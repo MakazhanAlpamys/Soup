@@ -450,3 +450,186 @@ class TestAFolderThatCannotBeMadePrivateRefusesTheRun:
         )
         shard_checkpoint(src, out, dtype="float32", stripe_roots=(stripe,))
         assert [os.path.normcase(p) for p in calls] == [os.path.normcase(_folder(out, stripe))]
+
+
+# --------------------------------------------------------------------------------------------
+# #1614 — the root is re-checked before EVERY write of a shard, not once at secure time
+# --------------------------------------------------------------------------------------------
+def _plant_link(kind, target, link):
+    if kind == "symlink":
+        os.symlink(str(target), str(link), target_is_directory=True)
+    else:
+        _junction(target, link)
+
+
+_LINK_KINDS = [
+    pytest.param("symlink", marks=pytest.mark.requires_symlink),
+    pytest.param(
+        "junction",
+        marks=pytest.mark.skipif(not WINDOWS, reason="junctions are a Windows reparse point"),
+    ),
+]
+
+
+class TestAStripeRootSwapIsRefusedAtTheNextStripeWrite:
+    """``secure_stripe_folder`` runs once, before the per-layer write loop starts. Between
+    then and the last write, the root could be renamed and a link substituted for it — the
+    per-model folder's own lstat still looks like a real directory, so only comparing its
+    realpath against the validated root catches the swap. The fix re-runs that comparison
+    (``stripe_folder_problem``) before every per-layer write and before the marker write.
+
+    5 layers over (primary, stripe): layers 1 and 3 go to the stripe root, so a swap planted
+    right after one of those two writes is picked up either by the next per-layer write (the
+    other one) or, when the swap happens after the last layer, by the marker write.
+    """
+
+    @pytest.mark.parametrize("kind", _LINK_KINDS)
+    @pytest.mark.parametrize(
+        "swap_after, refused_at", [(1, "decoder layer 3"), (3, "stripe marker")]
+    )
+    def test_the_swap_is_refused(self, tmp_path, monkeypatch, kind, swap_after, refused_at):
+        from soup_cli.utils import layer_shard as layer_shard_module
+
+        src = _weights(tmp_path, n_layers=5)
+        out = str(tmp_path / "cache" / "model")
+        (tmp_path / "stripe").mkdir()
+        stripe = os.path.realpath(str(tmp_path / "stripe"))
+        folder_name = os.path.basename(_folder(out, stripe))
+        # Already holds a same-named folder, so the substituted link looks legitimate to
+        # anything that does not compare realpaths against the originally validated root.
+        elsewhere = tmp_path / "elsewhere"
+        (elsewhere / folder_name).mkdir(parents=True)
+        trigger = os.path.basename(layer_shard_path(out, swap_after))
+        real_atomic_save = layer_shard_module._atomic_save
+        swapped = []
+
+        def fake_atomic_save(blob, path):
+            real_atomic_save(blob, path)
+            if (
+                not swapped
+                and os.path.basename(path) == trigger
+                and os.path.basename(os.path.dirname(path)) == folder_name
+            ):
+                os.replace(stripe, str(tmp_path / "moved-root"))
+                _plant_link(kind, elsewhere, stripe)
+                swapped.append(path)
+
+        monkeypatch.setattr(layer_shard_module, "_atomic_save", fake_atomic_save)
+        with pytest.raises(StripeRootError) as caught:
+            shard_checkpoint(src, out, dtype="float32", stripe_roots=(stripe,))
+        message = str(caught.value)
+        assert swapped, "the fixture never planted the link"
+        assert stripe in message and refused_at in message, message
+        # Nothing landed through the substituted link, and no index was committed (first shard).
+        assert os.listdir(str(elsewhere / folder_name)) == []
+        assert not os.path.exists(os.path.join(out, "index.json"))
+
+
+# --------------------------------------------------------------------------------------------
+# #1614 — a directory junction is refused as a stripe root, a volume mount point is not
+# --------------------------------------------------------------------------------------------
+class TestJunctionVersusVolumeMountPoint:
+    @pytest.mark.skipif(not WINDOWS, reason="junctions are a Windows reparse point")
+    def test_a_directory_junction_target_is_not_a_volume_mount_point(self, tmp_path):
+        from soup_cli.utils.stripe_roots import is_volume_mount_point
+
+        target = tmp_path / "target"
+        target.mkdir()
+        link = tmp_path / "link"
+        _junction(target, link)
+        assert is_volume_mount_point(str(link)) is False
+
+    @pytest.mark.parametrize(
+        "target, expected",
+        [
+            (r"\\?\Volume{1be1e677-9257-45ec-936f-712a49d3af54}\\", True),
+            (r"\\?\Volume{1be1e677-9257-45ec-936f-712a49d3af54}", True),
+            (r"\??\Volume{1be1e677-9257-45ec-936f-712a49d3af54}\\", True),
+            (r"\??\Volume{1be1e677-9257-45ec-936f-712a49d3af54}", True),
+            (r"\\?\Volume{1be1e677-9257-45ec-936f-712a49d3af54}\Users\nanda", False),
+            (r"\\?\C:\Users\nanda", False),
+            (r"\\?\UNC\server\share\folder", False),
+            (r"\\?\Volume{1be1e677-9257-45ec-936f-712a49d3af54}\data\{cache}", False),
+            (r"\\?\Volume{1be1e677-9257-45ec-936f-712a49d3af54}x", False),
+        ],
+        ids=[
+            "volume-root-trailing-sep-devicepath",
+            "volume-root-no-trailing-sep",
+            "volume-root-trailing-sep-ntpath",
+            "volume-root-no-trailing-sep-ntpath",
+            "folder-below-volume-path",
+            "drive-letter-folder",
+            "unc-folder",
+            "folder-below-volume-path-name-ends-with-a-brace",
+            "text-after-the-volume-name",
+        ],
+    )
+    def test_the_classifier_distinguishes_a_volume_root_from_a_folder_beneath_one(
+        self, tmp_path, monkeypatch, target, expected
+    ):
+        r"""No elevation is available to mount a real volume, so the link-target resolution is
+        patched directly -- the thing the classifier actually branches on. A junction can
+        target a folder beneath a volume GUID path exactly as it can beneath a drive letter or
+        a UNC share (reproduced for real with ``mklink /J`` against
+        ``\\?\Volume{...}\Users\...``), so the rule has to be "names the whole volume", not
+        "starts with Volume{"."""
+        from soup_cli.utils import stripe_roots as stripe_roots_module
+
+        link = tmp_path / "reparse-point"
+        link.mkdir()
+        monkeypatch.setattr(os, "readlink", lambda path: target)
+        assert stripe_roots_module.is_volume_mount_point(str(link)) is expected
+
+    def test_a_reparse_point_that_is_not_a_link_is_not_a_volume_mount_point(
+        self, tmp_path, monkeypatch
+    ):
+        """On Windows ``os.readlink`` raises ``ValueError``, not ``OSError``, for a reparse
+        point that is neither a symlink nor a junction/mount point, so the classifier has to
+        expect both -- only catching ``OSError`` let such a folder through as "not a mount
+        point, so must be a junction", when ``validate_stripe_root`` should refuse it by name
+        instead of letting a bare ``ValueError`` escape."""
+        from soup_cli.utils import stripe_roots as stripe_roots_module
+
+        def not_a_link(path):
+            raise ValueError("not a symbolic link")
+
+        monkeypatch.setattr(os, "readlink", not_a_link)
+        assert stripe_roots_module.is_volume_mount_point(str(tmp_path)) is False
+
+    def test_a_non_reparse_folder_is_not_a_volume_mount_point(self, tmp_path):
+        from soup_cli.utils.stripe_roots import is_volume_mount_point
+
+        assert is_volume_mount_point(str(tmp_path)) is False
+
+    @pytest.mark.skipif(not WINDOWS, reason="junctions are a Windows reparse point")
+    def test_a_junction_stripe_root_is_refused(self, tmp_path):
+        from soup_cli.utils.stripe_roots import validate_stripe_root
+
+        target = tmp_path / "elsewhere"
+        target.mkdir()
+        link = tmp_path / "stripe-link"
+        _junction(target, link)
+        primary = tmp_path / "primary"
+        primary.mkdir()
+        with pytest.raises(StripeRootError, match="junction") as caught:
+            validate_stripe_root(str(link), primary_root=str(primary))
+        assert "stripe-link" in str(caught.value)
+
+    @pytest.mark.skipif(not WINDOWS, reason="junctions are a Windows reparse point")
+    def test_a_volume_mount_point_stripe_root_is_accepted(self, tmp_path, monkeypatch):
+        """Same reparse tag as a junction; the classifier is what tells them apart, so this
+        patches the classifier itself rather than the unavailable (needs elevation) real
+        volume-mount-point setup."""
+        from soup_cli.utils import stripe_roots as stripe_roots_module
+
+        root = tmp_path / "mounted-volume"
+        target = tmp_path / "elsewhere"
+        target.mkdir()
+        _junction(target, root)
+        monkeypatch.setattr(stripe_roots_module, "is_volume_mount_point", lambda path: True)
+        primary = tmp_path / "primary"
+        primary.mkdir()
+        resolved = stripe_roots_module.validate_stripe_root(
+            str(root), primary_root=str(primary)
+        )
+        assert os.path.normcase(resolved) == os.path.normcase(os.path.realpath(str(root)))

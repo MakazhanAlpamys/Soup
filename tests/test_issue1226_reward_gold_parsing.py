@@ -895,29 +895,60 @@ class TestControlUnchanged:
 # ===========================================================================
 
 
+#: How many times smaller the reference input is than the full one. A linear parser takes
+#: about SCALE times longer on the full input; a quadratic one about SCALE**2 times.
+_SCALE = 8
+
+
+def _parse_once(text: str) -> float:
+    start = time.perf_counter()
+    accuracy_reward(_msg(text), answer=["42"])
+    math_verify_reward(_msg(text), answer=["42"])
+    return time.perf_counter() - start
+
+
+def _parse(text: str) -> float:
+    """Median of three timings: one GC pause or scheduler hiccup cannot decide the test."""
+    return sorted(_parse_once(text) for _ in range(3))[1]
+
+
+#: Each case builds its adversarial text for a size ``n`` (the former fixed strings at the
+#: full size), so that the same shape can be timed at n and at n // _SCALE.
+_ADVERSARIAL_SHAPES = [
+    (20_000, lambda n: "\\boxed{" * n),
+    (20_000, lambda n: "\\boxed{" * (n // 2) + "}" + "\\boxed{" * (n // 2)),
+    (20_000, lambda n: "the answer is " * n),
+    (20_000, lambda n: "#### " * n),
+    (50_000, lambda n: "1," * n),
+    (100_000, lambda n: " " * n + "x"),
+    (100_000, lambda n: "{" * n),
+    (200_000, lambda n: "answer" + " " * n + "x"),
+    (50_000, lambda n: "**answer" * n),
+    (200_000, lambda n: "The answer is " + "(" * n),
+    (20_000, lambda n: "#### Final Answer\n" * n),
+    (200_000, lambda n: "The answer is 42," + " " * n + "x"),  # test_issue1226_clause_scanner_*
+]
+
+
 class TestAdversarialInputsStayLinear:
     @pytest.mark.parametrize(
-        "text",
-        [
-            "\\boxed{" * 20_000,
-            "\\boxed{" * 10_000 + "}" + "\\boxed{" * 10_000,
-            "the answer is " * 20_000,
-            "#### " * 20_000,
-            "1," * 50_000,
-            " " * 100_000 + "x",
-            "{" * 100_000,
-            "answer" + " " * 200_000 + "x",
-            "**answer" * 50_000,
-            "The answer is " + "(" * 200_000,
-            "#### Final Answer\n" * 20_000,
-            "The answer is 42," + " " * 20_000 + "x",  # see test_issue1226_clause_scanner_*
-        ],
+        ("size", "shape"),
+        _ADVERSARIAL_SHAPES,
         ids=["open-boxes", "open-boxes-around-a-close", "phrases", "markers", "commas",
              "whitespace", "braces", "phrase-whitespace", "bold-labels", "open-parens",
              "answer-headings", "clause-whitespace"],
     )
-    def test_parsing_is_fast_on_adversarial_output(self, text):
-        start = time.perf_counter()
-        accuracy_reward(_msg(text), answer=["42"])
-        math_verify_reward(_msg(text), answer=["42"])
-        assert time.perf_counter() - start < 2.0
+    def test_parsing_is_fast_on_adversarial_output(self, size, shape):
+        """Linear in the input, measured against the same machine, not a wall clock.
+
+        A fixed bound (formerly 2 s) flaked on loaded CI runners (2.05 s on 2026-10-15,
+        PR #1898's ci:full) while a quadratic regression takes minutes. The full input is
+        timed against an input _SCALE times smaller: a linear parser lands near _SCALE x,
+        a quadratic one near _SCALE**2 x. The bound sits at 4 x _SCALE, plus 2 ms for the
+        timer's own resolution on a sub-millisecond reference; both sides are medians of
+        three, so no floor hides a quadratic parser on the smaller shapes.
+        """
+        reference = _parse(shape(size // _SCALE))
+        full = _parse(shape(size))
+        bound = 4 * _SCALE * reference + 0.002
+        assert full < bound, (full, reference, bound)

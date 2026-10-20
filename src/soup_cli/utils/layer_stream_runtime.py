@@ -175,6 +175,69 @@ def rebuild_params4bit(key: str, buffers: Mapping[str, Any], spec: Any, codes: M
     )
 
 
+class NF4ScaleCache:
+    """Expanded fp32 block scales of streamed nested-NF4 weights (opt-in).
+
+    bitsandbytes' dequantise + linear path expands a double-quantised weight's
+    scales on every call: ``dequantize_blockwise`` of the 8-bit codes, then
+    ``+= offset``. The base is frozen, so the result for a (layer, weight) never
+    changes; this keeps it on the compute device after the first visit and hands
+    later visits a non-nested ``QuantState`` over it. The expansion below is the
+    one in ``bitsandbytes.functional.dequantize_4bit``, so the 4-bit dequantise
+    that follows reads identical scales.
+
+    Keyed by layer index and shard key, never by pool slot: several layers take
+    turns in one slot. Only the dense path may use it; the fused custom GEMM
+    expands the nested scales inside its kernel.
+    """
+
+    def __init__(self) -> None:
+        self._states: Dict[Tuple[int, str], Any] = {}
+
+    def __len__(self) -> int:
+        return len(self._states)
+
+    @property
+    def nbytes(self) -> int:
+        return sum(
+            state.absmax.numel() * state.absmax.element_size() for state in self._states.values()
+        )
+
+    def dense_state(self, key: Tuple[int, str], quant_state: Any) -> Any:
+        state = self._states.get(key)
+        if state is None:
+            state = self._expand(quant_state)
+            self._states[key] = state
+        elif state.shape != quant_state.shape or state.blocksize != quant_state.blocksize:
+            raise RuntimeError(
+                f"NF4 scale cache entry {key} was built for shape {tuple(state.shape)} "
+                f"/ block {state.blocksize}, but the weight now has shape "
+                f"{tuple(quant_state.shape)} / block {quant_state.blocksize}"
+            )
+        return state
+
+    @staticmethod
+    def _expand(quant_state: Any) -> Any:
+        import torch
+        from bitsandbytes import functional as bnb_functional
+
+        absmax = bnb_functional.dequantize_blockwise(quant_state.absmax, quant_state.state2)
+        absmax += quant_state.offset
+        if absmax.dtype != torch.float32:
+            absmax = absmax.float()
+        return bnb_functional.QuantState(
+            absmax=absmax,
+            shape=quant_state.shape,
+            code=quant_state.code,
+            blocksize=quant_state.blocksize,
+            quant_type=quant_state.quant_type,
+            dtype=quant_state.dtype,
+        )
+
+    def clear(self) -> None:
+        self._states.clear()
+
+
 _CHECKPOINT_VISIBLE_NF4_FUNCTION = None
 
 
@@ -440,7 +503,11 @@ def install_dequant_forward(module: Any) -> int:
             ).to(inp_dtype)
 
         # Compatibility path: dequantise inside the checkpointed region and let
-        # F.linear save the dense weight properly.
+        # F.linear save the dense weight properly. The fused arm above keeps the
+        # nested state: its kernel expands the scales itself.
+        scale_cache = getattr(self.weight, "_soup_scale_cache", None)
+        if scale_cache is not None:
+            quant_state = scale_cache.dense_state(self.weight._soup_scale_cache_key, quant_state)
         weight = dequantize_4bit(self.weight, quant_state).to(x.dtype)
         return functional.linear(x, weight, bias).to(inp_dtype)
 
@@ -557,8 +624,20 @@ def plan_pinned_arenas(
 ) -> ArenaPlan:
     """Pack ``sizes`` (bytes, allocation order) into power-of-two arenas.
 
-    First-fit into the current arena, else open the next; a tensor never
-    straddles two arenas, because it has to be one contiguous view.
+    Two layouts are planned. The in-order walk puts each tensor into the arena
+    opened last, else opens the next. The largest-first walk (stable first-fit
+    decreasing) is returned ONLY when it page-locks strictly fewer bytes; on a
+    tie the in-order plan comes back, placement for placement. Either way
+    ``placements`` is indexed in the order the sizes were given, and a tensor
+    never straddles two arenas, because it has to be one contiguous view.
+
+    The in-order walk alone strands the space in front of a large tensor that
+    arrives late (#1702). A Qwen3-8B NF4 store is 3.58 GB of decoder tensors
+    followed by two 1.24 GB vocabulary matrices; neither fits behind the
+    decoder, so each opened a 2 GiB arena of its own: 8 GiB page-locked for a
+    6.07 GB store. Largest-first puts the two matrices down first and the
+    decoder fills in around them: 6 GiB. The test is bytes, not arena count —
+    after the trim a sorted layout can hold as many arenas and MORE bytes.
 
     The arena capacity is the power of two above FOUR times the store's largest
     tensor, floored at ``arena_bytes`` and capped at
@@ -591,6 +670,13 @@ def plan_pinned_arenas(
         return ArenaPlan(arena_sizes=(), placements=(), requested_bytes=0)
     ceiling = max(arena_bytes, PINNED_ARENA_MAX_BYTES)
     capacity = min(max(arena_bytes, _next_power_of_two(4 * max(sizes))), ceiling)
+    in_order = _plan_in_order(sizes, capacity, align)
+    largest_first = _plan_largest_first(sizes, capacity, align)
+    return largest_first if largest_first.pinned_bytes < in_order.pinned_bytes else in_order
+
+
+def _plan_in_order(sizes: Sequence[int], capacity: int, align: int) -> ArenaPlan:
+    """Allocation order: each tensor into the arena opened last, else a new one."""
     fills: List[int] = []
     capacities: List[int] = []
     placements: List[Tuple[int, int]] = []
@@ -605,6 +691,34 @@ def plan_pinned_arenas(
         # Only a tensor beyond the ceiling opens an arena wider than the rest.
         capacities.append(max(capacity, _next_power_of_two(size)))
         placements.append((len(fills) - 1, 0))
+    return ArenaPlan(
+        arena_sizes=tuple(max(align, _next_power_of_two(fill)) for fill in fills),
+        placements=tuple(placements),
+        requested_bytes=sum(sizes),
+    )
+
+
+def _plan_largest_first(sizes: Sequence[int], capacity: int, align: int) -> ArenaPlan:
+    """Largest tensor first, each into the FIRST arena with room, else a new one.
+
+    The sort is stable, so equal sizes keep their allocation order. Each
+    placement is written back at the tensor's ORIGINAL index: both sources read
+    the plan in allocation order, whatever order the arenas were filled in.
+    """
+    fills: List[int] = []
+    capacities: List[int] = []
+    placements: List[Tuple[int, int]] = [(0, 0)] * len(sizes)
+    for original, size in sorted(enumerate(sizes), key=lambda item: -item[1]):
+        for arena, fill in enumerate(fills):
+            start = -(-fill // align) * align
+            if start + size <= capacities[arena]:
+                placements[original] = (arena, start)
+                fills[arena] = start + size
+                break
+        else:
+            placements[original] = (len(fills), 0)
+            fills.append(size)
+            capacities.append(max(capacity, _next_power_of_two(size)))
     return ArenaPlan(
         arena_sizes=tuple(max(align, _next_power_of_two(fill)) for fill in fills),
         placements=tuple(placements),
@@ -1266,7 +1380,8 @@ class StreamPrefetcher:
         self.primes += 1
         self.backward_tail_prefetched = False
         self.tail_prefetched = False
-        self.pool.load_async(0, self.source, self.stream)
+        if self.pool.owner[self.pool.slot_for(0)] != 0:
+            self.pool.load_async(0, self.source, self.stream)
 
     def advance(self, idx: int) -> None:
         # Direction is explicit state, not re-derived per call. It only ever
@@ -1331,6 +1446,25 @@ class StreamPrefetcher:
 # ==========================================================================
 # the streamed layer (plan 5.6)
 # ==========================================================================
+def _substituted_names_are_tied(module: Any, names: Any) -> bool:
+    """True when a name in ``names`` shares its tensor with another registered name.
+
+    ``functional_call(tie_weights=True)`` rewrites the mapping only for a GIVEN
+    name whose tensor is registered under more than one name
+    (``torch.nn.utils.stateless._untie_named_tensors_map``); for every other
+    mapping it returns a plain copy. Deciding this once lets the hot path pass
+    ``tie_weights=False`` with an identical result.
+    """
+    wanted = set(names)
+    names_by_tensor: dict = {}
+    for name, tensor in (
+        *module.named_parameters(remove_duplicate=False),
+        *module.named_buffers(remove_duplicate=False),
+    ):
+        names_by_tensor.setdefault(id(tensor), set()).add(name)
+    return any(len(group) > 1 and group & wanted for group in names_by_tensor.values())
+
+
 def _build_streamed_layer_class():
     import torch
     import torch.nn as nn
@@ -1348,6 +1482,7 @@ def _build_streamed_layer_class():
             use_checkpoint=True,
             quant_specs=None,
             codes=None,
+            scale_cache=None,
         ):
             super().__init__()
             self.inner = inner
@@ -1358,6 +1493,9 @@ def _build_streamed_layer_class():
             self.use_checkpoint = bool(use_checkpoint)
             self.quant_specs = dict(quant_specs or {})
             self.codes = dict(codes or {})
+            # training.stream_nf4_scale_cache — an NF4ScaleCache owned by the
+            # runtime, or None.
+            self.scale_cache = scale_cache
             # #841 — each wrapper returns to the same pool slot on every visit.
             # Cache the tensor/Params4bit substitution views for that slot rather
             # than reconstructing Python wrappers and QuantState objects on every
@@ -1365,6 +1503,12 @@ def _build_streamed_layer_class():
             # pool tensors, so later layer loads update their contents in place.
             self._cached_substitution_buffers = None
             self._cached_substitution_weights = None
+            # functional_call's default tie_weights=True walks every parameter
+            # and buffer of the layer on each call, forward and recompute alike
+            # (~104 us on a PEFT Mistral layer, ~6.7 ms per 32-layer step). The
+            # walk changes nothing unless a substituted name is tied, and
+            # get_peft_model() has already run, so the graph is final here.
+            self._tie_weights = _substituted_names_are_tied(self.inner, self.name_map)
             # v0.72.5 (#331) — a streamed NF4 weight must not reach MatMul4Bit,
             # which captures it outside save_for_backward and so aliases the pool
             # across the checkpoint boundary. See install_dequant_forward.
@@ -1609,6 +1753,9 @@ def _build_streamed_layer_class():
                 else:
                     weight = rebuild_params4bit(ckpt, buffers, spec, self.codes)
                     weight._soup_stream_owner_check = self._assert_nf4_slot_owner
+                    if self.scale_cache is not None:
+                        weight._soup_scale_cache = self.scale_cache
+                        weight._soup_scale_cache_key = (self.idx, ckpt)
                     weights[meta] = weight
             self._cached_substitution_buffers = buffers
             self._cached_substitution_weights = weights
@@ -1633,6 +1780,7 @@ def _build_streamed_layer_class():
                 self._substituted_weights(buffers),
                 (hidden_states, *args),
                 kwargs,
+                tie_weights=self._tie_weights,
             )
 
     return StreamedDecoderLayer
@@ -2345,6 +2493,26 @@ def _stamp_4bit_markers(model: Any, quant_config: Any) -> None:
         model.config.quantization_config = quant_config
 
 
+def _drop_fp8_source_quantization(config: Any) -> None:
+    """Build the streamed skeleton at the stream dtype even over an FP8 block source.
+
+    An FP8 block checkpoint's ``config.json`` declares ``quantization_config`` with
+    ``quant_method: "fp8"``. The sharder dequantises those weights (``utils/fp8_block``),
+    so the shards hold the stream dtype (or NF4) and the modules must be plain
+    ``nn.Linear`` (or ``Linear4bit``): transformers' FP8 quantizer, applied from this
+    config, would turn them into ``FP8Linear`` modules expecting FP8 bytes and scales.
+    ``from_config`` does not apply it today (transformers 5.17), but the config would
+    still claim FP8 on a model holding none, for any reader of ``model.config``.
+
+    Only this skeleton's own config object is changed: ``config.json`` on disk and every
+    resident load (``from_pretrained``, which dequantises or runs FP8 itself) are not.
+    """
+    from soup_cli.utils.fp8_block import is_fp8_quantization_config
+
+    if is_fp8_quantization_config(getattr(config, "quantization_config", None)):
+        del config.quantization_config
+
+
 def build_meta_skeleton(
     model_id: str,
     *,
@@ -2372,6 +2540,7 @@ def build_meta_skeleton(
     torch_dtype = _torch_dtype(dtype)
     config = AutoConfig.from_pretrained(model_id, trust_remote_code=trust_remote_code)
     config.use_cache = False
+    _drop_fp8_source_quantization(config)
     quant_config = None
     if quant == QUANT_NF4:
         quant_config = build_nf4_config(dtype, double_quant=double_quant)
@@ -2720,6 +2889,10 @@ class StreamRuntime:
     total_params: int = 0
     #: Read-only Qwen4 PLE mappings, if the N-gram table is SSD-backed.
     external_sources: Tuple[Any, ...] = ()
+    #: training.stream_nf4_scale_cache — the layers' shared NF4ScaleCache, or None.
+    scale_cache: Any = None
+    #: Per MoE layer, the reader of its experts file (expert_layout "per_expert").
+    expert_readers: Tuple[Any, ...] = ()
 
     def close(self) -> None:
         """Release the weight source and detach the prefetch hook.
@@ -2731,16 +2904,25 @@ class StreamRuntime:
         mapping charges Windows commit for the file's whole size (#926).
         A no-op for the RAM tier, which owns neither a thread nor handles.
         """
-        source_close = getattr(self.source, "close", None)
-        if callable(source_close):
-            source_close()
-        for external in self.external_sources:
-            external_close = getattr(external, "close", None)
-            if callable(external_close):
-                external_close()
+        try:
+            source_close = getattr(self.source, "close", None)
+            if callable(source_close):
+                source_close()
+            for external in self.external_sources:
+                external_close = getattr(external, "close", None)
+                if callable(external_close):
+                    external_close()
+        finally:
+            # One open handle per MoE layer's experts file (expert_layout "per_expert").
+            for reader in self.expert_readers:
+                reader.close()
         if self.hook is not None:
             self.hook.remove()
             self.hook = None
+        if self.scale_cache is not None:
+            # The layers' substituted weights still reference the cache object;
+            # emptying it is what returns the device memory.
+            self.scale_cache.clear()
 
     def stats(self) -> Dict[str, Any]:
         return {
@@ -2761,10 +2943,18 @@ class StreamRuntime:
             # number there would be an invented one.
             "read_ahead": getattr(self.source, "read_ahead", None),
             "disk_bytes": getattr(self.source, "disk_bytes", 0),
+            "drive_count": len(getattr(self.source, "direct_io_roots", {})),
+            "direct_io_drives": sum(
+                getattr(self.source, "direct_io_roots", {}).values()
+            ),
+            "direct_io_roots": dict(getattr(self.source, "direct_io_roots", {})),
             "layer_loads": self.pool.loads,
             "large_loads": getattr(self.large_pool, "loads", 0),
             "device": self.device,
             "total_params": self.total_params,
+            "nf4_scale_cache_bytes": getattr(self.scale_cache, "nbytes", 0),
+            "expert_fetches": sum(reader.fetches for reader in self.expert_readers),
+            "expert_bytes_read": sum(reader.bytes_read for reader in self.expert_readers),
         }
 
 
@@ -2797,6 +2987,96 @@ def _layer_name_map(layer: Any) -> Dict[str, str]:
     }
 
 
+def _load_layer_buffers(
+    layers: Any, paths: Sequence[str], specs: Sequence[Any], keys: Sequence[str]
+) -> int:
+    """Copy the named persistent buffers of each decoder layer from its shard.
+
+    ``keys`` (``layer_shard.layer_buffer_keys(arch)``) are the only buffers
+    loaded. The skeleton is built under ``init_empty_weights()``, which leaves
+    buffers as real tensors holding their ``__init__`` value: DeepSeek-V3's
+    router ``e_score_correction_bias`` would otherwise run at zero, which routes
+    tokens to different experts with no error. Buffers are not trained, so they
+    are loaded once and stay resident, at the dtype the shard stores them in. A
+    listed buffer absent from a layer's shard keeps its init value, as
+    ``from_pretrained`` would. Returns the count loaded.
+    """
+    from safetensors import safe_open
+
+    wanted_keys = frozenset(keys)
+    if not wanted_keys:
+        return 0
+    loaded = 0
+    for idx, (layer, path) in enumerate(zip(layers, paths)):
+        wanted = []
+        for name, buf in layer.named_buffers():
+            owner_name, _, leaf = name.rpartition(".")
+            owner = layer.get_submodule(owner_name) if owner_name else layer
+            if buf is None or leaf in owner._non_persistent_buffers_set:
+                continue
+            key = name.replace(".base_layer.", ".")
+            if key in wanted_keys and key in specs[idx]:
+                wanted.append((owner, leaf, key, buf))
+        if not wanted:
+            continue
+        with safe_open(path, framework="pt") as handle:
+            for owner, leaf, key, buf in wanted:
+                value = handle.get_tensor(key)
+                if tuple(value.shape) != tuple(buf.shape):
+                    raise ValueError(
+                        f"decoder layer {idx} buffer {key!r} has shape "
+                        f"{tuple(value.shape)} in the shard but {tuple(buf.shape)} "
+                        f"in the model — reshard the checkpoint"
+                    )
+                # copy=True: on a CPU target `.to` would return the mapped view,
+                # keeping the whole layer file mapped for the model's lifetime.
+                setattr(owner, leaf, value.to(device=buf.device, copy=True))
+                loaded += 1
+    return loaded
+
+
+def _install_expert_streaming(
+    layers: Any,
+    shard_dir: str,
+    index: Any,
+    *,
+    device: str,
+    codes: Optional[Mapping[str, Any]],
+) -> Tuple[Any, ...]:
+    """Swap each MoE layer's experts module for a ``StreamedExperts``.
+
+    Only for a cache sharded with ``expert_layout="per_expert"``; returns the
+    experts-file readers (closed by ``StreamRuntime.close``).
+    """
+    from soup_cli.utils.expert_stream import (
+        EXPERT_LAYOUT_PER_EXPERT,
+        ExpertFetcher,
+        ExpertShardReader,
+        install_expert_streaming,
+    )
+    from soup_cli.utils.layer_shard import expert_paths
+
+    if getattr(index, "expert_layout", "") != EXPERT_LAYOUT_PER_EXPERT:
+        return ()
+    readers: Dict[int, Any] = {}
+    try:
+        for layer, path in expert_paths(shard_dir, index).items():
+            readers[layer] = ExpertShardReader(
+                path,
+                count=index.expert_count,
+                shapes=index.expert_shapes,
+                quant_specs=index.expert_quant_specs,
+                dtype=index.dtype,
+            )
+        fetcher = ExpertFetcher(device=device, dtype=index.dtype, codes=codes)
+        install_expert_streaming(layers, readers, fetcher)
+    except BaseException:
+        for reader in readers.values():
+            reader.close()
+        raise
+    return tuple(readers.values())
+
+
 def install_streaming(
     model: Any,
     *,
@@ -2812,12 +3092,16 @@ def install_streaming(
     read_ahead: int = DEFAULT_STREAM_READ_AHEAD,
     refill_before_backward: bool = False,
     read_ahead_decision: Any = None,
+    nf4_scale_cache: bool = False,
 ) -> StreamRuntime:
     """Wrap every decoder layer and wire the buffer pool + prefetch scheduler.
 
     ``refill_before_backward`` says the loss runs a second forward before each
     step's backward; an untied output head then hands autograd a private copy
     of its weight (#1049).
+
+    ``nf4_scale_cache`` gives the layers one shared :class:`NF4ScaleCache`
+    (``training.stream_nf4_scale_cache``); it needs double-quantised NF4 shards.
 
     ``read_ahead_decision`` (a ``stripe_roots.ReadAheadDecision``, R4) says how
     ``read_ahead`` came about, so the page-lock messages advise a depth that is
@@ -2829,6 +3113,7 @@ def install_streaming(
         QUANT_NF4,
         large_shard_path,
         large_weight_role,
+        layer_buffer_keys,
         layer_paths,
     )
 
@@ -2862,6 +3147,14 @@ def install_streaming(
             f"shard index is inconsistent: quant={getattr(index, 'quant', None)!r} "
             f"but {len(quant_specs)} quant_specs — reshard the checkpoint"
         )
+    scale_cache = None
+    if nf4_scale_cache:
+        if not any(spec.nested for spec in quant_specs.values()):
+            raise ValueError(
+                "nf4_scale_cache=True needs double-quantised NF4 shards, but this "
+                "index has no nested NF4 weights; there are no scales to cache"
+            )
+        scale_cache = NF4ScaleCache()
 
     owner = decoder_owner(model)
     layers = owner.layers
@@ -2872,13 +3165,18 @@ def install_streaming(
             f"{index.n_layers} — reshard the checkpoint"
         )
 
+    _require_stripe_folders(shard_dir, index)
+    # Before the name maps: the fused expert parameters leave the layer here,
+    # so the layer pool never allocates them.
+    expert_readers = _install_expert_streaming(
+        layers, shard_dir, index, device=str(device), codes=codes
+    )
     layer_name_maps = [_layer_name_map(layer) for layer in layers]
     if not any(layer_name_maps):
         raise RuntimeError(
             "no meta decoder weights found — the base was materialised, which "
             "defeats layer streaming entirely"
         )
-    _require_stripe_folders(shard_dir, index)
     decoder_paths = layer_paths(shard_dir, index)
     layer_specs = RamSource.layer_specs_from_paths(decoder_paths)
     large_specs = large_layer_specs(shard_dir, index)
@@ -2921,6 +3219,11 @@ def install_streaming(
         needed_specs_by_layer.append(needed)
         active_keys_by_layer.append(tuple(sorted(needed)))
     spec = RamSource.merge_layer_specs(needed_specs_by_layer)
+    # Before the source exists: a refusal here leaves no reader thread or
+    # page-locked staging behind.
+    _load_layer_buffers(
+        layers, decoder_paths, layer_specs, layer_buffer_keys(getattr(index, "arch", ""))
+    )
 
     large_source_indices = {key: n_layers + offset for offset, key in enumerate(large_keys)}
     source_specs = needed_specs_by_layer + [{key: large_specs[key]} for key in large_keys]
@@ -2984,6 +3287,7 @@ def install_streaming(
             layer_name_maps[idx],
             quant_specs=quant_specs,
             codes=codes,
+            scale_cache=scale_cache,
         )
 
     if large_pool is not None:
@@ -3062,7 +3366,9 @@ def install_streaming(
         large_pool=large_pool,
         hook=handle,
         total_params=int(getattr(index, "total_params", 0) or 0),
+        expert_readers=expert_readers,
         tier=tier,
+        scale_cache=scale_cache,
     )
 
 
@@ -3222,6 +3528,36 @@ def _require_stripe_folders(shard_dir: str, index: Any) -> None:
             )
 
 
+def _say_unaligned_staging(source: Any, console: Any) -> None:
+    """Put the disk tier's page-cache fallback where a `soup train` user reads it (#1531).
+
+    The source logs it; the logger is not what the Rich output shows.
+    """
+    if console is not None and not getattr(source, "staging_aligned", True):
+        from soup_cli.utils.async_disk_source import UNALIGNED_STAGING_MESSAGE
+
+        console.print(f"[yellow]{UNALIGNED_STAGING_MESSAGE}[/]")
+
+
+def _say_page_cache_roots(source: Any, console: Any) -> None:
+    """Name each drive whose operating system refused direct I/O (#1615)."""
+    if console is None:
+        return
+    from soup_cli.utils.terminal import for_terminal
+
+    for root, reason in getattr(source, "page_cache_reasons", {}).items():
+        console.print(
+            "[yellow]Layer streaming reads "
+            f"{for_terminal(root)} through the page cache: direct I/O is unavailable there "
+            f"({for_terminal(reason)}).[/]"
+        )
+
+
+def _say_disk_source_fallbacks(source: Any, console: Any) -> None:
+    _say_unaligned_staging(source, console)
+    _say_page_cache_roots(source, console)
+
+
 def _build_source(
     shard_dir,
     n_layers,
@@ -3323,8 +3659,10 @@ def _build_source(
                 # otherwise report as an out-of-memory it never had.
                 recover_from_failed_page_lock(console=console)
             else:
+                _say_disk_source_fallbacks(source, console)
                 return source, source.pinned
         source = AsyncDiskSource(shard_dir, n_layers, spec, pin=False, **open_kwargs)
+        _say_disk_source_fallbacks(source, console)
         return source, source.pinned
     # `source.pinned` on both branches rather than the literal, so the tuple's
     # second element has ONE meaning to read off: what the source says about
@@ -3417,6 +3755,7 @@ def build_streamed_model(
     ngram_source: str = "disk",
     refill_before_backward: bool = False,
     read_ahead_decision: Any = None,
+    nf4_scale_cache: bool = False,
 ) -> Tuple[Any, StreamRuntime]:
     """Meta skeleton -> extras -> LoRA -> streaming. No resident base load.
 
@@ -3469,6 +3808,7 @@ def build_streamed_model(
             read_ahead=read_ahead,
             refill_before_backward=refill_before_backward,
             read_ahead_decision=read_ahead_decision,
+            nf4_scale_cache=nf4_scale_cache,
         )
     except BaseException:
         for external in external_sources:

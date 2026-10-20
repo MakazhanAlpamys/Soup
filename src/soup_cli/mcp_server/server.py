@@ -15,8 +15,6 @@ from __future__ import annotations
 import inspect
 import json
 import secrets
-import sys
-from contextlib import redirect_stdout
 from typing import List
 
 import anyio
@@ -25,7 +23,7 @@ from mcp.server.lowlevel import Server
 from mcp.server.stdio import stdio_server
 
 from soup_cli.mcp_server.execution import ExecutionManager
-from soup_cli.mcp_server.registry import McpToolError, ToolSpec, _sanitize, build_registry
+from soup_cli.mcp_server.registry import McpToolError, ToolSpec, build_registry, call_tool
 
 SERVER_NAME = "soup"
 
@@ -54,24 +52,31 @@ def _dispatch_tool(by_name, name: str, arguments: dict) -> str:
     Raises :class:`_DispatchError` with a path-free, C0/ESC-free message for
     every failure mode, so the two SDK adapters below only have to decide how
     to *shape* an error, never what it says.
+
+    The three guarantees themselves live in `registry.call_tool` (#1761) so a caller
+    running a registry tool without an MCP server gets them too; this only serializes
+    and re-labels, which is transport-specific.
+
+    `allow_mutating=True` is deliberate: the table handed to this function was already
+    filtered by `build_registry`, and a mutating spec in it is either a real handler
+    (the server was started with --allow-mutating) or the `_refuse_mutating` stub. Either
+    way the gate has been applied once already, and applying it again here would make
+    `soup mcp serve --allow-mutating` refuse the tools it was started to allow.
     """
     spec = by_name.get(name)
     if spec is None:
         raise _DispatchError("unknown tool")
     try:
-        # Any core that prints (e.g. a Rich warning) must not corrupt the
-        # JSON-RPC stdout channel - send stray stdout to stderr for the
-        # duration of the (synchronous) handler call. Serialization stays
-        # INSIDE the try so a non-JSON-serializable result also becomes a
-        # sanitized error (never a raw TypeError the SDK would echo).
-        with redirect_stdout(sys.stderr):
-            result = spec.handler(arguments or {})
-        return json.dumps(_sanitize(result), indent=2, ensure_ascii=False)
+        result = call_tool(name, arguments, registry=[spec], allow_mutating=True)
     except McpToolError as exc:
-        # _sanitize the message too so the C0/ESC guarantee is structural,
-        # not just a convention every handler must remember (security-review).
-        raise _DispatchError(_sanitize(str(exc))) from None
-    except Exception as exc:  # never leak a stack trace / path to the client
+        # call_tool already sanitized the message, so the C0/ESC guarantee stays
+        # structural rather than a convention every handler has to remember.
+        raise _DispatchError(str(exc)) from None
+    try:
+        # Serialization stays INSIDE a try so a non-serializable result also becomes a
+        # sanitized error (never a raw TypeError the SDK would echo).
+        return json.dumps(result, indent=2, ensure_ascii=False)
+    except Exception as exc:
         raise _DispatchError(f"internal error ({type(exc).__name__})") from None
 
 
@@ -99,6 +104,7 @@ def build_server(specs: List[ToolSpec]) -> Server:
     adapters below differ, because 2.x hands its handlers a request context and
     wants a ``*Result`` object where 1.x wanted a bare list.
     """
+
     by_name = {spec.name: spec for spec in specs}
 
     if _uses_callback_handlers():  # mcp 2.x

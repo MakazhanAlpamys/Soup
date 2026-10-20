@@ -47,6 +47,10 @@ def require_str(value: object, field: str, *, max_len: int = 4096) -> str:
     return value
 
 
+# Longest prompt (chars) a probe accepts; ``live`` skips longer dataset prompts (#1435).
+MAX_PROMPT_CHARS = 8192
+
+
 def require_prompts(prompts: object, *, max_count: int = 10_000) -> list:
     """Validate a sequence of prompt strings; return a list copy."""
     if not isinstance(prompts, Sequence) or isinstance(prompts, (str, bytes)):
@@ -55,7 +59,7 @@ def require_prompts(prompts: object, *, max_count: int = 10_000) -> list:
         raise ValueError(f"too many prompts (max {max_count})")
     out: list = []
     for index, value in enumerate(prompts):
-        out.append(require_str(value, f"prompts[{index}]", max_len=8192))
+        out.append(require_str(value, f"prompts[{index}]", max_len=MAX_PROMPT_CHARS))
     return out
 
 

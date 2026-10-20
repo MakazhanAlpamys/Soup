@@ -36,6 +36,7 @@ from typing import (
     Any,
     Callable,
     Dict,
+    FrozenSet,
     Iterable,
     Iterator,
     List,
@@ -46,6 +47,20 @@ from typing import (
 )
 
 from soup_cli import __version__
+from soup_cli.utils.expert_stream import (
+    EXPERT_LAYOUT_PER_EXPERT,
+    expert_shard_name,
+    write_expert_shard,
+)
+from soup_cli.utils.fp8_block import (
+    SUPPORTED_FP8_FORMAT,
+    FP8BlockPlan,
+    UnsupportedFP8Error,
+    dequantize_fp8_block,
+    fp8_block_size,
+    plan_fp8_block,
+    read_checkpoint_quantization_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +90,9 @@ NF4_CODE_KEY = "__nf4_code"
 NF4_NESTED_CODE_KEY = "__nf4_nested_code"
 
 NF4_BLOCKSIZE = 64
+#: Blocks per float32 nested absmax under double quantisation (bitsandbytes'
+#: ``compress_statistics``); recorded per weight as ``nested_blocksize``.
+NF4_NESTED_BLOCKSIZE = 256
 #: bitsandbytes' own 4-bit types. Read-back values are checked against this.
 _SUPPORTED_QUANT_TYPES = ("nf4", "fp4")
 #: An index claiming a wilder blocksize than bitsandbytes supports is corrupt.
@@ -98,6 +116,7 @@ _MAX_TOTAL_TENSORS = 200_000
 _MAX_LIVE_SOURCE_HANDLES = 2
 
 _INDEX_NAME = "index.json"
+_RESHARDING_INDEX_NAME = "index.json.resharding"
 _EXTRAS_NAME = "extras.safetensors"
 _SHARD_FORMAT_VERSION = 5
 _LARGE_EMBED_ROLE = "embed_tokens"
@@ -109,10 +128,38 @@ _QWEN4_PLE_SHARD_RE = re.compile(
 _QWEN4_OQ_PLE_SHARD_RE = re.compile(
     r"^(?P<prefix>.+\.ple\.ple_embedding\.ngram_embedding)\.shards\.(?P<part>\d+)\.weight$"
 )
-_QWEN4_EXPERT_RE = re.compile(
+_PER_EXPERT_RE = re.compile(
     r"^(?P<prefix>model\.layers\.\d+\.mlp\.experts)\."
     r"(?P<expert>\d+)\.(?P<projection>gate_proj|up_proj|down_proj)\.weight$"
 )
+#: Architectures whose transformers module holds the routed experts as fused
+#: 3-D ``gate_up_proj`` [E, 2I, H] / ``down_proj`` [E, H, I] parameters while
+#: the checkpoint stores one 2-D tensor per expert and projection (the
+#: ``qwen2_moe`` conversion in transformers' ``conversion_mapping.py``: gate
+#: rows first, experts in index order). Value = the name used in messages.
+_STACKED_EXPERT_ARCHS = {"qwen4_exp": "Qwen4", "deepseek_v3": "DeepSeek-V3"}
+#: Per-layer BUFFERS the checkpoint carries and a streamed run must use. The
+#: skeleton is built under ``init_empty_weights()``, which leaves buffers at
+#: their ``__init__`` value, so the runtime loads exactly these from the layer
+#: shard (``layer_stream_runtime._load_layer_buffers``); every other buffer
+#: keeps its init value, as it always has (a qwen4_exp integer buffer, for one,
+#: reaches the shard cast to the stream dtype and must not be loaded back).
+#: Stored at float32 whatever the stream dtype: transformers keeps them in fp32
+#: on load (``_keep_in_fp32_modules_strict``), so a resident bf16 run routes with
+#: the fp32 values and the streamed run must as well.
+_LAYER_BUFFER_KEYS = {"deepseek_v3": ("mlp.gate.e_score_correction_bias",)}
+
+
+def layer_buffer_keys(arch: str) -> Tuple[str, ...]:
+    """Short keys of the per-layer buffers streamed for ``arch`` (see above)."""
+    return _LAYER_BUFFER_KEYS.get(arch, ())
+
+
+#: Architectures admitted to ``expert_layout="per_expert"``: each one passed
+#: the resident-vs-streamed parity tests in ``tests/test_expert_stream.py``.
+_PER_EXPERT_LAYOUT_ARCHS = ("deepseek_v3",)
+#: Public name for the trainer's early refusal (``training.stream_expert_layout``).
+PER_EXPERT_LAYOUT_ARCHS = _PER_EXPERT_LAYOUT_ARCHS
 _QWEN4_OQ_EXPERT_RE = re.compile(
     r"^(?P<prefix>model\.layers\.\d+\.mlp)\.switch_mlp\."
     r"(?P<projection>gate_proj|up_proj|down_proj)\.weight$"
@@ -260,6 +307,22 @@ class ShardIndex:
     #: Per decoder layer, the root holding its file (0 = this directory, k = stripe_roots[k-1]).
     #: Empty == every layer here.
     layer_roots: Tuple[int, ...] = ()
+    #: "" keeps a MoE layer's routed experts inside its decoder-layer file (the
+    #: fused 3-D tensors); "per_expert" writes them to ``experts_NNN.safetensors``
+    #: beside the layer file, one tensor pair per expert, streamed one expert at
+    #: a time (``utils/expert_stream.py``). Deliberately NOT a format-version
+    #: bump (that would invalidate every existing cache): a Soup from before this
+    #: field reads a per_expert cache as fused and refuses it at install with
+    #: "shard is missing decoder weights"; reshard with that version to use it.
+    expert_layout: str = ""
+    #: per_expert: the decoder layers that have an experts file, ascending.
+    expert_layers: Tuple[int, ...] = ()
+    #: per_expert: routed experts per MoE layer (the same in every MoE layer).
+    expert_count: int = 0
+    #: per_expert: stored dense shape of one expert's "gate_up" and "down".
+    expert_shapes: Mapping[str, Tuple[int, ...]] = field(default_factory=dict)
+    #: per_expert under NF4: the spec of "gate_up" and "down". Empty otherwise.
+    expert_quant_specs: Mapping[str, NF4WeightSpec] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -537,6 +600,17 @@ def layer_paths(shard_dir: str, index: "ShardIndex") -> List[str]:
     return [layer_shard_path(dirs[root], idx) for idx, root in enumerate(placement)]
 
 
+def expert_paths(shard_dir: str, index: "ShardIndex") -> Dict[int, str]:
+    """Decoder layer -> its experts file, beside the layer's own file (same root)."""
+    if getattr(index, "expert_layout", "") != EXPERT_LAYOUT_PER_EXPERT:
+        return {}
+    paths = layer_paths(shard_dir, index)
+    return {
+        layer: os.path.join(os.path.dirname(paths[layer]), expert_shard_name(layer))
+        for layer in index.expert_layers
+    }
+
+
 def _same_roots(first: Sequence[str], second: Sequence[str]) -> bool:
     """Equal as folders, not as strings: case and a trailing separator differ on Windows."""
 
@@ -608,9 +682,9 @@ def _stripe_marker_problem(
     return None
 
 
-def read_shard_index(out_dir: str) -> ShardIndex:
-    """Read ``index.json``. Raises on a missing or malformed index."""
-    path = os.path.join(out_dir, _INDEX_NAME)
+def read_shard_index(out_dir: str, *, index_name: str = _INDEX_NAME) -> ShardIndex:
+    """Read a shard index. Raises on a missing or malformed index."""
+    path = os.path.join(out_dir, index_name)
     with open(path, encoding="utf-8") as handle:
         payload = json.load(handle)
     # `quant` defaults to "none" so a v0.72.0/.1 bf16 cache stays valid for a
@@ -628,6 +702,28 @@ def read_shard_index(out_dir: str) -> ShardIndex:
         raise ValueError("stripe_roots are set but layer_roots is empty")
     if any(not 0 <= root <= len(stripe_roots) for root in layer_roots):
         raise ValueError("layer_roots names a root the index does not have")
+    expert_layout = str(payload.get("expert_layout", ""))
+    if expert_layout not in ("", EXPERT_LAYOUT_PER_EXPERT):
+        raise ValueError(f"unknown expert_layout {expert_layout!r}")
+    expert_layers = tuple(int(layer) for layer in (payload.get("expert_layers") or ()))
+    if list(expert_layers) != sorted(set(expert_layers)) or any(
+        not 0 <= layer < n_layers for layer in expert_layers
+    ):
+        raise ValueError("expert_layers must be distinct ascending decoder layer indices")
+    expert_count = int(payload.get("expert_count", 0))
+    expert_shapes = {
+        str(part): tuple(int(dim) for dim in shape)
+        for part, shape in (payload.get("expert_shapes") or {}).items()
+    }
+    if bool(expert_layers) != (expert_layout == EXPERT_LAYOUT_PER_EXPERT) or (
+        expert_layers
+        and (
+            not 1 <= expert_count <= 4096
+            or set(expert_shapes) != {"gate_up", "down"}
+            or any(len(shape) != 2 or min(shape) < 1 for shape in expert_shapes.values())
+        )
+    ):
+        raise ValueError("the index's expert fields do not describe one layout")
     return ShardIndex(
         n_layers=n_layers,
         layer_keys=tuple(payload["layer_keys"]),
@@ -656,6 +752,14 @@ def read_shard_index(out_dir: str) -> ShardIndex:
         external_mode=str(payload.get("external_mode", "")),
         stripe_roots=stripe_roots,
         layer_roots=layer_roots,
+        expert_layout=expert_layout,
+        expert_layers=expert_layers,
+        expert_count=expert_count,
+        expert_shapes=expert_shapes,
+        expert_quant_specs={
+            str(part): NF4WeightSpec.from_json(value)
+            for part, value in (payload.get("expert_quant_specs") or {}).items()
+        },
     )
 
 
@@ -693,6 +797,13 @@ def _resolve_cache_root(cache_dir: Optional[str], is_under: Any) -> str:
     return default_layer_stream_cache_dir()
 
 
+def resolve_cache_root(cache_dir: Optional[str] = None) -> str:
+    """Cache ROOT only (explicit arg > env override > default). No side effects."""
+    from soup_cli.utils.paths import is_under
+
+    return _resolve_cache_root(cache_dir, is_under)
+
+
 def resolve_shard_dir(model: str, cache_dir: Optional[str] = None) -> str:
     """Per-model shard dir (explicit arg > env override > default).
 
@@ -713,14 +824,21 @@ def resolve_shard_dir(model: str, cache_dir: Optional[str] = None) -> str:
 # sharding
 # ==========================================================================
 def _discover_safetensors(weights_dir: str) -> List[str]:
-    """Sorted, non-symlinked ``*.safetensors`` under ``weights_dir``."""
+    """Sorted, non-symlinked checkpoint files under ``weights_dir``.
+
+    The checkpoint's files are what the index names, or ``model.safetensors`` /
+    the ``model-*-of-*`` shards (#1806); Mistral's ``consolidated.safetensors``
+    beside them used to put every one of its tensors into the resident extras
+    shard and double ``source_weight_bytes``.
+    """
+    from soup_cli.utils.checkpoint_files import checkpoint_files
+
     root = os.path.realpath(os.path.expanduser(weights_dir))
     if not os.path.isdir(root):
         raise FileNotFoundError(f"weights directory not found: {weights_dir}")
+    selected = checkpoint_files(root)
     found = []
-    for name in sorted(os.listdir(root)):
-        if not name.endswith(".safetensors"):
-            continue
+    for name in selected.weights:
         path = os.path.join(root, name)
         if os.path.islink(path):
             logger.warning("layer-stream sharder: skipping symlinked shard %s", name)
@@ -730,8 +848,8 @@ def _discover_safetensors(weights_dir: str) -> List[str]:
         found.append(path)
     if not found:
         raise FileNotFoundError(
-            f"no .safetensors weight files found in {weights_dir} — layer "
-            f"streaming needs a safetensors checkpoint"
+            f"{selected.why_empty(weights_dir)} — layer streaming needs a safetensors "
+            f"checkpoint"
         )
     if len(found) > _MAX_SHARD_FILES:
         raise ValueError(f"too many shard files ({len(found)} > {_MAX_SHARD_FILES})")
@@ -799,6 +917,329 @@ def estimate_oq_stream_cache_bytes(
     return elements * itemsize + 256 * 1024 * 1024
 
 
+#: Header bytes a safetensors file spends per tensor besides the tensor's name: its
+#: dtype, shape and offsets, with the file's 8-byte length field and alignment padding
+#: spread over its tensors (at most 87 per tensor on the Moonlight-16B caches).
+_HEADER_BYTES_PER_TENSOR = 96
+#: ``index.json``: its scalar fields plus a share per listed entry (source file,
+#: stored key, quantised suffix, decoder layer). Measured 62-91 bytes per entry, from
+#: a one-layer Llama to Moonlight-16B (7.9-8.7 KB for ~116 entries).
+_INDEX_BYTES_FIXED = 1024
+_INDEX_BYTES_PER_ENTRY = 128
+_PER_EXPERT_PROJECTIONS = frozenset({"gate_proj", "up_proj", "down_proj"})
+
+
+def nf4_weight_bytes(numel: int, *, double_quant: bool) -> int:
+    """Bytes :func:`_quantize_nf4` stores for ONE weight of ``numel`` elements.
+
+    The packed nibbles (``ceil(numel / 2)`` uint8) plus one absmax per
+    ``NF4_BLOCKSIZE`` block: float32 without double quantisation; with it a uint8
+    per block, one float32 nested absmax per ``NF4_NESTED_BLOCKSIZE`` blocks and
+    one float32 offset. Exact: pinned against bitsandbytes' own output.
+    """
+    if isinstance(numel, bool) or not isinstance(numel, int) or numel <= 0:
+        raise ValueError(f"an NF4 weight needs a positive element count; got {numel!r}")
+    blocks = -(-numel // NF4_BLOCKSIZE)
+    packed = (numel + 1) // 2
+    if not double_quant:
+        return packed + 4 * blocks
+    return packed + blocks + 4 * -(-blocks // NF4_NESTED_BLOCKSIZE) + 4
+
+
+def _nf4_sidecar_suffixes(double_quant: bool) -> Tuple[str, ...]:
+    """The stored key suffixes of one NF4 weight (see :func:`_quantize_nf4`)."""
+    nested = (NESTED_ABSMAX_SUFFIX, NESTED_OFFSET_SUFFIX) if double_quant else ()
+    return ("", ABSMAX_SUFFIX) + nested
+
+
+def _layer_tensor_storage(
+    short: str,
+    *,
+    dtype: str,
+    quantise: bool,
+    suffixes: Iterable[str],
+    fp32_keys: Iterable[str],
+) -> Tuple[str, bool]:
+    """``(stored dtype, NF4?)`` for one decoder-layer key that is not a routed expert.
+
+    The one rule :func:`shard_checkpoint` writes by and
+    :func:`estimate_shard_cache_bytes` sizes by: a key the meta probe found
+    converted to ``Linear4bit`` (``suffixes``) is NF4, a layer buffer the runtime
+    loads back stays float32, everything else is stored at ``dtype``.
+    """
+    stored = "float32" if short in fp32_keys else dtype
+    return stored, bool(quantise) and short in suffixes
+
+
+def _routed_experts_quantised(expert_layout: str, quantise: bool) -> bool:
+    """Whether a stacked-expert architecture's routed experts are stored as NF4.
+
+    ``per_expert`` quantises each expert matrix on its own under NF4. The default
+    fused layout stacks them into the 3-D ``mlp.experts.gate_up_proj`` /
+    ``down_proj`` parameters, which ``replace_with_bnb_linear`` does not convert
+    (they are not ``nn.Linear`` weights), so they stay at the stream dtype.
+    """
+    return bool(quantise) and expert_layout == EXPERT_LAYOUT_PER_EXPERT
+
+
+def _fp8_consumed_keys(plan: Optional[FP8BlockPlan]) -> FrozenSet[str]:
+    """Source keys the cache never stores: an FP8 block source's ``weight_scale_inv``.
+
+    The rule :func:`shard_checkpoint` skips by and :func:`estimate_shard_cache_bytes`
+    charges nothing for. The FP8 weight itself is stored, dequantised, by the ordinary
+    rules above, so it is charged like any other weight of its element count.
+    """
+    return plan.scales if plan is not None else frozenset()
+
+
+class SourceHeaderError(ValueError):
+    """A source safetensors header could not be read or parsed.
+
+    Its own type so the disk pre-flight can fall back to an approximate figure for
+    exactly this, while a bad request or a checkpoint the sharder refuses still raises.
+    """
+
+
+#: What reading and parsing one header can raise: a missing or unreadable file, a
+#: malformed header (``ValueError``), a null or nested dimension or offset
+#: (``TypeError``), an infinite one (``OverflowError``) and JSON nested deeper than
+#: the parser recurses (``RecursionError``: 200 KB of ``[`` is enough).
+_HEADER_READ_ERRORS = (OSError, ValueError, TypeError, OverflowError, RecursionError)
+
+
+def _read_source_tensors(
+    shard_paths: Sequence[str],
+) -> Dict[str, Tuple[str, Tuple[int, ...]]]:
+    """Canonical key -> (safetensors dtype, shape) over every source file, from the headers.
+
+    A header that cannot be read becomes :class:`SourceHeaderError`. One tensor
+    spelled twice, or more than ``_MAX_TOTAL_TENSORS`` across the files, is
+    refused the way :func:`shard_checkpoint` refuses it.
+    """
+    from soup_cli.utils.safetensors_reader import RAW_DTYPES, read_header
+
+    shapes: Dict[str, Tuple[str, Tuple[int, ...]]] = {}
+    spelled: Dict[str, str] = {}
+    for path in shard_paths:
+        try:
+            header = read_header(path)
+        except _HEADER_READ_ERRORS as exc:
+            raise SourceHeaderError(
+                f"cannot read the safetensors header of {path}: {exc}"
+            ) from exc
+        for source_key, entry in header.items():
+            key = _canonical_stream_key(source_key)
+            prior = spelled.get(key)
+            if prior is not None:
+                raise ValueError(
+                    f"checkpoint spells one streamed tensor twice: {prior!r} and "
+                    f"{source_key!r} both canonicalise to {key!r}. Refusing rather than "
+                    f"silently keeping one by safetensors key order."
+                )
+            spelled[key] = source_key
+            shapes[key] = (RAW_DTYPES[entry.dtype], entry.shape)
+            if len(shapes) > _MAX_TOTAL_TENSORS:
+                raise ValueError(f"checkpoint declares more than {_MAX_TOTAL_TENSORS} tensors")
+    return shapes
+
+
+@dataclass(frozen=True)
+class ShardCacheEstimate:
+    """What :func:`shard_checkpoint` will write, sized from the source headers.
+
+    ``layer_bytes[i]`` is the tensor payload of decoder layer ``i``: its layer file
+    plus, under ``expert_layout="per_expert"``, its experts file (both are written
+    to the same root). ``other_bytes`` is the payload of the extras shard and the
+    large embed/head shards, all on root 0. Both are exact. ``header_bytes`` and
+    ``index_bytes`` bound the safetensors headers and ``index.json`` from above.
+    """
+
+    layer_bytes: Tuple[int, ...]
+    other_bytes: int
+    header_bytes: int
+    index_bytes: int
+
+    @property
+    def total_bytes(self) -> int:
+        return sum(self.layer_bytes) + self.other_bytes + self.header_bytes + self.index_bytes
+
+
+def estimate_shard_cache_bytes(
+    shard_paths: Sequence[str],
+    *,
+    dtype: str,
+    arch: str = "",
+    quant: str = QUANT_NONE,
+    quant_suffixes: Iterable[str] = (),
+    double_quant: bool = True,
+    expert_layout: str = "",
+    num_hidden_layers: Optional[int] = None,
+    quantization_config: Optional[Mapping[str, Any]] = None,
+) -> Optional[ShardCacheEstimate]:
+    """Size the cache :func:`shard_checkpoint` writes for the same arguments.
+
+    Reads only the safetensors headers of ``shard_paths`` (shapes and dtypes; no
+    tensor is loaded and no file is mapped) and stores each tensor the way the
+    sharder does: :func:`_layer_tensor_storage` for every decoder key,
+    :func:`_routed_experts_quantised` for the routed experts of a stacked-expert
+    architecture, :func:`nf4_weight_bytes` for each NF4 weight, the same
+    multi-token-prediction drop for ``deepseek_v3`` and the stream ``dtype`` for
+    everything outside the decoder layers.
+
+    ``quantization_config`` is the checkpoint config's (``None`` when it has none).
+    An FP8 block source is classified by :func:`plan_fp8_block`, as the sharder
+    classifies it: each FP8 weight is charged at the rate its dequantised tensor is
+    stored at (the rules above, by element count), and its ``weight_scale_inv`` is
+    consumed and charged nothing.
+
+    Returns ``None`` for ``qwen4_exp``, whose external PLE table and oQ layout
+    have their own estimators. The arguments are checked before any file is read
+    (``ValueError``). A header that cannot be read raises
+    :class:`SourceHeaderError`; a checkpoint the sharder would refuse raises
+    ``ValueError`` in the sharder's words, before anything is sized by its layer
+    count.
+    """
+    if arch == "qwen4_exp":
+        return None
+    # The config alone decides an unsupported FP8 spelling: refused before any header.
+    fp8_block_size(quantization_config, arch=arch)
+    if dtype not in _SUPPORTED_DTYPES:
+        raise ValueError(
+            f"unsupported dtype {dtype!r} for layer streaming; "
+            f"supported: {', '.join(_SUPPORTED_DTYPES)}"
+        )
+    if expert_layout not in ("", EXPERT_LAYOUT_PER_EXPERT):
+        raise ValueError(
+            f"unsupported expert_layout {expert_layout!r}; supported: "
+            f"'' (fused) or {EXPERT_LAYOUT_PER_EXPERT!r}"
+        )
+    suffixes = _validate_quant_request(quant, quant_suffixes)
+    quantise = quant == QUANT_NF4
+
+    from soup_cli.utils.expert_stream import DOWN, GATE_UP, expert_key
+    from soup_cli.utils.safetensors_reader import _ITEMSIZE
+
+    tensors = _read_source_tensors(shard_paths)
+    fp8_plan = plan_fp8_block(quantization_config, tensors, arch=arch)
+    consumed = _fp8_consumed_keys(fp8_plan)
+
+    itemsize = _ITEMSIZE[dtype]
+    stack_experts = arch in _STACKED_EXPERT_ARCHS
+    fp32_keys = layer_buffer_keys(arch)
+    drop_extra_layers = arch == "deepseek_v3" and num_hidden_layers is not None
+    experts_nf4 = _routed_experts_quantised(expert_layout, quantise)
+    sidecars = _nf4_sidecar_suffixes(double_quant)
+
+    layer_bytes: Dict[int, int] = {}
+    routed: Dict[int, Dict[int, Dict[str, int]]] = {}
+    other_bytes = 0
+    header_bytes = 0
+    stored_names: set = set()
+    any_nf4 = False
+
+    def _charge_names(names: Iterable[str], *, indexed: bool = True) -> int:
+        """Header bytes for ``names``; ``indexed`` ones are also listed in index.json."""
+        names = tuple(names)
+        if indexed:
+            stored_names.update(names)
+        return sum(len(name) + _HEADER_BYTES_PER_TENSOR for name in names)
+
+    for key, (_source_dtype, shape) in tensors.items():
+        if key in consumed:
+            continue
+        numel = math.prod(shape)
+        match = _LAYER_RE.match(key)
+        if match is None:
+            other_bytes += numel * itemsize
+            header_bytes += _charge_names((key,))
+            continue
+        idx = int(match.group(1))
+        if drop_extra_layers and idx >= num_hidden_layers:
+            continue
+        layer_bytes.setdefault(idx, 0)
+        expert_match = _PER_EXPERT_RE.match(key) if stack_experts else None
+        if expert_match:
+            expert = int(expert_match.group("expert"))
+            projections = routed.setdefault(idx, {}).setdefault(expert, {})
+            projections[expert_match.group("projection")] = numel
+            continue
+        short = match.group(2)
+        stored, nf4 = _layer_tensor_storage(
+            short, dtype=dtype, quantise=quantise, suffixes=suffixes, fp32_keys=fp32_keys
+        )
+        if nf4:
+            any_nf4 = True
+            layer_bytes[idx] += nf4_weight_bytes(numel, double_quant=double_quant)
+            header_bytes += _charge_names(short + suffix for suffix in sidecars)
+        else:
+            layer_bytes[idx] += numel * _ITEMSIZE[stored]
+            header_bytes += _charge_names((short,))
+
+    for idx, experts in routed.items():
+        for expert, projections in experts.items():
+            if set(projections) != _PER_EXPERT_PROJECTIONS:
+                raise ValueError(
+                    f"layer {idx} expert {expert} has incomplete expert projections: "
+                    f"{sorted(projections)}"
+                )
+        # gate and up are concatenated into ONE gate_up matrix before it is stored.
+        pairs = [
+            (projections["gate_proj"] + projections["up_proj"], projections["down_proj"])
+            for projections in experts.values()
+        ]
+        if experts_nf4:
+            any_nf4 = True
+            layer_bytes[idx] += sum(
+                nf4_weight_bytes(gate_up, double_quant=double_quant)
+                + nf4_weight_bytes(down, double_quant=double_quant)
+                for gate_up, down in pairs
+            )
+        else:
+            layer_bytes[idx] += sum(gate_up + down for gate_up, down in pairs) * itemsize
+        if expert_layout == EXPERT_LAYOUT_PER_EXPERT:
+            # experts_NNN.safetensors, whose keys index.json does not list.
+            parts = sidecars if experts_nf4 else ("",)
+            names = [
+                expert_key(expert, part) + suffix
+                for expert in experts
+                for part in (GATE_UP, DOWN)
+                for suffix in parts
+            ]
+            header_bytes += _charge_names(names, indexed=False)
+        else:
+            # Fused: the two stacked tensors in the layer file.
+            header_bytes += _charge_names(("mlp.experts.gate_up_proj", "mlp.experts.down_proj"))
+
+    if not layer_bytes:
+        raise ValueError(
+            "no decoder layer weights (model.layers.N.*) found; layer streaming has "
+            "nothing to stream"
+        )
+    n_layers = max(layer_bytes) + 1
+    # Before anything below is sized by the layer count: a header naming layer
+    # 8,000,000 would otherwise cost ~780 MB just to say the layers are missing.
+    if n_layers > _MAX_LAYERS:
+        raise ValueError(f"too many decoder layers ({n_layers} > {_MAX_LAYERS})")
+    if len(layer_bytes) != n_layers:
+        missing = sorted(set(range(n_layers)) - set(layer_bytes))
+        raise ValueError(f"decoder layer indices are not contiguous; missing {missing[:8]}")
+    if any_nf4:
+        # The shared code tables in extras: the 16 float32 NF4 levels, plus the
+        # 256-entry float32 nested map under double quantisation.
+        tables = {NF4_CODE_KEY: 16 * 4}
+        if double_quant:
+            tables[NF4_NESTED_CODE_KEY] = 256 * 4
+        other_bytes += sum(tables.values())
+        header_bytes += _charge_names(tables)
+    index_entries = len(shard_paths) + len(stored_names) + len(suffixes) + n_layers
+    return ShardCacheEstimate(
+        layer_bytes=tuple(layer_bytes[idx] for idx in range(n_layers)),
+        other_bytes=other_bytes,
+        header_bytes=header_bytes,
+        index_bytes=_INDEX_BYTES_FIXED + _INDEX_BYTES_PER_ENTRY * index_entries,
+    )
+
+
 def source_weight_bytes(weights_dir: str) -> int:
     """Total bytes of the source ``*.safetensors`` — a cheap size probe that
     lets a caller refuse an oversized base BEFORE spending minutes sharding."""
@@ -814,6 +1255,17 @@ def _source_file_components(shards: List[str]) -> Tuple[Tuple[str, int, int], ..
             (os.path.basename(path), int(stat.st_size), int(stat.st_mtime_ns))
         )
     return tuple(components)
+
+
+def source_identity_includes_config(arch: str) -> bool:
+    """Whether ``config.json`` is part of a shard cache's source identity.
+
+    ``qwen4_exp`` reads its PLE layout from the config; for ``deepseek_v3`` the
+    config's layer count decides which (multi-token-prediction) layers are
+    dropped. The pre-sharding planner and the sharder must agree on this, or
+    the planner predicts a cache miss the sharder then does not see.
+    """
+    return arch in ("qwen4_exp", "deepseek_v3")
 
 
 def checkpoint_source_components(
@@ -920,6 +1372,13 @@ def _atomic_write_index(index: ShardIndex, out_dir: str) -> None:
     payload["quant_specs"] = {
         key: spec.to_json() for key, spec in index.quant_specs.items()
     }
+    payload["expert_layers"] = list(index.expert_layers)
+    payload["expert_shapes"] = {
+        part: list(shape) for part, shape in index.expert_shapes.items()
+    }
+    payload["expert_quant_specs"] = {
+        part: spec.to_json() for part, spec in index.expert_quant_specs.items()
+    }
     path = os.path.join(out_dir, _INDEX_NAME)
     fd, tmp = tempfile.mkstemp(prefix=".soup.", suffix=".tmp", dir=out_dir)
     try:
@@ -979,6 +1438,7 @@ def inspect_shard_cache(
     quant_device: str,
     external_mode: str = "",
     stripe_roots: Sequence[str] = (),
+    expert_layout: str = "",
 ) -> Tuple[Optional[ShardIndex], str]:
     """Return a reusable index or the precise reason it must be rewritten.
 
@@ -992,6 +1452,8 @@ def inspect_shard_cache(
     try:
         index = read_shard_index(out_dir)
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        if os.path.exists(os.path.join(out_dir, _RESHARDING_INDEX_NAME)):
+            return None, "previous re-shard did not finish; cache index is unavailable"
         return None, "cache index is missing or unreadable"
     if index.dtype != dtype:
         return None, f"dtype changed ({index.dtype!r} -> {dtype!r})"
@@ -1012,6 +1474,11 @@ def inspect_shard_cache(
         return None, (
             f"external tensor policy changed ({index.external_mode!r} -> "
             f"{external_mode!r})"
+        )
+    if index.expert_layout != expert_layout:
+        return None, (
+            f"expert layout changed ({index.expert_layout or 'fused'!r} -> "
+            f"{expert_layout or 'fused'!r})"
         )
     if index.format_version != _SHARD_FORMAT_VERSION:
         return None, (
@@ -1049,12 +1516,49 @@ def inspect_shard_cache(
         path = large_shard_path(out_dir, key)
         if not os.path.exists(path):
             return None, f"cached shard {os.path.basename(path)!r} is missing"
-    for path in layer_paths(out_dir, index):
+    for path in [*layer_paths(out_dir, index), *expert_paths(out_dir, index).values()]:
         if not os.path.exists(path):
             if os.path.dirname(path) == out_dir:
                 return None, f"cached shard {os.path.basename(path)!r} is missing"
             return None, f"cached shard {path} is missing"
     return index, "cache is reusable"
+
+
+def _content_change_requires_index_quarantine(
+    out_dir: str,
+    *,
+    dtype: str,
+    fingerprint: str,
+    quant: str,
+    double_quant: bool,
+    quant_device: str,
+    external_mode: str,
+    expert_layout: str = "",
+) -> bool:
+    """Return whether the next write could make the current index describe wrong bytes."""
+    try:
+        index = read_shard_index(out_dir)
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return False
+    return any(
+        (
+            index.dtype != dtype,
+            index.quant != quant,
+            index.quant != QUANT_NONE and index.double_quant != double_quant,
+            index.quant != QUANT_NONE and index.quant_device != quant_device,
+            index.source_fingerprint != fingerprint,
+            index.external_mode != external_mode,
+            index.expert_layout != expert_layout,
+            index.format_version != _SHARD_FORMAT_VERSION,
+        )
+    )
+
+
+def _quarantine_shard_index(out_dir: str) -> None:
+    """Take the old commit point out of play before rewriting content bytes."""
+    path = os.path.join(out_dir, _INDEX_NAME)
+    if os.path.exists(path):
+        os.replace(path, os.path.join(out_dir, _RESHARDING_INDEX_NAME))
 
 
 # ==========================================================================
@@ -1170,6 +1674,8 @@ def shard_checkpoint(
     quant_device: Optional[str] = None,
     notify: Optional[Callable[[str], None]] = None,
     stripe_roots: Sequence[str] = (),
+    num_hidden_layers: Optional[int] = None,
+    expert_layout: str = "",
 ) -> ShardIndex:
     """Rewrite an HF checkpoint into per-layer safetensors shards.
 
@@ -1186,11 +1692,51 @@ def shard_checkpoint(
     ``i`` is written to root ``i mod N`` (root 0 is ``out_dir``), each extra
     root gets a per-model folder named like ``out_dir`` plus a ``stripe.json``
     marker, and the index records the placement.
+
+    For ``arch`` in :data:`_STACKED_EXPERT_ARCHS` the per-expert routed-expert
+    keys (``mlp.experts.E.{gate,up,down}_proj.weight``) are stacked into the
+    fused ``mlp.experts.gate_up_proj`` / ``mlp.experts.down_proj`` tensors the
+    transformers module holds, the same conversion ``from_pretrained`` applies.
+    For ``deepseek_v3``, ``num_hidden_layers`` (the config's value) drops the
+    multi-token-prediction layers a DeepSeek-V3 / Kimi K2 checkpoint stores
+    past the last decoder layer; transformers ignores them on load too.
+
+    ``expert_layout="per_expert"`` (stacked-expert architectures only) writes a
+    MoE layer's routed experts to ``experts_NNN.safetensors`` beside its layer
+    file, one ``(gate_up, down)`` pair per expert, NF4-quantised per matrix
+    under ``quant='nf4'``; the layer file then holds only the dense part.
+
+    A DeepSeek-V3 FP8 block-quantised checkpoint (``config.json``'s
+    ``quantization_config`` plus ``float8_e4m3fn`` weights with ``weight_scale_inv``
+    block scales; see ``utils/fp8_block.py``) is detected from the checkpoint itself:
+    each FP8 weight is dequantised to fp32 as it is read, per-expert ones before they
+    are stacked or written to their experts file, cast to the stream dtype and then
+    stored by the rules above. The scales are consumed and never stored. Any other
+    FP8 spelling is refused before anything is written.
     """
+    if expert_layout not in ("", EXPERT_LAYOUT_PER_EXPERT):
+        raise ValueError(
+            f"unsupported expert_layout {expert_layout!r}; supported: "
+            f"'' (fused) or {EXPERT_LAYOUT_PER_EXPERT!r}"
+        )
+    if expert_layout and arch not in _PER_EXPERT_LAYOUT_ARCHS:
+        raise ValueError(
+            f"expert_layout={expert_layout!r} is gated on resident parity per "
+            f"architecture; admitted: {', '.join(_PER_EXPERT_LAYOUT_ARCHS)}; got arch={arch!r}"
+        )
     if dtype not in _SUPPORTED_DTYPES:
         raise ValueError(
             f"unsupported dtype {dtype!r} for layer streaming; "
             f"supported: {', '.join(_SUPPORTED_DTYPES)}"
+        )
+    if num_hidden_layers is not None and (
+        isinstance(num_hidden_layers, bool)
+        or not isinstance(num_hidden_layers, int)
+        or not 1 <= num_hidden_layers <= _MAX_LAYERS
+    ):
+        raise ValueError(
+            f"num_hidden_layers must be an int in [1, {_MAX_LAYERS}], "
+            f"got {num_hidden_layers!r}"
         )
     suffixes = _validate_quant_request(quant, quant_suffixes)
     quantise = quant == QUANT_NF4
@@ -1199,14 +1745,23 @@ def shard_checkpoint(
     # index stores that so the cache check below stays stable across ordinals.
     device_kind = str(device).split(":", 1)[0] if quantise else ""
     external_mode = "qwen4_ple" if arch == "qwen4_exp" else ""
+    stack_experts = arch in _STACKED_EXPERT_ARCHS
+    expert_label = _STACKED_EXPERT_ARCHS.get(arch, arch)
+    # Fused routed experts are stacked at the stream dtype below and never quantised;
+    # per_expert ones are NF4 under quant='nf4'. The disk pre-flight sizes by this too.
+    experts_nf4 = _routed_experts_quantised(expert_layout, quantise)
+    fp32_layer_keys = layer_buffer_keys(arch)
+    drop_extra_layers = arch == "deepseek_v3" and num_hidden_layers is not None
     shards = _discover_safetensors(weights_dir)
     resolved_out = _validate_out_dir(out_dir)
 
     from soup_cli.utils.stripe_roots import (
         STRIPE_DIRS_ENV,
+        StripeRootError,
         layer_roots_for,
         primary_cache_identity,
         secure_stripe_folder,
+        stripe_folder_problem,
         validate_stripe_root,
     )
 
@@ -1230,7 +1785,7 @@ def shard_checkpoint(
     source_files = checkpoint_source_components(
         weights_dir,
         _source_file_components(shards),
-        include_config=bool(external_mode),
+        include_config=source_identity_includes_config(arch),
     )
     fingerprint = _fingerprint_components(source_files)
     if not force:
@@ -1244,8 +1799,11 @@ def shard_checkpoint(
             device_kind,
             external_mode,
             stripe_roots=stripe,
+            expert_layout=expert_layout,
         )
         if cached is not None:
+            if notify is not None:
+                _notify_unindexed_cache_files(resolved_out, cached, notify)
             return cached
         if notify is not None:
             from soup_cli.utils.terminal import for_terminal
@@ -1254,11 +1812,27 @@ def shard_checkpoint(
             # as text, never as markup or raw control bytes.
             notify(f"[yellow]Re-sharding layer cache:[/] {for_terminal(miss_reason)}.")
             _notify_orphaned_stripes(resolved_out, stripe, notify)
+        if _content_change_requires_index_quarantine(
+            resolved_out,
+            dtype=dtype,
+            fingerprint=fingerprint,
+            quant=quant,
+            double_quant=double_quant,
+            quant_device=device_kind,
+            external_mode=external_mode,
+            expert_layout=expert_layout,
+        ):
+            _quarantine_shard_index(resolved_out)
 
     from safetensors import safe_open
 
+    # An FP8 spelling the config alone rules out is refused before any header is read.
+    source_quantization = read_checkpoint_quantization_config(weights_dir)
+    fp8_block_size(source_quantization, arch=arch)
+
     # pass 1 — build key -> shard without materialising a single tensor
     where: Dict[str, Tuple[str, str]] = {}
+    source_tensors: Dict[str, Tuple[str, Tuple[int, ...]]] = {}
     external_parts: Dict[str, List[Tuple[int, ExternalTensorPart]]] = {}
     oq_external_keys: Dict[str, List[Tuple[int, str]]] = {}
     external_source_keys = set()
@@ -1279,6 +1853,11 @@ def shard_checkpoint(
                         f"safetensors key order."
                     )
                 where[key] = (path, source_key)
+                header = handle.get_slice(source_key)
+                source_tensors[key] = (
+                    str(header.get_dtype()),
+                    tuple(int(dim) for dim in header.get_shape()),
+                )
                 ple_match = _QWEN4_PLE_SHARD_RE.match(key) if external_mode else None
                 oq_ple_match = (
                     _QWEN4_OQ_PLE_SHARD_RE.match(key) if external_mode else None
@@ -1314,6 +1893,12 @@ def shard_checkpoint(
                 if match:
                     layer_ids.add(int(match.group(1)))
 
+    # Before any byte is read or written: every FP8 tensor must be a block weight with
+    # its scale, every scale must sit beside one (the disk pre-flight runs the same plan).
+    fp8_plan = plan_fp8_block(source_quantization, source_tensors, arch=arch)
+    consumed = _fp8_consumed_keys(fp8_plan)
+    del source_tensors
+
     oq_config = None
     if saw_oq_companion:
         from soup_cli.utils.oq_affine import load_affine_quant_config
@@ -1335,6 +1920,24 @@ def shard_checkpoint(
             for key in where
             if (match := _LAYER_RE.match(key)) is not None
         }
+
+    if expert_layout and not any(_PER_EXPERT_RE.match(key) for key in where):
+        raise ValueError(
+            f"expert_layout={expert_layout!r} found no per-expert routed weights "
+            f"(model.layers.N.mlp.experts.E.*) in {weights_dir} to split"
+        )
+    if drop_extra_layers:
+        # DeepSeek-V3 / Kimi K2 store the multi-token-prediction module as the
+        # layer(s) after the last decoder layer (``model.layers.61.*`` of 61).
+        # The CausalLM has no such layer and transformers drops the keys on
+        # load; kept here they would make a shard the skeleton cannot place.
+        where = {
+            key: location
+            for key, location in where.items()
+            if (match := _LAYER_RE.match(key)) is None
+            or int(match.group(1)) < num_hidden_layers
+        }
+        layer_ids = {layer for layer in layer_ids if layer < num_hidden_layers}
 
     external_tensors: Dict[str, Any] = {}
     for logical_key, indexed_parts in external_parts.items():
@@ -1468,18 +2071,21 @@ def shard_checkpoint(
     # Collected here, deleted only after the new index commits — see the comment beside the
     # deletion below for why.
     stale_root0_copies: List[str] = []
+    expert_layers_written: List[int] = []
+    expert_meta: Optional[Tuple[int, Dict[str, Any], Dict[str, Any]]] = None
     # At most _MAX_LIVE_SOURCE_HANDLES source files are mapped at once (#926);
     # a failed open, or a raise anywhere below, still releases the live ones.
     with _SourceHandles(shards, safe_open) as handles:
         for idx in range(n_layers):
             prefix = f"model.layers.{idx}."
             blob = {}
-            qwen4_experts: Dict[str, Dict[int, Tuple[str, str]]] = {}
+            stacked_experts: Dict[str, Dict[int, Tuple[str, str]]] = {}
+            per_expert_ids: List[int] = []
             oq_experts: Dict[str, str] = {}
-            for key, location in where.items():
+            for key in where:
                 if not key.startswith(prefix):
                     continue
-                if key in external_source_keys:
+                if key in external_source_keys or key in consumed:
                     continue
                 if saw_oq_companion and key.endswith((".scales", ".biases")):
                     continue
@@ -1489,22 +2095,29 @@ def shard_checkpoint(
                 if oq_expert_match:
                     oq_experts[oq_expert_match.group("projection")] = key
                     continue
-                expert_match = _QWEN4_EXPERT_RE.match(key) if external_mode else None
+                expert_match = _PER_EXPERT_RE.match(key) if stack_experts else None
                 if expert_match:
                     projection = expert_match.group("projection")
                     expert = int(expert_match.group("expert"))
-                    qwen4_experts.setdefault(projection, {})[expert] = location
+                    stacked_experts.setdefault(projection, {})[expert] = key
                     continue
-                path, source_key = location
                 short = key[len(prefix):]
+                # The same rule estimate_shard_cache_bytes sizes the disk pre-flight by.
+                stored, as_nf4 = _layer_tensor_storage(
+                    short,
+                    dtype=dtype,
+                    quantise=quantise,
+                    suffixes=suffixes,
+                    fp32_keys=fp32_layer_keys,
+                )
                 if saw_oq_companion and key.endswith(".weight"):
                     tensor = _read_oq_tensor(
                         handles, where, key, oq_config=oq_config, dtype=dtype
                     )
                 else:
-                    tensor = _read_tensor(handles[path], source_key, dtype)
+                    tensor = _read_source_tensor(handles, where, key, stored, fp8_plan)
                 total_params += tensor.numel()
-                if quantise and short in suffixes:
+                if as_nf4:
                     sidecars, spec, code, nested_code = _quantize_nf4(
                         tensor, double_quant=double_quant, device=device
                     )
@@ -1528,29 +2141,35 @@ def shard_checkpoint(
             for logical_key, spec in external_tensors.items():
                 if logical_key.startswith(prefix):
                     total_params += math.prod(spec.shape)
-            if qwen4_experts:
+            if stacked_experts:
                 import torch
 
                 expected_projections = {"gate_proj", "up_proj", "down_proj"}
-                if set(qwen4_experts) != expected_projections:
+                if set(stacked_experts) != expected_projections:
                     raise ValueError(
-                        f"Qwen4 layer {idx} has incomplete expert projections: "
-                        f"{sorted(qwen4_experts)}"
+                        f"{expert_label} layer {idx} has incomplete expert projections: "
+                        f"{sorted(stacked_experts)}"
                     )
-                expert_ids = sorted(qwen4_experts["gate_proj"])
+                expert_ids = sorted(stacked_experts["gate_proj"])
                 if expert_ids != list(range(len(expert_ids))) or any(
-                    sorted(qwen4_experts[name]) != expert_ids
+                    sorted(stacked_experts[name]) != expert_ids
                     for name in expected_projections
                 ):
                     raise ValueError(
-                        f"Qwen4 layer {idx} expert ids must be contiguous and "
+                        f"{expert_label} layer {idx} expert ids must be contiguous and "
                         "identical across gate/up/down projections"
                     )
 
                 def _expert_tensor(projection: str, expert: int):
-                    path, source_key = qwen4_experts[projection][expert]
-                    return _read_tensor(handles[path], source_key, dtype)
+                    # An FP8 expert is dequantised here, before it is stacked or written.
+                    return _read_source_tensor(
+                        handles, where, stacked_experts[projection][expert], dtype, fp8_plan
+                    )
 
+                if expert_layout == EXPERT_LAYOUT_PER_EXPERT:
+                    # Written after the layer file, in its root (below).
+                    per_expert_ids = expert_ids
+                    expert_ids = []
                 gate_up = []
                 down = []
                 for expert in expert_ids:
@@ -1562,10 +2181,12 @@ def shard_checkpoint(
                     total_params += gate.numel() + up.numel() + down_tensor.numel()
                 if "mlp.experts.gate_up_proj" in blob or "mlp.experts.down_proj" in blob:
                     raise ValueError(
-                        f"Qwen4 layer {idx} contains both packed and per-expert weights"
+                        f"{expert_label} layer {idx} contains both packed and "
+                        "per-expert weights"
                     )
-                blob["mlp.experts.gate_up_proj"] = torch.stack(gate_up, dim=0)
-                blob["mlp.experts.down_proj"] = torch.stack(down, dim=0)
+                if gate_up:
+                    blob["mlp.experts.gate_up_proj"] = torch.stack(gate_up, dim=0)
+                    blob["mlp.experts.down_proj"] = torch.stack(down, dim=0)
             if oq_experts:
                 import torch
 
@@ -1620,6 +2241,19 @@ def shard_checkpoint(
                     )
                 shared_specs.setdefault(name, spec)
             root = layer_roots[idx] if layer_roots else 0
+            if root:
+                # secure_stripe_folder ran once, before the loop started. Between then and
+                # now the root could have been renamed and a link substituted in its place
+                # (the folder itself still looks fine to a plain stat), so the same
+                # real-path check is repeated right before every write that would otherwise
+                # silently follow it.
+                problem = stripe_folder_problem(shard_dirs[root], stripe[root - 1])
+                if problem is not None:
+                    raise StripeRootError(
+                        f"{STRIPE_DIRS_ENV}: writing decoder layer {idx} to the stripe root "
+                        f"{stripe[root - 1]} refused: {problem}. The existing cache index is "
+                        f"unchanged."
+                    )
             try:
                 _atomic_save(blob, layer_shard_path(shard_dirs[root], idx))
             except OSError as exc:
@@ -1634,6 +2268,35 @@ def shard_checkpoint(
                     f"Free space on that drive, or name another folder in {STRIPE_DIRS_ENV} "
                     f"(unset it to shard to one root).",
                 ) from exc
+            if per_expert_ids:
+                import torch
+
+                def _expert_pairs(ids=per_expert_ids, read=_expert_tensor):
+                    for expert in ids:
+                        gate = read("gate_proj", expert)
+                        gate_up_one = torch.cat((gate, read("up_proj", expert)))
+                        yield gate_up_one, read("down_proj", expert)
+
+                info = write_expert_shard(
+                    os.path.join(shard_dirs[root], expert_shard_name(idx)),
+                    _expert_pairs(),
+                    quantise=experts_nf4,
+                    double_quant=double_quant,
+                    device=device,
+                )
+                if experts_nf4:
+                    tables.observe(f"{prefix}mlp.experts", *info.codes)
+                described = (info.count, dict(info.shapes), dict(info.quant_specs))
+                if expert_meta is None:
+                    expert_meta = described
+                elif expert_meta != described:
+                    raise ValueError(
+                        f"{expert_label} layer {idx} experts differ from the first MoE "
+                        f"layer's ({described[:2]} vs {expert_meta[:2]}); one expert layout "
+                        f"serves every layer"
+                    )
+                expert_layers_written.append(idx)
+                total_params += info.total_params
             if root:
                 # A copy of this layer from an earlier one-root layout is now stale. It is
                 # Soup's own file inside the contained primary root, so it WILL go — but not
@@ -1646,23 +2309,27 @@ def shard_checkpoint(
                 stale = layer_shard_path(resolved_out, idx)
                 if os.path.exists(stale):
                     stale_root0_copies.append(stale)
+            # An experts file the new index will not name (an earlier per_expert
+            # layout, or one now written to a stripe root) goes the same way.
+            stale_experts = os.path.join(resolved_out, expert_shard_name(idx))
+            if (not per_expert_ids or root) and os.path.exists(stale_experts):
+                stale_root0_copies.append(stale_experts)
             del blob
 
         extras = {}
         large_keys = []
         large_roles: Dict[str, str] = {}
-        for key, location in where.items():
-            if _LAYER_RE.match(key):
+        for key in where:
+            if _LAYER_RE.match(key) or key in consumed:
                 continue
             if saw_oq_companion and key.endswith((".scales", ".biases")):
                 continue
-            path, source_key = location
             if saw_oq_companion and key.endswith(".weight"):
                 tensor = _read_oq_tensor(
                     handles, where, key, oq_config=oq_config, dtype=dtype
                 )
             else:
-                tensor = _read_tensor(handles[path], source_key, dtype)
+                tensor = _read_source_tensor(handles, where, key, dtype, fp8_plan)
             total_params += tensor.numel()
             role = large_weight_role(key) if stream_untied_pair else None
             if role is None:
@@ -1687,6 +2354,12 @@ def shard_checkpoint(
 
     primary = primary_cache_identity(resolved_out)
     for position, directory in enumerate(shard_dirs[1:], start=1):
+        problem = stripe_folder_problem(directory, stripe[position - 1])
+        if problem is not None:
+            raise StripeRootError(
+                f"{STRIPE_DIRS_ENV}: writing the stripe marker to {stripe[position - 1]} "
+                f"refused: {problem}. The existing cache index is unchanged."
+            )
         _write_stripe_marker(
             directory,
             fingerprint=fingerprint,
@@ -1715,8 +2388,27 @@ def shard_checkpoint(
         external_mode=external_mode,
         stripe_roots=stripe,
         layer_roots=layer_roots,
+        expert_layout=expert_layout,
+        expert_layers=tuple(expert_layers_written),
+        expert_count=expert_meta[0] if expert_meta else 0,
+        expert_shapes=expert_meta[1] if expert_meta else {},
+        expert_quant_specs=expert_meta[2] if expert_meta else {},
     )
     _atomic_write_index(index, resolved_out)
+    resharding_index = os.path.join(resolved_out, _RESHARDING_INDEX_NAME)
+    try:
+        os.remove(resharding_index)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        if notify is not None:
+            from soup_cli.utils.terminal import for_terminal
+
+            notify(
+                f"[yellow]Could not delete the completed re-shard marker "
+                f"{for_terminal(resharding_index)} ({for_terminal(exc)}); the new cache "
+                f"index is committed — delete the marker when it is no longer in use.[/]"
+            )
     # Only now: the new index above no longer names these paths, so removing them cannot
     # leave any on-disk index (old or new) describing a file that does not exist. Best-effort
     # from here on: the shard is already correct and fully committed, so a failed delete (a
@@ -1738,6 +2430,8 @@ def shard_checkpoint(
                     f"({for_terminal(exc)}); the cache is complete without it — delete it to "
                     f"reclaim the space.[/]"
                 )
+    if notify is not None:
+        _notify_unindexed_cache_files(resolved_out, index, notify)
     return index
 
 
@@ -1753,6 +2447,23 @@ def _folder_bytes(folder: str) -> int:
     return total
 
 
+def shard_cache_disk_bytes(shard_dir: str, index: ShardIndex) -> Optional[int]:
+    """Bytes of the files a reusable cache is made of, or ``None`` if one cannot be measured.
+
+    Only what the cache check requires is counted: the index, the extras shard, each large
+    shard and each layer file wherever it is placed. A stray or stale file in the folder is
+    not part of the cache, and a file that cannot be read makes the caller keep its estimate.
+    """
+    paths = [os.path.join(shard_dir, _INDEX_NAME), extras_shard_path(shard_dir)]
+    paths.extend(large_shard_path(shard_dir, key) for key in index.large_keys)
+    paths.extend(layer_paths(shard_dir, index))
+    paths.extend(expert_paths(shard_dir, index).values())
+    try:
+        return sum(os.path.getsize(path) for path in paths)
+    except (OSError, ValueError):
+        return None
+
+
 def _notify_orphaned_stripes(
     out_dir: str, keep: Sequence[str], notify: Callable[[str], None]
 ) -> None:
@@ -1760,9 +2471,8 @@ def _notify_orphaned_stripes(
 
     Never deletes them: they sit outside the contained primary root, so the operator decides.
     """
-    try:
-        previous = read_shard_index(out_dir)
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+    previous = _read_previous_shard_index(out_dir)
+    if previous is None:
         return
     from soup_cli.utils.stripe_roots import stripe_folder_problem
     from soup_cli.utils.terminal import for_terminal
@@ -1779,6 +2489,61 @@ def _notify_orphaned_stripes(
             f"({_folder_bytes(folder) / 1e9:.2f} GB); this layout no longer does. Delete it "
             f"to reclaim the space.[/]"
         )
+
+
+def _read_previous_shard_index(out_dir: str) -> Optional[ShardIndex]:
+    """Read the current index, or the quarantined one during an interrupted re-shard."""
+    for name in (_INDEX_NAME, _RESHARDING_INDEX_NAME):
+        try:
+            return read_shard_index(out_dir, index_name=name)
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+            pass
+    return None
+
+
+def _notify_unindexed_cache_files(
+    out_dir: str, index: ShardIndex, notify: Callable[[str], None]
+) -> None:
+    """Report layer/temp files that the committed index no longer names."""
+    from soup_cli.utils.stripe_roots import stripe_folder_problem
+    from soup_cli.utils.terminal import for_terminal
+
+    expected = {
+        os.path.normcase(os.path.realpath(path))
+        for path in [*layer_paths(out_dir, index), *expert_paths(out_dir, index).values()]
+    }
+    directories = stripe_dirs(out_dir, index.stripe_roots)
+    for position, directory in enumerate(directories):
+        if position:
+            problem = stripe_folder_problem(directory, index.stripe_roots[position - 1])
+            if problem is not None:
+                continue
+        try:
+            entries = list(os.scandir(directory))
+        except OSError:
+            continue
+        for entry in entries:
+            if not (
+                (
+                    entry.name.startswith(("layer_", "experts_"))
+                    and entry.name.endswith(".safetensors")
+                )
+                or (entry.name.startswith(".soup.") and entry.name.endswith(".tmp"))
+            ):
+                continue
+            try:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                path = os.path.normcase(os.path.realpath(entry.path))
+                if path in expected:
+                    continue
+                size = entry.stat(follow_symlinks=False).st_size
+            except OSError:
+                continue
+            notify(
+                f"[yellow]Unindexed layer-cache file {for_terminal(entry.path)} "
+                f"({size} bytes) is present; it was not named by the committed cache index.[/]"
+            )
 
 
 def _require_all_quantised(suffixes: Tuple[str, ...], matched: Iterable[str]) -> None:
@@ -1938,11 +2703,56 @@ def _own(view: Any, candidate: Any) -> Any:
     return view.clone() if candidate is view else candidate
 
 
+def _refuse_fp8(key: str, stored_dtype: str) -> None:
+    """The backstop under every plain read: an FP8 tensor or block scale that reaches a
+    cast was not dequantised by an accepted :class:`FP8BlockPlan`. A plain cast keeps
+    the raw e4m3 values and drops the scales, so the run would train on wrong weights
+    while the resident load (which dequantises) looks fine."""
+    if stored_dtype.upper().startswith("F8") or key.endswith("_scale_inv"):
+        raise UnsupportedFP8Error(
+            f"checkpoint tensor {key!r} is FP8 ({stored_dtype}) or an FP8 block scale "
+            f"that would be cast without its scales. {SUPPORTED_FP8_FORMAT}"
+        )
+
+
+def _read_source_tensor(
+    handles: Mapping[str, Any],
+    where: Mapping[str, Tuple[str, str]],
+    key: str,
+    dtype: str,
+    fp8_plan: Optional[FP8BlockPlan],
+) -> "Any":
+    """One OWNED source tensor at ``dtype``; an FP8 block weight is dequantised first.
+
+    The FP8 weight and its ``weight_scale_inv`` are read raw (each owns its memory, so
+    the scale's file may evict the weight's handle), multiplied in fp32 per block, one
+    band of rows at a time, into an output preallocated at ``dtype``
+    (:func:`~soup_cli.utils.fp8_block.dequantize_fp8_block`): the raw weight, the output
+    and one band are live, not an fp32 copy of the whole tensor.
+    """
+    path, source_key = where[key]
+    if fp8_plan is None or key not in fp8_plan.weights:
+        return _read_tensor(handles[path], source_key, dtype)
+    import torch
+
+    scale_path, scale_source_key = where[fp8_plan.scale_key(key)]
+    weight = _read_raw_tensor(handles[path], source_key)
+    scale = _read_raw_tensor(handles[scale_path], scale_source_key)
+    try:
+        return dequantize_fp8_block(
+            weight, scale, fp8_plan.block, name=key, dtype=getattr(torch, dtype)
+        )
+    finally:
+        del weight, scale
+
+
 def _read_tensor(handle: Any, key: str, dtype: str) -> "Any":
     """Materialise one OWNED tensor, size-capped, converted to the target dtype."""
     import torch
 
-    shape = handle.get_slice(key).get_shape()
+    sliced = handle.get_slice(key)
+    _refuse_fp8(key, str(sliced.get_dtype()))
+    shape = sliced.get_shape()
     elements = math.prod(int(dim) for dim in shape)
     if elements > _MAX_TENSOR_ELEMENTS:
         raise ValueError(

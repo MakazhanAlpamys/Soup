@@ -39,8 +39,8 @@ _MAX_ROWS = 1_000_000
 _MAX_FILE_BYTES = 1024 * 1024 * 1024  # 1 GiB
 _MAX_PATH_LEN = 4096
 
-# Closed allowlist for `--benchmarks`. Live n-gram corpora for these
-# benchmarks ship in v0.47.1; for now we accept caller-supplied texts.
+# Closed label allowlist for `--benchmarks`. Corpora are not bundled;
+# decontamination requires caller-supplied texts.
 BENCHMARKS: Mapping[str, str] = MappingProxyType(
     {
         "mmlu": "MMLU multiple-choice questions",
@@ -487,13 +487,17 @@ def compute_scorecard(
     *,
     benchmarks: Sequence[str] = (),
     decontaminate_texts: Optional[Mapping[str, Sequence[str]]] = None,
+    benchmark_texts: Optional[Sequence[str]] = None,
     decontaminate_threshold: float = 0.8,
 ) -> ScoreReport:
     """Compute the composite scorecard over a row sequence.
 
     ``benchmarks`` is the closed allowlist of benchmark names to consider;
     ``decontaminate_texts`` maps benchmark name → list of texts (caller
-    supplies the corpora; live MMLU/GSM8K loaders ship in v0.47.1).
+    supplies the corpora). ``benchmark_texts`` supplies an operator corpus
+    without pretending it is one of the named benchmarks. An explicit corpus
+    must be nonempty and each text must have usable 8-grams; None keeps the
+    legacy no-comparison behavior. No corpora are bundled.
     """
     _require_unit_float(decontaminate_threshold, name="decontaminate_threshold")
     for b in benchmarks:
@@ -501,6 +505,16 @@ def compute_scorecard(
             raise ValueError(f"unknown benchmark: {b!r}")
 
     dec_texts: List[str] = []
+    if benchmark_texts is not None:
+        if isinstance(benchmark_texts, (str, bytes)) or not isinstance(benchmark_texts, Sequence):
+            raise TypeError("benchmark_texts must be a sequence of texts, not a string")
+        if not benchmark_texts:
+            raise ValueError("benchmark_texts must contain usable 8-gram texts")
+        for text in benchmark_texts:
+            text = _require_str(text, name="benchmark text")
+            if not ngram_set(text, n=8):
+                raise ValueError("benchmark_texts must contain usable 8-gram texts")
+            dec_texts.append(text)
     if decontaminate_texts:
         for b in benchmarks:
             seq = decontaminate_texts.get(b) or []
@@ -587,26 +601,32 @@ def _check_input_path(path: Any) -> str:
     return os.path.realpath(path)
 
 
-def load_jsonl_rows(path: Any) -> List[Mapping[str, Any]]:
-    """Read a JSONL file under cwd; skip malformed lines silently."""
+def load_jsonl_rows(path: Any, *, strict: bool = False) -> List[Mapping[str, Any]]:
+    """Read bounded JSONL under cwd; optionally refuse malformed/non-object rows."""
     target = _check_input_path(path)
     size = os.path.getsize(target)
     if size > _MAX_FILE_BYTES:
         raise ValueError(f"file exceeds {_MAX_FILE_BYTES} bytes")
     out: List[Mapping[str, Any]] = []
     with open(target, "r", encoding="utf-8-sig") as fh:
-        for line in fh:
+        for line_number, line in enumerate(fh, 1):
             line = line.strip()
             if not line:
                 continue
             if len(out) >= _MAX_ROWS:
+                if strict:
+                    raise ValueError(f"file exceeds {_MAX_ROWS} rows")
                 break
             try:
                 row = json.loads(line)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
+                if strict:
+                    raise ValueError(f"line {line_number} is not valid JSON") from exc
                 continue
             if isinstance(row, Mapping):
                 out.append(row)
+            elif strict:
+                raise ValueError(f"line {line_number} must be a JSON object")
     return out
 
 

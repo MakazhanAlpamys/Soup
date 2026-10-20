@@ -16,14 +16,14 @@ import hashlib
 import os
 import stat
 from dataclasses import dataclass
-from typing import Callable, List, Mapping, Optional, Sequence, Tuple
+from typing import Callable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from soup_cli.utils.config_bounds import (
     DEFAULT_STREAM_READ_AHEAD,
     MAX_STREAM_READ_AHEAD,
     MIN_STREAM_READ_AHEAD,
 )
-from soup_cli.utils.paths import is_under
+from soup_cli.utils.paths import is_under, quote_path
 
 STRIPE_DIRS_ENV = "SOUP_LAYER_STREAM_STRIPE_DIRS"
 
@@ -123,7 +123,7 @@ def _nearest_existing(path: str) -> str:
     while not os.path.exists(anchor):
         parent = os.path.dirname(anchor)
         if parent == anchor:
-            raise StripeRootError(f"cannot find an existing folder above {path!r}")
+            raise StripeRootError(f"cannot find an existing folder above {quote_path(path)}")
         anchor = parent
     return anchor
 
@@ -133,6 +133,96 @@ def volume_of(path: str) -> int:
     return int(os.stat(_nearest_existing(path)).st_dev)
 
 
+def _is_link(info: os.stat_result) -> bool:
+    """A symlink, or on Windows any reparse point: a junction does not report S_ISLNK (and
+    ``os.path.islink`` misses it before 3.12), but it redirects exactly as a symlink does."""
+    if stat.S_ISLNK(info.st_mode):
+        return True
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return os.name == "nt" and bool(getattr(info, "st_file_attributes", 0) & reparse)
+
+
+def is_volume_mount_point(path: str) -> bool:
+    """Whether the reparse point at ``path`` is a genuine Windows volume mount point.
+
+    A directory junction and a volume mount point carry the identical
+    ``IO_REPARSE_TAG_MOUNT_POINT`` tag (``_is_link`` cannot tell them apart), so the two are
+    distinguished by their target instead: ``mountvol`` names a volume mount point's target
+    ``\\\\?\\Volume{<guid>}\\`` with nothing after it -- it names a whole volume rather than a
+    folder, where a junction can target a folder BENEATH a volume GUID path just as easily as
+    one beneath a drive letter or UNC share. Refusing every reparse point would also refuse a
+    legitimate volume-mount-point stripe root; this is the narrower rule that does not.
+    """
+    try:
+        target = os.readlink(path)
+    except (OSError, ValueError):
+        # On Windows, os.readlink raises ValueError ("not a symbolic link"), not OSError,
+        # for a reparse point that is neither a symlink nor a junction/mount point.
+        return False
+    stripped = target.removeprefix("\\\\?\\").removeprefix("\\??\\")
+    volume = stripped.rstrip("\\")
+    return volume.startswith("Volume{") and volume.endswith("}") and "\\" not in volume
+
+
+def check_stripe_root(
+    entry: str,
+    *,
+    primary_root: str,
+    accepted: Sequence[str] = (),
+) -> Tuple[Optional[str], Optional[str]]:
+    """Syntax, existence, symlink and overlap rules; returns ``(resolved, reason)``.
+
+    If valid, returns ``(resolved_realpath, None)``.
+    If invalid, returns ``(None, reason)`` where ``reason`` does NOT contain the
+    environment variable or entry prefix.
+    """
+    if any(ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F for ch in entry):
+        return None, "contains control characters"
+    if os.name == "nt" and entry.replace("/", "\\").startswith(_DEVICE_NAMESPACE_PREFIXES):
+        return None, (
+            "a device-namespace path is not accepted; name the folder by its drive "
+            "letter or UNC share"
+        )
+    expanded = os.path.expanduser(entry)
+    if not os.path.isabs(expanded):
+        return None, "must be an absolute path"
+    if os.name == "nt" and not os.path.splitdrive(expanded)[0]:
+        return None, "must name a drive letter or a UNC share"
+    if os.path.islink(expanded):
+        return None, "must not be a symlink"
+    if os.name == "nt":
+        try:
+            entry_info = os.lstat(expanded)
+        except OSError:
+            entry_info = None
+        if (
+            entry_info is not None
+            and _is_link(entry_info)
+            and not is_volume_mount_point(expanded)
+        ):
+            return None, (
+                "is a directory junction, not a real folder or a genuine Windows "
+                "volume mount point; Soup would stripe layer writes through it to wherever "
+                "it currently points, which a junction (unlike a mounted volume) can be "
+                "repointed to at any time"
+            )
+    if not os.path.isdir(expanded):
+        return None, (
+            "must be an existing directory. Soup creates only its per-model folder "
+            "inside a stripe root, never the root itself, so a drive that is not mounted "
+            "cannot be mistaken for an empty one. Reconnect the drive, or remove this entry "
+            f"(unset {STRIPE_DIRS_ENV} to re-shard to one root)."
+        )
+    resolved = os.path.realpath(expanded)
+    primary = os.path.realpath(os.path.expanduser(primary_root))
+    if is_under(resolved, primary) or is_under(primary, resolved):
+        return None, f"overlaps the primary layer-stream cache root {primary}"
+    for other in accepted:
+        if is_under(resolved, other) or is_under(other, resolved):
+            return None, f"overlaps another stripe root, {other}"
+    return resolved, None
+
+
 def validate_stripe_root(entry: str, *, primary_root: str, accepted: Sequence[str] = ()) -> str:
     """Syntax, existence, symlink and overlap rules; returns the entry's realpath.
 
@@ -140,41 +230,93 @@ def validate_stripe_root(entry: str, *, primary_root: str, accepted: Sequence[st
     path runs once. The sharder calls this one to bound its own writes without paying the
     ~9 s disk-kind probe a second time.
     """
-    where = f"{STRIPE_DIRS_ENV} entry {entry!r}"
-    # C0, DEL and C1: 0x9B alone is a complete CSI introducer on some terminals.
-    if any(ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F for ch in entry):
-        raise StripeRootError(f"{where}: contains control characters")
-    if os.name == "nt" and entry.replace("/", "\\").startswith(_DEVICE_NAMESPACE_PREFIXES):
-        # realpath keeps such a prefix, and the overlap rule would then compare it with the
-        # primary as if it were another drive — a folder inside the primary passed.
-        raise StripeRootError(
-            f"{where}: a device-namespace path is not accepted; name the folder by its drive "
-            f"letter or UNC share"
-        )
-    expanded = os.path.expanduser(entry)
-    if not os.path.isabs(expanded):
-        raise StripeRootError(f"{where}: must be an absolute path")
-    if os.name == "nt" and not os.path.splitdrive(expanded)[0]:
-        # isabs() accepts a path that starts with a separator but names no drive; the folder
-        # it means would then depend on the drive of the current directory.
-        raise StripeRootError(f"{where}: must name a drive letter or a UNC share")
-    if os.path.islink(expanded):
-        raise StripeRootError(f"{where}: must not be a symlink")
-    if not os.path.isdir(expanded):
-        raise StripeRootError(
-            f"{where}: must be an existing directory. Soup creates only its per-model folder "
-            f"inside a stripe root, never the root itself, so a drive that is not mounted "
-            f"cannot be mistaken for an empty one. Reconnect the drive, or remove this entry "
-            f"(unset {STRIPE_DIRS_ENV} to re-shard to one root)."
-        )
-    resolved = os.path.realpath(expanded)
-    primary = os.path.realpath(os.path.expanduser(primary_root))
-    if is_under(resolved, primary) or is_under(primary, resolved):
-        raise StripeRootError(f"{where}: overlaps the primary layer-stream cache root {primary}")
-    for other in accepted:
-        if is_under(resolved, other) or is_under(other, resolved):
-            raise StripeRootError(f"{where}: overlaps another stripe root, {other}")
+    resolved, reason = check_stripe_root(entry, primary_root=primary_root, accepted=accepted)
+    if reason is not None:
+        raise StripeRootError(f"{STRIPE_DIRS_ENV} entry {quote_path(entry)}: {reason}")
+    assert resolved is not None
     return resolved
+
+
+def iter_early_stripe_roots(
+    primary_root: str,
+    entries: Sequence[str],
+) -> Iterator[Tuple[str, Optional[str], Optional[str]]]:
+    """Validate stripe root entries early, yielding ``(entry, resolved, reason)``.
+
+    ``resolved`` is the resolved canonical path when valid, or ``None``.
+    ``reason`` is the refusal message without environment variable prefix when invalid,
+    or ``None``.
+    """
+    accepted: List[str] = []
+    primary_canonical = os.path.realpath(os.path.expanduser(primary_root))
+    owners = {volume_of(primary_canonical): f"the primary cache root {primary_canonical}"}
+
+    for idx, entry in enumerate(entries):
+        if len(entries) > MAX_STRIPE_DIRS and idx >= MAX_STRIPE_DIRS:
+            yield (
+                entry,
+                None,
+                (
+                    f"names {len(entries)} folders; at most {MAX_STRIPE_DIRS} "
+                    f"(training.stream_read_ahead stops at {MAX_STREAM_READ_AHEAD}, "
+                    f"and every drive needs a staging slot of its own)"
+                ),
+            )
+            continue
+
+        resolved, reason = check_stripe_root(
+            entry, primary_root=primary_canonical, accepted=accepted
+        )
+        if reason is not None:
+            yield (entry, None, reason)
+            continue
+
+        assert resolved is not None
+        volume = volume_of(resolved)
+        if volume in owners:
+            yield (
+                entry,
+                None,
+                (
+                    f"on the same volume as {owners[volume]}. "
+                    f"Two roots on one drive read no faster than one and cost a staging slot."
+                ),
+            )
+            continue
+
+        owners[volume] = f"stripe root {resolved}"
+        accepted.append(resolved)
+        yield (entry, resolved, None)
+
+
+def validate_early_stripe_roots(
+    primary_root: str,
+    *,
+    environ: Optional[Mapping[str, str]] = None,
+) -> Tuple[str, ...]:
+    """Syntax, existence, count cap, symlink, overlap and same-volume rules.
+
+    Runs early in the CLI (``soup train``, ``--dry-run``) before expensive dataset
+    loading or run creation. Omits the ~9 s NVMe disk-kind probe, which stays in
+    :func:`resolve_stripe_roots` on the setup path.
+    """
+    env = os.environ if environ is None else environ
+    entries = parse_stripe_dirs(env.get(STRIPE_DIRS_ENV))
+    if not entries:
+        return ()
+    if len(entries) > MAX_STRIPE_DIRS:
+        raise StripeRootError(
+            f"{STRIPE_DIRS_ENV} names {len(entries)} folders; at most {MAX_STRIPE_DIRS} "
+            f"(training.stream_read_ahead stops at {MAX_STREAM_READ_AHEAD}, and every drive "
+            f"needs a staging slot of its own)"
+        )
+    accepted: List[str] = []
+    for entry, resolved, reason in iter_early_stripe_roots(primary_root, entries):
+        if reason is not None:
+            raise StripeRootError(f"{STRIPE_DIRS_ENV} entry {quote_path(entry)}: {reason}")
+        assert resolved is not None
+        accepted.append(resolved)
+    return tuple(accepted)
 
 
 def resolve_stripe_roots(
@@ -191,32 +333,18 @@ def resolve_stripe_roots(
     """
     env = os.environ if environ is None else environ
     entries = parse_stripe_dirs(env.get(STRIPE_DIRS_ENV))
-    if len(entries) > MAX_STRIPE_DIRS:
-        raise StripeRootError(
-            f"{STRIPE_DIRS_ENV} names {len(entries)} folders; at most {MAX_STRIPE_DIRS} "
-            f"(training.stream_read_ahead stops at {MAX_STREAM_READ_AHEAD}, and every drive "
-            f"needs a staging slot of its own)"
-        )
-    accepted: List[str] = []
-    owners = {volume_of(primary_root): f"the primary cache root {primary_root}"} if entries else {}
-    for entry in entries:
-        resolved = validate_stripe_root(entry, primary_root=primary_root, accepted=accepted)
-        volume = volume_of(resolved)
-        if volume in owners:
-            raise StripeRootError(
-                f"{STRIPE_DIRS_ENV} entry {entry!r}: on the same volume as {owners[volume]}. "
-                f"Two roots on one drive read no faster than one and cost a staging slot."
-            )
+    if not entries:
+        return ()
+    accepted = validate_early_stripe_roots(primary_root, environ=env)
+    for entry, resolved in zip(entries, accepted):
         kind = disk_kind(resolved)
         if kind != "nvme":
             raise StripeRootError(
-                f"{STRIPE_DIRS_ENV} entry {entry!r}: the disk tier streams from NVMe only, and "
-                f"this volume classifies as {kind!r}. If the probe is wrong, "
-                f"training.stream_disk_kind overrides it."
+                f"{STRIPE_DIRS_ENV} entry {quote_path(entry)}: the disk tier streams "
+                f"from NVMe only, and this volume classifies as {kind!r}. If the probe "
+                f"is wrong, training.stream_disk_kind overrides it."
             )
-        owners[volume] = f"stripe root {resolved}"
-        accepted.append(resolved)
-    return tuple(accepted)
+    return accepted
 
 
 def layer_roots_for(n_layers: int, n_roots: int) -> Tuple[int, ...]:
@@ -245,15 +373,6 @@ def stripe_folder_name(shard_dir: str) -> str:
     slug = os.path.basename(os.path.normpath(shard_dir))
     digest = hashlib.sha256(os.fsencode(primary_cache_identity(shard_dir))).hexdigest()[:12]
     return f"{slug}-{digest}"
-
-
-def _is_link(info: os.stat_result) -> bool:
-    """A symlink, or on Windows any reparse point: a junction does not report S_ISLNK (and
-    ``os.path.islink`` misses it before 3.12), but it redirects exactly as a symlink does."""
-    if stat.S_ISLNK(info.st_mode):
-        return True
-    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-    return os.name == "nt" and bool(getattr(info, "st_file_attributes", 0) & reparse)
 
 
 def stripe_folder_problem(folder: str, root: str) -> Optional[str]:

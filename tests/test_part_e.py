@@ -14,10 +14,18 @@ Covers:
 from __future__ import annotations
 
 import json
+import re
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    """ANSI-stripped, whitespace-collapsed CLI output (#1068: Rich colours numbers)."""
+    return " ".join(_ANSI_RE.sub("", text).split())
 
 # ---------------------------------------------------------------------------
 # #56 — run_lr_sweep
@@ -276,6 +284,241 @@ class TestSpikeRecoveryHint:
         data = json.loads((tmp_path / "spike_recovery.json").read_text())
         assert data["attempts"] == 2
 
+    def test_fresh_cap_1_allows_one_recovery_and_refuses_second(self, tmp_path, monkeypatch):
+        """Cap 1 permits exactly one recovery (prior attempts=0), refusing the second."""
+        monkeypatch.chdir(tmp_path)
+        args = SimpleNamespace(learning_rate=1e-3, output_dir=str(tmp_path))
+
+        # Launch 1: fresh instance, prior count = 0 -> recovery permitted, attempts incremented to 1
+        cb1 = _make_callback(
+            tmp_path,
+            spike_recovery=True,
+            spike_recovery_max_attempts=1,
+            spike_recovery_lr_decay=0.5,
+        )
+        cb1._write_spike_recovery_hint(args, loss=10.0)
+        data1 = json.loads((tmp_path / "spike_recovery.json").read_text(encoding="utf-8"))
+        assert data1["attempts"] == 1
+        assert data1["should_recover"] is True, "First launch under cap 1 must permit recovery"
+
+        # Launch 2 (re-launch): new instance reads persisted count 1 -> budget exhausted
+        cb2 = _make_callback(
+            tmp_path,
+            spike_recovery=True,
+            spike_recovery_max_attempts=1,
+            spike_recovery_lr_decay=0.5,
+        )
+        cb2._write_spike_recovery_hint(args, loss=12.0)
+        data2 = json.loads((tmp_path / "spike_recovery.json").read_text(encoding="utf-8"))
+        assert data2["attempts"] == 2
+        assert data2["should_recover"] is False, "Second launch under cap 1 must refuse recovery"
+
+    def test_cap_2_two_allowed_attempts_across_new_instances(self, tmp_path, monkeypatch):
+        """Under cap 2, both attempt 1 and attempt 2 are permitted; attempt 3 is refused."""
+        monkeypatch.chdir(tmp_path)
+        args = SimpleNamespace(learning_rate=1e-3, output_dir=str(tmp_path))
+
+        # Launch 1: prior count = 0 -> permitted, persisted 1
+        cb1 = _make_callback(
+            tmp_path,
+            spike_recovery=True,
+            spike_recovery_max_attempts=2,
+            spike_recovery_lr_decay=0.5,
+        )
+        cb1._write_spike_recovery_hint(args, loss=10.0)
+        data1 = json.loads((tmp_path / "spike_recovery.json").read_text(encoding="utf-8"))
+        assert data1["attempts"] == 1
+        assert data1["should_recover"] is True, "First attempt under cap 2 must be permitted"
+
+        # Launch 2: new instance reads persisted count 1 -> second attempt is permitted
+        cb2 = _make_callback(
+            tmp_path,
+            spike_recovery=True,
+            spike_recovery_max_attempts=2,
+            spike_recovery_lr_decay=0.5,
+        )
+        cb2._write_spike_recovery_hint(args, loss=12.0)
+        data2 = json.loads((tmp_path / "spike_recovery.json").read_text(encoding="utf-8"))
+        assert data2["attempts"] == 2
+        assert data2["should_recover"] is True, "Second attempt under cap 2 must be permitted"
+
+        # Launch 3: new instance reads persisted count 2 -> budget exhausted, recovery refused
+        cb3 = _make_callback(
+            tmp_path,
+            spike_recovery=True,
+            spike_recovery_max_attempts=2,
+            spike_recovery_lr_decay=0.5,
+        )
+        cb3._write_spike_recovery_hint(args, loss=14.0)
+        data3 = json.loads((tmp_path / "spike_recovery.json").read_text(encoding="utf-8"))
+        assert data3["attempts"] == 3
+        assert data3["should_recover"] is False, "Third attempt under cap 2 must be refused"
+
+    @pytest.mark.parametrize(
+        "bad_payload",
+        [
+            "corrupted non-json",
+            '{"attempts": null}',
+            '{"attempts": []}',
+            '{"attempts": {}}',
+            '{"attempts": "not_an_int"}',
+            '{"attempts": true}',
+            '{"attempts": 1e999}',
+            '{"attempts": -1e999}',
+            '{"attempts": Infinity}',
+            '{"attempts": -Infinity}',
+            '{"attempts": NaN}',
+        ],
+    )
+    def test_corrupt_and_malformed_hint_files_fall_back_gracefully(
+        self, tmp_path, monkeypatch, bad_payload
+    ):
+        """Malformed JSON or invalid attempt types fall back safely to 0 without crashing."""
+        monkeypatch.chdir(tmp_path)
+        args = SimpleNamespace(learning_rate=1e-3, output_dir=str(tmp_path))
+        (tmp_path / "spike_recovery.json").write_text(bad_payload, encoding="utf-8")
+
+        cb = _make_callback(
+            tmp_path,
+            spike_recovery=True,
+            spike_recovery_max_attempts=2,
+            spike_recovery_lr_decay=0.5,
+        )
+        cb._write_spike_recovery_hint(args, loss=10.0)
+        data = json.loads((tmp_path / "spike_recovery.json").read_text(encoding="utf-8"))
+        assert data["attempts"] == 1
+        assert data["should_recover"] is True
+
+    def test_preserves_valid_positive_persisted_count(self, tmp_path, monkeypatch):
+        """Valid persisted count from prior launch is safely parsed and incremented."""
+        monkeypatch.chdir(tmp_path)
+        args = SimpleNamespace(learning_rate=1e-3, output_dir=str(tmp_path))
+        hint_path = tmp_path / "spike_recovery.json"
+        hint_path.write_text(json.dumps({"attempts": 2, "max_attempts": 3}), encoding="utf-8")
+
+        cb1 = _make_callback(
+            tmp_path,
+            spike_recovery=True,
+            spike_recovery_max_attempts=3,
+            spike_recovery_lr_decay=0.5,
+        )
+        cb1._write_spike_recovery_hint(args, loss=10.0)
+        data1 = json.loads(hint_path.read_text(encoding="utf-8"))
+        assert data1["attempts"] == 3
+        assert data1["should_recover"] is True, "Prior count 2 with cap 3 must allow 3rd attempt"
+
+        # Subsequent re-launch with prior count 3
+        cb2 = _make_callback(
+            tmp_path,
+            spike_recovery=True,
+            spike_recovery_max_attempts=3,
+            spike_recovery_lr_decay=0.5,
+        )
+        cb2._write_spike_recovery_hint(args, loss=12.0)
+        data2 = json.loads(hint_path.read_text(encoding="utf-8"))
+        assert data2["attempts"] == 4
+        assert data2["should_recover"] is False, "Prior count 3 with cap 3 must refuse recovery"
+
+    def test_preserves_large_positive_integer_count_and_exhausts_cap(
+        self, tmp_path, monkeypatch
+    ):
+        """Large integer count (10**309) is preserved without float conversion and exhausts cap."""
+        monkeypatch.chdir(tmp_path)
+        args = SimpleNamespace(learning_rate=1e-3, output_dir=str(tmp_path))
+        hint_path = tmp_path / "spike_recovery.json"
+        huge_attempts = 10**309
+        hint_path.write_text(
+            json.dumps({"attempts": huge_attempts, "max_attempts": 2}),
+            encoding="utf-8",
+        )
+
+        cb = _make_callback(
+            tmp_path,
+            spike_recovery=True,
+            spike_recovery_max_attempts=2,
+            spike_recovery_lr_decay=0.5,
+        )
+        cb._write_spike_recovery_hint(args, loss=10.0)
+        data = json.loads(hint_path.read_text(encoding="utf-8"))
+        assert data["attempts"] == huge_attempts + 1
+        assert data["should_recover"] is False, (
+            "Prior large count must exhaust cap and refuse recovery"
+        )
+
+    @pytest.mark.parametrize(
+        "bad_payload",
+        [
+            '{"attempts": null}',
+            '{"attempts": 1e999}',
+            '{"attempts": -1e999}',
+            '{"attempts": Infinity}',
+            '{"attempts": -Infinity}',
+            '{"attempts": NaN}',
+            '{"attempts": "not_an_int"}',
+        ],
+    )
+    def test_watchdog_path_stops_training_with_bad_hints(
+        self, tmp_path, monkeypatch, bad_payload
+    ):
+        """Watchdog path stops training safely when hint file is malformed or non-finite."""
+        monkeypatch.chdir(tmp_path)
+        hint_path = tmp_path / "spike_recovery.json"
+        hint_path.write_text(bad_payload, encoding="utf-8")
+
+        cb = _make_callback(
+            tmp_path,
+            loss_watchdog=True,
+            loss_watchdog_threshold=5.0,
+            loss_watchdog_patience=1,
+            spike_recovery=True,
+            spike_recovery_max_attempts=2,
+            spike_recovery_lr_decay=0.5,
+        )
+        args = SimpleNamespace(learning_rate=1e-3, output_dir=str(tmp_path))
+        state = SimpleNamespace(global_step=1, epoch=1.0)
+        control = SimpleNamespace(should_training_stop=False)
+
+        cb.on_log(args, state, control, logs={"loss": 10.0})
+
+        assert control.should_training_stop is True, "Watchdog must stop training on loss spike"
+        assert cb._watchdog_fired is True
+        data = json.loads(hint_path.read_text(encoding="utf-8"))
+        assert data["attempts"] == 1
+        assert data["should_recover"] is True
+
+    def test_watchdog_path_preserves_large_integer_count_and_exhausts_cap(
+        self, tmp_path, monkeypatch
+    ):
+        """Watchdog path preserves large positive integer and exhausts recovery budget."""
+        monkeypatch.chdir(tmp_path)
+        hint_path = tmp_path / "spike_recovery.json"
+        huge_attempts = 10**309
+        hint_path.write_text(
+            json.dumps({"attempts": huge_attempts, "max_attempts": 2}),
+            encoding="utf-8",
+        )
+
+        cb = _make_callback(
+            tmp_path,
+            loss_watchdog=True,
+            loss_watchdog_threshold=5.0,
+            loss_watchdog_patience=1,
+            spike_recovery=True,
+            spike_recovery_max_attempts=2,
+            spike_recovery_lr_decay=0.5,
+        )
+        args = SimpleNamespace(learning_rate=1e-3, output_dir=str(tmp_path))
+        state = SimpleNamespace(global_step=1, epoch=1.0)
+        control = SimpleNamespace(should_training_stop=False)
+
+        cb.on_log(args, state, control, logs={"loss": 10.0})
+
+        assert control.should_training_stop is True, "Watchdog must stop training on loss spike"
+        assert cb._watchdog_fired is True
+        data = json.loads(hint_path.read_text(encoding="utf-8"))
+        assert data["attempts"] == huge_attempts + 1
+        assert data["should_recover"] is False, "Exhausted count must keep recovery disabled"
+
     def test_disabled_when_strategy_not_set(self, tmp_path):
         cb = _make_callback(tmp_path, spike_recovery=False)
         args = SimpleNamespace(
@@ -284,24 +527,6 @@ class TestSpikeRecoveryHint:
         cb._write_spike_recovery_hint(args, loss=10.0)
         # No hint file written.
         assert not (tmp_path / "spike_recovery.json").exists()
-
-    def test_should_recover_false_at_max_attempts(self, tmp_path, monkeypatch):
-        """When attempts have hit max_attempts, should_recover must be False."""
-        monkeypatch.chdir(tmp_path)
-        cb = _make_callback(
-            tmp_path,
-            spike_recovery=True,
-            spike_recovery_max_attempts=2,
-            spike_recovery_lr_decay=0.5,
-        )
-        args = SimpleNamespace(
-            learning_rate=1e-3, output_dir=str(tmp_path),
-        )
-        # Bump internal counter to budget cap
-        cb._spike_recovery_attempts = 2
-        cb._write_spike_recovery_hint(args, loss=10.0)
-        data = json.loads((tmp_path / "spike_recovery.json").read_text())
-        assert data["should_recover"] is False
 
     def test_outside_cwd_skipped(self, tmp_path):
         """Containment guard: when output_dir is outside cwd, skip silently."""
@@ -386,3 +611,158 @@ class TestGradAccumAdvisory:
 
         cb._maybe_advise_grad_accum()
         assert cb._grad_accum_advised is False
+
+    # -- #1620: pressure is measured against the card, not a fixed total ----
+
+    def test_advises_on_small_card_using_measured_total(self, tmp_path, monkeypatch, capsys):
+        """An 8 GB card at 97.5% pressure with no explicit total advises.
+
+        Against the old fixed 24 GB default this peak could never fire.
+        """
+        cb = _make_callback(
+            tmp_path,
+            grad_accum_auto_tune=True,
+            grad_accum_pressure_threshold=0.92,
+            grad_accum_current_steps=1,
+            grad_accum_current_batch=8,
+        )
+        fake_torch = MagicMock()
+        fake_torch.cuda.is_available.return_value = True
+        fake_torch.cuda.current_device.return_value = 0
+        fake_torch.cuda.max_memory_allocated.return_value = int(7.8 * (1024**3))
+        fake_torch.cuda.get_device_properties.return_value.total_memory = 8 * (1024**3)
+        monkeypatch.setitem(__import__("sys").modules, "torch", fake_torch)
+
+        cb._maybe_advise_grad_accum()
+        assert cb._grad_accum_advised is True
+        assert cb._grad_accum_monitor.total_vram_gb == pytest.approx(8.0)
+        # The advisory carries the measured numbers, not just the pair
+        # (#1068: strip ANSI before reading numbers out of Rich output).
+        assert "peak 7.8 of 8.0 GB (97%)" in _plain(capsys.readouterr().out)
+
+    def test_no_advice_on_large_card_using_measured_total(self, tmp_path, monkeypatch):
+        """An 80 GB card at 28.7% pressure with no explicit total stays quiet."""
+        cb = _make_callback(
+            tmp_path,
+            grad_accum_auto_tune=True,
+            grad_accum_pressure_threshold=0.92,
+            grad_accum_current_steps=1,
+            grad_accum_current_batch=8,
+        )
+        fake_torch = MagicMock()
+        fake_torch.cuda.is_available.return_value = True
+        fake_torch.cuda.current_device.return_value = 0
+        fake_torch.cuda.max_memory_allocated.return_value = 23 * (1024**3)
+        fake_torch.cuda.get_device_properties.return_value.total_memory = 80 * (1024**3)
+        monkeypatch.setitem(__import__("sys").modules, "torch", fake_torch)
+
+        cb._maybe_advise_grad_accum()
+        assert cb._grad_accum_advised is False
+        assert cb._grad_accum_monitor.total_vram_gb == pytest.approx(80.0)
+
+    def test_trainer_built_callback_measures_the_card(self, tmp_path, monkeypatch):
+        """Built exactly as the trainers build it (#802 kwargs), the advisory
+        uses the card's total, not the old 24 GB default."""
+        from soup_cli.monitoring.callback import (
+            SoupTrainerCallback,
+            soup_callback_kwargs,
+        )
+
+        tcfg = SimpleNamespace(
+            grad_accum_auto_tune=True,
+            gradient_accumulation_steps=1,
+            batch_size=8,
+        )
+        cb = SoupTrainerCallback(
+            display=MagicMock(), **soup_callback_kwargs(tcfg)
+        )
+        fake_torch = MagicMock()
+        fake_torch.cuda.is_available.return_value = True
+        fake_torch.cuda.current_device.return_value = 0
+        fake_torch.cuda.max_memory_allocated.return_value = int(7.8 * (1024**3))
+        fake_torch.cuda.get_device_properties.return_value.total_memory = 8 * (1024**3)
+        monkeypatch.setitem(__import__("sys").modules, "torch", fake_torch)
+
+        cb._maybe_advise_grad_accum()
+        assert cb._grad_accum_advised is True
+        assert cb._grad_accum_monitor.total_vram_gb == pytest.approx(8.0)
+
+    def test_no_advice_when_device_properties_raise(self, tmp_path, monkeypatch):
+        """An unreadable card total means no advice and no exception."""
+        cb = _make_callback(
+            tmp_path,
+            grad_accum_auto_tune=True,
+            grad_accum_pressure_threshold=0.92,
+            grad_accum_current_steps=1,
+            grad_accum_current_batch=8,
+        )
+        fake_torch = MagicMock()
+        fake_torch.cuda.is_available.return_value = True
+        fake_torch.cuda.current_device.return_value = 0
+        fake_torch.cuda.max_memory_allocated.return_value = int(7.8 * (1024**3))
+        fake_torch.cuda.get_device_properties.side_effect = RuntimeError("no props")
+        monkeypatch.setitem(__import__("sys").modules, "torch", fake_torch)
+
+        cb._maybe_advise_grad_accum()
+        assert cb._grad_accum_advised is False
+        assert cb._grad_accum_monitor is None
+
+    # -- review follow-ups: the gate, the enabled guard, the device identity ----
+
+    def _fake_cuda(self, current=0, peaks=None, totals=None):
+        peaks, totals = peaks or {0: 7.8}, totals or {0: 8}
+        fake_torch = MagicMock()
+        fake_torch.cuda.is_available.return_value = True
+        fake_torch.cuda.current_device.return_value = current
+        fake_torch.cuda.max_memory_allocated.side_effect = (
+            lambda device=0: int(peaks.get(device, 0.0) * (1024**3))
+        )
+        fake_torch.cuda.get_device_properties.side_effect = (
+            lambda device: SimpleNamespace(total_memory=int(totals[device] * (1024**3)))
+        )
+        return fake_torch
+
+    def test_on_log_drives_the_advisory(self, tmp_path, monkeypatch):
+        """The advisory must fire through on_log, not only via a direct call:
+        the on_log gate is what makes a real run advise at all."""
+        cb = _make_callback(tmp_path, grad_accum_auto_tune=True,
+                            grad_accum_pressure_threshold=0.92,
+                            grad_accum_current_steps=1, grad_accum_current_batch=8)
+        monkeypatch.setitem(__import__("sys").modules, "torch", self._fake_cuda())
+        state = SimpleNamespace(global_step=1, epoch=0.1, max_steps=10, log_history=[])
+        cb.on_log(SimpleNamespace(output_dir=str(tmp_path)), state, SimpleNamespace(),
+                  logs={"loss": 1.0, "learning_rate": 1e-4})
+        assert cb._grad_accum_advised is True
+        assert cb._grad_accum_monitor.total_vram_gb == pytest.approx(8.0)
+
+    def test_disabled_callback_stays_quiet_under_pressure(self, tmp_path, monkeypatch):
+        """The enabled guard keeps a callback built with auto_tune off silent
+        even when pressure is over the threshold."""
+        cb = _make_callback(tmp_path, grad_accum_auto_tune=False,
+                            grad_accum_current_batch=8)
+        monkeypatch.setitem(__import__("sys").modules, "torch", self._fake_cuda())
+        cb._maybe_advise_grad_accum()
+        assert cb._grad_accum_advised is False
+        assert cb._grad_accum_monitor is None
+
+    def test_peak_and_total_come_from_the_current_device(self, tmp_path, monkeypatch):
+        """The peak and the total must both come from the device the run uses:
+        device 1 holds the 7.8 GB peak and the 8 GB card, device 0 is idle."""
+        cb = _make_callback(tmp_path, grad_accum_auto_tune=True,
+                            grad_accum_pressure_threshold=0.92,
+                            grad_accum_current_steps=1, grad_accum_current_batch=8)
+        monkeypatch.setitem(__import__("sys").modules, "torch", self._fake_cuda(
+            current=1, peaks={0: 0.0, 1: 7.8}, totals={0: 80, 1: 8}))
+        cb._maybe_advise_grad_accum()
+        assert cb._grad_accum_advised is True
+        assert cb._grad_accum_monitor.total_vram_gb == pytest.approx(8.0)
+
+    def test_live_panel_reads_the_current_device(self, tmp_path, monkeypatch):
+        """The live memory panel reports the device the run uses, not device 0."""
+        cb = _make_callback(tmp_path)
+        monkeypatch.setitem(__import__("sys").modules, "torch", self._fake_cuda(
+            current=1, peaks={0: 0.0, 1: 7.8}, totals={0: 80, 1: 8}))
+        state = SimpleNamespace(global_step=1, epoch=0.1, max_steps=10, log_history=[])
+        cb.on_log(SimpleNamespace(output_dir=str(tmp_path)), state, SimpleNamespace(),
+                  logs={"loss": 1.0, "learning_rate": 1e-4})
+        assert cb.display.update.call_args.kwargs["gpu_mem"] == "7.8/8.0 GB"

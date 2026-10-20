@@ -14,6 +14,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import sqlite3
+from typing import Optional
 
 import typer
 from rich.console import Console
@@ -161,10 +162,13 @@ def train_cmd(
     db: str = typer.Option(
         "local_rl.db", "--db", help="Path to local-RL SQLite database"
     ),
-    backend: str = typer.Option(
-        "ollama",
+    backend: Optional[str] = typer.Option(
+        None,
         "--backend",
-        help="Allowed: " + ", ".join(sorted(SUPPORTED_LOCAL_RL_BACKENDS)),
+        help=(
+            "Accepted for compatibility; has no effect on training. "
+            "Allowed: " + ", ".join(sorted(SUPPORTED_LOCAL_RL_BACKENDS))
+        ),
     ),
     model: str = typer.Option(
         ...,
@@ -198,7 +202,7 @@ def train_cmd(
     """Run (``--once``) or schedule the nightly DPO/KTO/ORPO train."""
     try:
         cfg = LocalRLConfig(
-            backend=backend,
+            backend="ollama" if backend is None else backend,
             model=model,
             db_path=db,
             train_method=train_method,
@@ -206,6 +210,9 @@ def train_cmd(
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
+
+    if backend is not None:
+        console.print("[dim]Note: --backend has no effect on training.[/]")
 
     if not once:
         # Render the scheduler scaffold; never run systemctl / launchctl.

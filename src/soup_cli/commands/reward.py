@@ -36,6 +36,7 @@ console = Console()
 
 _MAX_INPUT_BYTES = 64 * 1024 * 1024
 _MAX_ROWS = 1_000_000
+_MAX_LISTED_REJECTED = 10
 _ALLOWED_KINDS = ("auto",) + rs.KINDS
 _MAX_SENTINEL_LEN = 256
 
@@ -100,6 +101,8 @@ def _render_report_panel(report: rs.CalibrationReport, kind: str, out_path: str)
     table.add_column()
     table.add_row("verifier kind", escape(kind))
     table.add_row("references (accepted)", f"{report.positives} ({report.pos_accept:.0%})")
+    for ref in report.rejected_references:
+        table.add_row("rejected reference", escape(repr(ref)))
     table.add_row("negatives (accepted)", f"{report.negatives} ({report.neg_accept:.0%})")
     table.add_row("discrimination", f"{report.discrimination:.2f}")
     table.add_row("precision", f"{report.precision:.2f}")
@@ -233,8 +236,13 @@ def synth(
 
     if report.refused:
         _cleanup(candidate_path)
+        shown = report.rejected_references[:_MAX_LISTED_REJECTED]
+        rejected = "".join(f"\nrejected reference: {escape(repr(ref))}" for ref in shown)
+        remaining = len(report.rejected_references) - len(shown)
+        if remaining:
+            rejected += f"\n+{remaining} more (see --output-report)"
         console.print(Panel(
-            escape(report.reason),
+            escape(report.reason) + rejected,
             title="[bold red]verifier refused (not emitted)[/]", border_style="red"))
         raise typer.Exit(2)
 

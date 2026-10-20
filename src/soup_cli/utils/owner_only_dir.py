@@ -28,6 +28,8 @@ import os
 import stat
 from typing import Any, List
 
+from soup_cli.utils.paths import quote_path
+
 #: The DACL on Windows: this account and SYSTEM, full control, inherited by files and folders.
 _SYSTEM_SID = "S-1-5-18"
 _ADMINISTRATORS_SID = "S-1-5-32-544"
@@ -291,7 +293,10 @@ def _win_create_dir(path: str) -> bool:
         code = api.ctypes.get_last_error()
     if code == _ERROR_ALREADY_EXISTS:
         return False
-    raise OSError(code, f"CreateDirectoryW({path!r}) failed: {api.ctypes.FormatError(code)}")
+    raise OSError(
+        code,
+        f"CreateDirectoryW({quote_path(path)}) failed: {api.ctypes.FormatError(code)}",
+    )
 
 
 def _win_owner_sid(path: str) -> str:
@@ -304,7 +309,10 @@ def _win_owner_sid(path: str) -> str:
         ctypes.byref(owner), None, None, None, ctypes.byref(descriptor),
     )
     if code:
-        raise OSError(code, f"GetNamedSecurityInfoW({path!r}) failed: {ctypes.FormatError(code)}")
+        raise OSError(
+            code,
+            f"GetNamedSecurityInfoW({quote_path(path)}) failed: {ctypes.FormatError(code)}",
+        )
     try:
         return _win_sid_string(owner)
     finally:
@@ -328,7 +336,10 @@ def _win_protect(path: str) -> None:
             None, None, dacl, None,
         )
     if code:
-        raise OSError(code, f"SetNamedSecurityInfoW({path!r}) failed: {ctypes.FormatError(code)}")
+        raise OSError(
+            code,
+            f"SetNamedSecurityInfoW({quote_path(path)}) failed: {ctypes.FormatError(code)}",
+        )
 
 
 def _win_dacl_sddl(path: str) -> str:
@@ -341,7 +352,10 @@ def _win_dacl_sddl(path: str) -> str:
         None, None, None, None, ctypes.byref(descriptor),
     )
     if code:
-        raise OSError(code, f"GetNamedSecurityInfoW({path!r}) failed: {ctypes.FormatError(code)}")
+        raise OSError(
+            code,
+            f"GetNamedSecurityInfoW({quote_path(path)}) failed: {ctypes.FormatError(code)}",
+        )
     try:
         text = wintypes.LPWSTR()
         if not api.advapi32.ConvertSecurityDescriptorToStringSecurityDescriptorW(

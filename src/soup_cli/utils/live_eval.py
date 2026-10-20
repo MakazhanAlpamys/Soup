@@ -28,14 +28,15 @@ import math
 import re
 import time
 from collections.abc import Mapping, Sequence
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # Public closure types (mirror the diagnose protocols).
 GeneratorFn = Callable[[str], str]
 MultiGen = Callable[[str, int], "list[str]"]
 
 # Bounds — keep the live paths from running away on a 4 GB box.
-_MAX_PROMPT_TOKENS = 1024
+MAX_PROMPT_TOKENS = 1024
+_MAX_PROMPT_TOKENS = MAX_PROMPT_TOKENS  # compatibility for existing private consumers
 _MAX_TRAIN_ROWS = 512
 _MIN_TRAIN_ROWS = 1
 _DEFAULT_LORA_R = 8
@@ -134,7 +135,28 @@ def _build_quantization_config(quantization: Optional[str]):
     )
 
 
-def _render_prompt_template(tokenizer: object, prompt: str) -> Tuple[str, bool]:
+def validate_chat_template_kwargs(value: Optional[dict]) -> dict:
+    """Snapshot template variables without overriding live-eval encoding controls."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
+        raise ValueError("chat_template_kwargs must be a dict with string keys or None")
+    reserved = {
+        "conversation", "tokenize", "add_generation_prompt", "continue_final_message",
+        "return_tensors", "return_dict", "padding", "truncation", "max_length",
+        "chat_template", "return_assistant_tokens_mask",
+    }
+    overlap = reserved.intersection(value)
+    if overlap:
+        raise ValueError("chat_template_kwargs cannot override " + ", ".join(sorted(overlap)))
+    from copy import deepcopy
+
+    return deepcopy(value)
+
+
+def _render_prompt_template(
+    tokenizer: object, prompt: str, *, chat_template_kwargs: Optional[dict] = None,
+) -> Tuple[str, bool]:
     """Render a single user turn; also report whether the chat template produced it.
 
     Falls back to the raw prompt when the tokenizer has no chat template or the
@@ -147,10 +169,17 @@ def _render_prompt_template(tokenizer: object, prompt: str) -> Tuple[str, bool]:
                 [{"role": "user", "content": prompt}],
                 tokenize=False,
                 add_generation_prompt=True,
+                **(chat_template_kwargs or {}),
             )
-        except Exception:  # noqa: BLE001 — malformed template → raw prompt
+        except Exception as exc:  # noqa: BLE001 — default malformed template → raw prompt
+            if chat_template_kwargs:
+                raise ValueError(
+                    f"cannot render chat template with chat_template_kwargs: {exc}"
+                ) from exc
             return prompt, False
         return text, True
+    if chat_template_kwargs:
+        raise ValueError("chat_template_kwargs requires a tokenizer with a chat template")
     return prompt, False
 
 
@@ -160,6 +189,29 @@ def _apply_prompt_template(tokenizer: object, prompt: str) -> str:
     Falls back to the raw prompt when the tokenizer has no chat template.
     """
     return _render_prompt_template(tokenizer, prompt)[0]
+
+
+def encode_prompt(
+    tokenizer: object, prompt: str, *, chat_template_kwargs: Optional[dict] = None,
+    return_tensors: Optional[str] = "pt",
+) -> Any:
+    """Render/encode one user prompt exactly as the live generators do.
+
+    The returned tokenizer encoding is truncated at ``MAX_PROMPT_TOKENS``.
+    Template-rendered special tokens are not added again. Without options,
+    missing/broken templates retain the raw-prompt fallback. Use
+    ``return_tensors=None`` and ``tokenizer.pad`` to assemble a batch.
+    """
+    if not isinstance(prompt, str):
+        raise TypeError("prompt must be a string")
+    options = validate_chat_template_kwargs(chat_template_kwargs)
+    from soup_cli.utils.vllm import encode_rendered_prompt
+
+    text, templated = _render_prompt_template(tokenizer, prompt, chat_template_kwargs=options)
+    return encode_rendered_prompt(
+        tokenizer, text, templated=templated, return_tensors=return_tensors,
+        truncation=True, max_length=MAX_PROMPT_TOKENS,
+    )
 
 
 def load_model_and_tokenizer(
@@ -188,10 +240,25 @@ def load_model_and_tokenizer(
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     dev = resolve_device(device)
-    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+    from soup_cli.utils.run_provenance import (
+        base_revision_kwargs,
+        recorded_adapter_base,
+        recorded_base_kwargs,
+    )
+
+    tokenizer_id = model_id
+    if adapter is None:
+        saved_base = recorded_adapter_base(model_id)
+        if saved_base is not None:
+            adapter, model_id = model_id, saved_base
+    revision_kwargs = base_revision_kwargs(model_id) or recorded_base_kwargs(adapter, model_id)
+    tokenizer = AutoTokenizer.from_pretrained(
+        tokenizer_id, trust_remote_code=trust_remote_code,
+        **(revision_kwargs if tokenizer_id == model_id else {}),
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    model_kwargs = {"trust_remote_code": trust_remote_code}
+    model_kwargs = {"trust_remote_code": trust_remote_code, **revision_kwargs}
     if dtype is not None:
         model_kwargs["torch_dtype"] = dtype
     quant_config = _build_quantization_config(quantization)
@@ -228,20 +295,23 @@ def make_generator(
     dtype: Optional[str] = None,
     quantization: Optional[str] = None,
     loaded: Optional[tuple] = None,
+    chat_template_kwargs: Optional[dict] = None,
+    batch_size: int = 8,
 ) -> GeneratorFn:
     """Build a deterministic ``GeneratorFn`` closure (greedy decode).
 
     ``loaded`` lets a caller share an already-loaded ``(model, tokenizer,
     device)`` triple across several closures (base + multi off one load).
     ``dtype``/``quantization`` are ignored when ``loaded`` is given, same as
-    ``device``.
+    ``device``. The closure also exposes ``batch(prompts) -> list[str]`` using
+    greedy decoding, left padding and at most ``batch_size`` prompts per call.
     """
     _check_positive_int(max_new_tokens, "max_new_tokens")
+    _check_positive_int(batch_size, "batch_size")
+    options = validate_chat_template_kwargs(chat_template_kwargs)
     if loaded is not None and (not isinstance(loaded, tuple) or len(loaded) != 3):
         raise ValueError("loaded must be a (model, tokenizer, device) tuple")
     import torch
-
-    from soup_cli.utils.vllm import encode_rendered_prompt
 
     model, tokenizer, dev = loaded or load_model_and_tokenizer(
         model_id,
@@ -260,15 +330,7 @@ def make_generator(
     def _gen(prompt: str) -> str:
         if not isinstance(prompt, str):
             raise TypeError("prompt must be a string")
-        text, templated = _render_prompt_template(tokenizer, prompt)
-        inputs = encode_rendered_prompt(
-            tokenizer,
-            text,
-            templated=templated,
-            return_tensors="pt",
-            truncation=True,
-            max_length=_MAX_PROMPT_TOKENS,
-        ).to(dev)
+        inputs = encode_prompt(tokenizer, prompt, chat_template_kwargs=options).to(dev)
         prompt_len = inputs["input_ids"].shape[1]
         with torch.no_grad():
             out = model.generate(
@@ -280,6 +342,41 @@ def make_generator(
         gen_ids = out[0][prompt_len:]
         return tokenizer.decode(gen_ids, skip_special_tokens=True)
 
+    def _batch(prompts: list[str]) -> list[str]:
+        if not isinstance(prompts, list) or any(not isinstance(p, str) for p in prompts):
+            raise TypeError("prompts must be a list of strings")
+        outputs = []
+        for start in range(0, len(prompts), batch_size):
+            encodings = [
+                encode_prompt(tokenizer, prompt, chat_template_kwargs=options)
+                for prompt in prompts[start:start + batch_size]
+            ]
+            width = max(row["input_ids"].shape[1] for row in encodings)
+            if pad_id is None:
+                raise ValueError("batch generation requires a pad or EOS token")
+            # Pad tensors on the left without mutating the shared tokenizer.
+            # Each prompt uses exactly the scalar rendering/truncation contract.
+            inputs = {
+                key: torch.cat([
+                    torch.nn.functional.pad(
+                        row[key], (width - row[key].shape[1], 0),
+                        value=pad_id if key == "input_ids" else 0,
+                    )
+                    for row in encodings
+                ]).to(dev)
+                for key in encodings[0]
+            }
+            with torch.no_grad():
+                generated = model.generate(
+                    **inputs, max_new_tokens=max_new_tokens,
+                    do_sample=False, num_return_sequences=1, pad_token_id=pad_id,
+                )
+            outputs.extend(
+                tokenizer.decode(row[width:], skip_special_tokens=True) for row in generated
+            )
+        return outputs
+
+    _gen.batch = _batch
     return _gen
 
 
@@ -293,12 +390,14 @@ def make_multi_generator(
     trust_remote_code: bool = False,
     quantization: Optional[str] = None,
     loaded: Optional[tuple] = None,
+    chat_template_kwargs: Optional[dict] = None,
 ) -> MultiGen:
     """Build a sampling ``MultiGen`` closure: ``multi(prompt, k) -> [str, ...]``.
 
     ``quantization`` is ignored when ``loaded`` is given, same as ``device``.
     """
     _check_positive_int(max_new_tokens, "max_new_tokens")
+    options = validate_chat_template_kwargs(chat_template_kwargs)
     if (
         isinstance(temperature, bool)
         or not isinstance(temperature, (int, float))
@@ -308,8 +407,6 @@ def make_multi_generator(
     if loaded is not None and (not isinstance(loaded, tuple) or len(loaded) != 3):
         raise ValueError("loaded must be a (model, tokenizer, device) tuple")
     import torch
-
-    from soup_cli.utils.vllm import encode_rendered_prompt
 
     model, tokenizer, dev = loaded or load_model_and_tokenizer(
         model_id,
@@ -329,15 +426,7 @@ def make_multi_generator(
             raise TypeError("prompt must be a string")
         if isinstance(k, bool) or not isinstance(k, int) or k < 1:
             raise ValueError("k must be a positive int")
-        text, templated = _render_prompt_template(tokenizer, prompt)
-        inputs = encode_rendered_prompt(
-            tokenizer,
-            text,
-            templated=templated,
-            return_tensors="pt",
-            truncation=True,
-            max_length=_MAX_PROMPT_TOKENS,
-        ).to(dev)
+        inputs = encode_prompt(tokenizer, prompt, chat_template_kwargs=options).to(dev)
         prompt_len = inputs["input_ids"].shape[1]
         with torch.no_grad():
             out = model.generate(

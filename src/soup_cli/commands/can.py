@@ -216,7 +216,9 @@ def publish_cmd(
         ..., "--hf-hub",
         help="HF Hub dataset repo (e.g. 'me/my-recipe-can')",
     ),
-    private: bool = typer.Option(False, "--private"),
+    private: bool = typer.Option(
+        False, "--private", help="Create a private HF Hub dataset repository."
+    ),
     commit_message: Optional[str] = typer.Option(
         None, "--message", "-m",
         help="Commit message (first line only, capped at 200 chars)",
@@ -246,7 +248,9 @@ def fork_cmd(
     modify: list[str] = typer.Option(
         [], "--modify", help="Modification like 'training.lr=5e-5' (repeatable)",
     ),
-    author: str = typer.Option("unknown", "--author"),
+    author: str = typer.Option(
+        "unknown", "--author", help="Author name recorded in the forked manifest."
+    ),
 ) -> None:
     """Fork a can with config modifications and re-pack."""
     from soup_cli.cans.pack import fork_can

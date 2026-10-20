@@ -45,14 +45,32 @@ class TestDPOVariantsConfig:
             training={"dpo_beta": 0.1, **training},
         )
 
-    @pytest.mark.parametrize("lora_r", [0, 16])
-    def test_ref_regen_epochs_refused_at_load(self, lora_r):
-        with pytest.raises(ValidationError, match="dpo_ref_regen_epochs is not wired yet"):
+    @pytest.mark.parametrize("lora_r", [1, 8, 16])
+    def test_ref_regen_epochs_accepted_with_lora(self, lora_r):
+        cfg = SoupConfig(
+            base="some-model",
+            task="dpo",
+            data={"train": "./data.jsonl", "format": "dpo"},
+            training={"dpo_ref_regen_epochs": 2, "lora": {"r": lora_r}},
+        )
+        assert cfg.training.dpo_ref_regen_epochs == 2
+
+    def test_ref_regen_epochs_accepted_with_default_lora(self):
+        cfg = SoupConfig(
+            base="some-model",
+            task="dpo",
+            data={"train": "./data.jsonl", "format": "dpo"},
+            training={"dpo_ref_regen_epochs": 2},
+        )
+        assert cfg.training.dpo_ref_regen_epochs == 2
+
+    def test_ref_regen_epochs_refused_on_full_fine_tuning(self):
+        with pytest.raises(ValidationError, match="full fine-tuning"):
             SoupConfig(
                 base="some-model",
                 task="dpo",
                 data={"train": "./data.jsonl", "format": "dpo"},
-                training={"dpo_ref_regen_epochs": 2, "lora": {"r": lora_r}},
+                training={"dpo_ref_regen_epochs": 2, "lora": {"r": 0}},
             )
 
     @pytest.mark.parametrize("sched", ["linear", "cosine", "exponential"])
@@ -171,13 +189,32 @@ class TestDPOVariantsConfig:
         ("preference", {"preference_loss": "ipo"}),
     ],
 )
-def test_ref_regen_epochs_refused_on_every_dpo_family_task(task, extra):
-    with pytest.raises(ValidationError, match="dpo_ref_regen_epochs is not wired yet"):
+def test_ref_regen_epochs_accepted_on_every_dpo_family_task(task, extra):
+    cfg = SoupConfig(
+        base="some-model",
+        task=task,
+        data={"train": "./data.jsonl", "format": "dpo"},
+        training={"dpo_ref_regen_epochs": 2, **extra},
+    )
+    assert cfg.training.dpo_ref_regen_epochs == 2
+
+
+@pytest.mark.parametrize(
+    ("task", "extra"),
+    [
+        ("dpo", {}),
+        ("ipo", {}),
+        ("preference", {"preference_loss": "dpo"}),
+        ("preference", {"preference_loss": "ipo"}),
+    ],
+)
+def test_ref_regen_epochs_refused_on_full_fine_tuning_every_dpo_family_task(task, extra):
+    with pytest.raises(ValidationError, match="full fine-tuning"):
         SoupConfig(
             base="some-model",
             task=task,
             data={"train": "./data.jsonl", "format": "dpo"},
-            training={"dpo_ref_regen_epochs": 2, **extra},
+            training={"dpo_ref_regen_epochs": 2, "lora": {"r": 0}, **extra},
         )
 
 
@@ -509,6 +546,166 @@ class TestBuildDPOVariantCallbacks:
         assert kinds == {BetaScheduleCallback, RefModelRegenCallback}
 
 
+class TestRefModelRegenCallbackUnit:
+    """Unit tests for RefModelRegenCallback adapter copying."""
+
+    def test_ref_model_regen_copies_lora_adapter_weights(self):
+        import torch
+        from torch import nn
+
+        from soup_cli.utils.dpo_variants import RefModelRegenCallback
+
+        class DummyModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.layer = nn.Module()
+                self.layer.lora_A_default = nn.Parameter(torch.ones(4, 4), requires_grad=True)
+                self.layer.lora_B_default = nn.Parameter(
+                    torch.full((4, 4), 2.0), requires_grad=True
+                )
+                self.layer.lora_A_ref = nn.Parameter(torch.zeros(4, 4), requires_grad=False)
+                self.layer.lora_B_ref = nn.Parameter(torch.zeros(4, 4), requires_grad=False)
+
+            def named_parameters(self, prefix="", recurse=True, remove_duplicate=True):
+                yield "base_model.model.layer.lora_A.default.weight", self.layer.lora_A_default
+                yield "base_model.model.layer.lora_B.default.weight", self.layer.lora_B_default
+                yield "base_model.model.layer.lora_A.ref.weight", self.layer.lora_A_ref
+                yield "base_model.model.layer.lora_B.ref.weight", self.layer.lora_B_ref
+
+        model = DummyModel()
+        trainer = MagicMock()
+        trainer.ref_model = None
+        trainer.model = model
+
+        cb = RefModelRegenCallback(every_n_epochs=1)
+        cb.attach(trainer)
+
+        state = MagicMock(epoch=1.0)
+        cb.on_epoch_end(args=None, state=state, control=None)
+
+        assert cb.regen_count == 1
+        assert torch.equal(model.layer.lora_A_ref, model.layer.lora_A_default)
+        assert torch.equal(model.layer.lora_B_ref, model.layer.lora_B_default)
+        assert model.layer.lora_A_ref.requires_grad is False
+        assert model.layer.lora_B_ref.requires_grad is False
+
+    def test_ref_model_regen_skips_non_divisible_epoch(self):
+        import torch
+        from torch import nn
+
+        from soup_cli.utils.dpo_variants import RefModelRegenCallback
+
+        class DummyModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.layer = nn.Parameter(torch.zeros(2, 2), requires_grad=False)
+
+            def named_parameters(self, prefix="", recurse=True, remove_duplicate=True):
+                yield "lora.ref.weight", self.layer
+
+        model = DummyModel()
+        trainer = MagicMock(ref_model=None, model=model)
+        cb = RefModelRegenCallback(every_n_epochs=2)
+        cb.attach(trainer)
+
+        cb.on_epoch_end(args=None, state=MagicMock(epoch=1.0), control=None)
+        assert cb.regen_count == 0
+
+    def test_ref_model_regen_skips_epoch_zero(self):
+        from soup_cli.utils.dpo_variants import RefModelRegenCallback
+
+        trainer = MagicMock()
+        cb = RefModelRegenCallback(every_n_epochs=1)
+        cb.attach(trainer)
+
+        cb.on_epoch_end(args=None, state=MagicMock(epoch=0.0), control=None)
+        assert cb.regen_count == 0
+
+    def test_ref_model_regen_warns_when_no_ref_adapter_found(self, caplog):
+        import logging
+
+        from torch import nn
+
+        from soup_cli.utils.dpo_variants import RefModelRegenCallback
+
+        model = nn.Linear(2, 2)
+        trainer = MagicMock(ref_model=None, model=model)
+        cb = RefModelRegenCallback(every_n_epochs=1)
+        cb.attach(trainer)
+
+        with caplog.at_level(logging.WARNING):
+            cb.on_epoch_end(args=None, state=MagicMock(epoch=1.0), control=None)
+
+        assert cb.regen_count == 0
+        assert "no '.ref.' adapter parameters found on model" in caplog.text
+
+    def test_ref_model_regen_counts_nothing_when_no_source_matches(self, caplog):
+        import logging
+
+        import torch
+        from torch import nn
+
+        from soup_cli.utils.dpo_variants import RefModelRegenCallback
+
+        class OnlyRef(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.w = nn.Parameter(torch.zeros(2, 2), requires_grad=False)
+
+            def named_parameters(self, prefix="", recurse=True, remove_duplicate=True):
+                yield "base_model.model.layer.lora_A.ref.weight", self.w
+
+        trainer = MagicMock(ref_model=None, model=OnlyRef())
+        cb = RefModelRegenCallback(every_n_epochs=1)
+        cb.attach(trainer)
+        with caplog.at_level(logging.WARNING):
+            cb.on_epoch_end(args=None, state=MagicMock(epoch=1.0), control=None)
+        assert cb.regen_count == 0
+        assert "matching source parameter" in caplog.text
+
+    def test_ref_model_regen_ensures_ref_adapter_is_frozen(self):
+        import torch
+        from torch import nn
+
+        from soup_cli.utils.dpo_variants import RefModelRegenCallback
+
+        class ModelWithUnfrozenRef(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.default_w = nn.Parameter(torch.ones(2, 2), requires_grad=True)
+                self.ref_w = nn.Parameter(torch.zeros(2, 2), requires_grad=True)
+
+            def named_parameters(self, prefix="", recurse=True, remove_duplicate=True):
+                yield "base_model.model.layer.lora_A.default.weight", self.default_w
+                yield "base_model.model.layer.lora_A.ref.weight", self.ref_w
+
+        trainer = MagicMock(ref_model=None, model=ModelWithUnfrozenRef())
+        cb = RefModelRegenCallback(every_n_epochs=1)
+        cb.attach(trainer)
+        cb.on_epoch_end(args=None, state=MagicMock(epoch=1.0), control=None)
+        assert trainer.model.ref_w.requires_grad is False
+        assert cb.regen_count == 1
+
+    def test_ref_model_regen_supports_separate_ref_model(self):
+        import torch
+        from torch import nn
+
+        from soup_cli.utils.dpo_variants import RefModelRegenCallback
+
+        student = nn.Linear(2, 2)
+        student.weight.data.fill_(5.0)
+        ref_model = nn.Linear(2, 2)
+        ref_model.weight.data.fill_(0.0)
+
+        trainer = MagicMock(ref_model=ref_model, model=student)
+        cb = RefModelRegenCallback(every_n_epochs=1)
+        cb.attach(trainer)
+
+        cb.on_epoch_end(args=None, state=MagicMock(epoch=1.0), control=None)
+        assert cb.regen_count == 1
+        assert torch.equal(ref_model.weight, student.weight)
+
+
 class TestBetaScheduleLazyTotalSteps:
     def test_on_train_begin_resolves_total_steps_from_state(self):
         from soup_cli.utils.dpo_variants import BetaScheduleCallback
@@ -713,6 +910,206 @@ def test_preference_dispatcher_schedule_acts(tmp_path, loss):
         schedule="cosine",
     )
     assert wrapper.trainer.beta == pytest.approx(expected, abs=1e-6)
+
+
+class TestRealTrainerRefModelRegen:
+    """Real DPO / IPO / Preference train() runs on tiny CPU model testing ref_regen."""
+
+    @pytest.mark.parametrize(
+        ("task", "extra"),
+        [
+            ("dpo", "  dpo_ref_regen_epochs: 1\n"),
+            ("ipo", "  dpo_ref_regen_epochs: 1\n"),
+            ("preference", "  preference_loss: dpo\n  dpo_ref_regen_epochs: 1\n"),
+            ("preference", "  preference_loss: ipo\n  dpo_ref_regen_epochs: 1\n"),
+        ],
+    )
+    def test_dpo_family_ref_regen_acts_after_epoch_1(self, tmp_path, task, extra):
+        import torch
+        from transformers import TrainerCallback
+
+        class _EpochObserver(TrainerCallback):
+            def __init__(self, trainer):
+                self.trainer = trainer
+                self.epoch1_regen_count = None
+                self.epoch1_all_equal = None
+                self.epoch1_ref_requires_grad = None
+
+            def on_train_begin(self, args, state, control, **kwargs):
+                # Ensure observer runs AFTER RefModelRegenCallback in on_epoch_end
+                cbs = self.trainer.callback_handler.callbacks
+                if self in cbs:
+                    cbs.remove(self)
+                    cbs.append(self)
+
+            def on_epoch_end(self, args, state, control, **kwargs):
+                if int(round(state.epoch)) == 1:
+                    regen_cbs = [
+                        cb for cb in self.trainer.callback_handler.callbacks
+                        if type(cb).__name__ == "RefModelRegenCallback"
+                    ]
+                    assert len(regen_cbs) == 1
+                    self.epoch1_regen_count = regen_cbs[0].regen_count
+                    named = dict(self.trainer.model.named_parameters())
+                    ref_params = {k: v for k, v in named.items() if ".ref." in k}
+                    self.epoch1_all_equal = bool(ref_params) and all(
+                        torch.equal(ref_p, named[ref_name.replace(".ref.", ".default.", 1)])
+                        for ref_name, ref_p in ref_params.items()
+                    )
+                    self.epoch1_ref_requires_grad = any(
+                        p.requires_grad for p in ref_params.values()
+                    )
+
+        from soup_cli.config.loader import load_config_from_string
+
+        rows = [
+            {"prompt": f"Q{i}?", "chosen": f"A{i} good.", "rejected": f"A{i} bad."}
+            for i in range(4)
+        ]
+        cfg = load_config_from_string(
+            f"base: {Path(_local_base_model_dir()).as_posix()}\n"
+            f"task: {task}\n"
+            "data:\n  train: x.jsonl\n  max_length: 64\n"
+            "training:\n  epochs: 2\n  batch_size: 2\n  quantization: none\n  lr: 1e-4\n"
+            f"{extra}"
+            f"output: {(tmp_path / 'out').as_posix()}\n"
+        )
+        if task == "dpo":
+            from soup_cli.trainer.dpo import DPOTrainerWrapper as Wrapper
+        elif task == "ipo":
+            from soup_cli.trainer.ipo import IPOTrainerWrapper as Wrapper
+        else:
+            from soup_cli.trainer.preference import PreferenceTrainerWrapper as Wrapper
+
+        wrapper = Wrapper(cfg, device="cpu")
+        wrapper.setup({"train": list(rows)})
+
+        observer = _EpochObserver(wrapper.trainer)
+        wrapper.trainer.add_callback(observer)
+
+        wrapper.train()
+
+        regen_cbs = [
+            cb for cb in wrapper.trainer.callback_handler.callbacks
+            if type(cb).__name__ == "RefModelRegenCallback"
+        ]
+        assert len(regen_cbs) == 1
+        regen_cb = regen_cbs[0]
+
+        # Criteria 1 & 2: after epoch 1 each .ref. tensor equals its
+        # .default. tensor and regen_count == 1
+        assert observer.epoch1_regen_count == 1
+        assert observer.epoch1_all_equal is True
+        assert observer.epoch1_ref_requires_grad is False
+
+        # After epoch 2 completes: regen_count == 2
+        assert regen_cb.regen_count == 2
+        named = dict(wrapper.trainer.model.named_parameters())
+        ref_params = {k: v for k, v in named.items() if ".ref." in k}
+        assert len(ref_params) > 0
+        assert all(
+            torch.equal(ref_p, named[ref_name.replace(".ref.", ".default.", 1)])
+            for ref_name, ref_p in ref_params.items()
+        )
+        assert not any(p.requires_grad for p in ref_params.values())
+
+    def test_dpo_ref_regen_skips_non_divisible_epochs(self, tmp_path):
+        import torch
+        from transformers import TrainerCallback
+
+        class _EpochObserver(TrainerCallback):
+            def __init__(self, trainer):
+                self.trainer = trainer
+                self.epoch1_regen_count = None
+                self.epoch1_all_equal = None
+                self.epoch1_all_999 = None
+                self.epoch1_ref_requires_grad = None
+
+            def on_train_begin(self, args, state, control, **kwargs):
+                cbs = self.trainer.callback_handler.callbacks
+                if self in cbs:
+                    cbs.remove(self)
+                    cbs.append(self)
+
+            def on_epoch_end(self, args, state, control, **kwargs):
+                if int(round(state.epoch)) == 1:
+                    regen_cbs = [
+                        cb for cb in self.trainer.callback_handler.callbacks
+                        if type(cb).__name__ == "RefModelRegenCallback"
+                    ]
+                    assert len(regen_cbs) == 1
+                    self.epoch1_regen_count = regen_cbs[0].regen_count
+                    named = dict(self.trainer.model.named_parameters())
+                    ref_params = {k: v for k, v in named.items() if ".ref." in k}
+                    self.epoch1_all_999 = bool(ref_params) and all(
+                        torch.equal(ref_p, torch.full_like(ref_p, 999.0))
+                        for ref_p in ref_params.values()
+                    )
+                    self.epoch1_all_equal = bool(ref_params) and all(
+                        torch.equal(ref_p, named[ref_name.replace(".ref.", ".default.", 1)])
+                        for ref_name, ref_p in ref_params.items()
+                    )
+                    self.epoch1_ref_requires_grad = any(
+                        p.requires_grad for p in ref_params.values()
+                    )
+
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.dpo import DPOTrainerWrapper
+
+        rows = [
+            {"prompt": f"Q{i}?", "chosen": f"A{i} good.", "rejected": f"A{i} bad."}
+            for i in range(4)
+        ]
+        cfg = load_config_from_string(
+            f"base: {Path(_local_base_model_dir()).as_posix()}\n"
+            "task: dpo\n"
+            "data:\n  train: x.jsonl\n  max_length: 64\n"
+            "training:\n  epochs: 2\n  batch_size: 2\n  quantization: none\n  lr: 1e-4\n"
+            "  dpo_ref_regen_epochs: 2\n"
+            f"output: {(tmp_path / 'out').as_posix()}\n"
+        )
+        wrapper = DPOTrainerWrapper(cfg, device="cpu")
+        wrapper.setup({"train": list(rows)})
+
+        # Intentionally fill ref parameters with sentinel before training to prove
+        # that epoch 1 leaves them completely untouched.
+        with torch.no_grad():
+            for name, param in wrapper.trainer.model.named_parameters():
+                if ".ref." in name:
+                    param.fill_(999.0)
+
+        observer = _EpochObserver(wrapper.trainer)
+        wrapper.trainer.add_callback(observer)
+
+        wrapper.train()
+
+        regen_cbs = [
+            cb for cb in wrapper.trainer.callback_handler.callbacks
+            if type(cb).__name__ == "RefModelRegenCallback"
+        ]
+        assert len(regen_cbs) == 1
+        regen_cb = regen_cbs[0]
+
+        # Criteria 3: Epoch 1 is not divisible by 2, so ref is unchanged and receives no gradients
+        assert observer.epoch1_regen_count == 0
+        assert observer.epoch1_all_999 is True
+        assert observer.epoch1_all_equal is False
+        assert observer.epoch1_ref_requires_grad is False
+
+        # After epoch 2 (divisible by 2): regen_count == 1 and .ref. equals .default.
+        assert regen_cb.regen_count == 1
+        named = dict(wrapper.trainer.model.named_parameters())
+        ref_params = {k: v for k, v in named.items() if ".ref." in k}
+        assert len(ref_params) > 0
+        assert all(
+            torch.equal(ref_p, named[ref_name.replace(".ref.", ".default.", 1)])
+            for ref_name, ref_p in ref_params.items()
+        )
+        assert not any(
+            torch.equal(ref_p, torch.full_like(ref_p, 999.0))
+            for ref_p in ref_params.values()
+        )
+        assert not any(p.requires_grad for p in ref_params.values())
 
 
 def _lazy_body_names(tree):

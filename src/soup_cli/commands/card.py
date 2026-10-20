@@ -56,7 +56,9 @@ def _truncate(text: str, limit: int) -> str:
 
 
 # Export kinds that prove the artifact is a standalone (non-adapter) model.
-_DENSE_KINDS = frozenset({"merged", "gguf", "onnx", "awq", "gptq", "tensorrt", "edited_model"})
+_DENSE_KINDS = frozenset({
+    "merged", "gguf", "onnx", "awq", "gptq", "tensorrt", "torchao", "edited_model",
+})
 
 
 def _is_adapter(artifacts: Sequence[Mapping[str, Any]], config: Mapping[str, Any]) -> bool:

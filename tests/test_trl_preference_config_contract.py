@@ -264,6 +264,9 @@ class TestTheCanaryCoversWhatItClaims:
             for path in trainer_dir.glob("*.py")
             if any(marker in path.read_text(encoding="utf-8") for marker in markers)
             and path.stem != "_trl_compat"  # the helper defines it, does not pass it
+            # Builds no trl config: its `max_prompt_length=` goes to its own
+            # tokenizer (tests/test_mlx_dpo.py pins the cap).
+            and path.stem != "mlx_dpo"
         }
         assert users, "found no trainer passing a prompt-length cap — did the path move?"
         uncovered = sorted(users - set(_ALL_SIX))

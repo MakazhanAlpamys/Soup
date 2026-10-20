@@ -1,11 +1,11 @@
 """Tests for Issue #687: Web UI authentication on read APIs and SSE streams."""
 
 import pytest
-from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 from soup_cli.cli import app as cli_app
 from soup_cli.ui.app import create_app, get_auth_token
+from tests.ui_helpers import ui_client
 
 
 def _auth_headers():
@@ -34,7 +34,7 @@ class TestReadAuthentication:
     )
     def test_unauthenticated_reads_return_401(self, endpoint):
         """Unauthenticated requests to read APIs must return 401."""
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         resp = client.get(endpoint)
         assert resp.status_code == 401, f"{endpoint} allowed unauthenticated access"
 
@@ -52,13 +52,13 @@ class TestReadAuthentication:
     )
     def test_bad_token_reads_return_401(self, endpoint):
         """Requests with an invalid Bearer token must return 401."""
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         resp = client.get(endpoint, headers={"Authorization": "Bearer invalid_secret_token"})
         assert resp.status_code == 401
 
     def test_authenticated_reads_succeed(self):
         """Authenticated requests with valid Bearer token return 200."""
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         headers = _auth_headers()
 
         resp = client.get("/api/system", headers=headers)
@@ -84,19 +84,19 @@ class TestPublicEndpoints:
     """Verify that public endpoints remain reachable without authentication."""
 
     def test_index_is_public(self):
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         resp = client.get("/")
         assert resp.status_code == 200
         assert "text/html" in resp.headers["content-type"]
 
     def test_health_is_public(self):
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         resp = client.get("/api/health")
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
 
     def test_static_files_are_public(self):
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         resp = client.get("/static/app.js")
         assert resp.status_code == 200
 
@@ -114,26 +114,26 @@ class TestSSEAuthenticationAndTickets:
     )
     def test_unauthenticated_sse_returns_401(self, endpoint):
         """SSE endpoints without auth must return 401."""
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         resp = client.get(endpoint)
         assert resp.status_code == 401
 
     def test_bearer_header_on_sse_succeeds(self):
         """SSE endpoints accept direct Authorization Bearer header."""
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         resp = client.get("/api/train/logs", headers=_auth_headers())
         assert resp.status_code == 200
 
     def test_durable_token_in_query_rejected(self):
         """?token= query param must NOT be accepted on SSE endpoints (#687)."""
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         token = get_auth_token()
         resp = client.get(f"/api/train/logs?token={token}")
         assert resp.status_code == 401
 
     def test_auth_ticket_exchange_and_single_use(self):
         """POST /api/auth/ticket issues ticket, ticket is single-use only."""
-        client = TestClient(create_app())
+        client = ui_client(create_app())
 
         # Unauthenticated ticket request fails
         resp = client.post("/api/auth/ticket")
@@ -157,7 +157,7 @@ class TestSSEAuthenticationAndTickets:
 
     def test_invalid_ticket_rejected(self):
         """Nonexistent ticket fails with 401."""
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         resp = client.get("/api/train/logs?ticket=nonexistent-ticket-value")
         assert resp.status_code == 401
 
@@ -183,7 +183,7 @@ class TestNonLoopbackBindingProtection:
     def test_create_app_allows_loopback_default(self):
         """create_app allows loopback hosts with normal token."""
         app = create_app(host="127.0.0.1")
-        client = TestClient(app)
+        client = ui_client(app)
         resp = client.get("/api/system", headers=_auth_headers())
         assert resp.status_code == 200
 

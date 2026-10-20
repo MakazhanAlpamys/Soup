@@ -149,13 +149,15 @@ class PreferenceTrainerWrapper:
         from rich.console import Console as _Console
 
         from soup_cli.utils.preference_combine import (
+            REF_FREE_LOSSES,
             describe_blend,
+            primary_loss,
             validate_weight_compat,
         )
 
         weights = get_loss_weights(self.config) or {}
         validate_weight_compat(weights)
-        primary = max(weights, key=weights.get)
+        primary = primary_loss(weights)
         # Build the primary inner wrapper using the same dispatch table.
         inner_cfg = _make_inner_cfg(self.config, primary)
         kwargs = {
@@ -179,7 +181,13 @@ class PreferenceTrainerWrapper:
             raise ValueError(f"unknown primary preference loss: {primary!r}")
         _Console().print(
             f"[cyan]Multi-objective preference loss:[/] {describe_blend(weights)} "
-            f"(primary: {primary})"
+            f"(primary: {primary}"
+            + (
+                "; simpo/orpo are preference terms only, without the NLL term"
+                if set(weights) <= REF_FREE_LOSSES
+                else ""
+            )
+            + ")"
         )
         self._active_weights = dict(weights)
         return PrimaryWrapper(inner_cfg, **kwargs)
@@ -195,10 +203,16 @@ class PreferenceTrainerWrapper:
             # Advisory print + build are owned by ``_build_multi_objective``
             # so successive setup() calls (e.g. resume) emit one consistent
             # advisory line, not two.
-            from soup_cli.utils.preference_combine import validate_weight_compat
+            from soup_cli.utils.preference_combine import (
+                validate_adapter_off_reference,
+                validate_weight_compat,
+            )
 
             weights = get_loss_weights(self.config) or {}
             validate_weight_compat(weights)
+            # #1425: also before anything is loaded -- a dpo / ipo term whose
+            # adapter-off reference would not be the starting model.
+            validate_adapter_off_reference(weights, self.config.training)
             if self._inner is None:
                 self._inner = self._build_multi_objective()
             if self._inner is not None:
@@ -213,7 +227,26 @@ class PreferenceTrainerWrapper:
                 inner_trainer = getattr(self._inner, "trainer", None)
                 if inner_trainer is not None:
                     try:
-                        attach_weighted_preference_combine(inner_trainer, weights)
+                        # #1425: capture the log-probs of the primary
+                        # trainer's own forward pass, then wrap compute_loss
+                        # over them. CPO / ORPO hand over policy log-probs;
+                        # a dpo / ipo primary (trl's DPOTrainer) also gives
+                        # the reference ones. A dpo / ipo term under a
+                        # simpo / orpo primary has no reference and refuses.
+                        from soup_cli.utils.preference_combine import (
+                            attach_policy_logp_capture,
+                            attach_reference_logp_capture,
+                            blend_loss_params,
+                            needs_reference_model,
+                        )
+
+                        attach_policy_logp_capture(
+                            inner_trainer, reference=needs_reference_model(weights)
+                        )
+                        attach_reference_logp_capture(inner_trainer)
+                        attach_weighted_preference_combine(
+                            inner_trainer, weights, blend_loss_params(self.config)
+                        )
                     except (TypeError, ValueError) as exc:
                         # Schema validates weights at config load; runtime
                         # rejection should be loud — but fall through to the
