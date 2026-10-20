@@ -730,7 +730,7 @@ def _drive_qwen4_streaming_setup(
     `resolve_targets` replaces the `resolve_lora_target_modules` stub (which
     answers `["q_proj"]` whatever it is given), so a test about target
     resolution can hand the setup the real resolver
-    (`tests/test_stream_moe_lora_targets.py`).
+    (`tests/test_mla_lora_targets.py`, `tests/test_stream_moe_lora_targets.py`).
     """
     import sys
     import types

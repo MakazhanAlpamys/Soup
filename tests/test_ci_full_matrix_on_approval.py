@@ -619,6 +619,8 @@ class TestPlanDecision:
             "full": "${{ steps.decide.outputs.full }}",
             "matrix": "${{ steps.decide.outputs.matrix }}",
             "constraints": "${{ steps.decide.outputs.constraints }}",
+            # 2026-10-20: tests/test_ci_docs_only_fast_path.py pins how it is computed.
+            "docs_only": "${{ steps.docs.outputs.docs_only }}",
         }
 
     @pytest.mark.parametrize(("context", "kind"), EVENTS)
@@ -1467,6 +1469,12 @@ class TestADraftRunsNothing:
             assert not _STATUS_FUNCTION.search(condition), f"{name}: {condition}"
 
 
+#: Every step of the `test` job also asks `env.RUN_SUITE`, the job's own switch for a cell that
+#: does nothing in a docs-only pull request (2026-10-20; tests/test_ci_docs_only_fast_path.py).
+#: Here it is the ordinary case, a cell that works.
+WORKING_CELL = {"env": {"RUN_SUITE": "true"}}
+
+
 class TestCoverageUpload:
     def test_one_cell_of_every_gated_run_uploads_and_a_quick_run_uploads_nothing(self):
         """The upload is pinned to one cell. Pinned to a cell the approval run does not
@@ -1480,7 +1488,7 @@ class TestCoverageUpload:
             return [
                 cell
                 for cell in _cell_dicts(_matrix(name))
-                if _truthy(_Expression(condition, {"matrix": cell}).value())
+                if _truthy(_Expression(condition, {"matrix": cell, **WORKING_CELL}).value())
             ]
 
         for name in ("APPROVAL_MATRIX", "FULL_MATRIX", "RELEASE_MATRIX"):
@@ -1506,7 +1514,7 @@ def _cells_running(step: dict[str, Any], matrix: str) -> list[dict[str, str]]:
     return [
         cell
         for cell in _cell_dicts(_matrix(matrix))
-        if _truthy(_Expression(condition, {"matrix": cell}).value())
+        if _truthy(_Expression(condition, {"matrix": cell, **WORKING_CELL}).value())
     ]
 
 

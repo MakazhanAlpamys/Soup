@@ -1148,6 +1148,26 @@ class TestTheCaptureReadsTrlOwnLogProbs:
             blended(base), rel=1e-9
         )
 
+    def test_dpo_and_ipo_terms_read_their_own_config_fields(self, tmp_path, monkeypatch):
+        """`dpo.py` builds with `training.dpo_beta` and `ipo.py` with
+        `training.ipo_tau`; the blend's dpo / ipo terms must read the same
+        fields, not `DEFAULT_BETA` (#1645)."""
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.utils.preference_combine import DEFAULT_BETA, blend_loss_params
+
+        monkeypatch.chdir(tmp_path)
+        cfg = load_config_from_string(
+            "base: ./unused\ntask: preference\n"
+            "data: {train: ./unused.jsonl, format: dpo, max_length: 64}\n"
+            "training:\n  epochs: 1\n  batch_size: 2\n  quantization: none\n"
+            "  preference_loss_weights: {dpo: 0.5, ipo: 0.5}\n"
+            "  dpo_beta: 0.5\n  ipo_tau: 0.7\n"
+            "  lora: {r: 4, alpha: 8, dropout: 0.0}\noutput: ./out\n"
+        )
+        params = blend_loss_params(cfg)
+        assert params["dpo"]["beta"] == 0.5 != DEFAULT_BETA, params
+        assert params["ipo"]["beta"] == 0.7 != DEFAULT_BETA, params
+
     def test_a_dpo_primary_has_no_hook_and_still_refuses(self):
         import torch
 

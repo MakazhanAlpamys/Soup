@@ -260,6 +260,12 @@ def build_mlx_adapter_config(lora_cfg: object, *, adapter_path: str, **extra: ob
     return config
 
 
+def _resolved_batch_size(tcfg: object) -> int:
+    """``training.batch_size`` as MLX runs it: anything but an int (``auto``) is 1."""
+    value = getattr(tcfg, "batch_size", 1)
+    return int(value) if isinstance(value, int) else 1
+
+
 class MLXSFTTrainerWrapper:
     """High-level wrapper for MLX supervised fine-tuning."""
 
@@ -386,10 +392,29 @@ class MLXSFTTrainerWrapper:
                 "[yellow]MLX backend ignores: " + ", ".join(unsupported) + "[/]"
             )
 
+    def _check_train_split_size(self, dataset: dict) -> None:
+        """#1851: a training split smaller than one batch cannot train at all.
+
+        mlx-lm's ``iterate_batches`` -- like ``masked_iterate_batches`` -- raises
+        on a dataset smaller than one batch, which surfaced after the model had
+        loaded. Refused here, before the load. (A short *validation* split is
+        skipped with a warning in ``train()`` instead.)
+        """
+        batch_size = _resolved_batch_size(self.config.training)
+        train_rows = len(dataset.get("train") or [])
+        if 0 < train_rows < batch_size:
+            raise ValueError(
+                f"MLX backend: the training split has {train_rows} row(s), fewer "
+                f"than training.batch_size ({batch_size}), and mlx-lm trains in "
+                f"whole batches. Lower training.batch_size to at most {train_rows} "
+                "or add rows."
+            )
+
     def setup(self, dataset: dict) -> None:
         """Load MLX model, configure LoRA, prepare dataset."""
         self._require_mlx()
         self._check_unsupported()
+        self._check_train_split_size(dataset)
 
         from soup_cli.utils.mlx import load_mlx_model
 
@@ -555,13 +580,21 @@ class MLXSFTTrainerWrapper:
         if resume_from_checkpoint is not None:
             self._load_checkpoint_weights(resume_from_checkpoint)
 
-        batch_size = (
-            int(cfg.training.batch_size)
-            if isinstance(cfg.training.batch_size, int)
-            else 1
-        )
+        batch_size = _resolved_batch_size(cfg.training)
         train_rows = list(self._dataset.get("train", []))
         val_rows = list(self._dataset.get("val", []))
+        if 0 < len(val_rows) < batch_size:
+            # #1851: mlx-lm evaluates in whole batches of `batch_size` and raises
+            # on a smaller split. Evaluating nothing is the no-val branch below;
+            # the warning keeps it from being #1223's silent hold-out.
+            console.print(
+                f"[yellow]MLX backend: the validation split has {len(val_rows)} "
+                f"row(s), fewer than training.batch_size ({batch_size}); mlx-lm "
+                "evaluates in whole batches, so it is not evaluated and val_loss "
+                "will be absent. Lower batch_size, raise data.val_split, or set "
+                "data.val_split: 0 to train on those rows.[/]"
+            )
+            val_rows = []
         iters = int(
             cfg.training.epochs * max(1, math.ceil(len(train_rows) / batch_size))
         )
