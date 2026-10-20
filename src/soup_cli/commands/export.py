@@ -409,6 +409,7 @@ def export(
         console.print("[dim]GGUF: conversion dependencies...[/]")
         _install_convert_deps()
     tool_options = {"verbose": True} if verbose else {}
+    convert_options = dict(tool_options)
 
     # --- Convert to GGUF ---
     console.print(
@@ -431,11 +432,22 @@ def export(
             )
             raise typer.Exit(1)
 
+        from soup_cli.utils.gguf_mtp import needs_no_mtp
+
+        try:
+            if needs_no_mtp(model_path, convert_script):
+                convert_options["no_mtp"] = True
+        except ValueError as exc:
+            from soup_cli.utils.terminal import for_terminal
+
+            console.print(f"[red]{for_terminal(str(exc))}[/]")
+            raise typer.Exit(1) from exc
+
         if quant in ("f16", "f32"):
             # Direct conversion without quantization
             outtype = "f16" if quant == "f16" else "f32"
             console.print(f"[dim]GGUF: convert — Converting to GGUF ({outtype})...[/]")
-            _run_convert(convert_script, model_path, output_path, outtype, **tool_options)
+            _run_convert(convert_script, model_path, output_path, outtype, **convert_options)
         else:
             # Convert to f16 first, then quantize.
             #
@@ -452,7 +464,7 @@ def export(
             try:
                 f16_path = tmp_dir / f"{model_name}.f16.gguf"
                 console.print("[dim]GGUF: convert — Converting to GGUF (f16)...[/]")
-                _run_convert(convert_script, model_path, f16_path, "f16", **tool_options)
+                _run_convert(convert_script, model_path, f16_path, "f16", **convert_options)
 
                 # Quantize
                 console.print(f"[dim]GGUF: quantize — Quantizing to {quant}...[/]")
@@ -785,6 +797,7 @@ def _run_export_tool(cmd: list[str], label: str, *, verbose: bool) -> None:
 
 def _run_convert(
     script: Path, model_dir: Path, output_path: Path, outtype: str, *, verbose: bool = False,
+    no_mtp: bool = False,
 ) -> None:
     """Run llama.cpp convert_hf_to_gguf.py script."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -795,6 +808,8 @@ def _run_convert(
         "--outfile", str(output_path),
         "--outtype", outtype,
     ]
+    if no_mtp:
+        cmd.append("--no-mtp")
     _run_export_tool(cmd, "Conversion", verbose=verbose)
 
 

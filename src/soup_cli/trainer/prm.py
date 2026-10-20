@@ -17,7 +17,6 @@ per project policy — ``python -m soup_cli.cli --help`` must not pull torch.
 from __future__ import annotations
 
 import logging
-import math
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -355,10 +354,9 @@ class PRMTrainerWrapper:
             )
             console.print(f"[green]Auto batch size (PRM):[/] {batch_size}")
         bs = int(batch_size)
-        total_steps = math.ceil(
-            len(train_rows) / bs / tcfg.gradient_accumulation_steps
-        ) * tcfg.epochs
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
+
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
         use_bf16, use_fp16 = bf16_fp16_flags(self.device, allow_mps_bf16=True)
         from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 

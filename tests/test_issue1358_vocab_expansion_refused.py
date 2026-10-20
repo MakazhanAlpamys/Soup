@@ -276,7 +276,7 @@ class TestABackendTheTaskCannotRunOnIsNamedFirst:
 
     @pytest.mark.parametrize(("task", "backend", "expected"), [
         ("online_dpo", "unsloth", "task='online_dpo' requires backend='transformers'"),
-        ("dpo", "mlx", "MLX backend only ships SFT"),
+        ("ipo", "mlx", "MLX backend only ships SFT"),
         ("kto", "mlx", "MLX backend only ships SFT"),
     ])
     def test_the_backend_refusal_comes_first(self, task, backend, expected):

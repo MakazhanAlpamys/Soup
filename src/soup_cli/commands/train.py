@@ -1754,6 +1754,11 @@ def train(
         console.print("[green]Config valid. Ready to train![/]")
         raise typer.Exit()
 
+    # Capture the source before loading/transformation, never at verdict/registration time.
+    from soup_cli.utils.training_identity import capture_training_data_hash
+
+    training_data_sha256 = capture_training_data_hash(cfg)
+
     # Load data
     console.print("[dim]Loading dataset...[/]")
     if val_notice:
@@ -1791,6 +1796,7 @@ def train(
     # _reconcile_orphaned_run to ever notice the process is gone — the
     # rescue path #401 built for MCP-spawned runs was otherwise inert here.
     tracker.mark_running(run_id, pid=os.getpid())
+    tracker.record_training_data_hash(run_id, training_data_sha256)
     console.print(f"[dim]Run ID: {run_id}[/]")
 
     try:

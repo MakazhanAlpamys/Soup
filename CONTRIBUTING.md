@@ -649,6 +649,26 @@ instead of setting `COLUMNS`. To reproduce a failure that shows only in CI,
 install the plugin (`pip install "pytest-xdist[psutil]"`) and run
 `pytest tests/ -n logical --dist loadfile`.
 
+**A docs-only pull request runs the suite once.** When every file a pull request
+changes is under `docs/` or `changelog.d/`, or is `CONTRIBUTORS.md` or
+`CONTRIBUTING.md` (a renamed file counts under both names; `README*.md`,
+`benchmarks/` and everything else do not count), the `plan` job marks the run
+docs-only: `test (ubuntu-latest, 3.12)` runs the whole suite as always, and the
+other test cells and the three smoke jobs still report, as success, without
+running a step. If the file list cannot be read, or is not the whole list, the
+full set runs. A push, the nightly run and a release branch are never docs-only.
+
+**A hung test is cut off.** The test steps run with `--timeout=600
+--timeout-method=thread --max-worker-restart=2` (`pytest-timeout`, part of the
+`dev` extra), a 45-minute step limit and a 60-minute job limit. A test that
+runs for ten minutes fails and the worker running it is killed and replaced;
+xdist runs that test again on the new worker, and gives up after two
+replacements. After five minutes (`-o faulthandler_timeout=300`) the stacks of
+all threads are written to the log, so a hang says where it is. A healthy test
+takes seconds. A test that really needs longer marks itself
+`@pytest.mark.timeout(1200)`. A local `pytest` run has no cap unless you pass
+the flags.
+
 See `.github/workflows/ci.yml`.
 
 ### Stale CI marks (#1017)

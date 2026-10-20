@@ -64,10 +64,12 @@ def _set_ppo_training_kwargs(
 
     if total_steps is not None:
         from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
 
         use_bf16, use_fp16 = bf16_fp16_flags(device)
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
         training_kwargs = {
-            "warmup_steps": int(total_steps * tcfg.warmup_ratio),
+            "warmup_steps": warmup_steps,
             "weight_decay": tcfg.weight_decay,
             "max_grad_norm": tcfg.max_grad_norm,
             "optim": tcfg.optimizer,
@@ -190,6 +192,11 @@ class PPOTrainerWrapper:
         # Import PPOTrainer/PPOConfig — trl >=0.28 moved to trl.experimental
         ppo_trainer_cls, ppo_config_cls, is_experimental = _import_ppo_classes()
 
+        from soup_cli.trainer._trl_compat import config_accepts
+
+        if self.deepspeed_config and not config_accepts(ppo_config_cls, "deepspeed"):
+            raise ValueError("task: ppo does not support --deepspeed on this trl version")
+
         # Enable Rich progress bar for HuggingFace downloads
         from soup_cli.trainer.sft import _enable_hf_transfer_progress
 
@@ -311,8 +318,19 @@ class PPOTrainerWrapper:
             total_steps=total_steps, device=self.device,
         )
 
+        from soup_cli.trainer._trl_compat import config_accepts
+
         if "cliprange" in ppo_params:
             ppo_kwargs["cliprange"] = tcfg.ppo_clip_ratio
+
+        if config_accepts(ppo_config_cls, "deepspeed"):
+            ppo_kwargs["deepspeed"] = self.deepspeed_config
+
+        if config_accepts(ppo_config_cls, "response_length"):
+            ppo_kwargs["response_length"] = cfg.data.max_length
+
+        if config_accepts(ppo_config_cls, "save_total_limit"):
+            ppo_kwargs["save_total_limit"] = 3
 
         # Optional params that may not exist in all trl versions
         if "log_with" in ppo_params:
