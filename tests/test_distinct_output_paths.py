@@ -91,14 +91,41 @@ class TestEnsureDistinctPaths:
                 [("--logs", "Traces.jsonl")], [("--output", "traces.jsonl")]
             )
 
+    @pytest.mark.skipif(os.name != "nt", reason="case-insensitive file system")
+    def test_case_variant_of_a_path_that_does_not_exist_yet_is_refused_on_windows():
+        with pytest.raises(ValueError):
+            ensure_distinct_paths([("--logs", "Missing.jsonl")], [("--output", "missing.jsonl")])
+
+
+    @pytest.mark.skipif(os.name != "nt", reason="case-insensitive file system")
+    def test_nested_case_variant_of_a_missing_directory_is_refused_on_windows():
+        with pytest.raises(ValueError):
+            ensure_distinct_paths(
+                [("--retriever-config output", "out/R1/stage")],
+                [("--generator-config output", "out/r1")],
+                reject_nested=True,
+            )
+
+
+    @pytest.mark.requires_symlink
+    def test_symlinked_directory_alias_of_a_missing_output_is_refused():
+        os.mkdir("real")
+        os.symlink("real", "link", target_is_directory=True)
+        with pytest.raises(ValueError):
+            ensure_distinct_paths(
+                [("--retriever-config output", "real/r1")],
+                [("--generator-config output", "link/r1")],
+                reject_nested=True,
+            )
+        with pytest.raises(ValueError):
+            ensure_distinct_paths([("--logs", "real/in.jsonl")], [("--output", "link/in.jsonl")])
+
+    @pytest.mark.requires_hardlink
     def test_hard_link_is_refused(self):
         # A hard link has a different path but is the same file on disk, so only
         # os.path.samefile catches it.
         _write("a.jsonl")
-        try:
-            os.link("a.jsonl", "b.jsonl")
-        except (OSError, NotImplementedError):
-            pytest.skip("hard links are not available here")
+        os.link("a.jsonl", "b.jsonl")
         with pytest.raises(ValueError):
             ensure_distinct_paths([("--input", "a.jsonl")], [("--output", "b.jsonl")])
 
