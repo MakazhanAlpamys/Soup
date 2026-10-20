@@ -865,6 +865,7 @@ class StreamingSetupMixin:
             quantised_layer_suffixes,
         )
         from soup_cli.utils.moe import resolve_moe_lora_targets
+        from soup_cli.utils.peft_wiring import resolve_lora_target_modules
         from soup_cli.utils.qwen4_ple import external_tensor_bytes
         from soup_cli.utils.spectrum_scan import resolve_model_weights
         from soup_cli.utils.stripe_roots import resolve_stripe_roots
@@ -974,20 +975,33 @@ class StreamingSetupMixin:
         # It runs BEFORE the weights are resolved: it needs only the config, and
         # the disk pre-flight below sizes the shard cache by these same suffixes.
         quant_suffixes = ()
-        moe_targets = None
+        # The attention targets (``auto`` resolved, or the user's list), first:
+        # they need only the config, and the moe_lora helper below must EXTEND
+        # them, as it does on the resident trainers since #1590. Handing it
+        # ``None`` and replacing the list with its answer dropped every name the
+        # MoE list does not repeat -- MLA's q_a/q_b/kv_a/kv_b projections, Qwen3.5's
+        # in_proj_qkv / out_proj -- and an explicit list altogether.
+        target_modules = resolve_lora_target_modules(
+            model_config, tcfg.lora.target_modules, console
+        )
         # #798: the ONE helper that turns moe_lora into targets, and refuses a
         # dropout peft cannot honour on fused experts. This path kept its own
         # copy of the block, which is why it was the one path with no refusal.
         # The probe is a meta skeleton and is the only model available here, so
         # the call happens while it is alive rather than at the attach below.
+        # With moe_lora off it returns ``target_modules`` unchanged.
         if quant == QUANT_NF4:
             probe = self._stream_meta_skeleton(cfg.base, dtype=dtype, quant=quant)
-            moe_targets = resolve_moe_lora_targets(probe, tcfg, None, console=console)
+            target_modules = resolve_moe_lora_targets(
+                probe, tcfg, target_modules, console=console
+            )
             quant_suffixes = quantised_layer_suffixes(probe)
             del probe
         elif tcfg.moe_lora:
             probe = self._stream_meta_skeleton(cfg.base, dtype=dtype, quant=quant)
-            moe_targets = resolve_moe_lora_targets(probe, tcfg, None, console=console)
+            target_modules = resolve_moe_lora_targets(
+                probe, tcfg, target_modules, console=console
+            )
             del probe
 
         def _disk_preflight(weights_plan) -> None:
@@ -1351,17 +1365,10 @@ class StreamingSetupMixin:
             if not enabled:
                 console.print(f"[dim]expandable_segments allocator hint not enabled: {why_not}[/]")
 
-        from soup_cli.utils.peft_wiring import (
-            build_lora_config,
-            resolve_lora_target_modules,
-        )
+        from soup_cli.utils.peft_wiring import build_lora_config
 
-        target_modules = resolve_lora_target_modules(
-            model_config, tcfg.lora.target_modules, console
-        )
-        if moe_targets:
-            # Already announced by resolve_moe_lora_targets when the probe ran.
-            target_modules = moe_targets
+        # ``target_modules`` was settled before the probe was deleted, moe_lora's
+        # additions included (already announced by resolve_moe_lora_targets).
         lora_config = build_lora_config(
             tcfg.lora,
             target_modules=target_modules,
