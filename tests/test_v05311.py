@@ -1,0 +1,1836 @@
+"""v0.53.11 — GRPO Plus finish + preference live (#123, #126, #127, #119, #68).
+
+Tests the math kernels + dispatch logic. Live GPU smoke runs are documented
+in plan.md and require a CUDA box.
+"""
+
+from __future__ import annotations
+
+import math
+
+import pytest
+
+# Skip the whole module when torch is unavailable — the math kernels are
+# torch-based by design.
+torch = pytest.importorskip("torch")
+
+
+# ---------------------------------------------------------------------------
+# #123 — GRPO variant live loss kernels
+# ---------------------------------------------------------------------------
+
+
+class TestGRPOVariantKernels:
+    def _toy_inputs(self, batch=2, seq=4):
+        logp_new = torch.zeros(batch, seq)
+        logp_old = torch.zeros(batch, seq)
+        advantages = torch.tensor([1.0, -1.0])
+        return logp_new, logp_old, advantages
+
+    def test_standard_returns_none(self):
+        from soup_cli.utils.grpo_variants import apply_variant_loss
+
+        logp_new, logp_old, adv = self._toy_inputs()
+        assert apply_variant_loss(
+            "standard", logp_new=logp_new, logp_old=logp_old, advantages=adv
+        ) is None
+
+    @pytest.mark.parametrize("variant", ["gspo", "dapo", "dr_grpo", "bnpo", "rft"])
+    def test_variant_returns_finite_scalar(self, variant):
+        from soup_cli.utils.grpo_variants import apply_variant_loss
+
+        logp_new, logp_old, adv = self._toy_inputs()
+        out = apply_variant_loss(
+            variant, logp_new=logp_new, logp_old=logp_old, advantages=adv
+        )
+        assert out is not None
+        assert out.shape == ()  # scalar
+        assert math.isfinite(float(out))
+
+    def test_two_sided_requires_delta(self):
+        from soup_cli.utils.grpo_variants import apply_variant_loss
+
+        logp_new, logp_old, adv = self._toy_inputs()
+        with pytest.raises(ValueError, match="grpo_delta"):
+            apply_variant_loss(
+                "two_sided", logp_new=logp_new, logp_old=logp_old, advantages=adv
+            )
+
+    def test_two_sided_with_delta(self):
+        from soup_cli.utils.grpo_variants import apply_variant_loss
+
+        logp_new, logp_old, adv = self._toy_inputs()
+        out = apply_variant_loss(
+            "two_sided",
+            logp_new=logp_new,
+            logp_old=logp_old,
+            advantages=adv,
+            delta=0.2,
+        )
+        assert math.isfinite(float(out))
+
+    def test_completion_mask_zeros_padding(self):
+        from soup_cli.utils.grpo_variants import apply_variant_loss
+
+        logp_new, logp_old, adv = self._toy_inputs()
+        mask = torch.tensor([[1.0, 1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]])
+        out = apply_variant_loss(
+            "gspo",
+            logp_new=logp_new,
+            logp_old=logp_old,
+            advantages=adv,
+            completion_mask=mask,
+        )
+        assert math.isfinite(float(out))
+
+    def test_gspo_masked_token_cannot_change_loss(self):
+        """A masked (padding) token must not shift the gspo batch-mean
+        statistic other rows are centered against (#723)."""
+        from soup_cli.utils.grpo_variants import apply_variant_loss
+
+        logp_old = torch.zeros(4, 2)
+        adv = torch.tensor([1.0, 0.6, -0.3, 0.2])
+        mask = torch.tensor([[1.0, 0.0], [1.0, 1.0], [1.0, 1.0], [1.0, 1.0]])
+
+        losses = []
+        for delta in (-2.0, -6.0):
+            logp_new = torch.zeros(4, 2)
+            logp_new[0, 1] = delta  # masked position
+            out = apply_variant_loss(
+                "gspo",
+                logp_new=logp_new,
+                logp_old=logp_old,
+                advantages=adv,
+                completion_mask=mask,
+            )
+            losses.append(float(out))
+        assert losses[0] == pytest.approx(losses[1])
+
+    def test_gspo_masked_token_zero_gradient(self):
+        """Every masked gspo token must receive exactly zero gradient (#723)."""
+        from soup_cli.utils.grpo_variants import apply_variant_loss
+
+        logp_old = torch.zeros(4, 2)
+        adv = torch.tensor([1.0, 0.6, -0.3, 0.2])
+        mask = torch.tensor([[1.0, 0.0], [1.0, 1.0], [1.0, 1.0], [1.0, 1.0]])
+        logp_new = torch.zeros(4, 2, requires_grad=True)
+        with torch.no_grad():
+            logp_new[0, 1] = -6.0
+        out = apply_variant_loss(
+            "gspo",
+            logp_new=logp_new,
+            logp_old=logp_old,
+            advantages=adv,
+            completion_mask=mask,
+        )
+        out.backward()
+        assert float(logp_new.grad[0, 1]) == pytest.approx(0.0)
+
+    def test_gspo_all_masked_column_no_nan(self):
+        """A column with zero unmasked entries must not divide by zero."""
+        from soup_cli.utils.grpo_variants import apply_variant_loss
+
+        logp_new, logp_old, adv = self._toy_inputs()
+        mask = torch.tensor([[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]])
+        out = apply_variant_loss(
+            "gspo",
+            logp_new=logp_new,
+            logp_old=logp_old,
+            advantages=adv,
+            completion_mask=mask,
+        )
+        assert math.isfinite(float(out))
+
+    def test_bool_beta_rejected(self):
+        from soup_cli.utils.grpo_variants import apply_variant_loss
+
+        logp_new, logp_old, adv = self._toy_inputs()
+        with pytest.raises(TypeError, match="bool"):
+            apply_variant_loss(
+                "gspo",
+                logp_new=logp_new,
+                logp_old=logp_old,
+                advantages=adv,
+                beta=True,
+            )
+
+    def test_unknown_variant_rejected(self):
+        from soup_cli.utils.grpo_variants import apply_variant_loss
+
+        logp_new, logp_old, adv = self._toy_inputs()
+        with pytest.raises(ValueError, match="grpo_variant"):
+            apply_variant_loss(
+                "nonsense", logp_new=logp_new, logp_old=logp_old, advantages=adv
+            )
+
+    def test_no_more_deferred_live(self):
+        from soup_cli.utils.grpo_variants import _DEFERRED_LIVE
+
+        assert _DEFERRED_LIVE == frozenset()
+
+    def test_variant_metadata_live_wired(self):
+        from soup_cli.utils.grpo_variants import _VARIANT_METADATA
+
+        for name, spec in _VARIANT_METADATA.items():
+            assert spec.live_wired is True, f"{name} not flipped to live"
+
+
+# ---------------------------------------------------------------------------
+# #119 — LongLoRA forward override
+# ---------------------------------------------------------------------------
+
+
+class TestLongLoRAShift:
+    def test_shift_heads_for_s2_basic(self):
+        from soup_cli.utils.longlora import shift_heads_for_s2
+
+        # [B=1, H=4, T=8, D=2]
+        t = torch.arange(64, dtype=torch.float32).reshape(1, 4, 8, 2)
+        shifted = shift_heads_for_s2(t, group_size=4)
+        assert shifted.shape == t.shape
+        # First half unchanged
+        assert torch.equal(shifted[:, :2, :, :], t[:, :2, :, :])
+        # Second half shifted by group_size//2 = 2
+        assert not torch.equal(shifted[:, 2:, :, :], t[:, 2:, :, :])
+
+    def test_shift_rejects_bool_group_size(self):
+        from soup_cli.utils.longlora import shift_heads_for_s2
+
+        t = torch.zeros(1, 4, 8, 2)
+        with pytest.raises(TypeError, match="bool"):
+            shift_heads_for_s2(t, group_size=True)
+
+    def test_shift_rejects_small_group_size(self):
+        from soup_cli.utils.longlora import shift_heads_for_s2
+
+        t = torch.zeros(1, 4, 8, 2)
+        with pytest.raises(ValueError, match=">= 2"):
+            shift_heads_for_s2(t, group_size=1)
+
+    def test_shift_rejects_non_4d(self):
+        from soup_cli.utils.longlora import shift_heads_for_s2
+
+        t = torch.zeros(1, 4, 8)
+        with pytest.raises(ValueError, match="4-D"):
+            shift_heads_for_s2(t, group_size=4)
+
+    def test_shift_single_head_no_change(self):
+        from soup_cli.utils.longlora import shift_heads_for_s2
+
+        t = torch.arange(16, dtype=torch.float32).reshape(1, 1, 8, 2)
+        out = shift_heads_for_s2(t, group_size=4)
+        assert torch.equal(out, t)
+
+    def test_apply_longlora_forward_override_returns_context(self):
+        from soup_cli.utils.longlora import (
+            LongLoRAForwardOverride,
+            apply_longlora_forward_override,
+        )
+
+        # Minimal model stub with .modules() iterator.
+        class _Stub:
+            def modules(self):
+                return iter([])
+
+        result = apply_longlora_forward_override(_Stub(), group_size=4)
+        assert isinstance(result, LongLoRAForwardOverride)
+        # Restoration is no-op on empty model.
+        with result:
+            pass
+
+    def test_override_restore_on_exit(self):
+        # v0.71.12 #158 — the shift now patches q_proj / k_proj (NOT the
+        # attention output). The attention forward itself is untouched.
+        from soup_cli.utils.longlora import apply_longlora_forward_override
+
+        class _Proj:
+            def forward(self, x):
+                return x
+
+        class LlamaAttention:  # exact name the regex matches
+            def __init__(self):
+                self.head_dim = 2
+                self.q_proj = _Proj()
+                self.k_proj = _Proj()
+
+            def forward(self, x):
+                return (x,)
+
+        class _Model:
+            def __init__(self):
+                self.attn = LlamaAttention()
+
+            def modules(self):
+                yield self.attn
+
+        model = _Model()
+        override = apply_longlora_forward_override(model, group_size=4)
+        with override:
+            # q_proj / k_proj forwards are now the shift wrapper.
+            assert getattr(model.attn.q_proj.forward, "__name__", None) == "s2_proj_shift"
+            assert getattr(model.attn.k_proj.forward, "__name__", None) == "s2_proj_shift"
+            # The attention output forward is left alone.
+            assert getattr(model.attn.forward, "__name__", None) != "s2_proj_shift"
+        # After exit, the patched closure is gone and the bound method is back.
+        assert getattr(model.attn.q_proj.forward, "__name__", None) != "s2_proj_shift"
+        assert not getattr(model.attn.q_proj.forward, "_soup_longlora_patched", False)
+        assert model.attn.q_proj.forward("hello") == "hello"
+
+
+# ---------------------------------------------------------------------------
+# #126 — PRMTrainerWrapper + compute_prm_loss kernel
+# ---------------------------------------------------------------------------
+
+
+class TestPRMKernel:
+    def test_compute_prm_loss_perfect_match(self):
+        from soup_cli.utils.prm import compute_prm_loss
+
+        preds = torch.tensor([1.0, 2.0, 3.0])
+        labels = torch.tensor([1.0, 2.0, 3.0])
+        out = compute_prm_loss(preds, labels)
+        assert float(out) == pytest.approx(0.0)
+
+    def test_compute_prm_loss_mse(self):
+        from soup_cli.utils.prm import compute_prm_loss
+
+        preds = torch.tensor([1.0, 2.0])
+        labels = torch.tensor([0.0, 0.0])
+        out = compute_prm_loss(preds, labels)
+        assert float(out) == pytest.approx((1.0 + 4.0) / 2)
+
+    def test_compute_prm_loss_mask(self):
+        from soup_cli.utils.prm import compute_prm_loss
+
+        preds = torch.tensor([1.0, 2.0, 100.0])
+        labels = torch.tensor([0.0, 0.0, 0.0])
+        mask = torch.tensor([1.0, 1.0, 0.0])
+        out = compute_prm_loss(preds, labels, mask=mask)
+        # Masked → only first two contribute.
+        assert float(out) == pytest.approx((1.0 + 4.0) / 2)
+
+    def test_compute_prm_loss_shape_mismatch(self):
+        from soup_cli.utils.prm import compute_prm_loss
+
+        preds = torch.tensor([1.0, 2.0])
+        labels = torch.tensor([1.0, 2.0, 3.0])
+        with pytest.raises(ValueError, match="shape mismatch"):
+            compute_prm_loss(preds, labels)
+
+    def test_build_prm_trainer_returns_wrapper(self):
+        # The factory no longer raises NotImplementedError — it returns a
+        # configured wrapper. The actual trust_remote_code probe inside
+        # the wrapper will read None for a stub base, so we use a string.
+        from soup_cli.trainer.prm import PRMTrainerWrapper
+        from soup_cli.utils.prm import build_prm_trainer
+
+        class _Cfg:
+            base = "hf-internal-testing/tiny-random-gpt2"
+            task = "prm"
+
+        wrapper = build_prm_trainer(config=_Cfg())
+        assert isinstance(wrapper, PRMTrainerWrapper)
+
+    def test_build_prm_trainer_rejects_unknown_kwarg(self):
+        from soup_cli.utils.prm import build_prm_trainer
+
+        class _Cfg:
+            base = "test"
+
+        with pytest.raises(TypeError, match="unexpected kwargs"):
+            build_prm_trainer(config=_Cfg(), bogus_kwarg=1)
+
+
+# ---------------------------------------------------------------------------
+# #127 — GRPO stability callback
+# ---------------------------------------------------------------------------
+
+
+class TestGRPOStabilityCallback:
+    def test_update_ema(self):
+        from soup_cli.monitoring.grpo_stability_callback import update_ema
+
+        ref = {"w": torch.zeros(2)}
+        pol = {"w": torch.ones(2)}
+        out = update_ema(ref, pol, alpha=0.5)
+        assert torch.equal(out["w"], torch.full((2,), 0.5))
+
+    def test_update_ema_bool_rejected(self):
+        from soup_cli.monitoring.grpo_stability_callback import update_ema
+
+        with pytest.raises(TypeError, match="bool"):
+            update_ema({}, {}, alpha=True)
+
+    def test_update_ema_alpha_bounds(self):
+        from soup_cli.monitoring.grpo_stability_callback import update_ema
+
+        with pytest.raises(ValueError, match="\\(0, 1\\]"):
+            update_ema({}, {}, alpha=0.0)
+        with pytest.raises(ValueError, match="\\(0, 1\\]"):
+            update_ema({}, {}, alpha=1.5)
+
+    def test_check_tis_threshold(self):
+        from soup_cli.monitoring.grpo_stability_callback import check_tis_threshold
+
+        log_ratio = torch.tensor([0.1, 0.2, 0.5])
+        assert check_tis_threshold(log_ratio, 0.3) is True
+        assert check_tis_threshold(log_ratio, 1.0) is False
+
+    def test_filter_zero_advantage(self):
+        from soup_cli.monitoring.grpo_stability_callback import filter_zero_advantage
+
+        adv = torch.tensor([0.0, 1.0, -1.0, 1e-10])
+        mask = filter_zero_advantage(adv)
+        assert mask[0].item() is False or mask[0].item() == 0
+        assert bool(mask[1]) is True
+        assert bool(mask[2]) is True
+        assert bool(mask[3]) is False
+
+    def test_callback_construct_with_all_fields(self):
+        from soup_cli.monitoring.grpo_stability_callback import GRPOStabilityCallback
+
+        cb = GRPOStabilityCallback(
+            ref_model_ema_alpha=0.99,
+            replay_buffer_size=10,
+            async_grpo_prefetch=True,
+            tis_threshold=2.0,
+            mask_truncated_completions=True,
+            defer_rerolling=True,
+            skip_zero_advantage=True,
+            off_policy_mask_threshold=0.5,
+        )
+        assert cb.ref_model_ema_alpha == 0.99
+        assert cb.replay_size() == 0
+        assert cb.tis_alerts() == 0
+
+    def test_callback_replay_buffer(self):
+        from soup_cli.monitoring.grpo_stability_callback import GRPOStabilityCallback
+
+        cb = GRPOStabilityCallback(replay_buffer_size=2)
+        cb.push_rollout("a")
+        cb.push_rollout("b")
+        cb.push_rollout("c")
+        assert cb.replay_size() == 2  # bounded
+
+    def test_callback_tis_alert(self):
+        from soup_cli.monitoring.grpo_stability_callback import GRPOStabilityCallback
+
+        cb = GRPOStabilityCallback(tis_threshold=0.3)
+        cb.record_tis_alert(torch.tensor([0.1, 0.2]))  # below threshold
+        assert cb.tis_alerts() == 0
+        cb.record_tis_alert(torch.tensor([0.5, 0.6]))  # above threshold
+        assert cb.tis_alerts() == 1
+
+    def test_callback_bool_rejected_on_numeric_fields(self):
+        from soup_cli.monitoring.grpo_stability_callback import GRPOStabilityCallback
+
+        with pytest.raises(TypeError, match="bool"):
+            GRPOStabilityCallback(ref_model_ema_alpha=True)
+        with pytest.raises(TypeError, match="bool"):
+            GRPOStabilityCallback(replay_buffer_size=True)
+
+
+class TestAttachGRPOStabilityCallback:
+    def test_no_field_set_returns_false(self):
+        from soup_cli.utils.peft_wiring import attach_grpo_stability_callback
+
+        class _TCfg:
+            ref_model_ema_alpha = None
+            replay_buffer_size = None
+            async_grpo_prefetch = False
+            tis_threshold = None
+            mask_truncated_completions = False
+            defer_rerolling = False
+            skip_zero_advantage = False
+            off_policy_mask_threshold = None
+
+        class _Trainer:
+            def add_callback(self, cb):
+                pass
+
+        assert attach_grpo_stability_callback(_Trainer(), _TCfg()) is False
+
+    def test_attaches_when_set(self):
+        from soup_cli.utils.peft_wiring import attach_grpo_stability_callback
+
+        class _TCfg:
+            ref_model_ema_alpha = 0.99
+            replay_buffer_size = None
+            async_grpo_prefetch = False
+            tis_threshold = None
+            mask_truncated_completions = False
+            defer_rerolling = False
+            skip_zero_advantage = False
+            off_policy_mask_threshold = None
+
+        added = []
+
+        class _Trainer:
+            def add_callback(self, cb):
+                added.append(cb)
+
+        assert attach_grpo_stability_callback(_Trainer(), _TCfg()) is True
+        assert len(added) == 1
+
+
+# ---------------------------------------------------------------------------
+# #68 — weighted preference combine live wrapper
+# ---------------------------------------------------------------------------
+
+
+class TestWeightedCombineHook:
+    def test_attaches_to_trainer_with_compute_loss(self):
+        from soup_cli.utils.preference_combine import (
+            attach_weighted_preference_combine,
+        )
+
+        class _Trainer:
+            def compute_loss(self, model, inputs, return_outputs=False):
+                return torch.tensor(2.0)
+
+        trainer = _Trainer()
+        ok = attach_weighted_preference_combine(
+            trainer, {"dpo": 0.5, "simpo": 0.5}
+        )
+        assert ok is True
+        # Re-attach is idempotent.
+        assert attach_weighted_preference_combine(
+            trainer, {"dpo": 0.5, "simpo": 0.5}
+        ) is True
+
+    def test_returns_false_without_compute_loss(self):
+        from soup_cli.utils.preference_combine import (
+            attach_weighted_preference_combine,
+        )
+
+        class _NoComputeLoss:
+            pass
+
+        assert attach_weighted_preference_combine(
+            _NoComputeLoss(), {"dpo": 1.0}
+        ) is False
+
+    def test_rejects_bco_mixed_with_paired(self):
+        from soup_cli.utils.preference_combine import (
+            attach_weighted_preference_combine,
+        )
+
+        class _Trainer:
+            def compute_loss(self, *args, **kwargs):
+                return torch.tensor(1.0)
+
+        with pytest.raises(ValueError, match="bco"):
+            attach_weighted_preference_combine(
+                _Trainer(), {"bco": 0.5, "dpo": 0.5}
+            )
+
+    def test_blended_loss_scales_with_weight(self):
+        """#1425: this asserted `2.0 * 0.7`, i.e. the silent primary-only
+        fallback. It now refuses; `inputs=None` is the shape it exercised."""
+        from soup_cli.utils.preference_combine import (
+            attach_weighted_preference_combine,
+        )
+
+        class _Trainer:
+            def compute_loss(self, model, inputs, return_outputs=False):
+                return torch.tensor(2.0)
+
+        trainer = _Trainer()
+        attach_weighted_preference_combine(
+            trainer, {"dpo": 0.7, "simpo": 0.3}
+        )
+        with pytest.raises(ValueError) as excinfo:
+            trainer.compute_loss(None, None)
+        assert "cannot compute" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# Version bump sanity
+# ---------------------------------------------------------------------------
+
+
+def test_version_bump():
+    import soup_cli
+
+    major, minor, patch = (int(x) for x in soup_cli.__version__.split("."))
+    assert (major, minor, patch) >= (0, 53, 11)
+
+
+# ---------------------------------------------------------------------------
+# v0.53.11 #123 — _GRPOTrainerVariant subclass factory
+# ---------------------------------------------------------------------------
+
+
+class TestGRPOTrainerVariantFactory:
+    def test_factory_returns_subclass(self):
+        from soup_cli.trainer.grpo import make_grpo_trainer_variant
+
+        class _FakeGRPOTrainer:
+            def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+                return torch.tensor(1.0)
+
+        variant_cls = make_grpo_trainer_variant(_FakeGRPOTrainer, "gspo")
+        assert issubclass(variant_cls, _FakeGRPOTrainer)
+        assert variant_cls._soup_grpo_variant == "gspo"
+
+    def test_factory_cached_by_variant(self):
+        from soup_cli.trainer.grpo import make_grpo_trainer_variant
+
+        class _FakeGRPOTrainer:
+            def compute_loss(self, *a, **k):
+                return torch.tensor(0.0)
+
+        a = make_grpo_trainer_variant(_FakeGRPOTrainer, "gspo")
+        b = make_grpo_trainer_variant(_FakeGRPOTrainer, "gspo")
+        assert a is b
+
+    def test_variant_compute_loss_routes_through_kernel(self):
+        from soup_cli.trainer.grpo import make_grpo_trainer_variant
+
+        class _FakeGRPOTrainer:
+            def __init__(self):
+                self.args = type("Args", (), {"beta": 0.1})()
+
+            def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+                return torch.tensor(99.0)
+
+        variant_cls = make_grpo_trainer_variant(_FakeGRPOTrainer, "gspo")
+        trainer = variant_cls()
+        inputs = {
+            "per_token_logps": torch.zeros(2, 4),
+            "old_per_token_logps": torch.zeros(2, 4),
+            # #1232: beta 0.1 needs the reference trl puts in the batch whenever
+            # beta != 0. Without it the kernel refuses, the #159 fallback runs,
+            # and the fake's 99.0 comes back -- which this test used to accept.
+            "ref_per_token_logps": torch.zeros(2, 4),
+            "advantages": torch.tensor([1.0, -1.0]),
+        }
+        # Variant kernel should compute a real (non-99.0) loss.
+        result = trainer.compute_loss(model=None, inputs=inputs)
+        assert isinstance(result, torch.Tensor)
+        assert not trainer._soup_fallback_warned, "fell back to the base loss"
+        assert float(result) != 99.0
+        # gspo at ratio 1 with advantages +1 / -1 is 0, and a reference equal
+        # to the policy adds exactly 0 KL.
+        assert float(result) == 0.0
+
+    def test_variant_falls_back_on_missing_inputs(self):
+        """When TRL renames inputs, fall back to original loss (defence-in-depth)."""
+        from soup_cli.trainer.grpo import make_grpo_trainer_variant
+
+        class _FakeGRPOTrainer:
+            def __init__(self):
+                self.args = type("Args", (), {"beta": 0.1})()
+
+            def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+                return torch.tensor(42.0)
+
+        variant_cls = make_grpo_trainer_variant(_FakeGRPOTrainer, "gspo")
+        trainer = variant_cls()
+        # No expected keys — falls back to original.
+        result = trainer.compute_loss(model=None, inputs={})
+        assert float(result) == 42.0
+
+
+class TestGRPOVariantRuntimeContract:
+    """Regression tests for GRPO variant execution on realistic TRL runtime contracts.
+
+    Tests that variants do NOT require per_token_logps to be pre-injected in inputs,
+    and instead resolve logps in a single forward pass via _get_per_token_logps_and_entropies
+    without triggering fallback to stock TRL loss.
+    """
+
+    class _MockTRLTrainer:
+        def __init__(self, beta=0.0):
+            self.args = type("Args", (), {"beta": beta})()
+            self.model = type("Model", (), {"training": True})()
+            self.current_gradient_accumulation_steps = 1
+            self._get_logps_called = 0
+
+        def _get_per_token_logps_and_entropies(
+            self, model, input_ids, attention_mask, logits_to_keep, **kwargs
+        ):
+            self._get_logps_called += 1
+            b = input_ids.size(0)
+            t = logits_to_keep
+            # Distinct logps to test math
+            logps = torch.tensor(
+                [[-0.1, -0.2, -0.3], [-0.4, -0.5, -0.6]], requires_grad=True
+            )
+            return logps, torch.zeros(b, t)
+
+        def _compute_loss(self, model, inputs):
+            return torch.tensor(777.0)
+
+        def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+            return self._compute_loss(model, inputs)
+
+    @pytest.fixture
+    def realistic_batch(self):
+        return {
+            "prompt_ids": torch.tensor([[1, 2], [3, 4]]),
+            "prompt_mask": torch.tensor([[1, 1], [1, 1]]),
+            "completion_ids": torch.tensor([[5, 6, 7], [8, 9, 10]]),
+            "completion_mask": torch.tensor([[1, 1, 1], [1, 1, 1]]),
+            "advantages": torch.tensor([1.2, -0.8]),
+            "num_items_in_batch": 2,
+        }
+
+    def test_realistic_batch_without_precomputed_logps_computes_variant_loss(
+        self, realistic_batch
+    ):
+        """Realistic batch (no per_token_logps in inputs) must execute variant without fallback."""
+        from soup_cli.trainer.grpo import make_grpo_trainer_variant
+
+        variant_cls = make_grpo_trainer_variant(self._MockTRLTrainer, "gspo")
+        trainer = variant_cls()
+        loss = trainer.compute_loss(model=None, inputs=realistic_batch)
+
+        assert not trainer._soup_fallback_warned
+        assert float(loss.detach()) != 777.0
+        assert trainer._get_logps_called == 1
+
+    @pytest.mark.parametrize("variant", ["gspo", "dapo", "dr_grpo", "bnpo", "rft"])
+    def test_all_variants_execute_without_fallback_on_realistic_batch(
+        self, realistic_batch, variant
+    ):
+        """Every supported variant must execute cleanly without fallback."""
+        from soup_cli.trainer.grpo import make_grpo_trainer_variant
+
+        variant_cls = make_grpo_trainer_variant(self._MockTRLTrainer, variant)
+        trainer = variant_cls()
+        loss = trainer.compute_loss(model=None, inputs=realistic_batch)
+
+        assert not trainer._soup_fallback_warned
+        assert float(loss.detach()) != 777.0
+
+    def test_two_sided_variant_with_delta_executes(self, realistic_batch):
+        """two_sided variant with delta executes cleanly without fallback."""
+        from soup_cli.trainer.grpo import make_grpo_trainer_variant
+
+        variant_cls = make_grpo_trainer_variant(self._MockTRLTrainer, "two_sided")
+        trainer = variant_cls()
+        trainer._soup_grpo_delta = 0.2
+        loss = trainer.compute_loss(model=None, inputs=realistic_batch)
+
+        assert not trainer._soup_fallback_warned
+        assert float(loss.detach()) != 777.0
+
+    def test_standard_variant_delegates_to_stock_loss_without_warning(
+        self, realistic_batch
+    ):
+        """'standard' variant delegates directly to stock _compute_loss."""
+        from soup_cli.trainer.grpo import make_grpo_trainer_variant
+
+        variant_cls = make_grpo_trainer_variant(self._MockTRLTrainer, "standard")
+        trainer = variant_cls()
+        loss = trainer.compute_loss(model=None, inputs=realistic_batch)
+
+        assert not trainer._soup_fallback_warned
+        assert float(loss) == 777.0
+
+    def test_fallback_warns_once_on_corrupted_inputs(self):
+        """Corrupted inputs missing prompt_ids and logps must trigger fallback with warning."""
+        from soup_cli.trainer.grpo import make_grpo_trainer_variant
+
+        variant_cls = make_grpo_trainer_variant(self._MockTRLTrainer, "gspo")
+        trainer = variant_cls()
+        loss = trainer.compute_loss(model=None, inputs={"corrupted": True})
+
+        assert trainer._soup_fallback_warned
+        assert float(loss) == 777.0
+
+    def test_variant_loss_differs_from_stock_and_between_objectives(
+        self, realistic_batch
+    ):
+        """Different objectives produce mathematically distinct losses on identical data."""
+        from soup_cli.trainer.grpo import make_grpo_trainer_variant
+
+        losses = {}
+        for var in ["gspo", "dapo", "dr_grpo", "bnpo", "rft"]:
+            cls_ = make_grpo_trainer_variant(self._MockTRLTrainer, var)
+            tr = cls_()
+            losses[var] = float(tr.compute_loss(model=None, inputs=realistic_batch).detach())
+
+        # rft computes NLL on positive advantages whereas gspo uses centered ratio
+        assert losses["rft"] != losses["gspo"]
+
+    def test_real_trl_grpotrainer_end_to_end_step(self, tmp_path, aten_half_matmuls):
+        """End-to-end single step with real trl.GRPOTrainer and tiny model."""
+        from datasets import Dataset
+        from transformers import GPT2Config, GPT2LMHeadModel
+        from trl import GRPOConfig, GRPOTrainer
+
+        from soup_cli.trainer.grpo import make_grpo_trainer_variant
+        from tests._tiny_hf_models import build_tokenizer
+
+        # #1356: a tokenizer built locally (no download) stands in for the
+        # real "gpt2" tokenizer -- vocab_size matches it rather than a
+        # hardcoded 50257, since nothing here depends on real BPE merges.
+        # Dropout 0 and a 1-layer/1-head shape are specific to this test
+        # (deterministic, minimal), so the model stays file-local.
+        tokenizer = build_tokenizer(
+            ("Hello", "World", "hello world"), eos="<|endoftext|>"
+        )
+        config = GPT2Config(
+            n_layer=1,
+            n_head=1,
+            n_embd=32,
+            vocab_size=len(tokenizer),
+            attn_pdrop=0.0,
+            resid_pdrop=0.0,
+            embd_pdrop=0.0,
+        )
+        model = GPT2LMHeadModel(config)
+        dataset = Dataset.from_dict({"prompt": ["Hello", "World"]})
+
+        training_args = GRPOConfig(
+            output_dir=str(tmp_path / "grpo_out"),
+            per_device_train_batch_size=2,
+            num_generations=2,
+            max_completion_length=4,
+            report_to="none",
+            learning_rate=1e-4,
+            max_steps=1,
+            use_cpu=True,
+        )
+
+        variant_cls = make_grpo_trainer_variant(GRPOTrainer, "gspo")
+        trainer = variant_cls(
+            model=model,
+            reward_funcs=lambda prompts, completions, **k: [1.0] * len(completions),
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=tokenizer,
+        )
+
+        assert not trainer._soup_fallback_warned
+        trainer.train()
+        assert not trainer._soup_fallback_warned
+
+
+# ---------------------------------------------------------------------------
+# v0.53.11 #126 — PRM Trainer subclass factory + dataset prep
+# ---------------------------------------------------------------------------
+
+
+class TestPRMTrainerSubclass:
+    def test_factory_returns_subclass(self):
+        from soup_cli.trainer.prm import make_prm_trainer_class
+
+        class _FakeTrainer:
+            pass
+
+        prm_cls = make_prm_trainer_class(_FakeTrainer)
+        assert issubclass(prm_cls, _FakeTrainer)
+        assert hasattr(prm_cls, "compute_loss")
+
+    def test_prepare_dataset_skips_mismatched(self):
+        from soup_cli.trainer.prm import _prepare_prm_dataset
+
+        class _Tok:
+            def __call__(self, text, add_special_tokens=False):
+                return {"input_ids": list(range(len(text.split())))}
+
+        rows = [
+            {"prompt": "hi", "completions": ["a", "b"], "labels": [1.0]},  # mismatch
+            {"prompt": "hi", "completions": ["a"], "labels": [0.5]},  # ok
+            {},  # missing fields
+        ]
+        prepared = _prepare_prm_dataset(rows, _Tok(), max_length=100)
+        assert len(prepared) == 1
+        assert prepared[0]["step_positions"] == [1]
+        assert prepared[0]["labels"] == [0.5]
+
+    def test_prepare_dataset_truncates_long(self):
+        from soup_cli.trainer.prm import _prepare_prm_dataset
+
+        class _Tok:
+            def __call__(self, text, add_special_tokens=False):
+                return {"input_ids": [1] * 50}
+
+        rows = [{"prompt": "p", "completions": ["a", "b", "c"], "labels": [1, 2, 3]}]
+        prepared = _prepare_prm_dataset(rows, _Tok(), max_length=80)
+        # Should truncate to fit max_length.
+        assert len(prepared) == 1
+        assert all(p < 80 for p in prepared[0]["step_positions"])
+
+
+# ---------------------------------------------------------------------------
+# v0.53.11 #68 — true weighted combine path
+# ---------------------------------------------------------------------------
+
+
+class TestTrueWeightedCombine:
+    def test_uses_combine_when_logps_available(self):
+        from soup_cli.utils.preference_combine import (
+            attach_weighted_preference_combine,
+        )
+
+        class _Trainer:
+            beta = 0.1
+            simpo_gamma = 1.0
+
+            def compute_loss(self, model, inputs, return_outputs=False):
+                # Returns primary loss; should be REPLACED by weighted combine.
+                return torch.tensor(99.0)
+
+        trainer = _Trainer()
+        attach_weighted_preference_combine(
+            trainer, {"dpo": 0.5, "simpo": 0.5}
+        )
+        # Provide per-batch logps so the true-weighted path activates.
+        inputs = {
+            "policy_chosen_logps": torch.tensor([0.0, 0.1]),
+            "policy_rejected_logps": torch.tensor([-0.5, -0.6]),
+            "reference_chosen_logps": torch.tensor([0.0, 0.0]),
+            "reference_rejected_logps": torch.tensor([0.0, 0.0]),
+        }
+        out = trainer.compute_loss(model=None, inputs=inputs)
+        # Result is the TRUE weighted combine, not the 99.0 placeholder.
+        assert float(out) != 99.0
+        assert math.isfinite(float(out))
+
+    def test_refuses_when_logps_missing(self):
+        """#1425: no trl 0.29 trainer puts log-probs on the batch.
+
+        This used to return `primary * primary_weight` — training only the
+        highest-weighted loss while reporting a blended number, silently.
+        """
+        from soup_cli.utils.preference_combine import (
+            attach_weighted_preference_combine,
+        )
+
+        class _Trainer:
+            def compute_loss(self, model, inputs, return_outputs=False):
+                return torch.tensor(2.0)
+
+        trainer = _Trainer()
+        attach_weighted_preference_combine(
+            trainer, {"dpo": 0.7, "simpo": 0.3}
+        )
+        # No logps -> refuse, naming the terms, instead of scaling silently.
+        with pytest.raises(ValueError) as excinfo:
+            trainer.compute_loss(model=None, inputs={})
+        message = str(excinfo.value)
+        assert "dpo" in message and "simpo" in message, message
+        assert "preference_loss_weights" in message, message
+
+    def test_refusal_names_only_the_terms_it_could_not_compute(self):
+        """Policy logps present, reference ones absent: `simpo` computes and
+        only `dpo` is named as missing."""
+        from soup_cli.utils.preference_combine import (
+            attach_weighted_preference_combine,
+        )
+
+        class _Trainer:
+            def compute_loss(self, model, inputs, return_outputs=False):
+                return torch.tensor(2.0)
+
+        trainer = _Trainer()
+        attach_weighted_preference_combine(
+            trainer, {"dpo": 0.7, "simpo": 0.3}
+        )
+        inputs = {
+            "policy_chosen_logps": torch.tensor([0.0, 0.1]),
+            "policy_rejected_logps": torch.tensor([-0.5, -0.6]),
+        }
+        with pytest.raises(ValueError) as excinfo:
+            trainer.compute_loss(model=None, inputs=inputs)
+        message = str(excinfo.value)
+        # Pinned whole, not "cannot compute dpo": that substring also occurs in
+        # "cannot compute dpo, simpo", so a mutation that named every requested
+        # term as missing would survive a looser assertion (#1425 review).
+        assert "cannot compute dpo on this step (computed: simpo)" in message, message
+
+
+class TestTheCaptureReadsTrlOwnLogProbs:
+    """#1425 — the blend must run on the log-probs trl already computed.
+
+    The fake trainer below has trl 0.29 CPO's shape: `concatenated_forward`
+    returns per-sequence log-probs and the batch carries per-side `*_labels`.
+    trl averages those log-probs for simpo/ipo; the kernels here take sums
+    plus lengths, so the capture puts the length back in and the kernel
+    divides it out again. The net must equal trl's own value.
+    """
+
+    @staticmethod
+    def _cpo(chosen_avg, rejected_avg, chosen_len, rejected_len, prompt=2):
+        import torch
+
+        class _Cpo:
+            loss_type = "simpo"
+            beta = 0.1
+            simpo_gamma = 0.5
+            orpo_alpha = 1.0
+
+            def concatenated_forward(self, model, batch, *a, **k):
+                return (
+                    torch.tensor(chosen_avg),
+                    torch.tensor(rejected_avg),
+                    None,
+                    None,
+                    torch.tensor(0.0),
+                )
+
+            def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+                # The primary loss the blend replaces; its value must not
+                # survive into the result.
+                return torch.tensor(99.0)
+
+        # Tensors, like trl's real batch: the capture reads response lengths off
+        # these, and a list of ints would silently take the no-labels path.
+        batch = {
+            "chosen_labels": torch.tensor(
+                [[-100] * prompt + list(range(chosen_len)) for _ in range(2)],
+            ),
+            "rejected_labels": torch.tensor(
+                [[-100] * prompt + list(range(rejected_len)) for _ in range(2)],
+            ),
+        }
+        return _Cpo(), batch
+
+    def test_a_cpo_style_trainer_produces_the_weighted_sum(self):
+        import torch
+
+        from soup_cli.utils.preference_combine import (
+            attach_policy_logp_capture,
+            attach_weighted_preference_combine,
+            compute_orpo_term,
+            compute_simpo_term,
+        )
+
+        trainer, batch = self._cpo([-0.5, -0.5], [-1.0, -1.0], 4, 4)
+        assert attach_policy_logp_capture(trainer) is True
+        # Params as `PreferenceTrainerWrapper.setup` supplies them (#1425 review):
+        # the trainer's own attributes are no longer read, so a test that wants a
+        # specific objective has to name it here.
+        attach_weighted_preference_combine(
+            trainer,
+            {"simpo": 0.7, "orpo": 0.3},
+            {"simpo": {"beta": 0.1, "gamma": 0.5}, "orpo": {"alpha": 1.0}},
+        )
+        trainer.concatenated_forward(None, batch)  # the capture runs here
+
+        out = float(trainer.compute_loss(model=None, inputs=batch))
+        assert out != pytest.approx(99.0)
+
+        # trl gave -0.5 / -1.0 averaged over 4 tokens, i.e. sums of -2 / -4.
+        lens = torch.tensor([4, 4])
+        expected = 0.7 * float(
+            compute_simpo_term(
+                torch.tensor([-2.0, -2.0]), torch.tensor([-4.0, -4.0]), 0.1, 0.5,
+                chosen_lens=lens, rejected_lens=lens,
+            ),
+        ) + 0.3 * float(
+            compute_orpo_term(
+                torch.tensor([-2.0, -2.0]), torch.tensor([-4.0, -4.0]), 1.0,
+                chosen_lens=lens, rejected_lens=lens,
+            ),
+        )
+        assert out == pytest.approx(expected, rel=1e-4), (out, expected)
+
+    def test_the_sum_reproduces_trls_own_averaged_value(self):
+        """The round trip through sums must be a no-op: trl's averages and ours
+        must give the same SimPO term."""
+        import torch
+
+        from soup_cli.utils.preference_combine import (
+            _record_policy_logps,
+            compute_simpo_term,
+        )
+
+        trainer = object.__new__(type("T", (), {}))
+        chosen_avg = torch.tensor([-0.4, -0.6])
+        rejected_avg = torch.tensor([-0.9, -1.1])
+        # Padded to one width, as a collator emits; the per-row count of
+        # non -100 entries is still 5 and 3.
+        batch = {
+            "chosen_labels": torch.tensor([
+                [-100, -100] + list(range(5)),
+                [-100, -100] + list(range(3)) + [-100, -100],
+            ]),
+            "rejected_labels": torch.tensor([
+                [-100, -100] + list(range(7)),
+                [-100, -100] + list(range(2)) + [-100] * 5,
+            ]),
+        }
+        _record_policy_logps(trainer, batch, chosen_avg, rejected_avg)
+        stored = trainer._soup_policy_logps
+        ours = compute_simpo_term(
+            stored["policy_chosen_logps"], stored["policy_rejected_logps"], 0.1, 0.5,
+            chosen_lens=stored["chosen_lens"], rejected_lens=stored["rejected_lens"],
+        )
+        # trl's own SimPO loss works directly on the averages it produced, with
+        # no lengths: it already normalised. Dividing them again here (as an
+        # earlier version of this control did) is not trl's formula.
+        theirs = compute_simpo_term(chosen_avg, rejected_avg, 0.1, 0.5)
+        assert float(ours) == pytest.approx(float(theirs), rel=1e-6)
+
+    def test_changing_only_the_secondary_loss_changes_the_loss(self):
+        """The second open box on #1425: same primary, different secondary."""
+        from soup_cli.utils.preference_combine import (
+            attach_policy_logp_capture,
+            attach_weighted_preference_combine,
+        )
+
+        def blended(weights):
+            trainer, batch = self._cpo([-0.5, -0.5], [-1.0, -1.0], 4, 4)
+            attach_policy_logp_capture(trainer)
+            attach_weighted_preference_combine(trainer, weights)
+            trainer.concatenated_forward(None, batch)
+            return float(trainer.compute_loss(model=None, inputs=batch))
+
+        assert blended({"simpo": 0.6, "orpo": 0.4}) != pytest.approx(
+            blended({"simpo": 0.7, "orpo": 0.3}), rel=1e-9
+        )
+
+    def test_the_blend_does_not_read_parameters_off_the_trainer(self):
+        """Config wins over the trainer's attributes (#1425 review).
+
+        The trainer is whichever loss has the larger weight, so `getattr` here
+        made the same weights in a different YAML order train a different
+        objective. Changing the trainer's attributes must change nothing now.
+        """
+        from soup_cli.utils.preference_combine import (
+            attach_policy_logp_capture,
+            attach_weighted_preference_combine,
+        )
+
+        def blended(overrides=None):
+            trainer, batch = self._cpo([-0.5, -0.5], [-1.0, -1.0], 4, 4)
+            for attr, value in (overrides or {}).items():
+                setattr(trainer, attr, value)
+            attach_policy_logp_capture(trainer)
+            attach_weighted_preference_combine(
+                trainer,
+                {"simpo": 0.5, "orpo": 0.5},
+                {"simpo": {"beta": 0.1, "gamma": 0.5}, "orpo": {"alpha": 0.1}},
+            )
+            trainer.concatenated_forward(None, batch)
+            return float(trainer.compute_loss(model=None, inputs=batch))
+
+        baseline = blended()
+        # Every attribute the old code read off the trainer, made hostile.
+        for overrides in (
+            {"beta": 7.0},
+            {"simpo_gamma": 9.0},
+            {"orpo_alpha": 4.0},
+            {"beta": 7.0, "simpo_gamma": 9.0, "orpo_alpha": 4.0},
+        ):
+            assert blended(overrides) == pytest.approx(baseline, rel=1e-9), overrides
+
+    def test_the_blend_reads_each_loss_parameters_from_the_config(self):
+        """`params` is what reaches each kernel, so the secondary loss's own
+        field moves the blend even when it is not the primary."""
+        from soup_cli.utils.preference_combine import (
+            attach_policy_logp_capture,
+            attach_weighted_preference_combine,
+        )
+
+        def blended(params):
+            trainer, batch = self._cpo([-0.5, -0.5], [-1.0, -1.0], 4, 4)
+            attach_policy_logp_capture(trainer)
+            attach_weighted_preference_combine(
+                trainer, {"simpo": 0.5, "orpo": 0.5}, params
+            )
+            trainer.concatenated_forward(None, batch)
+            return float(trainer.compute_loss(model=None, inputs=batch))
+
+        base = {"simpo": {"beta": 0.1, "gamma": 0.5}, "orpo": {"alpha": 0.1}}
+        assert blended({**base, "orpo": {"alpha": 0.9}}) != pytest.approx(
+            blended(base), rel=1e-9
+        )
+        assert blended({**base, "simpo": {"beta": 0.1, "gamma": 3.0}}) != pytest.approx(
+            blended(base), rel=1e-9
+        )
+        assert blended({**base, "simpo": {"beta": 0.5, "gamma": 0.5}}) != pytest.approx(
+            blended(base), rel=1e-9
+        )
+
+    def test_dpo_and_ipo_terms_read_their_own_config_fields(self, tmp_path, monkeypatch):
+        """`dpo.py` builds with `training.dpo_beta` and `ipo.py` with
+        `training.ipo_tau`; the blend's dpo / ipo terms must read the same
+        fields, not `DEFAULT_BETA` (#1645)."""
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.utils.preference_combine import DEFAULT_BETA, blend_loss_params
+
+        monkeypatch.chdir(tmp_path)
+        cfg = load_config_from_string(
+            "base: ./unused\ntask: preference\n"
+            "data: {train: ./unused.jsonl, format: dpo, max_length: 64}\n"
+            "training:\n  epochs: 1\n  batch_size: 2\n  quantization: none\n"
+            "  preference_loss_weights: {dpo: 0.5, ipo: 0.5}\n"
+            "  dpo_beta: 0.5\n  ipo_tau: 0.7\n"
+            "  lora: {r: 4, alpha: 8, dropout: 0.0}\noutput: ./out\n"
+        )
+        params = blend_loss_params(cfg)
+        assert params["dpo"]["beta"] == 0.5 != DEFAULT_BETA, params
+        assert params["ipo"]["beta"] == 0.7 != DEFAULT_BETA, params
+
+    def test_a_dpo_primary_has_no_hook_and_still_refuses(self):
+        import torch
+
+        from soup_cli.utils.preference_combine import (
+            attach_policy_logp_capture,
+            attach_weighted_preference_combine,
+        )
+
+        class _Dpo:
+            beta = 0.1
+
+            def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+                return torch.tensor(2.0)
+
+        trainer = _Dpo()
+        assert attach_policy_logp_capture(trainer) is False
+        attach_weighted_preference_combine(trainer, {"dpo": 0.7, "simpo": 0.3})
+        with pytest.raises(ValueError, match="cannot compute"):
+            trainer.compute_loss(model=None, inputs={})
+
+    def test_attaching_twice_is_a_no_op(self):
+        from soup_cli.utils.preference_combine import attach_policy_logp_capture
+
+        trainer, _ = self._cpo([-0.5, -0.5], [-1.0, -1.0], 4, 4)
+        assert attach_policy_logp_capture(trainer) is True
+        first = trainer.concatenated_forward
+        assert attach_policy_logp_capture(trainer) is True
+        assert trainer.concatenated_forward is first
+
+    def test_a_batch_without_per_side_labels_keeps_trls_values(self):
+        """No labels means no lengths; the capture must not invent any."""
+        import torch
+
+        from soup_cli.utils.preference_combine import _record_policy_logps
+
+        trainer = object.__new__(type("T", (), {}))
+        chosen_avg = torch.tensor([-0.5, -0.5])
+        rejected_avg = torch.tensor([-1.0, -1.0])
+        _record_policy_logps(
+            trainer, {"concatenated_labels": None}, chosen_avg, rejected_avg,
+        )
+        stored = trainer._soup_policy_logps
+        assert stored["chosen_lens"] is None
+        assert stored["policy_chosen_logps"] is chosen_avg
+
+    def test_the_installed_cpo_still_returns_its_own_logps(self):
+        """Pin the hook this capture wraps (trl 0.29, read from source)."""
+        from pathlib import Path
+
+        import trl
+
+        candidates = [
+            Path(trl.__file__).parent / "experimental" / "cpo" / "cpo_trainer.py",
+            Path(trl.__file__).parent / "trainer" / "cpo_trainer.py",
+        ]
+        sources = [p.read_text(encoding="utf-8") for p in candidates if p.is_file()]
+        assert sources, "trl ships no cpo_trainer.py to pin the capture against"
+        source = "\n".join(sources)
+        assert "def concatenated_forward(" in source, (
+            "trl's CPO no longer has concatenated_forward, so #1425's capture "
+            "has no hook and a blend falls back to refusing"
+        )
+        assert "chosen_logps" in source and "rejected_logps" in source, (
+            "trl's CPO concatenated_forward no longer returns per-side log-probs; "
+            "re-derive #1425's capture against the new shape"
+        )
+
+
+class TestOnARealTrlTrainer:
+    """The stub trainer above is why this passed: it is the only way the wrapper
+    sees log-probs. On a real trl 0.29 trainer the batch carries none, so a blend
+    must stop instead of training the primary loss alone (#1425 review).
+
+    On `main` these fail, because training completes: the loss is
+    `0.7 * DPO` and the run reports success.
+    """
+
+    _WORDS = [
+        "<pad>", "<s>", "</s>", "<unk>", "what", "is", "one", "plus", "?",
+        "two", "three", "hello", "there", "hi", "no",
+    ]
+
+    def _tiny_model_dir(self, tmp_path):
+        """A random-init 2-layer Llama plus a WordLevel tokenizer (#1425 repro)."""
+        try:
+            from soup_cli.trainer._trl_compat import resolve_trl_symbol
+
+            resolve_trl_symbol("DPOConfig")
+        except Exception as exc:  # noqa: BLE001 — a broken trl is not a failure
+            pytest.skip(f"this environment cannot import a trl DPO config: {exc}")
+
+        import torch
+        from tokenizers import Tokenizer, models, pre_tokenizers
+        from transformers import (
+            LlamaConfig,
+            LlamaForCausalLM,
+            PreTrainedTokenizerFast,
+        )
+
+        base = tmp_path / "tiny"
+        words = list(self._WORDS)
+        raw = Tokenizer(
+            models.WordLevel(vocab={w: i for i, w in enumerate(words)}, unk_token="<unk>"),
+        )
+        raw.pre_tokenizer = pre_tokenizers.Whitespace()
+        tok = PreTrainedTokenizerFast(
+            tokenizer_object=raw, bos_token="<s>", eos_token="</s>",
+            pad_token="<pad>", unk_token="<unk>",
+        )
+        torch.manual_seed(0)
+        LlamaForCausalLM(LlamaConfig(
+            vocab_size=len(words), hidden_size=32, intermediate_size=64,
+            num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
+            pad_token_id=0, bos_token_id=1, eos_token_id=2,
+        )).save_pretrained(base)
+        tok.save_pretrained(base)
+        return base
+
+    # The refusal test that stood here (`{dpo: 0.7, simpo: 0.3}` and
+    # `{simpo: 0.6, dpo: 0.4}` stopping at step 0) is gone with #1425: both
+    # blends train now. tests/test_issue1425_dpo_ipo_blend.py has them as
+    # positive cases, and the refusal that is left (no log-probs, or a model
+    # with no adapter to switch off) on stand-in trainers.
+
+    def test_a_reference_free_blend_on_a_real_trainer_is_the_weighted_sum(
+        self, tmp_path, monkeypatch,
+    ):
+        """Pin the `attach_policy_logp_capture` call in `setup()` (#1425 review).
+
+        Every other blend test attaches the capture itself on a fake trainer, so
+        deleting the one line in `PreferenceTrainerWrapper.setup` that installs
+        it left them all green while no real blend would compute anything.
+        """
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.preference import PreferenceTrainerWrapper
+        from soup_cli.utils.preference_combine import compute_orpo_term
+
+        monkeypatch.chdir(tmp_path)
+        base = self._tiny_model_dir(tmp_path)
+        cfg = load_config_from_string(
+            f"base: {base.as_posix()}\ntask: preference\n"
+            "data: {train: ./unused.jsonl, format: dpo, max_length: 64}\n"
+            "training:\n  epochs: 1\n  batch_size: 2\n  quantization: none\n"
+            "  preference_loss_weights: {simpo: 0.7, orpo: 0.3}\n"
+            "  orpo_beta: 0.4\n  simpo_gamma: 1.5\n"
+            "  lora: {r: 4, alpha: 8, dropout: 0.0}\noutput: ./out\n"
+        )
+        rows = [
+            {"prompt": "what is one plus one ?", "chosen": "two",
+             "rejected": "one plus one is three"},
+            {"prompt": "hello there", "chosen": "hi there hello", "rejected": "no"},
+        ]
+        wrapper = PreferenceTrainerWrapper(cfg, device="cpu")
+        wrapper.setup({"train": rows})
+        trainer = wrapper.trainer
+        batch = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+
+        blended = trainer.compute_loss(trainer.model, batch)
+        # trl's own, unwrapped forward on the same batch.
+        chosen, rejected = type(trainer).concatenated_forward(
+            trainer, trainer.model, batch,
+        )[:2]
+        # The config's own fields, not their defaults: ORPO's alpha is
+        # `training.orpo_beta`, and reading a hardcoded 1.0 here is the bug
+        # this test existed to catch (#1425 review).
+        assert float(trainer.simpo_gamma) == 1.5  # the SimPO wrapper's own
+        simpo = trainer.cpo_loss(chosen, rejected)[0].mean()
+        orpo = compute_orpo_term(chosen, rejected, 0.4)  # training.orpo_beta
+        assert float(blended) == pytest.approx(float(0.7 * simpo + 0.3 * orpo), rel=1e-6)
+        blended.backward()
+        assert any(
+            p.grad is not None and float(p.grad.abs().sum()) > 0
+            for p in trainer.model.parameters() if p.requires_grad
+        )
+        wrapper.train()  # completes instead of stopping at step 0
+
+    @pytest.mark.parametrize(
+        ("weights", "field", "low", "high"),
+        [
+            ("{simpo: 0.7, orpo: 0.3}", "orpo_beta", 0.1, 0.9),
+            ("{orpo: 0.7, simpo: 0.3}", "simpo_gamma", 0.5, 3.0),
+        ],
+    )
+    def test_the_secondary_loss_reads_its_own_config_field(
+        self, tmp_path, monkeypatch, weights, field, low, high,
+    ):
+        """A blend's secondary term must honour its own field, not the
+        primary trainer's attributes (#1425 review)."""
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.preference import PreferenceTrainerWrapper
+
+        losses = []
+        for i, value in enumerate((low, high)):
+            sub = tmp_path / f"r{i}"
+            sub.mkdir()
+            monkeypatch.chdir(sub)
+            base = self._tiny_model_dir(sub)
+            cfg = load_config_from_string(
+                f"base: {base.as_posix()}\ntask: preference\n"
+                "data: {train: ./unused.jsonl, format: dpo, max_length: 64}\n"
+                "training:\n  epochs: 1\n  batch_size: 2\n  quantization: none\n"
+                f"  preference_loss_weights: {weights}\n  {field}: {value}\n"
+                "  lora: {r: 4, alpha: 8, dropout: 0.0}\noutput: ./out\n"
+            )
+            wrapper = PreferenceTrainerWrapper(cfg, device="cpu")
+            wrapper.setup({"train": [
+                {"prompt": "what is one plus one ?", "chosen": "two",
+                 "rejected": "one plus one is three"},
+                {"prompt": "hello there", "chosen": "hi there hello", "rejected": "no"},
+            ]})
+            trainer = wrapper.trainer
+            batch = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+            losses.append(float(trainer.compute_loss(trainer.model, batch)))
+        assert losses[0] != pytest.approx(losses[1], rel=1e-9), (field, losses)
+
+    def test_the_same_weights_in_either_order_train_the_same_objective(
+        self, tmp_path, monkeypatch,
+    ):
+        """SimPO's beta must come from the config, not the primary trainer.
+
+        Under an ORPO primary, `trainer.beta` is `orpo_beta` (0.7 here), so a
+        beta read off the trainer would silently scale SimPO's term by it. Only
+        a real trainer exposes that attribute, which is why the fake-trainer
+        test cannot catch this one (#1425 review).
+        """
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.preference import PreferenceTrainerWrapper
+
+        losses = []
+        for i, weights in enumerate(("{simpo: 0.5, orpo: 0.5}", "{orpo: 0.5, simpo: 0.5}")):
+            sub = tmp_path / f"r{i}"
+            sub.mkdir()
+            monkeypatch.chdir(sub)
+            base = self._tiny_model_dir(sub)
+            cfg = load_config_from_string(
+                f"base: {base.as_posix()}\ntask: preference\n"
+                "data: {train: ./unused.jsonl, format: dpo, max_length: 64}\n"
+                "training:\n  epochs: 1\n  batch_size: 2\n  quantization: none\n"
+                f"  preference_loss_weights: {weights}\n"
+                "  orpo_beta: 0.7\n  simpo_gamma: 2.0\n"
+                "  lora: {r: 4, alpha: 8, dropout: 0.0}\noutput: ./out\n"
+            )
+            wrapper = PreferenceTrainerWrapper(cfg, device="cpu")
+            wrapper.setup({"train": [
+                {"prompt": "what is one plus one ?", "chosen": "two",
+                 "rejected": "one plus one is three"},
+                {"prompt": "hello there", "chosen": "hi there hello", "rejected": "no"},
+            ]})
+            trainer = wrapper.trainer
+            batch = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+            losses.append(float(trainer.compute_loss(trainer.model, batch)))
+        assert losses[0] == pytest.approx(losses[1], rel=1e-6), losses
+
+    def test_the_setup_line_says_the_terms_are_margin_only(self, tmp_path, monkeypatch, capsys):
+        """Someone reading a training log never sees the docs (#1425 review).
+
+        Under (b) the blend's terms carry no NLL, so the `Multi-objective
+        preference loss:` line has to say so itself.
+        """
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.preference import PreferenceTrainerWrapper
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("COLUMNS", "200")  # rich wraps, the phrase must not split
+
+        def build(weights):
+            cfg = load_config_from_string(
+                "base: ./unused\ntask: preference\n"
+                "data: {train: ./unused.jsonl, format: dpo, max_length: 64}\n"
+                "training:\n  epochs: 1\n  batch_size: 2\n  quantization: none\n"
+                f"  preference_loss_weights: {weights}\n"
+                "  lora: {r: 4, alpha: 8, dropout: 0.0}\noutput: ./out\n"
+            )
+            PreferenceTrainerWrapper(cfg, device="cpu")._build_multi_objective()
+            return capsys.readouterr().out
+
+        out = build("{simpo: 0.6, orpo: 0.4}")
+        assert "Multi-objective preference loss" in out, out
+        assert "preference terms only, without the NLL term" in out, out
+
+        # A blend that will refuse anyway has no reason to claim anything about
+        # its terms, and must not print the note.
+        out = build("{simpo: 0.6, dpo: 0.4}")
+        assert "Multi-objective preference loss" in out, out
+        assert "preference terms only" not in out, out
+
+    def test_setup_installs_the_capture_and_the_blend(self, tmp_path, monkeypatch):
+        """The two wrappers `setup()` must install, without building a trainer.
+
+        The real-trainer test above skips wherever trl's config cannot import,
+        and every other blend test attaches the capture itself — so deleting
+        `attach_policy_logp_capture(inner_trainer)` from `setup()` left the
+        whole file green while no real blend could compute anything (#1425
+        review). Injecting a fake inner trainer exercises the call site itself.
+        """
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.preference import PreferenceTrainerWrapper
+
+        class _FakeInner:
+            class trainer:  # noqa: N801 — stands in for the trl trainer
+                beta = 7.0
+                simpo_gamma = 9.0
+
+                def concatenated_forward(self, model, batch, *a, **k):
+                    raise AssertionError("not called here")
+
+                def compute_loss(self, model, inputs, return_outputs=False, **kw):
+                    raise AssertionError("not called here")
+
+            def setup(self, dataset):
+                self.dataset = dataset
+
+        monkeypatch.chdir(tmp_path)
+        cfg = load_config_from_string(
+            "base: ./unused\ntask: preference\n"
+            "data: {train: ./unused.jsonl, format: dpo, max_length: 64}\n"
+            "training:\n  epochs: 1\n  batch_size: 2\n  quantization: none\n"
+            "  preference_loss_weights: {simpo: 0.7, orpo: 0.3}\n"
+            "  orpo_beta: 0.9\n"
+            "  lora: {r: 4, alpha: 8, dropout: 0.0}\noutput: ./out\n"
+        )
+        wrapper = PreferenceTrainerWrapper(cfg, device="cpu")
+        inner = _FakeInner()
+        wrapper._inner = inner
+        wrapper.setup({"train": []})
+
+        trainer = inner.trainer
+        assert getattr(trainer.concatenated_forward, "_soup_logp_capture", False), (
+            "setup() no longer installs the log-prob capture, so a real blend "
+            "computes nothing and falls through to refusing"
+        )
+        assert getattr(trainer.compute_loss, "_soup_weighted_combine", False), (
+            "setup() no longer installs the weighted blend"
+        )
+
+        # And the params it hands the blend come from the config, not the
+        # trainer's hostile `beta = 7.0` / `simpo_gamma = 9.0` above.
+        from soup_cli.utils.preference_combine import blend_loss_params
+
+        params = blend_loss_params(cfg)
+        assert params["orpo"]["alpha"] == 0.9, params
+        assert params["simpo"]["gamma"] == cfg.training.simpo_gamma, params
+        assert params["simpo"]["beta"] != 7.0, params
+
+    def test_the_default_beta_matches_the_one_the_wrappers_build(self):
+        """`DEFAULT_BETA` stands in for trl's CPOConfig default (the SimPO wrapper
+        sets no beta). Read the dataclass default itself: constructing a config
+        resolves bf16 and raises on a CPU-only runner."""
+        from soup_cli.trainer._trl_compat import resolve_trl_symbol
+        from soup_cli.utils.preference_combine import DEFAULT_BETA
+
+        try:
+            cpo_config_cls = resolve_trl_symbol("CPOConfig", "trl.experimental.cpo")
+        except Exception as exc:  # noqa: BLE001 — a broken trl is not a failure
+            pytest.skip(f"this environment cannot import a trl CPO config: {exc}")
+
+        field = cpo_config_cls.__dataclass_fields__.get("beta")
+        if field is None:
+            pytest.skip("trl's CPOConfig no longer names a beta")
+        assert field.default == DEFAULT_BETA, (field.default, DEFAULT_BETA)
+
+
+# ---------------------------------------------------------------------------
+# v0.53.11 #127 — live EMA hook in callback
+# ---------------------------------------------------------------------------
+
+
+class TestStabilityCallbackEMA:
+    def test_on_step_end_runs_ema_update(self):
+        # v0.71.11 #160 — on_step_end now mutates the ref parameters in
+        # place (no full state_dict / load_state_dict round-trip).
+        import torch.nn as nn
+
+        from soup_cli.monitoring.grpo_stability_callback import GRPOStabilityCallback
+
+        cb = GRPOStabilityCallback(ref_model_ema_alpha=0.5)
+        ref = nn.Linear(2, 2)
+        pol = nn.Linear(2, 2)
+        with torch.no_grad():
+            ref.weight.fill_(0.0)
+            pol.weight.fill_(1.0)
+        cb._policy_model = pol
+        cb._ref_model = ref
+
+        class _State:
+            log_history: list = []
+
+        state = _State()
+        cb.on_step_end(args=None, state=state, control=None, model=pol)
+        # ref mutated in place to the midpoint 0.5.
+        assert torch.allclose(ref.weight, torch.full_like(ref.weight, 0.5))
+
+    def test_on_step_end_logs_counters(self):
+        from soup_cli.monitoring.grpo_stability_callback import GRPOStabilityCallback
+
+        cb = GRPOStabilityCallback(replay_buffer_size=4, tis_threshold=1.0)
+        cb.push_rollout("a")
+        cb.record_tis_alert(torch.tensor([2.0]))
+
+        class _State:
+            log_history: list = []
+
+        state = _State()
+        cb.on_step_end(args=None, state=state, control=None)
+        assert state.log_history
+        last = state.log_history[-1]
+        assert last["tis_alerts"] == 1
+        assert last["replay_size"] == 1
+
+    def test_on_train_begin_captures_models(self):
+        from soup_cli.monitoring.grpo_stability_callback import GRPOStabilityCallback
+
+        cb = GRPOStabilityCallback(ref_model_ema_alpha=0.99)
+        policy = object()
+        ref = object()
+
+        class _Trainer:
+            ref_model = ref
+
+        cb.on_train_begin(
+            args=None, state=None, control=None, model=policy, trainer=_Trainer()
+        )
+        assert cb._policy_model is policy
+        assert cb._ref_model is ref
+
+
+# ---------------------------------------------------------------------------
+# v0.53.11 review-fix coverage gaps (tdd-guide findings)
+# ---------------------------------------------------------------------------
+
+
+class TestReviewFixCoverage:
+    """Tests added in response to v0.53.11 tdd-guide HIGH/MEDIUM findings."""
+
+    # --- HIGH: bool / bounds rejection on remaining numeric fields ---
+
+    @pytest.mark.parametrize("field", [
+        "ref_model_ema_alpha",
+        "replay_buffer_size",
+        "tis_threshold",
+        "off_policy_mask_threshold",
+    ])
+    def test_callback_bool_rejected_all_numeric_fields(self, field):
+        from soup_cli.monitoring.grpo_stability_callback import GRPOStabilityCallback
+
+        with pytest.raises(TypeError, match="bool"):
+            GRPOStabilityCallback(**{field: True})
+
+    @pytest.mark.parametrize("value", [0.0, 100.5])
+    def test_callback_tis_threshold_bounds(self, value):
+        from soup_cli.monitoring.grpo_stability_callback import GRPOStabilityCallback
+
+        with pytest.raises(ValueError, match="tis_threshold"):
+            GRPOStabilityCallback(tis_threshold=value)
+
+    @pytest.mark.parametrize("value", [-0.1, 1.1])
+    def test_callback_off_policy_bounds(self, value):
+        from soup_cli.monitoring.grpo_stability_callback import GRPOStabilityCallback
+
+        with pytest.raises(ValueError, match="off_policy_mask_threshold"):
+            GRPOStabilityCallback(off_policy_mask_threshold=value)
+
+    @pytest.mark.parametrize("value", [0, 1_000_001])
+    def test_callback_replay_buffer_size_bounds(self, value):
+        from soup_cli.monitoring.grpo_stability_callback import GRPOStabilityCallback
+
+        with pytest.raises(ValueError, match="replay_buffer_size"):
+            GRPOStabilityCallback(replay_buffer_size=value)
+
+    def test_check_tis_threshold_bool_rejected(self):
+        from soup_cli.monitoring.grpo_stability_callback import check_tis_threshold
+
+        with pytest.raises(TypeError, match="bool"):
+            check_tis_threshold(torch.tensor([1.0]), True)
+
+    def test_update_ema_nan_rejected(self):
+        from soup_cli.monitoring.grpo_stability_callback import update_ema
+
+        with pytest.raises(ValueError, match="finite"):
+            update_ema({}, {}, alpha=float("nan"))
+
+    # --- HIGH: variant compute_loss return_outputs=True path ---
+
+    def test_variant_compute_loss_return_outputs_true(self):
+        from soup_cli.trainer.grpo import make_grpo_trainer_variant
+
+        class _FakeGRPOTrainer:
+            def __init__(self):
+                self.args = type("Args", (), {"beta": 0.1})()
+
+            def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+                return (torch.tensor(99.0), {"fake": True})
+
+        variant_cls = make_grpo_trainer_variant(_FakeGRPOTrainer, "gspo")
+        trainer = variant_cls()
+        inputs = {
+            "per_token_logps": torch.zeros(2, 4),
+            "old_per_token_logps": torch.zeros(2, 4),
+            # #1232: the reference trl supplies whenever beta != 0; without it
+            # the kernel refuses and the fake's (99.0, {"fake": True}) returns.
+            "ref_per_token_logps": torch.zeros(2, 4),
+            "advantages": torch.tensor([1.0, -1.0]),
+        }
+        result = trainer.compute_loss(
+            model=None, inputs=inputs, return_outputs=True
+        )
+        # When kernel handles the loss we return (variant_loss, None) per
+        # the implementation — outputs are not reproducible without a full
+        # forward pass.
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        loss, outputs = result
+        assert isinstance(loss, torch.Tensor)
+        assert not trainer._soup_fallback_warned, "fell back to the base loss"
+        assert outputs is None, outputs
+        assert float(loss) == 0.0
+
+    # --- HIGH: source-grep regression — callback wired into grpo.py ---
+
+    def test_grpo_trainer_wires_stability_callback_source_grep(self):
+        import inspect
+
+        import soup_cli.trainer.grpo as grpo_mod
+
+        body = inspect.getsource(grpo_mod)
+        assert "attach_grpo_stability_callback" in body, (
+            "GRPOTrainerWrapper.setup must call attach_grpo_stability_callback"
+        )
+
+    def test_preference_wires_weighted_combine_source_grep(self):
+        import inspect
+
+        import soup_cli.trainer.preference as pref_mod
+
+        body = inspect.getsource(pref_mod)
+        assert "attach_weighted_preference_combine" in body, (
+            "PreferenceTrainerWrapper.setup must wire attach_weighted_preference_combine"
+        )
+
+    # --- MEDIUM: idempotent attach + restore-on-exception ---
+
+    def test_attach_weighted_preference_not_double_wrapped(self):
+        from soup_cli.utils.preference_combine import (
+            attach_weighted_preference_combine,
+        )
+
+        class _Trainer:
+            def compute_loss(self, model, inputs, return_outputs=False):
+                return torch.tensor(2.0)
+
+        trainer = _Trainer()
+        attach_weighted_preference_combine(trainer, {"dpo": 0.6, "simpo": 0.4})
+        first_wrapper = trainer.compute_loss
+        # Second attach must short-circuit; compute_loss unchanged.
+        attach_weighted_preference_combine(trainer, {"dpo": 0.6, "simpo": 0.4})
+        assert trainer.compute_loss is first_wrapper
+
+    def test_longlora_idempotent_install(self):
+        from soup_cli.utils.longlora import apply_longlora_forward_override
+
+        class _Proj:
+            def forward(self, x):
+                return x
+
+        class LlamaAttention:
+            def __init__(self):
+                self.head_dim = 2
+                self.q_proj = _Proj()
+                self.k_proj = _Proj()
+
+            def forward(self, x):
+                return (x,)
+
+        class _Model:
+            def __init__(self):
+                self.attn = LlamaAttention()
+
+            def modules(self):
+                yield self.attn
+
+        model = _Model()
+        ovr1 = apply_longlora_forward_override(model, group_size=4)
+        with ovr1:
+            wrapped_once = model.attn.q_proj.forward
+            # Nested context on the same projection must NOT double-wrap.
+            ovr2 = apply_longlora_forward_override(model, group_size=4)
+            with ovr2:
+                assert model.attn.q_proj.forward is wrapped_once
+        # After exiting, original projection forward restored.
+        assert not getattr(model.attn.q_proj.forward, "_soup_longlora_patched", False)
+
+    def test_longlora_restores_on_exception(self):
+        from soup_cli.utils.longlora import apply_longlora_forward_override
+
+        class _Proj:
+            def forward(self, x):
+                return x
+
+        class LlamaAttention:
+            def __init__(self):
+                self.head_dim = 2
+                self.q_proj = _Proj()
+                self.k_proj = _Proj()
+
+            def forward(self, x):
+                return (x,)
+
+        class _Model:
+            def __init__(self):
+                self.attn = LlamaAttention()
+
+            def modules(self):
+                yield self.attn
+
+        model = _Model()
+        original = model.attn.q_proj.forward
+        ovr = apply_longlora_forward_override(model, group_size=4)
+        with pytest.raises(RuntimeError):
+            with ovr:
+                raise RuntimeError("simulated mid-training crash")
+        # Projection forwards restored despite the exception.
+        assert not getattr(model.attn.q_proj.forward, "_soup_longlora_patched", False)
+        _ = original  # silence lint
+
+    # --- MEDIUM: factory cache isolation between base classes ---
+
+    def test_variant_factory_isolates_by_base_class(self):
+        from soup_cli.trainer.grpo import make_grpo_trainer_variant
+
+        class _BaseA:
+            def compute_loss(self, *a, **k):
+                return torch.tensor(0.0)
+
+        class _BaseB:
+            def compute_loss(self, *a, **k):
+                return torch.tensor(0.0)
+
+        a = make_grpo_trainer_variant(_BaseA, "gspo")
+        b = make_grpo_trainer_variant(_BaseB, "gspo")
+        assert a is not b
+
+    def test_variant_factory_normalises_case(self):
+        """v0.53.11 review fix (security MEDIUM) — case-insensitive cache."""
+        from soup_cli.trainer.grpo import make_grpo_trainer_variant
+
+        class _Base:
+            def compute_loss(self, *a, **k):
+                return torch.tensor(0.0)
+
+        a = make_grpo_trainer_variant(_Base, "gspo")
+        b = make_grpo_trainer_variant(_Base, "GSPO")
+        assert a is b
+
+    # --- LOW: empty completions in PRM dataset prep ---
+
+    def test_prepare_prm_empty_completions(self):
+        from soup_cli.trainer.prm import _prepare_prm_dataset
+
+        class _Tok:
+            def __call__(self, text, add_special_tokens=False):
+                return {"input_ids": [1, 2, 3]}
+
+        rows = [{"prompt": "p", "completions": [], "labels": []}]
+        prepared = _prepare_prm_dataset(rows, _Tok(), max_length=100)
+        # Empty completions → zero output rows (does not crash).
+        assert prepared == []
