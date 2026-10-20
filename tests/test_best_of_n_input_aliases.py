@@ -5,6 +5,7 @@ import pytest
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests.conftest import strip_ansi
 
 
 @pytest.mark.parametrize("resume", [False, True], ids=["new-run", "resume"])
@@ -14,7 +15,12 @@ from soup_cli.cli import app
 )
 @pytest.mark.parametrize(
     "alias_kind",
-    ["same-path", "dot-alias", "hardlink", "windows-case"],
+    [
+        "same-path",
+        "dot-alias",
+        pytest.param("hardlink", marks=pytest.mark.requires_hardlink),
+        "windows-case",
+    ],
 )
 def test_online_input_alias_is_rejected_without_writes(
     tmp_path: Path,
@@ -35,10 +41,7 @@ def test_online_input_alias_is_rejected_without_writes(
         alias = "./prompts.jsonl"
     elif alias_kind == "hardlink":
         linked = Path("linked-prompts.jsonl")
-        try:
-            linked.hardlink_to(source)
-        except (OSError, NotImplementedError) as exc:
-            pytest.skip(f"Hard links unavailable: {exc}")
+        linked.hardlink_to(source)
         alias = str(linked)
     elif alias_kind == "windows-case":
         if os.name != "nt":
@@ -84,7 +87,7 @@ def test_online_input_alias_is_rejected_without_writes(
     before = {path.name: path.read_bytes() for path in tmp_path.iterdir()}
     result = CliRunner().invoke(app, arguments)
     after = {path.name: path.read_bytes() for path in tmp_path.iterdir()}
-    message = " ".join(result.output.split())
+    message = " ".join(strip_ansi(result.output).split())
 
     assert after == before
     assert result.exit_code == 2, (result.output, repr(result.exception))

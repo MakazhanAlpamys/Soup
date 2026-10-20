@@ -8,6 +8,7 @@ from soup_cli.utils.best_of_n_checkpoint import (
     initialise_checkpoint,
     load_checkpoint,
 )
+from tests.conftest import strip_ansi
 
 
 @pytest.mark.parametrize(
@@ -277,6 +278,7 @@ def test_resume_rejects_invalid_checkpoint_without_changing_files(
             "--resume",
         ],
     )
+    message = " ".join(strip_ansi(result.output).split())
 
     after = {
         path.name: path.read_bytes()
@@ -284,7 +286,7 @@ def test_resume_rejects_invalid_checkpoint_without_changing_files(
     }
 
     assert result.exit_code == 2, (result.output, repr(result.exception))
-    assert "Invalid checkpoint" in result.output
-    assert "version is not supported" in result.output
+    assert "Invalid checkpoint" in message
+    assert "version is not supported" in message
     assert generation_calls == []
     assert after == before

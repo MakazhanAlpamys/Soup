@@ -241,10 +241,11 @@ def test_cli_rejects_overlapping_outputs(
         args.append("--plan-only")
 
     result = CliRunner().invoke(app, args)
+    message = " ".join(strip_ansi(result.output).split())
 
     assert result.exit_code == 2, (result.output, result.exception)
-    assert "--retriever-config" in result.output
-    assert "--generator-config" in result.output
+    assert "--retriever-config" in message
+    assert "--generator-config" in message
     assert calls == []
     assert not Path("output").exists()
 
@@ -369,7 +370,7 @@ def test_cli_rejects_effective_output_overlap_without_writes(
         arguments.append("--plan-only")
 
     result = CliRunner().invoke(app, arguments)
-    message = " ".join(result.output.split())
+    message = " ".join(strip_ansi(result.output).split())
 
     assert snapshot() == before
     assert calls == []

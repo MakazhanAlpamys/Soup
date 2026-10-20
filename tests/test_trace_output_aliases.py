@@ -5,10 +5,18 @@ import pytest
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests.conftest import strip_ansi
 
 
 @pytest.mark.parametrize("command", ["ingest", "prune-prompt"])
-@pytest.mark.parametrize("alias_kind", ["hardlink", "windows-case", "dotdot"])
+@pytest.mark.parametrize(
+    "alias_kind",
+    [
+        pytest.param("hardlink", marks=pytest.mark.requires_hardlink),
+        "windows-case",
+        "dotdot",
+    ],
+)
 def test_trace_command_rejects_input_alias_without_writes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -28,10 +36,7 @@ def test_trace_command_rejects_input_alias_without_writes(
 
     if alias_kind == "hardlink":
         linked = Path("linked-traces.jsonl")
-        try:
-            linked.hardlink_to(source)
-        except (OSError, NotImplementedError) as exc:
-            pytest.skip(f"Hard links unavailable: {exc}")
+        linked.hardlink_to(source)
         alias = str(linked)
     elif alias_kind == "windows-case":
         if os.name != "nt":
@@ -72,7 +77,7 @@ def test_trace_command_rejects_input_alias_without_writes(
         input_option = "--input"
 
     result = CliRunner().invoke(app, arguments)
-    message = " ".join(result.output.split())
+    message = " ".join(strip_ansi(result.output).split())
 
     after_files = {
         path.name: path.read_bytes()

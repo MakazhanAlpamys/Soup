@@ -4,6 +4,7 @@ import pytest
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests.conftest import strip_ansi
 
 
 @pytest.mark.parametrize("plan_only", [True, False], ids=["plan", "live"])
@@ -75,17 +76,19 @@ def test_best_of_n_rejects_output_aliasing_prompts_before_sampling(
         arguments.extend([option, value])
 
     result = CliRunner().invoke(app, arguments)
+    message = " ".join(strip_ansi(result.output).split())
 
     assert source.read_bytes() == original
     assert result.exit_code == 2, (result.output, repr(result.exception))
-    assert "--prompts" in result.output
-    assert output_option in result.output
-    assert "same file" in result.output
+    assert "--prompts" in message
+    assert output_option in message
+    assert "same file" in message
     assert sampler_calls == []
     assert sorted(path.name for path in tmp_path.iterdir()) == [
         "prompts.jsonl"
     ]
 
+@pytest.mark.requires_hardlink
 @pytest.mark.parametrize("plan_only", [True, False], ids=["plan", "live"])
 @pytest.mark.parametrize(
     "output_option",
@@ -115,10 +118,7 @@ def test_offline_rejects_output_hardlink_before_indexing(
         "--judgments": judgments,
     }
     alias = Path("alias.jsonl")
-    try:
-        alias.hardlink_to(inputs[input_option])
-    except (OSError, NotImplementedError) as exc:
-        pytest.skip(f"Hard links unavailable: {exc}")
+    alias.hardlink_to(inputs[input_option])
 
     def unexpected_indexing(*args, **kwargs):
         pytest.fail("Offline indexing started before rejecting an input alias")
@@ -149,6 +149,7 @@ def test_offline_rejects_output_hardlink_before_indexing(
         arguments.extend([option, value])
 
     result = CliRunner().invoke(app, arguments)
+    message = " ".join(strip_ansi(result.output).split())
 
     after = {
         path.name: path.read_bytes()
@@ -156,16 +157,23 @@ def test_offline_rejects_output_hardlink_before_indexing(
     }
     assert after == before
     assert result.exit_code == 2, (result.output, repr(result.exception))
-    assert input_option in result.output
-    assert output_option in result.output
-    assert "same file" in result.output
+    assert input_option in message
+    assert output_option in message
+    assert "same file" in message
 
 @pytest.mark.parametrize("plan_only", [True, False], ids=["plan", "live"])
 @pytest.mark.parametrize(
     "output_option",
     ["--export-candidates", "--checkpoint"],
 )
-@pytest.mark.parametrize("alias_kind", ["same-path", "dot-alias", "hardlink"])
+@pytest.mark.parametrize(
+    "alias_kind",
+    [
+        "same-path",
+        "dot-alias",
+        pytest.param("hardlink", marks=pytest.mark.requires_hardlink),
+    ],
+)
 def test_export_rejects_output_aliasing_prompts_before_sampling(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -181,10 +189,7 @@ def test_export_rejects_output_aliasing_prompts_before_sampling(
 
     if alias_kind == "hardlink":
         alias_path = Path("alias.jsonl")
-        try:
-            alias_path.hardlink_to(source)
-        except (OSError, NotImplementedError) as exc:
-            pytest.skip(f"Hard links unavailable: {exc}")
+        alias_path.hardlink_to(source)
         alias = str(alias_path)
     elif alias_kind == "dot-alias":
         alias = "./prompts.jsonl"
@@ -226,6 +231,7 @@ def test_export_rejects_output_aliasing_prompts_before_sampling(
         arguments.extend([option, value])
 
     result = CliRunner().invoke(app, arguments)
+    message = " ".join(strip_ansi(result.output).split())
 
     after = {
         path.name: path.read_bytes()
@@ -234,6 +240,6 @@ def test_export_rejects_output_aliasing_prompts_before_sampling(
     assert after == before
     assert result.exit_code == 2, (result.output, repr(result.exception))
     assert (
-        "must be distinct" in result.output
-        or "same file" in result.output
+        "must be distinct" in message
+        or "same file" in message
     )

@@ -5,6 +5,7 @@ import pytest
 from typer.testing import CliRunner
 
 from soup_cli.utils.prune_prompt import prune_traces
+from tests.conftest import strip_ansi
 
 
 class CharacterTokenizer:
@@ -79,12 +80,13 @@ def test_prune_cli_rejects_input_as_output(
             output_path,
         ],
     )
+    message = " ".join(strip_ansi(result.output).split())
 
     assert source.read_bytes() == original
     assert result.exit_code == 1, (result.output, repr(result.exception))
-    assert "--input" in result.output
-    assert "--output" in result.output
-    assert "same file" in result.output
+    assert "--input" in message
+    assert "--output" in message
+    assert "same file" in message
 
 @pytest.mark.parametrize("token_aware", [False, True], ids=["char", "token"])
 def test_prune_writes_distinct_output_without_changing_input(
