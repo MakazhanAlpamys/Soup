@@ -368,6 +368,13 @@ KNOWN_UNCONSUMED = {
     "training.grace_codebook": "#808 -- warns at load from v0.76, refused as of v0.77 "
                                "(the string appears as an artifact-kind name in "
                                "store.py:52 / edit.py:312, unrelated to this field)",
+    "training.rl_checkpoint_include_ref_model": "#808 -- warns at load from v0.76, "
+                                                "refused as of v0.77; no save writes "
+                                                "reference-model state, so nothing reads it",
+    "training.rl_checkpoint_include_rollout_buffer": "#808 -- warns at load from "
+                                                     "v0.76, refused as of v0.77; no save "
+                                                     "writes rollout-buffer state, so "
+                                                     "nothing reads it",
     # -- #807: read ONLY inside a function nothing in src/ references, so the
     #    read is not consumption. Surfaced by the dead-function gate, which
     #    the guard previously applied to @property resolvers only.
@@ -749,8 +756,8 @@ def test_the_allowlist_size_is_pinned_exactly():
     half: it names WHICH entry went stale, where this one only says the count
     moved.
     """
-    assert len(KNOWN_UNCONSUMED) == 32, (
-        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 32. Going UP "
+    assert len(KNOWN_UNCONSUMED) == 34, (
+        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 34. Going UP "
         "means a field was allowlisted rather than wired; going DOWN means an "
         "entry was retired, which is the good direction -- lower this number "
         "in the same commit."

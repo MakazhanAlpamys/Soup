@@ -1,0 +1,104 @@
+Loading config from D:\soup-bench\fp8-loss-check\fp8\soup.yaml...
+== Training Setup ==
+  Device:  NVIDIA GeForce RTX 5070 Laptop GPU
+  Memory:  7.9 GB
+  Model:   D:/soup-bench/models/Moonlight-16B-A3B-fp8block
+  Task:    sft
+  Backend: transformers
+  LoRA:    r=8, alpha=16
+  Quant:   4bit
+  Seed:    42
+Loading dataset...
+Loaded: 9 train samples
+Run ID: run_20261020_171022_5424b88c
+Setting up model + trainer...
+== REMOTE CODE WARNING ==
+  --trust-remote-code is enabled for D:/soup-bench/models/Moonlight-16B-A3B-fp8block
+  This will execute Python code shipped in the model repo. Only proceed if you trust the source.
+W1020 17:10:33.846000 18648 site-packages\torch\utils\flop_counter.py:113] triton not found; flop counting will not work for triton kernels
+Loading tokenizer: D:/soup-bench/models/Moonlight-16B-A3B-fp8block
+FP8 block-quantised base (128x128 blocks): dequantised to bfloat16 as the layer cache is written
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+== Layer streaming disk pre-flight ==
+  HF/local source: 16.64 GB
+  Soup materialized copy: 0.00 GB (no write required)
+  Layer-shard cache: 30.60 GB (write required)
+  Projected total on disk: 47.24 GB
+  Additional writes before training: 30.60 GB
+  Free on target volume (layer-shard cache): 101.13 GB
+Preparing layer shards -> D:\soup-bench\fp8-loss-check\soup-cache\D___soup-bench__models__Moonlight-16B-A3B-fp8block
+Re-sharding layer cache: cache index is missing or unreadable.
+== training.stream_layers ==
+  Layer streaming BETA — arch deepseek_v3, tier disk
+  base         streamed from disk across 27 layers, staged by an async reader (no resident copy)
+  host staging read_ahead 2 -> 3661 MB (page-locked when the box allows)
+  VRAM buffers 2 x 1159 MB + 1 x 671 MB large-layer slot = 2990 MB
+  resident     0 MB extras + adapters
+  peak VRAM    ~4.32 GB at batch 1 x seq 512 (logits 1.17 GB)
+  free VRAM    7.32 GB
+  forecast     317-466 tok/s — a compute-bound bound, not a promise
+  (from 44.62 TFLOPS measured on this card now using bfloat16 @ 1087 MHz)
+  ! base does not fit in RAM — streaming from the NVMe disk tier instead. An async reader stages training.stream_read_ahead layers in host RAM (page-locked
+  where the box allows) rather than holding the base resident. It is slower than the RAM tier — measured 1.9-2.3x its step time with the store fully cached,
+  on one box (benchmarks/gate-971-async-nvme-source.md); a store larger than RAM has no RAM-tier comparison, which is what makes this a fallback. Set
+  stream_source='ram' to refuse rather than fall back.
+Layer streaming is BETA: slower than resident training, but this model may not run resident on this card at all.
+expandable_segments allocator hint not enabled: Windows ignores it — torch warns and carries on
+Layer streaming ready: 27 layers, streamed from DISK (30.60 GB on an NVMe volume) by an async reader, read_ahead=2, 3632 MB pinned host staging (4.29 GB
+page-locked), 2 x 1159 MB decoder buffers + 1 x 671 MB large-layer slot
+LoRA applied: 3,552,768 trainable / 15,960,111,936 total (0.02%)
+Gradient checkpointing: handled per-layer by layer streaming (HF's own is left off to avoid double recompute)
+Rewind log: D:\soup-bench\fp8-loss-check\fp8\output\rewind.jsonl
+Base revision: unknown (existing loading behavior preserved)
+Training started!
+[transformers] The tokenizer has new PAD/BOS/EOS tokens that differ from the model config and generation config. The model config and generation config were aligned accordingly, being updated with the tokenizer's values. Updated tokens: {'pad_token_id': 163838}.
+{'loss': '4.631', 'grad_norm': '14.88', 'learning_rate': '0', 'entropy': '3.991', 'num_tokens': '37', 'mean_token_accuracy': '0.5714', 'epoch': '0.1111'}
+{'loss': '5.709', 'grad_norm': '18.62', 'learning_rate': '0.0001', 'entropy': '4.359', 'num_tokens': '68', 'mean_token_accuracy': '0.5455', 'epoch': '0.2222'}
+{'loss': '4.71', 'grad_norm': '14.88', 'learning_rate': '9.964e-05', 'entropy': '2.889', 'num_tokens': '139', 'mean_token_accuracy': '0.4706', 'epoch': '0.3333'}
+{'loss': '5.09', 'grad_norm': '25.5', 'learning_rate': '9.855e-05', 'entropy': '4.165', 'num_tokens': '177', 'mean_token_accuracy': '0.4545', 'epoch': '0.4444'}
+{'loss': '2.487', 'grad_norm': '6.625', 'learning_rate': '9.675e-05', 'entropy': '3.292', 'num_tokens': '236', 'mean_token_accuracy': '0.5641', 'epoch': '0.5556'}
+{'loss': '1.948', 'grad_norm': '3.078', 'learning_rate': '9.427e-05', 'entropy': '2.62', 'num_tokens': '310', 'mean_token_accuracy': '0.6111', 'epoch': '0.6667'}
+{'loss': '10.1', 'grad_norm': '29.38', 'learning_rate': '9.115e-05', 'entropy': '4.741', 'num_tokens': '344', 'mean_token_accuracy': '0', 'epoch': '0.7778'}
+{'loss': '1.373', 'grad_norm': '3.297', 'learning_rate': '8.743e-05', 'entropy': '2.739', 'num_tokens': '416', 'mean_token_accuracy': '0.8', 'epoch': '0.8889'}
+{'loss': '5.398', 'grad_norm': '10.25', 'learning_rate': '8.316e-05', 'entropy': '4.601', 'num_tokens': '457', 'mean_token_accuracy': '0.1905', 'epoch': '1'}
+{'eval_loss': '4.14', 'eval_runtime': '11.06', 'eval_samples_per_second': '0.09', 'eval_steps_per_second': '0.09', 'eval_entropy': '2.988', 'eval_num_tokens': '457', 'eval_mean_token_accuracy': '0.4211', 'epoch': '1'}
+{'loss': '2.773', 'grad_norm': '4.812', 'learning_rate': '7.84e-05', 'entropy': '4.142', 'num_tokens': '494', 'mean_token_accuracy': '0.7143', 'epoch': '1.111'}
+{'loss': '3.492', 'grad_norm': '12.62', 'learning_rate': '7.324e-05', 'entropy': '4.932', 'num_tokens': '525', 'mean_token_accuracy': '0.5455', 'epoch': '1.222'}
+{'loss': '8.776', 'grad_norm': '46.75', 'learning_rate': '6.773e-05', 'entropy': '5.063', 'num_tokens': '559', 'mean_token_accuracy': '0', 'epoch': '1.333'}
+{'loss': '3.607', 'grad_norm': '10.75', 'learning_rate': '6.197e-05', 'entropy': '2.903', 'num_tokens': '630', 'mean_token_accuracy': '0.4706', 'epoch': '1.444'}
+{'loss': '1.889', 'grad_norm': '5.281', 'learning_rate': '5.603e-05', 'entropy': '3.509', 'num_tokens': '689', 'mean_token_accuracy': '0.5897', 'epoch': '1.556'}
+{'loss': '4.633', 'grad_norm': '9.062', 'learning_rate': '5e-05', 'entropy': '4.652', 'num_tokens': '730', 'mean_token_accuracy': '0.2857', 'epoch': '1.667'}
+{'loss': '3.739', 'grad_norm': '300', 'learning_rate': '4.397e-05', 'entropy': '4.509', 'num_tokens': '768', 'mean_token_accuracy': '0.4545', 'epoch': '1.778'}
+{'loss': '1.515', 'grad_norm': '3.656', 'learning_rate': '3.803e-05', 'entropy': '2.728', 'num_tokens': '842', 'mean_token_accuracy': '0.6667', 'epoch': '1.889'}
+{'loss': '1.07', 'grad_norm': '2.578', 'learning_rate': '3.227e-05', 'entropy': '2.57', 'num_tokens': '914', 'mean_token_accuracy': '0.8', 'epoch': '2'}
+{'eval_loss': '3.581', 'eval_runtime': '12.76', 'eval_samples_per_second': '0.078', 'eval_steps_per_second': '0.078', 'eval_entropy': '3.004', 'eval_num_tokens': '914', 'eval_mean_token_accuracy': '0.4211', 'epoch': '2'}
+{'loss': '1.501', 'grad_norm': '4.719', 'learning_rate': '2.676e-05', 'entropy': '2.7', 'num_tokens': '988', 'mean_token_accuracy': '0.6667', 'epoch': '2.111'}
+{'loss': '1.724', 'grad_norm': '3.672', 'learning_rate': '2.16e-05', 'entropy': '3.437', 'num_tokens': '1047', 'mean_token_accuracy': '0.6154', 'epoch': '2.222'}
+{'loss': '2.872', 'grad_norm': '5.125', 'learning_rate': '1.684e-05', 'entropy': '4.892', 'num_tokens': '1078', 'mean_token_accuracy': '0.7273', 'epoch': '2.333'}
+{'loss': '7.656', 'grad_norm': '175', 'learning_rate': '1.257e-05', 'entropy': '5.221', 'num_tokens': '1112', 'mean_token_accuracy': '0', 'epoch': '2.444'}
+{'loss': '1.01', 'grad_norm': '2.406', 'learning_rate': '8.851e-06', 'entropy': '2.603', 'num_tokens': '1184', 'mean_token_accuracy': '0.82', 'epoch': '2.556'}
+{'loss': '4.29', 'grad_norm': '7.344', 'learning_rate': '5.727e-06', 'entropy': '4.616', 'num_tokens': '1225', 'mean_token_accuracy': '0.2381', 'epoch': '2.667'}
+{'loss': '2.303', 'grad_norm': '4.281', 'learning_rate': '3.249e-06', 'entropy': '4.077', 'num_tokens': '1262', 'mean_token_accuracy': '0.7143', 'epoch': '2.778'}
+{'loss': '3.646', 'grad_norm': '1808', 'learning_rate': '1.453e-06', 'entropy': '4.469', 'num_tokens': '1300', 'mean_token_accuracy': '0.4545', 'epoch': '2.889'}
+{'loss': '3.094', 'grad_norm': '9.562', 'learning_rate': '3.646e-07', 'entropy': '2.967', 'num_tokens': '1371', 'mean_token_accuracy': '0.4706', 'epoch': '3'}
+{'eval_loss': '3.494', 'eval_runtime': '12.36', 'eval_samples_per_second': '0.081', 'eval_steps_per_second': '0.081', 'eval_entropy': '3.022', 'eval_num_tokens': '1371', 'eval_mean_token_accuracy': '0.4211', 'epoch': '3'}
+{'train_runtime': '725.5', 'train_samples_per_second': '0.037', 'train_steps_per_second': '0.037', 'train_loss': '3.742', 'epoch': '3'}
+== Soup Training: D:/soup-bench/models/Moonlight-16B-A3B-fp8block ==
+  Epoch 3.0/3   100%
+  Step:  27/27
+  Loss:  3.0939    LR: 3.65e-07
+  Val loss: 3.4939
+  Speed: 0.04 it/s
+  GPU peak: 3.1/7.9 GB
+  Grad:  9.5625
+  Loss: 4.6312 -> 3.0939
+  Duration: 12m
+  Output: D:\soup-bench\fp8-loss-check\fp8\output
+  Run ID: run_20261020_171022_5424b88c
+
+  Quick test:  soup chat --model D:\soup-bench\fp8-loss-check\fp8\output
+  Push to HF:  soup push --model D:\soup-bench\fp8-loss-check\fp8\output
+  Merge LoRA:  soup merge --adapter D:\soup-bench\fp8-loss-check\fp8\output
+  Export GGUF: soup export --model D:\soup-bench\fp8-loss-check\fp8\output
+  Run details: soup runs show run_20261020_171022_5424b88c
+exit=0

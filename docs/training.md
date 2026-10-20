@@ -59,6 +59,11 @@
 
 ---
 
+Multimodal SFT (`task: sft` with `modality: vision` or `audio`) requires
+`backend: transformers` rather than `backend: unsloth`. The vision and audio setup
+paths do not use Unsloth; requesting it is refused at config load instead of
+silently falling back to transformers. Text SFT continues to support Unsloth.
+
 ## Validation split & evaluation (`training.eval_steps`)
 
 `data.val_split` (default `0.1`) holds that share of the rows out of training,
@@ -624,7 +629,7 @@ soup train
 
 ## Knowledge Distillation
 
-Train a small student model to match a larger teacher's output distribution. Every train/val row must keep at least one causal-loss target after truncation at `data.max_length`, and a row without one is refused at setup by split and row number, as SFT does.
+Train a small student model to match a larger teacher's output distribution. Every train/val row must keep at least one causal-loss target after truncation at `data.max_length`, and a row without one is refused at setup by split and row number, as SFT does. Both token-level and sequence-level distillation require `modality: text`; vision and audio inputs are refused at config load because this trainer is text-only.
 
 ```yaml
 base: HuggingFaceTB/SmolLM2-135M
@@ -1039,7 +1044,10 @@ adapter off the model is then no longer the one the policy started from. A
 `dpo` / `ipo` term under a `simpo` / `orpo` primary is refused with either of
 them, before the model is loaded. With such an init, give `dpo` or `ipo` the
 largest weight: trl's copy of the adapter carries the residual's other half,
-so its reference is still the starting model.
+so its reference is still the starting model. `relora_steps` has no such way
+out: trl's `ref` adapter sits on the same base weights, so a blend that names
+`dpo` or `ipo` refuses it whatever the largest weight is
+([ReLoRA](peft-and-efficiency.md#lora-quality--pissa-relora-per-pattern-rank-surgical-patches)).
 
 **Which tokens.** The terms are computed on the primary trainer's batch, and
 the two trainer families do not render a row the same way: the CPO / ORPO
@@ -1738,7 +1746,9 @@ output: ./output_ppo
 `epochs` controls complete passes over the training dataset. `ppo_epochs`
 controls optimization passes within each PPO update. Soup forwards both values,
 plus `ppo_kl_penalty`, to the active TRL `PPOConfig` names and prints the
-effective schedule during setup.
+effective schedule during setup. `data.max_length` sets PPO's response length
+(moving the default from TRL's 53 to `data.max_length`), `--deepspeed` is forwarded,
+and `save_total_limit=3` keeps up to 3 checkpoints.
 
 One PPO rollout batch is `batch_size` x `gradient_accumulation_steps` prompts on
 every process, and TRL drops a partial batch, so the train set needs at least
@@ -2131,7 +2141,7 @@ training:
   distill_temperature: 2.0
 ```
 
-The cross-validator rejects `task='distill'` without `teacher_model`, and rejects `teacher_model` / `distill_*` fields when `task` is anything other than `distill`. It also refuses `task='distill'` on `backend: mlx` and `backend: unsloth` at config load; distillation runs on `backend: transformers` only.
+The cross-validator rejects `task='distill'` without `teacher_model`, and rejects `teacher_model` / `distill_*` fields when `task` is anything other than `distill`. It also refuses `task='distill'` on `backend: mlx` and `backend: unsloth` at config load; distillation runs on `backend: transformers` only. Both token-level and sequence-level distillation require `modality: text`; `vision` and `audio` are refused at config load because the distill trainer has no multimodal input path.
 
 
 ## EBFT + GDPO (BETA, v0.52.0)
@@ -2273,3 +2283,32 @@ a conflicting combo is rejected loudly at config load. Scans cache under `~/.sou
 `all` default) is recommended for very large models — it skips the giant embedding/lm_head matrices.
 The SNR kernel is pure-numpy and transpose-invariant, so GPT-2 `Conv1D` weights score the same as
 Linear weights. (v0.71.23)
+
+## Training source identity
+
+`soup train` captures `training_data_sha256` before loading or transforming a
+supported single local raw text-training file. The digest is SHA-256 of the
+complete file bytes, including any BOM and original newline encoding. It records
+source bytes at startup; it does not prove which transformed examples, external
+assets or later streaming reads trained the model. The source is not frozen.
+
+Capture uses 1 MiB reads, a 256 MiB byte limit and a 5-second time budget checked
+between filesystem operations. An operation already blocked on I/O cannot be
+interrupted by that budget. Larger, unreadable, changing or incomplete files are
+recorded as unknown (`NULL`), never as the hash of a prefix. Descriptor and path
+metadata detect accidental replacement/modification during capture; this is not
+an adversarial filesystem snapshot.
+
+Mixed/interleaved/replay, remote, streaming, tokenized and directory inputs remain
+unknown. The initial scope is text input through `data.train`; TTS, unlearning and
+non-text modalities remain unknown. No unknown component is silently omitted to
+manufacture an identity for a composite input. Dry runs do not capture a digest.
+
+The recorded value is retained in `soup_run.json` beside the final artifact and
+copied by `soup registry push --run-id` without reopening today's source. Explicit
+`--data` still describes the file registered now: its hash takes precedence for
+`data_hash` and the entry fingerprint, while `training_data_sha256` keeps the
+historical startup digest. Copied artifacts retain that digest without the
+original dataset. Existing runs stay unknown; no historical identity is inferred
+from today's files. Sweep and other training entry points do not gain capture in
+this change.

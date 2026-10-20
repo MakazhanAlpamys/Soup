@@ -17,7 +17,6 @@ per project policy — ``python -m soup_cli.cli --help`` must not pull torch.
 from __future__ import annotations
 
 import logging
-import math
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -36,6 +35,7 @@ from soup_cli.utils.gpu import (
     resolve_base_load_dtype,
 )
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 logger = logging.getLogger(__name__)
@@ -275,7 +275,8 @@ class PRMTrainerWrapper:
         apply_training_seed(cfg.training)
 
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -292,6 +293,7 @@ class PRMTrainerWrapper:
             # GradScaler on pre-Ampere cards, and makes the Metal optimizer abort
             # on MPS (#564).
             torch_dtype=resolve_base_load_dtype(self.device, full_finetune=True),
+            **base_revision_kwargs(cfg.base),
         )
         hidden_size = base_model.config.hidden_size
         # The head trains too, so it is an fp32 master weight like the base.
@@ -352,10 +354,9 @@ class PRMTrainerWrapper:
             )
             console.print(f"[green]Auto batch size (PRM):[/] {batch_size}")
         bs = int(batch_size)
-        total_steps = math.ceil(
-            len(train_rows) / bs / tcfg.gradient_accumulation_steps
-        ) * tcfg.epochs
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
+
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
         use_bf16, use_fp16 = bf16_fp16_flags(self.device, allow_mps_bf16=True)
         from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 

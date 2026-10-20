@@ -2493,6 +2493,26 @@ def _stamp_4bit_markers(model: Any, quant_config: Any) -> None:
         model.config.quantization_config = quant_config
 
 
+def _drop_fp8_source_quantization(config: Any) -> None:
+    """Build the streamed skeleton at the stream dtype even over an FP8 block source.
+
+    An FP8 block checkpoint's ``config.json`` declares ``quantization_config`` with
+    ``quant_method: "fp8"``. The sharder dequantises those weights (``utils/fp8_block``),
+    so the shards hold the stream dtype (or NF4) and the modules must be plain
+    ``nn.Linear`` (or ``Linear4bit``): transformers' FP8 quantizer, applied from this
+    config, would turn them into ``FP8Linear`` modules expecting FP8 bytes and scales.
+    ``from_config`` does not apply it today (transformers 5.17), but the config would
+    still claim FP8 on a model holding none, for any reader of ``model.config``.
+
+    Only this skeleton's own config object is changed: ``config.json`` on disk and every
+    resident load (``from_pretrained``, which dequantises or runs FP8 itself) are not.
+    """
+    from soup_cli.utils.fp8_block import is_fp8_quantization_config
+
+    if is_fp8_quantization_config(getattr(config, "quantization_config", None)):
+        del config.quantization_config
+
+
 def build_meta_skeleton(
     model_id: str,
     *,
@@ -2520,6 +2540,7 @@ def build_meta_skeleton(
     torch_dtype = _torch_dtype(dtype)
     config = AutoConfig.from_pretrained(model_id, trust_remote_code=trust_remote_code)
     config.use_cache = False
+    _drop_fp8_source_quantization(config)
     quant_config = None
     if quant == QUANT_NF4:
         quant_config = build_nf4_config(dtype, double_quant=double_quant)

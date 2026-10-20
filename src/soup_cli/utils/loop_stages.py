@@ -120,7 +120,7 @@ def checked_thumbs_db(state: LoopState) -> Optional[str]:
     if resolved is None:
         return None
     path, field = resolved
-    from soup_cli.utils.local_rl import validate_db_path
+    from soup_cli.utils.local_rl import THUMBS_HARVEST_SELECT, validate_db_path
 
     try:
         validate_db_path(path)
@@ -137,7 +137,7 @@ def checked_thumbs_db(state: LoopState) -> Optional[str]:
     try:
         # Short timeout: a lock is not a verdict, so do not wait out sqlite's 5 s.
         with contextlib.closing(sqlite3.connect(os.path.abspath(path), timeout=0.1)) as conn:
-            conn.execute("SELECT 1 FROM thumbs LIMIT 1")
+            conn.execute(f"{THUMBS_HARVEST_SELECT} LIMIT 1")
     except sqlite3.Error as exc:
         if "locked" in str(exc).lower():
             return path
@@ -190,7 +190,7 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
 
     trace_dir = _resolve_trace_dir(state)
     traces = list(parse_soup_serve(trace_dir)) if trace_dir else []
-    pairs = list(build_pairs(traces, signal="thumbs_up")) if traces else []
+    pairs = list(build_pairs(traces, signal="thumbs_up"))
     thumbs = _thumbs_pairs(state)
     seen = {(p.prompt, p.chosen, p.rejected) for p in pairs}
     for p in thumbs:
@@ -238,7 +238,9 @@ def _render_dpo_yaml(state: LoopState, pairs_path: str, output_dir: str) -> str:
     config = {
         "base": base,
         "task": "dpo",
-        "data": {"train": pairs_path, "format": "dpo"},
+        # val_split 0: a one- or two-pair harvest would otherwise lose its only
+        # training rows to the schema default 0.1 (#1909).
+        "data": {"train": pairs_path, "format": "dpo", "val_split": 0},
         "training": {"epochs": 1, "batch_size": 1, "lr": 5.0e-5},
         "output": output_dir,
     }
@@ -251,13 +253,21 @@ def train_dpo_from_pairs(
     """Train a DPO adapter from harvested pairs via a ``soup train`` subprocess.
 
     Returns ``{run_id, skipped, adapter_path}``. Skips (no run) when the
-    harvest produced no pairs. The subprocess is argv-list (no shell);
+    harvest produced no pairs, adding a ``notes`` reason (``no_preference_pairs``
+    with the count, or ``pairs_file_missing``) that the loop saves in the
+    iteration record (#1909). The subprocess is argv-list (no shell);
     ``_TRAIN_RUNNER`` injects a stand-in for tests.
     """
     pairs_path = ctx.get("pairs_path")
     pairs_n = int(ctx.get("pairs_harvested", 0) or 0)
-    if not pairs_path or pairs_n <= 0:
-        return {"run_id": None, "skipped": True, "adapter_path": None}
+    skip = {"run_id": None, "skipped": True, "adapter_path": None}
+    if pairs_n <= 0:
+        return {**skip, "notes": "no_preference_pairs: 0 valid pairs harvested, training skipped"}
+    if not pairs_path:
+        return {**skip, "notes": "pairs_file_missing: no pairs path recorded, training skipped"}
+    if not os.path.isfile(str(pairs_path)):
+        note = f"pairs_file_missing: {quote_path(str(pairs_path))} not found, training skipped"
+        return {**skip, "notes": note}
 
     run_id = f"loop-train-{uuid.uuid4().hex[:8]}"
     output_dir = os.path.join(_ADAPTERS_DIR, run_id)

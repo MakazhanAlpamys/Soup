@@ -31,6 +31,7 @@ from rich.panel import Panel
 
 from soup_cli.utils.config_bounds import DEFAULT_STREAM_READ_AHEAD, MAX_STREAM_READ_AHEAD
 from soup_cli.utils.paths import quote_path
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.stripe_roots import ReadAheadDecision, effective_read_ahead
 
 console = Console()
@@ -379,11 +380,16 @@ def estimate_stripe_write_shares(
     quant: str = "none",
     double_quant: bool = True,
     arch: str = "",
+    estimate: Any = None,
 ) -> tuple[list[int], bool]:
     """Calculate per-root shard write shares, charging root 0 non-decoder bytes (#1612).
 
     Returns ``(shares, approximate)``:
-    - When source safetensors headers can be parsed without tensor loads:
+    - When ``estimate`` (a ``layer_shard.ShardCacheEstimate``) is given, its
+      per-layer and non-decoder bytes are what each root is charged: the same
+      header-derived sizes the pre-flight's total comes from. ``approximate`` is
+      False.
+    - Otherwise, when source safetensors headers can be parsed without tensor loads:
       calculates the parameter count per decoder layer and for non-decoder weights.
       Root k is charged decoder bytes for layers placed on root k according to
       ``layer_roots_for(n_layers, n_roots)``.
@@ -398,6 +404,13 @@ def estimate_stripe_write_shares(
         return _stripe_write_shares(total_bytes, n_roots), n_roots > 1
     if n_roots <= 1 or total_bytes <= 0:
         return _stripe_write_shares(total_bytes, n_roots), False
+    if estimate is not None:
+        return _shares_from_layer_bytes(
+            dict(enumerate(estimate.layer_bytes)),
+            float(estimate.other_bytes),
+            total_bytes=total_bytes,
+            n_roots=n_roots,
+        )
     if not weights_dir:
         return _stripe_write_shares(total_bytes, n_roots), True
 
@@ -417,7 +430,6 @@ def estimate_stripe_write_shares(
             NF4_BYTES_PER_PARAM_SINGLE,
         )
         from soup_cli.utils.safetensors_reader import _ITEMSIZE, read_header
-        from soup_cli.utils.stripe_roots import layer_roots_for
 
         shards = _discover_safetensors(resolved_dir)
         itemsize = _ITEMSIZE.get(dtype, 2)
@@ -452,33 +464,109 @@ def estimate_stripe_write_shares(
                 else:
                     non_decoder_bytes += numel * itemsize
 
-        if not decoder_layer_bytes:
-            return _stripe_write_shares(total_bytes, n_roots), True
-
-        n_layers = max(decoder_layer_bytes.keys()) + 1
-        layer_roots = layer_roots_for(n_layers, n_roots)
-        raw_root_shares = [0.0] * n_roots
-        for layer_idx in range(n_layers):
-            raw_root_shares[layer_roots[layer_idx]] += decoder_layer_bytes.get(layer_idx, 0.0)
-        raw_root_shares[0] += non_decoder_bytes
-
-        raw_total = sum(raw_root_shares)
-        if raw_total <= 0:
-            return _stripe_write_shares(total_bytes, n_roots), True
-
-        effective_total = max(int(total_bytes), int(math.ceil(raw_total)))
-        raw_scaled = [effective_total * (s / raw_total) for s in raw_root_shares]
-        shares = [int(v) for v in raw_scaled]
-        remainder = effective_total - sum(shares)
-        fractions = sorted(
-            range(n_roots), key=lambda i: raw_scaled[i] - shares[i], reverse=True
+        return _shares_from_layer_bytes(
+            decoder_layer_bytes, non_decoder_bytes, total_bytes=total_bytes, n_roots=n_roots
         )
-        for i in range(remainder):
-            shares[fractions[i]] += 1
-
-        return shares, False
     except Exception:
         return _stripe_write_shares(total_bytes, n_roots), True
+
+
+def _shares_from_layer_bytes(
+    decoder_layer_bytes: dict,
+    non_decoder_bytes: float,
+    *,
+    total_bytes: int,
+    n_roots: int,
+) -> tuple[list[int], bool]:
+    """Split ``total_bytes`` over the roots in proportion to what each root receives.
+
+    Root ``k`` gets the decoder layers ``layer_roots_for`` places on it; root 0 also
+    gets everything outside the decoder layers. The total is raised to the raw sum
+    when that is larger. Falls back to the even split when nothing was measured.
+    """
+    from soup_cli.utils.stripe_roots import layer_roots_for
+
+    if not decoder_layer_bytes:
+        return _stripe_write_shares(total_bytes, n_roots), True
+
+    n_layers = max(decoder_layer_bytes.keys()) + 1
+    layer_roots = layer_roots_for(n_layers, n_roots)
+    raw_root_shares = [0.0] * n_roots
+    for layer_idx in range(n_layers):
+        raw_root_shares[layer_roots[layer_idx]] += decoder_layer_bytes.get(layer_idx, 0.0)
+    raw_root_shares[0] += non_decoder_bytes
+
+    raw_total = sum(raw_root_shares)
+    if raw_total <= 0:
+        return _stripe_write_shares(total_bytes, n_roots), True
+
+    effective_total = max(int(total_bytes), int(math.ceil(raw_total)))
+    raw_scaled = [effective_total * (s / raw_total) for s in raw_root_shares]
+    shares = [int(v) for v in raw_scaled]
+    remainder = effective_total - sum(shares)
+    fractions = sorted(range(n_roots), key=lambda i: raw_scaled[i] - shares[i], reverse=True)
+    for i in range(remainder):
+        shares[fractions[i]] += 1
+
+    return shares, False
+
+
+def _planned_source_shards(weights_plan: Any) -> list[str]:
+    """The ``*.safetensors`` files the sharder will read, listed before any copy is made.
+
+    Without a copy that is the weight directory itself, listed the way the sharder
+    lists it. A symlinked Hugging Face snapshot is copied to a regular-file
+    directory first, and that copy does not exist yet when the pre-flight runs, so
+    its files are read where the copy step will read them, through the copy step's
+    own validation: a link is followed only into the snapshot's blob stores.
+    """
+    from soup_cli.utils.layer_shard import _discover_safetensors
+
+    if not weights_plan.needs_materialization:
+        return _discover_safetensors(weights_plan.weights_dir)
+    from soup_cli.utils.spectrum_scan import _snapshot_materialization_entries
+
+    revision = getattr(weights_plan, "source_revision", None)
+    if revision is None:
+        # The copy step refuses such a snapshot; the pre-flight does not guess around it.
+        raise ValueError("cannot read a symlinked Hub snapshot without its resolved revision")
+    entries = _snapshot_materialization_entries(
+        weights_plan.source_dir, source_revision=revision
+    )
+    return sorted(
+        resolved
+        for relative, resolved, _blob in entries
+        if relative.endswith(".safetensors") and not os.path.dirname(relative)
+    )
+
+
+#: What listing the source files can raise (a missing directory, a snapshot the copy
+#: step would refuse, a malformed plan); the pre-flight then falls back.
+_SOURCE_LISTING_ERRORS = (OSError, ValueError, TypeError, OverflowError)
+
+
+def _preflight_cache_estimate(weights_plan: Any, *, arch: str, **estimate_kwargs: Any) -> Any:
+    """The shard cache the sharder will write for this plan, or ``None``.
+
+    ``None`` for an architecture with its own estimator (``qwen4_exp``, whose
+    source is then not even listed), and when the source files cannot be listed
+    or a header cannot be read: the caller then charges the coarse NF4-rate
+    figure and labels it approximate. Nothing else falls back: a bad request
+    (dtype, layout, quant suffixes) and a checkpoint the sharder would refuse
+    raise here, before any copy or shard is written.
+    """
+    from soup_cli.utils.layer_shard import SourceHeaderError, estimate_shard_cache_bytes
+
+    if arch == "qwen4_exp":
+        return None
+    try:
+        source_shards = _planned_source_shards(weights_plan)
+    except _SOURCE_LISTING_ERRORS:
+        return None
+    try:
+        return estimate_shard_cache_bytes(source_shards, arch=arch, **estimate_kwargs)
+    except SourceHeaderError:
+        return None
 
 
 def _render_stream_disk_preflight(
@@ -734,7 +822,10 @@ class StreamingSetupMixin:
         # is worse than finding out now.
         refuse_if_data_parallel(self.device)
 
+        from soup_cli.utils.expert_stream import EXPERT_LAYOUT_PER_EXPERT
+        from soup_cli.utils.fp8_block import fp8_block_size
         from soup_cli.utils.layer_shard import (
+            PER_EXPERT_LAYOUT_ARCHS,
             QUANT_NF4,
             QUANT_NONE,
             checkpoint_source_components,
@@ -781,7 +872,8 @@ class StreamingSetupMixin:
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -789,11 +881,33 @@ class StreamingSetupMixin:
         # The streamed decoder is always transformers' own class (see
         # _STREAM_NATIVE_MODEL_CODE); trust_remote_code reaches the tokenizer only.
         model_config = AutoConfig.from_pretrained(
-            cfg.base, trust_remote_code=self._STREAM_NATIVE_MODEL_CODE
+            cfg.base, trust_remote_code=self._STREAM_NATIVE_MODEL_CODE,
+            **base_revision_kwargs(cfg.base),
         )
         # Allowlist, not a heuristic — a half-supported architecture streams
         # weights into the wrong module and mis-trains silently.
         arch = stream_arch_of(model_config)
+        # training.stream_expert_layout, in the sharder's spelling ("" = fused).
+        # Refused here for an architecture the layout is not gated on: before any
+        # weight is resolved, downloaded or sharded.
+        expert_layout = (
+            EXPERT_LAYOUT_PER_EXPERT
+            if getattr(tcfg, "stream_expert_layout", "fused") == "per_expert"
+            else ""
+        )
+        if expert_layout and arch not in PER_EXPERT_LAYOUT_ARCHS:
+            raise ValueError(
+                "training.stream_expert_layout='per_expert' is gated on resident parity "
+                f"per architecture; admitted: {', '.join(PER_EXPERT_LAYOUT_ARCHS)}; this "
+                f"base streams as {arch!r}. Use stream_expert_layout='fused'."
+            )
+        # An FP8 block-quantised base (DeepSeek-V3's published format) is dequantised by
+        # the sharder. A spelling it does not dequantise, or an FP8 base on another
+        # architecture, is refused here from the config alone: before any weight is
+        # resolved or downloaded. The disk pre-flight sizes the cache from the same
+        # config (the shards hold dequantised weights, the scales are not stored).
+        source_quantization = getattr(model_config, "quantization_config", None)
+        fp8_block = fp8_block_size(source_quantization, arch=arch)
 
         on_cuda = str(self.device).startswith("cuda")
         # #385 — ASK THE CARD. bf16 needs Ampere, and a T4 (Colab free), a P100
@@ -801,6 +915,11 @@ class StreamingSetupMixin:
         # made the entire free tier unsupported without saying so, and could not
         # fail on the Ampere card every published measurement came from.
         dtype = resolve_stream_dtype(str(self.device))
+        if fp8_block is not None:
+            console.print(
+                f"[dim]FP8 block-quantised base ({fp8_block[0]}x{fp8_block[1]} blocks): "
+                f"dequantised to {dtype} as the layer cache is written[/]"
+            )
 
         # v0.72.2 — NF4. The decoder linears ship as packed nibbles + per-block
         # absmax, so the RAM store is ~0.26x its bf16 size; embeddings, norms and
@@ -833,14 +952,68 @@ class StreamingSetupMixin:
                 + "[/]"
             )
         quant_device_kind = str(self.device).split(":", 1)[0] if quant == QUANT_NF4 else ""
+        # DeepSeek-V3 / Kimi K2 store their MTP module as layers past the last
+        # decoder layer; the sharder drops them against the config's count (and the
+        # disk pre-flight does not charge them).
+        stream_num_hidden_layers = (
+            int(self._stream_shape_config(model_config).num_hidden_layers)
+            if arch == "deepseek_v3"
+            else None
+        )
+
+        # The authoritative list of weights to quantise is whatever
+        # replace_with_bnb_linear actually converts, read off a meta skeleton —
+        # not a hard-coded name list that would drift per architecture.
+        #
+        # This builds a second, throwaway skeleton (build_streamed_model makes
+        # its own). Deliberate: a meta skeleton allocates NO weight storage, so
+        # the cost is module-tree construction only, and threading a pre-built
+        # model into build_streamed_model would couple suffix discovery to model
+        # construction for no memory saving.
+        #
+        # It runs BEFORE the weights are resolved: it needs only the config, and
+        # the disk pre-flight below sizes the shard cache by these same suffixes.
+        quant_suffixes = ()
+        moe_targets = None
+        # #798: the ONE helper that turns moe_lora into targets, and refuses a
+        # dropout peft cannot honour on fused experts. This path kept its own
+        # copy of the block, which is why it was the one path with no refusal.
+        # The probe is a meta skeleton and is the only model available here, so
+        # the call happens while it is alive rather than at the attach below.
+        if quant == QUANT_NF4:
+            probe = self._stream_meta_skeleton(cfg.base, dtype=dtype, quant=quant)
+            moe_targets = resolve_moe_lora_targets(probe, tcfg, None, console=console)
+            quant_suffixes = quantised_layer_suffixes(probe)
+            del probe
+        elif tcfg.moe_lora:
+            probe = self._stream_meta_skeleton(cfg.base, dtype=dtype, quant=quant)
+            moe_targets = resolve_moe_lora_targets(probe, tcfg, None, console=console)
+            del probe
 
         def _disk_preflight(weights_plan) -> None:
-            shard_estimate = estimate_stream_store_bytes(
-                weights_plan.source_bytes,
+            # What the sharder will write, from the source headers and the sharder's
+            # own storage rules: fused routed experts stay at the stream dtype under
+            # NF4, which a flat NF4 rate under-counted ~3.6x on Moonlight-16B.
+            cache_estimate = _preflight_cache_estimate(
+                weights_plan,
                 dtype=dtype,
+                arch=arch,
                 quant=quant,
+                quant_suffixes=quant_suffixes,
                 double_quant=double_quant,
+                expert_layout=expert_layout,
+                num_hidden_layers=stream_num_hidden_layers,
+                quantization_config=source_quantization,
             )
+            if cache_estimate is not None:
+                shard_estimate = cache_estimate.total_bytes
+            else:
+                shard_estimate = estimate_stream_store_bytes(
+                    weights_plan.source_bytes,
+                    dtype=dtype,
+                    quant=quant,
+                    double_quant=double_quant,
+                )
             oq_shard_estimate = estimate_oq_stream_cache_bytes(
                 weights_plan.weights_dir,
                 dtype=dtype,
@@ -865,6 +1038,7 @@ class StreamingSetupMixin:
                     quant_device_kind,
                     "qwen4_ple" if arch == "qwen4_exp" else "",
                     stripe_roots=stripe_roots,
+                    expert_layout=expert_layout,
                 )
             cached_bytes = None
             if cached is not None:
@@ -880,9 +1054,12 @@ class StreamingSetupMixin:
                 quant=quant,
                 double_quant=double_quant,
                 arch=arch,
+                estimate=cache_estimate,
             )
             dirs = stripe_dirs(shard_dir, stripe_roots)
             effective_shard_bytes = max(shard_estimate, sum(shares))
+            # The flat-rate fallback is a guess and says so; a measured cache is exact.
+            coarse = cache_estimate is None and oq_shard_estimate is None
             _render_stream_disk_preflight(
                 source_bytes=weights_plan.source_bytes,
                 materialized_copy_bytes=weights_plan.materialized_copy_bytes,
@@ -892,7 +1069,7 @@ class StreamingSetupMixin:
                 shard_write_bytes=shares[0],
                 shard_path=shard_dir,
                 stripe_writes=tuple(zip(dirs[1:], shares[1:])),
-                approximate=approximate and cached_bytes is None,  # a measured cache is exact
+                approximate=(approximate or coarse) and cached_bytes is None,
             )
 
         weights_dir = resolve_model_weights(
@@ -933,32 +1110,6 @@ class StreamingSetupMixin:
                     f"free RAM, or pick a smaller base."
                 )
 
-        # The authoritative list of weights to quantise is whatever
-        # replace_with_bnb_linear actually converts, read off a meta skeleton —
-        # not a hard-coded name list that would drift per architecture.
-        #
-        # This builds a second, throwaway skeleton (build_streamed_model makes
-        # its own). Deliberate: a meta skeleton allocates NO weight storage, so
-        # the cost is module-tree construction only, and threading a pre-built
-        # model into build_streamed_model would couple suffix discovery to model
-        # construction for no memory saving.
-        quant_suffixes = ()
-        moe_targets = None
-        # #798: the ONE helper that turns moe_lora into targets, and refuses a
-        # dropout peft cannot honour on fused experts. This path kept its own
-        # copy of the block, which is why it was the one path with no refusal.
-        # The probe is a meta skeleton and is the only model available here, so
-        # the call happens while it is alive rather than at the attach below.
-        if quant == QUANT_NF4:
-            probe = self._stream_meta_skeleton(cfg.base, dtype=dtype, quant=quant)
-            moe_targets = resolve_moe_lora_targets(probe, tcfg, None, console=console)
-            quant_suffixes = quantised_layer_suffixes(probe)
-            del probe
-        elif tcfg.moe_lora:
-            probe = self._stream_meta_skeleton(cfg.base, dtype=dtype, quant=quant)
-            moe_targets = resolve_moe_lora_targets(probe, tcfg, None, console=console)
-            del probe
-
         console.print(f"[dim]Preparing layer shards -> {shard_dir}[/]")
         index = shard_checkpoint(
             weights_dir,
@@ -973,14 +1124,23 @@ class StreamingSetupMixin:
             quant_device=str(self.device),
             stripe_roots=stripe_roots,
             notify=console.print,
-            # DeepSeek-V3 / Kimi K2 store their MTP module as layers past the last
-            # decoder layer; the sharder drops them against the config's count.
-            num_hidden_layers=(
-                int(self._stream_shape_config(model_config).num_hidden_layers)
-                if arch == "deepseek_v3"
-                else None
-            ),
+            num_hidden_layers=stream_num_hidden_layers,
+            expert_layout=expert_layout,
         )
+        if expert_layout:
+            # Whatever the tier, per_expert reads every routed expert from the cache
+            # volume (about three times per step: forward, recompute, backward); the
+            # RAM tier holds only the dense part, so the tier choice never looks at it.
+            experts_disk = resolve_disk_kind(
+                shard_dir, tcfg.stream_disk_kind, notify=console.print
+            )
+            if experts_disk.kind != "nvme":
+                console.print(
+                    "[yellow]training.stream_expert_layout='per_expert' reads every routed "
+                    "expert from the cache volume about three times per step, and that "
+                    f"volume reads as {for_terminal(repr(str(experts_disk.kind)))}, not NVMe: "
+                    "expect steps bound by that disk.[/]"
+                )
         # R4: decided once, from the roots the index actually carries (a reused cache keeps its
         # own), so the plan's staging figure, the host pre-flight and the reader all agree. Read
         # with getattr like `external_tensors` below: an index without the field is one root.
@@ -1375,11 +1535,16 @@ class StreamingSetupMixin:
         prediction is demoted to advice instead, because refusing here would
         prevent the measurement that exists to overrule it.
         """
+        from soup_cli.utils.expert_stream import (
+            EXPERT_LAYOUT_PER_EXPERT,
+            expert_stream_vram_bytes,
+        )
         from soup_cli.utils.layer_stream import (
             LOGITS_BYTES_PER_ELEMENT,
             accumulation_advice,
             calibrated_logits_bytes_per_element,
             decide_stream_fit,
+            dtype_bytes,
             estimate_logits_bytes,
             estimate_stream_peak_vram,
             forecast_stream_throughput,
@@ -1395,6 +1560,17 @@ class StreamingSetupMixin:
             if getattr(tcfg, "stream_nf4_scale_cache", False)
             else 0
         )
+        # training.stream_expert_layout='per_expert': the layer buffers above hold
+        # only the dense part (the layer files no longer carry the experts); one
+        # routed expert is in flight at a time on top of them.
+        expert_bytes = 0
+        expert_shapes = getattr(index, "expert_shapes", None)
+        if getattr(index, "expert_layout", "") == EXPERT_LAYOUT_PER_EXPERT and expert_shapes:
+            expert_bytes = expert_stream_vram_bytes(
+                expert_shapes,
+                dtype_bytes=dtype_bytes(index.dtype),
+                quantised=bool(getattr(index, "expert_quant_specs", None)),
+            )
 
         shape_cfg = self._stream_shape_config(model_config)
         vocab = int(getattr(shape_cfg, "vocab_size", 0) or 0)
@@ -1438,7 +1614,7 @@ class StreamingSetupMixin:
             batch_size=rows,
             logits_bytes_per_element=calibrated,
             large_layer_bytes=large_layer_bytes,
-            persistent_bytes=scale_cache_bytes,
+            persistent_bytes=scale_cache_bytes + expert_bytes,
         )
         logits = estimate_logits_bytes(
             vocab_size=vocab, seq_len=seq_len, batch_size=rows, bytes_per_element=calibrated
@@ -1454,6 +1630,11 @@ class StreamingSetupMixin:
             lines.append(
                 f"  scale cache  {scale_cache_bytes / 1e9:.2f} GB resident "
                 "(training.stream_nf4_scale_cache), included above"
+            )
+        if expert_bytes:
+            lines.append(
+                f"  experts      {expert_bytes / 1e9:.3f} GB for the routed expert in flight "
+                "(training.stream_expert_layout='per_expert'), included above"
             )
         if calibrated > LOGITS_BYTES_PER_ELEMENT:
             lines.append(

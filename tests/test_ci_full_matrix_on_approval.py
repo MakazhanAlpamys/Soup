@@ -77,6 +77,12 @@ GATED_JOBS = (
     "transformers-floor",
     "core-floor",
 )
+#: The two gated jobs that are not required checks and never fail the build: they run in the
+#: nightly, manual and release runs but not on a pull request, approval run included
+#: (2026-10-19: 206 pull-request runs in 7 days, 480 job-minutes, for a signal that is not a
+#: merge gate). The other four gated jobs run on a pull request at approval.
+PR_SKIPPED_JOBS = ("type-check", "torchao-contract")
+PR_SKIP = "github.event_name != 'pull_request'"
 #: The support matrix: what RELEASE runs, and what requires-python must match.
 SUPPORT_MATRIX = {
     "os": ["ubuntu-latest", "windows-latest", "macos-latest"],
@@ -572,6 +578,26 @@ class TestTriggers:
     def test_pushes_to_main_and_release_branches_still_trigger(self):
         assert _triggers()["push"]["branches"] == ["main", "release/**"]
 
+    def test_a_push_that_only_touches_docs_starts_no_run(self):
+        """2026-10-19: 15 of 131 pushes to main in a week were docs-only credit commits, each
+        a quick run of about 20 runner-minutes. The filter is `paths-ignore`, so any push that
+        also touches one other path still runs, and it is exactly these four."""
+        push = _triggers()["push"]
+        assert push["paths-ignore"] == [
+            "docs/**",
+            "changelog.d/**",
+            "CONTRIBUTORS.md",
+            "CONTRIBUTING.md",
+        ]
+        assert "paths" not in push, "an allow-list would skip every path it forgot"
+
+    def test_a_pull_request_is_never_path_filtered(self):
+        """Every required context must report on every pull request: a filter on the pull_request
+        trigger would leave a docs-only pull request with "Expected" checks and no merge."""
+        pull_request = _triggers()["pull_request"]
+        for key in ("paths", "paths-ignore", "branches-ignore"):
+            assert key not in pull_request, key
+
     def test_the_nightly_full_run_and_the_manual_dispatch_exist(self):
         """A push to main runs only the quick set, so the full matrix on main has to come
         from somewhere: without these two the seven-cell run would never happen on main."""
@@ -593,6 +619,8 @@ class TestPlanDecision:
             "full": "${{ steps.decide.outputs.full }}",
             "matrix": "${{ steps.decide.outputs.matrix }}",
             "constraints": "${{ steps.decide.outputs.constraints }}",
+            # 2026-10-20: tests/test_ci_docs_only_fast_path.py pins how it is computed.
+            "docs_only": "${{ steps.docs.outputs.docs_only }}",
         }
 
     @pytest.mark.parametrize(("context", "kind"), EVENTS)
@@ -624,7 +652,24 @@ class TestGatedJobs:
     def test_the_smoke_and_contract_jobs_run_only_on_a_full_run(self, name):
         job = _jobs()[name]
         assert "plan" in _needs(job), f"{name} does not need plan"
-        assert job.get("if") == GATE, f"{name} is not gated on plan's decision"
+        expected = f"{GATE} && {PR_SKIP}" if name in PR_SKIPPED_JOBS else GATE
+        assert job.get("if") == expected, f"{name} is not gated on plan's decision"
+
+    @pytest.mark.parametrize(("context", "kind"), EVENTS)
+    @pytest.mark.parametrize("name", GATED_JOBS)
+    def test_which_gated_jobs_start_for_each_kind_of_run(self, name, context, kind):
+        """The two jobs that are not required checks run in the nightly, manual and release
+        runs only; the other four also run at approval; nothing runs for a quick run."""
+        full = kind in ("RELEASE", "FULL", "APPROVAL")
+        decided = {"needs": {"plan": {"outputs": {"full": "true" if full else "false"}}}}
+        expected = full and not (name in PR_SKIPPED_JOBS and kind == "APPROVAL")
+        assert _runs(name, {**context, **decided}) is expected, (name, kind)
+
+    def test_nothing_depends_on_the_two_jobs_a_pull_request_skips(self):
+        """A job that needs a skipped one is skipped with it, so nothing may wait on them."""
+        for name, job in _jobs().items():
+            for skipped in PR_SKIPPED_JOBS:
+                assert skipped not in _needs(job), f"{name} needs {skipped}"
 
     def test_lint_waits_for_nothing_and_skips_only_a_draft(self):
         lint = _jobs()["lint"]
@@ -1424,6 +1469,12 @@ class TestADraftRunsNothing:
             assert not _STATUS_FUNCTION.search(condition), f"{name}: {condition}"
 
 
+#: Every step of the `test` job also asks `env.RUN_SUITE`, the job's own switch for a cell that
+#: does nothing in a docs-only pull request (2026-10-20; tests/test_ci_docs_only_fast_path.py).
+#: Here it is the ordinary case, a cell that works.
+WORKING_CELL = {"env": {"RUN_SUITE": "true"}}
+
+
 class TestCoverageUpload:
     def test_one_cell_of_every_gated_run_uploads_and_a_quick_run_uploads_nothing(self):
         """The upload is pinned to one cell. Pinned to a cell the approval run does not
@@ -1437,12 +1488,87 @@ class TestCoverageUpload:
             return [
                 cell
                 for cell in _cell_dicts(_matrix(name))
-                if _truthy(_Expression(condition, {"matrix": cell}).value())
+                if _truthy(_Expression(condition, {"matrix": cell, **WORKING_CELL}).value())
             ]
 
         for name in ("APPROVAL_MATRIX", "FULL_MATRIX", "RELEASE_MATRIX"):
             assert len(uploading(name)) == 1, (name, uploading(name))
         assert uploading("QUICK_MATRIX") == []
+
+
+COVERAGE_STEP = "Run unit tests with coverage"
+NO_COVERAGE_STEP = "Run unit tests without coverage"
+#: The one cell that measures coverage, enforces the floor and uploads the report.
+COVERAGE_CELL = {"os": "ubuntu-latest", "python-version": "3.10"}
+ALL_MATRICES = ("RELEASE_MATRIX", "FULL_MATRIX", "APPROVAL_MATRIX", "QUICK_MATRIX")
+
+
+def _test_step(name: str) -> dict[str, Any]:
+    steps = [step for step in _jobs()["test"]["steps"] if step.get("name") == name]
+    assert len(steps) == 1, (name, steps)
+    return steps[0]
+
+
+def _cells_running(step: dict[str, Any], matrix: str) -> list[dict[str, str]]:
+    condition = str(step.get("if", "true"))
+    return [
+        cell
+        for cell in _cell_dicts(_matrix(matrix))
+        if _truthy(_Expression(condition, {"matrix": cell, **WORKING_CELL}).value())
+    ]
+
+
+class TestCoverageIsMeasuredInOneCell:
+    """2026-10-19: coverage is measured in ubuntu / 3.10 only, the cell that uploads it. The
+    floor is enforced there; every other cell runs the suite with `--no-cov`."""
+
+    @pytest.mark.parametrize("matrix", ("RELEASE_MATRIX", "FULL_MATRIX", "APPROVAL_MATRIX"))
+    def test_every_gated_run_measures_coverage_in_exactly_the_uploading_cell(self, matrix):
+        assert _cells_running(_test_step(COVERAGE_STEP), matrix) == [COVERAGE_CELL]
+        assert _cells_running(_test_step("Upload coverage to Codecov"), matrix) == [COVERAGE_CELL]
+
+    def test_a_quick_run_measures_no_coverage_and_so_does_not_check_the_floor(self):
+        """Known and accepted: the quick run has no ubuntu / 3.10 cell. The approval run a
+        merge waits for has it, and so does the nightly run."""
+        assert _cells_running(_test_step(COVERAGE_STEP), "QUICK_MATRIX") == []
+
+    @pytest.mark.parametrize("matrix", ALL_MATRICES)
+    def test_every_cell_runs_the_suite_exactly_once(self, matrix):
+        """A cell that ran neither step would test nothing; one that ran both would run the
+        suite twice. The two conditions are opposites."""
+        with_coverage = _cells_running(_test_step(COVERAGE_STEP), matrix)
+        without = _cells_running(_test_step(NO_COVERAGE_STEP), matrix)
+        cells = _cell_dicts(_matrix(matrix))
+        assert len(with_coverage) + len(without) == len(cells), matrix
+        assert not [cell for cell in with_coverage if cell in without], matrix
+        assert sorted(with_coverage + without, key=str) == sorted(cells, key=str), matrix
+
+    def test_the_coverage_step_measures_and_the_other_one_does_not(self):
+        measured = shlex.split(str(_test_step(COVERAGE_STEP)["run"]))
+        assert "--cov=soup_cli" in measured
+        assert "--cov-report=xml:coverage.xml" in measured  # the Codecov upload sends it
+        assert "--no-cov" not in measured
+        unmeasured = shlex.split(str(_test_step(NO_COVERAGE_STEP)["run"]))
+        assert "--no-cov" in unmeasured
+        assert not [arg for arg in unmeasured if arg.startswith("--cov")], unmeasured
+
+    def test_the_floor_is_left_to_pyproject_and_the_measuring_step_does_not_switch_it_off(self):
+        """`--cov-fail-under` lives in `addopts`: dropping it, or a `-o addopts=` / `-p no:cov`
+        / `--cov-fail-under=0` on the measuring step, would measure coverage and enforce nothing."""
+        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        addopts = re.search(r'^addopts\s*=\s*"(.*)"\s*$', pyproject, re.M)
+        assert addopts is not None
+        assert "--cov-fail-under=77" in shlex.split(addopts.group(1)), addopts.group(1)
+        measured = str(_test_step(COVERAGE_STEP)["run"])
+        for switch in ("addopts", "no:cov", "--cov-fail-under", "--no-cov"):
+            assert switch not in measured, switch
+
+    @pytest.mark.parametrize("step", (COVERAGE_STEP, NO_COVERAGE_STEP))
+    def test_both_steps_still_write_what_later_steps_read(self, step):
+        """The nightly test-count badge reads report.xml from ubuntu / 3.11, a cell that now
+        runs the unmeasured step: `--junitxml` must not be left to the measuring one."""
+        args = shlex.split(str(_test_step(step)["run"]))
+        assert "--junitxml=report.xml" in args, step
 
 
 def _contributing() -> str:
