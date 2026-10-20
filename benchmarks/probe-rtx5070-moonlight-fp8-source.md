@@ -4,10 +4,14 @@ Status: **FAIL (T2_max_step, T6_step_time)**, runs 2026-10-20 11:51Z-12:25Z. Bot
 COMPLETE; T1, T3, T4 and T5 pass. Sections 1-3 and appendix A are the rule and the setup as
 committed in `62bc0331b` (branch `feat/moe-fp8-loss-check`, from `25c876f65`, then the head of
 #2061) before either arm ran, and are unchanged; after #2061 merged (as `32af390c`, with one
-later review commit) that commit was rebased onto main as `2efb4ca99`. Section 4 is the run log and section 5 the
-results. Sections 6 and 7 are analysis done AFTER the verdict and are not part of the rule:
-section 6 traces T6 to the drive's state, and section 7 discusses T2. Neither changes the
-verdict. No threshold was changed and no arm was re-run.
+later review commit) that commit was rebased onto main as `2efb4ca99`. `62bc0331b` was committed
+locally before either arm ran and was never pushed; the only public copy is `2efb4ca99`, whose
+committer date is 2026-10-20 14:04Z and which sits in PR #2066 (opened 14:06Z), both after the
+runs, so "written before any run" cannot be checked from public history. Section 4 is the run log and
+section 5 the results. Sections 6 and 7 are analysis done AFTER the verdict and are not part of
+the rule: section 6 gives the most likely cause of T6, the D: drive's sustained-read plateau, and
+section 7 discusses T2. Neither changes the verdict. No threshold was changed and no arm was
+re-run.
 
 ## 1. Question
 
@@ -417,7 +421,8 @@ steps run as fast. T6 stays FAIL.
 
 ## 7. T2: per-step divergence on short rows (analysis after the verdict)
 
-The breach is on row 0, the shortest row (5 supervised tokens), every time it is seen:
+Step 7 is the one breach: 3.2655 against the limit of 1.6, on row 0, the shortest row (5
+supervised tokens). Row 0 comes up at steps 7, 12 and 22; steps 12 and 22 are below the limit:
 
 | step | A | B | ΔL |
 |---:|---:|---:|---:|
@@ -425,9 +430,10 @@ The breach is on row 0, the shortest row (5 supervised tokens), every time it is
 | 12 | 8.2903 | 8.7763 | +0.4860 |
 | 22 | 6.5275 | 7.6556 | +1.1281 |
 
-The next largest per-step gaps also fall on short rows, both under the limit but above the
-matched reference's maximum of 0.818: -1.3845 at step 4 (row 4, 11 tokens) and -1.2548 at step
-10 (row 1, 14 tokens). Against that:
+The next largest per-step gaps after step 7 also fall on short rows, all under the limit but
+above the matched reference's maximum of 0.818: -1.3845 at step 4 (row 4, 11 tokens), -1.2548 at
+step 10 (row 1, 14 tokens) and +1.1281 at step 22 (row 0, above). Step 12, at +0.4860, is below
+0.818. Against that:
 - step 1, a pure base forward, agrees to 0.081;
 - the evaluation after epoch 3 agrees to 0.072;
 - the epoch-3 mean agrees to 0.101.
