@@ -7,18 +7,14 @@ import tarfile
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from soup_cli.cans.schema import Manifest
 from soup_cli.utils.paths import is_under_cwd
-from soup_cli.utils.yaml_limits import check_yaml_expanded_size
+from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_limited
 
 #: Largest ``manifest.yaml`` read into memory. A manifest holds a handful of
 #: short fields plus at most 64 attestations of <= 1 MiB each, so a real one is
 #: far below this.
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
-#: Largest ``config.yaml`` read into memory; a training config is kilobytes.
-MAX_CONFIG_BYTES = 1 * 1024 * 1024
 #: Most members ``extract_can`` will write. ``soup can pack`` writes four.
 MAX_EXTRACT_MEMBERS = 10_000
 #: Largest total declared size of the regular files ``extract_can`` writes.
@@ -33,8 +29,8 @@ MAX_EXTRACT_BYTES = 8 * 1024 * 1024 * 1024
 
 def _read_text_member(
     tar: tarfile.TarFile, name: str, max_bytes: int,
-) -> tuple[str, int]:
-    """Return ``(text, byte_length)`` of a regular UTF-8 member, size-capped."""
+) -> str:
+    """Return the text of a regular UTF-8 member, size-capped."""
     try:
         member = tar.getmember(name)
     except KeyError as exc:
@@ -56,7 +52,7 @@ def _read_text_member(
             f"member '{name}' in can is too large (> {max_bytes} bytes)"
         )
     try:
-        return raw.decode("utf-8"), len(raw)
+        return raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError(f"member '{name}' in can is not valid UTF-8: {exc}") from exc
 
@@ -73,11 +69,10 @@ def inspect_can(path: str) -> Manifest:
     if not can_path.exists():
         raise FileNotFoundError(f"can not found: {path}")
     with tarfile.open(can_path, mode="r:gz") as tar:
-        manifest_text, manifest_bytes = _read_text_member(
-            tar, "manifest.yaml", MAX_MANIFEST_BYTES,
-        )
-    data = yaml.safe_load(manifest_text) or {}
-    check_yaml_expanded_size(data, "manifest.yaml", source_bytes=manifest_bytes)
+        manifest_text = _read_text_member(tar, "manifest.yaml", MAX_MANIFEST_BYTES)
+    data = load_yaml_limited(
+        manifest_text, "manifest.yaml", max_bytes=MAX_MANIFEST_BYTES,
+    ) or {}
     return Manifest(**data)
 
 
@@ -89,9 +84,8 @@ def read_config(path: str) -> dict[str, Any]:
     if not can_path.exists():
         raise FileNotFoundError(f"can not found: {path}")
     with tarfile.open(can_path, mode="r:gz") as tar:
-        cfg_text, cfg_bytes = _read_text_member(tar, "config.yaml", MAX_CONFIG_BYTES)
-    data = yaml.safe_load(cfg_text) or {}
-    check_yaml_expanded_size(data, "config.yaml", source_bytes=cfg_bytes)
+        cfg_text = _read_text_member(tar, "config.yaml", MAX_CONFIG_BYTES)
+    data = load_yaml_limited(cfg_text, "config.yaml", max_bytes=MAX_CONFIG_BYTES) or {}
     if not isinstance(data, dict):
         raise ValueError("config.yaml must deserialise to a mapping")
     return data

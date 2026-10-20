@@ -1,8 +1,9 @@
 """HF/TRL flight-recorder tests: row identity, per-row loss, and the eval guard.
 
-Every test runs a real (tiny-random, CPU) TRL ``SFTTrainer`` -- the whole point of
-the module is that it hooks HF internals correctly, and a mocked trainer would
-assert nothing about ``_get_train_sampler`` / ``compute_loss`` call order.
+Every test runs a real (tiny, randomly-initialised, CPU) TRL ``SFTTrainer`` --
+the whole point of the module is that it hooks HF internals correctly, and a
+mocked trainer would assert nothing about ``_get_train_sampler`` /
+``compute_loss`` call order.
 """
 
 from __future__ import annotations
@@ -12,8 +13,6 @@ import pytest
 pytest.importorskip("trl")
 
 from soup_cli.trainer import rewind_hf  # noqa: E402
-
-MODEL_ID = "hf-internal-testing/tiny-random-LlamaForCausalLM"
 
 
 class FakeSink:
@@ -53,12 +52,14 @@ def _uniform_dataset(n: int = 8):
 
 
 def _model_and_tokenizer():
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    """A real, randomly-initialised tiny Llama + a locally-trained tokenizer
+    (no download) -- #1356 found this pulling both from the Hub every run for
+    nothing these tests check depends on real weights or vocabulary. Shared
+    builders live in tests/_tiny_hf_models.py."""
+    from tests._tiny_hf_models import build_llama, build_tokenizer
 
-    tok = AutoTokenizer.from_pretrained(MODEL_ID)
-    if tok.pad_token is None:
-        tok.pad_token = tok.eos_token
-    model = AutoModelForCausalLM.from_pretrained(MODEL_ID)
+    tok = build_tokenizer()
+    model = build_llama(tok)
     return model, tok
 
 

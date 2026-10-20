@@ -5,6 +5,8 @@ from unittest.mock import patch as mock_patch
 
 import pytest
 
+BOUNDED_POST = "soup_cli.utils.http_response.post_capped"
+
 # ─── Provider Validation Tests ───────────────────────────────────────────
 
 
@@ -70,7 +72,7 @@ class TestGenerateServer:
             ]
         }
 
-        with mock_patch("httpx.post", return_value=mock_response) as mock_post:
+        with mock_patch(BOUNDED_POST, return_value=mock_response) as mock_post:
             _generate_server(
                 prompt="Generate test data",
                 count=1,
@@ -98,7 +100,7 @@ class TestGenerateServer:
             ]
         }
 
-        with mock_patch("httpx.post", return_value=mock_response) as mock_post:
+        with mock_patch(BOUNDED_POST, return_value=mock_response) as mock_post:
             _generate_server(
                 prompt="test",
                 count=1,
@@ -124,7 +126,7 @@ class TestGenerateServer:
             ]
         }
 
-        with mock_patch("httpx.post", return_value=mock_response) as mock_post:
+        with mock_patch(BOUNDED_POST, return_value=mock_response) as mock_post:
             _generate_server(
                 prompt="test",
                 count=1,
@@ -150,7 +152,7 @@ class TestGenerateServer:
             ]
         }
 
-        with mock_patch("httpx.post", return_value=mock_response) as mock_post:
+        with mock_patch(BOUNDED_POST, return_value=mock_response) as mock_post:
             _generate_server(
                 prompt="test",
                 count=1,
@@ -172,7 +174,7 @@ class TestGenerateServer:
         mock_response.status_code = 500
         mock_response.text = "Internal Server Error"
 
-        with mock_patch("httpx.post", return_value=mock_response):
+        with mock_patch(BOUNDED_POST, return_value=mock_response):
             with pytest.raises(ValueError, match="Server returned 500"):
                 _generate_server(
                     prompt="test",
@@ -203,7 +205,7 @@ class TestGenerateServer:
             ]
         }
 
-        with mock_patch("httpx.post", return_value=mock_response):
+        with mock_patch(BOUNDED_POST, return_value=mock_response):
             result = _generate_server(
                 prompt="test",
                 count=1,
@@ -227,7 +229,7 @@ class TestGenerateServer:
             "choices": [{"message": {"content": "[]"}}]
         }
 
-        with mock_patch("httpx.post", return_value=mock_response) as mock_post:
+        with mock_patch(BOUNDED_POST, return_value=mock_response) as mock_post:
             _generate_server(
                 prompt="test",
                 count=1,
@@ -475,7 +477,7 @@ class TestServerSSRFValidation:
             "choices": [{"message": {"content": "[]"}}]
         }
 
-        with mock_patch("httpx.post", return_value=mock_response):
+        with mock_patch(BOUNDED_POST, return_value=mock_response):
             result = _generate_server(
                 prompt="test", count=1, fmt="alpaca",
                 model_name="m", api_base="http://127.0.0.1:8000",

@@ -48,6 +48,9 @@ No source files under ``src/`` are modified. The harness temporarily
 monkeypatches the runtime in-process to recreate the historical mechanism.
 
 A machine without CUDA exits 0 with an explicit skip.
+
+Exit codes: 0 completed, 1 historical mechanism result not reproduced or
+runtime failure, 2 invalid CLI/input, 3 invalid or non-finite measurement.
 """
 
 from __future__ import annotations
@@ -71,6 +74,10 @@ DEFAULT_SEED = 3
 INPUT_SEED = 17
 CORRECTNESS_REPEATS = 3
 DEVICE = "cuda"
+
+
+class MeasurementInvalidError(RuntimeError):
+    """The run cannot support a numerical mechanism verdict."""
 
 
 def cuda_available() -> bool:
@@ -505,6 +512,8 @@ def run_backward(
 def gradient_snapshot(model: Any) -> dict[str, Any]:
     """Collect LoRA gradients using canonical parameter names."""
 
+    import torch
+
     params = canonical_parameters(model)
 
     gradients = {}
@@ -515,6 +524,11 @@ def gradient_snapshot(model: Any) -> dict[str, Any]:
 
         if parameter.grad is None:
             continue
+
+        if not torch.isfinite(parameter.grad).all():
+            raise MeasurementInvalidError(
+                f"non-finite gradients in {name}"
+            )
 
         gradients[name] = parameter.grad.detach().float().clone()
 
@@ -567,6 +581,11 @@ def assert_gradient_parity(
             raise RuntimeError(
                 f"gradient shape differs for {name!r}: "
                 f"{tuple(left.shape)} != {tuple(right.shape)}"
+            )
+
+        if not torch.isfinite(left).all() or not torch.isfinite(right).all():
+            raise MeasurementInvalidError(
+                f"non-finite gradients in {name}"
             )
 
         diff = (left - right).abs().max().item()
@@ -1018,6 +1037,9 @@ def main() -> int:
 
         return 0
 
+    except MeasurementInvalidError as exc:
+        print(f"ERROR: invalid measurement: {exc}; no verdict")
+        return 3
     except Exception as exc:
         print(
             f"ERROR: mechanism_cost.py failed: "

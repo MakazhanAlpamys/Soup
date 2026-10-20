@@ -1,0 +1,26 @@
+# 2026-09-30T15:58:50 C:\Users\user\AppData\Local\Programs\Python\Python312\python.exe benchmarks/harness/stream_probe.py --weights D:/synth/llama-70b-shape-v32k-f4 --quant nf4 --tier disk --seq 512 --batch 1 --steps 3 --warmup 1 --step --read-ahead 2 --label "R4 gate round 0 arm SINGLE" --out benchmarks/results/probe-rtx5070/two-drive/gate2_r0_single.json
+RUN: layer-streaming throughput probe
+gpu             NVIDIA GeForce RTX 5070 Laptop GPU
+torch           2.14.0+cu130
+vram_total_gb   8.518
+soup_cli_file   C:\Users\user\projects\Soup-stripe\src\soup_cli\__init__.py
+driver          616.92
+pcie_gen        5
+pcie_width      8
+dtype           bfloat16
+quant           nf4
+tier            disk
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 32767), got 128000. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 32767), got 128001. This may result in unexpected behavior.
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+W0930 15:59:02.479000 10136 site-packages\torch\utils\flop_counter.py:113] triton not found; flop counting will not work for triton kernels
+arch            llama  layers 80
+shards          C:\Users\user\.soup\layer-stream\D___synth__llama-70b-shape-v32k-f4  (0.0 s)
+store           1.957 GB pinned on tier disk (disk 36.388 GB); build 3.6 s
+source          AsyncDiskSource  read_ahead 2  staging 1957 MB pinned
+stripe          direct_io True  stripe roots []  layer roots
+buffers         2 x 709.9 MB
+nf4 linears     560 patched for the ablation
+step_plain                    28.2 tok/s  step 18.133 s  peak 4.378 GB  loads 157.0+2.0  eff 11.63 TFLOPS  clock 180->1312 MHz
+step_events                   27.4 tok/s  step 18.653 s  peak 4.378 GB  loads 157.0+2.0  eff 11.30 TFLOPS  copy 14.150 s (4.97 GB/s) stall 12.8 ms (0.07%)  clock 1312->1380 MHz
+wrote         benchmarks/results/probe-rtx5070/two-drive/gate2_r0_single.json

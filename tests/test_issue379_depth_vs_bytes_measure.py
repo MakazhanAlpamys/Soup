@@ -153,7 +153,10 @@ def test_layer_mib_is_store_bytes_per_layer(monkeypatch):
     ],
 )
 def test_changed_or_nonfinite_measurements_are_invalid(monkeypatch, kwargs, message):
-    with pytest.raises(module.MeasurementInvalidError, match=message):
+    with pytest.raises(
+        (module.MeasurementInvalidError, mechanism_cost.MeasurementInvalidError),
+        match=message,
+    ):
         _measure(monkeypatch, _Toy(**kwargs))
 
 

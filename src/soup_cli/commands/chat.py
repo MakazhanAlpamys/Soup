@@ -86,7 +86,7 @@ def chat(
     model_path = Path(model)
 
     if not model_path.exists():
-        console.print(f"[red]Model path not found: {model_path}[/]")
+        console.print(f"[red]Model path not found: {for_terminal(model_path)}[/]")
         raise typer.Exit(1)
 
     # Detect if it's a LoRA adapter or full model
@@ -111,7 +111,7 @@ def chat(
 
     console.print(
         Panel(
-            f"Model:  [bold]{model_path}[/]\n"
+            f"Model:  [bold]{for_terminal(model_path)}[/]\n"
             + (f"Base:   [bold]{for_terminal(base_model)}[/]\n" if is_adapter else "")
             + f"Device: [bold]{device}[/]\n"
             f"Type:   [bold]{'LoRA adapter' if is_adapter else 'Full model'}[/]",
@@ -182,7 +182,7 @@ def chat(
             # Remove old system prompt if exists
             history = [msg for msg in history if msg["role"] != "system"]
             history.insert(0, {"role": "system", "content": new_system})
-            console.print(f"[dim]System prompt set: {new_system}[/]\n")
+            console.print(f"[dim]System prompt set: {for_terminal(new_system)}[/]\n")
             continue
 
         # Add user message
@@ -196,7 +196,7 @@ def chat(
         )
 
         history.append({"role": "assistant", "content": response})
-        console.print(f"[bold green]Assistant:[/] {response}\n")
+        console.print(f"[bold green]Assistant:[/] {for_terminal(response)}\n")
 
 
 def _detect_base_model(adapter_config_path: Path) -> Optional[str]:
@@ -240,10 +240,10 @@ def _load_model(
             device_map=device_map,
             torch_dtype=torch_dtype,
         )
-        console.print(f"[dim]Loading LoRA adapter: {model_path}...[/]")
+        console.print(f"[dim]Loading LoRA adapter: {for_terminal(model_path)}...[/]")
         model_obj = PeftModel.from_pretrained(base, model_path)
     else:
-        console.print(f"[dim]Loading model: {model_path}...[/]")
+        console.print(f"[dim]Loading model: {for_terminal(model_path)}...[/]")
         model_obj = AutoModelForCausalLM.from_pretrained(
             model_path,
             trust_remote_code=trust_remote_code,

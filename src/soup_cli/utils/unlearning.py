@@ -11,10 +11,8 @@ Three method backends for the new ``task='unlearn'`` trainer:
   Adds a noise vector to the residual stream for forget-set inputs while
   preserving retain-set activations.
 
-Schema-only release: validators here are reused by the SoupConfig
-cross-validator, while the live trainer wrapper ships in v0.61.1
-(mirrors v0.50.0 GRPO Plus / v0.52.0 Modality II / v0.53.0 Quant Menu II
-stub-then-live pattern).
+Validators here are reused by the SoupConfig cross-validator. The live
+trainer uses the transformers backend; MLX unlearning is not supported.
 """
 
 from __future__ import annotations
@@ -200,11 +198,10 @@ def apply_unlearn_loss(method: str):
 
 
 def build_unlearn_trainer(config: object, **kwargs: object) -> object:
-    """Live unlearn trainer factory — deferred stub.
+    """Construct the transformers unlearning trainer lazily.
 
-    Lazy-imports the wrapper so the schema-only import path never pulls
-    in the heavy ``transformers`` / ``peft`` surface. The wrapper itself
-    is a stub that raises ``NotImplementedError`` on ``setup()``.
+    Lazy-imports the wrapper so config validation never pulls in the heavy
+    ``transformers`` / ``peft`` surface.
     """
     from soup_cli.trainer.unlearn import UnlearnTrainerWrapper
 

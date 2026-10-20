@@ -22,7 +22,12 @@ from soup_cli.utils.gpu import (
     resolve_device_map,
     resolve_frozen_base_load_dtype,
 )
-from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.mixed_precision import (
+    align_trainable_dtype_for_fp16,
+    keep_trainable_dtype_on_resume,
+    reload_root_adapter_on_resume,
+)
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -297,10 +302,11 @@ class GRPOTrainerWrapper:
           #387; ``grpo_fp16`` was the only way to run GRPO there and nothing
           said so.
 
-        ``auto_mixed_precision`` is mutually exclusive with ``grpo_fp16``
-        (rejected at schema load via ``_validate_grpo_fp16_amp_exclusive``);
-        when only ``auto_mixed_precision`` is set, the v0.32.0 picker runs
-        elsewhere in the training loop and overrides this default.
+        ``auto_mixed_precision`` is refused on ``task='grpo'`` at schema
+        load (#1618 — this wrapper never reads the field, so it would train
+        at whatever precision these lines pick); ``grpo_fp16`` is the only
+        way to choose the dtype here, and the grpo_fp16 + auto_mixed_precision
+        combo is rejected by ``_validate_grpo_fp16_amp_exclusive``.
         """
         device_name = str(self.device).lower()
         if device_name.startswith("mps"):
@@ -460,13 +466,11 @@ class GRPOTrainerWrapper:
             output_dir = output_dir / cfg.experiment_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # --- Calculate warmup steps from ratio ---
-        import math
+        # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
 
-        total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps) * tcfg.epochs
-        )
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
 
         # --- Warn if running on CPU (trl GRPO has known CPU issues) ---
         if self.device == "cpu":
@@ -503,6 +507,9 @@ class GRPOTrainerWrapper:
             "gradient_accumulation_steps": tcfg.gradient_accumulation_steps,
             "learning_rate": tcfg.lr,
             "warmup_steps": warmup_steps,
+            "gradient_checkpointing": should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
             "weight_decay": tcfg.weight_decay,
             "max_grad_norm": tcfg.max_grad_norm,
             "optim": tcfg.optimizer,
@@ -640,7 +647,8 @@ class GRPOTrainerWrapper:
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -665,7 +673,10 @@ class GRPOTrainerWrapper:
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
 
-        self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
         apply_vocab_expansion(
@@ -673,7 +684,7 @@ class GRPOTrainerWrapper:
             self.model,
             cfg.data,
         )
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantization in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
             self.model = prepare_model_for_kbit_training(
@@ -735,7 +746,13 @@ class GRPOTrainerWrapper:
 
     def _setup_unsloth(self, cfg, tcfg):
         """Load model via unsloth FastLanguageModel (2-5x faster)."""
+        from soup_cli.utils import unsloth
         from soup_cli.utils.unsloth import load_model_and_tokenizer
+        # #797: resolve training.gradient_checkpointing for the Unsloth path
+        # (streaming layers already checkpoint every layer, so it stays off).
+        use_gradient_checkpointing = unsloth.resolve_unsloth_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=getattr(tcfg, "stream_layers", False)
+        )
 
         console.print(f"[dim]Loading model via [bold]unsloth[/]: {cfg.base}[/]")
         self.model, self.tokenizer = load_model_and_tokenizer(
@@ -746,6 +763,8 @@ class GRPOTrainerWrapper:
             lora_alpha=tcfg.lora.alpha,
             lora_dropout=tcfg.lora.dropout,
             target_modules=tcfg.lora.target_modules,
+            use_rslora=tcfg.lora.use_rslora,
+            use_gradient_checkpointing=use_gradient_checkpointing,
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -762,23 +781,19 @@ class GRPOTrainerWrapper:
 
         # Add callback for live display and experiment tracking
         if display:
-            from soup_cli.monitoring.callback import (
-                SoupTrainerCallback,
-                soup_callback_kwargs,
-            )
+            from soup_cli.monitoring.callback import build_soup_trainer_callback
 
             self.trainer.add_callback(
-                SoupTrainerCallback(
+                build_soup_trainer_callback(
                     display,
+                    config=self.config,
                     tracker=tracker,
+                    batch_size=self._batch_size,
                     run_id=run_id,
-                    eval_gate_config=self.config.training.eval_gate,
-                    **soup_callback_kwargs(
-                        self.config.training,
-                        batch_size=self._batch_size,
-                        output_dir=self._output_dir,
-                        include_eval_gate=False,
-                    ),
+                    output_dir=self._output_dir,
+                    # #1389: grpo's validation number is the held-out
+                    # reward, not TRL's policy objective in `eval_loss`.
+                    task=self.config.task,
                 )
             )
 
@@ -793,6 +808,9 @@ class GRPOTrainerWrapper:
                 fp16=getattr(self.trainer.args, "fp16", False),
                 bf16=getattr(self.trainer.args, "bf16", False),
             )
+            if resume_from_checkpoint is not None:
+                reload_root_adapter_on_resume(self.trainer)
+                keep_trainable_dtype_on_resume(self.trainer)
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 

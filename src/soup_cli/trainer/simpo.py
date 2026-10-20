@@ -1,6 +1,5 @@
 """SimPO (Simple Preference Optimization) trainer — wraps trl.CPOTrainer."""
 
-import math
 import time
 from pathlib import Path
 from typing import Optional
@@ -20,6 +19,7 @@ from soup_cli.utils.gpu import (
     resolve_frozen_base_load_dtype,
 )
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -161,12 +161,10 @@ class SimPOTrainerWrapper(StreamingSetupMixin):
             output_dir = output_dir / cfg.experiment_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # --- Calculate warmup steps from ratio ---
-        total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
-        )
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
+
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
 
         # --- SimPO config (via CPOTrainer with loss_type='simpo') ---
         from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
@@ -225,6 +223,16 @@ class SimPOTrainerWrapper(StreamingSetupMixin):
             processing_class=self.tokenizer,
         )
 
+        # #1208 — trl 0.29 slices each answer to `max_length -
+        # longer_response_length`, so a long `chosen` beside a short `rejected`
+        # leaves the short one with zero tokens; SimPO's length-normalised
+        # log-probability is then 0/0, every LoRA tensor goes NaN, and
+        # transformers' nan-inf filter logs the loss as 0.0. Refuse before the
+        # first step instead of training to NaN behind a plausible number.
+        self._refuse_empty_completion_rows(self.trainer, split="train")
+        if self.trainer.eval_dataset is not None:
+            self._refuse_empty_completion_rows(self.trainer, split="eval")
+
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the
         # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
         # scheduler keeps two base_lrs until torch's strict zip raises at the
@@ -261,7 +269,8 @@ class SimPOTrainerWrapper(StreamingSetupMixin):
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -282,7 +291,10 @@ class SimPOTrainerWrapper(StreamingSetupMixin):
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
 
-        self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
         apply_vocab_expansion(
@@ -290,7 +302,7 @@ class SimPOTrainerWrapper(StreamingSetupMixin):
             self.model,
             cfg.data,
         )
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantization in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
             self.model = prepare_model_for_kbit_training(
@@ -344,7 +356,13 @@ class SimPOTrainerWrapper(StreamingSetupMixin):
 
     def _setup_unsloth(self, cfg: SoupConfig, tcfg) -> None:
         """Load model via unsloth FastLanguageModel (2-5x faster)."""
+        from soup_cli.utils import unsloth
         from soup_cli.utils.unsloth import load_model_and_tokenizer
+        # #797: resolve training.gradient_checkpointing for the Unsloth path
+        # (streaming layers already checkpoint every layer, so it stays off).
+        use_gradient_checkpointing = unsloth.resolve_unsloth_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=getattr(tcfg, "stream_layers", False)
+        )
 
         console.print(f"[dim]Loading model via [bold]unsloth[/]: {cfg.base}[/]")
         self.model, self.tokenizer = load_model_and_tokenizer(
@@ -355,9 +373,40 @@ class SimPOTrainerWrapper(StreamingSetupMixin):
             lora_alpha=tcfg.lora.alpha,
             lora_dropout=tcfg.lora.dropout,
             target_modules=tcfg.lora.target_modules,
+            use_rslora=tcfg.lora.use_rslora,
+            use_gradient_checkpointing=use_gradient_checkpointing,
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+
+    def _refuse_empty_completion_rows(self, trainer, *, split: str) -> None:
+        """Raise when a row's completion has no trainable token left (#1208).
+
+        Runs against the prepared, tokenised dataset trl itself will read, so it
+        sees the same answers the trainer does rather than the raw strings.
+        """
+        from soup_cli.trainer._trl_compat import (
+            preference_rows_with_empty_completion,
+        )
+
+        dataset = trainer.train_dataset if split == "train" else trainer.eval_dataset
+        affected = preference_rows_with_empty_completion(dataset)
+        if not affected:
+            return
+
+        shown = ", ".join(str(index) for index in affected[:5])
+        if len(affected) > 5:
+            shown += f", ... (+{len(affected) - 5} more)"
+        raise ValueError(
+            f"SimPO: {len(affected)} {split} row(s) would train on zero completion "
+            f"tokens at data.max_length={self.config.data.max_length} "
+            f"(rows: {shown}). trl truncates each answer to max_length minus "
+            "the LONGER answer's length, so the shorter side of a lopsided "
+            "pair is emptied and SimPO's length-normalised log-probability "
+            "becomes 0/0 — the run trains every LoRA tensor to NaN while the "
+            "logged loss reads 0.0. Raise data.max_length, balance the pair, "
+            "or drop the row."
+        )
 
     def train(
         self,
@@ -375,23 +424,15 @@ class SimPOTrainerWrapper(StreamingSetupMixin):
         start = time.time()
 
         if display:
-            from soup_cli.monitoring.callback import (
-                SoupTrainerCallback,
-                soup_callback_kwargs,
-            )
-
+            from soup_cli.monitoring.callback import build_soup_trainer_callback
             self.trainer.add_callback(
-                SoupTrainerCallback(
+               build_soup_trainer_callback(
                     display,
+                    config=self.config,
                     tracker=tracker,
                     run_id=run_id,
-                    eval_gate_config=self.config.training.eval_gate,
-                    **soup_callback_kwargs(
-                        self.config.training,
-                        batch_size=self._batch_size,
-                        output_dir=self._output_dir,
-                        include_eval_gate=False,
-                    ),
+                    batch_size=self._batch_size,
+                    output_dir=self._output_dir,
                 )
             )
 

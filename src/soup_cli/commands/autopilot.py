@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
+from typing import Optional
 
+import click
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.prompt import Prompt
 
 from soup_cli.autopilot.analyzer import (
     analyze_dataset,
@@ -61,11 +65,31 @@ def _kernel_display(enabled: bool, note: str | None) -> str:
     return str(enabled)
 
 
+def _stdin_isatty() -> bool:
+    """True when standard input is an interactive terminal."""
+    return sys.stdin.isatty()
+
+
+def _param_by_name(ctx: typer.Context, name: str) -> click.Parameter | None:
+    """Find a Click Parameter on the command by its argument name."""
+    for param in ctx.command.params:
+        if param.name == name:
+            return param
+    return None
+
+
 def autopilot_cmd(
-    model: str = typer.Option(..., "--model", "-m", help="Base model (HF model id)"),
-    data: str = typer.Option(..., "--data", "-d", help="Dataset path (JSONL)"),
-    goal: str = typer.Option(
-        ..., "--goal", "-g",
+    ctx: typer.Context,
+    model: Optional[str] = typer.Option(
+        None, "--model", "-m", help="Base model (HF model id)",
+    ),
+    data: Optional[str] = typer.Option(
+        None, "--data", "-d", help="Dataset path (JSONL)",
+    ),
+    goal: Optional[str] = typer.Option(
+        None,
+        "--goal",
+        "-g",
         help=(
             "Goal: chat | reasoning | code | classification | tool-calling | "
             "alignment | domain-adapt"
@@ -85,6 +109,35 @@ def autopilot_cmd(
     ),
 ) -> None:
     """Autopilot: give model+data+goal, Soup picks optimal hyperparameters."""
+    if not _stdin_isatty():
+        if model is None:
+            raise click.MissingParameter(ctx=ctx, param=_param_by_name(ctx, "model"))
+        if data is None:
+            raise click.MissingParameter(ctx=ctx, param=_param_by_name(ctx, "data"))
+        if goal is None:
+            raise click.MissingParameter(ctx=ctx, param=_param_by_name(ctx, "goal"))
+
+    if model is None:
+        model = Prompt.ask("Base model (HF model id)")
+    if not model or not model.strip():
+        console.print("[red]Base model cannot be empty.[/]")
+        raise typer.Exit(1)
+    model = model.strip()
+
+    if data is None:
+        data = Prompt.ask("Dataset path (JSONL)")
+    if not data or not data.strip():
+        console.print("[red]Dataset path cannot be empty.[/]")
+        raise typer.Exit(1)
+    data = data.strip()
+
+    if goal is None:
+        goal = Prompt.ask(
+            "Goal",
+            choices=sorted(GOAL_TO_TASK.keys()),
+            default="chat",
+        )
+
     if goal not in GOAL_TO_TASK:
         console.print(
             f"[red]Unknown goal '{goal}'. "

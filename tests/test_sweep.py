@@ -347,3 +347,38 @@ def test_a_failed_arm_prints_its_error_verbatim(
 
     plain = " ".join(re.sub(r"\x1b\[[0-9;]*m", "", result.output).split())
     assert 'pip install "soup-cli[mlx]"' in plain, plain
+
+
+@pytest.mark.parametrize("failure_stage", ["construction", "setup"])
+def test_sweep_setup_failure_marks_run_failed(tmp_path, monkeypatch, failure_stage):
+    """An arm that fails before training must not remain running (#1464)."""
+    from unittest.mock import Mock
+
+    from soup_cli.commands.sweep import _run_single
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.experiment.tracker import ExperimentTracker
+
+    cfg = SoupConfig(base="test/model", data={"train": "data.jsonl"})
+    failure = OSError("repo not found")
+    trainer = Mock()
+    factory = Mock(return_value=trainer)
+    if failure_stage == "construction":
+        factory.side_effect = failure
+    else:
+        trainer.setup.side_effect = failure
+
+    monkeypatch.setattr("soup_cli.trainer.dispatch.build_trainer", factory)
+    monkeypatch.setattr("soup_cli.data.loader.load_dataset", lambda *a, **kw: {"train": [{}]})
+    monkeypatch.setattr("soup_cli.utils.gpu.detect_device", lambda: ("cpu", "CPU"))
+    monkeypatch.setattr("soup_cli.utils.gpu.get_gpu_info", lambda: {})
+
+    with pytest.raises(OSError) as excinfo:
+        _run_single(cfg, {}, "sweep_1", tmp_path / "soup.yaml")
+
+    assert excinfo.value is failure
+    trainer.train.assert_not_called()
+    runs = ExperimentTracker().list_runs()
+    assert len(runs) == 1
+    assert runs[0]["experiment_name"] == "sweep_1"
+    assert runs[0]["status"] == "failed", runs[0]
+    assert runs[0]["error_message"] == "OSError: repo not found", runs[0]
