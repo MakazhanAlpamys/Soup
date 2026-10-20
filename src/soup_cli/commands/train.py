@@ -873,7 +873,7 @@ def train(
         "--cloud",
         help=(
             "Train on a cloud GPU instead of locally (v0.71.18 #16). Supported: "
-            "modal, lambda (runpod is planned). Renders a cloud app stub from the config "
+            "modal, lambda, runpod. Renders a cloud app stub from the config "
             "(plan-only); use --cloud-submit to submit live."
         ),
     ),
@@ -1094,10 +1094,7 @@ def train(
 
         cloud = cloud.lower()
         if cloud == "runpod":
-            console.print(
-                "[yellow]RunPod cloud training is not yet live; use --cloud modal or lambda.[/]"
-            )
-            raise typer.Exit(2)
+            from soup_cli.cloud import runpod as cloud_mod
         elif cloud == "modal":
             from soup_cli.cloud import modal as cloud_mod
         elif cloud == "lambda":
@@ -1105,7 +1102,7 @@ def train(
         else:
             console.print(
                 f"[red]Invalid --cloud:[/] {markup_escape(cloud)}. "
-                "Supported: modal, lambda (runpod is planned)."
+                "Supported: modal, lambda, runpod."
             )
             raise typer.Exit(2)
 

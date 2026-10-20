@@ -370,7 +370,7 @@ training:
 
 ## Cloud GPU Training
 
-No local GPU? `soup train --cloud modal|lambda` renders a provider-specific controller
+No local GPU? `soup train --cloud modal|lambda|runpod` renders a provider-specific controller
 from your `soup.yaml`. The config YAML is base64-embedded as **data**; credentials are read from
 the environment only when a live submission starts.
 
@@ -395,11 +395,42 @@ including after a failed run, the app downloads every file in that directory int
 output directory and prints a `modal volume get soup-outputs /<run name> <output dir> --force`
 command that retries the download; that command places the files under `<output dir>/<run name>`.
 
-### RunPod (Planned)
+### RunPod
 
-RunPod support is currently in development and descoped from live CLI dispatch pending automated
-lifecycle and termination safeguards. Running `soup train --cloud runpod` informs the operator that
-RunPod is not yet live and points to active cloud backends (`--cloud modal` and `--cloud lambda`).
+`soup train --cloud runpod --gpu a100` writes `soup_runpod_app.py` without contacting
+RunPod. GPUs: `a100` (80 GB SXM), `h100`, `a40`, `rtx3090`, `rtx4090`. The controller
+uses Python's standard library and local OpenSSH `ssh`/`scp`; no RunPod SDK extra
+is needed. For live submission, set `RUNPOD_API_KEY` and `RUNPOD_SSH_PRIVATE_KEY`
+to your private key path, with its matching OpenSSH public key at `<path>.pub`:
+
+```bash
+soup train --config soup.yaml --cloud runpod --gpu rtx4090 --cloud-submit
+```
+
+The local controller creates one Secure Cloud GPU Pod with TCP SSH access, installs
+the running Soup version, runs training over SSH and copies the configured relative
+output directory back before deleting the Pod. Choose a fresh local output path;
+existing outputs and symlink/junction paths are refused before allocation and
+rechecked before copying. The config is base64-embedded data;
+inline credential fields are refused. The API key and private SSH key remain local;
+only the public key enters the Pod environment. Models and datasets must be publicly
+accessible remotely: local input files and local credentials are not uploaded.
+
+Deletion runs in `finally` on training/copy failure, timeout and Ctrl+C, and polls
+until the API returns 404. The parent waits through interrupts so it does not kill
+the cleanup controller. A lost create response is reconciled by the unique run
+name, without repeating the create request or deleting unrelated Pods. Keep the
+controller running; force-killing it or losing API access can leave cleanup
+unconfirmed. An unconfirmed cleanup exits nonzero and names the run to check in
+the RunPod console. A single interrupted SSH training session is failed rather
+than retried, to avoid duplicate training. Artifacts are copied only after a
+successful training command; a failed copy still terminates the Pod.
+
+**Not yet live-validated.** Tests use local mocked API/SSH transports. The code
+PR does not include a paid run; provider execution, GPU behavior, retrieval and
+billing termination remain a separate live-validation task, per #264's ruling.
+API contract: [RunPod REST v1 OpenAPI](https://rest.runpod.io/v1/openapi.json),
+[SSH setup](https://docs.runpod.io/pods/configuration/use-ssh).
 
 ### Lambda Cloud
 
@@ -433,7 +464,7 @@ soup train --config soup.yaml --cloud lambda --gpu a100 --cloud-submit
 controller can copy the artifact back safely. The API key stays on the caller and is never embedded
 in cloud-init or instance logs.
 
-The Lambda submission path still requires the paid live-validation checklist in #264 before
+The Lambda submission path still requires the paid live-validation checklist in #1280 before
 it can be described as provider-validated. Plan-only rendering and the lifecycle boundaries are
 covered by offline tests.
 
