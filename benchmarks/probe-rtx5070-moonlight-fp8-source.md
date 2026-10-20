@@ -2,8 +2,9 @@
 
 Status: **FAIL (T2_max_step, T6_step_time)**, runs 2026-10-20 11:51Z-12:25Z. Both arms
 COMPLETE; T1, T3, T4 and T5 pass. Sections 1-3 and appendix A are the rule and the setup as
-committed in `62bc0331b` (branch `feat/moe-fp8-loss-check`, from `25c876f65`, the head of
-#2061) before either arm ran, and are unchanged. Section 4 is the run log and section 5 the
+committed in `62bc0331b` (branch `feat/moe-fp8-loss-check`, from `25c876f65`, then the head of
+#2061) before either arm ran, and are unchanged; after #2061 merged (as `32af390c`, with one
+later review commit) that commit was rebased onto main as `2efb4ca99`. Section 4 is the run log and section 5 the
 results. Sections 6 and 7 are analysis done AFTER the verdict and are not part of the rule:
 section 6 traces T6 to the drive's state, and section 7 discusses T2. Neither changes the
 verdict. No threshold was changed and no arm was re-run.
