@@ -92,13 +92,13 @@ class TestEnsureDistinctPaths:
             )
 
     @pytest.mark.skipif(os.name != "nt", reason="case-insensitive file system")
-    def test_case_variant_of_a_path_that_does_not_exist_yet_is_refused_on_windows():
+    def test_case_variant_of_a_path_that_does_not_exist_yet_is_refused_on_windows(self):
         with pytest.raises(ValueError):
             ensure_distinct_paths([("--logs", "Missing.jsonl")], [("--output", "missing.jsonl")])
 
 
     @pytest.mark.skipif(os.name != "nt", reason="case-insensitive file system")
-    def test_nested_case_variant_of_a_missing_directory_is_refused_on_windows():
+    def test_nested_case_variant_of_a_missing_directory_is_refused_on_windows(self):
         with pytest.raises(ValueError):
             ensure_distinct_paths(
                 [("--retriever-config output", "out/R1/stage")],
