@@ -13,15 +13,18 @@ REPLACED the resolved list with the helper's answer. So under ``stream_layers``:
 
 The replace was never a decision about streaming: #426 copied SFT's block from
 before #1590, when ``auto`` still meant ``None`` and there was no list to keep.
+(The helper keeps LIST targets only; a string target such as qwen4_exp's
+``"all-linear"`` is replaced by the MoE names on both paths, as before.)
 
 These tests drive the real streaming setup through the shared harness, with real
 tiny models as the probe, and compare what it builds with what the resident
 trainer sequence (``attach_preflight.trainer_lora_config``) builds for the same
-config.
+config. The VRAM forecast is checked against a real peft attach.
 """
 
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -30,9 +33,17 @@ torch = pytest.importorskip("torch")
 transformers = pytest.importorskip("transformers")
 pytest.importorskip("peft")
 
+from soup_cli.trainer.stream_setup import StreamingSetupMixin  # noqa: E402
+from soup_cli.utils.moe import get_moe_target_modules  # noqa: E402
 from soup_cli.utils.peft_wiring import resolve_lora_target_modules  # noqa: E402
 
 _REAL_RESOLVER = resolve_lora_target_modules
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text):
+    """ANSI stripped and whitespace collapsed: Rich colours and wraps at 80 columns."""
+    return " ".join(_ANSI_RE.sub("", text).split())
 
 
 def _tiny_deepseek_v3(q_lora_rank):
@@ -79,11 +90,35 @@ def _tiny_qwen3_5_moe():
     return transformers.Qwen3_5MoeForCausalLM(config)
 
 
+def _meta_deepseek_v3():
+    """DeepSeek-V3's own dimensions (7168 hidden, 256 routed experts), two layers
+    (one dense, one MoE), on the meta device: shapes without storage."""
+    config = transformers.DeepseekV3Config(num_hidden_layers=2, first_k_dense_replace=1)
+    with torch.device("meta"):
+        return transformers.DeepseekV3ForCausalLM(config)
+
+
+def _meta_qwen3_5_moe():
+    """Qwen3.5-MoE's default dimensions (2048 hidden, 256 experts), four layers
+    (three linear-attention, one full-attention), on the meta device."""
+    config = transformers.Qwen3_5MoeTextConfig(num_hidden_layers=4)
+    with torch.device("meta"):
+        return transformers.Qwen3_5MoeForCausalLM(config)
+
+
+#: label -> (what ``stream_arch_of`` reports for it, builder). Qwen3.5-MoE streams
+#: as ``qwen3``. qwen3_moe, OLMoE and Mixtral are not here because ``stream_arch_of``
+#: refuses them: streaming + moe_lora is reachable on deepseek_v3, Qwen3.5-MoE and
+#: qwen4_exp only.
 _BASES = {
     "deepseek_v3-q_lora_rank-int": ("deepseek_v3", lambda: _tiny_deepseek_v3(12)),
     "deepseek_v3-q_lora_rank-none": ("deepseek_v3", lambda: _tiny_deepseek_v3(None)),
-    "qwen3_5_moe": ("qwen3_5_moe", _tiny_qwen3_5_moe),
+    "qwen3_5_moe": ("qwen3", _tiny_qwen3_5_moe),
 }
+
+
+def _copy(targets):
+    return list(targets) if isinstance(targets, list) else targets
 
 
 def _lora(target_modules):
@@ -105,12 +140,16 @@ def _resident(model, lora, moe_lora=True):
     return targets
 
 
-def _streamed(tmp_path, monkeypatch, arch, model, lora, *, moe_lora=True, quantization="none"):
+def _streamed(
+    tmp_path, monkeypatch, arch, model, lora, *, moe_lora=True, quantization="none", calls=None
+):
     """The LoRA config kwargs the streaming setup hands ``build_streamed_model``.
 
     The probe the setup builds from ``cfg.base`` is the tiny real model, and its
     config is what ``AutoConfig`` returns, so the resolver and the MoE helper see a
     real architecture. Everything past them is the shared harness's stubs.
+    ``calls``, when a dict, receives every call the harness recorded (the VRAM
+    forecast's keyword arguments under "budget").
     """
     import soup_cli.trainer.stream_setup as stream_setup
     import soup_cli.utils.layer_stream_runtime as layer_stream_runtime
@@ -122,7 +161,7 @@ def _streamed(tmp_path, monkeypatch, arch, model, lora, *, moe_lora=True, quanti
         classmethod(lambda cls, *a, **k: probes.append(k) or model),
     )
     monkeypatch.setattr(layer_stream_runtime, "quantised_layer_suffixes", lambda _probe: ())
-    calls = {}
+    calls = {} if calls is None else calls
     _drive_qwen4_streaming_setup(
         tmp_path, monkeypatch, arch=arch, model_cfg=model.config, load_calls=calls,
         tcfg_overrides={"lora": lora, "moe_lora": moe_lora, "quantization": quantization},
@@ -132,13 +171,37 @@ def _streamed(tmp_path, monkeypatch, arch, model, lora, *, moe_lora=True, quanti
     return calls["build"][0]["lora_config"], probes
 
 
+def _attach_streamed(monkeypatch, model, streamed):
+    """The streamed LoRA kwargs, given to the real peft on the same model."""
+    kwargs = dict(vars(streamed))
+    monkeypatch.undo()  # the harness stubs peft and transformers; use the real ones
+    from peft import LoraConfig, get_peft_model
+
+    return get_peft_model(model, LoraConfig(**kwargs))
+
+
+def _adapted(attached):
+    """Module keys carrying an adapter, in the base model's own naming."""
+    from peft.tuners.tuners_utils import BaseTunerLayer
+
+    prefix = "base_model.model."
+    return {
+        name[len(prefix):] if name.startswith(prefix) else name
+        for name, module in attached.named_modules()
+        if isinstance(module, BaseTunerLayer)
+    }
+
+
+def _trainable(attached):
+    return sum(param.numel() for param in attached.parameters() if param.requires_grad)
+
+
 def _attention_projections(model):
-    """Every ``nn.Linear`` directly under an attention block, read off the model."""
+    """Every ``nn.Linear`` directly under a ``self_attn`` block, read off the model."""
     return {
         name
         for name, module in model.named_modules()
-        if isinstance(module, torch.nn.Linear)
-        and name.split(".")[-2:-1] in (["self_attn"], ["linear_attn"])
+        if isinstance(module, torch.nn.Linear) and name.split(".")[-2:-1] == ["self_attn"]
     }
 
 
@@ -176,7 +239,7 @@ class TestTheAttentionTargetsAreKept:
         """The names the replace dropped on Qwen3.5-MoE."""
         model = _tiny_qwen3_5_moe()
 
-        streamed, _probes = _streamed(tmp_path, monkeypatch, "qwen3_5_moe", model, _lora("auto"))
+        streamed, _probes = _streamed(tmp_path, monkeypatch, "qwen3", model, _lora("auto"))
 
         assert {"in_proj_qkv", "out_proj"} <= set(streamed.target_modules)
 
@@ -206,6 +269,22 @@ class TestAnExplicitListSurvives:
         targets = list(streamed.target_modules)
         assert targets[:2] == explicit, targets
         assert targets == list(resident)
+
+    @pytest.mark.parametrize("base", sorted(_BASES))
+    def test_a_name_both_lists_carry_appears_once(self, tmp_path, monkeypatch, base):
+        """Expected value built from the raw MoE list, not from the helper, so a
+        helper that stops de-duplicating fails here even though parity holds."""
+        arch, build = _BASES[base]
+        model = build()
+        explicit = ["o_proj", "gate_proj", "my_custom_proj"]
+        moe_names = get_moe_target_modules(model)
+        assert {"o_proj", "gate_proj"} <= set(moe_names), moe_names
+
+        streamed, _probes = _streamed(tmp_path, monkeypatch, arch, model, _lora(list(explicit)))
+
+        targets = list(streamed.target_modules)
+        assert len(targets) == len(set(targets)), targets
+        assert targets == explicit + [name for name in moe_names if name not in explicit]
 
     def test_the_user_list_is_not_mutated(self, tmp_path, monkeypatch):
         model = _tiny_deepseek_v3(12)
@@ -243,16 +322,42 @@ class TestTheSameHelperGetsTheSameInput:
 
         assert seen == [_REAL_RESOLVER(model.config, "auto")]
 
-    def test_nf4_with_moe_lora_is_the_union_too(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize(
+        "targets", ["auto", ["o_proj", "my_custom_proj"]], ids=["auto", "explicit"]
+    )
+    def test_nf4_with_moe_lora_is_the_union_too(self, tmp_path, monkeypatch, targets):
         """The NF4 branch builds the probe whether or not moe_lora is set."""
         model = _tiny_deepseek_v3(12)
-        resident = _resident(model, _lora("auto"))
+        resident = _resident(model, _lora(_copy(targets)))
 
         streamed, _probes = _streamed(
-            tmp_path, monkeypatch, "deepseek_v3", model, _lora("auto"), quantization="4bit"
+            tmp_path, monkeypatch, "deepseek_v3", model, _lora(_copy(targets)),
+            quantization="4bit",
         )
 
         assert list(streamed.target_modules) == list(resident)
+        if isinstance(targets, list):
+            assert list(streamed.target_modules)[: len(targets)] == targets
+
+
+class TestTheUnionIsAnnounced:
+    @pytest.mark.parametrize("quantization", ["none", "4bit"])
+    def test_the_line_names_what_attaches(self, tmp_path, monkeypatch, capsys, quantization):
+        """What the user reads before the run: the union's size and the fused
+        expert parameters, printed by the helper when it is handed the console."""
+        model = _tiny_deepseek_v3(12)
+
+        streamed, _probes = _streamed(
+            tmp_path, monkeypatch, "deepseek_v3", model, _lora("auto"),
+            quantization=quantization,
+        )
+
+        fused = list(streamed.target_parameters)
+        expected = (
+            f"ScatterMoE LoRA: targeting {len(streamed.target_modules)} module patterns "
+            f"and {len(fused)} fused expert parameter(s): {', '.join(fused)}"
+        )
+        assert expected in _plain(capsys.readouterr().out)
 
 
 class TestWithoutMoeLoraNothingChanges:
@@ -273,28 +378,158 @@ class TestWithoutMoeLoraNothingChanges:
 
 class TestTheStreamedConfigAttaches:
     @pytest.mark.parametrize("q_lora_rank", [12, None], ids=["q_lora_rank-int", "q_lora_rank-none"])
-    def test_every_attention_projection_and_the_experts_are_adapted(
+    def test_deepseek_v3_every_attention_projection_and_the_experts(
         self, tmp_path, monkeypatch, q_lora_rank
     ):
-        """The streamed kwargs, given to the real peft on the same model."""
         model = _tiny_deepseek_v3(q_lora_rank)
         expected = _attention_projections(model)
         assert expected, "the probe found no attention projection"
 
         streamed, _probes = _streamed(tmp_path, monkeypatch, "deepseek_v3", model, _lora("auto"))
-        kwargs = dict(vars(streamed))
-        monkeypatch.undo()  # the harness stubs peft and transformers; use the real ones
-
-        from peft import LoraConfig, get_peft_model
-        from peft.tuners.tuners_utils import BaseTunerLayer
-
-        attached = get_peft_model(model, LoraConfig(**kwargs))
-        prefix = "base_model.model."
-        adapted = {
-            name[len(prefix):] if name.startswith(prefix) else name
-            for name, module in attached.named_modules()
-            if isinstance(module, BaseTunerLayer)
-        }
+        adapted = _adapted(_attach_streamed(monkeypatch, model, streamed))
 
         assert expected <= adapted, sorted(expected - adapted)
         assert any(".mlp.experts" in name for name in adapted), sorted(adapted)
+
+    def test_qwen3_5_moe_both_attention_kinds_and_the_experts(self, tmp_path, monkeypatch):
+        """A tiny real Qwen3.5-MoE builds on CPU in well under a second."""
+        model = _tiny_qwen3_5_moe()
+        expected = {
+            "model.layers.0.linear_attn.in_proj_qkv",
+            "model.layers.0.linear_attn.out_proj",
+            *(
+                f"model.layers.1.self_attn.{name}"
+                for name in ("q_proj", "k_proj", "v_proj", "o_proj")
+            ),
+        }
+
+        streamed, _probes = _streamed(tmp_path, monkeypatch, "qwen3", model, _lora("auto"))
+        adapted = _adapted(_attach_streamed(monkeypatch, model, streamed))
+
+        assert expected <= adapted, sorted(expected - adapted)
+        assert any(".mlp.experts" in name for name in adapted), sorted(adapted)
+
+
+#: Bases the forecast is checked on. The tiny Qwen3.5-MoE is absent on purpose:
+#: its attention keeps the default head sizes (q_proj 32 -> 1024), so the
+#: estimator's hidden x hidden assumption is ~7x short there, before and after
+#: this change. At Qwen3.5-MoE's own dimensions the routed experts dominate and the
+#: forecast is high, which is the meta case below.
+_FORECAST_BASES = {
+    "tiny-deepseek_v3-q_lora_rank-int": ("deepseek_v3", lambda: _tiny_deepseek_v3(12)),
+    "tiny-deepseek_v3-q_lora_rank-none": ("deepseek_v3", lambda: _tiny_deepseek_v3(None)),
+    "deepseek_v3-real-dims-meta": ("deepseek_v3", _meta_deepseek_v3),
+    "qwen3_5_moe-real-dims-meta": ("qwen3", _meta_qwen3_5_moe),
+}
+
+
+def _forecast(lora, model, targets, *, moe_lora=True):
+    tcfg = SimpleNamespace(moe_lora=moe_lora, lora=lora)
+    return StreamingSetupMixin._estimate_adapter_params(
+        None, tcfg, model.config, target_modules=targets
+    )
+
+
+class TestTheVramForecastCountsWhatAttaches:
+    """``_estimate_adapter_params`` documents one tolerance: it is "deliberately
+    coarse and biased HIGH" (every target taken as hidden x hidden), never below
+    what attaches, because the adapter term is ~0.5% of a streamed step's peak and
+    an under-count eats the safety margin. No upper bound is documented; the 3x
+    below is this file's own, to catch a runaway count. Measured: 2.1-2.4x on the
+    tiny DeepSeek-V3, 1.80x at DeepSeek-V3's dimensions, 1.45x at Qwen3.5-MoE's."""
+
+    def test_the_forecast_is_handed_the_attached_targets(self, tmp_path, monkeypatch):
+        model = _tiny_deepseek_v3(12)
+        calls = {}
+
+        streamed, _probes = _streamed(
+            tmp_path, monkeypatch, "deepseek_v3", model, _lora(["o_proj"]), calls=calls
+        )
+
+        assert len(calls["budget"]) == 1
+        handed = calls["budget"][0]["target_modules"]
+        assert list(handed) == list(streamed.target_modules)
+        assert list(handed.target_parameters) == list(streamed.target_parameters)
+
+    def test_the_budget_charges_the_targets_it_is_handed(self, monkeypatch):
+        """The real ``_stream_budget_lines`` (the harness stubs it) passes the
+        targets on: the peak forecast's adapter term is the union's count."""
+        from soup_cli.utils import layer_stream
+
+        model = _tiny_deepseek_v3(12)
+        lora = _lora(["o_proj"])
+        targets = _resident(model, lora)
+        seen = {}
+        real = layer_stream.estimate_stream_peak_vram
+
+        def _capture(**kwargs):
+            seen.update(kwargs)
+            return real(**kwargs)
+
+        monkeypatch.setattr(layer_stream, "estimate_stream_peak_vram", _capture)
+        tcfg = SimpleNamespace(
+            batch_size=1, stream_buffers=2, stream_vram_probe=False,
+            stream_nf4_scale_cache=False, moe_lora=True, lora=lora,
+        )
+        StreamingSetupMixin()._stream_budget_lines(
+            SimpleNamespace(data=SimpleNamespace(max_length=4)),
+            tcfg,
+            model_config=model.config,
+            layer_bytes=1000,
+            embed_bytes=0,
+            index=SimpleNamespace(
+                n_layers=2, quant_specs={}, dtype="float32", expert_layout="", expert_shapes={}
+            ),
+            on_cuda=False,
+            target_modules=targets,
+        )
+
+        assert seen["adapter_params"] == _forecast(lora, model, targets)
+        assert seen["adapter_params"] > _forecast(lora, model, None)
+
+    @pytest.mark.parametrize("targets", ["auto", ["o_proj"]], ids=["auto", "explicit-o_proj"])
+    @pytest.mark.parametrize("base", sorted(_FORECAST_BASES))
+    def test_the_forecast_is_not_below_the_attached_adapter(
+        self, tmp_path, monkeypatch, base, targets
+    ):
+        """``['o_proj']`` was charged ONE target per layer while ``moe_lora``
+        attached the union plus every routed expert."""
+        arch, build = _FORECAST_BASES[base]
+        model = build()
+        lora = _lora(_copy(targets))
+        calls = {}
+
+        streamed, _probes = _streamed(tmp_path, monkeypatch, arch, model, lora, calls=calls)
+        forecast = _forecast(lora, model, calls["budget"][0]["target_modules"])
+        trainable = _trainable(_attach_streamed(monkeypatch, model, streamed))
+
+        assert trainable <= forecast <= 3 * trainable, (forecast, trainable)
+
+    def test_a_list_holding_the_auto_names_is_charged_at_least_auto(self, tmp_path, monkeypatch):
+        """A list that attaches everything ``auto`` does, and more, cannot be
+        charged less. (A shorter list such as ``['o_proj']`` attaches less than
+        ``auto`` -- measured 1600 vs 2256 parameters here -- so it is charged less.)"""
+        model = _tiny_deepseek_v3(12)
+        auto = list(_REAL_RESOLVER(model.config, "auto"))
+        charged = {}
+        for label, targets in (("auto", "auto"), ("superset", auto + ["my_custom_proj"])):
+            root = tmp_path / label
+            root.mkdir()
+            lora = _lora(targets)
+            calls = {}
+            _streamed(root, monkeypatch, "deepseek_v3", model, lora, calls=calls)
+            charged[label] = _forecast(lora, model, calls["budget"][0]["target_modules"])
+
+        assert charged["superset"] >= charged["auto"], charged
+
+    @pytest.mark.parametrize("targets", ["auto", ["o_proj"]], ids=["auto", "explicit-o_proj"])
+    def test_without_moe_lora_the_forecast_is_unchanged(self, targets):
+        """Only moe_lora's union is charged from the resolved list; without it the
+        configured value is counted exactly as before."""
+        model = _tiny_deepseek_v3(12)
+        lora = _lora(_copy(targets))
+        resolved = _REAL_RESOLVER(model.config, lora.target_modules)
+
+        assert _forecast(lora, model, resolved, moe_lora=False) == _forecast(
+            lora, model, None, moe_lora=False
+        )

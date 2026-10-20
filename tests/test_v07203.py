@@ -1015,7 +1015,7 @@ class TestIssue617PanelDtype:
                 return 128
 
             @staticmethod
-            def _estimate_adapter_params(tcfg, model_config):
+            def _estimate_adapter_params(tcfg, model_config, target_modules=None):
                 return 0
 
         setup = object.__new__(_Setup)

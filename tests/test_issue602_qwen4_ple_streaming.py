@@ -722,7 +722,8 @@ def _drive_qwen4_streaming_setup(
     (`tests/test_deepseek_v3_streaming.py`); `shard_calls`, when a list, receives
     the keyword arguments of every `shard_checkpoint` call; `load_calls`, when a
     dict, receives the keyword arguments of the tokenizer, config and
-    `build_streamed_model` calls under "tokenizer", "config" and "build";
+    `build_streamed_model` calls under "tokenizer", "config" and "build", and
+    those of the (stubbed) VRAM forecast `_stream_budget_lines` under "budget";
     `tcfg_overrides`, when a dict, sets extra training-config attributes;
     `disk_kind` is what the stubbed `resolve_disk_kind` reports; `disk_calls`,
     when a list, receives the (path, override) of every call to it;
@@ -744,7 +745,8 @@ def _drive_qwen4_streaming_setup(
             self.device = "cpu"
             self._trust_remote_code = trust_remote_code
 
-        def _stream_budget_lines(self, *_args, **_kwargs):
+        def _stream_budget_lines(self, *_args, **kwargs):
+            _record(load_calls, "budget", kwargs)
             return (), None
 
     cfg = types.SimpleNamespace(
