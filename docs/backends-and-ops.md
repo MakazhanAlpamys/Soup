@@ -117,7 +117,7 @@ training:
     alpha: 32
 ```
 
-MLX backend supports SFT and DPO. Any other task with `backend: mlx` (`grpo`, `ipo`, `kto`, ...) is refused when the config is loaded, with an error naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for ready-made Apple Silicon configs.
+MLX backend supports SFT, DPO and ORPO. Any other task with `backend: mlx` (`grpo`, `ipo`, `kto`, `simpo`, `preference`, ...) is refused when the config is loaded, with an error naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for ready-made Apple Silicon configs.
 
 #### DPO on MLX
 
@@ -153,6 +153,64 @@ training:
 - **Progress.** The panel and `soup ui` show loss and validation loss. Reward accuracy and margin print per logged step when there is no live panel, and are returned in the run result; the reference precompute prints its progress before the panel starts.
 - **Refused at load:** `modality: vision` / `audio` (MLX DPO trains on text and chat rows) and `training.lora.r: 0` (the reference is the untrained LoRA policy, so an adapter must exist), plus `dpo_beta_schedule` / `dpo_ref_regen_epochs` and LoRA+.
 - **Not applied on MLX:** `data.chat_template`, per-row `tools` / `chat_template_kwargs` columns (TRL reads them; MLX DPO renders with the model's own template and nothing else), NEFTune, Liger, FlashAttention and the other CUDA-path options MLX SFT also warns about.
+
+#### ORPO on MLX
+
+`task: orpo` with `backend: mlx` runs the same loop as MLX DPO with ORPO's
+objective, matched to TRL 0.29.1's ORPO trainer (the one the transformers
+backend runs): the mean log-probability of each completion, the stable
+odds-ratio term `log_odds = (a - b) - (log(1 - e^a) - log(1 - e^b))`, and
+`loss = chosen NLL - orpo_beta * mean(logsigmoid(log_odds))`, where the NLL is a
+token mean over the whole chosen sequence, prompt included. There is no
+reference model and nothing is precomputed.
+
+```yaml
+base: mlx-community/Qwen2.5-0.5B-Instruct-4bit
+task: orpo
+backend: mlx
+
+data:
+  train: ./prefs.jsonl
+  format: dpo
+  max_length: 1024
+
+training:
+  lr: 5e-5
+  orpo_beta: 0.1
+  batch_size: 2
+  gradient_accumulation_steps: 4
+  gradient_checkpointing: true
+  quantization: 4bit
+  lora:
+    r: 16
+    alpha: 32
+```
+
+- **Tokens.** Rows are read by the `format: dpo` converter and tokenized as
+  TRL's ORPO trainer does: rendered to text with the chat template (keeping
+  only the prefix the prompt and `prompt + answer` renderings share), the
+  answer located even when the tokenizer merges the last prompt token into it,
+  BOS prepended and EOS appended when missing. Over-long rows are cut as on the
+  transformers backend (prompt to `max_length // 2`, keeping its end, answers to
+  the remaining room); TRL's own earlier answer cut, which can leave the shorter
+  answer empty, is not reproduced. A pair the template cannot split is skipped
+  with a count; a row with no room for an answer is refused.
+- **Ties train.** A pair whose `chosen` equals its `rejected` is kept, as in
+  TRL: its odds-ratio term is the constant `log 2` and the NLL still learns.
+- **Stops on a nonfinite loss** instead of training on NaN.
+- **Reported:** loss, NLL, log-odds ratio, mean log-odds, reward accuracy and
+  margin (`orpo_beta * logp`, as TRL logs them), per logged step and in the run
+  result (`val_*` for the validation split).
+- **Saved:** `adapters.safetensors` and `adapter_config.json` (with `task:
+  orpo`, `orpo_beta` and the base model), loadable with
+  `mlx_lm.load(base, adapter_path=output)`, both written atomically and the
+  metadata before the first step. `--resume` refuses a checkpoint without that
+  metadata, from another task, or from another base, before any tensor loads.
+- **Refused at load:** `quantization: 8bit` (use `none`, or a pre-quantized
+  4-bit base with `quantization: 4bit`), `training.lora.r: 0`, non-text
+  `modality`, LoRA+, and `task: preference` with `preference_loss: orpo` on
+  `backend: mlx` (use `task: orpo`). The other settings MLX DPO does not apply
+  are not applied here either.
 
 #### DoRA on MLX
 
@@ -215,7 +273,7 @@ what ran is recoverable from the output directory.
 
 ### Transformers on MPS
 
-The regular `backend: transformers` path can run more than MLX's SFT and DPO
+The regular `backend: transformers` path can run more than MLX's SFT, DPO and ORPO
 surface. On a live MPS runtime that accepts bfloat16, Soup enables BF16 autocast
 for the hardware-validated text trainers: SFT, DPO, GRPO/RLVR, reward modelling,
 and PRM.

@@ -4902,7 +4902,7 @@ UNSLOTH_SETUP_TASKS: frozenset[str] = frozenset({
 #: The tasks with a trainer on ``backend: mlx``: SFT through mlx-lm's tuner and
 #: DPO through Soup's own loop (``trainer/mlx_dpo.py``). Validators that defer
 #: to :meth:`SoupConfig._validate_mlx_task_support` read this, not ``"sft"``.
-MLX_TASKS: frozenset[str] = frozenset({"sft", "dpo"})
+MLX_TASKS: frozenset[str] = frozenset({"sft", "dpo", "orpo"})
 
 #: #1497 — the tasks whose trainer reads ``training.freeze_layers`` /
 #: ``training.freeze_ratio``: ``SFTTrainerWrapper._setup_transformers``, which
@@ -8195,36 +8195,52 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_mlx_task_support(self) -> "SoupConfig":
-        """MLX backend supports sft and dpo.
+        """MLX backend supports sft, dpo and orpo.
 
-        SFT runs through mlx-lm's tuner; DPO through Soup's own loop in
-        ``trainer/mlx_dpo.py``. Every other task -- GRPO included, whose MLX
-        wrapper is still scaffolding -- is refused here rather than at
+        SFT runs through mlx-lm's tuner; DPO and ORPO through Soup's own loop
+        in ``trainer/mlx_dpo.py`` / ``trainer/mlx_orpo.py``. Every other task --
+        GRPO included, whose MLX wrapper is still scaffolding -- is refused here
+        rather than at
         ``train()`` time.
         """
         if self.backend != "mlx":
             return self
-        if self.task == "dpo":
-            # MLX DPO tokenizes text and chat rows only, and takes its reference
-            # log-probs from the policy before training, which is the base
-            # model only because a LoRA adapter's B starts at zero.
+        if self.task in ("dpo", "orpo"):
+            # The native preference loops tokenize text and chat rows only and
+            # train a LoRA adapter. DPO's reference log-probs come from the
+            # policy before training, which is the base model only because a
+            # LoRA adapter's B starts at zero; ORPO trains LoRA only (no full
+            # fine-tune on MLX yet).
+            name = self.task.upper()
             if self.modality != "text":
                 raise ValueError(
-                    f"modality='{self.modality}' is not supported by task='dpo' on "
-                    "backend='mlx': MLX DPO trains on text and chat rows only. "
+                    f"modality='{self.modality}' is not supported by task='{self.task}' "
+                    f"on backend='mlx': MLX {name} trains on text and chat rows only. "
                     "Use backend=transformers, or modality: text."
                 )
             if int(self.training.lora.r) < 1:
+                why = (
+                    "the reference model is the untrained LoRA policy, which needs "
+                    "a LoRA adapter to exist"
+                    if self.task == "dpo"
+                    else "MLX ORPO trains a LoRA adapter; full fine-tuning is not "
+                    "implemented on backend='mlx'"
+                )
                 raise ValueError(
-                    "training.lora.r must be at least 1 for task='dpo' on "
-                    "backend='mlx': the reference model is the untrained LoRA "
-                    "policy, which needs a LoRA adapter to exist."
+                    f"training.lora.r must be at least 1 for task='{self.task}' on "
+                    f"backend='mlx': {why}."
+                )
+            if self.task == "orpo" and self.training.quantization == "8bit":
+                raise ValueError(
+                    "training.quantization='8bit' is not supported by task='orpo' on "
+                    "backend='mlx': use quantization: none, or a pre-quantized "
+                    "mlx-community 4-bit base with quantization: 4bit."
                 )
             return self
         if self.task in MLX_TASKS:
             return self
         raise ValueError(
-            f"MLX backend only ships SFT and DPO; task='{self.task}' has no "
+            f"MLX backend only ships SFT, DPO and ORPO; task='{self.task}' has no "
             "trainer on backend='mlx'. "
             f"Use backend=transformers for task={self.task}."
         )

@@ -356,7 +356,8 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
             unsupported.append("quantization=8bit (use mlx-community 4bit models)")
         if self.config.data.chat_template:
             unsupported.append(
-                "data.chat_template (MLX DPO renders with the model's own template)"
+                f"data.chat_template (MLX {self.objective} renders with the model's own "
+                "template)"
             )
         for name, label in (
             ("use_galore", "GaLore"),
@@ -399,23 +400,18 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
         examples, ties, unstable = [], 0, []
         for index, row in enumerate(rows):
             try:
-                examples.append(
-                    build_preference_example(
-                        row,
-                        self.tokenizer,
-                        max_length=max_length,
-                        max_prompt_length=max_length // 2,
-                    )
-                )
+                examples.append(self._build_example(row, max_length))
             except IdenticalPairError:
                 ties += 1
             except PrefixUnstableError:
                 unstable.append(index)
             except PreferenceRowError as exc:
-                raise PreferenceRowError(f"dpo {split} row {index}: {exc}") from exc
+                raise PreferenceRowError(
+                    f"{self.objective.lower()} {split} row {index}: {exc}"
+                ) from exc
         if unstable:
             console.print(
-                f"[yellow]MLX DPO: skipped {len(unstable)} {split} row(s) whose "
+                f"[yellow]MLX {self.objective}: skipped {len(unstable)} {split} row(s) whose "
                 "completion could not be located (the chat template or tokenizer "
                 "renders the prompt differently once a completion follows; first: "
                 f"row {unstable[0]})[/]"
@@ -468,24 +464,96 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
         if split is None or not sample:
             if split is None:
                 console.print(
-                    "[yellow]MLX DPO: computing log-probs over the full vocabulary "
+                    f"[yellow]MLX {self.objective}: computing log-probs over the full vocabulary "
                     "for every position (no frozen vocab head found); long "
                     "sequences need more memory[/]"
                 )
             return split
         self.model.eval()
-        tokens, mask = self._to_arrays(sample)
+        tokens, mask = self._verification_arrays(sample)
         full = sequence_logps(self.model, tokens, mask)
         chunked = sequence_logps(self.model, tokens, mask, head_split=split)
         same = mx.allclose(full, chunked, rtol=1e-3, atol=1e-2).item()
         self.model.train()
         if not same:
             console.print(
-                "[yellow]MLX DPO: this architecture changes logits after the vocab "
+                f"[yellow]MLX {self.objective}: this architecture changes logits after the vocab "
                 "head; using the full-vocabulary path (more memory)[/]"
             )
             return None
         return split
+
+    # -- loop -------------------------------------------------------------
+
+    # -- objective hooks --------------------------------------------------
+    #
+    # The loop below is shared by every native preference objective on MLX
+    # (DPO here, ORPO in mlx_orpo.py). A subclass changes the tokenized
+    # example, the arrays a batch needs, what is prepared before the first
+    # update, the loss and its metrics -- nothing else.
+
+    #: Name used in messages and the adapter metadata.
+    objective = "DPO"
+    #: Metrics ``_loss`` returns, in report order; all are batch means.
+    metric_names: tuple = ("reward_accuracy", "reward_margin")
+
+    #: An objective whose loss has no finite value on some inputs (ORPO's
+    #: log1mexp at a mean log-prob of 0) stops the run instead of training on
+    #: NaN. DPO keeps its documented behaviour: a diverged run reports NaN.
+    fail_on_nonfinite = False
+
+    def _build_example(self, row: dict, max_length: int) -> Any:
+        return build_preference_example(
+            row, self.tokenizer, max_length=max_length, max_prompt_length=max_length // 2,
+        )
+
+    def _batch_arrays(self, examples: list) -> tuple:
+        return self._to_arrays(examples)
+
+    def _verification_arrays(self, examples: list) -> tuple:
+        """``(tokens, completion mask)`` for the head-split check."""
+        return self._to_arrays(examples)
+
+    def _check_finite(self, loss: Any, split: str) -> None:
+        import math as _math
+
+        value = loss.item()
+        if self.fail_on_nonfinite and not _math.isfinite(value):
+            raise FloatingPointError(
+                f"MLX {self.objective}: nonfinite loss ({value}) on the {split} split; "
+                "lower training.lr or check the rows"
+            )
+
+    def _prepare_objective(self, train_examples: list, val_examples: list,
+                           batch_size: int) -> None:
+        """Run before the checkpoint loads: DPO's reference is the base model."""
+        self._ref = {"train": self._reference_logps(train_examples, batch_size)}
+        if val_examples:
+            self._ref["val"] = self._reference_logps(val_examples, batch_size)
+
+    def _loss(self, model: Any, arrays: tuple, split: str, rows: Any) -> tuple:
+        tokens, mask = arrays
+        ref_chosen, ref_rejected = (r[rows] for r in self._ref[split])
+        logps = sequence_logps(model, tokens, mask, head_split=self._head_split)
+        half = ref_chosen.shape[0]
+        return dpo_loss(
+            logps[:half], logps[half:], ref_chosen, ref_rejected,
+            float(self.config.training.dpo_beta),
+        )
+
+    def _format_metrics(self, metrics: dict) -> str:
+        return (
+            f"reward acc {metrics['reward_accuracy']:.2f}, "
+            f"margin {metrics['reward_margin']:.4f}"
+        )
+
+    def _objective_metadata(self) -> dict:
+        return {
+            "task": "dpo",
+            "dpo_beta": float(self.config.training.dpo_beta),
+            "dpo_loss_type": "sigmoid",
+            "reference": "precomputed from the base model",
+        }
 
     # -- loop -------------------------------------------------------------
 
@@ -500,6 +568,7 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
 
         cfg = self.config
         tcfg = cfg.training
+        name = self.objective
         if self.model is None or self.tokenizer is None:
             raise RuntimeError("MLX backend: setup(dataset) must be called before train()")
 
@@ -513,19 +582,18 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
         output_dir.mkdir(parents=True, exist_ok=True)
         batch_size = int(tcfg.batch_size) if isinstance(tcfg.batch_size, int) else 1
         accum = max(1, int(tcfg.gradient_accumulation_steps))
-        beta = float(tcfg.dpo_beta)
 
         train_examples, train_ties = self._examples(list(self._dataset.get("train", [])))
         val_examples, val_ties = self._examples(list(self._dataset.get("val", [])), "val")
         skipped = train_ties + val_ties
         if skipped:
             console.print(
-                f"[yellow]MLX DPO: skipped {skipped} dpo row(s) with identical "
-                "chosen and rejected (a tie carries no preference signal)[/]"
+                f"[yellow]MLX {name}: skipped {skipped} {name.lower()} row(s) with "
+                "identical chosen and rejected (a tie carries no preference signal)[/]"
             )
         if len(train_examples) < batch_size:
             raise ValueError(
-                f"MLX DPO: {len(train_examples)} training pair(s) remain, fewer than "
+                f"MLX {name}: {len(train_examples)} training pair(s) remain, fewer than "
                 f"training.batch_size ({batch_size})"
                 + (f", after skipping {train_ties} tie(s)" if train_ties else "")
                 + f". Lower training.batch_size to at most {max(1, len(train_examples))} "
@@ -548,10 +616,7 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
         self._head_split = self._verified_head_split(train_examples[:batch_size])
 
         # Before any adapter weights move: this is the base model.
-        ref_train = self._reference_logps(train_examples, batch_size)
-        ref_val = (
-            self._reference_logps(val_examples, batch_size) if val_examples else None
-        )
+        self._prepare_objective(train_examples, val_examples, batch_size)
         if resume_from_checkpoint is not None:
             self._load_checkpoint_weights(resume_from_checkpoint)
 
@@ -569,39 +634,47 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
             build_optimizer(optimizer_plan), float(tcfg.max_grad_norm)
         )
 
-        def loss_fn(model, tokens, mask, ref_chosen, ref_rejected):
-            logps = sequence_logps(model, tokens, mask, head_split=self._head_split)
-            half = ref_chosen.shape[0]
-            loss, metrics = dpo_loss(
-                logps[:half], logps[half:], ref_chosen, ref_rejected, beta
-            )
-            return loss, metrics
+        def loss_fn(model, arrays, rows):
+            return self._loss(model, arrays, "train", rows)
 
         loss_and_grad = nn.value_and_grad(self.model, loss_fn)
+        names = self.metric_names
 
         def evaluate() -> Optional[dict]:
             if not val_examples:
                 return None
             self.model.eval()
-            losses, accs = [], []
+            total = {"loss": 0.0, **{k: 0.0 for k in names}}
             for start in range(0, len(val_examples), batch_size):
                 chunk = val_examples[start : start + batch_size]
-                tokens, mask = self._to_arrays(chunk)
-                end = start + len(chunk)
-                loss, metrics = loss_fn(
-                    self.model, tokens, mask, ref_val[0][start:end], ref_val[1][start:end]
-                )
-                mx.eval(loss, metrics["reward_accuracy"])
-                losses.append(loss.item() * len(chunk))
-                accs.append(metrics["reward_accuracy"].item() * len(chunk))
+                arrays = self._batch_arrays(chunk)
+                rows = mx.arange(start, start + len(chunk))
+                loss, metrics = self._loss(self.model, arrays, "val", rows)
+                mx.eval(loss, *(metrics[k] for k in names))
+                self._check_finite(loss, "val")
+                # Weighted by the chunk's size: a partial last chunk counts
+                # for its rows, not as a whole batch.
+                total["loss"] += loss.item() * len(chunk)
+                for k in names:
+                    total[k] += metrics[k].item() * len(chunk)
             self.model.train()
-            return {
-                "val_loss": sum(losses) / len(val_examples),
-                "val_reward_accuracy": sum(accs) / len(val_examples),
-            }
+            out = {"val_loss": total["loss"] / len(val_examples)}
+            out.update({f"val_{k}": total[k] / len(val_examples) for k in names})
+            return out
 
         def save(path: Path) -> None:
-            mx.save_safetensors(str(path), dict(tree_flatten(self.model.trainable_parameters())))
+            # Written beside the target and renamed into place: a crash mid-write
+            # never leaves a complete-looking adapter file.
+            partial = path.with_name(path.stem + ".partial.safetensors")
+            mx.save_safetensors(str(partial), dict(tree_flatten(self.model.trainable_parameters())))
+            partial.replace(path)
+
+        # Written now as well as at the end, so a step checkpoint of a run that
+        # stops early still sits beside the metadata `--resume` checks.
+        self._write_adapter_config(
+            output_dir, batch_size=batch_size, iters=iters, accum=accum,
+            optimizer_plan=optimizer_plan, seed=seed, data_seed=data_seed,
+        )
 
         save_steps = int(getattr(tcfg, "save_steps", 0) or 0)
         logging_steps = max(1, int(getattr(tcfg, "logging_steps", 10) or 10))
@@ -614,31 +687,29 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
 
         self.model.train()
         grads = None
-        group_loss = group_acc = group_margin = 0.0
+        group = {"loss": 0.0, **{k: 0.0 for k in names}}
         t0 = tic = time.time()
         try:
             for it, batch in enumerate(plan, start=1):
                 chunk = [train_examples[i] for i in batch]
-                tokens, mask = self._to_arrays(chunk)
-                idx = mx.array(batch)
-                (loss, metrics), step_grads = loss_and_grad(
-                    self.model, tokens, mask, ref_train[0][idx], ref_train[1][idx]
-                )
+                arrays = self._batch_arrays(chunk)
+                (loss, metrics), step_grads = loss_and_grad(self.model, arrays, mx.array(batch))
                 grads = (
                     step_grads
                     if grads is None
                     else tree_map(lambda a, b: a + b, grads, step_grads)
                 )
-                mx.eval(loss, metrics["reward_accuracy"], metrics["reward_margin"], grads)
+                mx.eval(loss, *(metrics[k] for k in names), grads)
                 # mlx-lm's default (`clear_cache_threshold: 0`): free the
                 # allocator cache every iteration. Batches have a new padded
                 # width almost every step, so cached buffers rarely fit the
                 # next one; kept, they grew the process to ~40 GB on a run
                 # whose largest step needs under 4 GB.
                 _clear_allocator_cache()
-                group_loss += loss.item()
-                group_acc += metrics["reward_accuracy"].item()
-                group_margin += metrics["reward_margin"].item()
+                self._check_finite(loss, "train")
+                group["loss"] += loss.item()
+                for k in names:
+                    group[k] += metrics[k].item()
 
                 # Counted in iterations, as mlx-lm's `steps_per_save` is for MLX
                 # SFT, so the file names line up with `--resume auto`. Checked
@@ -655,10 +726,9 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
                 mx.eval(self.model.parameters(), optimizer.state)
                 grads = None
                 update = it // accum
-                step_loss = group_loss / accum
-                losses.append(step_loss)
-                reward_acc, margin = group_acc / accum, group_margin / accum
-                group_loss = group_acc = group_margin = 0.0
+                step = {k: v / accum for k, v in group.items()}
+                losses.append(step["loss"])
+                group = {k: 0.0 for k in group}
 
                 # Evaluate once per epoch: when this update crossed an epoch
                 # boundary, or on the last update.
@@ -674,8 +744,8 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
                     self._report(
                         display, tracker, run_id,
                         step=it, epoch=it / iters * epochs,
-                        loss=step_loss, lr=self._current_lr(optimizer, tcfg.lr),
-                        speed=speed, reward_acc=reward_acc, margin=margin, val=val,
+                        loss=step["loss"], lr=self._current_lr(optimizer, tcfg.lr),
+                        speed=speed, metrics=step, val=val,
                     )
 
         finally:
@@ -700,7 +770,7 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
         }
         if final_eval is not None:
             result.update(final_eval)
-        console.print(f"[green]MLX DPO training complete:[/] {output_dir}")
+        console.print(f"[green]MLX {name} training complete:[/] {output_dir}")
         return result
 
     # -- helpers ----------------------------------------------------------
@@ -712,9 +782,8 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
         except (TypeError, ValueError, AttributeError):
             return float(fallback)
 
-    @staticmethod
-    def _report(display, tracker, run_id, *, step, epoch, loss, lr, speed,
-                reward_acc, margin, val) -> None:
+    def _report(self, display, tracker, run_id, *, step, epoch, loss, lr, speed,
+                metrics, val) -> None:
         val_loss = val["val_loss"] if val else None
         try:
             import mlx.core as mx
@@ -729,15 +798,11 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
                 gpu_mem=gpu_mem, val_loss=val_loss,
             )
         else:
-            msg = (
-                f"step {step}: loss {loss:.4f}, reward acc {reward_acc:.2f}, "
-                f"margin {margin:.4f}"
-            )
+            msg = f"step {step}: loss {loss:.4f}, {self._format_metrics(metrics)}"
             if val:
-                msg += (
-                    f", val loss {val['val_loss']:.4f}, "
-                    f"val reward acc {val['val_reward_accuracy']:.2f}"
-                )
+                msg += f", val loss {val['val_loss']:.4f}"
+                if "val_reward_accuracy" in val:
+                    msg += f", val reward acc {val['val_reward_accuracy']:.2f}"
             console.print(f"[dim]{msg}[/]")
         if tracker is not None and run_id:
             try:
@@ -767,9 +832,11 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
 
     def _write_adapter_config(self, output_dir: Path, *, batch_size, iters, accum,
                               optimizer_plan, seed, data_seed) -> None:
-        """The same loadable shape MLX SFT writes, plus what DPO ran with."""
+        """The same loadable shape MLX SFT writes, plus what the objective ran with."""
         cfg = self.config
-        (output_dir / "adapter_config.json").write_text(
+        target = output_dir / "adapter_config.json"
+        partial = output_dir / "adapter_config.json.partial"
+        partial.write_text(
             json.dumps(
                 {
                     "fine_tune_type": "lora",
@@ -786,13 +853,11 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
                     "grad_accumulation_steps": accum,
                     **optimizer_plan.as_metadata(),
                     "max_grad_norm": float(cfg.training.max_grad_norm),
-                    "task": "dpo",
-                    "dpo_beta": float(cfg.training.dpo_beta),
-                    "dpo_loss_type": "sigmoid",
-                    "reference": "precomputed from the base model",
+                    **self._objective_metadata(),
                     "seed": seed,
                     "data_seed": data_seed,
                 },
                 indent=2,
             )
         )
+        partial.replace(target)
