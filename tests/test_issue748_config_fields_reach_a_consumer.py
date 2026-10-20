@@ -399,7 +399,8 @@ KNOWN_UNCONSUMED = {
                                     "(convergence-detector staging)",
     "training.forgetting_eval_steps": "#808 -- warns at load from v0.76, refused as of v0.77 "
                                       "(catastrophic-forgetting probe staging)",
-    "training.forgetting_threshold": "#799 -- staged catastrophic-forgetting threshold; "
+    "training.forgetting_threshold": "#799 / #1814 -- staged catastrophic-forgetting threshold, "
+                                     "warns at load from v0.77, refused as of v0.78; "
                                      "the same name in ship.py is unrelated",
     "training.forgetting_benchmark": "#808 -- warns at load from v0.76, refused as of v0.77 "
                                      "(catastrophic-forgetting probe staging)",
