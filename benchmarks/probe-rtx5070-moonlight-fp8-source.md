@@ -1,9 +1,12 @@
 # Probe: does LoRA on an FP8-block source of Moonlight-16B-A3B train like the bf16 source? RTX 5070 Laptop 8 GB
 
-Status: **rule committed, not run.** Sections 1-3 and the appendix are the rule and the setup as
-committed on branch `feat/moe-fp8-loss-check` (from `25c876f65`, the head of #2061) before
-either arm ran. Nothing in this record has touched the GPU yet; the maintainer runs the arms
-under a measurement hold. Sections 4 and 5 are filled from the runs.
+Status: **FAIL (T2_max_step, T6_step_time)**, runs 2026-10-20 11:51Z-12:25Z. Both arms
+COMPLETE; T1, T3, T4 and T5 pass. Sections 1-3 and appendix A are the rule and the setup as
+committed in `62bc0331b` (branch `feat/moe-fp8-loss-check`, from `25c876f65`, the head of
+#2061) before either arm ran, and are unchanged. Section 4 is the run log and section 5 the
+results. Sections 6 and 7 are analysis done AFTER the verdict and are not part of the rule:
+section 6 traces T6 to the drive's state, and section 7 discusses T2. Neither changes the
+verdict. No threshold was changed and no arm was re-run.
 
 ## 1. Question
 
@@ -243,13 +246,223 @@ over the three layers (raw: `results/probe-rtx5070/fp8-loss-check/weights.json`)
 - The compare script was run on folders built from sections 4.1 and 4.2, with synthetic timestamps and GPU strings for T5 and T6. It returned PASS for the reference pair (section 2.3). With B's losses frozen at epoch 1, it returned FAIL on T2 and T4.
 - The run script parses (PowerShell 7.6 parser, 0 errors). Its exit-code capture through `Tee-Object` was checked on a process exiting 3.
 
-## 4. Box state at the runs
+## 4. Run log (2026-10-20, UTC)
 
-(Filled after the runs.)
+Both arms ran on AC power, under a measurement hold, through `fp8_loss_check_run.ps1` (appendix
+A), A first. The script's pre-checks passed for both arms:
+- `src/` of the `soup-wt/moe-fp8` worktree equal to `25c876f65`, nothing untracked under it;
+- `soup_cli` imported from `C:\Users\user\projects\soup-wt\moe-fp8\src`;
+- at least 10 GB of RAM available, on AC, no GPU compute process.
+
+The cool-down rule held: B's process started 10 min 38 s after A's ended, with the GPU at 42 °C,
+as at A's start. Raw: `benchmarks/results/probe-rtx5070/fp8-loss-check/`.
+
+| | A (bf16 source) | B (FP8-block source) |
+|---|---|---|
+| process (watchdog window) | 11:51:00-11:59:42 | 12:10:20-12:24:47 |
+| run id | `run_20261020_165102_5938d145` | `run_20261020_171022_5424b88c` |
+| layer cache | reused `D:/soup-bench/soup-cache`: 31 files, 30,598,520,590 B, `quant_device: cuda`; the folder's listing digest (`d878adad…`) was the same before and after | re-sharded into `D:/soup-bench/fp8-loss-check/soup-cache`: "Re-sharding layer cache: cache index is missing or unreadable.", files written 12:10:41-12:12:17 (96.5 s), 31 files, 30,598,520,565 B (estimate 30,598,555,900 B), `quant_device: cuda`, reusable afterwards |
+| FP8 notice in the log | none | "FP8 block-quantised base (128x128 blocks): dequantised to bfloat16 as the layer cache is written" |
+| training began (`rewind.jsonl` header) | 11:51:49 | 12:12:34 |
+| step 1 / step 27 logged (tracker) | 11:52:10.6 / 11:59:23.8 | 12:13:14.3 / 12:24:28.1 |
+| `train_runtime` | 464.4 s | 725.5 s |
+| stream plan line | "27 layers, streamed from DISK (30.60 GB on an NVMe volume) by an async reader, read_ahead=2, 3632 MB pinned host staging (4.29 GB page-locked), 2 x 1159 MB decoder buffers + 1 x 671 MB large-layer slot" | identical |
+| D: free before / after | 101,162,680,320 / 101,128,101,888 B | 101,128,122,368 / 70,494,965,760 B |
+| watchdog samples | 104 | 173 |
+| minimum free RAM | 3.419 GB | 5.351 GB |
+| largest tree RSS / peak working set | 7.146 / 7.174 GB | 7.166 / 7.194 GB |
+| largest `nvidia-smi` memory used | 3,994 MiB | 3,994 MiB |
+| hottest GPU temperature | 50 °C | 52 °C |
+| watchdog fired / sampling gaps / samples off AC / other GPU processes | no / 0 / 0 / none | no / 0 / 0 / none |
+
+**New bytes on D:** 30,667,714,560 B over both runs (101,162,680,320 B free before A,
+70,494,965,760 B after B), against section 3.2's estimate of about 30.67 GB.
+
+The console capture has one defect: PowerShell decoded `soup train`'s UTF-8 output through the
+console's OEM code page (cp866), so `train.log` holds the box drawing as mojibake. The committed
+`train-a.log` and `train-b.log` are re-decoded (cp866 → UTF-8), with box borders and progress
+bars dropped. The `verdict.json` copy keeps only the plain "Layer streaming ready" line of
+`stream_plan_lines`; everything else in it is as `fp8_loss_check_compare.py` wrote it.
 
 ## 5. Results
 
-(Filled after the runs.)
+**Both arms COMPLETE.** Each exited 0 and logged a finite loss at all 27 steps and three
+finite evaluation losses. Each wrote `adapter_model.safetensors` (7,134,912 B, 216 tensors, all
+finite, `lora_B` non-zero). The dataset fingerprints (`84c087f8…`) and the step-to-row orders
+are identical, and no condition of section 2.4 holds.
+
+| | statistic | value | limit | |
+|---|---|---:|---:|---|
+| T1 | \|ΔL\| at step 1 | 0.0814 | 0.40 | pass |
+| T2 | max \|ΔL\| over 27 steps | 3.2655 (step 7) | 1.6 | **FAIL** |
+| T3 | \|ΔL\| of the evaluation after epoch 3 | 0.0721 (A 3.5660, B 3.4939) | 0.30 | pass |
+| T4 | \|ΔL\| of the epoch-3 mean | 0.1010 | 0.15 | pass |
+| T5 | GPU peak, B / A | 1.00 (3.1 / 3.1 GiB) | ≤ 1.10 | pass |
+| T6 | median seconds per step, B / A | 1.909 (A 13.124 s, B 25.058 s) | ≤ 1.10 | **FAIL** |
+
+The compare script printed the verdict line:
+
+```
+FAIL (T2_max_step, T6_step_time)
+```
+
+Reported, with no threshold (section 2.5):
+- **A's step-1 loss minus section 4.1's: 0.0.** It is 4.712586402893066 in both.
+- **B's shard:** 96.5 s; the cache is 30,598,520,565 B and its `index.json` reads `quant_device: cuda`.
+- **Wall time:** A 8 min 42 s and B 14 min 27 s as watchdog windows; B's includes the shard.
+- **Peaks:** see section 4.
+
+Per step: losses from `rewind.jsonl`, and the interval since the previous step's log entry in
+each arm's tracker. Steps 10 and 19 carry the end-of-epoch evaluation. Raw: `steps.json`.
+
+| step | row | tokens | A loss | B loss | ΔL | A interval s | B interval s |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 1 | 14 | 4.7126 | 4.6312 | -0.0814 | | |
+| 2 | 6 | 11 | 6.1370 | 5.7089 | -0.4281 | 12.684 | 22.372 |
+| 3 | 7 | 17 | 5.1476 | 4.7102 | -0.4374 | 12.667 | 21.756 |
+| 4 | 4 | 11 | 6.4743 | 5.0898 | -1.3845 | 12.675 | 22.030 |
+| 5 | 5 | 39 | 2.5789 | 2.4871 | -0.0918 | 12.837 | 22.184 |
+| 6 | 3 | 54 | 1.9471 | 1.9478 | +0.0007 | 12.882 | 22.331 |
+| 7 | 0 | 5 | 13.3655 | 10.1000 | -3.2655 | 13.015 | 22.954 |
+| 8 | 8 | 50 | 1.4611 | 1.3732 | -0.0879 | 12.904 | 22.407 |
+| 9 | 2 | 21 | 5.3738 | 5.3983 | +0.0245 | 12.872 | 22.244 |
+| 10 | 1 | 14 | 4.0283 | 2.7735 | -1.2548 | 20.308 | 36.110 |
+| 11 | 6 | 11 | 3.6503 | 3.4920 | -0.1583 | 12.842 | 24.303 |
+| 12 | 0 | 5 | 8.2903 | 8.7763 | +0.4860 | 12.839 | 25.009 |
+| 13 | 7 | 17 | 3.4764 | 3.6071 | +0.1306 | 12.939 | 25.108 |
+| 14 | 5 | 39 | 1.7902 | 1.8890 | +0.0988 | 12.882 | 24.859 |
+| 15 | 2 | 21 | 4.8216 | 4.6327 | -0.1889 | 12.799 | 24.980 |
+| 16 | 4 | 11 | 3.4582 | 3.7394 | +0.2813 | 13.233 | 25.071 |
+| 17 | 3 | 54 | 1.4136 | 1.5150 | +0.1014 | 19.828 | 25.282 |
+| 18 | 8 | 50 | 1.0888 | 1.0700 | -0.0188 | 17.203 | 25.045 |
+| 19 | 3 | 54 | 1.3469 | 1.5008 | +0.1539 | 27.086 | 39.939 |
+| 20 | 5 | 39 | 1.6067 | 1.7244 | +0.1176 | 21.018 | 25.176 |
+| 21 | 6 | 11 | 2.9913 | 2.8720 | -0.1193 | 21.149 | 25.618 |
+| 22 | 0 | 5 | 6.5275 | 7.6556 | +1.1281 | 21.122 | 25.440 |
+| 23 | 8 | 50 | 1.0300 | 1.0104 | -0.0196 | 21.066 | 33.691 |
+| 24 | 2 | 21 | 4.1548 | 4.2905 | +0.1356 | 21.204 | 25.300 |
+| 25 | 1 | 14 | 3.0285 | 2.3029 | -0.7256 | 21.013 | 25.499 |
+| 26 | 4 | 11 | 3.1388 | 3.6456 | +0.5068 | 21.166 | 33.989 |
+| 27 | 7 | 17 | 3.3620 | 3.0939 | -0.2682 | 20.986 | 25.133 |
+
+| | epoch 1 mean | epoch 2 mean | epoch 3 mean | eval after epoch 1 | eval after epoch 2 | eval after epoch 3 |
+|---|---:|---:|---:|---:|---:|---:|
+| A | 5.2442 | 3.5575 | 3.0207 | 4.2493 | 3.5632 | 3.5660 |
+| B | 4.6052 | 3.4994 | 3.1218 | 4.1399 | 3.5809 | 3.4939 |
+| ΔL | -0.6391 | -0.0581 | +0.1010 | -0.1093 | +0.0177 | -0.0721 |
+
+## 6. T6: what made B slower (analysis after the verdict, not part of the rule)
+
+Done 2026-10-20 12:43Z-13:00Z, read-only and on the CPU: cache headers, the reader's code, and
+a short read benchmark. Nothing on D: was modified.
+
+**1. The cache layout is identical.** `benchmarks/harness/fp8_loss_check_layout.py` compared all
+30 safetensors files of A's cache with B's (output: `t6-layout.txt`):
+- header length, data start, file size, metadata, tensor order, and every tensor's dtype, shape, length and absolute offset: no difference in any file;
+- for example `layer_010.safetensors`: a 3,752-byte header and 1,123,596,780 bytes in both, with the fused experts at offsets ≡ 3436 (mod 4096) and ≡ 364 (mod 512) in both;
+- `index.json`: equal in every field except `source_files` and `source_fingerprint`, including `quant_specs`, `layer_keys`, format version 5 and `quant_device: cuda`.
+
+`fsutil file queryextents` reports a single NTFS extent for every one of the 60 files
+(`t6-extents.txt`), so neither cache is fragmented.
+
+**2. The reader did not fall back.** `AsyncDiskSource` (`utils/async_disk_source.py`) opens
+`FILE_FLAG_NO_BUFFERING` handles (`safetensors_reader.open_direct`). It decides once per drive
+per run, by opening the first layer file, and the read spans are 4 KiB-aligned supersets of the
+tensors, so tensor offsets do not matter to it. When the volume refuses direct I/O, or the
+staging is unaligned, the console says so: "Layer streaming reads <root> through the page
+cache: direct I/O is unavailable there (…)", or "the disk tier reads through the page cache
+instead of direct I/O". Neither `train.log` has either line. A grep for direct, unbuffered,
+buffered, aligned and fallback finds only the disk-tier notice and a transformers
+token-alignment message, the same in both logs, and both print the identical plan line.
+
+**3. On a rested drive, B's files read as fast as A's.** `fp8_loss_check_readbench.py` read
+`layer_010` and `layer_020` (1,123,596,780 B each) through `open_direct` in 4 ranges, as the
+reader does, alternating A and B. The box was quiet (no pytest and no GPU job; 10.4 GB free at
+the start), 12:56-13:00Z, about 30 minutes after B ended; 11.2 GB read in all
+(`t6-readbench.txt`):
+
+| read | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | then, fresh process | 1 | 2 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| arm, layer | A 10 | B 10 | A 10 | B 10 | A 10 | B 10 | B 20 | A 20 | | B 10 | A 10 |
+| GB/s | 2.61 | 5.29 | 4.82 | 5.39 | 4.82 | 5.36 | 5.28 | 4.92 | | 2.70 | 4.52 |
+
+The first read of each process pays the buffer's first touch, whichever arm it reads (2.61 A,
+2.70 B). Leaving those out, A reads at 4.52-4.92 GB/s and B at 5.28-5.39 GB/s.
+
+**The step is read-bound, and the drive has a sustained-read plateau.** During the steps the
+GPU sat idle: utilisation 0% in 44% (A) and 57% (B) of the watchdog's 5-s samples, 45-52 °C.
+
+The two drives on this box (Samsung PM9B1, `MZAL81T0HFLB-00BL2`) were seen to drop from about
+4.0 GB/s to a flat 2.43-2.59 GB/s plateau about two minutes into sustained unbuffered reading,
+and to hold it to the end of the arm. In an arm that followed another arm straight away, the
+plateau began within 17 s. A third level, 1.86-2.04 GB/s, once held for a whole arm.
+The sources:
+- [`probe-rtx5070-two-drive-sustained.md`](probe-rtx5070-two-drive-sustained.md);
+- [`probe-rtx5070-drive-throttle.md`](probe-rtx5070-drive-throttle.md). It holds the hypothesis that a drive thermally throttles, most likely D:, as not established; the drives' temperatures cannot be read without elevation.
+
+The runs match that:
+- **A slowed at step 17.** It took 12.67-13.23 s per step for steps 2-16 (the epoch-1 evaluation aside), then 21.0-21.2 s from step 20 to the end, with 19.8, 17.2 and 27.1 s (the epoch-2 evaluation) in between. The ratio is 1.64, about the 4.0 → 2.5 GB/s step.
+- **B started on the plateau.** Its training began 17 s after its own shard ended: 16.6 GB read and 30.6 GB written on D: in 96.5 s. B took 21.8-23.0 s per step from step 2, and 24.3-25.6 s from step 11 onward (33.7 and 34.0 s at steps 23 and 26, the evaluations aside).
+- The bytes per step were not measured, so these ratios only fit the recorded drive levels; they do not measure them.
+
+**Conclusion.**
+- **The most likely cause of the T6 gap is the drive's state, not the FP8 path.** The layout is identical, the reader took the direct path in both arms, and on a rested drive B's files read at A's rate or faster.
+- **No product bug:** caches from the current sharder and from FP8 sources stream like the old ones.
+- **The rule had a gap: its cool-down covered the GPU, not the drive.** It asked for 10 minutes after A and a GPU within 5 °C, but put B's 47 GB of shard I/O on D: inside B's own run, 17 s before its timed steps.
+
+**What this does not show.** It does not show that B trains at A's speed. No training run on a
+rested drive was compared: the benchmark shows that B's files read as fast as A's, not that B's
+steps run as fast. T6 stays FAIL.
+
+## 7. T2: per-step divergence on short rows (analysis after the verdict)
+
+The breach is on row 0, the shortest row (5 supervised tokens), every time it is seen:
+
+| step | A | B | ΔL |
+|---:|---:|---:|---:|
+| 7 | 13.3655 | 10.1000 | -3.2655 |
+| 12 | 8.2903 | 8.7763 | +0.4860 |
+| 22 | 6.5275 | 7.6556 | +1.1281 |
+
+The next largest per-step gaps also fall on short rows, both under the limit but above the
+matched reference's maximum of 0.818: -1.3845 at step 4 (row 4, 11 tokens) and -1.2548 at step
+10 (row 1, 14 tokens). Against that:
+- step 1, a pure base forward, agrees to 0.081;
+- the evaluation after epoch 3 agrees to 0.072;
+- the epoch-3 mean agrees to 0.101.
+
+All three are within their limits. The epoch-1 mean differs by 0.64 (reported; it has no limit).
+
+Two facts noticed after the verdict:
+- **Step 2 is also a pure base forward.** The scheduler's first step has learning rate 0, so A's step-2 loss equals section 4.1's exactly, like its step 1. The base-only differences between A and B are therefore -0.081 (row 1, 14 tokens) and -0.428 (row 6, 11 tokens), against +0.121 and -0.114 for the 4.1/4.2 reference.
+- **For scale only:** A and section 4.1 stream the same cache bytes and differ in the LoRA-A seed (42 against 0) and the code. They still differ by 1.62 at step 7 (row 0), and by at most 0.60 elsewhere.
+
+**Neither fact changes T2.** The record does not show that the two sources train alike step by
+step: per-step losses on short rows diverge beyond the registered bound. No threshold was
+changed after the fact and no arm was re-run.
+
+## 8. What this shows, and what it does not
+
+Shown:
+- the `soup train` path from an FP8 block-quantised DeepSeek-V3 checkpoint runs end to end on an 8 GB card: dequantised at shard time, fused NF4, streamed from disk by layer streaming (Soup's implementation of layer-to-layer streaming, L2L, Pudipeddi et al. 2020);
+- it uses the same GPU peak as the bf16 source (3.1 GiB);
+- its final evaluation loss differs from the bf16 run's by 0.072, its step-1 loss by 0.081 and its epoch-3 mean by 0.101, each within its registered limit.
+
+Not shown:
+- speed parity (T6 failed, and the rested-drive comparison of section 9 has not been run);
+- per-step parity (T2 failed);
+- anything about an official FP8 release, Kimi K2 or any 1T model. The FP8 source is this project's own conversion of a real bf16 model into the real format, and 9 training rows say nothing about quality.
+
+## 9. Future work (not done)
+
+A re-run of T6 with the drive's state controlled, pre-registered as its own rule before it runs:
+- **Order.** Interleave B, A, A, B. B's cache already exists, so no timed run shards anything.
+- **Rest.** D: rests for at least 30 minutes before the first run and between runs.
+- **Logging.** The watchdog logs D:'s per-second read rate (a per-disk read-bytes counter), so a step time can be split into bytes and rate.
+- **Order effect.** The difference between the first and second run of each arm is a check of its own.
+
+The run script should also set the console's output encoding to UTF-8, so `train.log` keeps
+Rich's box drawing (section 4).
 
 ## Appendix A. Commands
 
