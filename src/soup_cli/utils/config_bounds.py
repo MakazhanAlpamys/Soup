@@ -16,6 +16,12 @@ MIN_STREAM_READ_AHEAD = 1
 MAX_STREAM_READ_AHEAD = 8
 DEFAULT_STREAM_READ_AHEAD = 2
 
+# --- layer streaming: head + loss chunk (utils/stream_loss_chunk.py) --------
+#: Below this the loop over the head costs more than the logits it saves: 16
+#: tokens of a 128 256-token vocabulary are 29 MB at the shipped 14 B/element.
+MIN_STREAM_LOSS_CHUNK = 16
+MAX_STREAM_LOSS_CHUNK = 8192
+
 # --- layer streaming: tasks ------------------------------------------------
 #: Tasks whose trainers can run against a streamed base (v0.72.4).
 #:

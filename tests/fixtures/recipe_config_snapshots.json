@@ -270,6 +270,7 @@
     "training.stream_expert_layout": "fused",
     "training.stream_layers": false,
     "training.stream_nf4_scale_cache": false,
+    "training.stream_loss_chunk": null,
     "training.stream_ngram_source": "auto",
     "training.stream_pin": null,
     "training.stream_read_ahead": 2,

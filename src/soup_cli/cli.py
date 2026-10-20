@@ -820,7 +820,7 @@ def _audit_env_opt_out() -> bool:
 _ALL_SECRET_OPTION_STRINGS: frozenset[str] | None = None
 
 
-def _mask_audit_args(command: str, args: list[str]) -> tuple[str, ...]:
+def _mask_audit_args(command: str, args: list[str], *, tree=None) -> tuple[str, ...]:
     """Mask credential option values in ``args`` by option name.
 
     Long credential option names are masked app-wide; short aliases (``-t``)
@@ -830,31 +830,65 @@ def _mask_audit_args(command: str, args: list[str]) -> tuple[str, ...]:
     failure falls back to that widest set, never to the unmasked args.
     Whatever the tree yields, a long option whose name looks like a
     credential is masked by that name as well.
+
+    ``tree`` is an optional ``(root command, all long option strings, memo)``
+    triple from one earlier walk, so that masking many stored lines does not
+    rebuild the command tree for each of them. The memo holds one
+    :class:`~soup_cli.utils.argv_redaction.ArgMasker` per command (its option
+    sets built once), and one for the whole app under ``"*"``
+    (see :func:`_audit_arg_masker`).
     """
     global _ALL_SECRET_OPTION_STRINGS
     from soup_cli.utils.argv_redaction import (
+        ArgMasker,
         all_long_option_strings,
         all_secret_option_strings,
-        mask_secret_args,
         resolve_command,
         secret_option_strings,
         subcommands,
     )
 
-    root = typer.main.get_command(app)
+    root = typer.main.get_command(app) if tree is None else tree[0]
     if _ALL_SECRET_OPTION_STRINGS is None:
         _ALL_SECRET_OPTION_STRINGS = all_secret_option_strings(root)
     everything = _ALL_SECRET_OPTION_STRINGS
+    long_options = all_long_option_strings(root) if tree is None else tree[1]
+    memo = {} if tree is None else tree[2]  # without a tree there is nothing to reuse
+    key = "*"
     try:
         resolved = resolve_command(root, [command, *args])
-        if subcommands(resolved) is not None:
-            secret_opts = everything
-        else:
-            app_wide_longs = frozenset(o for o in everything if o.startswith("--"))
-            secret_opts = secret_option_strings(resolved) | app_wide_longs
+        if subcommands(resolved) is None:
+            key = id(resolved)
+            if key not in memo:
+                app_wide_longs = frozenset(o for o in everything if o.startswith("--"))
+                memo[key] = ArgMasker(
+                    secret_option_strings(resolved) | app_wide_longs, long_options
+                )
     except Exception:  # noqa: BLE001 — fall back to the widest mask
-        secret_opts = everything
-    return mask_secret_args(args, secret_opts, all_long_option_strings(root))
+        key = "*"
+    if key not in memo:
+        memo[key] = ArgMasker(everything, long_options)
+    return memo[key](args)
+
+
+def _audit_arg_masker():
+    """``_mask_audit_args`` bound to a single walk of the command tree.
+
+    The audit log hands this to its writer, which applies it to the lines that
+    older versions stored. The walk is made on first use, so a log that needs
+    no pass costs nothing extra.
+    """
+    walked: list = []
+
+    def mask(command: str, args: list[str]) -> tuple[str, ...]:
+        if not walked:
+            from soup_cli.utils.argv_redaction import all_long_option_strings
+
+            root = typer.main.get_command(app)
+            walked.append((root, all_long_option_strings(root), {}))
+        return _mask_audit_args(command, args, tree=walked[0])
+
+    return mask
 
 
 def _emit_audit_event(argv: list[str], exit_code: int) -> None:
@@ -899,7 +933,8 @@ def _emit_audit_event(argv: list[str], exit_code: int) -> None:
             host_id=host,
             operator_id=operator,
         )
-        append_audit_event(ev)
+        # Lines older versions wrote get the same masking, once (marker file).
+        append_audit_event(ev, arg_mask=_audit_arg_masker())
     except Exception:  # noqa: BLE001 — audit must never crash the CLI
         pass
 

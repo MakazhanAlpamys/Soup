@@ -722,6 +722,8 @@ class StreamingSetupMixin:
 
     #: Set by :meth:`_setup_streaming_transformers`; absent on a resident run.
     _stream_runtime = None
+    # #1693 -- the head-and-loss hook of a run with `stream_loss_chunk` set.
+    _stream_loss_chunk_hook = None
 
     #: ``trust_remote_code`` for the streamed MODEL (config, meta skeleton,
     #: install): always False. Every entry of ``SUPPORTED_STREAM_ARCHS`` passed
@@ -1434,6 +1436,18 @@ class StreamingSetupMixin:
             raise
         if fast_lora_counts is not None:
             console.print(f"[green]{fast_lora_summary(fast_lora_counts)}[/]")
+        loss_chunk = getattr(tcfg, "stream_loss_chunk", None)
+        if loss_chunk is not None:
+            # #1693 -- before the probe, so that it measures the step that runs.
+            from soup_cli.utils.stream_loss_chunk import ChunkedHeadLoss, causal_lm_of
+
+            try:
+                self._stream_loss_chunk_hook = ChunkedHeadLoss(causal_lm_of(model), loss_chunk)
+            except Exception:
+                # As for #792's patch above: training's cleanup context has
+                # not started yet, so release the runtime here.
+                self._close_stream_runtime()
+                raise
         if probe_plan is not None:
             self._run_stream_vram_probe(model, probe_plan)
         stats = runtime.stats()
@@ -1493,6 +1507,24 @@ class StreamingSetupMixin:
         runtime = getattr(self, "_stream_runtime", None)
         if runtime is not None:
             runtime.close()
+
+    def _remove_stream_loss_chunk_hook(self) -> None:
+        """Take the chunked head and loss off the model when training ends (#1693).
+
+        A labelled forward later in the same process (an eval gate, ``infer``)
+        then gets the full logits again, and the trainer's ``compute_loss``
+        takes TRL's own path.
+        """
+        hook = self._stream_loss_chunk_hook
+        if hook is None:
+            return
+        from soup_cli.utils.stream_loss_chunk import HOOK_ATTR
+
+        hook.remove()
+        trainer = getattr(self, "trainer", None)
+        if trainer is not None and getattr(trainer, HOOK_ATTR, None) is hook:
+            setattr(trainer, HOOK_ATTR, None)
+        self._stream_loss_chunk_hook = None
 
     def _estimate_adapter_params(self, tcfg, model_config, target_modules=None) -> int:
         """Trainable adapter parameters, before the model exists.
@@ -1608,6 +1640,10 @@ class StreamingSetupMixin:
         hidden = int(getattr(shape_cfg, "hidden_size", 0) or 0)
         inter = self._stream_intermediate_size(shape_cfg)
         seq_len = int(cfg.data.max_length)
+        # #1693 -- with the head and the loss in chunks, the logits term stops
+        # at one chunk. (`getattr`: the stand-in configs of #348 and #349 name
+        # only the fields this method read when they were written.)
+        loss_chunk = getattr(tcfg, "stream_loss_chunk", None)
         batch = tcfg.batch_size if isinstance(tcfg.batch_size, int) else 1
         # v0.72.4 — a paired loss concatenates chosen and rejected into ONE
         # tensor, so twice the rows reach the model per configured batch. The
@@ -1648,16 +1684,21 @@ class StreamingSetupMixin:
             logits_bytes_per_element=calibrated,
             large_layer_bytes=large_layer_bytes,
             persistent_bytes=scale_cache_bytes + expert_bytes,
+            loss_chunk=loss_chunk,
         )
         logits = estimate_logits_bytes(
-            vocab_size=vocab, seq_len=seq_len, batch_size=rows, bytes_per_element=calibrated
+            vocab_size=vocab,
+            seq_len=seq_len if loss_chunk is None else min(seq_len, loss_chunk),
+            batch_size=rows,
+            bytes_per_element=calibrated,
         )
         paired = (
             "" if rows == batch else f" ({rows} rows — chosen+rejected are one concatenated tensor)"
         )
+        chunked = "" if loss_chunk is None else f" in chunks of {loss_chunk} tokens"
         lines = [
             f"  peak VRAM    ~{predicted / 1e9:.2f} GB at batch {batch} x seq "
-            f"{seq_len}{paired} (logits {logits / 1e9:.2f} GB)"
+            f"{seq_len}{paired} (logits {logits / 1e9:.2f} GB{chunked})"
         ]
         if scale_cache_bytes:
             lines.append(
