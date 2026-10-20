@@ -75,8 +75,8 @@ class TestVisionConfig:
             load_config_from_string(raw)
 
         message = str(exc_info.value)
-        assert task in message
-        assert data_format in message
+        assert f"task={task!r}" in message
+        assert f"data.format={data_format!r}" in message
         assert "no vision-preference row path" in message
         assert "text preference format" in message
 
