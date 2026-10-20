@@ -348,7 +348,7 @@ soup lock show [PATH]                        Print tracked lock file
 soup lock check [PATH] --base-sha <h> --dataset-sha <h> --env-hash <h> --base-model <m>  Refuse with exit 2 on drift, 3 on usage/missing lock
 soup compile <program.py> --eval <suite> [--optimizer mipro|gepa|textgrad|copro|bootstrap_fewshot] [--plan-only]  DSPy / GEPA / TextGrad prompt-program compiler — live (v0.71.13; pip install "soup-cli[compile]")
 soup distill-prompt --traces <jsonl> --teacher <m> --student <m> --strategy sft|preference|kl [--provider ollama|anthropic|vllm] [--base-url <url>] [--temperature F] [--max-rows N]  Distill prompt-heavy traces via a live teacher (v0.71.13); a teacher/student call that fails or returns nothing drops that trace, and the command exits 1 without writing the file when nothing is left
-soup compile-tools <spec.json|yaml> --eval <jsonl> [--optimizer textgrad|gepa] [--plan-only]  TextGrad / GEPA tool-schema optimiser — live (v0.71.13; pip install "soup-cli[compile]")
+soup compile-tools <spec.json|yaml> --eval <jsonl> [--optimizer textgrad|gepa] [--task-lm <m>] [--reflection-lm <m>] [--engine <name>] [--plan-only]  TextGrad / GEPA tool-schema optimiser — live (v0.71.13; pip install "soup-cli[compile]")
 soup apple-adapter <source-dir> --direction hf-to-mlx|mlx-to-hf|hf-to-apple|mlx-to-apple --output <dir> [--sign] [--plan-only]  PEFT LoRA <-> mlx-lm adapter conversion — live (v0.71.21; *-to-apple upstream-gated exit 3)
 soup local-rl init --db <path>                Create personal-LLM flywheel SQLite schema (v0.68.0)
 soup local-rl status --db <path>              Print interactions / thumbs-up / thumbs-down counters

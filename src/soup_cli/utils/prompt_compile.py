@@ -191,6 +191,7 @@ class CompileResult:
     score: float
     iterations: int
     converged: bool
+    score_unmeasured: bool = False
 
     def __post_init__(self) -> None:
         if isinstance(self.program_text, bool) or not isinstance(self.program_text, str):
@@ -209,6 +210,8 @@ class CompileResult:
             raise ValueError("iterations must be >= 0")
         if not isinstance(self.converged, bool):
             raise TypeError("converged must be bool")
+        if not isinstance(self.score_unmeasured, bool):
+            raise TypeError("score_unmeasured must be bool")
 
 
 # ---------------------------------------------------------------------------
@@ -402,7 +405,7 @@ def _run_dspy(plan: CompilePlan) -> CompileResult:
     if iters_raw is None:
         iters_raw = getattr(compiled, "iterations", plan.max_iters)
     iterations = int(iters_raw or plan.max_iters)
-    converged = bool(getattr(compiled, "converged", True))
+    converged = bool(getattr(compiled, "converged", False))
     return CompileResult(
         program_text=program_text,
         score=score if math.isfinite(score) else 0.0,
@@ -458,9 +461,18 @@ def _run_gepa(plan: CompilePlan) -> CompileResult:
     seed_candidate = program if isinstance(program, dict) else {"prompt": str(program)}
     adapter = getattr(module, "adapter", None)
     if adapter is not None:
+        if not hasattr(adapter, "evaluate"):
+            raise ValueError(
+                f"Adapter in {plan.program_path} does not implement the required 'evaluate' method."
+            )
         task_lm = None
     else:
-        task_lm = getattr(module, "task_lm", None) or "default_lm"
+        task_lm = getattr(module, "task_lm", None)
+        if not task_lm:
+            raise ValueError(
+                f"GEPA optimizer requires program {plan.program_path} to "
+                "define 'task_lm' or 'adapter'."
+            )
 
     reflection_lm = (
         getattr(module, "reflection_lm", None)
@@ -481,7 +493,7 @@ def _run_gepa(plan: CompilePlan) -> CompileResult:
         and reflection_strategy is None
         and reflection_lm is None
     ):
-        reflection_lm = getattr(module, "task_lm", None) or "default_lm"
+        reflection_lm = task_lm
 
     kwargs: dict[str, Any] = {
         "seed_candidate": seed_candidate,
@@ -516,8 +528,12 @@ def _run_gepa(plan: CompilePlan) -> CompileResult:
         score = float(getattr(optimised, "best_score", 0.0) or 0.0)
     else:
         score = 0.0
-    iterations = int(getattr(optimised, "iterations", plan.max_iters) or plan.max_iters)
-    converged = bool(getattr(optimised, "converged", True))
+    iterations = int(
+        getattr(optimised, "total_metric_calls", None)
+        or getattr(optimised, "iterations", plan.max_iters)
+        or plan.max_iters
+    )
+    converged = bool(getattr(optimised, "converged", False))
     return CompileResult(
         program_text=program_text,
         score=score if math.isfinite(score) else 0.0,
@@ -550,18 +566,26 @@ def _run_textgrad(plan: CompilePlan) -> CompileResult:
             )
     initial_text = str(variable.value)
     engine = getattr(module, "engine", None)
-    if engine is None and hasattr(tg, "get_backward_engine"):
+    if engine is None and hasattr(tg, "SingletonBackwardEngine"):
         try:
-            engine = tg.get_backward_engine()
-        except Exception:  # noqa: BLE001
-            engine = None
-    if engine is None and hasattr(tg, "get_engine"):
-        try:
-            engine = tg.get_engine()
+            engine = tg.SingletonBackwardEngine().get_engine()
         except Exception:  # noqa: BLE001
             engine = None
     if engine is None:
-        engine = "default"
+        raise ValueError(
+            "No backward engine configured for TextGrad. Define 'engine' or call "
+            "'textgrad.set_backward_engine(...)' in your program."
+        )
+
+    if hasattr(tg, "set_backward_engine"):
+        try:
+            singleton_engine = None
+            if hasattr(tg, "SingletonBackwardEngine"):
+                singleton_engine = tg.SingletonBackwardEngine().get_engine()
+            if singleton_engine is None:
+                tg.set_backward_engine(engine)
+        except Exception:  # noqa: BLE001
+            pass
 
     try:
         optimizer = tg.TGD(parameters=[variable], engine=engine)
@@ -592,12 +616,7 @@ def _run_textgrad(plan: CompilePlan) -> CompileResult:
     best_text = initial_text
     converged = False
     iterations = 0
-
-    if hasattr(tg, "set_backward_engine"):
-        try:
-            tg.set_backward_engine(engine)
-        except Exception:
-            pass
+    has_score_signal = hasattr(variable, "score") or (initial_score > 0.0)
 
     for i in range(plan.max_iters):
         ex = raw_examples[i % len(raw_examples)] if raw_examples else {}
@@ -632,12 +651,23 @@ def _run_textgrad(plan: CompilePlan) -> CompileResult:
         optimizer.step()
         iterations = i + 1
         cur_score = float(getattr(variable, "score", _calc_score(str(variable.value))) or 0.0)
+        if cur_score > 0.0 or hasattr(variable, "score"):
+            has_score_signal = True
         if cur_score > best_score:
             best_score = cur_score
             best_text = str(variable.value)
             if best_score >= 1.0:
-                converged = True
                 break
+
+    if not has_score_signal:
+        best_text = str(variable.value)
+        return CompileResult(
+            program_text=best_text,
+            score=0.0,
+            iterations=iterations,
+            converged=False,
+            score_unmeasured=True,
+        )
 
     if best_score > initial_score and best_score >= 1.0:
         converged = True
@@ -646,6 +676,7 @@ def _run_textgrad(plan: CompilePlan) -> CompileResult:
         score=best_score,
         iterations=iterations,
         converged=converged,
+        score_unmeasured=False,
     )
 
 

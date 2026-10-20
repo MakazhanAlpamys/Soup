@@ -40,8 +40,8 @@ def compile_tools_cmd(
     reflection_lm: Optional[str] = typer.Option(
         None, "--reflection-lm", help="Reflection language model for GEPA optimizer"
     ),
-    adapter: Optional[str] = typer.Option(
-        None, "--adapter", help="Adapter or candidate proposer for GEPA optimizer"
+    engine: Optional[str] = typer.Option(
+        None, "--engine", help="Backward engine for TextGrad optimizer (e.g. gpt-4o)"
     ),
     plan_only: bool = typer.Option(
         False, "--plan-only", help="Render plan + exit 0 (no live optimise)."
@@ -56,7 +56,7 @@ def compile_tools_cmd(
             output_path=output,
             task_lm=task_lm,
             reflection_lm=reflection_lm,
-            adapter=adapter,
+            engine=engine,
         )
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
@@ -69,11 +69,11 @@ def compile_tools_cmd(
         f"Output:    [bold]{escape(plan.output_path)}[/]",
     ]
     if plan.task_lm:
-        plan_details.append(f"Task LM:   [bold]{escape(plan.task_lm)}[/]")
+        plan_details.append(f"Task LM:     [bold]{escape(plan.task_lm)}[/]")
     if plan.reflection_lm:
-        plan_details.append(f"Reflect LM:[bold]{escape(plan.reflection_lm)}[/]")
-    if plan.adapter:
-        plan_details.append(f"Adapter:   [bold]{escape(plan.adapter)}[/]")
+        plan_details.append(f"Reflect LM:  [bold]{escape(plan.reflection_lm)}[/]")
+    if plan.engine:
+        plan_details.append(f"Engine:      [bold]{escape(plan.engine)}[/]")
 
     console.print(
         Panel(
@@ -95,7 +95,7 @@ def compile_tools_cmd(
             )
         )
         raise typer.Exit(2) from exc
-    except (TypeError, ValueError, FileNotFoundError, RuntimeError) as exc:
+    except (TypeError, ValueError, FileNotFoundError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
     except Exception as exc:

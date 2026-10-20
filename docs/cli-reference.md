@@ -896,6 +896,9 @@ Usage: `soup compile-tools [OPTIONS] SPEC`
 | `--eval` | text |  | yes | Path to tool-call eval JSONL |
 | `--optimizer` | text | `textgrad` |  | Allowed: gepa, textgrad |
 | `--output`, `-o` | text | `compiled_tools.json` |  | Output schema path |
+| `--task-lm` | text |  |  | Task language model for GEPA optimizer |
+| `--reflection-lm` | text |  |  | Reflection language model for GEPA optimizer |
+| `--engine` | text |  |  | Backward engine for TextGrad optimizer (e.g. gpt-4o) |
 | `--plan-only` | flag | off |  | Render plan + exit 0 (no live optimise). |
 
 ## `soup completions`

@@ -102,7 +102,7 @@ class ToolCompilePlan:
     output_path: str
     task_lm: Optional[str] = None
     reflection_lm: Optional[str] = None
-    adapter: Optional[str] = None
+    engine: Optional[str] = None
 
     def __post_init__(self) -> None:
         validate_spec_path(self.spec_path)
@@ -121,7 +121,7 @@ def build_tool_compile_plan(
     output_path: str,
     task_lm: Optional[str] = None,
     reflection_lm: Optional[str] = None,
-    adapter: Optional[str] = None,
+    engine: Optional[str] = None,
 ) -> ToolCompilePlan:
     return ToolCompilePlan(
         spec_path=spec_path,
@@ -130,7 +130,7 @@ def build_tool_compile_plan(
         output_path=output_path,
         task_lm=task_lm,
         reflection_lm=reflection_lm,
-        adapter=adapter,
+        engine=engine,
     )
 
 
@@ -169,12 +169,24 @@ def _optimise_description(
             requires_grad=True,
             role_description="tool description",
         )
-        engine = getattr(tg, "get_backward_engine", lambda: None)() or "default"
-        if hasattr(tg, "set_backward_engine"):
+        if plan and plan.engine and hasattr(tg, "set_backward_engine"):
             try:
-                tg.set_backward_engine(engine)
+                tg.set_backward_engine(plan.engine)
             except Exception:
                 pass
+        engine = None
+        if hasattr(tg, "SingletonBackwardEngine"):
+            try:
+                engine = tg.SingletonBackwardEngine().get_engine()
+            except Exception:
+                engine = None
+        if engine is None and plan and plan.engine:
+            engine = plan.engine
+        if engine is None:
+            raise ValueError(
+                "No backward engine configured for TextGrad. Pass --engine <name> "
+                "or call 'textgrad.set_backward_engine(...)'."
+            )
         try:
             opt = tg.TGD(parameters=[variable], engine=engine)
         except TypeError:
@@ -219,15 +231,14 @@ def _optimise_description(
         raise ImportError(
             f"GEPA is required for the 'gepa' optimizer. {_INSTALL_HINT}"
         ) from exc
-    adapter = plan.adapter if plan else None
-    if adapter is not None:
-        task_lm = None
-    else:
-        task_lm = (plan.task_lm if plan else None) or "default_lm"
+    task_lm = plan.task_lm if plan else None
+    if not task_lm:
+        raise ValueError(
+            "GEPA optimizer requires --task-lm to be specified. "
+            "Pass --task-lm <model_id>."
+        )
 
-    reflection_lm = plan.reflection_lm if plan else None
-    if reflection_lm is None:
-        reflection_lm = task_lm or "default_lm"
+    reflection_lm = (plan.reflection_lm if plan else None) or task_lm
 
     kwargs: dict[str, Any] = {
         "seed_candidate": {"description": str(description)},
@@ -236,8 +247,6 @@ def _optimise_description(
         "task_lm": task_lm,
         "reflection_lm": reflection_lm,
     }
-    if adapter is not None:
-        kwargs["adapter"] = adapter
 
     optimised = gepa.optimize(**kwargs)  # type: ignore[attr-defined]
     best_candidate = getattr(optimised, "best_candidate", optimised)

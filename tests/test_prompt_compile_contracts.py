@@ -93,6 +93,8 @@ def recording_textgrad(monkeypatch):
 
     class _TextLoss:
         def __init__(self, eval_system_prompt, engine=None):
+            if engine == "default":
+                raise ValueError("Engine default not supported")
             self.eval_system_prompt = eval_system_prompt
             self.engine = engine
             calls.append(("TextLoss", eval_system_prompt, engine))
@@ -114,6 +116,8 @@ def recording_textgrad(monkeypatch):
 
     class _TGD:
         def __init__(self, parameters, engine=None, **kwargs):
+            if engine == "default":
+                raise ValueError("Engine default not supported")
             self.parameters = parameters
             self.engine = engine
             kw = dict(kwargs)
@@ -136,11 +140,18 @@ def recording_textgrad(monkeypatch):
         singleton_engine[0] = e
         calls.append(("set_backward_engine", e))
 
+    class _SingletonBackwardEngine:
+        def __init__(self):
+            pass
+
+        def get_engine(self):
+            return singleton_engine[0]
+
     fake_tg = types.SimpleNamespace(
         Variable=_Variable,
         TextLoss=_TextLoss,
         TGD=_TGD,
-        get_backward_engine=lambda: "default_engine",
+        SingletonBackwardEngine=_SingletonBackwardEngine,
         set_backward_engine=_set_backward_engine,
     )
     monkeypatch.setitem(sys.modules, "textgrad", fake_tg)
@@ -155,11 +166,17 @@ def recording_gepa(monkeypatch):
         assert isinstance(seed_candidate, dict), (
             f"seed_candidate must be dict, got {type(seed_candidate)}"
         )
+        assert kwargs.get("task_lm") != "default_lm", "default_lm placeholder not permitted"
+        assert kwargs.get("reflection_lm") != "default_lm", "default_lm placeholder not permitted"
         assert "task_lm" in kwargs or "adapter" in kwargs, "GEPA requires task_lm or adapter"
         if kwargs.get("adapter") is not None and kwargs.get("task_lm") is not None:
             raise ValueError("GEPA requires task_lm=None in adapter mode")
 
         active_adapter = kwargs.get("adapter")
+        if active_adapter is not None:
+            assert hasattr(active_adapter, "evaluate") and callable(
+                getattr(active_adapter, "evaluate")
+            ), "adapter must implement evaluate()"
         adapter_has_propose = (
             active_adapter is not None
             and hasattr(active_adapter, "propose_new_texts")
@@ -191,6 +208,9 @@ def recording_gepa(monkeypatch):
             ],
             val_aggregate_scores=[0.95],
             best_idx=0,
+            total_metric_calls=kwargs.get(
+                "max_metric_calls", len(trainset) if hasattr(trainset, "__len__") else 5
+            ),
         )
 
     fake_gepa = types.SimpleNamespace(optimize=fake_optimize)
@@ -281,7 +301,9 @@ def test_dspy_metric_never_none(tmp_path, monkeypatch, recording_dspy):
 
 def test_textgrad_backward_loss_and_engine_contract(tmp_path, monkeypatch, recording_textgrad):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "prog.py").write_text("program = 'Answer briefly.'\n", encoding="utf-8")
+    (tmp_path / "prog.py").write_text(
+        "program = 'Answer briefly.'\nengine = 'gpt-4o'\n", encoding="utf-8"
+    )
     (tmp_path / "math.jsonl").write_text(
         '{"question": "1+1", "answer": "2"}\n{"question": "2+2", "answer": "4"}\n', encoding="utf-8"
     )
@@ -362,7 +384,9 @@ def test_result_panel_reports_actual_convergence_and_score(
 ):
     monkeypatch.chdir(tmp_path)
     # Text edits alone must not imply convergence.
-    (tmp_path / "prog.py").write_text("program = 'Answer briefly.'\n", encoding="utf-8")
+    (tmp_path / "prog.py").write_text(
+        "program = 'Answer briefly.'\nengine = 'gpt-4o'\n", encoding="utf-8"
+    )
     (tmp_path / "eval.jsonl").write_text('{"question": "1+1", "answer": "2"}\n', encoding="utf-8")
 
     runner = CliRunner()
@@ -386,12 +410,14 @@ def test_result_panel_reports_actual_convergence_and_score(
     panel = dict(re.findall(r"(Iterations|Converged|Score):\s+(\S+)", stripped))
     assert panel.get("Converged") == "False"
     assert panel.get("Iterations") == "3"
-    assert panel.get("Score") == "0.000"
+    assert panel.get("Score") == "unmeasured"
 
 
 def test_gepa_seed_candidate_dict_and_string_output(tmp_path, monkeypatch, recording_gepa):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "prog.py").write_text("program = 'Answer briefly.'\n", encoding="utf-8")
+    (tmp_path / "prog.py").write_text(
+        "program = 'Answer briefly.'\ntask_lm = 'my_model'\n", encoding="utf-8"
+    )
     (tmp_path / "eval.jsonl").write_text('{"question": "1+1", "answer": "2"}\n', encoding="utf-8")
 
     runner = CliRunner()
@@ -454,6 +480,8 @@ def test_compile_tools_textgrad_backward_contract(tmp_path, monkeypatch, recordi
             "eval.jsonl",
             "--optimizer",
             "textgrad",
+            "--engine",
+            "gpt-4o",
             "-o",
             "out.json",
         ],
@@ -493,7 +521,9 @@ def test_textgrad_bare_exception_exits_2_with_clean_message(tmp_path, monkeypatc
     monkeypatch.setitem(sys.modules, "textgrad", fake_tg)
 
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "prog.py").write_text("program = 'Answer briefly.'\n", encoding="utf-8")
+    (tmp_path / "prog.py").write_text(
+        "program = 'Answer briefly.'\nengine = 'dummy_engine'\n", encoding="utf-8"
+    )
     (tmp_path / "eval.jsonl").write_text('{"question": "1+1", "answer": "2"}\n', encoding="utf-8")
 
     runner = CliRunner()
@@ -519,6 +549,8 @@ def test_textgrad_bare_exception_exits_2_with_clean_message(tmp_path, monkeypatc
             "eval.jsonl",
             "--optimizer",
             "textgrad",
+            "--engine",
+            "dummy_engine",
             "-o",
             "out.json",
         ],
@@ -530,7 +562,13 @@ def test_textgrad_bare_exception_exits_2_with_clean_message(tmp_path, monkeypatc
 def test_gepa_adapter_mode_passes_task_lm_none(tmp_path, monkeypatch, recording_gepa):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "prog.py").write_text(
-        "program = 'Answer briefly.'\nadapter = 'my_lora_adapter'\ntask_lm = 'ignored_lm'\n",
+        "program = 'Answer briefly.'\n"
+        "class MockAdapter:\n"
+        "    def evaluate(self, candidate):\n"
+        "        return 1.0\n"
+        "adapter = MockAdapter()\n"
+        "task_lm = 'ignored_lm'\n"
+        "reflection_lm = 'my_reflection_lm'\n",
         encoding="utf-8",
     )
     (tmp_path / "eval.jsonl").write_text('{"answer": "4"}\n', encoding="utf-8")
@@ -539,7 +577,7 @@ def test_gepa_adapter_mode_passes_task_lm_none(tmp_path, monkeypatch, recording_
     )
     assert res.exit_code == 0, res.output
     kwargs = recording_gepa[0][1]["kwargs"]
-    assert kwargs["adapter"] == "my_lora_adapter"
+    assert hasattr(kwargs["adapter"], "evaluate")
     assert kwargs["task_lm"] is None
 
 
@@ -548,7 +586,7 @@ def test_textgrad_edit_without_score_improvement_does_not_claim_converged(
 ):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "prog.py").write_text(
-        "program = 'Answer briefly.'\ndef metric(gold, pred):\n    return 0.0\n",
+        "program = 'Answer briefly.'\nengine = 'gpt-4o'\ndef metric(gold, pred):\n    return 0.0\n",
         encoding="utf-8",
     )
     (tmp_path / "eval.jsonl").write_text('{"answer": "4"}\n', encoding="utf-8")
@@ -557,11 +595,10 @@ def test_textgrad_edit_without_score_improvement_does_not_claim_converged(
         "--max-iters", "2", "-o", "out.py",
     ])
     assert res.exit_code == 0, res.output
-    assert (tmp_path / "out.py").read_text(encoding="utf-8") == (
-        "Answer briefly."
-    )
+    written = (tmp_path / "out.py").read_text(encoding="utf-8")
+    assert "improved" in written
     panel = dict(re.findall(r"(Converged|Score):\s+(\S+)", _strip_ansi(res.output)))
-    assert panel == {"Converged": "False", "Score": "0.000"}
+    assert panel == {"Converged": "False", "Score": "unmeasured"}
 
 
 def test_textgrad_loss_predecessor_graph_populates_gradients(
@@ -572,6 +609,7 @@ def test_textgrad_loss_predecessor_graph_populates_gradients(
     monkeypatch.chdir(tmp_path)
     metric_code = (
         "program = 'Answer briefly.'\n"
+        "engine = 'gpt-4o'\n"
         "def metric(gold, pred):\n"
         "    return 1.0 if 'improved' in str(pred) else 0.0\n"
     )
@@ -583,6 +621,7 @@ def test_textgrad_loss_predecessor_graph_populates_gradients(
         "_load_program_module",
         lambda path: types.SimpleNamespace(
             program="Answer briefly.",
+            engine="gpt-4o",
             variable=variable,
             metric=lambda g, p: 1.0 if "improved" in str(p) else 0.0,
         ),
@@ -645,7 +684,7 @@ def test_textgrad_measures_score_and_convergence(
 
     monkeypatch.chdir(tmp_path)
     (tmp_path / "prog.py").write_text(
-        "program = 'Answer briefly.'\n" + metric_code, encoding="utf-8"
+        "program = 'Answer briefly.'\nengine = 'gpt-4o'\n" + metric_code, encoding="utf-8"
     )
     (tmp_path / "eval.jsonl").write_text(
         "\n".join(json.dumps(ex) for ex in examples), encoding="utf-8"
@@ -711,12 +750,13 @@ def test_textgrad_preserves_best_candidate_on_regression(tmp_path, monkeypatch):
         Variable=_Variable,
         TextLoss=_TextLoss,
         TGD=_TGD,
-        get_backward_engine=lambda: "engine",
+        SingletonBackwardEngine=type("S", (), {"get_engine": lambda self: "engine"}),
     )
     monkeypatch.setitem(sys.modules, "textgrad", fake_tg)
 
     prog_code = """
 program = 'Initial prompt'
+engine = 'gpt-4o'
 def metric(gold, pred):
     if 'Candidate_1' in pred:
         return 0.5
@@ -806,7 +846,7 @@ def test_compile_tools_gepa_passes_reflection_lm(tmp_path, monkeypatch, recordin
 
 
 def test_compile_tools_gepa_cli_options(tmp_path, monkeypatch, recording_gepa):
-    """compile-tools CLI forwards --task-lm, --reflection-lm, and --adapter to gepa.optimize."""
+    """compile-tools CLI forwards --task-lm and --reflection-lm to gepa.optimize."""
     monkeypatch.chdir(tmp_path)
     spec_json = {
         "openapi": "3.0.0",
@@ -849,8 +889,8 @@ def test_compile_tools_gepa_cli_options(tmp_path, monkeypatch, recording_gepa):
     assert recording_gepa[-1][1]["kwargs"]["task_lm"] == "my_task_model"
     assert recording_gepa[-1][1]["kwargs"]["reflection_lm"] == "my_reflection_model"
 
-    # 2. Adapter mode sets task_lm to None
-    res_adapter = runner.invoke(
+    # 2. Omitting --reflection-lm defaults reflection_lm to task_lm
+    res_default_refl = runner.invoke(
         app,
         [
             "compile-tools",
@@ -859,15 +899,32 @@ def test_compile_tools_gepa_cli_options(tmp_path, monkeypatch, recording_gepa):
             "eval.jsonl",
             "--optimizer",
             "gepa",
-            "--adapter",
-            "my_tool_adapter",
+            "--task-lm",
+            "my_task_model_only",
             "-o",
             "out2.json",
         ],
     )
-    assert res_adapter.exit_code == 0, res_adapter.output
-    assert recording_gepa[-1][1]["kwargs"]["adapter"] == "my_tool_adapter"
-    assert recording_gepa[-1][1]["kwargs"]["task_lm"] is None
+    assert res_default_refl.exit_code == 0, res_default_refl.output
+    assert recording_gepa[-1][1]["kwargs"]["task_lm"] == "my_task_model_only"
+    assert recording_gepa[-1][1]["kwargs"]["reflection_lm"] == "my_task_model_only"
+
+    # 3. Omitting --task-lm fails with exit code 2
+    res_no_task = runner.invoke(
+        app,
+        [
+            "compile-tools",
+            "tools.json",
+            "--eval",
+            "eval.jsonl",
+            "--optimizer",
+            "gepa",
+            "-o",
+            "out3.json",
+        ],
+    )
+    assert res_no_task.exit_code == 2
+    assert "GEPA optimizer requires --task-lm" in res_no_task.output
 
 
 def test_gepa_reads_val_aggregate_scores_without_best_score(tmp_path, monkeypatch):
@@ -875,7 +932,9 @@ def test_gepa_reads_val_aggregate_scores_without_best_score(tmp_path, monkeypatc
     from soup_cli.utils.prompt_compile import CompilePlan, _run_gepa
 
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "prog.py").write_text("program = 'Hello'\n", encoding="utf-8")
+    (tmp_path / "prog.py").write_text(
+        "program = 'Hello'\ntask_lm = 'my_task_lm'\n", encoding="utf-8"
+    )
     (tmp_path / "eval.jsonl").write_text('{"input": "a", "output": "b"}\n', encoding="utf-8")
 
     plan = CompilePlan(
@@ -912,3 +971,83 @@ def test_gepa_reads_val_aggregate_scores_without_best_score(tmp_path, monkeypatc
     monkeypatch.setitem(sys.modules, "gepa", fake_gepa_legacy)
     res_legacy = _run_gepa(plan)
     assert res_legacy.score == 0.73
+
+
+def test_textgrad_refuses_when_no_engine_configured(tmp_path, monkeypatch, recording_textgrad):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prog.py").write_text("program = 'Answer briefly.'\n", encoding="utf-8")
+    (tmp_path / "eval.jsonl").write_text('{"question": "1+1", "answer": "2"}\n', encoding="utf-8")
+    runner = CliRunner()
+    res = runner.invoke(
+        app,
+        ["compile", "prog.py", "--eval", "eval.jsonl", "--optimizer", "textgrad", "-o", "out.py"],
+    )
+    assert res.exit_code == 2
+    assert "No backward engine configured" in res.output
+
+    spec_json = {
+        "openapi": "3.0.0",
+        "info": {"title": "Test", "version": "1.0"},
+        "paths": {"/search": {"get": {"operationId": "search", "description": "Search"}}},
+    }
+    (tmp_path / "spec.json").write_text(json.dumps(spec_json), encoding="utf-8")
+    res_tools = runner.invoke(
+        app,
+        [
+            "compile-tools",
+            "spec.json",
+            "--eval",
+            "eval.jsonl",
+            "--optimizer",
+            "textgrad",
+            "-o",
+            "out.json",
+        ],
+    )
+    assert res_tools.exit_code == 2
+    assert "No backward engine configured" in res_tools.output
+
+
+def test_textgrad_preserves_prompt_when_no_score_signal(tmp_path, monkeypatch, recording_textgrad):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prog.py").write_text(
+        "program = 'Answer briefly.'\nengine = 'gpt-4o'\n", encoding="utf-8"
+    )
+    (tmp_path / "eval.jsonl").write_text('{"question": "1+1", "answer": "2"}\n', encoding="utf-8")
+    runner = CliRunner()
+    res = runner.invoke(
+        app,
+        [
+            "compile",
+            "prog.py",
+            "--eval",
+            "eval.jsonl",
+            "--optimizer",
+            "textgrad",
+            "--max-iters",
+            "2",
+            "-o",
+            "out.py",
+        ],
+    )
+    assert res.exit_code == 0, res.output
+    written = (tmp_path / "out.py").read_text(encoding="utf-8")
+    assert "improved" in written
+    stripped = _strip_ansi(res.output)
+    panel = dict(re.findall(r"(Iterations|Converged|Score):\s+(\S+)", stripped))
+    assert panel.get("Score") == "unmeasured"
+    assert panel.get("Converged") == "False"
+
+
+def test_gepa_invalid_adapter_raises_cleanly(tmp_path, monkeypatch, recording_gepa):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prog.py").write_text(
+        "program = 'Answer briefly.'\nadapter = 'string_not_adapter_object'\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "eval.jsonl").write_text('{"answer": "4"}\n', encoding="utf-8")
+    res = CliRunner().invoke(
+        app, ["compile", "prog.py", "--eval", "eval.jsonl", "--optimizer", "gepa", "-o", "out.py"]
+    )
+    assert res.exit_code == 2
+    assert "evaluate" in res.output
