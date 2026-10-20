@@ -631,8 +631,9 @@ jobs:
 
   typer-vendored:
     needs: plan
-    if: needs.plan.outputs.full == 'true'
-    # Exercise the vendored identities without upgrading either floor environment.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # Keep the pinned vendored probe off PR/release runs to preserve CI capacity.
+    # Exercise these identities nightly/manually without upgrading either floor.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

@@ -521,8 +521,9 @@ The core and training floor jobs exercise Typer 0.15.4. The separate `typer-vend
 job installs a core-only environment pinned to Typer 0.27.3 / Click 8.4.2,
 records those versions, asserts the real command/exception/parameter-source
 identities use Typer's vendored Click, and runs the unchanged 20-case
-`tests/test_typer_click_compat.py`. This explicit lane runs with the floor jobs
-at approval/nightly/release; it does not replace the minimum-version environment.
+`tests/test_typer_click_compat.py`. This explicit lane runs only on `schedule`
+and `workflow_dispatch`, keeping it off pull-request and release-push runs;
+it does not replace the minimum-version environment.
 Typer is not pinned in the ordinary CI stack, so its test matrix resolves the
 newest release admitted by `pyproject.toml`. The compatibility regressions
 exercise gate exit codes, noninteractive missing options, configured defaults,

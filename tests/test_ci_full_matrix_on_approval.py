@@ -76,8 +76,8 @@ GATED_JOBS = (
     "pytorch-smoke",
     "transformers-floor",
     "core-floor",
-    "typer-vendored",
 )
+NIGHTLY_JOBS = ("typer-vendored",)
 #: The support matrix: what RELEASE runs, and what requires-python must match.
 SUPPORT_MATRIX = {
     "os": ["ubuntu-latest", "windows-latest", "macos-latest"],
@@ -633,8 +633,19 @@ class TestGatedJobs:
         assert "needs" not in lint
 
     def test_every_job_is_classified(self):
-        """A new job must be declared quick or full here, or it lands on every PR push."""
-        assert sorted(_jobs()) == sorted(["plan", "lint", "test", *GATED_JOBS])
+        """Classify quick, approval and nightly jobs so none lands on every PR push."""
+        assert sorted(_jobs()) == sorted(["plan", "lint", "test", *GATED_JOBS, *NIGHTLY_JOBS])
+
+    @pytest.mark.parametrize(("context", "kind"), EVENTS)
+    def test_vendored_lane_runs_only_on_nightly_and_manual(self, context, kind):
+        job = _jobs()["typer-vendored"]
+        assert "plan" in _needs(job)
+        context = {
+            **context,
+            "needs": {"plan": {"outputs": {"full": "false" if kind == "QUICK" else "true"}}},
+        }
+        # FULL is schedule/dispatch; APPROVAL and RELEASE must not add this job.
+        assert _runs("typer-vendored", context) == (kind == "FULL")
 
 
 class TestMatrix:
