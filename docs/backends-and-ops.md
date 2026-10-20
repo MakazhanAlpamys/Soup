@@ -583,7 +583,14 @@ Writing a default counts as leaving it unwritten, so a full YAML dump and its
 minimal source have the same report; `seed: 0` still counts because the seed
 default is unset. Settings refused at config load are not listed as doctor rows:
 their active values fail before the report can run. This report describes the
-reviewed gaps, not a guarantee that every unlisted setting is supported.
+reviewed gaps, not a guarantee that every unlisted setting is supported. A
+task/backend/modality combination whose table has not been reviewed yet says so
+("has not been reviewed for settings it ignores") instead of printing an
+all-clear (#1815). Reviewed today: SFT on every backend and modality, which on
+`backend: transformers` with text flags the thirteen knobs of other tasks
+(`kto_beta`, `orpo_beta`, `simpo_gamma`, `cpo_alpha`, `ipo_tau`, `bco_beta`,
+`num_generations`, `ppo_epochs`, `ppo_clip_ratio`, `ppo_kl_penalty`, and the three
+`embedding_*` settings) that load on `task: sft` and are never read there.
 
 ### GPU diagnostics
 
