@@ -77,7 +77,10 @@ _IDEMPOTENCY_KEY_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 
 # What a retry under the same idempotency key has to repeat. ``notes`` is free-form and
 # not compared; the tag only has to be one of the entry's tags.
-_IDEMPOTENT_FIELDS = ("name", "base_model", "task", "run_id", "config_hash", "data_hash")
+_IDEMPOTENT_FIELDS = (
+    "name", "base_model", "task", "run_id", "config_hash", "data_hash",
+    "base_revision", "base_revision_source", "training_data_sha256",
+)
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS registry_entries (
@@ -89,6 +92,9 @@ CREATE TABLE IF NOT EXISTS registry_entries (
     config_json  TEXT NOT NULL,
     config_hash  TEXT NOT NULL,
     data_hash    TEXT,
+    base_revision TEXT,
+    base_revision_source TEXT,
+    training_data_sha256 TEXT,
     entry_hash   TEXT NOT NULL,
     created_at   TEXT NOT NULL,
     notes        TEXT,
@@ -262,9 +268,13 @@ class RegistryStore:
         columns = {
             row[1] for row in conn.execute("PRAGMA table_info(registry_entries)").fetchall()
         }
-        if "idempotency_key" not in columns:
+        for column in (
+            "idempotency_key", "base_revision", "base_revision_source", "training_data_sha256",
+        ):
+            if column in columns:
+                continue
             try:
-                conn.execute("ALTER TABLE registry_entries ADD COLUMN idempotency_key TEXT")
+                conn.execute(f"ALTER TABLE registry_entries ADD COLUMN {column} TEXT")
             except sqlite3.OperationalError as exc:
                 if "duplicate column" not in str(exc).lower():
                     raise
@@ -309,6 +319,9 @@ class RegistryStore:
         data_path: Optional[str] = None,
         notes: Optional[str] = None,
         idempotency_key: Optional[str] = None,
+        base_revision: Optional[str] = None,
+        base_revision_source: Optional[str] = None,
+        training_data_sha256: Optional[str] = None,
     ) -> str:
         """Create a new registry entry. Returns the new entry's id.
 
@@ -326,17 +339,24 @@ class RegistryStore:
         if idempotency_key is not None:
             validate_idempotency_key(idempotency_key)
 
+        from soup_cli.utils.run_provenance import validate_identity, validate_training_hash
+
+        validate_identity(base_revision, base_revision_source)
+        validate_training_hash(training_data_sha256)
         entry_id = _generate_entry_id()
         now = datetime.now().isoformat()
 
         config_hash = hash_config(config)
-        data_hash = hash_file(data_path) if data_path is not None else None
+        data_hash = hash_file(data_path) if data_path is not None else training_data_sha256
         entry_hash = hash_entry(
-            config=config, data_path=data_path, base_model=base_model,
+            config=config, data_path=None, base_model=base_model, data_sha256=data_hash,
+            base_revision=base_revision, base_revision_source=base_revision_source,
         )
         request = {
             "name": name, "base_model": base_model, "task": task, "run_id": run_id,
             "config_hash": config_hash, "data_hash": data_hash,
+            "base_revision": base_revision, "base_revision_source": base_revision_source,
+            "training_data_sha256": training_data_sha256,
         }
 
         if idempotency_key is not None:
@@ -350,13 +370,14 @@ class RegistryStore:
                 """INSERT INTO registry_entries
                    (id, name, base_model, task, run_id, config_json,
                     config_hash, data_hash, entry_hash, created_at, notes,
-                    idempotency_key)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    idempotency_key, base_revision, base_revision_source, training_data_sha256)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     entry_id, name, base_model, task, run_id,
                     json.dumps(config, default=str, sort_keys=True),
                     config_hash, data_hash, entry_hash, now, notes,
                     idempotency_key,
+                    base_revision, base_revision_source, training_data_sha256,
                 ),
             )
             conn.execute(
@@ -786,7 +807,10 @@ class RegistryStore:
 
         ``data_path`` names the file to record as the run's training input; its
         SHA-256 becomes ``data_hash``. It is what the caller says was trained on,
-        not proof of it. Without it, ``data_hash`` stays ``None``.
+        not proof of it. Without it, a historical ``training_data_sha256`` is
+        copied without reopening today's data file (legacy runs remain unknown).
+        With it, the explicit file takes precedence for ``data_hash`` while the
+        separate historical field is retained. ``entry_hash`` binds that choice.
         ``idempotency_key`` is passed to :meth:`push`.
         """
         run = tracker.get_run(run_id)
@@ -813,6 +837,9 @@ class RegistryStore:
             data_path=data_path,
             notes=notes,
             idempotency_key=idempotency_key,
+            base_revision=run.get("base_revision"),
+            base_revision_source=run.get("base_revision_source"),
+            training_data_sha256=run.get("training_data_sha256"),
         )
 
     def get_eval_results(self, entry_id: str) -> list[dict]:

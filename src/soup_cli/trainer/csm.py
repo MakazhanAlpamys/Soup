@@ -8,6 +8,7 @@ from typing import Any
 from soup_cli.trainer.sft import SFTTrainerWrapper, console
 from soup_cli.utils.csm import validate_csm_config, validate_csm_dataset, validate_csm_row
 from soup_cli.utils.eval_schedule import training_eval_kwargs
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 
@@ -149,6 +150,7 @@ class CSMTrainerWrapper(SFTTrainerWrapper):
         apply_training_seed(tcfg)
         self.processor = CsmProcessor.from_pretrained(
             cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         # Saving the processor, rather than just its tokenizer, preserves the
         # feature extractor + native chat template for reload/inference.
@@ -157,6 +159,7 @@ class CSMTrainerWrapper(SFTTrainerWrapper):
             cfg.base,
             torch_dtype=resolve_base_load_dtype(self.device, full_finetune=tcfg.lora.r == 0),
             trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if (self.model.config.num_codebooks != 32
                 or self.model.codec_model.config.num_quantizers != 32

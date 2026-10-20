@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import random
 import re
-import statistics
 import time
 from pathlib import Path
 
@@ -13,6 +12,7 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.utils import data_score
+from tests._growth_timing import assert_grows_linearly
 
 _BASELINE_EMAIL_PATTERN = re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b")
 _PATHOLOGICAL_RUNS = ("1-", "1.", "a.", "a-", "a+")
@@ -30,34 +30,43 @@ def _email_snippets(text: str) -> list[str]:
     ]
 
 
+def _row(run: str, length: int) -> str:
+    return (run * ((length + len(run) - 1) // len(run)))[:length]
+
+
+def test_email_pattern_growth_is_linear() -> None:
+    """The pattern alone: an 8x longer row must not take 32x the time (linear 8x, quadratic 64x).
+
+    ``detect_pii`` reads only the first ``_PII_SCAN_CAP`` characters, so a row long enough to
+    time reliably is past what it scans. The compiled pattern has no such cap: the helper
+    doubles the row until one search lasts long enough to time, then compares it with 8x.
+    """
+    pattern = _email_pattern()
+    for run in _PATHOLOGICAL_RUNS:
+        assert_grows_linearly(
+            pattern.search, lambda length, run=run: _row(run, length), 500, label=repr(run)
+        )
+
+
 def test_email_detection_growth_is_subquadratic(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An 8x longer row must not consume 64x the regex time."""
+    """``detect_pii`` end to end (all four patterns), within the rows it scans in full."""
     monkeypatch.setattr(data_score, "_presidio_pii", lambda _text: None)
     n = 5_000
 
     for run in _PATHOLOGICAL_RUNS:
-        smaller = (run * ((n + len(run) - 1) // len(run)))[:n]
-        larger = (run * ((8 * n + len(run) - 1) // len(run)))[: 8 * n]
-
-        small_samples = []
-        large_samples = []
-        for _ in range(3):
-            start = time.perf_counter()
-            small_hits = data_score.detect_pii(smaller)
-            small_samples.append(time.perf_counter() - start)
-
-            start = time.perf_counter()
-            large_hits = data_score.detect_pii(larger)
-            large_samples.append(time.perf_counter() - start)
-
-        small_elapsed = statistics.median(small_samples)
-        large_elapsed = statistics.median(large_samples)
-
-        assert not any(hit["kind"] == "email" for hit in small_hits)
-        assert not any(hit["kind"] == "email" for hit in large_hits)
-        assert large_elapsed < small_elapsed * 32, (
-            f"{run!r}: 8N took {large_elapsed:.3f}s vs N {small_elapsed:.3f}s"
+        # The growth check goes first: a quadratic pattern fails here in seconds, where
+        # scanning the 8n row for the no-hit check below would take it minutes. The cap keeps
+        # the larger row inside the 50,000 characters ``detect_pii`` reads (past it the time
+        # stops growing and the check would pass for any pattern).
+        assert_grows_linearly(
+            data_score.detect_pii,
+            lambda length, run=run: _row(run, length),
+            n // 10,
+            label=repr(run),
+            cap=data_score._PII_SCAN_CAP,
         )
+        for text in (_row(run, n), _row(run, 8 * n)):
+            assert not any(hit["kind"] == "email" for hit in data_score.detect_pii(text))
 
 
 def test_email_detection_matches_baseline_row_flags_on_seeded_texts() -> None:

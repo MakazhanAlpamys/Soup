@@ -25,6 +25,7 @@ from soup_cli.utils.mixed_precision import (
     align_trainable_dtype_for_fp16,
     keep_trainable_dtype_on_resume,
 )
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 from soup_cli.utils.terminal import for_terminal
 
@@ -1643,7 +1644,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -1684,7 +1686,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             from soup_cli.utils.long_context import apply_long_context_config
 
             model_config = AutoConfig.from_pretrained(
-                cfg.base, trust_remote_code=self._trust_remote_code
+                cfg.base, trust_remote_code=self._trust_remote_code,
+                **base_revision_kwargs(cfg.base),
             )
             rope_config = apply_long_context_config(
                 model_config,
@@ -1699,7 +1702,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             if rope_config:
                 model_kwargs["config"] = model_config
 
-        self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
         apply_vocab_expansion(
@@ -1863,12 +1869,18 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
             # v0.39.0 Part D / v0.40.6 #67 — surgical PEFT patches via shared helpers.
             from soup_cli.utils.peft_wiring import (
+                apply_fast_lora_patches,
                 apply_post_lora_patches,
                 apply_pre_lora_patches,
+                fast_lora_summary,
             )
             apply_pre_lora_patches(self.model, cfg.base)
             self.model = get_peft_model(self.model, lora_config)
             apply_post_lora_patches(self.model)
+            # #792 — after every other LoRA patch, so the kernels see the final modules.
+            fast_lora_counts = apply_fast_lora_patches(self.model, tcfg)
+            if fast_lora_counts is not None:
+                console.print(f"[green]{fast_lora_summary(fast_lora_counts)}[/]")
 
             # v0.71.12 #84 — Mixture-of-Depths selective-token routing. Applied
             # AFTER get_peft_model so the freshly-added routers are trainable.
@@ -1921,7 +1933,13 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def _setup_unsloth(self, cfg, tcfg):
         """Load model via unsloth FastLanguageModel (2-5x faster)."""
+        from soup_cli.utils import unsloth
         from soup_cli.utils.unsloth import load_model_and_tokenizer
+        # #797: resolve training.gradient_checkpointing for the Unsloth path
+        # (streaming layers already checkpoint every layer, so it stays off).
+        use_gradient_checkpointing = unsloth.resolve_unsloth_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=getattr(tcfg, "stream_layers", False)
+        )
 
         console.print(f"[dim]Loading model via [bold]unsloth[/]: {cfg.base}[/]")
         self.model, self.tokenizer = load_model_and_tokenizer(
@@ -1933,6 +1951,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             lora_dropout=tcfg.lora.dropout,
             target_modules=tcfg.lora.target_modules,
             use_rslora=tcfg.lora.use_rslora,
+            use_gradient_checkpointing=use_gradient_checkpointing,
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -1944,7 +1963,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
         console.print(f"[dim]Loading vision processor: {cfg.base}[/]")
         self.processor = AutoProcessor.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         # Idefics3/SmolVLM (and other) processors keep the text tokenizer nested
         # and don't forward pad_token/eos_token — mirror them onto the processor
@@ -1983,7 +2003,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
 
-        self.model = AutoModelForImageTextToText.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModelForImageTextToText.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
         apply_vocab_expansion(
@@ -2115,7 +2138,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         )
         console.print(f"[dim]Loading audio processor: {cfg.base}[/]")
         self.processor = AutoProcessor.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         self.tokenizer = self.processor  # SFTTrainer uses processing_class
 
@@ -2147,7 +2171,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
         # Use AutoModel for audio models — AutoModelForCausalLM doesn't handle
         # audio-language architectures (Qwen2-Audio, Whisper, etc.)
-        self.model = AutoModel.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModel.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
         apply_vocab_expansion(

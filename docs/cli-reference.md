@@ -3470,6 +3470,8 @@ Usage: `soup ship [OPTIONS] [<command>] [ARGS]...`
 | `--output`, `-o` | text |  |  | Write the verdict JSON to this path. |
 | `--emit-evidence` | text |  |  | Write the scores in the --evidence INPUT schema so this run can be replayed offline (output-is-input). With --config it also STAMPS the config's provenance onto the emitted evidence. |
 | `--config` | text |  |  | soup.yaml whose eval.ship block supplies defaults (CLI flags win). With --evidence alone it GATES (refuses evidence whose config_sha drifted from this config, or whose numerics family does not match); with --emit-evidence it STAMPS this config's provenance. |
+| `--require-provenance` | flag | off |  | Strict offline drift check: requires --evidence, --config, --adapter and task eval. Compare artifact/task/source bytes, suite version and effective verdict policy. |
+| `--data-sha256` | text |  |  | Caller-asserted training-data SHA-256 for emitted/strict evidence; not proof of which bytes trained the model. |
 | `--push` | text |  |  | Post the verdict as a GitHub PR comment (owner/repo#N). Auth via GITHUB_TOKEN / GH_TOKEN; needs the `gh` CLI. |
 | `--device` | text |  |  | Device for the live run (cuda / cpu). |
 | `--chat-template-kwargs` | text |  |  | Live chat-template variables as a JSON object, e.g. {"enable_thinking":false}. |

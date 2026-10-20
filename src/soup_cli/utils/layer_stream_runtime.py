@@ -2493,6 +2493,26 @@ def _stamp_4bit_markers(model: Any, quant_config: Any) -> None:
         model.config.quantization_config = quant_config
 
 
+def _drop_fp8_source_quantization(config: Any) -> None:
+    """Build the streamed skeleton at the stream dtype even over an FP8 block source.
+
+    An FP8 block checkpoint's ``config.json`` declares ``quantization_config`` with
+    ``quant_method: "fp8"``. The sharder dequantises those weights (``utils/fp8_block``),
+    so the shards hold the stream dtype (or NF4) and the modules must be plain
+    ``nn.Linear`` (or ``Linear4bit``): transformers' FP8 quantizer, applied from this
+    config, would turn them into ``FP8Linear`` modules expecting FP8 bytes and scales.
+    ``from_config`` does not apply it today (transformers 5.17), but the config would
+    still claim FP8 on a model holding none, for any reader of ``model.config``.
+
+    Only this skeleton's own config object is changed: ``config.json`` on disk and every
+    resident load (``from_pretrained``, which dequantises or runs FP8 itself) are not.
+    """
+    from soup_cli.utils.fp8_block import is_fp8_quantization_config
+
+    if is_fp8_quantization_config(getattr(config, "quantization_config", None)):
+        del config.quantization_config
+
+
 def build_meta_skeleton(
     model_id: str,
     *,
@@ -2520,6 +2540,7 @@ def build_meta_skeleton(
     torch_dtype = _torch_dtype(dtype)
     config = AutoConfig.from_pretrained(model_id, trust_remote_code=trust_remote_code)
     config.use_cache = False
+    _drop_fp8_source_quantization(config)
     quant_config = None
     if quant == QUANT_NF4:
         quant_config = build_nf4_config(dtype, double_quant=double_quant)
@@ -2922,6 +2943,11 @@ class StreamRuntime:
             # number there would be an invented one.
             "read_ahead": getattr(self.source, "read_ahead", None),
             "disk_bytes": getattr(self.source, "disk_bytes", 0),
+            "drive_count": len(getattr(self.source, "direct_io_roots", {})),
+            "direct_io_drives": sum(
+                getattr(self.source, "direct_io_roots", {}).values()
+            ),
+            "direct_io_roots": dict(getattr(self.source, "direct_io_roots", {})),
             "layer_loads": self.pool.loads,
             "large_loads": getattr(self.large_pool, "loads", 0),
             "device": self.device,
@@ -3513,6 +3539,25 @@ def _say_unaligned_staging(source: Any, console: Any) -> None:
         console.print(f"[yellow]{UNALIGNED_STAGING_MESSAGE}[/]")
 
 
+def _say_page_cache_roots(source: Any, console: Any) -> None:
+    """Name each drive whose operating system refused direct I/O (#1615)."""
+    if console is None:
+        return
+    from soup_cli.utils.terminal import for_terminal
+
+    for root, reason in getattr(source, "page_cache_reasons", {}).items():
+        console.print(
+            "[yellow]Layer streaming reads "
+            f"{for_terminal(root)} through the page cache: direct I/O is unavailable there "
+            f"({for_terminal(reason)}).[/]"
+        )
+
+
+def _say_disk_source_fallbacks(source: Any, console: Any) -> None:
+    _say_unaligned_staging(source, console)
+    _say_page_cache_roots(source, console)
+
+
 def _build_source(
     shard_dir,
     n_layers,
@@ -3614,10 +3659,10 @@ def _build_source(
                 # otherwise report as an out-of-memory it never had.
                 recover_from_failed_page_lock(console=console)
             else:
-                _say_unaligned_staging(source, console)
+                _say_disk_source_fallbacks(source, console)
                 return source, source.pinned
         source = AsyncDiskSource(shard_dir, n_layers, spec, pin=False, **open_kwargs)
-        _say_unaligned_staging(source, console)
+        _say_disk_source_fallbacks(source, console)
         return source, source.pinned
     # `source.pinned` on both branches rather than the literal, so the tuple's
     # second element has ONE meaning to read off: what the source says about

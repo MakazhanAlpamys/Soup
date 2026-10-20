@@ -838,7 +838,8 @@ class TestAnAdapterOffReferenceMustBeTheStartingModel:
         [
             (_LORA[:-1] + ", init_strategy: pissa}", FIELDS, "init_strategy='pissa'"),
             (_LORA[:-1] + ", use_olora: true}", FIELDS, "training.lora.use_olora=True"),
-            (_LORA, FIELDS + "  relora_steps: 1\n", "training.relora_steps=1"),
+            # relora_steps with a dpo / ipo term no longer gets this far: the
+            # config refuses it when it is loaded (#1835).
         ],
     )
     def test_a_real_setup_refuses_before_the_model_is_loaded(
