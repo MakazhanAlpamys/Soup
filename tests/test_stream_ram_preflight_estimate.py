@@ -228,6 +228,8 @@ class TestAFusedMoeBase:
         assert seen["shards"] == []  # nothing was sharded
         assert [call["ram_bytes"] for call in seen["early"]] == [need]
         assert seen["early"][0]["approximate"] is False
+        # the on-disk figure is the source size (the harness reports 1,024 bytes)
+        assert seen["early"][0]["source_bytes"] == 1_024
 
     def test_the_old_flat_rate_would_have_let_it_through(self, tmp_path):
         """The control: at that free RAM the flat figure is under the headroom."""
@@ -694,3 +696,146 @@ class TestADenseBase:
             )
         )
         assert seen["early"][0]["ram_bytes"] == sum(estimate.layer_bytes) + estimate.other_bytes
+
+
+# --------------------------------------------------------------------------
+# review round: psutil without figures, both ceilings, the printed figures, a bad checkpoint
+# --------------------------------------------------------------------------
+def _message(check):
+    with pytest.raises(ValueError) as excinfo:
+        check()
+    return " ".join(str(excinfo.value).split())
+
+
+def _early(**overrides):
+    from soup_cli.trainer.stream_setup import _validate_early_ram_fit
+
+    kwargs = dict(
+        base=_BASE, source_bytes=0, ram_bytes=0, approximate=False, quantised=True,
+        free_ram=10**15, total_ram=None,
+    )
+    kwargs.update(overrides)
+    return _validate_early_ram_fit(**kwargs)
+
+
+def _late(*, ram, free, total):
+    from soup_cli.trainer.stream_setup import _validate_qwen4_ngram_ram_fit
+
+    return _validate_qwen4_ngram_ram_fit(
+        stream_source="ram", ngram_source="disk", required_ram=ram, free_ram=free,
+        resident_ram=0, total_ram=total,
+    )
+
+
+class TestWhenPsutilCannotReportRam:
+    """After sharding, an unknown free RAM is replaced by ten times the store (with a
+    notice), so only the 55% physical ceiling can still refuse, and only when the total is
+    known. The early check does the same: no free-RAM rule, the physical one if it can."""
+
+    def test_no_figures_at_all_proceed_to_sharding_with_the_notice(self, tmp_path, monkeypatch):
+        import io
+
+        from rich.console import Console
+
+        import soup_cli.trainer.stream_setup as stream_setup
+
+        buffer = io.StringIO()
+        monkeypatch.setattr(
+            stream_setup, "console", Console(file=buffer, width=400, color_system=None)
+        )
+        seen = _passed(
+            _drive(
+                tmp_path, monkeypatch, weights=_moe_dir(tmp_path), free_ram=None,
+                total_ram=None,
+            )
+        )
+        assert len(seen["shards"]) == 1
+        text = " ".join(buffer.getvalue().split())
+        assert "psutil unavailable" in text and "cannot size the RAM tier" in text
+        assert text.count("psutil unavailable") == 1  # said once, by the check after sharding
+
+    def test_unknown_free_ram_still_meets_the_physical_ceiling(self, tmp_path, monkeypatch):
+        weights = _moe_dir(tmp_path)
+        need = _estimate(weights).ram_tier_bytes
+        seen = _drive(tmp_path, monkeypatch, weights=weights, free_ram=None, total_ram=need)
+        text = _text(seen)
+        assert "more than 55% of physical RAM" in text
+        assert "Refusing before sharding" in text
+        assert seen["shards"] == []
+
+    def test_unknown_free_ram_under_the_physical_ceiling_passes(self, tmp_path, monkeypatch):
+        weights = _moe_dir(tmp_path)
+        need = _estimate(weights).ram_tier_bytes
+        seen = _passed(
+            _drive(tmp_path, monkeypatch, weights=weights, free_ram=None, total_ram=need * 2)
+        )
+        assert [call["ram_bytes"] for call in seen["early"]] == [need]
+        assert len(seen["shards"]) == 1
+
+    @pytest.mark.parametrize(("free", "total"), [(None, None), (None, 10**15), (10**15, None)])
+    def test_an_unknown_figure_never_refuses_on_its_own(self, free, total):
+        _early(ram_bytes=10**12, free_ram=free, total_ram=total)
+
+
+def test_over_both_ceilings_the_physical_one_is_named_as_after_sharding():
+    """The late check tests 55% of physical RAM first; the early refusal names it too."""
+    early = _message(lambda: _early(ram_bytes=8_000, free_ram=10_000, total_ram=10_000))
+    late = _message(lambda: _late(ram=8_000, free=10_000, total=10_000))
+    for text in (early, late):
+        assert "55% of physical RAM (0.0 GB)" in text, text
+        assert "of RAM is free" not in text, text
+
+
+class TestTheRefusalPrintsTheFiguresItCompared:
+    def test_the_header_estimate(self):
+        text = _message(
+            lambda: _early(
+                base="org/model", source_bytes=16_000_000_000, ram_bytes=30_600_000_000,
+                free_ram=20_000_000_000,
+            )
+        )
+        assert (
+            "training.stream_source='ram' but org/model needs 30.6 GB of RAM once sharded"
+            in text
+        )
+        assert "(sized from its safetensors headers; 16.0 GB on disk)" in text
+        assert "and only 20.0 GB of RAM is free" in text
+
+    def test_the_fallback(self):
+        text = _message(
+            lambda: _early(
+                base="org/model", source_bytes=16_000_000_000, ram_bytes=4_100_000_000,
+                approximate=True, free_ram=5_000_000_000,
+            )
+        )
+        assert (
+            "org/model is 16.0 GB on disk, approximately 4.1 GB once quantised to NF4" in text
+        )
+        assert "and only 5.0 GB of RAM is free" in text
+
+    def test_the_physical_ceiling(self):
+        text = _message(
+            lambda: _early(
+                source_bytes=16_000_000_000, ram_bytes=30_600_000_000,
+                total_ram=40_000_000_000,
+            )
+        )
+        assert "needs 30.6 GB of RAM once sharded" in text
+        assert "16.0 GB on disk" in text
+        assert "more than 55% of physical RAM (40.0 GB)" in text
+
+
+@pytest.mark.parametrize("run_preflight", [True, False], ids=["after-preflight", "own-estimate"])
+def test_a_checkpoint_the_sharder_refuses_is_refused_not_approximated(
+    tmp_path, monkeypatch, run_preflight
+):
+    """Only an unreadable header falls back; a checkpoint the sharder would refuse is
+    refused in its words, before any shard, whichever check sizes it first."""
+    tensors = _moe_tensors()
+    del tensors["model.layers.1.mlp.experts.2.up_proj.weight"]
+    seen = _drive(
+        tmp_path, monkeypatch, weights=_moe_dir(tmp_path, tensors), run_preflight=run_preflight
+    )
+    assert "incomplete expert projections" in _text(seen)
+    assert seen["early"] == []
+    assert seen["shards"] == []

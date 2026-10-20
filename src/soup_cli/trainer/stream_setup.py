@@ -220,7 +220,7 @@ def _validate_early_ram_fit(
     ram_bytes: int,
     approximate: bool,
     quantised: bool,
-    free_ram: int,
+    free_ram: Optional[int],
     total_ram: Optional[int],
 ) -> None:
     """Refuse a ``stream_source: ram`` run BEFORE sharding when the RAM tier cannot hold it.
@@ -234,6 +234,10 @@ def _validate_early_ram_fit(
     ``approximate`` marks the fallback for source headers that cannot be listed or read:
     the flat NF4 rate on the size on disk, which errs low (far low for a fused MoE base)
     and is labelled as a guess, the way the disk pre-flight panel labels it.
+
+    A figure psutil cannot report (``None``) is not checked. That mirrors the check
+    after sharding, which replaces an unknown free RAM by ten times the store and so
+    can still refuse only by the physical ceiling, when the total is known.
     """
     from soup_cli.utils.layer_stream import (
         PHYSICAL_RAM_TIER_HEADROOM,
@@ -246,7 +250,7 @@ def _validate_early_ram_fit(
             f"more than {PHYSICAL_RAM_TIER_HEADROOM_PERCENT}% of physical RAM "
             f"({total_ram / 1e9:.1f} GB)"
         )
-    elif ram_bytes >= free_ram * RAM_TIER_HEADROOM:
+    elif free_ram is not None and ram_bytes >= free_ram * RAM_TIER_HEADROOM:
         limit = f"and only {free_ram / 1e9:.1f} GB of RAM is free"
     else:
         return
@@ -1162,9 +1166,9 @@ class StreamingSetupMixin:
         # Qwen4's source size includes the PLE table, which the sharder leaves
         # external. Its exact RAM/disk decision is made from the safetensors header
         # below; counting it here would reject the very `stream_ngram_source: disk`
-        # run this path enables.
-        early_free_ram = free_ram_bytes()
-        if early_free_ram is not None and arch != "qwen4_exp" and tcfg.stream_source == "ram":
+        # run this path enables. A RAM figure psutil cannot report is not checked,
+        # as after sharding (see `_validate_early_ram_fit`).
+        if arch != "qwen4_exp" and tcfg.stream_source == "ram":
             if "cache" in preflight_estimate:
                 cache_estimate = preflight_estimate["cache"]
             else:
@@ -1186,7 +1190,7 @@ class StreamingSetupMixin:
                 ram_bytes=ram_bytes,
                 approximate=cache_estimate is None,
                 quantised=quant != QUANT_NONE,
-                free_ram=early_free_ram,
+                free_ram=free_ram_bytes(),
                 total_ram=total_ram_bytes(),
             )
 
