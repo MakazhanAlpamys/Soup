@@ -54,7 +54,9 @@ _LAMBDA_SUBMIT_OVERRIDE: Optional[Callable[["CloudPlan"], int]] = None
 #     ``BatchMode=yes``;
 #   * the proxy and certificate variables ``urllib`` / ``ssl`` read for the
 #     Lambda API call;
-#   * the locale variables that pick the output encoding.
+#   * the locale variables that pick the output encoding;
+#   * the dynamic-loader search paths, so an interpreter built against a shared
+#     ``libpython`` still finds its library.
 # ``-I`` also ignores every ``PYTHON*`` variable, so none is forwarded.
 _CONTROLLER_ENV_NAMES: frozenset[str] = frozenset({
     "LAMBDA_API_KEY",
@@ -89,6 +91,9 @@ _CONTROLLER_ENV_NAMES: frozenset[str] = frozenset({
     "LANG",
     "LC_ALL",
     "LC_CTYPE",
+    "LD_LIBRARY_PATH",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_FALLBACK_LIBRARY_PATH",
 })
 
 
@@ -175,6 +180,12 @@ def render_lambda_stub(
         "import time",
         "import urllib.error",
         "import urllib.request",
+        "",
+        "# Started with -I, which ignores PYTHONIOENCODING and PYTHONUTF8: replace what the",
+        "# output encoding cannot show, so a log line is printed rather than raising.",
+        "for _stream in (sys.stdout, sys.stderr):",
+        "    if hasattr(_stream, 'reconfigure'):",
+        "        _stream.reconfigure(errors='replace')",
         "",
         f"_INSTANCE_TYPE = {lambda_gpu!r}",
         f"_USER_DATA = {user_data!r}",
@@ -463,7 +474,7 @@ def plan_lambda_run(
         output_dir=output_dir,
         stub_path=stub_path,
         stub_text=stub_text,
-        run_command=f"python {stub_path}",
+        run_command=f"python -I {stub_path}",
     )
 
 

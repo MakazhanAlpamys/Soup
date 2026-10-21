@@ -86,6 +86,21 @@ def test_controller_argv_starts_with_the_isolated_interpreter_flag(launched, mon
     assert launch.argv == [sys.executable, "-I", "x.py"]
 
 
+def test_printed_manual_run_command_uses_the_isolated_interpreter_flag(tmp_path, monkeypatch):
+    from soup_cli.cloud.lambda_labs import plan_lambda_run
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "soup.yaml").write_text("base: x\n", encoding="utf-8")
+
+    plan = plan_lambda_run(
+        "soup.yaml", gpu="a100", output_dir="./out", soup_version="0.76.0", stub_path="ctl.py"
+    )
+
+    # The command a user is told to run starts the controller the way
+    # ``--cloud-submit`` does: ``python -I <stub>``.
+    assert plan.run_command == "python -I ctl.py"
+
+
 def test_controller_gets_the_lambda_and_os_variables_it_reads(launched, monkeypatch):
     _set_lambda_env(monkeypatch)
     monkeypatch.setenv("LAMBDA_REGION", "us-west-1")
@@ -163,9 +178,12 @@ def test_other_tool_settings_in_the_parent_are_not_forwarded(launched, monkeypat
         "NO_PROXY",
         "no_proxy",
         "LANG",
+        "LD_LIBRARY_PATH",
+        "DYLD_LIBRARY_PATH",
+        "DYLD_FALLBACK_LIBRARY_PATH",
     ],
 )
-def test_network_agent_and_locale_settings_are_forwarded(launched, monkeypatch, name):
+def test_network_agent_locale_and_library_settings_are_forwarded(launched, monkeypatch, name):
     _set_lambda_env(monkeypatch)
     monkeypatch.setenv(name, "value")
 
@@ -318,3 +336,94 @@ def test_rendered_controller_does_not_import_modules_from_its_own_directory(tmp_
     assert "imported from the controller directory" not in isolated.stderr
     # The control run proves the sibling module is really on the path without -I.
     assert "imported from the controller directory" in plain.stderr
+
+
+# ``-I`` also ignores PYTHONUTF8 and PYTHONIOENCODING, so the controller's output goes
+# through the platform default encoding (the ANSI code page on a Windows pipe). The
+# rendered file reconfigures stdout and stderr to replace what that encoding cannot
+# show, so a log line with such a character is printed instead of raising.
+#
+# The harness runs the real controller code under ``-I``: ``narrow`` first puts both
+# streams on an ASCII pipe encoding that raises on anything else (the same failure a
+# Windows code page gives, on every platform); ``native`` keeps whatever the platform
+# default is. ``stdout`` then drives ``main()``'s own print path with a failing Lambda
+# call; ``stderr`` writes one line after the controller has been loaded.
+_ENCODING_HARNESS = r'''
+import sys
+
+stream, mode, stub = sys.argv[1:4]
+if mode == "narrow":
+    for handle in (sys.stdout, sys.stderr):
+        handle.reconfigure(encoding="ascii", errors="strict")
+namespace = {"__name__": "controller_under_test"}
+with open(stub, encoding="utf-8") as fh:
+    source = fh.read()
+exec(compile(source, stub, "exec"), namespace)
+text = "remote said: \u2588 \u00e9 \u65e5"
+if stream == "stdout":
+    def _fail(*args, **kwargs):
+        raise RuntimeError(text)
+    namespace["_request_json"] = _fail
+    sys.exit(namespace["main"]())
+sys.stderr.write("stderr line: " + text + "\n")
+sys.stderr.flush()
+'''
+
+
+def _run_encoding_harness(tmp_path: Path, stream: str, mode: str):
+    from soup_cli.cloud.lambda_labs import _controller_environment
+
+    stub = _render_controller(tmp_path)
+    harness = tmp_path / "encoding_harness.py"
+    harness.write_text(_ENCODING_HARNESS, encoding="utf-8")
+    key = tmp_path / "key"
+    key.write_text("not a real key\n", encoding="utf-8")
+    parent_env = _parent_env(
+        LAMBDA_API_KEY="k",
+        LAMBDA_SSH_KEY_NAME="n",
+        LAMBDA_SSH_PRIVATE_KEY=str(key),
+    )
+    # No PYTHONIOENCODING / PYTHONUTF8: the controller environment never carries them.
+    return subprocess.run(
+        [sys.executable, "-I", str(harness), stream, mode, str(stub)],
+        env=_controller_environment(parent_env),
+        cwd=tmp_path,
+        capture_output=True,
+        timeout=120,
+    )
+
+
+def test_stdout_prints_a_line_its_encoding_cannot_show(tmp_path):
+    result = _run_encoding_harness(tmp_path, "stdout", "narrow")
+
+    stdout = result.stdout.decode("ascii")
+    stderr = result.stderr.decode("utf-8", errors="replace")
+    assert "UnicodeEncodeError" not in stderr, stderr
+    assert result.returncode == 1, (stdout, stderr)
+    assert "Lambda training failed: remote said: ? ? ?" in stdout
+
+
+def test_stderr_writes_a_line_its_encoding_cannot_show(tmp_path):
+    result = _run_encoding_harness(tmp_path, "stderr", "narrow")
+
+    stderr = result.stderr.decode("ascii")
+    assert "UnicodeEncodeError" not in stderr, stderr
+    assert result.returncode == 0, (result.stdout, stderr)
+    assert "stderr line: remote said: ? ? ?" in stderr
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_output_with_the_platform_default_pipe_encoding_does_not_raise(tmp_path, stream):
+    # Windows pipes use the ANSI code page, which cannot show U+2588 or U+65E5; on
+    # other platforms the default is usually UTF-8 and this is a smoke run.
+    result = _run_encoding_harness(tmp_path, stream, "native")
+
+    stdout = result.stdout.decode("utf-8", errors="replace")
+    stderr = result.stderr.decode("utf-8", errors="replace")
+    assert "UnicodeEncodeError" not in stderr, stderr
+    if stream == "stdout":
+        assert result.returncode == 1, (stdout, stderr)
+        assert "Lambda training failed: remote said:" in stdout
+    else:
+        assert result.returncode == 0, (stdout, stderr)
+        assert "stderr line: remote said:" in stderr
