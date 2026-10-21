@@ -247,14 +247,15 @@ chosen and rejected completion tokens:
   so the NLL is a token mean over the chosen completion tokens of the whole
   batch (not a mean of per-row means). This differs from ORPO, whose NLL
   includes the prompt. `cpo_alpha` weights it (`> 0`, as on the transformers
-  backend).
+  backend). With `gradient_accumulation_steps > 1` the NLL is a token mean per
+  micro-batch and the micro-batches are averaged with equal weight, as the
+  transformers Trainer does for TRL's CPO.
 - **Tokens** are ORPO's above: TRL's CPO and ORPO trainers tokenize rows with
   the same code, so rows that fit in `data.max_length` train on the same tokens
   on either backend. Over-long rows are cut with Soup's cap (prompt to
   `max_length // 2`, keeping its end, answers to the remaining room). The
   transformers SimPO path applies no prompt cap: TRL 0.29.1 cuts only the
   answers there, and Soup refuses a row whose shorter answer that cut empties.
-  A row with no room for an answer is refused on MLX too.
 - **Ties train**, as in TRL: the preference term is the constant
   `softplus(simpo_gamma)` and the NLL still learns.
 - **Stops on a nonfinite loss** instead of training on NaN.
