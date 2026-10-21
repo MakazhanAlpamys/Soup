@@ -28,20 +28,30 @@ def test_invoke_is_the_installed_typer_implementation(force_color: bool) -> None
 
 @pytest.mark.parametrize("preserve", [False, True])
 @pytest.mark.parametrize("fail", [False, True])
-@pytest.mark.parametrize(
-    "symlink_temp_root", [False, pytest.param(True, marks=pytest.mark.requires_symlink)],
-)
 def test_filesystem_restores_cwd_and_respects_directory_lifecycle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, preserve: bool, fail: bool,
-    symlink_temp_root: bool,
+) -> None:
+    _assert_filesystem_lifecycle(tmp_path, monkeypatch, preserve, fail)
+
+
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize("preserve", [False, True])
+@pytest.mark.parametrize("fail", [False, True])
+def test_filesystem_with_symlinked_temporary_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, preserve: bool, fail: bool,
+) -> None:
+    target = tmp_path / "temporary-root"
+    target.mkdir()
+    alias = tmp_path / "temporary-alias"
+    alias.symlink_to(target, target_is_directory=True)
+    monkeypatch.setattr(tempfile, "tempdir", str(alias))
+    _assert_filesystem_lifecycle(tmp_path, monkeypatch, preserve, fail)
+
+
+def _assert_filesystem_lifecycle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, preserve: bool, fail: bool,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    if symlink_temp_root:
-        target = tmp_path / "temporary-root"
-        target.mkdir()
-        alias = tmp_path / "temporary-alias"
-        alias.symlink_to(target, target_is_directory=True)
-        monkeypatch.setattr(tempfile, "tempdir", str(alias))
     expectation = pytest.raises(RuntimeError, match="inside isolation") if fail else nullcontext()
     directory: Path | None = None
 
