@@ -374,6 +374,7 @@ def _per_expert_linear_moe(
     dense_out=False,
     layers=1,
     experts=2,
+    block_gate_proj=None,
 ):
     """One ``nn.Linear`` per expert and an ``nn.Linear`` router, as ``model_type``.
 
@@ -381,7 +382,8 @@ def _per_expert_linear_moe(
     router weight); a ``qwen2_moe`` it does not. ``shared_gate`` adds a one-logit
     ``shared_expert_gate``; ``attn_gate`` a non-router ``nn.Linear`` whose leaf name is
     the router's, ``gate``; ``dense_out`` an attention ``nn.Linear`` no MoE name
-    reaches.
+    reaches; ``block_gate_proj`` (an output size) a ``gate_proj`` beside the router,
+    whose path starts with the router's.
     """
 
     class _PerExpertLinearMoE(torch.nn.Module):
@@ -406,6 +408,8 @@ def _per_expert_linear_moe(
                     for _ in range(experts)
                 )
                 block = {"gate": torch.nn.Linear(8, experts), "experts": per_expert}
+                if block_gate_proj is not None:
+                    block["gate_proj"] = torch.nn.Linear(8, block_gate_proj)
                 if shared_gate:
                     block["shared_expert_gate"] = torch.nn.Linear(8, 1)
                 blocks.append(
@@ -577,6 +581,20 @@ class TestTheGatesStayOutOnStandIns:
         assert set(peft_config.exclude_modules) == {_ROUTER, _SHARED_GATE}
         assert not {_ROUTER, _SHARED_GATE} & modules and not params
         assert "layers.0.block_sparse_moe.experts.0.gate_proj" in modules
+
+    @pytest.mark.parametrize("model_type", ["qwen2_moe", "mixtral"])
+    def test_a_gate_proj_beside_the_router_is_still_adapted(self, model_type):
+        """``…block_sparse_moe.gate_proj`` starts with the router's path, not inside it."""
+        gate_proj = "layers.0.block_sparse_moe.gate_proj"
+        targets, peft_config, modules, params = _stand_in_attach(
+            _tcfg(), "all-linear", model_type=model_type, block_gate_proj=16
+        )
+
+        assert gate_proj in modules
+        assert _ROUTER not in modules and not params
+        if model_type == "qwen2_moe":
+            assert isinstance(targets, MoeLoraTargetString)
+            assert list(peft_config.exclude_modules) == [_ROUTER]
 
     def test_vera_gets_a_list_because_vera_has_no_exclude_modules(self):
         targets, peft_config, modules, _ = _stand_in_attach(
@@ -1003,6 +1021,22 @@ class TestTheGatesAreFoundByStructure:
                 )
 
         assert moe_mod.find_moe_gates(_Model()) == ["mlp.gate"]
+
+    def test_in_an_experts_block_the_output_decides_not_the_name(self):
+        """A child with one output per expert is taken there, a ``gate_proj`` too.
+
+        The documented trade-off: leaving such a module unadapted is the safer error.
+        With any other output size the same ``gate_proj`` is not a gate.
+        """
+        torch = pytest.importorskip("torch")
+        gate_proj = "layers.0.block_sparse_moe.gate_proj"
+
+        assert gate_proj in moe_mod.find_moe_gates(
+            _per_expert_linear_moe(torch, block_gate_proj=2)
+        )
+        assert gate_proj not in moe_mod.find_moe_gates(
+            _per_expert_linear_moe(torch, block_gate_proj=16)
+        )
 
     def test_a_single_expert_block_routes_nothing(self):
         torch = pytest.importorskip("torch")

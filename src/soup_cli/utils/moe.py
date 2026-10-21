@@ -470,9 +470,15 @@ def find_moe_gates(model) -> list[str]:
 
     A module's output dimension is its ``out_features``, the rows of its own 2-D
     ``weight`` (the transformers-5 ``TopKRouter`` holds a bare parameter), or the
-    ``out_features`` of its sole child (a router that wraps one ``nn.Linear``). A
-    ``gate_proj`` is never a candidate, nor an attention ``gate`` with no expert
-    tensor beside it. Model order; a stand-in with no modules yields ``[]``.
+    ``out_features`` of its sole child (a router that wraps one ``nn.Linear``).
+
+    Only the second layout looks at names, so there a ``gate_proj`` is never a
+    candidate, nor is an attention ``gate`` with no expert tensor beside it. The
+    first is decided by output dimension alone: a direct child of an ``experts``
+    block with one output, or one per expert, is taken whatever its name, a
+    ``gate_proj`` included (no known family has one there). Leaving such a module
+    unadapted is the safer error; a name guard would adapt a router that happened
+    to carry the name. Model order; a stand-in with no modules yields ``[]``.
     """
     try:
         named = list(model.named_modules())
