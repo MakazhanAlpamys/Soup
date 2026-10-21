@@ -19,7 +19,7 @@ TEMPLATES = ["chatml", "llama3", "{% for m in messages %}{{ m['content'] }}{% en
 
 
 class TestMlxChatTemplateRefusal:
-    @pytest.mark.parametrize("task", ["sft", "dpo", "orpo"])
+    @pytest.mark.parametrize("task", ["sft", "dpo", "orpo", "simpo"])
     @pytest.mark.parametrize("template", TEMPLATES)
     def test_mlx_with_chat_template_refused_at_config_load(self, template: str, task: str) -> None:
         with pytest.raises(ValueError) as exc_info:
@@ -35,7 +35,7 @@ class TestMlxChatTemplateRefusal:
         assert "backend: transformers" in message
         assert "Remove data.chat_template" in message
 
-    @pytest.mark.parametrize("task", ["sft", "dpo", "orpo"])
+    @pytest.mark.parametrize("task", ["sft", "dpo", "orpo", "simpo"])
     def test_empty_chat_template_still_loads_on_mlx(self, task: str) -> None:
         # The field validator normalises "" to None, which is not an override.
         config = SoupConfig(
@@ -47,7 +47,7 @@ class TestMlxChatTemplateRefusal:
         )
         assert config.data.chat_template is None
 
-    @pytest.mark.parametrize("task", ["sft", "dpo", "orpo"])
+    @pytest.mark.parametrize("task", ["sft", "dpo", "orpo", "simpo"])
     @pytest.mark.parametrize("template", TEMPLATES)
     def test_transformers_backend_still_accepts_chat_template(
         self, template: str, task: str,
@@ -62,7 +62,7 @@ class TestMlxChatTemplateRefusal:
         )
         assert config.data.chat_template == template
 
-    @pytest.mark.parametrize("task", ["sft", "dpo", "orpo"])
+    @pytest.mark.parametrize("task", ["sft", "dpo", "orpo", "simpo"])
     def test_mlx_without_chat_template_still_allowed(self, task: str) -> None:
         config = SoupConfig(
             base="test/model",

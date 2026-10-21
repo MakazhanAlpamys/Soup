@@ -232,16 +232,7 @@ _MLX_DPO: tuple[SupportEntry, ...] = tuple(
 _MLX_ORPO: tuple[SupportEntry, ...] = _MLX_DPO
 
 #: MLX SimPO is MLX ORPO's tokenization and MLX DPO's loop: the same fields.
-_MLX_SIMPO: tuple[SupportEntry, ...] = tuple(
-    entry for entry in _MLX_ORPO if entry.field != "data.chat_template"
-) + (
-    SupportEntry(
-        "data.chat_template",
-        IGNORED,
-        "MLX SimPO renders conversational rows with the model's own chat template",
-        trainer_reads=True,
-    ),
-)
+_MLX_SIMPO: tuple[SupportEntry, ...] = _MLX_ORPO
 
 #: ``(task, backend, modality)`` -> the settings that combination does not honour.
 REGISTRY: dict[tuple[str, str, str], tuple[SupportEntry, ...]] = {

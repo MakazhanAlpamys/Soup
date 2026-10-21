@@ -290,7 +290,8 @@ That shows the objective moving, not alignment quality.
   another task (ORPO and DPO included), or from another base, before any tensor
   loads.
 - **Refused at load:** `quantization: 8bit`, `training.lora.r: 0`, non-text
-  `modality`, LoRA+, and `task: preference` with `preference_loss: simpo` on
+  `modality`, LoRA+, `data.chat_template` (as for MLX DPO and ORPO), and
+  `task: preference` with `preference_loss: simpo` on
   `backend: mlx` (use `task: simpo`). The other settings MLX DPO does not apply
   are not applied here either.
 
