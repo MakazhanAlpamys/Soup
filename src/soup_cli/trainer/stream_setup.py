@@ -1052,8 +1052,8 @@ class StreamingSetupMixin:
         # The attention targets (``auto`` resolved, or the user's list), first:
         # they need only the config, and the moe_lora helper below must EXTEND a
         # list target, as it does on the resident trainers since #1590 (a string
-        # target -- qwen4_exp's "all-linear", a regex -- it replaces, on both
-        # paths). Handing it ``None`` and replacing the list with its answer
+        # target -- qwen4_exp's "all-linear", a regex -- it keeps, without the MoE
+        # routers, on both paths). Handing it ``None`` and replacing the list with its answer
         # dropped every name the MoE list does not repeat -- MLA's q_a/q_b/kv_a/kv_b
         # projections, Qwen3.5's in_proj_qkv / out_proj -- and an explicit list.
         target_modules = resolve_lora_target_modules(

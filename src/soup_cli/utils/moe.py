@@ -306,23 +306,45 @@ def peft_routes_lora_to_fused_params(model, target_modules) -> bool:
 
 
 def _peft_config_converter():
-    """peft's private v4->v5 config conversion, or ``None`` where it is not importable."""
+    """peft's private v4->v5 conversion, as ``(model, targets, excluded) -> parameters``.
+
+    ``None`` where peft or that private path is not importable. The probe config is a
+    throwaway, so the conversion's in-place rewrite touches nothing the caller owns.
+    """
     try:
+        from peft import LoraConfig
         from peft.utils.transformers_weight_conversion import (
             convert_peft_config_for_transformers,
         )
     except ImportError:
         return None
-    return convert_peft_config_for_transformers
+
+    def convert(model, target_modules, exclude_modules):
+        probe = LoraConfig(
+            r=8, target_modules=target_modules, exclude_modules=list(exclude_modules) or None
+        )
+        convert_peft_config_for_transformers(probe, model, None)
+        return set(getattr(probe, "target_parameters", None) or ())
+
+    return convert
 
 
 def _peft_all_linear_expander():
-    """peft's private ``all-linear`` expansion, or ``None`` where it is not importable."""
+    """peft's private ``all-linear`` expansion, as ``model -> module names``.
+
+    ``None`` where peft or that private path is not importable.
+    """
     try:
+        from peft import LoraConfig
         from peft.tuners.tuners_utils import _maybe_include_all_linear_layers
     except ImportError:
         return None
-    return _maybe_include_all_linear_layers
+
+    def expand(model):
+        probe = LoraConfig(r=8, target_modules=ALL_LINEAR)
+        return set(_maybe_include_all_linear_layers(probe, model).target_modules)
+
+    return expand
 
 
 def _peft_converted_parameters(model, target_modules, exclude_modules=()) -> Optional[set]:
@@ -337,28 +359,18 @@ def _peft_converted_parameters(model, target_modules, exclude_modules=()) -> Opt
     if not isinstance(model_type, str):
         return set()
     convert = _peft_config_converter()
-    try:
-        from peft import LoraConfig
-    except ImportError:
-        return None
     if convert is None:
         return None
-
-    # A throwaway config, so the conversion's in-place rewrite touches nothing
-    # the caller owns. A string stays a string: peft's conversion resolves
-    # ``"all-linear"`` or a regex against the model, where ``list()`` of it would be
-    # one target per character. The exclusions go in too: peft's resolution of a
-    # regex skips an excluded module, its ``all-linear`` does not.
+    # A string stays a string: peft's conversion resolves ``"all-linear"`` or a
+    # regex against the model, where ``list()`` of it would be one target per
+    # character. The exclusions go in too: peft's resolution of a regex skips an
+    # excluded module, its ``all-linear`` does not.
     if not isinstance(target_modules, str):
         target_modules = list(target_modules or [])
-    probe = LoraConfig(
-        r=8, target_modules=target_modules, exclude_modules=list(exclude_modules) or None
-    )
     try:
-        convert(probe, model, None)
+        return convert(model, target_modules, exclude_modules)
     except Exception:  # noqa: BLE001 - a probe must never break the run
         return None
-    return set(getattr(probe, "target_parameters", None) or ())
 
 
 def _named_children(module) -> dict:
@@ -528,10 +540,7 @@ def _all_linear_modules(model) -> Optional[set]:
     expand = _peft_all_linear_expander()
     if expand is None:
         return None
-    from peft import LoraConfig
-
-    probe = LoraConfig(r=8, target_modules=ALL_LINEAR)
-    return set(expand(probe, model).target_modules)
+    return expand(model)
 
 
 def _linear_modules_by_type(model) -> set:

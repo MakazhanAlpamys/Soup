@@ -13,8 +13,8 @@ REPLACED the resolved list with the helper's answer. So under ``stream_layers``:
 
 The replace was never a decision about streaming: #426 copied SFT's block from
 before #1590, when ``auto`` still meant ``None`` and there was no list to keep.
-(The helper keeps LIST targets only; a string target such as qwen4_exp's
-``"all-linear"`` is replaced by the MoE names on both paths, as before.)
+(A string target such as qwen4_exp's ``"all-linear"`` reaches the same helper on both
+paths too; ``tests/test_moe_lora_string_targets.py`` covers it, streaming included.)
 
 These tests drive the real streaming setup through the shared harness, with real
 tiny models as the probe, and compare what it builds with what the resident

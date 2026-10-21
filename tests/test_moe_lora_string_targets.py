@@ -665,6 +665,29 @@ class TestFailClosedWithoutPeftsPrivateHelpers:
         assert isinstance(targets, MoeLoraTargets)
         assert modules == expected_modules and params == expected_params
 
+    def test_a_peft_without_the_private_modules_fails_closed(self, monkeypatch):
+        """The import guards: a peft that lacks either private module answers nothing."""
+        import sys
+
+        from soup_cli.utils.peft_wiring import build_lora_config
+
+        model = _read_only("qwen4_exp")
+        monkeypatch.setitem(sys.modules, "peft.tuners.tuners_utils", None)
+        monkeypatch.setitem(sys.modules, "peft.utils.transformers_weight_conversion", None)
+
+        assert moe_mod._peft_all_linear_expander() is None
+        assert moe_mod._peft_config_converter() is None
+        targets = resolve_moe_lora_targets(model, _tcfg(), "all-linear")
+        monkeypatch.undo()
+        modules, params = _peft_attach(
+            _build("qwen4_exp"),
+            build_lora_config(_tcfg().lora, target_modules=targets, task_type=None),
+        )
+        expected_modules, expected_params, _ = _expected("qwen4_exp", "auto")
+
+        assert isinstance(targets, MoeLoraTargets)
+        assert modules == expected_modules and params == expected_params
+
     def test_without_the_conversion_a_gate_named_entry_is_dropped(self, monkeypatch):
         monkeypatch.setattr(moe_mod, "_peft_config_converter", lambda: None)
         targets, _, modules, params = _stand_in_attach(_tcfg(), "all-linear", attn_gate=True)
@@ -1200,3 +1223,77 @@ class TestTheAnnouncementOnRealModels:
             "MoE module patterns), excluding 2 MoE router/gate module(s) and adding 2 fused "
             "expert parameter(s): mlp.experts.down_proj, mlp.experts.gate_up_proj"
         )
+
+
+# --------------------------------------------------------------------------- #
+# Layer streaming hands its resolved targets to the same helper (#2072)        #
+# --------------------------------------------------------------------------- #
+
+
+class TestLayerStreamingTakesTheSamePath:
+    """The streamed LoRA config attaches what the resident one does, string or list.
+
+    Driven through the shared streaming harness of ``test_stream_moe_lora_targets``:
+    the setup's meta-skeleton probe is the tiny real model, so the resolver and this
+    helper see a real architecture.
+    """
+
+    @staticmethod
+    def _resident(build, lora):
+        from soup_cli.utils.attach_preflight import trainer_lora_config
+
+        cfg = SimpleNamespace(
+            task="sft", modality="text", training=SimpleNamespace(moe_lora=True, lora=lora)
+        )
+        peft_config, _ = trainer_lora_config(build(), cfg)
+        return _peft_attach(build(), peft_config)
+
+    @pytest.mark.parametrize(
+        ("label", "real_helpers", "kept"),
+        [
+            ("qwen3_5_moe", True, True),
+            # The harness swaps peft's ``LoraConfig`` for a stub, which peft's own
+            # conversion cannot run on: the helper gets no answer, and fails closed to
+            # a list.
+            ("qwen3_5_moe", False, False),
+            ("deepseek_v3-q_lora_rank-int", True, False),
+        ],
+        ids=["qwen3_5_moe-kept-string", "qwen3_5_moe-no-peft-helpers-list", "deepseek_v3-list"],
+    )
+    def test_all_linear_streams_as_it_attaches_resident(
+        self, tmp_path, monkeypatch, label, real_helpers, kept
+    ):
+        pytest.importorskip("torch")
+        pytest.importorskip("peft")
+        from tests import test_stream_moe_lora_targets as harness
+
+        if real_helpers:
+            # Bound to the real peft now, before the harness stubs it.
+            expand = moe_mod._peft_all_linear_expander()
+            convert = moe_mod._peft_config_converter()
+            monkeypatch.setattr(moe_mod, "_peft_all_linear_expander", lambda: expand)
+            monkeypatch.setattr(moe_mod, "_peft_config_converter", lambda: convert)
+        stream_arch, build = harness._BASES[label]
+        lora = harness._lora("all-linear")
+        streamed, _probes = harness._streamed(tmp_path, monkeypatch, stream_arch, build(), lora)
+        kwargs = dict(vars(streamed))
+        monkeypatch.undo()  # the harness stubs peft; attach with the real one
+        from peft import LoraConfig
+
+        streamed_set = _peft_attach(build(), LoraConfig(**kwargs))
+        resident_set = self._resident(build, lora)
+        gates = moe_mod.find_moe_gates(build())
+        modules, params = streamed_set
+
+        assert gates
+        assert streamed_set == resident_set
+        assert not [name for name in modules if moe_mod._in_a_gate(name, gates)]
+        assert not [param for param in params if moe_mod._in_a_gate(param, gates)]
+        assert any(".mlp.experts." in param for param in params)
+        if kept:
+            assert kwargs["target_modules"] == "all-linear"
+            assert kwargs["exclude_modules"]
+            assert all(moe_mod._in_a_gate(name, gates) for name in kwargs["exclude_modules"])
+        else:
+            assert isinstance(kwargs["target_modules"], list)
+            assert "gate" not in kwargs["target_modules"]
