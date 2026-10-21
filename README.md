@@ -26,7 +26,7 @@
 <p align="center">
   <a href="https://pypi.org/project/soup-cli/"><img src="https://img.shields.io/pypi/v/soup-cli?color=blue" alt="PyPI"></a>
   <a href="https://pepy.tech/project/soup-cli"><img src="https://img.shields.io/pepy/dt/soup-cli?color=blue" alt="Downloads"></a>
-  <img src="https://img.shields.io/badge/python-3.10--3.12-blue" alt="Python 3.10-3.12">
+  <img src="https://img.shields.io/badge/python-3.11--3.13-blue" alt="Python 3.11-3.13">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0 License">
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/MakazhanAlpamys/65fdc943f85f3b2c46ecddb415c2b779/raw/soup_tests.json" alt="Tests"></a>
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://github.com/MakazhanAlpamys/Soup/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -139,8 +139,8 @@ that will refuse them. A config that loaded before can stop loading: run
 - **Deprecated:** `soup export --format awq` and `--format gptq` will be removed in v0.77; both
   upstream projects are archived and neither extra installs next to `[train]`.
 
-> Python **3.10–3.12** only. On 3.13+, pip used to resolve untested PyTorch wheels that
-> crash in the native extension before Soup runs at all.
+> From v0.77, Python **3.11–3.13** only: 3.10 reached end of life on 2026-10-01 (pip there stays
+> on v0.76); on 3.14+, pip falls back to v0.72.4 (no upper bound) and untested PyTorch wheels.
 
 Older highlights live on the [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) page.
 
@@ -347,7 +347,7 @@ docker compose up   # or build locally
 
 ## Requirements
 
-- Python 3.10, 3.11 or 3.12 (those are the versions CI tests; 3.13+ is not supported yet
+- Python 3.11, 3.12 or 3.13 (those are the versions CI tests; 3.14+ is not supported yet
   because the PyTorch stack has not been validated there)
 - GPU with CUDA (recommended), Apple Silicon (MPS), or CPU (experimental — very slow)
 - 8 GB+ VRAM for 7B models with QLoRA

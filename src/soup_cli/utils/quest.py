@@ -775,7 +775,14 @@ def validate_metadata(metadata: Any) -> dict[str, Any]:
             value = base_model[len(LOCAL_BASE_PREFIX) :]
             if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
                 raise ValueError("Invalid QuEST local base_model digest")
-        elif posixpath.isabs(base_model) or ntpath.isabs(base_model) or base_model.startswith("."):
+        elif (
+            posixpath.isabs(base_model)
+            or ntpath.isabs(base_model)
+            # By name, not only through isabs: Python 3.13's ntpath.isabs no longer calls a
+            # rooted path without a drive ("\x") absolute, and 3.11-3.12 do.
+            or base_model.startswith(("/", "\\"))
+            or base_model.startswith(".")
+        ):
             raise ValueError("QuEST v2 base_model must not contain a local path")
     if metadata["group_size"] != GROUP_SIZE or metadata["weight_bits"] != WEIGHT_BITS:
         raise ValueError("Invalid QuEST W4 group declaration")

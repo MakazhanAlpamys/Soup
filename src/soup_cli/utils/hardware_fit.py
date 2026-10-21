@@ -19,12 +19,14 @@ Public surface:
 - ``HardwareFitReport`` frozen dataclass.
 - ``estimate_peak_vram_gb(inp)`` -> ``VRAMBreakdown``.
 - ``decide_hardware_fit(inp, *, available_vram_gb)`` -> ``HardwareFitReport``.
+- ``resolve_peft_mode(cfg, quant=None)`` -> ``str``.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any
 
 VRAM_SAFETY_MARGIN = 0.10  # 10% headroom
 
@@ -216,6 +218,40 @@ _OPTIM_BYTES_PER_PARAM = {
     "adalomo": 2.0,
     "schedule_free_adamw": 8.0,
 }
+
+
+def resolve_peft_mode(cfg: Any, quant: str | None = None) -> str:
+    """Resolve the effective PEFT mode ('full', 'qlora', or 'lora') for a config.
+
+    Shared between train hardware-fit preflight, `soup profile`, and MCP `tool_profile` (#1423).
+    """
+    from soup_cli.trainer.classifier import CLASSIFICATION_TASKS
+    from soup_cli.trainer.sft import is_full_finetune
+
+    tcfg = getattr(cfg, "training", None)
+    if quant is None and tcfg is not None:
+        quant = str(getattr(tcfg, "quantization", "none") or "none")
+
+    task = getattr(cfg, "task", None)
+    if quant == "4bit":
+        return "qlora"
+    if task == "prm" or (
+        task in CLASSIFICATION_TASKS
+        and not (
+            getattr(tcfg, "classifier_lora", False)
+            and getattr(getattr(tcfg, "lora", None), "r", 0) > 0
+        )
+    ) or (
+        task == "asr"
+        and not (
+            getattr(tcfg, "asr_lora", False)
+            and getattr(getattr(tcfg, "lora", None), "r", 0) > 0
+        )
+    ):
+        return "full"
+    if tcfg is not None and is_full_finetune(tcfg):
+        return "full"
+    return "lora"
 
 
 def _trainable_param_fraction(peft: str) -> float:

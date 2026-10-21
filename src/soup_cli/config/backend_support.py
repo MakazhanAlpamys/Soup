@@ -161,12 +161,6 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
         trainer_reads=True,
     ),
     SupportEntry(
-        "training.use_mod",
-        IGNORED,
-        "Mixture-of-Depths routing is wired on the transformers path, not MLX",
-        trainer_reads=True,
-    ),
-    SupportEntry(
         "training.moe_lora",
         IGNORED,
         "ScatterMoE LoRA targets expert layers on the transformers path; no MLX implementation",
@@ -232,26 +226,10 @@ _NOT_DPO_GAPS = frozenset({
 
 _MLX_DPO: tuple[SupportEntry, ...] = tuple(
     entry for entry in _MLX_SFT if entry.field not in _NOT_DPO_GAPS
-) + (
-    SupportEntry(
-        "data.chat_template",
-        IGNORED,
-        "MLX DPO renders conversational rows with the model's own chat template",
-        trainer_reads=True,
-    ),
 )
 
 #: MLX ORPO runs MLX DPO's loop with its own loss, so it ignores the same fields.
-_MLX_ORPO: tuple[SupportEntry, ...] = tuple(
-    entry for entry in _MLX_DPO if entry.field != "data.chat_template"
-) + (
-    SupportEntry(
-        "data.chat_template",
-        IGNORED,
-        "MLX ORPO renders conversational rows with the model's own chat template",
-        trainer_reads=True,
-    ),
-)
+_MLX_ORPO: tuple[SupportEntry, ...] = _MLX_DPO
 
 #: MLX SimPO is MLX ORPO's tokenization and MLX DPO's loop: the same fields.
 _MLX_SIMPO: tuple[SupportEntry, ...] = tuple(

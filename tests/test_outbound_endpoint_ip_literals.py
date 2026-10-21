@@ -359,11 +359,11 @@ class TestShipJudgeModelFlag:
 
     @pytest.mark.parametrize("host", _NON_PUBLIC_HOSTS)
     def test_refused_as_a_usage_error(self, host, out):
-        import click
+        import typer
 
         from soup_cli.commands.ship import _validate_judge_model_url
 
-        with pytest.raises(click.exceptions.Exit) as info:
+        with pytest.raises(typer.Exit) as info:
             _validate_judge_model_url(f"https://{host}/m")
         assert info.value.exit_code == 3
         assert f"--judge-model: {_REFUSED}" in out.getvalue()

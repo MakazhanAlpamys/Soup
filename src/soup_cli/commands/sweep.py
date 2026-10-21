@@ -495,12 +495,13 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
     from soup_cli.monitoring.display import TrainingDisplay
     from soup_cli.trainer.dispatch import build_trainer
     from soup_cli.utils.eval_schedule import loader_data_config, validation_notice
-    from soup_cli.utils.gpu import detect_device, get_gpu_info
+    from soup_cli.utils.gpu import configure_mps_async_load, detect_device, get_gpu_info
 
     cfg = SoupConfig(**config_dict)
 
     # Detect hardware
     device, device_name = detect_device()
+    configure_mps_async_load(device)
     gpu_info = get_gpu_info()
 
     # Load data -- the same split `soup train` would use (#1223).

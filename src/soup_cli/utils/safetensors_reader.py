@@ -142,6 +142,23 @@ class TensorRange:
         return self.end - self.start
 
 
+class UnsupportedDtypeError(ValueError):
+    """A header names a tensor in a dtype this reader does not read (``U32``, ``F4``, ...).
+
+    A ``ValueError`` like every other malformed-header refusal here; its own type so the
+    layer-stream disk pre-flight can refuse that tensor in the sharder's words
+    (``layer_shard._read_source_tensors``) instead of treating the header as unreadable.
+    ``tensor`` and ``dtype`` are the header's own (untrusted) strings. Both have defaults
+    so the exception rebuilds from its message alone, as ``pickle`` and ``copy`` rebuild
+    it (its attributes then come back from its ``__dict__``).
+    """
+
+    def __init__(self, message: str, *, tensor: str = "", dtype: object = None) -> None:
+        super().__init__(message)
+        self.tensor = tensor
+        self.dtype = dtype
+
+
 def read_header(path: str) -> Dict[str, TensorRange]:
     """Every tensor in ``path``, with absolute byte ranges. Never maps the file."""
     return read_header_with_identity(path)[0]
@@ -185,9 +202,11 @@ def read_header_with_identity(path: str) -> Tuple[Dict[str, TensorRange], ShardI
             raise ValueError(f"{path}: entry {name!r} is not an object")
         raw_dtype = meta.get("dtype")
         if raw_dtype not in _DTYPES:
-            raise ValueError(
+            raise UnsupportedDtypeError(
                 f"{path}: tensor {name!r} has unsupported dtype {raw_dtype!r}; "
-                f"supported: {', '.join(sorted(_DTYPES))}"
+                f"supported: {', '.join(sorted(_DTYPES))}",
+                tensor=name,
+                dtype=raw_dtype,
             )
         dtype = _DTYPES[raw_dtype]
         # No default: ``dict.get(key, default)`` substitutes only when the KEY is

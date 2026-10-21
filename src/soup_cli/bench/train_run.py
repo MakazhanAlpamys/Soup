@@ -214,6 +214,7 @@ def run_bench_train(
     from soup_cli.bench.collector import BenchCollector, summarize_trainable
     from soup_cli.bench.train_report import check_trainable, summarize_clock_samples
     from soup_cli.trainer.sft import SFTTrainerWrapper
+    from soup_cli.utils.gpu import configure_mps_async_load
 
     with tempfile.TemporaryDirectory(prefix="soup-bench-") as scratch:
         # Log every step (the grad_norm check reads each one), never save, and
@@ -223,6 +224,7 @@ def run_bench_train(
         )
         cfg = cfg.model_copy(update={"training": training, "output": scratch})
 
+        configure_mps_async_load(device)
         wrapper = SFTTrainerWrapper(cfg, device=device)
         wrapper.setup(load_dataset(cfg))
         trainer = wrapper.trainer
