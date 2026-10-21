@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:c47b976dfbc0c66deffcec8079f30d09ad54799e5751673fd8cc4105eb28ea87 -->
+<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -27,7 +27,7 @@
 <p align="center">
   <a href="https://pypi.org/project/soup-cli/"><img src="https://img.shields.io/pypi/v/soup-cli?color=blue" alt="PyPI"></a>
   <a href="https://pepy.tech/project/soup-cli"><img src="https://img.shields.io/pepy/dt/soup-cli?color=blue" alt="ダウンロード数"></a>
-  <img src="https://img.shields.io/badge/python-3.10--3.12-blue" alt="Python 3.10-3.12">
+  <img src="https://img.shields.io/badge/python-3.11--3.13-blue" alt="Python 3.11-3.13">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0 ライセンス">
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/MakazhanAlpamys/65fdc943f85f3b2c46ecddb415c2b779/raw/soup_tests.json" alt="テスト"></a>
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://github.com/MakazhanAlpamys/Soup/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -136,7 +136,7 @@ LLM の学習は、今でも骨の折れる作業です。経験豊富なチー�
   `soup adapters sign --backend sigstore` と `soup attest emit --sign sigstore` は、Sigstore のキーレス OIDC で
   署名します（`pip install "soup-cli[sigstore]"`）。
 
-> Python は **3.10–3.12** のみ対応です。3.13 以降では、pip がテストされていない PyTorch の wheel を解決し、
+> Python は **3.11–3.13** のみ対応です。3.14 以降では、pip がテストされていない PyTorch の wheel を解決し、
 > Soup が動き出す前にネイティブ拡張の中でクラッシュしていました。
 
 過去のハイライトは [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) ページにあります。
@@ -343,8 +343,8 @@ docker compose up   # またはローカルでビルド
 
 ## 動作要件
 
-- Python 3.10、3.11、または 3.12（CI がテストしているバージョンです。PyTorch スタックがまだ検証されて
-  いないため、3.13 以降は未サポートです）
+- Python 3.11、3.12、または 3.13（CI がテストしているバージョンです。PyTorch スタックがまだ検証されて
+  いないため、3.14 以降は未サポートです）
 - CUDA 対応 GPU（推奨）、Apple Silicon（MPS）、または CPU（実験的 — 非常に遅い）
 - QLoRA で 7B モデルを扱うには 8 GB 以上の VRAM
 

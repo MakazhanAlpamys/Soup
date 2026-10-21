@@ -102,11 +102,13 @@ Rows are `{"audio": <path>, "text": <transcript>}` with `data.format: asr`. See
 
 ## Optional Extras
 
-> **Python 3.10, 3.11 or 3.12.** Since v0.73.0 the package declares
-> `requires-python = ">=3.10,<3.13"`. Those are exactly the versions CI tests. Without the
-> upper bound, pip on 3.13+ resolved PyTorch wheels nobody had validated, and the failure was
-> not a Soup error message — it was a loader crash inside `c10.dll` / `libc10.so` before any
-> Soup code ran. If you are on 3.13+, create a 3.12 environment; support widens when CI does.
+> **Python 3.11, 3.12 or 3.13.** Since v0.77 the package declares
+> `requires-python = ">=3.11,<3.14"` (v0.73.0 to v0.76: `">=3.10,<3.13"`). Those are exactly
+> the versions CI tests. Python 3.10 reached end of life on 2026-10-01; on it, pip keeps
+> installing v0.76. Without the upper bound, pip on an untested Python resolved PyTorch wheels
+> nobody had validated, and the failure was not a Soup error message — it was a loader crash
+> inside `c10.dll` / `libc10.so` before any Soup code ran. If you are on 3.14+, create a 3.13
+> environment; support widens when CI does.
 
 ### Quoting the extra
 
@@ -142,7 +144,7 @@ spelling is unchanged. See [the README's install section](../README.md#1-install
 | `fast` | `pip install "soup-cli[fast]"` | Unsloth backend (2-5x faster, lower VRAM) |
 | `vision` | `pip install "soup-cli[vision]"` | Vision / multimodal fine-tuning (Pillow) |
 | `audio` | `pip install "soup-cli[audio]"` | Audio / speech fine-tuning (librosa, soundfile) |
-| `mlx` | `pip install "soup-cli[mlx]"` | Standalone Apple Silicon SFT backend for local data; `[train]` is not required |
+| `mlx` | `pip install "soup-cli[mlx]"` | Standalone Apple Silicon SFT, DPO and ORPO backend for local data; `[train]` is not required |
 | `qat` | `pip install "soup-cli[qat]"` | torchao: FP8 training (`quantization_aware: fp8`), FP8 attention, NVFP4, the `ao_adamw_*` optimizers and `soup export --format torchao` |
 | `serve` | `pip install "soup-cli[serve]"` | Inference server (FastAPI + uvicorn) |
 | `serve-fast` | `pip install "soup-cli[serve-fast]"` | vLLM inference backend (2-4x throughput) |

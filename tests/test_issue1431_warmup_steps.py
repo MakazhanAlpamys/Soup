@@ -8,7 +8,7 @@ Verifies that:
 3. SFT with packing / multipack and pretrain with packing scale warmup to the
    real packed step count.
 4. Unpacked SFT control matches the expected warmup within one step.
-5. All 15 wrappers resolve warmup_steps as the configured fraction without multiplying
+5. All 18 wrappers resolve warmup_steps as the configured fraction without multiplying
    warmup_ratio into a step count.
 """
 
@@ -39,9 +39,12 @@ WARMUP_WRAPPERS = (
     "grpo",
     "ipo",
     "kto",
+    "mole_routing",
     "online_dpo",
     "orpo",
+    "ppo",
     "pretrain",
+    "prm",
     "reward_model",
     "sft",
     "simpo",

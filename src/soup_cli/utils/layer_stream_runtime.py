@@ -1838,6 +1838,38 @@ def _unwrap_tuner_base(module: Any) -> Any:
     return module
 
 
+def _refuse_lora_on_streamed_boundary(model: Any, index: Any, lora_config: Any) -> None:
+    """Refuse a LoRA target on the streamed embedding or head (#1048).
+
+    Saving or resuming that adapter is not supported yet. Checked after
+    get_peft_model(), so it covers every spelling of ``target_modules`` that
+    matched the module, and only when the checkpoint streams those weights: a
+    tied one has no large-layer keys and keeps both modules resident.
+    """
+    if not tuple(getattr(index, "large_keys", ()) or ()):
+        return
+    from peft.tuners.tuners_utils import BaseTunerLayer
+
+    wrapped = [
+        role
+        for role, module in (
+            ("embed_tokens", model.get_input_embeddings()),
+            ("lm_head", model.get_output_embeddings()),
+        )
+        if isinstance(module, BaseTunerLayer)
+    ]
+    if wrapped:
+        names = ", ".join(wrapped)
+        raise ValueError(
+            f"training.stream_layers does not yet support a LoRA target on the "
+            f"streamed {names} of an untied checkpoint: the forward pass is "
+            f"correct, but saving or resuming that adapter is not supported yet. "
+            f"Change training.lora.target_modules (now "
+            f"{lora_config.target_modules!r}) so it does not match {names}, or "
+            f"train without stream_layers."
+        )
+
+
 def _build_streamed_large_layer_class():
     import torch
     import torch.nn as nn
@@ -2493,6 +2525,26 @@ def _stamp_4bit_markers(model: Any, quant_config: Any) -> None:
         model.config.quantization_config = quant_config
 
 
+def _drop_fp8_source_quantization(config: Any) -> None:
+    """Build the streamed skeleton at the stream dtype even over an FP8 block source.
+
+    An FP8 block checkpoint's ``config.json`` declares ``quantization_config`` with
+    ``quant_method: "fp8"``. The sharder dequantises those weights (``utils/fp8_block``),
+    so the shards hold the stream dtype (or NF4) and the modules must be plain
+    ``nn.Linear`` (or ``Linear4bit``): transformers' FP8 quantizer, applied from this
+    config, would turn them into ``FP8Linear`` modules expecting FP8 bytes and scales.
+    ``from_config`` does not apply it today (transformers 5.17), but the config would
+    still claim FP8 on a model holding none, for any reader of ``model.config``.
+
+    Only this skeleton's own config object is changed: ``config.json`` on disk and every
+    resident load (``from_pretrained``, which dequantises or runs FP8 itself) are not.
+    """
+    from soup_cli.utils.fp8_block import is_fp8_quantization_config
+
+    if is_fp8_quantization_config(getattr(config, "quantization_config", None)):
+        del config.quantization_config
+
+
 def build_meta_skeleton(
     model_id: str,
     *,
@@ -2520,6 +2572,7 @@ def build_meta_skeleton(
     torch_dtype = _torch_dtype(dtype)
     config = AutoConfig.from_pretrained(model_id, trust_remote_code=trust_remote_code)
     config.use_cache = False
+    _drop_fp8_source_quantization(config)
     quant_config = None
     if quant == QUANT_NF4:
         quant_config = build_nf4_config(dtype, double_quant=double_quant)
@@ -3771,6 +3824,7 @@ def build_streamed_model(
 
         apply_pre_lora_patches(model, model_id)
         model = get_peft_model(model, lora_config)
+        _refuse_lora_on_streamed_boundary(model, index, lora_config)
         materialize_meta_adapters(model, seed=seed, device=device)
         assert_trainable_adapters_materialized(model)
         runtime = install_streaming(

@@ -243,7 +243,9 @@ def load_config(
     staged_error = _report_staged_fields(raw, config=config)
     if staged_error is not None:
         console.print("[red bold]Config validation error:[/]\n")
-        console.print(f"  [red]{for_terminal(staged_error)}[/]")
+        # One line per staged field: indent each, not only the first.
+        for line in staged_error.splitlines():
+            console.print(f"  [red]{for_terminal(line)}[/]")
         raise SystemExit(1)
 
     return config

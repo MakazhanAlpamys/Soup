@@ -267,8 +267,10 @@
     "training.skip_zero_advantage": false,
     "training.stream_buffers": 2,
     "training.stream_disk_kind": null,
+    "training.stream_expert_layout": "fused",
     "training.stream_layers": false,
     "training.stream_nf4_scale_cache": false,
+    "training.stream_loss_chunk": null,
     "training.stream_ngram_source": "auto",
     "training.stream_pin": null,
     "training.stream_read_ahead": 2,
@@ -1408,21 +1410,6 @@
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
-    },
-    "pixtral-dpo": {
-      "base": "mistralai/Pixtral-12B-2409",
-      "data.format": "llava",
-      "data.image_dir": "./data/images",
-      "data.max_length": 4096,
-      "data.train": "./data/vision_preference_train.jsonl",
-      "modality": "vision",
-      "task": "dpo",
-      "training.batch_size": 1,
-      "training.gradient_accumulation_steps": 16,
-      "training.gradient_checkpointing": true,
-      "training.lora.alpha": 32,
-      "training.lora.r": 16,
-      "training.lr": 5e-06
     },
     "qvq-72b-sft": {
       "base": "Qwen/QVQ-72B-Preview",

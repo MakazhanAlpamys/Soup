@@ -100,6 +100,26 @@ What Soup reported:
 **COMPLETES:** finite loss, adapter written. A 9-row dataset says nothing about quality; this
 shows that the CLI path, from config to adapter, runs on this base on an 8 GB card.
 
+### 4.2 Product path with `training.stream_expert_layout: per_expert` (#2029)
+
+2026-10-19 12:32:19Z to 12:52:59Z, AC power, 6 GB RAM free at start. The other sessions were told
+beforehand; free RAM dipped near zero during the run because a foreign WSL VM held ~6.5 GB.
+
+Setup: the same config and command as section 4.1, plus `stream_expert_layout: per_expert`, with
+`SOUP_LAYER_STREAM_CACHE_DIR=D:/soup-bench/soup-cache-experts`. Code: the #2029 branch at
+c40776c1b plus its uncommitted changes, which are what 76bab8e7 committed.
+
+What Soup reported:
+- **Store.** The per-expert NF4 cache came to 8.7 GB, so `auto` chose the RAM tier: 1.81 GB pinned (the dense parts); the experts are read from the cache volume.
+- **Pre-flight.** It printed `experts 0.044 GB for the routed expert in flight`.
+- **Steps.** 27 steps in 1,128 s, ~41.8 s per step, against ~15.7 s in section 4.1.
+- **Loss.** Training loss 4.775 at step 10, then 3.165 at step 20; mean 3.827; validation loss 3.611 after epoch 3.
+- **GPU peak.** 1.0 of 7.9 GB, against 3.1 GB in section 4.1.
+- **Adapter.** Written: `adapter_model.safetensors`, 7,134,912 bytes.
+
+**COMPLETES:** finite loss, adapter written. Under 4bit the routed experts are NF4 here and bf16
+in section 4.1, so the two runs' losses come from numerically different bases.
+
 ## 5. Verdict
 
 **Both arms COMPLETE.** LoRA training steps of Moonlight-16B, a 16 B-parameter DeepSeek-V3-architecture MoE that does not fit this 8 GB card resident, run on the laptop:

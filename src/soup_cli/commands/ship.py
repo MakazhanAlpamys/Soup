@@ -126,7 +126,7 @@ _MAX_BENCHMARK_NAME_CHARS = 256
 
 def _fail(message: str, code: int) -> NoReturn:
     """Print a friendly red error and raise ``typer.Exit(code)``."""
-    console.print(f"[red]Error:[/] {escape(message)}")
+    console.print(f"[red]Error:[/] {escape(for_terminal(message))}")
     raise typer.Exit(code=code)
 
 
@@ -413,6 +413,38 @@ def _check_evidence_staleness(payload: dict, expected_sha: str) -> None:
         )
 
 
+def _compute_ship_binding(
+    cfg: Optional["SoupConfig"], *, adapter: Optional[str], task_eval: Optional[str],
+    suite_names: List[str], task_mode: str, judge_model: Optional[str],
+    threshold: float, noise_floor_runs: Optional[int], data_sha256: Optional[str],
+) -> Dict[str, object]:
+    """Capture source bytes and the effective verdict policy separately from config_sha."""
+    from soup_cli.utils.ship_provenance import judge_identity, make_binding
+
+    source_sha = None
+    if cfg is not None:
+        data = cfg.data
+        if (cfg.modality == "text" and isinstance(data.train, str)
+                and data.format != "pre_tokenized" and not data.tokenized_path
+                and not data.replay and not data.forget_set and not data.retain_set
+                and data.interleave is None and not data.streaming):
+            source_sha = _safe_hash_file(data.train, _MAX_DATA_SHA_BYTES)
+    policy = {
+        "task_mode": task_mode,
+        "forgetting_threshold": threshold,
+        "general_suite": suite_names,
+        "judge_model_sha256": judge_identity(judge_model)
+        if task_mode in {"judge_score", "pairwise"} else None,
+        "noise_floor_runs": noise_floor_runs,
+    }
+    return make_binding(
+        adapter=adapter,
+        task_eval_sha256=_safe_hash_file(task_eval, _MAX_EVIDENCE_BYTES) if task_eval else None,
+        source_data_sha256=source_sha, data_sha256=data_sha256,
+        suites=suite_names, policy=policy,
+    )
+
+
 def _flag_is_default(ctx: typer.Context, name: str) -> bool:
     """True when ``name`` was left at its default (so --config may fill it).
 
@@ -423,7 +455,7 @@ def _flag_is_default(ctx: typer.Context, name: str) -> bool:
     make a flag config-overridable.
     """
     try:
-        from click.core import ParameterSource
+        from soup_cli.utils.typer_compat import ParameterSource
 
         source = ctx.get_parameter_source(name)
     except (ImportError, AttributeError):  # pragma: no cover — defensive
@@ -1293,6 +1325,16 @@ def ship(
         "from this config, or whose numerics family does not match); with "
         "--emit-evidence it STAMPS this config's provenance.",
     ),
+    require_provenance: bool = typer.Option(
+        False, "--require-provenance",
+        help="Strict offline drift check: requires --evidence, --config, --adapter and task eval. "
+        "Compare artifact/task/source bytes, suite version and effective verdict policy.",
+    ),
+    data_sha256: Optional[str] = typer.Option(
+        None, "--data-sha256",
+        help="Caller-asserted training-data SHA-256 for emitted/strict evidence; "
+        "not proof of which bytes trained the model.",
+    ),
     push: Optional[str] = typer.Option(
         None,
         "--push",
@@ -1309,6 +1351,16 @@ def ship(
 ) -> None:
     """Decide SHIP / DON'T SHIP for a fine-tune (exit 0 = SHIP, 2 = DON'T)."""
     soup_config = None
+    from soup_cli.utils.ship_provenance import check_binding, validate_data_identity
+
+    try:
+        validate_data_identity(data_sha256)
+    except ValueError as exc:
+        _fail(str(exc), _EXIT_USAGE)
+    if require_provenance and (not evidence or config is None or not adapter or tuned):
+        _fail("--require-provenance needs --evidence, --config and a local --adapter", _EXIT_USAGE)
+    if data_sha256 is not None and not (emit_evidence or require_provenance):
+        _fail("--data-sha256 needs --emit-evidence or --require-provenance", _EXIT_USAGE)
     template_kwargs = _parse_chat_template_kwargs(chat_template_kwargs)
     if evidence and chat_template_kwargs is not None:
         _fail("--chat-template-kwargs applies only to a live run, not --evidence", _EXIT_USAGE)
@@ -1356,6 +1408,16 @@ def ship(
     # (incl. data_sha over the training file) is built lazily, only when we
     # actually --emit-evidence.
     config_sha = _config_sha_of(soup_config) if soup_config is not None else None
+    binding: Optional[Dict[str, object]] = None
+
+    def capture_binding(
+        mode: str, names: List[str], floor_runs: Optional[int],
+    ) -> Dict[str, object]:
+        return _compute_ship_binding(
+            soup_config, adapter=adapter, task_eval=task_eval, suite_names=names,
+            task_mode=mode, judge_model=judge_model, threshold=threshold,
+            noise_floor_runs=floor_runs, data_sha256=data_sha256,
+        )
 
     if evidence:
         # An offline verdict loads no model, so there is nothing to repeat. A
@@ -1379,14 +1441,32 @@ def ship(
         #   * PRODUCER (--emit-evidence): STAMP the config's provenance onto these
         #     scores (raw scores from an external eval tool -> bound evidence), so
         #     the input is NOT required to already carry a matching provenance.
-        if config_sha is not None and not emit_evidence:
+        if config_sha is not None and (not emit_evidence or require_provenance):
             _check_evidence_staleness(payload, config_sha)
             assert soup_config is not None  # config_sha is computed from it
             _check_evidence_numerics(
                 payload, _expected_numerics_family(soup_config)
             )
+        # Decode/validate the complete evidence before its floor enters the
+        # canonical policy encoder. Raw JSON may contain non-finite numbers.
         verdict = _verdict_from_evidence(payload, forgetting_threshold=threshold)
+        recorded_runs = verdict.noise_floor.runs if verdict.noise_floor is not None else None
+        if require_provenance:
+            binding = capture_binding(task_mode, _parse_suite(general_suite), recorded_runs)
+            try:
+                check_binding(payload, binding)
+            except ValueError as exc:
+                _fail(str(exc), _EXIT_USAGE)
+        if emit_evidence and binding is None:
+            # External scores are explicitly caller-trusted, not a claim that this
+            # command evaluated a model. Bind the actual supplied axes/mode.
+            binding = capture_binding(
+                verdict.task_win.mode, [item.name for item in verdict.benchmark_deltas],
+                recorded_runs,
+            )
     elif base or tuned or adapter or task_eval:
+        if emit_evidence:
+            binding = capture_binding(task_mode, _parse_suite(general_suite), noise_floor)
         verdict = _verdict_live(
             base=base,
             tuned=tuned,
@@ -1402,6 +1482,13 @@ def ship(
             quantization=_live_eval_quantization_from_config(soup_config),
             **({"chat_template_kwargs": template_kwargs} if template_kwargs is not None else {}),
         )
+        if emit_evidence and binding != capture_binding(
+            task_mode, _parse_suite(general_suite), noise_floor,
+        ):
+            _fail(
+                "provenance input changed during live evaluation; re-run before emitting",
+                _EXIT_USAGE,
+            )
     else:
         _fail(
             "provide --evidence <json> for an offline verdict, or "
@@ -1418,6 +1505,7 @@ def ship(
         provenance = dict(current_baseline_stamp())
         if soup_config is not None:
             provenance.update(_compute_provenance(soup_config))
+        provenance["binding"] = binding
     _emit_and_exit(
         verdict, output, emit_evidence=emit_evidence, push=push, provenance=provenance
     )

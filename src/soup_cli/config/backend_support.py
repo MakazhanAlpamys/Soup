@@ -19,9 +19,9 @@ drift -- every entry must name a real field, and every dotted field name in
 the truth; it can only stop it rotting, which is the failure that produced #749.
 
 Scope today: ``task=sft`` on ``backend=mlx`` and on ``backend=unsloth`` (#1124;
-both apply to every modality), plus multimodal vision and audio on
-``backend=transformers`` (#1156). Other combinations report nothing rather
-than guessing, which is the honest default for a table that has not been
+both apply to every modality), ``task=dpo`` and ``task=orpo`` on ``backend=mlx``, plus
+multimodal vision and audio on ``backend=transformers`` (#1156). Other combinations report
+nothing rather than guessing, which is the honest default for a table that has not been
 reviewed for them.
 """
 
@@ -161,12 +161,6 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
         trainer_reads=True,
     ),
     SupportEntry(
-        "training.use_mod",
-        IGNORED,
-        "Mixture-of-Depths routing is wired on the transformers path, not MLX",
-        trainer_reads=True,
-    ),
-    SupportEntry(
         "training.moe_lora",
         IGNORED,
         "ScatterMoE LoRA targets expert layers on the transformers path; no MLX implementation",
@@ -219,9 +213,46 @@ _TRANSFORMERS_AUDIO_SFT: tuple[SupportEntry, ...] = (
 _UNSLOTH_SFT: tuple[SupportEntry, ...] = ()
 
 
+#: Fields MLX SFT warns about that have no meaning for DPO, or that MLX DPO
+#: honours: the seeds (its own loop seeds ``mx.random`` and the batch order)
+#: and SFT's response-masking switches (DPO supervises completions by design).
+_NOT_DPO_GAPS = frozenset({
+    "training.seed",
+    "training.data_seed",
+    "data.train_on_messages_with_train_field",
+    "data.mask_history",
+    "data.train_on_prompt",
+})
+
+_MLX_DPO: tuple[SupportEntry, ...] = tuple(
+    entry for entry in _MLX_SFT if entry.field not in _NOT_DPO_GAPS
+) + (
+    SupportEntry(
+        "data.chat_template",
+        IGNORED,
+        "MLX DPO renders conversational rows with the model's own chat template",
+        trainer_reads=True,
+    ),
+)
+
+#: MLX ORPO runs MLX DPO's loop with its own loss, so it ignores the same fields.
+_MLX_ORPO: tuple[SupportEntry, ...] = tuple(
+    entry for entry in _MLX_DPO if entry.field != "data.chat_template"
+) + (
+    SupportEntry(
+        "data.chat_template",
+        IGNORED,
+        "MLX ORPO renders conversational rows with the model's own chat template",
+        trainer_reads=True,
+    ),
+)
+
+
 #: ``(task, backend, modality)`` -> the settings that combination does not honour.
 REGISTRY: dict[tuple[str, str, str], tuple[SupportEntry, ...]] = {
     ("sft", "mlx", "text"): _MLX_SFT,
+    ("dpo", "mlx", "text"): _MLX_DPO,
+    ("orpo", "mlx", "text"): _MLX_ORPO,
     ("sft", "unsloth", "text"): _UNSLOTH_SFT,
     ("sft", "transformers", "vision"): _TRANSFORMERS_VISION_SFT,
     ("sft", "transformers", "audio"): _TRANSFORMERS_AUDIO_SFT,
@@ -249,6 +280,21 @@ TRAINER_MODULES: dict[tuple[str, str, str], tuple[str, ...]] = {
         "soup_cli/trainer/mlx_optim.py",
         "soup_cli/trainer/mlx_masking.py",
         "soup_cli/trainer/rewind_mlx.py",
+        "soup_cli/trainer/loss_summary.py",
+    ),
+    ("dpo", "mlx", "text"): (
+        "soup_cli/trainer/mlx_dpo.py",
+        "soup_cli/trainer/mlx_sft.py",
+        "soup_cli/trainer/mlx_optim.py",
+        "soup_cli/trainer/_trl_compat.py",
+        "soup_cli/trainer/loss_summary.py",
+    ),
+    ("orpo", "mlx", "text"): (
+        "soup_cli/trainer/mlx_orpo.py",
+        "soup_cli/trainer/mlx_dpo.py",
+        "soup_cli/trainer/mlx_sft.py",
+        "soup_cli/trainer/mlx_optim.py",
+        "soup_cli/trainer/_trl_compat.py",
         "soup_cli/trainer/loss_summary.py",
     ),
     # utils/unsloth.py handles the loader path. trainer/sft.py::_setup_unsloth is not listed

@@ -1014,9 +1014,13 @@ def estimate_stream_store_bytes(
 
     Deliberately coarse: it assumes the source is stored at ``dtype`` and
     charges the NF4 rate to every parameter, while layernorms and (in the shard
-    set) the embeddings actually stay unquantised. That errs slightly LOW, which
-    is the safe direction — the authoritative check runs after sharding, on the
-    real shard sizes.
+    set) the embeddings actually stay unquantised. That errs LOW — the
+    authoritative check runs after sharding, on the real shard sizes. It errs far
+    low for a fused MoE base, whose stacked routed experts stay at ``dtype``, and
+    for an FP8 block source, whose files hold one byte per weight. So the disk
+    pre-flight and the early RAM check both size the cache from the source headers
+    instead (``layer_shard.estimate_shard_cache_bytes``) and fall back to this
+    ratio only when those headers cannot be listed or read.
     """
     if quant not in SUPPORTED_STREAM_QUANTS:
         raise ValueError(
@@ -1221,6 +1225,21 @@ def nf4_scale_cache_bytes(quant_specs: Mapping[str, Any], n_layers: int) -> int:
     return per_layer * n_layers
 
 
+def estimate_loss_chunk_bytes(
+    *, hidden_size: int, seq_len: int, batch_size: int = 1, dtype: str = "bfloat16"
+) -> int:
+    """What ``training.stream_loss_chunk`` keeps that an unchunked step does not (#1693).
+
+    Two ``[batch, seq, hidden]`` tensors in the stream dtype: the gradient on
+    the hidden states that the forward fills chunk by chunk, and its product
+    with the incoming gradient in the backward. They are not live together with
+    a chunk's logits, so charging both next to the logits term errs high.
+    """
+    if hidden_size <= 0 or seq_len <= 0 or batch_size <= 0:
+        raise ValueError("hidden_size, seq_len and batch_size must all be positive")
+    return 2 * hidden_size * seq_len * batch_size * dtype_bytes(dtype)
+
+
 def estimate_stream_peak_vram(
     *,
     layer_bytes: int,
@@ -1237,6 +1256,7 @@ def estimate_stream_peak_vram(
     logits_bytes_per_element: Optional[float] = None,
     large_layer_bytes: int = 0,
     persistent_bytes: int = 0,
+    loss_chunk: Optional[int] = None,
 ) -> int:
     """Predicted ``torch.cuda.max_memory_allocated()`` for a streaming step.
 
@@ -1265,7 +1285,21 @@ def estimate_stream_peak_vram(
 
     ``persistent_bytes`` is device memory the runtime holds for the whole run on
     top of the pool, such as :func:`nf4_scale_cache_bytes`.
+
+    ``loss_chunk`` is ``training.stream_loss_chunk`` (#1693): the logits term is
+    charged on ``min(seq_len, loss_chunk)`` tokens, at the same bytes per
+    element, and :func:`estimate_loss_chunk_bytes` is added. None of the runs
+    this formula was fitted to used it.
     """
+    logits_tokens = seq_len
+    chunk_bytes = 0
+    if loss_chunk is not None:
+        if isinstance(loss_chunk, bool) or not isinstance(loss_chunk, int) or loss_chunk < 1:
+            raise ValueError(f"loss_chunk must be a positive integer, got {loss_chunk!r}")
+        logits_tokens = min(seq_len, loss_chunk)
+        chunk_bytes = estimate_loss_chunk_bytes(
+            hidden_size=hidden_size, seq_len=seq_len, batch_size=batch_size, dtype=dtype
+        )
     return (
         layer_bytes * buffers
         + large_layer_bytes
@@ -1283,10 +1317,11 @@ def estimate_stream_peak_vram(
         )
         + estimate_logits_bytes(
             vocab_size=vocab_size,
-            seq_len=seq_len,
+            seq_len=logits_tokens,
             batch_size=batch_size,
             bytes_per_element=logits_bytes_per_element,
         )
+        + chunk_bytes
     )
 
 

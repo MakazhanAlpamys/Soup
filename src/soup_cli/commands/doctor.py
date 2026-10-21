@@ -626,10 +626,18 @@ def _check_gpu():
                 )
             )
         elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            from soup_cli.utils.terminal import for_terminal
+
+            async_load = os.environ.get("HF_DEACTIVATE_ASYNC_LOAD")
+            if async_load is None:
+                async_desc = "not set (soup train sets it to 1 on MPS)"
+            else:
+                async_desc = for_terminal(async_load)
             console.print(
                 Panel(
                     "Backend:  [bold green]MPS (Apple Silicon)[/]\n"
-                    "Status:   [bold green]available[/]",
+                    "Status:   [bold green]available[/]\n"
+                    f"HF_DEACTIVATE_ASYNC_LOAD: [dim]{async_desc}[/]",
                     title="GPU",
                 )
             )

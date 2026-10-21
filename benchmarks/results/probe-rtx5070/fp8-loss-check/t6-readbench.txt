@@ -1,0 +1,13 @@
+{"arm": "A", "layer": 10, "bytes": 1123596780, "seconds": 0.431, "GBps": 2.61, "free_ram_gb": 9.46}
+{"arm": "B", "layer": 10, "bytes": 1123596780, "seconds": 0.212, "GBps": 5.29, "free_ram_gb": 9.62}
+{"arm": "A", "layer": 10, "bytes": 1123596780, "seconds": 0.233, "GBps": 4.82, "free_ram_gb": 9.62}
+{"arm": "B", "layer": 10, "bytes": 1123596780, "seconds": 0.209, "GBps": 5.39, "free_ram_gb": 9.55}
+{"arm": "A", "layer": 10, "bytes": 1123596780, "seconds": 0.233, "GBps": 4.82, "free_ram_gb": 9.48}
+{"arm": "B", "layer": 10, "bytes": 1123596780, "seconds": 0.21, "GBps": 5.36, "free_ram_gb": 9.38}
+{"arm": "B", "layer": 20, "bytes": 1123596780, "seconds": 0.213, "GBps": 5.28, "free_ram_gb": 9.33}
+{"arm": "A", "layer": 20, "bytes": 1123596780, "seconds": 0.228, "GBps": 4.92, "free_ram_gb": 9.31}
+total GB read: 8.99
+# second process, ORDER = [("B", 10), ("A", 10)]
+{"arm": "B", "layer": 10, "bytes": 1123596780, "seconds": 0.416, "GBps": 2.7, "free_ram_gb": 8.89}
+{"arm": "A", "layer": 10, "bytes": 1123596780, "seconds": 0.248, "GBps": 4.52, "free_ram_gb": 8.87}
+total GB read: 2.25

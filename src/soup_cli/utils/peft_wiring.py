@@ -86,6 +86,20 @@ _DEEPSEEK_V3_ATTENTION = (
     "o_proj",
 )
 
+#: The same attention when the checkpoint has no low-rank query. DeepSeek-V3's MLA
+#: builds ONE of two query paths, picked by the config: ``q_proj`` when
+#: ``q_lora_rank`` is ``None``, ``q_a_proj -> q_a_layernorm -> q_b_proj`` otherwise
+#: (``DeepseekV3Attention``, transformers 5.17). Moonlight-16B-A3B ships
+#: ``q_lora_rank: null``. peft refuses an attach only when NO target matches, so
+#: there the tuple above attached on its kv/o names and silently left the whole
+#: query path without an adapter.
+_DEEPSEEK_V3_ATTENTION_FULL_RANK_QUERY = (
+    "q_proj",
+    "kv_a_proj_with_mqa",
+    "kv_b_proj",
+    "o_proj",
+)
+
 MOE_TEXT_LORA_TARGETS: dict[str, Any] = {
     "qwen3_moe": ("q_proj", "k_proj", "v_proj", "o_proj"),
     # GLM-4.6 (``zai-org/GLM-4.6``, 92 layers). Ordinary attention, the same
@@ -167,6 +181,59 @@ MOE_TEXT_LORA_TARGETS: dict[str, Any] = {
     # 0 in the vision tower (#1395).
     "mistral3": r".*language_model\..*\.self_attn\.(q_proj|k_proj|v_proj|o_proj)",
 }
+
+#: What replaces a :data:`MOE_TEXT_LORA_TARGETS` entry when the base's config sets
+#: ``q_lora_rank`` to ``None`` -- only for the types whose attention is
+#: ``DeepseekV3Attention`` and so has that split:
+#:
+#: - ``deepseek_v3``: the class itself (Moonlight-16B-A3B).
+#: - ``kimi_k2``: Kimi-K2 checkpoints declare ``DeepseekV3ForCausalLM``, and
+#:   transformers' own ``Kimi_K25Config`` rewrites a ``kimi_k2`` text config to
+#:   ``deepseek_v3``. Every shipped Kimi-K2 config sets 1536, so this row is for a
+#:   checkpoint that does not.
+#:
+#: Absent on purpose:
+#:
+#: - ``glm_moe_dsa``: ``GlmMoeDsaConfig`` refuses ``q_lora_rank: None`` at
+#:   construction, and its DSA indexer and forward use ``q_a_proj``
+#:   unconditionally, so no GLM-5 base has a ``q_proj`` to adapt.
+#: - ``kimi_k25``: its ``vision_tower`` has a ``q_proj`` of its own (measured on a
+#:   tiny real model), so a row would have to be a language-tower regex, and
+#:   ``resolve_moe_lora_targets`` (``utils/moe.py``) keeps the resolved targets only
+#:   when they are a list. Under ``moe_lora: true`` such a row cost the language
+#:   tower its ``kv_a_proj_with_mqa`` / ``kv_b_proj`` adapters. No shipped Kimi K2.5 /
+#:   K2.6 config sets ``null`` (``text_config.q_lora_rank: 1536``), so the wrapper
+#:   keeps the low-rank tuple; one that did would train no adapter on ``q_proj``.
+MLA_FULL_RANK_QUERY_TARGETS: dict[str, Any] = {
+    "deepseek_v3": _DEEPSEEK_V3_ATTENTION_FULL_RANK_QUERY,
+    "kimi_k2": _DEEPSEEK_V3_ATTENTION_FULL_RANK_QUERY,
+}
+
+#: ``getattr`` default telling "the config has no ``q_lora_rank``" from ``None``.
+_ABSENT = object()
+
+
+def _q_lora_rank(model: Any) -> Any:
+    """``q_lora_rank`` of the config whose ``model_type`` chose the row, or ``_ABSENT``.
+
+    Only that config is read. Both rows are text-only types that keep the MLA
+    fields on the config itself (``DeepseekV3Config`` has no ``text_config``);
+    ``kimi_k25``, which keeps them on ``text_config``, has no row. ``model`` may
+    be the config: ``stream_setup`` resolves from the bare ``AutoConfig``. A config
+    without the field is ``_ABSENT``, never ``None`` -- guessing a layout from a
+    missing field would swap a list that matches for one that may not. ``0`` is
+    not ``None`` either: ``DeepseekV3Attention`` tests ``is None``.
+    """
+    return getattr(getattr(model, "config", model), "q_lora_rank", _ABSENT)
+
+
+def _moe_table_entry(model_type: str, model: Any) -> Any:
+    """The table entry for ``model_type``, for THIS checkpoint's MLA query path."""
+    full_rank = MLA_FULL_RANK_QUERY_TARGETS.get(model_type)
+    if full_rank is not None and _q_lora_rank(model) is None:
+        return full_rank
+    return MOE_TEXT_LORA_TARGETS[model_type]
+
 
 #: Entries of :data:`MOE_TEXT_LORA_TARGETS` that cover only PART of the decoder,
 #: each with what is left unadapted. A declared table rather than a branch in the
@@ -320,6 +387,10 @@ def resolve_lora_target_modules(model: Any, configured: Any, console: Any = None
     inspect both configs without importing Transformers or PEFT at module load.
     Qwen4-Exp's causal-LM loader exposes ``qwen4_exp_text`` directly.
 
+    On DeepSeek-V3-style MLA the entry also follows the config's ``q_lora_rank``
+    (:data:`MLA_FULL_RANK_QUERY_TARGETS`): ``None`` means the base has ``q_proj``
+    and no ``q_a_proj`` / ``q_b_proj``.
+
     An architecture neither Soup nor peft maps returns :class:`UnmappedTargets`
     rather than raising; :func:`build_lora_config` decides, once a ``moe_lora``
     override and ``target_parameters`` have had their chance (#1070).
@@ -348,10 +419,15 @@ def resolve_lora_target_modules(model: Any, configured: Any, console: Any = None
     for value in (getattr(getattr(model, "config", model), "model_type", None),):
         if value in MOE_TEXT_LORA_TARGETS:
             _note_partial_coverage(value, model, console)
-            return _as_targets(MOE_TEXT_LORA_TARGETS[value])
+            return _as_targets(_moe_table_entry(value, model))
     for value in sorted(str(v) for v in model_types if v is not None):
         if value in MOE_TEXT_LORA_TARGETS:
             _note_partial_coverage(value, model, console)
+            # Only a text config gets here, inside a wrapper with no row of its
+            # own. The table's MLA names exist only in a text tower, but a bare
+            # ``q_proj`` can also name a vision tower's projection (Kimi K2.5's
+            # has one), so the ``q_lora_rank`` rule needs a row that scopes it
+            # and is not applied here.
             return _as_targets(MOE_TEXT_LORA_TARGETS[value])
 
     named = sorted(value for value in model_types if isinstance(value, str))
@@ -471,8 +547,9 @@ def build_peft_config_spec(
 def _with_moe_parameters(target_modules: Any, target_parameters: Any) -> Any:
     """Add the fused expert parameters ``moe_lora`` resolved (#1421).
 
-    ``resolve_moe_lora_targets`` returns a ``MoeLoraTargets`` list that carries
-    them as ``target_parameters``; merging here, rather than at each call site,
+    ``resolve_moe_lora_targets`` returns a ``MoeLoraTargets`` list (or, for a
+    string target, a ``MoeLoraTargetString``) that carries them as
+    ``target_parameters``; merging here, rather than at each call site,
     is what makes every MoE-wired trainer adapt the experts without passing a new
     argument. An explicit ``lora.target_parameters`` list is kept and extended.
     """
@@ -523,14 +600,23 @@ def build_lora_config(
     """
     import peft
 
+    # The MoE router / gate modules a string target kept under ``moe_lora`` would
+    # otherwise reach (only ever with LoRA: VeRA gets an explicit list instead).
+    exclude_modules = list(getattr(target_modules, "exclude_modules", None) or ())
     target_parameters = _with_moe_parameters(target_modules, target_parameters)
     target_modules = _settle_unmapped(target_modules, target_parameters)
+    if isinstance(target_modules, str):
+        # A ``MoeLoraTargetString`` has handed over what rides along with it above;
+        # peft, and the adapter_config.json it saves, get the plain string.
+        target_modules = str(target_modules)
     spec = build_peft_config_spec(
         lora_cfg,
         target_modules=target_modules,
         target_parameters=target_parameters,
         task_type=task_type,
     )
+    if exclude_modules:
+        spec["init_kwargs"]["exclude_modules"] = exclude_modules
     config_cls = getattr(peft, spec["peft_cls"])
     return config_cls(**spec["init_kwargs"])
 
@@ -1478,12 +1564,6 @@ def _build_rl_checkpoint_cb(tcfg: Any, *, output_dir: str, task: str) -> Any:
             save_every_steps=int(save_every),
             include_optimizer_state=bool(
                 getattr(tcfg, "rl_checkpoint_include_optimizer", True)
-            ),
-            include_ref_model=bool(
-                getattr(tcfg, "rl_checkpoint_include_ref_model", False)
-            ),
-            include_rollout_buffer=bool(
-                getattr(tcfg, "rl_checkpoint_include_rollout_buffer", False)
             ),
             keep_last=int(getattr(tcfg, "rl_checkpoint_keep_last", 3)),
         )

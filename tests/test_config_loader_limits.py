@@ -498,21 +498,21 @@ class TestCallerWithItsOwnSizeLimit:
         assert f"Config file soup.yaml {_SIZE_MESSAGE}" in _plain(result.output)
 
     def test_ship_refuses_a_config_over_its_own_limit(self, in_tmp):
-        import click
+        import typer
 
         from soup_cli.commands import ship
 
         (in_tmp / "soup.yaml").write_bytes(b"#" + b"x" * ship._MAX_CONFIG_BYTES)
-        with pytest.raises(click.exceptions.Exit):
+        with pytest.raises(typer.Exit):
             ship._parse_ship_config("soup.yaml")
 
     def test_recipes_verify_reads_no_further_than_the_limit(self, in_tmp, capsys):
-        import click
+        import typer
 
         from soup_cli.commands.recipes import _configs_to_verify
 
         (in_tmp / "soup.yaml").write_bytes(_config_of_size(MAX_CONFIG_BYTES + 1).encode())
-        with pytest.raises(click.exceptions.Exit):
+        with pytest.raises(typer.Exit):
             _configs_to_verify("soup.yaml", False)
         captured = capsys.readouterr()
         assert f"Config file soup.yaml {_SIZE_MESSAGE}" in _plain(captured.out + captured.err)

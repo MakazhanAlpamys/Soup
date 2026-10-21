@@ -13,9 +13,9 @@ cd Soup
 
 ### 2. Set Up Development Environment
 
-**Requirements:** Python 3.10, 3.11 or 3.12 (`requires-python = ">=3.10,<3.13"`). CI runs
-exactly those three; `tests/test_requires_python_bound.py` derives the declared bound from
-the CI matrix, so widening one without the other fails the suite.
+**Requirements:** Python 3.11, 3.12 or 3.13 (`requires-python = ">=3.11,<3.14"`; 3.10 was
+dropped in #1805). CI runs exactly those three; `tests/test_requires_python_bound.py` derives
+the declared bound from the CI matrix, so widening one without the other fails the suite.
 
 Work inside a virtualenv, then install the project in editable mode with dev
 dependencies:
@@ -124,7 +124,7 @@ src/soup_cli/
   eval/               - Eval platform (custom tasks, LLM judge, human eval, leaderboard)
   bench/              - Benchmark instruments behind `soup bench train` (collector, train_report, train_run) (#836)
   migrate/            - Config migration (LLaMA-Factory, Axolotl, Unsloth)
-  recipes/            - Ready-made configs for popular models (170 recipes)
+  recipes/            - Ready-made configs for popular models (169 recipes)
   autopilot/          - Zero-config decision engine (v0.25.0)
   registry/           - Model Registry (hashing, store, diff, attach) (v0.26.0 + v0.33.0)
   cans/               - Shareable .can artifact format + run/publish orchestrator (v0.26.0 + v0.33.0)
@@ -508,6 +508,27 @@ Contributions are accepted under the Apache License, Version 2.0, the project's 
 
 ## Architecture & Design Decisions
 
+### Typer and Click compatibility
+
+The supported Typer range spans releases using standalone Click and releases
+vendoring it. Resolve exception and parameter-source identities through
+`soup_cli.utils.typer_compat`; importing those objects from standalone `click`
+can silently stop matching the live command tree. Inspect command and parameter
+capabilities when traversing help or reference pages. Keep standalone Click
+declared while the minimum supported Typer requires it.
+
+The core and training floor jobs exercise Typer 0.15.4. The separate `typer-vendored`
+job installs a core-only environment pinned to Typer 0.27.3 / Click 8.4.2,
+records those versions, asserts the real command/exception/parameter-source
+identities use Typer's vendored Click, and runs the unchanged 20-case
+`tests/test_typer_click_compat.py`. This explicit lane runs only on `schedule`
+and `workflow_dispatch`, keeping it off pull-request and release-push runs;
+it does not replace the minimum-version environment.
+Typer is not pinned in the ordinary CI stack, so its test matrix resolves the
+newest release admitted by `pyproject.toml`. The compatibility regressions
+exercise gate exit codes, noninteractive missing options, configured defaults,
+explicit tokens, legacy bench routing and complete command-tree traversal.
+
 ### Lazy Imports for Speed
 
 Heavy ML imports (torch, transformers, trl) are imported inside command handlers so the CLI stays fast. Users can run `soup version` or `soup --help` instantly without waiting for PyTorch to load.
@@ -583,7 +604,7 @@ Great areas for first contributions:
 
 GitHub Actions runs on every push and PR:
 - **ruff** linting on Python 3.11 (must pass)
-- **pytest** on Python 3.10, 3.11, 3.12 across Ubuntu, Windows, macOS (must pass)
+- **pytest** on Python 3.11, 3.12, 3.13 across Ubuntu, Windows, macOS (must pass)
 - **transformers-floor** on Ubuntu / Python 3.11 (#478): installs
   `.[dev]` under `.github/constraints/transformers-floor.txt`, asserts the
   pinned `transformers` version, and runs the static `dtype=` / `torch_dtype=`
@@ -603,14 +624,27 @@ GitHub Actions runs on every push and PR:
 
 **Pull requests run a quick subset first.** A push to a pull request runs `lint`
 and the tests on Ubuntu / Python 3.12 only. The required cells (Ubuntu on Python
-3.10 and 3.12, Windows and macOS on 3.12, plus the smoke jobs) run when a
+3.11 and 3.12, Windows and macOS on 3.12, plus the smoke jobs) run when a
 maintainer adds the `ci:full` label at approval, and on every later push while
 the label stays. Until then the other `test (...)` checks show as *Expected* and
 the smoke jobs as *skipped*; neither is a failure on your side. A PR is merged
 only when those checks are green on its current head. After the merge, `main`
 runs the same quick set on every commit and the full matrix (every Python from
-3.10 to 3.12, with 3.11 on Ubuntu only) once a night; a push to a `release/**`
-branch runs every cell.
+3.11 to 3.13, with 3.11 on Ubuntu only) once a night; a push to a `release/**`
+branch runs every cell. Python 3.13 runs in the nightly and release runs only, not
+on a pull request, so a failure that exists only there shows on `main` in the
+next nightly run.
+
+**Coverage is measured on `main`, not on a pull request.** Every `test (...)`
+cell of a pull-request run, `test (ubuntu-latest, 3.11)` at approval included,
+runs the suite with `--no-cov`: a pull request gets no Codecov report and the
+77% floor is not checked on it. The nightly run on `main` (and a manual dispatch
+or a push to a `release/**` branch) measures coverage in `test (ubuntu-latest,
+3.11)`, checks the floor and uploads the report. So a change that takes coverage
+below 77% merges green and turns the next nightly run red. A plain
+`pytest tests/` measures it and enforces the floor locally (it is in the
+`addopts` of `pyproject.toml`), so run that before you push a change that
+removes tests or adds untested code.
 
 **A draft pull request runs no CI.** Nothing starts while a pull request is a
 draft, whatever is pushed to it. Mark it ready for review and the quick set
@@ -648,6 +682,26 @@ terminal width of the process: give the console an explicit width in the test
 instead of setting `COLUMNS`. To reproduce a failure that shows only in CI,
 install the plugin (`pip install "pytest-xdist[psutil]"`) and run
 `pytest tests/ -n logical --dist loadfile`.
+
+**A docs-only pull request runs the suite once.** When every file a pull request
+changes is under `docs/` or `changelog.d/`, or is `CONTRIBUTORS.md` or
+`CONTRIBUTING.md` (a renamed file counts under both names; `README*.md`,
+`benchmarks/` and everything else do not count), the `plan` job marks the run
+docs-only: `test (ubuntu-latest, 3.12)` runs the whole suite as always, and the
+other test cells and the three smoke jobs still report, as success, without
+running a step. If the file list cannot be read, or is not the whole list, the
+full set runs. A push, the nightly run and a release branch are never docs-only.
+
+**A hung test is cut off.** The test steps run with `--timeout=600
+--timeout-method=thread --max-worker-restart=2` (`pytest-timeout`, part of the
+`dev` extra), a 45-minute step limit and a 60-minute job limit. A test that
+runs for ten minutes fails and the worker running it is killed and replaced;
+xdist runs that test again on the new worker, and gives up after two
+replacements. After five minutes (`-o faulthandler_timeout=300`) the stacks of
+all threads are written to the log, so a hang says where it is. A healthy test
+takes seconds. A test that really needs longer marks itself
+`@pytest.mark.timeout(1200)`. A local `pytest` run has no cap unless you pass
+the flags.
 
 See `.github/workflows/ci.yml`.
 

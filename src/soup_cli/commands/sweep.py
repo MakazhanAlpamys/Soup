@@ -289,6 +289,17 @@ def sweep(
     if skipped:
         console.print(f"\n[yellow]Early stopping: {skipped} run(s) skipped.[/]")
 
+    # #1808: a sweep in which no arm completed used to return normally, so a
+    # script chaining on the exit code read a table of "failed" rows as success.
+    # One completed arm is still a sweep; none is a failure, named as such.
+    completed_count = sum(1 for r in results if r["status"] == "completed")
+    if results and completed_count == 0:
+        console.print(
+            f"\n[red]No sweep run completed: {len(results)} of {len(results)} "
+            f"run(s) failed.[/] The first error is printed above each run."
+        )
+        raise typer.Exit(1)
+
 
 def _parse_sweep_params(params: list[str]) -> dict[str, list]:
     """Parse sweep parameter strings into a dict of {key: [values]}."""
@@ -484,12 +495,13 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
     from soup_cli.monitoring.display import TrainingDisplay
     from soup_cli.trainer.dispatch import build_trainer
     from soup_cli.utils.eval_schedule import loader_data_config, validation_notice
-    from soup_cli.utils.gpu import detect_device, get_gpu_info
+    from soup_cli.utils.gpu import configure_mps_async_load, detect_device, get_gpu_info
 
     cfg = SoupConfig(**config_dict)
 
     # Detect hardware
     device, device_name = detect_device()
+    configure_mps_async_load(device)
     gpu_info = get_gpu_info()
 
     # Load data -- the same split `soup train` would use (#1223).

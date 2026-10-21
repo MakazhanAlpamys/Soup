@@ -896,6 +896,9 @@ Usage: `soup compile-tools [OPTIONS] SPEC`
 | `--eval` | text |  | yes | Path to tool-call eval JSONL |
 | `--optimizer` | text | `textgrad` |  | Allowed: gepa, textgrad |
 | `--output`, `-o` | text | `compiled_tools.json` |  | Output schema path |
+| `--task-lm` | text |  |  | Task language model for GEPA optimizer |
+| `--reflection-lm` | text |  |  | Reflection language model for GEPA optimizer |
+| `--engine` | text |  |  | Backward engine for TextGrad optimizer (e.g. gpt-4o) |
 | `--plan-only` | flag | off |  | Render plan + exit 0 (no live optimise). |
 
 ## `soup completions`
@@ -1133,7 +1136,7 @@ Usage: `soup data decontaminate [OPTIONS]`
 |---|---|---|---|---|
 | `--input`, `-i` | text |  | yes | Input JSONL file to decontaminate. |
 | `--benchmarks`, `-b` | text |  |  | Comma-separated benchmark names (label only; corpora not bundled). |
-| `--benchmark-file` | text |  |  | v0.53.7: operator-supplied benchmark JSONL (under cwd). Each row's ``text``/``prompt``/``content`` field contributes to the n-gram contamination set. Compatible with --benchmarks (extends). |
+| `--benchmark-file` | text |  |  | v0.53.7: operator-supplied benchmark JSONL (under cwd). Each row's text, prompt, Alpaca, preference or conversation fields contribute to the n-gram contamination set. Compatible with --benchmarks (extends). |
 | `--output`, `-o` | text | `clean.jsonl` |  | Output JSONL of rows that survived decontamination. |
 | `--threshold` | float, 0.0 to 1.0 | `0.8` |  | Minimum n-gram overlap ratio for removing a row. |
 | `--n` | integer, 1 to 32 | `8` |  | N-gram size used for overlap detection. |
@@ -3467,6 +3470,8 @@ Usage: `soup ship [OPTIONS] [<command>] [ARGS]...`
 | `--output`, `-o` | text |  |  | Write the verdict JSON to this path. |
 | `--emit-evidence` | text |  |  | Write the scores in the --evidence INPUT schema so this run can be replayed offline (output-is-input). With --config it also STAMPS the config's provenance onto the emitted evidence. |
 | `--config` | text |  |  | soup.yaml whose eval.ship block supplies defaults (CLI flags win). With --evidence alone it GATES (refuses evidence whose config_sha drifted from this config, or whose numerics family does not match); with --emit-evidence it STAMPS this config's provenance. |
+| `--require-provenance` | flag | off |  | Strict offline drift check: requires --evidence, --config, --adapter and task eval. Compare artifact/task/source bytes, suite version and effective verdict policy. |
+| `--data-sha256` | text |  |  | Caller-asserted training-data SHA-256 for emitted/strict evidence; not proof of which bytes trained the model. |
 | `--push` | text |  |  | Post the verdict as a GitHub PR comment (owner/repo#N). Auth via GITHUB_TOKEN / GH_TOKEN; needs the `gh` CLI. |
 | `--device` | text |  |  | Device for the live run (cuda / cpu). |
 | `--chat-template-kwargs` | text |  |  | Live chat-template variables as a JSON object, e.g. {"enable_thinking":false}. |
@@ -3659,7 +3664,7 @@ Usage: `soup train [OPTIONS]`
 | `--track-energy` | flag | off |  | Measure the training window's energy + CO2 via codecarbon (offline; requires `pip install soup-cli[carbon]`). Feeds the kWh / CO2 into --annex-xi. v0.71.3. |
 | `--energy-country` | text | `USA` |  | ISO 3166-1 alpha-3 country code for the CO2 grid-intensity estimate used by --track-energy (default USA). |
 | `--energy-out` | text |  |  | Write the --track-energy measurement to this JSON file (cwd-contained) so `soup bom emit --energy <path>` can consume it. v0.71.15. |
-| `--cloud` | text |  |  | Train on a cloud GPU instead of locally (v0.71.18 #16). Supported: modal, lambda (runpod is planned). Renders a cloud app stub from the config (plan-only); use --cloud-submit to submit live. |
+| `--cloud` | text |  |  | Train on a cloud GPU instead of locally (v0.71.18 #16). Supported: modal, lambda, runpod. Renders a cloud app stub from the config (plan-only); use --cloud-submit to submit live. |
 | `--gpu` | text | `a100` |  | Cloud GPU type for --cloud (t4 / l4 / a10 / a10g / a100 / a100-80gb / l40s / h100 / a6000). Default a100. Provider-specific allowlists apply. |
 | `--cloud-submit` | flag | off |  | With --cloud, submit the rendered run live via the cloud's SDK or API (gated on respective provider token/API key). Default is plan-only (render + print the command). Lambda requires a registered SSH key. |
 

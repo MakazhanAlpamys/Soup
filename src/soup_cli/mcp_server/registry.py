@@ -499,6 +499,10 @@ def tool_profile(args: dict) -> dict:
     batch_size = 4 if batch_size == "auto" else int(batch_size)
     gpu_memory_gb, gpu_memory_source = _resolve_gpu_memory_mcp(gpu)
 
+    from soup_cli.utils.hardware_fit import resolve_peft_mode
+
+    peft = resolve_peft_mode(cfg)
+
     result = estimate_total(
         model_name=cfg.base,
         model_params_b=model_params_b,
@@ -509,6 +513,7 @@ def tool_profile(args: dict) -> dict:
         seq_len=cfg.data.max_length,
         optimizer=cfg.training.optimizer,
         gradient_checkpointing=cfg.training.gradient_checkpointing,
+        peft=peft,
     )
     tokens_per_sec = estimate_speed(model_params_b, cfg.training.quantization, batch_size)
     result["tokens_per_sec"] = round(tokens_per_sec, 1)

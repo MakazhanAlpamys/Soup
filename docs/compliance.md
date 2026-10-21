@@ -117,10 +117,15 @@ soup ci init --data data/train.jsonl --suite expectations.yaml --evidence ship_e
 The generated job runs, in order:
 
 ```
-soup data validate <data>       # dataset format compliance
+soup data validate <data> --min-valid-fraction 1.0  # every row must convert
 soup expect <data> <suite>      # PII / token-length / refusal / judge expectations
 soup ship --evidence <ev.json>  # SHIP / DON'T-SHIP (exit 2 blocks the merge)
 ```
+
+The generated data gate refuses any dropped row, including skipped JSONL records.
+The standalone validator keeps its permissive default. To tolerate partial data,
+edit `--min-valid-fraction` in your workflow. Existing workflow files are unchanged
+until you regenerate them with `soup ci init --force`.
 
 A minimal `expectations.yaml` for the second step:
 

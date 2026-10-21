@@ -92,6 +92,7 @@ CLI_TESTS = (
     "tests/test_cli_dependency_floors.py",
     "tests/test_click_argument_help.py",
     "tests/test_cli_startup_is_light.py",
+    "tests/test_typer_click_compat.py",
 )
 
 
@@ -192,9 +193,9 @@ def _command_paths(root: click.Command) -> list[list[str]]:
         for name in command.list_commands(ctx):
             child = command.get_command(ctx, name)
             assert child is not None, f"`{' '.join([*path, name])}` is listed but missing"
-            visit(child, click.Context(child, info_name=name, parent=ctx), [*path, name])
+            visit(child, child.context_class(child, info_name=name, parent=ctx), [*path, name])
 
-    visit(root, click.Context(root, info_name="soup"), [])
+    visit(root, root.context_class(root, info_name="soup"), [])
     return paths
 
 

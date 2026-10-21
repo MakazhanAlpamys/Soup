@@ -2,7 +2,7 @@
 
 Tool-agnostic entry point for AI coding agents (Codex, Cursor, Aider, Claude Code, etc.).
 
-**Soup** is a CLI-first LLM fine-tuning tool. Python 3.10+, Apache-2.0.
+**Soup** is a CLI-first LLM fine-tuning tool. Python 3.11–3.13 (`requires-python = ">=3.11,<3.14"`), Apache-2.0.
 
 ## Build & test
 
@@ -13,7 +13,8 @@ ruff check src/soup_cli/ tests/  # Lint — must be clean before any commit
 ```
 
 - `pytest -m smoke` runs the slow tests that download models and train (skipped by default).
-- CI matrix: Python 3.10 / 3.11 / 3.12 × Ubuntu / Windows / macOS.
+- CI matrix: Python 3.11 / 3.12 / 3.13 × Ubuntu / Windows / macOS (3.13 in the nightly and
+  release runs; pull requests run 3.11 and 3.12).
 
 ## Conventions (must follow)
 

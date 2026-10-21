@@ -285,7 +285,7 @@ training:
   use_cut_ce: true   # Patches the CE kernel before model load
 ```
 
-Architecture detection reads `config.model_type` first, so a local checkpoint directory (`soup merge`/`soup shrink`/`soup draft distill` output) is patched the same as a hub id; a name-based match on the last path component (`meta-llama/Llama-3.1-8B` → llama patcher) is the fallback when config resolution is unavailable. Saves 8-24 GB VRAM at common batch × seq shapes. Not compatible with unsloth (own CE kernel) or mlx. Wired across every transformer-backend trainer (SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward-Model, Embedding, Pretrain) — note that PPO has its own forward loop so cut_ce no-ops gracefully there.
+Architecture detection reads `config.model_type` first, so a local checkpoint directory (`soup merge`/`soup shrink`/`soup draft distill` output) is patched the same as a hub id; a name-based match on the last path component (`meta-llama/Llama-3.1-8B` → llama patcher) is the fallback when config resolution is unavailable. Saves 8-24 GB VRAM at common batch × seq shapes. Not compatible with unsloth (own CE kernel), mlx or layer streaming. Wired across every transformer-backend trainer (SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward-Model, Embedding, Pretrain) — note that PPO has its own forward loop so cut_ce no-ops gracefully there.
 
 
 ## Gradient Checkpointing Tiers
@@ -450,6 +450,7 @@ training:
   # stream_vram_override: 4_000_000_000   # Bytes to assume free (v0.73.x); see below
   # stream_vram_probe: true    # Decide the fit by MEASURING one step (sft only); see below
   # stream_nf4_scale_cache: true  # Keep expanded NF4 scales resident (4bit + double quant); see below
+  # stream_loss_chunk: 128     # Output head and loss N tokens at a time, for long contexts (sft only)
   # stream_disk_kind: nvme     # Override auto disk-kind detection: nvme/ssd/hdd; see below
 ```
 
@@ -479,16 +480,62 @@ checkpointed step. The fused arm reduces saved-weight VRAM but its backward stil
 dequantises because bitsandbytes exposes no transposed 4-bit GEMM; it is therefore a
 bounded memory/time trade, not a claim that #842's full kernel ceiling is complete.
 
-**Expert-granularity streaming (DeepSeek-V3-family MoE, API/harness only).** For
-admitted DeepSeek-V3 checkpoints with per-expert source weights, `shard_checkpoint(..., expert_layout="per_expert")`
-stores routed experts separately so the runtime fetches one frozen expert at a time
-instead of holding the full routed-expert block in the layer buffer. This is a
-capacity option for unusually large MoE layers; it does not add a CLI or config knob.
-The current harness trains LoRA on attention projections: LoRA on streamed routed
-experts is unsupported, while attention and shared-expert LoRA remain resident. The
-fit planner still estimates the fused layer and does not account for per-expert
-streaming, so its recommendation is not an estimate of this layout's capacity. No
-production throughput claim is made; see the [expert streaming gate](../benchmarks/gate-expert-streaming.md).
+**Expert-granularity streaming (`training.stream_expert_layout: per_expert`, DeepSeek-V3 family).**
+
+What it does:
+- The sharder stores each MoE layer's routed experts in their own file, one pair of matrices per expert, NF4 per matrix under `quantization: 4bit`.
+- The runtime reads an expert only when the router picks it, and again in the backward, so the layer buffers hold just the dense part (attention, norms, router, shared expert).
+- The VRAM bound no longer grows with the expert count.
+
+Measured (all in the [Moonlight-16B record](../benchmarks/probe-rtx5070-moonlight-16b.md) unless linked):
+- **Numerics.** It matches transformers' eager experts bit for bit, forward and backward, on the same weights ([gate](../benchmarks/gate-expert-streaming.md)).
+- **Harness steps** (seq 512): peak allocated VRAM 1,882 MiB against 3,993 MiB fused, at 17.5-18.0 s against 8.9-9.8 s per step.
+- **`soup train`** (9 short rows): Soup reported a GPU peak of 1.0 GB against 3.1 GB fused, at about 42 s against 16 s per step.
+
+It buys capacity, not speed:
+- Each routed expert is read from the cache volume about three times per step (forward, recompute, backward), one at a time. Expect slower steps, and keep the cache on NVMe: Soup warns when the volume is not.
+- The default stays `fused`.
+- Under `quantization: 4bit` the routed experts are NF4 here but stay at the stream dtype with `fused`, so the two layouts train against numerically different bases.
+
+What the VRAM pre-flight counts:
+- the layer buffers, measured from the dense-only layer files;
+- plus one routed expert in flight, shown as an `experts` line.
+
+What the disk pre-flight counts: the cache the sharder will write in the layout you chose, sized from the source safetensors headers (see "Disk pre-flight and shard cache" below). Under `quantization: 4bit` that is the experts at NF4 here and at the stream dtype with `fused`: for Moonlight it charges 9.24 GB here and 30.60 GB fused, within 0.01% of the caches the sharder then wrote. (Before, it charged the NF4 rate to every parameter, 8.23 GB in both layouts, so a fused run could pass the check and fill the disk mid-shard.)
+
+Limits and refusals:
+- **Architecture.** Only `model_type: deepseek_v3` is admitted. Any other base is refused before weights are resolved.
+- **Adapters on routed experts.** `moe_lora` is refused with this layout, because a streamed expert has nowhere to keep an adapter between its visits. Adapt attention or the shared expert instead.
+- **Older Soup versions.** A Soup from before this layout accepts a per-expert cache as reusable and then fails at install ("shard is missing decoder weights"). Delete the cache directory, or re-shard with `fused`, before going back to an older version.
+
+**FP8 block-quantised bases (DeepSeek-V3 family).** Layer streaming keeps a frozen base off the card and streams it in layer by layer (layer-to-layer streaming, L2L: Pudipeddi et al. 2020). DeepSeek-V3 is published as an FP8 block-quantised checkpoint, and Kimi K2 uses the same format. Soup now shards such a checkpoint by dequantising it as it writes the layer cache, instead of refusing it. There is no config key for this: the format is detected from the checkpoint.
+
+What the format is:
+- each decoder linear weight is `float8_e4m3fn`;
+- beside it, `<name>.weight_scale_inv` holds a float32 scale per 128 x 128 block;
+- `config.json` declares it in `quantization_config` (`quant_method: fp8`, `weight_block_size: [128, 128]`);
+- embeddings, the head, the norms and the router stay bf16.
+
+What the sharder does:
+- multiplies each FP8 weight by its block scales in fp32, cropping the last block at a ragged edge (DeepSeek's own dequantisation rule), and casts the result to the stream dtype;
+- stores it by the usual rules, so under `quantization: 4bit` the same weights become NF4 that would become NF4 from a bf16 checkpoint;
+- dequantises routed experts before they are stacked (`fused`) or written to their experts file (`per_expert`);
+- keeps a linear that the checkpoint stores in bf16 without a scale, beside FP8 siblings, as it is stored (DeepSeek-V3's checkpoints mix the two: only the FP8 tensors carry a scale);
+- works one band of rows at a time into an output already at the stream dtype, so a tensor costs its output plus a small fp32 band, and a block size past the matrix edge costs nothing extra;
+- never stores the scales. The streamed model is built at the stream dtype: the config's FP8 `quantization_config` is dropped from the streamed skeleton only, so `config.json` and every resident load are unchanged.
+
+Measured:
+- **Numerics.** On a tiny DeepSeek-V3, the model streamed from the FP8 checkpoint matches a resident model holding the same dequantised weights bit for bit, in its logits, loss and LoRA gradients, in both expert layouts. Its layer cache holds the same tensors, bit for bit, as the one sharded from those dequantised weights, NF4 included ([gate](../benchmarks/gate-fp8-shard.md)).
+- **Disk and RAM.** The disk pre-flight charges each FP8 weight at the rate its dequantised tensor is stored at, and nothing for the scales. So does the RAM check that runs before sharding under `stream_source: ram`, so a base whose dequantised weights do not fit in RAM is refused before anything is written.
+- **A real checkpoint, CPU only.** Moonlight-16B-A3B, converted to this format, sharded in 93 s (27 layers, NF4, `fused`). The 30.60 GB cache came within 0.0002% of the pre-flight's figure (0.000115%: 35,336 bytes), and every FP8-derived tensor checked in three layers equals an independent dequantisation of the source. A GPU `soup train` comparison against the bf16 source is recorded in [`probe-rtx5070-moonlight-fp8-source.md`](../benchmarks/probe-rtx5070-moonlight-fp8-source.md) (pre-registered verdict FAIL on per-step loss and step time; see the record).
+
+Limits and refusals:
+- **Architecture.** Only `model_type: deepseek_v3` is admitted. A Kimi K2 checkpoint declares `model_type: kimi_k2` and is still refused by name, FP8 or not.
+- **Other FP8 formats.** Each of these is refused, and the message names the supported format: per-tensor scales, `e5m2` weights, `compressed-tensors`, ue8m0 (power-of-two) scales, static activation scales, a missing or misshapen scale, an FP8 tensor without a scale, and a scale without its tensor. A `weight_block_size` axis outside [1, 1048576] is refused too. A spelling the config already gives away is refused at setup, before any weight is resolved or downloaded; the rest before the first byte of the cache is written.
+- **Integer and packed formats.** Kimi-K2-Thinking's compressed-tensors `pack-quantized` INT4 (int32 `weight_packed`, `weight_scale`, int64 `weight_shape`) is not dequantised, and nor is any other integer quantiser; see the refusal list below.
+- **Damaged values.** A weight that is NaN after dequantisation (the e4m3fn bytes 0x7F and 0xFF), a negative scale, a non-finite scale, and a weight past float16's range under a float16 stream (pre-Ampere cards; stream it in bfloat16) are refused, naming the tensor, when that tensor is read: before the cache index is written, though files of earlier layers may already be on disk (no index names them, so they are never used, and the next run shards again). A zero scale, as an all-zero block has, is kept.
+- **Cache identity.** For `deepseek_v3`, `config.json` is part of the cache's source identity, as are the weight files, so a cache sharded from the bf16 checkpoint is never reused for its FP8 copy at the same path, nor the reverse.
+- **After training.** The adapter is trained against the dequantised weights. Merging it or serving it loads the base through transformers' own FP8 path, which is a different numerical path from the one the adapter was trained on.
 
 **`stream_nf4_scale_cache` (opt-in).** On the dequantise + `F.linear` path, a
 double-quantised NF4 weight expands its 8-bit block scales to fp32 on every visit,
@@ -735,14 +782,26 @@ prints this advice when it sees you accumulating.
 - `task: kto` with `batch_size: 1` → TRL's KL term is degenerate at batch 1; refused when the config is read (this applies to every KTO run, not only to streaming) rather than minutes later after sharding
 - `lora.use_dora` / `lora.use_vera` / `lora.init_strategy` other than `random` → these initialise from the real base weight, which is on the meta device under streaming
 - `moe_expert_quant` → expert quantization runs only in the resident model-construction path and would otherwise be silently ignored
+- a LoRA target on the streamed `embed_tokens` or `lm_head` of an untied checkpoint, however `target_modules` spells it (a name, a regex, a dotted path) → refused while the streamed model is built, after the adapter is attached and before any streaming buffer is allocated, not at config load: only then is it known whether the checkpoint streams them and which modules the spelling matched. Saving or resuming that adapter is not supported yet (#1048). The dotted `[q_proj, model.embed_tokens]` is refused like the other spellings until item 1 of #1048 (save and resume) lands. A tied checkpoint streams neither weight, so a target there trains, saves with the defaults and loads back unchanged, as it does without streaming
 - `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers` → each independently rewrites or re-freezes the same layers
+- `use_cut_ce` is refused with `stream_layers` (#1206): streamed setup does not install the resident CCE patch. Disable CCE to stream with the conservative full-logits budget, or disable streaming to use resident CCE. A tiny local streamed Llama was exercised through sharding, forward/loss and backward on CPU; this is no CUDA memory measurement.
 - `use_liger` / `use_flash_attn` → **not reached at all** under streaming (#1692). Both are read by the *resident* setup: Liger patches the MLP forward there, and flash-attn is handed to `from_pretrained` as `attn_implementation`. A streamed model is built by `from_config` with no attention argument and no Liger patch, and `_liger_applied` is never set, so `use_liger_kernel` misses `TrainingArguments` too. These are the switches you reach for when a streamed run will not fit, so they are refused rather than dropped; each is offered again once it is wired and shown to engage on a streamed model. On every task outside `{sft, tts}` they are already refused at config load (#806)
-- `stream_source` / `stream_ngram_source` / `stream_buffers` / `stream_read_ahead` / `stream_vram_override` / `stream_vram_probe` / `stream_nf4_scale_cache` / `stream_disk_kind` / `stream_pin` set while `stream_layers: false` → a footgun, refused
+- `stream_source` / `stream_ngram_source` / `stream_buffers` / `stream_read_ahead` / `stream_vram_override` / `stream_vram_probe` / `stream_nf4_scale_cache` / `stream_expert_layout` / `stream_disk_kind` / `stream_pin` / `stream_loss_chunk` set while `stream_layers: false` → a footgun, refused
+- `stream_expert_layout: per_expert` with `moe_lora` → refused: a routed expert streamed one at a time has nowhere to keep an adapter. On a base that is not `model_type: deepseek_v3` → refused at setup, before the weights are resolved
+- an FP8 checkpoint in any format other than DeepSeek-V3's block FP8, or an FP8 base that is not `model_type: deepseek_v3` → refused naming the supported format: at setup when `config.json` gives it away, otherwise before the cache is written. The block format itself is dequantised at shard time (see "FP8 block-quantised bases" above)
+- any other quantised checkpoint → refused by name, before a byte of the cache is written, and in the same words by the sharder, the disk pre-flight and the setup. The sharder checks the source first, from its `config.json` and headers, so a refusal creates no cache folder, leaves an existing cache and its `index.json` untouched, and never reuses a cache an older Soup sharded from such a source. Layer streaming reads plain floating-point weights, DeepSeek-V3's block FP8 and, on qwen4_exp only, oMLX/oQ affine bundles; the message says which format it found, that layer streaming cannot dequantise it, and to point `training.base` at a bf16 or FP8-block copy. Refused:
+  - a `config.json` `quantization_config` whose `quant_method` is not `fp8`: `compressed-tensors` in any format (Kimi-K2-Thinking's `pack-quantized` INT4 among them), `gptq`, `awq`, `bitsandbytes` (or `load_in_4bit` / `load_in_8bit` with no method), `hqq`, `aqlm`, `eetq`, `torchao`, `quanto`, `fbgemm_fp8`, `mxfp4`, `mxfp8`, `nvfp4`, `gguf` and every other quantiser transformers registers, or a name it does not. Also read from `text_config` when the top level has none, and a value that is not a mapping (a string, a list, a number) is refused as malformed. `quant_method` is matched exactly, as transformers matches it: `FP8` is not `fp8`. Refused at setup, before any weight is resolved or downloaded. A config with no `quant_method` (the oMLX/oQ spelling, `bits` and `group_size` only) is decided by its tensors;
+  - a tensor stored as an integer or packed type (I8, I16, I32, I64, U8, U16, U32, U64, BOOL, F4), which a plain read would cast to floats and train on: GPTQ/AWQ `qweight`, compressed-tensors `weight_packed`, bitsandbytes uint8 and int8 weights, oMLX/oQ uint32 words on an architecture other than qwen4_exp;
+  - a floating-point tensor named like a quantiser's companion: `weight_scale` (compressed-tensors; DeepSeek-V3's block FP8 spells its scale `weight_scale_inv`), `weight_global_scale`, `weight_zero_point`, `input_scale`, `qzeros`, `g_idx`, `SCB`, `absmax`, `quant_map`, `W_q`, `codebooks` and the like.
+
+  Not refused: the integer buffers a supported model really carries, which are qwen4_exp's PLE n-gram hashing tables (`layer_multipliers`, `ngram_heads_vocab_sizes`, `ngram_heads_offsets`, int64; the runtime keeps the skeleton's own values) and `position_ids`. The supported families' own checkpoints carry no other integer tensor (pinned by a tiny checkpoint of each in `tests/test_stream_refuses_packed_quant.py`). Dequantise any other source to bf16 first
 - `stream_nf4_scale_cache` without `quantization: 4bit` and double quantization → refused: there are no nested NF4 scales to cache
 - a non-default `stream_read_ahead` beside `stream_source: ram` → refused. The read-ahead reader belongs to the NVMe disk tier and `ram` never falls back to it, so the setting would validate, be documented, and reach nothing. The default is accepted, because a default is not a decision
 - a disk-tier run whose host staging (`stream_read_ahead` layers, plus one slot each for the embedding and an untied `lm_head`) plus the resident extras will not fit the free-RAM headroom → refused by name, naming the depth to lower. Refused rather than clamped: a depth you set is a decision, and silently lowering it would hand back a slower run than the one you configured
 - more than 8 distinct layer shapes in one shard index → refused. Staging is allocated per shape and a shape with one member takes a full slot at any depth, so an index whose every layer differed would hold most of the model in staging at once — page-locked when the box allows it and `stream_pin` is not false, a loud pageable fallback otherwise, and a refusal only under `stream_pin: true` on a CUDA target — which is what the disk tier exists to avoid. A real model has one to three
 - `stream_vram_probe` on any task other than `sft` → the probe runs a plain causal-LM step, which *is* the SFT step but is not a preference loss. Measured at one matching shape it is conservative there too (6.02 GB against a real DPO step's 5.30 GB, +13.5%), but one shape is not a validation, so it is not offered for `dpo`/`orpo`/`simpo`/`kto` yet
+- `stream_loss_chunk` on any task other than `sft`, or with `data.format: raft` → the chunked step rebuilds the causal-LM cross-entropy and returns no logits. A preference loss reduces the logits to per-token log-probs instead, and RAFT's weighted loss reads all of them (#1693)
+- `stream_loss_chunk` beside `use_cut_ce` → each replaces how the loss over the logits is computed. Refused before the `use_cut_ce` refusal above, with a message that names both fields (#1693)
 - an architecture outside the supported list (llama / qwen2 / qwen3, including qwen3_5_moe text aliases / qwen4_exp text / mistral / gemma / gemma2 / gemma3_text / phi / phi3 / deepseek_v3) → named explicitly. `deepseek_v3` is the DeepSeek-V3 family (MLA attention, routed experts plus a shared expert); a Kimi K2 checkpoint uses the same decoder but declares `model_type: kimi_k2`, which transformers does not register, so it is refused under that name. Under `quantization: 4bit` its attention, shared-expert and dense-MLP projections are NF4 while the routed experts stay at the stream dtype: they are 3-D parameters, not `nn.Linear` modules, so a DeepSeek-V3 layer streams most of its bytes unquantised
 
 **Config example:**
@@ -882,15 +941,40 @@ above); it does not make the reference free.
 reports the complete projected footprint: the HF/local source, any regular-file copy Soup
 still needs, and the per-layer shard cache. Required writes are grouped by target volume and
 the run refuses before either write when that volume lacks free space. With
-`SOUP_LAYER_STREAM_STRIPE_DIRS` set, each root is charged the bytes it will receive,
-read from the source safetensors headers (the primary root also holds the embedding,
-head and extras); when a header cannot be read or the model is qwen4_exp the split is
-even and the panel says approximately. Override the two cache roots with
-`SOUP_SPECTRUM_CACHE_DIR` and `SOUP_LAYER_STREAM_CACHE_DIR`; both retain Soup's
-home/cwd/tmp containment policy.
+`SOUP_LAYER_STREAM_STRIPE_DIRS` set, each root is charged the bytes it will receive
+(the primary root also holds the embedding, head and extras); when a header cannot be
+read or the model is qwen4_exp the split is even and the panel says approximately.
+Override the two cache roots with `SOUP_SPECTRUM_CACHE_DIR` and
+`SOUP_LAYER_STREAM_CACHE_DIR`; both retain Soup's home/cwd/tmp containment policy.
 A shard cache Soup will reuse is reported at the size of its own files, on every drive it is
-striped over; one it has to write is reported at the estimate, or with two or more drives at
-the larger of the estimate and the bytes derived from the source headers.
+striped over. One it has to write is sized from the source safetensors headers (shapes and
+dtypes only: no weight is loaded), tensor by tensor, by the rules the sharder writes with:
+NF4 for the decoder weights the meta probe converts to 4-bit under `quantization: 4bit`,
+the stream dtype for norms, embeddings, the head, an MoE router and fused routed experts,
+float32 for the layer buffers the runtime loads back, plus an allowance for the file headers
+and the index. A snapshot that still has to be copied is read where the copy step reads it.
+A checkpoint the sharder would refuse (more than 512 decoder layers, a missing layer, an
+incomplete expert, one tensor spelled twice, an FP8 spelling it does not dequantise) is
+refused here, in the sharder's words, before anything is copied. An FP8 block-quantised
+source is charged at the rate its dequantised tensors are stored at, and nothing for its
+block scales, which the sharder consumes. When the files cannot be listed or a header cannot be read, the cache is
+charged the NF4 rate for every parameter and the panel says approximately; so does a
+qwen4_exp base that is not an oQ checkpoint, which keeps its source-size figure.
+
+This raises the figure for a dense base under `quantization: 4bit`, because the embeddings,
+an untied head and the norms stay at the stream dtype rather than NF4: Llama-3.1-8B goes from
+4.14 GB to 5.70 GB and Llama-3.2-1B from 0.64 GB to 1.03 GB (derived from their shapes), and
+Mistral-7B-Instruct-v0.3 from 3.74 GB to 4.14 GB, against a 4.14 GB cache measured on disk.
+A run that passed the pre-flight before by less than that margin is now refused: the old
+figure was low, and the sharder would have written the larger amount. The early RAM check
+(`stream_source: ram`, before sharding) charges the same estimate, read once: the decoder-layer
+files, the embedding and head and the resident extras, which is what the check after sharding
+measures on the real store (the `per_expert` experts files stay on disk on every tier and are
+not charged). It refuses by that check's rule, 70% of free RAM or 55% of physical RAM, so a
+base the exact check would refuse is refused before anything is sharded. When the headers
+cannot be listed or read, it charges the flat NF4 rate on the size on disk and its refusal
+says approximately. `stream_source: auto` is not checked before sharding: it picks its tier
+after sharding, from the real store.
 
 **Two or more NVMe drives.** On a cold store larger than RAM the disk-tier step can wait on the
 read (measured for a 70B-shaped store), and then one drive is the ceiling. Set
@@ -1350,7 +1434,7 @@ Both reject silently-no-op combinations: setting either flag without `moe_lora=t
 
 **`moe_lora` requires `lora.dropout: 0.0` on a fused-expert MoE.** transformers 5.x keeps a Qwen3-MoE's experts as fused 3-D parameters (`mlp.experts.gate_up_proj`), which peft adapts through `lora.ParamWrapper`, and that wrapper raises `lora.ParamWrapper does not work with lora_dropout != 0.` With the schema default of `0.05` the LoRA attach failed outright, so `moe_lora` did not work on any task - including `sft`. Soup now stops at the attach with a message naming the flag, instead of letting peft's reach the user, and all 29 shipped recipes that set `moe_lora` pin `lora.dropout: 0.0`. The check is made against the loaded model, not at config load: whether the experts are fused depends on the checkpoint and the transformers version, and a model with one module per expert takes dropout normally. A dense base is untouched - there the flag is a no-op. Since #1421 the refusal covers every fused-expert family, Mixtral and MiniMax included: their experts are now targeted (next paragraph), so peft's wrapper refuses dropout on them too, where before it attached quietly and adapted no experts.
 
-**`moe_lora` reaches the fused experts on every family (#1421).** On transformers 5 an MoE layer keeps all its routed experts as two 3-D parameters on one module (`mlp.experts.gate_up_proj` and `down_proj`), not as one `nn.Linear` per expert, so module names cannot address them. Until #1421 `moe_lora` named modules only, and whether those names reached the experts depended on peft's own v4→v5 name conversion, which exists for some architectures and not others. Now `resolve_moe_lora_targets` finds the fused parameters on the loaded model and hands them to peft as `target_parameters`, beside the module targets it already resolved (an `auto` list is kept, so Qwen3.5's `in_proj_qkv` / `out_proj` stay adapted; not under `stream_layers`, whose setup resolves the targets on a meta skeleton and replaces the list). Measured on tiny stand-ins with transformers 5.16.1 / peft 0.20.0, routed-expert adapters per family, by module names alone and through the trainer path:
+**`moe_lora` reaches the fused experts on every family (#1421).** On transformers 5 an MoE layer keeps all its routed experts as two 3-D parameters on one module (`mlp.experts.gate_up_proj` and `down_proj`), not as one `nn.Linear` per expert, so module names cannot address them. Until #1421 `moe_lora` named modules only, and whether those names reached the experts depended on peft's own v4→v5 name conversion, which exists for some architectures and not others. Now `resolve_moe_lora_targets` finds the fused parameters on the loaded model and hands them to peft as `target_parameters`, beside the module targets it already resolved (list targets are kept: what `auto` resolves to, so Qwen3.5's `in_proj_qkv` / `out_proj` stay adapted, and an explicit `lora.target_modules` list; a string target such as qwen4_exp's `"all-linear"` or a regex keeps its meaning, without the MoE routers (see below); `stream_layers` does the same, resolving the targets before its meta-skeleton probe and handing them to the same helper). Measured on tiny stand-ins with transformers 5.16.1 / peft 0.20.0, routed-expert adapters per family, by module names alone and through the trainer path:
 
 | family | module names alone (before #1421) | trainer path (now) |
 |---|---|---|
@@ -1365,6 +1449,31 @@ Both reject silently-no-op combinations: setting either flag without `moe_lora=t
 | `kimi_k2` | **not measured** (no stand-in builds here) | not measured |
 
 `minimax-m3-sft` still trains attention-only LoRA: it sets no `moe_lora`, since it loads through SFT's vision path, which never runs the MoE step, and `minimax-m3-dpo` was removed because DPO cannot build the `minimax_m3_vl` wrapper (#1145). The seven `kimi-k2.x` recipes that set `moe_lora` are untested rather than known-good — no tiny stand-in for those configs exists in the installed transformers. A checkpoint that still keeps one `nn.Linear` per expert (the transformers-4 layout) is handled as before: the projections are named as modules and no `target_parameters` are added. `moe_lora` together with `lora.use_vera: true` is refused on a fused-expert model (#1197): VeRA wraps `nn.Linear` modules only and has no `target_parameters` path, so the flag would adapt attention (and a shared expert) exactly as VeRA without it; set `use_vera: false` to adapt the experts with LoRA, or drop `moe_lora`. The per-expert-Linear layout is not refused, VeRA wraps those.
+
+**A string `target_modules` keeps its meaning under `moe_lora`.** A list target is extended with the MoE names (above). A string is not a list to extend, and it used to be replaced by the MoE list. peft reads a string in one of two ways, and each is now kept:
+
+- `"all-linear"` (in any casing; it is what `target_modules: auto` resolves to on qwen4_exp) means every `nn.Linear` and `Conv1D` except the output embedding, which already includes every module the MoE names reach, so the fused expert parameters are added as `target_parameters`. On qwen4_exp that keeps the Gated DeltaNet, QSA indexer, hyper-connection and PLE projections the MoE list does not name.
+- Any other string is a regex that peft full-matches against each module name. It becomes one regex, `(?:<your regex>)|(?:(?:.*\.)?(?:q_proj|k_proj|…))`, whose second half is peft's list rule for the MoE names, so peft adapts exactly what either half matches, plus the fused expert parameters. A leading global flag such as `(?i)` or `(?x)` stays at the front and applies to your half only. A regex that does not compile is refused at setup, naming `training.lora.target_modules`. A bare module name written as a string (`target_modules: in_proj_qkv`) is still a full-match regex, so it matches no nested module: the setup prints a warning that the regex matches no module and only the `moe_lora` targets attach. Write a list instead.
+
+**Under `moe_lora` a string never adapts a router.** No module whose output is routing logits gets an adapter from a string target. That covers the router (one logit per expert: `mlp.gate` on qwen3_moe, deepseek_v3 and qwen4_exp, `ffn.router` on DBRX, `mlp.router` and the attention's `experts.router` on JetMoE) and the shared-expert gate (the single logit that scales the shared expert, `shared_expert_gate`). They are found from the model's structure:
+
+- Under a module that holds `experts`, a router is a child whose output dimension is the expert count, and a shared-expert gate is a child whose output dimension is 1. The count comes from the experts' 3-D tensors or per-expert modules, or from the config where the experts are stacked 2-D tensors (DBRX).
+- Where there is no `experts` child (JetMoE), a router is a child named `router` or `gate` that sits beside a 3-D expert tensor with as many experts as it has outputs.
+- A router that wraps one `nn.Linear` (DBRX, JetMoE) is kept out through that Linear.
+
+A dense `gate_proj` is never taken for one, and neither is an attention `gate`. They stay out even when your regex names them. Router LoRA is a training-stability risk that a string would otherwise switch on without saying so. To adapt a router anyway, name it in an explicit `target_modules` list, which `moe_lora` extends and never filters.
+
+How the gates are kept out is decided per string, by asking peft's own handling of it:
+
+- The string is kept, and the gates it would reach go to peft's `exclude_modules`. This applies to `all-linear` where peft adapts it as written (qwen4_exp, DBRX, JetMoE) and to a regex on any family. On the families peft converts from the transformers-4 layout (`qwen3_moe`, `deepseek_v3`, `glm4_moe`, `olmoe`, `mixtral`, `minimax` and the rest of transformers' conversion mapping), peft resolves a regex to the last names of the modules it matches, skipping excluded ones. So a regex naming one layer's `q_a_proj` reaches every layer's, with or without `moe_lora`.
+- `all-linear` on those converted families becomes an explicit list. There peft adds the router's old name `gate` to `all-linear` whatever is excluded, and adapts the router weight `mlp.gate.weight` as a parameter, which `exclude_modules` does not reach. The list is what the string means without the gates, plus the MoE names: a leaf name (`q_proj`) where it reaches nothing outside that meaning, the full module path otherwise. A regex on those families becomes such a list only if it reaches a non-router whose last name is `gate`, which peft would rewrite onto every router.
+- With `lora.use_vera: true` a string becomes such a list whenever it would reach a gate, because peft's `VeraConfig` has no `exclude_modules`.
+
+On the converted families peft also renames every target ending in an old expert projection name (`gate_proj`, `up_proj`, `down_proj`) to the fused expert tensor. A dense or shared-expert `nn.Linear` with that name (deepseek_v3's first dense layer and its shared experts) is therefore not adapted as a module, with a list target too.
+
+Without `moe_lora` a string reaches peft unchanged, router included where peft includes it.
+
+The `ScatterMoE LoRA:` setup line says which happened: `keeping target_modules 'all-linear'` or `targeting the target_modules regex or the N MoE module patterns (one combined regex)`, followed by `excluding K MoE router/gate module(s)` when any are excluded; or, for a string turned into a list, `targeting 'all-linear' as a list of N target names` (or `the target_modules regex as a list of N target names`) with the gates it leaves out. Layer streaming hands its resolved targets to the same helper (#2072), so all of this holds under `stream_layers` too.
 
 **`target_modules: auto` on a MoE base.** Until #1070 `resolve_lora_target_modules` had no mapping for any MoE architecture Soup ships, so `auto` resolved to `None` and peft refused with `No target_modules passed but also no target_parameters found`. Those architectures now resolve to their attention projections (see `docs/peft-and-efficiency.md`); a MoE architecture neither Soup nor peft maps is refused at setup, naming it. With `moe_lora: true` the targets come from the model scan instead, and that is applied *before* the refusal is decided, so `moe_lora` still works on an unmapped MoE such as `qwen2_moe`.
 

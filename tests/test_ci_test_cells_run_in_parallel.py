@@ -9,8 +9,8 @@ clean:
 * `-n logical` with the plugin's `psutil` extra installed, which is what counts the CPUs;
 * nothing in `pyproject.toml` turns workers on, so a local `pytest tests/` stays serial.
 
-pyproject is read with regular expressions, not ``tomllib``, which is 3.11+ while this
-repository supports 3.10: the convention of ``tests/test_requires_python_bound.py``.
+pyproject is read with regular expressions, not ``tomllib``: the convention of
+``tests/test_requires_python_bound.py``, set while the floor was 3.10, which has no ``tomllib``.
 """
 
 from __future__ import annotations
@@ -29,6 +29,13 @@ PYPROJECT = ROOT / "pyproject.toml"
 CONTRIBUTING = ROOT / "CONTRIBUTING.md"
 
 RUN_STEP = "Run unit tests with coverage"
+# 2026-10-19: every cell but ubuntu / 3.11 (3.10 until #1805) runs this one, with
+# `--no-cov`; 2026-10-21: so does every cell of a pull-request run, ubuntu / 3.11 included.
+# Coverage is measured in one cell of a run that is not a pull request
+# (tests/test_ci_full_matrix_on_approval.py::TestCoverageIsMeasuredInOneCell); the
+# parallelism pins below hold for both steps, because most cells now run the second.
+NO_COV_STEP = "Run unit tests without coverage"
+RUN_STEPS = (RUN_STEP, NO_COV_STEP)
 INSTALL_STEP = "Install dependencies"
 
 
@@ -42,8 +49,8 @@ def _step(name: str) -> dict[str, Any]:
     return steps[0]
 
 
-def _pytest_args() -> list[str]:
-    args = shlex.split(str(_step(RUN_STEP)["run"]))
+def _pytest_args(step: str = RUN_STEP) -> list[str]:
+    args = shlex.split(str(_step(step)["run"]))
     assert args[:2] == ["pytest", "tests/"], args
     return args
 
@@ -56,13 +63,15 @@ def _option(args: list[str], flag: str) -> list[str]:
 
 
 class TestTheTestJobRunsInParallel:
-    def test_one_worker_per_logical_cpu(self) -> None:
-        assert _option(_pytest_args(), "-n") == ["logical"]
+    @pytest.mark.parametrize("step", RUN_STEPS)
+    def test_one_worker_per_logical_cpu(self, step: str) -> None:
+        assert _option(_pytest_args(step), "-n") == ["logical"]
 
-    def test_one_test_file_per_worker(self) -> None:
+    @pytest.mark.parametrize("step", RUN_STEPS)
+    def test_one_test_file_per_worker(self, step: str) -> None:
         """`load` hands the tests of one file to several workers: module-level state and
         test order inside a file are lost, and a timing test failed under it."""
-        assert _option(_pytest_args(), "--dist") == ["loadfile"]
+        assert _option(_pytest_args(step), "--dist") == ["loadfile"]
 
     def test_the_plugin_is_installed_with_its_cpu_counter(self) -> None:
         """Without the `psutil` extra `-n logical` falls back to another count."""
@@ -73,21 +82,38 @@ class TestTheTestJobRunsInParallel:
 
     def test_the_plugin_is_installed_before_the_tests_run(self) -> None:
         names = [step.get("name") for step in _jobs()["test"]["steps"]]
-        assert names.index(INSTALL_STEP) < names.index(RUN_STEP)
+        for step in RUN_STEPS:
+            assert names.index(INSTALL_STEP) < names.index(step)
 
+    @pytest.mark.parametrize("step", RUN_STEPS)
     @pytest.mark.parametrize(
         "argument",
         [
-            "--junitxml=report.xml",  # the nightly test-count badge parses it
-            "--cov=soup_cli",
-            "--cov-report=xml:coverage.xml",  # the Codecov upload sends it
-            "--cov-report=term-missing:skip-covered",
+            "--junitxml=report.xml",  # the nightly badge parses it, from an unmeasured cell
             "-v",
             "--tb=short",
         ],
     )
-    def test_the_reports_the_later_steps_read_are_still_written(self, argument: str) -> None:
-        assert argument in _pytest_args()
+    def test_the_reports_the_later_steps_read_are_still_written(
+        self, step: str, argument: str
+    ) -> None:
+        assert argument in _pytest_args(step)
+
+    @pytest.mark.parametrize(
+        "argument",
+        [
+            "--cov=soup_cli",
+            "--cov-report=xml:coverage.xml",  # the Codecov upload sends it
+            "--cov-report=term-missing:skip-covered",
+        ],
+    )
+    def test_the_measuring_step_still_writes_the_coverage_reports(self, argument: str) -> None:
+        assert argument in _pytest_args(RUN_STEP)
+
+    def test_the_other_step_turns_coverage_off_and_writes_no_coverage_report(self) -> None:
+        args = _pytest_args(NO_COV_STEP)
+        assert "--no-cov" in args
+        assert not [arg for arg in args if arg.startswith("--cov")], args
 
     def test_no_step_of_any_job_spreads_one_file_over_workers(self) -> None:
         text = CI.read_text(encoding="utf-8")

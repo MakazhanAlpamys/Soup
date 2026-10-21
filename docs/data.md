@@ -723,6 +723,16 @@ format drops.
 {"prompt": "Explain gravity", "chosen": "Gravity is a force...", "rejected": "I don't know"}
 ```
 
+For `dpo`, `ipo`, `simpo`, `orpo`, `bco`, `preference` and `reward_model`, training
+resolves an omitted `data.format` or `data.format: auto` to `dpo`. This preserves
+`chosen` and `rejected` when the prompt is a `messages` conversation instead of a
+`prompt` string. The existing converter decides prompt precedence and normalises
+string/message-list answers; mixed text and conversational pairs are unified.
+Ordinary SFT auto-detection and KTO's unpaired layout are unchanged. Standalone
+`soup data validate` has no training-task context: use `--format dpo` to inspect
+these preference layouts. A training or validation split without preference-pair
+columns is refused before loading a model, including with `soup train --dry-run`.
+
 **KTO (unpaired preferences):**
 ```json
 {"prompt": "Explain gravity", "completion": "Gravity is a force...", "label": true}
@@ -1173,11 +1183,22 @@ the same comparison corpus, so omitting labels or changing one valid label to
 another does not change the removal count. The file's JSONL is bounded and
 cwd-contained by the shared loader, with strict
 parsing: malformed/non-object rows, empty files and rows without usable 8-gram
-text are refused before the scorecard is printed. Text comes from `text`,
-`content`, or `messages[].content`, via the shared extractor. The fixed 8-gram
+text are refused before the scorecard is printed. Text comes from the shared
+expectations extractor: plain text/content, Alpaca instruction/input/output,
+prompt/chosen/rejected/completion, ShareGPT/ChatML conversations, embedding fields
+and textual tool-call arguments. The fixed 8-gram
 heuristic uses `--threshold`; a resulting zero describes only those supplied
 texts, not absence of contamination against every public benchmark. The other
 input/standalone loader paths keep their previous tolerant behavior.
+
+All six quality commands (`score`, `pii`, `toxicity`, `langdetect`, `educational`
+and `decontaminate`) warn with a count when some input rows have no extractable
+text. They fail before reporting metrics or writing output when no row has text.
+Inputs with no rows, including empty files or files containing only blank or
+non-object/non-JSON lines, are refused too.
+Standalone decontamination applies the same rule to its benchmark file; the
+scorecard benchmark file retains the stricter per-row 8-gram validation above.
+The PII and abuse-keyword detectors themselves are unchanged.
 
 The scorecard reports PII matches, abuse-keyword matches, language distribution, mean heuristic educational value, and decontamination removals. PII detection uses a narrow ReDoS-hardened regex set (email / phone / SSN / credit-card) with a 50 KB pre-cap on every input. Language detection is a stopword heuristic across six languages. `soup data toxicity` is retained as a compatible command name, but its output is explicitly an abuse-keyword heuristic, not a toxicity classifier. Ambiguous technical and medical terms such as process `kill`, thread `die`, and heart `attack` are not treated as standalone safety signals. This trades one known failure mode for explicit limitations: in maintainer review, 9 of 10 held-out abusive examples scored zero and 10 of 12 benign technical or editorial examples were flagged at the default threshold. Use it only for keyword triage, never as a safety decision. The default Magpie quality filter therefore applies only non-empty and educational heuristics; provide an explicit model-backed policy outside Soup when safety classification is required. The `[data-pro]` extra currently adds `langdetect` and Presidio only; it does not install Llama Guard or FineWeb-Edu. Decontamination uses n-gram containment against caller-supplied texts: `--benchmarks mmlu,gsm8k` selects allowlisted labels only; use `--benchmark-file custom_benchmark.jsonl` for actual comparison data.
 

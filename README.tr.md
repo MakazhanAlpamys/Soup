@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:c47b976dfbc0c66deffcec8079f30d09ad54799e5751673fd8cc4105eb28ea87 -->
+<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -27,7 +27,7 @@
 <p align="center">
   <a href="https://pypi.org/project/soup-cli/"><img src="https://img.shields.io/pypi/v/soup-cli?color=blue" alt="PyPI"></a>
   <a href="https://pepy.tech/project/soup-cli"><img src="https://img.shields.io/pepy/dt/soup-cli?color=blue" alt="İndirmeler"></a>
-  <img src="https://img.shields.io/badge/python-3.10--3.12-blue" alt="Python 3.10-3.12">
+  <img src="https://img.shields.io/badge/python-3.11--3.13-blue" alt="Python 3.11-3.13">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0 Lisansı">
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/MakazhanAlpamys/65fdc943f85f3b2c46ecddb415c2b779/raw/soup_tests.json" alt="Testler"></a>
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://github.com/MakazhanAlpamys/Soup/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -139,8 +139,10 @@ veriyor ve onları reddedecek sürümü belirtiyor. Daha önce yüklenen bir yap
   `soup adapters sign --backend sigstore` ve `soup attest emit --sign sigstore` ise Sigstore anahtarsız
   OIDC ile imzalar (`pip install "soup-cli[sigstore]"`).
 
-> Yalnızca Python **3.10–3.12**. 3.13+ sürümlerinde pip, Soup daha hiç çalışmadan yerel (native)
-> uzantıda çöken, test edilmemiş PyTorch wheel paketlerini seçiyordu.
+> v0.77'den itibaren yalnızca Python **3.11–3.13**. Python 3.10, 2026-10-01'de kullanım ömrünün
+> sonuna (end of life) ulaştı; 3.10 üzerinde pip v0.76'yı kurmaya devam eder. 3.14+ sürümlerinde
+> pip, üst sınırı olmayan son sürüm olan v0.72.4'e geri döner ve orada test edilmemiş PyTorch
+> wheel paketlerini seçer.
 
 Eski sürümlerin öne çıkanları [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) sayfasında.
 
@@ -348,8 +350,8 @@ docker compose up   # ya da yerel olarak derleyin
 
 ## Gereksinimler
 
-- Python 3.10, 3.11 veya 3.12 (CI'ın test ettiği sürümler bunlar; PyTorch yığını orada henüz
-  doğrulanmadığı için 3.13+ şimdilik desteklenmiyor)
+- Python 3.11, 3.12 veya 3.13 (CI'ın test ettiği sürümler bunlar; PyTorch yığını orada henüz
+  doğrulanmadığı için 3.14+ şimdilik desteklenmiyor)
 - CUDA'lı GPU (önerilen), Apple Silicon (MPS) veya CPU (deneysel — çok yavaş)
 - QLoRA ile 7B modeller için 8 GB+ VRAM
 

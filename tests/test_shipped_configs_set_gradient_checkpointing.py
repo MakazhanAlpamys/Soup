@@ -41,7 +41,11 @@ SHIPPED = _shipped_configs()
 
 
 def test_every_trl_task_has_a_shipped_config():
-    """Guard against a vacuous pass: the walk must reach configs for all five tasks."""
+    """Guard against a vacuous pass: the walk must reach configs for all five tasks.
+
+    The literal pins TRL_TASKS itself, so dropping a task from the constant fails here too.
+    """
+    assert TRL_TASKS == {"grpo", "ipo", "bco", "reward_model", "online_dpo"}
     tasks = {yaml.safe_load(text)["task"] for _, text in SHIPPED}
     assert tasks == TRL_TASKS
 

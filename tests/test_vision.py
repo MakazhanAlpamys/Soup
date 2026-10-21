@@ -59,6 +59,42 @@ LLAVA_DATASET = [
 class TestVisionConfig:
     """Test modality config field validation."""
 
+    @pytest.mark.parametrize("task", ["dpo", "ipo", "simpo", "orpo", "bco", "preference"])
+    @pytest.mark.parametrize("data_format", ["llava", "sharegpt4v"])
+    def test_preference_tasks_reject_vision_row_formats(self, task, data_format):
+        from soup_cli.config.loader import load_config_from_string
+
+        preference_loss = "  preference_loss: dpo\n" if task == "preference" else ""
+        raw = (
+            f"base: org/model\ntask: {task}\nmodality: vision\n"
+            f"data:\n  train: ./data.jsonl\n  format: {data_format}\n"
+        )
+        if preference_loss:
+            raw += f"training:\n{preference_loss}"
+        with pytest.raises(ValueError) as exc_info:
+            load_config_from_string(raw)
+
+        message = str(exc_info.value)
+        assert f"task={task!r}" in message
+        assert f"data.format={data_format!r}" in message
+        assert "no vision-preference row path" in message
+        assert "text preference format" in message
+
+    @pytest.mark.parametrize("task", ["dpo", "ipo", "simpo", "orpo", "bco", "preference"])
+    def test_preference_tasks_accept_text_preference_format(self, task):
+        from soup_cli.config.loader import load_config_from_string
+
+        preference_loss = "  preference_loss: dpo\n" if task == "preference" else ""
+        raw = (
+            f"base: org/model\ntask: {task}\nmodality: vision\n"
+            "data:\n  train: ./data.jsonl\n  format: dpo\n"
+        )
+        if preference_loss:
+            raw += f"training:\n{preference_loss}"
+        cfg = load_config_from_string(raw)
+        assert cfg.task == task
+        assert cfg.data.format == "dpo"
+
     def test_modality_default_is_text(self):
         """Default modality should be 'text'."""
         cfg = SoupConfig(base="some-model", data={"train": "./data.jsonl"})

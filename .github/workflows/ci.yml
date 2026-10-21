@@ -7,6 +7,21 @@ on:
     # main, which for a release cut from an older tag is not the tree that
     # ships, so a PR run cannot stand in for this one.
     branches: [main, 'release/**']
+    # A push that touches only these paths starts no run (a pull request is NOT
+    # filtered: it has no `paths` / `paths-ignore`, so every required context still
+    # reports on every pull request). Measured 2026-10-19 over 7 days: 15 of 131
+    # pushes to main were docs-only credit commits, each a full quick run (about 20
+    # runner-minutes), 303 minutes in all. What it gives up: tests read these paths
+    # (the changelog fragments, CONTRIBUTING.md, CONTRIBUTORS.md, docs/), so a docs-only
+    # push that breaks one of them shows in the nightly run instead of on its own
+    # commit; the same change as a pull request is still tested. `release/**` shares the
+    # filter, which is fine: a release cut carries a version bump and code, never docs
+    # alone, and a docs-only tip can be run by hand with workflow_dispatch.
+    paths-ignore:
+      - 'docs/**'
+      - 'changelog.d/**'
+      - 'CONTRIBUTORS.md'
+      - 'CONTRIBUTING.md'
   pull_request:
     branches: [main]
     # The first three are GitHub's defaults. `ready_for_review` is a draft's first
@@ -118,6 +133,15 @@ concurrency:
 # `test` takes a single value rather than a per-OS expression: 90 is slack for
 # ubuntu/macos, but the alternative is arithmetic in a matrix expression to
 # save runner-minutes that are only ever spent when a job is already hung.
+#
+# 2026-10-20: `test` is 60, not 90, and its two pytest steps carry a limit of
+# their own (45; see the first of them). The table above predates the parallel
+# run (2026-10-07). Measured 2026-10-12..19 over 1145 successful `test` jobs: the
+# slowest took 37.5 minutes (Windows, before the warm-cache fix of 2026-10-19
+# took 6.3 of them; 23.3 since), ubuntu 31.0, macOS 31.7. 60 is 1.6x the slowest
+# and leaves 15 minutes above the step limit for checkout, install and the warm-up.
+# What it saves: a job that hangs ends 30 minutes sooner (the nightly run of
+# 2026-10-20 held one Windows cell for the full 90).
 
 jobs:
   # Quick runs, the required cells at approval, the full matrix every night, and
@@ -135,8 +159,10 @@ jobs:
   #   nightly run on main, a manual    FULL: seven test cells (no Windows or macOS
   #     dispatch                         on 3.11) + the six gated jobs
   #   pull request labelled ci:full    APPROVAL: the four required test cells (ubuntu
-  #                                      on 3.10 and 3.12, Windows and macOS on
-  #                                      3.12) + the six gated jobs
+  #                                      on 3.11 and 3.12, Windows and macOS on
+  #                                      3.12) + the four gated jobs that run on a
+  #                                      pull request (not type-check, not
+  #                                      torchao-contract: 2026-10-19, below)
   #   push to main, any other pull     QUICK: lint + test (ubuntu-latest, 3.12)
   #     request run
   #   draft pull request               nothing: no job starts
@@ -148,13 +174,27 @@ jobs:
   # (x1.33 on that limit). What it gives up: 3 of 64 failing attempts failed on
   # windows-3.11 alone, and a failure like that now surfaces on the release
   # branch instead of before merge. Branch protection requires neither cell.
+  # Since #1805 (2026-10-21) 3.11 is the oldest supported Python, so Windows and
+  # macOS meet the floor on release/** only; FULL spends those two slots on 3.13.
+  #
+  # 2026-10-21 (#1805): the support matrix is 3.11 / 3.12 / 3.13. 3.10 left it (end
+  # of life on 2026-10-01), 3.13 joined it, and requires-python moved with them to
+  # ">=3.11,<3.14" (tests/test_requires_python_bound.py derives the bound from
+  # RELEASE). 3.13 runs on every OS in FULL and RELEASE and in no pull-request run:
+  # QUICK and APPROVAL stay on 3.12, so a new interpreter cannot turn every open
+  # pull request red at once (the reasoning of the pinned stack below). What it
+  # gives up: a failure that exists only on 3.13 shows on `main` in the next nightly
+  # run, not before merge. Moving the pull-request gate to 3.13 later means changing
+  # APPROVAL, QUICK, the cell `RUN_SUITE` keeps and branch protection together
+  # (tests/test_ci_full_matrix_on_approval.py names every one of them).
   #
   # 2026-10-07: a labelled pull request runs APPROVAL, no longer FULL. An approval
   # run was seven test cells, two of them on macOS, the binding limit above; it is
-  # four, one on macOS. What it gives up: a failure that exists only on ubuntu
-  # 3.11, Windows 3.10 or macOS 3.10 is not caught before merge and shows on
-  # `main` in the next nightly run instead. Branch protection must not require
-  # any of the three: they come off it together with this change.
+  # four, one on macOS. What it gives up: a failure that exists only on a
+  # nightly-only cell (then ubuntu 3.11, Windows 3.10 and macOS 3.10; since #1805
+  # the three 3.13 cells) is not caught before merge and shows on `main` in the
+  # next nightly run instead. Branch protection must not require any of the
+  # three: they came off it together with this change.
   #
   # A quick push costs 3 jobs (lint, plan, one ubuntu cell) instead of 15, and
   # none of them on Windows or macOS. A maintainer adds `ci:full` at approval.
@@ -168,10 +208,10 @@ jobs:
   # What this costs, and why the merge gate still holds:
   #
   # - Contributors see only ubuntu / Python 3.12 until approval. A failure that
-  #   exists only on Windows, macOS or 3.10 surfaces at approval, so that round
-  #   trip starts later than it used to. One that needs ubuntu on 3.11, or Windows
-  #   or macOS on 3.10, surfaces after the merge, in the nightly run; one that
-  #   needs Windows or macOS on 3.11, on the release branch.
+  #   exists only on Windows, macOS or 3.11 surfaces at approval, so that round
+  #   trip starts later than it used to. One that needs 3.13, on any OS, surfaces
+  #   after the merge, in the nightly run; one that needs Windows or macOS on 3.11,
+  #   on the release branch.
   # - The required smokes (mlx-smoke, pytorch-smoke, transformers-floor) read as
   #   SKIPPED on a quick run, and branch protection counts a job skipped by its
   #   `if:` as passing. So the smokes are not what blocks a merge; the test cells
@@ -191,9 +231,14 @@ jobs:
   #   starts a second approval run, in a concurrency group of its own so it cannot
   #   cancel the first, and no later push cancels it either. Add other labels
   #   before `ci:full`.
-  # - Coverage uploads from the ubuntu / 3.10 cell only -- the ubuntu cell every
-  #   gated run has and a quick run does not -- so a pull request's Codecov report
-  #   arrives at approval.
+  # - Coverage is not measured on a pull request at all (2026-10-21). The one cell that
+  #   measures it, enforces the 77% floor and uploads to Codecov is `test (ubuntu-latest,
+  #   3.11)` of a run that is NOT a pull request: the nightly run, a manual dispatch and
+  #   a push to release/**. Every cell of a pull-request run, that cell at approval
+  #   included, runs the suite with `--no-cov`. What it gives up: a pull request has no
+  #   Codecov report, and one that drops coverage below the floor merges green and turns
+  #   the next nightly run red, on `main`. A push to `main` is a quick run, which has no
+  #   ubuntu / 3.11 cell (it never did), so it does not measure either.
   # - A draft pull request runs nothing: `plan` and `lint` are skipped by their
   #   own `if:`, and every other job needs `plan`. The merge gate holds for the
   #   reason above -- the required `test (...)` contexts are never created -- and
@@ -215,6 +260,25 @@ jobs:
   # and a pinned nightly run stays green and says nothing. When and how to bump
   # the pins is in the header of that file.
   #
+  # 2026-10-20: `plan` also decides `docs_only`: true only for a pull request whose EVERY
+  # changed file is under docs/ or changelog.d/ or is CONTRIBUTORS.md or CONTRIBUTING.md,
+  # read from the pull request's own file list (`gh api .../pulls/N/files`, a rename
+  # counted by both names) and false on any API error, an empty list, or a list shorter
+  # than the pull request's `changed_files` (the endpoint stops at 3000 files). README*.md
+  # and benchmarks/ are NOT in the set: tests read them. When it is true the suite runs
+  # ONCE: `test (ubuntu-latest, 3.12)` is exactly what it was, and every step of the
+  # other test cells and of the three smoke jobs is skipped by its own `if:`. The jobs are
+  # not skipped, their steps are: a job skipped by its `if:` reads "skipped", while a job
+  # whose steps are all skipped reports SUCCESS, which is what every required context
+  # should read. Measured 2026-10-12..19: about 136 job-minutes a day went to the other
+  # cells and the smokes of pull requests that changed only these paths (about 185 before
+  # the warm-cache fix of 2026-10-19). What it gives up: a docs-only change that breaks a
+  # test only on Windows, macOS or Python 3.11 (a test that reads one of these paths)
+  # shows in the nightly run instead; ubuntu / 3.12 still runs every test. A push, the
+  # nightly run, a manual dispatch and a release branch are not affected: `docs_only` is
+  # false for them. Never filter `pull_request` by `paths` for this: a filtered workflow
+  # reports nothing and every required context would stay "Expected".
+  #
   # `timeout-minutes: 5` is not a measurement: one shell step, no checkout, no
   # install.
   plan:
@@ -223,27 +287,32 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Only what the docs-only step reads: the pull request's file list. There is no
+    # checkout, so no `contents`; naming one permission makes every other one `none`.
+    permissions:
+      pull-requests: read
     env:
       # The four matrices, each declared once as a JSON literal the tests parse.
       # RELEASE is the support matrix, every cell: tests/test_requires_python_bound.py
       # derives requires-python from it. FULL is RELEASE minus Windows and macOS on
-      # 3.11. APPROVAL is the oldest and the newest Python, the oldest on ubuntu
+      # 3.11. APPROVAL is the oldest Python and the newest one a pull request runs
+      # (3.12: 3.13 is FULL and RELEASE only, see above), the oldest on ubuntu
       # only, and tests/test_ci_full_matrix_on_approval.py pins it to exactly the
       # required `test (...)` contexts. QUICK is one required cell. Keep the key
       # order (it names the checks) and the versions as strings (a JSON 3.10 is 3.1).
       RELEASE_MATRIX: >-
         {"os": ["ubuntu-latest", "windows-latest", "macos-latest"],
-        "python-version": ["3.10", "3.11", "3.12"]}
+        "python-version": ["3.11", "3.12", "3.13"]}
       FULL_MATRIX: >-
         {"os": ["ubuntu-latest", "windows-latest", "macos-latest"],
-        "python-version": ["3.10", "3.11", "3.12"],
+        "python-version": ["3.11", "3.12", "3.13"],
         "exclude": [{"os": "windows-latest", "python-version": "3.11"},
         {"os": "macos-latest", "python-version": "3.11"}]}
       APPROVAL_MATRIX: >-
         {"os": ["ubuntu-latest", "windows-latest", "macos-latest"],
-        "python-version": ["3.10", "3.12"],
-        "exclude": [{"os": "windows-latest", "python-version": "3.10"},
-        {"os": "macos-latest", "python-version": "3.10"}]}
+        "python-version": ["3.11", "3.12"],
+        "exclude": [{"os": "windows-latest", "python-version": "3.11"},
+        {"os": "macos-latest", "python-version": "3.11"}]}
       QUICK_MATRIX: '{"os": ["ubuntu-latest"], "python-version": ["3.12"]}'
       # The pinned upstream stack, named once. QUICK and APPROVAL hand it to the
       # jobs as `-c <path>`; FULL and RELEASE hand them nothing.
@@ -252,6 +321,7 @@ jobs:
       full: ${{ steps.decide.outputs.full }}
       matrix: ${{ steps.decide.outputs.matrix }}
       constraints: ${{ steps.decide.outputs.constraints }}
+      docs_only: ${{ steps.docs.outputs.docs_only }}
     steps:
       - name: Choose the release, full, approval or quick matrix
         id: decide
@@ -284,6 +354,51 @@ jobs:
             echo "matrix=$matrix"
             echo "constraints=$constraints"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Detect a docs-only pull request
+        # `true` only when the pull request's file list is non-empty, complete, and every
+        # name on it (a rename counts both its old and its new one) is a docs path. Every
+        # other outcome is `false`, an API error included: the worst a wrong `false` costs
+        # is the full run this job exists to avoid, the worst a wrong `true` costs is a
+        # test cell that did not run. The values come in through `env:`, never into the
+        # script text.
+        id: docs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+        run: |
+          set -u
+          docs_only=false
+          is_docs() {
+            case "$1" in
+              docs/*|changelog.d/*|CONTRIBUTORS.md|CONTRIBUTING.md) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          if [ "$EVENT_NAME" = "pull_request" ] && [ -n "$PR_NUMBER" ]; then
+            if rows=$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --paginate --jq '.[] | [.filename, .previous_filename] | @tsv'); then
+              # No file at all reads as ONE blank row, and a blank name is not a docs path,
+              # so an empty list counts against `docs_only` without a check of its own.
+              total=0
+              other=0
+              while IFS=$'\t' read -r name previous; do
+                total=$((total + 1))
+                is_docs "$name" || other=$((other + 1))
+                if [ -n "$previous" ]; then
+                  is_docs "$previous" || other=$((other + 1))
+                fi
+              done <<< "$rows"
+              if [ "$other" -eq 0 ] && [ "$total" = "$CHANGED_FILES" ]; then
+                docs_only=true
+              fi
+            else
+              echo "::warning title=Docs-only check::could not read the pull request's file list; running the full set"
+            fi
+          fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
 
   lint:
     # Skipped on a draft pull request, like `plan`: see the comment above `plan`.
@@ -334,7 +449,11 @@ jobs:
 
   type-check:
     needs: plan
-    if: needs.plan.outputs.full == 'true'
+    # Not on a pull request, approval run included: it is not a required check and
+    # never fails (see below), so a pull request gained nothing from it. Measured
+    # 2026-10-19: 206 pull-request runs in 7 days, 59 job-minutes. It still runs in
+    # the nightly, manual and release runs.
+    if: needs.plan.outputs.full == 'true' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Non-blocking type-check baseline. The codebase adopts annotations
@@ -361,29 +480,42 @@ jobs:
     # installs the PyTorch/TRL stack and would hide an accidental MLX dependency.
     runs-on: macos-14
     timeout-minutes: 20
+    # Every step below carries `if: needs.plan.outputs.docs_only != 'true'` (2026-10-20): a
+    # docs-only pull request reports this job as SUCCESS without doing its work (see the
+    # comment above `plan`). A step added here needs the same condition.
     steps:
       - uses: actions/checkout@v4
+        if: needs.plan.outputs.docs_only != 'true'
       - uses: actions/setup-python@v5
+        if: needs.plan.outputs.docs_only != 'true'
         with:
           python-version: "3.12"
       - name: Install only the MLX runtime and smoke-test dependency
+        if: needs.plan.outputs.docs_only != 'true'
         # Ends with `plan`'s stack (above `plan`); a constraint installs nothing, so torch stays absent.
         run: pip install -e ".[mlx]" pytest ${{ needs.plan.outputs.constraints }}
       - name: Verify MLX imports and the PyTorch training stack is absent
+        if: needs.plan.outputs.docs_only != 'true'
         run: |
           python -c "import mlx.core, mlx_lm; print(mlx.core.__version__, mlx_lm.__version__)"
           python -c "import importlib.util; names=('torch','trl','datasets','peft','accelerate','bitsandbytes'); present=[name for name in names if importlib.util.find_spec(name)]; assert not present, f'unexpected training dependencies: {present}'"
       - name: Run one-step MLX SFT through the real CLI
+        if: needs.plan.outputs.docs_only != 'true'
         run: pytest -o addopts= -m smoke -k mlx_sft_smoke -q tests/test_smoke_train.py
-      - name: Run the MLX flight-recorder tests
+      - name: Run the MLX flight-recorder and DoRA lifecycle tests
+        if: needs.plan.outputs.docs_only != 'true'
         # These importorskip on `mlx.core` / `mlx_lm`, which the 3x3 matrix does
         # not install (`mlx` is not in [dev]), so this is the only job that can
         # execute them. Without this step, replacing the whole MLX per-row loss
         # with a constant 0.0 left the suite green (#1018 review).
-        run: pytest -o addopts= -q tests/test_rewind_mlx.py
+        run: pytest -o addopts= -q tests/test_rewind_mlx.py tests/test_mlx_dora_native.py
   torchao-contract:
     needs: plan
-    if: needs.plan.outputs.full == 'true'
+    # Not on a pull request, approval run included: it is not a required check.
+    # Measured 2026-10-19: 206 pull-request runs in 7 days, 421 job-minutes (2.0 each).
+    # It still runs in the nightly, manual and release runs, so a torchao release that
+    # renames a class shows on `main` the next night.
+    if: needs.plan.outputs.full == 'true' && github.event_name != 'pull_request'
     # #826: every torchao class Soup names is resolved against the REAL package
     # here. The 3x3 matrix cannot do it -- `torchao` is not in `[dev]`, so those
     # cells skip these tests, which is how three names torchao never exported
@@ -427,17 +559,25 @@ jobs:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: "utf-8"
 
+    # Every step below carries `needs.plan.outputs.docs_only != 'true'` in its `if:`
+    # (2026-10-20): a docs-only pull request reports this job as SUCCESS without doing its
+    # work (see the comment above `plan`). Mind the last step: `success()` is true when
+    # everything before it was skipped. A step added here needs the same condition.
     steps:
       - uses: actions/checkout@v4
+        if: needs.plan.outputs.docs_only != 'true'
 
       - uses: actions/setup-python@v5
+        if: needs.plan.outputs.docs_only != 'true'
         with:
           python-version: "3.11"
 
       - name: Set HF cache location
+        if: needs.plan.outputs.docs_only != 'true'
         run: echo "HF_HOME=$RUNNER_TEMP/hf-cache" >> "$GITHUB_ENV"
 
       - name: Restore PyTorch smoke HF cache
+        if: needs.plan.outputs.docs_only != 'true'
         id: hf-cache
         uses: actions/cache/restore@v4
         with:
@@ -447,6 +587,7 @@ jobs:
             hf-pytorch-smoke-${{ runner.os }}-
 
       - name: Install training dependencies
+        if: needs.plan.outputs.docs_only != 'true'
         # torch>=2.6 is load-bearing, not belt-and-braces: sshleifer/tiny-gpt2
         # ships only pytorch_model.bin, and transformers refuses torch.load
         # below 2.6.0 under CVE-2025-32434. Removing this pin because "[dev]
@@ -456,6 +597,7 @@ jobs:
         run: pip install -e ".[dev]" "torch>=2.6.0" ${{ needs.plan.outputs.constraints }}
 
       - name: Warm tiny GPT-2 cache
+        if: needs.plan.outputs.docs_only != 'true'
         shell: python
         run: |
           from huggingface_hub import snapshot_download
@@ -466,9 +608,10 @@ jobs:
           )
 
       - name: Run PyTorch smoke tests
+        if: needs.plan.outputs.docs_only != 'true'
         run: python -m pytest -o addopts= -m smoke -q tests/
       - name: Save PyTorch smoke HF cache
-        if: success() && steps.hf-cache.outputs.cache-hit != 'true'
+        if: needs.plan.outputs.docs_only != 'true' && success() && steps.hf-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/hf-cache
@@ -477,6 +620,7 @@ jobs:
   # #1802: the training stack requires newer core dependencies, so its floor job
   # cannot exercise every light-core floor. Install only the core here, on the
   # oldest supported Python (PyYAML 6.0 has wheels for it), and start the CLI.
+  # 3.11 since #1805; PyYAML 6.0 and pydantic-core 2.0.1 ship cp311 manylinux wheels.
   core-floor:
     needs: plan
     if: needs.plan.outputs.full == 'true'
@@ -489,7 +633,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.11"
       - name: Isolate core floors from runner tooling
         # Runner/image tooling can require newer packages (wheel>=0.46 needs
         # packaging>=24) than the core floor. Keep that graph outside this cell.
@@ -527,6 +671,8 @@ jobs:
           pytest -o addopts= -q
           tests/test_core_dependency_floors.py
           tests/test_cli_dependency_floors.py
+          tests/test_typer_click_compat.py
+          tests/test_cli_runner.py
           tests/test_click_argument_help.py
           tests/test_cli_startup_is_light.py
           tests/test_cli.py
@@ -548,16 +694,24 @@ jobs:
     env:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: "utf-8"
+    # Every step below carries `if: needs.plan.outputs.docs_only != 'true'` (2026-10-20): a
+    # docs-only pull request reports this job as SUCCESS without doing its work (see the
+    # comment above `plan`). A step added here needs the same condition.
     steps:
       - uses: actions/checkout@v4
+        if: needs.plan.outputs.docs_only != 'true'
       - uses: actions/setup-python@v5
+        if: needs.plan.outputs.docs_only != 'true'
         with:
           python-version: "3.11"
       - name: Install with Transformers floor constraints
+        if: needs.plan.outputs.docs_only != 'true'
         run: pip install -e ".[dev,audio]" -c .github/constraints/transformers-floor.txt
       - name: Verify constrained dependency graph
+        if: needs.plan.outputs.docs_only != 'true'
         run: python -m pip check
       - name: Assert installed versions match floor constraints
+        if: needs.plan.outputs.docs_only != 'true'
         run: |
           python - <<'PY'
           import importlib.metadata as md
@@ -589,6 +743,7 @@ jobs:
               print(f"{name}={got} (matches constraints)")
           PY
       - name: Prove the pinned torch actually supports trl's FSDP2 path
+        if: needs.plan.outputs.docs_only != 'true'
         run: |
           python - <<'PY'
           import torch
@@ -609,6 +764,7 @@ jobs:
           )
           PY
       - name: Run Transformers floor compatibility guard
+        if: needs.plan.outputs.docs_only != 'true'
         run: >
           pytest -o addopts= --no-cov -q
           tests/test_transformers_floor_compat.py
@@ -621,6 +777,61 @@ jobs:
           tests/test_cli_dependency_floors.py
           tests/test_click_argument_help.py
           tests/test_cli_startup_is_light.py
+          tests/test_typer_click_compat.py
+          tests/test_cli_help_completeness.py
+          tests/test_cli_help_markup.py
+          tests/test_gen_reference_docs.py
+          tests/test_cli_runner.py
+
+  typer-vendored:
+    needs: plan
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # Keep the pinned vendored probe off PR/release runs to preserve CI capacity.
+    # Exercise these identities nightly/manually without upgrading either floor.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned vendored Typer compatibility lane
+        run: python -m pip install -e . "pytest>=7,<9" "typer==0.27.3" "click==8.4.2"
+      - name: Verify pinned vendored identities and compatibility scenarios
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+        run: |
+          python - <<'PY'
+          import json
+          from importlib.metadata import version
+          import click
+          from typer._click.core import Command, Context, ParameterSource
+          from typer._click.exceptions import MissingParameter, UsageError
+          from typer.core import TyperGroup
+          from typer.main import get_command
+          from soup_cli.cli import app
+          from soup_cli.utils import typer_compat
+
+          installed = {name: version(name) for name in ("typer", "click")}
+          assert installed == {"typer": "0.27.3", "click": "8.4.2"}, installed
+          assert TyperGroup.__bases__[0] is Command
+          root = get_command(app)
+          assert isinstance(root, Command) and not isinstance(root, click.Command)
+          assert typer_compat.UsageError is UsageError and UsageError is not click.UsageError
+          assert typer_compat.MissingParameter is MissingParameter
+          assert MissingParameter is not click.MissingParameter
+          assert typer_compat.ParameterSource is ParameterSource
+          assert ParameterSource is not click.core.ParameterSource
+          with root.commands["ship"].make_context("ship", []) as context:
+              assert isinstance(context, Context)
+              assert context.get_parameter_source("forgetting_threshold") is ParameterSource.DEFAULT
+          print(json.dumps({**installed, "command_base": Command.__module__,
+                            "usage_error": UsageError.__module__,
+                            "parameter_source": ParameterSource.__module__}, sort_keys=True))
+          PY
+          python -m pytest -o addopts= tests/test_typer_click_compat.py -q
 
   test:
     needs: plan
@@ -633,7 +844,7 @@ jobs:
       # is what keeps a required one blocking a merge.
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    timeout-minutes: 60
     env:
       # Force UTF-8 mode on all platforms. Without this, Windows defaults to
       # cp1252 ('charmap'), which fails when importing upstream packages that
@@ -641,23 +852,38 @@ jobs:
       # (seen with trl.trainer.grpo_trainer on windows-latest / py3.11).
       PYTHONUTF8: "1"
       PYTHONIOENCODING: "utf-8"
+      # Whether this cell does any work (2026-10-20). `true` for every cell of every run
+      # except a docs-only pull request (see the comment above `plan`), where only
+      # `test (ubuntu-latest, 3.12)` keeps it: that cell runs the full suite as before and
+      # the others report SUCCESS with every step skipped. EVERY step below carries
+      # `env.RUN_SUITE == 'true'` in its `if:`; a step added here needs it too, or it runs
+      # (and installs) on the cells that were meant to do nothing.
+      RUN_SUITE: ${{ needs.plan.outputs.docs_only != 'true' || (matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12') }}
     steps:
       - uses: actions/checkout@v4
+        if: env.RUN_SUITE == 'true'
       - uses: actions/setup-python@v5
+        if: env.RUN_SUITE == 'true'
         with:
           python-version: ${{ matrix.python-version }}
-          cache: ${{ runner.os == 'Linux' && matrix.python-version == '3.12' && 'pip' || '' }}
-          cache-dependency-path: |
-            pyproject.toml
-            .github/constraints/*.txt
+        # No pip cache (dropped 2026-10-19; it was ubuntu / 3.12 only). Measured over the
+        # last 12 pull-request runs: the cached ubuntu / 3.12 cell spent 0.49 min (0.33
+        # to 0.60) restoring the cache plus 1.54 min installing = 2.03 min, the uncached
+        # ubuntu / 3.10 cell (3.11 since #1805) 1.80 min installing, so the cache cost more
+        # than it saved.
+        # It also held 6.1 GB of the 8.8 GB the repository uses of its 10 GB Actions
+        # cache (two 3 GB entries, a new one whenever pyproject.toml or a constraints
+        # file changes), which is what evicted the small HF caches.
       # The Web UI escaping tests run `safe_html.js` under node, and skip when
       # node is absent. Runner images happen to ship one, so the skip would be
       # silent: pin it, or the only tests that execute the real escaping logic
       # can disappear without anything turning red.
       - uses: actions/setup-node@v4
+        if: env.RUN_SUITE == 'true'
         with:
           node-version: "22"
       - name: Pin the HF cache to a deterministic path
+        if: env.RUN_SUITE == 'true'
         # Set here and not in the job-level `env:` block: the `runner` context
         # is not available there (only github / needs / strategy / matrix /
         # vars / secrets / inputs are), and referencing it makes GitHub reject
@@ -670,6 +896,7 @@ jobs:
         shell: bash
         run: echo "HF_HOME=$RUNNER_TEMP/hf-cache" >> "$GITHUB_ENV"
       - name: Restore HF Hub cache
+        if: env.RUN_SUITE == 'true'
         id: hf-cache
         uses: actions/cache/restore@v4
         with:
@@ -678,6 +905,7 @@ jobs:
           key: hf-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
           restore-keys: hf-${{ runner.os }}-
       - name: Install dependencies
+        if: env.RUN_SUITE == 'true'
         # pytest-xdist runs the suite in parallel (see the test step below); its
         # psutil extra is what `-n logical` counts the CPUs with. Installed here
         # and not in the dev extra: a local run stays serial unless a contributor
@@ -685,6 +913,7 @@ jobs:
         # Ends with `plan`'s stack: pinned on a pull request and a push to main, the newest at night.
         run: pip install -e ".[dev]" "pytest-xdist[psutil]" ${{ needs.plan.outputs.constraints }}
       - name: Warm HF Hub cache (models the tests load)
+        if: env.RUN_SUITE == 'true'
         # Pre-download the models the unit tests load, with retries, so a
         # transient HF Hub 429 (Too Many Requests) on a single matrix cell does
         # not red the whole run. Never fails the job: if warming can't complete
@@ -694,14 +923,31 @@ jobs:
         # ~/.cache/huggingface, not what greps for repo-shaped strings in
         # tests/ suggest (most of those are config fixtures that never
         # download). The list grew because run 30942028585 reddened
-        # windows/3.10 on a 429 for SmolLM2-135M-Instruct/config.json — a repo
+        # windows/3.10 (a cell that left the matrix with #1805) on a 429 for
+        # SmolLM2-135M-Instruct/config.json — a repo
         # this step did not warm, so the retry loop above never protected it.
         #
         # "gpt2" is deliberately unqualified: tests ask for the bare id, which
         # caches as models--gpt2. Warming "openai-community/gpt2" instead would
         # fill a different directory and every test would still miss.
+        #
+        # 2026-10-19: on macOS and Windows this step failed on `gpt2` in EVERY cell since
+        # about 2026-10-16 17Z -- the Hub answers 404 on
+        # `/api/models/gpt2/xet-read-token/<sha>`, the token the hf_xet download path asks
+        # for, and a 404 is retried like a 429 until the budget runs out. Measured over the
+        # last 12 pull-request runs: 6.3 min per macOS and Windows cell (6.25 to 6.37),
+        # about 57 cells a day = 362 runner-minutes a day, and the cache was never
+        # saved (`warmed` stayed `partial`), so every cell paid it again. Linux never hit it
+        # because its restored cache already held the file. HF_HUB_DISABLE_XET (read by
+        # huggingface_hub's constants.py, in v2.2.0 which the pinned stack installs and in
+        # the newest release) makes `is_xet_available()` false, so the download takes the
+        # plain HTTP path and never asks for that token. The budget below is 120 s, not
+        # 360: it is only ever spent in full when the Hub is refusing a repo, and a step
+        # that cannot warm everything never fails the job anyway.
         id: warm
         shell: python
+        env:
+          HF_HUB_DISABLE_XET: "1"
         run: |
           import os
           import time
@@ -738,7 +984,7 @@ jobs:
           # second. The Hub had cut that runner off for the duration — so
           # burning a fresh retry ladder on repo #2 the moment repo #1 gave up
           # just spends the budget faster without ever waiting out the block.
-          deadline = time.monotonic() + 360
+          deadline = time.monotonic() + 120
           pending = list(models)
           delay = 10
 
@@ -774,7 +1020,7 @@ jobs:
         # healthy Windows cells were not allowed to save what they had. The
         # losers of the resulting race log "unable to reserve cache" and move
         # on, which is far cheaper than an OS that never gets a cache.
-        if: always() && steps.warm.outputs.warmed == 'all' && steps.hf-cache.outputs.cache-hit != 'true'
+        if: always() && env.RUN_SUITE == 'true' && steps.warm.outputs.warmed == 'all' && steps.hf-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/hf-cache
@@ -787,18 +1033,82 @@ jobs:
         # 1390 s, macOS 2003 s -> 992 s, with the same tests passing and coverage
         # unchanged. `--dist load` hands the tests of one file to several workers
         # and is not used: it was no faster, and one timing test failed under it.
-        run: pytest tests/ -n logical --dist loadfile -v --tb=short --junitxml=report.xml --cov=soup_cli --cov-report=xml:coverage.xml --cov-report=term-missing:skip-covered
+        #
+        # 2026-10-19: coverage is measured in ONE cell, ubuntu / 3.11 (3.10 until #1805,
+        # the oldest supported Python either way), the cell that uploads it. The 77% floor
+        # (`--cov-fail-under` in pyproject.toml's `addopts`) is enforced there; every other
+        # cell runs the next step with `--no-cov`, which turns the tracer and the floor off
+        # for it. A coverage floor measured on seven more
+        # cells says nothing the one cell does not, and the tracer slows the suite on all
+        # of them: measured locally, serial, on 147 CLI tests (Python 3.12), 33 s without
+        # coverage and 85 s with it (CI itself is not measured yet). The two steps carry
+        # opposite conditions, so exactly one runs in a cell.
+        #
+        # 2026-10-21: and only outside a pull request. The ruling of that day was coverage
+        # "only on push to main and nightly", about 165 job-minutes a day: the approval run
+        # of every pull request ran this step in ubuntu / 3.11 and paid the tracer there.
+        # `github.event_name != 'pull_request'` is on this step and on the upload below,
+        # and the opposite (`== 'pull_request' ||`) on the next one, so a pull request runs
+        # the next step in every cell, ubuntu / 3.11 included, and still writes report.xml.
+        # This step runs for the nightly run, a manual dispatch and a push to release/**.
+        # A push to `main` is QUICK (ubuntu / 3.12 only) and has no ubuntu / 3.11 cell, so it
+        # runs the next step as before: it never measured coverage, and the ruling's "a drop
+        # shows on the merge commit" would need the quick cell to measure it, which costs the
+        # tracer on every push to main (see tests/test_ci_full_matrix_on_approval.py,
+        # TestCoverageIsMeasuredInOneCell).
+        #
+        # 2026-10-20: a hung test is capped three ways. `--timeout=600 --timeout-method=thread`
+        # (pytest-timeout, in the dev extra) fails ONE test that has run for ten minutes: the
+        # thread method works on Windows (no SIGALRM there) and in an xdist worker, which it
+        # kills with `os._exit` after dumping every stack, so xdist reports "worker crashed" on
+        # that test and starts another worker. Measured with xdist 3.8.0 (a scratch run on
+        # Windows, a sleeping test under `-n 2 --dist loadfile`): `loadfile` hands the crashed
+        # test to the replacement worker AGAIN, and it failed on every replacement until the
+        # default limit of four restarts per worker (9 failures of one test in that run), which
+        # at ten minutes each would outlast the step. `--max-worker-restart=2` bounds it at three
+        # tries, 30 minutes, and a one-off wedge still passes on the retry (the run stays red:
+        # the first failure is kept). `timeout-minutes: 45` on the step is the backstop for a
+        # hang neither can see (a worker that never exits). `-o faulthandler_timeout=300`
+        # (pytest's own, no dependency) dumps every thread's stack into the log once a test has
+        # run for five minutes, before the cap above ends it, so a hang leaves its location in
+        # the log of the cell that hit it (checked under `-n 2` with a sleeping test: the dump
+        # comes from the worker, one per attempt). Why: in the nightly run of 2026-10-20,
+        # `test (windows-latest, 3.10)` (gone since #1805) ran to the job's 90-minute limit
+        # inside ONE test
+        # (tests/test_mcp_capacity_all_runs.py::test_launching_run_older_than_list_window_blocks,
+        # started 03:56:45, the other four workers idle from then on), and a macOS pull-request
+        # cell of 2026-10-13 held its runner for 46 minutes. Measured: the slowest single test
+        # in four recent full cells (ubuntu, macOS, Windows) took under 51 s (the gap between
+        # two finished tests of one worker, an upper bound), and the longest test step of the
+        # last 7 days took 27.7 minutes, so none of the caps can fire on a healthy run. A test
+        # that needs longer marks itself `@pytest.mark.timeout(N)`.
+        if: env.RUN_SUITE == 'true' && github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        timeout-minutes: 45
+        run: pytest tests/ -n logical --dist loadfile -v --tb=short -o faulthandler_timeout=300 --timeout=600 --timeout-method=thread --max-worker-restart=2 --junitxml=report.xml --cov=soup_cli --cov-report=xml:coverage.xml --cov-report=term-missing:skip-covered
+      - name: Run unit tests without coverage
+        # Same options as the step above minus the coverage reports; `--junitxml` stays in
+        # both, because the nightly test-count badge reads report.xml from ubuntu / 3.11,
+        # which runs the step above (it is a schedule run, never a pull request) and ran
+        # this one before #1805: with it in both, moving the badge or the coverage cell
+        # cannot leave the badge without a report, and a pull request still writes one.
+        # The exact opposite of the step above: every cell of a pull request, and every cell
+        # of any run but ubuntu / 3.11. The same two caps.
+        if: env.RUN_SUITE == 'true' && (github.event_name == 'pull_request' || matrix.os != 'ubuntu-latest' || matrix.python-version != '3.11')
+        timeout-minutes: 45
+        run: pytest tests/ -n logical --dist loadfile -v --tb=short -o faulthandler_timeout=300 --timeout=600 --timeout-method=thread --max-worker-restart=2 --junitxml=report.xml --no-cov
       - name: Upload coverage to Codecov
-        # ubuntu / 3.10 is the ubuntu cell every gated run has (release, full,
-        # approval) and a quick run does not. It was 3.11 until the approval run
-        # stopped having that cell.
-        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'
+        # The cell that measures coverage, nowhere else: ubuntu / 3.11 of a run that is not a
+        # pull request (release, nightly, manual dispatch), the same condition as "Run unit
+        # tests with coverage" -- a pull request has no coverage.xml to send. It was 3.11
+        # until the approval run of 2026-10-07 stopped having that cell, 3.10 from then
+        # on, and 3.11 again since #1805 made it the oldest.
+        if: env.RUN_SUITE == 'true' && github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
         uses: codecov/codecov-action@v4
         with:
           files: coverage.xml
           fail_ci_if_error: false
       - name: Update test count badge
-        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11' && github.ref == 'refs/heads/main' && github.event_name == 'schedule' && github.repository == 'MakazhanAlpamys/Soup'
+        if: env.RUN_SUITE == 'true' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11' && github.ref == 'refs/heads/main' && github.event_name == 'schedule' && github.repository == 'MakazhanAlpamys/Soup'
         run: |
           TESTS=$(python -c "
           import xml.etree.ElementTree as ET

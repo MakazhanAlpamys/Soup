@@ -701,6 +701,12 @@ def _drive_qwen4_streaming_setup(
     shard_calls=None,
     load_calls=None,
     trust_remote_code=False,
+    tcfg_overrides=None,
+    disk_kind="ssd",
+    disk_calls=None,
+    free_ram=1_000_000,
+    total_ram=2_000_000,
+    resolve_targets=None,
 ):
     """Drive the real `_setup_streaming_transformers()` for a qwen4_exp base.
 
@@ -718,14 +724,23 @@ def _drive_qwen4_streaming_setup(
     (`tests/test_deepseek_v3_streaming.py`); `shard_calls`, when a list, receives
     the keyword arguments of every `shard_checkpoint` call; `load_calls`, when a
     dict, receives the keyword arguments of the tokenizer, config and
-    `build_streamed_model` calls under "tokenizer", "config" and "build".
+    `build_streamed_model` calls under "tokenizer", "config" and "build", and
+    those of the (stubbed) VRAM forecast `_stream_budget_lines` under "budget";
+    `tcfg_overrides`, when a dict, sets extra training-config attributes;
+    `disk_kind` is what the stubbed `resolve_disk_kind` reports; `disk_calls`,
+    when a list, receives the (path, override) of every call to it; `free_ram` and
+    `total_ram` are what the stubbed `free_ram_bytes` / `total_ram_bytes` report;
+    `resolve_targets` replaces the `resolve_lora_target_modules` stub (which
+    answers `["q_proj"]` whatever it is given), so a test about target
+    resolution can hand the setup the real resolver
+    (`tests/test_mla_lora_targets.py`, `tests/test_stream_moe_lora_targets.py`).
     """
     import sys
     import types
 
     import soup_cli.trainer.stream_setup as stream_setup
 
-    harness_total_ram = 2_000_000
+    harness_total_ram = total_ram
     harness_resident_ram = 4_096
 
     class _Wrapper(stream_setup.StreamingSetupMixin):
@@ -733,7 +748,8 @@ def _drive_qwen4_streaming_setup(
             self.device = "cpu"
             self._trust_remote_code = trust_remote_code
 
-        def _stream_budget_lines(self, *_args, **_kwargs):
+        def _stream_budget_lines(self, *_args, **kwargs):
+            _record(load_calls, "budget", kwargs)
             return (), None
 
     cfg = types.SimpleNamespace(
@@ -765,6 +781,8 @@ def _drive_qwen4_streaming_setup(
             alpha_pattern=None,
         ),
     )
+    for name, value in (tcfg_overrides or {}).items():
+        setattr(tcfg, name, value)
     if model_cfg is None:
         model_cfg = types.SimpleNamespace(
             model_type="qwen4_exp",
@@ -847,7 +865,7 @@ def _drive_qwen4_streaming_setup(
         or (lambda *_a, **_k: str(tmp_path / "weights")),
     )
     monkeypatch.setattr(
-        "soup_cli.utils.layer_stream.free_ram_bytes", lambda: 1_000_000
+        "soup_cli.utils.layer_stream.free_ram_bytes", lambda: free_ram
     )
     monkeypatch.setattr(
         "soup_cli.utils.layer_stream.total_ram_bytes", lambda: harness_total_ram
@@ -868,16 +886,18 @@ def _drive_qwen4_streaming_setup(
         "soup_cli.utils.layer_stream_runtime.large_layer_buffer_bytes",
         lambda *_a, **_k: 0,
     )
-    monkeypatch.setattr(
-        "soup_cli.utils.layer_stream.resolve_disk_kind",
-        lambda *_a, **_k: types.SimpleNamespace(kind="ssd"),
-    )
+    def _resolve_disk_kind(path=None, override=None, **_kwargs):
+        if disk_calls is not None:
+            disk_calls.append((path, override))
+        return types.SimpleNamespace(kind=disk_kind)
+
+    monkeypatch.setattr("soup_cli.utils.layer_stream.resolve_disk_kind", _resolve_disk_kind)
     monkeypatch.setattr(
         "soup_cli.utils.layer_stream.render_stream_panel", lambda *_a, **_k: "panel"
     )
     monkeypatch.setattr(
         "soup_cli.utils.peft_wiring.resolve_lora_target_modules",
-        lambda *_a, **_k: ["q_proj"],
+        resolve_targets or (lambda *_a, **_k: ["q_proj"]),
     )
     monkeypatch.setattr(
         "soup_cli.utils.layer_stream_runtime.build_streamed_model",
@@ -1165,8 +1185,8 @@ def test_qwen4_oq_torch_floor_matches_project_and_doctor():
     # A substring test is satisfied by the string appearing anywhere --
     # a comment, another extra, or a docstring -- so it would keep passing
     # after the floor had been moved or removed from the place that matters.
-    # `tomllib` is 3.11+ and this repo supports 3.10, so this is a bounded
-    # regex over one block rather than a TOML parse.
+    # A bounded regex over one block rather than a TOML parse: written while the
+    # floor was 3.10, which has no `tomllib`.
     block = re.search(r"^train = \[(.*?)^\]", project, re.S | re.M)
     assert block is not None, "pyproject.toml has no `train` extra"
     entries = re.findall(r'"([^"]+)"', block.group(1))
