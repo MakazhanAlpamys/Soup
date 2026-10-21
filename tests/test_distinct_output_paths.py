@@ -96,7 +96,6 @@ class TestEnsureDistinctPaths:
         with pytest.raises(ValueError):
             ensure_distinct_paths([("--logs", "Missing.jsonl")], [("--output", "missing.jsonl")])
 
-
     @pytest.mark.skipif(os.name != "nt", reason="case-insensitive file system")
     def test_nested_case_variant_of_a_missing_directory_is_refused_on_windows(self):
         with pytest.raises(ValueError):
@@ -106,9 +105,8 @@ class TestEnsureDistinctPaths:
                 reject_nested=True,
             )
 
-
     @pytest.mark.requires_symlink
-    def test_symlinked_directory_alias_of_a_missing_output_is_refused():
+    def test_symlinked_directory_alias_of_a_missing_output_is_refused(self):
         os.mkdir("real")
         os.symlink("real", "link", target_is_directory=True)
         with pytest.raises(ValueError):
@@ -119,6 +117,14 @@ class TestEnsureDistinctPaths:
             )
         with pytest.raises(ValueError):
             ensure_distinct_paths([("--logs", "real/in.jsonl")], [("--output", "link/in.jsonl")])
+        with pytest.raises(ValueError):
+            ensure_distinct_paths(
+                [("--retriever-config output", "link/r1")],
+                [("--generator-config output", "real/r1")],
+                reject_nested=True,
+            )
+        with pytest.raises(ValueError):
+            ensure_distinct_paths([("--logs", "link/in.jsonl")], [("--output", "real/in.jsonl")])
 
     @pytest.mark.requires_hardlink
     def test_hard_link_is_refused(self):
@@ -175,7 +181,7 @@ class TestIngestRefusesItsOwnInput:
         assert os.path.getsize("out.jsonl") > 0
 
     def test_dot_slash_spelling_of_logs_is_refused(self):
-            # The same file spelled ./traces.jsonl must be refused like traces.jsonl.
+        # The same file spelled ./traces.jsonl must be refused like traces.jsonl.
         original = '{"id": "t1", "input": "hi", "output": "hello"}\n'
         _write("traces.jsonl", original)
         result = CliRunner().invoke(

@@ -1950,7 +1950,8 @@ soup ra-dit -r retriever.yaml -g generator.yaml --plan-only
 ```
 
 It trains the retriever, then **records** that trained retriever as the generator's paired retriever (writing its output dir into the generator's `training.ra_dit_retriever_model`) and trains the generator RAFT-style. The recorded retriever is the one used at deploy/serve time — stage-2 does not fuse the retriever weights. A plain `soup train` of a generator-stage config with no retriever model set **auto-links** the most-recent RA-DIT retriever run from the Registry; pass `--retriever-model <m>` to override.
-Both configs must write to different, non-nested output directories: `soup ra-dit` refuses a pair whose effective outputs (`output` plus `experiment_name`, exactly as the trainers build them) are equal or nested, so give one stage its own `output` or `experiment_name` first — the two shipped recipes both declare `output: ./output`.
+
+Both configs must write to different, non-nested output directories: `soup ra-dit` refuses a pair whose effective outputs (`output` plus `experiment_name`, exactly as the trainers build them) are equal or nested, so give each stage its own `output`, or give both stages different `experiment_name` values. The two shipped recipes both declare `output: ./output`, so setting an `experiment_name` on only one stage is not enough.
 
 
 ## Curriculum-Aware Training (BETA)
