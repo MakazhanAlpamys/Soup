@@ -897,7 +897,7 @@ class StreamingSetupMixin:
         refuse_if_data_parallel(self.device)
 
         from soup_cli.utils.expert_stream import EXPERT_LAYOUT_PER_EXPERT
-        from soup_cli.utils.fp8_block import fp8_block_size
+        from soup_cli.utils.fp8_block import check_source_quantization, quantization_config_of
         from soup_cli.utils.layer_shard import (
             PER_EXPERT_LAYOUT_ARCHS,
             QUANT_NF4,
@@ -977,12 +977,14 @@ class StreamingSetupMixin:
                 f"base streams as {arch!r}. Use stream_expert_layout='fused'."
             )
         # An FP8 block-quantised base (DeepSeek-V3's published format) is dequantised by
-        # the sharder. A spelling it does not dequantise, or an FP8 base on another
-        # architecture, is refused here from the config alone: before any weight is
+        # the sharder. A spelling it does not dequantise, an FP8 base on another
+        # architecture, or any other declared quantiser (compressed-tensors, GPTQ, AWQ,
+        # bitsandbytes, ...) is refused here from the config alone: before any weight is
         # resolved or downloaded. The disk pre-flight sizes the cache from the same
         # config (the shards hold dequantised weights, the scales are not stored).
-        source_quantization = getattr(model_config, "quantization_config", None)
-        fp8_block = fp8_block_size(source_quantization, arch=arch)
+        # The top-level declaration, or a multimodal wrapper's text_config one.
+        source_quantization = quantization_config_of(model_config)
+        fp8_block = check_source_quantization(source_quantization, arch=arch)
 
         on_cuda = str(self.device).startswith("cuda")
         # #385 — ASK THE CARD. bf16 needs Ampere, and a T4 (Colab free), a P100

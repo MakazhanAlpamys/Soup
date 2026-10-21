@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 from unittest.mock import patch as mock_patch
 
 import pytest
-from click.exceptions import Exit as ClickExit
+from typer import Exit as ClickExit
 
 from soup_cli.commands.export import SUPPORTED_FORMATS
 

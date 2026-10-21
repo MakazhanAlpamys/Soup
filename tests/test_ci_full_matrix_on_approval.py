@@ -9,9 +9,11 @@ four matrices by event:
   -- the release checklist needs all of them green on the tagged commit;
 * FULL, the same minus Windows and macOS on 3.11, for the nightly run on ``main``
   and a manual dispatch;
-* APPROVAL, the four cells branch protection requires (the oldest and the newest
-  Python on ubuntu, the newest on Windows and macOS), for pull requests a
-  maintainer has labelled ``ci:full``;
+* APPROVAL, the four cells branch protection requires (the oldest Python and the
+  newest one a pull request runs on ubuntu, that newest on Windows and macOS), for
+  pull requests a maintainer has labelled ``ci:full``. Since #1805 the support
+  matrix also lists 3.13, which FULL and RELEASE run on every OS and no
+  pull-request run does;
 * QUICK, ``test (ubuntu-latest, 3.12)`` alone, for a push to ``main`` and for any
   other pull-request run.
 
@@ -77,6 +79,7 @@ GATED_JOBS = (
     "transformers-floor",
     "core-floor",
 )
+NIGHTLY_JOBS = ("typer-vendored",)
 #: The two gated jobs that are not required checks and never fail the build: they run in the
 #: nightly, manual and release runs but not on a pull request, approval run included
 #: (2026-10-19: 206 pull-request runs in 7 days, 480 job-minutes, for a signal that is not a
@@ -86,8 +89,12 @@ PR_SKIP = "github.event_name != 'pull_request'"
 #: The support matrix: what RELEASE runs, and what requires-python must match.
 SUPPORT_MATRIX = {
     "os": ["ubuntu-latest", "windows-latest", "macos-latest"],
-    "python-version": ["3.10", "3.11", "3.12"],
+    "python-version": ["3.11", "3.12", "3.13"],
 }
+#: The Pythons of the support matrix that no pull-request run tests (#1805, 2026-10-21):
+#: 3.13 runs on every OS in FULL and RELEASE, and QUICK and APPROVAL stay on 3.12, so a new
+#: interpreter cannot turn every open pull request red at once. Only the newest may be here.
+NIGHTLY_ONLY_PYTHONS = ("3.13",)
 #: What FULL leaves out of it. 3.11 still runs on ubuntu in every full run.
 FULL_EXCLUDE = (
     {"os": "windows-latest", "python-version": "3.11"},
@@ -95,8 +102,8 @@ FULL_EXCLUDE = (
 )
 #: What APPROVAL leaves out of its two Pythons: the oldest runs on ubuntu only.
 APPROVAL_EXCLUDE = (
-    {"os": "windows-latest", "python-version": "3.10"},
-    {"os": "macos-latest", "python-version": "3.10"},
+    {"os": "windows-latest", "python-version": "3.11"},
+    {"os": "macos-latest", "python-version": "3.11"},
 )
 QUICK_MATRIX = {"os": ["ubuntu-latest"], "python-version": ["3.12"]}
 #: The four ``test`` contexts a merge waits on: what APPROVAL runs, and what branch
@@ -105,9 +112,11 @@ QUICK_MATRIX = {"os": ["ubuntu-latest"], "python-version": ["3.12"]}
 #: repos/MakazhanAlpamys/Soup/branches/main/protection``, it still listed the seven
 #: cells of FULL; the three in NIGHTLY_ONLY_CONTEXTS come off it right after this
 #: change merges, never before. A cell named any other way is a context nobody waits on.
+#: #1805 (2026-10-21) swapped ``test (ubuntu-latest, 3.10)`` for ``test (ubuntu-latest,
+#: 3.11)``: branch protection swaps them when it merges.
 REQUIRED_TEST_CONTEXTS = frozenset(
     {
-        "test (ubuntu-latest, 3.10)",
+        "test (ubuntu-latest, 3.11)",
         "test (ubuntu-latest, 3.12)",
         "test (windows-latest, 3.12)",
         "test (macos-latest, 3.12)",
@@ -117,9 +126,9 @@ REQUIRED_TEST_CONTEXTS = frozenset(
 #: failure that exists on one of them alone shows on ``main`` the next night.
 NIGHTLY_ONLY_CONTEXTS = frozenset(
     {
-        "test (ubuntu-latest, 3.11)",
-        "test (windows-latest, 3.10)",
-        "test (macos-latest, 3.10)",
+        "test (ubuntu-latest, 3.13)",
+        "test (windows-latest, 3.13)",
+        "test (macos-latest, 3.13)",
     }
 )
 #: The two cells only a push to ``release/**`` runs. Not required, so not a merge gate.
@@ -226,6 +235,15 @@ def _rules(entries: Any) -> list[tuple[tuple[str, Any], ...]]:
 
 def _version(text: str) -> tuple[int, ...]:
     return tuple(int(part) for part in text.split("."))
+
+
+def _gated_pythons() -> list[str]:
+    """The support matrix's Pythons that a pull-request run may test."""
+    return [
+        python
+        for python in SUPPORT_MATRIX["python-version"]
+        if python not in NIGHTLY_ONLY_PYTHONS
+    ]
 
 
 # --- A small evaluator for the GitHub expressions these tests need -----------
@@ -677,8 +695,19 @@ class TestGatedJobs:
         assert "needs" not in lint
 
     def test_every_job_is_classified(self):
-        """A new job must be declared quick or full here, or it lands on every PR push."""
-        assert sorted(_jobs()) == sorted(["plan", "lint", "test", *GATED_JOBS])
+        """Classify quick, approval and nightly jobs so none lands on every PR push."""
+        assert sorted(_jobs()) == sorted(["plan", "lint", "test", *GATED_JOBS, *NIGHTLY_JOBS])
+
+    @pytest.mark.parametrize(("context", "kind"), EVENTS)
+    def test_vendored_lane_runs_only_on_nightly_and_manual(self, context, kind):
+        job = _jobs()["typer-vendored"]
+        assert "plan" in _needs(job)
+        context = {
+            **context,
+            "needs": {"plan": {"outputs": {"full": "false" if kind == "QUICK" else "true"}}},
+        }
+        # FULL is schedule/dispatch; APPROVAL and RELEASE must not add this job.
+        assert _runs("typer-vendored", context) == (kind == "FULL")
 
 
 class TestMatrix:
@@ -710,7 +739,7 @@ class TestMatrix:
         # such as {"python-version": "3.11"} would drop the ubuntu cell too).
         assert _cells(_matrix("RELEASE_MATRIX")) - _cells(full) == RELEASE_ONLY_CONTEXTS
 
-    def test_approval_is_the_oldest_and_newest_python_with_the_oldest_on_ubuntu_only(self):
+    def test_approval_is_the_oldest_and_newest_gated_python_with_the_oldest_on_ubuntu_only(self):
         approval = _matrix("APPROVAL_MATRIX")
         assert list(approval) == ["os", "python-version", "exclude"], (
             "the key order names the checks"
@@ -719,9 +748,27 @@ class TestMatrix:
         pythons = SUPPORT_MATRIX["python-version"]
         assert approval["python-version"] == [
             min(pythons, key=_version),
-            max(pythons, key=_version),
+            max(_gated_pythons(), key=_version),
         ]
         assert _rules(approval["exclude"]) == _rules(APPROVAL_EXCLUDE)
+
+    def test_the_nightly_only_python_is_the_newest_and_runs_on_every_os_each_night(self):
+        """#1805: 3.13 joined the support matrix without joining the pull-request gate. That
+        holds only while every nightly run tests it on every OS, and only for the newest
+        Python: an ungated floor would let a pull request break the oldest one unseen."""
+        gated = _gated_pythons()
+        assert gated, "no Python is left for a pull-request run to test"
+        assert set(NIGHTLY_ONLY_PYTHONS) <= set(SUPPORT_MATRIX["python-version"])
+        for python in NIGHTLY_ONLY_PYTHONS:
+            assert _version(python) > max(_version(each) for each in gated), python
+            nightly = {
+                cell["os"]
+                for cell in _cell_dicts(_matrix("FULL_MATRIX"))
+                if cell["python-version"] == python
+            }
+            assert nightly == set(SUPPORT_MATRIX["os"]), (python, nightly)
+            for name in ("APPROVAL_MATRIX", "QUICK_MATRIX"):
+                assert python not in _matrix(name)["python-version"], (name, python)
 
     def test_approval_names_exactly_the_required_test_contexts(self):
         assert _cells(_matrix("APPROVAL_MATRIX")) == REQUIRED_TEST_CONTEXTS
@@ -734,14 +781,13 @@ class TestMatrix:
             REQUIRED_TEST_CONTEXTS | NIGHTLY_ONLY_CONTEXTS | RELEASE_ONLY_CONTEXTS
         )
 
-    def test_the_quick_matrix_is_the_newest_python_on_ubuntu(self):
+    def test_the_quick_matrix_is_the_newest_gated_python_on_ubuntu(self):
         quick = _matrix("QUICK_MATRIX")
         assert quick == QUICK_MATRIX
         assert list(quick) == ["os", "python-version"]
         names = _cells(quick)
         assert len(names) == 1 and names <= REQUIRED_TEST_CONTEXTS
-        support_pythons = SUPPORT_MATRIX["python-version"]
-        assert quick["python-version"] == [max(support_pythons, key=_version)]
+        assert quick["python-version"] == [max(_gated_pythons(), key=_version)]
 
     @pytest.mark.parametrize("name", MATRIX_NAMES)
     def test_the_matrix_literals_are_single_lines(self, name):
@@ -1059,7 +1105,7 @@ class TestPinnedUpstream:
         """A new job that installs `.[dev]` on its own resolves the newest release on
         every pull request, which is the failure this switch removed."""
         installing = {name for name, job in _jobs().items() if _project_installs(job)}
-        assert installing == {*SWITCHED_JOBS, FLOOR_JOB, "core-floor"}
+        assert installing == {*SWITCHED_JOBS, FLOOR_JOB, "core-floor", "typer-vendored"}
 
     def test_no_environment_variable_constrains_a_job_behind_its_command_line(self):
         """`PIP_CONSTRAINT` in an `env:` applies to every pip of that job on every run,
@@ -1118,6 +1164,8 @@ UNPINNED_ON_PURPOSE = {
     # CORE: the project with no extra, so no torch and no transformers to pin.
     # Its separate core-floor constraints are checked by test_core_dependency_floors.py.
     (CI.name, "core-floor"): CORE,
+    # Dedicated core-only lane with exact Typer/Click pins, asserted at runtime.
+    (CI.name, "typer-vendored"): CORE,
     ("codspeed.yml", "benchmark"): CORE,
     # NEWEST: started by a schedule or by hand, never by a pull request or a push, and
     # there to meet the newest release.
@@ -1474,33 +1522,34 @@ class TestADraftRunsNothing:
 #: Here it is the ordinary case, a cell that works.
 WORKING_CELL = {"env": {"RUN_SUITE": "true"}}
 
-
-class TestCoverageUpload:
-    def test_one_cell_of_every_gated_run_uploads_and_a_quick_run_uploads_nothing(self):
-        """The upload is pinned to one cell. Pinned to a cell the approval run does not
-        have, it would stop every pull request's Codecov report without a red mark."""
-        steps = _jobs()["test"]["steps"]
-        upload = [step for step in steps if step.get("name") == "Upload coverage to Codecov"]
-        assert len(upload) == 1, upload
-        condition = str(upload[0].get("if", ""))
-
-        def uploading(name: str) -> list[dict[str, str]]:
-            return [
-                cell
-                for cell in _cell_dicts(_matrix(name))
-                if _truthy(_Expression(condition, {"matrix": cell, **WORKING_CELL}).value())
-            ]
-
-        for name in ("APPROVAL_MATRIX", "FULL_MATRIX", "RELEASE_MATRIX"):
-            assert len(uploading(name)) == 1, (name, uploading(name))
-        assert uploading("QUICK_MATRIX") == []
-
-
 COVERAGE_STEP = "Run unit tests with coverage"
 NO_COVERAGE_STEP = "Run unit tests without coverage"
-#: The one cell that measures coverage, enforces the floor and uploads the report.
-COVERAGE_CELL = {"os": "ubuntu-latest", "python-version": "3.10"}
+UPLOAD_STEP = "Upload coverage to Codecov"
+BADGE_STEP = "Update test count badge"
+#: The one cell that measures coverage, enforces the floor and uploads the report: ubuntu on
+#: the oldest supported Python (3.10 until #1805), in a run that is not a pull request
+#: (2026-10-21: no pull-request run measures coverage).
+COVERAGE_CELL = {"os": "ubuntu-latest", "python-version": "3.11"}
 ALL_MATRICES = ("RELEASE_MATRIX", "FULL_MATRIX", "APPROVAL_MATRIX", "QUICK_MATRIX")
+
+
+def _is_pull_request(run: Any) -> bool:
+    return bool(run.values[0]["github"]["event_name"] == "pull_request")
+
+
+#: The runs of EVENTS that are a pull request (quick, approval), and the ones that are not (a
+#: push to main, a push to release/**, the nightly run, a manual dispatch). The coverage rule
+#: of 2026-10-21 is about exactly this split.
+PULL_REQUEST_RUNS = [run for run in EVENTS if _is_pull_request(run)]
+OTHER_RUNS = [run for run in EVENTS if not _is_pull_request(run)]
+#: The cells that measure coverage in each kind of run that is not a pull request: exactly one
+#: in the runs that have an ubuntu / 3.11 cell, none in a quick run. A push to ``main`` is a
+#: quick run (ubuntu / 3.12 only), so it measures nothing; it never did.
+MEASURING_CELLS: dict[str, list[dict[str, str]]] = {
+    "RELEASE": [COVERAGE_CELL],
+    "FULL": [COVERAGE_CELL],
+    "QUICK": [],
+}
 
 
 def _test_step(name: str) -> dict[str, Any]:
@@ -1509,39 +1558,122 @@ def _test_step(name: str) -> dict[str, Any]:
     return steps[0]
 
 
-def _cells_running(step: dict[str, Any], matrix: str) -> list[dict[str, str]]:
+def _context(cell: dict[str, str], run: Any) -> dict[str, Any]:
+    """What a step's ``if:`` sees in *cell* of a run shaped like *run* (a ``github`` context
+    from EVENTS). The event matters: a missing ``github`` would read as null and make
+    ``github.event_name != 'pull_request'`` true for every cell."""
+    assert run["github"]["event_name"], run
+    return {**run, "matrix": cell, **WORKING_CELL}
+
+
+def _cells_running(step: dict[str, Any], matrix: str, run: Any) -> list[dict[str, str]]:
     condition = str(step.get("if", "true"))
     return [
         cell
         for cell in _cell_dicts(_matrix(matrix))
-        if _truthy(_Expression(condition, {"matrix": cell, **WORKING_CELL}).value())
+        if _truthy(_Expression(condition, _context(cell, run)).value())
     ]
 
 
+def _suite_steps_in(cell: dict[str, str], run: Any) -> list[str]:
+    """Which of the two steps that run the suite run in *cell*: exactly one, or it is a bug."""
+    context = _context(cell, run)
+    return [
+        name
+        for name in (COVERAGE_STEP, NO_COVERAGE_STEP)
+        if _truthy(_Expression(str(_test_step(name).get("if", "true")), context).value())
+    ]
+
+
+class TestCoverageUpload:
+    def test_there_is_exactly_one_upload_step(self):
+        steps = [s for s in _jobs()["test"]["steps"] if s.get("name") == UPLOAD_STEP]
+        assert len(steps) == 1, steps
+
+    @pytest.mark.parametrize(("context", "kind"), OTHER_RUNS)
+    def test_a_run_that_is_not_a_pull_request_uploads_from_the_measuring_cell_only(
+        self, context, kind
+    ):
+        """Pinned to a cell the run does not have, it would stop every Codecov report without
+        a red mark; pinned to two, they would race. The nightly, manual and release runs have
+        the cell; a push to main is a quick run and has none."""
+        found = _cells_running(_test_step(UPLOAD_STEP), f"{kind}_MATRIX", context)
+        assert found == MEASURING_CELLS[kind], (kind, found)
+
+    @pytest.mark.parametrize(("context", "kind"), PULL_REQUEST_RUNS)
+    def test_a_pull_request_uploads_nothing_the_approval_run_included(self, context, kind):
+        """2026-10-21: the approval run's ubuntu / 3.11 measured coverage and uploaded it; a
+        pull request has no Codecov report now, and no coverage.xml to send."""
+        assert _cells_running(_test_step(UPLOAD_STEP), f"{kind}_MATRIX", context) == []
+
+
 class TestCoverageIsMeasuredInOneCell:
-    """2026-10-19: coverage is measured in ubuntu / 3.10 only, the cell that uploads it. The
-    floor is enforced there; every other cell runs the suite with `--no-cov`."""
+    """2026-10-19: coverage is measured in ubuntu / 3.11 only (3.10 until #1805), the cell
+    that uploads it. The floor is enforced there; every other cell runs the suite with
+    `--no-cov`. 2026-10-21: and only in a run that is not a pull request (the nightly run, a
+    manual dispatch, a push to release/**): a pull-request run measures nothing, the approval
+    run's ubuntu / 3.11 included."""
 
-    @pytest.mark.parametrize("matrix", ("RELEASE_MATRIX", "FULL_MATRIX", "APPROVAL_MATRIX"))
-    def test_every_gated_run_measures_coverage_in_exactly_the_uploading_cell(self, matrix):
-        assert _cells_running(_test_step(COVERAGE_STEP), matrix) == [COVERAGE_CELL]
-        assert _cells_running(_test_step("Upload coverage to Codecov"), matrix) == [COVERAGE_CELL]
+    def test_the_events_table_has_every_kind_of_run_the_rule_tells_apart(self):
+        """CONTROL. The loops below are vacuous over a table that lost a kind of run."""
+        assert sorted(run.id for run in OTHER_RUNS) == [
+            "manual-dispatch",
+            "nightly",
+            "push-main",
+            "push-release",
+        ]
+        assert {run.values[1] for run in PULL_REQUEST_RUNS} == {"QUICK", "APPROVAL"}
+        assert {run.values[1] for run in OTHER_RUNS} == set(MEASURING_CELLS)
+        # The change matters because the approval run HAS the cell that used to measure.
+        assert COVERAGE_CELL in _cell_dicts(_matrix("APPROVAL_MATRIX"))
 
-    def test_a_quick_run_measures_no_coverage_and_so_does_not_check_the_floor(self):
-        """Known and accepted: the quick run has no ubuntu / 3.10 cell. The approval run a
-        merge waits for has it, and so does the nightly run."""
-        assert _cells_running(_test_step(COVERAGE_STEP), "QUICK_MATRIX") == []
+    @pytest.mark.parametrize(("context", "kind"), PULL_REQUEST_RUNS)
+    def test_no_cell_of_a_pull_request_run_measures_coverage(self, context, kind):
+        assert _cells_running(_test_step(COVERAGE_STEP), f"{kind}_MATRIX", context) == []
 
-    @pytest.mark.parametrize("matrix", ALL_MATRICES)
-    def test_every_cell_runs_the_suite_exactly_once(self, matrix):
+    @pytest.mark.parametrize(("context", "kind"), PULL_REQUEST_RUNS)
+    def test_every_cell_of_a_pull_request_run_runs_the_suite_with_no_cov(self, context, kind):
+        """The approval run's ubuntu / 3.11 included: it takes the other step, `--no-cov`, which
+        turns the tracer and the floor off."""
+        for cell in _cell_dicts(_matrix(f"{kind}_MATRIX")):
+            assert _suite_steps_in(cell, context) == [NO_COVERAGE_STEP], cell
+        args = shlex.split(str(_test_step(NO_COVERAGE_STEP)["run"]))
+        assert "--no-cov" in args
+        assert not [arg for arg in args if arg.startswith("--cov")], args
+
+    @pytest.mark.parametrize(("context", "kind"), OTHER_RUNS)
+    def test_a_run_that_is_not_a_pull_request_measures_in_exactly_the_uploading_cell(
+        self, context, kind
+    ):
+        """On the nightly run, a manual dispatch and a push to release/**: ubuntu / 3.11 runs
+        the measuring step (so the floor applies there), every other cell runs `--no-cov`."""
+        matrix = f"{kind}_MATRIX"
+        measuring = _cells_running(_test_step(COVERAGE_STEP), matrix, context)
+        assert measuring == MEASURING_CELLS[kind], (kind, measuring)
+        assert measuring == _cells_running(_test_step(UPLOAD_STEP), matrix, context)
+        for cell in _cell_dicts(_matrix(matrix)):
+            expected = COVERAGE_STEP if cell in measuring else NO_COVERAGE_STEP
+            assert _suite_steps_in(cell, context) == [expected], (kind, cell)
+
+    def test_a_push_to_main_measures_nothing_known_and_accepted(self):
+        """A push to main is a quick run: ubuntu / 3.12 only, no ubuntu / 3.11 cell, so there
+        is no cell to measure in and the floor is not checked on the merge commit (it never
+        was). The nightly run checks it. Making the quick cell measure instead costs the
+        tracer on every push to main; that is a ruling for the maintainers, not a default."""
+        push = _push("refs/heads/main")
+        assert COVERAGE_CELL not in _cell_dicts(_matrix("QUICK_MATRIX"))
+        assert _cells_running(_test_step(COVERAGE_STEP), "QUICK_MATRIX", push) == []
+        assert _cells_running(_test_step(UPLOAD_STEP), "QUICK_MATRIX", push) == []
+        assert _cells_running(_test_step(NO_COVERAGE_STEP), "QUICK_MATRIX", push) == [
+            {"os": "ubuntu-latest", "python-version": "3.12"}
+        ]
+
+    @pytest.mark.parametrize(("context", "kind"), EVENTS)
+    def test_every_cell_runs_the_suite_exactly_once(self, context, kind):
         """A cell that ran neither step would test nothing; one that ran both would run the
-        suite twice. The two conditions are opposites."""
-        with_coverage = _cells_running(_test_step(COVERAGE_STEP), matrix)
-        without = _cells_running(_test_step(NO_COVERAGE_STEP), matrix)
-        cells = _cell_dicts(_matrix(matrix))
-        assert len(with_coverage) + len(without) == len(cells), matrix
-        assert not [cell for cell in with_coverage if cell in without], matrix
-        assert sorted(with_coverage + without, key=str) == sorted(cells, key=str), matrix
+        suite twice. The two conditions are opposites, for every kind of run."""
+        for cell in _cell_dicts(_matrix(f"{kind}_MATRIX")):
+            assert len(_suite_steps_in(cell, context)) == 1, (kind, cell)
 
     def test_the_coverage_step_measures_and_the_other_one_does_not(self):
         measured = shlex.split(str(_test_step(COVERAGE_STEP)["run"]))
@@ -1565,10 +1697,26 @@ class TestCoverageIsMeasuredInOneCell:
 
     @pytest.mark.parametrize("step", (COVERAGE_STEP, NO_COVERAGE_STEP))
     def test_both_steps_still_write_what_later_steps_read(self, step):
-        """The nightly test-count badge reads report.xml from ubuntu / 3.11, a cell that now
-        runs the unmeasured step: `--junitxml` must not be left to the measuring one."""
+        """The nightly test-count badge reads report.xml from ubuntu / 3.11, which runs the
+        measuring step (a schedule run is never a pull request) and ran the unmeasured one
+        before #1805: `--junitxml` stays in both, so moving the badge or the coverage cell
+        cannot leave it without a report, and a pull request writes one as well."""
         args = shlex.split(str(_test_step(step)["run"]))
         assert "--junitxml=report.xml" in args, step
+
+    def test_the_badge_step_runs_only_where_the_measuring_step_wrote_its_report(self):
+        """The badge is a nightly step of ubuntu / 3.11; in that cell of that run one of the
+        two suite steps ran, and each of them writes report.xml. No pull request gets here."""
+        nightly = _on_event("schedule")
+        nightly["github"]["repository"] = "MakazhanAlpamys/Soup"
+        badge = _test_step(BADGE_STEP)
+        assert _cells_running(badge, "FULL_MATRIX", nightly) == [COVERAGE_CELL]
+        (name,) = _suite_steps_in(COVERAGE_CELL, nightly)
+        assert name == COVERAGE_STEP
+        assert "--junitxml=report.xml" in shlex.split(str(_test_step(name)["run"]))
+        for run in PULL_REQUEST_RUNS:
+            matrix = f"{run.values[1]}_MATRIX"
+            assert _cells_running(badge, matrix, run.values[0]) == [], run.id
 
 
 def _contributing() -> str:

@@ -508,7 +508,7 @@ class TestPerStyleExtractors:
 
 class TestEvalCitationCli:
     def _runner(self):
-        from typer.testing import CliRunner
+        from tests.cli_runner import CliRunner
 
         return CliRunner()
 
@@ -920,7 +920,7 @@ class TestInstallSteeringHook:
 
 class TestServeSteerCli:
     def _runner(self):
-        from typer.testing import CliRunner
+        from tests.cli_runner import CliRunner
 
         return CliRunner()
 
@@ -960,9 +960,9 @@ class TestSteerCommandPlumbing:
 
         import numpy as np
         from safetensors.numpy import save_file
-        from typer.testing import CliRunner
 
         from soup_cli.commands.steer import app
+        from tests.cli_runner import CliRunner
 
         monkeypatch.chdir(tmp_path)
         d = "steering/safety-v1"
@@ -982,9 +982,8 @@ class TestSteerCommandPlumbing:
         assert "Vector loaded" in result.output
 
     def test_steer_train_help_has_output(self):
-        from typer.testing import CliRunner
-
         from soup_cli.commands.steer import app
+        from tests.cli_runner import CliRunner
 
         result = CliRunner().invoke(app, ["train", "--help"])
         assert result.exit_code == 0
@@ -1263,7 +1262,7 @@ class TestTrainAutolinkHook:
 
 class TestRaDitCli:
     def _runner(self):
-        from typer.testing import CliRunner
+        from tests.cli_runner import CliRunner
 
         return CliRunner()
 
@@ -1910,9 +1909,8 @@ class TestV07110ReviewFixRegressions:
         assert "validate_steering_strength" in src
 
     def test_serve_bad_steer_name_message(self):
-        from typer.testing import CliRunner
-
         from soup_cli.cli import app
+        from tests.cli_runner import CliRunner
 
         result = CliRunner().invoke(
             app, ["serve", "-m", "model", "--steer", "bad/name"]

@@ -159,6 +159,14 @@ class DeclaredSink:
 # - gate: (caller_func, gate_func) where caller_func is AST-verified to call gate_func
 # - reason: explicit justification for exemptions (fixed host, loopback only, operator env)
 DECLARED_SINKS: dict[tuple[str, str], DeclaredSink] = {
+    ("cloud/_runpod_controller.py", "_request_json"): DeclaredSink(
+        calls=("urllib.request.build_opener",),
+        gate=None,
+        reason=(
+            "fixed host: _API_BASE is hardcoded to https://rest.runpod.io/v1; "
+            "the standalone controller refuses redirects and caps response reads"
+        ),
+    ),
     ("commands/generate.py", "_generate_openai"): DeclaredSink(
         calls=("soup_cli.utils.http_response.post_capped",),
         gate=("_generate_openai", "refuse_private_ip_literal"),

@@ -24,6 +24,7 @@ from rich.text import Text
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from soup_cli.utils.typer_compat import is_group
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 _BOX_RE = re.compile(r"[─-╿│╭╮╰╯]")
@@ -93,7 +94,7 @@ def _iter_cli_help_strings(
         except (ValueError, TypeError):
             pass
 
-    if isinstance(cmd, click.Group):
+    if is_group(cmd):
         for sub_name, sub_cmd in cmd.commands.items():
             yield from _iter_cli_help_strings(sub_cmd, f"{path} {sub_name}")
 

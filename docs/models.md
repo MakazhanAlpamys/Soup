@@ -102,11 +102,13 @@ Rows are `{"audio": <path>, "text": <transcript>}` with `data.format: asr`. See
 
 ## Optional Extras
 
-> **Python 3.10, 3.11 or 3.12.** Since v0.73.0 the package declares
-> `requires-python = ">=3.10,<3.13"`. Those are exactly the versions CI tests. Without the
-> upper bound, pip on 3.13+ resolved PyTorch wheels nobody had validated, and the failure was
-> not a Soup error message — it was a loader crash inside `c10.dll` / `libc10.so` before any
-> Soup code ran. If you are on 3.13+, create a 3.12 environment; support widens when CI does.
+> **Python 3.11, 3.12 or 3.13.** Since v0.77 the package declares
+> `requires-python = ">=3.11,<3.14"` (v0.73.0 to v0.76: `">=3.10,<3.13"`). Those are exactly
+> the versions CI tests. Python 3.10 reached end of life on 2026-10-01; on it, pip keeps
+> installing v0.76. Without the upper bound, pip on an untested Python resolved PyTorch wheels
+> nobody had validated, and the failure was not a Soup error message — it was a loader crash
+> inside `c10.dll` / `libc10.so` before any Soup code ran. If you are on 3.14+, create a 3.13
+> environment; support widens when CI does.
 
 ### Quoting the extra
 

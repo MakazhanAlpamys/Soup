@@ -161,12 +161,6 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
         trainer_reads=True,
     ),
     SupportEntry(
-        "training.use_mod",
-        IGNORED,
-        "Mixture-of-Depths routing is wired on the transformers path, not MLX",
-        trainer_reads=True,
-    ),
-    SupportEntry(
         "training.moe_lora",
         IGNORED,
         "ScatterMoE LoRA targets expert layers on the transformers path; no MLX implementation",
