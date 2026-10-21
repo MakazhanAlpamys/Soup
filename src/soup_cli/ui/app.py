@@ -864,6 +864,8 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                     fh = os.fdopen(fd, "w", encoding="utf-8")
                 except BaseException:
                     with contextlib.suppress(OSError):
+                        # os.fdopen can occasionally close the descriptor itself before raising;
+                        # practically unreachable with the fixed "w"/utf-8 arguments here.
                         os.close(fd)
                     raise
                 with fh:
