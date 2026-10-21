@@ -76,13 +76,15 @@ class TestRecipeCatalog:
         assert results == []
 
     def test_all_recipes_valid_yaml(self):
-        """All recipes contain valid YAML that loads as SoupConfig."""
-        from soup_cli.config.loader import load_config_from_string
+        """Each recipe loads or refuses with its documented unavailability reason."""
         from soup_cli.recipes.catalog import RECIPES
+        from tests.recipe_contracts import load_catalog_config
 
         for name, recipe in RECIPES.items():
             try:
-                config = load_config_from_string(recipe.yaml_str)
+                config = load_catalog_config(recipe)
+                if config is None:
+                    continue
                 assert config.base is not None, f"Recipe {name} has no base model"
             except Exception as exc:
                 pytest.fail(f"Recipe '{name}' is invalid: {exc}")

@@ -804,32 +804,10 @@
       "training.lr": 1e-05
     },
     "kimi-k2-sft": {
-      "base": "moonshotai/Kimi-K2-Base",
-      "data.format": "auto",
-      "data.max_length": 8192,
-      "data.train": "./data/train.jsonl",
-      "training.epochs": 2,
-      "training.lora.alpha": 32,
-      "training.lora.dropout": 0.0,
-      "training.lora.r": 16,
-      "training.lr": 0.0001,
-      "training.moe_lora": true
+      "$unavailable": "Resident Kimi K2 is unsupported on Transformers 5.x"
     },
     "kimi-k2-thinking-grpo": {
-      "base": "moonshotai/Kimi-K2-Thinking",
-      "data.format": "auto",
-      "data.max_length": 4096,
-      "data.train": "./data/reasoning_prompts.jsonl",
-      "task": "grpo",
-      "training.batch_size": 1,
-      "training.epochs": 1,
-      "training.gradient_accumulation_steps": 8,
-      "training.gradient_checkpointing": true,
-      "training.grpo_beta": 0.04,
-      "training.lora.alpha": 32,
-      "training.lora.r": 16,
-      "training.lr": 5e-06,
-      "training.verifiable_domain": "math"
+      "$unavailable": "Resident Kimi K2 is unsupported on Transformers 5.x"
     },
     "kimi-k2.5-dpo": {
       "base": "moonshotai/Kimi-K2.5",

@@ -88,6 +88,11 @@ def use(
         console.print(f"[red]Recipe not found: {name}[/]")
         raise typer.Exit(1)
 
+    if recipe.unavailable_reason:
+        console.print(f"[red]{for_terminal(recipe.unavailable_reason)}[/]")
+        console.print("[dim]The guarded streamed route is tracked in #2107.[/]")
+        raise typer.Exit(2)
+
     from soup_cli.migrate.common import validate_output_path
 
     try:

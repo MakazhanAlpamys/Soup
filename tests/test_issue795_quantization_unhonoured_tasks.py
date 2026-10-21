@@ -295,9 +295,10 @@ class TestShippedConfigs:
         """#983's lesson: a gate is only safe if nothing Soup ships trips it. The
         three ASR recipes set ``quantization: none``."""
         from soup_cli.recipes.catalog import RECIPES
+        from tests.recipe_contracts import load_catalog_config
 
         for recipe in RECIPES.values():
-            load_config_from_string(recipe.yaml_str)
+            load_catalog_config(recipe)
 
     def test_soup_draft_distill_config_loads_as_none(self):
         from soup_cli.commands.draft import _build_distill_config_yaml
