@@ -587,6 +587,56 @@ training:
 Works with SFT and Pretrain tasks. Packed SFT keeps the assistant-only loss mask (`train_on_responses_only`, `train_on_messages_with_train_field`, `mask_history`, or a pre-tokenised `labels` column). Warning emitted if `max_length < 256`.
 
 
+### Native MLX packing
+
+With `backend: mlx`, `task: sft`, `modality: text`, `packing: true` selects
+ordered next-fit packing on native **full-attention Llama with unscaled RoPE**.
+Each record is truncated individually, then concatenated without changing its
+retained targets. Segment-isolated causal attention prevents conditioning on
+other examples; rotary positions restart at zero for each segment. First-token
+transitions between examples never contribute to loss. Tails are retained.
+Assistant-only masks, per-message `train` flags, `mask_history`, and cached
+pre-tokenized labels retain their existing meanings, including explicit cached
+targets that differ from input IDs. Records without retained causal targets fail
+explicitly. With packing disabled, the existing unpacked path is unchanged.
+
+```yaml
+backend: mlx
+task: sft
+training:
+  packing: true
+  batch_size: 1
+  gradient_checkpointing: false
+  gradient_accumulation_steps: 1
+  lora:
+    use_dora: false
+```
+
+This first slice supports ordinary LoRA with dense or genuine 4-bit bases on
+`mlx>=0.31.2,<0.33` and `mlx-lm>=0.31.3,<0.33`. One pack forms a microbatch
+(`batch_size: auto` also resolves to one). Accumulation groups are normalized by
+their total supervised-token count, including unequal-length packs. Training
+reports average the per-pack means over each logging interval; validation is
+token-weighted. The number
+of packs must be divisible by `gradient_accumulation_steps`, so an epoch neither
+drops a tail nor crosses its boundary to complete a group. Epochs still count
+complete passes; iteration-based report/save intervals now count packed
+microbatches, while `eval_steps` counts optimizer updates as usual.
+
+The runtime reports records, packs, context utilization and supervised tokens per
+epoch, and saves these in adapter metadata. Masks are allocated per microbatch,
+not for the entire dataset. Packing is not a promise of faster training: measure
+preparation, the first compiled step, full training, peak memory and held-out loss
+against the same unpacked workload. Very short workloads can regress.
+
+Other architectures (including hybrid/recurrent Nemotron), scaled RoPE, sliding
+attention, distributed or streaming training, multimodal/pretraining packing,
+DoRA, rank/alpha patterns and gradient checkpointing are refused. `multipack`
+remains separate and unsupported on MLX. Rewind logging is explicitly disabled
+with a warning because packs combine dataset rows; no row-level attribution is
+claimed for a packed update.
+
+
 ## Curriculum Learning
 
 Sort dataset by difficulty (easy → hard) for better convergence:

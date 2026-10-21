@@ -13,6 +13,8 @@ on:
       - 'src/soup_cli/commands/data.py'
       - 'tests/test_mlx_cache_native.py'
       - 'tests/test_mlx_pretokenized.py'
+      - 'tests/test_mlx_packing.py'
+      - 'tests/test_mlx_packing_native.py'
       - 'tests/test_mlx_dora_native.py'
       - 'tests/test_issue1038_preprocess_to_pretokenized.py'
       - 'tests/test_issue634_mlx_resume.py'
@@ -66,4 +68,6 @@ jobs:
           HF_HUB_OFFLINE: '1'
           HF_DATASETS_OFFLINE: '1'
           PYTHONPATH: src
-        run: pytest -o addopts= -q tests/test_mlx_cache_native.py tests/test_mlx_pretokenized.py
+        run: >-
+          pytest -o addopts= -q tests/test_mlx_cache_native.py tests/test_mlx_pretokenized.py
+          tests/test_mlx_packing.py tests/test_mlx_packing_native.py
