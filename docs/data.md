@@ -738,6 +738,15 @@ columns is refused before loading a model, including with `soup train --dry-run`
 {"prompt": "Explain gravity", "completion": "Gravity is a force...", "label": true}
 ```
 
+`label` accepts booleans; strings `true`, `1`, `yes`, `false`, `0`, `no`
+(ignoring case and surrounding spaces); and integers `1`, `0`, `-1`.
+`1` is desirable; `0` and `-1` are undesirable. Nulls, floats (including
+`1.0` and non-finite numbers), containers and other integers are refused instead
+of coerced. `soup data validate --format kto` reports the offending label;
+training drops malformed rows with the same reason and refuses an empty result,
+including with `--dry-run`. Use `--min-valid-fraction 1.0` to reject any bad row
+in standalone validation.
+
 **LLaVA (vision):**
 ```json
 {"image": "photo.jpg", "conversations": [{"from": "human", "value": "<image>\nDescribe this."}, {"from": "gpt", "value": "A cat."}]}
