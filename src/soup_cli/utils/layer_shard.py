@@ -812,8 +812,13 @@ def resolve_shard_dir(model: str, cache_dir: Optional[str] = None) -> str:
     an env var is operator config, not API input (mirrors spectrum_scan).
     """
     from soup_cli.utils.paths import is_under
+    from soup_cli.utils.run_provenance import base_revision_kwargs
 
     slug = model_slug(model)
+    revision = base_revision_kwargs(model).get("revision")
+    if revision:
+        # '@' cannot occur in model_slug, so no model id aliases this slot.
+        slug += "@" + revision
     root: str = _resolve_cache_root(cache_dir, is_under)
     chosen = os.path.join(root, slug)
     os.makedirs(chosen, exist_ok=True)

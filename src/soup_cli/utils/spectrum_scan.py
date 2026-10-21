@@ -999,9 +999,12 @@ def _download_hub_checkpoint(model: str) -> str:
         select_checkpoint_files,
     )
     from soup_cli.utils.hubs import snapshot_download
+    from soup_cli.utils.run_provenance import base_revision_kwargs
 
+    revision_kwargs = base_revision_kwargs(model)
     source = snapshot_download(
-        model, cache_dir=None, allow_patterns=[*hub_allow_patterns(None), "*.json"]
+        model, cache_dir=None, allow_patterns=[*hub_allow_patterns(None), "*.json"],
+        **revision_kwargs,
     )
     real = os.path.realpath(source)
     selected = select_checkpoint_files(os.listdir(real), read_index_weight_map(real))
@@ -1013,6 +1016,7 @@ def _download_hub_checkpoint(model: str) -> str:
             cache_dir=None,
             allow_patterns=[*allow, "*.json"],
             ignore_patterns=ignore or None,
+            **revision_kwargs,
         )
     return source
 
@@ -1066,8 +1070,15 @@ def _hf_snapshot_plan(
     slot: Optional[str] = None,
 ) -> ModelWeightsPlan:
     """Plan the regular-file copy of a symlinked HF snapshot (reused when current)."""
+    from soup_cli.utils.run_provenance import base_revision_kwargs
+
+    if slot is None:
+        slot = model_slug(model)
+        revision = base_revision_kwargs(model).get("revision")
+        if revision:
+            slot += "@" + revision
     materialized = os.path.join(
-        resolve_cache_dir(), "weights", slot or model_slug(model)
+        resolve_cache_dir(), "weights", slot
     )
     existing = _materialized_matches_hf_snapshot(
         source,

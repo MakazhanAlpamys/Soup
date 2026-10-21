@@ -225,7 +225,9 @@ def test_dry_run_does_not_capture_training_identity(tmp_path, monkeypatch):
     capture.assert_not_called()
 
 
-@pytest.mark.parametrize("mode", ["bound", "offline", "distributed", "non-hf"])
+@pytest.mark.parametrize("mode", [
+    "bound", "streaming", "unsloth", "offline", "distributed", "non-hf",
+])
 @pytest.mark.parametrize("source_state", ["unchanged", "changed", "deleted"])
 def test_train_cli_records_identity_and_writes_final_artifact(
     tmp_path, monkeypatch, moving_hub, mode, source_state,
@@ -244,6 +246,7 @@ def test_train_cli_records_identity_and_writes_final_artifact(
     monkeypatch.setattr("soup_cli.utils.gpu.detect_device", lambda: ("cpu", "CPU"))
     monkeypatch.setattr("soup_cli.utils.gpu.get_gpu_info", lambda: {})
     alternate_snapshot = None
+    bound = mode in {"bound", "streaming"}
 
     def alternate_hub(hub, model_id, *, local_dir):
         nonlocal alternate_snapshot
@@ -261,15 +264,17 @@ def test_train_cli_records_identity_and_writes_final_artifact(
         '{"instruction":"hi", "output":"hello"}\n', encoding="utf-8",
     )
     (tmp_path / "soup.yaml").write_text(
-        f"base: {BASE}\ndata: {{train: data.jsonl, format: alpaca, val_split: 0}}\n"
+        f"base: {BASE}\nbackend: {'unsloth' if mode == 'unsloth' else 'transformers'}\n"
+        "data: {train: data.jsonl, format: alpaca, val_split: 0}\n"
         "training: {epochs: 1, quantization: none, batch_size: 1, "
+        f"stream_layers: {str(mode == 'streaming').lower()}, "
         f"hub: {'modelscope' if mode == 'non-hf' else 'hf'}}}\noutput: final\n",
         encoding="utf-8",
     )
     import hashlib
 
     stored_hash = hashlib.sha256((tmp_path / "data.jsonl").read_bytes()).hexdigest()
-    expected = {"revision": REVISION} if mode == "bound" else {}
+    expected = {"revision": REVISION} if bound else {}
 
     class Trainer:
         def setup(self, dataset):
@@ -303,15 +308,16 @@ def test_train_cli_records_identity_and_writes_final_artifact(
     assert row["status"] == "completed"
     assert row["base_model"] == BASE
     assert json.loads(row["config_json"])["base"] == BASE
-    assert row["base_revision"] == (REVISION if mode == "bound" else None)
+    assert row["base_revision"] == (REVISION if bound else None)
     assert row["base_revision_source"] == {
-        "bound": "hub_commit", "offline": "offline", "distributed": "unsupported_backend",
+        "bound": "hub_commit", "streaming": "hub_commit", "unsloth": "unsupported_backend",
+        "offline": "offline", "distributed": "unsupported_backend",
         "non-hf": "unsupported_backend",
     }[mode]
     metadata = provenance.read_run_provenance(output)
     assert metadata["run_id"] == row["run_id"]
     assert metadata["base_revision"] == row["base_revision"]
     assert metadata["training_data_sha256"] == stored_hash
-    assert moving_hub.call_count == (1 if mode == "bound" else 0)
+    assert moving_hub.call_count == (1 if bound else 0)
     assert provenance.base_revision_kwargs(BASE) == {}
     tracker.close()

@@ -1923,7 +1923,7 @@ def train(
         base_identity = BaseRevision(
             run_base,
             binding_supported=(cfg.backend == "transformers" and hub_name == "hf"
-                               and not cfg.training.stream_layers and not is_in_distributed()),
+                               and not is_in_distributed()),
         )
         with base_revision_scope(base_identity):
             trainer_wrapper = build_trainer(cfg, **trainer_kwargs)
