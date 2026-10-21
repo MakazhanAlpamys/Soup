@@ -1848,6 +1848,12 @@ training:
   quantization: 4bit
 ```
 
+**Long prompts are capped as in DPO and ORPO.** trl's CPO trainer cuts only the
+answers, so after it tokenizes, `soup train` cuts the prompt to
+`data.max_length // 2` tokens, keeping its end, and the answers to the room
+left, for the train and validation splits. Every sequence is then at most
+`data.max_length`; a row that already fits is unchanged.
+
 **Rows whose completion trl truncates away are refused.** trl's CPO trainer
 truncates each answer to `data.max_length` minus the **longer** answer's length,
 so a long `chosen` beside a short `rejected` leaves the short side with zero
