@@ -48,7 +48,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (170 recipes)
+# Recipe catalog (169 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -2682,39 +2682,6 @@ training:
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
-  gradient_checkpointing: true
-
-output: ./output
-""",
-    ),
-    "pixtral-dpo": RecipeMeta(
-        model="mistralai/Pixtral-12B-2409",
-        task="dpo",
-        size="12B",
-        tags=("mistral", "pixtral", "vision", "multimodal", "dpo", "alignment"),
-        description="Pixtral 12B DPO multimodal preference alignment",
-        yaml_str="""\
-base: mistralai/Pixtral-12B-2409
-task: dpo
-modality: vision
-
-data:
-  train: ./data/vision_preference_train.jsonl
-  format: llava
-  image_dir: ./data/images
-  max_length: 4096
-
-training:
-  epochs: 3
-  lr: 5e-6
-  batch_size: 1
-  gradient_accumulation_steps: 16
-  lora:
-    r: 16
-    alpha: 32
-    target_modules: auto
-  quantization: 4bit
-  dpo_beta: 0.1
   gradient_checkpointing: true
 
 output: ./output

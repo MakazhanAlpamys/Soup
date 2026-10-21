@@ -526,7 +526,7 @@ What the sharder does:
 
 Measured:
 - **Numerics.** On a tiny DeepSeek-V3, the model streamed from the FP8 checkpoint matches a resident model holding the same dequantised weights bit for bit, in its logits, loss and LoRA gradients, in both expert layouts. Its layer cache holds the same tensors, bit for bit, as the one sharded from those dequantised weights, NF4 included ([gate](../benchmarks/gate-fp8-shard.md)).
-- **Disk.** The pre-flight charges each FP8 weight at the rate its dequantised tensor is stored at, and nothing for the scales.
+- **Disk and RAM.** The disk pre-flight charges each FP8 weight at the rate its dequantised tensor is stored at, and nothing for the scales. So does the RAM check that runs before sharding under `stream_source: ram`, so a base whose dequantised weights do not fit in RAM is refused before anything is written.
 - **A real checkpoint, CPU only.** Moonlight-16B-A3B, converted to this format, sharded in 93 s (27 layers, NF4, `fused`). The 30.60 GB cache came within 0.0002% of the pre-flight's figure (0.000115%: 35,336 bytes), and every FP8-derived tensor checked in three layers equals an independent dequantisation of the source. A GPU `soup train` comparison against the bf16 source is recorded in [`probe-rtx5070-moonlight-fp8-source.md`](../benchmarks/probe-rtx5070-moonlight-fp8-source.md) (pre-registered verdict FAIL on per-step loss and step time; see the record).
 
 Limits and refusals:
@@ -534,7 +534,6 @@ Limits and refusals:
 - **Other FP8 formats.** Each of these is refused, and the message names the supported format: per-tensor scales, `e5m2` weights, `compressed-tensors`, ue8m0 (power-of-two) scales, static activation scales, a missing or misshapen scale, an FP8 tensor without a scale, and a scale without its tensor. A `weight_block_size` axis outside [1, 1048576] is refused too. A spelling the config already gives away is refused at setup, before any weight is resolved or downloaded; the rest before the first byte of the cache is written.
 - **Damaged values.** A weight that is NaN after dequantisation (the e4m3fn bytes 0x7F and 0xFF), a negative scale, a non-finite scale, and a weight past float16's range under a float16 stream (pre-Ampere cards; stream it in bfloat16) are refused, naming the tensor, when that tensor is read: before the cache index is written, though files of earlier layers may already be on disk (no index names them, so they are never used, and the next run shards again). A zero scale, as an all-zero block has, is kept.
 - **Cache identity.** For `deepseek_v3`, `config.json` is part of the cache's source identity, as are the weight files, so a cache sharded from the bf16 checkpoint is never reused for its FP8 copy at the same path, nor the reverse.
-- **The early RAM check.** The check that runs before sharding still charges the FP8 files at their size on disk, about half the dequantised weights. A base that cannot fit in RAM may therefore be refused after sharding, by the exact check, rather than before it.
 - **After training.** The adapter is trained against the dequantised weights. Merging it or serving it loads the base through transformers' own FP8 path, which is a different numerical path from the one the adapter was trained on.
 
 **`stream_nf4_scale_cache` (opt-in).** On the dequantise + `F.linear` path, a
@@ -960,8 +959,14 @@ an untied head and the norms stay at the stream dtype rather than NF4: Llama-3.1
 Mistral-7B-Instruct-v0.3 from 3.74 GB to 4.14 GB, against a 4.14 GB cache measured on disk.
 A run that passed the pre-flight before by less than that margin is now refused: the old
 figure was low, and the sharder would have written the larger amount. The early RAM check
-(`stream_source: ram`, before sharding) still uses the flat NF4 rate; the check after sharding
-measures the real store.
+(`stream_source: ram`, before sharding) charges the same estimate, read once: the decoder-layer
+files, the embedding and head and the resident extras, which is what the check after sharding
+measures on the real store (the `per_expert` experts files stay on disk on every tier and are
+not charged). It refuses by that check's rule, 70% of free RAM or 55% of physical RAM, so a
+base the exact check would refuse is refused before anything is sharded. When the headers
+cannot be listed or read, it charges the flat NF4 rate on the size on disk and its refusal
+says approximately. `stream_source: auto` is not checked before sharding: it picks its tier
+after sharding, from the real store.
 
 **Two or more NVMe drives.** On a cold store larger than RAM the disk-tier step can wait on the
 read (measured for a 70B-shaped store), and then one drive is the ceiling. Set
