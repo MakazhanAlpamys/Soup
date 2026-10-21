@@ -163,20 +163,22 @@ class MoeLoraTargets(list):
 
 
 class MoeLoraTargetString(str):
-    """A string ``target_modules`` ``moe_lora`` kept, plus the fused expert parameters.
+    """A string ``target_modules`` ``moe_lora`` kept, plus what rides along with it.
 
     The string twin of :class:`MoeLoraTargets`: peft's ``"all-linear"`` as written,
     or a user regex joined with the MoE module names into one regex. A ``str``, so
-    every trainer and peft read it as the string target it is; the
-    ``target_parameters`` ride along to :func:`peft_wiring.build_lora_config`,
-    which hands peft a plain ``str``.
+    every trainer and peft read it as the string target it is. The fused expert
+    ``target_parameters`` and the MoE router / gate modules the string would
+    otherwise reach (``exclude_modules``) ride along to
+    :func:`peft_wiring.build_lora_config`, which hands peft a plain ``str``.
     """
 
-    __slots__ = ("target_parameters",)
+    __slots__ = ("target_parameters", "exclude_modules")
 
-    def __new__(cls, value, target_parameters=()):
+    def __new__(cls, value, target_parameters=(), exclude_modules=()):
         instance = super().__new__(cls, value)
         instance.target_parameters = list(target_parameters)
+        instance.exclude_modules = list(exclude_modules)
         return instance
 
 
@@ -204,21 +206,8 @@ def _join_regex_with_names(user_regex: str, names) -> str:
     pattern, so a leading run of them is hoisted out of the user's group, and the
     names half is shielded from them with ``(?-imsx:...)``. Under ``(?x)`` a newline
     closes the user's half first, so a trailing ``# comment`` cannot swallow the
-    closing parenthesis.
-
-    Raises:
-        ValueError: the user's regex does not compile, named by its field rather
-            than left to surface from peft, joined with names the user never wrote.
+    closing parenthesis. ``user_regex`` has passed :func:`_check_user_regex`.
     """
-    try:
-        re.compile(user_regex)
-    except re.error as exc:
-        raise ValueError(
-            f"training.lora.target_modules is not a valid regular expression ({exc}). "
-            "peft full-matches a string target_modules against every module name, and "
-            "training.moe_lora adds the MoE module names to it as one regex. Fix the "
-            "regex, or give target_modules as a list of module names."
-        ) from exc
     flags_match = _LEADING_GLOBAL_FLAGS.match(user_regex)
     flags = flags_match.group(0) if flags_match else ""
     body = user_regex[len(flags):]
@@ -227,6 +216,22 @@ def _join_regex_with_names(user_regex: str, names) -> str:
     names_regex = _names_as_full_match_regex(names)
     names_group = f"(?-imsx:{names_regex})" if flags else f"(?:{names_regex})"
     return f"{flags}(?:{body})|{names_group}"
+
+
+def _check_user_regex(user_regex: str) -> None:
+    """Refuse a regex that does not compile, by its field name.
+
+    Rather than let it surface from peft, joined with names the user never wrote.
+    """
+    try:
+        re.compile(user_regex)
+    except re.error as exc:
+        raise ValueError(
+            f"training.lora.target_modules is not a valid regular expression ({exc}). "
+            "peft full-matches a string target_modules against every module name, and "
+            "training.moe_lora adds the MoE module names to it. Fix the regex, or give "
+            "target_modules as a list of module names."
+        ) from exc
 
 
 def _string_target_kind(target_modules) -> Optional[str]:
@@ -279,9 +284,19 @@ def peft_routes_lora_to_fused_params(model, target_modules) -> bool:
     # answers every attribute, so peft's lookup succeeds against nothing real and
     # the probe comes back True for a model that has no experts at all; a real
     # architecture always has a plain string here.
+    return bool(_peft_converted_parameters(model, target_modules))
+
+
+def _peft_converted_parameters(model, target_modules) -> set:
+    """The ``target_parameters`` peft's v4->v5 conversion makes of these targets.
+
+    Empty when the model has no plain-string ``model_type`` (a stub answers every
+    attribute, so peft's lookup would succeed against nothing real), when the
+    private conversion path is not importable, or when it raises.
+    """
     model_type = getattr(getattr(model, "config", None), "model_type", None)
     if not isinstance(model_type, str):
-        return False
+        return set()
 
     try:
         from peft import LoraConfig
@@ -289,7 +304,7 @@ def peft_routes_lora_to_fused_params(model, target_modules) -> bool:
             convert_peft_config_for_transformers,
         )
     except ImportError:
-        return False
+        return set()
 
     # A throwaway config, so the conversion's in-place rewrite touches nothing
     # the caller owns. A string stays a string: peft's conversion resolves
@@ -301,8 +316,152 @@ def peft_routes_lora_to_fused_params(model, target_modules) -> bool:
     try:
         convert_peft_config_for_transformers(probe, model, None)
     except Exception:  # noqa: BLE001 - a probe must never break the run
-        return False
-    return bool(getattr(probe, "target_parameters", None))
+        return set()
+    return set(getattr(probe, "target_parameters", None) or ())
+
+
+def _named_children(module) -> dict:
+    try:
+        return dict(module.named_children())
+    except Exception:  # noqa: BLE001 - a stand-in for a module has no children
+        return {}
+
+
+def _own_parameters(module) -> dict:
+    try:
+        return dict(module.named_parameters(recurse=False))
+    except Exception:  # noqa: BLE001 - a stand-in for a module has no parameters
+        return {}
+
+
+def _expert_count(experts) -> int:
+    """The leading dimension of the fused 3-D experts, or the per-expert modules."""
+    for param in _own_parameters(experts).values():
+        if getattr(param, "ndim", 0) == 3:
+            return int(param.shape[0])
+    return len(_named_children(experts))
+
+
+def _output_dim(module) -> Optional[int]:
+    """``out_features``, or the rows of the module's own 2-D ``weight``."""
+    out_features = getattr(module, "out_features", None)
+    if isinstance(out_features, int):
+        return out_features
+    weight = _own_parameters(module).get("weight")
+    if weight is not None and getattr(weight, "ndim", 0) == 2:
+        return int(weight.shape[0])
+    return None
+
+
+def find_moe_gates(model) -> list[str]:
+    """Module paths of every MoE router and shared-expert gate, found by structure.
+
+    An MoE block is a module with an ``experts`` child. Among its other direct
+    children, the router is the one whose output is one logit per expert (output
+    dimension == expert count), and the shared-expert gate the one whose output is
+    the single logit that scales the shared expert (output dimension 1:
+    ``shared_expert_gate`` on Qwen2-MoE, Qwen3-Next and qwen4_exp). Both produce
+    routing logits, so under ``moe_lora`` neither gets an adapter from a string
+    target. A module's output dimension is its ``out_features`` (an ``nn.Linear``
+    router, the transformers-4 layout) or the rows of its own 2-D ``weight`` (the
+    transformers-5 ``TopKRouter``, which holds a bare parameter). The expert count
+    is the leading dimension of the fused 3-D expert tensors, or the number of
+    per-expert modules. Model order; a stand-in with no modules yields ``[]``.
+    """
+    try:
+        named = list(model.named_modules())
+    except Exception:  # noqa: BLE001 - a stand-in for a model has no modules
+        return []
+    gates = []
+    for path, module in named:
+        children = _named_children(module)
+        experts = children.get("experts")
+        if experts is None:
+            continue
+        count = _expert_count(experts)
+        if count < 2:
+            continue
+        prefix = f"{path}." if path else ""
+        for name, child in children.items():
+            if name != "experts" and _output_dim(child) in (count, 1):
+                gates.append(prefix + name)
+    return gates
+
+
+def _gate_parameter_keys(model, gates) -> list[str]:
+    modules = dict(model.named_modules())
+    return [
+        f"{gate}.{name}" for gate in gates for name in _own_parameters(modules.get(gate))
+    ]
+
+
+def _converted_targets_reach(model, target_modules, parameter_keys) -> bool:
+    """Would peft's conversion of these targets adapt any of these parameters?
+
+    The same match peft's ``_inject_parameters`` makes: the key, or a ``.<name>``
+    suffix of it.
+    """
+    produced = _peft_converted_parameters(model, target_modules)
+    return any(
+        key == name or key.endswith(f".{name}") for key in parameter_keys for name in produced
+    )
+
+
+def _all_linear_modules(model) -> set:
+    """peft's own ``all-linear``: every ``nn.Linear`` / ``Conv1D`` but the output head."""
+    from peft import LoraConfig
+    from peft.tuners.tuners_utils import _maybe_include_all_linear_layers
+
+    probe = LoraConfig(r=8, target_modules=ALL_LINEAR)
+    return set(_maybe_include_all_linear_layers(probe, model).target_modules)
+
+
+def _compact_names(module_names, meant) -> list[str]:
+    """``meant`` as list entries, a leaf name where it reaches nothing else.
+
+    peft matches a list entry by ``key == entry or key.endswith("." + entry)``. A
+    leaf name is used when every module it reaches is in ``meant`` (so it never
+    names a router, the output head or anything outside the string's meaning);
+    otherwise that leaf's modules are listed by full path. Model order, no
+    duplicates.
+    """
+    meant_set = set(meant)
+    by_leaf: dict = {}
+    for name in meant:
+        by_leaf.setdefault(name.rsplit(".", 1)[-1], []).append(name)
+    entries = []
+    for leaf, paths in by_leaf.items():
+        reach = {name for name in module_names if name == leaf or name.endswith(f".{leaf}")}
+        if reach <= meant_set:
+            entries.append(leaf)
+        else:
+            entries.extend(paths)
+    return entries
+
+
+def _materialise(model, kind, target_modules, gates, moe_targets) -> list[str]:
+    """The string as an explicit list: its modules but the gates, then the MoE names.
+
+    ``all-linear`` is peft's own expansion; a regex is the modules it full-matches,
+    as peft matches a string on a model it does not convert. peft's conversion
+    rewrites a list entry by its last name, so an entry that would still land on a
+    gate's parameter that way (a non-router module whose leaf is the router's v4
+    name, ``gate``) is dropped rather than let it adapt every router.
+    """
+    module_names = [name for name, _ in model.named_modules() if name]
+    if kind == "all-linear":
+        linear = _all_linear_modules(model)
+        meant = [name for name in module_names if name in linear]
+    else:
+        meant = [name for name in module_names if re.fullmatch(target_modules, name)]
+    gate_set = set(gates)
+    meant = [name for name in meant if name not in gate_set]
+    entries = _compact_names(module_names, meant)
+    entries.extend(name for name in moe_targets if name not in entries)
+    gate_keys = _gate_parameter_keys(model, gates)
+    return [
+        entry for entry in entries if not _converted_targets_reach(model, [entry], gate_keys)
+    ]
 
 
 def _refuse_dropout_on_fused_experts(model, tcfg, target_modules, fused_parameters=()) -> None:
@@ -378,10 +537,18 @@ def resolve_moe_lora_targets(model, tcfg, target_modules, console=None):
     * ``"all-linear"`` (what ``auto`` resolves to on qwen4_exp) as written: peft
       expands it to every ``nn.Linear`` / ``Conv1D`` but the output head, which
       already includes every module the MoE names reach. Replacing it dropped
-      qwen4_exp's Gated DeltaNet, indexer, shared-expert-gate, hyper-connection
-      and PLE projections, 24 of the 34 linears on a tiny model.
+      qwen4_exp's Gated DeltaNet, indexer, hyper-connection and PLE projections:
+      10 linears attached on a tiny model, where 32 do now.
     * any other string, a regex peft full-matches against each module name, as
       one regex of the union: ``(?:<user regex>)|(?:<the MoE names>)``.
+
+    Either way no MoE router or shared-expert gate (:func:`find_moe_gates`) gets an
+    adapter from the string, even one the user's regex names: they go to peft's
+    ``exclude_modules``, or, on the families where peft's own conversion would
+    still adapt the router weight (and with VeRA), the string becomes an explicit
+    list of what it means without them, plus the MoE names. To adapt a router,
+    name it in an explicit ``target_modules`` list. Without ``moe_lora`` a string
+    reaches peft untouched, router included where peft includes it.
 
     Raises:
         ValueError: fused expert parameters will be targeted AND ``lora.use_vera``
@@ -400,42 +567,97 @@ def resolve_moe_lora_targets(model, tcfg, target_modules, console=None):
         return target_modules
     fused = find_fused_expert_parameters(model)
     kind = _string_target_kind(target_modules)
-    if kind == "all-linear":
-        modules = target_modules
-    elif kind == "regex":
-        modules = _join_regex_with_names(target_modules, moe_targets)
-    else:
+    gates, excluded, listed = [], [], False
+    if kind is None:
         modules = list(target_modules) if isinstance(target_modules, list) else []
         modules.extend(name for name in moe_targets if name not in modules)
+    else:
+        if kind == "regex":
+            _check_user_regex(target_modules)
+        modules, gates, excluded, listed = _string_targets(
+            model, tcfg, kind, target_modules, moe_targets
+        )
     _refuse_vera_on_fused_experts(tcfg, fused)
     _refuse_dropout_on_fused_experts(model, tcfg, modules, fused)
     if console is not None:
-        console.print(_announcement(kind, modules, moe_targets, fused))
-    if kind is not None:
-        return MoeLoraTargetString(modules, fused)
+        console.print(
+            _announcement(kind, listed, modules, moe_targets, fused, gates, excluded)
+        )
+    if kind is not None and not listed:
+        return MoeLoraTargetString(modules, fused, excluded)
     return MoeLoraTargets(modules, fused)
 
 
-def _announcement(kind, modules, moe_targets, fused) -> str:
+def _string_targets(model, tcfg, kind, target_modules, moe_targets):
+    """A string target under ``moe_lora``: its meaning, without any MoE gate.
+
+    Returns ``(modules, gates, excluded, listed)``. ``modules`` is the string kept
+    (``all-linear`` as written, or the regex joined with the MoE names) with the
+    gates it would reach in ``excluded``, for peft's ``exclude_modules``; or, when
+    that cannot keep the gates out, an explicit list (``listed``).
+
+    It cannot on the families peft converts from the transformers-4 layout
+    (qwen3_moe, deepseek_v3, ...): there peft adds the router's v4 name to a string
+    target and adapts the router weight as a ``target_parameters`` entry, which
+    ``exclude_modules`` does not reach. Asked of peft with ``all-linear``, the
+    string its conversion maps every v4 name for. Nor with VeRA, whose
+    ``VeraConfig`` has no ``exclude_modules``.
+    """
+    if kind == "all-linear":
+        kept = target_modules
+    else:
+        kept = _join_regex_with_names(target_modules, moe_targets)
+    gates = find_moe_gates(model)
+    if not gates:
+        return kept, gates, [], False
+    if _converted_targets_reach(model, ALL_LINEAR, _gate_parameter_keys(model, gates)):
+        return _materialise(model, kind, target_modules, gates, moe_targets), gates, [], True
+    if kind == "all-linear":
+        reached = _all_linear_modules(model)
+        excluded = [gate for gate in gates if gate in reached]
+    else:
+        excluded = [gate for gate in gates if re.fullmatch(kept, gate)]
+    if excluded and getattr(getattr(tcfg, "lora", None), "use_vera", False):
+        return _materialise(model, kind, target_modules, gates, moe_targets), gates, [], True
+    return kept, gates, excluded, False
+
+
+def _announcement(kind, listed, modules, moe_targets, fused, gates, excluded) -> str:
     """The setup line: what ``moe_lora`` did to the targets, never the user's regex.
 
     The regex is not printed: a character class such as ``[qkv]`` is a Rich tag.
+    A string turned into a list is counted, not listed.
     """
-    if kind == "all-linear":
+    patterns = f"the {len(moe_targets)} MoE module patterns"
+    without = f"{len(gates)} MoE router/gate module(s)"
+    joiner = " and"
+    if listed and kind == "all-linear":
+        line = (
+            f"[green]ScatterMoE LoRA:[/] targeting 'all-linear' as a list of "
+            f"{len(modules)} target names: every linear layer but the output head, "
+            f"without the {without}, plus {patterns}"
+        )
+    elif listed:
+        line = (
+            f"[green]ScatterMoE LoRA:[/] targeting the target_modules regex as a list of "
+            f"{len(modules)} target names: the modules it matches, without the {without}, "
+            f"plus {patterns}"
+        )
+    elif kind == "all-linear":
         line = (
             f"[green]ScatterMoE LoRA:[/] keeping target_modules 'all-linear' (it already "
-            f"covers the {len(moe_targets)} MoE module patterns)"
+            f"covers {patterns})"
         )
         joiner = " and adding"
     elif kind == "regex":
         line = (
-            f"[green]ScatterMoE LoRA:[/] targeting the target_modules regex or the "
-            f"{len(moe_targets)} MoE module patterns (one combined regex)"
+            f"[green]ScatterMoE LoRA:[/] targeting the target_modules regex or {patterns} "
+            f"(one combined regex)"
         )
-        joiner = " and"
     else:
         line = f"[green]ScatterMoE LoRA:[/] targeting {len(modules)} module patterns"
-        joiner = " and"
+    if excluded:
+        line += f", excluding {len(excluded)} MoE router/gate module(s)"
     if fused:
         line += f"{joiner} {len(fused)} fused expert parameter(s): {', '.join(fused)}"
     return line
