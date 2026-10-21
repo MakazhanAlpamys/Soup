@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
 from soup_cli.commands.data import app as data_app
 from soup_cli.utils.demo_bundles import (
@@ -16,6 +15,7 @@ from soup_cli.utils.demo_bundles import (
     get_bundle,
     list_bundles,
 )
+from tests.cli_runner import CliRunner
 
 
 class TestDemoBundleRegistry:

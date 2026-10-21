@@ -11,15 +11,16 @@ Taxonomy (project-wide standard):
 
 from __future__ import annotations
 
-import click.exceptions
 import typer.core
+
+from soup_cli.utils.typer_compat import UsageError
 
 EXIT_OK: int = 0
 EXIT_RUNTIME_ERROR: int = 1
 EXIT_GATE_FAILED: int = 2
 EXIT_USAGE_ERROR: int = 3
 
-_USAGE_ERRORS: tuple[type[Exception], ...] = (click.exceptions.UsageError,)
+_USAGE_ERRORS: tuple[type[Exception], ...] = (UsageError,)
 
 
 class _GateUsageErrorMixin:

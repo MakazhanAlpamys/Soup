@@ -179,11 +179,13 @@ def test_registry_covers_every_field_the_mlx_trainer_warns_about():
     unknown = sorted(warned - known)
     assert unknown == [], f"warning list names fields that do not exist: {unknown}"
     registered = {e.field for e in unsupported_for("sft", "mlx")}
-    # These warnings are internal guards for schema-refused monitoring values.
-    # Their load-time refusal is pinned by test_issue1069; doctor cannot list them.
+    # These warnings are internal guards for schema-refused values. Their
+    # load-time refusal is pinned by test_issue1069 (monitoring flags) and
+    # test_mlx_use_mod_is_refused_at_load_and_has_no_doctor_row below (use_mod,
+    # #1752); doctor cannot list them.
     schema_refused = {
         "training.loss_watchdog", "training.loss_spike_recovery",
-        "training.grad_accum_auto_tune",
+        "training.grad_accum_auto_tune", "training.use_mod",
     }
     missing = sorted(warned - registered - schema_refused)
     assert missing == [], (
@@ -264,24 +266,43 @@ def test_961_reachable_fields_reported_together(config_at):
 
     #961 declared four reachable fields. ``training.quantization_aware`` is no
     longer one of them on MLX: ``true`` is refused at load on every backend
-    (#1222), and ``fp8`` and ``quest`` are refused on mlx. So three are
-    reported together, and adding the fourth stops the load instead.
+    (#1222), and ``fp8`` and ``quest`` are refused on mlx. ``training.use_mod``
+    is refused at load too (#1752). The two that still load are reported
+    together, and adding either refused field stops the load instead.
     """
     from soup_cli.config.backend_support import check_config
     from soup_cli.config.loader import load_config
 
-    fields = "  use_mod: true\n  moe_lora: true\n  use_fsdp2_compile: true"
+    fields = "  moe_lora: true\n  use_fsdp2_compile: true"
     cfg = load_config(config_at("sft", "mlx", fields))
     rows = check_config(cfg)
     assert {e.field for e in rows} == {
-        "training.use_mod",
         "training.moe_lora",
         "training.use_fsdp2_compile",
     }
-    assert len(rows) == 3
+    assert len(rows) == 2
 
     with pytest.raises(SystemExit):
         load_config(config_at("sft", "mlx", fields + "\n  quantization_aware: true"))
+
+
+def test_mlx_use_mod_is_refused_at_load_and_has_no_doctor_row(config_at):
+    """#1752 — ``use_mod: true`` on MLX SFT stops at config load, so doctor can
+    never see it and the registry lists no row for it (a ``REJECTED`` row would
+    be unreachable, #1330). ``mlx_sft.py`` keeps its own warning for the field."""
+    from soup_cli.config.backend_support import unsupported_for
+    from soup_cli.config.loader import load_config, load_config_from_string
+
+    assert "training.use_mod" not in {e.field for e in unsupported_for("sft", "mlx")}
+
+    path = config_at("sft", "mlx", "  use_mod: true")
+    with pytest.raises(ValueError) as info:
+        load_config_from_string(pathlib.Path(path).read_text(encoding="utf-8"))
+    message = " ".join(str(info.value).split())
+    assert "training.use_mod is not applied by task='sft' with backend='mlx'" in message, message
+    assert message.endswith("Use backend: transformers, or set use_mod: false.")
+    with pytest.raises(SystemExit):
+        load_config(path)
 
 
 def test_only_fields_the_user_actually_set_are_reported(config_at):

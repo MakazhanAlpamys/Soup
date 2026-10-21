@@ -51,15 +51,15 @@ RUN_KINDS = (
 # Literal outcomes over the entire supported 3x3 matrix, independent of the policy
 # expression and of which cells a particular workflow kind currently selects: none caches.
 SUPPORT_CELLS = (
-    ("ubuntu-latest", "Linux", "3.10"),
     ("ubuntu-latest", "Linux", "3.11"),
     ("ubuntu-latest", "Linux", "3.12"),
-    ("windows-latest", "Windows", "3.10"),
+    ("ubuntu-latest", "Linux", "3.13"),
     ("windows-latest", "Windows", "3.11"),
     ("windows-latest", "Windows", "3.12"),
-    ("macos-latest", "macOS", "3.10"),
+    ("windows-latest", "Windows", "3.13"),
     ("macos-latest", "macOS", "3.11"),
     ("macos-latest", "macOS", "3.12"),
+    ("macos-latest", "macOS", "3.13"),
 )
 RUNNER_OS = {"ubuntu-latest": "Linux", "windows-latest": "Windows", "macos-latest": "macOS"}
 

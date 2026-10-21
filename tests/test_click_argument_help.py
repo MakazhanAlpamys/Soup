@@ -16,8 +16,8 @@ environment that resolved click 8.5 (whatever the cause), and the declaration te
 fails when the pin is removed from ``pyproject.toml`` even on an environment that
 happens to hold a good click.
 
-``pyproject.toml`` is parsed with a regex, not ``tomllib``: ``tomllib`` is 3.11+ and
-this repo supports 3.10 (the convention of ``tests/test_issue636_torch_floor.py``).
+``pyproject.toml`` is parsed with a regex, not ``tomllib`` (the convention of
+``tests/test_issue636_torch_floor.py``, set while the floor was 3.10, which has no ``tomllib``).
 Before widening the bound, check that ``soup adapters check --help`` still shows its
 description with the newest click and the newest typer Soup allows.
 """

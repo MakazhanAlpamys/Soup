@@ -13,8 +13,8 @@ Three locks:
 2. ``LICENSE`` carries the two passages that had drifted, and not the drifted wording.
 3. The holder line is one string in ``NOTICE``, the READMEs and the package authors.
 
-``pyproject.toml`` is read with a regex, not ``tomllib``, which is 3.11+ while this
-project supports 3.10 (same reason as ``test_requires_python_bound.py``).
+``pyproject.toml`` is read with a regex, not ``tomllib``, as ``test_requires_python_bound.py``
+did while the floor was 3.10, which has no ``tomllib``.
 """
 
 from __future__ import annotations

@@ -897,6 +897,9 @@ Usage: `soup compile-tools [OPTIONS] SPEC`
 | `--eval` | text |  | yes | Path to tool-call eval JSONL |
 | `--optimizer` | text | `textgrad` |  | Allowed: gepa, textgrad |
 | `--output`, `-o` | text | `compiled_tools.json` |  | Output schema path |
+| `--task-lm` | text |  |  | Task language model for GEPA optimizer |
+| `--reflection-lm` | text |  |  | Reflection language model for GEPA optimizer |
+| `--engine` | text |  |  | Backward engine for TextGrad optimizer (e.g. gpt-4o) |
 | `--plan-only` | flag | off |  | Render plan + exit 0 (no live optimise). |
 
 ## `soup completions`
@@ -3665,7 +3668,7 @@ Usage: `soup train [OPTIONS]`
 | `--track-energy` | flag | off |  | Measure the training window's energy + CO2 via codecarbon (offline; requires `pip install soup-cli[carbon]`). Feeds the kWh / CO2 into --annex-xi. v0.71.3. |
 | `--energy-country` | text | `USA` |  | ISO 3166-1 alpha-3 country code for the CO2 grid-intensity estimate used by --track-energy (default USA). |
 | `--energy-out` | text |  |  | Write the --track-energy measurement to this JSON file (cwd-contained) so `soup bom emit --energy <path>` can consume it. v0.71.15. |
-| `--cloud` | text |  |  | Train on a cloud GPU instead of locally (v0.71.18 #16). Supported: modal, lambda (runpod is planned). Renders a cloud app stub from the config (plan-only); use --cloud-submit to submit live. |
+| `--cloud` | text |  |  | Train on a cloud GPU instead of locally (v0.71.18 #16). Supported: modal, lambda, runpod. Renders a cloud app stub from the config (plan-only); use --cloud-submit to submit live. |
 | `--gpu` | text | `a100` |  | Cloud GPU type for --cloud (t4 / l4 / a10 / a10g / a100 / a100-80gb / l40s / h100 / a6000). Default a100. Provider-specific allowlists apply. |
 | `--cloud-submit` | flag | off |  | With --cloud, submit the rendered run live via the cloud's SDK or API (gated on respective provider token/API key). Default is plan-only (render + print the command). Lambda requires a registered SSH key. |
 

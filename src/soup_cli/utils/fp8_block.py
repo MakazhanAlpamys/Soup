@@ -20,6 +20,16 @@ Every other FP8 spelling is refused, naming what is supported: per-tensor scales
 compressed-tensors, ue8m0 scales, static activation scales, a missing or misshapen scale,
 an FP8 tensor without a scale and a scale without its tensor.
 
+Every other quantised source is refused here too, by name and before a byte of the cache
+is written (:func:`refuse_unsupported_quantization`, :func:`refuse_unsupported_tensor`):
+a ``quantization_config`` whose ``quant_method`` is not ``fp8`` (compressed-tensors in any
+format, GPTQ, AWQ, bitsandbytes, HQQ, ...), and a tensor stored as an integer or packed
+type, or named like a quantiser's companion (``weight_packed``, ``qweight``, ``SCB``, ...).
+A plain read would cast the stored words to floats and the run would train on them.
+The exceptions are the integer buffers a supported model really has
+(:data:`INTEGER_BUFFER_SUFFIXES`) and qwen4_exp's oMLX/oQ affine bundles, which the
+sharder dequantises itself.
+
 No top-level torch: ``layer_shard`` imports this module on the light CLI path.
 """
 
@@ -62,7 +72,99 @@ SUPPORTED_FP8_FORMAT = (
 )
 
 
-class UnsupportedFP8Error(ValueError):
+#: The tail of every refusal of a quantised source that is not an FP8 one.
+SUPPORTED_SOURCE_FORMATS = (
+    "Layer streaming cannot dequantise it: it reads plain floating-point weights "
+    "(bfloat16, float16, float32), DeepSeek-V3's block FP8 (quant_method 'fp8' with "
+    f"weight_block_size, on model_type {', '.join(FP8_BLOCK_ARCHS)}) and, on qwen4_exp "
+    "only, oMLX/oQ affine bundles. Point training.base at a bf16 or FP8-block copy of "
+    "this model, or dequantise it to bf16 first."
+)
+
+#: The safetensors dtypes a plain read may cast to the stream dtype. FP8 is planned
+#: separately (:func:`plan_fp8_block`); every other stored type is a packed or integer
+#: one that a cast would turn into garbage weights.
+FLOAT_SOURCE_DTYPES = frozenset({"BF16", "F16", "F32", "F64"})
+
+#: Integer buffers a supported architecture really carries in its checkpoint. Read by
+#: key suffix, so a wrapper prefix (``language_model.``) does not hide one:
+#:
+#: - qwen4_exp's PLE n-gram hashing tables (``nn.Buffer`` of torch.long, persistent):
+#:   the sharder stores them cast and the runtime never loads them back
+#:   (``layer_shard._LAYER_BUFFER_KEYS``), so the skeleton keeps their exact values;
+#: - ``position_ids``, the int64 buffer vision towers and older encoders persist.
+INTEGER_BUFFER_SUFFIXES = (
+    ".ple.ple_embedding.layer_multipliers",
+    ".ple.ple_embedding.ngram_heads_vocab_sizes",
+    ".ple.ple_embedding.ngram_heads_offsets",
+    ".position_ids",
+)
+
+_COMPRESSED_TENSORS = "compressed-tensors"
+_GPTQ_OR_AWQ = "GPTQ or AWQ (int4 weights packed into int32 'qweight' words)"
+_BNB_8BIT = "bitsandbytes LLM.int8() (int8 weights with 'SCB' row scales)"
+_BNB_4BIT = "bitsandbytes 4-bit (NF4/FP4 nibbles packed into uint8, with 'absmax')"
+#: Key suffixes that exist only in a quantiser's on-disk format, checked in this order
+#: (a longer suffix before the shorter one it ends with). ``_scale_inv`` is not here: it
+#: is DeepSeek-V3's block-FP8 scale, planned by :func:`plan_fp8_block`.
+QUANTISED_KEY_SUFFIXES: Tuple[Tuple[str, str], ...] = (
+    ("weight_packed", f"{_COMPRESSED_TENSORS} pack-quantized (int weights packed into "
+     "int32 'weight_packed' words)"),
+    ("weight_shape", f"{_COMPRESSED_TENSORS} pack-quantized ('weight_shape' records the "
+     "unpacked shape)"),
+    ("weight_global_scale", f"{_COMPRESSED_TENSORS} NVFP4"),
+    ("weight_zero_point", f"{_COMPRESSED_TENSORS} (asymmetric zero points)"),
+    ("weight_g_idx", f"{_COMPRESSED_TENSORS} (activation-order group index)"),
+    ("weight_scale", f"{_COMPRESSED_TENSORS} ('weight_scale'; DeepSeek-V3's block FP8 "
+     "spells its scale 'weight_scale_inv')"),
+    ("input_global_scale", "static activation scales (NVFP4)"),
+    ("input_scale", "static activation scales"),
+    ("output_scale", "static activation scales"),
+    ("qweight", _GPTQ_OR_AWQ),
+    ("qzeros", "GPTQ or AWQ (int32-packed 'qzeros' zero points)"),
+    ("g_idx", "GPTQ (activation-order 'g_idx')"),
+    (".SCB", _BNB_8BIT),
+    (".weight_format", _BNB_8BIT),
+    (".quant_state.bitsandbytes__nf4", _BNB_4BIT),
+    (".quant_state.bitsandbytes__fp4", _BNB_4BIT),
+    (".nested_quant_map", _BNB_4BIT),
+    (".nested_absmax", _BNB_4BIT),
+    (".quant_map", _BNB_4BIT),
+    (".absmax", _BNB_4BIT),
+    (".W_q", "HQQ (packed 'W_q')"),
+    (".codebooks", "AQLM (additive codebooks)"),
+    (".codes", "AQLM (int codes)"),
+    (".weight_scales", "EETQ (int8 weights with 'weight_scales')"),
+    ("._data", "quanto (quantised '_data')"),
+    ("._scale", "quanto (quantised '_scale')"),
+    ("_qdata", "torchao (quantised '_qdata')"),
+)
+
+#: What a stored type that is not floating point holds in a quantised checkpoint, for a
+#: tensor whose name does not already say (:data:`QUANTISED_KEY_SUFFIXES`).
+_PACKED_DTYPE_FORMATS = {
+    "I32": "int32, the word GPTQ, AWQ and compressed-tensors pack int4 weights into",
+    "U32": (
+        "uint32, the word oMLX/oQ affine (MLX) checkpoints pack quantised weights into "
+        "(layer streaming dequantises those on qwen4_exp only)"
+    ),
+    "U8": "uint8, which bitsandbytes 4-bit packs NF4/FP4 nibbles into (HQQ and MXFP4 too)",
+    "I8": "int8, an int8-quantised weight (bitsandbytes LLM.int8(), compressed-tensors, EETQ)",
+    "F4": "FP4, packed MXFP4/NVFP4 values",
+    "C64": "complex64, not a real-valued weight type",
+}
+
+#: ``quant_method`` values that are FP8 formats other than DeepSeek-V3's block FP8:
+#: refused as :class:`UnsupportedFP8Error`, with the FP8 format named.
+_FP8_FAMILY_METHODS = frozenset({"fbgemm_fp8", "mxfp8"})
+
+
+class UnsupportedQuantizedSourceError(ValueError):
+    """A quantised checkpoint layer streaming does not dequantise; the message names the
+    format, says so, and points to a bf16 or FP8-block source."""
+
+
+class UnsupportedFP8Error(UnsupportedQuantizedSourceError):
     """An FP8 checkpoint layer streaming does not dequantise; the message names the format."""
 
 
@@ -74,6 +176,10 @@ def _brief(value: Any) -> str:
 
 def _refuse(problem: str) -> UnsupportedFP8Error:
     return UnsupportedFP8Error(f"{problem}. {SUPPORTED_FP8_FORMAT}")
+
+
+def _refuse_source(problem: str) -> UnsupportedQuantizedSourceError:
+    return UnsupportedQuantizedSourceError(f"{problem}. {SUPPORTED_SOURCE_FORMATS}")
 
 
 def as_quantization_mapping(quantization_config: Any) -> Optional[Mapping[str, Any]]:
@@ -169,6 +275,175 @@ def fp8_block_size(quantization_config: Any, *, arch: str) -> Optional[Tuple[int
     return int(block[0]), int(block[1])
 
 
+def _int_setting(value: Any) -> Optional[int]:
+    value = _setting(value)
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _compressed_tensors_detail(quant: Mapping[str, Any]) -> Tuple[str, bool]:
+    """``(detail, is_fp8)`` for a compressed-tensors config: its format and weight spec.
+
+    Read from the untrusted config defensively; only the first group's weights are named.
+    """
+    fmt = _setting(quant.get("format"))
+    parts = [f"format {_brief(fmt)}"] if fmt is not None else []
+    weights: Optional[Mapping[str, Any]] = None
+    groups = quant.get("config_groups")
+    if isinstance(groups, Mapping):
+        for group in groups.values():
+            if isinstance(group, Mapping) and isinstance(group.get("weights"), Mapping):
+                weights = group["weights"]
+                break
+    bits = kind = None
+    if weights is not None:
+        bits = _int_setting(weights.get("num_bits"))
+        kind = _setting(weights.get("type"))
+        if bits is not None and kind in ("int", "float"):
+            spec = f"{bits}-bit {kind} weights"
+            group_size = _int_setting(weights.get("group_size"))
+            if group_size is not None:
+                spec += f" in groups of {group_size}"
+            parts.append(spec)
+    is_fp8 = fmt == "float-quantized" or (kind == "float" and bits == 8)
+    return (f" ({', '.join(parts)})" if parts else ""), is_fp8
+
+
+def refuse_unsupported_quantization(quantization_config: Any) -> None:
+    """Refuse a ``quantization_config`` declaring a quantiser layer streaming cannot read.
+
+    Passes no config (``None``), a config that declares no quantiser (the oMLX/oQ affine
+    spelling,
+    ``bits`` and ``group_size`` without a ``quant_method``, whose tensors decide) and
+    ``quant_method: "fp8"``, which :func:`fp8_block_size` decides. Every other
+    ``quant_method`` is refused naming it: the ones transformers registers
+    (compressed-tensors in any format, gptq, awq, bitsandbytes, hqq, aqlm, eetq, torchao,
+    quanto, ...) and any value it does not. ``load_in_4bit`` / ``load_in_8bit`` without a method
+    is bitsandbytes, as transformers reads it. A value that is not a mapping (a string,
+    a list, a number) is refused as malformed. ``quant_method`` is matched exactly, as
+    transformers looks it up: ``FP8`` is not ``fp8``. Another FP8 format raises
+    :class:`UnsupportedFP8Error`, everything else :class:`UnsupportedQuantizedSourceError`.
+    """
+    quant = as_quantization_mapping(quantization_config)
+    if quant is None:
+        if quantization_config is None:
+            return
+        # A string, list or number declares SOMETHING; transformers cannot read it either.
+        raise _refuse_source(
+            f"config.json quantization_config is {_brief(quantization_config)}, not a "
+            f"mapping: a malformed declaration no quantiser can be read from"
+        )
+    method = _setting(quant.get("quant_method"))
+    bnb_bits = (
+        4 if quant.get("load_in_4bit") is True
+        else 8 if quant.get("load_in_8bit") is True
+        else None
+    )
+    if method is None:
+        if bnb_bits is None:
+            return
+        raise _refuse_source(
+            f"config.json quantization_config declares load_in_{bnb_bits}bit: "
+            f"bitsandbytes pre-quantised {bnb_bits}-bit weights"
+        )
+    if method == "fp8":
+        return
+    # An unhashable value (a list) is a declared quantiser too, named as written.
+    is_fp8 = isinstance(method, str) and method in _FP8_FAMILY_METHODS
+    if method == _COMPRESSED_TENSORS:
+        detail, is_fp8 = _compressed_tensors_detail(quant)
+    elif bnb_bits is not None:
+        detail = f" ({bnb_bits}-bit)"
+    else:
+        bits = _int_setting(quant.get("bits"))
+        detail = f" ({bits}-bit)" if bits is not None else ""
+    problem = f"config.json quantization_config declares quant_method {_brief(method)}{detail}"
+    raise _refuse(problem) if is_fp8 else _refuse_source(problem)
+
+
+def check_source_quantization(
+    quantization_config: Any, *, arch: str
+) -> Optional[Tuple[int, int]]:
+    """The config-alone gate of a layer-streamed source, run before any header is read.
+
+    ``(bm, bn)`` for a supported FP8 block config (:func:`fp8_block_size`), ``None`` for
+    a config that declares no quantiser; any other declared quantisation is refused by
+    name (:func:`refuse_unsupported_quantization`). The sharder, the disk pre-flight and
+    the trainer setup all call this, and :func:`plan_fp8_block` repeats it.
+    """
+    block = fp8_block_size(quantization_config, arch=arch)
+    refuse_unsupported_quantization(quantization_config)
+    return block
+
+
+def quantised_format_of(key: str) -> Optional[str]:
+    """The quantiser a key's suffix belongs to (:data:`QUANTISED_KEY_SUFFIXES`), or None."""
+    for suffix, name in QUANTISED_KEY_SUFFIXES:
+        if key.endswith(suffix):
+            return name
+    return None
+
+
+def refuse_unsupported_tensor(key: str, stored_dtype: str) -> None:
+    """Refuse one source tensor that a plain read would cast into a wrong weight.
+
+    ``stored_dtype`` is the safetensors spelling (``I32``, ``BF16``, ...). Passes a
+    floating-point tensor with an ordinary name and an integer buffer a supported model
+    really has (:data:`INTEGER_BUFFER_SUFFIXES`). FP8 is not this function's: every caller
+    plans or refuses it first (:func:`plan_fp8_block`, ``layer_shard._refuse_fp8``).
+    Refuses every other stored type, and a floating-point tensor named like a quantiser's
+    companion (:data:`QUANTISED_KEY_SUFFIXES`). The message names the format by the suffix, or
+    else by what the stored type is used for (:data:`_PACKED_DTYPE_FORMATS`): both are
+    read off the one tensor, so every caller words the same tensor the same way.
+    """
+    dtype = str(stored_dtype).upper()
+    fmt = quantised_format_of(key)
+    if dtype in FLOAT_SOURCE_DTYPES:
+        if fmt is None:
+            return
+        raise _refuse_source(
+            f"checkpoint tensor {_brief(key)} ({_brief(stored_dtype)}) belongs to {fmt}, "
+            f"whose weights a plain read would stream still quantised"
+        )
+    if key.endswith(INTEGER_BUFFER_SUFFIXES):
+        return
+    if fmt is None:
+        fmt = _PACKED_DTYPE_FORMATS.get(dtype, "an integer or packed type")
+    raise _refuse_source(
+        f"checkpoint tensor {_brief(key)} is stored as {_brief(stored_dtype)}: {fmt}. A "
+        f"plain read would cast its stored words to floats and train on them as weights"
+    )
+
+
+def _affine_weight(key: str, tensors: Mapping[str, Any]) -> bool:
+    """``<m>.weight`` with both ``<m>.scales`` and ``<m>.biases``: an oMLX/oQ affine weight."""
+    if not key.endswith(".weight"):
+        return False
+    base = key[: -len(".weight")]
+    return base + ".scales" in tensors and base + ".biases" in tensors
+
+
+def refuse_unsupported_tensors(
+    tensors: Mapping[str, Tuple[str, Sequence[int]]],
+    plan: Optional["FP8BlockPlan"],
+    *,
+    arch: str,
+) -> None:
+    """Refuse the first tensor, in key order, that no reader of layer streaming dequantises.
+
+    ``tensors`` maps canonical keys to ``(safetensors dtype, shape)``. ``plan``'s FP8 block
+    weights and scales are dequantised by the sharder. So, on qwen4_exp, is an oMLX/oQ
+    affine weight (``layer_shard._read_oq_tensor`` checks its uint32 words); its float
+    ``.scales`` and ``.biases`` pass as any float tensor does.
+    """
+    planned = plan.weights | plan.scales if plan is not None else frozenset()
+    for key in sorted(tensors):
+        if key in planned:
+            continue
+        if arch == "qwen4_exp" and _affine_weight(key, tensors):
+            continue
+        refuse_unsupported_tensor(key, tensors[key][0])
+
+
 @dataclass(frozen=True)
 class FP8BlockPlan:
     """Which tensors of a checkpoint are FP8 block weights, and which are their scales.
@@ -205,7 +480,25 @@ def plan_fp8_block(
     Returns ``None`` when the checkpoint holds no FP8 tensor and no block scale. The
     sharder and the disk pre-flight both call this, so they agree on which keys are
     dequantised and which are consumed.
+
+    It is also where every other quantised source is refused, in the same words for
+    both: a declared quantiser that is not ``fp8``
+    (:func:`refuse_unsupported_quantization`), then the first tensor no reader
+    dequantises (:func:`refuse_unsupported_tensors`).
     """
+    plan = _classify_fp8(quantization_config, tensors, arch=arch)
+    refuse_unsupported_quantization(quantization_config)
+    refuse_unsupported_tensors(tensors, plan, arch=arch)
+    return plan
+
+
+def _classify_fp8(
+    quantization_config: Any,
+    tensors: Mapping[str, Tuple[str, Sequence[int]]],
+    *,
+    arch: str,
+) -> Optional[FP8BlockPlan]:
+    """:func:`plan_fp8_block`'s FP8 half: the block plan, or the FP8 spelling refused."""
     block = fp8_block_size(quantization_config, arch=arch)
     scales = {key for key in tensors if key.endswith(FP8_SCALE_SUFFIX)}
     weights = {
@@ -275,11 +568,35 @@ def plan_fp8_block(
     return FP8BlockPlan(block=block, weights=frozenset(weights), scales=frozenset(scales))
 
 
-def read_checkpoint_quantization_config(weights_dir: str) -> Optional[Mapping[str, Any]]:
+def quantization_config_of(config: Any) -> Any:
+    """A model config's ``quantization_config``: its own, else its ``text_config``'s.
+
+    ``config`` is a ``config.json`` mapping or a transformers config object. A multimodal
+    wrapper can carry the declaration on its text sub-config only; the top level wins
+    when both are present, as it does for transformers' own loader. The value is
+    returned as found, so :func:`check_source_quantization` refuses a malformed one.
+    """
+
+    def _get(owner: Any, name: str) -> Any:
+        if isinstance(owner, Mapping):
+            return owner.get(name)
+        return getattr(owner, name, None)
+
+    own = _get(config, "quantization_config")
+    if own is not None:
+        return own
+    # A missing or non-config text_config (None, a string) has no such attribute: None.
+    return _get(_get(config, "text_config"), "quantization_config")
+
+
+def read_checkpoint_quantization_config(weights_dir: str) -> Any:
     """``quantization_config`` from ``config.json`` beside the weights, or ``None``.
 
-    ``None`` when there is no regular, readable, size-bounded ``config.json`` or it has no
-    such mapping: :func:`plan_fp8_block` then refuses an FP8 checkpoint by saying so.
+    ``None`` when there is no regular, readable, size-bounded ``config.json`` or it
+    declares none (at the top level or under ``text_config``,
+    :func:`quantization_config_of`): :func:`plan_fp8_block` then refuses an FP8
+    checkpoint by saying so. A declaration that is not a mapping is returned as it is,
+    for :func:`check_source_quantization` to refuse as malformed.
     """
     path = os.path.join(os.path.realpath(os.path.expanduser(weights_dir)), "config.json")
     if not os.path.isfile(path) or os.path.islink(path):
@@ -291,8 +608,8 @@ def read_checkpoint_quantization_config(weights_dir: str) -> Optional[Mapping[st
             payload = json.load(handle)
     except (OSError, UnicodeDecodeError, ValueError, RecursionError):
         return None
-    quant = payload.get("quantization_config") if isinstance(payload, dict) else None
-    return quant if isinstance(quant, dict) else None
+    # Valid JSON that is not an object (a list, a number) has no such key: None.
+    return quantization_config_of(payload)
 
 
 def dequantize_fp8_block(

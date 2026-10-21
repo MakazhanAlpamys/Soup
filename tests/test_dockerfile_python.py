@@ -12,7 +12,9 @@ real ``docker build`` is the only thing that proves the image runs):
 
 - the base image's own Python is inside ``requires-python``, which is read from
   ``pyproject.toml`` and not copied, so a bump of the range fails here until the base follows;
-- the Dockerfile refuses a Python outside the range before it downloads a wheel;
+- the Dockerfile refuses a Python outside the range before it downloads a wheel, and its
+  guard's floor and ceiling are ``requires-python``'s own, both read from ``pyproject.toml``
+  (a guard that is looser or tighter than the range is the same bug from the other side);
 - the install is ``soup-cli[...]==${SOUP_VERSION}`` from a build arg with no default, followed
   by a check that the package that landed is that version;
 - ``docker.yml`` derives ``SOUP_VERSION`` from the git tag and stops on any other ref.
@@ -195,11 +197,18 @@ class TestBaseImage:
         assert match, f"cannot read the range off the Python guard: {command}"
         low = (int(match.group(1)), int(match.group(2)))
         high = (int(match.group(3)), int(match.group(4)))
-        required_low, _required_high = _bounds(_requires_python())
-        assert low >= required_low, (
-            f"the guard admits Python {low[0]}.{low[1]} but requires-python "
+        required_low, required_high = _bounds(_requires_python())
+        assert low == required_low, (
+            f"the guard's floor is Python {low[0]}.{low[1]} but requires-python "
             f"'{_requires_python()}' starts at {required_low[0]}.{required_low[1]}: "
-            "raise the guard's floor with it"
+            "a guard below it admits a Python pip would not install for, one above it refuses "
+            "a Python the package supports; move the guard with the range"
+        )
+        assert high == required_high, (
+            f"the guard's ceiling is Python {high[0]}.{high[1]} (excluded) but requires-python "
+            f"'{_requires_python()}' stops below {required_high[0]}.{required_high[1]}: "
+            "a guard above it admits a Python soup-cli does not support and pip would quietly "
+            "install an older release; move the guard with the range"
         )
         assert low <= _base_python(_base_image()) < high, (
             "the guard rejects the Python the base image ships, so every build would fail"

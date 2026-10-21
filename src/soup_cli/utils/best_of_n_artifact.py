@@ -120,6 +120,9 @@ def _validate_sampler(sampler: Any) -> dict:
         or len(model) > 256
         or os.path.isabs(model)
         or ntpath.isabs(model)
+        # By name, not only through isabs: Python 3.13 no longer calls a rooted path
+        # without a drive ("/x", "\x") absolute on Windows, and 3.11-3.12 do.
+        or model.startswith(("/", "\\"))
         or "\\" in model
         or model.startswith(("./", "../", "~/"))
     ):
@@ -154,6 +157,8 @@ def _validate_sampler(sampler: Any) -> dict:
             or len(revision) > 256
             or os.path.isabs(revision)
             or ntpath.isabs(revision)
+            # As for the model: a rooted path without a drive is not absolute on 3.13.
+            or revision.startswith(("/", "\\"))
             or "\\" in revision
             or revision.startswith(("./", "../", "~/"))
         ):

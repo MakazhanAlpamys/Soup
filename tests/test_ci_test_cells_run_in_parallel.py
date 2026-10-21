@@ -9,8 +9,8 @@ clean:
 * `-n logical` with the plugin's `psutil` extra installed, which is what counts the CPUs;
 * nothing in `pyproject.toml` turns workers on, so a local `pytest tests/` stays serial.
 
-pyproject is read with regular expressions, not ``tomllib``, which is 3.11+ while this
-repository supports 3.10: the convention of ``tests/test_requires_python_bound.py``.
+pyproject is read with regular expressions, not ``tomllib``: the convention of
+``tests/test_requires_python_bound.py``, set while the floor was 3.10, which has no ``tomllib``.
 """
 
 from __future__ import annotations
@@ -29,9 +29,11 @@ PYPROJECT = ROOT / "pyproject.toml"
 CONTRIBUTING = ROOT / "CONTRIBUTING.md"
 
 RUN_STEP = "Run unit tests with coverage"
-# 2026-10-19: every cell but ubuntu / 3.10 runs this one, with `--no-cov`. Coverage is
-# measured in one cell (tests/test_ci_full_matrix_on_approval.py::TestCoverageIsMeasuredInOneCell);
-# the parallelism pins below hold for both steps, because most cells now run the second.
+# 2026-10-19: every cell but ubuntu / 3.11 (3.10 until #1805) runs this one, with
+# `--no-cov`; 2026-10-21: so does every cell of a pull-request run, ubuntu / 3.11 included.
+# Coverage is measured in one cell of a run that is not a pull request
+# (tests/test_ci_full_matrix_on_approval.py::TestCoverageIsMeasuredInOneCell); the
+# parallelism pins below hold for both steps, because most cells now run the second.
 NO_COV_STEP = "Run unit tests without coverage"
 RUN_STEPS = (RUN_STEP, NO_COV_STEP)
 INSTALL_STEP = "Install dependencies"

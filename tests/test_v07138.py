@@ -494,10 +494,9 @@ class TestShipLiveHeadline:
     def _run(self, monkeypatch, base_gen, tuned_gen, extra_args=None, want_verdict=False):
         import json as _json
 
-        from typer.testing import CliRunner
-
         from soup_cli.cli import app
         from soup_cli.commands import ship as ship_cmd
+        from tests.cli_runner import CliRunner
 
         # Inject deterministic generators (no model load).
         monkeypatch.setattr(
@@ -604,9 +603,8 @@ class TestExitCodeTaxonomy:
     can tell a config typo from a caught regression."""
 
     def _invoke(self, args):
-        from typer.testing import CliRunner
-
         from soup_cli.cli import app
+        from tests.cli_runner import CliRunner
 
         return CliRunner().invoke(app, ["ship", *args])
 
