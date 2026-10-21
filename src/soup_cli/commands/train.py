@@ -17,13 +17,19 @@ from rich.panel import Panel
 
 from soup_cli.config.loader import load_config
 from soup_cli.data.loader import (
+    PREFERENCE_PAIR_TASKS,
     data_config_for_task,
     load_dataset,
     task_preserves_source_columns,
 )
 from soup_cli.monitoring.display import TrainingDisplay
 from soup_cli.trainer.classifier import CLASSIFICATION_TASKS
-from soup_cli.utils.gpu import detect_device, get_gpu_info, resolve_quantization
+from soup_cli.utils.gpu import (
+    configure_mps_async_load,
+    detect_device,
+    get_gpu_info,
+    resolve_quantization,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - type hints only, no runtime import
     from soup_cli.config.schema import SoupConfig
@@ -259,6 +265,35 @@ def _validate_csm_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
         raise typer.Exit(1) from exc
 
 
+def _validate_preference_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
+    """Reject a lossy format choice before constructing any preference trainer."""
+    if cfg.task not in PREFERENCE_PAIR_TASKS:
+        return
+    from soup_cli.data.loader import last_load_outcome
+
+    required = {"prompt", "chosen", "rejected"}
+    outcome = last_load_outcome()
+    fmt = outcome.fmt or cfg.data.format
+    for split in ("train", "val"):
+        rows = dataset.get(split, [])
+        for index, row in enumerate(rows, 1):
+            if isinstance(row, dict) and required.issubset(row):
+                continue
+            console.print(
+                f"[red]Invalid {cfg.task} dataset:[/] {split} row {index} loaded as "
+                f"format {markup_escape(repr(fmt))} lacks prompt, chosen or rejected. "
+                "Use data.format: dpo with preference-pair rows."
+            )
+            raise typer.Exit(1)
+    if not dataset.get("train") and outcome.first_drop is not None:
+        console.print(
+            f"[red]No training rows:[/] preference data loaded as format "
+            f"{markup_escape(repr(fmt))} must provide prompt, chosen and rejected. "
+            "Use data.format: dpo with preference-pair rows."
+        )
+        raise typer.Exit(1)
+
+
 def _refuse_empty_train(dcfg, dataset) -> None:
     """Stop a run whose data loaded zero training rows (#1217).
 
@@ -305,9 +340,8 @@ def _build_hardware_fit_input(cfg):
     ``"auto"``, unknown model size, unsupported quant, out-of-range dims), in
     which case the caller skips the gate rather than guess.
     """
-    from soup_cli.trainer.sft import is_full_finetune
     from soup_cli.utils.gpu import model_size_from_name
-    from soup_cli.utils.hardware_fit import HardwareFitInput
+    from soup_cli.utils.hardware_fit import HardwareFitInput, resolve_peft_mode
 
     tcfg = cfg.training
     bs = getattr(tcfg, "batch_size", None)
@@ -322,41 +356,7 @@ def _build_hardware_fit_input(cfg):
     quant = _HW_FIT_QUANT.get(str(getattr(tcfg, "quantization", "none") or "none"))
     if quant is None:
         return None
-    task = getattr(cfg, "task", None)
-    if quant == "4bit":
-        peft = "qlora"
-    elif task == "prm" or (
-        task in CLASSIFICATION_TASKS
-        and not (tcfg.classifier_lora and tcfg.lora.r > 0)
-    ) or (task == "asr" and not (tcfg.asr_lora and tcfg.lora.r > 0)):
-        # #795: these trainers decide full fine-tuning themselves -- PRM always,
-        # the classifier family and ASR unless their own LoRA opt-in is on
-        # (classifier.py:262, asr.py::_should_use_lora). Budgeting them as LoRA
-        # under-predicts, the unsafe direction.
-        peft = "full"
-    elif is_full_finetune(tcfg):
-        # #471 — was an independent, hand-maintained check
-        # (unfrozen_parameters / freeze_layers / freeze_ratio) that had
-        # drifted from sft.py's real full-FT decision in BOTH directions:
-        # it missed lisa_enabled/lora.r==0 (under-predicting VRAM for those
-        # runs) and treated bare freeze_layers/freeze_ratio as sufficient on
-        # its own even with lora.r>0 still on (over-predicting — and able to
-        # falsely refuse a launch that would fit, since freeze_layers/
-        # freeze_ratio only reduce what's trainable WITHIN LoRA or full-FT,
-        # they don't select the mode). Now shares is_full_finetune with
-        # sft.py's SFTTrainerWrapper._resolve_load_dtype so the two cannot
-        # disagree again.
-        #
-        # #377 — lisa_train_embeddings=false freezes the always-on group and
-        # lowers real VRAM, but LISA stays "full" here on purpose: the analytical
-        # predictor has no measured constant for the frozen-embeddings trainable
-        # set, and over-predicting is the safe failure (under-predicting is a
-        # silent WDDM spill on Windows). A frozen-embeddings run that would fit
-        # can therefore still be refused by pre-flight; --allow-oom-attempt is
-        # the documented bypass, and crediting the saving is a hardware follow-up.
-        peft = "full"
-    else:
-        peft = "lora"
+    peft = resolve_peft_mode(cfg, quant=quant)
     optimizer = str(getattr(tcfg, "optimizer", "adamw_torch") or "adamw_torch")
     if optimizer not in _HW_FIT_OPTIMIZERS:
         optimizer = "adamw_torch"
@@ -1471,6 +1471,8 @@ def train(
     device, device_name = detect_device(backend=cfg.backend)
     gpu_info = get_gpu_info(backend=cfg.backend)
 
+    configure_mps_async_load(device)
+
     # Quantization guard: explicit decision per #423.  See resolve_quantization()
     # docstring for the full rationale — MLX 4-bit uses pre-quantized mlx-community
     # weights (not bitsandbytes NF4), CPU cannot run bitsandbytes at all.
@@ -1743,6 +1745,7 @@ def train(
             data_config_for_task(run_data_config, cfg.task),
             preserve_source_columns=task_preserves_source_columns(cfg.task),
         )
+        _validate_preference_dataset_if_applicable(cfg, dataset)
         _refuse_empty_train(cfg.data, dataset)
         _validate_classification_dataset_if_applicable(cfg, dataset)
         _validate_csm_dataset_if_applicable(cfg, dataset)
@@ -1754,6 +1757,11 @@ def train(
         console.print("[green]Config valid. Ready to train![/]")
         raise typer.Exit()
 
+    # Capture the source before loading/transformation, never at verdict/registration time.
+    from soup_cli.utils.training_identity import capture_training_data_hash
+
+    training_data_sha256 = capture_training_data_hash(cfg)
+
     # Load data
     console.print("[dim]Loading dataset...[/]")
     if val_notice:
@@ -1762,6 +1770,7 @@ def train(
         data_config_for_task(run_data_config, cfg.task),
         preserve_source_columns=task_preserves_source_columns(cfg.task),
     )
+    _validate_preference_dataset_if_applicable(cfg, dataset)
     _refuse_empty_train(cfg.data, dataset)
     _validate_classification_dataset_if_applicable(cfg, dataset)
     _validate_csm_dataset_if_applicable(cfg, dataset)
@@ -1777,6 +1786,7 @@ def train(
     from soup_cli.experiment.tracker import ExperimentTracker
 
     tracker = ExperimentTracker()
+    run_base = cfg.base
     experiment_name = cfg.experiment_name or name
     run_id = tracker.start_run(
         config_dict=cfg.model_dump(),
@@ -1790,6 +1800,7 @@ def train(
     # _reconcile_orphaned_run to ever notice the process is gone — the
     # rescue path #401 built for MCP-spawned runs was otherwise inert here.
     tracker.mark_running(run_id, pid=os.getpid())
+    tracker.record_training_data_hash(run_id, training_data_sha256)
     console.print(f"[dim]Run ID: {run_id}[/]")
 
     try:
@@ -1878,9 +1889,26 @@ def train(
         # to keep separate chains and sweep's copy fell ten tasks and the MLX
         # route behind. See soup_cli/trainer/dispatch.py.
         from soup_cli.trainer.dispatch import build_trainer
+        from soup_cli.utils.launcher import is_in_distributed
+        from soup_cli.utils.run_provenance import BaseRevision, base_revision_scope
 
-        trainer_wrapper = build_trainer(cfg, **trainer_kwargs)
-        trainer_wrapper.setup(dataset)
+        base_identity = BaseRevision(
+            run_base,
+            binding_supported=(cfg.backend == "transformers" and hub_name == "hf"
+                               and not cfg.training.stream_layers and not is_in_distributed()),
+        )
+        with base_revision_scope(base_identity):
+            trainer_wrapper = build_trainer(cfg, **trainer_kwargs)
+            trainer_wrapper.setup(dataset)
+        tracker.record_base_revision(
+            run_id, revision=base_identity.revision, source=base_identity.source,
+        )
+        if base_identity.source == "hub_commit":
+            console.print(f"[dim]Base revision: {base_identity.revision} (bound Hub commit)[/]")
+        elif base_identity.source == "cache_path":
+            console.print("[dim]Base revision: cache-path metadata; local bytes are unverified[/]")
+        else:
+            console.print("[dim]Base revision: unknown (existing loading behavior preserved)[/]")
 
         # #350 — PEFT promotes newly-created adapters to fp32. FSDP cannot flatten
         # those beside bf16/float16 BNB storage, so align every trainable floating
@@ -1963,7 +1991,7 @@ def train(
         raise
 
     try:
-        with profiler_ctx as profiler, energy_ctx:
+        with profiler_ctx as profiler, energy_ctx, base_revision_scope(base_identity):
             if profile_run and profiler is not None:
                 from soup_cli.utils.profiling import attach_profile_callback
 
@@ -1976,6 +2004,19 @@ def train(
                 display=display, tracker=tracker, run_id=run_id,
                 resume_from_checkpoint=resume_from,
             )
+
+        from soup_cli.utils.run_provenance import write_run_provenance
+
+        tracker.record_base_revision(
+            run_id, revision=base_identity.revision, source=base_identity.source,
+        )
+        # Only the saving rank writes portable metadata beside the final artifact.
+        if _should_run_diagnose_gate_on_rank():
+            metadata = base_identity.metadata(run_id)
+            recorded_run = tracker.get_run(run_id)
+            if isinstance(recorded_run, dict):
+                metadata["training_data_sha256"] = recorded_run.get("training_data_sha256")
+            write_run_provenance(result["output_dir"], metadata)
 
         # Save completion to tracker
         tracker.finish_run(

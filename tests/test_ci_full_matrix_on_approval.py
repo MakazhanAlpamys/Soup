@@ -9,9 +9,11 @@ four matrices by event:
   -- the release checklist needs all of them green on the tagged commit;
 * FULL, the same minus Windows and macOS on 3.11, for the nightly run on ``main``
   and a manual dispatch;
-* APPROVAL, the four cells branch protection requires (the oldest and the newest
-  Python on ubuntu, the newest on Windows and macOS), for pull requests a
-  maintainer has labelled ``ci:full``;
+* APPROVAL, the four cells branch protection requires (the oldest Python and the
+  newest one a pull request runs on ubuntu, that newest on Windows and macOS), for
+  pull requests a maintainer has labelled ``ci:full``. Since #1805 the support
+  matrix also lists 3.13, which FULL and RELEASE run on every OS and no
+  pull-request run does;
 * QUICK, ``test (ubuntu-latest, 3.12)`` alone, for a push to ``main`` and for any
   other pull-request run.
 
@@ -75,12 +77,23 @@ GATED_JOBS = (
     "torchao-contract",
     "pytorch-smoke",
     "transformers-floor",
+    "core-floor",
 )
+#: The two gated jobs that are not required checks and never fail the build: they run in the
+#: nightly, manual and release runs but not on a pull request, approval run included
+#: (2026-10-19: 206 pull-request runs in 7 days, 480 job-minutes, for a signal that is not a
+#: merge gate). The other four gated jobs run on a pull request at approval.
+PR_SKIPPED_JOBS = ("type-check", "torchao-contract")
+PR_SKIP = "github.event_name != 'pull_request'"
 #: The support matrix: what RELEASE runs, and what requires-python must match.
 SUPPORT_MATRIX = {
     "os": ["ubuntu-latest", "windows-latest", "macos-latest"],
-    "python-version": ["3.10", "3.11", "3.12"],
+    "python-version": ["3.11", "3.12", "3.13"],
 }
+#: The Pythons of the support matrix that no pull-request run tests (#1805, 2026-10-21):
+#: 3.13 runs on every OS in FULL and RELEASE, and QUICK and APPROVAL stay on 3.12, so a new
+#: interpreter cannot turn every open pull request red at once. Only the newest may be here.
+NIGHTLY_ONLY_PYTHONS = ("3.13",)
 #: What FULL leaves out of it. 3.11 still runs on ubuntu in every full run.
 FULL_EXCLUDE = (
     {"os": "windows-latest", "python-version": "3.11"},
@@ -88,8 +101,8 @@ FULL_EXCLUDE = (
 )
 #: What APPROVAL leaves out of its two Pythons: the oldest runs on ubuntu only.
 APPROVAL_EXCLUDE = (
-    {"os": "windows-latest", "python-version": "3.10"},
-    {"os": "macos-latest", "python-version": "3.10"},
+    {"os": "windows-latest", "python-version": "3.11"},
+    {"os": "macos-latest", "python-version": "3.11"},
 )
 QUICK_MATRIX = {"os": ["ubuntu-latest"], "python-version": ["3.12"]}
 #: The four ``test`` contexts a merge waits on: what APPROVAL runs, and what branch
@@ -98,9 +111,11 @@ QUICK_MATRIX = {"os": ["ubuntu-latest"], "python-version": ["3.12"]}
 #: repos/MakazhanAlpamys/Soup/branches/main/protection``, it still listed the seven
 #: cells of FULL; the three in NIGHTLY_ONLY_CONTEXTS come off it right after this
 #: change merges, never before. A cell named any other way is a context nobody waits on.
+#: #1805 (2026-10-21) swapped ``test (ubuntu-latest, 3.10)`` for ``test (ubuntu-latest,
+#: 3.11)``: branch protection swaps them when it merges.
 REQUIRED_TEST_CONTEXTS = frozenset(
     {
-        "test (ubuntu-latest, 3.10)",
+        "test (ubuntu-latest, 3.11)",
         "test (ubuntu-latest, 3.12)",
         "test (windows-latest, 3.12)",
         "test (macos-latest, 3.12)",
@@ -110,9 +125,9 @@ REQUIRED_TEST_CONTEXTS = frozenset(
 #: failure that exists on one of them alone shows on ``main`` the next night.
 NIGHTLY_ONLY_CONTEXTS = frozenset(
     {
-        "test (ubuntu-latest, 3.11)",
-        "test (windows-latest, 3.10)",
-        "test (macos-latest, 3.10)",
+        "test (ubuntu-latest, 3.13)",
+        "test (windows-latest, 3.13)",
+        "test (macos-latest, 3.13)",
     }
 )
 #: The two cells only a push to ``release/**`` runs. Not required, so not a merge gate.
@@ -219,6 +234,15 @@ def _rules(entries: Any) -> list[tuple[tuple[str, Any], ...]]:
 
 def _version(text: str) -> tuple[int, ...]:
     return tuple(int(part) for part in text.split("."))
+
+
+def _gated_pythons() -> list[str]:
+    """The support matrix's Pythons that a pull-request run may test."""
+    return [
+        python
+        for python in SUPPORT_MATRIX["python-version"]
+        if python not in NIGHTLY_ONLY_PYTHONS
+    ]
 
 
 # --- A small evaluator for the GitHub expressions these tests need -----------
@@ -571,6 +595,26 @@ class TestTriggers:
     def test_pushes_to_main_and_release_branches_still_trigger(self):
         assert _triggers()["push"]["branches"] == ["main", "release/**"]
 
+    def test_a_push_that_only_touches_docs_starts_no_run(self):
+        """2026-10-19: 15 of 131 pushes to main in a week were docs-only credit commits, each
+        a quick run of about 20 runner-minutes. The filter is `paths-ignore`, so any push that
+        also touches one other path still runs, and it is exactly these four."""
+        push = _triggers()["push"]
+        assert push["paths-ignore"] == [
+            "docs/**",
+            "changelog.d/**",
+            "CONTRIBUTORS.md",
+            "CONTRIBUTING.md",
+        ]
+        assert "paths" not in push, "an allow-list would skip every path it forgot"
+
+    def test_a_pull_request_is_never_path_filtered(self):
+        """Every required context must report on every pull request: a filter on the pull_request
+        trigger would leave a docs-only pull request with "Expected" checks and no merge."""
+        pull_request = _triggers()["pull_request"]
+        for key in ("paths", "paths-ignore", "branches-ignore"):
+            assert key not in pull_request, key
+
     def test_the_nightly_full_run_and_the_manual_dispatch_exist(self):
         """A push to main runs only the quick set, so the full matrix on main has to come
         from somewhere: without these two the seven-cell run would never happen on main."""
@@ -592,6 +636,8 @@ class TestPlanDecision:
             "full": "${{ steps.decide.outputs.full }}",
             "matrix": "${{ steps.decide.outputs.matrix }}",
             "constraints": "${{ steps.decide.outputs.constraints }}",
+            # 2026-10-20: tests/test_ci_docs_only_fast_path.py pins how it is computed.
+            "docs_only": "${{ steps.docs.outputs.docs_only }}",
         }
 
     @pytest.mark.parametrize(("context", "kind"), EVENTS)
@@ -623,7 +669,24 @@ class TestGatedJobs:
     def test_the_smoke_and_contract_jobs_run_only_on_a_full_run(self, name):
         job = _jobs()[name]
         assert "plan" in _needs(job), f"{name} does not need plan"
-        assert job.get("if") == GATE, f"{name} is not gated on plan's decision"
+        expected = f"{GATE} && {PR_SKIP}" if name in PR_SKIPPED_JOBS else GATE
+        assert job.get("if") == expected, f"{name} is not gated on plan's decision"
+
+    @pytest.mark.parametrize(("context", "kind"), EVENTS)
+    @pytest.mark.parametrize("name", GATED_JOBS)
+    def test_which_gated_jobs_start_for_each_kind_of_run(self, name, context, kind):
+        """The two jobs that are not required checks run in the nightly, manual and release
+        runs only; the other four also run at approval; nothing runs for a quick run."""
+        full = kind in ("RELEASE", "FULL", "APPROVAL")
+        decided = {"needs": {"plan": {"outputs": {"full": "true" if full else "false"}}}}
+        expected = full and not (name in PR_SKIPPED_JOBS and kind == "APPROVAL")
+        assert _runs(name, {**context, **decided}) is expected, (name, kind)
+
+    def test_nothing_depends_on_the_two_jobs_a_pull_request_skips(self):
+        """A job that needs a skipped one is skipped with it, so nothing may wait on them."""
+        for name, job in _jobs().items():
+            for skipped in PR_SKIPPED_JOBS:
+                assert skipped not in _needs(job), f"{name} needs {skipped}"
 
     def test_lint_waits_for_nothing_and_skips_only_a_draft(self):
         lint = _jobs()["lint"]
@@ -664,7 +727,7 @@ class TestMatrix:
         # such as {"python-version": "3.11"} would drop the ubuntu cell too).
         assert _cells(_matrix("RELEASE_MATRIX")) - _cells(full) == RELEASE_ONLY_CONTEXTS
 
-    def test_approval_is_the_oldest_and_newest_python_with_the_oldest_on_ubuntu_only(self):
+    def test_approval_is_the_oldest_and_newest_gated_python_with_the_oldest_on_ubuntu_only(self):
         approval = _matrix("APPROVAL_MATRIX")
         assert list(approval) == ["os", "python-version", "exclude"], (
             "the key order names the checks"
@@ -673,9 +736,27 @@ class TestMatrix:
         pythons = SUPPORT_MATRIX["python-version"]
         assert approval["python-version"] == [
             min(pythons, key=_version),
-            max(pythons, key=_version),
+            max(_gated_pythons(), key=_version),
         ]
         assert _rules(approval["exclude"]) == _rules(APPROVAL_EXCLUDE)
+
+    def test_the_nightly_only_python_is_the_newest_and_runs_on_every_os_each_night(self):
+        """#1805: 3.13 joined the support matrix without joining the pull-request gate. That
+        holds only while every nightly run tests it on every OS, and only for the newest
+        Python: an ungated floor would let a pull request break the oldest one unseen."""
+        gated = _gated_pythons()
+        assert gated, "no Python is left for a pull-request run to test"
+        assert set(NIGHTLY_ONLY_PYTHONS) <= set(SUPPORT_MATRIX["python-version"])
+        for python in NIGHTLY_ONLY_PYTHONS:
+            assert _version(python) > max(_version(each) for each in gated), python
+            nightly = {
+                cell["os"]
+                for cell in _cell_dicts(_matrix("FULL_MATRIX"))
+                if cell["python-version"] == python
+            }
+            assert nightly == set(SUPPORT_MATRIX["os"]), (python, nightly)
+            for name in ("APPROVAL_MATRIX", "QUICK_MATRIX"):
+                assert python not in _matrix(name)["python-version"], (name, python)
 
     def test_approval_names_exactly_the_required_test_contexts(self):
         assert _cells(_matrix("APPROVAL_MATRIX")) == REQUIRED_TEST_CONTEXTS
@@ -688,14 +769,13 @@ class TestMatrix:
             REQUIRED_TEST_CONTEXTS | NIGHTLY_ONLY_CONTEXTS | RELEASE_ONLY_CONTEXTS
         )
 
-    def test_the_quick_matrix_is_the_newest_python_on_ubuntu(self):
+    def test_the_quick_matrix_is_the_newest_gated_python_on_ubuntu(self):
         quick = _matrix("QUICK_MATRIX")
         assert quick == QUICK_MATRIX
         assert list(quick) == ["os", "python-version"]
         names = _cells(quick)
         assert len(names) == 1 and names <= REQUIRED_TEST_CONTEXTS
-        support_pythons = SUPPORT_MATRIX["python-version"]
-        assert quick["python-version"] == [max(support_pythons, key=_version)]
+        assert quick["python-version"] == [max(_gated_pythons(), key=_version)]
 
     @pytest.mark.parametrize("name", MATRIX_NAMES)
     def test_the_matrix_literals_are_single_lines(self, name):
@@ -1013,7 +1093,7 @@ class TestPinnedUpstream:
         """A new job that installs `.[dev]` on its own resolves the newest release on
         every pull request, which is the failure this switch removed."""
         installing = {name for name, job in _jobs().items() if _project_installs(job)}
-        assert installing == {*SWITCHED_JOBS, FLOOR_JOB}
+        assert installing == {*SWITCHED_JOBS, FLOOR_JOB, "core-floor"}
 
     def test_no_environment_variable_constrains_a_job_behind_its_command_line(self):
         """`PIP_CONSTRAINT` in an `env:` applies to every pip of that job on every run,
@@ -1070,6 +1150,8 @@ UNPINNED_ON_PURPOSE = {
     ("merge-freshness.yml", "reeval-open-prs"): TOOL,
     ("publish.yml", "publish"): TOOL,
     # CORE: the project with no extra, so no torch and no transformers to pin.
+    # Its separate core-floor constraints are checked by test_core_dependency_floors.py.
+    (CI.name, "core-floor"): CORE,
     ("codspeed.yml", "benchmark"): CORE,
     # NEWEST: started by a schedule or by hand, never by a pull request or a push, and
     # there to meet the newest release.
@@ -1421,6 +1503,12 @@ class TestADraftRunsNothing:
             assert not _STATUS_FUNCTION.search(condition), f"{name}: {condition}"
 
 
+#: Every step of the `test` job also asks `env.RUN_SUITE`, the job's own switch for a cell that
+#: does nothing in a docs-only pull request (2026-10-20; tests/test_ci_docs_only_fast_path.py).
+#: Here it is the ordinary case, a cell that works.
+WORKING_CELL = {"env": {"RUN_SUITE": "true"}}
+
+
 class TestCoverageUpload:
     def test_one_cell_of_every_gated_run_uploads_and_a_quick_run_uploads_nothing(self):
         """The upload is pinned to one cell. Pinned to a cell the approval run does not
@@ -1434,12 +1522,90 @@ class TestCoverageUpload:
             return [
                 cell
                 for cell in _cell_dicts(_matrix(name))
-                if _truthy(_Expression(condition, {"matrix": cell}).value())
+                if _truthy(_Expression(condition, {"matrix": cell, **WORKING_CELL}).value())
             ]
 
         for name in ("APPROVAL_MATRIX", "FULL_MATRIX", "RELEASE_MATRIX"):
             assert len(uploading(name)) == 1, (name, uploading(name))
         assert uploading("QUICK_MATRIX") == []
+
+
+COVERAGE_STEP = "Run unit tests with coverage"
+NO_COVERAGE_STEP = "Run unit tests without coverage"
+#: The one cell that measures coverage, enforces the floor and uploads the report: ubuntu on
+#: the oldest supported Python (3.10 until #1805).
+COVERAGE_CELL = {"os": "ubuntu-latest", "python-version": "3.11"}
+ALL_MATRICES = ("RELEASE_MATRIX", "FULL_MATRIX", "APPROVAL_MATRIX", "QUICK_MATRIX")
+
+
+def _test_step(name: str) -> dict[str, Any]:
+    steps = [step for step in _jobs()["test"]["steps"] if step.get("name") == name]
+    assert len(steps) == 1, (name, steps)
+    return steps[0]
+
+
+def _cells_running(step: dict[str, Any], matrix: str) -> list[dict[str, str]]:
+    condition = str(step.get("if", "true"))
+    return [
+        cell
+        for cell in _cell_dicts(_matrix(matrix))
+        if _truthy(_Expression(condition, {"matrix": cell, **WORKING_CELL}).value())
+    ]
+
+
+class TestCoverageIsMeasuredInOneCell:
+    """2026-10-19: coverage is measured in ubuntu / 3.11 only (3.10 until #1805), the cell
+    that uploads it. The floor is enforced there; every other cell runs the suite with
+    `--no-cov`."""
+
+    @pytest.mark.parametrize("matrix", ("RELEASE_MATRIX", "FULL_MATRIX", "APPROVAL_MATRIX"))
+    def test_every_gated_run_measures_coverage_in_exactly_the_uploading_cell(self, matrix):
+        assert _cells_running(_test_step(COVERAGE_STEP), matrix) == [COVERAGE_CELL]
+        assert _cells_running(_test_step("Upload coverage to Codecov"), matrix) == [COVERAGE_CELL]
+
+    def test_a_quick_run_measures_no_coverage_and_so_does_not_check_the_floor(self):
+        """Known and accepted: the quick run has no ubuntu / 3.11 cell. The approval run a
+        merge waits for has it, and so does the nightly run."""
+        assert _cells_running(_test_step(COVERAGE_STEP), "QUICK_MATRIX") == []
+
+    @pytest.mark.parametrize("matrix", ALL_MATRICES)
+    def test_every_cell_runs_the_suite_exactly_once(self, matrix):
+        """A cell that ran neither step would test nothing; one that ran both would run the
+        suite twice. The two conditions are opposites."""
+        with_coverage = _cells_running(_test_step(COVERAGE_STEP), matrix)
+        without = _cells_running(_test_step(NO_COVERAGE_STEP), matrix)
+        cells = _cell_dicts(_matrix(matrix))
+        assert len(with_coverage) + len(without) == len(cells), matrix
+        assert not [cell for cell in with_coverage if cell in without], matrix
+        assert sorted(with_coverage + without, key=str) == sorted(cells, key=str), matrix
+
+    def test_the_coverage_step_measures_and_the_other_one_does_not(self):
+        measured = shlex.split(str(_test_step(COVERAGE_STEP)["run"]))
+        assert "--cov=soup_cli" in measured
+        assert "--cov-report=xml:coverage.xml" in measured  # the Codecov upload sends it
+        assert "--no-cov" not in measured
+        unmeasured = shlex.split(str(_test_step(NO_COVERAGE_STEP)["run"]))
+        assert "--no-cov" in unmeasured
+        assert not [arg for arg in unmeasured if arg.startswith("--cov")], unmeasured
+
+    def test_the_floor_is_left_to_pyproject_and_the_measuring_step_does_not_switch_it_off(self):
+        """`--cov-fail-under` lives in `addopts`: dropping it, or a `-o addopts=` / `-p no:cov`
+        / `--cov-fail-under=0` on the measuring step, would measure coverage and enforce nothing."""
+        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        addopts = re.search(r'^addopts\s*=\s*"(.*)"\s*$', pyproject, re.M)
+        assert addopts is not None
+        assert "--cov-fail-under=77" in shlex.split(addopts.group(1)), addopts.group(1)
+        measured = str(_test_step(COVERAGE_STEP)["run"])
+        for switch in ("addopts", "no:cov", "--cov-fail-under", "--no-cov"):
+            assert switch not in measured, switch
+
+    @pytest.mark.parametrize("step", (COVERAGE_STEP, NO_COVERAGE_STEP))
+    def test_both_steps_still_write_what_later_steps_read(self, step):
+        """The nightly test-count badge reads report.xml from ubuntu / 3.11, which runs the
+        measuring step since #1805 and ran the unmeasured one before: `--junitxml` stays in
+        both, so moving the badge or the coverage cell cannot leave it without a report."""
+        args = shlex.split(str(_test_step(step)["run"]))
+        assert "--junitxml=report.xml" in args, step
 
 
 def _contributing() -> str:

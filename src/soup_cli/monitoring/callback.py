@@ -632,16 +632,15 @@ class _SoupTrainerCallback_body:  # noqa: N801
         Best-effort: errors are logged but never crash training.
         """
         import json
+        import math
         from pathlib import Path
 
         if self._spike_strategy is None:
             return
-        attempts = self._spike_recovery_attempts
         try:
             new_lr = self._spike_strategy.compute_new_lr(args.learning_rate)
         except ValueError:
             return
-        recover = self._spike_strategy.should_recover(attempts)
         out_dir = Path(self.output_dir or args.output_dir or ".")
         # Containment: never write outside cwd (matches v0.32.0 lr-finder /
         # autopilot / cans policy). Caller's output_dir is already validated
@@ -657,6 +656,24 @@ class _SoupTrainerCallback_body:  # noqa: N801
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
             hint_path = out_dir / "spike_recovery.json"
+            attempts = self._spike_recovery_attempts
+            if hint_path.exists() and attempts == 0:
+                try:
+                    data = json.loads(hint_path.read_text(encoding="utf-8"))
+                    if isinstance(data, dict) and "attempts" in data:
+                        raw = data["attempts"]
+                        if isinstance(raw, bool):
+                            pass
+                        elif isinstance(raw, float):
+                            if math.isfinite(raw):
+                                attempts = max(0, int(raw))
+                        elif isinstance(raw, int):
+                            attempts = max(0, raw)
+                        elif isinstance(raw, str):
+                            attempts = max(0, int(raw))
+                except (json.JSONDecodeError, ValueError, TypeError, OverflowError, OSError):
+                    pass
+            recover = self._spike_strategy.should_recover(attempts)
             hint_path.write_text(json.dumps({
                 "attempts": attempts + 1,
                 "max_attempts": self._spike_strategy.max_attempts,
@@ -666,10 +683,17 @@ class _SoupTrainerCallback_body:  # noqa: N801
                 "should_recover": recover,
             }, indent=2), encoding="utf-8")
             self._spike_recovery_attempts = attempts + 1
-            console.print(
-                f"[yellow]Spike recovery hint written:[/] {hint_path} "
-                f"(recommended_lr={new_lr:.2e}, should_recover={recover})"
-            )
+            if recover:
+                console.print(
+                    f"[yellow]Spike recovery hint written:[/] {hint_path} "
+                    f"(recommended_lr={new_lr:.2e}, should_recover={recover})"
+                )
+            else:
+                console.print(
+                    f"[yellow]Spike recovery hint written:[/] {hint_path} "
+                    f"(recommended_lr={new_lr:.2e}, should_recover=False, "
+                    f"max attempts {self._spike_strategy.max_attempts} reached)"
+                )
         except OSError as exc:
             logger.warning("Failed to write spike recovery hint: %s", exc)
 

@@ -164,7 +164,11 @@ def test_router_correction_bias_stays_fp32_under_a_bf16_stream(tmp_path):
 @pytest.mark.parametrize("fp8_key", ["weight", "scale"])
 def test_fp8_checkpoint_is_refused_before_anything_is_written(tmp_path, fp8_key):
     """DeepSeek-V3 / Kimi K2 publish FP8 weights plus ``weight_scale_inv`` block
-    scales. A cast would keep the raw e4m3 values and drop the scales."""
+    scales. A cast would keep the raw e4m3 values and drop the scales, so an FP8
+    tensor or a block scale is accepted only as that block format, declared by
+    ``config.json`` (and then dequantised at shard time, see
+    ``tests/test_fp8_block_streaming.py``). This checkpoint has no config, so either
+    spelling is refused naming the supported format."""
     import torch
     from safetensors.torch import save_file
 
@@ -184,8 +188,9 @@ def test_fp8_checkpoint_is_refused_before_anything_is_written(tmp_path, fp8_key)
     else:
         state["model.layers.0.self_attn.o_proj.weight_scale_inv"] = torch.ones(1, 1)
     save_file(state, str(weights / "model.safetensors"))
-    with pytest.raises(ValueError, match="Dequantise the checkpoint to bf16 first"):
+    with pytest.raises(ValueError, match="Dequantise this checkpoint to bf16 first") as caught:
         shard_checkpoint(str(weights), str(tmp_path / "s"), dtype="bfloat16", arch="deepseek_v3")
+    assert "declares no FP8 quantization_config" in str(caught.value)
     assert not (tmp_path / "s" / "index.json").exists()
 
 
@@ -282,6 +287,37 @@ def test_setup_hands_the_config_layer_count_to_the_sharder_for_deepseek_v3_only(
     )
     assert len(calls) == 1
     assert calls[0]["num_hidden_layers"] == expected
+
+
+def test_streamed_model_is_built_from_native_code_while_the_tokenizer_trusts_remote(
+    tmp_path, monkeypatch
+):
+    """Moonlight-16B (deepseek_v3) ships its tokenizer only as remote code, and its
+    remote modelling code keeps one module per expert, which the stacked shards do
+    not fit. So the tokenizer gets the user's trust_remote_code and the model side
+    (config, skeleton, install) never does."""
+    from tests.test_issue602_qwen4_ple_streaming import _drive_qwen4_streaming_setup
+
+    calls = {}
+    _drive_qwen4_streaming_setup(
+        tmp_path, monkeypatch, arch="deepseek_v3", model_cfg=_deepseek_setup_cfg(),
+        load_calls=calls, trust_remote_code=True,
+    )
+    assert [call["trust_remote_code"] for call in calls["tokenizer"]] == [True]
+    assert [call["trust_remote_code"] for call in calls["config"]] == [False]
+    assert [call["trust_remote_code"] for call in calls["build"]] == [False]
+
+
+def test_setup_meta_probe_is_built_from_native_code(monkeypatch):
+    """The NF4 / moe_lora probe in the setup: the same rule as the model itself."""
+    import soup_cli.utils.layer_stream_runtime as runtime
+    from soup_cli.trainer.stream_setup import StreamingSetupMixin
+
+    seen = []
+    monkeypatch.setattr(runtime, "build_meta_skeleton", lambda *a, **k: seen.append(k) or "probe")
+    probe = StreamingSetupMixin._stream_meta_skeleton("base", dtype="bfloat16", quant="nf4")
+    assert probe == "probe"
+    assert seen == [{"dtype": "bfloat16", "quant": "nf4", "trust_remote_code": False}]
 
 
 def test_planner_fingerprints_config_json_for_deepseek_v3(tmp_path, monkeypatch):

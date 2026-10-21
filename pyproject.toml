@@ -11,13 +11,14 @@ license = "Apache-2.0"
 # Explicit, so the files that ship do not depend on hatchling's default globs (#1677).
 # An explicit list replaces the default: a file added later must be named here too.
 license-files = ["LICENSE", "NOTICE"]
-# Upper-bounded on purpose (#358). CI tests 3.10 / 3.11 / 3.12 and nothing above.
-# Without a ceiling, pip on 3.13+ resolves torch wheels nobody here has run, and
+# Upper-bounded on purpose (#358). CI tests 3.11 / 3.12 / 3.13 and nothing above;
+# 3.10 left with #1805 (end of life on 2026-10-01), when 3.13 joined.
+# Without a ceiling, pip on 3.14+ resolves torch wheels nobody here has run, and
 # the failure is not a Soup error message — it is a loader crash inside c10.dll /
 # libc10.so before any Soup code executes, so the user has nothing to act on.
 # `tests/test_requires_python_bound.py` derives this bound from the CI matrix, so
 # widening one without the other fails the suite.
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.11,<3.14"
 authors = [
     { name = "Makazhan Alpamys and the Soup contributors", email = "team@trysoup.dev" },
 ]
@@ -162,7 +163,7 @@ wandb = ["wandb>=0.15.0,<0.18.0"]
 # Self-references `[train]` so CI / contributors get the full training stack
 # (CI runs `pip install -e ".[dev]"`; without this every test would fail at
 # `import torch`).
-dev = ["soup-cli[train,mcp,data]", "jsonschema>=4.18", "cryptography>=41.0.0", "reportlab>=4.0.0", "pytest>=7.0", "ruff>=0.1.0", "pytest-cov>=4.0", "httpx>=0.24.0", "mypy>=1.8.0", "pre-commit>=3.5.0", "fastapi>=0.104.0"]
+dev = ["soup-cli[train,mcp,data]", "jsonschema>=4.18", "cryptography>=41.0.0", "reportlab>=4.0.0", "pytest>=7.0", "ruff>=0.1.0", "pytest-cov>=4.0", "pytest-timeout>=2.3.1", "httpx>=0.24.0", "mypy>=1.8.0", "pre-commit>=3.5.0", "fastapi>=0.104.0"]
 ui = ["fastapi>=0.104.0", "uvicorn>=0.24.0"]
 serve = ["fastapi>=0.104.0", "uvicorn>=0.24.0"]
 serve-fast = ["vllm>=0.4.3", "fastapi>=0.104.0", "uvicorn>=0.24.0"]
@@ -274,7 +275,7 @@ artifacts = [
 ]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 line-length = 100
 
 [tool.ruff.lint]
@@ -285,7 +286,7 @@ select = ["E", "F", "I", "N", "W"]
 # none of which ship complete stubs. This config surfaces type issues in our own
 # code without drowning in third-party `Any`s. The CI `type-check` job is
 # non-blocking; tighten incrementally as modules gain annotations.
-python_version = "3.10"
+python_version = "3.11"
 files = ["src/soup_cli"]
 ignore_missing_imports = true
 follow_imports = "silent"

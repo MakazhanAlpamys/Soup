@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:44c28c06ff7d2445391cfcc7cd483b096453a302085ff8ac52cb48fa79ce4da5 -->
+<!-- synced-from: README.md sha256:4675902b8ea66e77e0822a60fdc9d3205a11eb02fb70cdf3b5670bd9ef1af391 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -27,7 +27,7 @@
 <p align="center">
   <a href="https://pypi.org/project/soup-cli/"><img src="https://img.shields.io/pypi/v/soup-cli?color=blue" alt="PyPI"></a>
   <a href="https://pepy.tech/project/soup-cli"><img src="https://img.shields.io/pepy/dt/soup-cli?color=blue" alt="ダウンロード数"></a>
-  <img src="https://img.shields.io/badge/python-3.10--3.12-blue" alt="Python 3.10-3.12">
+  <img src="https://img.shields.io/badge/python-3.11--3.13-blue" alt="Python 3.11-3.13">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0 ライセンス">
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/MakazhanAlpamys/65fdc943f85f3b2c46ecddb415c2b779/raw/soup_tests.json" alt="テスト"></a>
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://github.com/MakazhanAlpamys/Soup/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -138,7 +138,7 @@ LLM の学習は、今でも骨の折れる作業です。経験豊富なチー�
 - **非推奨:** `soup export --format awq` と `--format gptq` は v0.77 で削除されます。どちらの
   上流プロジェクトもアーカイブ済みで、どちらの extra も `[train]` と一緒にはインストールできません。
 
-> Python は **3.10–3.12** のみ対応です。3.13 以降では、pip がテストされていない PyTorch の wheel を解決し、
+> Python は **3.11–3.13** のみ対応です。3.14 以降では、pip がテストされていない PyTorch の wheel を解決し、
 > Soup が動き出す前にネイティブ拡張の中でクラッシュしていました。
 
 過去のハイライトは [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) ページにあります。
@@ -345,8 +345,8 @@ docker compose up   # またはローカルでビルド
 
 ## 動作要件
 
-- Python 3.10、3.11、または 3.12（CI がテストしているバージョンです。PyTorch スタックがまだ検証されて
-  いないため、3.13 以降は未サポートです）
+- Python 3.11、3.12、または 3.13（CI がテストしているバージョンです。PyTorch スタックがまだ検証されて
+  いないため、3.14 以降は未サポートです）
 - CUDA 対応 GPU（推奨）、Apple Silicon（MPS）、または CPU（実験的 — 非常に遅い）
 - QLoRA で 7B モデルを扱うには 8 GB 以上の VRAM
 

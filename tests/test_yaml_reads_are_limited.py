@@ -11,13 +11,22 @@ that the refusal comes out in that reader's own contract.
 from __future__ import annotations
 
 import ast
+import json
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
-from soup_cli.utils.yaml_limits import MAX_YAML_NESTING, YamlLimitError
+from soup_cli.utils.yaml_limits import (
+    ALIAS_EXPANSION_SLACK,
+    MAX_YAML_NESTING,
+    YamlLimitError,
+    load_yaml_limited,
+)
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "soup_cli"
 
@@ -227,12 +236,43 @@ def test_the_limited_loader_is_where_the_scan_expects_it():
 # ---------------------------------------------------------------------------
 
 
-def _alias_fan_out(levels: int = 9) -> str:
+def _alias_fan_out(levels: int) -> str:
     """Lists that each reference the previous one ten times."""
     text = "l0: &a0 [" + ", ".join(["x"] * 10) + "]\n"
     for index in range(1, levels + 1):
         text += f"l{index}: &a{index} [" + ", ".join([f"*a{index - 1}"] * 10) + "]\n"
     return text
+
+
+def _fan_out_nodes(levels: int) -> int:
+    """Nodes in a tree walk of ``_alias_fan_out(levels)``, counted without walking it."""
+    list_nodes = 11  # l0: itself and its ten items
+    total = 1 + (levels + 1) + list_nodes  # the root mapping, its keys, and l0
+    for _ in range(levels):
+        list_nodes = 1 + 10 * list_nodes
+        total += list_nodes
+    return total
+
+
+def _fan_out_levels_just_over() -> int:
+    """The fewest fan-out levels whose tree walk is past the node allowance."""
+    for levels in range(1, 12):
+        size = len(_alias_fan_out(levels).encode())
+        if _fan_out_nodes(levels) > size + ALIAS_EXPANSION_SLACK:
+            return levels
+    raise AssertionError("no fan-out passes the allowance: did ALIAS_EXPANSION_SLACK grow?")
+
+
+def _alias_fan_out_just_over() -> str:
+    """A fan-out document that is only just past the node allowance.
+
+    Nine levels is what this used to build: 570 bytes that PyYAML loads in an instant (the
+    references stay shared) and that expand to about 1.2e10 nodes as soon as anything walks
+    them. On 2026-10-14 a loader that had slipped back to a bare ``yaml.safe_load`` turned these
+    tests into a run of more than ten minutes and about 31 GB. The shortest fan-out past the
+    allowance is refused with the same message and costs next to nothing if no one refuses it.
+    """
+    return _alias_fan_out(_fan_out_levels_just_over())
 
 
 def _nested_past_the_limit() -> str:
@@ -241,7 +281,7 @@ def _nested_past_the_limit() -> str:
 
 
 _OVER_LIMIT = {
-    "node-allowance": (_alias_fan_out, "expands to more than"),
+    "node-allowance": (_alias_fan_out_just_over, "expands to more than"),
     "nesting": (
         _nested_past_the_limit,
         f"nests collections more than {MAX_YAML_NESTING} levels deep",
@@ -364,15 +404,104 @@ _RAISING_READERS = {
 }
 
 
+# A reader is driven in a child process, under a timeout and (on Linux) a memory cap, so that a
+# limited loader that has regressed to a bare ``yaml.safe_load`` fails these tests in seconds.
+# In process, that regression ran for more than ten minutes and reached about 31 GB
+# (2026-10-14): nothing in the process could stop a reader from walking a document built to be
+# walked for ever. The documents are now only just past their limits, so the child has little to
+# do even then; the child and its timeout are for the day one of them is not.
+
+#: How long a child gets to drive one reader with one document. The limited loader refuses in
+#: milliseconds and the rest is interpreter start-up, so a child still running after this has
+#: not refused anything.
+_CHILD_TIMEOUT_SECONDS = 30
+
+#: Address-space cap for the child on Linux, where it is enforced. Windows and macOS rely on
+#: the timeout alone.
+_CHILD_MEMORY_BYTES = 4 * 1024**3
+
+_CHILD = """
+import importlib, json, sys
+reader, limit, memory = sys.argv[1], sys.argv[2], int(sys.argv[3])
+if sys.platform.startswith("linux"):
+    import resource
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (memory, memory))
+    except (ValueError, OSError):
+        pass
+tests = importlib.import_module("tests.test_yaml_reads_are_limited")
+drive = tests._RAISING_READERS[reader][0]
+try:
+    drive(tests._OVER_LIMIT[limit][0]())
+except tests.YamlLimitError as exc:
+    refusal = str(exc)
+else:
+    refusal = None
+print("REFUSED|" + json.dumps(refusal))
+"""
+
+
+def _child_environment() -> dict[str, str]:
+    """The environment of a child that imports the same ``soup_cli`` this process imported."""
+    import soup_cli
+
+    entries = [
+        str(Path(__file__).resolve().parents[1]),  # so that ``tests`` imports
+        str(Path(soup_cli.__file__).resolve().parents[1]),
+    ]
+    inherited = os.environ.get("PYTHONPATH")
+    if inherited:
+        entries.append(inherited)
+    return {**os.environ, "PYTHONPATH": os.pathsep.join(entries), "PYTHONIOENCODING": "utf-8"}
+
+
+def _refusal_in_subprocess(tmp_path: Path, reader: str, limit: str) -> str | None:
+    """The ``YamlLimitError`` message from driving ``reader`` with the ``limit`` document.
+
+    ``None`` when it raised nothing. The child runs in ``tmp_path`` (the drivers write their
+    files to the working directory) and is killed after ``_CHILD_TIMEOUT_SECONDS``.
+    """
+    argv = [sys.executable, "-W", "ignore", "-c", _CHILD, reader, limit, str(_CHILD_MEMORY_BYTES)]
+    try:
+        done = subprocess.run(
+            argv,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_CHILD_TIMEOUT_SECONDS,
+            cwd=tmp_path,
+            env=_child_environment(),
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            f"{reader} neither refused the {limit} document nor failed within "
+            f"{_CHILD_TIMEOUT_SECONDS} s (child killed): is the YAML loader still the limited one?",
+            pytrace=False,
+        )
+    assert done.returncode == 0, (done.stdout[-2000:], done.stderr[-2000:])
+    marked = [line for line in done.stdout.splitlines() if line.startswith("REFUSED|")]
+    assert len(marked) == 1, (done.stdout[-2000:], done.stderr[-2000:])
+    return json.loads(marked[0].removeprefix("REFUSED|"))
+
+
 @pytest.mark.parametrize("limit", sorted(_OVER_LIMIT))
 @pytest.mark.parametrize("reader", sorted(_RAISING_READERS))
-def test_reader_refuses_a_document_past_the_limit(tmp_path, monkeypatch, reader, limit):
-    monkeypatch.chdir(tmp_path)
-    drive, what = _RAISING_READERS[reader]
-    make_text, message = _OVER_LIMIT[limit]
-    with pytest.raises(YamlLimitError) as raised:
-        drive(make_text())
-    assert str(raised.value).startswith(f"{what} {message}"), str(raised.value)
+def test_reader_refuses_a_document_past_the_limit(tmp_path, reader, limit):
+    what = _RAISING_READERS[reader][1]
+    message = _OVER_LIMIT[limit][1]
+    refusal = _refusal_in_subprocess(tmp_path, reader, limit)
+    assert refusal is not None, f"{reader} raised no YamlLimitError for the {limit} document"
+    assert refusal.startswith(f"{what} {message}"), refusal
+
+
+def test_the_fan_out_document_is_only_just_past_the_node_allowance():
+    levels = _fan_out_levels_just_over()
+    # The document every reader test is given, not only the level count it is built from. A
+    # string comparison, so it fails before anything parses a document that is too large.
+    assert _alias_fan_out_just_over() == _alias_fan_out(levels)
+    with pytest.raises(YamlLimitError, match=r"^doc expands to more than"):
+        load_yaml_limited(_alias_fan_out(levels), "doc", max_bytes=10**6)
+    load_yaml_limited(_alias_fan_out(levels - 1), "doc", max_bytes=10**6)  # one level less loads
 
 
 # Readers whose contract is a fallback value rather than an exception: each is

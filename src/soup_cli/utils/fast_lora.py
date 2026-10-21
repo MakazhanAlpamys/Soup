@@ -528,6 +528,19 @@ def patch_fast_lora_single_projection(model: Any, *, allow_dropout: bool = False
     return len(targets)
 
 
+def eligible_single_projections(model: Any) -> int:
+    """Patched single projections the kernel can run (#792).
+
+    A ``fan_in_fan_out`` LoRA (GPT-2's Conv1D layout) is patched like any other
+    but delegates to peft on every call, so it is not counted.
+    """
+    return sum(
+        1
+        for child in model.modules()
+        if getattr(child, _PATCH_MARKER, False) and not getattr(child, "fan_in_fan_out", False)
+    )
+
+
 def _release_single_projection(child: Any) -> bool:
     """Give ``child`` back the forward it had before this kernel; ``True`` if it had it.
 

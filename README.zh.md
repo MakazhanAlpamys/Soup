@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:44c28c06ff7d2445391cfcc7cd483b096453a302085ff8ac52cb48fa79ce4da5 -->
+<!-- synced-from: README.md sha256:4675902b8ea66e77e0822a60fdc9d3205a11eb02fb70cdf3b5670bd9ef1af391 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <strong>中文</strong></p>
 
 <p align="center">
@@ -8,7 +8,7 @@
 <h1 align="center">Soup</h1>
 
 <p align="center">
-  <strong>一条命令完成 LLM 微调与后训练。无需 SSH，告别配置地狱。</strong>
+  <strong>一条命令完成 LLM 微调与后训练。无需 SSH，告别配置灾难。</strong>
 </p>
 
 <p align="center">
@@ -27,7 +27,7 @@
 <p align="center">
   <a href="https://pypi.org/project/soup-cli/"><img src="https://img.shields.io/pypi/v/soup-cli?color=blue" alt="PyPI"></a>
   <a href="https://pepy.tech/project/soup-cli"><img src="https://img.shields.io/pepy/dt/soup-cli?color=blue" alt="下载量"></a>
-  <img src="https://img.shields.io/badge/python-3.10--3.12-blue" alt="Python 3.10-3.12">
+  <img src="https://img.shields.io/badge/python-3.11--3.13-blue" alt="Python 3.11-3.13">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0 许可证">
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/MakazhanAlpamys/65fdc943f85f3b2c46ecddb415c2b779/raw/soup_tests.json" alt="测试"></a>
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://github.com/MakazhanAlpamys/Soup/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -62,7 +62,7 @@ soup train
 **在 4 GB 笔记本 GPU 上微调 8B 模型。** Layer streaming 让冻结的基座模型不占
 显存，按解码层逐层送入 GPU。在 RTX 3050 Laptop 4 GB 上实测：Llama-3.1-8B-Instruct +
 NF4 达到 **952 MHz 下 119.6 tok/s，峰值 3.32 GB**（修复前）——与常规常驻显存的运行逐位一致，并在 H100 上
-以同样的 3.32 GB 独立复现出 113.00 tok/s。（两个数字都测自 v0.72.2，早于 v0.73.0 那次
+以同样的 3.32 GB 独立复现出 113.00 tok/s。（两个数字都测于 v0.72.2，早于 v0.73.0 那次
 在 32B 上付出 −4.8% 代价的正确性修复。修复后的复测在另一台 RTX 3050 Laptop 4 GB
 上完成（@umran666，#1103），结果是 **1935–1957 MHz 下 208.6 tok/s，峰值 2.40 GB**。这相当于
 同场 GEMM 上限的 59%，而修复前是 68%：按单位时钟频率折算大约慢 14%，所以表面上 1.74x 的提升来自
@@ -75,19 +75,19 @@ NF4 达到 **952 MHz 下 119.6 tok/s，峰值 3.32 GB**（修复前）——与�
 然后断言流式模型与常驻模型逐位一致）
 
 <p align="center">
-  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="在 4 GB 卡上对 Llama-3.1-8B 执行 soup train 的预检：3.60 GB 基座固定在内存中跨 32 层流转，配两个 113 MB 显存缓冲，实测峰值 3.32 GB、119.6 tok/s，停在 4 GB 线以内（修复前的那组数据，测自 v0.72.2，952 MHz；#331 修复后的那组数据见下方说明）"></a><br>
+  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="在 4 GB 卡上对 Llama-3.1-8B 执行 soup train 的预检：3.60 GB 基座固定在内存中跨 32 层流转，配两个 113 MB 显存缓冲，实测峰值 3.32 GB、119.6 tok/s，停在 4 GB 线以内（修复前的那组数据，测于 v0.72.2，952 MHz；#331 修复后的那组数据见下方说明）"></a><br>
   <sub>Llama-3.1-8B-Instruct + NF4、LoRA、batch 1、seq 512，RTX 3050 Laptop 4 GB——<b>峰值 3.32 GB，119.6 tok/s</b>，952 MHz（修复前，v0.72.2；#331 修复后：1935 MHz 下 208.6 tok/s，2.40 GB，不可直接比较，@umran666，#1103）。<a href="https://youtu.be/T1LCErE943E">完整视频（90 秒）</a></sub>
 </p>
 
 ## 为什么选择 Soup
 
-训练 LLM 至今仍然痛苦。即便是有经验的团队，也有 30-50% 的时间耗在和基础设施搏斗上，
+训练 LLM 至今仍然令人痛苦。即使是有经验的团队，也有 30-50% 的时间耗在和基础设施搏斗上，
 而不是改进模型。Soup 解决的就是这件事。
 
-- **零 SSH。** 再也不用 SSH 进一台坏掉的 GPU 机器。
-- **一份配置。** 一个简单的 YAML 文件就是全部所需。
-- **全部自动。** batch size、GPU 检测、量化——都替你处理。
-- **本地可跑。** 用自己的 GPU 跑 QLoRA，不需要云。
+- **零 SSH：** 再也不用 SSH 进一台坏掉的 GPU 机器。
+- **一份配置：** 一个简单的 YAML 文件就是全部所需。
+- **全部自动：** batch size、GPU 检测、量化，都替你处理。
+- **本地可跑：** 用自己的 GPU 跑 QLoRA，不需要云。
 
 ## 最新动态
 
@@ -102,7 +102,7 @@ NF4 达到 **952 MHz 下 119.6 tok/s，峰值 3.32 GB**（修复前）——与�
   `training.rope_scaling_type`、`freeze_layers` / `freeze_ratio`（transformers 后端上
   文本 `sft` / `tts` 路径之外）、`auto_mixed_precision`（`sft` / `tts` 之外），以及另外七个
   没有 unsloth 初始化流程的任务上的 `backend: unsloth`。每条报错都会指出字段名以及该怎么改。
-  `lr_groups`、`early_stop_patience`、`forgetting_eval_steps` 及其他无人读取的旋钮，现在加载时发出警告，
+  `lr_groups`、`early_stop_patience`、`forgetting_eval_steps` 及其他无人读取的配置项，现在加载时发出警告，
   从 v0.77 起被拒绝。
 - **验证集损失现在会被评估。** `data.val_split` 在每次运行中都会把部分行留作验证、排除在训练之外，
   但 transformers 后端上没有任何训练器去评估它们。现在，每个拿到划分的任务都会在每个 epoch 结束时评估，或通过
@@ -134,7 +134,7 @@ NF4 达到 **952 MHz 下 119.6 tok/s，峰值 3.32 GB**（修复前）——与�
 - **已弃用：** `soup export --format awq` 和 `--format gptq` 将在 v0.77 移除；这两个上游项目都已归档，
   两个 extra 也都无法与 `[train]` 一起安装。
 
-> 仅支持 Python **3.10–3.12**。在 3.13+ 上，pip 过去会解析到未测试过的 PyTorch
+> 仅支持 Python **3.11–3.13**。在 3.14+ 上，pip 过去会解析到未测试过的 PyTorch
 > wheel，在 Soup 运行之前就崩在原生扩展里。
 
 更早的更新记录在 [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) 页面。
@@ -261,7 +261,7 @@ output: ./output
 
 > **自 v0.75 起，未知配置键会被拒绝。** 没有任何模型声明过的键——比如
 > `quantizaton` 这样的笔误，或只存在于更新版 Soup 的字段——以前会通过校验然后被
-> 丢弃，任务带着"设置没生效"的状态继续跑。v0.74 会在加载时报出来并提示你可能想写的
+> 丢弃，任务带着“设置没生效”的状态继续跑。v0.74 会在加载时报出来并提示你可能想写的
 > 字段；从 **v0.75** 起同样的配置直接加载失败，所以请修正或删掉这个键，别再指望它被
 > 忽略。见 [未知配置键](docs/backends-and-ops.md#unknown-config-keys)。
 
@@ -272,7 +272,7 @@ output: ./output
 | 指南 | 内容 |
 |---|---|
 | [训练任务与方法](docs/training.md) | SFT、DPO/GRPO/PPO/KTO/ORPO/SimPO/IPO/BCO、tool-calling、PRM、预训练、蒸馏、分类、视觉/音频/TTS、机器遗忘、RAFT/RA-DIT、训练循环加固检测器 |
-| [PEFT、长上下文与效率](docs/peft-and-efficiency.md) | DoRA、LoRA+、rsLoRA、VeRA、OLoRA、NEFTune、PiSSA、ReLoRA、optimizer 与 PEFT 全家桶、LLaMA Pro、GaLore、YaRN/LongLoRA、packing、课程学习、自动调参 |
+| [PEFT、长上下文与效率](docs/peft-and-efficiency.md) | DoRA、LoRA+、rsLoRA、VeRA、OLoRA、NEFTune、PiSSA、ReLoRA、optimizer 与 PEFT 工具集、LLaMA Pro、GaLore、YaRN/LongLoRA、packing、课程学习、自动调参 |
 | [性能与量化](docs/performance-and-quantization.md) | QAT、FP8、量化菜单（I + II）、KV-cache、NVFP4、保存格式、Cut Cross-Entropy、gradient checkpointing、kernel、activation offloading、layer streaming、多 GPU / DeepSpeed / FSDP |
 | [数据工程](docs/data.md) | 格式、对齐 Axolotl/LF 的数据管线、数据工具、合成生成与 forge、质量记分卡、trace 工具、远程数据集、混合、recipe DAG |
 | [评测与探针](docs/evaluation.md) | eval design/gate、eval-gated 训练、benchmark、NLG 指标、校准、Elo 竞技场、诊断、后训练 X-ray 探针、A/B、漂移、可调性、`soup advise` |
@@ -339,7 +339,7 @@ docker compose up   # 或在本地构建
 
 ## 环境要求
 
-- Python 3.10、3.11 或 3.12（这是 CI 测试的版本；3.13+ 暂不支持，因为 PyTorch
+- Python 3.11、3.12 或 3.13（这是 CI 测试的版本；3.14+ 暂不支持，因为 PyTorch
   技术栈还没在那上面验证过）
 - 带 CUDA 的 GPU（推荐）、Apple Silicon（MPS）、或 CPU（实验性——非常慢）
 - 7B 模型跑 QLoRA 需要 8 GB+ 显存

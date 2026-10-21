@@ -59,6 +59,34 @@ class TestTheDepth:
         assert _depth(DEFAULT_STREAM_READ_AHEAD, 9)[0] == MAX_STREAM_READ_AHEAD
 
 
+class TestTheReadyLineNamesDriveModes:
+    @staticmethod
+    def _stats(drive_count, direct_io_drives):
+        return {
+            "tier": "disk",
+            "pinned": False,
+            "pinned_bytes": 0,
+            "disk_bytes": 1_000_000_000,
+            "read_ahead": 3,
+            "store_bytes": 20_000_000,
+            "drive_count": drive_count,
+            "direct_io_drives": direct_io_drives,
+        }
+
+    def test_two_direct_drives_are_counted(self):
+        line = stream_setup._stream_source_line(self._stats(2, 2))
+        assert "2 NVMe volumes, direct I/O 2/2" in line
+
+    def test_a_mixed_pair_is_counted(self):
+        line = stream_setup._stream_source_line(self._stats(2, 1))
+        assert "2 NVMe volumes, direct I/O 1/2" in line
+
+    def test_one_drive_keeps_the_existing_wording(self):
+        line = stream_setup._stream_source_line(self._stats(1, 1))
+        assert "on an NVMe volume" in line
+        assert "direct I/O" not in line
+
+
 def test_every_depth_consumer_in_the_setup_reads_the_effective_value():
     """The default N+1 is worth nothing if one consumer still reads the raw setting."""
     source = inspect.getsource(stream_setup)
@@ -421,7 +449,7 @@ def _make_synthetic_untied_checkpoint(tmp_path, n_layers: int = 5) -> str:
     return str(weights)
 
 
-def _drive_setup(tmp_path, monkeypatch, *, striped):
+def _drive_setup(tmp_path, monkeypatch, *, striped, stream_source="ram"):
     """The real `_setup_streaming_transformers` on a tiny checkpoint, runtime boundary spied.
 
     Same harness as test_issue623 (simulated CUDA, ``build_streamed_model`` spied). Two temp
@@ -478,7 +506,7 @@ def _drive_setup(tmp_path, monkeypatch, *, striped):
         captured.update(kwargs)
         runtime = MagicMock()
         runtime.stats.return_value = {
-            "tier": "ram", "store_bytes": 1_000_000, "disk_bytes": 1_000_000,
+            "tier": stream_source, "store_bytes": 1_000_000, "disk_bytes": 1_000_000,
             "pinned": False, "read_ahead": kwargs.get("read_ahead"), "buffers": 2,
             "buffer_bytes": 4_000, "n_layers": 3,
         }
@@ -490,7 +518,7 @@ def _drive_setup(tmp_path, monkeypatch, *, striped):
         stream_setup, "console", Console(file=buffer, width=400, color_system=None)
     )
 
-    cfg = load_config_from_string(_cfg_yaml(weights, ""))
+    cfg = load_config_from_string(_cfg_yaml(weights, "", stream_source=stream_source))
     wrapper = SFTTrainerWrapper(cfg)
     wrapper.device = "cuda"
     wrapper._setup_streaming_transformers(cfg, cfg.training)
@@ -512,7 +540,7 @@ class TestTheSetupPathUsesTheRoots:
         assert captured["read_ahead_decision"].raised
         assert "Layer cache striped over" in said
         assert "layer-shard stripe 1" in said  # the second drive is charged on its own
-        assert f"training.stream_read_ahead {DEFAULT_STREAM_READ_AHEAD} -> 3" in said
+        assert f"training.stream_read_ahead {DEFAULT_STREAM_READ_AHEAD} -> 3" not in said
         stripe_folder = second_drive / os.listdir(second_drive)[0]
         assert any(name.startswith("layer_") for name in os.listdir(stripe_folder)), (
             "no layer file landed on the second drive"
@@ -520,6 +548,12 @@ class TestTheSetupPathUsesTheRoots:
         # #1612: exact shares charge root 0 more than root 1 (2 of 3 layers plus extras on root 0)
         assert len(preflight_calls) >= 1
         assert preflight_calls[0]["shard_write_bytes"] > preflight_calls[0]["stripe_writes"][0][1]
+
+    def test_disk_tier_announces_the_effective_stripe_depth(self, tmp_path, monkeypatch):
+        _captured, said, _second_drive, _preflight = _drive_setup(
+            tmp_path, monkeypatch, striped=True, stream_source="disk"
+        )
+        assert f"training.stream_read_ahead {DEFAULT_STREAM_READ_AHEAD} -> 3" in said
 
     def test_one_drive_is_left_exactly_as_it_was(self, tmp_path, monkeypatch):
         captured, said, _second_drive, _preflight = _drive_setup(

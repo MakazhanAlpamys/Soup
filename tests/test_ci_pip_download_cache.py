@@ -1,11 +1,18 @@
-"""Only the Ubuntu/Python 3.12 test cell reuses pip downloads.
+"""No test cell of CI caches pip downloads.
 
-The cache inputs include the project metadata and every committed constraints file,
-including the compatibility floor. Checkout must precede setup-python so those inputs
-can be hashed. A cache hit must never bypass installation: nightly jobs still resolve
-the newest allowed versions, and the floor job still installs its constrained stack.
-The remaining test cells and the four smoke/contract jobs leave pip caching disabled
-to limit large dependency archives competing with the existing HF model caches.
+The ubuntu / Python 3.12 cell used to restore a pip cache (#1970). Measured on 2026-10-19
+over the last 12 pull-request runs, that cost more than it saved: restoring it took 0.49 min
+(0.33 to 0.60) and the install then 1.54 min, 2.03 min in all, where the uncached ubuntu /
+3.10 cell installed in 1.80 min. The cache entries were also 3 GB each (two of them, a new
+one whenever ``pyproject.toml`` or a constraints file changes) and filled 6.1 GB of the
+8.8 GB the repository used of its 10 GB Actions cache, which is what evicted the small
+Hugging Face caches next to them. So no cell declares ``cache:`` or ``cache-dependency-path:``
+any more, and these tests pin that for every kind of run and every cell of the support matrix.
+
+What stays pinned: a cache must never bypass installation (nightly jobs still resolve the
+newest allowed versions, the floor job still installs its constrained stack), and the
+project install follows ``setup-python``. A job that wants a pip cache again has to bring a
+measurement that beats the one above, and change this file with it.
 """
 
 from __future__ import annotations
@@ -30,7 +37,8 @@ from tests.test_ci_full_matrix_on_approval import (
 ROOT = Path(__file__).absolute().parents[1]
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 PROJECT_JOBS = ("test", "mlx-smoke", "torchao-contract", "pytorch-smoke", "transformers-floor")
-UNCACHED_JOBS = ("mlx-smoke", "torchao-contract", "pytorch-smoke", "transformers-floor")
+#: The only `if:` a project install may have: none, or the docs-only guard of its job.
+DOCS_ONLY_GUARDS = ("", "env.RUN_SUITE == 'true'", "needs.plan.outputs.docs_only != 'true'")
 RUN_KINDS = (
     pytest.param((_push(), _pull_request("opened")), "QUICK", id="quick-main-and-pr"),
     pytest.param(
@@ -41,17 +49,17 @@ RUN_KINDS = (
     pytest.param((_push("refs/heads/release/v0.76.0"),), "RELEASE", id="release"),
 )
 # Literal outcomes over the entire supported 3x3 matrix, independent of the policy
-# expression and of which cells a particular workflow kind currently selects.
+# expression and of which cells a particular workflow kind currently selects: none caches.
 SUPPORT_CELLS = (
-    ("ubuntu-latest", "Linux", "3.10", ""),
-    ("ubuntu-latest", "Linux", "3.11", ""),
-    ("ubuntu-latest", "Linux", "3.12", "pip"),
-    ("windows-latest", "Windows", "3.10", ""),
-    ("windows-latest", "Windows", "3.11", ""),
-    ("windows-latest", "Windows", "3.12", ""),
-    ("macos-latest", "macOS", "3.10", ""),
-    ("macos-latest", "macOS", "3.11", ""),
-    ("macos-latest", "macOS", "3.12", ""),
+    ("ubuntu-latest", "Linux", "3.11"),
+    ("ubuntu-latest", "Linux", "3.12"),
+    ("ubuntu-latest", "Linux", "3.13"),
+    ("windows-latest", "Windows", "3.11"),
+    ("windows-latest", "Windows", "3.12"),
+    ("windows-latest", "Windows", "3.13"),
+    ("macos-latest", "macOS", "3.11"),
+    ("macos-latest", "macOS", "3.12"),
+    ("macos-latest", "macOS", "3.13"),
 )
 RUNNER_OS = {"ubuntu-latest": "Linux", "windows-latest": "Windows", "macos-latest": "macOS"}
 
@@ -82,17 +90,16 @@ def _project_installs(job_name: str) -> list[tuple[int, dict[str, Any]]]:
     return installs
 
 
-class TestPipDownloadCache:
+class TestNoPipDownloadCache:
     @pytest.mark.parametrize(("contexts", "kind"), RUN_KINDS)
-    @pytest.mark.parametrize(("runner", "runner_os", "python_version", "expected"), SUPPORT_CELLS)
-    def test_only_ubuntu_python312_caches_pip_for_every_run_kind(
+    @pytest.mark.parametrize(("runner", "runner_os", "python_version"), SUPPORT_CELLS)
+    def test_no_cell_caches_pip_for_any_run_kind(
         self,
         contexts: tuple[dict[str, Any], ...],
         kind: str,
         runner: str,
         runner_os: str,
         python_version: str,
-        expected: str,
     ) -> None:
         _, setup = _python_setup("test")
         policy = setup.get("with", {}).get("cache", "")
@@ -102,12 +109,12 @@ class TestPipDownloadCache:
                 "runner": {"os": runner_os},
                 "matrix": {"os": runner, "python-version": python_version},
             }
-            assert _render(policy, cell_context) == expected, (
-                f"{kind}: {runner}/{python_version} must select pip cache {expected!r}"
+            assert _render(policy, cell_context) == "", (
+                f"{kind}: {runner}/{python_version} must not select a pip cache"
             )
 
     @pytest.mark.parametrize(("contexts", "kind"), RUN_KINDS)
-    def test_each_selected_workflow_matrix_has_only_one_cached_cell(
+    def test_each_selected_workflow_matrix_has_no_cached_cell(
         self, contexts: tuple[dict[str, Any], ...], kind: str
     ) -> None:
         _, setup = _python_setup("test")
@@ -118,32 +125,20 @@ class TestPipDownloadCache:
                 cell_context = {**context, "runner": {"os": RUNNER_OS[cell["os"]]}, "matrix": cell}
                 if _render(policy, cell_context):
                     cached.add((cell["os"], cell["python-version"]))
-            assert cached == {("ubuntu-latest", "3.12")}, (kind, cached)
-
-    @pytest.mark.parametrize("job_name", UNCACHED_JOBS)
-    def test_smoke_and_contract_jobs_leave_pip_cache_disabled(self, job_name: str) -> None:
-        _, setup = _python_setup(job_name)
-        assert not setup.get("with", {}).get("cache"), (
-            f"{job_name}: pip caching is reserved for the Ubuntu/Python 3.12 test cell"
-        )
-        assert "cache-dependency-path" not in setup.get("with", {}), (
-            f"{job_name}: uncached setup must not declare pip cache dependency inputs"
-        )
-
-    def test_cache_inputs_cover_project_and_all_constraints(self) -> None:
-        _, setup = _python_setup("test")
-        dependency_paths = setup.get("with", {}).get("cache-dependency-path", "")
-        assert isinstance(dependency_paths, str), "test: cache inputs must be paths"
-        patterns = [line.strip() for line in dependency_paths.splitlines() if line.strip()]
-        matched = {path for pattern in patterns for path in ROOT.glob(pattern) if path.is_file()}
-        constraints = set((ROOT / ".github" / "constraints").glob("*.txt"))
-        assert constraints, "the constraint check must cover committed constraints files"
-        required = {ROOT / "pyproject.toml", *constraints}
-        missing = sorted(str(path.relative_to(ROOT)) for path in required - matched)
-        assert not missing, f"test: pip cache does not hash dependency inputs: {missing}"
+            assert cached == set(), (kind, cached)
 
     @pytest.mark.parametrize("job_name", PROJECT_JOBS)
-    def test_checkout_precedes_python_cache_restore(self, job_name: str) -> None:
+    def test_no_project_job_declares_a_pip_cache_or_its_inputs(self, job_name: str) -> None:
+        _, setup = _python_setup(job_name)
+        assert "cache" not in setup.get("with", {}), (
+            f"{job_name}: pip caching is off (2026-10-19: the cache cost more than it saved)"
+        )
+        assert "cache-dependency-path" not in setup.get("with", {}), (
+            f"{job_name}: no pip cache, so no cache dependency inputs"
+        )
+
+    @pytest.mark.parametrize("job_name", PROJECT_JOBS)
+    def test_checkout_precedes_python_setup(self, job_name: str) -> None:
         setup_index, _ = _python_setup(job_name)
         checkouts = [
             index
@@ -151,11 +146,11 @@ class TestPipDownloadCache:
             if str(step.get("uses", "")).startswith("actions/checkout@")
         ]
         assert checkouts and min(checkouts) < setup_index, (
-            f"{job_name}: checkout must make cache dependency inputs available before setup-python"
+            f"{job_name}: checkout must come before setup-python (a cache hashes the project files)"
         )
 
     @pytest.mark.parametrize("job_name", PROJECT_JOBS)
-    def test_project_install_follows_cache_restore(self, job_name: str) -> None:
+    def test_project_install_follows_python_setup(self, job_name: str) -> None:
         setup_index, _ = _python_setup(job_name)
         for install_index, step in _project_installs(job_name):
             assert setup_index < install_index, (
@@ -165,7 +160,12 @@ class TestPipDownloadCache:
     @pytest.mark.parametrize("job_name", PROJECT_JOBS)
     def test_cache_hit_cannot_bypass_project_install(self, job_name: str) -> None:
         for _, step in _project_installs(job_name):
-            assert "if" not in step, f"{job_name}: project installation must be unconditional"
+            # 2026-10-20: the one condition a project install may carry is the docs-only
+            # guard (tests/test_ci_docs_only_fast_path.py): it skips every step of a cell or
+            # smoke job that does nothing in a docs-only pull request. Never a cache result.
+            assert str(step.get("if", "")) in DOCS_ONLY_GUARDS, (
+                f"{job_name}: project installation must be unconditional"
+            )
             assert "cache-hit" not in str(step["run"]), (
                 f"{job_name}: cache hits must not gate installation inside the shell"
             )

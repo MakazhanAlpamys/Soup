@@ -1,10 +1,12 @@
 """R4 — every drive keeps a read in flight; one drive still reads one layer at a time."""
 
+import io
 import threading
 import time
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 
 torch = pytest.importorskip("torch")
 pytest.importorskip("safetensors")
@@ -14,7 +16,14 @@ from safetensors.torch import save_file  # noqa: E402
 import soup_cli.utils.async_disk_source as mod  # noqa: E402
 from soup_cli.utils.async_disk_source import AsyncDiskSource, _RangeReaders  # noqa: E402
 from soup_cli.utils.layer_shard import layer_shard_path  # noqa: E402
-from soup_cli.utils.layer_stream_runtime import DiskSource, RamSource  # noqa: E402
+from soup_cli.utils.layer_stream_runtime import (  # noqa: E402
+    DiskSource,
+    RamSource,
+    StreamRuntime,
+    _build_source,
+    _say_page_cache_roots,
+)
+from tests.conftest import strip_ansi  # noqa: E402
 
 N = 8
 
@@ -300,6 +309,72 @@ def test_direct_io_is_decided_per_drive(tmp_path, monkeypatch):
         _walk(source, spec, range(N))
     finally:
         source.close()
+
+
+def test_build_source_reports_each_drive_mode_and_page_cache_reason(tmp_path, monkeypatch):
+    """The console and runtime stats expose the same per-drive decision."""
+    def refuse_root1(path):
+        if Path(path).parent.name == "root1":
+            raise OSError("no direct I/O on this volume")
+        return open(path, "rb", buffering=0)
+
+    monkeypatch.setattr(mod, "open_direct", refuse_root1)
+    shard_dir, paths, roots = _striped_shards(tmp_path)
+    spec = RamSource.layer_specs_from_paths(paths)
+    output = io.StringIO()
+    source, pinned = _build_source(
+        shard_dir,
+        N,
+        spec,
+        pin=False,
+        console=Console(file=output, width=200, color_system=None),
+        tier="disk",
+        shard_paths=paths,
+        layer_roots=roots,
+        read_ahead=3,
+    )
+    try:
+        assert source._open_of[0] is refuse_root1
+        assert source._open_of[1] == source._open_buffered
+        pool = type("Pool", (), {"n": 2, "nbytes": 0, "loads": 0})()
+        stats = StreamRuntime(
+            pool=pool,
+            source=source,
+            prefetcher=None,
+            n_layers=N,
+            pinned=pinned,
+            device="cpu",
+            tier="disk",
+        ).stats()
+        assert stats["drive_count"] == 2
+        assert stats["direct_io_drives"] == 1
+        assert sorted(stats["direct_io_roots"].values()) == [False, True]
+        said = " ".join(strip_ansi(output.getvalue()).split())
+        assert "root1" in said
+        assert "page cache" in said
+        assert "no direct I/O on this volume" in said
+    finally:
+        source.close()
+
+
+def test_page_cache_warning_sanitizes_external_root_and_reason():
+    output = io.StringIO()
+    source = type(
+        "Source",
+        (),
+        {"page_cache_reasons": {"[/]root\x1b": "[bold]refused[/]\x07"}},
+    )()
+
+    _say_page_cache_roots(
+        source,
+        Console(file=output, width=200, color_system=None),
+    )
+
+    said = strip_ansi(output.getvalue())
+    assert "[/]root" in said
+    assert "[bold]refused[/]" in said
+    assert "\x1b" not in said
+    assert "\x07" not in said
 
 
 def test_submit_calls_on_done_once_per_job_after_its_outcome_is_set():

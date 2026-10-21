@@ -147,6 +147,9 @@ def _stub_export_backend(monkeypatch, tmp_path, merges):
         merges.append(output_dir)
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
+        (out / "config.json").write_text(
+            '{"architectures":["LlamaForCausalLM"]}', encoding="utf-8",
+        )
         (out / "model.safetensors").write_bytes(b"\0" * 16)
         (out / "config.json").write_text(
             '{"architectures":["GPT2LMHeadModel"]}', encoding="utf-8",

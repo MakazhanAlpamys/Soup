@@ -136,7 +136,7 @@ def resolve_command(root: click.Command, args: Sequence[str]) -> click.Command:
     return current
 
 
-def _mask_short_bundle(tok: str, short_opts: set[str]) -> tuple[str, bool] | None:
+def _mask_short_bundle(tok: str, short_opts: frozenset[str] | set[str]) -> tuple[str, bool] | None:
     """Mask a bundled short-option token, or return ``None`` if it holds no secret.
 
     Click allows short options to be bundled: ``-xtVALUE`` is ``-x`` (a flag)
@@ -180,6 +180,60 @@ def _starts_an_option(tok: str, known: frozenset[str] | set[str]) -> bool:
     return name in known or is_secret_name(name)
 
 
+class ArgMasker:
+    """:func:`mask_secret_args` with the option sets it works from built once.
+
+    The sets come from the two option collections, and the union with every long
+    option of the command tree is large. One command line pays for it once; the
+    audit log's pass over all its stored lines would pay for it per line, so the
+    pass keeps one masker per command and calls it for each of that command's lines.
+    """
+
+    __slots__ = ("credential_opts", "_long_opts", "_known_longs", "_short_opts")
+
+    def __init__(
+        self, credential_opts: Iterable[str], known_opts: Iterable[str] = frozenset()
+    ) -> None:
+        self.credential_opts = frozenset(credential_opts)
+        self._long_opts = frozenset(o for o in self.credential_opts if o.startswith("--"))
+        self._known_longs = self._long_opts | frozenset(known_opts)
+        self._short_opts = frozenset(
+            o for o in self.credential_opts if not o.startswith("--") and len(o) == 2
+        )
+
+    def __call__(self, args: Sequence[str]) -> tuple[str, ...]:
+        """Same result as ``mask_secret_args(args, <credential options>, known_opts)``."""
+        out: list[str] = []
+        mask_next = False
+        for raw in args:
+            tok = str(raw)
+            if mask_next:
+                mask_next = False
+                if not _starts_an_option(tok, self._known_longs):
+                    out.append(REDACTED)
+                    continue
+                # An option, not a value: the option before it had none, and this
+                # one is scanned like any other.
+            if tok in self.credential_opts:
+                out.append(tok)
+                mask_next = True
+                continue
+            if tok.startswith("--"):
+                name, has_value, _ = tok.partition("=")
+                if name in self._long_opts or is_secret_name(name):
+                    out.append(f"{name}={REDACTED}" if has_value else tok)
+                    mask_next = not has_value
+                    continue
+            elif tok.startswith("-") and not tok.startswith("--") and len(tok) > 1:
+                masked = _mask_short_bundle(tok, self._short_opts)
+                if masked is not None:
+                    out.append(masked[0])
+                    mask_next = masked[1]
+                    continue
+            out.append(tok)
+        return tuple(out)
+
+
 def mask_secret_args(
     args: Sequence[str],
     secret_opts: frozenset[str],
@@ -202,35 +256,4 @@ def mask_secret_args(
     before it had no value and the scan continues from the new option, so a
     switch in front of a credential option cannot shift the mask off its value.
     """
-    long_opts = {o for o in secret_opts if o.startswith("--")}
-    known_longs = long_opts | known_opts
-    short_opts = {o for o in secret_opts if not o.startswith("--") and len(o) == 2}
-    out: list[str] = []
-    mask_next = False
-    for raw in args:
-        tok = str(raw)
-        if mask_next:
-            mask_next = False
-            if not _starts_an_option(tok, known_longs):
-                out.append(REDACTED)
-                continue
-            # An option, not a value: the option before it had none, and this
-            # one is scanned like any other.
-        if tok in secret_opts:
-            out.append(tok)
-            mask_next = True
-            continue
-        if tok.startswith("--"):
-            name, has_value, _ = tok.partition("=")
-            if name in long_opts or is_secret_name(name):
-                out.append(f"{name}={REDACTED}" if has_value else tok)
-                mask_next = not has_value
-                continue
-        elif tok.startswith("-") and not tok.startswith("--") and len(tok) > 1:
-            masked = _mask_short_bundle(tok, short_opts)
-            if masked is not None:
-                out.append(masked[0])
-                mask_next = masked[1]
-                continue
-        out.append(tok)
-    return tuple(out)
+    return ArgMasker(secret_opts, known_opts)(args)

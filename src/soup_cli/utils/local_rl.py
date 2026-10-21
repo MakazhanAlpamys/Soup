@@ -286,6 +286,10 @@ def record_thumb(
         conn.commit()
 
 
+# The one definition of what the harvest reads; ``checked_thumbs_db`` probes it.
+THUMBS_HARVEST_SELECT = "SELECT prompt, response, thumb, ts FROM thumbs"
+
+
 def harvest_dpo_pairs(db_path: str) -> Tuple[DpoPair, ...]:
     """Pair up/down responses to the same prompt into DPO training rows.
 
@@ -300,9 +304,7 @@ def harvest_dpo_pairs(db_path: str) -> Tuple[DpoPair, ...]:
     if not os.path.exists(real):
         raise FileNotFoundError(f"db_path not found: {db_path!r}")
     with sqlite3.connect(real) as conn:
-        rows = conn.execute(
-            "SELECT prompt, response, thumb, ts FROM thumbs ORDER BY ts ASC"
-        ).fetchall()
+        rows = conn.execute(f"{THUMBS_HARVEST_SELECT} ORDER BY ts ASC").fetchall()
     last_up: dict[str, str] = {}
     last_down: dict[str, str] = {}
     for prompt, response, thumb, _ts in rows:
@@ -615,6 +617,7 @@ def run_nightly_train(
 
 
 __all__ = [
+    "THUMBS_HARVEST_SELECT",
     "SUPPORTED_LOCAL_RL_BACKENDS",
     "SUPPORTED_LOCAL_RL_TRAIN_METHODS",
     "MAX_PROMPT_LEN",

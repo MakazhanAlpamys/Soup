@@ -1,0 +1,28 @@
+{
+  "started": "2026-10-20T12:10:20.374+00:00",
+  "match": "D:\\soup-bench\\fp8-loss-check\\fp8\\soup.yaml",
+  "min_free_gb": 1.5,
+  "period_s": 5.0,
+  "fired": false,
+  "gaps": [],
+  "off_ac_samples": 0,
+  "foreign_compute_pids": [],
+  "pid": 18648,
+  "cmdline": [
+    "C:\\Users\\user\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+    "-m",
+    "soup_cli.cli",
+    "train",
+    "--config",
+    "D:\\soup-bench\\fp8-loss-check\\fp8\\soup.yaml",
+    "--trust-remote-code",
+    "--yes"
+  ],
+  "ended": "2026-10-20T12:24:47.041+00:00",
+  "samples": 173,
+  "min_free_ram_gb": 5.351,
+  "max_tree_rss_gb": 7.166,
+  "peak_wset_gb": 7.194,
+  "max_gpu_memory_used_mib": 3994.0,
+  "max_gpu_temperature_c": 52.0
+}

@@ -27,9 +27,13 @@ import json
 import math
 import os
 from dataclasses import dataclass
-from typing import Any, List, Optional, Sequence, Union
+from typing import Any, Iterator, List, Optional, Sequence, Union
 
-from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.paths import (
+    atomic_write_lines,
+    ensure_distinct_paths,
+    is_under_cwd,
+)
 
 # DoS caps
 _MAX_SCAN_ROWS = 100_000
@@ -306,6 +310,11 @@ def prune_traces(
     if not os.path.isfile(input_path):
         raise FileNotFoundError(input_path)
 
+    ensure_distinct_paths(
+        [("--input", input_path)],
+        [("--output", output_path)],
+    )
+
     # Resolve the tokenizer up front (fails fast on a bad name even on an
     # empty input file) — None keeps the legacy character path.
     tok = _resolve_tokenizer(tokenizer) if tokenizer is not None else None
@@ -361,25 +370,34 @@ def _prune_char_level(
     rows_total: int,
     threshold: float,
 ) -> PrunePromptReport:
-    """Character-level prefix strip (the v0.63.0 default behaviour)."""
+    """Strip a character prefix and publish only a complete output."""
     prefix = detect_common_prefix(prompts, min_frequency=threshold)
     rows_pruned = 0
-    with open(input_path, encoding="utf-8") as fh_in, \
-            open(output_path, "w", encoding="utf-8") as fh_out:
-        for line in fh_in:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(row, dict):
-                continue
-            if prefix and isinstance(row.get("prompt"), str) and row["prompt"].startswith(prefix):
-                row["prompt"] = row["prompt"][len(prefix):]
-                rows_pruned += 1
-            fh_out.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    def lines() -> Iterator[str]:
+        nonlocal rows_pruned
+        with open(input_path, encoding="utf-8") as fh_in:
+            for line in fh_in:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                if (
+                    prefix
+                    and isinstance(row.get("prompt"), str)
+                    and row["prompt"].startswith(prefix)
+                ):
+                    row["prompt"] = row["prompt"][len(prefix):]
+                    rows_pruned += 1
+                yield json.dumps(row, ensure_ascii=False) + "\n"
+
+    atomic_write_lines(lines(), output_path, field="--output")
+
     return PrunePromptReport(
         prefix=prefix,
         prefix_chars=len(prefix),
@@ -397,36 +415,38 @@ def _prune_token_level(
     rows_total: int,
     threshold: float,
 ) -> PrunePromptReport:
-    """Token-aware prefix strip (v0.71.5 #205).
-
-    The detected prefix is a list of token IDs; stripping a row decodes the
-    REMAINING token IDs so the boundary is always a clean token break.
-    """
-    token_rows = [_encode(tok, p) for p in prompts]
-    prefix_ids = detect_common_prefix_tokens(token_rows, min_frequency=threshold)
+    """Strip a token prefix and publish only a complete output."""
+    token_rows = [_encode(tok, prompt) for prompt in prompts]
+    prefix_ids = detect_common_prefix_tokens(
+        token_rows,
+        min_frequency=threshold,
+    )
     prefix_text = tok.decode(prefix_ids) if prefix_ids else ""
     plen = len(prefix_ids)
-
     rows_pruned = 0
-    with open(input_path, encoding="utf-8") as fh_in, \
-            open(output_path, "w", encoding="utf-8") as fh_out:
-        for line in fh_in:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(row, dict):
-                continue
-            prompt = row.get("prompt")
-            if prefix_ids and isinstance(prompt, str):
-                ids = _encode(tok, prompt)
-                if ids[:plen] == prefix_ids:
-                    row["prompt"] = tok.decode(ids[plen:])
-                    rows_pruned += 1
-            fh_out.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    def lines() -> Iterator[str]:
+        nonlocal rows_pruned
+        with open(input_path, encoding="utf-8") as fh_in:
+            for line in fh_in:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                prompt = row.get("prompt")
+                if prefix_ids and isinstance(prompt, str):
+                    ids = _encode(tok, prompt)
+                    if ids[:plen] == prefix_ids:
+                        row["prompt"] = tok.decode(ids[plen:])
+                        rows_pruned += 1
+                yield json.dumps(row, ensure_ascii=False) + "\n"
+
+    atomic_write_lines(lines(), output_path, field="--output")
 
     return PrunePromptReport(
         prefix=prefix_text,

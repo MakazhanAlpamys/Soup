@@ -150,7 +150,7 @@ class TestPlanLambdaLabsRun:
         plan = plan_lambda_run("soup.yaml", gpu="a100", output_dir="./out", soup_version="0.71.22")
         assert isinstance(plan, CloudPlan)
         assert plan.cloud == "lambda"
-        assert plan.run_command == "python soup_lambda_app.py"
+        assert plan.run_command == "python -I soup_lambda_app.py"
 
     def test_plan_config_too_large(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -223,7 +223,7 @@ class TestTrainCloudCliNew:
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert (tmp_path / "soup_lambda_app.py").exists()
         txt = _strip_ansi(result.output)
-        assert "python soup_lambda_app.py" in txt
+        assert "python -I soup_lambda_app.py" in txt
 
     def test_cloud_name_is_case_insensitive(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -288,5 +288,3 @@ class TestCloudNoSecrets:
         assert secret not in stub_modal
         assert hf_token not in stub_modal
         assert wandb_key not in stub_modal
-
-

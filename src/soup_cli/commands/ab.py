@@ -12,7 +12,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from soup_cli.commands._webhook_cli import emit_webhooks, validate_webhook_flags
-from soup_cli.config.deprecation import deadline_clause
+from soup_cli.config.deprecation import deadline_clause, refuses_deprecated_values
 from soup_cli.utils.ab_test import (
     ACCEPT_HOLD_SPREAD_RATIO,
     HIGHER_IS_BETTER,
@@ -81,8 +81,16 @@ def ab(
     )
 
     # #1418: --beta is retired. Say so rather than drop it silently, and do not
-    # pass it on (MsprtConfig would warn a second time).
+    # pass it on (MsprtConfig would warn a second time). Once deprecated values
+    # are refused, it is a usage error and nothing runs.
     if beta is not None:
+        if refuses_deprecated_values():
+            console.print(
+                "[red]Error: "
+                f"{escape(retired_beta_message('--beta', '--alpha'))} {deadline_clause()}[/]"
+            )
+            # Exit 2, like soup ab's other flag errors (--metric, --alpha).
+            raise typer.Exit(2)
         console.print(
             "[yellow]Warning: "
             f"{escape(retired_beta_message('--beta', '--alpha'))} {deadline_clause()}[/]"

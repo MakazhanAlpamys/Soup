@@ -7,7 +7,7 @@ Four things are held here.
    parameters. Wording is NOT compared, on purpose: a pull request that rewords a help
    string or a description must not go red here. The byte-exact check (``--check``) is
    a release-time one and runs only with ``SOUP_DOCS_EXACT=1``.
-2. **The render is the same everywhere.** CI runs this on Python 3.10 and 3.12, on
+2. **The render is the same everywhere.** CI runs this on Python 3.11 to 3.13, on
    Linux, Windows and macOS, so every helper that keeps the output identical across
    them is pinned on its own: the type spelling, the default and constraint rendering,
    the cell escaping, the Rich-markup stripping.

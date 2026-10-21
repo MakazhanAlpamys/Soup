@@ -437,6 +437,7 @@ def snapshot_download(
     cache_dir: str | None,
     revision: str | None = None,
     allow_patterns: list[str] | None = None,
+    ignore_patterns: list[str] | None = None,
     namespace_check: bool = True,
     allow_namespace_shift: str | None = None,
     _metadata_fn: Optional[Callable[[str], Optional[Tuple[str, str]]]] = None,
@@ -449,7 +450,9 @@ def snapshot_download(
     ``None`` asks Hugging Face for its canonical cached snapshot instead; this
     is used by layer streaming to inspect and reuse an existing non-symlinked
     cache entry before deciding whether a second materialised copy is needed.
-    The namespace-pin gate (#186) runs in both cases.
+    The namespace-pin gate (#186) runs in both cases. ``ignore_patterns`` is
+    forwarded only when given, as huggingface_hub applies it after
+    ``allow_patterns`` (#1806).
 
     Returns the absolute path to the downloaded snapshot directory. Raises
     ``ImportError`` (with a pip-install hint) when ``huggingface_hub`` is
@@ -462,11 +465,11 @@ def snapshot_download(
             raise TypeError("revision must be str or None")
         if "\x00" in revision or any(ord(c) < 0x20 for c in revision):
             raise ValueError("revision must not contain control characters")
-    if allow_patterns is not None:
-        if not isinstance(allow_patterns, list) or not all(
-            isinstance(p, str) for p in allow_patterns
-        ):
-            raise TypeError("allow_patterns must be a list of str or None")
+    for field_name, patterns in (("allow_patterns", allow_patterns),
+                                 ("ignore_patterns", ignore_patterns)):
+        if patterns is not None:
+            if not isinstance(patterns, list) or not all(isinstance(p, str) for p in patterns):
+                raise TypeError(f"{field_name} must be a list of str or None")
 
     if namespace_check:
         _run_namespace_check(
@@ -487,6 +490,8 @@ def snapshot_download(
         "revision": revision,
         "allow_patterns": allow_patterns,
     }
+    if ignore_patterns is not None:
+        kwargs["ignore_patterns"] = ignore_patterns
     if canonical_cache is None:
         return hf_snapshot_download(**kwargs)
     os.makedirs(canonical_cache, exist_ok=True)

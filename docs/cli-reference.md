@@ -1133,7 +1133,7 @@ Usage: `soup data decontaminate [OPTIONS]`
 |---|---|---|---|---|
 | `--input`, `-i` | text |  | yes | Input JSONL file to decontaminate. |
 | `--benchmarks`, `-b` | text |  |  | Comma-separated benchmark names (label only; corpora not bundled). |
-| `--benchmark-file` | text |  |  | v0.53.7: operator-supplied benchmark JSONL (under cwd). Each row's ``text``/``prompt``/``content`` field contributes to the n-gram contamination set. Compatible with --benchmarks (extends). |
+| `--benchmark-file` | text |  |  | v0.53.7: operator-supplied benchmark JSONL (under cwd). Each row's text, prompt, Alpaca, preference or conversation fields contribute to the n-gram contamination set. Compatible with --benchmarks (extends). |
 | `--output`, `-o` | text | `clean.jsonl` |  | Output JSONL of rows that survived decontamination. |
 | `--threshold` | float, 0.0 to 1.0 | `0.8` |  | Minimum n-gram overlap ratio for removing a row. |
 | `--n` | integer, 1 to 32 | `8` |  | N-gram size used for overlap detection. |
@@ -3470,6 +3470,8 @@ Usage: `soup ship [OPTIONS] [<command>] [ARGS]...`
 | `--output`, `-o` | text |  |  | Write the verdict JSON to this path. |
 | `--emit-evidence` | text |  |  | Write the scores in the --evidence INPUT schema so this run can be replayed offline (output-is-input). With --config it also STAMPS the config's provenance onto the emitted evidence. |
 | `--config` | text |  |  | soup.yaml whose eval.ship block supplies defaults (CLI flags win). With --evidence alone it GATES (refuses evidence whose config_sha drifted from this config, or whose numerics family does not match); with --emit-evidence it STAMPS this config's provenance. |
+| `--require-provenance` | flag | off |  | Strict offline drift check: requires --evidence, --config, --adapter and task eval. Compare artifact/task/source bytes, suite version and effective verdict policy. |
+| `--data-sha256` | text |  |  | Caller-asserted training-data SHA-256 for emitted/strict evidence; not proof of which bytes trained the model. |
 | `--push` | text |  |  | Post the verdict as a GitHub PR comment (owner/repo#N). Auth via GITHUB_TOKEN / GH_TOKEN; needs the `gh` CLI. |
 | `--device` | text |  |  | Device for the live run (cuda / cpu). |
 | `--chat-template-kwargs` | text |  |  | Live chat-template variables as a JSON object, e.g. {"enable_thinking":false}. |

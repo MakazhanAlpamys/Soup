@@ -201,6 +201,53 @@ def check_report_output_path(path: str, field: str = "--output") -> str:
     return path
 
 
+def _same_file(first: str, second: str) -> bool:
+    """Whether two existing paths are one file, hard links included."""
+    try:
+        return os.path.samefile(first, second)
+    except (OSError, ValueError):
+        # A path that does not exist yet cannot be a hard link to anything.
+        return False
+
+
+def ensure_distinct_paths(
+    inputs: Iterable[tuple[str, str]],
+    outputs: Iterable[tuple[str, str]],
+    *,
+    reject_nested: bool = False,
+) -> None:
+    """Refuse outputs aliasing inputs, optionally including nested directories.
+
+    Items are (field, path) pairs. Identity uses normcase(realpath(...))
+    and samefile for existing paths, including hard links.
+    With reject_nested=True, neither path may contain the other.
+    Opens and creates nothing.
+    """
+    input_list = list(inputs)
+    for out_field, out_path in outputs:
+        out_identity = os.path.normcase(os.path.realpath(out_path))
+        for in_field, in_path in input_list:
+            in_identity = os.path.normcase(os.path.realpath(in_path))
+            if out_identity == in_identity or _same_file(out_path, in_path):
+                raise ValueError(
+                    f"{out_field} {quote_path(out_path)} is the same file as "
+                    f"{in_field} {quote_path(in_path)}; choose a different {out_field}"
+                )
+
+            if reject_nested:
+                try:
+                    common = os.path.commonpath([in_identity, out_identity])
+                except ValueError:
+                    # Paths on different drives cannot contain each other.
+                    continue
+                if common in (in_identity, out_identity):
+                    raise ValueError(
+                        f"{out_field} {quote_path(out_path)} overlaps "
+                        f"{in_field} {quote_path(in_path)}; "
+                        "choose separate, non-nested output directories"
+                    )
+
+
 def atomic_write_text(
     text: str,
     output_path: str,
