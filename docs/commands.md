@@ -383,6 +383,7 @@ soup train  # task in {sft,tts} + train_router_only=true [+moe_lora]  Freeze MoE
 soup train  # quantization='bitnet_1.58'  BitNet 1.58 training is not implemented; config load refuses it
 soup export --model ./output --format bitnet|tq1_0  BitNet 1.58 TQ1_0 ternary GGUF via llama.cpp — LIVE (v0.71.20)
 soup version [--full] [--json]                Show version (--full: system info, --json: JSON output)
+soup --version                                Show version (prints the same text as soup version)
 soup --verbose <command>                      Full traceback on errors
 ```
 
