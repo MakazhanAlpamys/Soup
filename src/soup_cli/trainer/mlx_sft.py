@@ -1053,6 +1053,8 @@ class MLXSFTTrainerWrapper:
                 f"iteration(s), and after the last of {iters // accum})[/]"
             )
 
+            drift_reported: list = []
+
             def run_eval(update: int) -> None:
                 tic = time.time()
                 value = evaluate_all_rows(
@@ -1061,9 +1063,21 @@ class MLXSFTTrainerWrapper:
                     iterate_fn=eval_iterate,
                 )
                 step_state = getattr(optimizer, "state", {}).get("step")
+                optimizer_step = int(step_state.item()) if step_state is not None else None
+                if optimizer_step not in (None, update) and not drift_reported:
+                    # The trigger assumes mlx-lm fetches the batch for
+                    # iteration `it` only after `it - 1` ran; a release that
+                    # prefetches would move the schedule, so say so, once.
+                    drift_reported.append(update)
+                    console.print(
+                        f"[yellow]MLX: the evaluation for update {update} ran after "
+                        f"{optimizer_step} optimizer step(s); this mlx-lm fetches "
+                        "batches ahead of the step, so training.eval_steps is "
+                        "approximate here.[/]"
+                    )
                 eval_log.append({
                     "update": update,
-                    "optimizer_step": int(step_state.item()) if step_state is not None else None,
+                    "optimizer_step": optimizer_step,
                     "val_loss": value,
                 })
                 callback.on_val_loss_report({

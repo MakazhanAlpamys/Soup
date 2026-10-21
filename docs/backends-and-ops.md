@@ -115,6 +115,9 @@ tail, and is recorded in `adapter_config.json` as `eval_steps` / `eval_unit`
 split smaller than one batch is evaluated rather than skipped. The validation
 loss uses the training loss: for plain-text rows that is mlx-lm's
 `default_loss`, which also scores the first padding token after each row.
+Soup triggers each evaluation when mlx-lm asks for the next training batch,
+which mlx-lm 0.31 and 0.32 do only after the previous step; if a release reads
+batches ahead, the run says once that the evaluation ran before its update.
 
 ```yaml
 base: mlx-community/Llama-3.2-3B-Instruct-4bit
