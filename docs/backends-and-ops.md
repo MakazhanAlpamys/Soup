@@ -239,7 +239,9 @@ chosen and rejected completion tokens:
 
 Qualified on Qwen2.5-0.5B-Instruct in bf16 and 4-bit on an M4 Pro: one epoch on
 600 UltraFeedback pairs took about 4.5 minutes and 7.5-8.6 GB, and the mean
-log-probability margin on 200 held-out pairs rose 1.9x (bf16) and 3.1x (4-bit).
+log-probability margin on 200 held-out pairs rose 1.9x (bf16) and 3.1x (4-bit),
+while held-out pairwise accuracy barely moved (0.540 to 0.565, 0.545 to 0.550).
+That shows the objective moving, not alignment quality.
 
 - **Beta is 0.1, fixed.** Soup's transformers backend passes no beta to TRL, so
   `CPOConfig`'s default 0.1 applies; MLX uses the same value and records it as

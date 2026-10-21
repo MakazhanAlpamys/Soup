@@ -59,7 +59,8 @@ def simpo_loss(
 ) -> tuple[Any, dict]:
     """TRL's SimPO loss and its metrics from per-pair mean completion log-probs.
 
-    Returns ``(loss, metrics)`` with TRL's logged quantities: ``nll_loss``,
+    Returns ``(loss, metrics)`` with ``preference_loss`` (the mean preference
+    term, which TRL does not log) and TRL's logged quantities: ``nll_loss``,
     ``reward_chosen`` / ``reward_rejected`` (``beta * logp``),
     ``reward_accuracy`` (strict ``>``), ``reward_margin``, and
     ``logps_chosen`` / ``logps_rejected``, all batch means.
@@ -74,6 +75,7 @@ def simpo_loss(
     loss = pref.mean() + cpo_alpha * chosen_nll
     chosen_rewards, rejected_rewards = beta * a, beta * b
     metrics = {
+        "preference_loss": pref.mean(),
         "nll_loss": chosen_nll,
         "reward_chosen": chosen_rewards.mean(),
         "reward_rejected": rejected_rewards.mean(),
@@ -90,8 +92,8 @@ class MLXSimPOTrainerWrapper(MLXORPOTrainerWrapper):
 
     objective = "SimPO"
     metric_names = (
-        "nll_loss", "reward_chosen", "reward_rejected", "reward_accuracy", "reward_margin",
-        "logps_chosen", "logps_rejected",
+        "preference_loss", "nll_loss", "reward_chosen", "reward_rejected", "reward_accuracy",
+        "reward_margin", "logps_chosen", "logps_rejected",
     )
 
     def _batch_arrays(self, examples: list) -> tuple:

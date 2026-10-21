@@ -271,6 +271,10 @@ class TestTheLossMatchesTheOracle:
         assert nll == pytest.approx(rnll, rel=1e-5)
         assert loss == pytest.approx(_np_loss(ra, rb, rnll, gamma, alpha), rel=1e-5)
         assert metrics["nll_loss"].item() == pytest.approx(rnll, rel=1e-5)
+        # The preference term, logged on its own: the total minus cpo_alpha * NLL.
+        assert metrics["preference_loss"].item() == pytest.approx(
+            _np_loss(ra, rb, rnll, gamma, alpha) - alpha * rnll, rel=1e-5
+        )
         assert metrics["reward_chosen"].item() == pytest.approx(BETA * ra.mean(), rel=1e-5)
         assert metrics["reward_rejected"].item() == pytest.approx(BETA * rb.mean(), rel=1e-5)
         assert metrics["reward_margin"].item() == pytest.approx(
@@ -697,6 +701,21 @@ class TestConfig:
             )
         return load_config_from_string(text)
 
+    def test_the_configured_gamma_and_alpha_reach_the_loss(self, monkeypatch):
+        """``simpo_gamma`` and ``cpo_alpha`` are the task's user-facing settings;
+        beta is CPOConfig's default (review of #2097)."""
+        from soup_cli.trainer import mlx_simpo
+
+        cfg = self._load(training="  cpo_alpha: 0.3\n  simpo_gamma: 1.3\n")
+        wrapper = mlx_simpo.MLXSimPOTrainerWrapper(cfg)
+        wrapper._head_split = None
+        seen = {}
+        monkeypatch.setattr(mlx_simpo, "simpo_terms", lambda *a, **k: (1.0, 2.0, 3.0))
+        monkeypatch.setattr(mlx_simpo, "simpo_loss",
+                            lambda *a, **k: (seen.update(k), (0.0, {}))[1])
+        wrapper._loss(object(), (None, None), "train", None)
+        assert seen == {"beta": 0.1, "gamma": 1.3, "cpo_alpha": 0.3}
+
     def test_simpo_on_mlx_loads_and_is_an_mlx_task(self):
         from soup_cli.config.schema import MLX_TASKS
 
@@ -716,8 +735,9 @@ class TestConfig:
         ("", "  quantization: 8bit\n", "quantization='8bit' is not supported by task='simpo'"),
         ("modality: vision\n", "", "modality='vision' is not supported by task='simpo'"),
         ("", "  lora: {r: 0}\n", "lora.r must be at least 1 for task='simpo'"),
-        ("", "  loraplus_lr_ratio: 16\n", "loraplus_lr_ratio"),
-        ("", "  cpo_alpha: 0\n", "cpo_alpha"),
+        ("", "  loraplus_lr_ratio: 16\n",
+         "training.loraplus_lr_ratio is not implemented on backend='mlx'"),
+        ("", "  cpo_alpha: 0\n", "cpo_alpha: Input should be greater than 0"),
     ])
     def test_unsupported_combinations_are_refused_at_load(self, top, training, match):
         with pytest.raises(Exception, match=match):
