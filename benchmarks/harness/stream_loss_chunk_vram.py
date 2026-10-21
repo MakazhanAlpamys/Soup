@@ -6,7 +6,6 @@ without the option, same model and stack, beside the pre-flight's prediction for
 the same run, so that "the pre-flight does not under-predict on those rows" can
 be checked rather than assumed.
 
-Nothing in this file has been run on a CUDA GPU by its author, who has none.
 ``--self-test`` runs the same protocol on a tiny local Llama and never reads a
 peak: it checks the plumbing (the arms, the realised length, the hook, the
 pre-flight's inputs and arithmetic, the verdicts), not memory. It runs on the

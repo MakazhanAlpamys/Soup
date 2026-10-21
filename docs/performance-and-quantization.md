@@ -722,7 +722,7 @@ The same term decides what an 8B base needs on a 4 GB card. Llama-3.1-8B NF4 (vo
 further 512 tokens per step** — 4.512 GB at 1024, already above the 4.294 GB card
 ([probe v0.73.0, section 9](../benchmarks/probe-v0.73.0-what-bounds-streaming.md#9-peak-vram-and-the-microbatch-sweep)).
 `data.max_length` defaults to 2048, so the "8B on 4 GB" setup needs `data.max_length: 512`.
-`training.stream_loss_chunk` (below) stops the logits term growing with the length; no chunked
+`training.stream_loss_chunk` (below) is built to stop the logits term growing with the length; no chunked
 run of that setup has been measured.
 
 So `soup train` predicts peak VRAM before building the model, and **refuses a run it
@@ -792,9 +792,9 @@ has not been measured.
 **The pre-flight** charges the logits on `min(seq, chunk)` tokens at the shipped bytes per
 element, plus the two tensors above; the panel line ends
 `(logits 0.23 GB in chunks of 128 tokens)` at batch 1 with the vocabulary above. That charge
-is arithmetic. The 14 bytes per element were measured on unchunked steps, and whether a
-chunked step still pays the 2 of them that are a retained copy of the logits (#327) is not
-known. The hook is on the model before `stream_vram_probe` runs, so with
+is arithmetic. Of the 14 bytes per element, 12 are the loss arithmetic measured on
+unchunked steps and 2 are charged for a retained copy of the logits whose cause is not
+identified (#327); whether a chunked step still pays those 2 is not known. The hook is on the model before `stream_vram_probe` runs, so with
 `stream_vram_probe: true` the step that decides the fit is the chunked one.
 
 **Refused.** At config load, as listed under "Rejected at config load" below: without

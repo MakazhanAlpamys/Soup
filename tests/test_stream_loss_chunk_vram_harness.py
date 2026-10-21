@@ -54,8 +54,32 @@ def test_the_self_test_passes(capsys):
     assert harness.run_self_test() == harness.EXIT_OK
 
     out = capsys.readouterr().out
-    assert "self-test: 13 passed, 0 failed" in out
+    assert "self-test: 13 passed, 0 failed" in out  # ansi-ok: print() output, no Rich console
     assert "FAIL" not in out
+
+
+def test_each_arm_is_torn_down(monkeypatch, capsys):
+    """On a card a hook or streamed runtime left behind would sit in the next arm's peak."""
+    from soup_cli.trainer.sft import SFTTrainerWrapper
+
+    calls = {"hook": 0, "runtime": 0}
+    remove_hook = SFTTrainerWrapper._remove_stream_loss_chunk_hook
+    close_runtime = SFTTrainerWrapper._close_stream_runtime
+
+    def counting_remove_hook(self):
+        calls["hook"] += 1
+        return remove_hook(self)
+
+    def counting_close_runtime(self):
+        calls["runtime"] += 1
+        return close_runtime(self)
+
+    monkeypatch.setattr(SFTTrainerWrapper, "_remove_stream_loss_chunk_hook", counting_remove_hook)
+    monkeypatch.setattr(SFTTrainerWrapper, "_close_stream_runtime", counting_close_runtime)
+
+    assert harness.run_self_test() == harness.EXIT_OK
+    capsys.readouterr()
+    assert calls == {"hook": 2, "runtime": 2}, "both teardowns, once per arm"
 
 
 @pytest.mark.parametrize("chunk", [None, 128])
