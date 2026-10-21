@@ -146,7 +146,7 @@ soup data push --input d.jsonl --hf-dataset u/n --hub modelscope|modelers  Uploa
 soup data registry                           List all registered datasets
 soup data demo                                List bundled demo JSONL fixtures
 soup data demo alpaca_demo --output ./d.jsonl  Copy a bundled demo JSONL fixture
-soup data ingest <file>                         PDF/DOCX/MD/TXT -> JSONL (one row per page/heading)
+soup data ingest <file>                         PDF/DOCX/MD/TXT -> JSONL (PDF/DOCX: pip install "soup-cli[documents]")
 soup data preprocess <config>                   AOT-tokenize and cache for reuse across runs
 soup data recipe <path>                         Validate / execute a Data Recipe DAG
 soup data mix                                 BETA mixture-weight optimiser (proxy runs)

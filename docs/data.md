@@ -1027,7 +1027,12 @@ of being silently skipped.
 
 **Document ingestion (PDF / DOCX / MD / TXT → JSONL):**
 
+PDF and DOCX need the optional `documents` extra. Markdown uses the built-in heading
+splitter, and TXT uses the built-in reader; neither needs an extra. The `pdf` extra
+renders compliance reports with reportlab and does not provide document readers.
+
 ```bash
+pip install "soup-cli[documents]"
 soup data ingest report.pdf --output report.jsonl
 soup data ingest README.md
 soup data ingest notes.docx

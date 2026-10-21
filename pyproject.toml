@@ -158,6 +158,8 @@ eval = ["lm-eval>=0.4.0"]
 # docs/evaluation.md; the wheel alone cannot supply benchmark/benchmark.py.
 aider = ["aider-chat>=0.86.2,<0.87"]
 data = ["datasketch>=1.6.0", "scikit-learn>=1.0.0"]
+# PDF/DOCX readers for `soup data ingest`; these floors are round-trip tested.
+documents = ["pypdf>=6.0.0", "python-docx>=1.2.0"]
 wandb = ["wandb>=0.15.0,<0.18.0"]
 # Self-references `[train]` so CI / contributors get the full training stack
 # (CI runs `pip install -e ".[dev]"`; without this every test would fail at

@@ -152,6 +152,7 @@ spelling is unchanged. See [the README's install section](../README.md#1-install
 | `eval` | `pip install "soup-cli[eval]"` | Benchmark evaluation (lm-evaluation-harness) |
 | `aider` | `pip install "soup-cli[aider]"` | Aider CLI; Polyglot evaluation also needs Aider's source-built Docker image |
 | `data` | `pip install "soup-cli[data]"` | Deduplication (MinHash via datasketch) |
+| `documents` | `pip install "soup-cli[documents]"` | PDF / DOCX ingestion (pypdf, python-docx); Markdown and TXT need no extra |
 | `data-pro` | `pip install "soup-cli[data-pro]"` | Language detection + PII (langdetect, presidio) |
 | `deepspeed` | `pip install "soup-cli[deepspeed]"` | Multi-GPU training (DeepSpeed ZeRO) |
 | `liger` | `pip install "soup-cli[liger]"` | Liger Kernel fused ops |
