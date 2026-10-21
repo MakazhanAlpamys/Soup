@@ -279,6 +279,8 @@ class TestTheTriggerWithoutMlx:
         assert seen == [(update, 4) for update in expected]
         assert result["eval_updates"] == expected
         assert [e["optimizer_step"] for e in loop["wrapper"]._eval_log] == expected
+        # In step, the drift warning stays silent.
+        assert "fetches batches ahead" not in loop["printed"].getvalue()
 
     def test_a_loop_that_prefetches_is_reported_once(self, tmp_path, monkeypatch):
         """The trigger relies on mlx-lm fetching batch `it` after step
