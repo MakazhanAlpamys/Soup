@@ -2936,7 +2936,7 @@ def ingest_document(
 
     Lazy-imports the per-format extractor so missing optional deps don't
     break the rest of `soup data --help`. Supported formats:
-    Install PDF/DOCX readers with `pip install "soup-cli[documents]"`.
+    Install PDF/DOCX readers with `pip install "soup-cli\\[documents]"`.
     - .pdf  → pypdf (documents extra)
     - .docx → python-docx (documents extra)
     - .md   → built-in heading splitter
