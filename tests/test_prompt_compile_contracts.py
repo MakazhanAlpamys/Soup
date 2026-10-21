@@ -15,12 +15,12 @@ def _strip_ansi(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", text)
 
 
-def _flat(text: str) -> str:
+def _plain(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", text))
 
 
 def _panel(output: str) -> dict:
-    return dict(re.findall(r"(Score|Iterations|Converged):\s+(\S+)", _flat(output)))
+    return dict(re.findall(r"(Score|Iterations|Converged):\s+(\S+)", _plain(output)))
 
 
 @pytest.fixture
@@ -934,7 +934,7 @@ def test_compile_tools_gepa_cli_options(tmp_path, monkeypatch, recording_gepa):
         ],
     )
     assert res_no_task.exit_code == 2
-    assert "GEPA optimizer requires --task-lm" in _flat(res_no_task.output)
+    assert "GEPA optimizer requires --task-lm" in _plain(res_no_task.output)
 
 
 def test_gepa_reads_val_aggregate_scores_without_best_score(tmp_path, monkeypatch):
@@ -993,7 +993,7 @@ def test_textgrad_refuses_when_no_engine_configured(tmp_path, monkeypatch, recor
         ["compile", "prog.py", "--eval", "eval.jsonl", "--optimizer", "textgrad", "-o", "out.py"],
     )
     assert res.exit_code == 2
-    assert "No backward engine configured" in _flat(res.output)
+    assert "No backward engine configured" in _plain(res.output)
 
     spec_json = {
         "openapi": "3.0.0",
@@ -1015,7 +1015,7 @@ def test_textgrad_refuses_when_no_engine_configured(tmp_path, monkeypatch, recor
         ],
     )
     assert res_tools.exit_code == 2
-    assert "No backward engine configured" in _flat(res_tools.output)
+    assert "No backward engine configured" in _plain(res_tools.output)
 
 
 def test_textgrad_preserves_prompt_when_no_score_signal(tmp_path, monkeypatch, recording_textgrad):
@@ -1060,7 +1060,7 @@ def test_gepa_invalid_adapter_raises_cleanly(tmp_path, monkeypatch, recording_ge
         app, ["compile", "prog.py", "--eval", "eval.jsonl", "--optimizer", "gepa", "-o", "out.py"]
     )
     assert res.exit_code == 2
-    assert "does not implement the required 'evaluate' method" in _flat(res.output)
+    assert "does not implement the required 'evaluate' method" in _plain(res.output)
 
 
 @pytest.fixture
@@ -1161,7 +1161,8 @@ def test_textgrad_runs_when_the_program_calls_set_backward_engine(
     )
     assert res.exit_code == 0, (res.output, repr(res.exception))
     assert (tmp_path / "out.py").read_text(encoding="utf-8").endswith("[edited] [edited]")
-    assert _panel(res.output).get("Score") == "unmeasured"
+    plain = _plain(res.output)
+    assert _panel(plain).get("Score") == "unmeasured"
 
 
 @pytest.mark.parametrize(
@@ -1195,7 +1196,8 @@ def test_textgrad_keeps_the_initial_text_when_every_edit_scores_worse(
     )
     assert res.exit_code == 0, (res.output, repr(res.exception))
     assert (tmp_path / "out.py").read_text(encoding="utf-8") == "Answer briefly."
-    assert _panel(res.output).get("Score") == "0.500"
+    plain = _plain(res.output)
+    assert _panel(plain).get("Score") == "0.500"
 
 
 def _tools_spec(tmp_path):
@@ -1256,7 +1258,7 @@ def test_compile_gepa_refuses_a_program_without_task_lm_or_adapter(
         app, ["compile", "prog.py", "--eval", "eval.jsonl", "--optimizer", "gepa", "-o", "out.py"]
     )
     assert res.exit_code == 2
-    assert "define 'task_lm' or 'adapter'" in _flat(res.output)
+    assert "define 'task_lm' or 'adapter'" in _plain(res.output)
     assert recording_gepa == []
 
 
@@ -1270,7 +1272,7 @@ def test_compile_gepa_names_the_missing_evaluate_method(tmp_path, monkeypatch, r
         app, ["compile", "prog.py", "--eval", "eval.jsonl", "--optimizer", "gepa", "-o", "out.py"]
     )
     assert res.exit_code == 2
-    assert "does not implement the required 'evaluate' method" in _flat(res.output)
+    assert "does not implement the required 'evaluate' method" in _plain(res.output)
     assert recording_gepa == []
 
 
@@ -1302,7 +1304,8 @@ def test_dspy_panel_reports_what_the_compiled_program_says(
          "--max-iters", "4", "-o", "out.py"],
     )
     assert res.exit_code == 0, (res.output, repr(res.exception))
-    assert _panel(res.output) == {"Score": "0.850", "Iterations": "11", "Converged": expected}
+    plain = _plain(res.output)
+    assert _panel(plain) == {"Score": "0.850", "Iterations": "11", "Converged": expected}
 
 
 @pytest.mark.parametrize("extra, expected", [({"converged": True}, "True"), ({}, "False")])
@@ -1323,7 +1326,8 @@ def test_gepa_panel_reports_metric_calls_and_convergence(tmp_path, monkeypatch, 
          "--max-iters", "5", "-o", "out.py"],
     )
     assert res.exit_code == 0, (res.output, repr(res.exception))
-    assert _panel(res.output) == {"Score": "0.900", "Iterations": "37", "Converged": expected}
+    plain = _plain(res.output)
+    assert _panel(plain) == {"Score": "0.900", "Iterations": "37", "Converged": expected}
 
 
 def test_compile_tools_gepa_writes_the_description_component_not_the_dict(
