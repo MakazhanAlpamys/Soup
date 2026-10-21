@@ -44,8 +44,17 @@ def test_documents_extra_declares_both_tested_reader_floors() -> None:
     assert match, "no installable documents extra"
     requirements = [Requirement(value) for value in ast.literal_eval(match.group(1))]
     assert {str(requirement) for requirement in requirements} == {
-        "pypdf>=6.0.0", "python-docx>=1.2.0",
+        "pypdf>=6.19.0", "python-docx>=1.2.0",
     }
+
+
+def test_documents_stays_opt_in_with_the_all_extra() -> None:
+    text = (ROOT / "pyproject.toml").read_text("utf-8")
+    match = re.search(r"^all\s*=\s*(\[.*\])$", text, re.M)
+    assert match, "no all extra"
+    assert all(
+        "documents" not in Requirement(value).extras for value in ast.literal_eval(match.group(1))
+    )
 
 
 @pytest.mark.parametrize("extension,module,package", [
