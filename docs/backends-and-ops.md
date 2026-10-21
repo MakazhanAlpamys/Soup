@@ -340,7 +340,11 @@ training:
   itself, and a last group of one row is its own KL row. Batches run in
   dataset order, the last partial batch included, because TRL's KTO samples
   sequentially: each training batch is one KL group, so its `z` is estimated
-  from the same completions it scores. `training.seed` / `data_seed` do not
+  from the same completions it scores. With `gradient_accumulation_steps`
+  above 1 the plan is cut to whole accumulation windows, as in MLX DPO and
+  ORPO; in dataset order that always leaves the same final batches untrained
+  (TRL instead updates on the partial window at each epoch's end), and the run
+  warns before training, naming those batches and their rows. `training.seed` / `data_seed` do not
   reorder rows (on either backend); shuffle the file to mix labels.
 - **Reference, precomputed.** The reference log-probs of every row and of its KL
   row come from the base model before the first update, as in MLX DPO
@@ -354,12 +358,19 @@ training:
   missing. A row longer than `data.max_length` loses the end of its completion;
   the prompt is never cut (TRL 0.29.1 has no prompt cap, and the transformers
   path adds none). A KL row is re-cut to its own prompt's room.
-- **Refused before any update:** a row whose `label` is not `true` / `false`,
-  or has none; an empty completion; and a row whose prompt leaves no room for
-  one completion token in `data.max_length` (TRL keeps such a prompt whole and
-  trains it past `max_length`). A refusal names the split and row index.
+- **Labels** are read by the loader's `format: kto` converter, exactly as on the
+  transformers backend (`true` / `false`, and the strings and numbers that
+  converter accepts); MLX adds no reading of its own. Only a row handed to the
+  trainer without the loader is checked for a real `true` / `false`.
+- **Refused before any update:** a row with no `label`; an empty completion;
+  and a row whose prompt leaves no room for one completion token in
+  `data.max_length` (TRL keeps such a prompt whole and trains it past
+  `max_length`). A refusal names the split and row index.
 - **Batch size at least 2**, as on the transformers backend: `batch_size: 1` is
-  refused at load and `batch_size: auto` runs at 2.
+  refused at load and `batch_size: auto` runs at 2. A training split smaller
+  than `batch_size` trains as one partial batch and one KL group, as in TRL;
+  fewer than 2 rows is refused, because a row's KL completion is another
+  row's.
 - **Stops on a nonfinite loss** instead of training on it (TRL's `nanmean`
   drops a NaN row silently).
 - **LoRA dropout applies**, as in MLX DPO above; set `lora.dropout: 0` to match
@@ -370,7 +381,8 @@ training:
   `n/a` for a label the step did not see). The run result has `val_kl`,
   `val_rewards_chosen`, `val_rewards_rejected`, `val_rewards_margins`,
   `val_logps_chosen` and `val_logps_rejected` for the validation split, which
-  is scored in `batch_size` chunks in order.
+  is scored in `batch_size` chunks in order. TRL's `logits/*` and `count/*`
+  metrics are not reported.
 - **Saved:** `adapters.safetensors` and `adapter_config.json` (with `task: kto`,
   `kto_beta`, the loss type, both weights, the KL group size and the base
   model), loadable with `mlx_lm.load(base, adapter_path=output)`, written as
