@@ -591,7 +591,10 @@ class TestWorkflowPins:
 
     def test_job_if_conditions_are_pinned(self):
         jobs = self._loaded()["jobs"]
-        assert jobs["gate"]["if"] == "github.event_name == 'pull_request'"
+        # A pull request that is not a draft (2026-10-19; test_ci_extra_workflows_skip_drafts.py).
+        assert jobs["gate"]["if"] == (
+            "github.event_name == 'pull_request' && github.event.pull_request.draft == false"
+        )
         reeval_if = jobs["reeval-open-prs"]["if"]
         assert "push" in reeval_if
         assert "pull_request" not in reeval_if

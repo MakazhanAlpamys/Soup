@@ -28,6 +28,7 @@ from soup_cli.utils.mixed_precision import (
     align_trainable_dtype_for_fp16,
     keep_trainable_dtype_on_resume,
 )
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -220,7 +221,8 @@ class RewardModelTrainerWrapper:
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -252,6 +254,7 @@ class RewardModelTrainerWrapper:
 
         self.model = AutoModelForSequenceClassification.from_pretrained(
             cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
         )
 
         if tcfg.quantize_reward_model and tcfg.quantization in ("4bit", "8bit"):

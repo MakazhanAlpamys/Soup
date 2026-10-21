@@ -33,6 +33,7 @@ from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import bf16_fp16_flags
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -123,7 +124,10 @@ def _load_autoconfig(base: str, trust_remote_code: bool) -> Any:
     """Load ``AutoConfig`` for ``base`` (isolated for test monkeypatching)."""
     from transformers import AutoConfig
 
-    return AutoConfig.from_pretrained(base, trust_remote_code=trust_remote_code)
+    return AutoConfig.from_pretrained(
+        base, trust_remote_code=trust_remote_code,
+        **base_revision_kwargs(base),
+    )
 
 
 def _require_whisper_base(base: str, trust_remote_code: bool) -> Any:
@@ -203,7 +207,8 @@ class AsrTrainerWrapper:
 
         console.print(f"[dim]Loading Whisper processor: {cfg.base}[/]")
         self.processor = WhisperProcessor.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         # For fine-tuning, the decoder prefix (language / task) is baked into
         # the tokenized labels; forced_decoder_ids must be cleared so training
@@ -220,7 +225,8 @@ class AsrTrainerWrapper:
 
         console.print(f"[dim]Loading Whisper model: {cfg.base}[/]")
         self.model = WhisperForConditionalGeneration.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         self.model.config.forced_decoder_ids = None
         self.model.config.suppress_tokens = []

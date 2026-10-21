@@ -85,10 +85,10 @@ def diff(
     path_a = Path(model_a)
     path_b = Path(model_b)
     if not path_a.exists():
-        console.print(f"[red]Model A not found: {path_a}[/]")
+        console.print(f"[red]Model A not found: {for_terminal(path_a)}[/]")
         raise typer.Exit(1)
     if not path_b.exists():
-        console.print(f"[red]Model B not found: {path_b}[/]")
+        console.print(f"[red]Model B not found: {for_terminal(path_b)}[/]")
         raise typer.Exit(1)
 
     # Collect prompts
@@ -181,7 +181,7 @@ def diff(
         with open(out_path, "w", encoding="utf-8") as f:
             for row in results:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
-        console.print(f"[dim]Results saved to {out_path}[/]")
+        console.print(f"[dim]Results saved to {for_terminal(out_path)}[/]")
 
 
 def _collect_prompts(prompts_file: Optional[str], prompt_args: Optional[list[str]]) -> list[str]:
@@ -243,7 +243,9 @@ def _load_model(
             pass
 
     if is_adapter and not base_model:
-        console.print(f"[red]Cannot detect base model for {path}. Use --base-a/--base-b.[/]")
+        console.print(
+            f"[red]Cannot detect base model for {for_terminal(path)}. Use --base-a/--base-b.[/]"
+        )
         raise typer.Exit(1)
 
     probe_target = base_model or model_path

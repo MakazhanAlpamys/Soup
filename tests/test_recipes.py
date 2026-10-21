@@ -110,6 +110,21 @@ class TestRecipeCatalog:
                 f"Recipe '{name}' task mismatch: meta={recipe.task}, yaml={yaml_task}"
             )
 
+    def test_recipe_data_formats_suit_preference_tasks(self):
+        """The catalog must not offer vision row formats to preference trainers."""
+        import yaml
+
+        from soup_cli.recipes.catalog import RECIPES
+
+        preference_tasks = {"dpo", "ipo", "simpo", "orpo", "bco", "preference"}
+        vision_preference_formats = {"llava", "sharegpt4v"}
+        for name, recipe in RECIPES.items():
+            parsed = yaml.safe_load(recipe.yaml_str)
+            data_format = parsed.get("data", {}).get("format", "auto")
+            assert not (
+                recipe.task in preference_tasks and data_format in vision_preference_formats
+            ), f"Recipe {name} pairs preference task {recipe.task} with {data_format}"
+
     def test_recipe_models_match_yaml_base(self):
         """Recipe.model matches the base model in the YAML content."""
         import yaml
@@ -1811,6 +1826,7 @@ class TestV025NewRecipes:
         Issue #850 added 2 (deepseek-v4-pro-dpo, deepseek-v4-pro-grpo) -> 176.
         PR #1113 removes spark-tts -> 173.
         Issue #1145 removed 3 (mistral-large-3-sft, mistral-large-3-dpo, minimax-m3-dpo) -> 170.
+        Issue #1867 retires the unsupported vision-preference recipe -> 169.
         """
         from soup_cli.recipes.catalog import RECIPES
         from tests.recipe_count import EXPECTED_RECIPE_COUNT, recipe_count_hint

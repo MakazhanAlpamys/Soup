@@ -100,6 +100,14 @@ dependency; the local file path below does not.
 CUDA-shaped analytical VRAM preflight is skipped on the MLX path because Apple
 unified memory is managed by Metal, not a fixed CUDA VRAM pool.
 
+mlx-lm trains and evaluates in whole batches of `training.batch_size`
+([#1851](https://github.com/MakazhanAlpamys/Soup/issues/1851)). A validation
+split with fewer rows than one batch, which the default `data.val_split: 0.1`
+produces on a small file, is not evaluated: the run warns, naming both numbers,
+and records no `val_loss`. Lower `batch_size`, raise `val_split`, or set
+`val_split: 0` to train on those rows instead. A training split with fewer rows
+than one batch is refused before the model loads.
+
 ```yaml
 base: mlx-community/Llama-3.2-3B-Instruct-4bit
 task: sft
@@ -117,7 +125,71 @@ training:
     alpha: 32
 ```
 
-MLX backend supports SFT. `backend: mlx` with `task: dpo` or `task: grpo` is refused when the config is loaded, with an error naming the task — upstream `mlx-lm` ships no DPO/GRPO training helper, so those wrappers exist only as a backstop for callers that bypass config validation. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for ready-made Apple Silicon configs.
+MLX backend supports SFT and DPO. Any other task with `backend: mlx` (`grpo`, `ipo`, `kto`, ...) is refused when the config is loaded, with an error naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for ready-made Apple Silicon configs.
+
+#### DPO on MLX
+
+`task: dpo` with `backend: mlx` runs Soup's own training loop (`mlx-lm` ships no DPO helper), with the sigmoid loss TRL uses by default and `training.dpo_beta`.
+
+```yaml
+base: mlx-community/Qwen2.5-0.5B-Instruct-4bit
+task: dpo
+backend: mlx
+
+data:
+  train: ./prefs.jsonl
+  format: dpo
+  max_length: 1024
+
+training:
+  lr: 2e-5
+  dpo_beta: 0.1
+  batch_size: 2
+  gradient_accumulation_steps: 4
+  gradient_checkpointing: true
+  seed: 42
+  lora:
+    r: 16
+    alpha: 32
+```
+
+- **No second model in memory.** LoRA `B` starts at zero, so before the first update the policy *is* the base model. Reference log-probs are computed once from it before training, which is what TRL's `precompute_ref_log_probs` does. `--resume` computes them before the checkpoint loads, so the reference is always the base model.
+- **The rows `load_dataset` gives every backend.** Each row is read by the loader's own `format: dpo` converter, so MLX accepts exactly the layouts the transformers backend does: text (three strings) or conversational (a message-list prompt, or full `chosen` / `rejected` conversations that repeat the user turn, as the bundled examples do). Text rows get EOS appended; conversational rows go through the model's chat template; the prompt is capped at `max_length // 2` and completions at what remains, as on TRL 0.29. Where this differs from TRL, it does on purpose: a pair whose `chosen` equals its `rejected` is skipped with a count (TRL trains it at a constant loss and zero gradient), and a row the chat template is not prefix-stable for is skipped with a count and the first row's index (TRL warns and slices anyway). Fewer pairs than `training.batch_size` after skipping is refused, naming both.
+- **Seeded.** `training.seed` seeds `mx.random` (LoRA init, dropout) and the batch order; `training.data_seed`, when set, owns the batch order instead. Two runs with the same seed reproduce each other's losses.
+- **Memory.** Log-probs are computed from the first completion position on, with the vocabulary head run in checkpointed chunks, so the full-vocabulary logits of a batch are never held at once. The chunked path is checked against the full model on the first batch and dropped, with a warning, for an architecture that changes logits after the head. Set `training.gradient_checkpointing: true` for long sequences: measured once on an M4 Pro, Qwen2.5-0.5B-4bit with 792-token pairs, it took a training step from 10.05 GB to 3.63 GB.
+- **Learning rate.** DPO is more sensitive than SFT. In one run on UltraFeedback pairs with Qwen2.5-0.5B-4bit, LoRA r=16 on attention, `lr: 5e-5` diverged to NaN within a dozen updates while `lr: 2e-5` trained; start at `2e-5` or below.
+- **Progress.** The panel and `soup ui` show loss and validation loss. Reward accuracy and margin print per logged step when there is no live panel, and are returned in the run result; the reference precompute prints its progress before the panel starts.
+- **Refused at load:** `modality: vision` / `audio` (MLX DPO trains on text and chat rows) and `training.lora.r: 0` (the reference is the untrained LoRA policy, so an adapter must exist), plus `dpo_beta_schedule` / `dpo_ref_regen_epochs` and LoRA+.
+- **Not applied on MLX:** `data.chat_template`, per-row `tools` / `chat_template_kwargs` columns (TRL reads them; MLX DPO renders with the model's own template and nothing else), NEFTune, Liger, FlashAttention and the other CUDA-path options MLX SFT also warns about.
+
+#### DoRA on MLX
+
+For text SFT, set `training.lora.use_dora: true` to use MLX-LM's native
+weight-decomposed adapter instead of plain LoRA. Soup supports dense linear
+targets on unquantized or pre-quantized 4-bit bases, with the same scalar
+`lora.r`, `lora.alpha` and `target_modules` settings as MLX LoRA. The base remains
+frozen; the low-rank factors and magnitude parameters train. Switch/expert layers,
+embedding targets, unmatched target names and 8-bit target layers are refused
+before adapter conversion. `use_rslora`, `rank_pattern` and `alpha_pattern` are
+not supported with MLX DoRA. Unsloth DoRA remains refused.
+
+The output records `fine_tune_type: dora` and is loadable with
+`mlx_lm.load(base, adapter_path=output)`. `soup train --resume auto` warm-starts
+the DoRA weights, including magnitudes; it refuses missing, extra or differently
+shaped adapter tensors before loading any of them. This restores weights only,
+not optimizer state, dataset position or the iteration counter.
+
+To fuse the adapter, use the native MLX-LM command (this is not `soup merge`):
+
+```bash
+mlx_lm.fuse --model ./mlx-base --adapter-path ./output \
+  --save-path ./fused-model --dequantize
+```
+
+Native regression tests use a local, randomly initialized one-layer Llama and
+check training, frozen base weights, gradients, reload and dequantized fusion.
+They require no model downloads. They establish adapter lifecycle correctness;
+they do not establish pretrained-model quality or a speed advantage over LoRA.
 
 #### Optimizers and schedules
 
@@ -151,7 +223,7 @@ what ran is recoverable from the output directory.
 
 ### Transformers on MPS
 
-The regular `backend: transformers` path can run more than MLX's SFT-only
+The regular `backend: transformers` path can run more than MLX's SFT and DPO
 surface. On a live MPS runtime that accepts bfloat16, Soup enables BF16 autocast
 for the hardware-validated text trainers: SFT, DPO, GRPO/RLVR, reward modelling,
 and PRM.
@@ -201,7 +273,22 @@ training:
 
 Works with the tasks that have an unsloth setup: SFT (text; SFT vision and audio still run the transformers setup), DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, BCO, preference, Pretrain, Embedding and TTS. The others (`reward_model`, `prm`, `classifier`, `reranker`, `cross_encoder`, `distill`, `unlearn`, `moe_lora_routing`, `online_dpo` and `asr`) have no unsloth setup, so `backend: unsloth` is refused at config load for them (#1357). If unsloth is installed but not enabled, Soup suggests it, but only for a config that would still load with `backend: unsloth` (#1736): a config one of these refusals would stop gets no suggestion.
 
+`quantization: 8bit` with `backend: unsloth` is refused at config load: Soup's Unsloth loader passes `load_in_4bit` only, so `8bit` used to load the model in 16-bit with no word (#1811). Use `4bit` or `none` on this backend, or `backend: transformers` for 8-bit.
+
 > **Tip:** Soup auto-detects unsloth. When it is installed, `soup train` prints a hint if you haven't enabled it yet and your config would load with it.
+
+### Gradient checkpointing on Unsloth
+
+On `backend: unsloth`, `training.gradient_checkpointing` is honoured instead of silently ignored ([#797](https://github.com/MakazhanAlpamys/Soup/issues/797)):
+
+- `false` (the schema default) disables checkpointing and may increase activation memory.
+- `true` (or a tier: `selective`, `medium`, `full`, `auto`) enables Unsloth's optimized checkpointing; throughput and maximum context depend on the workload.
+- Layer streaming (`training.stream_layers: true`) already checkpoints every layer, so the Unsloth kernel stays off there whatever the flag says.
+
+```yaml
+training:
+  gradient_checkpointing: true  # keep Unsloth's optimized checkpointing
+```
 
 
 ## Cloud GPU Training
@@ -489,7 +576,7 @@ soup recipes verify --json    # one row per config on stdout, for CI
 | **Reasoning** | All 6 DeepSeek-R1-Distill sizes (Qwen 1.5B / 7B / 14B / 32B + Llama 8B / 70B), Qwen3-Coder 30B, Qwen3-30B-A3B reasoning, Phi-4 reasoning |
 | **Small / edge / mobile** | SmolLM2 (135M / 360M / 1.7B), Qwen2.5 (0.5B / 1.5B / 3B), Gemma 2 2B, Phi-3.5-mini, Llama-3.2 (1B / 3B) |
 | **Domain specialists** | BioMistral 7B, Meditron 7B (medical) — CodeLlama (13B / 70B), Magicoder 6.7B (code) — Mathstral 7B (math) — Llama-2-13b-finance (FinGPT-style starter) — Nemotron-4 340B |
-| **Multimodal reasoning** | Llama-3.2-Vision GRPO, Pixtral DPO |
+| **Multimodal reasoning** | Llama-3.2-Vision GRPO |
 | **Multi-GPU** | llama3-70b-fsdp2, qwen3-32b-zeropp, deepseek-v3-pipeline |
 | **Apple Silicon (MLX)** | llama3.1-8b / qwen3-8b / gemma3-9b SFT-MLX |
 | **Tool-calling / agentic** | qwen3-8b-tools, llama4-scout-tools |
@@ -678,6 +765,48 @@ A file over a limit is refused with a message naming the file and the limit (`so
 ## Experiment Tracking
 
 Every `soup train` run is automatically tracked in a local SQLite database (`~/.soup/experiments.db`).
+
+### Recorded base identity
+
+For single-process resident Hugging Face loads on the Transformers backend, `soup train` resolves
+the base's commit once, immediately before its first model/tokenizer/processor/config
+load, and passes that commit to the run's subsequent base loads. The original `base`
+name stays in the config and experiments row; unrelated teacher, reward and scorer
+repositories do not receive its revision. `soup runs show` displays the revision and
+its source.
+
+The new nullable `runs.base_revision`, `runs.base_revision_source` and
+`runs.training_data_sha256` columns upgrade existing databases in place. Historical
+rows stay unknown; Soup never fills them from today's Hub state or dataset bytes.
+Training-data hash capture remains separate work (#1764 part 2); this change reserves
+its storage/transfer contract without hashing training inputs.
+
+An unavailable/offline Hub metadata lookup preserves the existing load flow and
+records an unknown revision. A local `snapshots/<40-hex>` directory records
+`base_revision_source: cache_path`: this is a hint derived from the directory name,
+**not proof that its local bytes match the Hub commit**. Other local directories
+also have unknown content identity. There is no new config field or new default
+offline, legacy-export or `--base` refusal.
+
+The saving rank writes `soup_run.json` beside the final training artifact, containing
+the schema version, run ID, original base ID, nullable revision/source and nullable
+training-data hash. Keep that file when copying an adapter. Shared live-eval loading
+and GGUF's adapter-merge path can then reuse a matching recorded Hub commit without
+access to the original experiments database. An explicit different base or missing,
+malformed or future-version metadata keeps the existing flow, without guessing a
+historical commit. This metadata is provenance, not a signed integrity attestation.
+Loading a local adapter folder directly also reuses that commit when its
+`adapter_config.json` names the same base and has no conflicting explicit revision;
+the tokenizer still comes from the adapter folder.
+
+**First-stage boundaries:** Non-HF hubs, Unsloth, MLX, layer-streaming and distributed loads remain unbound and
+are recorded as such; a cache-path hint on any backend is still unverified. Standalone
+wrapper/sweep invocations do not automatically establish a run scope. Metadata is
+written for the final artifact, not each intermediate checkpoint. Other exporters
+(including ONNX/TensorRT and native AWQ/GPTQ/torchao loaders), remote adapter sidecars
+and independent teacher/reward/scorer repositories do not gain a binding guarantee.
+Evaluation engines that bypass the shared live-eval loader (including lm-eval's
+adapter benchmark path and vLLM) also remain unbound in this stage.
 
 ```bash
 # List all training runs
@@ -1174,7 +1303,7 @@ soup env check
 Given (params, seq_len, batch_size, optimizer, quant, peft, gradient_checkpointing), the analytical predictor returns a 5-bucket peak-VRAM breakdown (weights / optimizer / gradients / activations / overhead) and an OK/OOM verdict with a 10% safety margin.
 
 For `soup train`, `params_b` is derived by `model_size_from_name`:
-- A local checkpoint path is measured directly from safetensors metadata headers.
+- A local checkpoint path is measured directly from safetensors metadata headers. The files measured are the checkpoint's own: the ones `model.safetensors.index.json` names; without an index `model.safetensors`, else the `model-*-of-*.safetensors` shards, else every `*.safetensors` except `consolidated*`. The Hub download for layer streaming and `soup spectrum scan` fetches by the same rule, so what is downloaded is what is counted. A `consolidated.safetensors` beside the checkpoint (the mistral-inference copy Mistral's repositories ship, which transformers never loads) is not counted, not downloaded for layer streaming or `soup spectrum scan`, not copied out of the HF cache, and not sharded; a directory holding only such a file is refused with its name (#1806).
 - A Hub id is parsed: e.g. `72B`, `8x7B` → `46.7` total, `17B-16E` → `109` total, with active-parameter markers (`-A22B`) ignored.
 - An id with no size token (e.g. `DeepSeek-V3`, `Kimi-K2`, `GLM-5`, `MiniMax-M2`) still falls back to `7B`, which under-predicts these models (they have 229B to 1T parameters). Point `base:` at a local download to have the checkpoint measured instead.
 

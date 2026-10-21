@@ -100,6 +100,7 @@ def test_expect_suite_path_that_is_a_directory_names_the_problem(tmp_path, monke
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("filename", ["soup.lock", "custom.lock"])
 @pytest.mark.parametrize(
     "args",
     [
@@ -114,16 +115,18 @@ def test_expect_suite_path_that_is_a_directory_names_the_problem(tmp_path, monke
     ],
     ids=["show", "check"],
 )
-def test_lock_commands_name_a_corrupt_lock_file(tmp_path, monkeypatch, args):
+def test_lock_commands_name_a_corrupt_lock_file(tmp_path, monkeypatch, args, filename):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "soup.lock").write_text("garbage:", encoding="utf-8")
+    (tmp_path / filename).write_text("garbage:", encoding="utf-8")
 
-    result = CliRunner().invoke(app, args)
+    result = CliRunner().invoke(
+        app, [filename if value == "soup.lock" else value for value in args]
+    )
 
     assert result.exit_code == EXIT_USAGE_ERROR, (result.output, repr(result.exception))
     plain = _plain(result.output)
     assert "not valid JSON" in plain
-    assert "soup.lock" in plain
+    assert filename in plain
 
 
 def test_lock_show_names_a_lock_file_that_is_not_utf8(tmp_path, monkeypatch):

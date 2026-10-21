@@ -118,9 +118,9 @@ soup loop watch --pre-wired --pack-cans --poll-interval 300
 
 # Learn from Soup's own serving (#1440): the pre-wired harvest also reads the
 # thumbs `soup serve --record-thumbs` captures through POST /v1/thumbs, pairing
-# the latest 👍 and 👎 answer per prompt. The database must stay under cwd and
-# exist as a thumbs database: start the serve first, or `soup loop watch` refuses,
-# naming the field.
+# the latest thumbs-up and thumbs-down answer per prompt. The database must
+# stay under cwd and exist as a thumbs database: start the serve first, or
+# `soup loop watch` refuses, naming the field.
 soup serve --model ./base --record-thumbs ./rl.db
 soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod \
     --pre-wired --thumbs-db ./rl.db
@@ -306,7 +306,14 @@ soup registry promote llama31-chat-v1 --tag prod
 soup registry delete llama31-chat-v1 --yes
 ```
 
-**Training data:** `push --data <file>` stores the file's SHA-256 as the entry's `data_hash`, shown by `soup registry show`. It records the file registered as the training input, not proof of what the run trained on. The file must be under the current directory; without `--data` the entry has no `data_hash`.
+**Training data:** `push --data <file>` stores the file's SHA-256 as the entry's `data_hash`, shown by `soup registry show`. It records the file registered as the training input, not proof of what the run trained on. The file must be under the current directory. Without `--data`, `register_from_run` copies a stored historical `training_data_sha256` without reopening today's path; legacy runs remain unknown. When both are present, the explicit file takes precedence for `data_hash`, while the separate historical `training_data_sha256` is retained. `entry_hash` binds the chosen data digest and any recorded base revision/source. Training-time hash capture itself remains #1764 part 2; reserving nullable storage does not claim the transformed examples consumed by training.
+
+**Base identity:** Registration copies the run's nullable base revision and its source;
+`soup registry show` exposes both. `hub_commit` identifies the commit passed to supported
+base loaders, while `cache_path` only describes the local directory name and does not
+verify local contents. The original human-readable base ID and config hash retain their
+existing meaning. Registrations with no known revision/hash retain their legacy entry
+fingerprint. Retries also compare the recorded revision/source and historical data hash.
 
 **Retries:** `push --idempotency-key <key>` (or `RegistryStore.push(idempotency_key=...)`) makes a registration safe to repeat after a crash or a timeout. A later push with the same key writes nothing and returns the existing entry, provided it repeats that entry's name, base model, task, run, config and data hash and its tag is one of the entry's tags; anything else under the same key is refused with an error naming the entry. Notes are not compared. Two writers pushing the same key at once end up with one entry. A key is 1 to 128 characters from letters, digits, `.`, `_`, `:` and `-`; pushes without one behave as before. `RegistryStore.get_by_idempotency_key(key)` finds the entry. Deleting the entry frees its key.
 
@@ -574,7 +581,12 @@ soup --no-audit-log version             # skip the audit line for this command
 PII redaction across **every** string field (`hf_*` / `sk-*` / `Bearer …` → `<redacted>`)
 via the v0.40.3 `_SECRET_RE` policy. POSIX `O_NOFOLLOW` + `0o600` perms, atomic-append,
 rotation at 100 MiB with symlink rejection at the backup path. The auto-instrumentation is
-best-effort — a broken audit log never crashes the CLI.
+best-effort — a broken audit log never crashes the CLI. Lines written by older versions get the
+same webhook URL masking as new ones, applied once the next time the log is written
+(`audit.jsonl.masked-v1` marks it done). A file it cannot replace is left as it is; the attempt
+is recorded in `audit.jsonl.masked-v1.tried` and the next one waits a day, so a log another
+process keeps open is not re-read by every command. Temp files an interrupted pass left beside
+the log are removed by the next pass once they are an hour old.
 
 
 ## Reproducibility Receipt (`soup train --repro-receipt`)

@@ -25,6 +25,9 @@ on:
       - '.github/constraints/pinned-upstream.txt'
   pull_request:
     branches: [main]
+    # `ready_for_review` is what starts the first run of a draft pull request: a draft
+    # is skipped by the job's own `if:` (2026-10-19; see the job).
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'src/soup_cli/recipes/**'
       - 'src/soup_cli/config/**'
@@ -77,6 +80,10 @@ concurrency:
 
 jobs:
   validate-recipes:
+    # Not on a draft pull request (not a required check). Measured 2026-10-19 over 7
+    # days: 15 runs on a head whose CI run was a skipped draft, 32 job-minutes. Marking
+    # the pull request ready runs it (`ready_for_review` above).
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     env:
       PYTHONUTF8: "1"
