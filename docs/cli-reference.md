@@ -2167,6 +2167,9 @@ Usage: `soup eval custom [OPTIONS]`
 |---|---|---|---|---|
 | `--tasks`, `-t` | text |  | yes | Path to eval tasks JSONL file |
 | `--model`, `-m` | text |  | yes | Path to model directory |
+| `--backend` | text | `transformers` |  | Generation backend: transformers or mlx |
+| `--max-tokens` | integer, 1 to 16384 | `512` |  | MLX maximum generated tokens (1-16384) |
+| `--temperature` | float | `0.0` |  | MLX sampling temperature (0 = greedy) |
 | `--run-id` | text |  |  | Link results to an existing training run |
 | `--attach-to-registry` | text |  |  | Attach the eval JSON to a registry entry as kind=eval_results |
 | `--output`, `-o` | text |  |  | Path to write the eval JSON output. Honored independently of --attach-to-registry (v0.40.1 / G10). |
