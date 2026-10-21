@@ -541,12 +541,16 @@ def _lands_on(produced, parameter_keys) -> bool:
 def _all_linear_modules(model) -> Optional[set]:
     """peft's own ``all-linear``: every ``nn.Linear`` / ``Conv1D`` but the output head.
 
-    ``None`` when peft's private expansion is not importable.
+    ``None`` when peft's private expansion is not importable, or raises (a private
+    signature is not a promise): the caller then fails closed, as for the conversion.
     """
     expand = _peft_all_linear_expander()
     if expand is None:
         return None
-    return expand(model)
+    try:
+        return expand(model)
+    except Exception:  # noqa: BLE001 - a changed private helper must not break setup
+        return None
 
 
 def _linear_modules_by_type(model) -> set:

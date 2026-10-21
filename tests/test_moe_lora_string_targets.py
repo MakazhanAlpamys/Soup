@@ -8,8 +8,10 @@ meanings, and both were lost:
 * ``"all-linear"``, peft's shorthand for every ``nn.Linear`` but the output head.
   ``target_modules: auto`` resolves to it on qwen4_exp, so ``moe_lora`` on a qwen4_exp
   base dropped the Gated DeltaNet ``in_proj_*`` / ``out_proj``, the QSA indexer, the
-  shared-expert gate, the hyper-connection mixers and the PLE projections: 10 adapted
-  modules instead of 34 on the tiny model below.
+  hyper-connection mixers and the PLE projections. On the tiny model below that is 10
+  adapted modules under ``moe_lora`` before this fix and 32 after it: the 34 linears
+  ``all-linear`` adapts without ``moe_lora``, minus the 2 ``shared_expert_gate``,
+  whose output is a routing logit.
 * any other string, which peft full-matches against every module name as a regex.
 
 Now ``"all-linear"`` is kept as it is (it already reaches every module the MoE names
@@ -675,6 +677,20 @@ class TestFailClosedWithoutPeftsPrivateHelpers:
         assert isinstance(targets, MoeLoraTargets)
         assert modules == expected_modules and params == expected_params
 
+    def test_an_all_linear_expander_that_raises_fails_closed(self, monkeypatch):
+        """A private helper whose signature changed raises; setup lists, not crashes."""
+
+        def changed_signature(_model):
+            raise TypeError("_maybe_include_all_linear_layers() missing 1 required argument")
+
+        monkeypatch.setattr(moe_mod, "_peft_all_linear_expander", lambda: changed_signature)
+        modules, params, targets = _attach_uncached("qwen4_exp", "auto")
+        expected_modules, expected_params, gates = _expected("qwen4_exp", "auto")
+
+        assert isinstance(targets, MoeLoraTargets)
+        assert modules == expected_modules and params == expected_params
+        assert not gates & modules
+
     def test_without_the_conversion_the_string_becomes_a_list(self, monkeypatch):
         monkeypatch.setattr(moe_mod, "_peft_config_converter", lambda: None)
         modules, params, targets = _attach_uncached("qwen4_exp", "auto")
@@ -1103,6 +1119,14 @@ class TestTheStringMinusTheGatesAttaches:
 
         assert type(targets) is str and targets == string
         assert (set(modules), set(params)) == direct
+
+    def test_an_explicit_list_naming_the_router_is_honoured(self):
+        """A list is extended, never filtered: listing ``gate`` adapts the router."""
+        _, params, targets = _attach_uncached("qwen3_moe", ["q_proj", "gate"])
+
+        assert isinstance(targets, MoeLoraTargets)
+        assert list(targets)[:2] == ["q_proj", "gate"]
+        assert {"model.layers.0.mlp.gate.weight", "model.layers.1.mlp.gate.weight"} <= params
 
     def test_without_moe_lora_peft_still_adapts_the_routers(self):
         _, qwen3_params, _ = _attach("qwen3_moe", "all-linear", moe_lora=False)
