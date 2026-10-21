@@ -731,7 +731,7 @@ the tokenizer still comes from the adapter folder.
 are recorded as such; a cache-path hint on any backend is still unverified. Standalone
 wrapper/sweep invocations do not automatically establish a run scope. Metadata is
 written for the final artifact, not each intermediate checkpoint. Other exporters
-(including ONNX/TensorRT and native AWQ/GPTQ/torchao loaders), remote adapter sidecars
+(including ONNX/TensorRT and native torchao loaders), remote adapter sidecars
 and independent teacher/reward/scorer repositories do not gain a binding guarantee.
 Evaluation engines that bypass the shared live-eval loader (including lm-eval's
 adapter benchmark path and vLLM) also remain unbound in this stage.

@@ -159,8 +159,11 @@ def export(
 
     # --- Validate ---
     if fmt not in SUPPORTED_FORMATS:
+        removed_notice = ""
+        if fmt in ("awq", "gptq"):
+            removed_notice = f"\n[yellow]--format {fmt} was removed in v0.77.[/]"
         console.print(
-            f"[red]Unsupported format: {fmt}[/]\n"
+            f"[red]Unsupported format: {fmt}[/]{removed_notice}\n"
             f"Supported: {', '.join(SUPPORTED_FORMATS)}"
         )
         raise typer.Exit(1)
@@ -212,7 +215,6 @@ def export(
                 explicit_id=registry_id, source_model=str(Path(model)),
             )
         return
-
 
     # --- TorchAO PTQ export path (v0.53.1 #142) ---
     if fmt == "torchao":
@@ -997,37 +999,6 @@ def _export_tensorrt(
         )
     )
     return output_path
-
-
-def _validate_output_path(output: Optional[str]) -> Optional[Path]:
-    """Validate output path stays under cwd (path traversal protection)."""
-    if output is None:
-        return None
-    # realpath + commonpath containment (is_under_cwd) — Path.resolve() +
-    # relative_to() breaks on Windows 8.3 short names.
-    from soup_cli.utils.paths import is_under_cwd
-
-    out_path = Path(output).resolve()
-    if not is_under_cwd(output):
-        console.print("[red]Output path must be under the current working directory.[/]")
-        raise typer.Exit(1)
-    return out_path
-
-
-def _validate_calibration_path(calibration_data: Optional[str]) -> Optional[Path]:
-    """Validate calibration data path stays under cwd."""
-    if calibration_data is None:
-        return None
-    from soup_cli.utils.paths import is_under_cwd
-
-    cal_path = Path(calibration_data).resolve()
-    if not is_under_cwd(calibration_data):
-        console.print("[red]Calibration data path must be under the current working directory.[/]")
-        raise typer.Exit(1)
-    if not cal_path.exists():
-        console.print(f"[red]Calibration data not found: {cal_path}[/]")
-        raise typer.Exit(1)
-    return cal_path
 
 
 def _auto_deploy_ollama(

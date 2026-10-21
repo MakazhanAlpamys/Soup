@@ -266,7 +266,7 @@ an issue number or a version. Existing test files keep their names.
 | test_multi_adapter.py | Multi-adapter serving: validation, parsing, FastAPI endpoints, CLI |
 | test_data_sample.py | Data sampling: random/diverse/hard strategies, CLI, edge cases |
 | test_adapters.py | Adapter management: list/info/compare, discovery, metadata |
-| test_issue1710_remove_awq_gptq_export.py | AWQ/GPTQ removal verification: rejection at CLI, pyproject extras, codebase clean |
+| test_export_removed_formats.py | AWQ/GPTQ removal verification: rejection at CLI, pyproject extras, codebase clean |
 | test_packing.py | Sample packing: config, YAML, trainer integration, sweep |
 | test_data_split.py | Data split: ratio/absolute/stratified splits, seed, edge cases |
 | test_curriculum.py | Curriculum learning: config, length sort, buckets, sweep |

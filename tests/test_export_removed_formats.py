@@ -41,9 +41,10 @@ class TestExportRefusesRemovedFormats:
 
         result = CliRunner().invoke(app, ["export", "--model", str(model_dir), "--format", fmt])
 
-        assert result.exit_code != 0
+        assert result.exit_code == 1, (result.output, repr(result.exception))
         output = _plain(result.output)
         assert f"unsupported format: {fmt}" in output.lower()
+        assert f"--format {fmt} was removed in v0.77." in output
         for remaining in STAYING_EXPORT:
             assert remaining in output
 
@@ -61,11 +62,14 @@ class TestExportRefusesRemovedFormats:
 
     def test_export_help_omits_removed_formats(self) -> None:
         result = CliRunner().invoke(app, ["export", "--help"])
-        assert result.exit_code == 0
+        assert result.exit_code == 0, (result.output, repr(result.exception))
         output = _plain(result.output).lower()
         assert "awq and gptq are deprecated" not in output
         assert "--format awq" not in output
         assert "--format gptq" not in output
+        assert "--bits" not in output
+        assert "--group-size" not in output
+        assert "--calibration-samples" not in output
 
 
 class TestQuantizeRefusesRemovedFormats:
@@ -113,6 +117,8 @@ class TestCodebaseRemovals:
         assert not hasattr(export_mod, "_export_awq")
         assert not hasattr(export_mod, "_export_gptq")
         assert not hasattr(export_mod, "_standardize_gptq_shard_name")
+        assert not hasattr(export_mod, "_validate_output_path")
+        assert not hasattr(export_mod, "_validate_calibration_path")
 
 
 class TestPackagingRemovals:

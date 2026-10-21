@@ -1186,7 +1186,7 @@ def _mutating_specs(
                 "type": "object",
                 "properties": {
                     "model": {"type": "string", "description": "Adapter/model path or id."},
-                    "format": {"type": "string", "description": "gguf / onnx / awq / gptq / ..."},
+                    "format": {"type": "string", "description": "gguf / onnx / tensorrt / ..."},
                     "output": {"type": "string", "description": "Optional output path."},
                 },
                 "required": ["model", "format"],
