@@ -999,10 +999,35 @@ def _export_tensorrt(
     return output_path
 
 
+def _validate_output_path(output: Optional[str]) -> Optional[Path]:
+    """Validate output path stays under cwd (path traversal protection)."""
+    if output is None:
+        return None
+    # realpath + commonpath containment (is_under_cwd) — Path.resolve() +
+    # relative_to() breaks on Windows 8.3 short names.
+    from soup_cli.utils.paths import is_under_cwd
+
+    out_path = Path(output).resolve()
+    if not is_under_cwd(output):
+        console.print("[red]Output path must be under the current working directory.[/]")
+        raise typer.Exit(1)
+    return out_path
 
 
+def _validate_calibration_path(calibration_data: Optional[str]) -> Optional[Path]:
+    """Validate calibration data path stays under cwd."""
+    if calibration_data is None:
+        return None
+    from soup_cli.utils.paths import is_under_cwd
 
-
+    cal_path = Path(calibration_data).resolve()
+    if not is_under_cwd(calibration_data):
+        console.print("[red]Calibration data path must be under the current working directory.[/]")
+        raise typer.Exit(1)
+    if not cal_path.exists():
+        console.print(f"[red]Calibration data not found: {cal_path}[/]")
+        raise typer.Exit(1)
+    return cal_path
 
 
 def _auto_deploy_ollama(
