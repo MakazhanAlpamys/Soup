@@ -295,6 +295,8 @@ def masked_iterate_batches(
     loop: bool = False,
     seed: Any = None,
     comm_group: Any = None,
+    *,
+    _target_pad: int = 0,
 ) -> Iterable[Tuple[Any, Any]]:
     """``iterate_batches`` yielding a padded per-token mask instead of spans.
 
@@ -302,7 +304,8 @@ def masked_iterate_batches(
     ``train()`` and ``evaluate()`` both call it by keyword. Padding, the
     ``pad_to`` granularity and the truncation warning mirror upstream so a
     masked run batches into the same shapes an unmasked one would; the only
-    difference is the second element of each yielded pair.
+    difference is the second element of each yielded pair. The private
+    ``_target_pad`` also lets cached explicit labels use their -100 ignore value.
 
     Truncation is applied to the mask as well as the tokens. A conversation cut
     off before its assistant turn therefore contributes no supervised tokens
@@ -351,7 +354,7 @@ def masked_iterate_batches(
 
             n = batch_size // step
             tok_arr = np.zeros((n, width), np.int32)
-            mask_arr = np.zeros((n, width), np.int32)
+            mask_arr = np.full((n, width), _target_pad, np.int32)
             for j in range(n):
                 keep = min(lengths[j], width)
                 tok_arr[j, :keep] = toks[j][:keep]
