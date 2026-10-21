@@ -389,27 +389,11 @@ class MLXSFTTrainerWrapper:
     def _check_unsupported(self) -> None:
         tcfg = self.config.training
         dcfg = self.config.data
+        if self.config.task == "sft" and self.config.modality != "text" and (
+            dcfg.mask_history or dcfg.train_on_messages_with_train_field
+        ):
+            raise ValueError("Native selective message masks support text SFT only")
         unsupported = []
-        # #683 review: the per-message `train` field has no MLX equivalent --
-        # `MaskedChatDataset` supervises every assistant turn and reads no
-        # per-message flag. It looked rejected only because the mutual-
-        # exclusion validator fires while `train_on_responses_only` is at its
-        # `true` default; set that to false and the field was dropped in
-        # silence, which is the shape of the defect #683 reports.
-        if getattr(dcfg, "train_on_messages_with_train_field", False):
-            unsupported.append(
-                "data.train_on_messages_with_train_field (MLX supervises "
-                "every assistant turn; the per-message flag is not read)"
-            )
-        # #761: mask_history narrows the transformers label builder
-        # (data/loss_mask.py) to the last assistant turn. MLX SFT builds its own
-        # mask and never goes through it, so without this line the same soup.yaml
-        # trained the last turn on transformers and every turn here, in silence.
-        if getattr(dcfg, "mask_history", False):
-            unsupported.append(
-                "data.mask_history (MLX supervises every assistant turn, not "
-                "only the last)"
-            )
         if getattr(dcfg, "train_on_prompt", False):
             unsupported.append(
                 "data.train_on_prompt (MLX masks the prompt or supervises the "
@@ -792,8 +776,11 @@ class MLXSFTTrainerWrapper:
         from soup_cli.trainer.mlx_masking import plan_response_masking
 
         responses_only = bool(getattr(cfg.data, "train_on_responses_only", False))
+        train_field = bool(getattr(cfg.data, "train_on_messages_with_train_field", False))
+        mask_history = bool(getattr(cfg.data, "mask_history", False))
         plan = plan_response_masking(
-            responses_only, train_rows[0] if train_rows else {}
+            responses_only, train_rows[0] if train_rows else {},
+            train_field=train_field, mask_history=mask_history,
         )
         use_token_mask = plan.token_mask
         args.mask_prompt = plan.mask_prompt
@@ -809,7 +796,8 @@ class MLXSFTTrainerWrapper:
             )
 
             masked_train = MaskedChatDataset(
-                train_rows, self.tokenizer, chat_key=_CHAT_KEY
+                train_rows, self.tokenizer, chat_key=_CHAT_KEY,
+                train_field=train_field, mask_history=mask_history, max_length=max_seq_length,
             )
             # Probe row 0 now. `process` is otherwise called lazily by
             # `CacheDataset` from inside `train()`, so a template this cannot
@@ -823,15 +811,19 @@ class MLXSFTTrainerWrapper:
                     masked_train.process(train_rows[0])
                 except ResponseMaskError as exc:
                     raise ResponseMaskError(
-                        f"{exc}. Set `data.train_on_responses_only: false` to "
-                        "train on the full sequence on this model, or run the "
-                        "recipe on the transformers backend."
+                        f"{exc}. Use a prefix-stable native chat template and keep selected "
+                        "targets within data.max_length, or disable selective masking "
+                        "and set data.train_on_responses_only: false for full-sequence loss."
                     ) from exc
 
             train_dataset = CacheDataset(masked_train)
             val_dataset = (
                 CacheDataset(
-                    MaskedChatDataset(val_rows, self.tokenizer, chat_key=_CHAT_KEY)
+                    MaskedChatDataset(
+                        val_rows, self.tokenizer, chat_key=_CHAT_KEY,
+                        train_field=train_field, mask_history=mask_history,
+                        max_length=max_seq_length,
+                    )
                 )
                 if val_rows
                 else None
@@ -1254,6 +1246,8 @@ class MLXSFTTrainerWrapper:
                     "mask_prompt": bool(args.mask_prompt),
                     "response_token_mask": use_token_mask,
                     "train_on_responses_only": responses_only,
+                    "train_on_messages_with_train_field": train_field,
+                    "mask_history": mask_history,
                     "grad_checkpoint": grad_checkpoint,
                     "grad_accumulation_steps": grad_accumulation_steps,
                     # #686: the EFFECTIVE optimizer and schedule, so an adapter
