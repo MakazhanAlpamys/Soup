@@ -1,10 +1,12 @@
-"""Tests for Issue #2054: soup ui must not send the browser to a bind-any address.
+"""The URL ``soup ui`` prints and opens names a host the browser can reach.
 
-``soup ui --public`` binds to ``0.0.0.0`` and used to print and open
-``http://0.0.0.0:<port>/?token=...``. Windows cannot connect to ``0.0.0.0``, so
-the tab never loaded; ``--host ::`` gave the malformed ``http://:::<port>``. The
-printed and opened URL now use loopback for an unspecified bind, while the
-server keeps the bind host.
+The server binds to the host it is given, but a bind-any address is not a
+destination: ``0.0.0.0`` (``--public`` or ``--host 0.0.0.0``) and ``::`` are
+printed and opened as ``127.0.0.1`` and ``[::1]``, since Windows cannot connect
+to ``0.0.0.0``. IPv6 literals are bracketed, and the printed line is escaped so
+that Rich does not read a host such as ``[fd00::1]`` as a style tag. The app,
+``uvicorn.run`` and the ``--public`` phone URL keep the bind host or the LAN
+address. See #2054.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ pytest.importorskip("fastapi")
 pytest.importorskip("uvicorn")
 
 from soup_cli.cli import app  # noqa: E402
+from soup_cli.ui.app import create_app  # noqa: E402
 
 _TOKEN = "abcdefghijklmnopqrstuvwx"
 _LAN_IP = "192.168.1.23"
@@ -42,8 +45,12 @@ def _lan_socket(*args, **kwargs):
     return sock
 
 
-def _run_ui(*args: str) -> tuple[object, list[str], str]:
-    """Invoke ``soup ui`` with the browser thread inline; return (result, opened, bind host)."""
+def _run_ui(*args: str) -> tuple[object, list[str], str, str]:
+    """Invoke ``soup ui`` with the browser thread inline.
+
+    Returns the result, the opened URLs, the host given to ``uvicorn.run`` and the
+    host given to ``create_app``.
+    """
     opened: list[str] = []
 
     def _open(url, *a, **kw):
@@ -52,6 +59,7 @@ def _run_ui(*args: str) -> tuple[object, list[str], str]:
 
     with (
         patch("uvicorn.run") as run,
+        patch("soup_cli.ui.app.create_app", wraps=create_app) as made,
         patch("webbrowser.open", side_effect=_open),
         patch("threading.Thread", side_effect=_immediate_thread),
         patch("time.sleep"),
@@ -59,7 +67,8 @@ def _run_ui(*args: str) -> tuple[object, list[str], str]:
     ):
         result = CliRunner().invoke(app, ["ui", "--port", "7861", "--auth-token", _TOKEN, *args])
     bind_host = run.call_args.kwargs["host"] if run.called else ""
-    return result, opened, bind_host
+    app_host = made.call_args.kwargs["host"] if made.called else ""
+    return result, opened, bind_host, app_host
 
 
 class TestUnspecifiedBindOpensLoopback:
@@ -72,7 +81,7 @@ class TestUnspecifiedBindOpensLoopback:
         ],
     )
     def test_printed_and_opened_url_use_loopback(self, args, bind_host, login_url):
-        result, opened, bound = _run_ui(*args)
+        result, opened, bound, app_host = _run_ui(*args)
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
         output = _collapse(result.output)
@@ -80,9 +89,10 @@ class TestUnspecifiedBindOpensLoopback:
         assert opened == [login_url]
         assert "0.0.0.0:7861" not in output
         assert bound == bind_host
+        assert app_host == bind_host
 
     def test_public_phone_url_keeps_the_lan_address(self):
-        result, _, _ = _run_ui("--public")
+        result, _, _, _ = _run_ui("--public")
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert f"http://{_LAN_IP}:7861/?token={_TOKEN}" in _collapse(result.output)
@@ -92,18 +102,20 @@ class TestOtherHostsUnchanged:
     @pytest.mark.parametrize("host", ["127.0.0.1", "192.168.1.5", "localhost"])
     def test_named_host_is_used_as_given(self, host):
         login_url = f"http://{host}:7861/?token={_TOKEN}"
-        result, opened, bound = _run_ui("--host", host)
+        result, opened, bound, app_host = _run_ui("--host", host)
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert f"URL: {login_url}" in _collapse(result.output)
         assert opened == [login_url]
-        assert bound == host
+        assert bound == app_host == host
 
-    def test_ipv6_loopback_is_bracketed(self):
-        login_url = f"http://[::1]:7861/?token={_TOKEN}"
-        result, opened, bound = _run_ui("--host", "::1")
+    @pytest.mark.parametrize("host", ["::1", "fd00::1", "abcd::1"])
+    def test_ipv6_literal_is_bracketed_in_the_printed_url(self, host):
+        # fd00::1 and abcd::1 start with a letter, so unescaped "[fd00::1]" is a Rich tag
+        login_url = f"http://[{host}]:7861/?token={_TOKEN}"
+        result, opened, bound, app_host = _run_ui("--host", host)
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert f"URL: {login_url}" in _collapse(result.output)
         assert opened == [login_url]
-        assert bound == "::1"
+        assert bound == app_host == host

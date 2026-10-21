@@ -9,6 +9,8 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
+from soup_cli.utils.terminal import for_terminal
+
 console = Console()
 
 
@@ -149,7 +151,7 @@ def ui(
     login_url = f"{url}/?token={token}"
 
     panel_body = (
-        f"URL:    [bold]{login_url}[/]\n"
+        f"URL:    [bold]{for_terminal(login_url)}[/]\n"
         f"Token:  [bold]{token}[/]\n\n"
         f"API endpoints require:\n"
         f"  [dim]Authorization: Bearer {token}[/]\n\n"
