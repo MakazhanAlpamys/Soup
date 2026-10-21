@@ -164,7 +164,11 @@ def test_router_correction_bias_stays_fp32_under_a_bf16_stream(tmp_path):
 @pytest.mark.parametrize("fp8_key", ["weight", "scale"])
 def test_fp8_checkpoint_is_refused_before_anything_is_written(tmp_path, fp8_key):
     """DeepSeek-V3 / Kimi K2 publish FP8 weights plus ``weight_scale_inv`` block
-    scales. A cast would keep the raw e4m3 values and drop the scales."""
+    scales. A cast would keep the raw e4m3 values and drop the scales, so an FP8
+    tensor or a block scale is accepted only as that block format, declared by
+    ``config.json`` (and then dequantised at shard time, see
+    ``tests/test_fp8_block_streaming.py``). This checkpoint has no config, so either
+    spelling is refused naming the supported format."""
     import torch
     from safetensors.torch import save_file
 
@@ -184,8 +188,9 @@ def test_fp8_checkpoint_is_refused_before_anything_is_written(tmp_path, fp8_key)
     else:
         state["model.layers.0.self_attn.o_proj.weight_scale_inv"] = torch.ones(1, 1)
     save_file(state, str(weights / "model.safetensors"))
-    with pytest.raises(ValueError, match="Dequantise the checkpoint to bf16 first"):
+    with pytest.raises(ValueError, match="Dequantise this checkpoint to bf16 first") as caught:
         shard_checkpoint(str(weights), str(tmp_path / "s"), dtype="bfloat16", arch="deepseek_v3")
+    assert "declares no FP8 quantization_config" in str(caught.value)
     assert not (tmp_path / "s" / "index.json").exists()
 
 

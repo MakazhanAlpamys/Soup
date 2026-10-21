@@ -112,8 +112,12 @@ _MALFORMED = {
     "shape-infinite": '{"t":{"dtype":"BF16","shape":[Infinity],"data_offsets":[0,4]}}',
     "nested-brackets": "[" * 200_000,
     "not-json": "not json at all",
-    "fp8-dtype": '{"t":{"dtype":"F8_E4M3","shape":[2],"data_offsets":[0,2]}}',
+    "unknown-dtype": '{"t":{"dtype":"C64","shape":[2],"data_offsets":[0,16]}}',
 }
+#: An FP8 header used to be unreadable here and fell back. It is read now, and an FP8
+#: tensor that is not a DeepSeek-V3 block weight with its scale is a checkpoint the
+#: sharder refuses: refused here in its words (tests/test_fp8_block_streaming.py).
+_FP8_WITHOUT_SCALE = '{"t":{"dtype":"F8_E4M3","shape":[2],"data_offsets":[0,2]}}'
 
 
 def _layer_stack(n_layers):
@@ -641,6 +645,13 @@ class TestTheFallbackIsOnlyForUnreadableSources:
     def test_a_malformed_header_falls_back(self, tmp_path, spelling):
         _write_raw(tmp_path / "m" / "model.safetensors", _MALFORMED[spelling])
         assert _preflight(_ready_plan(tmp_path / "m")) is None
+
+    def test_an_fp8_tensor_without_its_scale_is_refused_not_approximated(self, tmp_path):
+        from soup_cli.utils.fp8_block import UnsupportedFP8Error
+
+        _write_raw(tmp_path / "m" / "model.safetensors", _FP8_WITHOUT_SCALE)
+        with pytest.raises(UnsupportedFP8Error, match="declares no FP8 quantization_config"):
+            _preflight(_ready_plan(tmp_path / "m"))
 
     def test_a_source_that_cannot_be_listed_falls_back(self, tmp_path):
         plan = types.SimpleNamespace(

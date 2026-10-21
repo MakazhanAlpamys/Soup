@@ -37,6 +37,8 @@ from tests.test_ci_full_matrix_on_approval import (
 ROOT = Path(__file__).absolute().parents[1]
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 PROJECT_JOBS = ("test", "mlx-smoke", "torchao-contract", "pytorch-smoke", "transformers-floor")
+#: The only `if:` a project install may have: none, or the docs-only guard of its job.
+DOCS_ONLY_GUARDS = ("", "env.RUN_SUITE == 'true'", "needs.plan.outputs.docs_only != 'true'")
 RUN_KINDS = (
     pytest.param((_push(), _pull_request("opened")), "QUICK", id="quick-main-and-pr"),
     pytest.param(
@@ -158,7 +160,12 @@ class TestNoPipDownloadCache:
     @pytest.mark.parametrize("job_name", PROJECT_JOBS)
     def test_cache_hit_cannot_bypass_project_install(self, job_name: str) -> None:
         for _, step in _project_installs(job_name):
-            assert "if" not in step, f"{job_name}: project installation must be unconditional"
+            # 2026-10-20: the one condition a project install may carry is the docs-only
+            # guard (tests/test_ci_docs_only_fast_path.py): it skips every step of a cell or
+            # smoke job that does nothing in a docs-only pull request. Never a cache result.
+            assert str(step.get("if", "")) in DOCS_ONLY_GUARDS, (
+                f"{job_name}: project installation must be unconditional"
+            )
             assert "cache-hit" not in str(step["run"]), (
                 f"{job_name}: cache hits must not gate installation inside the shell"
             )

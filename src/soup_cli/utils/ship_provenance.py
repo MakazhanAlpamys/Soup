@@ -31,6 +31,10 @@ def make_binding(
     from soup_cli.utils.adapter_sign import compute_adapter_manifest
 
     validate_data_identity(data_sha256)
+    # Suite order is not part of score identity; verdict deltas sort names too.
+    # Canonicalize both declarations before hashing, without changing callers.
+    suites = sorted(suites)
+    policy = {**policy, "general_suite": sorted(policy["general_suite"])}
     root = None
     if adapter is not None:
         try:

@@ -95,7 +95,7 @@ class BaseRevision:
         return {
             "schema_version": 1, "run_id": run_id, "base_model": self.base,
             "base_revision": self.revision, "base_revision_source": self.source,
-            # Reserved shared storage contract; hash capture is #1764 part 2.
+            # The train command fills this from the recorded startup source hash.
             "training_data_sha256": None,
         }
 

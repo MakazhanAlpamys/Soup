@@ -1,0 +1,163 @@
+{
+ "file": "layer_000.safetensors",
+ "header_len": [
+  3136,
+  3136
+ ],
+ "data_start": [
+  3144,
+  3144
+ ],
+ "data_start_mod4096": [
+  3144,
+  3144
+ ],
+ "size": [
+  42813444,
+  42813444
+ ],
+ "metadata": [
+  null,
+  null
+ ],
+ "n_tensors": [
+  32,
+  32
+ ],
+ "diffs": [],
+ "big_tensors_mod": null
+}
+{
+ "file": "layer_010.safetensors",
+ "header_len": [
+  3752,
+  3752
+ ],
+ "data_start": [
+  3760,
+  3760
+ ],
+ "data_start_mod4096": [
+  3760,
+  3760
+ ],
+ "size": [
+  1123596780,
+  1123596780
+ ],
+ "metadata": [
+  null,
+  null
+ ],
+ "n_tensors": [
+  36,
+  36
+ ],
+ "diffs": [],
+ "big_tensors_mod": {
+  "A": [
+   [
+    "mlp.experts.down_proj",
+    3436,
+    364,
+    369098752
+   ],
+   [
+    "mlp.experts.gate_up_proj",
+    3436,
+    364,
+    738197504
+   ],
+   [
+    "mlp.shared_experts.down_proj.weight",
+    492,
+    492,
+    2883584
+   ],
+   [
+    "mlp.shared_experts.gate_proj.weight",
+    492,
+    492,
+    2883584
+   ],
+   [
+    "mlp.shared_experts.up_proj.weight",
+    492,
+    492,
+    2883584
+   ],
+   [
+    "self_attn.kv_b_proj.weight",
+    2540,
+    492,
+    1048576
+   ],
+   [
+    "self_attn.o_proj.weight",
+    2540,
+    492,
+    2097152
+   ],
+   [
+    "self_attn.q_proj.weight",
+    2540,
+    492,
+    3145728
+   ]
+  ],
+  "B": [
+   [
+    "mlp.experts.down_proj",
+    3436,
+    364,
+    369098752
+   ],
+   [
+    "mlp.experts.gate_up_proj",
+    3436,
+    364,
+    738197504
+   ],
+   [
+    "mlp.shared_experts.down_proj.weight",
+    492,
+    492,
+    2883584
+   ],
+   [
+    "mlp.shared_experts.gate_proj.weight",
+    492,
+    492,
+    2883584
+   ],
+   [
+    "mlp.shared_experts.up_proj.weight",
+    492,
+    492,
+    2883584
+   ],
+   [
+    "self_attn.kv_b_proj.weight",
+    2540,
+    492,
+    1048576
+   ],
+   [
+    "self_attn.o_proj.weight",
+    2540,
+    492,
+    2097152
+   ],
+   [
+    "self_attn.q_proj.weight",
+    2540,
+    492,
+    3145728
+   ]
+  ]
+ }
+}
+files with any difference: []
+index differs: source_files (expected for source_*)
+index differs: source_fingerprint (expected for source_*)
+quant_specs equal: True layer_keys equal: True

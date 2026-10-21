@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -14,6 +15,65 @@ from soup_cli.utils import run_provenance as provenance
 
 BASE = "owner/base"
 REVISION = "a" * 40
+
+
+@pytest.mark.parametrize("suffix", [".jsonl", ".bin"])
+def test_capture_happens_before_the_loader_reads_the_file(
+    tmp_path, monkeypatch, moving_hub, suffix,
+):
+    pytest.importorskip("torch")
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+    from soup_cli.commands import train as train_module
+    from soup_cli.experiment.tracker import ExperimentTracker
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "runs.db"))
+    monkeypatch.setattr("soup_cli.utils.launcher.is_in_distributed", lambda: False)
+    monkeypatch.setattr("soup_cli.utils.gpu.detect_device", lambda: ("cpu", "CPU"))
+    monkeypatch.setattr("soup_cli.utils.gpu.get_gpu_info", lambda: {})
+    original_bytes = b'{"instruction":"hi", "output":"hello"}\n'
+    source = tmp_path / ("data" + suffix)
+    source.write_bytes(original_bytes)
+    # A stand-in loader accepts an unsupported extension too, so the CLI can
+    # complete and persist unknown without introducing a hash producer there.
+    (tmp_path / "loader.jsonl").write_bytes(original_bytes)
+    (tmp_path / "soup.yaml").write_text(
+        f"base: {BASE}\ndata: {{train: data{suffix}, format: alpaca, val_split: 0}}\n"
+        "training: {epochs: 1, quantization: none, batch_size: 1}\noutput: final\n",
+        encoding="utf-8",
+    )
+    real_loader = train_module.load_dataset
+
+    def rewriting_loader(data_config, *args, **kwargs):
+        source.write_bytes(b'{"instruction":"later", "output":"bytes"}\n')
+        return real_loader(
+            data_config.model_copy(update={"train": "loader.jsonl"}), *args, **kwargs,
+        )
+
+    monkeypatch.setattr(train_module, "load_dataset", rewriting_loader)
+    output = tmp_path / "final"
+
+    class Trainer:
+        def setup(self, dataset):
+            assert dataset["train"]
+
+        def train(self, **kwargs):
+            output.mkdir()
+            return {"output_dir": str(output), "initial_loss": 1.0, "final_loss": 0.5,
+                    "total_steps": 1, "duration_secs": 1.0}
+
+    monkeypatch.setattr("soup_cli.trainer.dispatch.build_trainer", lambda cfg, **kw: Trainer())
+    result = CliRunner().invoke(app, ["train", "--config", "soup.yaml", "--yes"])
+    assert result.exit_code == 0, (result.output, result.exception)
+    tracker = ExperimentTracker(tmp_path / "runs.db")
+    try:
+        expected = hashlib.sha256(original_bytes).hexdigest() if suffix == ".jsonl" else None
+        assert tracker.list_runs()[0]["training_data_sha256"] == expected
+        assert provenance.read_run_provenance(output)["training_data_sha256"] == expected
+    finally:
+        tracker.close()
 
 
 @pytest.fixture
@@ -143,10 +203,32 @@ def test_copied_adapter_pins_live_eval_and_export_loaders(tmp_path, monkeypatch,
     assert calls == expected_calls + [("model", expected_revision), ("model", expected_revision)]
 
 
+def test_dry_run_does_not_capture_training_identity(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("soup_cli.utils.gpu.detect_device", lambda: ("cpu", "CPU"))
+    monkeypatch.setattr("soup_cli.utils.gpu.get_gpu_info", lambda: {})
+    capture = Mock(side_effect=AssertionError("dry-run must not hash the training source"))
+    monkeypatch.setattr("soup_cli.utils.training_identity.capture_training_data_hash", capture)
+    (tmp_path / "data.jsonl").write_text(
+        '{"instruction":"hi", "output":"hello"}\n', encoding="utf-8",
+    )
+    (tmp_path / "soup.yaml").write_text(
+        "base: owner/base\ndata: {train: data.jsonl, format: alpaca, val_split: 0}\n"
+        "training: {epochs: 1, quantization: none, batch_size: 1}\n", encoding="utf-8",
+    )
+    result = CliRunner().invoke(app, ["train", "--config", "soup.yaml", "--dry-run"])
+    assert result.exit_code == 0, (result.output, result.exception)
+    capture.assert_not_called()
+
+
 @pytest.mark.parametrize("mode", ["bound", "offline", "distributed", "non-hf"])
-@pytest.mark.parametrize("stored_hash", [None, "c" * 64], ids=["unknown-data", "stored-data"])
+@pytest.mark.parametrize("source_state", ["unchanged", "changed", "deleted"])
 def test_train_cli_records_identity_and_writes_final_artifact(
-    tmp_path, monkeypatch, moving_hub, mode, stored_hash,
+    tmp_path, monkeypatch, moving_hub, mode, source_state,
 ):
     pytest.importorskip("torch")
     from typer.testing import CliRunner
@@ -184,22 +266,27 @@ def test_train_cli_records_identity_and_writes_final_artifact(
         f"hub: {'modelscope' if mode == 'non-hf' else 'hf'}}}\noutput: final\n",
         encoding="utf-8",
     )
+    import hashlib
+
+    stored_hash = hashlib.sha256((tmp_path / "data.jsonl").read_bytes()).hexdigest()
     expected = {"revision": REVISION} if mode == "bound" else {}
 
     class Trainer:
         def setup(self, dataset):
             assert dataset["train"]
+            tracker = ExperimentTracker(tmp_path / "runs.db")
+            try:
+                assert tracker.list_runs()[0]["training_data_sha256"] == stored_hash
+            finally:
+                tracker.close()
             assert provenance.base_revision_kwargs(BASE) == expected
 
         def train(self, **kwargs):
             assert provenance.base_revision_kwargs(BASE) == expected
-            # Emulate a separate producer of the reserved historical hash field.
-            conn = kwargs["tracker"]._get_conn()
-            conn.execute(
-                "UPDATE runs SET training_data_sha256=? WHERE run_id=?",
-                (stored_hash, kwargs["run_id"]),
-            )
-            conn.commit()
+            if source_state == "changed":
+                (tmp_path / "data.jsonl").write_text("later bytes", encoding="utf-8")
+            elif source_state == "deleted":
+                (tmp_path / "data.jsonl").unlink()
             output.mkdir()
             return {"output_dir": str(output), "initial_loss": 1.0, "final_loss": 0.5,
                     "total_steps": 1, "duration_secs": 1.0}

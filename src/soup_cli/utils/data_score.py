@@ -139,22 +139,11 @@ def ngram_overlap_ratio(a: Any, b: Any, *, n: int = 8) -> float:
 
 
 def _extract_row_text(row: Any) -> str:
+    from soup_cli.utils.row_text import extract_row_text
+
     if not isinstance(row, Mapping):
         return ""
-    val = row.get("text") or row.get("content")
-    if isinstance(val, str):
-        return val
-    # Fall back to joining messages if present (tolerant of various shapes)
-    msgs = row.get("messages")
-    if isinstance(msgs, list):
-        parts: List[str] = []
-        for m in msgs:
-            if isinstance(m, Mapping):
-                c = m.get("content")
-                if isinstance(c, str):
-                    parts.append(c)
-        return "\n".join(parts)
-    return ""
+    return extract_row_text(row)
 
 
 def decontaminate_rows(

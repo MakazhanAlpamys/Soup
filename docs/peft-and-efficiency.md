@@ -239,7 +239,20 @@ an explicit target list always wins unchanged:
    `qwen3_5_text`. The MoE architectures Soup ships recipes for (`qwen3_moe`,
    `deepseek_v3`, `deepseek_v4`, `glm4_moe`, `glm_moe_dsa`, `granitemoehybrid`,
    `kimi_k2`/`kimi_k25`, `gpt_oss`, `minimax_m2`, `minimax_m3_vl`, `mistral3`) target
-   their attention projections; PEFT maps none of them (#1070). MiniMax-M3 uses a regex
+   their attention projections; PEFT maps none of them (#1070). On the DeepSeek-V3
+   multi-head latent attention bases `deepseek_v3` and `kimi_k2` the query
+   projections follow the checkpoint's `q_lora_rank`: an integer gives the model
+   `q_a_proj` and `q_b_proj`, while `q_lora_rank: null` (Moonlight-16B-A3B) gives it a
+   single `q_proj`, which is targeted instead. A `kimi_k25` base keeps the
+   `q_a_proj` / `q_b_proj` names even with `q_lora_rank: null`, so its `q_proj`
+   would get no adapter. No shipped Kimi K2.5 or K2.6 config sets `null`. The
+   reason is its vision tower, which has a `q_proj` of its own: the entry would have
+   to be a regex scoped to the language tower, and `moe_lora: true` adds its names
+   to a list of targets but discards a regex, so the key/value projections would
+   lose their adapter. The same holds for any other wrapper around a `deepseek_v3`
+   text config with `q_lora_rank: null` (Kimi-VL style): Soup has no row for the
+   wrapper, so its text tower keeps the `q_a_proj` / `q_b_proj` names and its
+   `q_proj` gets no adapter. MiniMax-M3 uses a regex
    scoped to its language tower, so a text fine-tune does not adapt the vision
    encoder. `mistral3` (the vision-language wrapper behind `mistral-medium-3-5-sft`,
    which therefore sets `modality: vision` so SFT loads the image-text class) uses the
@@ -409,9 +422,11 @@ training:
 ```
 
 Works with all training tasks on the transformers backend (see the note on
-quantized bases below). On `backend: unsloth` and `backend: mlx`, `use_dora: true`
-is refused when the config is loaded: neither backend builds a DoRA adapter, so
-it would silently train plain LoRA.
+quantized bases below). The MLX backend also supports DoRA for text SFT on dense
+linear targets with unquantized or pre-quantized 4-bit bases; see
+[DoRA on MLX](backends-and-ops.md#dora-on-mlx) for restrictions and native adapter
+loading/fusion. On `backend: unsloth`, `use_dora: true` remains refused at config
+load because that path does not build a DoRA adapter.
 
 > **Not on GPTQ / AWQ / AQLM / EETQ bases.** peft has no DoRA variant for those
 > layers and raises when the adapter is attached, so `use_dora: true` with

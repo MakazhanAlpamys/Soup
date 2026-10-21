@@ -53,8 +53,8 @@ def inert_fields_set(text: str) -> list[str]:
 
 
 def test_the_catalog_is_not_empty():
-    # A loop over nothing passes; the issue counted 170 recipes at v0.76.0.
-    assert len(RECIPES) >= 170
+    # A loop over nothing passes; the catalog has 169 recipes since pixtral-dpo was dropped (#1867).
+    assert len(RECIPES) >= 169
     assert len(list_templates()) >= 10
 
 

@@ -269,6 +269,17 @@ class ExperimentTracker:
         conn.commit()
         return run_id
 
+    def record_training_data_hash(self, run_id: str, digest: Optional[str]) -> None:
+        """Record startup source bytes, leaving unsupported/incomplete sources unknown."""
+        from soup_cli.utils.run_provenance import validate_training_hash
+
+        validate_training_hash(digest)
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE runs SET training_data_sha256=? WHERE run_id=?", (digest, run_id),
+        )
+        conn.commit()
+
     def record_base_revision(
         self, run_id: str, *, revision: Optional[str], source: str,
     ) -> None:
