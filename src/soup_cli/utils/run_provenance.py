@@ -130,7 +130,7 @@ def synchronize_base_revision(identity: BaseRevision, *, cpu: bool = False) -> N
         return
     from accelerate.utils import broadcast_object_list
 
-    payload = [None]
+    payload: list[Any] = [None]
     if state.is_main_process:
         identity.load_kwargs(identity.base)
         payload[0] = identity.metadata("coordinator")
