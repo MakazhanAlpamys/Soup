@@ -15,6 +15,14 @@ def _strip_ansi(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", text)
 
 
+def _flat(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", text))
+
+
+def _panel(output: str) -> dict:
+    return dict(re.findall(r"(Score|Iterations|Converged):\s+(\S+)", _flat(output)))
+
+
 @pytest.fixture
 def recording_dspy(monkeypatch):
     calls = []
@@ -87,6 +95,8 @@ def recording_textgrad(monkeypatch):
                     "if it was already set via set_backward_engine()"
                 )
             used_engine = passed_engine or singleton_engine[0]
+            if used_engine is None:
+                raise Exception("No backward engine provided.")
             calls.append(("backward", used_engine))
             if self.grad_fn is not None:
                 self.grad_fn(backward_engine=used_engine)
@@ -924,7 +934,7 @@ def test_compile_tools_gepa_cli_options(tmp_path, monkeypatch, recording_gepa):
         ],
     )
     assert res_no_task.exit_code == 2
-    assert "GEPA optimizer requires --task-lm" in res_no_task.output
+    assert "GEPA optimizer requires --task-lm" in _flat(res_no_task.output)
 
 
 def test_gepa_reads_val_aggregate_scores_without_best_score(tmp_path, monkeypatch):
@@ -983,7 +993,7 @@ def test_textgrad_refuses_when_no_engine_configured(tmp_path, monkeypatch, recor
         ["compile", "prog.py", "--eval", "eval.jsonl", "--optimizer", "textgrad", "-o", "out.py"],
     )
     assert res.exit_code == 2
-    assert "No backward engine configured" in res.output
+    assert "No backward engine configured" in _flat(res.output)
 
     spec_json = {
         "openapi": "3.0.0",
@@ -1005,7 +1015,7 @@ def test_textgrad_refuses_when_no_engine_configured(tmp_path, monkeypatch, recor
         ],
     )
     assert res_tools.exit_code == 2
-    assert "No backward engine configured" in res_tools.output
+    assert "No backward engine configured" in _flat(res_tools.output)
 
 
 def test_textgrad_preserves_prompt_when_no_score_signal(tmp_path, monkeypatch, recording_textgrad):
@@ -1050,4 +1060,290 @@ def test_gepa_invalid_adapter_raises_cleanly(tmp_path, monkeypatch, recording_ge
         app, ["compile", "prog.py", "--eval", "eval.jsonl", "--optimizer", "gepa", "-o", "out.py"]
     )
     assert res.exit_code == 2
-    assert "evaluate" in res.output
+    assert "does not implement the required 'evaluate' method" in _flat(res.output)
+
+
+@pytest.fixture
+def published_textgrad(monkeypatch):
+    """textgrad 0.1.8 guards (config.py / variable.py / loss.py / optimizer.py): no
+    get_backward_engine export, Variable has no score, backward() refuses 'no engine' and 'both'."""
+    state = {"engine": None}
+
+    def get_engine(name, **kwargs):
+        if "gpt-4" in name:
+            return types.SimpleNamespace(name=name)
+        raise ValueError(f"Engine {name} not supported")
+
+    class Singleton:
+        def get_engine(self):
+            return state["engine"]
+
+    def set_backward_engine(engine, override=False, **kwargs):
+        if isinstance(engine, str):
+            engine = get_engine(engine)
+        if state["engine"] is not None and not override:
+            raise Exception("Engine already set. Use override=True to override cautiously.")
+        state["engine"] = engine
+
+    def validate(engine):
+        if engine is None and state["engine"] is None:
+            raise Exception("No engine provided.")
+        if engine is None:
+            engine = state["engine"]
+        return get_engine(engine) if isinstance(engine, str) else engine
+
+    class Variable:
+        def __init__(self, value="", predecessors=None, requires_grad=True, role_description=""):
+            self.value = value
+            self.predecessors = list(predecessors or [])
+            self.requires_grad = requires_grad
+            self.gradients = set()
+
+        def backward(self, engine=None):
+            if engine is None and state["engine"] is None:
+                raise Exception("No backward engine provided.")
+            if engine is not None and state["engine"] is not None:
+                raise Exception("Both an engine is provided and the global engine is set.")
+            for pred in self.predecessors:
+                pred.gradients.add("critique")
+
+    class TextLoss:
+        def __init__(self, eval_system_prompt, engine=None):
+            validate(engine)
+
+        def __call__(self, instance):
+            return Variable("loss", predecessors=[instance])
+
+    class TGD:
+        def __init__(self, parameters, engine=None, **kwargs):
+            self.parameters = parameters
+            validate(engine)
+
+        def zero_grad(self):
+            for parameter in self.parameters:
+                parameter.gradients.clear()
+
+        def step(self):
+            for parameter in self.parameters:
+                if parameter.gradients:
+                    parameter.value = parameter.value + " [edited]"
+
+    fake = types.SimpleNamespace(
+        Variable=Variable, TextLoss=TextLoss, TGD=TGD, get_engine=get_engine,
+        set_backward_engine=set_backward_engine, SingletonBackwardEngine=Singleton,
+    )
+    monkeypatch.setitem(sys.modules, "textgrad", fake)
+    return types.SimpleNamespace(module=fake, state=state)
+
+
+def _suite(tmp_path):
+    (tmp_path / "eval.jsonl").write_text('{"question": "1+1", "answer": "2"}\n', encoding="utf-8")
+
+
+def _compile_textgrad(tmp_path, program_source, *extra):
+    (tmp_path / "prog.py").write_text(program_source, encoding="utf-8")
+    return CliRunner().invoke(
+        app,
+        ["compile", "prog.py", "--eval", "eval.jsonl", "--optimizer", "textgrad",
+         "--max-iters", "2", "-o", "out.py", *extra],
+    )
+
+
+def test_textgrad_runs_when_the_program_calls_set_backward_engine(
+    tmp_path, monkeypatch, published_textgrad
+):
+    """The documented route: no `engine` name in the program, only the singleton."""
+    monkeypatch.chdir(tmp_path)
+    _suite(tmp_path)
+    res = _compile_textgrad(
+        tmp_path,
+        "import textgrad\ntextgrad.set_backward_engine('gpt-4o')\nprogram = 'Answer briefly.'\n",
+    )
+    assert res.exit_code == 0, (res.output, repr(res.exception))
+    assert (tmp_path / "out.py").read_text(encoding="utf-8").endswith("[edited] [edited]")
+    assert _panel(res.output).get("Score") == "unmeasured"
+
+
+@pytest.mark.parametrize(
+    "engine_source", ["engine = 'gpt-4o'", "engine = textgrad.get_engine('gpt-4o')"]
+)
+def test_textgrad_registers_an_exported_engine_for_backward(
+    tmp_path, monkeypatch, published_textgrad, engine_source
+):
+    """loss.backward() takes no argument, so the exported engine must be the singleton by then."""
+    monkeypatch.chdir(tmp_path)
+    _suite(tmp_path)
+    res = _compile_textgrad(
+        tmp_path, f"import textgrad\n{engine_source}\nprogram = 'Answer briefly.'\n"
+    )
+    assert res.exit_code == 0, (res.output, repr(res.exception))
+    assert published_textgrad.state["engine"] is not None
+    assert (tmp_path / "out.py").read_text(encoding="utf-8").endswith("[edited] [edited]")
+
+
+def test_textgrad_keeps_the_initial_text_when_every_edit_scores_worse(
+    tmp_path, monkeypatch, published_textgrad
+):
+    """A metric that rates the initial text 0.5 and every edit 0.0 is a real signal: keep the
+    initial text and print its score, not 'unmeasured'."""
+    monkeypatch.chdir(tmp_path)
+    _suite(tmp_path)
+    res = _compile_textgrad(
+        tmp_path,
+        "engine = 'gpt-4o'\nprogram = 'Answer briefly.'\n"
+        "def metric(gold, pred):\n    return 0.5 if pred == 'Answer briefly.' else 0.0\n",
+    )
+    assert res.exit_code == 0, (res.output, repr(res.exception))
+    assert (tmp_path / "out.py").read_text(encoding="utf-8") == "Answer briefly."
+    assert _panel(res.output).get("Score") == "0.500"
+
+
+def _tools_spec(tmp_path):
+    spec = {
+        "openapi": "3.0.0", "info": {"title": "T", "version": "1"},
+        "paths": {
+            "/s": {"get": {"operationId": "search", "description": "Search catalog"}},
+            "/t": {"get": {"operationId": "tag", "description": "Tag items"}},
+        },
+    }
+    (tmp_path / "spec.json").write_text(json.dumps(spec), encoding="utf-8")
+    (tmp_path / "tools_eval.jsonl").write_text(
+        '{"query": "shoes", "tool": "search"}\n', encoding="utf-8"
+    )
+
+
+def _descriptions(tmp_path):
+    data = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    return [tool["description"] for tool in data["tools"]]
+
+
+def test_compile_tools_textgrad_engine_flag_reaches_backward(
+    tmp_path, monkeypatch, published_textgrad
+):
+    monkeypatch.chdir(tmp_path)
+    _tools_spec(tmp_path)
+    res = CliRunner().invoke(
+        app,
+        ["compile-tools", "spec.json", "--eval", "tools_eval.jsonl", "--optimizer", "textgrad",
+         "--engine", "gpt-4o", "-o", "out.json"],
+    )
+    assert res.exit_code == 0, (res.output, repr(res.exception))
+    assert _descriptions(tmp_path) == ["Search catalog [edited]", "Tag items [edited]"]
+
+
+def test_compile_tools_textgrad_uses_an_engine_the_caller_already_set(
+    tmp_path, monkeypatch, published_textgrad
+):
+    monkeypatch.chdir(tmp_path)
+    _tools_spec(tmp_path)
+    published_textgrad.module.set_backward_engine("gpt-4o")
+    res = CliRunner().invoke(
+        app,
+        ["compile-tools", "spec.json", "--eval", "tools_eval.jsonl", "--optimizer", "textgrad",
+         "-o", "out.json"],
+    )
+    assert res.exit_code == 0, (res.output, repr(res.exception))
+    assert _descriptions(tmp_path) == ["Search catalog [edited]", "Tag items [edited]"]
+
+
+def test_compile_gepa_refuses_a_program_without_task_lm_or_adapter(
+    tmp_path, monkeypatch, recording_gepa
+):
+    monkeypatch.chdir(tmp_path)
+    _suite(tmp_path)
+    (tmp_path / "prog.py").write_text("program = 'Answer briefly.'\n", encoding="utf-8")
+    res = CliRunner().invoke(
+        app, ["compile", "prog.py", "--eval", "eval.jsonl", "--optimizer", "gepa", "-o", "out.py"]
+    )
+    assert res.exit_code == 2
+    assert "define 'task_lm' or 'adapter'" in _flat(res.output)
+    assert recording_gepa == []
+
+
+def test_compile_gepa_names_the_missing_evaluate_method(tmp_path, monkeypatch, recording_gepa):
+    monkeypatch.chdir(tmp_path)
+    _suite(tmp_path)
+    (tmp_path / "prog.py").write_text(
+        "program = 'A'\nadapter = 'string_not_adapter_object'\n", encoding="utf-8"
+    )
+    res = CliRunner().invoke(
+        app, ["compile", "prog.py", "--eval", "eval.jsonl", "--optimizer", "gepa", "-o", "out.py"]
+    )
+    assert res.exit_code == 2
+    assert "does not implement the required 'evaluate' method" in _flat(res.output)
+    assert recording_gepa == []
+
+
+def _fake_dspy(monkeypatch, compiled):
+    class _Optimizer:
+        def __init__(self, **kwargs):
+            pass
+
+        def compile(self, program, **kwargs):
+            return compiled
+
+    monkeypatch.setitem(sys.modules, "dspy", types.SimpleNamespace(
+        MIPROv2=_Optimizer, COPRO=_Optimizer, BootstrapFewShot=_Optimizer,
+        Example=lambda **kw: types.SimpleNamespace(with_inputs=lambda *keys: None),
+    ))
+
+
+@pytest.mark.parametrize("converged_attr, expected", [({"converged": True}, "True"), ({}, "False")])
+def test_dspy_panel_reports_what_the_compiled_program_says(
+    tmp_path, monkeypatch, converged_attr, expected
+):
+    monkeypatch.chdir(tmp_path)
+    _suite(tmp_path)
+    (tmp_path / "prog.py").write_text("program = 'Answer briefly.'\n", encoding="utf-8")
+    _fake_dspy(monkeypatch, types.SimpleNamespace(score=0.85, total_calls=11, **converged_attr))
+    res = CliRunner().invoke(
+        app,
+        ["compile", "prog.py", "--eval", "eval.jsonl", "--optimizer", "mipro",
+         "--max-iters", "4", "-o", "out.py"],
+    )
+    assert res.exit_code == 0, (res.output, repr(res.exception))
+    assert _panel(res.output) == {"Score": "0.850", "Iterations": "11", "Converged": expected}
+
+
+@pytest.mark.parametrize("extra, expected", [({"converged": True}, "True"), ({}, "False")])
+def test_gepa_panel_reports_metric_calls_and_convergence(tmp_path, monkeypatch, extra, expected):
+    monkeypatch.chdir(tmp_path)
+    _suite(tmp_path)
+    (tmp_path / "prog.py").write_text(
+        "program = 'Answer briefly.'\ntask_lm = 'gpt-4o-mini'\n", encoding="utf-8"
+    )
+    result = types.SimpleNamespace(
+        best_candidate={"prompt": "NEW"}, val_aggregate_scores=[0.4, 0.9], best_idx=1,
+        total_metric_calls=37, **extra,
+    )
+    monkeypatch.setitem(sys.modules, "gepa", types.SimpleNamespace(optimize=lambda **kw: result))
+    res = CliRunner().invoke(
+        app,
+        ["compile", "prog.py", "--eval", "eval.jsonl", "--optimizer", "gepa",
+         "--max-iters", "5", "-o", "out.py"],
+    )
+    assert res.exit_code == 0, (res.output, repr(res.exception))
+    assert _panel(res.output) == {"Score": "0.900", "Iterations": "37", "Converged": expected}
+
+
+def test_compile_tools_gepa_writes_the_description_component_not_the_dict(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    _tools_spec(tmp_path)
+    result = types.SimpleNamespace(best_candidate={"other": "X", "description": "NEW"})
+    monkeypatch.setitem(sys.modules, "gepa", types.SimpleNamespace(optimize=lambda **kw: result))
+    res = CliRunner().invoke(
+        app,
+        ["compile-tools", "spec.json", "--eval", "tools_eval.jsonl", "--optimizer", "gepa",
+         "--task-lm", "gpt-4o-mini", "-o", "out.json"],
+    )
+    assert res.exit_code == 0, (res.output, repr(res.exception))
+    assert _descriptions(tmp_path) == ["NEW", "NEW"]
+
+
+def test_compile_result_score_unmeasured_type_check():
+    from soup_cli.utils.prompt_compile import CompileResult
+
+    with pytest.raises(TypeError, match="score_unmeasured must be bool"):
+        CompileResult("txt", 0.5, 1, True, score_unmeasured="not_bool")
