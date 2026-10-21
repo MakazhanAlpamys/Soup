@@ -311,12 +311,6 @@ def doctor(
         _run_nccl_check()
 
     # Summary
-    # Config check runs before the summary line (#2100): if the config cannot
-    # be loaded or is refused, doctor terminates with exit 2 before asserting
-    # that "All checks passed!".
-    if config:
-        _check_config_support(config)
-
     if issues:
         # Issue/fix text may contain "[train]"-style brackets, which Rich
         # would otherwise swallow as markup tags — escape so the suggestion
@@ -333,8 +327,22 @@ def doctor(
                 console.print(
                     f"[dim]  pip install {escape(' '.join(fix_parts))}[/]", highlight=False
                 )
-    else:
+
+    loaded_cfg = None
+    if config:
+        # Load and validate the config before the environment summary (#2100).
+        # If the config is refused or cannot be loaded, doctor terminates with exit 2
+        # before asserting that "All checks passed!".
+        loaded_cfg = _load_doctor_config(config)
+
+    if not issues:
         console.print("\n[bold green]All checks passed![/] Your environment is ready.")
+
+    # After the environment summary on purpose: "All checks passed" reports on
+    # the environment, and printing config findings above it read as though the
+    # green line covered them too.
+    if loaded_cfg is not None:
+        _report_config_support(loaded_cfg)
 
     console.print(f"\n[dim]GitHub: [link={GITHUB_URL}]{GITHUB_URL}[/link][/]")
 
@@ -360,42 +368,31 @@ def _installed_version_str(import_name: str, pkg_name: str) -> str | None:
     return str(version)
 
 
-def _check_config_support(config_path: str) -> None:
-    """#755 — report the settings this config sets that its backend never reads.
+def _load_doctor_config(config_path: str):
+    """Load config for doctor, exiting with code 2 on refusal or load error (#2100)."""
+    try:
+        from soup_cli.config.loader import load_config
 
-    Only fields the user wrote and switched on are listed (a ``false`` or unset
-    value is not; ``seed: 0`` is). A wall of 275 rows is not a pre-flight check,
-    and the fields sitting at their schema default or written in their off
-    position are not what anyone came here to ask about.
-    """
+        return load_config(config_path)
+    except FileNotFoundError as exc:
+        console.print(f"\n[red]Config not found:[/] {config_path}")
+        raise typer.Exit(2) from exc
+    except SystemExit as exc:
+        console.print("\n[red]Config could not be loaded (see above).[/]")
+        raise typer.Exit(2) from exc
+    except Exception as exc:  # invalid YAML, unreadable file
+        console.print(f"\n[red]Config could not be loaded:[/] {exc}")
+        raise typer.Exit(2) from exc
+
+
+def _report_config_support(cfg) -> None:
+    """#755 — report the settings this config sets that its backend never reads."""
     from soup_cli.config.backend_support import (
         DEFAULT_BACKEND,
         DEFAULT_MODALITY,
         check_config,
         unsupported_for,
     )
-
-    try:
-        from soup_cli.config.loader import load_config
-
-        cfg = load_config(config_path)
-    except FileNotFoundError as exc:
-        console.print(f"\n[red]Config not found:[/] {config_path}")
-        # Non-zero deliberately: this leg is meant to be gate-able in CI, and a
-        # config that cannot be read is not a clean bill of health. `doctor`
-        # without --config keeps its old exit status.
-        raise typer.Exit(2) from exc
-    except SystemExit as exc:
-        # load_config prints its own diagnosis and raises SystemExit(1) for a
-        # schema-invalid config. SystemExit is a BaseException, so it walks
-        # past `except Exception` and the exit code contradicted the 2
-        # documented in docs/commands.md. Re-raised as 2 so all three unreadable
-        # shapes -- missing, unparseable, schema-invalid -- agree.
-        console.print("\n[red]Config could not be loaded (see above).[/]")
-        raise typer.Exit(2) from exc
-    except Exception as exc:  # invalid YAML, unreadable file
-        console.print(f"\n[red]Config could not be loaded:[/] {exc}")
-        raise typer.Exit(2) from exc
 
     backend = getattr(cfg, "backend", DEFAULT_BACKEND)
     modality = getattr(cfg, "modality", DEFAULT_MODALITY)
@@ -431,6 +428,11 @@ def _check_config_support(config_path: str) -> None:
         f"  [yellow]{len(gaps)} setting(s) switched on here are not read on "
         f"backend={backend}{modality_summary}.[/]"
     )
+
+
+def _check_config_support(config_path: str) -> None:
+    cfg = _load_doctor_config(config_path)
+    _report_config_support(cfg)
 
 
 def _get_mlx_info() -> dict:
