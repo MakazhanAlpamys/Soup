@@ -723,6 +723,16 @@ format drops.
 {"prompt": "Explain gravity", "chosen": "Gravity is a force...", "rejected": "I don't know"}
 ```
 
+For `dpo`, `ipo`, `simpo`, `orpo`, `bco`, `preference` and `reward_model`, training
+resolves an omitted `data.format` or `data.format: auto` to `dpo`. This preserves
+`chosen` and `rejected` when the prompt is a `messages` conversation instead of a
+`prompt` string. The existing converter decides prompt precedence and normalises
+string/message-list answers; mixed text and conversational pairs are unified.
+Ordinary SFT auto-detection and KTO's unpaired layout are unchanged. Standalone
+`soup data validate` has no training-task context: use `--format dpo` to inspect
+these preference layouts. A training or validation split without preference-pair
+columns is refused before loading a model, including with `soup train --dry-run`.
+
 **KTO (unpaired preferences):**
 ```json
 {"prompt": "Explain gravity", "completion": "Gravity is a force...", "label": true}

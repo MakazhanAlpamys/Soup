@@ -298,14 +298,21 @@ def task_preserves_source_columns(task: str) -> bool:
     return task in PRESERVE_SOURCE_TASKS
 
 
+PREFERENCE_PAIR_TASKS = frozenset({
+    "dpo", "ipo", "simpo", "orpo", "bco", "preference", "reward_model",
+})
+
+
 def data_config_for_task(data_config: DataConfig, task: str) -> DataConfig:
-    """Resolve ``format: auto`` for task: cross_encoder (#1219).
+    """Resolve task-specific ``format: auto`` without changing the input config.
 
     ``detect_format`` cannot see the task, and ``{question, answer}`` is also
     GSM8K's shape, so pair rows are recognised only when the task reads them.
     """
     if task == "cross_encoder" and data_config.format == "auto":
         return data_config.model_copy(update={"format": "cross_encoder"})
+    if task in PREFERENCE_PAIR_TASKS and data_config.format == "auto":
+        return data_config.model_copy(update={"format": "dpo"})
     return data_config
 
 

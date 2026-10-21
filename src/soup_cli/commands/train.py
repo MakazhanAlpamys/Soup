@@ -17,6 +17,7 @@ from rich.panel import Panel
 
 from soup_cli.config.loader import load_config
 from soup_cli.data.loader import (
+    PREFERENCE_PAIR_TASKS,
     data_config_for_task,
     load_dataset,
     task_preserves_source_columns,
@@ -257,6 +258,35 @@ def _validate_csm_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
     except ValueError as exc:
         console.print(f"[red]Error validating CSM dataset:[/] {escape(str(exc))}")
         raise typer.Exit(1) from exc
+
+
+def _validate_preference_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
+    """Reject a lossy format choice before constructing any preference trainer."""
+    if cfg.task not in PREFERENCE_PAIR_TASKS:
+        return
+    from soup_cli.data.loader import last_load_outcome
+
+    required = {"prompt", "chosen", "rejected"}
+    outcome = last_load_outcome()
+    fmt = outcome.fmt or cfg.data.format
+    for split in ("train", "val"):
+        rows = dataset.get(split, [])
+        for index, row in enumerate(rows, 1):
+            if isinstance(row, dict) and required.issubset(row):
+                continue
+            console.print(
+                f"[red]Invalid {cfg.task} dataset:[/] {split} row {index} loaded as "
+                f"format {markup_escape(repr(fmt))} lacks prompt, chosen or rejected. "
+                "Use data.format: dpo with preference-pair rows."
+            )
+            raise typer.Exit(1)
+    if not dataset.get("train") and outcome.first_drop is not None:
+        console.print(
+            f"[red]No training rows:[/] preference data loaded as format "
+            f"{markup_escape(repr(fmt))} must provide prompt, chosen and rejected. "
+            "Use data.format: dpo with preference-pair rows."
+        )
+        raise typer.Exit(1)
 
 
 def _refuse_empty_train(dcfg, dataset) -> None:
@@ -1743,6 +1773,7 @@ def train(
             data_config_for_task(run_data_config, cfg.task),
             preserve_source_columns=task_preserves_source_columns(cfg.task),
         )
+        _validate_preference_dataset_if_applicable(cfg, dataset)
         _refuse_empty_train(cfg.data, dataset)
         _validate_classification_dataset_if_applicable(cfg, dataset)
         _validate_csm_dataset_if_applicable(cfg, dataset)
@@ -1767,6 +1798,7 @@ def train(
         data_config_for_task(run_data_config, cfg.task),
         preserve_source_columns=task_preserves_source_columns(cfg.task),
     )
+    _validate_preference_dataset_if_applicable(cfg, dataset)
     _refuse_empty_train(cfg.data, dataset)
     _validate_classification_dataset_if_applicable(cfg, dataset)
     _validate_csm_dataset_if_applicable(cfg, dataset)
