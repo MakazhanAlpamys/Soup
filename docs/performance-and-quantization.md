@@ -722,6 +722,8 @@ The same term decides what an 8B base needs on a 4 GB card. Llama-3.1-8B NF4 (vo
 further 512 tokens per step** — 4.512 GB at 1024, already above the 4.294 GB card
 ([probe v0.73.0, section 9](../benchmarks/probe-v0.73.0-what-bounds-streaming.md#9-peak-vram-and-the-microbatch-sweep)).
 `data.max_length` defaults to 2048, so the "8B on 4 GB" setup needs `data.max_length: 512`.
+`training.stream_loss_chunk` (below) stops the logits term growing with the length; no chunked
+run of that setup has been measured.
 
 So `soup train` predicts peak VRAM before building the model, and **refuses a run it
 expects not to fit**:
@@ -750,6 +752,73 @@ BF16 support and `float16` otherwise — and is printed with the SM clock it was
 because this card alone produced 3.5 and 7.6 TFLOPS in two sessions at the same reported
 clock. A per-card constant compiled into Soup would be a fabrication. Real streamed runs landed at
 68–100% of their measured ceiling.
+
+**Long contexts: the head and the loss in chunks (`training.stream_loss_chunk`, #1693).**
+The logits term is `vocab × seq × batch`, so it is what caps the context length on a small
+card. `training.stream_loss_chunk: 128` runs the output head and the loss 128 tokens at a
+time: each chunk runs the head, takes its cross-entropy and the gradient on its own slice of
+the hidden states, and drops its logits before the next chunk starts. The logits term the
+pre-flight charges becomes `vocab × min(seq, chunk) × batch`. By the pre-flight's own
+arithmetic (the shipped 14 bytes per element, the 128 256-token vocabulary above, batch 1)
+that is an estimated 0.23 GB at a chunk of 128 whatever `data.max_length` is, against
+0.92 GB at 512 tokens, 1.84 GB at 1024 and 3.68 GB at 2048 unchunked. These are estimates,
+not measurements: no run with the option has been measured on a GPU (see the end of this
+section). The option takes an explicit number of tokens from 16 to 8192; there is no default
+and no `true`, and unset is off.
+
+**What it costs.** Two `[batch, seq, hidden]` tensors in the stream dtype, which the
+pre-flight adds to its estimate: the gradient on the hidden states, filled chunk by chunk in
+the forward and handed to the backward, and its product with the incoming gradient. At
+2048 tokens, hidden 4096 and bf16 that charge is 34 MB for the two. They are not live at the
+same time as a chunk's logits, so charging both beside the logits term errs high. And a loop
+over the head, one matmul per chunk instead of one over the sequence; what that does to speed
+has not been measured.
+
+**What it gives up.**
+
+- `outputs.logits` on a labelled forward: the output carries the loss and no logits. The
+  trainer's `entropy`, `mean_token_accuracy` and `num_tokens` columns and the rewind log's
+  per-row losses (`rewind.jsonl`) are written as before, under the same names, from what the
+  chunk loop collects. A forward without labels (generation, `predict`) is unchanged; a
+  labelled forward without gradients (the eval loss) is chunked too.
+- Equality to the last bit with an unchunked step. The per-token terms are the ones
+  `ForCausalLMLoss` computes; the order of the final sum and the shape of each matmul are
+  not. `tests/test_stream_loss_chunk.py` holds the loss, the gradients, the logged columns
+  and the rewind log's losses to a relative `1e-5` of the same run unchunked, on a tiny
+  Llama. The bit-exactness the streamed path is published with does not extend to a run with
+  this option.
+- A trainable output head: the gradient is taken on the hidden states only.
+
+**The pre-flight** charges the logits on `min(seq, chunk)` tokens at the shipped bytes per
+element, plus the two tensors above; the panel line ends
+`(logits 0.23 GB in chunks of 128 tokens)` at batch 1 with the vocabulary above. That charge
+is arithmetic. The 14 bytes per element were measured on unchunked steps, and whether a
+chunked step still pays the 2 of them that are a retained copy of the logits (#327) is not
+known. The hook is on the model before `stream_vram_probe` runs, so with
+`stream_vram_probe: true` the step that decides the fit is the chunked one.
+
+**Refused.** At config load, as listed under "Rejected at config load" below: without
+`stream_layers`, for a task other than `sft`, with `data.format: raft`, and beside
+`use_cut_ce`. When the model is built, with the reason: a trainable output head, a model
+without one, and a model that changes its logits after the head: Gemma 2's
+`final_logit_softcapping` is read from its config, and any other such model is caught at its
+first labelled forward.
+
+**Not measured yet.** #1693 asks for peak VRAM at 512, 1024 and 2048 tokens with and without
+the option, on one model and stack, and for a pre-flight that does not under-predict on those
+rows. That table needs a CUDA card and is left for whoever has one. To produce it:
+
+```bash
+python benchmarks/harness/stream_loss_chunk_vram.py --base <id-or-path> --quantization 4bit
+```
+
+The harness runs the setup `soup train` uses and one step per arm at batch 1 (`--seqs` and
+`--chunk` change the lengths and the chunk, 512,1024,2048 and 128 by default) and prints one
+row per length and arm: the pre-flight's prediction for that run, the free VRAM it compared
+against, and `torch.cuda.max_memory_allocated()` over the step. An arm that runs out of
+memory is a row, not a crash. It exits 1 when a row under-predicts, including an arm that ran
+out of memory inside the predicted fit. `--self-test` runs the same protocol on a tiny local
+Llama with no GPU and no download, and reads no peak.
 
 ### Batch size vs gradient accumulation
 
