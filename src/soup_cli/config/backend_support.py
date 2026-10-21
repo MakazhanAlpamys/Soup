@@ -19,9 +19,9 @@ drift -- every entry must name a real field, and every dotted field name in
 the truth; it can only stop it rotting, which is the failure that produced #749.
 
 Scope today: ``task=sft`` on ``backend=mlx`` and on ``backend=unsloth`` (#1124;
-both apply to every modality), ``task=dpo`` on ``backend=mlx``, plus multimodal
-vision and audio on ``backend=transformers`` (#1156). Other combinations report nothing rather
-than guessing, which is the honest default for a table that has not been
+both apply to every modality), ``task=dpo`` and ``task=orpo`` on ``backend=mlx``, plus
+multimodal vision and audio on ``backend=transformers`` (#1156). Other combinations report
+nothing rather than guessing, which is the honest default for a table that has not been
 reviewed for them.
 """
 
@@ -241,11 +241,24 @@ _MLX_DPO: tuple[SupportEntry, ...] = tuple(
     ),
 )
 
+#: MLX ORPO runs MLX DPO's loop with its own loss, so it ignores the same fields.
+_MLX_ORPO: tuple[SupportEntry, ...] = tuple(
+    entry for entry in _MLX_DPO if entry.field != "data.chat_template"
+) + (
+    SupportEntry(
+        "data.chat_template",
+        IGNORED,
+        "MLX ORPO renders conversational rows with the model's own chat template",
+        trainer_reads=True,
+    ),
+)
+
 
 #: ``(task, backend, modality)`` -> the settings that combination does not honour.
 REGISTRY: dict[tuple[str, str, str], tuple[SupportEntry, ...]] = {
     ("sft", "mlx", "text"): _MLX_SFT,
     ("dpo", "mlx", "text"): _MLX_DPO,
+    ("orpo", "mlx", "text"): _MLX_ORPO,
     ("sft", "unsloth", "text"): _UNSLOTH_SFT,
     ("sft", "transformers", "vision"): _TRANSFORMERS_VISION_SFT,
     ("sft", "transformers", "audio"): _TRANSFORMERS_AUDIO_SFT,
@@ -276,6 +289,14 @@ TRAINER_MODULES: dict[tuple[str, str, str], tuple[str, ...]] = {
         "soup_cli/trainer/loss_summary.py",
     ),
     ("dpo", "mlx", "text"): (
+        "soup_cli/trainer/mlx_dpo.py",
+        "soup_cli/trainer/mlx_sft.py",
+        "soup_cli/trainer/mlx_optim.py",
+        "soup_cli/trainer/_trl_compat.py",
+        "soup_cli/trainer/loss_summary.py",
+    ),
+    ("orpo", "mlx", "text"): (
+        "soup_cli/trainer/mlx_orpo.py",
         "soup_cli/trainer/mlx_dpo.py",
         "soup_cli/trainer/mlx_sft.py",
         "soup_cli/trainer/mlx_optim.py",

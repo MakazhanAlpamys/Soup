@@ -1052,16 +1052,39 @@ class ShardCacheEstimate:
     to the same root). ``other_bytes`` is the payload of the extras shard and the
     large embed/head shards, all on root 0. Both are exact. ``header_bytes`` and
     ``index_bytes`` bound the safetensors headers and ``index.json`` from above.
+
+    ``expert_file_bytes`` is the part of ``layer_bytes`` that lives in the
+    per_expert experts files (0 for the fused layout), and ``code_table_bytes``
+    the part of ``other_bytes`` that is the shared NF4 code tables (0 without
+    NF4). Neither is held by the RAM tier; see :attr:`ram_tier_bytes`.
     """
 
     layer_bytes: Tuple[int, ...]
     other_bytes: int
     header_bytes: int
     index_bytes: int
+    expert_file_bytes: int = 0
+    code_table_bytes: int = 0
 
     @property
     def total_bytes(self) -> int:
         return sum(self.layer_bytes) + self.other_bytes + self.header_bytes + self.index_bytes
+
+    @property
+    def ram_tier_bytes(self) -> int:
+        """Host RAM the RAM tier holds for this cache: what the post-shard check charges.
+
+        The decoder-layer files plus the large embed/head shards (the store), plus
+        the resident extras. The per_expert experts files are read from the cache
+        volume on every tier, and the NF4 code tables are machinery that
+        ``extras_resident_bytes`` leaves out, so neither is counted.
+        """
+        return (
+            sum(self.layer_bytes)
+            - self.expert_file_bytes
+            + self.other_bytes
+            - self.code_table_bytes
+        )
 
 
 def estimate_shard_cache_bytes(
@@ -1134,6 +1157,8 @@ def estimate_shard_cache_bytes(
     routed: Dict[int, Dict[int, Dict[str, int]]] = {}
     other_bytes = 0
     header_bytes = 0
+    expert_file_bytes = 0
+    code_table_bytes = 0
     stored_names: set = set()
     any_nf4 = False
 
@@ -1189,14 +1214,17 @@ def estimate_shard_cache_bytes(
         ]
         if experts_nf4:
             any_nf4 = True
-            layer_bytes[idx] += sum(
+            experts_payload = sum(
                 nf4_weight_bytes(gate_up, double_quant=double_quant)
                 + nf4_weight_bytes(down, double_quant=double_quant)
                 for gate_up, down in pairs
             )
         else:
-            layer_bytes[idx] += sum(gate_up + down for gate_up, down in pairs) * itemsize
+            experts_payload = sum(gate_up + down for gate_up, down in pairs) * itemsize
+        layer_bytes[idx] += experts_payload
         if expert_layout == EXPERT_LAYOUT_PER_EXPERT:
+            # In the experts file, not the layer file: never held by the RAM tier.
+            expert_file_bytes += experts_payload
             # experts_NNN.safetensors, whose keys index.json does not list.
             parts = sidecars if experts_nf4 else ("",)
             names = [
@@ -1229,7 +1257,8 @@ def estimate_shard_cache_bytes(
         tables = {NF4_CODE_KEY: 16 * 4}
         if double_quant:
             tables[NF4_NESTED_CODE_KEY] = 256 * 4
-        other_bytes += sum(tables.values())
+        code_table_bytes = sum(tables.values())
+        other_bytes += code_table_bytes
         header_bytes += _charge_names(tables)
     index_entries = len(shard_paths) + len(stored_names) + len(suffixes) + n_layers
     return ShardCacheEstimate(
@@ -1237,6 +1266,8 @@ def estimate_shard_cache_bytes(
         other_bytes=other_bytes,
         header_bytes=header_bytes,
         index_bytes=_INDEX_BYTES_FIXED + _INDEX_BYTES_PER_ENTRY * index_entries,
+        expert_file_bytes=expert_file_bytes,
+        code_table_bytes=code_table_bytes,
     )
 
 

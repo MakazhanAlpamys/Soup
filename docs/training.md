@@ -1812,6 +1812,9 @@ training:
   quantization: 4bit
 ```
 
+On Apple Silicon, `backend: mlx` runs ORPO natively with the same objective; see
+[ORPO on MLX](backends-and-ops.md#orpo-on-mlx).
+
 
 ## SimPO Training (Simple Preference)
 

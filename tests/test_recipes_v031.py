@@ -266,12 +266,11 @@ class TestPartEDomain:
 
 
 # ---------------------------------------------------------------------------
-# Part F: Multimodal reasoning (2 new)
+# Part F: Multimodal reasoning (1 new)
 # ---------------------------------------------------------------------------
 
 PART_F_MM_REASONING = [
     ("llama3.2-vision-grpo", "grpo", "meta-llama/Llama-3.2-11B-Vision-Instruct"),
-    ("pixtral-dpo", "dpo", "mistralai/Pixtral-12B-2409"),
 ]
 
 # Single source of truth across the file — concatenated for catalog-wide
@@ -284,7 +283,7 @@ ALL_V031_RECIPES = (
 
 
 class TestPartFMultimodalReasoning:
-    """2 new multimodal alignment / reasoning recipes."""
+    """Multimodal reasoning recipe."""
 
     @pytest.mark.parametrize("name,task,model", PART_F_MM_REASONING)
     def test_recipe_registered(self, name: str, task: str, model: str) -> None:

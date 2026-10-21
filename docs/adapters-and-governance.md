@@ -581,7 +581,12 @@ soup --no-audit-log version             # skip the audit line for this command
 PII redaction across **every** string field (`hf_*` / `sk-*` / `Bearer …` → `<redacted>`)
 via the v0.40.3 `_SECRET_RE` policy. POSIX `O_NOFOLLOW` + `0o600` perms, atomic-append,
 rotation at 100 MiB with symlink rejection at the backup path. The auto-instrumentation is
-best-effort — a broken audit log never crashes the CLI.
+best-effort — a broken audit log never crashes the CLI. Lines written by older versions get the
+same webhook URL masking as new ones, applied once the next time the log is written
+(`audit.jsonl.masked-v1` marks it done). A file it cannot replace is left as it is; the attempt
+is recorded in `audit.jsonl.masked-v1.tried` and the next one waits a day, so a log another
+process keeps open is not re-read by every command. Temp files an interrupted pass left beside
+the log are removed by the next pass once they are an hour old.
 
 
 ## Reproducibility Receipt (`soup train --repro-receipt`)
