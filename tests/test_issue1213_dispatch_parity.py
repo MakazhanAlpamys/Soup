@@ -77,11 +77,12 @@ _EXPECTED = {
     "asr": "AsrTrainerWrapper",
 }
 
-#: MLX rows resolve through ``mlx_routing``. Same three tasks the registry
+#: MLX rows resolve through ``mlx_routing``. Same four tasks the registry
 #: accepts; the name is what ``resolve_trainer`` would have imported.
 _MLX_EXPECTED = {
     "sft": "MLXSFTTrainerWrapper",
     "dpo": "MLXDPOTrainerWrapper",
+    "orpo": "MLXORPOTrainerWrapper",
     "grpo": "MLXGRPOTrainerWrapper",
 }
 

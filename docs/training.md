@@ -121,8 +121,18 @@ read training generations only. `ppo` and `online_dpo` refuse
 `evaluate()` crashes on prompt-only rows. A generation-based evaluation for
 those two is a separate feature.
 
-**Refused at config load.** `training.eval_steps` on `backend: mlx` (mlx-lm
-evaluates the split on its own cadence, #739), on `task: unlearn` (it trains on
+**On `backend: mlx`** (#1990) `task: sft` honours `training.eval_steps` in the
+same unit: completed optimizer updates, after gradient accumulation. Soup runs
+those evaluations itself, after updates N, 2N, ... and once after the last
+update, over every validation row (a tail smaller than one batch included),
+weighted by supervised tokens. mlx-lm's own pass would evaluate before the
+update it is scheduled at and read at most 25 whole batches. An evaluation
+takes no step and leaves the training order and the model's mode as they were.
+Unset, MLX keeps mlx-lm's cadence (a quarter of the run). The MLX preference
+tasks (`dpo`, `orpo`) evaluate once per epoch and refuse the field.
+
+**Refused at config load.** `training.eval_steps` on the MLX preference tasks
+(see above), on `task: unlearn` (it trains on
 `forget_set` / `retain_set` and has no validation split), and with
 `val_split: 0` on local files or remote URIs, where there would be nothing to
 evaluate.
@@ -1812,6 +1822,9 @@ training:
   quantization: 4bit
 ```
 
+On Apple Silicon, `backend: mlx` runs ORPO natively with the same objective; see
+[ORPO on MLX](backends-and-ops.md#orpo-on-mlx).
+
 
 ## SimPO Training (Simple Preference)
 
@@ -1950,6 +1963,8 @@ soup ra-dit -r retriever.yaml -g generator.yaml --plan-only
 ```
 
 It trains the retriever, then **records** that trained retriever as the generator's paired retriever (writing its output dir into the generator's `training.ra_dit_retriever_model`) and trains the generator RAFT-style. The recorded retriever is the one used at deploy/serve time — stage-2 does not fuse the retriever weights. A plain `soup train` of a generator-stage config with no retriever model set **auto-links** the most-recent RA-DIT retriever run from the Registry; pass `--retriever-model <m>` to override.
+
+Both configs must write to different, non-nested output directories: `soup ra-dit` refuses a pair whose effective outputs (`output` plus `experiment_name`, exactly as the trainers build them) are equal or nested, so give each stage its own `output`, or give both stages different `experiment_name` values. The two shipped recipes both declare `output: ./output`, so setting an `experiment_name` on only one stage is not enough.
 
 
 ## Curriculum-Aware Training (BETA)

@@ -4,6 +4,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # A local build installs this soup-cli release from PyPI, e.g.
+        #   SOUP_VERSION=0.77.0 docker compose build
+        # Unset, the Dockerfile stops the build. Pulling the published image needs none.
+        - SOUP_VERSION
     volumes:
       - .:/workspace
     deploy:

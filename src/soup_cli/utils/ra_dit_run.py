@@ -34,6 +34,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Optional, Tuple
 
 _MIN_TIMEOUT_S = 60
@@ -50,6 +51,7 @@ __all__ = [
     "resolve_retriever_for_generator",
     "run_ra_dit",
     "validate_ra_dit_config_path",
+    "load_ra_dit_configs",
 ]
 
 
@@ -289,6 +291,51 @@ def _run_train_subprocess(config_path: str, *, timeout_seconds: int) -> None:
         )
 
 
+def _effective_output(config: dict, field: str) -> str:
+    """Resolve the output directory using the trainers' experiment convention."""
+    output = config.get("output")
+    if not isinstance(output, str) or not output:
+        raise ValueError(
+            f"{field} must declare a non-empty 'output' directory"
+        )
+
+    experiment_name = config.get("experiment_name")
+    if experiment_name:
+        if not isinstance(experiment_name, str):
+            raise ValueError(
+                f"{field} experiment_name must be a string"
+            )
+        return str(Path(output) / experiment_name)
+
+    return output
+
+
+def load_ra_dit_configs(
+    retriever_config: str,
+    generator_config: str,
+) -> tuple[dict, dict, str, str]:
+    """Load both recipes and reject overlapping effective output directories."""
+    from soup_cli.utils.paths import ensure_distinct_paths  # noqa: PLC0415
+
+    retr_path = validate_ra_dit_config_path(
+        "--retriever-config", retriever_config
+    )
+    gen_path = validate_ra_dit_config_path(
+        "--generator-config", generator_config
+    )
+    retr_cfg = _load_yaml_config(retr_path)
+    gen_cfg = _load_yaml_config(gen_path)
+    retriever_output = _effective_output(retr_cfg, "--retriever-config")
+    generator_output = _effective_output(gen_cfg, "--generator-config")
+
+    ensure_distinct_paths(
+        [("--retriever-config output", retriever_output)],
+        [("--generator-config output", generator_output)],
+        reject_nested=True,
+    )
+    return retr_cfg, gen_cfg, retriever_output, generator_output
+
+
 def run_ra_dit(
     retriever_config: str,
     generator_config: str,
@@ -315,28 +362,18 @@ def run_ra_dit(
         TypeError / ValueError / FileNotFoundError: input validation.
         RuntimeError: a training stage failed.
     """
-    retr_path = _validate_config_path("retriever_config", retriever_config)
-    gen_path = _validate_config_path("generator_config", generator_config)
     timeout = _validate_timeout(timeout_seconds)
     runner = _runner if _runner is not None else (
         lambda p: _run_train_subprocess(p, timeout_seconds=timeout)
     )
 
-    retr_cfg = _load_yaml_config(retr_path)
-    gen_cfg = _load_yaml_config(gen_path)
-    retriever_output = retr_cfg.get("output")
-    if not isinstance(retriever_output, str) or not retriever_output:
-        raise ValueError(
-            "retriever config must declare a non-empty 'output' directory"
-        )
-    generator_output = gen_cfg.get("output")
-    if not isinstance(generator_output, str) or not generator_output:
-        raise ValueError(
-            "generator config must declare a non-empty 'output' directory"
-        )
+    _, gen_cfg, retriever_output, generator_output = load_ra_dit_configs(
+        retriever_config,
+        generator_config,
+    )
 
     # Stage 1 — train the retriever.
-    runner(retr_path)
+    runner(retriever_config)
 
     # Link: manual override wins; else the retriever's own output dir.
     if retriever_model is not None:

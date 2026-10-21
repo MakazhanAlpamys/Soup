@@ -249,7 +249,10 @@ an explicit target list always wins unchanged:
    reason is its vision tower, which has a `q_proj` of its own: the entry would have
    to be a regex scoped to the language tower, and `moe_lora: true` adds its names
    to a list of targets but discards a regex, so the key/value projections would
-   lose their adapter. MiniMax-M3 uses a regex
+   lose their adapter. The same holds for any other wrapper around a `deepseek_v3`
+   text config with `q_lora_rank: null` (Kimi-VL style): Soup has no row for the
+   wrapper, so its text tower keeps the `q_a_proj` / `q_b_proj` names and its
+   `q_proj` gets no adapter. MiniMax-M3 uses a regex
    scoped to its language tower, so a text fine-tune does not adapt the vision
    encoder. `mistral3` (the vision-language wrapper behind `mistral-medium-3-5-sft`,
    which therefore sets `modality: vision` so SFT loads the image-text class) uses the

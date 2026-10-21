@@ -547,8 +547,9 @@ def build_peft_config_spec(
 def _with_moe_parameters(target_modules: Any, target_parameters: Any) -> Any:
     """Add the fused expert parameters ``moe_lora`` resolved (#1421).
 
-    ``resolve_moe_lora_targets`` returns a ``MoeLoraTargets`` list that carries
-    them as ``target_parameters``; merging here, rather than at each call site,
+    ``resolve_moe_lora_targets`` returns a ``MoeLoraTargets`` list (or, for a
+    string target, a ``MoeLoraTargetString``) that carries them as
+    ``target_parameters``; merging here, rather than at each call site,
     is what makes every MoE-wired trainer adapt the experts without passing a new
     argument. An explicit ``lora.target_parameters`` list is kept and extended.
     """
@@ -599,14 +600,23 @@ def build_lora_config(
     """
     import peft
 
+    # The MoE router / gate modules a string target kept under ``moe_lora`` would
+    # otherwise reach (only ever with LoRA: VeRA gets an explicit list instead).
+    exclude_modules = list(getattr(target_modules, "exclude_modules", None) or ())
     target_parameters = _with_moe_parameters(target_modules, target_parameters)
     target_modules = _settle_unmapped(target_modules, target_parameters)
+    if isinstance(target_modules, str):
+        # A ``MoeLoraTargetString`` has handed over what rides along with it above;
+        # peft, and the adapter_config.json it saves, get the plain string.
+        target_modules = str(target_modules)
     spec = build_peft_config_spec(
         lora_cfg,
         target_modules=target_modules,
         target_parameters=target_parameters,
         task_type=task_type,
     )
+    if exclude_modules:
+        spec["init_kwargs"]["exclude_modules"] = exclude_modules
     config_cls = getattr(peft, spec["peft_cls"])
     return config_cls(**spec["init_kwargs"])
 

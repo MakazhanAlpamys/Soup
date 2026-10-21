@@ -62,6 +62,11 @@ def profile(
     # Resolve GPU memory
     gpu_memory_gb, gpu_memory_source = _resolve_gpu_memory(gpu)
 
+    # Resolve PEFT mode (#1423)
+    from soup_cli.utils.hardware_fit import resolve_peft_mode
+
+    peft = resolve_peft_mode(cfg)
+
     # Compute profile
     result = estimate_total(
         model_name=cfg.base,
@@ -73,6 +78,7 @@ def profile(
         seq_len=cfg.data.max_length,
         optimizer=cfg.training.optimizer,
         gradient_checkpointing=cfg.training.gradient_checkpointing,
+        peft=peft,
     )
 
     # Speed estimates
@@ -141,10 +147,16 @@ def _resolve_gpu_memory(gpu: str | None) -> tuple[float, str]:
 def _render_profile(result: dict, cfg, gpu_memory_gb: float, gpu_memory_source: str) -> None:
     """Render Rich profile output."""
     # Model info
+    if result.get("peft") == "full":
+        trainable_str = f"(trainable: {result['trainable_params']:,.0f}, full fine-tuning)"
+    else:
+        trainable_str = (
+            f"(trainable: {result['trainable_params']:,.0f} with LoRA r={cfg.training.lora.r})"
+        )
+
     model_info = (
         f"Model:     [bold]{cfg.base}[/]\n"
-        f"Params:    [bold]{result['model_params_b']:.1f}B[/] "
-        f"(trainable: {result['trainable_params']:,.0f} with LoRA r={cfg.training.lora.r})\n"
+        f"Params:    [bold]{result['model_params_b']:.1f}B[/] {trainable_str}\n"
         f"Quantization: [bold]{result['quantization']}[/]"
     )
     if result["gradient_checkpointing"]:
@@ -155,7 +167,10 @@ def _render_profile(result: dict, cfg, gpu_memory_gb: float, gpu_memory_source: 
     mem_table.add_column("Component", style="bold")
     mem_table.add_column("Memory", justify="right")
     mem_table.add_row("Model", f"~{result['model_memory_gb']:.1f} GB")
-    mem_table.add_row("LoRA", f"~{result['lora_memory_gb']:.1f} GB")
+    if result.get("peft") == "full":
+        mem_table.add_row("Gradients", f"~{result['gradients_memory_gb']:.1f} GB")
+    else:
+        mem_table.add_row("LoRA", f"~{result['lora_memory_gb']:.1f} GB")
     mem_table.add_row("Optimizer", f"~{result['optimizer_memory_gb']:.1f} GB")
     mem_table.add_row(
         f"Activations (bs={result['batch_size']}, seq={result['seq_len']})",
