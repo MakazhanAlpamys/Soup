@@ -14,6 +14,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
+from soup_cli.config.deprecation import DEPRECATED_VALUE_REJECTION_VERSION
 from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
@@ -161,7 +162,9 @@ def export(
     if fmt not in SUPPORTED_FORMATS:
         removed_notice = ""
         if fmt in ("awq", "gptq"):
-            removed_notice = f"\n[yellow]--format {fmt} was removed in v0.77.[/]"
+            removed_notice = (
+                f"\n[yellow]--format {fmt} was removed in v{DEPRECATED_VALUE_REJECTION_VERSION}.[/]"
+            )
         console.print(
             f"[red]Unsupported format: {fmt}[/]{removed_notice}\n"
             f"Supported: {', '.join(SUPPORTED_FORMATS)}"
