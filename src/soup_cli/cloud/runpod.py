@@ -167,6 +167,28 @@ def write_stub(plan: CloudPlan) -> str:
     return write_cloud_stub(plan)
 
 
+_CONTROLLER_ENV_NAMES: frozenset[str] = frozenset({
+    "RUNPOD_API_KEY", "RUNPOD_SSH_PRIVATE_KEY", "PATH", "HOME", "USERPROFILE", "SYSTEMROOT",
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+    "TEMP", "TMP", "TMPDIR", "SYSTEMDRIVE", "WINDIR", "SSH_AUTH_SOCK",
+})
+
+
+def _controller_environment(
+    environ: Mapping[str, str], *, case_insensitive: bool | None = None,
+) -> dict[str, str]:
+    """Keep the controller's credentials and OS/network settings, with OS name rules."""
+    if case_insensitive is None:
+        case_insensitive = os.name == "nt"
+    allowed = ({name.upper() for name in _CONTROLLER_ENV_NAMES}
+               if case_insensitive else _CONTROLLER_ENV_NAMES)
+    return {
+        name: value for name, value in environ.items()
+        if (name.upper() if case_insensitive else name) in allowed
+    }
+
+
 def submit_runpod_run(plan: CloudPlan, *, env: Mapping | None = None) -> int:
     """Keep waiting through interrupts so the controller can finish its cleanup."""
     if not isinstance(plan, CloudPlan) or plan.cloud != "runpod":
@@ -179,10 +201,7 @@ def submit_runpod_run(plan: CloudPlan, *, env: Mapping | None = None) -> int:
     ]
     if missing:
         raise RuntimeError("RunPod not configured. Set " + ", ".join(missing))
-    allowed = {
-        "RUNPOD_API_KEY", "RUNPOD_SSH_PRIVATE_KEY", "PATH", "HOME", "USERPROFILE", "SYSTEMROOT",
-    }
-    environ = {name: value for name, value in environ.items() if name in allowed}
+    environ = _controller_environment(environ)
     import subprocess
 
     proc = None

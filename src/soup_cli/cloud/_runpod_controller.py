@@ -22,6 +22,12 @@ import urllib.error
 import urllib.request
 import uuid
 
+# Isolated Python ignores PYTHONIOENCODING/PYTHONUTF8. A redirected Windows
+# stream may not encode a log character; print a replacement instead of failing.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(errors="replace")
+
 _GPU_ID = globals().get("_GPU_ID", "")
 _CONFIG_B64 = globals().get("_CONFIG_B64", "")
 _OUTPUT = globals().get("_OUTPUT", "")

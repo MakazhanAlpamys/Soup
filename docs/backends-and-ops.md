@@ -414,8 +414,14 @@ output directory back before deleting the Pod. Choose a fresh local output path;
 existing outputs, symlink/junction paths and path components starting with `-` are
 refused before allocation and rechecked before copying. SCP separates options from
 its operands with `--`. Submission starts Python in isolated mode (`-I`) and passes
-only the RunPod token/key path and `PATH`, `HOME`, `USERPROFILE`, `SYSTEMROOT` when
-present. SSH/SCP use `IdentitiesOnly=yes` with the selected key and a temporary per-run known-hosts
+only the RunPod token/key path, `PATH`, `HOME`, `USERPROFILE`, proxy settings
+(`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` and their lowercase forms),
+temporary-directory settings (`TEMP`, `TMP`, `TMPDIR`), Windows settings
+(`SYSTEMROOT`, `SYSTEMDRIVE`, `WINDIR`) and `SSH_AUTH_SOCK` when
+present. Environment names are matched case-insensitively on Windows. The controller
+reconfigures stdout/stderr to replace characters the pipe encoding cannot represent,
+because isolated Python ignores `PYTHONIOENCODING` and `PYTHONUTF8`.
+SSH/SCP use `IdentitiesOnly=yes` with the selected key and a temporary per-run known-hosts
 file, removed even after failure; the user's known-hosts file is not modified.
 The config is base64-embedded data; planning applies the
 shared YAML size, nesting and alias-expansion limits, and refuses inline credential

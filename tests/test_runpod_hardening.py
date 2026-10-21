@@ -324,7 +324,7 @@ def test_submit_isolates_python_and_filters_environment(credentials, monkeypatch
         "RUNPOD_API_KEY", "RUNPOD_SSH_PRIVATE_KEY", "PATH", "HOME", "USERPROFILE", "SYSTEMROOT",
     )}
     untrusted = {name: "private-value" for name in (
-        "PYTHONPATH", "PYTHONHOME", "HF_TOKEN", "WANDB_API_KEY", "SSH_AUTH_SOCK", "LD_PRELOAD",
+        "PYTHONPATH", "PYTHONHOME", "HF_TOKEN", "WANDB_API_KEY", "LD_PRELOAD",
     )}
     spawns = []
     monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: (
@@ -333,6 +333,78 @@ def test_submit_isolates_python_and_filters_environment(credentials, monkeypatch
     assert _backend().submit_runpod_run(plan, env={**environment, **untrusted}) == 7
     assert spawns == [([sys.executable, "-I", plan.stub_path], {"env": environment})]
     assert plan.run_command == "python -I soup_runpod_app.py"
+
+
+@pytest.mark.parametrize("name", [
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+    "TEMP", "TMP", "TMPDIR", "SYSTEMDRIVE", "WINDIR", "SSH_AUTH_SOCK",
+])
+def test_controller_forwards_network_temp_and_agent_settings(
+    credentials, monkeypatch, tmp_path, name,
+):
+    plan = _plan(tmp_path)
+    supplied = {
+        "RUNPOD_API_KEY": "fixture-key", "RUNPOD_SSH_PRIVATE_KEY": str(credentials),
+        name: "setting-value", "HF_TOKEN": "not-for-this-controller",
+    }
+    expected = {key: value for key, value in supplied.items() if key != "HF_TOKEN"}
+    # Check exact POSIX spellings too: on Windows a differently cased proxy name
+    # can otherwise conceal a missing allow-list entry after normalisation.
+    assert _backend()._controller_environment(supplied, case_insensitive=False) == expected
+    launches = []
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: (
+        launches.append((argv, kw)) or types.SimpleNamespace(wait=lambda: 0)
+    ))
+    assert _backend().submit_runpod_run(plan, env=supplied) == 0
+    assert launches == [([sys.executable, "-I", plan.stub_path], {"env": expected})]
+
+
+@pytest.mark.parametrize("case_insensitive", [False, True, None])
+def test_controller_environment_matches_windows_names_only_on_windows(case_insensitive):
+    supplied = {"Path": "bin", "SystemRoot": "windows", "Https_Proxy": "proxy", "OTHER": "no"}
+    expected = {key: value for key, value in supplied.items() if key != "OTHER"}
+    windows = os.name == "nt" if case_insensitive is None else case_insensitive
+    assert _backend()._controller_environment(
+        supplied, case_insensitive=case_insensitive,
+    ) == (expected if windows else {})
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+@pytest.mark.parametrize("mode", ["ascii", "native"])
+def test_isolated_controller_replaces_unencodable_output(tmp_path, monkeypatch, stream, mode):
+    monkeypatch.chdir(tmp_path)
+    plan = _plan(tmp_path)
+    _backend().write_stub(plan)
+    # Run the rendered controller under -I, not a replica of its bootstrap.
+    # The narrow mode models Windows redirected output on every platform.
+    harness = tmp_path / "encoding_harness.py"
+    harness.write_text(
+        "import sys\n"
+        "stream, mode, stub = sys.argv[1:]\n"
+        "if mode == 'ascii':\n"
+        "    for handle in (sys.stdout, sys.stderr):\n"
+        "        handle.reconfigure(encoding='ascii', errors='strict')\n"
+        "namespace = {'__name__': 'controller_under_test'}\n"
+        "with open(stub, encoding='utf-8') as source:\n"
+        "    exec(compile(source.read(), stub, 'exec'), namespace)\n"
+        "getattr(sys, stream).write('controller line: \\u2588 \\u00e9 \\u65e5\\n')\n"
+        "getattr(sys, stream).flush()\n",
+        encoding="utf-8",
+    )
+    environment = {name: value for name, value in os.environ.items() if name.upper() in {
+        "PATH", "SYSTEMROOT", "WINDIR", "SYSTEMDRIVE", "TEMP", "TMP", "TMPDIR",
+    }}
+    result = subprocess.run(
+        [sys.executable, "-I", str(harness), stream, mode, plan.stub_path],
+        env=environment, cwd=tmp_path, capture_output=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    output = getattr(result, stream).decode("ascii" if mode == "ascii" else "utf-8", "replace")
+    assert "controller line:" in output
+    if mode == "ascii":
+        assert "controller line: ? ? ?" in output
+    assert "UnicodeEncodeError" not in result.stderr.decode("utf-8", "replace")
 
 
 def test_actual_child_cannot_import_parent_pythonpath_or_read_unrelated_secret(
