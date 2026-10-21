@@ -31,7 +31,9 @@ def test_each_rank_uses_only_the_coordinators_nullable_result(monkeypatch, rank,
     if source == "resolution_failed":
         probe.side_effect = OSError("private provider diagnostic")
     monkeypatch.setattr(provenance, "get_hf_api", lambda: SimpleNamespace(model_info=probe))
-    state = SimpleNamespace(num_processes=2, is_main_process=rank == 0)
+    # Two one-process nodes: each is its node's local main process, but only
+    # global rank zero may resolve. A local-main check would resolve twice.
+    state = SimpleNamespace(num_processes=2, is_main_process=rank == 0, is_local_main_process=True)
     factory = Mock(return_value=state)
     monkeypatch.setattr(accelerate, "PartialState", factory)
     payload = {"schema_version": 1, "run_id": "coordinator", "base_model": BASE,
