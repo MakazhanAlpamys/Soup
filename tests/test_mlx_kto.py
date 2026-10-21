@@ -142,6 +142,24 @@ _U = {"role": "user", "content": "hi"}
 
 
 class TestTokenization:
+    def test_a_generation_prompt_the_full_render_lacks_is_narrowed_away(self):
+        """TRL keeps only the prefix the prompt and ``prompt + completion``
+        renderings share (review of #2111): a template whose generation prompt
+        adds text the full rendering does not contain must not shift the split."""
+        from soup_cli.trainer.mlx_kto import render_kto_text
+
+        class _Template:
+            def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False,
+                                    continue_final_message=False):
+                text = "".join(f"{m['role'][0].upper()}:{m['content']}\n" for m in messages)
+                return text + ("A:<think>\n" if add_generation_prompt else "")
+
+        row = {"prompt": [{"role": "user", "content": "q"}],
+               "completion": [{"role": "assistant", "content": "ans"}]}
+        prompt, completion = render_kto_text(row, _Template())
+        assert prompt == "U:q\nA:"
+        assert completion == "ans\n"
+
     def test_text_row_gets_bos_on_the_prompt_and_eos_on_the_completion(self):
         ex = _one({"prompt": "Q:", "completion": " yes", "label": True})
         assert _decode(ex.prompt_ids) == "^Q:"
@@ -681,15 +699,20 @@ class TestDataRefusals:
 
         rows = [{"prompt": "a", "completion": "", "label": True},
                 {"prompt": "c", "completion": "d", "label": False}]
-        with pytest.raises(PreferenceRowError, match="row 0: .*no completion token"):
+        with pytest.raises(PreferenceRowError, match="row 0: the completion is empty"):
             _wrapper_no_mlx()._examples(rows)
 
-    def test_a_prompt_that_fills_max_length_is_refused(self):
+    @pytest.mark.parametrize("prompt_len, completion", [(10, "ok"), (16, "y" * 20)],
+                             ids=["fills-the-room", "longer-than-the-room"])
+    def test_a_prompt_that_fills_max_length_is_refused(self, prompt_len, completion):
+        """A prompt longer than the room must not reach TRL's negative slice,
+        which keeps the head of a long answer past ``max_length`` (review of
+        #2111): the second row would train with the clamp at 0 removed."""
         from soup_cli.trainer.mlx_dpo import PreferenceRowError
 
         wrapper = _wrapper_no_mlx()
         wrapper.config.data.max_length = 12
-        rows = [{"prompt": "P" * 10, "completion": "ok", "label": True},
+        rows = [{"prompt": "P" * prompt_len, "completion": completion, "label": True},
                 {"prompt": "c", "completion": "d", "label": False}]
         with pytest.raises(PreferenceRowError, match="row 0: no completion token fits"):
             wrapper._examples(rows)
