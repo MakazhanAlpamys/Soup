@@ -404,6 +404,37 @@ class TestTheLossMatchesTrlItself:
         np.testing.assert_allclose(np.array(grads["logits"]), trl_grad, atol=2e-6)
 
 
+class TestTheOracleMatchesTrl:
+    """No MLX: the NumPy oracle itself against TRL's ``get_batch_loss_metrics``,
+    so a CI runner without MLX still checks what the MLX tests compare to."""
+
+    @pytest.mark.parametrize("gamma, alpha", _SETTINGS)
+    def test_loss_terms_and_gradient(self, gamma, alpha):
+        logits, tokens, comp, seq = _fixture(seed=2)
+        trl_loss, trl_metrics, trl_grad = TestTheLossMatchesTrlItself()._trl(
+            logits, tokens, comp, seq, gamma, alpha
+        )
+        a, b, nll = _np_terms(logits, tokens, comp, seq)
+        assert _np_loss(a, b, nll, gamma, alpha) == pytest.approx(trl_loss, rel=1e-9)
+        assert nll == pytest.approx(trl_metrics["nll_loss"], rel=1e-9)
+        assert a.mean() == pytest.approx(trl_metrics["logps/chosen"], rel=1e-9)
+        assert b.mean() == pytest.approx(trl_metrics["logps/rejected"], rel=1e-9)
+        assert BETA * (a - b).mean() == pytest.approx(trl_metrics["rewards/margins"], rel=1e-9)
+        rng = np.random.default_rng(7)
+        eps = 1e-5
+        scored = np.argwhere(comp[:, 1:] == 1)
+        assert np.abs(trl_grad).max() > 1e-3
+        for _ in range(8):  # positions the loss reads
+            r, p = scored[rng.integers(0, len(scored))]
+            idx = (r, p, rng.integers(0, logits.shape[2]))
+            hi, lo = logits.copy(), logits.copy()
+            hi[idx] += eps
+            lo[idx] -= eps
+            fd = (_oracle(hi, tokens, comp, seq, gamma, alpha)
+                  - _oracle(lo, tokens, comp, seq, gamma, alpha)) / (2 * eps)
+            assert fd == pytest.approx(trl_grad[idx], abs=1e-7, rel=1e-5), idx
+
+
 class TestEdgeValues:
     def _loss(self, a, b, nll=0.5, gamma=0.5, alpha=1.0):
         mx = pytest.importorskip("mlx.core")
@@ -699,7 +730,7 @@ class TestConfig:
                  .replace("  simpo_gamma: 0.5\n", "  preference_loss: simpo\n"))
         with pytest.raises(Exception, match="task='preference' has no trainer") as info:
             load_config_from_string(alias)
-        assert "task: simpo" in str(info.value)
+        assert "Use task: simpo for the native MLX trainer." in str(info.value)
 
     def test_other_tasks_name_simpo_among_the_mlx_ones(self):
         from soup_cli.config.loader import load_config_from_string

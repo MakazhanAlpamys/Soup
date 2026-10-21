@@ -8330,7 +8330,7 @@ class SoupConfig(BaseModel):
         if self.task in MLX_TASKS:
             return self
         hint = ""
-        native = {"orpo", "simpo"}
+        native = {"dpo", "orpo", "simpo"}
         if self.task == "preference" and self.training.preference_loss in native:
             hint = f" Use task: {self.training.preference_loss} for the native MLX trainer."
         raise ValueError(
