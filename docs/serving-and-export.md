@@ -310,6 +310,16 @@ soup infer --backend mlx --model ./mlx-adapter --input prompts.jsonl --output re
 soup infer --backend mlx --model ./mlx-base --input prompts.jsonl --output results.jsonl
 ```
 
+Interactive chat uses the same component and artifact contract:
+
+```bash
+soup chat --backend mlx --model ./mlx-adapter --temperature 0
+soup chat --backend mlx --model ./mlx-base
+```
+
+Chat preserves conversation history, `/quit`, `/clear`, `/system` and cancellation.
+Native adapters passed to the default chat backend are refused with a backend hint.
+
 Inference uses a shared MLX loader and generation implementation. Native Soup
 adapters carry `model`, `num_layers` and resolved `lora_parameters` in
 `adapter_config.json`, alongside `adapters.safetensors`. The base identity comes from
