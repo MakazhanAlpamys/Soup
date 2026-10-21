@@ -136,7 +136,7 @@ def test_shard_slots_separate_commits_and_leave_other_models_unchanged(tmp_path,
     for sha in (SHA, "b" * 40):
         with provenance.base_revision_scope(provenance.BaseRevision(BASE)):
             slot = resolve_shard_dir(BASE, cache)
-            assert sha in Path(slot).name
+            assert Path(slot).name.endswith("@" + sha)
             assert resolve_shard_dir(BASE, cache) == slot
             assert resolve_shard_dir("owner/teacher", cache) == other
             assert os.path.commonpath([os.path.realpath(slot), os.path.realpath(cache)]) == cache
@@ -156,7 +156,7 @@ def test_materialized_weight_slots_separate_pinned_commits(tmp_path, monkeypatch
     for sha in (SHA, "b" * 40):
         with provenance.base_revision_scope(provenance.BaseRevision(BASE)):
             plan = spectrum_scan._hf_snapshot_plan(BASE, str(source), (), sha)
-            assert sha in Path(plan.weights_dir).name
+            assert Path(plan.weights_dir).name.endswith("@" + sha)
             slots.append(plan.weights_dir)
     assert slots[0] != slots[1]
     assert moving_hub.call_count == 2
