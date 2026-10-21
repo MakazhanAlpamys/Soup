@@ -333,6 +333,23 @@ def _refuse_empty_train(dcfg, dataset) -> None:
     raise typer.Exit(1)
 
 
+def _refuse_over_judge_budget(cfg, dataset) -> None:
+    """Refuse a ``judge_rank`` run that could exceed its judge-call budget (#2047).
+
+    The rows are known only once the dataset is loaded, and the trainer loads
+    the model before it reads them, so this runs between the two.
+    """
+    from rich.markup import escape
+
+    from soup_cli.trainer.grpo_judge import check_judge_rank_budget
+
+    try:
+        check_judge_rank_budget(cfg, dataset)
+    except ValueError as exc:
+        console.print(f"[red]Judge budget:[/] {escape(str(exc))}")
+        raise typer.Exit(1) from exc
+
+
 def _build_hardware_fit_input(cfg):
     """Best-effort ``HardwareFitInput`` from a ``SoupConfig``.
 
@@ -1746,6 +1763,7 @@ def train(
         _refuse_empty_train(cfg.data, dataset)
         _validate_classification_dataset_if_applicable(cfg, dataset)
         _validate_csm_dataset_if_applicable(cfg, dataset)
+        _refuse_over_judge_budget(cfg, dataset)
         console.print(
             f"[green]Data OK:[/] {_train_sample_count(cfg.data, dataset)} train samples"
         )
@@ -1771,6 +1789,7 @@ def train(
     _refuse_empty_train(cfg.data, dataset)
     _validate_classification_dataset_if_applicable(cfg, dataset)
     _validate_csm_dataset_if_applicable(cfg, dataset)
+    _refuse_over_judge_budget(cfg, dataset)
     console.print(
         f"[green]Loaded:[/] {_train_sample_count(cfg.data, dataset)} train samples"
     )

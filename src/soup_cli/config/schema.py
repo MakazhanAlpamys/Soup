@@ -1502,9 +1502,11 @@ class TrainingConfig(BaseModel):
     reward_fn: Optional[str] = Field(
         default="accuracy",
         description=(
-            "Reward function: 'accuracy', 'format', 'verifiable', a path to a "
-            "custom .py file, or a comma-separated ensemble of the above "
-            "(e.g. 'accuracy,format') — the comma form is GRPO-only (v0.71.40)."
+            "Reward function: 'accuracy', 'format', 'verifiable', 'judge_rank' "
+            "(GRPO only, an LLM judge ranks each prompt's completions; see "
+            "grpo_judge, #2047), a path to a custom .py file, or a comma-separated "
+            "ensemble of the above (e.g. 'accuracy,format') — the comma form is "
+            "GRPO-only (v0.71.40)."
         ),
     )
     @field_validator("reward_fn", mode="before")
@@ -1583,6 +1585,119 @@ class TrainingConfig(BaseModel):
             raise ValueError("prm_reward must not contain null bytes")
         if len(value) > 512:
             raise ValueError("prm_reward must be <= 512 chars")
+        return value
+
+    # #2047 — GRPO ``reward_fn: judge_rank``: one LLM-judge call ranks each
+    # prompt's completions together. Every field is None by default and refused
+    # without judge_rank (SoupConfig._validate_grpo_judge_rank).
+    grpo_judge: Optional[str] = Field(
+        default=None,
+        description=(
+            "Judge URL for reward_fn judge_rank (ollama://model | "
+            "https://host/model | http://localhost:port/model), the form "
+            "online_dpo_judge takes. Required with judge_rank (#2047)."
+        ),
+    )
+    grpo_judge_rubric: Optional[str] = Field(
+        default=None,
+        description=(
+            "Rubric YAML for judge_rank, under the working directory. Only each "
+            "criterion's name and description are used: a ranking scores from 0 "
+            "to 1, so weights and scale are ignored. Unset = Soup's default "
+            "criteria (helpfulness, accuracy, safety)."
+        ),
+    )
+    grpo_judge_max_tokens: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=32768,
+        description="Judge reply budget per judge_rank call. Unset = 1024.",
+    )
+    grpo_judge_max_calls: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Cost guard for judge_rank: the run is refused before the model loads "
+            "when it could make more judge calls than this ((train rows x epochs + "
+            "held-out rows x evaluations) x 2 for the retry). Required with "
+            "judge_rank; no default."
+        ),
+    )
+    grpo_judge_max_failure_rate: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        allow_inf_nan=False,
+        description=(
+            "judge_rank stops the run when more than this share of its training "
+            "groups got no scores (checked from the 20th group). Unset = 0.2."
+        ),
+    )
+
+    @field_validator("grpo_judge", mode="before")
+    @classmethod
+    def _validate_grpo_judge_field(cls, value: Any) -> Optional[str]:
+        """#2047 — the judge URL is parsed and checked at load, not after the download.
+
+        ``_parse_judge_url`` refuses an unsupported scheme or a missing model id,
+        and ``validate_judge_api_base`` the http-to-a-remote-host and private-IP
+        cases, the same checks ``JudgeEvaluator`` runs when it is built.
+        """
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, str):
+            raise ValueError(
+                f"grpo_judge must be a string URL, got {type(value).__name__}"
+            )
+        if not value.strip():
+            raise ValueError("grpo_judge must be a non-empty string")
+        if "\x00" in value:
+            raise ValueError("grpo_judge must not contain null bytes")
+        if len(value) > 512:
+            raise ValueError("grpo_judge must be <= 512 chars")
+        from soup_cli.eval.gate import _parse_judge_url
+        from soup_cli.eval.judge import validate_judge_api_base
+
+        try:
+            _provider, _model, api_base = _parse_judge_url(value)
+            validate_judge_api_base(api_base)
+        except ValueError as exc:
+            raise ValueError(f"grpo_judge: {exc}") from exc
+        return value
+
+    @field_validator("grpo_judge_rubric", mode="before")
+    @classmethod
+    def _validate_grpo_judge_rubric_field(cls, value: Any) -> Optional[str]:
+        """#2047 — a rubric path stays under the working directory (realpath + commonpath)."""
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, str):
+            raise ValueError(
+                f"grpo_judge_rubric must be a string path, got {type(value).__name__}"
+            )
+        if not value.strip():
+            raise ValueError("grpo_judge_rubric must be a non-empty string")
+        if "\x00" in value:
+            raise ValueError("grpo_judge_rubric must not contain null bytes")
+        if len(value) > 4096:
+            raise ValueError("grpo_judge_rubric must be <= 4096 chars")
+        from soup_cli.utils.paths import is_under_cwd
+
+        if not is_under_cwd(value):
+            raise ValueError(
+                f"grpo_judge_rubric {value!r} is not under the working directory"
+            )
+        return value
+
+    @field_validator(
+        "grpo_judge_max_tokens", "grpo_judge_max_calls", "grpo_judge_max_failure_rate",
+        mode="before",
+    )
+    @classmethod
+    def _validate_grpo_judge_numbers(cls, value: Any, info: Any) -> Any:
+        """#2047 — a boolean is not a count or a rate (NaN is refused by the bounds)."""
+        if isinstance(value, bool):
+            raise ValueError(f"{info.field_name} must not be a boolean")
         return value
 
     # v0.71.31 — Online DPO (task='online_dpo'): on-policy generation judged by
@@ -7313,6 +7428,63 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 f"a comma-separated training.reward_fn (an ensemble, {rf!r}) is "
                 f"only supported for task='grpo'; got task={self.task!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_grpo_judge_rank(self) -> "SoupConfig":
+        """#2047 — ``reward_fn: judge_rank`` and its ``grpo_judge*`` fields.
+
+        ``judge_rank`` is built from this config in ``trainer/grpo.py`` (the PPO
+        and ``soup reward`` loaders refuse it), so it needs ``task='grpo'`` off
+        MLX, a judge URL and a call budget. ``prm_reward`` replaces
+        ``reward_fn``, so the judge would never run; a ``rollout_backend``
+        replaces the prompts after the cost guard has counted them. Any
+        ``grpo_judge*`` field without ``judge_rank`` would be read by nothing.
+        """
+        from soup_cli.trainer.grpo_judge import GRPO_JUDGE_FIELDS, uses_judge_rank
+
+        t = self.training
+        if not uses_judge_rank(t.reward_fn):
+            set_fields = [name for name in GRPO_JUDGE_FIELDS if getattr(t, name) is not None]
+            if set_fields:
+                named = ", ".join(f"training.{name}" for name in set_fields)
+                raise ValueError(
+                    f"{named} only apply to training.reward_fn judge_rank; got "
+                    f"reward_fn={t.reward_fn!r}. Add judge_rank to reward_fn or remove them."
+                )
+            return self
+        if self.task != "grpo":
+            raise ValueError(
+                "training.reward_fn judge_rank needs task='grpo' (it ranks each "
+                f"prompt's group of completions); got task={self.task!r}"
+            )
+        if self.backend == "mlx":
+            raise ValueError(
+                "training.reward_fn judge_rank is not supported on backend='mlx'; "
+                "use backend='transformers'"
+            )
+        if t.prm_reward is not None:
+            raise ValueError(
+                "training.prm_reward replaces training.reward_fn, so judge_rank would "
+                "never run; remove training.prm_reward or judge_rank"
+            )
+        if t.rollout_backend is not None:
+            raise ValueError(
+                "training.rollout_backend replaces the dataset prompts after the "
+                "judge_rank cost guard has counted them; remove training.rollout_backend "
+                "or judge_rank"
+            )
+        if t.grpo_judge is None:
+            raise ValueError(
+                "training.reward_fn judge_rank needs training.grpo_judge, the judge URL "
+                "(ollama://model, https://host/model or http://localhost:port/model)"
+            )
+        if t.grpo_judge_max_calls is None:
+            raise ValueError(
+                "training.reward_fn judge_rank needs training.grpo_judge_max_calls, the "
+                "most judge calls the run may make: (train rows x epochs + held-out rows "
+                "x evaluations) x 2 for the retry. It has no default."
             )
         return self
 
