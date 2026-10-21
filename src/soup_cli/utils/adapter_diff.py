@@ -201,8 +201,12 @@ def _read_safetensors_numpy(path: Path) -> dict[str, Any]:
     directly; a bfloat16 tensor is widened to float32 exactly, since it is the top 16 bits
     of a float32.
 
+    The arrays are read-only views of the bytes read (``np.frombuffer``); copy one before
+    changing it in place.
+
     Raises ``ValueError`` for more than ``_MAX_LAYERS`` tensors (before any payload is
-    read) and for a header ``read_header`` refuses, with the file name only.
+    read), for a header ``read_header`` refuses, and for a dtype numpy cannot hold (the
+    FP8 spellings ``read_header`` accepts), each naming the file once.
     """
     import numpy as np
 
@@ -211,16 +215,22 @@ def _read_safetensors_numpy(path: Path) -> dict[str, Any]:
     try:
         entries = read_header(str(path))
     except (ValueError, OSError) as exc:
-        reason = str(exc).replace(str(path), path.name)
-        raise ValueError(
-            f"Corrupt or unreadable safetensors weights in {path.name}: {reason}"
-        ) from exc
+        # read_header leads its messages with the path; the file is named once, here.
+        reason = str(exc).removeprefix(f"{path}: ").replace(str(path), path.name)
+        lead = "Unsupported" if "unsupported dtype" in reason else "Corrupt or unreadable"
+        raise ValueError(f"{lead} safetensors weights in {path.name}: {reason}") from exc
     if len(entries) > _MAX_LAYERS:
         raise ValueError(f"adapter has >{_MAX_LAYERS} tensors")
     result: dict[str, Any] = {}
     with open(str(path), "rb") as handle:
         for name, entry in entries.items():
             _require_str(name, "tensor name")
+            numpy_dtype = _NUMPY_DTYPES.get(entry.dtype)
+            if numpy_dtype is None and entry.dtype != "bfloat16":
+                raise ValueError(
+                    f"Unsupported safetensors weights in {path.name}: tensor {name!r} "
+                    f"has unsupported dtype {entry.dtype!r}; numpy has no such dtype"
+                )
             handle.seek(entry.start)
             raw = handle.read(entry.nbytes)
             if len(raw) != entry.nbytes:
@@ -232,7 +242,7 @@ def _read_safetensors_numpy(path: Path) -> dict[str, Any]:
                 bits = np.frombuffer(raw, dtype="<u2").astype(np.uint32) << 16
                 array = bits.view(np.float32)
             else:
-                array = np.frombuffer(raw, dtype=_NUMPY_DTYPES[entry.dtype])
+                array = np.frombuffer(raw, dtype=numpy_dtype)
             result[name] = array.reshape(entry.shape)
     return result
 
