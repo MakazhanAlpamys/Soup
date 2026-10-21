@@ -2089,6 +2089,12 @@ Usage: `soup eval benchmark [OPTIONS]`
 | `--run-id` | text |  |  | Link results to an existing training run |
 | `--device` | text |  |  | Device: cuda, mps, cpu. Auto-detected if not set. |
 | `--trust-remote-code` | flag | off |  | Allow loading models that ship custom Python via auto_map. Default deny (v0.36.0). Only enable if you trust the source. |
+| `--backend` | text | `transformers` |  | transformers or mlx |
+| `--base` | text |  |  | Native adapter base identity |
+| `--limit` | integer | `32` |  | Native sample cap per task (1..1024) |
+| `--max-length` | integer | `2048` |  | Native context token cap |
+| `--max-tokens` | integer | `256` |  | Native generation token cap |
+| `--seed` | integer | `0` |  | Native harness seed |
 
 ### `soup eval capability`
 
