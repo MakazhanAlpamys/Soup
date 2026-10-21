@@ -125,7 +125,7 @@ training:
     alpha: 32
 ```
 
-MLX backend supports SFT, DPO and ORPO. Any other task with `backend: mlx` (`grpo`, `ipo`, `kto`, `simpo`, `preference`, ...) is refused when the config is loaded, with an error naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for ready-made Apple Silicon configs.
+MLX backend supports SFT, DPO, ORPO and SimPO. Any other task with `backend: mlx` (`grpo`, `ipo`, `kto`, `preference`, ...) is refused when the config is loaded, with an error naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for ready-made Apple Silicon configs.
 
 #### DPO on MLX
 
@@ -228,6 +228,54 @@ training:
   `backend: mlx` (use `task: orpo`). The other settings MLX DPO does not apply
   are not applied here either.
 
+#### SimPO on MLX
+
+`task: simpo` with `backend: mlx` runs the same loop as MLX DPO with SimPO's
+objective, matched to TRL 0.29.1's CPO trainer with `loss_type: simpo` (the one
+the transformers backend runs). With `a` and `b` the mean log-probability of the
+chosen and rejected completion tokens:
+
+`loss = mean(-logsigmoid(beta * (a - b) - simpo_gamma)) + cpo_alpha * NLL`
+
+- **Beta is 0.1, fixed.** Soup's transformers backend passes no beta to TRL, so
+  `CPOConfig`'s default 0.1 applies; MLX uses the same value and records it as
+  `simpo_beta` in the adapter metadata. `dpo_beta` and `orpo_beta` are not
+  read. The margin `simpo_gamma` sits outside the temperature, as in TRL (which
+  writes it `beta * (a - b - simpo_gamma / beta)`). Label smoothing is TRL's
+  default 0.
+- **The NLL covers the chosen completion only.** CPO's labels mask the prompt,
+  so the NLL is a token mean over the chosen completion tokens of the whole
+  batch (not a mean of per-row means). This differs from ORPO, whose NLL
+  includes the prompt. `cpo_alpha` weights it (`> 0`, as on the transformers
+  backend).
+- **Tokens** are ORPO's above: TRL's CPO and ORPO trainers tokenize rows with
+  the same code, so rows that fit in `data.max_length` train on the same tokens
+  on either backend. Over-long rows are cut with Soup's cap (prompt to
+  `max_length // 2`, keeping its end, answers to the remaining room). The
+  transformers SimPO path applies no prompt cap: TRL 0.29.1 cuts only the
+  answers there, and Soup refuses a row whose shorter answer that cut empties.
+  A row with no room for an answer is refused on MLX too.
+- **Ties train**, as in TRL: the preference term is the constant
+  `softplus(simpo_gamma)` and the NLL still learns.
+- **Stops on a nonfinite loss** instead of training on NaN.
+- **LoRA dropout applies**, as in MLX DPO above; set `lora.dropout: 0` to
+  match TRL's `disable_dropout`.
+- **Reported:** loss, NLL, chosen and rejected rewards (`0.1 * logp`, as TRL
+  logs them), reward accuracy and margin, and the mean chosen and rejected
+  log-probabilities, per logged step and in the run result (`val_*` for the
+  validation split). TRL's mean-logit metrics are not computed: the vocabulary
+  head runs in chunks and the full logits are never held.
+- **Saved:** `adapters.safetensors` and `adapter_config.json` (with `task:
+  simpo`, `simpo_beta`, `simpo_gamma`, `cpo_alpha` and the base model),
+  loadable with `mlx_lm.load(base, adapter_path=output)`, written as MLX ORPO
+  writes them. `--resume` refuses a checkpoint without that metadata, from
+  another task (ORPO and DPO included), or from another base, before any tensor
+  loads.
+- **Refused at load:** `quantization: 8bit`, `training.lora.r: 0`, non-text
+  `modality`, LoRA+, and `task: preference` with `preference_loss: simpo` on
+  `backend: mlx` (use `task: simpo`). The other settings MLX DPO does not apply
+  are not applied here either.
+
 #### DoRA on MLX
 
 For text SFT, set `training.lora.use_dora: true` to use MLX-LM's native
@@ -289,7 +337,7 @@ what ran is recoverable from the output directory.
 
 ### Transformers on MPS
 
-The regular `backend: transformers` path can run more than MLX's SFT, DPO and ORPO
+The regular `backend: transformers` path can run more than MLX's SFT, DPO, ORPO and SimPO
 surface. On a live MPS runtime that accepts bfloat16, Soup enables BF16 autocast
 for the hardware-validated text trainers: SFT, DPO, GRPO/RLVR, reward modelling,
 and PRM.
