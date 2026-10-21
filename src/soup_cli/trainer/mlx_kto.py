@@ -83,11 +83,13 @@ class KtoExample:
 
 
 def _normalise_row(row: dict) -> dict:
-    """The row in one layout via the loader's converter, with a real bool label.
+    """The row in one layout via the loader's converter.
 
-    The loader's ``_convert_kto`` reads ``"true"``, ``1`` or ``-1`` as labels
-    when it loads a file, so rows from ``load_dataset`` arrive as booleans; a
-    row that still carries anything else is refused here rather than coerced.
+    Labels are read by the loader's KTO converter (``_convert_kto``) when
+    ``load_dataset`` loads the file, exactly as on the transformers backend, so
+    every row that reaches the trainer that way already has a bool label. The
+    bool check below only guards rows handed to ``setup()`` without the loader:
+    those are not given a second, different reading.
     """
     from soup_cli.data.formats import _convert_kto
 
@@ -96,7 +98,8 @@ def _normalise_row(row: dict) -> dict:
     label = row["label"]
     if not isinstance(label, bool):
         raise PreferenceRowError(
-            f"label must be true or false, got {label!r} ({type(label).__name__})"
+            f"label must be true or false, got {label!r} ({type(label).__name__}); "
+            "rows that bypass the loader are not converted"
         )
     try:
         return _convert_kto(row)
@@ -340,6 +343,36 @@ class MLXKTOTrainerWrapper(MLXDPOTrainerWrapper):
         """Dataset order, the last partial batch kept: TRL's sequential sampler.
         ``seed`` does not reorder anything, as on the transformers path."""
         return sequential_batches(n_rows, batch_size, epochs)
+
+    def _check_train_split_size(self, dataset: dict) -> None:
+        """Before the model loads: at least two rows (one KL group); fewer
+        rows than ``batch_size`` train as one partial batch, as in TRL."""
+        rows = len(dataset.get("train") or [])
+        if 0 < rows < KTO_MIN_BATCH:
+            self._check_train_rows(rows, self._resolve_batch_size(), 0)
+
+    def _check_train_rows(self, n_rows: int, batch_size: int, ties: int) -> None:
+        """Two rows or more: below ``batch_size`` they form one partial batch
+        and one KL group, as TRL trains them."""
+        if n_rows < KTO_MIN_BATCH:
+            raise ValueError(
+                f"MLX {self.objective}: the training split has {n_rows} row(s); KTO needs "
+                f"at least {KTO_MIN_BATCH}, because a row's KL completion is another "
+                "row's. Add rows."
+            )
+
+    def _on_plan_cut(self, dropped: list, kept: int, accum: int) -> None:
+        """Batches run in dataset order, so the cut always drops the same rows."""
+        rows = sorted({i for batch in dropped for i in batch})
+        first, last = kept + 1, kept + len(dropped)
+        span = f"{first}" if first == last else f"{first}-{last}"
+        console.print(
+            f"[yellow]MLX {self.objective}: gradient_accumulation_steps={accum} keeps "
+            f"{kept} of {kept + len(dropped)} batches; batch(es) {span} of the run "
+            f"({len(rows)} row(s): {', '.join(map(str, rows))}) are not trained. "
+            "Rows run in dataset order, so these are the same rows every run; "
+            "TRL instead updates on the partial window at each epoch's end.[/]"
+        )
 
     def _examples(self, rows: list, split: str = "train") -> tuple[list, int]:
         """Every row, tokenized with its KL row; nothing is skipped, so the KL

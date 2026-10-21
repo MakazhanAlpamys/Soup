@@ -634,9 +634,35 @@ class TestEdgeValues:
 # --------------------------------------------------------------------------
 
 
+class TestLabelsAreTheLoaders:
+    def test_labels_read_through_load_dataset_match_the_transformers_path(
+        self, tmp_path, monkeypatch
+    ):
+        """``load_dataset`` runs the loader's KTO converter for every backend: the
+        transformers trainer trains on these rows' labels as they are, and MLX
+        must read exactly the same ones (no second reading, no refusal)."""
+        from soup_cli.config.schema import DataConfig
+        from soup_cli.data.loader import load_dataset
+
+        raw = [True, False, "true", 1, -1, "no", 0]
+        path = tmp_path / "kto.jsonl"
+        path.write_text("".join(
+            json.dumps({"prompt": f"p{i}:", "completion": f" c{i}", "label": label}) + "\n"
+            for i, label in enumerate(raw)
+        ), encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        loaded = load_dataset(DataConfig(train=str(path), format="kto", val_split=0.0))
+        transformers_labels = [row["label"] for row in loaded["train"]]
+        assert transformers_labels == [True, False, True, True, False, False, False]
+        examples, _ = _wrapper_no_mlx()._examples(loaded["train"])
+        assert [e.label for e in examples] == transformers_labels
+
+
 class TestDataRefusals:
     @pytest.mark.parametrize("label", ["maybe", None, 1, "true", 0.5])
-    def test_a_non_boolean_label_is_refused_naming_the_row(self, label):
+    def test_a_row_bypassing_the_loader_with_a_non_bool_label_is_refused(self, label):
+        """Only a guard for rows handed to the trainer without ``load_dataset``,
+        which has already read every file row's label (test above)."""
         from soup_cli.trainer.mlx_dpo import PreferenceRowError
 
         rows = [{"prompt": "a", "completion": "b", "label": True},
@@ -671,6 +697,30 @@ class TestDataRefusals:
     def test_an_empty_training_split_is_refused(self):
         with pytest.raises(ValueError, match="MLX KTO: the train split has no rows"):
             _wrapper_no_mlx()._examples([])
+
+    def test_fewer_rows_than_batch_size_form_one_partial_batch(self):
+        """TRL trains 3 rows at batch_size 4 as one batch and one KL group."""
+        from soup_cli.trainer.mlx_kto import kl_partners, sequential_batches
+
+        wrapper = _wrapper_no_mlx()
+        wrapper.config.training.batch_size = 4
+        wrapper._check_train_split_size({"train": _rows(3)})
+        wrapper._check_train_rows(3, 4, 0)
+        assert sequential_batches(3, 4, 1) == [[0, 1, 2]]
+        assert kl_partners(3, 4) == [2, 0, 1]
+
+    @pytest.mark.parametrize("check", ["split", "rows"])
+    def test_one_row_is_refused_in_kto_words(self, check):
+        wrapper = _wrapper_no_mlx()
+        with pytest.raises(ValueError) as info:
+            if check == "split":
+                wrapper._check_train_split_size({"train": _rows(1)})
+            else:
+                wrapper._check_train_rows(1, 2, 0)
+        message = str(info.value)
+        assert "MLX KTO: the training split has 1 row(s); KTO needs at least 2" in message
+        assert "pair" not in message and "tie" not in message
+        assert "Lower training.batch_size" not in message
 
     def test_an_empty_val_split_is_fine(self):
         assert _wrapper_no_mlx()._examples([], "val") == ([], 0)
@@ -928,6 +978,60 @@ class TestTraining:
             wrapper.train()
         assert not any("lora" in k for k in _flat(wrapper.model.parameters()))
         assert not (tmp_path / "output" / "adapters.safetensors").exists()
+
+
+class TestAccumulationCut:
+    def test_the_warning_names_the_untrained_batches_and_rows(self, monkeypatch):
+        from io import StringIO
+
+        from rich.console import Console
+
+        from soup_cli.trainer import mlx_kto
+
+        buffer = StringIO()
+        monkeypatch.setattr(mlx_kto, "console", Console(file=buffer, width=400))
+        _wrapper_no_mlx()._on_plan_cut([[8, 9], [0, 1]], 8, 4)
+        text = _strip_ansi(buffer.getvalue())
+        assert "gradient_accumulation_steps=4 keeps 8 of 10 batches" in text
+        assert "batch(es) 9-10 of the run (4 row(s): 0, 1, 8, 9) are not trained" in text
+
+    def test_a_run_whose_plan_is_cut_warns_and_trains_the_kept_batches(
+        self, tmp_path, monkeypatch
+    ):
+        from io import StringIO
+
+        from rich.console import Console
+
+        from soup_cli.trainer import mlx_kto
+
+        buffer = StringIO()
+        monkeypatch.setattr(mlx_kto, "console", Console(file=buffer, width=400))
+        wrapper = _wrapper(tmp_path, monkeypatch, gradient_accumulation_steps=2)
+        wrapper._dataset = {"train": _rows(5), "val": []}  # [0,1] [2,3] [4]
+        result = wrapper.train()
+        assert result["total_steps"] == 2
+        text = _strip_ansi(buffer.getvalue())
+        assert "keeps 2 of 3 batches; batch(es) 3 of the run (1 row(s): 4)" in text
+
+    def test_no_cut_no_warning(self, tmp_path, monkeypatch):
+        from io import StringIO
+
+        from rich.console import Console
+
+        from soup_cli.trainer import mlx_kto
+
+        buffer = StringIO()
+        monkeypatch.setattr(mlx_kto, "console", Console(file=buffer, width=400))
+        wrapper = _wrapper(tmp_path, monkeypatch, gradient_accumulation_steps=2)
+        wrapper._dataset = {"train": _rows(4), "val": []}
+        wrapper.train()
+        assert "are not trained" not in _strip_ansi(buffer.getvalue())
+
+    def test_three_rows_at_batch_four_train_as_one_batch(self, tmp_path, monkeypatch):
+        wrapper = _wrapper(tmp_path, monkeypatch, batch_size=4)
+        wrapper._dataset = {"train": _rows(3), "val": []}
+        result = wrapper.train()
+        assert result["total_steps"] == 1 and math.isfinite(result["losses"][0])
 
 
 class TestResume:

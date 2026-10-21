@@ -525,6 +525,21 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
         """Every epoch's batches of example indices, in training order."""
         return plan_batches(n_rows, batch_size, epochs, seed)
 
+    def _check_train_rows(self, n_rows: int, batch_size: int, ties: int) -> None:
+        """Refuse a training split this objective cannot batch."""
+        if n_rows < batch_size:
+            raise ValueError(
+                f"MLX {self.objective}: {n_rows} training pair(s) remain, fewer than "
+                f"training.batch_size ({batch_size})"
+                + (f", after skipping {ties} tie(s)" if ties else "")
+                + f". Lower training.batch_size to at most {max(1, n_rows)} "
+                "or add rows."
+            )
+
+    def _on_plan_cut(self, dropped: list, kept: int, accum: int) -> None:
+        """Called with the batches an accumulation cut leaves untrained; the
+        shuffled plans of DPO and ORPO drop different rows each run, silently."""
+
     def _check_finite(self, loss: Any, split: str) -> None:
         import math as _math
 
@@ -602,21 +617,17 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
                 f"[yellow]MLX {name}: skipped {skipped} {name.lower()} row(s) with "
                 "identical chosen and rejected (a tie carries no preference signal)[/]"
             )
-        if len(train_examples) < batch_size:
-            raise ValueError(
-                f"MLX {name}: {len(train_examples)} training pair(s) remain, fewer than "
-                f"training.batch_size ({batch_size})"
-                + (f", after skipping {train_ties} tie(s)" if train_ties else "")
-                + f". Lower training.batch_size to at most {max(1, len(train_examples))} "
-                "or add rows."
-            )
+        self._check_train_rows(len(train_examples), batch_size, train_ties)
         epoch_count = max(1, int(tcfg.epochs))
         plan = self._plan_batches(len(train_examples), batch_size, epoch_count, data_seed)
         batches_per_epoch = max(1, len(plan) // epoch_count)
         iters = len(plan)
         if accum > 1:
             # Like MLX SFT: no partial accumulation group is ever flushed.
-            iters = max(accum, iters - iters % accum)
+            cut = max(accum, iters - iters % accum)
+            if cut < iters:
+                self._on_plan_cut(plan[cut:], cut, accum)
+            iters = cut
             plan = (plan * math.ceil(iters / len(plan)))[:iters]
         total_updates = max(1, iters // accum)
 
