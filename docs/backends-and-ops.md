@@ -237,6 +237,10 @@ chosen and rejected completion tokens:
 
 `loss = mean(-logsigmoid(beta * (a - b) - simpo_gamma)) + cpo_alpha * NLL`
 
+Qualified on Qwen2.5-0.5B-Instruct in bf16 and 4-bit on an M4 Pro: one epoch on
+600 UltraFeedback pairs took about 4.5 minutes and 7.5-8.6 GB, and the mean
+log-probability margin on 200 held-out pairs rose 1.9x (bf16) and 3.1x (4-bit).
+
 - **Beta is 0.1, fixed.** Soup's transformers backend passes no beta to TRL, so
   `CPOConfig`'s default 0.1 applies; MLX uses the same value and records it as
   `simpo_beta` in the adapter metadata. `dpo_beta` and `orpo_beta` are not
