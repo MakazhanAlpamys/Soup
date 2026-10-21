@@ -8,6 +8,7 @@ from typing import Callable
 
 import pydantic
 import pytest
+import yaml
 from rich.console import Console
 from typer.testing import CliRunner
 
@@ -27,6 +28,26 @@ INVALID_SUITES = [
         "true\n",
         "must be a mapping with 'suite' and 'tasks', got a bool",
         "scalar-root",
+    ),
+    (
+        "[]\n",
+        "must be a mapping with 'suite' and 'tasks', got a list",
+        "empty-list-root",
+    ),
+    (
+        "false\n",
+        "must be a mapping with 'suite' and 'tasks', got a bool",
+        "bool-false-root",
+    ),
+    (
+        "0\n",
+        "must be a mapping with 'suite' and 'tasks', got a int",
+        "int-zero-root",
+    ),
+    (
+        '""\n',
+        "must be a mapping with 'suite' and 'tasks', got a str",
+        "empty-str-root",
     ),
     (
         "suite: [\n",
@@ -113,7 +134,7 @@ def test_cli_eval_gate_refuses_invalid_suite_with_usage_error(
         args.extend(["--model", "synthetic-model"])
     result = CliRunner().invoke(app, args)
     output = " ".join(strip_ansi(result.output).split())
-    assert result.exit_code == 3
+    assert result.exit_code == 3, (result.output, repr(result.exception))
     assert "Cannot load suite:" in output
     assert expected_fragment in output
     assert "GATE PASSED" not in output
@@ -129,7 +150,7 @@ def test_cli_control_missing_suite_name_exits_usage_error(
     monkeypatch.setattr(eval_command, "console", Console(width=200))
     result = CliRunner().invoke(app, ["eval", "gate", "--suite", str(path)])
     output = " ".join(strip_ansi(result.output).split())
-    assert result.exit_code == 3
+    assert result.exit_code == 3, (result.output, repr(result.exception))
     assert "Cannot load suite:" in output
 
 
@@ -154,7 +175,7 @@ def test_cli_eval_gate_empty_file_exits_usage_error(
     monkeypatch.setattr(eval_command, "console", Console(width=200))
     result = CliRunner().invoke(app, ["eval", "gate", "--suite", str(path)])
     output = " ".join(strip_ansi(result.output).split())
-    assert result.exit_code == 3
+    assert result.exit_code == 3, (result.output, repr(result.exception))
     assert "Cannot load suite: 1 validation error for EvalSuite" in output
     assert "Field required" in output
 
@@ -164,10 +185,9 @@ def test_cli_control_valid_suite_passes(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     suite_dict = _nonempty_suite(tmp_path)
-    import yaml
     path = _write_suite_text(tmp_path, yaml.safe_dump(suite_dict))
     monkeypatch.setattr(eval_command, "console", Console(width=200))
     result = CliRunner().invoke(app, ["eval", "gate", "--suite", str(path)])
     output = strip_ansi(result.output)
-    assert result.exit_code == 0
+    assert result.exit_code == 0, (result.output, repr(result.exception))
     assert "GATE PASSED" in output
