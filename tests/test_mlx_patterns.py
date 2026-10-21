@@ -146,3 +146,20 @@ def test_incompatible_output_guard_and_atomic_metadata_failure(tmp_path, monkeyp
     assert (tmp_path / "adapter_config.json").read_bytes() == before
     assert (tmp_path / "adapters.safetensors").read_bytes() == b"retained weights"
     assert not list(tmp_path.glob(".soup.*"))
+
+
+def test_metadata_accepts_absolute_output_outside_cwd(tmp_path, monkeypatch):
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.trainer.mlx_lora import write_pattern_metadata
+
+    working = tmp_path / "working"
+    working.mkdir()
+    output = tmp_path / "elsewhere" / "run"
+    monkeypatch.chdir(working)
+    cfg = SoupConfig.model_validate({
+        "base": "owner/base", "data": {"train": "unused.jsonl"}, "output": str(output),
+    })
+    metadata = {"model": cfg.base, "soup_lora": _manifest()}
+    write_pattern_metadata(output, metadata)
+    assert json.loads((output / "adapter_config.json").read_text()) == metadata
+    assert not list(output.glob(".soup.*"))

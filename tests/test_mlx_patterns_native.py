@@ -74,7 +74,11 @@ def test_public_patterns_construct_local_shapes_and_scales(tmp_path, monkeypatch
             observed.append(index)
 
     monkeypatch.setattr(MLXSFTTrainerWrapper, "_apply_lora", capture)
+    working = tmp_path / "working"
+    working.mkdir()
+    monkeypatch.chdir(working)
     result = CliRunner().invoke(app, ["train", "--config", str(path), "--yes"])
+    monkeypatch.chdir(tmp_path)
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert observed == [0, 1]
     model = captured["model"]

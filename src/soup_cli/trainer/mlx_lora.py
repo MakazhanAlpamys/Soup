@@ -173,7 +173,16 @@ def check_pattern_output(output: Path, metadata: dict) -> None:
 def write_pattern_metadata(output: Path, metadata: dict) -> None:
     """Publish complete metadata atomically alongside periodic/final weights."""
     import json
+    import os
+    import tempfile
 
-    from soup_cli.utils.paths import atomic_write_text
-
-    atomic_write_text(json.dumps(metadata, indent=2), str(output / "adapter_config.json"))
+    # Training output is allowed outside cwd; the general report writer is not.
+    output.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".soup.", suffix=".tmp", dir=output)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(metadata, indent=2))
+        os.replace(temporary, output / "adapter_config.json")
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
