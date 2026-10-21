@@ -533,3 +533,42 @@ class TestTheVramForecastCountsWhatAttaches:
         assert _forecast(lora, model, resolved, moe_lora=False) == _forecast(
             lora, model, None, moe_lora=False
         )
+
+
+class TestTheForecastFormula:
+    """The counts the docstring states, worked by hand. The ratio window above
+    cannot tell the two expert rules apart on the test models: (E-1)*3 and E*2
+    both land inside [1x, 3x]."""
+
+    def test_fused_expert_tensors_are_one_adapter_per_routed_expert(self):
+        """Under moe_lora: every listed module once per layer, plus E adapters per
+        fused expert tensor; each adapter is hidden x hidden, A and B at rank r."""
+        from soup_cli.utils.moe import MoeLoraTargets
+
+        config = SimpleNamespace(hidden_size=32, num_hidden_layers=2, n_routed_experts=4)
+        targets = MoeLoraTargets(
+            ["q_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+            ["mlp.experts.gate_up_proj", "mlp.experts.down_proj"],
+        )
+        tcfg = SimpleNamespace(moe_lora=True, lora=_lora("auto"))
+
+        forecast = StreamingSetupMixin._estimate_adapter_params(
+            None, tcfg, config, target_modules=targets
+        )
+
+        # 2 layers x (5 modules + 4 experts x 2 fused tensors) x 2 matrices x r=2 x 32
+        assert forecast == 2 * (5 + 4 * 2) * 2 * 2 * 32 == 3328
+
+    def test_a_dense_base_is_not_charged_differently_for_moe_lora(self):
+        """No routed experts: moe_lora adds nothing. Without the ``experts > 1``
+        guard an expert name would add (0 - 1) adapters, an UNDER-count."""
+        config = SimpleNamespace(hidden_size=32, num_hidden_layers=2)
+        lora = _lora(["q_proj", "gate_proj", "up_proj", "down_proj"])
+        charged = {
+            moe_lora: StreamingSetupMixin._estimate_adapter_params(
+                None, SimpleNamespace(moe_lora=moe_lora, lora=lora), config
+            )
+            for moe_lora in (True, False)
+        }
+
+        assert charged[True] == charged[False] == 2 * 4 * 2 * 2 * 32
