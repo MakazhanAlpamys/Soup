@@ -1800,6 +1800,9 @@ training:
 {"prompt": "What is 2+2?", "completion": "Fish", "label": false}
 ```
 
+On Apple Silicon, `backend: mlx` runs KTO natively with the same objective; see
+[KTO on MLX](backends-and-ops.md#kto-on-mlx).
+
 
 ## ORPO Training (No Reference Model)
 
