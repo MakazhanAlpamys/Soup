@@ -109,6 +109,7 @@ def render_runpod_stub(
     if (
         output.is_absolute()
         or ".." in output.parts
+        or any(part.startswith("-") for part in output.parts)
         or str(output) == "."
         or not re.fullmatch(r"[A-Za-z0-9._/-]+", output_dir)
     ):
@@ -157,7 +158,8 @@ def plan_runpod_run(
         soup_version=soup_version,
     )
     return CloudPlan(
-        "runpod", validate_gpu(gpu), output_dir, stub_path, stub, f"python {shlex.quote(stub_path)}"
+        "runpod", validate_gpu(gpu), output_dir, stub_path, stub,
+        f"python -I {shlex.quote(stub_path)}",
     )
 
 
@@ -177,13 +179,17 @@ def submit_runpod_run(plan: CloudPlan, *, env: Mapping | None = None) -> int:
     ]
     if missing:
         raise RuntimeError("RunPod not configured. Set " + ", ".join(missing))
+    allowed = {
+        "RUNPOD_API_KEY", "RUNPOD_SSH_PRIVATE_KEY", "PATH", "HOME", "USERPROFILE", "SYSTEMROOT",
+    }
+    environ = {name: value for name, value in environ.items() if name in allowed}
     import subprocess
 
     proc = None
     while True:
         try:
             if proc is None:
-                proc = subprocess.Popen([sys.executable, plan.stub_path], env=environ)
+                proc = subprocess.Popen([sys.executable, "-I", plan.stub_path], env=environ)
             return proc.wait()
         except BaseException as exc:
             if proc is None or not isinstance(exc, (KeyboardInterrupt, SystemExit)):

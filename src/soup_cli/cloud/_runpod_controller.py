@@ -5,6 +5,7 @@ SSH contract: https://docs.runpod.io/pods/configuration/use-ssh
 Only main() performs network operations. This module is also copied into plans.
 """
 
+import http.client
 import ipaddress
 import json
 import os
@@ -15,6 +16,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -43,6 +45,17 @@ def _notice(message):
     sys.stderr.flush()
 
 
+class _ControllerError(RuntimeError):
+    """Only fixed, controller-owned diagnostics are safe to show to the user."""
+
+
+class _APIError(_ControllerError):
+    def __init__(self, method: str, status: int) -> None:
+        super().__init__(f"RunPod API {method} failed: HTTP {status}")
+        # A server/request timeout can still have allocated a Pod. Reconcile it.
+        self.create_rejected = method == "POST" and 400 <= status < 500 and status != 408
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
@@ -57,19 +70,19 @@ def _request_json(api_key, path, *, method="GET", payload=None):
         with urllib.request.build_opener(_NoRedirect()).open(request, timeout=60) as response:
             raw = response.read(_MAX_RESPONSE + 1)
         if len(raw) > _MAX_RESPONSE:
-            raise RuntimeError("RunPod API response exceeds 1 MB")
+            raise _ControllerError("RunPod API response exceeds 1 MB")
         if not raw and method == "DELETE":
             return None
         parsed = json.loads(raw)
         if not isinstance(parsed, (dict, list)):
-            raise RuntimeError("RunPod API returned an invalid JSON shape")
+            raise _ControllerError("RunPod API returned an invalid JSON shape")
         return parsed
     except urllib.error.HTTPError as exc:
         if exc.code == 404 and method in {"GET", "DELETE"} and path.startswith("/pods/"):
             return None
-        raise RuntimeError(f"RunPod API {method} failed: HTTP {exc.code}") from None
-    except (OSError, ValueError):
-        raise RuntimeError("RunPod API transport or JSON response failed") from None
+        raise _APIError(method, exc.code) from None
+    except (OSError, ValueError, http.client.HTTPException):
+        raise _ControllerError("RunPod API transport or JSON response failed") from None
 
 
 def _launch_payload(public_key, name):
@@ -91,7 +104,7 @@ def _launch_payload(public_key, name):
 
 def _valid_id(value):
     if not isinstance(value, str) or not _POD_ID.fullmatch(value):
-        raise RuntimeError("RunPod returned an invalid Pod ID; check the console")
+        raise _ControllerError("RunPod returned an invalid Pod ID; check the console")
     return value
 
 
@@ -101,25 +114,35 @@ def _wait_for_ssh(api_key, pod_id):
     while time.monotonic() < deadline:
         record = _request_json(api_key, path)
         if not isinstance(record, dict) or record.get("desiredStatus") in {"EXITED", "TERMINATED"}:
-            raise RuntimeError("RunPod is unavailable before SSH startup")
+            raise _ControllerError("RunPod is unavailable before SSH startup")
         ip = record.get("publicIp")
         port = (record.get("portMappings") or {}).get("22")
         if ip and isinstance(port, int) and not isinstance(port, bool) and 1 <= port <= 65535:
             address = ipaddress.ip_address(ip)
             # The API chooses the destination; refuse local/metadata addresses.
             if address.version != 4 or not address.is_global:
-                raise RuntimeError("RunPod did not return a public SSH address")
+                raise _ControllerError("RunPod did not return a public SSH address")
             return str(address), port
         time.sleep(5)
-    raise RuntimeError("RunPod did not expose SSH within 15 minutes")
+    raise _ControllerError("RunPod did not expose SSH within 15 minutes")
 
 
 def _train_and_copy(ip, port, private_key):
+    with tempfile.TemporaryDirectory(prefix="soup-runpod-ssh-") as directory:
+        known_hosts = pathlib.Path(directory) / "known_hosts"
+        _run_ssh_session(ip, port, private_key, known_hosts)
+
+
+def _run_ssh_session(ip: str, port: int, private_key: str, known_hosts: pathlib.Path) -> None:
     common = [
         "-i",
         private_key,
         "-o",
         "BatchMode=yes",
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        f'UserKnownHostsFile="{known_hosts.as_posix()}"',
         "-o",
         "StrictHostKeyChecking=accept-new",
         "-o",
@@ -152,7 +175,7 @@ def _train_and_copy(ip, port, private_key):
         if ready.returncode == 0:
             break
         if time.monotonic() >= deadline:
-            raise RuntimeError("RunPod SSH did not become ready within five minutes")
+            raise _ControllerError("RunPod SSH did not become ready within five minutes")
         time.sleep(5)
     result = subprocess.run(
         ["ssh", *common, "-p", str(port), f"root@{ip}", "python3 -"],
@@ -162,7 +185,7 @@ def _train_and_copy(ip, port, private_key):
         timeout=25 * 3600,
     )
     if result.returncode != 0:
-        raise RuntimeError("RunPod remote training failed; no successful artifact copy claimed")
+        raise _ControllerError("RunPod remote training failed; no successful artifact copy claimed")
     destination = _local_destination()
     destination.mkdir(parents=True, exist_ok=True)
     copied = subprocess.run(
@@ -172,6 +195,7 @@ def _train_and_copy(ip, port, private_key):
             "-P",
             str(port),
             "-r",
+            "--",
             f"root@{ip}:/workspace/soup/{_OUTPUT}",
             str(destination),
         ],
@@ -179,26 +203,27 @@ def _train_and_copy(ip, port, private_key):
         timeout=900,
     )
     if copied.returncode != 0:
-        raise RuntimeError("RunPod artifact copy failed")
+        raise _ControllerError("RunPod artifact copy failed")
 
 
 def _local_destination():
     """Recheck the download path before allocation and immediately before SCP."""
     root = os.path.realpath(os.getcwd())
     target = pathlib.Path(_OUTPUT)
-    if target.is_absolute() or ".." in target.parts or str(target) == ".":
-        raise RuntimeError("RunPod output must stay under cwd")
+    if (target.is_absolute() or ".." in target.parts or str(target) == "."
+            or any(part.startswith("-") for part in target.parts)):
+        raise _ControllerError("RunPod output must stay under cwd without option-like components")
     candidate = pathlib.Path.cwd()
     for part in target.parts:
         candidate = candidate / part
         if os.path.lexists(candidate):
             info = os.lstat(candidate)
             if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
-                raise RuntimeError("RunPod output must not traverse symlinks or junctions")
+                raise _ControllerError("RunPod output must not traverse symlinks or junctions")
     if os.path.commonpath([root, os.path.realpath(target)]) != root:
-        raise RuntimeError("RunPod output must stay under cwd")
+        raise _ControllerError("RunPod output must stay under cwd")
     if os.path.lexists(target):
-        raise RuntimeError("RunPod output already exists; choose a fresh output directory")
+        raise _ControllerError("RunPod output already exists; choose a fresh output directory")
     return target.parent
 
 
@@ -214,7 +239,7 @@ def _terminate(api_key, pod_id):
         except RuntimeError:
             pass
         time.sleep(5)
-    raise RuntimeError("RunPod deletion was not confirmed within five minutes")
+    raise _ControllerError("RunPod deletion was not confirmed within five minutes")
 
 
 def _recover_created(api_key, name):
@@ -223,14 +248,14 @@ def _recover_created(api_key, name):
     while time.monotonic() < deadline:
         records = _request_json(api_key, "/pods")
         if not isinstance(records, list):
-            raise RuntimeError("RunPod could not reconcile the launch; check the console")
+            raise _ControllerError("RunPod could not reconcile the launch; check the console")
         found = [
             item["id"] for item in records if isinstance(item, dict) and item.get("name") == name
         ]
         if found:
             return [_valid_id(item) for item in found]
         time.sleep(5)
-    raise RuntimeError("RunPod launch result is unknown; check the console")
+    raise _ControllerError("RunPod launch result is unknown; check the console")
 
 
 def main():
@@ -271,8 +296,12 @@ def main():
         ip, port = _wait_for_ssh(api_key, pod_id)
         _train_and_copy(ip, port, private_key)
         rc = 0
-    except (Exception, KeyboardInterrupt, SystemExit):
-        _notice("RunPod training/controller failed; cleaning up the Pod.")
+    except (Exception, KeyboardInterrupt, SystemExit) as exc:
+        if isinstance(exc, _APIError) and exc.create_rejected:
+            launched = False
+        _notice(str(exc) if isinstance(exc, _ControllerError) else (
+            "RunPod training/controller failed; cleaning up the Pod."
+        ))
     finally:
         # Repeated Ctrl+C must not abandon cleanup of a billable resource.
         previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -280,7 +309,9 @@ def main():
             ids = [pod_id] if pod_id else (_recover_created(api_key, name) if launched else [])
             for owned_id in ids:
                 _terminate(api_key, owned_id)
-            _notice("RunPod termination verified.")
+            _notice("RunPod termination verified." if ids else (
+                "RunPod create request rejected; no Pod to clean up."
+            ))
         except Exception:
             _notice("CRITICAL: RunPod cleanup unconfirmed; check the console for " + name)
             rc = 1

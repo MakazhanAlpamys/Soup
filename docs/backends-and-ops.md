@@ -401,7 +401,8 @@ command that retries the download; that command places the files under `<output 
 RunPod. GPUs: `a100` (80 GB SXM), `h100`, `a40`, `rtx3090`, `rtx4090`. The controller
 uses Python's standard library and local OpenSSH `ssh`/`scp`; no RunPod SDK extra
 is needed. For live submission, set `RUNPOD_API_KEY` and `RUNPOD_SSH_PRIVATE_KEY`
-to your private key path, with its matching OpenSSH public key at `<path>.pub`:
+to your private key path, with its matching OpenSSH public key at `<path>.pub`.
+Only ed25519 and RSA public keys are accepted:
 
 ```bash
 soup train --config soup.yaml --cloud runpod --gpu rtx4090 --cloud-submit
@@ -410,8 +411,13 @@ soup train --config soup.yaml --cloud runpod --gpu rtx4090 --cloud-submit
 The local controller creates one Secure Cloud GPU Pod with TCP SSH access, installs
 the running Soup version, runs training over SSH and copies the configured relative
 output directory back before deleting the Pod. Choose a fresh local output path;
-existing outputs and symlink/junction paths are refused before allocation and
-rechecked before copying. The config is base64-embedded data; planning applies the
+existing outputs, symlink/junction paths and path components starting with `-` are
+refused before allocation and rechecked before copying. SCP separates options from
+its operands with `--`. Submission starts Python in isolated mode (`-I`) and passes
+only the RunPod token/key path and `PATH`, `HOME`, `USERPROFILE`, `SYSTEMROOT` when
+present. SSH/SCP use `IdentitiesOnly=yes` with the selected key and a temporary per-run known-hosts
+file, removed even after failure; the user's known-hosts file is not modified.
+The config is base64-embedded data; planning applies the
 shared YAML size, nesting and alias-expansion limits, and refuses inline credential
 fields. The API key and private SSH key remain local;
 only the public key enters the Pod environment. Models and datasets must be publicly
@@ -419,13 +425,22 @@ accessible remotely: local input files and local credentials are not uploaded.
 
 Deletion runs in `finally` on training/copy failure, timeout and Ctrl+C, and polls
 until the API returns 404. The parent waits through interrupts so it does not kill
-the cleanup controller. A lost create response is reconciled by the unique run
-name, without repeating the create request or deleting unrelated Pods. Keep the
-controller running; force-killing it or losing API access can leave cleanup
+the cleanup controller. Transient transport failures, including truncated HTTP
+responses during DELETE or confirmation GET, are retried within the five-minute
+cleanup window. A lost or ambiguous create response (including HTTP 5xx and 408)
+is reconciled by the unique run name, without repeating the create request or
+deleting unrelated Pods. A definite HTTP 4xx rejection other than 408 reports the
+status without claiming that cleanup of an allocated Pod failed. Fixed controller
+failure reasons are shown; arbitrary transport/subprocess exception text is hidden.
+Keep the controller running; force-killing it or losing API access can leave cleanup
 unconfirmed. An unconfirmed cleanup exits nonzero and names the run to check in
 the RunPod console. A single interrupted SSH training session is failed rather
-than retried, to avoid duplicate training. Artifacts are copied only after a
-successful training command; a failed copy still terminates the Pod.
+than retried, to avoid duplicate training. Keepalive probes run every 30 seconds
+with six missed probes allowed (roughly three minutes); the training command has
+a 25-hour timeout. Artifacts are copied only after a successful training command,
+with one SCP attempt capped at 15 minutes. A failed copy still terminates the Pod,
+so an incomplete download cannot be recovered from that Pod afterward. Remote log
+tail retrieval and a copy retry window are not implemented in this controller.
 
 **Not yet live-validated.** Tests use local mocked API/SSH transports. The code
 PR does not include a paid run; provider execution, GPU behavior, retrieval and
