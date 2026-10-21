@@ -365,47 +365,109 @@ class TestTheAnnouncementSaysWhatAttaches:
 # --------------------------------------------------------------------------- #
 
 
-def _per_expert_linear_moe(torch, *, model_type="mixtral", shared_gate=False, attn_gate=False):
+def _per_expert_linear_moe(
+    torch,
+    *,
+    model_type="mixtral",
+    shared_gate=False,
+    attn_gate=False,
+    dense_out=False,
+    layers=1,
+    experts=2,
+):
     """One ``nn.Linear`` per expert and an ``nn.Linear`` router, as ``model_type``.
 
     peft converts a ``mixtral`` from this layout (its ``all-linear`` there adds the
     router weight); a ``qwen2_moe`` it does not. ``shared_gate`` adds a one-logit
     ``shared_expert_gate``; ``attn_gate`` a non-router ``nn.Linear`` whose leaf name is
-    the router's, ``gate``.
+    the router's, ``gate``; ``dense_out`` an attention ``nn.Linear`` no MoE name
+    reaches.
     """
 
     class _PerExpertLinearMoE(torch.nn.Module):
         def __init__(self):
             super().__init__()
-            self.config = SimpleNamespace(model_type=model_type, num_local_experts=2)
-            experts = torch.nn.ModuleList(
-                torch.nn.ModuleDict(
-                    {
-                        "gate_proj": torch.nn.Linear(8, 16),
-                        "up_proj": torch.nn.Linear(8, 16),
-                        "down_proj": torch.nn.Linear(16, 8),
-                    }
+            self.config = SimpleNamespace(model_type=model_type, num_local_experts=experts)
+            blocks = []
+            for _ in range(layers):
+                attention = {name: torch.nn.Linear(8, 8) for name in ("q_proj", "v_proj")}
+                if attn_gate:
+                    attention["gate"] = torch.nn.Linear(8, 8)
+                if dense_out:
+                    attention["dense_out"] = torch.nn.Linear(8, 8)
+                per_expert = torch.nn.ModuleList(
+                    torch.nn.ModuleDict(
+                        {
+                            "gate_proj": torch.nn.Linear(8, 16),
+                            "up_proj": torch.nn.Linear(8, 16),
+                            "down_proj": torch.nn.Linear(16, 8),
+                        }
+                    )
+                    for _ in range(experts)
                 )
-                for _ in range(2)
-            )
-            attention = {name: torch.nn.Linear(8, 8) for name in ("q_proj", "v_proj")}
-            if attn_gate:
-                attention["gate"] = torch.nn.Linear(8, 8)
-            block = {"gate": torch.nn.Linear(8, 2), "experts": experts}
-            if shared_gate:
-                block["shared_expert_gate"] = torch.nn.Linear(8, 1)
-            self.layers = torch.nn.ModuleList(
-                [
+                block = {"gate": torch.nn.Linear(8, experts), "experts": per_expert}
+                if shared_gate:
+                    block["shared_expert_gate"] = torch.nn.Linear(8, 1)
+                blocks.append(
                     torch.nn.ModuleDict(
                         {
                             "self_attn": torch.nn.ModuleDict(attention),
                             "block_sparse_moe": torch.nn.ModuleDict(block),
                         }
                     )
-                ]
-            )
+                )
+            self.layers = torch.nn.ModuleList(blocks)
 
     return _PerExpertLinearMoE()
+
+
+def _jetmoe_like(torch):
+    """JetMoE's layout without its experts child, plus the near-misses it must ignore.
+
+    ``mlp.router`` wraps one ``nn.Linear`` beside a 3-D expert tensor; ``mlp.gate_proj``
+    is a dense projection with the same output size; ``attn.gate`` is an attention
+    gate with no expert tensor beside it. ``mixture`` is JetMoE's attention layout: an
+    ``experts`` module that is not a per-expert list (three different children, so
+    not three experts), whose router sits inside it, beside a ``kv_proj`` with three
+    outputs.
+    """
+
+    class _Router(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layer = torch.nn.Linear(8, 4, bias=False)
+
+    class _ParallelExperts(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.zeros(4, 16, 8))
+
+    class _JetMoeLike(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.config = SimpleNamespace(model_type="jetmoe", num_local_experts=4)
+            self.mlp = torch.nn.ModuleDict(
+                {
+                    "input_linear": _ParallelExperts(),
+                    "router": _Router(),
+                    "gate_proj": torch.nn.Linear(8, 4),
+                }
+            )
+            self.attn = torch.nn.ModuleDict(
+                {"gate": torch.nn.Linear(8, 4), "q_proj": torch.nn.Linear(8, 8)}
+            )
+            mixture = torch.nn.ModuleDict(
+                {
+                    "input_linear": _ParallelExperts(),
+                    "output_linear": _ParallelExperts(),
+                    "router": _Router(),
+                }
+            )
+            self.mixture = torch.nn.ModuleDict(
+                {"experts": mixture, "kv_proj": torch.nn.Linear(8, 3)}
+            )
+
+    return _JetMoeLike()
 
 
 def _peft_attach(model, peft_config):
@@ -466,13 +528,13 @@ class TestTheDropoutRefusalReadsAStringAsAString:
                 LoraConfig(r=4, target_modules="all-linear", lora_dropout=0.05),
             )
 
-    def test_a_regex_on_that_family_keeps_dropout_and_names_no_gate(self):
-        targets, _, modules, params = _stand_in_attach(
+    def test_a_regex_on_that_family_stays_a_string_and_keeps_dropout(self):
+        targets, peft_config, modules, params = _stand_in_attach(
             _tcfg(dropout=0.05), r".*\.self_attn\.v_proj"
         )
 
-        assert isinstance(targets, MoeLoraTargets)
-        assert "v_proj" in targets and "gate" not in targets
+        assert isinstance(targets, MoeLoraTargetString)
+        assert not peft_config.exclude_modules
         assert "layers.0.self_attn.v_proj" in modules
         assert _ROUTER not in modules and not params
 
@@ -495,6 +557,17 @@ class TestTheGatesStayOutOnStandIns:
         assert _ROUTER not in modules and not params
         assert "layers.0.self_attn.q_proj" in modules
 
+    def test_a_regex_reaching_a_non_router_named_gate_becomes_a_list(self):
+        """Kept, the regex would make peft rewrite ``self_attn.gate`` onto the router."""
+        targets, _, modules, params = _stand_in_attach(
+            _tcfg(), r".*\.self_attn\.(q_proj|gate)", attn_gate=True
+        )
+
+        assert isinstance(targets, MoeLoraTargets)
+        assert "q_proj" in targets
+        assert not [entry for entry in targets if entry.rsplit(".", 1)[-1] == "gate"]
+        assert _ROUTER not in modules and not params
+
     def test_exclude_modules_keeps_linear_gates_out_where_peft_does_not_convert(self):
         targets, peft_config, modules, params = _stand_in_attach(
             _tcfg(), "all-linear", model_type="qwen2_moe", shared_gate=True
@@ -514,6 +587,103 @@ class TestTheGatesStayOutOnStandIns:
         assert type(peft_config).__name__ == "VeraConfig"
         assert not {_ROUTER, _SHARED_GATE} & modules
         assert "layers.0.self_attn.q_proj" in modules
+
+    def test_vera_keeps_a_regex_that_reaches_no_gate(self):
+        targets, peft_config, modules, _ = _stand_in_attach(
+            _tcfg(use_vera=True), r".*\.self_attn\.q_proj", model_type="qwen2_moe",
+            shared_gate=True,
+        )
+
+        assert isinstance(targets, MoeLoraTargetString)
+        assert type(peft_config.target_modules) is str
+        assert not {_ROUTER, _SHARED_GATE} & modules
+        assert "layers.0.self_attn.q_proj" in modules
+
+    def test_a_listed_regex_is_what_it_full_matches_not_a_prefix(self):
+        """VeRA lists this regex (it reaches the router); ``dense`` is only a prefix."""
+        targets, _, modules, _ = _stand_in_attach(
+            _tcfg(use_vera=True),
+            r"layers\.0\.self_attn\.dense|.*\.block_sparse_moe\.gate",
+            model_type="qwen2_moe",
+            dense_out=True,
+        )
+
+        assert isinstance(targets, MoeLoraTargets)
+        assert not [entry for entry in targets if entry.endswith("dense_out")]
+        assert "layers.0.self_attn.dense_out" not in modules and _ROUTER not in modules
+
+    def test_a_leaf_that_reaches_beyond_the_regex_is_listed_by_path(self):
+        targets, _, modules, _ = _stand_in_attach(
+            _tcfg(use_vera=True),
+            r"layers\.0\.self_attn\.dense_out|.*\.block_sparse_moe\.gate",
+            model_type="qwen2_moe",
+            dense_out=True,
+            layers=2,
+        )
+
+        assert "layers.0.self_attn.dense_out" in targets
+        assert "dense_out" not in targets
+        assert "layers.0.self_attn.dense_out" in modules
+        assert "layers.1.self_attn.dense_out" not in modules
+
+    def test_the_list_is_announced_with_its_count(self):
+        from rich.console import Console
+
+        torch = pytest.importorskip("torch")
+        pytest.importorskip("peft")
+        buf = StringIO()
+        resolve_moe_lora_targets(
+            _per_expert_linear_moe(torch, attn_gate=True),
+            _tcfg(),
+            r".*\.self_attn\.(q_proj|gate)",
+            Console(file=buf, width=400),
+        )
+
+        assert _plain(buf.getvalue()) == (
+            "ScatterMoE LoRA: targeting the target_modules regex as a list of 7 target "
+            "names: the modules it matches, without the 1 MoE router/gate module(s), plus "
+            "the 7 MoE module patterns"
+        )
+
+
+class TestFailClosedWithoutPeftsPrivateHelpers:
+    """No answer from peft means a list, never a string peft might route to a router."""
+
+    def test_without_the_all_linear_expander_the_string_becomes_a_list(self, monkeypatch):
+        monkeypatch.setattr(moe_mod, "_peft_all_linear_expander", lambda: None)
+        modules, params, targets = _attach_uncached("qwen4_exp", "auto")
+        expected_modules, expected_params, _ = _expected("qwen4_exp", "auto")
+
+        assert isinstance(targets, MoeLoraTargets)
+        assert modules == expected_modules and params == expected_params
+
+    def test_without_the_conversion_the_string_becomes_a_list(self, monkeypatch):
+        monkeypatch.setattr(moe_mod, "_peft_config_converter", lambda: None)
+        modules, params, targets = _attach_uncached("qwen4_exp", "auto")
+        expected_modules, expected_params, _ = _expected("qwen4_exp", "auto")
+
+        assert isinstance(targets, MoeLoraTargets)
+        assert modules == expected_modules and params == expected_params
+
+    def test_without_the_conversion_a_gate_named_entry_is_dropped(self, monkeypatch):
+        monkeypatch.setattr(moe_mod, "_peft_config_converter", lambda: None)
+        targets, _, modules, params = _stand_in_attach(_tcfg(), "all-linear", attn_gate=True)
+
+        assert not [entry for entry in targets if entry.rsplit(".", 1)[-1] == "gate"]
+        assert _ROUTER not in modules and not params
+
+
+class TestARegexThatMatchesNothingIsAnnounced:
+    def test_a_bare_name_written_as_a_string_is_warned_about(self):
+        line = _announced("in_proj_qkv")
+
+        assert line.startswith(
+            "training.lora.target_modules is a regex that matches no module of this model:"
+        )
+        assert "only moe_lora's own targets attach" in line
+
+    def test_a_regex_that_matches_says_nothing_extra(self):
+        assert not _announced(r".*\.in_proj_qkv").startswith("training.lora")
 
 
 # --------------------------------------------------------------------------- #
@@ -604,6 +774,32 @@ def _build(arch: str):
                 pad_token_id=0,
             )
         )
+    if arch == "dbrx":
+        return transformers.DbrxForCausalLM(
+            transformers.DbrxConfig(
+                d_model=32,
+                n_heads=2,
+                n_layers=2,
+                max_seq_len=64,
+                vocab_size=64,
+                attn_config={"kv_n_heads": 1, "rope_theta": 10000.0},
+                ffn_config={"ffn_hidden_size": 16, "moe_num_experts": 4, "moe_top_k": 2},
+            )
+        )
+    if arch == "jetmoe":
+        return transformers.JetMoeForCausalLM(
+            transformers.JetMoeConfig(
+                vocab_size=64,
+                hidden_size=32,
+                num_hidden_layers=2,
+                num_key_value_heads=2,
+                kv_channels=8,
+                intermediate_size=16,
+                num_local_experts=4,
+                num_experts_per_tok=2,
+                max_position_embeddings=64,
+            )
+        )
     if arch == "dense":
         return transformers.LlamaForCausalLM(transformers.LlamaConfig(**_SMALL))
     raise KeyError(arch)
@@ -615,12 +811,8 @@ def _read_only(arch: str):
     return _build(arch)
 
 
-@functools.lru_cache(maxsize=None)
-def _attach(arch: str, target_modules, *, moe_lora: bool):
-    """``attach_preflight.trainer_lora_config`` (the trainer's sequence), then peft.
-
-    Cached: each test reads the same few attaches, and a result is frozen sets.
-    """
+def _attach_uncached(arch: str, target_modules, *, moe_lora: bool = True):
+    """``attach_preflight.trainer_lora_config`` (the trainer's sequence), then peft."""
     from soup_cli.utils.attach_preflight import trainer_lora_config
 
     model = _build(arch)
@@ -632,11 +824,18 @@ def _attach(arch: str, target_modules, *, moe_lora: bool):
     return frozenset(modules), frozenset(params), targets
 
 
+@functools.lru_cache(maxsize=None)
+def _attach(arch: str, target_modules, *, moe_lora: bool):
+    """Cached: each test reads the same few attaches, and a result is frozen sets."""
+    return _attach_uncached(arch, target_modules, moe_lora=moe_lora)
+
+
 #: The families among these that peft converts from the transformers-4 layout. There
-#: peft renames a target whose last name is a v4 expert projection into the fused
-#: expert parameter, so an ``nn.Linear`` with that leaf name (deepseek_v3's dense MLP
-#: and its shared experts) is not adapted as a module, whatever the target: peft's
-#: behaviour, the same with a list.
+#: peft resolves a regex to the last names of the modules it matches, and renames a
+#: target whose last name is a v4 expert projection into the fused expert parameter,
+#: so an ``nn.Linear`` with that leaf name (deepseek_v3's dense MLP and its shared
+#: experts) is not adapted as a module, whatever the target: peft's behaviour, the
+#: same with a list.
 _PEFT_CONVERTS = {"qwen3_moe", "deepseek_v3"}
 _V4_EXPERT_NAMES = {"gate_proj", "up_proj", "down_proj"}
 
@@ -645,11 +844,12 @@ _V4_EXPERT_NAMES = {"gate_proj", "up_proj", "down_proj"}
 def _expected(arch: str, target_modules):
     """What should attach, worked out from the model alone.
 
-    The string's meaning (``all-linear``: every ``nn.Linear`` but ``lm_head``; a regex:
-    the modules it full-matches) without the gates (each ``*Router`` module and each
+    The string's meaning without the gates (each ``*Router`` module and each
     ``shared_expert_gate``), plus the modules the MoE names reach under peft's list
-    rule; the parameters are every routed-expert tensor. Returns
-    ``(modules, parameters, gates)``.
+    rule; the parameters are every routed-expert tensor. ``all-linear`` means every
+    ``nn.Linear`` but ``lm_head``; a regex the modules it full-matches, or, on a
+    family peft converts, every ``nn.Linear`` sharing a last name with one of those.
+    Returns ``(modules, parameters, gates)``.
     """
     torch = pytest.importorskip("torch")
     model = _read_only(arch)
@@ -665,7 +865,14 @@ def _expected(arch: str, target_modules):
     if target_modules in ("auto", "all-linear"):
         meant = linear
     else:
-        meant = {name for name, _ in named if name and re.fullmatch(target_modules, name)}
+        matched = {
+            name for name, _ in named if name and re.fullmatch(target_modules, name)
+        } - gates
+        if arch in _PEFT_CONVERTS:
+            leaves = {name.rsplit(".", 1)[-1] for name in matched}
+            meant = {name for name in linear if name.rsplit(".", 1)[-1] in leaves}
+        else:
+            meant = matched
     names = moe_mod.get_moe_target_modules(model)
     modules = (meant | {name for name in linear if _peft_list_rule(names, name)}) - gates
     if arch in _PEFT_CONVERTS:
@@ -692,6 +899,7 @@ _PLAIN_CASES = [
 #: A regex that names the routers itself: under moe_lora they are still left out.
 _ROUTER_NAMING_CASES = [
     ("qwen3_moe", r".*\.mlp\.gate|.*\.self_attn\.q_proj"),
+    ("deepseek_v3", r".*\.mlp\.gate|.*\.self_attn\.q_a_proj"),
     ("qwen4_exp", r".*\.mlp\.(gate|shared_expert_gate)|.*\.in_proj_z"),
 ]
 _STRING_CASES = _PLAIN_CASES + _ROUTER_NAMING_CASES
@@ -712,6 +920,20 @@ class TestTheGatesAreFoundByStructure:
                     "model.layers.1.mlp.shared_expert_gate",
                 },
             ),
+            # DbrxRouter wraps one nn.Linear; its experts are stacked 2-D tensors, so
+            # the count comes from config.ffn_config.moe_num_experts.
+            ("dbrx", {"transformer.blocks.0.ffn.router", "transformer.blocks.1.ffn.router"}),
+            # JetMoE has no experts child: each router sits beside 3-D expert tensors,
+            # in the MLP and in the attention's mixture of experts.
+            (
+                "jetmoe",
+                {
+                    "model.layers.0.mlp.router",
+                    "model.layers.0.self_attention.experts.router",
+                    "model.layers.1.mlp.router",
+                    "model.layers.1.self_attention.experts.router",
+                },
+            ),
         ],
     )
     def test_every_router_and_shared_expert_gate(self, arch, gates):
@@ -725,6 +947,45 @@ class TestTheGatesAreFoundByStructure:
         model = _per_expert_linear_moe(torch, shared_gate=True, attn_gate=True)
 
         assert moe_mod.find_moe_gates(model) == [_ROUTER, _SHARED_GATE]
+
+    def test_a_router_beside_expert_tensors_but_no_dense_or_attention_gate(self):
+        torch = pytest.importorskip("torch")
+
+        assert moe_mod.find_moe_gates(_jetmoe_like(torch)) == [
+            "mlp.router",
+            "mixture.experts.router",
+        ]
+
+    def test_fused_experts_give_the_count_when_the_config_states_none(self):
+        """The 3-D expert tensors alone say how many experts there are."""
+        torch = pytest.importorskip("torch")
+
+        class _Experts(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.gate_up_proj = torch.nn.Parameter(torch.zeros(3, 16, 8))
+                self.down_proj = torch.nn.Parameter(torch.zeros(3, 8, 8))
+
+        class _TopKRouter(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.zeros(3, 8))
+
+        class _Model(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.config = SimpleNamespace(model_type="custom_moe")
+                self.mlp = torch.nn.ModuleDict(
+                    {"gate": _TopKRouter(), "experts": _Experts(), "up": torch.nn.Linear(8, 4)}
+                )
+
+        assert moe_mod.find_moe_gates(_Model()) == ["mlp.gate"]
+
+    def test_a_single_expert_block_routes_nothing(self):
+        torch = pytest.importorskip("torch")
+        model = _per_expert_linear_moe(torch, experts=1, shared_gate=True)
+
+        assert moe_mod.find_moe_gates(model) == []
 
     def test_a_dense_model_and_a_stand_in_have_none(self):
         assert moe_mod.find_moe_gates(_read_only("dense")) == []
@@ -751,6 +1012,24 @@ class TestTheStringMinusTheGatesAttaches:
         assert not {param.rsplit(".", 1)[0] for param in params} & gates
         assert not any(name.endswith("lm_head") for name in modules)
 
+    @pytest.mark.parametrize("arch", ["dbrx", "jetmoe"])
+    def test_a_router_that_wraps_a_linear_is_left_out(self, arch):
+        """DBRX and JetMoE: all-linear is kept, the routers' Linears are excluded."""
+        torch = pytest.importorskip("torch")
+        modules, params, targets = _attach(arch, "all-linear", moe_lora=True)
+        model = _read_only(arch)
+        linear = {
+            name for name, module in model.named_modules()
+            if isinstance(module, torch.nn.Linear) and name != "lm_head"
+        }
+        router_linears = {name for name in linear if ".router." in name}
+
+        assert router_linears
+        assert isinstance(targets, MoeLoraTargetString) and targets == "all-linear"
+        assert set(targets.exclude_modules) == router_linears
+        assert modules == linear - router_linears
+        assert not any(".router." in param for param in params)
+
     @pytest.mark.parametrize(("arch", "target_modules"), _PLAIN_CASES)
     def test_without_moe_lora_the_string_reaches_peft_untouched(self, arch, target_modules):
         """The same attach as handing peft the resolved string directly, as on main."""
@@ -768,10 +1047,14 @@ class TestTheStringMinusTheGatesAttaches:
         assert type(targets) is str and targets == string
         assert (set(modules), set(params)) == direct
 
-    def test_without_moe_lora_peft_still_adapts_the_router_on_qwen3_moe(self):
-        _, params, _ = _attach("qwen3_moe", "all-linear", moe_lora=False)
+    def test_without_moe_lora_peft_still_adapts_the_routers(self):
+        _, qwen3_params, _ = _attach("qwen3_moe", "all-linear", moe_lora=False)
+        dbrx_modules, _, _ = _attach("dbrx", "all-linear", moe_lora=False)
 
-        assert {"model.layers.0.mlp.gate.weight", "model.layers.1.mlp.gate.weight"} <= params
+        assert {"model.layers.0.mlp.gate.weight", "model.layers.1.mlp.gate.weight"} <= (
+            qwen3_params
+        )
+        assert "transformer.blocks.0.ffn.router.layer" in dbrx_modules
 
     def test_qwen4_exp_gets_back_every_linear_the_moe_list_dropped(self):
         modules, _, targets = _attach("qwen4_exp", "auto", moe_lora=True)
@@ -810,7 +1093,7 @@ class TestTheStringMinusTheGatesAttaches:
         assert sorted(peft_config.target_parameters) == _FUSED
 
 
-class TestThePerFamilyChoice:
+class TestThePerStringChoice:
     def test_qwen4_exp_keeps_the_string_and_excludes_the_shared_gates(self):
         """peft does not convert qwen4_exp: the string stays, ``exclude_modules`` acts."""
         from soup_cli.utils.attach_preflight import trainer_lora_config
@@ -840,11 +1123,34 @@ class TestThePerFamilyChoice:
         } <= modules
 
     @pytest.mark.parametrize("arch", ["qwen3_moe", "deepseek_v3"])
-    def test_a_family_peft_converts_gets_an_explicit_list(self, arch):
+    def test_all_linear_on_a_family_peft_converts_becomes_a_list(self, arch):
         _, _, targets = _attach(arch, "all-linear", moe_lora=True)
 
         assert isinstance(targets, MoeLoraTargets)
         assert "gate" not in targets
+
+    @pytest.mark.parametrize(
+        ("arch", "routers"),
+        [
+            ("qwen3_moe", {"model.layers.0.mlp.gate", "model.layers.1.mlp.gate"}),
+            ("deepseek_v3", {"model.layers.1.mlp.gate"}),
+        ],
+    )
+    def test_a_regex_naming_the_routers_stays_a_string_and_excludes_them(self, arch, routers):
+        """peft's resolution of a regex skips an excluded module, so no list is needed."""
+        regex = dict(_ROUTER_NAMING_CASES)[arch]
+        _, params, targets = _attach(arch, regex, moe_lora=True)
+
+        assert isinstance(targets, MoeLoraTargetString)
+        assert set(targets.exclude_modules) == routers
+        assert not {f"{router}.weight" for router in routers} & params
+
+    @pytest.mark.parametrize("arch", ["qwen3_moe", "deepseek_v3"])
+    def test_a_regex_reaching_no_router_stays_a_string(self, arch):
+        _, _, targets = _attach(arch, dict(_PLAIN_CASES[4:])[arch], moe_lora=True)
+
+        assert isinstance(targets, MoeLoraTargetString)
+        assert not targets.exclude_modules
 
     def test_the_list_uses_leaf_names_in_model_order(self):
         _, _, targets = _attach("qwen3_moe", "all-linear", moe_lora=True)
@@ -854,16 +1160,6 @@ class TestThePerFamilyChoice:
         assert list(targets) == [
             "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
         ]
-
-    def test_a_leaf_that_reaches_beyond_the_regex_is_listed_by_path(self):
-        modules, _, targets = _attach(
-            "deepseek_v3", r"model\.layers\.0\.self_attn\.q_a_proj", moe_lora=True
-        )
-
-        assert "model.layers.0.self_attn.q_a_proj" in targets
-        assert "q_a_proj" not in targets
-        assert "model.layers.0.self_attn.q_a_proj" in modules
-        assert "model.layers.1.self_attn.q_a_proj" not in modules
 
 
 class TestTheAnnouncementOnRealModels:
@@ -891,12 +1187,11 @@ class TestTheAnnouncementOnRealModels:
             "mlp.experts.down_proj, mlp.experts.gate_up_proj"
         )
 
-    def test_a_list_made_of_a_regex_is_counted(self):
-        assert self._line("deepseek_v3", r"model\.layers\.0\.self_attn\.q_a_proj") == (
-            "ScatterMoE LoRA: targeting the target_modules regex as a list of 8 target "
-            "names: the modules it matches, without the 1 MoE router/gate module(s), plus "
-            "the 7 MoE module patterns and 2 fused expert parameter(s): "
-            "mlp.experts.down_proj, mlp.experts.gate_up_proj"
+    def test_a_kept_regex_counts_the_routers_it_excludes(self):
+        assert self._line("qwen3_moe", dict(_ROUTER_NAMING_CASES)["qwen3_moe"]) == (
+            "ScatterMoE LoRA: targeting the target_modules regex or the 7 MoE module "
+            "patterns (one combined regex), excluding 2 MoE router/gate module(s) and 2 "
+            "fused expert parameter(s): mlp.experts.down_proj, mlp.experts.gate_up_proj"
         )
 
     def test_a_kept_string_counts_what_it_excludes(self):
