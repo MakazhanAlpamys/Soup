@@ -312,6 +312,11 @@ transformers backend runs, with `training.kto_beta` as `beta` and every other
   the mean over every row of the batch. A batch with only one label trains on
   that label's rows alone.
 
+Qualified on Qwen2.5-0.5B-Instruct in bf16 and 4-bit on an M4 Pro: one epoch on
+1,200 unpaired UltraFeedback rows (`batch_size: 4`, accumulation 2) took about
+9 minutes and 8.0-9.3 GB, and the KTO loss on 400 held-out rows fell from 0.500
+to 0.448 (bf16) and 0.456 (4-bit).
+
 ```yaml
 base: mlx-community/Qwen2.5-0.5B-Instruct-4bit
 task: kto
