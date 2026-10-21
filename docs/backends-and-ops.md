@@ -148,6 +148,7 @@ training:
 - **No second model in memory.** LoRA `B` starts at zero, so before the first update the policy *is* the base model. Reference log-probs are computed once from it before training, which is what TRL's `precompute_ref_log_probs` does. `--resume` computes them before the checkpoint loads, so the reference is always the base model.
 - **The rows `load_dataset` gives every backend.** Each row is read by the loader's own `format: dpo` converter, so MLX accepts exactly the layouts the transformers backend does: text (three strings) or conversational (a message-list prompt, or full `chosen` / `rejected` conversations that repeat the user turn, as the bundled examples do). Text rows get EOS appended; conversational rows go through the model's chat template; the prompt is capped at `max_length // 2` and completions at what remains, as on TRL 0.29. Where this differs from TRL, it does on purpose: a pair whose `chosen` equals its `rejected` is skipped with a count (TRL trains it at a constant loss and zero gradient), and a row the chat template is not prefix-stable for is skipped with a count and the first row's index (TRL warns and slices anyway). Fewer pairs than `training.batch_size` after skipping is refused, naming both.
 - **Seeded.** `training.seed` seeds `mx.random` (LoRA init, dropout) and the batch order; `training.data_seed`, when set, owns the batch order instead. Two runs with the same seed reproduce each other's losses.
+- **LoRA dropout applies.** `lora.dropout` (default 0.05) is active during training, as in MLX SFT; TRL's `disable_dropout` (on by default in 0.29.1) turns it off on the transformers backend. Set `lora.dropout: 0` to match it.
 - **Memory.** Log-probs are computed from the first completion position on, with the vocabulary head run in checkpointed chunks, so the full-vocabulary logits of a batch are never held at once. The chunked path is checked against the full model on the first batch and dropped, with a warning, for an architecture that changes logits after the head. Set `training.gradient_checkpointing: true` for long sequences: measured once on an M4 Pro, Qwen2.5-0.5B-4bit with 792-token pairs, it took a training step from 10.05 GB to 3.63 GB.
 - **Learning rate.** DPO is more sensitive than SFT. In one run on UltraFeedback pairs with Qwen2.5-0.5B-4bit, LoRA r=16 on attention, `lr: 5e-5` diverged to NaN within a dozen updates while `lr: 2e-5` trained; start at `2e-5` or below.
 - **Progress.** The panel and `soup ui` show loss and validation loss. Reward accuracy and margin print per logged step when there is no live panel, and are returned in the run result; the reference precompute prints its progress before the panel starts.
@@ -162,7 +163,8 @@ backend runs): the mean log-probability of each completion, the stable
 odds-ratio term `log_odds = (a - b) - (log(1 - e^a) - log(1 - e^b))`, and
 `loss = chosen NLL - orpo_beta * mean(logsigmoid(log_odds))`, where the NLL is a
 token mean over the whole chosen sequence, prompt included. There is no
-reference model and nothing is precomputed.
+reference model and nothing is precomputed. Qualified on
+Qwen2.5-0.5B-Instruct in bf16 and 4-bit on an M4 Pro.
 
 ```yaml
 base: mlx-community/Qwen2.5-0.5B-Instruct-4bit
@@ -197,14 +199,20 @@ training:
   with a count; a row with no room for an answer is refused.
 - **Ties train.** A pair whose `chosen` equals its `rejected` is kept, as in
   TRL: its odds-ratio term is the constant `log 2` and the NLL still learns.
-- **Stops on a nonfinite loss** instead of training on NaN.
+- **Stops on a nonfinite loss** instead of training on NaN. The check reads
+  the loss, not the gradient: a completion whose mean log-probability is
+  exactly 0 gives a finite loss and a NaN gradient, as in TRL.
+- **LoRA dropout applies**, as in MLX DPO above; set `lora.dropout: 0` to
+  match TRL's `disable_dropout`.
 - **Reported:** loss, NLL, log-odds ratio, mean log-odds, reward accuracy and
   margin (`orpo_beta * logp`, as TRL logs them), per logged step and in the run
   result (`val_*` for the validation split).
 - **Saved:** `adapters.safetensors` and `adapter_config.json` (with `task:
   orpo`, `orpo_beta` and the base model), loadable with
   `mlx_lm.load(base, adapter_path=output)`, both written atomically and the
-  metadata before the first step. `--resume` refuses a checkpoint without that
+  metadata before the first step. A run that stops before its first save
+  leaves the new `adapter_config.json` beside the previous run's adapter
+  file. `--resume` refuses a checkpoint without that
   metadata, from another task, or from another base, before any tensor loads.
 - **Refused at load:** `quantization: 8bit` (use `none`, or a pre-quantized
   4-bit base with `quantization: 4bit`), `training.lora.r: 0`, non-text

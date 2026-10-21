@@ -95,7 +95,7 @@ def render_preference_text(row: dict, tokenizer: Any) -> tuple[str, str, str]:
     elif last_role == "assistant":
         kwargs = {"add_generation_prompt": False, "continue_final_message": True}
     else:
-        raise PreferenceRowError(f"dpo.prompt ends with an unsupported role {last_role!r}")
+        raise PreferenceRowError(f"the prompt ends with an unsupported role {last_role!r}")
     prompt_text = tokenizer.apply_chat_template(prompt, tokenize=False, **kwargs)
     chosen_full = tokenizer.apply_chat_template(prompt + chosen, tokenize=False)
     prompt_text = _common_prefix(prompt_text, chosen_full)

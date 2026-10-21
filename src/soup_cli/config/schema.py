@@ -8200,8 +8200,7 @@ class SoupConfig(BaseModel):
         SFT runs through mlx-lm's tuner; DPO and ORPO through Soup's own loop
         in ``trainer/mlx_dpo.py`` / ``trainer/mlx_orpo.py``. Every other task --
         GRPO included, whose MLX wrapper is still scaffolding -- is refused here
-        rather than at
-        ``train()`` time.
+        rather than at ``train()`` time.
         """
         if self.backend != "mlx":
             return self
