@@ -14,7 +14,27 @@ from soup_cli.cli import app
 from soup_cli.mcp_server.registry import tool_profile
 from tests.conftest import strip_ansi
 
+
+def _plain(text: str) -> str:
+    """ANSI-stripped, whitespace-collapsed output, safe to substring-match."""
+    return " ".join(strip_ansi(text).split())
+
+
 BASE_MODEL = "meta-llama/Llama-3.1-8B"
+
+CONFIG_QLORA = """
+base: meta-llama/Llama-3.1-8B
+data:
+  train: dummy.jsonl
+  max_length: 512
+training:
+  quantization: 4bit
+  batch_size: 1
+  gradient_checkpointing: true
+  lora:
+    r: 16
+    alpha: 16
+"""
 
 CONFIG_LORA_CONTROL = """
 base: meta-llama/Llama-3.1-8B
@@ -120,14 +140,14 @@ class TestProfileFullFinetune:
         assert data.get("peft") == expected_peft
 
         if is_full_ft:
-            # Full fine-tune: trainable params equals model parameter count (8.0B)
             assert data["trainable_params"] == 8_000_000_000
             assert data["optimizer_memory_gb"] > 0
-            assert data["total_memory_gb"] > 24.0
+            assert data["gradients_memory_gb"] == 14.9
+            assert data["total_memory_gb"] == 62.28
         else:
-            # LoRA control: exactly unchanged (~29.36M params)
             assert data["trainable_params"] == 29_360_128
             assert data["total_memory_gb"] == 17.74
+            assert data["gradients_memory_gb"] == 0.0
 
     @pytest.mark.parametrize("name,yaml_text,expected_peft,is_full_ft", ALL_CONFIGS)
     def test_cli_and_preflight_peft_classification_agree(
@@ -185,8 +205,10 @@ class TestProfileFullFinetune:
         runner = CliRunner()
         result = runner.invoke(app, ["profile", "--config", str(cfg_file), "--gpu", "rtx4090"])
         assert result.exit_code == 0
-        plain = strip_ansi(result.output)
+        plain = _plain(result.output)
         assert "full fine-tuning" in plain
+        assert "Gradients ~14.9 GB" in plain
+        assert "Does NOT fit in 24 GB VRAM" in plain
         assert "Fits in 24 GB VRAM" not in plain
 
     def test_cli_rendering_lora_control_unchanged(self, tmp_path: Path) -> None:
@@ -196,25 +218,17 @@ class TestProfileFullFinetune:
         runner = CliRunner()
         result = runner.invoke(app, ["profile", "--config", str(cfg_file), "--gpu", "rtx4090"])
         assert result.exit_code == 0
-        plain = strip_ansi(result.output)
+        plain = _plain(result.output)
         assert "with LoRA r=16" in plain
         assert "Fits in 24 GB VRAM" in plain
+        assert "Gradients" not in plain
 
-    def test_mutation_check_reverting_peft_to_lora_only_fails(
+    def test_profile_and_mcp_label_a_4bit_lora_run_qlora(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Mutation check: reverting peft to 'lora' misreports lora.r=0 as 0 params."""
-        cfg_file = tmp_path / "lora_zero.yaml"
-        cfg_file.write_text(CONFIG_LORA_ZERO, encoding="utf-8")
-
-        # Simulate mutation: resolve_peft_mode returning 'lora' unconditionally
-        monkeypatch.setattr(
-            "soup_cli.utils.hardware_fit.resolve_peft_mode",
-            lambda cfg, **kw: "lora",
-        )
-
-        runner = CliRunner()
-        result = runner.invoke(app, ["profile", "--config", str(cfg_file), "--json"])
-        data = json.loads(result.output)
-        # Under mutated code, trainable_params is erroneously 0 instead of 8B
-        assert data["trainable_params"] == 0
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "soup.yaml").write_text(CONFIG_QLORA, encoding="utf-8")
+        result = CliRunner().invoke(app, ["profile", "--config", "soup.yaml", "--json"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["peft"] == "qlora"
+        assert tool_profile({"config": "soup.yaml"})["peft"] == "qlora"
