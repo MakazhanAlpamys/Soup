@@ -62,13 +62,15 @@ def validate_gpu(gpu: object) -> str:
 def _validate_config(config_yaml: str) -> None:
     import yaml
 
-    if not isinstance(config_yaml, str) or len(config_yaml.encode("utf-8")) > _MAX_CONFIG_BYTES:
-        raise ValueError("config must be a string of at most 1 MB")
+    from soup_cli.utils.yaml_limits import load_yaml_limited
+
+    if not isinstance(config_yaml, str):
+        raise ValueError("config must be a string")
     key = os.environ.get("RUNPOD_API_KEY")
     if key and key in config_yaml:
         raise ValueError("config must not embed provider credentials")
     try:
-        content = yaml.safe_load(config_yaml)
+        content = load_yaml_limited(config_yaml, "RunPod config", max_bytes=_MAX_CONFIG_BYTES)
     except yaml.YAMLError:
         raise ValueError("config must be valid YAML; credentials must stay local") from None
 

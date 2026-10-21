@@ -77,6 +77,24 @@ def test_inline_secrets_are_refused(config, credentials):
         _backend().render_runpod_stub(config, gpu="a100", output_dir="out", soup_version="0.76.0")
 
 
+def test_malformed_config_is_refused_without_echoing_its_content():
+    with pytest.raises(ValueError, match="valid YAML") as error:
+        _backend().render_runpod_stub(
+            "private-value: [", gpu="a100", output_dir="out", soup_version="0.76.0",
+        )
+    assert "private-value" not in str(error.value)
+
+
+def test_modest_alias_reuse_is_preserved_as_config_data():
+    config = CONFIG + "settings: &settings {epochs: 1}\ncopy: *settings\n"
+    stub = _backend().render_runpod_stub(
+        config, gpu="a100", output_dir="out", soup_version="0.76.0",
+    )
+    namespace = {"__name__": "test_controller"}
+    exec(compile(stub, "soup_runpod_app.py", "exec"), namespace)
+    assert base64.b64decode(namespace["_CONFIG_B64"]).decode() == config
+
+
 @pytest.mark.parametrize("version", ["x; echo bad", "", "x\n", True])
 def test_bad_package_version_is_refused(version):
     with pytest.raises(ValueError, match="soup_version"):
@@ -193,9 +211,18 @@ def test_rest_auth_uses_header_and_refuses_redirects(monkeypatch):
             seen.append((request, timeout))
             return Response(b'{"id":"pod-1"}')
 
-    monkeypatch.setattr(ns["urllib"].request, "build_opener", lambda *handlers: Opener())
+    def build_opener(*handlers):
+        assert len(handlers) == 1
+        assert isinstance(handlers[0], ns["_NoRedirect"])
+        assert handlers[0].redirect_request(
+            None, None, None, None, None, "https://evil.invalid",
+        ) is None
+        return Opener()
+
+    monkeypatch.setattr(ns["urllib"].request, "build_opener", build_opener)
     assert ns["_request_json"]("provider-secret", "/pods/pod-1") == {"id": "pod-1"}
     request, timeout = seen[0]
+    assert request.full_url == "https://rest.runpod.io/v1/pods/pod-1"
     assert request.get_header("Authorization") == "Bearer provider-secret"
     assert "provider-secret" not in request.full_url
     assert timeout == 60

@@ -411,8 +411,9 @@ The local controller creates one Secure Cloud GPU Pod with TCP SSH access, insta
 the running Soup version, runs training over SSH and copies the configured relative
 output directory back before deleting the Pod. Choose a fresh local output path;
 existing outputs and symlink/junction paths are refused before allocation and
-rechecked before copying. The config is base64-embedded data;
-inline credential fields are refused. The API key and private SSH key remain local;
+rechecked before copying. The config is base64-embedded data; planning applies the
+shared YAML size, nesting and alias-expansion limits, and refuses inline credential
+fields. The API key and private SSH key remain local;
 only the public key enters the Pod environment. Models and datasets must be publicly
 accessible remotely: local input files and local credentials are not uploaded.
 
