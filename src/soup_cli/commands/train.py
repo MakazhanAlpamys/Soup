@@ -1907,17 +1907,24 @@ def train(
         # to keep separate chains and sweep's copy fell ten tasks and the MLX
         # route behind. See soup_cli/trainer/dispatch.py.
         from soup_cli.trainer.dispatch import build_trainer
-        from soup_cli.utils.launcher import is_in_distributed
-        from soup_cli.utils.run_provenance import BaseRevision, base_revision_scope
+        from soup_cli.utils.run_provenance import (
+            BaseRevision,
+            base_revision_scope,
+            confirm_distributed_base_revision,
+            synchronize_base_revision,
+        )
 
         base_identity = BaseRevision(
             run_base,
-            binding_supported=(cfg.backend == "transformers" and hub_name == "hf"
-                               and not is_in_distributed()),
+            binding_supported=(cfg.backend == "transformers" and hub_name == "hf"),
         )
+        synchronize_base_revision(base_identity, cpu=device == "cpu")
         with base_revision_scope(base_identity):
             trainer_wrapper = build_trainer(cfg, **trainer_kwargs)
             trainer_wrapper.setup(dataset)
+        confirm_distributed_base_revision(
+            base_identity, model=getattr(trainer_wrapper, "model", None),
+        )
         tracker.record_base_revision(
             run_id, revision=base_identity.revision, source=base_identity.source,
         )
@@ -2025,6 +2032,9 @@ def train(
 
         from soup_cli.utils.run_provenance import write_run_provenance
 
+        confirm_distributed_base_revision(
+            base_identity, model=getattr(trainer_wrapper, "model", None),
+        )
         tracker.record_base_revision(
             run_id, revision=base_identity.revision, source=base_identity.source,
         )
