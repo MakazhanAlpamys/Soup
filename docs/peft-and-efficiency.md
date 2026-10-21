@@ -409,6 +409,56 @@ at it. `sft`, `orpo`, `simpo`, `reward_model`, `pretrain`, `embedding`, `grpo` w
 reference the same way as `kto` and `bco` but has not been measured.
 
 
+### Native MLX rank and alpha patterns
+
+Text SFT on `backend: mlx` supports ordinary linear LoRA and rsLoRA patterns
+on dense and genuine 4-bit targets. Automatic targets retain MLX's Q/V default;
+explicit targets are layer-relative keys such as `self_attn.q_proj`, or exact
+qualified paths. Patterns match **qualified native paths**, for example
+`model.layers.0.self_attn.q_proj`; these can differ from Transformers paths.
+
+Rank and alpha resolve independently, with scalar `r`/`alpha` fallbacks. As in
+PEFT 0.20+, the first matching dictionary entry wins. Patterns are regexes with
+an optional dotted prefix and an implicit end anchor; `q_proj` matches that
+suffix, while `^model.layers.0.self_attn.q_proj` anchors the whole path. Place
+specific entries before general entries. A fully shadowed pattern is valid if it
+matches a selected module; a pattern matching no selected module is an error.
+Existing pattern length/count/value/regex safety limits apply. Each selected
+layer uses its own `alpha / rank`, or `alpha / sqrt(rank)` for rsLoRA.
+
+```yaml
+backend: mlx
+training:
+  lora:
+    target_modules: [self_attn.q_proj, self_attn.v_proj]
+    r: 4
+    alpha: 8
+    rank_pattern: {q_proj: 2}
+    alpha_pattern: {v_proj: 12}
+```
+
+Patterned artifacts use the versioned `soup_lora` per-module manifest in
+`adapter_config.json`, containing the original recipe and resolved shapes and
+scales. Soup reconstructs modules before strict tensor loading; metadata drift,
+missing/extra tensors, incompatible shapes and nonfinite values are refused.
+Use `soup infer --backend mlx`, `soup merge --backend mlx`, or
+`from soup_cli.utils.mlx_generation import load_native_model` to load them.
+Generic `mlx_lm.load(..., adapter_path=...)` cannot reconstruct this format and
+fails on its missing uniform `lora_parameters` block. Uniform legacy artifacts
+keep their existing format and loading path. Metadata is available before the
+training loop so periodic checkpoints are reconstructible after interruption.
+Warm starts require matching per-module recipes and restore weights only.
+Metadata writes are atomic. Reusing an output containing incompatible adapter
+weights is refused before writing; choose a fresh output directory for a
+different recipe or base identity.
+
+DoRA, LoRA+, LoRA-FA, packing, non-text/non-SFT paths, embeddings and switch/MoE
+adapter targets remain refused with patterns until their combinations are
+qualified. Heterogeneous ranks alone do not establish better quality, speed or
+memory use. Native offline lifecycle tests cover MLX 0.31.2 / MLX-LM 0.31.3 and
+0.32.4 / 0.32.2.
+
+
 ## DoRA (Weight-Decomposed LoRA)
 
 Enable DoRA for improved LoRA quality with magnitude decomposition:

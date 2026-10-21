@@ -79,6 +79,18 @@ def read_native_adapter(path: Path, base: str | None = None) -> dict | None:
     if config.get("fine_tune_type") != "lora" or config.get("use_dora", False):
         raise ValueError("Native MLX generation currently supports ordinary linear LoRA only")
     params = config.get("lora_parameters")
+    if "soup_lora" in config:
+        from soup_cli.trainer.mlx_lora import validate_pattern_manifest
+
+        if params is not None:
+            raise ValueError("Ambiguous native MLX uniform and per-module metadata")
+        validate_pattern_manifest(config["soup_lora"])
+        layers = config.get("num_layers")
+        if type(layers) is not int or layers < 1:
+            raise ValueError("Native MLX metadata num_layers must be a positive integer")
+        if not (path / "adapters.safetensors").is_file():
+            raise ValueError("Native MLX adapter is missing adapters.safetensors")
+        return config
     if not isinstance(params, dict):
         raise ValueError("Native MLX metadata requires lora_parameters")
     rank = params.get("rank")
@@ -176,20 +188,27 @@ def load_native_model(
         layers = getattr(model, "layers", [])
         if config["num_layers"] > len(layers):
             raise ValueError("Native MLX metadata num_layers exceeds the base model's layers")
-        keys = set(config["lora_parameters"]["keys"])
-        matches = [
-            (name, module)
-            for parent in [*layers[-config["num_layers"]:], model]
-            for name, module in parent.named_modules() if name in keys
-        ]
-        if keys != {name for name, _ in matches} or any(
-            not isinstance(module, (nn.Linear, nn.QuantizedLinear))
-            or (isinstance(module, nn.QuantizedLinear) and module.bits != 4)
-            for _, module in matches
-        ):
-            raise ValueError("Native MLX targets must all match dense or 4-bit linear modules")
-        model.freeze()
-        linear_to_lora_layers(model, config["num_layers"], config["lora_parameters"])
+        if "soup_lora" in config:
+            from soup_cli.trainer.mlx_lora import apply_pattern_manifest
+
+            if config["num_layers"] != len(layers):
+                raise ValueError("Soup per-module metadata requires the complete base layer set")
+            apply_pattern_manifest(model, config["soup_lora"])
+        else:
+            keys = set(config["lora_parameters"]["keys"])
+            matches = [
+                (name, module)
+                for parent in [*layers[-config["num_layers"]:], model]
+                for name, module in parent.named_modules() if name in keys
+            ]
+            if keys != {name for name, _ in matches} or any(
+                not isinstance(module, (nn.Linear, nn.QuantizedLinear))
+                or (isinstance(module, nn.QuantizedLinear) and module.bits != 4)
+                for _, module in matches
+            ):
+                raise ValueError("Native MLX targets must all match dense or 4-bit linear modules")
+            model.freeze()
+            linear_to_lora_layers(model, config["num_layers"], config["lora_parameters"])
         expected = dict(tree_flatten(model.trainable_parameters()))
         try:
             weights = mx.load(str(path / "adapters.safetensors"))
