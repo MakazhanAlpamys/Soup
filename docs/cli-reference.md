@@ -34,6 +34,7 @@ Usage: `soup [OPTIONS] <command> [ARGS]...`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
+| `--version` | flag | off |  | Show Soup CLI version. |
 | `--verbose`, `-V` | flag | off |  | Show full traceback on errors |
 | `--log-level` | text | `normal` |  | Logging tier: quiet \| normal \| verbose \| debug |
 | `--no-audit-log` | flag | off |  | Disable the local HIPAA/SOC2 audit log for this invocation (also via SOUP_NO_AUDIT_LOG=1). Default: a one-line record per command under \~/.soup/audit.jsonl. v0.71.3. |
