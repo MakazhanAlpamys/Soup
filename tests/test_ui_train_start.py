@@ -240,9 +240,27 @@ def test_train_status_reports_config_path_during_run(tmp_path: pathlib.Path) -> 
         _wait_for_run_completion(10.0)
 
 
-def test_drain_worker_wait_order_guard(tmp_path: pathlib.Path) -> None:
+class FakeStdout:
+    """Fake stdout stream returning immediate EOF and tracking close calls."""
+
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    def readline(self) -> bytes:
+        return b""
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
+@pytest.mark.parametrize(
+    "has_stdout",
+    [False, True],
+    ids=["no_stdout", "stream"],
+)
+def test_drain_worker_wait_order_guard(tmp_path: pathlib.Path, has_stdout: bool) -> None:
     """Unit test: _drain_stdout_worker calls proc.wait() before deleting config, and
-    marks done first.
+    marks done first, for both stdout=None and active stream cases.
     """
     temp_config = tmp_path / "soup_ui_config_wait_guard.yaml"
     temp_config.write_text("base: test\n", encoding="utf-8")
@@ -251,21 +269,28 @@ def test_drain_worker_wait_order_guard(tmp_path: pathlib.Path) -> None:
     buffer = TrainLogBuffer(maxlen=100)
 
     class FakeProc:
-        stdout = None
-
-        def __init__(self) -> None:
+        def __init__(self, stdout: FakeStdout | None) -> None:
+            self.stdout = stdout
             self.wait_calls = 0
+            self.config_existed: bool | None = None
+            self.done_at_wait: bool | None = None
 
         def wait(self) -> None:
             self.wait_calls += 1
-            assert temp_config.exists(), "Config file must still exist while waiting"
-            assert buffer.is_done(), "Log buffer must be marked done before waiting"
+            self.config_existed = temp_config.exists()
+            self.done_at_wait = buffer.is_done()
 
-    proc = FakeProc()
+    stdout_stream = FakeStdout() if has_stdout else None
+    proc = FakeProc(stdout_stream)
     _drain_stdout_worker(proc, buffer, config_path=str(temp_config))
 
     assert proc.wait_calls == 1
+    assert proc.config_existed is True
+    assert proc.done_at_wait is True
     assert not temp_config.exists()
+    if has_stdout:
+        assert proc.stdout is not None
+        assert proc.stdout.close_calls == 1
 
 
 def test_popen_failure_does_not_close_reused_descriptor(tmp_path: pathlib.Path) -> None:
@@ -359,10 +384,15 @@ def test_fdopen_failure_os_close_error_does_not_mask_original_exception(
         created_fd.append(fd)
         return fd, path
 
+    closed_fds: list[int] = []
+
     def close_wrapper(fd: int) -> None:
         if created_fd and fd == created_fd[0]:
+            real_close(fd)
+            closed_fds.append(fd)
             raise OSError("Close error on fd")
         real_close(fd)
+        closed_fds.append(fd)
 
     client = ui_client(raise_server_exceptions=True)
     with patch("tempfile.mkstemp", side_effect=mkstemp_spy), patch(
@@ -375,7 +405,6 @@ def test_fdopen_failure_os_close_error_does_not_mask_original_exception(
                 headers=_auth_headers(),
             )
 
+    assert created_fd, "mkstemp must have been called"
+    assert created_fd[0] in closed_fds
     assert _config_files(tmp_path) == []
-    if created_fd:
-        with contextlib.suppress(OSError):
-            real_close(created_fd[0])
