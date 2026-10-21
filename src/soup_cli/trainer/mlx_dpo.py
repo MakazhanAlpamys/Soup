@@ -354,11 +354,6 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
         unsupported = []
         if tcfg.quantization == "8bit":
             unsupported.append("quantization=8bit (use mlx-community 4bit models)")
-        if self.config.data.chat_template:
-            unsupported.append(
-                f"data.chat_template (MLX {self.objective} renders with the model's own "
-                "template)"
-            )
         for name, label in (
             ("use_galore", "GaLore"),
             ("use_lorafa", "training.use_lorafa"),

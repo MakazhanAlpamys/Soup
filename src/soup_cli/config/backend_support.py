@@ -232,26 +232,10 @@ _NOT_DPO_GAPS = frozenset({
 
 _MLX_DPO: tuple[SupportEntry, ...] = tuple(
     entry for entry in _MLX_SFT if entry.field not in _NOT_DPO_GAPS
-) + (
-    SupportEntry(
-        "data.chat_template",
-        IGNORED,
-        "MLX DPO renders conversational rows with the model's own chat template",
-        trainer_reads=True,
-    ),
 )
 
 #: MLX ORPO runs MLX DPO's loop with its own loss, so it ignores the same fields.
-_MLX_ORPO: tuple[SupportEntry, ...] = tuple(
-    entry for entry in _MLX_DPO if entry.field != "data.chat_template"
-) + (
-    SupportEntry(
-        "data.chat_template",
-        IGNORED,
-        "MLX ORPO renders conversational rows with the model's own chat template",
-        trainer_reads=True,
-    ),
-)
+_MLX_ORPO: tuple[SupportEntry, ...] = _MLX_DPO
 
 
 #: ``(task, backend, modality)`` -> the settings that combination does not honour.
