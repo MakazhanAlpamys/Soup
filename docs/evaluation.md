@@ -1262,7 +1262,7 @@ soup eval custom --backend mlx --model ./native-adapter \
   --tasks eval_tasks.jsonl --output native-eval.json --max-tokens 512 --temperature 0
 ```
 
-The native path reuses the loader and chat renderer from `soup chat --backend mlx`.
+The native path reuses the loader and chat renderer from `soup infer --backend mlx`.
 Pass a local MLX base directory or an ordinary native linear text-LoRA adapter;
 its saved metadata identifies the base. Dense and genuine 4-bit bases are supported.
 DoRA, full fine-tunes, embeddings and other unqualified adapter variants are refused
@@ -1272,7 +1272,7 @@ Each task is rendered as one user message and its actual completion is passed to
 Soup's existing answer, text or tool-call scorer. Greedy generation is the default;
 positive temperature uses top-p 0.9. `--max-tokens` and `--temperature` configure
 only this explicit backend; stopping, token counting and template handling match
-native chat/infer. The default Transformers path keeps its existing generation settings.
+native inference. The default Transformers path keeps its existing generation settings.
 
 A load, generation or scoring error exits 1 with an **incomplete** diagnostic and
 writes no aggregate report or tracker result. Completed examples are not silently
