@@ -19,7 +19,7 @@ drift -- every entry must name a real field, and every dotted field name in
 the truth; it can only stop it rotting, which is the failure that produced #749.
 
 Scope today: ``task=sft`` on ``backend=mlx`` and on ``backend=unsloth`` (#1124;
-both apply to every modality), ``task=dpo``, ``task=orpo`` and ``task=simpo`` on
+both apply to every modality), ``task=dpo``, ``task=orpo``, ``task=simpo`` and ``task=kto`` on
 ``backend=mlx``, plus multimodal vision and audio on ``backend=transformers`` (#1156).
 Other combinations report nothing rather than guessing, which is the honest default for
 a table that has not been reviewed for them.
@@ -234,12 +234,16 @@ _MLX_ORPO: tuple[SupportEntry, ...] = _MLX_DPO
 #: MLX SimPO is MLX ORPO's tokenization and MLX DPO's loop: the same fields.
 _MLX_SIMPO: tuple[SupportEntry, ...] = _MLX_ORPO
 
+#: MLX KTO runs MLX DPO's loop and reference precompute: the same fields.
+_MLX_KTO: tuple[SupportEntry, ...] = _MLX_DPO
+
 #: ``(task, backend, modality)`` -> the settings that combination does not honour.
 REGISTRY: dict[tuple[str, str, str], tuple[SupportEntry, ...]] = {
     ("sft", "mlx", "text"): _MLX_SFT,
     ("dpo", "mlx", "text"): _MLX_DPO,
     ("orpo", "mlx", "text"): _MLX_ORPO,
     ("simpo", "mlx", "text"): _MLX_SIMPO,
+    ("kto", "mlx", "text"): _MLX_KTO,
     ("sft", "unsloth", "text"): _UNSLOTH_SFT,
     ("sft", "transformers", "vision"): _TRANSFORMERS_VISION_SFT,
     ("sft", "transformers", "audio"): _TRANSFORMERS_AUDIO_SFT,
@@ -286,6 +290,15 @@ TRAINER_MODULES: dict[tuple[str, str, str], tuple[str, ...]] = {
         "soup_cli/trainer/loss_summary.py",
     ),
     ("orpo", "mlx", "text"): (
+        "soup_cli/trainer/mlx_orpo.py",
+        "soup_cli/trainer/mlx_dpo.py",
+        "soup_cli/trainer/mlx_sft.py",
+        "soup_cli/trainer/mlx_optim.py",
+        "soup_cli/trainer/_trl_compat.py",
+        "soup_cli/trainer/loss_summary.py",
+    ),
+    ("kto", "mlx", "text"): (
+        "soup_cli/trainer/mlx_kto.py",
         "soup_cli/trainer/mlx_orpo.py",
         "soup_cli/trainer/mlx_dpo.py",
         "soup_cli/trainer/mlx_sft.py",

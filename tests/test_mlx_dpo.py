@@ -468,9 +468,9 @@ class TestConfig:
         fields = {entry.field for entry in check_config(cfg)}
         assert fields == {"training.use_galore"}
 
-    # orpo and simpo have their own MLX trainers since #2004 / #1999
-    # (tests/test_mlx_orpo.py, tests/test_mlx_simpo.py).
-    @pytest.mark.parametrize("task", ["ipo", "kto", "ppo"])
+    # orpo, simpo and kto have their own MLX trainers since #2004 / #1999 / #2000
+    # (tests/test_mlx_orpo.py, tests/test_mlx_simpo.py, tests/test_mlx_kto.py).
+    @pytest.mark.parametrize("task", ["ipo", "ppo"])
     def test_other_preference_tasks_still_refused(self, task):
         from soup_cli.config.loader import load_config_from_string
 
