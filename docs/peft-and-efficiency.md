@@ -744,15 +744,17 @@ The report contains the geometric `lrs[]`, raw + EMA-smoothed `losses[]`, the re
 
 The sweep takes one training row per step. With fewer rows than `--find-lr-steps`, it runs one step per row over the same `--find-lr-start` → `--find-lr-end` range and prints a line saying so. The recommendation needs at least 4 points, so `--find-lr-steps` must be at least 4 and a training set with fewer than 4 rows is refused before the model loads. If the loss turns non-finite partway through, the report covers the steps before it; if that leaves fewer than 4, the command says where it diverged instead of writing a report. If the sweep cannot run at all (the config does not load, the model or dataset cannot be loaded, or `torch` is not installed), the command names the cause, exits 1 and writes no report.
 
-### Auto Warmup Schedule
+### Warmup Schedule
 
 ```yaml
 training:
-  warmup_auto: true       # Pick warmup_steps from dataset_size × epochs × warmup_ratio
-  warmup_ratio: 0.03      # 3% of total update steps (default)
+  warmup_ratio: 0.03      # 3% of the actual optimizer steps (default)
 ```
 
-Clamped to `[10, 1000]` so tiny datasets get some warmup and huge datasets don't burn half a million wasted steps.
+`warmup_ratio` resolves over the run's real optimizer steps (#1507), which is what
+`warmup_auto` promised. `warmup_auto` was read by no trainer, so it is deprecated:
+an explicit `warmup_auto: true` loads with a warning naming the release that refuses
+it, and `soup autopilot` no longer writes it (#1814). Delete the line.
 
 ### Auto Mixed-Precision
 

@@ -175,7 +175,8 @@ def generate_config(
             and decisions["task"] in SFT_KERNEL_AWARE_TASKS
         ),
         "gradient_checkpointing": perf.get("gradient_checkpointing", False),
-        "warmup_auto": bool(decisions.get("warmup_auto", False)),
+        # warmup_auto is no longer written (#1814): no trainer reads it, and
+        # warmup_ratio already resolves over the actual optimizer steps.
         # #1618: only the SFT trainer reads auto_mixed_precision, so scope it
         # like the two kernel flags above — otherwise a DPO/PPO config the
         # flat generator writes would be refused at load.

@@ -295,7 +295,7 @@ Sections:
 | `training.convergence_detection` | `bool` | `false` |  | Watch for loss plateau / oscillation and surface advice (continue / early_stop / lower_lr) at the end of training. |
 | `training.convergence_window` | `int` | `50` | `>= 5`, `<= 10000` | Staged, not enforced during training: number of recent losses to inspect for plateau / oscillation |
 | `training.convergence_rel_tol` | `float` | `0.005` | `> 0.0`, `<= 1.0` | Staged, not enforced during training: relative range threshold below which the window is a plateau |
-| `training.warmup_auto` | `bool` | `false` |  | Auto-pick warmup_steps from dataset_size × epochs × warmup_ratio. Overrides any manual warmup_steps in the trainer. |
+| `training.warmup_auto` | `bool` | `false` |  | Deprecated (#1814): read by no trainer. warmup_ratio already resolves over the actual optimizer steps (#1507); an explicit true warns at load and a later release refuses it. |
 | `training.auto_mixed_precision` | `bool` | `false` |  | Pick bf16/fp16 based on model + GPU compute capability. Applied by task='sft' (and 'tts', which trains through the SFT trainer); refused on every other task, whose trainers pick their own precision. |
 | `training.grad_accum_auto_tune` | `bool` | `false` |  | Monitor VRAM each step; warn (and recommend new batch/accum) when memory pressure is high. Advisory only: it does not rebuild the DataLoader or change accumulation during a run. |
 | `training.grad_accum_pressure_threshold` | `float` | `0.92` | `> 0.05`, `< 0.99` | VRAM utilisation fraction that triggers a recommendation |

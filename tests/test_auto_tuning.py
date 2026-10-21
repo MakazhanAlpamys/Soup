@@ -713,10 +713,12 @@ class TestAutopilotIntegration:
 
 
 class TestAutopilotConfigEmission:
-    def test_generated_config_includes_warmup_auto_when_set(
+    def test_generated_config_never_writes_warmup_auto(
         self, tmp_path, monkeypatch,
     ):
-        """Generated config has warmup_auto=true so train.py picks it up."""
+        """#1814: no trainer reads warmup_auto (warmup_ratio already resolves over
+        the real optimizer steps), so the generator stops writing it, even when a
+        decisions dict still carries it."""
         from soup_cli.autopilot.generate_config import generate_config
 
         monkeypatch.chdir(tmp_path)
@@ -746,7 +748,8 @@ class TestAutopilotConfigEmission:
         )
         text = out.read_text(encoding="utf-8")
         cfg = yaml.safe_load(text)
-        assert cfg["training"].get("warmup_auto") is True
+        # Dumped with the other defaults, but never switched on (#1814).
+        assert cfg["training"].get("warmup_auto") in (None, False)
 
     def test_generated_config_scopes_perf_flags_to_sft_family(
         self, tmp_path, monkeypatch,

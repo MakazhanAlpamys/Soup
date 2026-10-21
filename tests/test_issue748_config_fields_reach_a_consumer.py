@@ -56,9 +56,9 @@ resolves one for a consumer.
 *A read inside a function nothing references is not consumption* (#807), and
 the gate that enforces it has limits in both directions. A field is dropped
 only when EVERY read sits in such a function; one live read anywhere rescues
-it, which is what keeps the impact small -- on this tree it drops exactly one
-declared field, `warmup_auto`, pinned by
-`test_the_real_tree_has_exactly_one_known_escape`.
+it, which is what keeps the impact small -- on this tree it drops no declared field
+(the one it used to, `warmup_auto`, was deprecated by #1814), pinned by
+`test_the_real_tree_has_no_known_escape`.
 
 "Referenced" is a syntactic question, not a reachability one, and it errs
 toward *referenced* -- so distrust a pass more than a failure. Two leaks
@@ -113,6 +113,7 @@ import functools
 import os
 import pathlib
 import re
+import sys
 import types
 
 import pytest
@@ -378,10 +379,10 @@ KNOWN_UNCONSUMED = {
     # -- #807: read ONLY inside a function nothing in src/ references, so the
     #    read is not consumption. Surfaced by the dead-function gate, which
     #    the guard previously applied to @property resolvers only.
-    "training.warmup_auto": "#807 -- read only in autopilot.generate_config, "
-                            "which nothing in src/ calls; and that line reads "
-                            "the decisions dict and WRITES the value into a "
-                            "config, so it is not a read of the field either",
+    "training.warmup_auto": "#807 / #1814 -- read by nothing (its one write, in the "
+                            "uncalled autopilot.generate_config, was removed); "
+                            "deprecated: an explicit true warns at load and is "
+                            "refused in a later release",
     # -- declared, and an explicit value is IGNORED with a warning naming the
     #    release that refuses it, so having no consumer is correct. Not refused
     #    yet, because Soup's own writers put the old default into saved configs.
@@ -1134,8 +1135,13 @@ class TestTheDeadFunctionGate:
             "a read inside a method must be attributed to that method, not lost"
         )
 
-    def test_the_real_tree_has_exactly_one_known_escape(self):
-        """Measured, and pinned so the number cannot drift unnoticed."""
+    def test_the_real_tree_has_no_known_escape(self):
+        """Measured, and pinned so the number cannot drift unnoticed.
+
+        It was exactly one, ``warmup_auto``, read only inside
+        ``autopilot.generate_config``; #1814 deprecated the field and removed that
+        write, so the gate drops no declared field on this tree. A new escape
+        turns this red."""
         modules = _consumer_modules()
         scoped = function_scoped_reads(modules)
         referenced = referenced_names(modules)
@@ -1147,25 +1153,35 @@ class TestTheDeadFunctionGate:
             schema_property_reads(SCHEMA_PATH),
         )
         dropped = sorted(ungated - drop_dead_function_reads(ungated, scoped, referenced))
-        assert "warmup_auto" in dropped, (
-            "warmup_auto is read only inside a function nothing references, "
-            "so the gate should drop it"
-        )
-        # The name says EXACTLY one, and membership alone would pass a gate that
-        # dropped more (#906 review). `dropped` spans every consumed identifier,
-        # not just config fields, so the exact claim is over declared leaves.
+        # `dropped` spans every consumed identifier, not just config fields, so
+        # the exact claim is over declared leaves (#906 review).
         declared_leaves = set(_declared().values())
         dropped_fields = sorted(set(dropped) & declared_leaves)
-        assert dropped_fields == ["warmup_auto"], (
-            f"expected exactly the one known escape, got {dropped_fields}"
+        assert dropped_fields == [], (
+            f"a declared field is read only inside dead functions: {dropped_fields}"
         )
 
-    def test_consumed_in_src_applies_the_gate_independently_of_the_allowlist(self):
+    def test_consumed_in_src_applies_the_gate_independently_of_the_allowlist(
+        self, tmp_path, monkeypatch
+    ):
         """#906 review: the only thing that caught the gate being removed from
         `_consumed_in_src()` was `test_the_allowlist_does_not_cover_fields_that_
         are_consumed` -- the pin scheduled for deletion once #794/#808 retire
         those entries. This pins the composition directly: each escape is read
-        in the ungated set, and must be absent from what the scan returns."""
+        in the ungated set, and must be absent from what the scan returns.
+
+        The real tree has no escape left (#1814), so one is planted: a module
+        beside the real ones whose only read of ``warmup_auto`` sits in a
+        function nothing references."""
+        planted = tmp_path / "planted_dead_read.py"
+        planted.write_text(
+            "def never_called(cfg):\n    return cfg.training.warmup_auto\n",
+            encoding="utf-8",
+        )
+        real_modules = _consumer_modules()
+        monkeypatch.setattr(
+            sys.modules[__name__], "_consumer_modules", lambda: [*real_modules, planted]
+        )
         modules = _consumer_modules()
         ungated = fold_property_reads(
             set(_consumed_cached(tuple(sorted(str(m) for m in modules)))),
