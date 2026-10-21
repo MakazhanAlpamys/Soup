@@ -1026,3 +1026,93 @@ def test_doctor_nccl_mocked_success():
         assert result.exit_code == 0
         assert "Measuring NCCL bandwidth" in _strip_ansi(result.output)
         assert "Result (H100 over NVLINK)" in _strip_ansi(result.output)
+
+
+# --- Doctor --config tests (#2100) ---
+
+
+def test_doctor_refused_config_does_not_print_all_checks_passed(tmp_path, monkeypatch):
+    """A refused config must not print 'All checks passed!' before exit 2 (#2100)."""
+    installed = {
+        "pydantic": "2.10.0",
+        "typer": "0.15.4",
+        "rich": "13.0.0",
+        "pyyaml": "6.0",
+        "plotext": "5.2.0",
+        "torch": "2.6.0",
+        "transformers": "5.16.1",
+        "peft": "0.20.0",
+        "trl": "0.29.0",
+        "datasets": "2.14.0",
+        "bitsandbytes": "0.41.0",
+        "accelerate": "0.27.0",
+    }
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._installed_version_str",
+        lambda imp, pkg: installed.get(pkg),
+    )
+    bad_config = tmp_path / "soup.yaml"
+    bad_config.write_text(
+        "base: meta-llama/Llama-3.1-8B-Instruct\nunknown_key: true\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["doctor", "--config", str(bad_config)])
+    assert result.exit_code == 2
+    out = _strip_ansi(result.output)
+    assert "All checks passed!" not in out
+    assert "unknown config key 'unknown_key'" in out
+    assert "Config could not be loaded" in out
+
+
+def test_doctor_valid_config_prints_all_checks_passed(sample_config, monkeypatch):
+    """A valid config check allows 'All checks passed!' on a healthy environment (#2100)."""
+    installed = {
+        "pydantic": "2.10.0",
+        "typer": "0.15.4",
+        "rich": "13.0.0",
+        "pyyaml": "6.0",
+        "plotext": "5.2.0",
+        "torch": "2.6.0",
+        "transformers": "5.16.1",
+        "peft": "0.20.0",
+        "trl": "0.29.0",
+        "datasets": "2.14.0",
+        "bitsandbytes": "0.41.0",
+        "accelerate": "0.27.0",
+    }
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._installed_version_str",
+        lambda imp, pkg: installed.get(pkg),
+    )
+    result = runner.invoke(app, ["doctor", "--config", str(sample_config)])
+    assert result.exit_code == 0
+    out = _strip_ansi(result.output)
+    assert "All checks passed!" in out
+    assert "Config check" in out
+
+
+def test_doctor_without_config_unchanged(monkeypatch):
+    """Without --config, doctor still prints 'All checks passed!' and exits 0 (#2100)."""
+    installed = {
+        "pydantic": "2.10.0",
+        "typer": "0.15.4",
+        "rich": "13.0.0",
+        "pyyaml": "6.0",
+        "plotext": "5.2.0",
+        "torch": "2.6.0",
+        "transformers": "5.16.1",
+        "peft": "0.20.0",
+        "trl": "0.29.0",
+        "datasets": "2.14.0",
+        "bitsandbytes": "0.41.0",
+        "accelerate": "0.27.0",
+    }
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._installed_version_str",
+        lambda imp, pkg: installed.get(pkg),
+    )
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    out = _strip_ansi(result.output)
+    assert "All checks passed!" in out
+

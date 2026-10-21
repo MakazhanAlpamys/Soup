@@ -311,6 +311,12 @@ def doctor(
         _run_nccl_check()
 
     # Summary
+    # Config check runs before the summary line (#2100): if the config cannot
+    # be loaded or is refused, doctor terminates with exit 2 before asserting
+    # that "All checks passed!".
+    if config:
+        _check_config_support(config)
+
     if issues:
         # Issue/fix text may contain "[train]"-style brackets, which Rich
         # would otherwise swallow as markup tags — escape so the suggestion
@@ -329,12 +335,6 @@ def doctor(
                 )
     else:
         console.print("\n[bold green]All checks passed![/] Your environment is ready.")
-
-    # After the environment summary on purpose: "All checks passed" reports on
-    # the environment, and printing config findings above it read as though the
-    # green line covered them too.
-    if config:
-        _check_config_support(config)
 
     console.print(f"\n[dim]GitHub: [link={GITHUB_URL}]{GITHUB_URL}[/link][/]")
 
