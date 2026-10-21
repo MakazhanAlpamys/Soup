@@ -199,6 +199,26 @@ class TestGenerateCombinations:
         combos = _generate_combinations({"lr": [1e-5, 2e-5, 1e-5]}, "random", None)
         assert sorted(c["lr"] for c in combos) == [1e-5, 2e-5]
 
+    def test_random_search_dedups_every_list_and_keeps_first_seen_order(self, monkeypatch):
+        """Every list is deduplicated, not only the first, and keeps its first-seen order."""
+        import random
+
+        from soup_cli.commands.sweep import _generate_combinations
+
+        drawn = []
+        real_choice = random.choice
+
+        def recording_choice(seq):
+            drawn.append(list(seq))
+            return real_choice(seq)
+
+        monkeypatch.setattr(random, "choice", recording_choice)
+        params = {"epochs": [3, 1, 3, 2], "batch_size": [6, 4, 6, 5]}
+        # 3 x 3 = 9 distinct arms; asking for 4 takes the sampling branch.
+        combos = _generate_combinations(params, "random", 4)
+        assert len(combos) == 4
+        assert drawn[:2] == [[3, 1, 2], [6, 4, 5]]
+
     def test_random_search_defaults_to_10(self):
         """Random search without max_runs should default to min(total, 10)."""
         from soup_cli.commands.sweep import _generate_combinations
@@ -360,7 +380,10 @@ class TestSweepCLI:
             "--dry-run",
         ])
         assert result.exit_code == 0, result.output
-        assert "Runs:     4" in result.output
+        from .conftest import strip_ansi
+
+        plain = " ".join(strip_ansi(result.output).split())
+        assert "Runs: 4" in plain
 
     def test_sweep_config_not_found(self):
         """Should fail if config doesn't exist."""
