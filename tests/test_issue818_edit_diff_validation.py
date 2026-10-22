@@ -5,10 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from typer.testing import CliRunner
-
 from soup_cli.cli import app
 from soup_cli.utils import live_eval
+from tests.cli_runner import CliRunner
 
 from .conftest import strip_ansi
 

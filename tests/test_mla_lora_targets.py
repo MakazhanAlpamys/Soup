@@ -153,6 +153,18 @@ class TestTheKimiWrapperKeepsTheLowRankTuple:
 
         assert resolved == list(MOE_TEXT_LORA_TARGETS["deepseek_v3"])
 
+    def test_a_wrapper_saying_none_itself_still_keeps_the_table_entry(self):
+        """The rule is off in the text-config fallback even when the outer config
+        carries ``q_lora_rank: None`` too: a wrapper Soup has no row for gets the
+        table entry whatever either config says."""
+        model = _model(
+            "some_unseen_wrapper", None, text_config=_config("deepseek_v3", None)
+        )
+
+        resolved = resolve_lora_target_modules(model, "auto")
+
+        assert resolved == list(MOE_TEXT_LORA_TARGETS["deepseek_v3"])
+
 
 # --------------------------------------------------------------------------
 # tiny real models on CPU

@@ -32,7 +32,7 @@ def test_torchao_in_valid_kinds():
     assert "torchao" in _VALID_KINDS
 
 
-@pytest.mark.parametrize("fmt", ["onnx", "tensorrt", "awq", "gptq", "torchao"])
+@pytest.mark.parametrize("fmt", ["onnx", "tensorrt", "torchao"])
 def test_export_refuses_deploy_for_unsupported_formats(tmp_path: Path, fmt: str):
     """Formats Ollama cannot load must refuse --deploy with an informative error."""
     model_dir = tmp_path / "model"
@@ -103,8 +103,6 @@ def test_export_wires_deploy_for_deployable_formats(tmp_path: Path, fmt: str):
     [
         ("onnx", "soup_cli.commands.export._export_onnx", "onnx"),
         ("tensorrt", "soup_cli.commands.export._export_tensorrt", "tensorrt"),
-        ("awq", "soup_cli.commands.export._export_awq", "awq"),
-        ("gptq", "soup_cli.commands.export._export_gptq", "gptq"),
         ("torchao", "soup_cli.commands.export._export_torchao_cli", "torchao"),
         ("gguf-ud", "soup_cli.commands.export._export_gguf_advanced", "gguf"),
         ("bitnet", "soup_cli.commands.export._export_bitnet_gguf", "gguf"),

@@ -145,13 +145,12 @@ def push(
     hf_token: Optional[str] = None
     hf_endpoint: Optional[str] = None
     if hub_canonical != "hf":
-        import click
-
         from soup_cli.utils.hubs import hub_token_env_var, resolve_hub_token
+        from soup_cli.utils.typer_compat import ParameterSource
 
         # --token also reads HF_TOKEN via envvar; only a value typed on the
         # command line is meant for this hub.
-        typed = ctx.get_parameter_source("token") == click.core.ParameterSource.COMMANDLINE
+        typed = ctx.get_parameter_source("token") == ParameterSource.COMMANDLINE
         hub_token = resolve_hub_token(hub_canonical, token if typed else None)
         if not hub_token:
             env_var = hub_token_env_var(hub_canonical)

@@ -24,8 +24,8 @@ class TestExportFormats:
         assert "tensorrt" in SUPPORTED_FORMATS
 
     def test_format_count(self):
-        """v0.53.1 — 7 prior formats + torchao + gguf-ud = 9."""
-        assert len(SUPPORTED_FORMATS) == 9
+        """v0.77 — 9 prior formats - awq - gptq = 7."""
+        assert len(SUPPORTED_FORMATS) == 7
         assert "bitnet" in SUPPORTED_FORMATS
         assert "tq1_0" in SUPPORTED_FORMATS
         assert "torchao" in SUPPORTED_FORMATS

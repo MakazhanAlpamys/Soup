@@ -138,6 +138,8 @@ def format_staged_fields(
     Per maintainer directive on #808:
     While warning, each staged field prints:
         <field> is accepted but read by nothing; v<STAGED_FIELD_REJECTION_VERSION> will refuse it
+    Once refused, each line also says what to do about it:
+        <field> is accepted but read by nothing; refused as of v<...>. Delete the line.
     """
     lines = []
     for item in staged:
@@ -149,6 +151,6 @@ def format_staged_fields(
         else:
             lines.append(
                 f"{item.path} is accepted but read by nothing; "
-                f"refused as of v{STAGED_FIELD_REJECTION_VERSION}"
+                f"refused as of v{STAGED_FIELD_REJECTION_VERSION}. Delete the line."
             )
     return "\n".join(lines)

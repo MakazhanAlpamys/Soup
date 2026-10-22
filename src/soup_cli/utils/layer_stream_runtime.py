@@ -1838,6 +1838,38 @@ def _unwrap_tuner_base(module: Any) -> Any:
     return module
 
 
+def _refuse_lora_on_streamed_boundary(model: Any, index: Any, lora_config: Any) -> None:
+    """Refuse a LoRA target on the streamed embedding or head (#1048).
+
+    Saving or resuming that adapter is not supported yet. Checked after
+    get_peft_model(), so it covers every spelling of ``target_modules`` that
+    matched the module, and only when the checkpoint streams those weights: a
+    tied one has no large-layer keys and keeps both modules resident.
+    """
+    if not tuple(getattr(index, "large_keys", ()) or ()):
+        return
+    from peft.tuners.tuners_utils import BaseTunerLayer
+
+    wrapped = [
+        role
+        for role, module in (
+            ("embed_tokens", model.get_input_embeddings()),
+            ("lm_head", model.get_output_embeddings()),
+        )
+        if isinstance(module, BaseTunerLayer)
+    ]
+    if wrapped:
+        names = ", ".join(wrapped)
+        raise ValueError(
+            f"training.stream_layers does not yet support a LoRA target on the "
+            f"streamed {names} of an untied checkpoint: the forward pass is "
+            f"correct, but saving or resuming that adapter is not supported yet. "
+            f"Change training.lora.target_modules (now "
+            f"{lora_config.target_modules!r}) so it does not match {names}, or "
+            f"train without stream_layers."
+        )
+
+
 def _build_streamed_large_layer_class():
     import torch
     import torch.nn as nn
@@ -2531,6 +2563,7 @@ def build_meta_skeleton(
     from transformers import AutoConfig, AutoModelForCausalLM
 
     from soup_cli.utils.layer_shard import QUANT_NF4, SUPPORTED_STREAM_QUANTS
+    from soup_cli.utils.run_provenance import base_revision_kwargs
 
     if quant not in SUPPORTED_STREAM_QUANTS:
         raise ValueError(
@@ -2538,7 +2571,9 @@ def build_meta_skeleton(
             f"{', '.join(SUPPORTED_STREAM_QUANTS)}"
         )
     torch_dtype = _torch_dtype(dtype)
-    config = AutoConfig.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+    config = AutoConfig.from_pretrained(
+        model_id, trust_remote_code=trust_remote_code, **base_revision_kwargs(model_id),
+    )
     config.use_cache = False
     _drop_fp8_source_quantization(config)
     quant_config = None
@@ -3792,6 +3827,7 @@ def build_streamed_model(
 
         apply_pre_lora_patches(model, model_id)
         model = get_peft_model(model, lora_config)
+        _refuse_lora_on_streamed_boundary(model, index, lora_config)
         materialize_meta_adapters(model, seed=seed, device=device)
         assert_trainable_adapters_materialized(model)
         runtime = install_streaming(

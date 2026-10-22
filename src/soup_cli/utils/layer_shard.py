@@ -56,10 +56,11 @@ from soup_cli.utils.fp8_block import (
     SUPPORTED_FP8_FORMAT,
     FP8BlockPlan,
     UnsupportedFP8Error,
+    check_source_quantization,
     dequantize_fp8_block,
-    fp8_block_size,
     plan_fp8_block,
     read_checkpoint_quantization_config,
+    refuse_unsupported_tensor,
 )
 
 logger = logging.getLogger(__name__)
@@ -812,8 +813,13 @@ def resolve_shard_dir(model: str, cache_dir: Optional[str] = None) -> str:
     an env var is operator config, not API input (mirrors spectrum_scan).
     """
     from soup_cli.utils.paths import is_under
+    from soup_cli.utils.run_provenance import base_revision_kwargs
 
     slug = model_slug(model)
+    revision = base_revision_kwargs(model).get("revision")
+    if revision:
+        # '@' cannot occur in model_slug, so no model id aliases this slot.
+        slug += "@" + revision
     root: str = _resolve_cache_root(cache_dir, is_under)
     chosen = os.path.join(root, slug)
     os.makedirs(chosen, exist_ok=True)
@@ -1000,6 +1006,11 @@ class SourceHeaderError(ValueError):
     """
 
 
+#: Stored types safetensors defines that ``safetensors_reader`` has no spelling for and a
+#: quantiser writes: packed or integer ones. FP8 spellings are left to the FP8 plan, and
+#: anything else (C64, a corrupt name) stays an unreadable header.
+_SAFETENSORS_ONLY_DTYPES = frozenset({"U16", "U32", "U64", "F4", "F6_E2M3", "F6_E3M2"})
+
 #: What reading and parsing one header can raise: a missing or unreadable file, a
 #: malformed header (``ValueError``), a null or nested dimension or offset
 #: (``TypeError``), an infinite one (``OverflowError``) and JSON nested deeper than
@@ -1016,13 +1027,27 @@ def _read_source_tensors(
     spelled twice, or more than ``_MAX_TOTAL_TENSORS`` across the files, is
     refused the way :func:`shard_checkpoint` refuses it.
     """
-    from soup_cli.utils.safetensors_reader import RAW_DTYPES, read_header
+    from soup_cli.utils.safetensors_reader import (
+        RAW_DTYPES,
+        UnsupportedDtypeError,
+        read_header,
+    )
 
     shapes: Dict[str, Tuple[str, Tuple[int, ...]]] = {}
     spelled: Dict[str, str] = {}
     for path in shard_paths:
         try:
             header = read_header(path)
+        except UnsupportedDtypeError as exc:
+            # A packed or integer type this reader has no spelling for (U32, U16, F4...):
+            # the sharder reads the header through safetensors and refuses that tensor
+            # (``plan_fp8_block``), so refuse it here in its words, before any copy.
+            # FP8 spellings it lacks (F8_E8M0) are the FP8 plan's to word: unread here.
+            if exc.dtype in _SAFETENSORS_ONLY_DTYPES:
+                refuse_unsupported_tensor(_canonical_stream_key(exc.tensor), exc.dtype)
+            raise SourceHeaderError(
+                f"cannot read the safetensors header of {path}: {exc}"
+            ) from exc
         except _HEADER_READ_ERRORS as exc:
             raise SourceHeaderError(
                 f"cannot read the safetensors header of {path}: {exc}"
@@ -1052,16 +1077,39 @@ class ShardCacheEstimate:
     to the same root). ``other_bytes`` is the payload of the extras shard and the
     large embed/head shards, all on root 0. Both are exact. ``header_bytes`` and
     ``index_bytes`` bound the safetensors headers and ``index.json`` from above.
+
+    ``expert_file_bytes`` is the part of ``layer_bytes`` that lives in the
+    per_expert experts files (0 for the fused layout), and ``code_table_bytes``
+    the part of ``other_bytes`` that is the shared NF4 code tables (0 without
+    NF4). Neither is held by the RAM tier; see :attr:`ram_tier_bytes`.
     """
 
     layer_bytes: Tuple[int, ...]
     other_bytes: int
     header_bytes: int
     index_bytes: int
+    expert_file_bytes: int = 0
+    code_table_bytes: int = 0
 
     @property
     def total_bytes(self) -> int:
         return sum(self.layer_bytes) + self.other_bytes + self.header_bytes + self.index_bytes
+
+    @property
+    def ram_tier_bytes(self) -> int:
+        """Host RAM the RAM tier holds for this cache: what the post-shard check charges.
+
+        The decoder-layer files plus the large embed/head shards (the store), plus
+        the resident extras. The per_expert experts files are read from the cache
+        volume on every tier, and the NF4 code tables are machinery that
+        ``extras_resident_bytes`` leaves out, so neither is counted.
+        """
+        return (
+            sum(self.layer_bytes)
+            - self.expert_file_bytes
+            + self.other_bytes
+            - self.code_table_bytes
+        )
 
 
 def estimate_shard_cache_bytes(
@@ -1101,8 +1149,9 @@ def estimate_shard_cache_bytes(
     """
     if arch == "qwen4_exp":
         return None
-    # The config alone decides an unsupported FP8 spelling: refused before any header.
-    fp8_block_size(quantization_config, arch=arch)
+    # The config alone decides an unsupported FP8 spelling, or another declared
+    # quantiser: refused before any header, as the sharder refuses it.
+    check_source_quantization(quantization_config, arch=arch)
     if dtype not in _SUPPORTED_DTYPES:
         raise ValueError(
             f"unsupported dtype {dtype!r} for layer streaming; "
@@ -1134,6 +1183,8 @@ def estimate_shard_cache_bytes(
     routed: Dict[int, Dict[int, Dict[str, int]]] = {}
     other_bytes = 0
     header_bytes = 0
+    expert_file_bytes = 0
+    code_table_bytes = 0
     stored_names: set = set()
     any_nf4 = False
 
@@ -1189,14 +1240,17 @@ def estimate_shard_cache_bytes(
         ]
         if experts_nf4:
             any_nf4 = True
-            layer_bytes[idx] += sum(
+            experts_payload = sum(
                 nf4_weight_bytes(gate_up, double_quant=double_quant)
                 + nf4_weight_bytes(down, double_quant=double_quant)
                 for gate_up, down in pairs
             )
         else:
-            layer_bytes[idx] += sum(gate_up + down for gate_up, down in pairs) * itemsize
+            experts_payload = sum(gate_up + down for gate_up, down in pairs) * itemsize
+        layer_bytes[idx] += experts_payload
         if expert_layout == EXPERT_LAYOUT_PER_EXPERT:
+            # In the experts file, not the layer file: never held by the RAM tier.
+            expert_file_bytes += experts_payload
             # experts_NNN.safetensors, whose keys index.json does not list.
             parts = sidecars if experts_nf4 else ("",)
             names = [
@@ -1229,7 +1283,8 @@ def estimate_shard_cache_bytes(
         tables = {NF4_CODE_KEY: 16 * 4}
         if double_quant:
             tables[NF4_NESTED_CODE_KEY] = 256 * 4
-        other_bytes += sum(tables.values())
+        code_table_bytes = sum(tables.values())
+        other_bytes += code_table_bytes
         header_bytes += _charge_names(tables)
     index_entries = len(shard_paths) + len(stored_names) + len(suffixes) + n_layers
     return ShardCacheEstimate(
@@ -1237,6 +1292,8 @@ def estimate_shard_cache_bytes(
         other_bytes=other_bytes,
         header_bytes=header_bytes,
         index_bytes=_INDEX_BYTES_FIXED + _INDEX_BYTES_PER_ENTRY * index_entries,
+        expert_file_bytes=expert_file_bytes,
+        code_table_bytes=code_table_bytes,
     )
 
 
@@ -1713,6 +1770,13 @@ def shard_checkpoint(
     are stacked or written to their experts file, cast to the stream dtype and then
     stored by the rules above. The scales are consumed and never stored. Any other
     FP8 spelling is refused before anything is written.
+
+    Every other quantised source is refused too (``fp8_block.check_source_quantization``
+    and the header plan, :func:`~soup_cli.utils.fp8_block.plan_fp8_block`). The source
+    is checked first, from its ``config.json`` and headers alone, before ``out_dir`` or
+    a stripe folder is made, a cache is looked up or an index is quarantined: a refused
+    source creates and renames nothing, and a cache older code sharded from it is not
+    reused.
     """
     if expert_layout not in ("", EXPERT_LAYOUT_PER_EXPERT):
         raise ValueError(
@@ -1753,6 +1817,113 @@ def shard_checkpoint(
     fp32_layer_keys = layer_buffer_keys(arch)
     drop_extra_layers = arch == "deepseek_v3" and num_hidden_layers is not None
     shards = _discover_safetensors(weights_dir)
+    from safetensors import safe_open
+
+    # Every check of the SOURCE comes first, before the out dir is made, a stripe
+    # folder secured, a cache looked up or an index quarantined: a refused source
+    # creates and renames nothing, and a cache sharded from it by older code is not
+    # reused (its hit would return before any later check). Headers only, no tensor.
+    # An FP8 spelling, or another quantiser, that the config alone rules out is refused
+    # before any header is read.
+    source_quantization = read_checkpoint_quantization_config(weights_dir)
+    check_source_quantization(source_quantization, arch=arch)
+
+    # pass 1 — build key -> shard without materialising a single tensor
+    where: Dict[str, Tuple[str, str]] = {}
+    source_tensors: Dict[str, Tuple[str, Tuple[int, ...]]] = {}
+    external_parts: Dict[str, List[Tuple[int, ExternalTensorPart]]] = {}
+    oq_external_keys: Dict[str, List[Tuple[int, str]]] = {}
+    external_source_keys = set()
+    saw_oq_companion = False
+    layer_ids = set()
+    for path in shards:
+        with safe_open(path, framework="pt") as handle:
+            for source_key in handle.keys():
+                if external_mode and source_key.endswith((".biases", ".scales")):
+                    saw_oq_companion = True
+                key = _canonical_stream_key(source_key)
+                prior = where.get(key)
+                if prior is not None and prior != (path, source_key):
+                    raise ValueError(
+                        f"checkpoint spells one streamed tensor twice: "
+                        f"{prior[1]!r} and {source_key!r} both canonicalise to "
+                        f"{key!r}. Refusing rather than silently keeping one by "
+                        f"safetensors key order."
+                    )
+                where[key] = (path, source_key)
+                header = handle.get_slice(source_key)
+                source_tensors[key] = (
+                    str(header.get_dtype()),
+                    tuple(int(dim) for dim in header.get_shape()),
+                )
+                ple_match = _QWEN4_PLE_SHARD_RE.match(key) if external_mode else None
+                oq_ple_match = (
+                    _QWEN4_OQ_PLE_SHARD_RE.match(key) if external_mode else None
+                )
+                is_dense_ple = external_mode and key.endswith(QWEN4_PLE_WEIGHT_SUFFIX)
+                if oq_ple_match:
+                    logical_key = oq_ple_match.group("prefix") + ".weight"
+                    part_index = int(oq_ple_match.group("part"))
+                    oq_external_keys.setdefault(logical_key, []).append(
+                        (part_index, key)
+                    )
+                elif ple_match or is_dense_ple:
+                    tensor_slice = handle.get_slice(source_key)
+                    logical_key = (
+                        ple_match.group("prefix") + ".weight" if ple_match else key
+                    )
+                    part_index = int(ple_match.group("part")) if ple_match else 0
+                    part = ExternalTensorPart(
+                        source_file=os.path.basename(path),
+                        source_key=source_key,
+                        shape=tuple(int(dim) for dim in tensor_slice.get_shape()),
+                        dtype=str(tensor_slice.get_dtype()),
+                    )
+                    external_parts.setdefault(logical_key, []).append(
+                        (part_index, part)
+                    )
+                    external_source_keys.add(key)
+                if len(where) > _MAX_TOTAL_TENSORS:
+                    raise ValueError(
+                        f"checkpoint declares more than {_MAX_TOTAL_TENSORS} tensors"
+                    )
+                match = _LAYER_RE.match(key)
+                if match:
+                    layer_ids.add(int(match.group(1)))
+
+    oq_config = None
+    if saw_oq_companion:
+        from soup_cli.utils.oq_affine import load_affine_quant_config
+
+        oq_config = load_affine_quant_config(weights_dir)
+        # oQ conditional-generation bundles also carry vision and MTP weights.
+        # The streamed skeleton is the text-only CausalLM, so those components
+        # are deliberately not copied into its extras shard.
+        where = {
+            key: location
+            for key, location in where.items()
+            if location[1].startswith("language_model.")
+            and not location[1].endswith(
+                ".ple.ple_embedding.ngram_embedding.weight_scale"
+            )
+        }
+        layer_ids = {
+            int(match.group(1))
+            for key in where
+            if (match := _LAYER_RE.match(key)) is not None
+        }
+
+    # Before any byte is read or written: every FP8 tensor must be a block weight with
+    # its scale, every scale must sit beside one, and no tensor read below may be a
+    # packed or integer one a plain read would cast (the disk pre-flight runs the same
+    # plan). Over the keys this sharder reads: an oQ bundle's vision and MTP weights
+    # are dropped above, never read.
+    fp8_plan = plan_fp8_block(
+        source_quantization, {key: source_tensors[key] for key in where}, arch=arch
+    )
+    consumed = _fp8_consumed_keys(fp8_plan)
+    del source_tensors
+
     resolved_out = _validate_out_dir(out_dir)
 
     from soup_cli.utils.stripe_roots import (
@@ -1823,103 +1994,6 @@ def shard_checkpoint(
             expert_layout=expert_layout,
         ):
             _quarantine_shard_index(resolved_out)
-
-    from safetensors import safe_open
-
-    # An FP8 spelling the config alone rules out is refused before any header is read.
-    source_quantization = read_checkpoint_quantization_config(weights_dir)
-    fp8_block_size(source_quantization, arch=arch)
-
-    # pass 1 — build key -> shard without materialising a single tensor
-    where: Dict[str, Tuple[str, str]] = {}
-    source_tensors: Dict[str, Tuple[str, Tuple[int, ...]]] = {}
-    external_parts: Dict[str, List[Tuple[int, ExternalTensorPart]]] = {}
-    oq_external_keys: Dict[str, List[Tuple[int, str]]] = {}
-    external_source_keys = set()
-    saw_oq_companion = False
-    layer_ids = set()
-    for path in shards:
-        with safe_open(path, framework="pt") as handle:
-            for source_key in handle.keys():
-                if external_mode and source_key.endswith((".biases", ".scales")):
-                    saw_oq_companion = True
-                key = _canonical_stream_key(source_key)
-                prior = where.get(key)
-                if prior is not None and prior != (path, source_key):
-                    raise ValueError(
-                        f"checkpoint spells one streamed tensor twice: "
-                        f"{prior[1]!r} and {source_key!r} both canonicalise to "
-                        f"{key!r}. Refusing rather than silently keeping one by "
-                        f"safetensors key order."
-                    )
-                where[key] = (path, source_key)
-                header = handle.get_slice(source_key)
-                source_tensors[key] = (
-                    str(header.get_dtype()),
-                    tuple(int(dim) for dim in header.get_shape()),
-                )
-                ple_match = _QWEN4_PLE_SHARD_RE.match(key) if external_mode else None
-                oq_ple_match = (
-                    _QWEN4_OQ_PLE_SHARD_RE.match(key) if external_mode else None
-                )
-                is_dense_ple = external_mode and key.endswith(QWEN4_PLE_WEIGHT_SUFFIX)
-                if oq_ple_match:
-                    logical_key = oq_ple_match.group("prefix") + ".weight"
-                    part_index = int(oq_ple_match.group("part"))
-                    oq_external_keys.setdefault(logical_key, []).append(
-                        (part_index, key)
-                    )
-                elif ple_match or is_dense_ple:
-                    tensor_slice = handle.get_slice(source_key)
-                    logical_key = (
-                        ple_match.group("prefix") + ".weight" if ple_match else key
-                    )
-                    part_index = int(ple_match.group("part")) if ple_match else 0
-                    part = ExternalTensorPart(
-                        source_file=os.path.basename(path),
-                        source_key=source_key,
-                        shape=tuple(int(dim) for dim in tensor_slice.get_shape()),
-                        dtype=str(tensor_slice.get_dtype()),
-                    )
-                    external_parts.setdefault(logical_key, []).append(
-                        (part_index, part)
-                    )
-                    external_source_keys.add(key)
-                if len(where) > _MAX_TOTAL_TENSORS:
-                    raise ValueError(
-                        f"checkpoint declares more than {_MAX_TOTAL_TENSORS} tensors"
-                    )
-                match = _LAYER_RE.match(key)
-                if match:
-                    layer_ids.add(int(match.group(1)))
-
-    # Before any byte is read or written: every FP8 tensor must be a block weight with
-    # its scale, every scale must sit beside one (the disk pre-flight runs the same plan).
-    fp8_plan = plan_fp8_block(source_quantization, source_tensors, arch=arch)
-    consumed = _fp8_consumed_keys(fp8_plan)
-    del source_tensors
-
-    oq_config = None
-    if saw_oq_companion:
-        from soup_cli.utils.oq_affine import load_affine_quant_config
-
-        oq_config = load_affine_quant_config(weights_dir)
-        # oQ conditional-generation bundles also carry vision and MTP weights.
-        # The streamed skeleton is the text-only CausalLM, so those components
-        # are deliberately not copied into its extras shard.
-        where = {
-            key: location
-            for key, location in where.items()
-            if location[1].startswith("language_model.")
-            and not location[1].endswith(
-                ".ple.ple_embedding.ngram_embedding.weight_scale"
-            )
-        }
-        layer_ids = {
-            int(match.group(1))
-            for key in where
-            if (match := _LAYER_RE.match(key)) is not None
-        }
 
     if expert_layout and not any(_PER_EXPERT_RE.match(key) for key in where):
         raise ValueError(
@@ -2707,12 +2781,17 @@ def _refuse_fp8(key: str, stored_dtype: str) -> None:
     """The backstop under every plain read: an FP8 tensor or block scale that reaches a
     cast was not dequantised by an accepted :class:`FP8BlockPlan`. A plain cast keeps
     the raw e4m3 values and drops the scales, so the run would train on wrong weights
-    while the resident load (which dequantises) looks fine."""
+    while the resident load (which dequantises) looks fine.
+
+    So is any other tensor that is not plain floating point, or that a quantiser
+    named (:func:`~soup_cli.utils.fp8_block.refuse_unsupported_tensor`): the header
+    plan refuses those first, and this is what still stands if a path skips it."""
     if stored_dtype.upper().startswith("F8") or key.endswith("_scale_inv"):
         raise UnsupportedFP8Error(
             f"checkpoint tensor {key!r} is FP8 ({stored_dtype}) or an FP8 block scale "
             f"that would be cast without its scales. {SUPPORTED_FP8_FORMAT}"
         )
+    refuse_unsupported_tensor(key, stored_dtype)
 
 
 def _read_source_tensor(

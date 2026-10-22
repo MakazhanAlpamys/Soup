@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:44c28c06ff7d2445391cfcc7cd483b096453a302085ff8ac52cb48fa79ce4da5 -->
+<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <strong>العربية</strong> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -27,7 +27,7 @@
 <p align="center">
   <a href="https://pypi.org/project/soup-cli/"><img src="https://img.shields.io/pypi/v/soup-cli?color=blue" alt="PyPI"></a>
   <a href="https://pepy.tech/project/soup-cli"><img src="https://img.shields.io/pepy/dt/soup-cli?color=blue" alt="التنزيلات"></a>
-  <img src="https://img.shields.io/badge/python-3.10--3.12-blue" alt="Python 3.10-3.12">
+  <img src="https://img.shields.io/badge/python-3.11--3.13-blue" alt="Python 3.11-3.13">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="ترخيص Apache-2.0">
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/MakazhanAlpamys/65fdc943f85f3b2c46ecddb415c2b779/raw/soup_tests.json" alt="الاختبارات"></a>
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://github.com/MakazhanAlpamys/Soup/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -135,11 +135,8 @@ soup train
   ثنائي الجانب متينًا إزاء التباين، ويوقّع `soup adapters sign --backend sigstore`
   و`soup attest emit --sign sigstore` باستخدام Sigstore OIDC بلا مفاتيح
   (<span dir="ltr">`pip install "soup-cli[sigstore]"`</span>).
-- **قيد الإيقاف التدريجي (Deprecated):** سيُزال `soup export --format awq` و<span dir="ltr">`--format gptq`</span>
-  في v0.77؛ فكلا المشروعين الأصليين مؤرشف ولا يُثبَّت أي من الملحقين (extras) إلى جانب
-  <span dir="ltr">`[train]`</span>.
 
-> Python **3.10–3.12** فقط. وعلى الإصدار 3.13 وما بعده كان pip يختار حزم PyTorch (wheels) غير مختبرة تنهار في
+> Python **3.11–3.13** فقط. وعلى الإصدار 3.14 وما بعده كان pip يختار حزم PyTorch (wheels) غير مختبرة تنهار في
 > الامتداد الأصلي قبل أن يعمل Soup أصلًا.
 
 تجد أبرز ما في الإصدارات الأقدم في صفحة [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
@@ -216,7 +213,7 @@ soup merge  --adapter ./output                              # ادمج LoRA في
 soup export --model ./output --format gguf --quant q4_k_m   # GGUF لـ Ollama / llama.cpp
 ```
 
-وتوجد أهداف تصدير أخرى (ONNX وTensorRT وAWQ وGPTQ وBitNet) وخيارات النشر في
+وتوجد أهداف تصدير أخرى (ONNX وTensorRT وBitNet) وخيارات النشر في
 [`docs/serving-and-export.md`](docs/serving-and-export.md).
 
 ## واجهة الويب
@@ -351,7 +348,7 @@ docker compose up   # أو ابنِ الصورة محليًا
 
 ## المتطلبات
 
-- Python 3.10 أو 3.11 أو 3.12 (هذه هي الإصدارات التي يختبرها CI؛ أما 3.13 وما بعده فغير مدعوم بعد لأن
+- Python 3.11 أو 3.12 أو 3.13 (هذه هي الإصدارات التي يختبرها CI؛ أما 3.14 وما بعده فغير مدعوم بعد لأن
   حزمة PyTorch لم يُتحقَّق منها هناك)
 - GPU يدعم CUDA (موصى به) أو Apple Silicon (MPS) أو CPU (تجريبي — بطيء جدًا)
 - 8 GB فأكثر من VRAM للنماذج بحجم 7B مع QLoRA
