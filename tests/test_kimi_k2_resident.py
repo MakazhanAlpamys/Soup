@@ -19,8 +19,14 @@ BLOCKED = ("kimi-k2-sft", "kimi-k2-thinking-grpo")
 
 def _assert_route_text(text, base):
     if base.casefold() in {"moonshotai/kimi-k2-base", "moonshotai/kimi-k2-instruct"}:
-        assert "training.stream_layers" in text and "#2107" in text
-        assert "not available until it merges" in text
+        assert "training.stream_layers: true" in text
+        assert "guarded" in text.lower()
+        assert "not available until it merges" not in text
+        assert "pending" not in text.lower()
+        assert "--trust-remote-code" in text and "tokenizer" in text
+        assert "pip install tiktoken" in text
+        assert "docs/performance-and-quantization.md" in text
+        assert "CPU-only parity on a tiny K2-like checkpoint" in text
         assert "no supported route yet" not in text.lower()
     else:
         assert "no supported route yet" in text.lower()

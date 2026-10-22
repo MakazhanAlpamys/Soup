@@ -42,8 +42,12 @@ code using removed APIs, including `is_torch_fx_available`, and an inference-onl
 MoE training path. `trust_remote_code` does not repair that incompatibility.
 This is a behaviour change: these resident configurations previously passed validation
 and failed later at model loading; now config validation stops before model loading.
-For Base and Instruct only, the native `training.stream_layers` route is tracked in
-[#2107](https://github.com/MakazhanAlpamys/Soup/pull/2107), not available until it merges.
+For Base and Instruct only, use the guarded `training.stream_layers: true` route
+added by [#2107](https://github.com/MakazhanAlpamys/Soup/pull/2107). It requires
+`--trust-remote-code` for the tokenizer and `pip install tiktoken`; see
+[Kimi K2 section of the streaming guide](performance-and-quantization.md)
+for the guard and prerequisites. Its evidence is CPU-only parity on a tiny
+K2-like checkpoint; full K2 weights, training and GPU execution remain unverified.
 Thinking and Instruct-0905 have no supported route yet. This refusal does not
 qualify local copies, other hubs or Unsloth as working routes. K2.5/K2.6 use
 native `kimi_k25` registration and are outside this boundary.

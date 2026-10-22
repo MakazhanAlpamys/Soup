@@ -3,14 +3,16 @@
 import os
 
 KIMI_K2_RESIDENT_REASON = "Resident Kimi K2 is unsupported on Transformers 5.x"
-KIMI_K2_PENDING_STREAM_REASON = (
-    KIMI_K2_RESIDENT_REASON + ". The native training.stream_layers route is tracked in #2107, "
-    "not available until it merges."
+KIMI_K2_GUARDED_STREAM_REASON = (
+    KIMI_K2_RESIDENT_REASON + ". Use the guarded training.stream_layers: true route "
+    "(#2107), with --trust-remote-code for the tokenizer and pip install tiktoken. "
+    "See docs/performance-and-quantization.md, Kimi K2: "
+    "CPU-only parity on a tiny K2-like checkpoint; full K2/GPU training is unverified."
 )
 KIMI_K2_NO_SUPPORTED_ROUTE_REASON = KIMI_K2_RESIDENT_REASON + ". No supported route yet."
 KIMI_K2_RESIDENT_REASONS = {
-    "moonshotai/kimi-k2-base": KIMI_K2_PENDING_STREAM_REASON,
-    "moonshotai/kimi-k2-instruct": KIMI_K2_PENDING_STREAM_REASON,
+    "moonshotai/kimi-k2-base": KIMI_K2_GUARDED_STREAM_REASON,
+    "moonshotai/kimi-k2-instruct": KIMI_K2_GUARDED_STREAM_REASON,
     "moonshotai/kimi-k2-instruct-0905": KIMI_K2_NO_SUPPORTED_ROUTE_REASON,
     "moonshotai/kimi-k2-thinking": KIMI_K2_NO_SUPPORTED_ROUTE_REASON,
 }

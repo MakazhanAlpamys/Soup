@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from soup_cli.utils.kimi import KIMI_K2_NO_SUPPORTED_ROUTE_REASON, KIMI_K2_PENDING_STREAM_REASON
+from soup_cli.utils.kimi import KIMI_K2_GUARDED_STREAM_REASON, KIMI_K2_NO_SUPPORTED_ROUTE_REASON
 
 
 @dataclass(frozen=True)
@@ -2812,11 +2812,8 @@ output: ./output
         task="sft",
         size="N/A",
         tags=("kimi", "moonshot", "moe", "long-context"),
-        description=(
-            "Kimi K2 SFT: unsupported resident route. training.stream_layers tracked in #2107, "
-            "not available until it merges."
-        ),
-        unavailable_reason=KIMI_K2_PENDING_STREAM_REASON,
+        description="Kimi K2 SFT: " + KIMI_K2_GUARDED_STREAM_REASON,
+        unavailable_reason=KIMI_K2_GUARDED_STREAM_REASON,
         yaml_str="""\
 base: moonshotai/Kimi-K2-Base
 task: sft
