@@ -142,6 +142,18 @@ def test_updates_freeze_eval_save_reload_and_warm_start(pair, tmp_path, student_
     restored, _ = load(str(pair[0]), adapter_path=cfg.output)
     restored.eval()
     assert mx.allclose(expected, restored(tokens), atol=1e-5, rtol=1e-5).item()
+    from mlx.utils import tree_unflatten
+    from mlx_lm.tuner.lora import LoRALinear
+
+    # Exercise the actual MLX-LM fusion operation on the saved/reloaded adapter.
+    adapted = [(name, module) for name, module in restored.named_modules()
+               if isinstance(module, LoRALinear)]
+    assert len(adapted) == len(trainable) // 2
+    restored.update_modules(tree_unflatten([
+        (name, module.fuse(dequantize=True)) for name, module in adapted
+    ]))
+    assert not any(isinstance(module, LoRALinear) for _, module in restored.named_modules())
+    assert mx.allclose(expected, restored(tokens), atol=2e-5, rtol=2e-5).item()
     metadata = json.loads((tmp_path / "out" / "adapter_config.json").read_text())
     assert metadata["task"] == "distill" and metadata["objective"]["ce_weight"] == 0.5
     assert metadata["tokenizer_identity"]["named_tokens"] == 8
@@ -362,6 +374,7 @@ def test_real_offline_cli_train_evaluate_reload_and_auto_warm_start(pair, tmp_pa
     outcome = CliRunner().invoke(app, ["train", "--config", str(path), "--yes"])
     assert outcome.exit_code == 0, (outcome.output, repr(outcome.exception))
     assert "KD update" in outcome.output and "CE=" in outcome.output
+    assert "Step:" in outcome.output
     restored, _ = load(str(pair[0]), adapter_path=cfg.output)
     assert mx.all(mx.isfinite(restored(mx.array([[5, 6, 7]])))).item()
     receipt = json.loads((tmp_path / "out" / "distillation_run.json").read_text())
@@ -417,3 +430,137 @@ def test_native_seed_controls_initialization_and_data_seed_controls_real_order(p
         assert mx.array_equal(initializations[0][name], initializations[1][name]).item()
         if name.endswith("lora_a"):
             assert not mx.array_equal(initializations[0][name], initializations[2][name]).item()
+
+
+def test_student_activation_checkpoint_preserves_seeded_dropout_updates(pair, tmp_path):
+    from soup_cli.trainer.mlx_distill import MLXDistillTrainerWrapper
+
+    outputs, losses = [], []
+    for enabled in (False, True):
+        cfg = config(*pair, tmp_path / str(enabled), gradient_checkpointing=enabled,
+                     lora={"r": 4, "alpha": 8, "dropout": 0.3})
+        trainer = MLXDistillTrainerWrapper(cfg)
+        trainer.setup(rows())
+        result = trainer.train()
+        outputs.append(dict(tree_flatten(trainer.model.trainable_parameters())))
+        losses.append([entry["loss"] for entry in result["history"]])
+    assert losses[0] == pytest.approx(losses[1], abs=2e-6)
+    for name in outputs[0]:
+        assert mx.allclose(outputs[0][name], outputs[1][name], atol=2e-6, rtol=2e-5).item()
+
+
+def test_quantized_expert_module_cannot_hide_outside_standard_linear_type(
+    pair, tmp_path, monkeypatch,
+):
+    from mlx_lm.models.switch_layers import QuantizedSwitchLinear
+
+    import soup_cli.utils.mlx as loader
+    from soup_cli.trainer.mlx_distill import MLXDistillTrainerWrapper
+
+    original = loader.load_mlx_model
+
+    def with_quantized_experts(path, **kwargs):
+        model, tokenizer = original(path, **kwargs)
+        if path == str(pair[1]):
+            model.experts = QuantizedSwitchLinear(32, 32, 2, group_size=32, bits=4)
+        return model, tokenizer
+
+    monkeypatch.setattr(loader, "load_mlx_model", with_quantized_experts)
+    trainer = MLXDistillTrainerWrapper(config(*pair, tmp_path / "out"))
+    with pytest.raises(ValueError, match="teacher artifact is actually quantized"):
+        trainer.setup(rows())
+    assert trainer.teacher is trainer.model is None
+
+
+def test_interruption_retains_prior_numbered_checkpoint_but_never_final_success(
+    pair, tmp_path, monkeypatch,
+):
+    from soup_cli.trainer.mlx_distill import MLXDistillTrainerWrapper
+
+    trainer = MLXDistillTrainerWrapper(config(*pair, tmp_path / "interrupted", save_steps=1))
+    trainer.setup(rows())
+    original = trainer._teacher_logits
+    calls = 0
+
+    def interrupt_after_update(tokens):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise KeyboardInterrupt
+        return original(tokens)
+
+    monkeypatch.setattr(trainer, "_teacher_logits", interrupt_after_update)
+    with pytest.raises(KeyboardInterrupt):
+        trainer.train()
+    output = tmp_path / "interrupted"
+    receipt = json.loads((output / "distillation_run.json").read_text())
+    assert receipt == {"status": "interrupted", "optimizer_updates": 1}
+    assert not (output / "adapters.safetensors").exists()
+    saved = output / "0000001_adapters.safetensors"
+    assert saved.exists()
+    restored = MLXDistillTrainerWrapper(config(*pair, tmp_path / "restored"))
+    restored.setup(rows())
+    restored._load_checkpoint_weights(str(saved))
+    assert all(mx.array_equal(value, mx.load(str(saved))[name]).item()
+               for name, value in tree_flatten(restored.model.trainable_parameters()))
+
+
+@pytest.mark.parametrize("previous", [False, True])
+def test_failed_final_publication_restores_previous_files_or_leaves_no_final_artifact(
+    pair, tmp_path, monkeypatch, previous,
+):
+    from pathlib import Path
+
+    from soup_cli.trainer.mlx_distill import MLXDistillTrainerWrapper
+
+    output = tmp_path / "out"
+    names = ("adapters.safetensors", "adapter_config.json", "distillation_metrics.json")
+    if previous:
+        earlier = MLXDistillTrainerWrapper(config(*pair, output, save_steps=0))
+        earlier.setup(rows())
+        earlier.train()
+    before = {name: (output / name).read_bytes() for name in names} if previous else {}
+    trainer = MLXDistillTrainerWrapper(config(*pair, output, save_steps=0, lr=0.01))
+    trainer.setup(rows())
+    replace = Path.replace
+
+    def fail_metrics_promotion(path, destination):
+        if path.name == ".distillation_metrics.tmp.json":
+            raise OSError("injected final metrics promotion failure")
+        return replace(path, destination)
+
+    monkeypatch.setattr(Path, "replace", fail_metrics_promotion)
+    with pytest.raises(OSError, match="injected final metrics"):
+        trainer.train()
+    for name in names:
+        if previous:
+            assert (output / name).read_bytes() == before[name]
+        else:
+            assert not (output / name).exists()
+    assert json.loads((output / "distillation_run.json").read_text())["status"] == "failed"
+
+
+def test_failed_checkpoint_write_does_not_destroy_previous_recoverable_checkpoint(
+    pair, tmp_path, monkeypatch,
+):
+    from pathlib import Path
+
+    from soup_cli.trainer.mlx_distill import MLXDistillTrainerWrapper
+
+    output = tmp_path / "out"
+    earlier = MLXDistillTrainerWrapper(config(*pair, output, save_steps=1))
+    earlier.setup(rows())
+    earlier.train()
+    checkpoint = output / "0000001_adapters.safetensors"
+    before = checkpoint.read_bytes()
+    trainer = MLXDistillTrainerWrapper(config(*pair, output, save_steps=1, lr=0.01))
+    trainer.setup(rows())
+
+    def partial_write(path, weights):
+        Path(path).write_bytes(b"partial write before injected I/O failure")
+        raise OSError("injected checkpoint write failure")
+
+    monkeypatch.setattr(mx, "save_safetensors", partial_write)
+    with pytest.raises(OSError, match="injected checkpoint write"):
+        trainer.train()
+    assert checkpoint.read_bytes() == before

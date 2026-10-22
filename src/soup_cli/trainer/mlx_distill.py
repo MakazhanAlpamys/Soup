@@ -30,6 +30,38 @@ from soup_cli.utils.mlx_distill import validate_native_distill
 console = Console()
 
 
+def _publish_final_files(staged, mark_complete):
+    """Roll back a failed multi-file replacement, retaining earlier adapters.
+
+    Each rename is atomic on the same filesystem. The run receipt remains
+    running until all files arrive; this is not a power-loss-atomic directory
+    transaction. If rollback itself fails, leave the backup directory intact.
+    """
+    import tempfile
+
+    backup_dir = Path(tempfile.mkdtemp(prefix=".distillation-backup-", dir=staged[0][1].parent))
+    backups, published = [], []
+    try:
+        for source, target in staged:
+            if target.exists():
+                backup = backup_dir / target.name
+                target.replace(backup)
+                backups.append((backup, target))
+            source.replace(target)
+            published.append(target)
+        mark_complete()
+    except BaseException:
+        for target in reversed(published):
+            target.unlink()
+        for backup, target in reversed(backups):
+            backup.replace(target)
+        backup_dir.rmdir()
+        raise
+    for backup, _ in backups:
+        backup.unlink()
+    backup_dir.rmdir()
+
+
 class MLXDistillTrainerWrapper(MLXSFTTrainerWrapper):
     """CLI trainer contract; teacher state never enters the optimizer or artifact."""
 
@@ -63,6 +95,7 @@ class MLXDistillTrainerWrapper(MLXSFTTrainerWrapper):
             )
             for name, model in (("student", self.model), ("teacher", self.teacher)):
                 if any(isinstance(module, (nn.QuantizedLinear, nn.QuantizedEmbedding))
+                       or (hasattr(module, "bits") and hasattr(module, "scales"))
                        for _, module in model.named_modules()):
                     raise ValueError(f"MLX distillation {name} artifact is actually quantized")
                 model.eval()
@@ -201,10 +234,21 @@ class MLXDistillTrainerWrapper(MLXSFTTrainerWrapper):
         loss_arguments = self._loss_arguments()
         # Whole-student activation recomputation preserves module/parameter names
         # and never mutates a shared layer class (which would affect the teacher).
-        forward = (
-            checkpoint(self.model, lambda tokens: self.model(mx.stop_gradient(tokens)))
-            if tcfg.gradient_checkpointing else self.model
-        )
+        forward = self.model
+        if tcfg.gradient_checkpointing:
+            def with_random_key(tokens, key):
+                # Recomputing a stochastic forward must reuse its original key,
+                # not draw fresh dropout masks or advance the next update's RNG.
+                mx.random.state[0][:] = mx.stop_gradient(key)
+                logits = self.model(mx.stop_gradient(tokens))
+                return logits, mx.random.state[0]
+
+            checkpointed = checkpoint(self.model, with_random_key)
+
+            def forward(tokens):
+                logits, next_key = checkpointed(tokens, mx.random.state[0])
+                mx.random.state[0][:] = next_key
+                return logits
 
         def loss(tokens, labels, active, teacher_logits):
             return token_loss_sums(
@@ -250,6 +294,9 @@ class MLXDistillTrainerWrapper(MLXSFTTrainerWrapper):
                                 **{("loss" if key == "loss_sum" else
                                     key.removesuffix("_sum") + "_loss"): value / count
                                    for key, value in sums.items()}})
+            if tracker is not None and run_id:
+                tracker.log_metrics(run_id=run_id, step=update, loss=None,
+                                    val_loss=evaluations[-1]["loss"])
             self.model.train()
 
         try:
@@ -262,6 +309,8 @@ class MLXDistillTrainerWrapper(MLXSFTTrainerWrapper):
             self.teacher.freeze()
             self.teacher.eval()
             self.model.train()
+            if display is not None:
+                display.start(total_updates)
             for epoch in range(tcfg.epochs):
                 order = rng.permutation(len(self._train_rows)).tolist()
                 for start in range(0, len(order), batch_size * accumulation):
@@ -319,8 +368,14 @@ class MLXDistillTrainerWrapper(MLXSFTTrainerWrapper):
                             val_loss=evaluations[-1]["loss"] if evaluations else None,
                         )
                     if tcfg.save_steps > 0 and update % tcfg.save_steps == 0:
-                        mx.save_safetensors(str(output / f"{update:07d}_adapters.safetensors"),
-                                            dict(tree_flatten(self.model.trainable_parameters())))
+                        checkpoint_temp = output / f".{update:07d}_adapters.tmp.safetensors"
+                        try:
+                            mx.save_safetensors(str(checkpoint_temp), dict(tree_flatten(
+                                self.model.trainable_parameters(),
+                            )))
+                            checkpoint_temp.replace(output / f"{update:07d}_adapters.safetensors")
+                        finally:
+                            checkpoint_temp.unlink(missing_ok=True)
             metadata = build_mlx_adapter_config(
                 tcfg.lora, adapter_path=str(output), model=cfg.base, task="distill",
                 num_layers=len(self.model.layers), teacher_model=tcfg.teacher_model,
@@ -351,10 +406,11 @@ class MLXDistillTrainerWrapper(MLXSFTTrainerWrapper):
             metrics_temp.write_text(json.dumps({
                 "training": history, "validation": evaluations,
             }, indent=2, allow_nan=False))
-            config_temp.replace(output / "adapter_config.json")
-            weights_temp.replace(output / "adapters.safetensors")
-            metrics_temp.replace(output / "distillation_metrics.json")
-            write_status("complete")
+            _publish_final_files([
+                (config_temp, output / "adapter_config.json"),
+                (weights_temp, output / "adapters.safetensors"),
+                (metrics_temp, output / "distillation_metrics.json"),
+            ], lambda: write_status("complete"))
         except BaseException as exc:
             write_status("interrupted" if isinstance(exc, KeyboardInterrupt) else "failed")
             raise
