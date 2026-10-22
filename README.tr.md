@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:4675902b8ea66e77e0822a60fdc9d3205a11eb02fb70cdf3b5670bd9ef1af391 -->
+<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -138,8 +138,6 @@ veriyor ve onları reddedecek sürümü belirtiyor. Daha önce yüklenen bir yap
   kod çözmede 2.9x daha hızlıydı). `soup ab`, iki yönlü, varyansa karşı dayanıklı bir test çalıştırır;
   `soup adapters sign --backend sigstore` ve `soup attest emit --sign sigstore` ise Sigstore anahtarsız
   OIDC ile imzalar (`pip install "soup-cli[sigstore]"`).
-- **Kullanımdan kaldırıldı:** `soup export --format awq` ve `--format gptq` v0.77'de kaldırılacak; her
-  iki üst proje de arşivlenmiş durumda ve ekstralardan hiçbiri `[train]` ile yan yana kurulamıyor.
 
 > v0.77'den itibaren yalnızca Python **3.11–3.13**. Python 3.10, 2026-10-01'de kullanım ömrünün
 > sonuna (end of life) ulaştı; 3.10 üzerinde pip v0.76'yı kurmaya devam eder. 3.14+ sürümlerinde
@@ -222,7 +220,7 @@ soup merge  --adapter ./output                              # LoRA'yı tabana bi
 soup export --model ./output --format gguf --quant q4_k_m   # Ollama / llama.cpp için GGUF
 ```
 
-Diğer dışa aktarma hedefleri (ONNX, TensorRT, AWQ, GPTQ, BitNet) ve dağıtım seçenekleri
+Diğer dışa aktarma hedefleri (ONNX, TensorRT, BitNet) ve dağıtım seçenekleri
 [`docs/serving-and-export.md`](docs/serving-and-export.md) içinde yer alır.
 
 ## Web Arayüzü

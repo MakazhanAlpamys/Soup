@@ -483,9 +483,10 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
     # -- objective hooks --------------------------------------------------
     #
     # The loop below is shared by every native preference objective on MLX
-    # (DPO here, ORPO in mlx_orpo.py). A subclass changes the tokenized
-    # example, the arrays a batch needs, what is prepared before the first
-    # update, the loss and its metrics -- nothing else.
+    # (DPO here, ORPO in mlx_orpo.py, SimPO in mlx_simpo.py). A subclass
+    # changes the tokenized example, the arrays a batch needs, what is
+    # prepared before the first update, the loss and its metrics -- nothing
+    # else.
 
     #: Name used in messages and the adapter metadata.
     objective = "DPO"

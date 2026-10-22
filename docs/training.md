@@ -1857,6 +1857,9 @@ as `0.0`. `soup train` stops before the first step, naming how many rows and
 which, with the `data.max_length` involved. Raise `data.max_length`, balance the
 pair, or drop the row.
 
+On Apple Silicon, `backend: mlx` runs SimPO natively with the same objective; see
+[SimPO on MLX](backends-and-ops.md#simpo-on-mlx).
+
 
 ## IPO Training (Regularized Preference)
 

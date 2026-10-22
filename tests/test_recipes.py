@@ -1829,6 +1829,7 @@ class TestV025NewRecipes:
         PR #1113 removes spark-tts -> 173.
         Issue #1145 removed 3 (mistral-large-3-sft, mistral-large-3-dpo, minimax-m3-dpo) -> 170.
         Issue #1867 retires the unsupported vision-preference recipe -> 169.
+        Task-variant for #275 added 1 (qwen3.5-4b-dpo) -> 170.
         """
         from soup_cli.recipes.catalog import RECIPES
         from tests.recipe_count import EXPECTED_RECIPE_COUNT, recipe_count_hint

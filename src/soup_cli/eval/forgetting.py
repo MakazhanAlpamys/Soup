@@ -219,11 +219,11 @@ MINI_MMLU: MiniBenchmark = [
      "answer": "C"},
     {"question": "Light travels faster than: (A) sound (B) nothing (C) radio waves",
      "answer": "A"},
-    {"question": "The square root of 81 is: (A) 8 (B) 9 (C) 18", "answer": "B"},
+    {"question": "The square root of 81 is: (A) 9 (B) 8 (C) 18", "answer": "A"},
     {"question": "Which gas do plants release during photosynthesis? "
                  "(A) oxygen (B) hydrogen (C) methane", "answer": "A"},
-    {"question": "The author of 'Romeo and Juliet' is: (A) Dickens (B) Shakespeare (C) Austen",
-     "answer": "B"},
+    {"question": "The author of 'Romeo and Juliet' is: (A) Dickens (B) Austen (C) Shakespeare",
+     "answer": "C"},
     {"question": "The freezing point of water in Fahrenheit is: (A) 0 (B) 32 (C) 100",
      "answer": "B"},
     {"question": "Which ocean is the largest? (A) Atlantic (B) Indian (C) Pacific",
@@ -244,6 +244,50 @@ MINI_MMLU: MiniBenchmark = [
     {"question": "The primary gas in Earth's atmosphere is: (A) oxygen (B) nitrogen (C) argon",
      "answer": "B"},
     {"question": "Sound cannot travel through a: (A) solid (B) liquid (C) vacuum", "answer": "C"},
+    # #1192 — the 26 rows above put a capable model at 1.000 (Qwen2.5-7B-Instruct,
+    # 26/26 in the #1111 tool-call discrimination record; Qwen2.5-1.5B-Instruct
+    # too). The rows below are 4-option, many with a common misconception as a
+    # distractor, selected from two 24-row candidate pools measured on two
+    # models. Two rows above had options swapped so no letter answers more
+    # than 30% of the suite.
+    {"question": "Which planet has the shortest day (fastest rotation)? (A) Mercury (B) Earth "
+                 "(C) Saturn (D) Jupiter",
+     "answer": "D"},
+    {"question": "The interior angles of a hexagon add up to: (A) 540 degrees (B) 900 degrees "
+                 "(C) 720 degrees (D) 1080 degrees",
+     "answer": "C"},
+    {"question": "Which country has the longest coastline? (A) Russia (B) Australia (C) Canada "
+                 "(D) Indonesia",
+     "answer": "C"},
+    {"question": "How many hearts does an octopus have? (A) 3 (B) 1 (C) 2 (D) 4",
+     "answer": "A"},
+    {"question": "Measured from base to peak, the tallest mountain on Earth is: (A) Mount "
+                 "Everest (B) Mauna Kea (C) K2 (D) Kilimanjaro",
+     "answer": "B"},
+    {"question": "In computing, a nibble is how many bits? (A) 4 (B) 2 (C) 8 (D) 16",
+     "answer": "A"},
+    {"question": "In which phase of mitosis do sister chromatids separate? (A) prophase (B) "
+                 "metaphase (C) telophase (D) anaphase",
+     "answer": "D"},
+    {"question": "Which planet has the highest average surface temperature? (A) Mercury (B) "
+                 "Venus (C) Mars (D) Jupiter",
+     "answer": "B"},
+    {"question": "Which element has the chemical symbol K? (A) krypton (B) calcium (C) "
+                 "phosphorus (D) potassium",
+     "answer": "D"},
+    {"question": "Which is the smallest of the world's five oceans? (A) the Southern (B) the "
+                 "Indian (C) the Atlantic (D) the Arctic",
+     "answer": "D"},
+    {"question": "The largest moon of Saturn is: (A) Ganymede (B) Europa (C) Titan (D) Callisto",
+     "answer": "C"},
+    {"question": "The hardest substance in the human body is: (A) tooth enamel (B) bone (C) "
+                 "cartilage (D) fingernail",
+     "answer": "A"},
+    {"question": "The Rock of Gibraltar is a territory of: (A) Spain (B) Morocco (C) Portugal "
+                 "(D) the United Kingdom",
+     "answer": "D"},
+    {"question": "The capital of Turkey is: (A) Istanbul (B) Izmir (C) Antalya (D) Ankara",
+     "answer": "D"},
 ]
 
 MINI_COMMON_SENSE: MiniBenchmark = [

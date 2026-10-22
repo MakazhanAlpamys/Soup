@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:4675902b8ea66e77e0822a60fdc9d3205a11eb02fb70cdf3b5670bd9ef1af391 -->
+<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <strong>中文</strong></p>
 
 <p align="center">
@@ -131,8 +131,6 @@ NF4 达到 **952 MHz 下 119.6 tok/s，峰值 3.32 GB**（修复前）——与�
   `soup ab` 运行双侧、对方差稳健的检验，`soup adapters sign --backend sigstore` 和
   `soup attest emit --sign sigstore` 使用 Sigstore 免密钥 OIDC 签名
   （`pip install "soup-cli[sigstore]"`）。
-- **已弃用：** `soup export --format awq` 和 `--format gptq` 将在 v0.77 移除；这两个上游项目都已归档，
-  两个 extra 也都无法与 `[train]` 一起安装。
 
 > 仅支持 Python **3.11–3.13**。在 3.14+ 上，pip 过去会解析到未测试过的 PyTorch
 > wheel，在 Soup 运行之前就崩在原生扩展里。
@@ -212,7 +210,7 @@ soup merge  --adapter ./output                              # 把 LoRA 合进基
 soup export --model ./output --format gguf --quant q4_k_m   # 导出 GGUF 给 Ollama / llama.cpp
 ```
 
-更多导出目标（ONNX、TensorRT、AWQ、GPTQ、BitNet）和部署选项在
+更多导出目标（ONNX、TensorRT、BitNet）和部署选项在
 [`docs/serving-and-export.md`](docs/serving-and-export.md)。
 
 ## Web UI

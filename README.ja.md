@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:4675902b8ea66e77e0822a60fdc9d3205a11eb02fb70cdf3b5670bd9ef1af391 -->
+<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -135,8 +135,6 @@ LLM の学習は、今でも骨の折れる作業です。経験豊富なチー�
   使わなかった最も速い実行より 2.9x 速くデコードできました）。`soup ab` は、分散に頑健な両側検定を実行します。
   `soup adapters sign --backend sigstore` と `soup attest emit --sign sigstore` は、Sigstore のキーレス OIDC で
   署名します（`pip install "soup-cli[sigstore]"`）。
-- **非推奨:** `soup export --format awq` と `--format gptq` は v0.77 で削除されます。どちらの
-  上流プロジェクトもアーカイブ済みで、どちらの extra も `[train]` と一緒にはインストールできません。
 
 > Python は **3.11–3.13** のみ対応です。3.14 以降では、pip がテストされていない PyTorch の wheel を解決し、
 > Soup が動き出す前にネイティブ拡張の中でクラッシュしていました。
@@ -217,7 +215,7 @@ soup merge  --adapter ./output                              # LoRA をベース�
 soup export --model ./output --format gguf --quant q4_k_m   # Ollama / llama.cpp 向けの GGUF
 ```
 
-その他のエクスポート先（ONNX、TensorRT、AWQ、GPTQ、BitNet）とデプロイのオプションは、
+その他のエクスポート先（ONNX、TensorRT、BitNet）とデプロイのオプションは、
 [`docs/serving-and-export.md`](docs/serving-and-export.md) にあります。
 
 ## Web UI

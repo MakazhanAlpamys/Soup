@@ -2,7 +2,7 @@
 
 [← Back to the Soup README](../README.md)
 
-> The OpenAI-compatible inference server, batch inference, benchmarking, merge/export (GGUF/ONNX/TensorRT/AWQ/GPTQ), the Anthropic Messages endpoint, speculative decoding, deploy autopilot, the Web UI, and Agent Forge.
+> The OpenAI-compatible inference server, batch inference, benchmarking, merge/export (GGUF/ONNX/TensorRT/BitNet/TorchAO), the Anthropic Messages endpoint, speculative decoding, deploy autopilot, the Web UI, and Agent Forge.
 
 **Contents:**
 
@@ -247,8 +247,8 @@ Auto-detected chat templates: `chatml`, `llama`, `mistral`, `vicuna`, `zephyr` (
 
 `soup export` integrates with Soup's local artifact registry and deployment workflows:
 
-- **Deploying on export (`--deploy`)**: `--deploy ollama` is supported for GGUF-family formats (`gguf`, `gguf-ud`, `bitnet`, `tq1_0`). For non-GGUF formats (`onnx`, `tensorrt`, `awq`, `gptq`, `torchao`), `--deploy` fails fast with an informative error because Ollama cannot load non-GGUF weight files. Use `--deploy-name` to assign a custom model name in Ollama.
-- **Registering exports (`--registry-id`)**: Pass `--registry-id <id>` to record and attach exported artifacts to a local registry entry across all export formats (`gguf`, `gguf-ud`, `bitnet`, `tq1_0`, `onnx`, `tensorrt`, `awq`, `gptq`, `torchao`). When an export produces a directory (such as multi-shard safetensors, ONNX data, or TensorRT engine files in `<output>/engine/*.engine`), all produced weight and engine files are discovered and attached to the registry entry.
+- **Deploying on export (`--deploy`)**: `--deploy ollama` is supported for GGUF-family formats (`gguf`, `gguf-ud`, `bitnet`, `tq1_0`). For non-GGUF formats (`onnx`, `tensorrt`, `torchao`), `--deploy` fails fast with an informative error because Ollama cannot load non-GGUF weight files. Use `--deploy-name` to assign a custom model name in Ollama.
+- **Registering exports (`--registry-id`)**: Pass `--registry-id <id>` to record and attach exported artifacts to a local registry entry across all export formats (`gguf`, `gguf-ud`, `bitnet`, `tq1_0`, `onnx`, `tensorrt`, `torchao`). When an export produces a directory (such as multi-shard safetensors, ONNX data, or TensorRT engine files in `<output>/engine/*.engine`), all produced weight and engine files are discovered and attached to the registry entry.
 
 
 ## Batch Inference
@@ -748,7 +748,7 @@ still records the URL it was given.
 
 **Pages:**
 - **Dashboard** — view all experiment runs, loss charts, system info, multi-run comparison
-- **New Training** — create configs from templates or 169 ready-made recipes, validate, start training with live SSE log streaming and progress bar
+- **New Training** — create configs from templates or 170 ready-made recipes, validate, start training with live SSE log streaming and progress bar
 - **Data Explorer** — browse and inspect datasets (JSONL, JSON, CSV, Parquet)
 - **Model Chat** — chat with streaming responses, configurable temperature/top_p/max_tokens, system prompt, adapter selection, markdown rendering, chat export
 
@@ -757,7 +757,7 @@ still records the URL it was given.
 - **Enhanced Metrics** — 2x2 chart grid (loss, LR, grad_norm, throughput) + GPU memory chart, eval results table
 - **Multi-Run Compare** — overlay loss curves from up to 5 runs side-by-side
 - **Chat Upgrade** — SSE streaming via proxy, typing indicator, cancel button, markdown renderer (bold, italic, code blocks), chat export as JSON
-- **Config Builder** — recipe dropdown (169 recipes), config schema API for dynamic form generation
+- **Config Builder** — recipe dropdown (170 recipes), config schema API for dynamic form generation
 
 Gradient norm is nullable: backends or steps that do not report it store and
 stream `null`, and the Web UI chart leaves a gap instead of drawing a false
@@ -814,7 +814,7 @@ soup quantize ./out --to gguf --bits 4
 soup quantize ./out --to onnx -o ./out-onnx
 ```
 
-Prints the equivalent `soup export …` invocation (escaped via `shlex.quote`) for copy-paste. Intentionally does NOT in-process call `soup export` — Typer commands aren't safe to re-enter. `--to awq` and `--to gptq` still print their command, followed by a notice that the two formats are deprecated and will be removed in Soup v0.77.
+Prints the equivalent `soup export …` invocation (escaped via `shlex.quote`) for copy-paste. Intentionally does NOT in-process call `soup export` — Typer commands aren't safe to re-enter.
 
 
 ## Llama.cpp Proxy

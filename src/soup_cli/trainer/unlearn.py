@@ -451,7 +451,11 @@ class UnlearnTrainerWrapper:
         retain_ce = self._retain_ce(tokenize_pair, dev)
 
         beta = _DEFAULT_BETA
-        alpha = float(self.config.training.unlearn_alpha or 1.0)
+        alpha = (
+            1.0
+            if self.config.training.unlearn_alpha is None
+            else float(self.config.training.unlearn_alpha)
+        )
         out = self.model(input_ids=input_ids)
         policy_logps = sequence_logprob(out.logits, labels)
         if method == "npo":
@@ -552,7 +556,11 @@ class UnlearnTrainerWrapper:
         if retain_acts is None or retain_frozen is None:
             # No retain set: pure forget steering.
             return torch.mean((forget_acts - control_vec) ** 2)
-        alpha = float(self.config.training.unlearn_alpha or 1.0)
+        alpha = (
+            1.0
+            if self.config.training.unlearn_alpha is None
+            else float(self.config.training.unlearn_alpha)
+        )
         return rmu_loss(
             forget_acts, control_vec, retain_acts, retain_frozen, alpha=alpha,
         )

@@ -42,6 +42,8 @@ jobs:
           python-version: "3.12"
 
       - name: Install the latest resolvable stack
+        # PyPI only, on purpose (2026-10-21): ci.yml's Linux jobs install the CPU torch wheel,
+        # and this weekly job is the one that resolves what a Linux user gets from PyPI.
         run: pip install -e ".[dev,audio]"
 
       - name: Report resolved versions against the declared bounds

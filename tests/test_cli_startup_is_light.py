@@ -159,6 +159,7 @@ def test_every_command_module_is_imported_at_startup():
 # module lazily at call time -- which the startup assertion cannot see.
 LIGHT_INVOCATIONS = [
     ["version"],
+    ["--version"],
     ["--help"],
     ["recipes", "list"],
     ["recipes", "search", "llama"],
