@@ -527,6 +527,7 @@ class TestTraining:
         assert result["val_reward_accuracy"] == pytest.approx(1.0)
         assert result["val_reward_margin"] > 0
         assert math.isfinite(result["val_nll_loss"])
+        assert math.isfinite(result["val_preference_loss"])
         assert result["skipped_identical_pairs"] == 0
         meta = json.loads((tmp_path / "output" / "adapter_config.json").read_text())
         assert meta["task"] == "simpo" and meta["fine_tune_type"] == "lora"

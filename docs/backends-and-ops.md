@@ -278,11 +278,14 @@ That shows the objective moving, not alignment quality.
 - **Stops on a nonfinite loss** instead of training on NaN.
 - **LoRA dropout applies**, as in MLX DPO above; set `lora.dropout: 0` to
   match TRL's `disable_dropout`.
-- **Reported:** loss, NLL, chosen and rejected rewards (`0.1 * logp`, as TRL
-  logs them), reward accuracy and margin, and the mean chosen and rejected
-  log-probabilities, per logged step and in the run result (`val_*` for the
-  validation split). TRL's mean-logit metrics are not computed: the vocabulary
-  head runs in chunks and the full logits are never held.
+- **Reported:** the panel and `soup ui` show loss and validation loss. Without a
+  live panel each logged step prints loss, NLL, reward accuracy and margin. The
+  run result has, for the validation split, `val_preference_loss` (the SimPO
+  term without the NLL, which is not on the per-step line), `val_nll_loss`, the
+  chosen and rejected rewards (`0.1 * logp`, as TRL logs them), reward accuracy
+  and margin, and the mean chosen and rejected log-probabilities. TRL's
+  mean-logit metrics are not computed: the vocabulary head runs in chunks and
+  the full logits are never held.
 - **Saved:** `adapters.safetensors` and `adapter_config.json` (with `task:
   simpo`, `simpo_beta`, `simpo_gamma`, `cpo_alpha` and the base model),
   loadable with `mlx_lm.load(base, adapter_path=output)`, written as MLX ORPO

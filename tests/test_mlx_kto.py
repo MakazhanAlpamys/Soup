@@ -776,6 +776,43 @@ class TestBatching:
         assert wrapper._resolve_batch_size() == expected
 
 
+class TestClassMeans:
+    """The reported ``val_rewards_*`` / ``val_logps_*`` from the per-row sums (no MLX)."""
+
+    def test_each_class_mean_is_its_per_row_sum_over_its_share(self):
+        from soup_cli.trainer.mlx_kto import class_means
+
+        metrics = {
+            "val_chosen_share": 0.25,
+            "val_chosen_rewards_per_row": 0.5,
+            "val_rejected_rewards_per_row": -0.6,
+            "val_chosen_logps_per_row": -1.0,
+            "val_rejected_logps_per_row": -6.0,
+        }
+        assert class_means(metrics, prefix="val_") == {
+            "val_rewards_chosen": pytest.approx(2.0),
+            "val_rewards_rejected": pytest.approx(-0.8),
+            "val_logps_chosen": pytest.approx(-4.0),
+            "val_logps_rejected": pytest.approx(-8.0),
+            "val_rewards_margins": pytest.approx(2.8),
+        }
+
+    def test_a_split_with_one_label_reports_that_label_only(self):
+        from soup_cli.trainer.mlx_kto import class_means
+
+        metrics = {
+            "chosen_share": 0.0,
+            "chosen_rewards_per_row": 0.0,
+            "rejected_rewards_per_row": -0.6,
+            "chosen_logps_per_row": 0.0,
+            "rejected_logps_per_row": -6.0,
+        }
+        assert class_means(metrics) == {
+            "rewards_rejected": pytest.approx(-0.6),
+            "logps_rejected": pytest.approx(-6.0),
+        }
+
+
 # --------------------------------------------------------------------------
 # Training on a tiny random Llama
 # --------------------------------------------------------------------------
