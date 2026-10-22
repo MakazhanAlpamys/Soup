@@ -48,4 +48,3 @@ def validate_native_distill(config) -> None:
         lr=tcfg.lr, optimizer=tcfg.optimizer, scheduler=tcfg.scheduler,
         warmup_ratio=tcfg.warmup_ratio, weight_decay=tcfg.weight_decay, total_updates=1,
     )
-
