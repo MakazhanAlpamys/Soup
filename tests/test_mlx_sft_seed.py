@@ -137,30 +137,6 @@ class TestTheSeedReachesTraining:
         assert a["lora_a"] != b["lora_a"]
 
 
-class TestTheSeedIsNoLongerAnnouncedAsIgnored:
-    @pytest.mark.parametrize("field", ["seed", "data_seed"])
-    def test_no_ignored_warning(self, monkeypatch, field):
-        from io import StringIO
-
-        from rich.console import Console
-
-        from soup_cli.config.schema import DataConfig, SoupConfig, TrainingConfig
-        from soup_cli.trainer import mlx_sft
-
-        buffer = StringIO()
-        monkeypatch.setattr(mlx_sft, "console", Console(file=buffer, width=200))
-        cfg = SoupConfig(
-            base="mlx-community/tiny",
-            task="sft",
-            backend="mlx",
-            data=DataConfig(train="./d.jsonl", format="chatml"),
-            training=TrainingConfig(**{field: 11}),
-            output="./out",
-        )
-        mlx_sft.MLXSFTTrainerWrapper(cfg)._check_unsupported()
-        assert f"training.{field}" not in buffer.getvalue()
-
-
 # --------------------------------------------------------------------------
 # End to end: mlx-lm's real train() loop, nothing replaced
 # --------------------------------------------------------------------------

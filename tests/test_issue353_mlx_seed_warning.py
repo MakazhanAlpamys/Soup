@@ -5,7 +5,9 @@ is set on a task that ignores it". MLX SFT read neither ``training.seed`` nor
 ``training.data_seed``, so it warned. #1850 seeds it for real (``mx.random``
 before the adapter is built, numpy's global RNG before mlx-lm's ``train()``
 shuffles), and that test said to remove the warning in the same commit. The
-behaviour is pinned in tests/test_mlx_sft_seed.py. What stays here are the
+behaviour is pinned in tests/test_mlx_sft_seed.py (real mlx) and
+tests/test_mlx_sft_seed_wiring.py (everywhere). What stays here needs no mlx:
+a set seed / data_seed is no longer announced as ignored, and the
 controls: the unsupported-feature list still fires, and says nothing about
 seeds.
 """
@@ -44,6 +46,13 @@ def _warnings_for(monkeypatch, **training):
 
 
 class TestTheSeedIsNotAnnouncedAsIgnored:
+    @pytest.mark.parametrize("field", ["seed", "data_seed"])
+    def test_no_ignored_warning(self, monkeypatch, field):
+        """MLX SFT honours both fields since #1850, so a run that sets one must
+        not be told it is ignored."""
+        out = _warnings_for(monkeypatch, **{field: 11})
+        assert f"training.{field}" not in out
+
     def test_control_an_unseeded_run_says_nothing_about_seeds(self, monkeypatch):
         """CONTROL. A warning that fires on every MLX run is noise, and noise is
         how the next real one gets ignored."""
