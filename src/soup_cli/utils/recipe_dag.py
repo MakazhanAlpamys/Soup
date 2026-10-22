@@ -189,8 +189,10 @@ def parse_recipe_yaml(text: str) -> RecipeDAG:
         raise ValueError(f"recipe text exceeds {_MAX_FILE_BYTES} bytes")
     import yaml  # lazy import — keep CLI startup fast
 
+    from soup_cli.utils.yaml_limits import load_yaml_limited
+
     try:
-        data = yaml.safe_load(text)
+        data = load_yaml_limited(text, "recipe text", max_bytes=_MAX_FILE_BYTES)
     except yaml.YAMLError as exc:
         raise ValueError(f"invalid YAML: {exc}") from exc
     return parse_recipe(data)

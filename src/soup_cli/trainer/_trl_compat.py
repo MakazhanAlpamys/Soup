@@ -235,3 +235,137 @@ def enforce_preference_sequence_limit(
         "TRL prepared a preference dataset with an unknown token layout; "
         f"cannot enforce max_length={max_length}. Columns: {sorted(columns)}"
     )
+
+
+def preference_rows_with_empty_completion(dataset: Any) -> list[int]:
+    """Row indices that would train on zero completion tokens (#1208).
+
+    trl 0.29's CPO truncation (the SimPO path) slices each answer to
+    ``answer[: max_length - longer_response_length]`` — identical in 0.29.0 and
+    0.29.1 — where ``longer_response_length`` is the *longer* of the two
+    answers. A long ``chosen`` against a short ``rejected`` therefore leaves the
+    short answer with zero tokens, and SimPO's length-normalised
+    log-probability becomes 0/0: every LoRA tensor goes NaN while
+    transformers' ``logging_nan_inf_filter`` reports the loss as 0.0.
+
+    ``CPOTrainer`` tokenises and truncates in ``__init__``, so the dataset handed
+    to a trainer has already been cut: the longer side is exactly
+    ``max_length`` trainable tokens and ``max_length - longer`` is 0. Re-applying
+    that arithmetic here flagged every truncated row, including pairs that train
+    fine (#1208 review, measured: a 64/14 pair refused). The truncation is
+    therefore not re-computed; the question is simply whether one side has no
+    trainable label left, which is what a zero-token completion looks like after
+    the fact.
+
+    Returns the affected row indices; the caller decides between refusing and
+    repairing. An unrecognised layout returns ``[]`` rather than a guess.
+    """
+    columns = set(getattr(dataset, "column_names", ()))
+    if not {"chosen_labels", "rejected_labels"} <= columns:
+        # SimPO only builds a CPOTrainer, whose prepared rows carry these
+        # columns. The DPO ``chosen_ids`` / ``rejected_ids`` shape is that
+        # trainer's collator input, never what a PPO-path dataset looks like.
+        return []
+
+    def completion_len(labels: list[int]) -> int:
+        """Trainable tokens: everything that is not the ``-100`` prompt span."""
+        return sum(1 for label in labels if label != -100)
+
+    return [
+        index
+        for index, row in enumerate(dataset)
+        if min(
+            completion_len(list(row["chosen_labels"])),
+            completion_len(list(row["rejected_labels"])),
+        ) == 0
+    ]
+
+
+def _sharded_at_load(trainer: Any) -> bool:
+    """``Trainer.__init__``'s own expression, asked of the trainer's model."""
+    return getattr(
+        getattr(trainer, "model", None), "is_distributed_loading_by_transformers", False
+    )
+
+
+def _false(trainer: Any) -> bool:
+    return False
+
+
+def _none(trainer: Any) -> None:
+    return None
+
+
+# Attributes ``transformers.Trainer.__init__`` assigns that another ``Trainer``
+# method reads on a path trl's experimental ``PPOTrainer`` reaches. Each maps to a
+# function of the trainer that returns what ``Trainer.__init__`` would have
+# assigned on a single-process run:
+#
+# - ``is_distributed_loading_by_transformers`` — new in transformers 5.19.0, where
+#   ``__init__`` takes it from the model (``False`` unless the model was loaded with
+#   a ``distributed_config``) and ``save_model`` reads it on every ordinary save.
+#   This is the one that broke ``task: ppo`` (#1675).
+# - ``is_fsdp_xla_v1_enabled`` — read by ``save_model`` and
+#   ``_save_optimizer_and_scheduler`` wherever ``torch_xla`` is importable; falsy
+#   without FSDP.
+# - ``hp_name`` — read by ``_get_output_dir`` for a hyperparameter-search trial;
+#   ``None`` until ``hyperparameter_search`` names one.
+_TRAINER_INIT_DEFAULTS: dict[str, Any] = {
+    "is_distributed_loading_by_transformers": _sharded_at_load,
+    "is_fsdp_xla_v1_enabled": _false,
+    "hp_name": _none,
+}
+
+
+def _attrs_trainer_init_assigns() -> set[str]:
+    """Attribute names the installed ``transformers.Trainer.__init__`` stores.
+
+    Read from the bytecode of the function that would have run, through any
+    decorator that wraps it, so the answer is about this install and needs no
+    version table.
+    """
+    import dis
+
+    from transformers import Trainer
+
+    names: set[str] = set()
+    func: Any = Trainer.__init__
+    while func is not None:
+        names.update(
+            ins.argval for ins in dis.get_instructions(func) if ins.opname == "STORE_ATTR"
+        )
+        func = getattr(func, "__wrapped__", None)
+    return names
+
+
+def ensure_trainer_init_attrs(trainer: Any) -> list[str]:
+    """Give a trainer that skipped ``Trainer.__init__`` the attributes it lacks.
+
+    trl's experimental ``PPOTrainer`` subclasses ``transformers.Trainer`` but has
+    an ``__init__`` of its own that never calls ``Trainer.__init__``, and it still
+    borrows ``Trainer`` methods (``save_model``, ``_save_checkpoint``). Any
+    attribute ``Trainer.__init__`` assigns and those methods read is then missing,
+    and the first read raises ``AttributeError`` — which is how transformers
+    5.19.0 stopped every PPO run at its first checkpoint (#1675).
+
+    A capability probe on both sides, not a version comparison: a value from
+    ``_TRAINER_INIT_DEFAULTS`` is set only when the installed ``Trainer.__init__``
+    assigns that attribute AND this object does not have it. So a trainer that did
+    run ``Trainer.__init__`` is left exactly as it was, a value trl or the caller
+    already set is never replaced, and an older transformers that never had the
+    attribute gains nothing. An object that is not a ``transformers.Trainer`` at
+    all is returned untouched.
+
+    Returns the names it added, in ``_TRAINER_INIT_DEFAULTS`` order.
+    """
+    from transformers import Trainer
+
+    if not isinstance(trainer, Trainer):
+        return []
+    assigned = _attrs_trainer_init_assigns()
+    added = []
+    for name, default_for in _TRAINER_INIT_DEFAULTS.items():
+        if name in assigned and not hasattr(trainer, name):
+            setattr(trainer, name, default_for(trainer))
+            added.append(name)
+    return added

@@ -668,7 +668,9 @@ def render_ship_panel(verdict: ShipVerdict) -> Panel:
     else:
         table.add_row("[dim](none measured)[/]", "-", "-", "-", "[red]missing[/]")
 
-    footer = f"[dim]{escape(_failed_rule_explanation(verdict))}[/]"
+    # The explanation names regressed benchmarks, which come from evidence
+    # files: strip control characters as well as escaping markup.
+    footer = f"[dim]{escape(for_terminal(_failed_rule_explanation(verdict)))}[/]"
     parts = [header, "", table, ""]
     if verdict.noise_floor is not None:
         parts.extend([

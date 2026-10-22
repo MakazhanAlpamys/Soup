@@ -1,6 +1,6 @@
 """v0.53.0 Part F + v0.53.1 #142 — Advanced save / merge formats.
 
-Two new save-format surfaces ship this release (schema-only):
+Two save-format surfaces:
 
 * ``soup merge --save-format <fmt>`` where fmt ∈ {fp16, 4bit, 4bit_forced}.
   ``4bit`` writes a single BNB-4bit-quantized merged checkpoint without
@@ -11,7 +11,8 @@ Two new save-format surfaces ship this release (schema-only):
   ``Int4WeightOnly`` / ``Int8DynActInt4`` / ``Float8DynActFloat8`` /
   ``NVFP4`` PTQ schemes (unsloth + axolotl parity).
 
-Live wiring deferred to v0.53.1.
+Both are live: ``soup merge`` calls :func:`merge_4bit` and ``soup export --format
+torchao`` calls :func:`export_torchao`.
 """
 
 from __future__ import annotations
@@ -191,7 +192,9 @@ def validate_quant_config_path(path: object) -> str:
     * ``os.path.realpath`` + ``os.path.commonpath`` cwd containment
     * ``os.lstat`` + ``stat.S_ISLNK`` rejection before any ``open()``
     * existence + extension check (``.yaml`` / ``.yml``)
-    * ``yaml.safe_load`` only.
+    * read through ``utils.yaml_limits.load_yaml_file_limited`` (``yaml.safe_load``
+      under the shared size, nesting and expansion limits), never a bare
+      ``yaml.safe_load``.
     """
     if isinstance(path, bool):
         raise TypeError(f"quant_config must not be bool, got {path!r}")
@@ -232,10 +235,12 @@ def load_quant_config(path: object) -> Mapping[str, Any]:
     * ``os.path.realpath`` + ``os.path.commonpath`` cwd containment
     * ``os.lstat + stat.S_ISLNK`` rejection (TOCTOU)
     * Extension allowlist (``.yaml`` / ``.yml``)
-    * ``yaml.safe_load`` only
+    * Read through ``utils.yaml_limits.load_yaml_file_limited`` (``yaml.safe_load``
+      under the shared nesting and expansion limits; the size cap below is its
+      ``max_bytes``)
     * 256 KB size cap
     """
-    import yaml
+    from soup_cli.utils.yaml_limits import load_yaml_file_limited
 
     validated_shape = validate_quant_config_path(path)
     _enforce_under_cwd_and_no_symlink(validated_shape, "quant_config")
@@ -255,8 +260,9 @@ def load_quant_config(path: object) -> Mapping[str, Any]:
             f"quant_config too large ({size} bytes; "
             f"cap {_MAX_QUANT_CONFIG_BYTES})"
         )
-    with open(validated_shape, encoding="utf-8") as fh:
-        data = yaml.safe_load(fh)
+    data = load_yaml_file_limited(
+        validated_shape, "quant_config", max_bytes=_MAX_QUANT_CONFIG_BYTES
+    )
     if data is None:
         return {}
     if not isinstance(data, dict):
@@ -283,10 +289,11 @@ def _build_merge_4bit_bnb_kwargs(
     }
     if forced:
         # ``forced`` => no skip-modules, so every Linear (incl. lm_head) is
-        # 4-bit quantized. BNB 4-bit uses ``bnb_4bit_skip_modules`` (the
-        # legacy 8-bit name was ``llm_int8_skip_modules`` — only emit it
-        # when the installed BNB exposes the 8-bit kwarg as a fallback).
-        bnb_kwargs["bnb_4bit_skip_modules"] = []
+        # 4-bit quantized. Transformers' BitsAndBytesConfig reads
+        # ``llm_int8_skip_modules`` for linear layer skipping across both
+        # 4-bit and 8-bit quantization. Passing an empty list ensures no
+        # module (including lm_head) is skipped.
+        bnb_kwargs["llm_int8_skip_modules"] = []
     return bnb_kwargs
 
 
@@ -303,11 +310,11 @@ def merge_4bit(
 
     Unsloth ``merged_4bit`` / ``4bit_forced`` recipe — no
     dequant → merge → requant cycle. ``forced=True`` quantizes ALL linear
-    layers including embeddings; default ``False`` follows BNB's default
-    skip-modules behaviour. ``double_quant`` mirrors
-    ``training.bnb_4bit_use_double_quant`` (#321) so the save path agrees with
-    the resident and streamed loaders; it defaults True to match shipped
-    behaviour.
+    layers (including ``lm_head``; embeddings are not quantized); default
+    ``False`` follows BNB's default skip-modules behaviour. ``double_quant``
+    mirrors ``training.bnb_4bit_use_double_quant`` (#321) so the save path
+    agrees with the resident and streamed loaders; it defaults True to match
+    shipped behaviour.
     """
     if not isinstance(forced, bool):
         raise TypeError(f"forced must be bool, got {type(forced).__name__}")
@@ -332,10 +339,22 @@ def merge_4bit(
 
     import torch
     from transformers import (  # type: ignore[import-not-found]
+        AutoConfig,
         AutoModelForCausalLM,
         AutoTokenizer,
         BitsAndBytesConfig,
     )
+
+    if forced:
+        cfg = AutoConfig.from_pretrained(
+            merged_dir, trust_remote_code=trust_remote_code
+        )
+        if getattr(cfg, "tie_word_embeddings", False):
+            raise ValueError(
+                "4bit_forced cannot quantize models with tie_word_embeddings=True: "
+                "a tied lm_head shares embedding weights which 4-bit Linear cannot hold; "
+                "use --save-format 4bit instead."
+            )
 
     dtype_map = {
         "float16": torch.float16,

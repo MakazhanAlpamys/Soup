@@ -24,6 +24,7 @@ from soup_cli.autopilot.decisions import (
     detect_prequantized_format_from_path,
 )
 from soup_cli.config.schema import (
+    AMP_APPLYING_TASKS,
     SFT_KERNEL_AWARE_TASKS,
     DataConfig,
     LoraConfig,
@@ -175,7 +176,13 @@ def generate_config(
         ),
         "gradient_checkpointing": perf.get("gradient_checkpointing", False),
         "warmup_auto": bool(decisions.get("warmup_auto", False)),
-        "auto_mixed_precision": bool(decisions.get("mixed_precision") is not None),
+        # #1618: only the SFT trainer reads auto_mixed_precision, so scope it
+        # like the two kernel flags above — otherwise a DPO/PPO config the
+        # flat generator writes would be refused at load.
+        "auto_mixed_precision": (
+            bool(decisions.get("mixed_precision") is not None)
+            and decisions["task"] in AMP_APPLYING_TASKS
+        ),
     }
     cfg = SoupConfig(
         base=base,

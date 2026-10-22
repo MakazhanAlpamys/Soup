@@ -25,11 +25,11 @@ from soup_cli.utils.fast_lora import (
     _flatten,
     _is_supported_lora_projection,
     _projection_state,
+    _release_single_projection,
     _scaled_lora_add,
 )
 
 _PATCH_MARKER = "_soup_fast_lora_qkv"
-_SINGLE_PROJECTION_PATCH_MARKER = "_soup_fast_lora_single_projection"
 _CACHE_MARKER = "_soup_fast_lora_qkv_cache"
 _CACHE_HIT_MARKER = "_soup_fast_lora_qkv_last_cache_hits"
 _RESTORE_MARKER = "_soup_fast_lora_qkv_restore"
@@ -310,11 +310,8 @@ def patch_fast_lora_qkv(model: Any) -> int:
             for proj in projections
         ):
             continue
-        if any(
-            getattr(proj, _SINGLE_PROJECTION_PATCH_MARKER, False)
-            for proj in projections
-        ):
-            continue
+        for proj in projections:
+            _release_single_projection(proj)
         _install_attention_patch(module)
         count += 1
     return count

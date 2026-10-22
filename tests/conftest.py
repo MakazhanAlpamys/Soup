@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from tests import _source_scan
+
 #: The skip message for a ``gpu``-marked test on a machine without CUDA (#833).
 GPU_SKIP_REASON = "needs a CUDA device (run the GPU subset with: pytest -m gpu --no-cov)"
 
@@ -167,6 +169,34 @@ def _isolate_experiments_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     provides a clean, isolated default.
     """
     monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "experiments.db"))
+
+
+@pytest.fixture(autouse=True)
+def _restore_working_directory():
+    """Put the working directory back after every test.
+
+    Some tests call ``os.chdir(tmp_path)`` and never return, and others open
+    ``src/soup_cli/...`` by a path relative to the repository root. In file
+    order the first kind happens to run after the second, so nothing fails.
+    A pytest-xdist worker can run them the other way round, and the relative
+    opens then raise ``FileNotFoundError``.
+    """
+    before = os.getcwd()
+    yield
+    os.chdir(before)
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _release_scanned_sources():
+    """Drop what a source-scanning guard parsed once its module is done.
+
+    ``tests/_source_scan.py`` lets a guard keep the parsed trees of the files it walked,
+    so that the module's next test does not parse them again. Every tree of
+    ``src/soup_cli`` is 283 MB of private bytes, and while they are alive every
+    ``gc.collect()`` in the worker walks them, so they go when the module goes.
+    """
+    yield
+    _source_scan.release()
 
 
 @pytest.fixture

@@ -289,6 +289,17 @@ def sweep(
     if skipped:
         console.print(f"\n[yellow]Early stopping: {skipped} run(s) skipped.[/]")
 
+    # #1808: a sweep in which no arm completed used to return normally, so a
+    # script chaining on the exit code read a table of "failed" rows as success.
+    # One completed arm is still a sweep; none is a failure, named as such.
+    completed_count = sum(1 for r in results if r["status"] == "completed")
+    if results and completed_count == 0:
+        console.print(
+            f"\n[red]No sweep run completed: {len(results)} of {len(results)} "
+            f"run(s) failed.[/] The first error is printed above each run."
+        )
+        raise typer.Exit(1)
+
 
 def _parse_sweep_params(params: list[str]) -> dict[str, list]:
     """Parse sweep parameter strings into a dict of {key: [values]}."""
@@ -475,17 +486,22 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
     _reject_unknown_sweep_params(config_dict)
 
     from soup_cli.config.schema import SoupConfig
-    from soup_cli.data.loader import load_dataset
+    from soup_cli.data.loader import (
+        data_config_for_task,
+        load_dataset,
+        task_preserves_source_columns,
+    )
     from soup_cli.experiment.tracker import ExperimentTracker
     from soup_cli.monitoring.display import TrainingDisplay
     from soup_cli.trainer.dispatch import build_trainer
     from soup_cli.utils.eval_schedule import loader_data_config, validation_notice
-    from soup_cli.utils.gpu import detect_device, get_gpu_info
+    from soup_cli.utils.gpu import configure_mps_async_load, detect_device, get_gpu_info
 
     cfg = SoupConfig(**config_dict)
 
     # Detect hardware
     device, device_name = detect_device()
+    configure_mps_async_load(device)
     gpu_info = get_gpu_info()
 
     # Load data -- the same split `soup train` would use (#1223).
@@ -493,8 +509,8 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
     if val_notice:
         console.print(f"[yellow]Note:[/] {val_notice}")
     dataset = load_dataset(
-        loader_data_config(cfg),
-        preserve_source_columns=cfg.task == "grpo",
+        data_config_for_task(loader_data_config(cfg), cfg.task),
+        preserve_source_columns=task_preserves_source_columns(cfg.task),
     )
     console.print(f"[dim]Loaded {len(dataset['train'])} train samples[/]")
 
@@ -508,16 +524,16 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
         experiment_name=run_name,
     )
 
-    # Build trainer — the same dispatch `soup train` uses (#1213). This used to
-    # be a second, shorter chain that never grew past v0.40.0, so ten task
-    # values and every `backend: mlx` config were trained as plain SFT here
-    # while the tracker recorded the configured task.
-    trainer_wrapper = build_trainer(cfg, device=device)
-    trainer_wrapper.setup(dataset)
-
-    # Train
-    display = TrainingDisplay(cfg, device_name=device_name)
     try:
+        # Build trainer — the same dispatch `soup train` uses (#1213). This used to
+        # be a second, shorter chain that never grew past v0.40.0, so ten task
+        # values and every `backend: mlx` config were trained as plain SFT here
+        # while the tracker recorded the configured task.
+        trainer_wrapper = build_trainer(cfg, device=device)
+        trainer_wrapper.setup(dataset)
+
+        # Train
+        display = TrainingDisplay(cfg, device_name=device_name)
         result = trainer_wrapper.train(display=display, tracker=tracker, run_id=run_id)
         tracker.finish_run(
             run_id=run_id,
@@ -529,8 +545,10 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
         )
         result["run_id"] = run_id
         return result
-    except Exception:
-        tracker.fail_run(run_id)
+    except Exception as exc:
+        from soup_cli.commands.train import _describe_exception_for_tracker
+
+        tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))
         raise
 
 

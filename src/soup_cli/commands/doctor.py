@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import platform
 import re
 import sys
@@ -26,7 +27,9 @@ console = Console()
 # extra, so a healthy core-only install reports no failures (#828).
 DEPS = [
     ("pydantic", "pydantic", "2.0.0", True),
-    ("typer", "typer", "0.9.0", True),
+    # A copy of the floor pyproject.toml declares, pinned to it by
+    # tests/test_cli_dependency_floors.py (#1802).
+    ("typer", "typer", "0.15.4", True),
     ("rich", "rich", "13.0.0", True),
     ("yaml", "pyyaml", "6.0", True),
     ("plotext", "plotext", "5.2.0", True),
@@ -41,7 +44,7 @@ DEPS = [
     ("unsloth", "unsloth", "2024.8", False),
     ("PIL", "Pillow", "9.0.0", False),
     ("torchao", "torchao", TORCHAO_MIN_VERSION, False),
-    ("sglang", "sglang", "0.2.0", False),
+    ("sglang", "sglang", "0.5.1", False),
     ("librosa", "librosa", "0.10.0", False),
 ]
 
@@ -119,8 +122,10 @@ def doctor(
     # MLX (Apple Silicon) check
     _check_mlx()
 
+    issues: list[str] = []
+
     # Resources check
-    _check_resources(probe_disk=disk)
+    _check_resources(probe_disk=disk, issues=issues)
 
     # Dependencies table
     table = Table(title="Dependencies")
@@ -129,8 +134,6 @@ def doctor(
     table.add_column("Installed", justify="center")
     table.add_column("Min Version")
     table.add_column("Status")
-
-    issues: list[str] = []
     # Actionable install specs for the trailing "Fix all" line. Only entries
     # that are actually missing or out of range land here — never the full
     # required set, and never a bare per-package floor for an extra group.
@@ -623,10 +626,18 @@ def _check_gpu():
                 )
             )
         elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            from soup_cli.utils.terminal import for_terminal
+
+            async_load = os.environ.get("HF_DEACTIVATE_ASYNC_LOAD")
+            if async_load is None:
+                async_desc = "not set (soup train sets it to 1 on MPS)"
+            else:
+                async_desc = for_terminal(async_load)
             console.print(
                 Panel(
                     "Backend:  [bold green]MPS (Apple Silicon)[/]\n"
-                    "Status:   [bold green]available[/]",
+                    "Status:   [bold green]available[/]\n"
+                    f"HF_DEACTIVATE_ASYNC_LOAD: [dim]{async_desc}[/]",
                     title="GPU",
                 )
             )
@@ -916,13 +927,13 @@ def _get_ram_gb() -> str:
     return "Unknown"
 
 
-def _check_resources(probe_disk: bool = False):
+def _check_resources(probe_disk: bool = False, issues: list[str] | None = None):
     """Check RAM and Disk space and display info."""
     import shutil
 
     table = Table(title="System Resources")
     table.add_column("Resource", style="bold")
-    table.add_column("Value")
+    table.add_column("Value", overflow="fold")
 
     table.add_row("RAM", _get_ram_gb())
 
@@ -958,6 +969,53 @@ def _check_resources(probe_disk: bool = False):
             "hdd": "[red]HDD[/] — layer streaming refuses the disk tier (RAM only)",
         }.get(kind, "[yellow]Unknown[/] — layer streaming will refuse the disk tier")
         table.add_row("Disk type", verdict)
+
+    stripe_var = os.environ.get("SOUP_LAYER_STREAM_STRIPE_DIRS")
+    if stripe_var:
+        from soup_cli.utils.layer_shard import resolve_cache_root
+        from soup_cli.utils.stripe_roots import (
+            STRIPE_DIRS_ENV,
+            iter_early_stripe_roots,
+            parse_stripe_dirs,
+        )
+        from soup_cli.utils.terminal import for_terminal
+
+        stripe_entries = parse_stripe_dirs(stripe_var)
+        primary = resolve_cache_root()
+        has_refused = False
+
+        for entry, resolved, reason in iter_early_stripe_roots(primary, stripe_entries):
+            row_label = "Stripe root"
+            if reason is not None:
+                has_refused = True
+                row_val = f"{for_terminal(entry)} — [red]Refused[/]: {for_terminal(reason)}"
+            elif probe_disk:
+                from soup_cli.utils.layer_stream import detect_disk_kind
+
+                try:
+                    kind = detect_disk_kind(resolved)
+                except Exception:  # noqa: BLE001
+                    kind = "unknown"
+                if kind != "nvme":
+                    has_refused = True
+                    reason_disk = (
+                        "the disk tier streams from NVMe only, and this volume classifies "
+                        f"as {kind!r}. If the probe is wrong, "
+                        "training.stream_disk_kind overrides it."
+                    )
+                    refused_msg = for_terminal(reason_disk)
+                    row_val = f"{for_terminal(entry)} — [red]Refused[/]: {refused_msg}"
+                else:
+                    row_val = f"{for_terminal(entry)} — [green]NVMe[/]"
+            else:
+                row_val = f"{for_terminal(entry)} — [green]OK[/]"
+            table.add_row(row_label, row_val)
+
+        if has_refused and issues is not None:
+            issues.append(
+                f"{STRIPE_DIRS_ENV}: one or more stripe roots are refused "
+                "(see System Resources above)"
+            )
 
     console.print(table)
     console.print()

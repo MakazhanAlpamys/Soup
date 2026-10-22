@@ -1,10 +1,10 @@
-"""v0.52.0 Part D — BitNet 1.58-bit fine-tuning + export schema helpers.
+"""BitNet 1.58-bit: the quantization allowlist, the export validators and the GGUF export.
 
-Schema-only support for ``quantization='bitnet_1.58'`` and the new
-``soup export --format bitnet`` / ``--format tq1_0`` GGUF flavours.
-
-Live ``onebitllms`` wrapping + llama.cpp ``TQ1_0`` export wiring are
-deferred to v0.52.1 (mirrors v0.50.0 stub-then-live pattern).
+Specs and validators for ``quantization='bitnet_1.58'`` and for
+``soup export --format bitnet`` / ``--format tq1_0``, plus :func:`export_bitnet_gguf`,
+the live llama.cpp conversion (v0.71.20 #134; it needs a built llama.cpp toolchain).
+Training with ``onebitllms`` lives in :mod:`soup_cli.trainer.bitnet`, which gates its
+setup on that package being installed.
 """
 
 from __future__ import annotations

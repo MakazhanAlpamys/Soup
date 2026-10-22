@@ -75,7 +75,7 @@ class TestDraftModelLoading:
 
             _load_draft_model("small-model", "cpu")
             call_kwargs = mock_load.call_args[1]
-            assert call_kwargs["device_map"] == "cpu"
+            assert call_kwargs["device_map"] == {"": "cpu"}
 
     def test_load_draft_model_blocks_urls(self):
         """_load_draft_model should reject URL-based model paths (SSRF)."""

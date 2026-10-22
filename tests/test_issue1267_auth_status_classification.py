@@ -218,8 +218,9 @@ def test_implicitly_chained_status_is_used():
 
 
 def test_wrapped_urllib_error_uses_its_code():
-    # The text fallback reads only the top message, so a wrapped urllib error is
-    # recognised by its `.code` alone.
+    # urllib's HTTPError also says "HTTP Error 403" in its text, which the text
+    # fallback now reads anywhere in the chain (#1361); the phrase-free variant in
+    # test_issue1361_auth_status_text_chain.py pins the `.code` probe on its own.
     cause = urllib.error.HTTPError("https://x/y", 403, "Forbidden", None, None)
     try:
         raise RuntimeError("download failed") from cause

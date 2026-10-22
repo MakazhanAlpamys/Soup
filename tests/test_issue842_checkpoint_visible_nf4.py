@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+import importlib.util
 import os
 import sys
 
@@ -154,14 +156,316 @@ def test_production_capability_gate_keeps_cpu_on_the_old_path():
     assert _can_use_checkpoint_visible_nf4_gemm(torch.randn(2, 16), state) is False
 
 
-def test_bitsandbytes_private_dispatch_contract_is_visible_to_cpu_ci():
-    try:
-        from bitsandbytes.backends.cuda import ops as bnb_cuda_ops
-    except (ImportError, AttributeError) as exc:
-        pytest.skip(f"bitsandbytes CUDA ops cannot import with this torch build: {exc}")
+_BNB_DISPATCH_NAMES = ("_gemm_4bit_use_custom_fn", "_gemm_4bit_custom_max_m")
 
-    assert hasattr(bnb_cuda_ops, "_gemm_4bit_use_custom_fn")
-    assert hasattr(bnb_cuda_ops, "_gemm_4bit_custom_max_m")
+
+def _module_level_names(source):
+    """Names a module source binds at its top level (Assign / AnnAssign / def / class).
+
+    Walks into top-level ``if`` / ``try`` / ``with`` blocks, because bitsandbytes binds
+    the dispatch names under ``if torch.version.hip is None:`` / ``else:``. Function and
+    class bodies are not entered: a local variable is not a module attribute.
+    """
+    bound = set()
+
+    def add_target(target):
+        if isinstance(target, ast.Name):
+            bound.add(target.id)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for element in target.elts:
+                add_target(element)
+        elif isinstance(target, ast.Starred):
+            add_target(target.value)
+
+    def visit(statements):
+        for node in statements:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    add_target(target)
+            elif isinstance(node, ast.AnnAssign):
+                if node.value is not None:
+                    add_target(node.target)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                bound.add(node.name)
+            elif isinstance(node, ast.If):
+                visit(node.body)
+                visit(node.orelse)
+            elif isinstance(node, (ast.Try, ast.TryStar)):
+                visit(node.body)
+                for handler in node.handlers:
+                    visit(handler.body)
+                visit(node.orelse)
+                visit(node.finalbody)
+            elif isinstance(node, (ast.With, ast.AsyncWith)):
+                visit(node.body)
+
+    visit(ast.parse(source).body)
+    return bound
+
+
+def _missing_module_level_names(source, names):
+    """The entries of ``names`` that ``source`` does not bind at module level."""
+    bound = _module_level_names(source)
+    return [name for name in names if name not in bound]
+
+
+def _locate_bnb_cuda_ops_source():
+    """Path of ``bitsandbytes/backends/cuda/ops`` (module or package), without importing it.
+
+    Returns ``None`` only when bitsandbytes is not installed (the caller skips). When it
+    IS installed and the module is not where we expect it, this fails instead of
+    skipping: bitsandbytes is an unconditional ``[train]`` dependency, so a moved or
+    renamed module is exactly the upstream change this canary exists to report.
+    """
+    spec = importlib.util.find_spec("bitsandbytes")
+    if spec is None:
+        return None
+    locations = list(spec.submodule_search_locations or [])
+    candidates = [
+        os.path.join(root, "backends", "cuda", leaf)
+        for root in locations
+        for leaf in ("ops.py", os.path.join("ops", "__init__.py"))
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    expected = " or ".join(candidates) or "backends/cuda/ops.py under the bitsandbytes package"
+    pytest.fail(
+        f"bitsandbytes is installed (search locations {locations}) but its CUDA ops module "
+        f"is not at the expected path {expected}. "
+        "src/soup_cli/utils/layer_stream_runtime.py (_can_use_checkpoint_visible_nf4_gemm) "
+        f"reads {' / '.join(_BNB_DISPATCH_NAMES)} from that module, so find where "
+        "bitsandbytes moved them and update this canary and that reader together.",
+        pytrace=False,
+    )
+
+
+def _canary_body():
+    # Read the source instead of importing ``bitsandbytes.backends.cuda.ops``: that module
+    # reads ``torch._C._cuda_getCurrentRawStream`` at import (bitsandbytes 0.50.2,
+    # ops.py:69), which a CPU-only torch wheel does not have, so an import would skip
+    # this canary on every CPU-wheel CI cell.
+    ops_path = _locate_bnb_cuda_ops_source()
+    if ops_path is None:
+        pytest.skip("bitsandbytes is not installed")
+
+    with open(ops_path, encoding="utf-8") as handle:
+        source = handle.read()
+
+    missing = _missing_module_level_names(source, _BNB_DISPATCH_NAMES)
+    assert not missing, (
+        f"bitsandbytes {ops_path} no longer binds {missing} at module level; "
+        "layer_stream_runtime._can_use_checkpoint_visible_nf4_gemm reads them"
+    )
+
+
+def test_bitsandbytes_private_dispatch_contract_is_visible_to_cpu_ci():
+    _canary_body()
+
+
+_SAMPLE_NAMES = ("_gemm_4bit_use_custom_fn", "_gemm_4bit_custom_max_m")
+
+
+def test_dispatch_name_check_accepts_names_bound_the_way_bitsandbytes_binds_them():
+    source = (
+        "import torch\n"
+        "if torch.version.hip is None:\n"
+        "    _gemm_4bit_use_custom_fn = _custom_cuda\n"
+        "    _gemm_4bit_custom_max_m: int = 1536\n"
+        "else:\n"
+        "    _gemm_4bit_use_custom_fn = _custom_rocm\n"
+        "    _gemm_4bit_custom_max_m = 256\n"
+    )
+    assert _missing_module_level_names(source, _SAMPLE_NAMES) == []
+    defined = "def _gemm_4bit_use_custom_fn():\n    pass\n_gemm_4bit_custom_max_m = 1\n"
+    assert _missing_module_level_names(defined, _SAMPLE_NAMES) == []
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_missing"),
+    [
+        ("_gemm_4bit_use_custom_fn = 1\n", ["_gemm_4bit_custom_max_m"]),
+        ("_gemm_4bit_custom_max_m = 1\n", ["_gemm_4bit_use_custom_fn"]),
+        ("", ["_gemm_4bit_use_custom_fn", "_gemm_4bit_custom_max_m"]),
+        (
+            "def helper():\n    _gemm_4bit_use_custom_fn = 1\n    _gemm_4bit_custom_max_m = 2\n",
+            ["_gemm_4bit_use_custom_fn", "_gemm_4bit_custom_max_m"],
+        ),
+        (
+            "_gemm_4bit_use_custom_fn: int\n_gemm_4bit_custom_max_m = 1\n",
+            ["_gemm_4bit_use_custom_fn"],
+        ),
+        (
+            "# _gemm_4bit_use_custom_fn = 1\n_gemm_4bit_custom_max_m = 1\n",
+            ["_gemm_4bit_use_custom_fn"],
+        ),
+    ],
+    ids=[
+        "missing-max-m",
+        "missing-use-custom-fn",
+        "empty-module",
+        "bound-only-inside-a-function",
+        "annotation-without-value",
+        "mentioned-only-in-a-comment",
+    ],
+)
+def test_dispatch_name_check_reports_the_name_that_is_missing(source, expected_missing):
+    assert _missing_module_level_names(source, _SAMPLE_NAMES) == expected_missing
+
+
+_FIRST, _SECOND = _SAMPLE_NAMES
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        f"if flag:\n    {_FIRST} = 1\n{_SECOND} = 1\n",
+        f"if flag:\n    pass\nelse:\n    {_FIRST} = 1\n{_SECOND} = 1\n",
+        f"if flag:\n    pass\nelif other:\n    {_FIRST} = 1\n{_SECOND} = 1\n",
+        f"try:\n    {_FIRST} = 1\nexcept ImportError:\n    pass\n{_SECOND} = 1\n",
+        f"try:\n    pass\nexcept ImportError:\n    {_FIRST} = 1\n{_SECOND} = 1\n",
+        f"try:\n    pass\nexcept ImportError:\n    pass\nelse:\n    {_FIRST} = 1\n{_SECOND} = 1\n",
+        f"try:\n    pass\nfinally:\n    {_FIRST} = 1\n{_SECOND} = 1\n",
+        f"try:\n    pass\nexcept* ValueError:\n    {_FIRST} = 1\n{_SECOND} = 1\n",
+        f"with context():\n    {_FIRST} = 1\n{_SECOND} = 1\n",
+        f"async with context():\n    {_FIRST} = 1\n{_SECOND} = 1\n",
+        (
+            "with context():\n"
+            "    try:\n"
+            "        if flag:\n"
+            "            pass\n"
+            "        else:\n"
+            f"            {_FIRST} = 1\n"
+            "    finally:\n"
+            "        pass\n"
+            f"{_SECOND} = 1\n"
+        ),
+    ],
+    ids=[
+        "only-under-if-body",
+        "only-under-else",
+        "only-under-elif",
+        "only-under-try-body",
+        "only-under-except",
+        "only-under-try-else",
+        "only-under-finally",
+        "only-under-except-star",
+        "only-under-with",
+        "only-under-async-with",
+        "only-under-else-nested-in-try-in-with",
+    ],
+)
+def test_dispatch_name_check_enters_every_block_that_can_bind_a_module_name(source):
+    # One name is bound at the top level, the other ONLY inside the block under test, so
+    # a walker that stops descending into that block reports the second name as missing.
+    assert _missing_module_level_names(source, _SAMPLE_NAMES) == []
+
+
+def _fake_bitsandbytes_find_spec(monkeypatch, spec):
+    """Make ``importlib.util.find_spec("bitsandbytes")`` return ``spec``; others are real."""
+    real_find_spec = importlib.util.find_spec
+
+    def find_spec(name, *args, **kwargs):
+        if name == "bitsandbytes":
+            return spec
+        return real_find_spec(name, *args, **kwargs)
+
+    monkeypatch.setattr(importlib.util, "find_spec", find_spec)
+
+
+def _installed_bitsandbytes(root):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(submodule_search_locations=[str(root)])
+
+
+def _outcome_of(call):
+    """Run ``call``; report ``("failed" | "skipped" | "passed", message)``.
+
+    ``pytest.raises`` would let a ``skip`` escape, and a skipped test is not a red one: a
+    canary that went back to skipping would then read as "not failed" instead of failing
+    this test. Catching both outcomes lets the test assert on the outcome itself.
+    """
+    try:
+        call()
+    except pytest.fail.Exception as error:
+        return "failed", str(error)
+    except pytest.skip.Exception as error:
+        return "skipped", str(error)
+    return "passed", ""
+
+
+def test_ops_locator_skips_only_when_bitsandbytes_is_not_installed(monkeypatch):
+    _fake_bitsandbytes_find_spec(monkeypatch, None)
+    assert _locate_bnb_cuda_ops_source() is None
+    outcome, message = _outcome_of(_canary_body)
+    assert (outcome, message) == ("skipped", "bitsandbytes is not installed")
+
+
+def test_ops_locator_fails_when_bitsandbytes_is_installed_but_ops_module_moved(
+    monkeypatch, tmp_path
+):
+    cuda_dir = tmp_path / "backends" / "cuda"
+    cuda_dir.mkdir(parents=True)
+    (cuda_dir / "ops_renamed.py").write_text(
+        f"{_FIRST} = 1\n{_SECOND} = 2\n", encoding="utf-8"
+    )
+    _fake_bitsandbytes_find_spec(monkeypatch, _installed_bitsandbytes(tmp_path))
+
+    outcome, message = _outcome_of(_locate_bnb_cuda_ops_source)
+
+    assert outcome == "failed", (outcome, message)
+    assert os.path.join(str(tmp_path), "backends", "cuda", "ops.py") in message
+    assert "src/soup_cli/utils/layer_stream_runtime.py" in message
+    assert _FIRST in message and _SECOND in message
+    # The canary itself must fail the same way, not skip.
+    assert _outcome_of(_canary_body)[0] == "failed"
+
+
+@pytest.mark.parametrize("locations", [None, []], ids=["no-locations", "empty-locations"])
+def test_ops_locator_fails_when_an_installed_bitsandbytes_has_no_search_locations(
+    monkeypatch, locations
+):
+    from types import SimpleNamespace
+
+    spec = SimpleNamespace(submodule_search_locations=locations)
+    _fake_bitsandbytes_find_spec(monkeypatch, spec)
+
+    outcome, message = _outcome_of(_locate_bnb_cuda_ops_source)
+
+    assert outcome == "failed", (outcome, message)
+    assert "backends/cuda/ops.py" in message
+    assert "src/soup_cli/utils/layer_stream_runtime.py" in message
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [("backends", "cuda", "ops.py"), ("backends", "cuda", "ops", "__init__.py")],
+    ids=["ops-module", "ops-package"],
+)
+def test_ops_locator_finds_the_module_as_a_file_or_a_package(
+    monkeypatch, tmp_path, relative_path
+):
+    ops_file = tmp_path.joinpath(*relative_path)
+    ops_file.parent.mkdir(parents=True)
+    ops_file.write_text("", encoding="utf-8")
+    _fake_bitsandbytes_find_spec(monkeypatch, _installed_bitsandbytes(tmp_path))
+
+    assert _locate_bnb_cuda_ops_source() == str(ops_file)
+
+
+def test_canary_reads_the_names_from_the_located_ops_source(monkeypatch, tmp_path):
+    ops_file = tmp_path / "backends" / "cuda" / "ops.py"
+    ops_file.parent.mkdir(parents=True)
+    _fake_bitsandbytes_find_spec(monkeypatch, _installed_bitsandbytes(tmp_path))
+
+    ops_file.write_text(f"{_FIRST} = 1\n{_SECOND} = 2\n", encoding="utf-8")
+    assert _outcome_of(_canary_body) == ("passed", "")
+
+    ops_file.write_text(f"{_FIRST} = 1\n", encoding="utf-8")
+    with pytest.raises(AssertionError, match=_SECOND) as excinfo:
+        _canary_body()
+    assert str(ops_file) in str(excinfo.value)
 
 
 @pytest.mark.parametrize(

@@ -27,8 +27,10 @@ def test_badge_condition_requires_the_upstream_repository() -> None:
     assert "||" not in condition, condition
     terms = [term.strip() for term in condition.split("&&")]
     assert UPSTREAM_GUARD in terms, terms
-    # ...and the terms it was added to must still be there.
-    for kept in ("github.ref == 'refs/heads/main'", "github.event_name == 'push'"):
+    # ...and the terms it was added to must still be there. The event is the nightly
+    # schedule since #1538: a push to main runs only the quick set, which has no
+    # ubuntu 3.11 cell, so the nightly full run is the one that updates the badge.
+    for kept in ("github.ref == 'refs/heads/main'", "github.event_name == 'schedule'"):
         assert kept in terms, terms
 
 

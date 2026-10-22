@@ -123,6 +123,7 @@ def train(
     ),
     examples_per_endpoint: int = typer.Option(
         4, "--examples-per-endpoint", "-n", min=1, max=32,
+        help="Number of synthetic examples to create per API endpoint.",
     ),
 ):
     """One-shot wrapper: synth + planned soup train invocation (printed)."""

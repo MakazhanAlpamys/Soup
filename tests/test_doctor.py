@@ -924,6 +924,10 @@ def test_doctor_nvidia_partial_stack_with_torch_present(monkeypatch):
     monkeypatch.setattr(
         "soup_cli.commands.doctor._nvidia_smi_cuda_version", lambda: (13, 0)
     )
+    # The GPU panel runs the REAL nvidia-smi when torch has no CUDA; on a box
+    # with a GPU that prints its own reinstall hint (with --index-url), which is
+    # not the partial-stack hint under test. Pin it off so every box agrees.
+    monkeypatch.setattr("soup_cli.commands.doctor._nvidia_smi_executable", lambda: None)
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     out = _strip_ansi(result.output)

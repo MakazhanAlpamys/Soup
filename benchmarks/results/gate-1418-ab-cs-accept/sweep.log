@@ -1,0 +1,85 @@
+== h0-part1
+self-check: max rel diff 0.0e+00 over 45 points vs _nig_confidence_half_width; 0 of 32 msprt_step runs differ
+h0 ratio 0.1: 509 s
+h0 ratio 0.15: 594 s
+h0 ratio 0.2: 432 s
+gate-1265 replay: 0 of 30 cells differ from the recorded counts
+wrote benchmarks/results/gate-1418-ab-cs-accept/h0-part1.json
+== h0-part2
+self-check: max rel diff 0.0e+00 over 45 points vs _nig_confidence_half_width; 0 of 32 msprt_step runs differ
+h0 ratio 0.25: 511 s
+h0 ratio 0.275: 578 s
+h0 ratio 0.3: 434 s
+gate-1265 replay: 0 of 30 cells differ from the recorded counts
+wrote benchmarks/results/gate-1418-ab-cs-accept/h0-part2.json
+== h0-part3
+self-check: max rel diff 0.0e+00 over 45 points vs _nig_confidence_half_width; 0 of 32 msprt_step runs differ
+h0 ratio 0.325: 509 s
+h0 ratio 0.35: 569 s
+h0 ratio 0.375: 439 s
+gate-1265 replay: 0 of 30 cells differ from the recorded counts
+wrote benchmarks/results/gate-1418-ab-cs-accept/h0-part3.json
+== h0-part4
+self-check: max rel diff 0.0e+00 over 45 points vs _nig_confidence_half_width; 0 of 32 msprt_step runs differ
+h0 ratio 0.4: 506 s
+h0 ratio 0.425: 604 s
+h0 ratio 0.45: 428 s
+gate-1265 replay: 0 of 30 cells differ from the recorded counts
+wrote benchmarks/results/gate-1418-ab-cs-accept/h0-part4.json
+== h0-part5
+self-check: max rel diff 0.0e+00 over 45 points vs _nig_confidence_half_width; 0 of 32 msprt_step runs differ
+h0 ratio 0.5: 500 s
+h0 ratio 0.55: 572 s
+h0 ratio 0.6: 443 s
+gate-1265 replay: 0 of 30 cells differ from the recorded counts
+wrote benchmarks/results/gate-1418-ab-cs-accept/h0-part5.json
+== h0-part6
+self-check: max rel diff 0.0e+00 over 45 points vs _nig_confidence_half_width; 0 of 32 msprt_step runs differ
+h0 ratio 0.7: 510 s
+h0 ratio 0.8: 584 s
+h0 ratio 1.0: 437 s
+gate-1265 replay: 0 of 30 cells differ from the recorded counts
+wrote benchmarks/results/gate-1418-ab-cs-accept/h0-part6.json
+== h0-part7
+self-check: max rel diff 0.0e+00 over 45 points vs _nig_confidence_half_width; 0 of 32 msprt_step runs differ
+h0 ratio 1.5: 506 s
+h0 ratio 2.0: 589 s
+gate-1265 replay: 0 of 20 cells differ from the recorded counts
+wrote benchmarks/results/gate-1418-ab-cs-accept/h0-part7.json
+== h0-part8
+self-check: max rel diff 0.0e+00 over 45 points vs _nig_confidence_half_width; 0 of 32 msprt_step runs differ
+h0 ratio 3.0: 521 s
+h0 ratio 5.0: 596 s
+gate-1265 replay: 0 of 20 cells differ from the recorded counts
+wrote benchmarks/results/gate-1418-ab-cs-accept/h0-part8.json
+== h1-part1
+self-check: max rel diff 0.0e+00 over 45 points vs _nig_confidence_half_width; 0 of 32 msprt_step runs differ
+h1 ratio 0.1: 130 s
+h1 ratio 0.15: 131 s
+h1 ratio 0.2: 134 s
+h1 ratio 0.25: 127 s
+h1 ratio 0.3: 129 s
+h1 ratio 0.35: 123 s
+gate-1265 replay: 0 of 60 cells differ from the recorded counts
+wrote benchmarks/results/gate-1418-ab-cs-accept/h1-part1.json
+== h1-part2
+self-check: max rel diff 0.0e+00 over 45 points vs _nig_confidence_half_width; 0 of 32 msprt_step runs differ
+h1 ratio 0.4: 131 s
+h1 ratio 0.45: 131 s
+h1 ratio 0.5: 134 s
+h1 ratio 0.6: 129 s
+h1 ratio 0.7: 126 s
+h1 ratio 0.8: 122 s
+gate-1265 replay: 0 of 60 cells differ from the recorded counts
+wrote benchmarks/results/gate-1418-ab-cs-accept/h1-part2.json
+== h1-part3
+self-check: max rel diff 0.0e+00 over 45 points vs _nig_confidence_half_width; 0 of 32 msprt_step runs differ
+h1 ratio 1.0: 132 s
+h1 ratio 1.5: 139 s
+h1 ratio 2.0: 137 s
+h1 ratio 3.0: 130 s
+h1 ratio 5.0: 132 s
+gate-1265 replay: 0 of 50 cells differ from the recorded counts
+wrote benchmarks/results/gate-1418-ab-cs-accept/h1-part3.json
+== check, after the #1418 review moved the shipped rule to level alpha (cs-alpha); counts unchanged, no re-sweep
+self-check: max rel diff 0.0e+00 over 45 points vs _nig_confidence_half_width; 0 of 32 msprt_step runs differ

@@ -1,0 +1,72 @@
+== h0-part1
+self-check: max rel diff 0.0e+00 over 150 points vs _nig_log_bayes_factor; 0 of 64 msprt_step peeks differ
+h0 ratio 0.1: 352 s
+h0 ratio 0.15: 353 s
+h0 ratio 0.2: 361 s
+wrote benchmarks/results/gate-1265-ab-nig/h0-part1.json
+== h0-part2
+self-check: max rel diff 0.0e+00 over 150 points vs _nig_log_bayes_factor; 0 of 64 msprt_step peeks differ
+h0 ratio 0.25: 353 s
+h0 ratio 0.275: 350 s
+h0 ratio 0.3: 361 s
+wrote benchmarks/results/gate-1265-ab-nig/h0-part2.json
+== h0-part3
+self-check: max rel diff 0.0e+00 over 150 points vs _nig_log_bayes_factor; 0 of 64 msprt_step peeks differ
+h0 ratio 0.325: 354 s
+h0 ratio 0.35: 351 s
+h0 ratio 0.375: 362 s
+wrote benchmarks/results/gate-1265-ab-nig/h0-part3.json
+== h0-part4
+self-check: max rel diff 0.0e+00 over 150 points vs _nig_log_bayes_factor; 0 of 64 msprt_step peeks differ
+h0 ratio 0.4: 353 s
+h0 ratio 0.425: 350 s
+h0 ratio 0.45: 360 s
+wrote benchmarks/results/gate-1265-ab-nig/h0-part4.json
+== h0-part5
+self-check: max rel diff 0.0e+00 over 150 points vs _nig_log_bayes_factor; 0 of 64 msprt_step peeks differ
+h0 ratio 0.5: 355 s
+h0 ratio 0.55: 351 s
+h0 ratio 0.6: 360 s
+wrote benchmarks/results/gate-1265-ab-nig/h0-part5.json
+== h0-part6
+self-check: max rel diff 0.0e+00 over 150 points vs _nig_log_bayes_factor; 0 of 64 msprt_step peeks differ
+h0 ratio 0.7: 351 s
+h0 ratio 0.8: 350 s
+h0 ratio 1.0: 362 s
+wrote benchmarks/results/gate-1265-ab-nig/h0-part6.json
+== h0-part7
+self-check: max rel diff 0.0e+00 over 150 points vs _nig_log_bayes_factor; 0 of 64 msprt_step peeks differ
+h0 ratio 1.5: 353 s
+h0 ratio 2.0: 349 s
+wrote benchmarks/results/gate-1265-ab-nig/h0-part7.json
+== h0-part8
+self-check: max rel diff 0.0e+00 over 150 points vs _nig_log_bayes_factor; 0 of 64 msprt_step peeks differ
+h0 ratio 3.0: 351 s
+h0 ratio 5.0: 350 s
+wrote benchmarks/results/gate-1265-ab-nig/h0-part8.json
+== h1-part1
+self-check: max rel diff 0.0e+00 over 150 points vs _nig_log_bayes_factor; 0 of 64 msprt_step peeks differ
+h1 ratio 0.1: 71 s
+h1 ratio 0.15: 74 s
+h1 ratio 0.2: 73 s
+h1 ratio 0.25: 71 s
+h1 ratio 0.3: 71 s
+h1 ratio 0.35: 45 s
+wrote benchmarks/results/gate-1265-ab-nig/h1-part1.json
+== h1-part2
+self-check: max rel diff 0.0e+00 over 150 points vs _nig_log_bayes_factor; 0 of 64 msprt_step peeks differ
+h1 ratio 0.4: 72 s
+h1 ratio 0.45: 73 s
+h1 ratio 0.5: 72 s
+h1 ratio 0.6: 72 s
+h1 ratio 0.7: 72 s
+h1 ratio 0.8: 45 s
+wrote benchmarks/results/gate-1265-ab-nig/h1-part2.json
+== h1-part3
+self-check: max rel diff 0.0e+00 over 150 points vs _nig_log_bayes_factor; 0 of 64 msprt_step peeks differ
+h1 ratio 1.0: 45 s
+h1 ratio 1.5: 36 s
+h1 ratio 2.0: 33 s
+h1 ratio 3.0: 36 s
+h1 ratio 5.0: 34 s
+wrote benchmarks/results/gate-1265-ab-nig/h1-part3.json

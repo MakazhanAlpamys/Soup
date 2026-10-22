@@ -19,6 +19,8 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from tests.ui_helpers import ui_client
+
 
 # --------------------------------------------------------------------------
 # HIGH-1 — vLLM serve must not force trust_remote_code=True
@@ -177,6 +179,11 @@ class TestAdapterScope:
         model = self._run(None, None, {"chat"})
         assert model.disable_calls == 1
 
+    def test_empty_selection_overrides_active_with_base(self):
+        model = self._run("", "chat", {"chat"})
+        assert model.set_calls == []
+        assert model.disable_calls == 1
+
     def test_no_adapters_is_noop(self):
         model = self._run("chat", "chat", set())
         assert model.set_calls == []
@@ -258,17 +265,17 @@ class TestDryRunNoReexec:
 
         called = {"execvp": False}
 
-        def _fake_execvp(file, argv):
+        def _fake_run_launcher(argv):
             called["execvp"] = True
             raise SystemExit(99)
 
-        monkeypatch.setattr("os.execvp", _fake_execvp)
+        monkeypatch.setattr("soup_cli.utils.launcher.run_launcher", _fake_run_launcher)
 
         CliRunner().invoke(
             app, ["train", "--config", "soup.yaml", "--gpus", "2", "--dry-run"]
         )
         assert called["execvp"] is False, (
-            "os.execvp was called on a --dry-run multi-GPU invocation"
+            "the launcher was run on a --dry-run multi-GPU invocation"
         )
 
 
@@ -282,11 +289,11 @@ class TestReexecForwardsFlags:
 
         captured: dict = {}
 
-        def _fake_execvp(file, argv):
+        def _fake_run_launcher(argv):
             captured["argv"] = list(argv)
             raise SystemExit(99)
 
-        monkeypatch.setattr("os.execvp", _fake_execvp)
+        monkeypatch.setattr("soup_cli.utils.launcher.run_launcher", _fake_run_launcher)
 
         CliRunner().invoke(
             app,
@@ -678,13 +685,12 @@ class TestRunsEscape:
 class TestConstantTimeToken:
     def test_wrong_token_401_right_token_ok(self):
         pytest.importorskip("fastapi")
-        from starlette.testclient import TestClient
 
         from soup_cli.ui.app import create_app, set_auth_token
 
         set_auth_token("a" * 32)
         app = create_app()
-        client = TestClient(app)
+        client = ui_client(app)
         # A mutating endpoint requires the Bearer token.
         bad = client.post(
             "/api/train/start",

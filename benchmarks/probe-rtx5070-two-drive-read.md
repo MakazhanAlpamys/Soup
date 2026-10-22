@@ -1,0 +1,417 @@
+<!--
+Working measurement record, published verbatim. The decision rule in §2 was
+written and committed BEFORE the harness read a single byte, which is the point
+of it: a rule written after the numbers are in is not a rule.
+
+Hardware: RTX 5070 Laptop GPU (Blackwell sm_120, 8151 MiB), Intel i9-14900HX,
+31.7 GB DDR5-5600, two Samsung PM9B1 NVMe (MZAL81T0HFLB-00BL2, 954 GB each),
+Windows 11 Pro 26100. Stack: Python 3.12.10, torch 2.14.0+cu130.
+Soup: branch probe/two-drive-read cut from origin/main d7a4f7a7, worktree
+C:\Users\user\projects\Soup-read.
+Harness: benchmarks/harness/two_drive_read.py (committed with this file). It
+imports the read primitive from benchmarks/harness/issue974_unbuffered.py, so
+the bytes are read exactly the way gate-974 read them.
+-->
+
+# Probe — does the second NVMe add read bandwidth? (disk-tier read rate, R1)
+
+**Status: decision rule committed 2026-09-28, BEFORE the run. NO FORMAL VERDICT: the rule's
+validity row fired in all three runs (§5), and D1, D2 and R3' are ambiguous by their own rules.
+The two-drive read rate it records is a measurement, not a verdict. Striping (R4) was gated on
+its own, on the training step: [`gate-two-drive-striping.md`](gate-two-drive-striping.md).**
+*(Status line updated 2026-10-01; until then it read "Results pending".)*
+
+---
+
+## 0. The question, and why it decides a feature
+
+The cold 70B-shaped step on this box is bound by the read outright: 17.0-17.2 s
+at seq 512 AND at seq 256, while the compute floor with the read removed halves
+(6.4 -> 3.8 s). The step moves 70.38 GB at 4.09-4.14 GB/s averaged
+(`probe-rtx5070-what-bounds-streaming.md` §21, Finding 21). One drive's
+unbuffered cold ceiling is 5.65 GB/s at K = 2-4 parallel ranges (gate-974 §4).
+So on one drive the step cannot go below ~12.5 s whatever the reader does.
+
+The box has TWO drives, and the disk tier reads from one: the NF4 shard caches
+live on C:, the bf16 fixtures on D:. If the two deliver ~2x together, a store
+striped across both could take the 70B step to its compute floor (~6.5 s at
+1x512), and every giant-MoE row in the roadmap's L2L table falls by the same
+factor, because those rows are `read seconds x compute ceiling` tokens per step.
+If the drives share a bottleneck, striping is work for nothing. The roadmap has
+said "a second NVMe halves it" since 2026-09-24; nobody measured it. This does,
+before any sharder or reader code changes.
+
+## 1. The two drives and where they attach
+
+| | C: | D: |
+|---|---|---|
+| physical disk | 0 | 1 |
+| model | Samsung MZAL81T0HFLB-00BL2 (PM9B1), 954 GB | same |
+| filled | 730 GB used, 224 GB free | 156 GB used, 798 GB free |
+| controller location | `PCIROOT(0)#PCI(0600)#PCI(0000)` | `PCIROOT(0)#PCI(1D04)#PCI(0000)` |
+| root port | `PEG0` = 00:06.0, Intel `8086:A74D` — a **CPU** root port | `RP13` = 00:1D.4, Intel `8086:7A34` — a **chipset (PCH)** root port |
+| path to memory | CPU lanes directly | the DMI 4.0 x8 link (~15.75 GB/s), shared with the chipset's other devices |
+| what lives there | the NF4 shard caches (two 70B stores, 36.4 GB each) | the bf16 fixtures (138 GB 70B-shaped, 27.5 GB 14B-shaped) |
+
+The CPU is an i9-14900HX (Raptor Lake HX). One drive on CPU lanes and one
+behind the chipset is the usual layout on this class of laptop, and it is the
+reason the answer is not obvious either way: DMI 4.0 x8 carries ~15.75 GB/s,
+enough for one drive with room to spare, but it is not the drive's own link.
+
+## 2. The decision rule, written before the run
+
+Inputs, per round, at K = 4 ranges per span (the reader's default
+`read_ranges`): `alone_A`, `alone_B` — each drive reading alone; `rate_A`,
+`rate_B` — each drive's rate in the both-at-once arm, over the window in which
+BOTH were reading. Then
+
+```
+r_sum = (rate_A + rate_B) / max(alone_A, alone_B)      # weighted striping's ceiling
+r_alt = 2 x min(rate_A, rate_B) / max(alone_A, alone_B) # plain alternate-layer striping
+```
+
+The rule reads the **median over three rounds**. A = C:, B = D:.
+
+| measured (medians) | verdict | what follows |
+|---|---|---|
+| **`alone_A` outside 4.5-6.2 GB/s** | the instrument does not reproduce gate-974's 5.1-5.65 GB/s at K = 2-4 on this drive | **no verdict.** Record the run, find out why, re-run. A comparison of two drives on a session that does not reproduce the known one is not evidence |
+| **`r_sum >= 1.6` AND `r_alt >= 1.6`** | the drives are independent | build **plain alternate-layer striping** (layer i on drive i mod 2) in the sharder and the reader, gated bit-exact against the single-drive disk tier. Predicted 70B step: `max(70.38 GB / (r_alt x 4.1 GB/s), 6.4 s)` — a prediction until the step measures it |
+| **`r_sum >= 1.6 > r_alt`** | independent but unequal | build **weighted** striping (bytes per drive in proportion to its rate — Colibri's 9 + 3 GB/s scheme); plain alternation would leave the difference on the table |
+| **`1.2 <= r_sum < 1.6`** | partly shared | **do not build yet.** Measure where the reader loses 4.1 vs 5.65 GB/s on one drive first (R3): that gap is worth 1.37x with no layout change, and the second drive is worth `r_sum` at most |
+| **`r_sum < 1.2`** | a shared bottleneck | **do not build.** The second drive is capacity, not bandwidth; say so in the roadmap and stop |
+
+**Why 1.6.** 2.0 is perfect. At 1.6 the 70B step's read goes from ~17 s to
+~10.7 s at today's reader efficiency — a 1.6x step for a sharder-layout change
+and a reader change, which is worth building. Below it the gain is smaller than
+what the single-drive reader gap (R3, 1.37x) and pinned RAM residency (~1.5x
+at ~12 GB resident, an estimate) offer without touching the layout, so it does
+not go first.
+
+**What the rule does NOT decide**, stated before the numbers so none of it is
+read into them afterwards: whether the reader reaches this rate inside the real
+step (R3 and the striping gate measure that); the host-to-device side (at
+2 x 5.65 GB/s the copy needs ~11 GB/s, against ~16.7 GB/s pinned H2D); sustained
+reads past a few seconds (thermal throttling of a DRAM-less drive is not
+exercised by ~2 s arms).
+
+## 3. Instrument
+
+- `two_drive_read.py`, the #974 primitive: `CreateFileW(FILE_FLAG_NO_BUFFERING
+  | FILE_FLAG_SEQUENTIAL_SCAN)`, one handle per range, one `ReadFile` per range,
+  into a sector-aligned **pinned** arena (one per drive). Unbuffered reads never
+  touch the page cache, so there is nothing to evict and every read is cold.
+- A span = 400 MiB, sector-aligned, wholly inside one file — the size of one
+  70B NF4 layer file (those are ~430 MB; the span is their first 400 MiB). On
+  C: the spans are the layer files of the two 70B NF4 stores in file order; on
+  D: consecutive 400 MiB windows of the bf16 fixtures. Each span is read as
+  K = 4 parallel ranges of 100 MiB, and the next span starts when all four have
+  landed — the reader's shape. **No span is read twice in a run.**
+- Per drive: one untimed warm-up span. Then three rounds; each round runs
+  A alone, B alone and both at once, 24 spans (10.07 GB) per drive per arm, in
+  an order that rotates so each arm runs first once.
+- In the both-at-once arm the two drives start from a barrier. Each drive's
+  rate is its bytes inside the window where both were reading, divided by the
+  window; a span that straddles the window's end is pro-rated. Aggregate over
+  the whole arm and each drive's own whole-arm rate are recorded beside it.
+- Byte check after every arm: the first and last MiB of the last span read into
+  each arena against a buffered read of the same offsets. A mismatch makes the
+  run exit non-zero.
+
+## 4. Box state
+
+This runs beside the contributor loop's own sessions (pytest suites and
+auto-merge loops) and a separate local project's llama-server. Each round
+stamps available physical memory, commit, the Python process count and the
+GPU's memory/utilisation/temperature into the JSON. The validity row in §2 is
+what catches a session contaminated by someone else's I/O.
+
+## 5. Results
+
+### Run 1 — 2026-09-28 10:28, NO VERDICT: the validity row fired
+
+JSON `benchmarks/results/probe-rtx5070/two-drive/r1_k4.json`; `soup_cli`
+stamped from this worktree (`Soup-read\src`); every byte check OK. GB/s:
+
+| round (order) | A = C: alone | B = D: alone | both: A | both: B | both: aggregate | window (s) | r_sum | r_alt |
+|---|---|---|---|---|---|---|---|---|
+| 0 (a, b, ab) | 3.62 | 4.27 | 3.64 | 4.95 | 7.65 | 2.03 | 2.014 | 1.707 |
+| 1 (b, ab, a) | 3.94 | 3.94 | 4.04 | 5.27 | 7.90 | 1.91 | 2.362 | 2.049 |
+| 2 (ab, a, b) | 3.85 | 5.83 | 4.46 | 5.75 | 8.69 | 1.75 | 1.751 | 1.529 |
+| **median** | **3.855** | 4.266 | 4.035 | 5.270 | — | — | 2.014 | 1.707 |
+
+**Verdict under §2: none.** `alone_A` = 3.855 GB/s is outside 4.5-6.2. The
+r medians would sit in the "independent drives" row, and they are **not read as
+a verdict**: the rule says a comparison made on a session that does not
+reproduce the known drive is not evidence, and it was written before this run
+for exactly this case.
+
+**What the run's own stamps show about why.** At the start the box had
+**3.03 GB of available physical memory and commit 56.65 GB against a limit of
+56.69** — at the limit, with the pagefile expanded (the rounds then read
+3.18 / 3.89 / 4.89 GB available, commit 56.6 / 53.8 / 51.0). The pagefile is
+`C:\pagefile.sys` (peak use since boot 9.7 GB). gate-974's unbuffered rows were
+measured at 19.34 GB free and commit 21.6 of 47.35 GB. **This run logged no disk
+counters, so paging I/O on C: during the arms is a hypothesis, not a
+measurement.** Two patterns fit it and neither proves it: C: was the slower
+drive in two of the three alone pairs and tied in the third, while D: — which
+nothing else touches — reached 6.5 GB/s on single spans and a 6.05 GB/s median
+per span in round 2, above anything gate-974 recorded on C:; and **each drive
+read faster in the both-at-once arm than alone in five of six comparisons**,
+which a shared bottleneck cannot produce and which points at the host (CPU
+power state, background load) rather than at the drives. That last pattern is
+not explained here.
+
+**A defect in the rule's validity row, found while diagnosing — disclosed, NOT
+corrected.** The 4.5-6.2 GB/s bound was derived from a summary of gate-974
+("5.1-5.65 GB/s at K = 2-4") that had kept its best readings. gate-974 §4's own
+K = 4, one-request-per-range readings are **5.12 GB/s (run A, layers 12-17) and
+4.18 (run B, layers 54-59)**, its K = 2-8 one-request readings span 4.02-5.30,
+and it calls the difference a 20-30% drive/position effect. The committed bound
+is therefore tighter than the reference it names: a quiet-box C: reading of
+~4.2 GB/s would fail it while matching gate-974's own run B. The row stays as
+committed — changing a validity bound after seeing the numbers it rules on is
+what pre-registration exists to prevent. If a later run lands between 4.0 and
+4.5 GB/s on a quiet box, the record says so and the call goes to the owner.
+
+**Instrument change before run 2** (the rule is unchanged): the harness now
+samples Windows performance counters through PDH every 0.25 s on a background
+thread — `LogicalDisk` read and write bytes per volume, `Memory\Pages/sec` and
+`Committed Bytes`, `Processor\% Processor Time` and `Processor Information\%
+Processor Performance` (the actual clock as a share of nominal). The harness
+only reads, so **a write on either volume during an arm is someone else's
+I/O**; the read counter cross-checks the harness's own rate. Also fixed: the
+box stamp's Python-process count was lost to a decoding error (`tasklist`
+prints in the OEM code page, and the no-break space in its memory column is
+0xFF in cp866), so run 1's `python_processes` is `null`.
+
+### Run 2 — 2026-09-28 10:35, NO VERDICT again, and foreign I/O is ruled out
+
+JSON `r1_k4_run2.json`; same rule, same spans as run 1 (the span list starts
+from the top of each drive's files every run, so run 2 re-read run 1's bytes —
+irrelevant to an unbuffered read of a drive with no DRAM cache, and stated so
+it is not discovered later); every byte check OK; no counter errors. The box
+this time: 5.26 GB available, commit 49.3 of 56.6 GB at the start (5.3 / 6.3 /
+5.9 GB and 49.3 / 46.4 / 47.4 GB in the rounds), 12-13 Python processes (the
+contributor loop's suites and watchers).
+
+| round (order) | A = C: alone | B = D: alone | both: A | both: B | both: aggregate | window (s) | r_sum | r_alt |
+|---|---|---|---|---|---|---|---|---|
+| 0 (a, b, ab) | 3.89 | 4.35 | 3.92 | 4.91 | 8.07 | 2.05 | 2.031 | 1.803 |
+| 1 (b, ab, a) | 3.99 | 4.33 | 4.15 | 5.34 | 8.26 | 1.88 | 2.192 | 1.917 |
+| 2 (ab, a, b) | 4.11 | 6.02 | 4.79 | 5.69 | 9.15 | 1.77 | 1.741 | 1.592 |
+| **median** | **3.990** | 4.351 | 4.149 | 5.341 | — | — | 2.031 | 1.803 |
+
+**Verdict under §2: none** — `alone_A` = 3.990 GB/s, outside 4.5-6.2, and also
+0.03 below the 4.02 floor of gate-974's own one-request readings, so it is not
+the "between 4.0 and 4.5" case the run-1 note hands to the owner either.
+
+**What the counters settle.** Writes on C: during the C:-alone arms averaged
+**1.2 / 1.8 / 0.2 MB/s** and during the both-at-once arms 10.4 / 0.1 / 7.0
+MB/s — against 3.7-4.4 GB/s of reads, i.e. **foreign I/O on C: is not why C:
+reads ~4 GB/s**, and neither is paging (136-689 pages/s in the C: arms, a few
+MB/s). The CPU was not asleep either: 10-23% busy, clock 136-154% of nominal in
+every arm. The read counter agrees with the harness (3.67 / 3.88 / 4.11 GB/s
+against 3.89 / 3.99 / 4.11). Two things did NOT change between runs: C: alone
+stayed at 3.9-4.1, and **each drive again read faster beside the other than
+alone** — A in 3 of 3 rounds (3.89 -> 3.92, 3.99 -> 4.15, 4.11 -> 4.79), B in
+2 of 3. The r medians reproduce: r_sum 2.014 -> 2.031, r_alt 1.707 -> 1.803.
+The both-at-once aggregate across the six rounds of the two runs is **7.65-9.15
+GB/s**, against 5.65 GB/s, the best single-drive primitive reading gate-974
+ever recorded on this box.
+
+**One host setting found while looking** (`powercfg`, active scheme Balanced
+`381b4222-...`): **PCIe Link State Power Management is "Maximum power savings"
+on AC as well as on battery** (index 2). The NVMe-specific idle settings are
+hidden on this image and do not print. So two host mechanisms fit "faster
+beside the other drive": the CPU package dropping into a deep idle state
+between completions, and each link's ASPM dropping it to L1 between bursts.
+
+### D1 — does keeping the CPU awake speed up one drive? (rule written before D1 ran)
+
+A busy loop on another core keeps the CPU package out of its deep idle states
+and cannot reach a PCIe link's ASPM, so reading C: alone with and without
+spinner processes separates the two mechanisms. Harness
+`two_drive_host_probe.py` (imports `two_drive_read.py`'s primitive, spans,
+counters and byte check): per round, rotated, C: alone and C: alone with 2
+processes running `while True: pass`; 24 spans per arm, K = 4, three rounds.
+
+| measured: spin / alone, per round | reading | next |
+|---|---|---|
+| **>= 1.10 in all three rounds** | the CPU package's idle state costs >= 10% of one drive's read | a keep-awake measure inside the reader is a software lever that needs no user setting; the owner decides on a controlled power-plan comparison before R1 is re-run |
+| **0.95-1.05 in all three rounds** | package idle is not it | the remaining host suspect is per-link ASPM, which only a power-plan change tests — owner decision, because it changes a system setting on a shared box |
+| **anything else** | ambiguous | reported as measured; no conclusion drawn |
+
+**D1 result — 2026-09-28 10:47, AMBIGUOUS by its own rule.** JSON
+`d1_host_spin.json`; every byte check OK; no counter errors.
+
+| round (order) | C: alone | C: alone + 2 spinners | spin / alone | CPU busy (alone / spin) | clock, % of nominal (alone / spin) |
+|---|---|---|---|---|---|
+| 0 (alone, spin) | 3.91 | 4.14 | 1.059 | 13% / 16% | 142 / 150 |
+| 1 (spin, alone) | 3.99 | 4.11 | 1.029 | 7% / 18% | 141 / 149 |
+| 2 (alone, spin) | **4.68** | 4.03 | **0.860** | 6% / 18% | 139 / 150 |
+| **median** | 3.993 | 4.108 | 1.029 | | |
+
+Neither decisive row holds (1.059 and 0.860 fall outside 0.95-1.05, and no
+round reaches 1.10), so no conclusion is drawn from D1. What it does show,
+without being a verdict: keeping two cores busy moved the median by +3% and
+reversed in one round, so **the CPU package's idle state is not the ~20% effect
+the both-at-once arm shows** — and C: alone ranged 3.91-4.68 GB/s within ninety
+seconds with foreign writes at 1.2-1.7 MB/s, i.e. the drive's own spread is as
+large as the effect being chased. Across all nine C:-alone arms of the day (runs
+1, 2, D1) C: read 3.62-4.68 GB/s, median 3.94.
+
+**Where R1 stands, stated plainly.** The committed rule has given no verdict,
+twice, and it will not be edited to give one. The one host suspect left is
+per-link ASPM ("Maximum power savings" on AC), and testing it means changing a
+power setting on a box other sessions are using, so it waits for the owner.
+What the record does establish is below any verdict: **the two drives read
+7.65-9.15 GB/s together in six of six both-at-once arms**, each drive at its
+alone rate or faster, which no shared bottleneck produces.
+
+### D2 — does PCIe ASPM slow one drive? (owner's consent 2026-09-28; rule written before D2 ran)
+
+The owner agreed to a short, reversible change of the power setting. Harness
+`two_drive_aspm_probe.py` reads the active scheme's AC ASPM index (2, "Maximum
+power savings"), then reads C: alone with the index at 2 ("on") and at 0
+("Off"), **switching the policy between arms** (`powercfg /setacvalueindex` +
+`/setactive`, read back after every change, 1 s settle), order rotated over
+three rounds, 24 spans per arm, K = 4. It refuses to run on battery. The
+original index is restored in a `finally` block and read back; the run exits
+non-zero if it disagrees. Then, with ASPM Off, it runs R1 once more (run 3)
+through the unchanged `two_drive_read.py`, and restores again. A write of the
+same value (2 -> 2) confirmed beforehand that no elevation is needed.
+
+| measured: off / on, per round | reading | next |
+|---|---|---|
+| **>= 1.10 in all three rounds** | ASPM costs >= 10% of one drive's read on this box | a host setting the disk tier's docs (and `soup doctor`) should name |
+| **0.95-1.05 in all three rounds** | ASPM is not it | what remains is the drive's own spread |
+| **anything else** | ambiguous | reported as measured; no conclusion |
+
+**R1 run 3 is judged by the R1 rule in §2, unchanged** — whatever D2 says. If
+its validity row passes, its verdict row is R1's verdict, stated as holding
+**with ASPM Off**; if the row fires again, R1 has no verdict from this box and
+the decision to build on the aggregate evidence stays the owner's.
+
+**First D2 attempt, 2026-09-28 ~10:55: refused, nothing changed.** The laptop
+had been unplugged (`GetSystemPowerStatus` ACLineStatus 0, battery 97% and
+discharging), and the harness refuses to run on battery because the AC index
+is then not the one in force and nothing would be comparable with runs 1-2.
+It stopped before reading or writing any power setting. D2 waits for AC.
+
+### R3' — does the reader's per-layer barrier cost one drive throughput? (rule written before R3' ran)
+
+Found while reading the reader for R4: `AsyncDiskSource._read_layer`
+(`src/soup_cli/utils/async_disk_source.py:688`) hands a layer's K ranges to K
+workers through `_RangeReaders.run`, which blocks until every range has landed
+before the next layer is dispatched. **Exactly one layer is ever in flight**, and
+workers that finish early idle on the slowest range's tail. Two consequences:
+striping the files alone could not speed anything up (layer i on C: and layer
+i+1 on D: would still be read one after the other), and the "reader gap" the
+roadmap attributed to the pipeline may instead be this barrier — or nothing,
+since the same primitive with the same barrier read C: at 3.62-4.68 GB/s today
+(median 3.94), which is where the step-level 4.1 GB/s of §21 already sits.
+
+Harness `two_drive_depth_probe.py`: one drive (C:), K = 4 workers, the same
+ranges read through ONE function at depth 1 (the reader today) and depth 2 (the
+next span's ranges queued behind the current one's, so a freed worker starts on
+it at once). At most K requests are outstanding in either arm; only the barrier
+differs. Order rotated over three rounds, 24 spans per arm, on AC only.
+
+| measured: depth 2 / depth 1, per round | reading | next |
+|---|---|---|
+| **>= 1.10 in all three rounds** | the barrier costs >= 10% of one drive | two layers in flight is a single-drive lever of its own, and it is the same reader change striping needs — build them together |
+| **0.95-1.05 in all three rounds** | the barrier costs nothing measurable | the reader already reads at the drive's rate; R3 closes with no single-drive reader lever, and striping still needs >= 2 layers in flight for its own reason |
+| **anything else** | ambiguous | reported as measured; no conclusion |
+
+### D2 result — 2026-09-28 13:35, AMBIGUOUS by its own rule; ASPM restored
+
+The laptop was back on AC from 13:26:53 (a background watcher waited for it to
+stay plugged in for 60 s; battery 17% and charging). Box at the start: 9.10 GB
+available, commit 46.95 of 56.62 GB, 18 Python processes, GPU idle. JSON
+`d2_aspm.json`; every byte check OK; **the AC ASPM index read 2 before and 2
+after** (restored by the harness's `finally`, then read back independently with
+`powercfg`).
+
+| round (order) | C: ASPM on (2) | C: ASPM Off (0) | off / on | foreign writes on C:, MB/s (on / off) |
+|---|---|---|---|---|
+| 0 (on, off) | 3.52 | 3.61 | 1.027 | 9.0 / 7.4 |
+| 1 (off, on) | 3.59 | 3.57 | 0.996 | 6.4 / 12.1 |
+| 2 (on, off) | 3.93 | 3.58 | 0.910 | 2.7 / 4.2 |
+| **median** | 3.588 | 3.582 | **0.996** | |
+
+No row decides it (0.910 is outside 0.95-1.05, no round reaches 1.10), so no
+conclusion is drawn — but **no round shows ASPM costing anything like the 10%
+the rule asked about**, and the median is 1.00. ASPM is not why C: reads ~4 GB/s.
+
+### R1 run 3, ASPM Off — NO VERDICT for the third time
+
+JSON `r1_k4_run3_aspm_off.json`, run by D2's harness with ASPM Off; every byte
+check OK; foreign writes on C: 2.3-3.9 MB/s in the C: arms.
+
+| round (order) | A = C: alone | B = D: alone | both: A | both: B | both: aggregate | window (s) | r_sum | r_alt |
+|---|---|---|---|---|---|---|---|---|
+| 0 (a, b, ab) | 3.90 | 4.45 | 3.88 | 4.69 | 7.94 | 2.14 | 1.929 | 1.747 |
+| 1 (b, ab, a) | 3.84 | 4.35 | 3.91 | 5.32 | 7.80 | 1.89 | 2.123 | 1.798 |
+| 2 (ab, a, b) | 3.73 | 5.73 | 4.27 | 5.82 | 8.45 | 1.73 | 1.761 | 1.491 |
+| **median** | **3.837** | 4.446 | 3.908 | 5.325 | — | — | 1.929 | 1.747 |
+
+`alone_A` = 3.837 is outside 4.5-6.2: **the validity row fired for the third
+time, so by the rule committed before run 1, R1 has no verdict from this box.**
+The decision to build on the aggregate evidence is the owner's, and it was made
+the same day on this record: the striping design went ahead, with its own gate
+on the real training step (not this primitive) as the shipping criterion.
+
+### R3' result — 2026-09-28 13:36, AMBIGUOUS by its own rule
+
+Box at the start: 5.41 GB available, commit **54.48 of 57.71 GB** (at the limit
+again; the contributor loop's suites were running), 18 Python processes. JSON
+`r3p_depth.json`; every byte check OK.
+
+| round (order) | C: depth 1 (the reader today) | C: depth 2 | d2 / d1 | foreign writes on C:, MB/s (d1 / d2) |
+|---|---|---|---|---|
+| 0 (d1, d2) | 3.63 | 4.02 | 1.106 | 11.4 / 16.3 |
+| 1 (d2, d1) | 3.84 | 4.23 | 1.101 | 8.8 / 8.0 |
+| 2 (d1, d2) | 4.52 | 4.36 | 0.963 | 5.9 / 8.0 |
+| **median** | 3.837 | 4.226 | **1.101** | |
+
+Two rounds of three clear 1.10 and the third reverses because depth 1 happened
+to read 4.52 there — the drive's own spread again. No conclusion is drawn; the
+reading worth keeping is that removing the per-layer barrier did not cost
+anything in any round, and gained ~10% in two.
+
+### What the day's record adds up to
+
+- **C: alone read 3.52-4.68 GB/s across twenty-four single-drive arms** (runs
+  1-3, both arms of D1 and of D2, R3' at depth 1; median 3.90), a spread of the
+  same size as every effect the diagnostics were built to find. *(Corrected
+  before publication: the commit that introduced this line said "seventeen
+  arms"; counted from the JSON it is twenty-four.)* Foreign I/O (counters), CPU idle (D1) and ASPM (D2) are each
+  ruled out or reduced to noise as the cause of C: reading below gate-974's
+  run A; what remains is unexplained and is stated as such. D: — the emptier
+  drive, behind the chipset — read up to 6.02 GB/s alone.
+- **Together the two drives read 7.65-9.15 GB/s in nine of nine
+  both-at-once arms**, r_sum 1.76-2.36 and r_alt 1.49-2.05 per round, medians
+  2.01 / 2.03 / 1.93 and 1.71 / 1.80 / 1.75 over the three runs.
+- **For three rounds to resolve a 10% effect, this drive needs a quieter box or
+  more rounds.** Every rule in this record was written for three; that choice,
+  not the drives, is why three of its tables end "ambiguous".
+
+## 6. Verdict
+
+**No formal verdict.** R1's validity row fired in all three runs (§5, runs 1-3), and the rule
+is not edited to give one; D1, D2 and R3' are ambiguous by their own rules. What the record
+establishes without a verdict is stated under "What the day's record adds up to" above. The
+decision to build striping on that evidence was the owner's (2026-09-28, §5 run 3), with its
+own gate on the real training step: [`gate-two-drive-striping.md`](gate-two-drive-striping.md).
+*(Updated 2026-10-01; until then this section read "Pending".)*
+
+## 7. What this does NOT measure
+
+- **The streamed step.** This is the read primitive on two drives, not the
+  reader and not a training step. A striped reader has to earn its own number.
+- **The copy to the GPU.** Bytes land in pinned host memory and stop there.
+- **Sustained load.** Arms are ~2 s; a DRAM-less drive's thermal throttle under
+  minutes of reads is not exercised.
+- **Any drive other than these two.** Two identical PM9B1 on one CPU and one
+  PCH root port; a desktop with both drives on CPU lanes, or two different
+  drives, is a different measurement.

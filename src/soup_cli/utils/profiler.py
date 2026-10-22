@@ -220,6 +220,7 @@ def estimate_total(
     seq_len: int,
     optimizer: str,
     gradient_checkpointing: bool,
+    peft: str = "lora",
 ) -> dict:
     """Compute full memory profile.
 
@@ -228,10 +229,19 @@ def estimate_total(
     arch = get_model_arch(model_name, model_params_b)
 
     model_mem = estimate_model_memory(model_params_b, quantization)
-    lora_mem = estimate_lora_memory(model_params_b, lora_r, lora_alpha)
-    trainable = estimate_trainable_params(
-        model_params_b, lora_r, arch["hidden_size"]
-    )
+    if peft == "full":
+        # #1423: full fine-tuning trains the whole model
+        trainable = int(model_params_b * 1e9)
+        lora_mem = 0.0
+        # Gradients are 2 bytes/param (FP16/BF16)
+        grad_mem = trainable * 2 / (1024**3)
+    else:
+        trainable = estimate_trainable_params(
+            model_params_b, lora_r, arch["hidden_size"]
+        )
+        lora_mem = estimate_lora_memory(model_params_b, lora_r, lora_alpha)
+        grad_mem = 0.0
+
     opt_mem = estimate_optimizer_memory(trainable, optimizer)
     act_mem = estimate_activation_memory(
         batch_size, seq_len, arch["hidden_size"], arch["num_layers"],
@@ -239,15 +249,17 @@ def estimate_total(
     )
 
     overhead = 1.5  # CUDA context + fragmentation
-    total = model_mem + lora_mem + opt_mem + act_mem + overhead
+    total = model_mem + lora_mem + opt_mem + grad_mem + act_mem + overhead
 
     return {
         "model_name": model_name,
         "model_params_b": model_params_b,
         "trainable_params": trainable,
         "quantization": quantization,
+        "peft": peft,
         "model_memory_gb": round(model_mem, 2),
         "lora_memory_gb": round(lora_mem, 2),
+        "gradients_memory_gb": round(grad_mem, 2),
         "optimizer_memory_gb": round(opt_mem, 2),
         "activation_memory_gb": round(act_mem, 2),
         "overhead_gb": overhead,

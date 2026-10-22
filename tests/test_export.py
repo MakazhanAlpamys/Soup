@@ -1,6 +1,7 @@
 """Tests for soup export command."""
 
 import json
+import re
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -132,3 +133,27 @@ def test_export_help():
     assert result.exit_code == 0
     assert "gguf" in result.output.lower()
     assert "quant" in result.output.lower()
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    """Help text with Rich colour removed and line wraps collapsed to one space."""
+    return " ".join(_ANSI_RE.sub("", text).split())
+
+
+def test_export_help_names_every_supported_format():
+    """The --format help lists every accepted format (torchao and gguf-ud were missing)."""
+    result = runner.invoke(app, ["export", "--help"])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    out = _plain(result.output)
+    formats_line = out.split("Export format:", 1)
+    assert len(formats_line) == 2, out
+    # Only the --format sentence: it ends at the deprecation note's closing bracket,
+    # before the next option's help (which also says "torchao").
+    listed = formats_line[1].split(")", 1)[0]
+    for fmt in SUPPORTED_FORMATS:
+        assert re.search(rf"(?<![\w-]){re.escape(fmt)}(?![\w-])", listed), (
+            f"--format help does not list {fmt!r}: {listed[:200]}"
+        )

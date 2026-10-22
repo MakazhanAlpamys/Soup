@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from soup_cli.config.schema import TrainingConfig
 from soup_cli.utils.optimizer_zoo import (
+    MLX_ONLY_OPTIMIZERS,
     SUPPORTED_OPTIMIZERS,
     is_new_v0_41_optimizer,
     required_package,
@@ -19,24 +20,45 @@ class TestSupportedOptimizers:
         assert "adamw_torch" in SUPPORTED_OPTIMIZERS
 
     def test_new_v0_41_entries(self):
+        # The 4.x-era additions transformers 5.x rejects were retired (#1269);
+        # only the survivors remain in the allowlist.
         for name in (
-            "badam",
             "apollo_adamw",
-            "adam_mini",
             "lomo",
             "adalomo",
             "grokadamw",
             "schedule_free_adamw",
             "schedule_free_sgd",
-            "muon",
+        ):
+            assert name in SUPPORTED_OPTIMIZERS, name
+            assert is_new_v0_41_optimizer(name)
+
+    def test_torch_rejected_entries_retired(self):
+        # #1269: these eight used to be here but transformers 5.x refuses them
+        # in TrainingArguments, so they are refused at config load instead.
+        # (`muon` and `adamw_hf` are rejected by transformers too, but the MLX
+        # backend builds them itself, so they stay allowlisted:
+        # test_mlx_only_entries_stay_allowlisted.)
+        for name in (
+            "badam",
+            "adam_mini",
             "dion",
             "came_pytorch",
             "ao_adamw_fp8",
             "ao_adamw_4bit",
             "ao_adamw_8bit",
+            "adamw_apex_fused",
         ):
+            assert name not in SUPPORTED_OPTIMIZERS, name
+            with pytest.raises(ValueError, match="no longer supported"):
+                validate_optimizer_name(name)
+
+    def test_mlx_only_entries_stay_allowlisted(self):
+        # #1283: refused per backend by SoupConfig, not by name.
+        assert MLX_ONLY_OPTIMIZERS == {"adamw_hf", "muon"}
+        for name in sorted(MLX_ONLY_OPTIMIZERS):
             assert name in SUPPORTED_OPTIMIZERS, name
-            assert is_new_v0_41_optimizer(name)
+            assert validate_optimizer_name(name) == name
 
     def test_bnb_entries_present(self):
         assert "adamw_bnb_8bit" in SUPPORTED_OPTIMIZERS
@@ -52,7 +74,7 @@ class TestValidateOptimizerName:
         assert validate_optimizer_name("adamw_torch") == "adamw_torch"
 
     def test_uppercase_normalised(self):
-        assert validate_optimizer_name("BAdam") == "badam"
+        assert validate_optimizer_name("GROKADAMW") == "grokadamw"
 
     def test_unknown_rejected(self):
         with pytest.raises(ValueError, match="not in the supported allowlist"):
@@ -83,10 +105,8 @@ class TestRequiredPackage:
         assert required_package("adamw_bnb_8bit") is None
 
     def test_new_returns_pkg(self):
-        assert required_package("badam") == "badam"
         assert required_package("apollo_adamw") == "apollo-torch"
         assert required_package("schedule_free_adamw") == "schedulefree"
-        assert required_package("ao_adamw_fp8") == "torchao"
 
 
 class TestSchemaIntegration:
@@ -94,8 +114,8 @@ class TestSchemaIntegration:
         TrainingConfig()
 
     def test_new_optimizer_accepted(self):
-        cfg = TrainingConfig(optimizer="badam")
-        assert cfg.optimizer == "badam"
+        cfg = TrainingConfig(optimizer="grokadamw")
+        assert cfg.optimizer == "grokadamw"
 
     def test_unknown_optimizer_rejected(self):
         with pytest.raises(ValidationError) as exc:
@@ -103,8 +123,8 @@ class TestSchemaIntegration:
         assert "not in the supported allowlist" in str(exc.value)
 
     def test_uppercase_normalised(self):
-        cfg = TrainingConfig(optimizer="BADAM")
-        assert cfg.optimizer == "badam"
+        cfg = TrainingConfig(optimizer="GrokAdamW")
+        assert cfg.optimizer == "grokadamw"
 
     def test_null_byte_rejected(self):
         with pytest.raises(ValidationError, match="null bytes"):
@@ -127,20 +147,17 @@ class TestIsNewV041Optimizer:
         assert is_new_v0_41_optimizer(None) is False
 
     def test_case_insensitive(self):
-        assert is_new_v0_41_optimizer("BADAM") is True
+        assert is_new_v0_41_optimizer("GrokAdamW") is True
 
 
 class TestRequiredPackageFull:
+    # #1269: the transformers-5-rejected additions were retired, so only the
+    # surviving v0.41.0 additions still map to a package.
     @pytest.mark.parametrize("name,pkg", [
-        ("adam_mini", "adam-mini"),
         ("lomo", "lomo-optim"),
         ("adalomo", "lomo-optim"),
         ("grokadamw", "grokadamw"),
-        ("muon", "muon-optimizer"),
-        ("dion", "dion-optimizer"),
-        ("came_pytorch", "came-pytorch"),
-        ("ao_adamw_4bit", "torchao"),
-        ("ao_adamw_8bit", "torchao"),
+        ("schedule_free_adamw", "schedulefree"),
         ("schedule_free_sgd", "schedulefree"),
     ])
     def test_each_pkg(self, name, pkg):

@@ -1,0 +1,17 @@
+{
+  "soup_cli": "C:\\Users\\user\\projects\\soup-wt\\moe-fp8\\src\\soup_cli\\__init__.py",
+  "cwd": "D:\\soup-bench",
+  "env": {
+    "SOUP_LAYER_STREAM_CACHE_DIR": "D:/soup-bench/fp8-loss-check/soup-cache"
+  },
+  "cache_root": "D:\\soup-bench\\fp8-loss-check\\soup-cache",
+  "base": "D:/soup-bench/models/Moonlight-16B-A3B-fp8block",
+  "shard_dir": "D:\\soup-bench\\fp8-loss-check\\soup-cache\\D___soup-bench__models__Moonlight-16B-A3B-fp8block",
+  "shard_dir_exists": false,
+  "source_files": 28,
+  "source_fingerprint": "874138d79dc0d76afb9bd138254d1059f39a43971283f7fd8fe5821b2b71be63",
+  "reusable": false,
+  "reason": "shard folder does not exist",
+  "reshard_estimate_bytes": 30598555900,
+  "cache_volume_free_bytes": 101128122368
+}

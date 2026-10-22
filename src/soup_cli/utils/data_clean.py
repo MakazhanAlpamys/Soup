@@ -37,15 +37,27 @@ _BOILERPLATE_PREFIXES = [
     ),
 ]
 
-# Common LLM canned sign-offs / suffixes in assistant turns
+# Common LLM canned sign-offs / suffixes in assistant turns.
+#
+# Run through ``.search`` on text a dataset author controls, so no pattern may
+# backtrack quadratically:
+# * no leading whitespace quantifier -- the caller has already ``rstrip()``ped the
+#   text, and with ``.search`` a leading ``\s*`` is retried from every offset inside
+#   one interior run of spaces (20,000 chars took ~20 s, 40,000 took ~64 s);
+# * the free-text tail of a sign-off is capped at ``_SIGNOFF_TAIL_CHARS`` rather than
+#   left unbounded, because an unbounded tail is re-scanned to the end of the line
+#   from every repeat of the sign-off.
+# A sign-off whose tail is longer than the cap is left alone.
+_SIGNOFF_TAIL_CHARS = 200
 _BOILERPLATE_SUFFIXES = [
     re.compile(
-        r"\s*(?:i )?hope (?:this|that) helps[!,.]?(?:\s*(?:please )?let me know if you "
-        r"(?:need|have) (?:anything|any(?: other)? questions)[^.\n]*[!,.]?)?$",
+        r"(?:i )?hope (?:this|that) helps[!,.]?(?:\s*(?:please )?let me know if you "
+        r"(?:need|have) (?:anything|any(?: other)? questions)"
+        rf"[^.\n]{{0,{_SIGNOFF_TAIL_CHARS}}}[!,.]?)?$",
         re.IGNORECASE,
     ),
     re.compile(
-        r"\s*(?:please )?let me know if you (?:have|need) (?:any )?"
+        r"(?:please )?let me know if you (?:have|need) (?:any )?"
         r"(?:further|other|more)? (?:questions|assistance|help)[!,.]?$",
         re.IGNORECASE,
     ),
@@ -239,6 +251,12 @@ def _clean_tool_calls(
     return cleaned_calls
 
 
+def _has_tool_calls(msg: Dict[str, Any]) -> bool:
+    """True when a turn carries at least one tool call (a non-empty list)."""
+    calls = msg.get("tool_calls")
+    return isinstance(calls, list) and len(calls) > 0
+
+
 def _clean_turn_tool_calls(
     msg: Dict[str, Any], applied_rules: List[str], repair_json: bool, drop_invalid_json: bool
 ) -> bool:
@@ -345,7 +363,13 @@ def clean_row(
                         if was_cr:
                             applied_rules.append("Markdown Code Fence Repair")
 
-                    if len(sanitized_content.strip()) < min_tokens:
+                    # #1477 - a call-only turn carries its payload in tool_calls,
+                    # and "" is what the unified tool-calling format writes there;
+                    # keep it as the same turn with content null is kept.
+                    if (
+                        not _has_tool_calls(msg)
+                        and len(sanitized_content.strip()) < min_tokens
+                    ):
                         return None, ["Empty / Whitespace Turns"]
 
                     msg["content"] = sanitized_content
@@ -560,4 +584,3 @@ def clean_dataset(
             cleaned_rows.append(cleaned)
 
     return cleaned_rows, report
-

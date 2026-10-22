@@ -7,7 +7,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
+from soup_cli.data.traces.messages import content_text, conversation_prompt
+
 SUPPORTED_FORMATS: tuple[str, ...] = ("langchain", "openai", "soup-serve")
+
+# The per-trace signal vocabulary a producer may write. Distinct from
+# ``pair_builder.SUPPORTED_SIGNALS``, which names pair *modes*: a trace can carry
+# ``thumbs_down`` (a signal) even though no ``--signal thumbs_down`` exists (#1440).
+TRACE_SIGNALS: frozenset[str] = frozenset({
+    "thumbs_up",
+    "thumbs_down",
+    "regenerated",
+    "user_edit",
+})
 
 
 @dataclass(frozen=True)
@@ -30,16 +42,13 @@ class Trace:
 
 def _langchain_prompt(inputs: Any) -> str:
     """Flatten LangChain ``inputs`` into a string prompt."""
+    if isinstance(inputs, list):
+        return conversation_prompt(inputs)
     if not isinstance(inputs, dict):
         return ""
     messages = inputs.get("messages")
     if isinstance(messages, list):
-        parts: list[str] = []
-        for msg in messages:
-            if isinstance(msg, dict):
-                content = msg.get("content") or ""
-                parts.append(str(content))
-        return "\n".join(parts).strip()
+        return conversation_prompt(messages)
     for key in ("prompt", "input", "query"):
         value = inputs.get(key)
         if isinstance(value, str):
@@ -60,11 +69,11 @@ def _langchain_output(outputs: Any) -> str:
             item = first
         if isinstance(item, dict):
             text = item.get("text") or item.get("content") or ""
-            return str(text)
+            return content_text(text)
     for key in ("output", "response", "text", "content"):
         value = outputs.get(key)
-        if isinstance(value, str):
-            return value
+        if isinstance(value, (str, list)):
+            return content_text(value)
     return ""
 
 
@@ -108,12 +117,7 @@ def parse_langchain(events: Iterable[Any]) -> Iterator[Trace]:
 
 
 def _openai_prompt(messages: Any) -> str:
-    if not isinstance(messages, list):
-        return ""
-    for msg in messages:
-        if isinstance(msg, dict) and msg.get("role") == "user":
-            return str(msg.get("content") or "")
-    return ""
+    return conversation_prompt(messages)
 
 
 def _openai_output(choices: Any) -> str:
@@ -124,8 +128,8 @@ def _openai_output(choices: Any) -> str:
         return ""
     msg = first.get("message")
     if isinstance(msg, dict):
-        return str(msg.get("content") or "")
-    return str(first.get("text") or "")
+        return content_text(msg.get("content"))
+    return content_text(first.get("text"))
 
 
 def _openai_signal(feedback: Any) -> str:
@@ -173,6 +177,36 @@ def parse_openai(events: Iterable[Any]) -> Iterator[Trace]:
 # ---------------------------------------------------------------------------
 
 
+def _record_signal(event: dict[str, Any]) -> str:
+    """The signal a ``soup ingest`` record carries.
+
+    ``soup ingest`` writes a top-level ``signal`` field in the canonical
+    vocabulary (``TraceRecord.to_dict``); ``soup serve --trace-log`` records
+    none, and a hand-written log may still carry the older
+    ``feedback.rating``. #1440: reading only ``feedback`` meant Soup's own
+    ingest stream was read as ``none`` for every row, so
+    ``soup data from-traces`` wrote 0 pairs from it and exited 0.
+    """
+    signal = event.get("signal")
+    if isinstance(signal, str) and signal in TRACE_SIGNALS:
+        return signal
+    return _openai_signal(event.get("feedback"))
+
+
+def _edited_output(event: dict[str, Any]) -> Optional[str]:
+    """The user's edited answer, under the names a log would use."""
+    feedback = event.get("feedback")
+    candidates = [
+        event.get("edited_output"),
+        event.get("edited_response"),
+        feedback.get("edited_output") if isinstance(feedback, dict) else None,
+    ]
+    for value in candidates:
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
 def parse_soup_serve(path: str) -> Iterator[Trace]:
     dir_path = Path(path)
     if not dir_path.is_dir():
@@ -194,8 +228,9 @@ def parse_soup_serve(path: str) -> Iterator[Trace]:
             output = str(event.get("response") or event.get("output") or "")
             if not prompt or not output:
                 continue
-            signal = _openai_signal(event.get("feedback"))
+            signal = _record_signal(event)
             yield Trace(
                 trace_id=str(event.get("id") or file_path.stem),
                 prompt=prompt, output=output, signal=signal,
+                edited_output=_edited_output(event),
             )
