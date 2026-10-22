@@ -151,7 +151,7 @@ Sections:
 | `training.grpo_judge_rubric` | `str \| null` | `null` |  | Rubric YAML for judge_rank, under the working directory. Only each criterion's name and description are used: a ranking scores from 0 to 1, so weights and scale are ignored. Unset = Soup's default criteria (helpfulness, accuracy, safety). |
 | `training.grpo_judge_max_tokens` | `int \| null` | `null` | `>= 1`, `<= 32768` | Judge reply budget per judge_rank call. Unset = 1024. |
 | `training.grpo_judge_max_calls` | `int \| null` | `null` | `>= 1` | Cost guard for judge_rank: the run is refused before the model loads when it could make more judge calls than this ((train rows x epochs + held-out rows x evaluations) x 2 for the retry). Required with judge_rank; no default. |
-| `training.grpo_judge_max_failure_rate` | `float \| null` | `null` | `>= 0.0`, `<= 1.0`; finite | judge_rank stops the run when more than this share of its training groups got no scores (checked from the 20th group). Unset = 0.2. |
+| `training.grpo_judge_max_failure_rate` | `float \| null` | `null` | `>= 0.0`, `<= 1.0` | judge_rank stops the run when more than this share of its training groups got no scores (checked from the 20th group). Unset = 0.2. |
 | `training.online_dpo_judge` | `str \| null` | `null` |  | Judge URL (ollama://model \| https://... \| http://localhost) for task='online_dpo'. Mutually exclusive with reward_model. |
 | `training.online_dpo_loss_type` | `str` | `"sigmoid"` | one of `"sigmoid"`, `"ipo"` | Online DPO loss type (maps to OnlineDPOConfig.loss_type). |
 | `training.online_dpo_max_new_tokens` | `int` | `64` | `>= 1`, `<= 4096` | Max new tokens generated per online-DPO step. |

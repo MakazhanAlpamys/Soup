@@ -1627,7 +1627,6 @@ class TrainingConfig(BaseModel):
         default=None,
         ge=0.0,
         le=1.0,
-        allow_inf_nan=False,
         description=(
             "judge_rank stops the run when more than this share of its training "
             "groups got no scores (checked from the 20th group). Unset = 0.2."
@@ -7437,7 +7436,8 @@ class SoupConfig(BaseModel):
 
         ``judge_rank`` is built from this config in ``trainer/grpo.py`` (the PPO
         and ``soup reward`` loaders refuse it), so it needs ``task='grpo'`` off
-        MLX, a judge URL and a call budget. ``prm_reward`` replaces
+        MLX, a text modality (the judge never sees an image), a judge URL and a
+        call budget. ``prm_reward`` replaces
         ``reward_fn``, so the judge would never run; a ``rollout_backend``
         replaces the prompts after the cost guard has counted them. Any
         ``grpo_judge*`` field without ``judge_rank`` would be read by nothing.
@@ -7463,6 +7463,13 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 "training.reward_fn judge_rank is not supported on backend='mlx'; "
                 "use backend='transformers'"
+            )
+        if self.modality == "vision":
+            raise ValueError(
+                "training.reward_fn judge_rank is not supported with modality='vision' "
+                "(including training.vision_grpo): the judge is sent only the text of the "
+                "conversation and the completions, never the images, so it would rank them "
+                "on the text alone. Use a rule-based reward, or modality: text."
             )
         if t.prm_reward is not None:
             raise ValueError(

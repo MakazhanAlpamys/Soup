@@ -77,6 +77,9 @@ DEFAULT_MAX_FAILURE_RATE = 0.2
 MIN_GROUPS_BEFORE_STOP = 20
 #: One call per group, plus one retry for a reply that does not parse.
 CALLS_PER_GROUP = 2
+#: A failure reason is cut to this many characters where it is logged or raised:
+#: it can quote judge-chosen text, such as every key of a long reply.
+MAX_REASON_CHARS = 200
 
 FAILED_RATE_KEY = "judge/failed_group_rate"
 EQUAL_RATE_KEY = "judge/equal_score_group_rate"
@@ -121,6 +124,7 @@ class JudgeRankState:
         self.eval_groups = self.eval_failed = self.eval_equal = 0
         self._window = {"train": [0, 0, 0], "eval": [0, 0, 0]}
         self._warned = False
+        self.first_reason: Optional[str] = None
 
     def bind(self, trainer: Any) -> None:
         self.trainer = trainer
@@ -156,10 +160,12 @@ class JudgeRankState:
         window[2] += equal
 
     def warn_failed(self, size: int, reason: str) -> None:
+        reason = _cut(reason)
         if self._warned:
             logger.debug("judge_rank: a group of %d got no scores: %s", size, reason)
             return
         self._warned = True
+        self.first_reason = reason
         logger.warning(
             "GRPO judge_rank: the judge %s gave no scores for a group of %d completions "
             "(%s). The group scores None, which gives it no advantage; the share of such "
@@ -218,13 +224,21 @@ class JudgeRankState:
             if rate_applies
             else f"or {tokens}"
         )
+        first = f" First failure: {self.first_reason}" if self.first_reason else ""
         return (
             f"GRPO stopped: the judge {self.judge_label} gave no usable scores for {what}. "
             "A group fails when the judge's reply, asked for twice, is not a JSON object "
             "with one score from 0 to 1 per response, or when the judge refuses the request "
             "(for example a prompt longer than its context). Check that training.grpo_judge "
-            f"points at a judge that follows the ranking instructions, {fixes}."
+            f"points at a judge that follows the ranking instructions, {fixes}.{first}"
         )
+
+
+def _cut(reason: str) -> str:
+    """``reason`` cut to :data:`MAX_REASON_CHARS`, with ``...`` marking the cut."""
+    if len(reason) <= MAX_REASON_CHARS:
+        return reason
+    return reason[:MAX_REASON_CHARS] + "..."
 
 
 def judge_rank_state(reward_fns: Any) -> Optional[JudgeRankState]:

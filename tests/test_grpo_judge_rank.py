@@ -18,6 +18,7 @@ the real TRL ``GRPOTrainer`` on a tiny local model. No test touches the network.
 from __future__ import annotations
 
 import json
+import logging
 import random
 import re
 from collections import defaultdict
@@ -47,7 +48,9 @@ def _plain(text: str) -> str:
     return " ".join(strip_ansi(text).split())
 
 
-def _config(task: str = "grpo", backend: str = "transformers", **training):
+def _config(
+    task: str = "grpo", backend: str = "transformers", modality: str = "text", **training
+):
     values = {
         "reward_fn": "judge_rank",
         "grpo_judge": JUDGE_URL,
@@ -62,6 +65,7 @@ def _config(task: str = "grpo", backend: str = "transformers", **training):
                 "base": "some-org/some-model",
                 "task": task,
                 "backend": backend,
+                "modality": modality,
                 "data": {"train": "train.jsonl"},
                 "training": values,
             }
@@ -506,6 +510,47 @@ def test_the_stop_names_the_judge_without_its_credentials(monkeypatch):
     assert "training.grpo_judge_max_failure_rate" in message
 
 
+def _many_keys(prompt: str) -> str:
+    """A reply with far too many keys: its error quotes the whole key list."""
+    return json.dumps({str(i + 1): 0.5 for i in range(300)})
+
+
+def _unusable_reason(reply: str) -> str:
+    with pytest.raises(ValueError) as caught:
+        gj.parse_rank_reply(reply, 4)
+    return f"the reply is not a usable ranking: {caught.value}"
+
+
+def test_a_long_reason_is_cut_in_the_logged_warning(monkeypatch, caplog):
+    reward = _reward(monkeypatch, FakeJudge(default=_many_keys))
+    prompts, completions = _groups(1)
+    with caplog.at_level(logging.WARNING, logger=gj.logger.name):
+        assert reward(prompts=prompts, completions=completions) == [None] * 4
+    reason = _unusable_reason(_many_keys(""))
+    assert len(reason) > gj.MAX_REASON_CHARS
+    (record,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+    message = record.getMessage()
+    assert f"({reason[: gj.MAX_REASON_CHARS]}...)" in message
+    assert reason not in message
+
+
+def test_the_stop_gives_the_first_failure_reason_cut(monkeypatch):
+    groups = gj.MIN_GROUPS_BEFORE_STOP
+    judge = FakeJudge(_many_keys, _many_keys, default="not json")
+    reward = _reward(monkeypatch, judge, grpo_judge_max_failure_rate=0.5)
+    state = _bind(reward, _trainer())
+    prompts, completions = _groups(groups)
+    assert reward(prompts=prompts, completions=completions) == [None] * (4 * groups)
+    callback = gj.make_judge_rank_callback(state)
+    with pytest.raises(gj.JudgeRankUnusableError) as caught:
+        callback.on_step_end(SimpleNamespace(), SimpleNamespace(global_step=1), SimpleNamespace())
+    message = str(caught.value)
+    reason = _unusable_reason(_many_keys(""))
+    assert f"First failure: {reason[: gj.MAX_REASON_CHARS]}..." in message
+    assert reason not in message
+    assert "Expecting value" not in message  # a later group's reason
+
+
 def test_the_callback_logs_rates_under_judge(monkeypatch):
     reward = _reward(monkeypatch, FakeJudge("bad", "bad", all_equal, default=by_content))
     trainer = _trainer()
@@ -638,6 +683,7 @@ def test_more_than_one_process_is_refused(monkeypatch):
         ({"grpo_judge": "https://10.0.0.5/m"}, "private"),
         ({"grpo_judge": "https://judge.example.com/"}, "missing model id"),
         ({"grpo_judge_rubric": "../outside.yaml"}, "under the working directory"),
+        ({"modality": "vision"}, "reward_fn judge_rank is not supported with modality='vision'"),
     ],
     ids=[
         "no-grpo_judge", "no-max_calls", "judge-fields-without-judge_rank",
@@ -645,7 +691,7 @@ def test_more_than_one_process_is_refused(monkeypatch):
         "rubric-without-judge_rank", "prm_reward", "rollout_backend", "bool-max_calls",
         "bool-max_tokens", "bool-max_failure_rate", "nan-max_failure_rate",
         "nan-max_calls", "rate-above-1", "max_calls-0", "ftp-scheme", "http-remote",
-        "private-ip", "no-model-id", "rubric-outside-cwd",
+        "private-ip", "no-model-id", "rubric-outside-cwd", "vision",
     ],
 )
 def test_load_time_refusals(overrides, needle):

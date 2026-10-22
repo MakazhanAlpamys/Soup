@@ -1595,8 +1595,11 @@ used. Without a rubric the judge uses Soup's default criteria (helpfulness, accu
 
 **What it costs.** One judge call per group, i.e. per training prompt per epoch, plus one per
 held-out prompt at each evaluation (`training.eval_steps`). A reply that does not parse is asked
-for once more, so a group takes at most 2 calls. The calls are made one after another while the
-step waits, so a step takes at least one judge round trip per prompt in its generation batch.
+for once more, so a group takes at most 2 calls. Inside each counted call, a request the judge
+answers with 429 or a 5xx, or that times out or loses its connection, is retried up to twice, so
+the judge host can see up to three requests per counted call. The calls are made one after
+another while the step waits, so a step takes at least one judge round trip per prompt in its
+generation batch.
 After the dataset loads and before the model does, Soup counts
 `(train rows x epochs + held-out rows x evaluations) x 2` and refuses the run when that exceeds
 `grpo_judge_max_calls`, stating the numbers and the value to raise it to. The number of
