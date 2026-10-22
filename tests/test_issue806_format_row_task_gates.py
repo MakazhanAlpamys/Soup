@@ -4,8 +4,8 @@ Both are applied by ``data.sft_format.build_format_row``. Its trainer callers
 are sft's text path (inherited by tts through ``TTSTrainerWrapper.setup``) and
 distill; pretrain and the classifier family never call it, so the flags loaded
 there and changed nothing, while tts, which does honour them, was refused.
-``train_on_eot`` also keys the pre-tokenized cache that pretrain loads (#1054),
-so pretrain keeps that one.
+pretrain also keys its pre-tokenized cache on ``train_on_eot`` (#1054), but its
+rows are ``labels = input_ids`` either way, so it is refused there too.
 
 Every refused config is first loaded without the flag, so a refusal can only
 come from the flag itself.
@@ -39,16 +39,16 @@ def _yaml(task, flag=""):
 
 def test_the_allowlists_match_the_consumers():
     assert REASONING_EFFORT_AWARE_TASKS == {"sft", "tts", "distill"}
-    assert TRAIN_ON_EOT_AWARE_TASKS == {"sft", "tts", "distill", "pretrain"}
+    assert TRAIN_ON_EOT_AWARE_TASKS == {"sft", "tts", "distill"}
 
 
-@pytest.mark.parametrize("task", sorted(REASONING_EFFORT_AWARE_TASKS))
+@pytest.mark.parametrize("task", ["distill", "sft", "tts"])
 def test_reasoning_effort_loads_where_the_formatter_runs(task):
     cfg = load_config_from_string(_yaml(task, _REASONING))
     assert cfg.training.reasoning_effort == "medium"
 
 
-@pytest.mark.parametrize("task", sorted(TRAIN_ON_EOT_AWARE_TASKS))
+@pytest.mark.parametrize("task", ["distill", "sft", "tts"])
 def test_train_on_eot_loads_where_it_is_read(task):
     cfg = load_config_from_string(_yaml(task, _EOT))
     assert cfg.training.train_on_eot is True

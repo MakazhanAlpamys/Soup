@@ -2036,7 +2036,7 @@ class TrainingConfig(BaseModel):
         default=None,
         description=(
             "gpt-oss train-time reasoning effort level. Injected as a prompt "
-            "prefix by the SFT-family data formatter."
+            "prefix by the SFT data formatter; task sft, tts or distill only."
         ),
     )
     train_on_eot: bool = Field(
@@ -2044,7 +2044,8 @@ class TrainingConfig(BaseModel):
         description=(
             "Include explicit EOT / EOS control tokens in the SFT loss "
             "(axolotl ``train_on_eot``). Default False matches HF Trainer "
-            "convention. (v0.52.0)"
+            "convention. Applied by the SFT data formatter; task sft, tts or "
+            "distill only. (v0.52.0)"
         ),
     )
     # ---- v0.53.0 Quant Menu II — UD GGUFs + KV cache + NVFP4 ---------------
@@ -4919,9 +4920,10 @@ AMP_APPLYING_TASKS: frozenset[str] = frozenset({"sft", "tts"})
 # (sft's text path, inherited by tts, and distill), the only reader of
 # ``training.reasoning_effort``.
 REASONING_EFFORT_AWARE_TASKS: frozenset[str] = frozenset({"sft", "tts", "distill"})
-# #806: ``training.train_on_eot`` is also read on pretrain, where it keys the
-# pre-tokenized cache (#1054).
-TRAIN_ON_EOT_AWARE_TASKS: frozenset[str] = REASONING_EFFORT_AWARE_TASKS | {"pretrain"}
+# #806: ``training.train_on_eot`` has the same reader. pretrain passes it to the
+# pre-tokenized cache too, but a pretrain row is ``labels = input_ids`` whatever
+# the mask mode, so there it changed only the cache key.
+TRAIN_ON_EOT_AWARE_TASKS: frozenset[str] = REASONING_EFFORT_AWARE_TASKS
 
 
 # #795: trainers that load the base unquantised and never read
@@ -6217,9 +6219,9 @@ class SoupConfig(BaseModel):
         callers are sft (its text path, inherited by tts's
         ``TTSTrainerWrapper.setup``) and distill (#806). pretrain, classifier,
         reranker and cross_encoder never call it, so the flags loaded there and
-        changed nothing. ``train_on_eot`` has one more reader: pretrain passes
-        it to ``_maybe_load_pretokenized``, where ``preprocess_mask_mode`` keys
-        the ``soup data preprocess`` cache on it (#1054), so pretrain keeps it.
+        changed nothing. pretrain also passes ``train_on_eot`` to the
+        ``soup data preprocess`` cache key (#1054), but its rows are
+        ``labels = input_ids`` either way, so the flag is refused there too.
         """
         tcfg = self.training
         if (
@@ -6230,14 +6232,16 @@ class SoupConfig(BaseModel):
                 f"training.reasoning_effort={tcfg.reasoning_effort!r} requires "
                 f"task in {sorted(REASONING_EFFORT_AWARE_TASKS)}; got task={self.task!r}. "
                 "Only those tasks build their rows with the SFT formatter that "
-                "injects it, so elsewhere it would be ignored."
+                "injects it, so elsewhere it would be ignored. Use task: sft, "
+                "tts or distill, or remove training.reasoning_effort."
             )
         if tcfg.train_on_eot and self.task not in TRAIN_ON_EOT_AWARE_TASKS:
             raise ValueError(
                 f"training.train_on_eot=true requires task in "
                 f"{sorted(TRAIN_ON_EOT_AWARE_TASKS)}; got task={self.task!r}. "
-                "Only those tasks build or load an assistant-only loss mask, "
-                "so elsewhere it would be ignored."
+                "Only those tasks build their rows with the SFT formatter that "
+                "applies the loss mask, so elsewhere it would be ignored. Use "
+                "task: sft, tts or distill, or remove training.train_on_eot."
             )
         return self
 
