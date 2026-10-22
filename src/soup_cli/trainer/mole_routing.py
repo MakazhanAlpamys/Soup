@@ -26,12 +26,30 @@ from rich.console import Console
 from soup_cli.config.schema import SoupConfig
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.eval_schedule import training_eval_kwargs
+from soup_cli.utils.gpu import (
+    bf16_fp16_flags,
+    estimate_batch_size,
+    get_gpu_info,
+    model_size_from_name,
+)
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 logger = logging.getLogger(__name__)
 
 console = Console()
+
+
+def _save_mole_gate(gate: Any, path: Path | str) -> None:
+    """Save the MoLE gate module with all floating point tensors in fp32."""
+    import torch
+
+    gate_state = {
+        name: tensor.to(torch.float32) if tensor.is_floating_point() else tensor
+        for name, tensor in gate.state_dict().items()
+    }
+    torch.save(gate_state, str(path))
 
 
 @lru_cache(maxsize=4)
@@ -57,6 +75,28 @@ def make_mole_trainer_class(base_cls: type) -> type:
 
     class _MoleTrainer(base_cls):  # type: ignore[misc, valid-type]
         """HF Trainer subclass for MoLE per-token routing."""
+
+        def _save_checkpoint(self, model, trial):
+            super()._save_checkpoint(model, trial)
+            step = int(getattr(self.state, "global_step", 0) or 0)
+            if step > 0 and getattr(self.args, "should_save", True):
+                ckpt_dir = Path(self.args.output_dir) / f"checkpoint-{step}"
+                gate = getattr(model, "mole_gate", None)
+                if ckpt_dir.is_dir() and gate is not None:
+                    _save_mole_gate(gate, ckpt_dir / "mole_gate.pt")
+
+        def _load_from_checkpoint(self, resume_from_checkpoint: str, model=None):
+            super()._load_from_checkpoint(resume_from_checkpoint, model=model)
+            target = model if model is not None else self.model
+            if target is not None:
+                for param in target.parameters():
+                    param.requires_grad_(False)
+                if hasattr(target, "mole_gate"):
+                    target.mole_gate.requires_grad_(True)
+                    gate_path = Path(resume_from_checkpoint) / "mole_gate.pt"
+                    if gate_path.is_file():
+                        gate_state = torch.load(gate_path, map_location="cpu", weights_only=True)
+                        target.mole_gate.load_state_dict(gate_state)
 
         def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
             input_ids = inputs["input_ids"]
@@ -263,7 +303,8 @@ class MoleRoutingTrainerWrapper:
             )
 
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -272,6 +313,7 @@ class MoleRoutingTrainerWrapper:
             cfg.base,
             trust_remote_code=self._trust_remote_code,
             torch_dtype=torch.bfloat16 if self.device == "cuda" else torch.float32,
+            **base_revision_kwargs(cfg.base),
         )
         hidden_size = base_model.config.hidden_size
 
@@ -279,7 +321,7 @@ class MoleRoutingTrainerWrapper:
         # rest — PEFT multi-adapter pattern (matches v0.71.8 interference_live).
         adapter_names = [f"task_{i}" for i in range(len(adapters))]
         model = PeftModel.from_pretrained(
-            base_model, adapters[0], adapter_name=adapter_names[0]
+            base_model, adapters[0], adapter_name=adapter_names[0],
         )
         for name, path in zip(adapter_names[1:], adapters[1:]):
             model.load_adapter(path, adapter_name=name)
@@ -336,8 +378,17 @@ class MoleRoutingTrainerWrapper:
             f"trainable_params={n_trainable}"
         )
 
-    def train(self, **_kwargs) -> dict:
+    def train(
+        self,
+        display=None,
+        tracker=None,
+        run_id=None,
+        resume_from_checkpoint: Optional[str] = None,
+        **_kwargs,
+    ) -> dict:
         """Train the gating kernel with the MoLE Trainer subclass."""
+        # #802 contract: display, tracker, and run_id are accepted for caller
+        # uniformity but not wired here.
         if self.model is None:
             raise RuntimeError(
                 "MoleRoutingTrainerWrapper.train() called before setup()"
@@ -366,23 +417,47 @@ class MoleRoutingTrainerWrapper:
                 self._dataset["val"], self.tokenizer, cfg.data.max_length
             )
 
-        # bool is subclass of int — explicit reject before isinstance(int).
-        if isinstance(tcfg.batch_size, bool) or not isinstance(tcfg.batch_size, int):
-            bs = 1
-        else:
-            bs = tcfg.batch_size
+        batch_size = tcfg.batch_size
+        if batch_size == "auto":
+            gpu_info = get_gpu_info()
+            batch_size = estimate_batch_size(
+                model_params_b=model_size_from_name(cfg.base),
+                seq_length=cfg.data.max_length,
+                gpu_memory_bytes=gpu_info["memory_total_bytes"],
+                quantization=tcfg.quantization,
+                lora_r=tcfg.lora.r,
+            )
+            console.print(f"[green]Auto batch size (MoLE):[/] {batch_size}")
+        bs = int(batch_size)
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
+
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
+        use_bf16, use_fp16 = bf16_fp16_flags(self.device)
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
         args = TrainingArguments(
             output_dir=str(output_dir),
             num_train_epochs=tcfg.epochs,
             per_device_train_batch_size=bs,
             gradient_accumulation_steps=tcfg.gradient_accumulation_steps,
             learning_rate=tcfg.lr,
+            warmup_steps=warmup_steps,
+            gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
+            weight_decay=tcfg.weight_decay,
+            max_grad_norm=tcfg.max_grad_norm,
+            optim=tcfg.optimizer,
+            lr_scheduler_type=tcfg.scheduler,
             logging_steps=tcfg.logging_steps,
             save_steps=tcfg.save_steps,
             save_total_limit=3,
+            bf16=use_bf16,
+            fp16=use_fp16,
             report_to=self.report_to,
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
+            **(self.fsdp_config or {}),  # #1204: --fsdp was stored and dropped
             **training_seed_kwargs(tcfg),
             **training_eval_kwargs(cfg, eval_rows, batch_size=bs),
         )
@@ -409,25 +484,21 @@ class MoleRoutingTrainerWrapper:
             from soup_cli.utils.deepspeed import attach_empty_param_group_guard
 
             attach_empty_param_group_guard(self.trainer)
+
         console.print("[green]Starting MoLE gate training...[/]")
         align_trainable_dtype_for_fp16(
             self.trainer.model,
             fp16=getattr(self.trainer.args, "fp16", False),
             bf16=getattr(self.trainer.args, "bf16", False),
         )
-        result = self.trainer.train()
+        result = self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         # Persist the trained gate (the base + adapters are unchanged on disk).
-        import torch
-
         gate_path = output_dir / "mole_gate.pt"
         # #1266: always fp32, whatever the module holds by now (a DeepSpeed bf16/fp16
         # engine casts it to 16-bit in place); a Linear(hidden, N) costs nothing.
         # The serve loader builds an fp32 gate, so a bf16 file from before loads too.
-        gate_state = {
-            name: tensor.to(torch.float32) if tensor.is_floating_point() else tensor
-            for name, tensor in self.model.mole_gate.state_dict().items()
-        }
-        torch.save(gate_state, str(gate_path))
+        _save_mole_gate(self.model.mole_gate, gate_path)
+
         # v0.71.17 #259 — write a self-describing manifest next to the gate so
         # `soup serve --mole <dir>` can reconstruct the decode-time blend
         # (base + N frozen task LoRAs + gate geometry).

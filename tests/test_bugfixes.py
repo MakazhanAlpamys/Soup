@@ -143,7 +143,10 @@ class TestDiffModelLoading:
         from soup_cli.commands.diff import _load_model
 
         source = inspect.getsource(_load_model)
-        assert "torch_dtype=torch.float16" in source
+        # #1443 resolves the value per --device instead of hard-coding
+        # float16, but both from_pretrained calls must still use the
+        # `torch_dtype=` spelling the floor Transformers version requires.
+        assert source.count("torch_dtype=torch_dtype") == 2
         # Substring-safe: torch_dtype=... contains the letters dtype=
         bare = source.replace("torch_dtype=", "")
         assert "dtype=" not in bare

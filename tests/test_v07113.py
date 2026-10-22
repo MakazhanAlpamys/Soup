@@ -613,13 +613,32 @@ class TestPrepareDistillDataset:
             rows = [json.loads(line) for line in fh if line.strip()]
         assert rows[0] == {"prompt": "q1", "chosen": "teach", "rejected": "stud"}
 
-    def test_empty_teacher_reply_skipped(self, tmp_path, monkeypatch):
+    def test_empty_teacher_reply_all_fail_raises(self, tmp_path, monkeypatch):
+        """#1274: every row failing must raise, not silently write an empty
+        file and report success — mirrors #1221's forge fix."""
         monkeypatch.chdir(tmp_path)
+        from soup_cli.utils.data_forge import ProviderCallError
         from soup_cli.utils.prompt_distill import prepare_distill_dataset
 
         plan = self._plan(tmp_path, "sft")
-        n = prepare_distill_dataset(plan, teacher_fn=lambda p: {"text": ""})
-        assert n == 0
+        with pytest.raises(ProviderCallError, match="2 of 2 provider calls failed"):
+            prepare_distill_dataset(plan, teacher_fn=lambda p: {"text": ""})
+        assert not os.path.exists(tmp_path / "out.jsonl")
+
+    def test_partial_teacher_failure_keeps_successful_rows(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.utils.data_forge import ForgeJudgeStats
+        from soup_cli.utils.prompt_distill import prepare_distill_dataset
+
+        plan = self._plan(tmp_path, "sft")
+
+        def teacher(p):
+            return {"text": "T"} if p == "q1" else {"text": ""}
+
+        stats = ForgeJudgeStats()
+        n = prepare_distill_dataset(plan, teacher_fn=teacher, stats=stats)
+        assert n == 1
+        assert (stats.calls, stats.failures) == (2, 1)
 
     def test_max_rows_cap(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -647,8 +666,9 @@ class TestPrepareDistillDataset:
         with pytest.raises(TypeError):
             prepare_distill_dataset({"traces_path": "x"})
 
-    def test_teacher_exception_skipped(self, tmp_path, monkeypatch):
+    def test_teacher_exception_all_fail_raises(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
+        from soup_cli.utils.data_forge import ProviderCallError
         from soup_cli.utils.prompt_distill import prepare_distill_dataset
 
         plan = self._plan(tmp_path, "sft")
@@ -656,8 +676,8 @@ class TestPrepareDistillDataset:
         def boom(p):
             raise RuntimeError("provider down")
 
-        n = prepare_distill_dataset(plan, teacher_fn=boom)
-        assert n == 0
+        with pytest.raises(ProviderCallError, match="provider down"):
+            prepare_distill_dataset(plan, teacher_fn=boom)
 
 
 class TestDistillPromptCli:
@@ -1328,8 +1348,9 @@ class TestCoverageGaps:
         out = extract_prompt({"prompt": "x" * (_MAX_PROMPT_CHARS + 50)})
         assert len(out) == _MAX_PROMPT_CHARS
 
-    def test_preference_empty_student_skipped(self, tmp_path, monkeypatch):
+    def test_preference_empty_student_all_fail_raises(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
+        from soup_cli.utils.data_forge import ProviderCallError
         from soup_cli.utils.prompt_distill import (
             build_distill_prompt_plan,
             prepare_distill_dataset,
@@ -1343,15 +1364,17 @@ class TestCoverageGaps:
             strategy="preference",
             output_path="o.jsonl",
         )
-        n = prepare_distill_dataset(
-            plan,
-            teacher_fn=lambda p: {"text": "T"},
-            student_fn=lambda p: {"text": ""},
-        )
-        assert n == 0
+        with pytest.raises(ProviderCallError, match="1 of 2 provider calls failed"):
+            prepare_distill_dataset(
+                plan,
+                teacher_fn=lambda p: {"text": "T"},
+                student_fn=lambda p: {"text": ""},
+            )
+        assert not os.path.exists(tmp_path / "o.jsonl")
 
-    def test_preference_student_exception_skipped(self, tmp_path, monkeypatch):
+    def test_preference_student_exception_all_fail_raises(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
+        from soup_cli.utils.data_forge import ProviderCallError
         from soup_cli.utils.prompt_distill import (
             build_distill_prompt_plan,
             prepare_distill_dataset,
@@ -1369,10 +1392,10 @@ class TestCoverageGaps:
         def boom(p):
             raise RuntimeError("down")
 
-        n = prepare_distill_dataset(
-            plan, teacher_fn=lambda p: {"text": "T"}, student_fn=boom
-        )
-        assert n == 0
+        with pytest.raises(ProviderCallError, match="down"):
+            prepare_distill_dataset(
+                plan, teacher_fn=lambda p: {"text": "T"}, student_fn=boom
+            )
 
     # --- #227 compile-tools ----------------------------------------------
     def test_spec_path_extension_rejected(self, tmp_path, monkeypatch):
@@ -1438,9 +1461,10 @@ class TestReachableInternals:
 
         seen = {}
 
-        def fake_make(provider, *, model, base_url, temperature):
+        def fake_make(provider, *, model, base_url, temperature, raise_on_error=False):
             seen.update(
-                provider=provider, model=model, base_url=base_url, temperature=temperature
+                provider=provider, model=model, base_url=base_url,
+                temperature=temperature, raise_on_error=raise_on_error,
             )
             return lambda prompt: {"text": f"R:{prompt}"}
 
@@ -1454,6 +1478,7 @@ class TestReachableInternals:
             "model": "qwen2.5:0.5b",
             "base_url": "http://localhost:11434",
             "temperature": 0.2,
+            "raise_on_error": True,
         }
 
     def test_prepare_distill_default_teacher_wires_provider(self, tmp_path, monkeypatch):

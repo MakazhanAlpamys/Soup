@@ -200,6 +200,8 @@ def show(
     info_lines.extend([
         "",
         f"Model:      [bold]{_esc(str(run.get('base_model') or '-'))}[/]",
+        f"Revision:   {for_terminal(run.get('base_revision') or 'unknown')}",
+        f"Identity:   {for_terminal(run.get('base_revision_source') or 'unknown')}",
         f"Task:       {_esc(str(run.get('task') or '-'))}",
         f"Device:     {_esc(str(run.get('device_name') or '-'))} "
         f"({_esc(str(run.get('device') or '-'))})",

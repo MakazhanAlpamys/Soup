@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import re
+import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 from rich.console import Console
@@ -15,14 +17,26 @@ from rich.markup import escape as markup_escape
 from rich.panel import Panel
 
 from soup_cli.config.loader import load_config
-from soup_cli.data.loader import load_dataset
+from soup_cli.data.loader import (
+    PREFERENCE_PAIR_TASKS,
+    data_config_for_task,
+    load_dataset,
+    task_preserves_source_columns,
+)
 from soup_cli.monitoring.display import TrainingDisplay
-from soup_cli.utils.gpu import detect_device, get_gpu_info, resolve_quantization
+from soup_cli.trainer.classifier import CLASSIFICATION_TASKS
+from soup_cli.utils.gpu import (
+    configure_mps_async_load,
+    detect_device,
+    get_gpu_info,
+    resolve_quantization,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - type hints only, no runtime import
     from soup_cli.config.schema import SoupConfig
     from soup_cli.utils.energy import EnergyMeasurement
 
+logger = logging.getLogger(__name__)
 console = Console()
 
 # Optimizers the analytical hardware-fit predictor understands (mirror of
@@ -34,6 +48,26 @@ _HW_FIT_OPTIMIZERS = frozenset({
     "lomo", "adalomo", "schedule_free_adamw",
 })
 
+# training.quantization -> the hardware-fit predictor's name for it. A value
+# that is not here (``hqq:*``) has no memory model, and the pre-flight says it
+# skipped the run (#1652).
+_HW_FIT_QUANT = {
+    "none": "none",
+    "4bit": "4bit",
+    "8bit": "8bit",
+    # Stay packed on the card.
+    "gptq": "gptq",
+    "awq": "awq",
+    "aqlm": "aqlm",
+    "eetq": "eetq",
+    # Dequantized on load, so priced (and gated) like "none" (#1631, #1652).
+    "mxfp4": "mxfp4",
+    "fp8": "fp8",
+}
+
+# The formats above that train in bf16, and how the gate's panel names them.
+_HW_FIT_DEQUANTIZED_ON_LOAD = {"mxfp4": "MXFP4", "fp8": "FP8"}
+
 _UNWIRED_TRAINING_TUNABLES = (
     # Group B tunables (forgetting_eval_steps, forgetting_benchmark, forgetting_stop,
     # checkpoint_eval_steps, checkpoint_eval_metric, checkpoint_eval_tasks,
@@ -42,6 +76,11 @@ _UNWIRED_TRAINING_TUNABLES = (
     # the loader warns about them with the refusal date, so they are not listed here.
     "forgetting_threshold",
 )
+
+
+def _stdin_isatty() -> bool:
+    """True when standard input is an interactive terminal."""
+    return sys.stdin.isatty()
 
 
 def _nondefault_unwired_training_settings(training_config) -> list[str]:
@@ -65,16 +104,115 @@ def _nondefault_unwired_training_settings(training_config) -> list[str]:
     return enabled_flags + changed_tunables
 
 
+UNSUPPORTED_RESUME_TASKS: frozenset[str] = frozenset({"unlearn"})
+
+
 def _format_training_complete_loss(result: dict) -> str:
     """Render only a loss comparison that the trainer actually measured."""
     summary_kind = result.get("loss_summary_kind")
     if summary_kind == "unavailable":
         return "Loss: [bold]unavailable[/]"
+    loss_key = result.get("loss_key")
+    label = f" [dim]({loss_key})[/]" if isinstance(loss_key, str) else ""
     if summary_kind in {"mean", "single"} or (
         summary_kind is None and result["initial_loss"] == result["final_loss"]
     ):
-        return f"Loss: [bold]{result['final_loss']:.4f}[/]"
-    return f"Loss: [bold]{result['initial_loss']:.4f} -> {result['final_loss']:.4f}[/]"
+        return f"Loss: [bold]{result['final_loss']:.4f}[/]{label}"
+    return f"Loss: [bold]{result['initial_loss']:.4f} -> {result['final_loss']:.4f}[/]{label}"
+
+
+def _format_duration_display(result: dict) -> str:
+    """Duration line for the completion panel (#1529).
+
+    Every trainer wrapper returns both a pre-formatted ``duration`` string and
+    the raw ``duration_secs`` — except unlearn, which until #1529 returned only
+    the seconds, so the panel's ``result['duration']`` raised ``KeyError``
+    AFTER the adapter was saved and the run was otherwise complete. Read the
+    string when present and fall back to formatting the seconds (``unknown``
+    when both are missing — a measured ``0m`` stays ``0m``, but an absent
+    measurement should not read as a zero) so no wrapper can lose a finished
+    run's summary.
+    """
+    duration = result.get("duration")
+    if duration:
+        return duration
+    duration_secs = result.get("duration_secs")
+    if duration_secs is None:
+        return "unknown"
+    hours = int(duration_secs // 3600)
+    minutes = int((duration_secs % 3600) // 60)
+    return f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+
+def _run_auto_eval_after_training(
+    eval_config,
+    output_dir: str,
+    run_id: str,
+    *,
+    trust_remote_code: bool = False,
+) -> None:
+    """Run configured evaluation once after the trained model is saved.
+
+    ``trust_remote_code`` is the run's own ``--trust-remote-code`` flag (CLI only;
+    there is no soup.yaml field). It reaches only the loads of the trained output
+    and its base: ``benchmark`` and ``custom``.
+    """
+    if not eval_config or not getattr(eval_config, "auto_eval", False):
+        return
+    if not output_dir or not _should_run_diagnose_gate_on_rank():
+        return
+
+    console.print("\n[bold blue]Running auto-eval...[/]")
+
+    benchmarks = getattr(eval_config, "benchmarks", None) or []
+    custom_tasks = getattr(eval_config, "custom_tasks", None)
+
+    if benchmarks:
+        try:
+            from soup_cli.commands.eval import benchmark
+
+            benchmark(
+                model=output_dir,
+                benchmarks=",".join(benchmarks),
+                num_fewshot=None,
+                batch_size=8,
+                run_id=run_id,
+                device=None,
+                trust_remote_code=trust_remote_code,
+            )
+        except typer.Exit:
+            logger.debug("Auto-eval benchmark skipped", exc_info=True)
+            console.print(
+                "[yellow]Auto-eval benchmark skipped (see the message above)[/]"
+            )
+        except Exception as exc:
+            logger.exception("Auto-eval benchmark failed")
+            console.print(
+                f"[yellow]Auto-eval benchmark failed: {markup_escape(str(exc))}[/]"
+            )
+
+    if custom_tasks:
+        try:
+            from soup_cli.commands.eval import custom
+
+            custom(
+                tasks=custom_tasks,
+                model=output_dir,
+                run_id=run_id,
+                attach_to_registry=None,
+                output=None,
+                trust_remote_code=trust_remote_code,
+            )
+        except typer.Exit:
+            logger.debug("Auto-eval custom skipped", exc_info=True)
+            console.print(
+                "[yellow]Auto-eval custom skipped (see the message above)[/]"
+            )
+        except Exception as exc:
+            logger.exception("Auto-eval custom failed")
+            console.print(
+                f"[yellow]Auto-eval custom failed: {markup_escape(str(exc))}[/]"
+            )
 
 
 def _train_sample_count(dcfg, dataset) -> int:
@@ -101,6 +239,65 @@ def _train_sample_count(dcfg, dataset) -> int:
         return rows
     valid = isinstance(count, int) and not isinstance(count, bool) and count >= 0
     return count if valid else rows
+
+
+def _validate_classification_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
+    """Validate sequence classification rows upfront if task is in CLASSIFICATION_TASKS."""
+    if cfg.task in CLASSIFICATION_TASKS:
+        from rich.markup import escape
+
+        from soup_cli.trainer.classifier import validate_classification_dataset
+
+        try:
+            validate_classification_dataset(cfg, dataset)
+        except (ValueError, TypeError) as exc:
+            console.print(
+                f"[red]Error validating {cfg.task} dataset:[/] {escape(str(exc))}"
+            )
+            raise typer.Exit(1) from exc
+
+
+def _validate_csm_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
+    if cfg.task != "tts" or cfg.training.tts_family != "sesame_csm":
+        return
+    from rich.markup import escape
+
+    from soup_cli.utils.csm import validate_csm_dataset
+
+    try:
+        validate_csm_dataset(dataset)
+    except ValueError as exc:
+        console.print(f"[red]Error validating CSM dataset:[/] {escape(str(exc))}")
+        raise typer.Exit(1) from exc
+
+
+def _validate_preference_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
+    """Reject a lossy format choice before constructing any preference trainer."""
+    if cfg.task not in PREFERENCE_PAIR_TASKS:
+        return
+    from soup_cli.data.loader import last_load_outcome
+
+    required = {"prompt", "chosen", "rejected"}
+    outcome = last_load_outcome()
+    fmt = outcome.fmt or cfg.data.format
+    for split in ("train", "val"):
+        rows = dataset.get(split, [])
+        for index, row in enumerate(rows, 1):
+            if isinstance(row, dict) and required.issubset(row):
+                continue
+            console.print(
+                f"[red]Invalid {cfg.task} dataset:[/] {split} row {index} loaded as "
+                f"format {markup_escape(repr(fmt))} lacks prompt, chosen or rejected. "
+                "Use data.format: dpo with preference-pair rows."
+            )
+            raise typer.Exit(1)
+    if not dataset.get("train") and outcome.first_drop is not None:
+        console.print(
+            f"[red]No training rows:[/] preference data loaded as format "
+            f"{markup_escape(repr(fmt))} must provide prompt, chosen and rejected. "
+            "Use data.format: dpo with preference-pair rows."
+        )
+        raise typer.Exit(1)
 
 
 def _refuse_empty_train(dcfg, dataset) -> None:
@@ -149,9 +346,8 @@ def _build_hardware_fit_input(cfg):
     ``"auto"``, unknown model size, unsupported quant, out-of-range dims), in
     which case the caller skips the gate rather than guess.
     """
-    from soup_cli.trainer.sft import is_full_finetune
     from soup_cli.utils.gpu import model_size_from_name
-    from soup_cli.utils.hardware_fit import HardwareFitInput
+    from soup_cli.utils.hardware_fit import HardwareFitInput, resolve_peft_mode
 
     tcfg = cfg.training
     bs = getattr(tcfg, "batch_size", None)
@@ -163,46 +359,10 @@ def _build_hardware_fit_input(cfg):
     seq_len = getattr(cfg.data, "max_length", None)
     if not isinstance(seq_len, int) or isinstance(seq_len, bool):
         return None
-    quant = {"none": "none", "4bit": "4bit", "8bit": "8bit"}.get(
-        str(getattr(tcfg, "quantization", "none") or "none")
-    )
+    quant = _HW_FIT_QUANT.get(str(getattr(tcfg, "quantization", "none") or "none"))
     if quant is None:
         return None
-    task = getattr(cfg, "task", None)
-    if quant == "4bit":
-        peft = "qlora"
-    elif task == "prm" or (
-        task in ("classifier", "reranker", "cross_encoder")
-        and not (tcfg.classifier_lora and tcfg.lora.r > 0)
-    ) or (task == "asr" and not (tcfg.asr_lora and tcfg.lora.r > 0)):
-        # #795: these trainers decide full fine-tuning themselves -- PRM always,
-        # the classifier family and ASR unless their own LoRA opt-in is on
-        # (classifier.py:262, asr.py::_should_use_lora). Budgeting them as LoRA
-        # under-predicts, the unsafe direction.
-        peft = "full"
-    elif is_full_finetune(tcfg):
-        # #471 — was an independent, hand-maintained check
-        # (unfrozen_parameters / freeze_layers / freeze_ratio) that had
-        # drifted from sft.py's real full-FT decision in BOTH directions:
-        # it missed lisa_enabled/lora.r==0 (under-predicting VRAM for those
-        # runs) and treated bare freeze_layers/freeze_ratio as sufficient on
-        # its own even with lora.r>0 still on (over-predicting — and able to
-        # falsely refuse a launch that would fit, since freeze_layers/
-        # freeze_ratio only reduce what's trainable WITHIN LoRA or full-FT,
-        # they don't select the mode). Now shares is_full_finetune with
-        # sft.py's SFTTrainerWrapper._resolve_load_dtype so the two cannot
-        # disagree again.
-        #
-        # #377 — lisa_train_embeddings=false freezes the always-on group and
-        # lowers real VRAM, but LISA stays "full" here on purpose: the analytical
-        # predictor has no measured constant for the frozen-embeddings trainable
-        # set, and over-predicting is the safe failure (under-predicting is a
-        # silent WDDM spill on Windows). A frozen-embeddings run that would fit
-        # can therefore still be refused by pre-flight; --allow-oom-attempt is
-        # the documented bypass, and crediting the saving is a hardware follow-up.
-        peft = "full"
-    else:
-        peft = "lora"
+    peft = resolve_peft_mode(cfg, quant=quant)
     optimizer = str(getattr(tcfg, "optimizer", "adamw_torch") or "adamw_torch")
     if optimizer not in _HW_FIT_OPTIMIZERS:
         optimizer = "adamw_torch"
@@ -225,8 +385,9 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
     """Refuse (or warn) before launch when the predicted peak VRAM won't fit.
 
     Skips silently on CPU / when VRAM is unknown / when the run isn't
-    statically predictable, so CI and small runs are unaffected. Honors the
-    documented ``--allow-oom-attempt`` opt-out.
+    statically predictable, so CI and small runs are unaffected. A quantization
+    the predictor has no figure for is skipped with one line (#1652). Honors
+    the documented ``--allow-oom-attempt`` opt-out.
     """
     # v0.72.0 — layer streaming bounds peak VRAM by ONE decoder layer, so the
     # resident prediction (full weights + optimizer + grads on the card) is the
@@ -252,6 +413,13 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
         return  # no CUDA VRAM to predict against
     inp = _build_hardware_fit_input(cfg)
     if inp is None:
+        quantization = str(getattr(cfg.training, "quantization", "none") or "none")
+        if quantization not in _HW_FIT_QUANT:
+            # #1652: silence here read as "fits".
+            console.print(
+                "[yellow]Pre-flight skipped:[/] no memory model for "
+                f"quantization: {quantization}"
+            )
         return
     from soup_cli.utils.hardware_fit import VRAM_SAFETY_MARGIN, decide_hardware_fit
 
@@ -259,6 +427,14 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
     if report.ok:
         return
     b = report.breakdown
+    # #1631: a "quantized" run priced like an unquantized one needs a word why.
+    dequantized = _HW_FIT_DEQUANTIZED_ON_LOAD.get(inp.quant)
+    note = (
+        f"An {dequantized} base is dequantized on load, so this estimate prices "
+        "the bf16 model.\n"
+        if dequantized
+        else ""
+    )
     tail = (
         "[yellow]--allow-oom-attempt set: launching anyway.[/]"
         if allow_oom_attempt
@@ -273,7 +449,7 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
             f"{report.available_vram_gb:.1f} GB available.\n"
             f"weights {b.weights_gb:.1f} | optim {b.optimizer_gb:.1f} | "
             f"grads {b.gradients_gb:.1f} | activations {b.activations_gb:.1f} "
-            f"| overhead {b.overhead_gb:.1f} GB\n\n" + tail,
+            f"| overhead {b.overhead_gb:.1f} GB\n" + note + "\n" + tail,
             title=(
                 "[yellow]Hardware-fit warning[/]"
                 if allow_oom_attempt
@@ -284,6 +460,39 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
     )
     if not allow_oom_attempt:
         raise typer.Exit(1)
+
+
+def _loads_on_unsloth(cfg) -> bool:
+    """#1736 — would this config still load with ``backend: unsloth``?
+
+    The tip that suggests the backend used to look at the backend alone, so it
+    was also printed for configs the schema refuses on unsloth (a task with no
+    unsloth setup, ``freeze_layers``, ``moe_lora``...). The schema is asked
+    instead of a list kept here: the dumped config is validated again with the
+    backend changed. Only that pass's ``ValidationError`` means no; anything
+    else is a bug and must surface.
+    """
+    from pydantic import ValidationError
+
+    from soup_cli.config.schema import SoupConfig
+
+    try:
+        SoupConfig.model_validate({**cfg.model_dump(), "backend": "unsloth"})
+    except ValidationError:
+        return False
+    return True
+
+
+def _unsloth_tip_applies(cfg) -> bool:
+    """Whether to suggest ``backend: unsloth``: only to a run on transformers,
+    with unsloth installed, whose config would load with it (#1736). The
+    installed check comes before the second validation, so a machine without
+    unsloth validates nothing twice."""
+    if cfg.backend != "transformers":
+        return False
+    from soup_cli.utils.unsloth import is_unsloth_available
+
+    return is_unsloth_available() and _loads_on_unsloth(cfg)
 
 
 def _apply_replay_overrides(cfg, *, replay, replay_ratio, replay_seed=None):
@@ -475,7 +684,10 @@ def train(
         False,
         "--yes",
         "-y",
-        help="Skip confirmation prompt",
+        help=(
+            "Skip the start-training confirmation. Required when stdin is "
+            "not a TTY (scripts, CI, pipes)."
+        ),
     ),
     trust_remote_code: bool = typer.Option(
         False,
@@ -572,7 +784,7 @@ def train(
         help=(
             "After training, run `soup diagnose` against the supplied evidence "
             "JSON (or scratch evidence). Refuses to mark the run successful "
-            "if any of the 6 v0.56.0 failure modes returns MAJOR."
+            "if any failure mode returns MAJOR (exit 2) or NOT_RUN (exit 3)."
         ),
     ),
     annex_xi: str = typer.Option(
@@ -640,7 +852,7 @@ def train(
         "--cloud",
         help=(
             "Train on a cloud GPU instead of locally (v0.71.18 #16). Supported: "
-            "modal, lambda (runpod is planned). Renders a cloud app stub from the config "
+            "modal, lambda, runpod. Renders a cloud app stub from the config "
             "(plan-only); use --cloud-submit to submit live."
         ),
     ),
@@ -682,15 +894,18 @@ def train(
         console.print(f"[red]Invalid distributed launch:[/] {markup_escape(message)}")
         raise typer.Exit(1) from exc
 
+    from soup_cli.utils.terminal import for_terminal
+
     config_path = Path(config)
     if not config_path.exists():
-        console.print(f"[red]Config not found: {config_path}[/]")
+        console.print(f"[red]Config not found: {for_terminal(config_path)}[/]")
         console.print("Run [bold]soup init[/] to create one.")
         raise typer.Exit(1)
 
     # --- LR range finder fast path ---
     if find_lr:
         from soup_cli.utils.lr_finder import (
+            LrSweepUnavailableError,
             SweepTooShortError,
             compute_lr_schedule,
             save_lr_finder_report,
@@ -705,17 +920,17 @@ def train(
         except ValueError as exc:
             console.print(f"[red]Invalid --find-lr range:[/] {exc}")
             raise typer.Exit(1) from exc
-        # v0.33.0 #56: live LR-sweep training loop. Falls back to a
-        # synthetic curve only when the real loop cannot run (no torch /
-        # config load failure) so users still get a parseable report.
+        # v0.33.0 #56: live LR-sweep training loop. #1203: when it cannot run, the
+        # command refuses rather than writing a curve nobody measured.
         # #1189: the sweep returns the LRs it actually ran, which can be fewer than
         # --find-lr-steps (a short dataset, or a loss that went non-finite).
         try:
-            lrs, losses_for_report = _run_live_lr_sweep_or_synth(
-                config_path, schedule,
+            lrs, losses_for_report = _run_live_lr_sweep(
+                config_path, schedule, trust_remote_code=trust_remote_code,
             )
-        except SweepTooShortError as exc:
-            console.print(f"[red]{markup_escape(str(exc))}[/]")
+        except (SweepTooShortError, LrSweepUnavailableError) as exc:
+            # The refusal can quote the config path and text from the file.
+            console.print(f"[red]{for_terminal(str(exc))}[/]")
             raise typer.Exit(1) from exc
         try:
             save_lr_finder_report(lrs, losses_for_report, find_lr_output)
@@ -726,7 +941,7 @@ def train(
         raise typer.Exit(0)
 
     # Load & validate config
-    console.print(f"[dim]Loading config from {config_path}...[/]")
+    console.print(f"[dim]Loading config from {for_terminal(config_path)}...[/]")
     cfg = load_config(
         config_path,
         training_overrides=(
@@ -756,7 +971,6 @@ def train(
     # An unregistered data.chat_template name raises KeyError in the trainer,
     # after the model has loaded. Check it before anything is downloaded.
     from soup_cli.data.chat_templates import resolve_chat_template
-    from soup_cli.utils.terminal import for_terminal
 
     try:
         resolve_chat_template(cfg.data.chat_template)
@@ -859,10 +1073,7 @@ def train(
 
         cloud = cloud.lower()
         if cloud == "runpod":
-            console.print(
-                "[yellow]RunPod cloud training is not yet live; use --cloud modal or lambda.[/]"
-            )
-            raise typer.Exit(2)
+            from soup_cli.cloud import runpod as cloud_mod
         elif cloud == "modal":
             from soup_cli.cloud import modal as cloud_mod
         elif cloud == "lambda":
@@ -870,7 +1081,7 @@ def train(
         else:
             console.print(
                 f"[red]Invalid --cloud:[/] {markup_escape(cloud)}. "
-                "Supported: modal, lambda (runpod is planned)."
+                "Supported: modal, lambda, runpod."
             )
             raise typer.Exit(2)
 
@@ -939,6 +1150,9 @@ def train(
     if hf_resume and not push_as:
         console.print("[red]--hf-resume requires --push-as <repo>[/]")
         raise typer.Exit(1)
+    if hf_resume and cfg.task in UNSUPPORTED_RESUME_TASKS:
+        console.print(f"[red]--hf-resume is not supported for task {cfg.task!r}[/]")
+        raise typer.Exit(1)
 
     # --- Eval-gate shortcut: --gate <path> sets training.eval_gate ---
     if gate:
@@ -949,7 +1163,7 @@ def train(
             # Validate the suite path up-front (path containment + parse).
             load_suite(gate)
         except (FileNotFoundError, ValueError) as exc:
-            console.print(f"[red]Invalid --gate suite: {exc}[/]")
+            console.print(f"[red]Invalid --gate suite: {for_terminal(str(exc))}[/]")
             raise typer.Exit(1) from exc
         cfg.training.eval_gate = EvalGateConfig(enabled=True, suite=gate)
         console.print(f"[green]Eval gate enabled[/] with suite: {gate}")
@@ -1127,14 +1341,16 @@ def train(
                 format_advice,
                 hint_argv_from_reexec,
                 is_in_distributed,
+                run_launcher,
             )
 
             num_processes = num_gpus * nodes
             if not is_in_distributed():
                 # v0.33.0 #37 — auto-reexec under accelerate launch unless
-                # --no-reexec was passed. Reexec uses os.execvp so the new
-                # accelerate process replaces this process; no leftover PID
-                # tree, stdio passes through unchanged.
+                # --no-reexec was passed. On POSIX the accelerate process
+                # replaces this one (os.execvp): no leftover PID tree, stdio
+                # passes through unchanged. Windows cannot do that, so there
+                # this process waits for the launcher (see run_launcher).
                 # #372 — one argv builder for both the re-exec and the printed
                 # hint, so they cannot drift. collect_reexec_passthrough is the
                 # only list of "flags the user typed" that survive a launch.
@@ -1224,15 +1440,19 @@ def train(
                         f"({num_processes} GPUs, {topo['interconnect']})[/]"
                     )
                     console.print(f"[dim]argv: {markup_escape(' '.join(argv))}[/]")
-                    # execvp replaces this process; the child carries --no-reexec.
+                    # The launcher takes over; the child carries --no-reexec. On
+                    # POSIX run_launcher execs and never returns. On Windows,
+                    # where exec would return 0 at once and leave the launcher
+                    # running, it waits and returns the launcher's exit code.
                     try:
-                        os.execvp(argv[0], argv)
+                        launcher_code = run_launcher(argv)
                     except OSError as exc:
                         console.print(
                             f"[red]accelerate launch failed:[/] {markup_escape(str(exc))}\n"
                             "Use [bold]--no-reexec[/] to print the launch command."
                         )
                         raise typer.Exit(1) from exc
+                    raise typer.Exit(launcher_code)
             elif not dry_run:
                 # Already a launched rank — announce + apply NCCL hints. (The
                 # dry_run branch above intentionally does neither.)
@@ -1257,6 +1477,8 @@ def train(
     device, device_name = detect_device(backend=cfg.backend)
     gpu_info = get_gpu_info(backend=cfg.backend)
 
+    configure_mps_async_load(device)
+
     # Quantization guard: explicit decision per #423.  See resolve_quantization()
     # docstring for the full rationale — MLX 4-bit uses pre-quantized mlx-community
     # weights (not bitsandbytes NF4), CPU cannot run bitsandbytes at all.
@@ -1271,7 +1493,8 @@ def train(
 
     # Hardware-fit preflight: refuse (unless --allow-oom-attempt) when the
     # analytical VRAM predictor says the run won't fit. Skips silently on CPU
-    # or when the config isn't statically predictable (e.g. batch_size='auto').
+    # or when the config isn't statically predictable (e.g. batch_size='auto');
+    # says so when the quantization has no memory model (hqq:*).
     _hardware_fit_preflight(cfg, gpu_info, allow_oom_attempt=allow_oom_attempt)
 
     backend_label = cfg.backend
@@ -1286,8 +1509,7 @@ def train(
 
     # v0.53.2 review-fix: classifier-family tasks train a sequence-classification
     # head, not a causal-LM LoRA — render "head" instead of LoRA r/alpha.
-    classifier_family = ("classifier", "reranker", "cross_encoder")
-    if cfg.task in classifier_family:
+    if cfg.task in CLASSIFICATION_TASKS:
         # v0.71.12 #146 — render BOTH the head line AND a LoRA line when the
         # opt-in classifier LoRA path is active.
         head_line = (
@@ -1484,17 +1706,44 @@ def train(
         for err in ctx_errors:
             console.print(f"[yellow]Long-context warning:[/] {err}")
 
-    # Suggest unsloth if available but not being used
-    if cfg.backend == "transformers":
-        from soup_cli.utils.unsloth import is_unsloth_available
+    # Suggest unsloth if available but not being used, and only to a config the
+    # loader would take with it (#1736).
+    if _unsloth_tip_applies(cfg):
+        console.print(
+            "[dim]Tip: unsloth is installed. Add [bold]backend: unsloth[/dim]"
+            "[dim] to soup.yaml for 2-5x faster training.[/]"
+        )
 
-        if is_unsloth_available():
-            console.print(
-                "[dim]Tip: unsloth is installed. Add [bold]backend: unsloth[/dim]"
-                "[dim] to soup.yaml for 2-5x faster training.[/]"
-            )
+    # #1613: cheap stripe roots validation ahead of confirmation, --dry-run,
+    # dataset loading, and run creation.
+    from soup_cli.utils.stripe_roots import STRIPE_DIRS_ENV
+
+    if getattr(getattr(cfg, "training", None), "stream_layers", False) and os.environ.get(
+        STRIPE_DIRS_ENV
+    ):
+        from soup_cli.utils.errors import format_friendly_error
+        from soup_cli.utils.layer_shard import resolve_cache_root
+        from soup_cli.utils.stripe_roots import StripeRootError, validate_early_stripe_roots
+
+        try:
+            validate_early_stripe_roots(resolve_cache_root())
+        except StripeRootError as exc:
+            format_friendly_error(exc)
+            raise typer.Exit(1) from exc
 
     if not dry_run and not yes:
+        # #1913: on a non-TTY stdin the confirm can never be answered — a pipe
+        # hangs until its writer closes (EOF aborts via typer) and an
+        # unattended service waits forever. Fail with the escape hatch named.
+        from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR
+
+        if not _stdin_isatty():
+            console.print(
+                "[red]stdin is not a TTY, so the start-training confirmation "
+                "cannot be answered.[/] Pass --yes to start without the "
+                "confirmation."
+            )
+            raise typer.Exit(EXIT_USAGE_ERROR)
         if not typer.confirm("Start training?", default=True):
             console.print("[yellow]Cancelled.[/]")
             raise typer.Exit()
@@ -1511,10 +1760,13 @@ def train(
         if val_notice:
             console.print(f"[yellow]Note:[/] {val_notice}")
         dataset = load_dataset(
-            run_data_config,
-            preserve_source_columns=cfg.task == "grpo",
+            data_config_for_task(run_data_config, cfg.task),
+            preserve_source_columns=task_preserves_source_columns(cfg.task),
         )
+        _validate_preference_dataset_if_applicable(cfg, dataset)
         _refuse_empty_train(cfg.data, dataset)
+        _validate_classification_dataset_if_applicable(cfg, dataset)
+        _validate_csm_dataset_if_applicable(cfg, dataset)
         console.print(
             f"[green]Data OK:[/] {_train_sample_count(cfg.data, dataset)} train samples"
         )
@@ -1523,15 +1775,23 @@ def train(
         console.print("[green]Config valid. Ready to train![/]")
         raise typer.Exit()
 
+    # Capture the source before loading/transformation, never at verdict/registration time.
+    from soup_cli.utils.training_identity import capture_training_data_hash
+
+    training_data_sha256 = capture_training_data_hash(cfg)
+
     # Load data
     console.print("[dim]Loading dataset...[/]")
     if val_notice:
         console.print(f"[yellow]Note:[/] {val_notice}")
     dataset = load_dataset(
-        run_data_config,
-        preserve_source_columns=cfg.task == "grpo",
+        data_config_for_task(run_data_config, cfg.task),
+        preserve_source_columns=task_preserves_source_columns(cfg.task),
     )
+    _validate_preference_dataset_if_applicable(cfg, dataset)
     _refuse_empty_train(cfg.data, dataset)
+    _validate_classification_dataset_if_applicable(cfg, dataset)
+    _validate_csm_dataset_if_applicable(cfg, dataset)
     console.print(
         f"[green]Loaded:[/] {_train_sample_count(cfg.data, dataset)} train samples"
     )
@@ -1544,6 +1804,7 @@ def train(
     from soup_cli.experiment.tracker import ExperimentTracker
 
     tracker = ExperimentTracker()
+    run_base = cfg.base
     experiment_name = cfg.experiment_name or name
     run_id = tracker.start_run(
         config_dict=cfg.model_dump(),
@@ -1557,6 +1818,7 @@ def train(
     # _reconcile_orphaned_run to ever notice the process is gone — the
     # rescue path #401 built for MCP-spawned runs was otherwise inert here.
     tracker.mark_running(run_id, pid=os.getpid())
+    tracker.record_training_data_hash(run_id, training_data_sha256)
     console.print(f"[dim]Run ID: {run_id}[/]")
 
     try:
@@ -1617,9 +1879,9 @@ def train(
                         f"[dim]Fetched {cfg.base} from hub={hub_name} → "
                         f"{local_path}[/]"
                     )
-                # Use ``model_copy(update=...)`` so the Pydantic field
-                # validators on ``base`` rerun (matches v0.33.0 #47 / v0.40.0
-                # Part B immutability policy).
+                # model_copy replaces base without validation and leaves the
+                # original config untouched. local_path comes from download_repo
+                # under the cache directory checked above, so no revalidation is needed.
                 cfg = cfg.model_copy(update={"base": local_path})
             except ImportError as exc:
                 console.print(f"[red]{_markup_escape(str(exc))}[/]")
@@ -1645,9 +1907,26 @@ def train(
         # to keep separate chains and sweep's copy fell ten tasks and the MLX
         # route behind. See soup_cli/trainer/dispatch.py.
         from soup_cli.trainer.dispatch import build_trainer
+        from soup_cli.utils.launcher import is_in_distributed
+        from soup_cli.utils.run_provenance import BaseRevision, base_revision_scope
 
-        trainer_wrapper = build_trainer(cfg, **trainer_kwargs)
-        trainer_wrapper.setup(dataset)
+        base_identity = BaseRevision(
+            run_base,
+            binding_supported=(cfg.backend == "transformers" and hub_name == "hf"
+                               and not is_in_distributed()),
+        )
+        with base_revision_scope(base_identity):
+            trainer_wrapper = build_trainer(cfg, **trainer_kwargs)
+            trainer_wrapper.setup(dataset)
+        tracker.record_base_revision(
+            run_id, revision=base_identity.revision, source=base_identity.source,
+        )
+        if base_identity.source == "hub_commit":
+            console.print(f"[dim]Base revision: {base_identity.revision} (bound Hub commit)[/]")
+        elif base_identity.source == "cache_path":
+            console.print("[dim]Base revision: cache-path metadata; local bytes are unverified[/]")
+        else:
+            console.print("[dim]Base revision: unknown (existing loading behavior preserved)[/]")
 
         # #350 — PEFT promotes newly-created adapters to fp32. FSDP cannot flatten
         # those beside bf16/float16 BNB storage, so align every trainable floating
@@ -1730,11 +2009,32 @@ def train(
         raise
 
     try:
-        with profiler_ctx, energy_ctx:
+        with profiler_ctx as profiler, energy_ctx, base_revision_scope(base_identity):
+            if profile_run and profiler is not None:
+                from soup_cli.utils.profiling import attach_profile_callback
+
+                if not attach_profile_callback(trainer_wrapper, profiler):
+                    console.print(
+                        "[yellow]--profile:[/] this trainer has no step hook, "
+                        "so no trace will be written"
+                    )
             result = trainer_wrapper.train(
                 display=display, tracker=tracker, run_id=run_id,
                 resume_from_checkpoint=resume_from,
             )
+
+        from soup_cli.utils.run_provenance import write_run_provenance
+
+        tracker.record_base_revision(
+            run_id, revision=base_identity.revision, source=base_identity.source,
+        )
+        # Only the saving rank writes portable metadata beside the final artifact.
+        if _should_run_diagnose_gate_on_rank():
+            metadata = base_identity.metadata(run_id)
+            recorded_run = tracker.get_run(run_id)
+            if isinstance(recorded_run, dict):
+                metadata["training_data_sha256"] = recorded_run.get("training_data_sha256")
+            write_run_provenance(result["output_dir"], metadata)
 
         # Save completion to tracker
         tracker.finish_run(
@@ -1744,6 +2044,13 @@ def train(
             total_steps=result["total_steps"],
             duration_secs=result["duration_secs"],
             output_dir=result["output_dir"],
+        )
+
+        _run_auto_eval_after_training(
+            cfg.eval,
+            result["output_dir"],
+            run_id,
+            trust_remote_code=trust_remote_code,
         )
     except Exception as exc:
         tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))
@@ -1782,7 +2089,7 @@ def train(
     console.print(
         Panel(
             f"{_format_training_complete_loss(result)}\n"
-            f"Duration: [bold]{result['duration']}[/]\n"
+            f"Duration: [bold]{_format_duration_display(result)}[/]\n"
             f"Output: [bold]{result['output_dir']}[/]\n"
             f"Run ID: [bold]{run_id}[/]\n\n"
             f"Quick test:  [bold]soup chat --model {result['output_dir']}[/]\n"
@@ -1796,17 +2103,9 @@ def train(
 
     # --- v0.56.0 --diagnose-gate: post-training failure-mode check ---
     if diagnose_gate and _should_run_diagnose_gate_on_rank():
-        try:
-            _run_diagnose_gate(
-                diagnose_gate, run_id, cfg.base, result["output_dir"]
-            )
-        except typer.Exit:
-            raise
-        except (OSError, ValueError) as exc:
-            console.print(
-                f"[red]--diagnose-gate failed:[/] {type(exc).__name__}: {exc}"
-            )
-            raise typer.Exit(1) from exc
+        _run_diagnose_gate_or_exit(
+            diagnose_gate, run_id, cfg.base, result["output_dir"]
+        )
 
     # --- v0.71.3 #180 --track-energy: print the measured energy/CO2 -------
     energy_measurement = (
@@ -1903,8 +2202,9 @@ def _write_annex_xi(out_path: str, run_id: str, cfg, *, energy=None) -> None:
     )
 
     modality = getattr(cfg, "modality", "text") or "text"
-    energy_kwh = float(getattr(energy, "energy_kwh", 0.0)) if energy is not None else 0.0
-    co2_kg = float(getattr(energy, "co2_kg", 0.0)) if energy is not None else 0.0
+    # #1446: without --track-energy nothing was measured; say so instead of 0.000.
+    energy_kwh = float(getattr(energy, "energy_kwh", 0.0)) if energy is not None else None
+    co2_kg = float(getattr(energy, "co2_kg", 0.0)) if energy is not None else None
     raw_train = getattr(cfg.data, "train", "") or ""
     # #443 — pass the raw str|list through so top-domain extraction
     # aggregates across every interleaved dataset, instead of stringifying
@@ -1922,7 +2222,7 @@ def _write_annex_xi(out_path: str, run_id: str, cfg, *, energy=None) -> None:
         task=str(cfg.task),
         dataset_summary=train_display,
         modalities=(modality,),
-        train_compute_flops=0.0,
+        train_compute_flops=None,  # #1446: Soup does not measure FLOPs; never claim 0
         train_energy_kwh=energy_kwh,
         train_co2_kg=co2_kg,
         top_domains=top_domains,
@@ -2106,8 +2406,8 @@ def _run_diagnose_gate(
     """Post-training failure-mode gate (v0.56.0).
 
     Loads a JSON ``evidence`` file with optional per-mode scores and
-    refuses to mark the run successful if any mode comes back MAJOR.
-    Missing modes fall back to a neutral OK score so partial evidence
+    refuses to mark the run successful if any mode comes back MAJOR (exit 2)
+    or NOT_RUN (exit 3, #1435). Missing modes fall back to a neutral OK score so partial evidence
     still produces a useful report card. The train command only calls
     this helper on the chief worker (RANK==0 in a multi-node launch, else
     LOCAL_RANK==0) so distributed runs execute the gate once per cluster,
@@ -2118,6 +2418,7 @@ def _run_diagnose_gate(
     from soup_cli.utils.diagnose.report import FAILURE_MODES, FailureScore
     from soup_cli.utils.diagnose.runner import build_report
     from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+    from soup_cli.utils.terminal import for_terminal
 
     enforce_under_cwd_and_no_symlink(evidence_path, "--diagnose-gate evidence")
     # 16 MiB cap on evidence JSON (security review HIGH — symmetric with
@@ -2135,7 +2436,8 @@ def _run_diagnose_gate(
     if not isinstance(raw_scores, dict):
         raise ValueError("evidence.scores must be an object")
 
-    from soup_cli.utils.diagnose.report import classify_score
+    from soup_cli.utils.diagnose.report import classify_score, evidence_default_score
+    from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR
 
     scores: dict = {}
     for mode in FAILURE_MODES:
@@ -2144,7 +2446,9 @@ def _run_diagnose_gate(
             continue
         if not isinstance(entry, dict):
             raise ValueError(f"scores.{mode} must be an object")
-        score = entry.get("score", 1.0)
+        score = entry.get("score", evidence_default_score(entry))
+        if isinstance(score, bool) or not isinstance(score, (int, float)):
+            raise ValueError(f"scores.{mode}.score must be a number")
         verdict = entry.get("verdict") or classify_score(score)
         scores[mode] = FailureScore(
             mode=mode,
@@ -2163,12 +2467,40 @@ def _run_diagnose_gate(
         for mode in FAILURE_MODES:
             sc = report.scores[mode]
             if sc.verdict == "MAJOR":
-                console.print(f"  [red]MAJOR[/] {mode}: {sc.evidence}")
+                console.print(f"  [red]MAJOR[/] {mode}: {for_terminal(sc.evidence)}")
         raise typer.Exit(2)
+    if report.overall == "NOT_RUN":
+        # An unmeasured mode is not a pass (#1435); same exit as `soup diagnose`.
+        console.print(
+            "[yellow]--diagnose-gate: one or more modes did not run (NOT_RUN); "
+            "the run is not verified.[/]"
+        )
+        for mode in FAILURE_MODES:
+            sc = report.scores[mode]
+            if sc.verdict == "NOT_RUN":
+                console.print(f"  [yellow]NOT_RUN[/] {mode}: {for_terminal(sc.evidence)}")
+        raise typer.Exit(EXIT_USAGE_ERROR)
     console.print(
         f"[green]--diagnose-gate: {report.overall}[/] across "
         f"{len(FAILURE_MODES)} modes."
     )
+
+
+def _run_diagnose_gate_or_exit(
+    evidence_path: str, run_id: str, base: str, adapter: str
+) -> None:
+    """Run the gate; an unreadable or refused evidence file is reported and exits 1."""
+    from soup_cli.utils.terminal import for_terminal
+
+    try:
+        _run_diagnose_gate(evidence_path, run_id, base, adapter)
+    except typer.Exit:
+        raise
+    except (OSError, ValueError) as exc:
+        console.print(
+            f"[red]--diagnose-gate failed:[/] {type(exc).__name__}: {for_terminal(exc)}"
+        )
+        raise typer.Exit(1) from exc
 
 
 def _resolve_deepspeed(deepspeed: str) -> str:
@@ -2313,6 +2645,9 @@ def _resolve_resume_or_exit(resume: str, cfg: "SoupConfig") -> str | None:
     """
     if not resume:
         return None
+    if cfg.task in UNSUPPORTED_RESUME_TASKS:
+        console.print(f"[red]--resume is not supported for task {cfg.task!r}[/]")
+        raise typer.Exit(1)
     resume_from = _resolve_checkpoint(resume, cfg.output, cfg.experiment_name, backend=cfg.backend)
     if resume_from:
         console.print(f"[green]Resuming from:[/] {resume_from}")
@@ -2322,55 +2657,43 @@ def _resolve_resume_or_exit(resume: str, cfg: "SoupConfig") -> str | None:
     return resume_from
 
 
-def _run_live_lr_sweep_or_synth(
-    config_path: str, schedule: list[float],
+def _run_live_lr_sweep(
+    config_path: str, schedule: list[float], trust_remote_code: bool = False,
 ) -> tuple[list[float], list[float]]:
-    """v0.33.0 #56 — try to run an in-process LR sweep; fall back to a
-    synthetic curve when prerequisites are missing.
+    """v0.33.0 #56 — run the in-process LR sweep over the config's own model.
 
     Returns ``(lrs, losses)`` of equal length.
 
-    Falls back when:
-      - torch / transformers / datasets are not importable
-      - config load fails
-      - dataset cannot be tokenized into a small in-memory loader
-    The fallback curve descends 60% then diverges so the recommended-LR
-    extraction in :func:`find_optimal_lr` still produces sensible output.
-    A ``SweepTooShortError`` is a refusal and is never turned into a curve.
+    #1203: every reason the sweep cannot run is a refusal.
+    :class:`LrSweepUnavailableError` covers a config that will not load and a
+    model or dataset that cannot be swept; :class:`SweepTooShortError` covers
+    fewer than ``MIN_NUM_STEPS`` rows, and a loss that is non-finite from the
+    first step or turns non-finite before 4 steps have run.
+    This used to answer all of them with a synthetic curve shaped by the LR
+    schedule alone, so a base model that does not exist exited 0 with a
+    ``recommended_lr`` that described no model and no data.
     """
-    from soup_cli.utils.lr_finder import SweepTooShortError
+    from soup_cli.utils.lr_finder import LrSweepUnavailableError, SweepTooShortError
 
     try:
-        cfg = load_config(config_path)
-    except Exception as exc:  # noqa: BLE001 — fall back rather than abort
-        console.print(
-            f"[yellow]--find-lr: config load failed ({exc}); "
-            f"writing synthetic curve.[/]"
+        # The refusal below quotes the reason, so the loader hands it over
+        # instead of printing its own line and exiting.
+        cfg = load_config(config_path, raise_unreadable=True)
+    except Exception as exc:  # noqa: BLE001 — one refusal line, not a traceback
+        raise LrSweepUnavailableError(
+            f"--find-lr: config load failed ({exc}); no LR report was written."
+        ) from exc
+
+    try:
+        return _live_lr_sweep_from_config(
+            cfg, schedule, trust_remote_code=trust_remote_code,
         )
-        return schedule, _synth_lr_curve(len(schedule))
-
-    try:
-        return _live_lr_sweep_from_config(cfg, schedule)
     except SweepTooShortError:
         raise
-    except Exception as exc:  # noqa: BLE001 — informative fallback
-        console.print(
-            f"[yellow]--find-lr: live sweep unavailable ({exc}); "
-            f"writing synthetic curve.[/]"
-        )
-        return schedule, _synth_lr_curve(len(schedule))
-
-
-def _synth_lr_curve(n: int) -> list[float]:
-    descend_until = max(1, int(n * 0.6))
-    out: list[float] = []
-    for i in range(n):
-        if i < descend_until:
-            out.append(3.0 - 2.0 * (i / descend_until))
-        else:
-            tail = (i - descend_until) / max(1, n - descend_until)
-            out.append(1.0 + 8.0 * tail * tail)
-    return out
+    except Exception as exc:  # noqa: BLE001 — the cause is the useful half
+        raise LrSweepUnavailableError(
+            f"--find-lr: live sweep unavailable ({exc}); no LR report was written."
+        ) from exc
 
 
 def _lr_finder_dataset_path(train) -> str:
@@ -2385,13 +2708,13 @@ def _lr_finder_dataset_path(train) -> str:
 
 
 def _live_lr_sweep_from_config(
-    cfg, schedule: list[float],
+    cfg, schedule: list[float], trust_remote_code: bool = False,
 ) -> tuple[list[float], list[float]]:
     """Build a tiny in-process loop: load model + tokenizer + a slice of
     the train dataset, then call :func:`run_lr_sweep`. Returns the
     ``(lrs, losses)`` the sweep actually ran."""
     # v0.40.1 Part C / G12 — fix broken `load_local` import that previously
-    # always fell through to the synthetic curve. The actual exported symbol
+    # made the live sweep fail every time. The actual exported symbol
     # is ``load_raw_data`` (path-only loader) — we use that.
     from pathlib import Path as _Path
 
@@ -2427,12 +2750,12 @@ def _live_lr_sweep_from_config(
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     tokenizer = AutoTokenizer.from_pretrained(
-        cfg.base, trust_remote_code=False,
+        cfg.base, trust_remote_code=trust_remote_code,
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     model = AutoModelForCausalLM.from_pretrained(
-        cfg.base, trust_remote_code=False,
+        cfg.base, trust_remote_code=trust_remote_code,
     ).to(device)
     model.train()
 

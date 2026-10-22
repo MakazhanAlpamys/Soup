@@ -1,0 +1,678 @@
+{
+ "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4",
+ "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4",
+ "files_compared": 83,
+ "tensors_compared": 2405,
+ "bytes_compared": 36388162816,
+ "mismatched_files": [],
+ "safetensors_only_in_striped_root0": [],
+ "all_equal": true,
+ "started": "2026-09-30T15:27:51",
+ "seconds": 131.7260980606079,
+ "files": [
+  {
+   "file": "extras.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\extras.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\extras.safetensors",
+   "tensors": 3,
+   "bytes": 17472,
+   "result": "equal"
+  },
+  {
+   "file": "large_embed_tokens.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\large_embed_tokens.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\large_embed_tokens.safetensors",
+   "tensors": 1,
+   "bytes": 536870912,
+   "result": "equal"
+  },
+  {
+   "file": "large_lm_head.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\large_lm_head.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\large_lm_head.safetensors",
+   "tensors": 1,
+   "bytes": 536870912,
+   "result": "equal"
+  },
+  {
+   "file": "layer_000.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_000.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_000.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_001.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_001.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_001.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_002.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_002.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_002.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_003.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_003.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_003.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_004.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_004.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_004.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_005.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_005.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_005.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_006.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_006.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_006.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_007.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_007.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_007.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_008.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_008.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_008.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_009.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_009.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_009.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_010.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_010.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_010.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_011.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_011.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_011.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_012.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_012.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_012.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_013.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_013.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_013.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_014.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_014.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_014.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_015.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_015.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_015.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_016.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_016.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_016.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_017.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_017.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_017.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_018.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_018.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_018.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_019.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_019.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_019.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_020.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_020.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_020.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_021.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_021.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_021.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_022.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_022.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_022.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_023.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_023.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_023.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_024.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_024.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_024.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_025.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_025.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_025.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_026.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_026.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_026.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_027.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_027.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_027.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_028.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_028.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_028.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_029.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_029.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_029.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_030.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_030.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_030.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_031.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_031.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_031.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_032.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_032.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_032.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_033.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_033.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_033.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_034.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_034.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_034.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_035.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_035.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_035.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_036.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_036.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_036.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_037.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_037.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_037.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_038.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_038.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_038.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_039.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_039.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_039.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_040.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_040.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_040.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_041.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_041.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_041.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_042.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_042.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_042.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_043.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_043.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_043.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_044.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_044.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_044.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_045.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_045.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_045.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_046.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_046.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_046.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_047.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_047.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_047.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_048.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_048.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_048.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_049.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_049.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_049.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_050.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_050.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_050.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_051.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_051.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_051.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_052.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_052.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_052.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_053.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_053.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_053.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_054.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_054.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_054.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_055.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_055.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_055.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_056.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_056.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_056.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_057.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_057.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_057.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_058.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_058.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_058.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_059.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_059.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_059.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_060.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_060.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_060.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_061.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_061.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_061.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_062.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_062.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_062.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_063.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_063.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_063.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_064.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_064.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_064.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_065.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_065.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_065.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_066.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_066.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_066.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_067.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_067.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_067.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_068.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_068.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_068.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_069.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_069.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_069.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_070.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_070.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_070.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_071.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_071.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_071.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_072.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_072.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_072.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_073.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_073.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_073.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_074.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_074.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_074.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_075.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_075.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_075.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_076.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_076.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_076.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_077.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_077.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_077.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_078.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_078.safetensors",
+   "striped": "C:/Users/user/.soup/layer-stream-striped/D___synth__llama-70b-shape-v32k-f4\\layer_078.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  },
+  {
+   "file": "layer_079.safetensors",
+   "single": "C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4\\layer_079.safetensors",
+   "striped": "D:\\soup-stripe\\D___synth__llama-70b-shape-v32k-f4\\layer_079.safetensors",
+   "tensors": 30,
+   "bytes": 441430044,
+   "result": "equal"
+  }
+ ]
+}

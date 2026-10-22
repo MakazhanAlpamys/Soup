@@ -58,7 +58,7 @@ def generate(
     api_key: Optional[str] = typer.Option(
         None,
         "--api-key",
-        help="[deprecated] Use OPENAI_API_KEY env var instead",
+        help="\\[deprecated] Use OPENAI_API_KEY env var instead",
         envvar="OPENAI_API_KEY",
     ),
     api_base: Optional[str] = typer.Option(
@@ -321,11 +321,10 @@ def generate(
 
             # Validate and dedup
             for example in batch:
-                if not _validate_example(example, fmt):
-                    # For preference templates, validate against preference format
-                    if template == "preference" and _validate_preference(example):
-                        all_examples.append(example)
-                        continue
+                is_valid = _validate_example(example, fmt)
+                if not is_valid and template == "preference" and _validate_preference(example):
+                    is_valid = True
+                if not is_valid:
                     continue
                 text = _row_to_text(example)
                 if text in existing_texts:
@@ -704,28 +703,40 @@ def _generate_openai(
         )
 
     try:
-        import httpx
+        import httpx  # noqa: F401 -- retain the optional-dependency diagnostic
     except ImportError:
         raise ImportError("httpx is required for OpenAI generation. Install: pip install httpx")
 
     base_url = api_base or "https://api.openai.com/v1"
 
-    # Validate api_base to prevent SSRF (block non-HTTPS remote URLs)
+    # Validate api_base to prevent SSRF (block non-HTTPS remote URLs and
+    # private / link-local / reserved IP literals; 0.0.0.0 is not loopback)
     if api_base:
         from urllib.parse import urlparse
 
+        from soup_cli.utils.net_guard import (
+            LOOPBACK_HOSTS,
+            UNSPECIFIED_HOST_HINT,
+            refuse_private_ip_literal,
+        )
+
         parsed = urlparse(api_base)
-        is_local = parsed.hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+        is_local = parsed.hostname in LOOPBACK_HOSTS
         if not is_local and parsed.scheme != "https":
+            if parsed.hostname == "0.0.0.0":
+                raise ValueError(f"api_base {UNSPECIFIED_HOST_HINT}")
             raise ValueError(
                 f"api_base must use HTTPS for remote APIs (got {parsed.scheme}://). "
                 "HTTP is only allowed for localhost."
             )
+        refuse_private_ip_literal(parsed.hostname, label="api_base")
 
     if generation_prompt is None:
         generation_prompt = _build_generation_prompt(prompt, count, fmt, seed_examples)
 
-    response = httpx.post(
+    from soup_cli.utils.http_response import GENERATION_RESPONSE_LIMIT_BYTES, post_capped
+
+    response = post_capped(
         f"{base_url}/chat/completions",
         headers={
             "Authorization": f"Bearer {resolved_key}",
@@ -740,11 +751,12 @@ def _generate_openai(
             "temperature": temperature,
             "max_tokens": 4096,
         },
+        max_bytes=GENERATION_RESPONSE_LIMIT_BYTES,
+        endpoint_label="OpenAI --api-base",
         timeout=120.0,
     )
 
     if response.status_code != 200:
-        logger.debug("API error response: %s", response.text)
         raise ValueError(
             f"API returned {response.status_code}. Check your API key and model name."
         )
@@ -843,27 +855,37 @@ def _generate_server(
     local inference server via its OpenAI-compatible /v1/chat/completions endpoint.
     """
     try:
-        import httpx
+        import httpx  # noqa: F401 -- retain the optional-dependency diagnostic
     except ImportError:
         raise ImportError("httpx is required for server generation. Install: pip install httpx")
 
     base_url = api_base or "http://localhost:8000/v1"
 
-    # Validate api_base to prevent SSRF — only allow http/https, block remote non-HTTPS
+    # Validate api_base to prevent SSRF — only allow http/https, block remote
+    # non-HTTPS and private / link-local / reserved IP literals
     if api_base:
         from urllib.parse import urlparse
+
+        from soup_cli.utils.net_guard import (
+            LOOPBACK_HOSTS,
+            UNSPECIFIED_HOST_HINT,
+            refuse_private_ip_literal,
+        )
 
         parsed = urlparse(api_base)
         if parsed.scheme not in ("http", "https"):
             raise ValueError(
                 f"api_base must use HTTP or HTTPS scheme (got {parsed.scheme}://)"
             )
-        is_local = parsed.hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+        is_local = parsed.hostname in LOOPBACK_HOSTS
         if not is_local and parsed.scheme != "https":
+            if parsed.hostname == "0.0.0.0":
+                raise ValueError(f"api_base {UNSPECIFIED_HOST_HINT}")
             raise ValueError(
                 f"api_base must use HTTPS for remote APIs (got {parsed.scheme}://). "
                 "HTTP is only allowed for localhost."
             )
+        refuse_private_ip_literal(parsed.hostname, label="api_base")
 
     # Strip trailing /v1 if present (we add it to the endpoint path)
     base_url = base_url.rstrip("/")
@@ -873,7 +895,9 @@ def _generate_server(
     if generation_prompt is None:
         generation_prompt = _build_generation_prompt(prompt, count, fmt, seed_examples)
 
-    response = httpx.post(
+    from soup_cli.utils.http_response import GENERATION_RESPONSE_LIMIT_BYTES, post_capped
+
+    response = post_capped(
         f"{base_url}/chat/completions",
         headers={"Content-Type": "application/json"},
         json={
@@ -885,11 +909,12 @@ def _generate_server(
             "temperature": temperature,
             "max_tokens": 4096,
         },
+        max_bytes=GENERATION_RESPONSE_LIMIT_BYTES,
+        endpoint_label="server --api-base",
         timeout=300.0,
     )
 
     if response.status_code != 200:
-        logger.debug("Server error response: %s", response.text)
         raise ValueError(
             f"Server returned {response.status_code}. "
             "Check that the server is running and the model name is correct."
@@ -950,4 +975,14 @@ def _path_within_cwd(path: Path, cwd: Path) -> bool:
 
 def _row_to_text(row: dict) -> str:
     """Convert a row to a text string for dedup comparison."""
+    if "prompt" in row and "chosen" in row and "rejected" in row:
+        p = row.get("prompt") or ""
+        c = row.get("chosen") or ""
+        r = row.get("rejected") or ""
+        return f"{p} {c} {r}".strip()
+    if "prompt" in row and "completion" in row and "label" in row:
+        p = row.get("prompt") or ""
+        c = row.get("completion") or ""
+        lbl = row.get("label") or ""
+        return f"{p} {c} {lbl}".strip()
     return " ".join(str(v) for v in row.values() if v)

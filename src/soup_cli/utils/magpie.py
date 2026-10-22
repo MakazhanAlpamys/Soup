@@ -335,11 +335,13 @@ def make_magpie_generate_fn(
         )
 
     try:
-        import httpx
+        import httpx  # noqa: F401 -- retain the optional-dependency diagnostic
     except ImportError as exc:
         raise ImportError(
             "httpx is required for live Magpie providers. Run: pip install httpx"
         ) from exc
+
+    from soup_cli.utils.http_response import ResponseTooLargeError, post_capped
 
     if canonical == "ollama":
         from soup_cli.data.providers.ollama import validate_ollama_url
@@ -352,7 +354,7 @@ def make_magpie_generate_fn(
             if not isinstance(prompt, str):
                 return ""
             try:
-                resp = httpx.post(
+                resp = post_capped(
                     api_url,
                     headers={"Content-Type": "application/json"},
                     json={
@@ -365,16 +367,18 @@ def make_magpie_generate_fn(
                             "num_predict": max_tokens,
                         },
                     },
+                    max_bytes=_MAX_RESPONSE_BYTES,
+                    endpoint_label="Magpie --base-url",
                     timeout=timeout_seconds,
                 )
+            except ResponseTooLargeError:
+                _LOG.debug("ollama magpie response exceeds byte limit; dropping sample")
+                return ""
             except Exception as exc:  # noqa: BLE001 — httpx error variety
                 _LOG.debug("ollama magpie HTTP error: %s", exc)
                 return ""
             if resp.status_code != 200:
                 _LOG.debug("ollama magpie status=%d", resp.status_code)
-                return ""
-            if len(resp.content) > _MAX_RESPONSE_BYTES:
-                _LOG.debug("ollama magpie response too large; dropping")
                 return ""
             try:
                 text = resp.json()["response"]
@@ -396,7 +400,7 @@ def make_magpie_generate_fn(
         if not isinstance(prompt, str):
             return ""
         try:
-            resp = httpx.post(
+            resp = post_capped(
                 api_url,
                 headers={"Content-Type": "application/json"},
                 json={
@@ -405,16 +409,18 @@ def make_magpie_generate_fn(
                     "temperature": float(temperature),
                     "max_tokens": max_tokens,
                 },
+                max_bytes=_MAX_RESPONSE_BYTES,
+                endpoint_label="Magpie --base-url",
                 timeout=timeout_seconds,
             )
+        except ResponseTooLargeError:
+            _LOG.debug("vllm magpie response exceeds byte limit; dropping sample")
+            return ""
         except Exception as exc:  # noqa: BLE001
             _LOG.debug("vllm magpie HTTP error: %s", exc)
             return ""
         if resp.status_code != 200:
             _LOG.debug("vllm magpie status=%d", resp.status_code)
-            return ""
-        if len(resp.content) > _MAX_RESPONSE_BYTES:
-            _LOG.debug("vllm magpie response too large; dropping")
             return ""
         try:
             text = resp.json()["choices"][0]["text"]

@@ -22,6 +22,7 @@
 - [Adapter Backdoor Scanner (`soup adapters scan`)](#adapter-backdoor-scanner-soup-adapters-scan)
 - [Adapter Sign + Verify (`soup adapters sign` / `verify`)](#adapter-sign--verify-soup-adapters-sign--verify)
 - [Strict Safetensors Mode (`soup adapters check-safetensors`)](#strict-safetensors-mode-soup-adapters-check-safetensors)
+- [Pre-Flight Adapter Health Audit (`soup adapters check`)](#pre-flight-adapter-health-audit-soup-adapters-check)
 - [Namespace Pinning (Anti-AI-Jacking)](#namespace-pinning-anti-ai-jacking)
 - [License-Conflict Matrix at Merge](#license-conflict-matrix-at-merge)
 - [Airgap Bundle (`soup airgap-bundle`)](#airgap-bundle-soup-airgap-bundle)
@@ -115,6 +116,17 @@ soup loop watch --poll-interval 300
 soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod --pre-wired
 soup loop watch --pre-wired --pack-cans --poll-interval 300
 
+# Learn from Soup's own serving (#1440): the pre-wired harvest also reads the
+# thumbs `soup serve --record-thumbs` captures through POST /v1/thumbs, pairing
+# the latest thumbs-up and thumbs-down answer per prompt. The database must
+# stay under cwd and exist as a thumbs database: start the serve first, or
+# `soup loop watch` refuses, naming the field.
+soup serve --model ./base --record-thumbs ./rl.db
+soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod \
+    --pre-wired --thumbs-db ./rl.db
+# or per run, overriding loop.yaml:
+SOUP_LOOP_THUMBS_DB=./rl.db soup loop watch --pre-wired
+
 # Unpack a recorded iteration's Soup Can for what-if analysis (v0.71.4)
 soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 
@@ -131,8 +143,9 @@ soup loop watch --detach
 soup serve --model base-model --adapters chat=./chat --host 0.0.0.0 --tool-auth-token "$TOKEN" &
 SOUP_LOOP_SERVE_ENDPOINT=http://127.0.0.1:8000 SOUP_TOOL_AUTH_TOKEN="$TOKEN" soup loop watch --detach
 
-# Promote a canary at 5% traffic with auto-rollback on MAJOR verdict
-soup loop canary registry://candidate --traffic 5% --autoroll-on-regress
+# Start serve with the candidate loaded, then promote it at 5% traffic.
+soup serve --model ./base --adapters candidate=./candidate
+soup loop canary candidate --traffic 5% --autoroll-on-regress
 
 # Pause/resume the daemon between iterations (atomic state flip)
 soup loop pause
@@ -142,7 +155,51 @@ soup loop resume
 soup loop replay iter-20260515T120000-abcdef01
 ```
 
-State lives in `.soup/loop.yaml` (atomic write, cwd-contained, symlink-rejected). Per-iteration manifests under `.soup-loops/<iter-id>/iteration.json` are laid out so a v0.26 Soup Can can wrap them directly. The canary router is deterministic (SHA-256 hash of conversation id) and sticky-on-rollback — a flaky verdict can't ping-pong traffic between adapters.
+State lives in `.soup/loop.yaml` (atomic write, cwd-contained, symlink-rejected). Per-iteration manifests under `.soup-loops/<iter-id>/iteration.json` are laid out so a v0.26 Soup Can can wrap them directly.
+
+Canary routing is available on the transformers backend when the candidate name was
+loaded with `soup serve --adapters`. Send a stable key as the
+`conversation_id` field or `X-Conversation-Id` header on
+`POST /v1/chat/completions`; requests without a key keep the normal active-adapter
+behavior. The router hashes the key, so every request in one conversation stays in
+the same stable or canary bucket. An explicit `adapter` field still takes precedence.
+
+Completed generations and generation errors are accumulated separately for the two
+buckets in `.soup/canary-stats.json`. `soup loop watch` evaluates those observations
+after at least 30 canary samples. If the canary success rate trails the stable rate by
+more than five percentage points, the verdict is `MAJOR`; with
+`--autoroll-on-regress`, the watcher atomically clears the canary and its traffic share
+from `loop.yaml`. `/v1/adapters/activate/<name>` remains an explicit 100% cutover for
+requests without a conversation key and does not change the canary policy. Keyed
+requests still follow the canary split; their stable bucket uses the served base
+model, even when another adapter was activated manually. Start `soup serve` from the
+directory containing `.soup/`, because the loop state and canary statistics paths are
+resolved from the working directory. Clients choose their own stable key, so a client
+can deliberately select a key that hashes into the canary bucket.
+
+The serving process caches the parsed policy using the state file's
+`(st_mtime_ns, st_size, st_ino)` identity. Atomic replacement invalidates it,
+so a rollback written by `soup loop watch` affects the next keyed request.
+State-path failures are warned about once per failure episode rather than on every request;
+a successful policy read allows a later failure to warn again.
+
+Outcome counters are buffered per serving app and persisted after 64 completed
+outcomes or two seconds from the first pending outcome, whichever comes first.
+Orderly shutdown flushes the remaining counters. With a healthy writable filesystem,
+an abrupt crash can lose the unflushed window (at most one 64-outcome batch, including
+a flush in progress, normally at most two seconds); scheduling delays or disk errors
+can delay persistence. A failed write retains the pending counters for retry.
+While that batch is full, additional outcomes are refused until persistence recovers;
+a disk outage can therefore lose more outcomes than the normal one-batch crash window.
+The on-disk `canary-stats.json` and watch verdicts lag traffic by the buffered window
+(normally up to 64 outcomes or two seconds). Rollout IDs prevent promotions from sharing
+samples. Pending samples and late completions from superseded promotions are discarded
+rather than replacing the new rollout's file. The existing stats lock protects threads
+in one process, not multiple server processes writing the same file.
+
+A canary that kills the serving process never reaches outcome recording: recording
+happens only after generation returns or raises. Such crashes remain invisible to
+the canary verdict unless external restart monitoring detects them.
 
 
 ## Knowledge Editing (`soup edit set`, ROME / MEMIT / AlphaEdit)
@@ -176,7 +233,7 @@ The kernels run a real rank-1 weight update at an MLP down-projection. They supp
 
 By default ROME uses the covariance-free `C = I` form. Pass `--cov-corpus <jsonl|txt>` to estimate the key covariance `C = E[k kᵀ] + λI` over a stats corpus and apply the genuine ROME closed form `u = C⁻¹ k*` — this spreads the rank-1 update mass per the closed form and reduces collateral interference with other facts (the exact post-condition is preserved either way). The corpus loader is cwd-contained, symlink-rejected, and size/line-capped; `--cov-corpus` is rejected for any method other than `rome`.
 
-The sequential edit governor is persisted (SQLite, cross-process-locked, `SOUP_EDIT_GOVERNOR_DB` override) so the per-base-model edit count + norm-blowup verdict survive across separate `soup edit set` runs. The count increment is atomic — two concurrent `soup edit set` runs on the same base are merged under the cross-process lock (no lost increment). `soup edit set` consults the governor automatically: it refuses BEFORE the model load past the per-base cap or after a BLOWUP verdict, and records the measured `||ΔW||_F` after each edit. Pass `--no-governor` to opt out. `--registry-id <id>` attaches the edited model (or GRACE codebook) into the Registry lineage.
+The sequential edit governor is persisted (SQLite, cross-process-locked, `SOUP_EDIT_GOVERNOR_DB` override) so the per-base-model edit count + norm-blowup verdict survive across separate `soup edit set` runs. The count increment is atomic — two concurrent `soup edit set` runs on the same base are merged under the cross-process lock (no lost increment). `soup edit set` consults the governor automatically: it refuses BEFORE the model load past the per-base cap or after a BLOWUP verdict, and records the measured `||ΔW||_F` after each edit. Pass `--no-governor` to opt out. `--registry-id <id>` (needs `--output`) records the saved result on that Registry entry: the weight file(s) `save_pretrained` wrote (`model.safetensors`, its numbered shards, or `pytorch_model*.bin`) as `edited_model` artifacts, or `grace_codebook.json` as a `grace_codebook` artifact. The Registry stores one hashed file per artifact, never a directory. A requested attach is part of the command's success: `soup edit set` exits 1 when it fails (unknown or ambiguous entry, unreadable registry, no weight file), with the edited model left on disk, and exits 2 before the model is loaded when the flag is given without `--output`.
 
 
 ## Activation Steering (`soup steer`)
@@ -200,7 +257,7 @@ soup serve --model ./adapter --steer safety-v1 --steer-strength 1.5
 soup steer list
 ```
 
-Steering names are validated against a strict regex (`^[A-Za-z0-9][A-Za-z0-9._\-]{0,127}$` — no path separators, no shell metacharacters); strength is bounded `|s| <= 10.0`. The trained vectors land in the Soup Registry under the `steering_vector` artifact kind so lineage is preserved.
+Steering names are validated against a strict regex (`^[A-Za-z0-9][A-Za-z0-9._\-]{0,127}$` — no path separators, no shell metacharacters); strength is bounded `|s| <= 10.0`. With `--registry-id <id>` the trained vector file (`steering_vector.safetensors`) is recorded on that Registry entry as a `steering_vector` artifact, so lineage is preserved and `soup steer list` shows it; `<id>` is an entry id, a unique id prefix, `name:tag` or `registry://<id>`. A vector saved outside `./steering/<name>` with `--output` is then found by name through an entry called `<name>`. A requested attach is part of the command's success: `soup steer train` exits 1 when it fails, with the vector left on disk. Without the flag nothing is written to the Registry.
 
 As of v0.71.10 the fit and the decode hook are **live** (validated on SmolLM2-135M): `soup steer train` captures residual-stream activations (CAA / RepE) or per-head `o_proj`-input activations (ITI) on the contrastive pairs, computes the control vector, and persists `steering_vector.safetensors` + `steering_config.json`. `soup serve --steer <name>` installs a forward hook on the loaded model that adds `strength × vector` at decode time (transformers backend; `--steer` is rejected with a clear error on vLLM/SGLang). RepE / ITI need at least two contrastive pairs; CAA works from one.
 
@@ -233,6 +290,12 @@ Every fine-tune you ship should be reproducible. Soup's local registry (`~/.soup
 # Register a completed run
 soup registry push --run-id run_202611_abc123 --name llama31-chat --tag v1
 
+# Also record the training data file's SHA-256 as data_hash
+soup registry push --run-id run_202611_abc123 --name llama31-chat --tag v1 --data data/train.jsonl
+
+# Safe to retry: the same key and the same registration return the existing entry
+soup registry push --run-id run_202611_abc123 --name llama31-chat --tag v1 --idempotency-key job-42
+
 # List entries (filter by name, tag, base model, task)
 soup registry list
 soup registry list --name llama31-chat --tag prod
@@ -253,13 +316,24 @@ soup registry promote llama31-chat-v1 --tag prod
 soup registry delete llama31-chat-v1 --yes
 ```
 
+**Training data:** `push --data <file>` stores the file's SHA-256 as the entry's `data_hash`, shown by `soup registry show`. It records the file registered as the training input, not proof of what the run trained on. The file must be under the current directory. Without `--data`, `register_from_run` copies a stored historical `training_data_sha256` without reopening today's path; legacy runs remain unknown. When both are present, the explicit file takes precedence for `data_hash`, while the separate historical `training_data_sha256` is retained. `entry_hash` binds the chosen data digest and any recorded base revision/source. Training-time hash capture itself remains #1764 part 2; reserving nullable storage does not claim the transformed examples consumed by training.
+
+**Base identity:** Registration copies the run's nullable base revision and its source;
+`soup registry show` exposes both. `hub_commit` identifies the commit passed to supported
+base loaders, while `cache_path` only describes the local directory name and does not
+verify local contents. The original human-readable base ID and config hash retain their
+existing meaning. Registrations with no known revision/hash retain their legacy entry
+fingerprint. Retries also compare the recorded revision/source and historical data hash.
+
+**Retries:** `push --idempotency-key <key>` (or `RegistryStore.push(idempotency_key=...)`) makes a registration safe to repeat after a crash or a timeout. A later push with the same key writes nothing and returns the existing entry, provided it repeats that entry's name, base model, task, run, config and data hash and its tag is one of the entry's tags; anything else under the same key is refused with an error naming the entry. Notes are not compared. Two writers pushing the same key at once end up with one entry. A key is 1 to 128 characters from letters, digits, `.`, `_`, `:` and `-`; pushes without one behave as before. `RegistryStore.get_by_idempotency_key(key)` finds the entry. Deleting the entry frees its key.
+
 **Lineage DAG** — every entry can point to a parent (its ancestor run). Walk the DAG for any name with:
 
 ```bash
 soup history llama31-chat
 ```
 
-**Refs resolve flexibly** — you can use a registry ID, a name (latest), or `name:tag`. Ambiguous prefixes raise an error rather than silently picking the wrong entry. Registry files are stored with `600` perms on POSIX; override the path with `SOUP_REGISTRY_DB_PATH`.
+**Refs resolve flexibly** — you can use a registry ID, a unique ID prefix, or `name:tag`. A bare name is not a ref; `soup history <name>` lists every entry with that name. Pushing the same `name:tag` twice keeps both entries. A `name:tag` that matches more than one entry raises an error naming the candidates, and an ambiguous prefix raises one too, rather than silently picking an entry; use the full ID then. Registry files are stored with `600` perms on POSIX; override the path with `SOUP_REGISTRY_DB_PATH`.
 
 
 ## Adapter Management (git for LoRA)
@@ -379,14 +453,23 @@ soup bom emit \
   --base-model meta-llama/Llama-3.1-8B \
   --base-sha aaaa...64hex \
   --config-sha bbbb...64hex \
-  --task sft --license apache-2.0 \
+  --task sft --license Apache-2.0 \
   --format both --output bom
 # writes bom.cdx.json + bom.spdx.json
 ```
 
 Root component is `type=machine-learning-model` (per CycloneDX ML-BOM extension). Base
 model + parent adapters + per-artifact files appear as components with SHA-256 hashes.
-License chain uses SPDX identifiers.
+`--license` is written by what it is: a listed SPDX id (any case, `apache-2.0` becomes
+`Apache-2.0`) goes in CycloneDX `license.id` and in SPDX `licenseConcluded` /
+`licenseDeclared`; a valid SPDX expression (`Apache-2.0 OR MIT`, upper-case operators,
+every operand a listed id or a `LicenseRef-`) goes in CycloneDX `expression` and in those
+SPDX fields with its ids canonicalised, each `LicenseRef-` operand defined in
+`hasExtractedLicensingInfos` (a `DocumentRef-` qualified operand makes the value a name, since
+the document carries no external references); anything else, including a name that merely contains "and" or
+"with" (`Gemma Terms of Use and Prohibited Use Policy`), is CycloneDX `license.name` and an
+SPDX `LicenseRef-` with its text in `hasExtractedLicensingInfos`. The CycloneDX
+`serialNumber` is an RFC 4122 `urn:uuid:` (#1446).
 
 ### Attaching energy + CO₂ (`--energy`)
 
@@ -423,7 +506,10 @@ soup attest emit \
 ```
 
 Stages are a closed allowlist: `extract` / `train` / `eval` / `export` / `publish`.
-Subject SHA must be 64-hex (sha256). The default `--sign unsigned` backend
+Subject SHA must be 64-hex (sha256). `--invocation "<command line>"` is recorded at
+`predicate.buildDefinition.externalParameters.invocation` (up to 4096 characters; a
+longer one is refused, not cut), beside the stage; the statement printed without
+`--output` is the same JSON, verbatim (#1446). The default `--sign unsigned` backend
 remains offline-only tamper metadata. The **`ed25519` backend is live** with
 `pip install soup-cli[sign]`; **Sigstore is live** with
 `pip install soup-cli[sigstore]`:
@@ -472,7 +558,9 @@ Top-10 domains by share, modality breakdown, training compute / kWh / CO₂, mod
 description, base model, run id. A `.pdf` output path renders a reportlab PDF (a `.md`
 path renders markdown). The **top crawled domains** are auto-extracted from the training
 JSONL (`cfg.data.train`). With `--track-energy`, the measured energy is recorded in the
-doc. Operator-controlled fields are escape-neutralised (`|[](){}!<>` + newline / CR / tab)
+doc; without it, the energy and CO₂ rows read "not measured" rather than 0, and the
+training-compute (FLOPs) row always reads "not measured", because nothing estimates it
+yet (#1446). Operator-controlled fields are escape-neutralised (`|[](){}!<>` + newline / CR / tab)
 so a malicious model name can't inject a forged heading into downstream renderers.
 
 ### Energy & CO₂ measurement (`--track-energy`)
@@ -482,7 +570,7 @@ so a malicious model name can't inject a forged heading into downstream renderer
 `--annex-xi`. `--energy-country <ISO3>` picks the grid for the CO₂ estimate (default `USA`;
 the kWh figure itself is country-independent). Add `--energy-out <path>` to persist the
 measurement as JSON for `soup bom emit --energy <path>` (the hand-off into an ML-BOM —
-see [Attaching energy + CO₂](#attaching-energy--co2---energy)). Requires `pip install
+see [Attaching energy + CO₂](#attaching-energy--co---energy)). Requires `pip install
 soup-cli[carbon]`; without it, `--track-energy` is a graceful no-op.
 
 
@@ -503,7 +591,12 @@ soup --no-audit-log version             # skip the audit line for this command
 PII redaction across **every** string field (`hf_*` / `sk-*` / `Bearer …` → `<redacted>`)
 via the v0.40.3 `_SECRET_RE` policy. POSIX `O_NOFOLLOW` + `0o600` perms, atomic-append,
 rotation at 100 MiB with symlink rejection at the backup path. The auto-instrumentation is
-best-effort — a broken audit log never crashes the CLI.
+best-effort — a broken audit log never crashes the CLI. Lines written by older versions get the
+same webhook URL masking as new ones, applied once the next time the log is written
+(`audit.jsonl.masked-v1` marks it done). A file it cannot replace is left as it is; the attempt
+is recorded in `audit.jsonl.masked-v1.tried` and the next one waits a day, so a log another
+process keeps open is not re-read by every command. Temp files an interrupted pass left beside
+the log are removed by the next pass once they are an hour old.
 
 
 ## Reproducibility Receipt (`soup train --repro-receipt`)
@@ -596,7 +689,9 @@ config asked" from "the path was wrong" -- a missing `adapter_config.json`, a
 missing `--config` and a path outside the working directory all exit `1`.
 This follows `soup ship` / `soup shrink` (0 pass / 2 failed gate / 1 error)
 rather than the older `adapters scan`, which predates that convention.
-`unknown` rows exit `0`.
+`unknown` rows exit `0`.  For GRPO runs, any non-zero `nan_skip_fraction`
+reads as `DIVERGED` (exit 2); even a single skipped step out of thousands is
+surfaced so the user can decide whether it matters.
 
 Strings in `adapter_config.json` are untrusted -- an adapter can be downloaded
 -- so record-derived text is stripped of ANSI/OSC control bytes and escaped
@@ -671,6 +766,32 @@ right to execute arbitrary code on load; refusing the file at the
 boundary is the only sound mitigation. Friendly advisory names the
 offending file and the canonical `from safetensors.torch import save_file`
 recipe. Exit code 3 under `--strict` for CI gating.
+
+
+## Pre-Flight Adapter Health Audit (`soup adapters check`)
+
+Pre-flight scan auditing single LoRA adapters for silent training failures (#1721):
+- **Total and per-layer ||dW||_F**: Frobenius norm of LoRA parameter updates (dW = scaling * (B @ A), with alpha / r for standard LoRA and alpha / sqrt(r) for rsLoRA) with float64 accumulation via matrix trace contraction.
+- **Live fraction**: Proportion of adapter layers with active, non-zero updates.
+- **All-zero lora_B layers**: Flags un-trained or zero-initialized layers that failed to move during training.
+- **Incomplete LoRA pairs**: Flags orphaned or partially-saved projections missing either A or B.
+- **Leaked .inner. keys**: Flags legacy wrapper namespaces for adapters saved prior to the #1011 save-time guard.
+
+```bash
+soup adapters check path/to/adapter/
+# Machine-readable output
+soup adapters check path/to/adapter/ --json
+```
+
+Outputs human diagnostics ending in a single verdict line: `alive` (exit code 0) or `inactive: <reason>` (exit code 2 for inactive/silent failure, distinct from usage error 1). Possible inactivity reasons include:
+- `all lora_B layers are zero (n/n)`
+- `lora_B layers are zero (k/n)`
+- `total ||ΔW||_F is 0.0`
+- `leaked .inner. keys detected (<n> tensors)`
+- `incomplete LoRA pairs detected (<n> orphans)`
+- `shape mismatch in LoRA projections (<n> layers)`
+- `non-finite weights detected (NaN/Inf)`
+- `no lora weights found`
 
 
 ## Namespace Pinning (Anti-AI-Jacking)

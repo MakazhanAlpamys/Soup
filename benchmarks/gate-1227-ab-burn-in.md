@@ -4,6 +4,10 @@ Measured on 2026-09-25 for [#1227](https://github.com/MakazhanAlpamys/Soup/issue
 CPU. This is the record behind `BURN_IN_ROWS_BY_ALPHA` and `CALIBRATED_HORIZON_ROWS` in
 [`src/soup_cli/utils/ab_test.py`](../src/soup_cli/utils/ab_test.py).
 
+**Superseded by [#1265](gate-1265-ab-nig.md):** `soup ab` now uses a variance-robust statistic
+with no burn-in, and `BURN_IN_ROWS_BY_ALPHA` / `CALIBRATED_HORIZON_ROWS` are gone. This record
+and its harness stay as the baseline that sweep compares against.
+
 ## What it gates
 
 `soup ab` runs a two-sided mSPRT. It averages Wald's likelihood ratios for a

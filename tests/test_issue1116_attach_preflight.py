@@ -859,9 +859,11 @@ class TestReviewFollowUps:
 
 class TestOnlySftReadsModality:
     """#1117 review, round 3: ``loader_for`` chose the class from ``modality`` for
-    every task, but only ``trainer/sft.py`` reads it. A vision DPO config was
+    every task, but only ``trainer/sft.py`` read it. A vision DPO config was
     reported ATTACHES (8 modules, 4 of them in the vision tower) while DPO's own
-    ``AutoModelForCausalLM`` refuses the base outright."""
+    ``AutoModelForCausalLM`` refused the base outright. Since #1393 DPO reads
+    ``modality`` too and is pinned in ``test_issue1393_dpo_vision_loader.py``; the
+    trainers here are the ones that still load one class whatever it says."""
 
     @staticmethod
     def _cfg(task, modality="text", **training):
@@ -869,7 +871,11 @@ class TestOnlySftReadsModality:
 
         from soup_cli.config.loader import load_config_from_string
 
-        fmt = {"text": "alpaca", "vision": "llava", "audio": "audio"}[modality]
+        fmt = {
+            "text": "alpaca",
+            "vision": "dpo" if task == "dpo" else "llava",
+            "audio": "audio",
+        }[modality]
         fmt = {"asr": "asr", "classifier": "auto", "reranker": "auto",
                "cross_encoder": "auto"}.get(task, fmt)
         raw = {
@@ -879,7 +885,7 @@ class TestOnlySftReadsModality:
         }
         return load_config_from_string(yaml.safe_dump(raw))
 
-    @pytest.mark.parametrize("task", ["dpo", "grpo"])
+    @pytest.mark.parametrize("task", ["grpo"])
     def test_a_vision_config_on_a_text_trainer_is_a_causal_lm(self, task):
         from soup_cli.utils.attach_preflight import loader_for
 
@@ -1214,12 +1220,13 @@ class TestTheAdvisoryGoesToStderr:
             "training:\n  lora:\n    r: 8\n    target_modules: auto\n",
             encoding="utf-8",
         )
-        # Click < 8.2 mixes stderr into stdout unless told not to; 8.2 removed the
-        # parameter and always keeps them apart (cf. test_issue762's note).
-        import importlib.metadata as _md
+        # Ask this runner: Typer may use a vendored implementation whose API
+        # is independent of the installed standalone Click version.
+        import inspect
 
-        click_version = tuple(int(x) for x in _md.version("click").split(".")[:2])
-        runner = CliRunner(mix_stderr=False) if click_version < (8, 2) else CliRunner()
+        supports_separate_stderr = "mix_stderr" in inspect.signature(CliRunner).parameters
+        kwargs = {"mix_stderr": False} if supports_separate_stderr else {}
+        runner = CliRunner(**kwargs)
         result = runner.invoke(app, ["recipes", "verify", "--config", str(path), "--json"])
 
         rows = _json.loads(result.stdout)
@@ -1330,7 +1337,7 @@ class TestTheLoadersWarningsLeaveJsonStdoutAlone:
     def test_json_stdout_parses_when_the_loader_warns(self, tmp_path, monkeypatch):
         """The config loader prints a deprecated value (#759) or a staged field (#808)
         as a warning on stdout. Under --json that line came before the document."""
-        import importlib.metadata as _md
+        import inspect
         import json as _json
 
         from transformers import LlamaConfig
@@ -1352,8 +1359,9 @@ class TestTheLoadersWarningsLeaveJsonStdoutAlone:
             "training:\n  lora:\n    r: 8\n    target_modules: [q_proj, v_proj]\n",
             encoding="utf-8",
         )
-        click_version = tuple(int(x) for x in _md.version("click").split(".")[:2])
-        runner = CliRunner(mix_stderr=False) if click_version < (8, 2) else CliRunner()
+        supports_separate_stderr = "mix_stderr" in inspect.signature(CliRunner).parameters
+        kwargs = {"mix_stderr": False} if supports_separate_stderr else {}
+        runner = CliRunner(**kwargs)
         result = runner.invoke(app, ["recipes", "verify", "--config", str(path), "--json"])
 
         assert result.exit_code == 0, (result.output, result.exception)

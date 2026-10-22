@@ -577,6 +577,8 @@ def _run_heal(
         str(config_path),
         "--yes",
     ]
+    if trc:
+        argv.append("--trust-remote-code")
     try:
         result = subprocess.run(  # noqa: S603 — argv list, no shell.
             argv, capture_output=True, check=False, timeout=_HEAL_TIMEOUT_SECONDS, env=env

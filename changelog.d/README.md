@@ -15,10 +15,11 @@ category with the same number. `<category>` is one of `added`, `changed`, `depre
 
 Write the complete changelog list item in the fragment and mention the same `#<number>` in
 its text. Long entries may contain paragraphs, tables, and fenced code blocks; assembly
-copies their Markdown verbatim. For example:
+copies their Markdown verbatim. For example, while the newest released heading is
+`0.76.0`:
 
 ```text
-changelog.d/0.73.3/490.changed.md
+changelog.d/0.76.0/490.changed.md
 ```
 
 Before a release, run:

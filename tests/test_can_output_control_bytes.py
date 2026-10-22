@@ -10,10 +10,11 @@ from typer.testing import CliRunner
 
 runner = CliRunner()
 
-# ``name`` is held to ``[A-Za-z0-9_.-]`` by the schema, so a control byte there
-# refuses the whole manifest; the other printed fields accept one.
+# ``name`` is held to ``[A-Za-z0-9_.-]`` and ``author`` refuses control
+# characters, so a control byte in either refuses the whole manifest; the
+# other printed fields accept one.
 MANIFEST = (
-    'can_format_version: 1\nname: "n"\nauthor: "a\\e[3A\\e[2K"\n'
+    'can_format_version: 1\nname: "n"\nauthor: "a"\n'
     'created_at: "2026-01-01"\nbase_hash: "h\\e]8;;http://x\\e\\\\"\n'
     'tags: ["t\\e[31m"]\ndescription: "\\e]0;TITLE\\e\\\\"\n'
 )
@@ -52,7 +53,6 @@ def test_manifest_fixture_carries_escape_bytes(can_file):
     from soup_cli.cans.unpack import inspect_can
 
     manifest = inspect_can(can_file)
-    assert "\x1b" in manifest.author
     assert "\x1b" in manifest.base_hash
     assert "\x1b" in manifest.tags[0]
     assert "\x1b" in manifest.description

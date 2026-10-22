@@ -555,7 +555,9 @@ class TestNVFP4:
             "soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: True
         )
         monkeypatch.setitem(sys.modules, "torchao", None)
-        with pytest.raises(RuntimeError, match="requires torchao") as excinfo:
+        with pytest.raises(
+            RuntimeError, match="requires torchao"
+        ) as excinfo:
             apply_nvfp4(_tiny_linear_model())
         assert "no Blackwell device detected" not in str(excinfo.value)
 
@@ -954,13 +956,15 @@ class TestSaveFormats:
         assert off["load_in_4bit"] is True
         assert off["bnb_4bit_quant_type"] == "nf4"
         assert "bnb_4bit_skip_modules" not in off
+        assert "llm_int8_skip_modules" not in off
 
         on = _build_merge_4bit_bnb_kwargs(
             compute_dtype="bfloat16", forced=True, double_quant=True
         )
         assert on["bnb_4bit_use_double_quant"] is True
         # ``forced`` still quantizes every Linear (empty skip list) — unchanged.
-        assert on["bnb_4bit_skip_modules"] == []
+        assert "bnb_4bit_skip_modules" not in on
+        assert on["llm_int8_skip_modules"] == []
 
     def test_merge_4bit_rejects_non_bool_double_quant(self):
         """Matches the existing ``forced``/``dtype`` type guards."""

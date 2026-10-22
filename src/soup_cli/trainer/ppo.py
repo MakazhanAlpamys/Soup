@@ -7,6 +7,7 @@ clipped surrogate objectives with a KL penalty against a frozen reference model.
 Full RLHF pipeline:  SFT → Reward Model → PPO
 """
 
+import math
 import os
 import time
 from pathlib import Path
@@ -19,12 +20,14 @@ from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.gpu import (
+    bf16_fp16_flags,
     estimate_batch_size,
     model_size_from_name,
     resolve_device_map,
     resolve_frozen_base_load_dtype,
 )
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -34,6 +37,9 @@ def _set_ppo_training_kwargs(
     ppo_kwargs: dict[str, object],
     ppo_config_cls: type,
     tcfg: Any,
+    *,
+    total_steps: int | None = None,
+    device: str = "cpu",
 ) -> dict[str, str]:
     """Forward Soup's three PPO schedules across TRL parameter renames."""
     from soup_cli.trainer._trl_compat import config_accepts, kl_penalty_kwargs
@@ -56,6 +62,30 @@ def _set_ppo_training_kwargs(
     for name in kl_kwargs:
         applied["kl_coef"] = name
 
+    if total_steps is not None:
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
+
+        use_bf16, use_fp16 = bf16_fp16_flags(device)
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
+        training_kwargs = {
+            "warmup_steps": warmup_steps,
+            "weight_decay": tcfg.weight_decay,
+            "max_grad_norm": tcfg.max_grad_norm,
+            "optim": tcfg.optimizer,
+            "lr_scheduler_type": tcfg.scheduler,
+            "logging_steps": tcfg.logging_steps,
+            "save_steps": tcfg.save_steps,
+            "bf16": use_bf16,
+            "fp16": use_fp16,
+            "gradient_checkpointing": should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
+        }
+        for name, value in training_kwargs.items():
+            if config_accepts(ppo_config_cls, name):
+                ppo_kwargs[name] = value
+
     return applied
 
 
@@ -69,6 +99,45 @@ def _effective_ppo_setting(
     if field is None:
         return f"{fallback} (not forwarded)"
     return getattr(config, field, kwargs[field])
+
+
+def _unsupported_rl_flags(tcfg) -> list[str]:
+    """The RL-signal flags PPO cannot feed on the experimental trl API (#1441)."""
+    flags = []
+    if getattr(tcfg, "reward_hack_detector", None) is not None:
+        flags.append("reward_hack_detector")
+    if getattr(tcfg, "echo_trap_enabled", False):
+        flags.append("echo_trap_enabled")
+    if getattr(tcfg, "reward_hack_mitigation", "off") != "off":
+        flags.append("reward_hack_mitigation")
+    return flags
+
+
+def refuse_unfed_rl_flags(tcfg, *, is_experimental: bool) -> None:
+    """Refuse RL-signal flags PPO cannot feed, before anything is loaded.
+
+    #1441: the experimental ``PPOTrainer`` takes no ``reward_funcs`` — its
+    reward comes from the reward model it calls internally — so the wrappers
+    built at :282-299 were dropped on the floor. The buffer was still created,
+    and because the buffer object existed, the detector's ``on_log`` fallback
+    returned early, so nothing was ever written *and* nothing was ever read from
+    trl's logs. A run with a detector, a mitigation mode or the echo trap was
+    announced, loaded and inert.
+
+    Refusing beats a dead callback: the run stops before the model load, and the
+    message names every flag that was set.
+    """
+    if not is_experimental:
+        return
+    flags = _unsupported_rl_flags(tcfg)
+    if not flags:
+        return
+    raise ValueError(
+        f"task: ppo cannot use {', '.join(flags)}: this trl's experimental "
+        "PPOTrainer takes no reward functions, so the reward/completion signal "
+        "these callbacks read is never captured. They are wired on GRPO only. "
+        "Remove the flag(s), or run task: grpo where the signal buffer is fed."
+    )
 
 
 class PPOTrainerWrapper:
@@ -120,10 +189,13 @@ class PPOTrainerWrapper:
 
     def setup(self, dataset: dict):
         """Load model, tokenizer, reward model/fn, apply LoRA, create PPO trainer."""
-        from datasets import Dataset
-
         # Import PPOTrainer/PPOConfig — trl >=0.28 moved to trl.experimental
         ppo_trainer_cls, ppo_config_cls, is_experimental = _import_ppo_classes()
+
+        from soup_cli.trainer._trl_compat import config_accepts
+
+        if self.deepspeed_config and not config_accepts(ppo_config_cls, "deepspeed"):
+            raise ValueError("task: ppo does not support --deepspeed on this trl version")
 
         # Enable Rich progress bar for HuggingFace downloads
         from soup_cli.trainer.sft import _enable_hf_transfer_progress
@@ -132,6 +204,15 @@ class PPOTrainerWrapper:
 
         cfg = self.config
         tcfg = cfg.training
+
+        # #1441 — refuse before anything is loaded, including `datasets` and the
+        # model. These callbacks read a signal buffer the experimental
+        # PPOTrainer leaves empty, so a run with them is announced and inert.
+        refuse_unfed_rl_flags(tcfg, is_experimental=is_experimental)
+
+        # Deferred below the refusal: a config that cannot run at all should say
+        # which flag stopped it, not fail on an unrelated import first.
+        from datasets import Dataset
 
         # #353: seed before the model and any adapter are built.
         apply_training_seed(tcfg)
@@ -229,12 +310,27 @@ class PPOTrainerWrapper:
 
         ppo_params = inspect.signature(ppo_config_cls).parameters
 
+        total_steps = math.ceil(
+            len(train_ds) / batch_size / tcfg.gradient_accumulation_steps
+        ) * tcfg.epochs
         applied_ppo_fields = _set_ppo_training_kwargs(
-            ppo_kwargs, ppo_config_cls, tcfg
+            ppo_kwargs, ppo_config_cls, tcfg,
+            total_steps=total_steps, device=self.device,
         )
+
+        from soup_cli.trainer._trl_compat import config_accepts
 
         if "cliprange" in ppo_params:
             ppo_kwargs["cliprange"] = tcfg.ppo_clip_ratio
+
+        if config_accepts(ppo_config_cls, "deepspeed"):
+            ppo_kwargs["deepspeed"] = self.deepspeed_config
+
+        if config_accepts(ppo_config_cls, "response_length"):
+            ppo_kwargs["response_length"] = cfg.data.max_length
+
+        if config_accepts(ppo_config_cls, "save_total_limit"):
+            ppo_kwargs["save_total_limit"] = 3
 
         # Optional params that may not exist in all trl versions
         if "log_with" in ppo_params:
@@ -431,6 +527,17 @@ class PPOTrainerWrapper:
             self._dataset_in_constructor = True
             self.trainer = ppo_trainer_cls(**trainer_kwargs)
 
+        # #1675 - trl.experimental's PPOTrainer subclasses transformers.Trainer
+        # but never runs Trainer.__init__, and its save_model / _save_checkpoint
+        # delegate to Trainer's. An attribute Trainer.__init__ assigns and those
+        # methods read is then missing: transformers 5.19.0 added one
+        # (is_distributed_loading_by_transformers) and the first checkpoint save
+        # raised AttributeError. Fill in what is absent, whichever branch built
+        # the trainer.
+        from soup_cli.trainer._trl_compat import ensure_trainer_init_attrs
+
+        ensure_trainer_init_attrs(self.trainer)
+
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the
         # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
         # scheduler keeps two base_lrs until torch's strict zip raises at the
@@ -529,6 +636,7 @@ class PPOTrainerWrapper:
             trust_remote_code=self._trust_remote_code,
             num_labels=1,
             device_map=resolve_device_map(self.device) if self.device != "cpu" else None,
+            **base_revision_kwargs(cfg.base),
         )
         reward_model.eval()
         return reward_model
@@ -571,6 +679,7 @@ class PPOTrainerWrapper:
             trust_remote_code=self._trust_remote_code,
             num_labels=1,
             device_map=resolve_device_map(self.device) if self.device != "cpu" else None,
+            **base_revision_kwargs(cfg.base),
         )
         return value_model
 
@@ -608,7 +717,8 @@ class PPOTrainerWrapper:
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -630,9 +740,12 @@ class PPOTrainerWrapper:
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
 
-        self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
 
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantization in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
             self.model = prepare_model_for_kbit_training(
@@ -688,7 +801,13 @@ class PPOTrainerWrapper:
 
     def _setup_unsloth(self, cfg, tcfg):
         """Load model via unsloth FastLanguageModel (2-5x faster)."""
+        from soup_cli.utils import unsloth
         from soup_cli.utils.unsloth import load_model_and_tokenizer
+        # #797: resolve training.gradient_checkpointing for the Unsloth path
+        # (streaming layers already checkpoint every layer, so it stays off).
+        use_gradient_checkpointing = unsloth.resolve_unsloth_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=getattr(tcfg, "stream_layers", False)
+        )
 
         console.print(f"[dim]Loading model via [bold]unsloth[/]: {cfg.base}[/]")
         self.model, self.tokenizer = load_model_and_tokenizer(
@@ -699,6 +818,8 @@ class PPOTrainerWrapper:
             lora_alpha=tcfg.lora.alpha,
             lora_dropout=tcfg.lora.dropout,
             target_modules=tcfg.lora.target_modules,
+            use_rslora=tcfg.lora.use_rslora,
+            use_gradient_checkpointing=use_gradient_checkpointing,
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -737,23 +858,15 @@ class PPOTrainerWrapper:
                 self.trainer.dataset = self._trl_train_ds
 
         if display:
-            from soup_cli.monitoring.callback import (
-                SoupTrainerCallback,
-                soup_callback_kwargs,
-            )
-
+            from soup_cli.monitoring.callback import build_soup_trainer_callback
             self.trainer.add_callback(
-                SoupTrainerCallback(
+               build_soup_trainer_callback(
                     display,
+                    config=self.config,
                     tracker=tracker,
                     run_id=run_id,
-                    eval_gate_config=self.config.training.eval_gate,
-                    **soup_callback_kwargs(
-                        self.config.training,
-                        batch_size=self._batch_size,
-                        output_dir=self._output_dir,
-                        include_eval_gate=False,
-                    ),
+                    batch_size=self._batch_size,
+                    output_dir=self._output_dir,
                 )
             )
 
@@ -797,9 +910,11 @@ class PPOTrainerWrapper:
             )
         self.tokenizer.save_pretrained(self._output_dir)
 
-        # Extract metrics
+        # Extract metrics. trl's PPO trainer (0.29) logs per-step losses under
+        # ``loss/policy_avg`` rather than ``loss``; the key is declared here
+        # instead of guessed (see #1413).
         logs = self.trainer.state.log_history
-        loss_summary = summarize_training_loss(logs)
+        loss_summary = summarize_training_loss(logs, loss_key="loss/policy_avg")
 
         hours = int(duration // 3600)
         minutes = int((duration % 3600) // 60)

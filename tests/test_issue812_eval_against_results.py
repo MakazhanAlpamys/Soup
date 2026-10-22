@@ -157,7 +157,7 @@ def test_empty_series_has_honest_unavailable_message():
 
 @pytest.mark.parametrize(
     "metric",
-    ["loss", "val_loss", "lr", "grad_norm", "speed", "gpu_mem", "epoch"],
+    ["loss", "val_loss", "val_reward", "lr", "grad_norm", "speed", "gpu_mem", "epoch"],
 )
 def test_benchmark_namespace_rejects_reserved_training_metrics(metric, monkeypatch):
     import soup_cli.experiment.tracker as tracker_module

@@ -85,12 +85,26 @@ def compile_cmd(
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
+    except Exception as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
 
-    atomic_write_text(result.program_text, plan.output_path, field="output_path")
+    try:
+        atomic_write_text(result.program_text, plan.output_path, field="output_path")
+    except ValueError as exc:
+        # #1445 — the write-time TOCTOU guard refuses cleanly (exit 2), not
+        # as an unhandled crash, matching the plan-time refusal above.
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+    score_display = (
+        "unmeasured"
+        if getattr(result, "score_unmeasured", False)
+        else f"{result.score:.3f}"
+    )
     console.print(
         Panel(
             f"Output:      [bold]{escape(plan.output_path)}[/]\n"
-            f"Score:       [bold]{result.score:.3f}[/]\n"
+            f"Score:       [bold]{score_display}[/]\n"
             f"Iterations:  [bold]{result.iterations}[/]\n"
             f"Converged:   [bold]{result.converged}[/]",
             title="soup compile — done",

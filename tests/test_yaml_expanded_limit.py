@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import re
 import tarfile
 import time
 
@@ -11,6 +12,7 @@ import yaml
 
 from soup_cli.utils.yaml_limits import (
     ALIAS_EXPANSION_SLACK,
+    MAX_YAML_NESTING,
     check_expanded_nodes,
     check_yaml_expanded_size,
     expanded_node_count,
@@ -40,6 +42,8 @@ def _write_can(path: str, members: dict[str, str]) -> None:
             info.size = len(payload)
             tf.addfile(info, io.BytesIO(payload))
 
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 _PLAIN_MANIFEST = (
     "can_format_version: 1\nname: n\nauthor: a\ncreated_at: '2026-01-01'\n"
@@ -216,6 +220,68 @@ def test_small_alias_manifest_still_loads(tmp_path, monkeypatch):
     assert manifest.attestations[0]["predicateType"] == "p"
 
 
+def _nested_attestation(levels: int) -> str:
+    """An attestation whose ``deep`` value brings the manifest to ``levels``."""
+    inner = levels - 3  # the manifest mapping, the attestations list, the statement
+    return "_type: t\npredicateType: p\ndeep: " + "[" * inner + "]" * inner + "\n"
+
+
+def _nested_config(levels: int) -> str:
+    inner = levels - 1  # the root mapping is the first level
+    return "deep: " + "[" * inner + "]" * inner + "\n"
+
+
+def test_manifest_nested_to_the_limit_loads(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from soup_cli.cans.unpack import inspect_can
+
+    body = _nested_attestation(MAX_YAML_NESTING)
+    _write_can("n.can", {"manifest.yaml": _manifest_with_attestation(body)})
+    assert inspect_can("n.can").attestations[0]["predicateType"] == "p"
+
+
+def test_manifest_nested_one_level_past_the_limit_is_refused(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from soup_cli.cans.unpack import inspect_can
+
+    body = _nested_attestation(MAX_YAML_NESTING + 1)
+    _write_can("n.can", {"manifest.yaml": _manifest_with_attestation(body)})
+    with pytest.raises(
+        ValueError,
+        match=r"^manifest.yaml nests collections more than 100 levels deep; refusing$",
+    ):
+        inspect_can("n.can")
+
+
+def test_config_nested_to_the_limit_loads(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from soup_cli.cans.unpack import read_config
+
+    _write_can("c.can", {"config.yaml": _nested_config(MAX_YAML_NESTING)})
+    assert list(read_config("c.can")) == ["deep"]
+
+
+def test_config_nested_one_level_past_the_limit_is_refused(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from soup_cli.cans.unpack import read_config
+
+    _write_can("c.can", {"config.yaml": _nested_config(MAX_YAML_NESTING + 1)})
+    with pytest.raises(
+        ValueError,
+        match=r"^config.yaml nests collections more than 100 levels deep; refusing$",
+    ):
+        read_config("c.can")
+
+
+def test_can_member_nested_far_past_the_limit_is_refused_the_same_way(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from soup_cli.cans.unpack import read_config
+
+    _write_can("c.can", {"config.yaml": _nested_config(20_000)})
+    with pytest.raises(ValueError, match="config.yaml nests collections more than 100"):
+        read_config("c.can")
+
+
 # ---------------------------------------------------------------------------
 # soup can run reads the config through the capped reader before anything else
 # ---------------------------------------------------------------------------
@@ -280,4 +346,23 @@ def test_cli_run_yes_refuses_alias_amplified_config(tmp_path, monkeypatch):
     result = CliRunner().invoke(app, ["can", "run", "r.can", "--yes"])
     assert result.exit_code == 1, (result.output, repr(result.exception))
     assert "expands to more than" in " ".join(result.output.split())
+    assert calls == []
+
+
+def test_cli_run_yes_refuses_config_nested_past_the_limit(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+
+    _, calls = _spawn_recorder(monkeypatch)
+    members = {
+        "manifest.yaml": _PLAIN_MANIFEST,
+        "config.yaml": _nested_config(MAX_YAML_NESTING + 1),
+    }
+    _write_can("r.can", members)
+    result = CliRunner().invoke(app, ["can", "run", "r.can", "--yes"])
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    output = " ".join(_ANSI_RE.sub("", result.output).split())
+    assert "config.yaml nests collections more than 100 levels deep; refusing" in output
     assert calls == []

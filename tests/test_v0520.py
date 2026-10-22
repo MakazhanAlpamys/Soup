@@ -679,12 +679,11 @@ class TestEbftGdpoUtils:
             validate_gdpo_compat(task="sft", backend="transformers")
 
     def test_get_ebft_spec(self):
-        # v0.53.2 #135 lifted EBFT + GDPO live_wired flags from False to True
-        # (kernel + attach hooks shipped).
+        # #1309: the GDPO kernel exists, but the supported TRL hook does not.
         from soup_cli.utils.ebft_gdpo import get_ebft_spec, get_gdpo_spec
 
         assert get_ebft_spec("structured").live_wired is True
-        assert get_gdpo_spec("margin").live_wired is True
+        assert get_gdpo_spec("margin").live_wired is False
 
     def test_apply_ebft_loss_lifted_in_v0532(self):
         """v0.52.0 shipped both as NotImplementedError stubs; v0.53.2 #135
@@ -726,19 +725,19 @@ class TestEbftGdpoSchema:
         with pytest.raises(Exception, match="#1230"):
             load_config_from_string(yaml)
 
-    def test_gdpo_dpo_happy(self):
-        cfg = load_config_from_string(
-            "base: x\ntask: dpo\ndata: {train: ./d.jsonl}\n"
-            "training: {gdpo_variant: length_normalized}\n"
-        )
-        assert cfg.training.gdpo_variant == "length_normalized"
+    def test_gdpo_dpo_refused(self):
+        with pytest.raises(ValueError, match="#1309"):
+            load_config_from_string(
+                "base: x\ntask: dpo\ndata: {train: ./d.jsonl}\n"
+                "training: {gdpo_variant: length_normalized}\n"
+            )
 
     def test_gdpo_on_sft_rejected(self):
         yaml = (
             "base: x\ntask: sft\ndata: {train: ./d.jsonl}\n"
             "training: {gdpo_variant: standard}\n"
         )
-        with pytest.raises(Exception, match="dpo"):
+        with pytest.raises(Exception, match="#1309"):
             load_config_from_string(yaml)
 
 
@@ -947,7 +946,6 @@ class TestV0520Recipes:
     NEW_RECIPES = (
         "orpheus-tts-sft",
         "llasa-tts",
-        "spark-tts",
         "oute-tts",
     )
 
@@ -963,7 +961,6 @@ class TestV0520Recipes:
         "name,expected_family", [
             ("orpheus-tts-sft", "orpheus"),
             ("llasa-tts", "llasa"),
-            ("spark-tts", "spark"),
             ("oute-tts", "oute"),
         ],
     )
@@ -1094,7 +1091,7 @@ class TestTddReviewGaps:
         from soup_cli.recipes.catalog import RECIPES
 
         new = (
-            "orpheus-tts-sft", "llasa-tts", "spark-tts", "oute-tts",
+            "orpheus-tts-sft", "llasa-tts", "oute-tts",
         )
         for name in new:
             base = RECIPES[name].model

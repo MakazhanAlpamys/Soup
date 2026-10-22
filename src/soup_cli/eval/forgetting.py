@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Literal, Optional, Tuple
 
+from soup_cli.eval.generation import generate_outputs
 from soup_cli.utils.final_answer import iter_boxed_answers
 
 MiniBenchmark = list[dict[str, str]]
@@ -43,6 +44,22 @@ _CUE_RE = re.compile(
 )
 # Parenthesised choice marker: "(B)" or "B)".
 _PAREN_RE = re.compile(r"(?<![A-Za-z0-9])\(?([A-Ja-j])\)(?![A-Za-z0-9])")
+# A lone uppercase letter wrapped in markdown emphasis, quotes or square
+# brackets: "**B**", "__B__", "*B*", "_B_", "`B`", "\"B\"", "'B'", "[B]".
+# Deliberate markup of a single letter is an explicit commitment like "(B)",
+# so it joins the last-wins tier — position decides against boxed/cue matches
+# the same way. Keeping the letter uppercase leaves prose such as "the word
+# 'a' is an article" untouched. (#1442)
+_WRAPPED_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:\*{1,2}|_{1,2}|[`\"'\[])\s*([A-J])\s*"
+    r"(?:\*{1,2}|_{1,2}|[`\"'\]])(?![A-Za-z0-9])"
+)
+# Standalone uppercase letter LEADING the output, followed by a line break
+# or " is" / " -" — the model led with its answer then explained itself
+# ("B is the correct answer.", "B\n\nBecause ..."). Restricted to the start
+# so a stray "B is" mid-prose cannot claim the slot, and kept uppercase so
+# the article "a" still cannot. (#1442)
+_LEADING_RE = re.compile(r"^([A-J])(?=\r?\n| is\b| -)")
 # LaTeX ``\boxed{C}`` — how a reasoning-tuned model states its final answer.
 # Read through ``utils.final_answer``'s shared scan instead of a local regex: the
 # box counts as an OPTION LETTER when the scan's normalised content is a single
@@ -101,20 +118,25 @@ def build_mcq_prompt(question: str, answer: str) -> str:
 def extract_mcq_letter(output: str) -> Optional[str]:
     """Pull the model's chosen MCQ option letter (A–J) from ``output``.
 
-    Three "explicit commitment" forms are considered together — a LaTeX
-    ``\\boxed{C}``, an ``answer/option/...`` cue, and a parenthesised
-    ``(B)``/``B)`` marker — and the LAST one to appear anywhere in the output
+    Four "explicit commitment" forms are considered together — a LaTeX
+    ``\\boxed{C}``, an ``answer/option/...`` cue, a parenthesised
+    ``(B)``/``B)`` marker, and a markdown/quote/bracket-wrapped lone letter
+    (``**B**``, ``[B]``) — and the LAST one to appear anywhere in the output
     wins. Position, not form, decides: a model that boxes a scratch answer and
     then self-corrects ("...\\boxed{A}... on reflection, the answer is (B)")
     chose B, while one that echoes the option list and then boxes its decision
     ("(A) x (B) y. Answer: \\boxed{A}") chose A. Ranking the boxed FORM above
     the others would get the first of those backwards.
 
-    Only if none of the three appears does the bare tier apply: a
-    clause-terminating uppercase letter, taking the FIRST match (a model
-    answering without a cue leads with the letter, e.g. "C. I think ..."). A
-    bare letter only counts when it terminates a clause, so a prose opener
-    ("A cat sat ...") is not read as choosing option A.
+    Only if none of the four appears (the wrapped-letter form counts as an
+    explicit commitment too — ``**B**``/``[B]``/``"B"`` and friends, #1442)
+    does the bare tier apply: a standalone uppercase letter leading the
+    output followed by a line break or ``is``/``-`` (``B is the correct
+    answer.``), else a clause-terminating uppercase letter, taking the FIRST
+    match (a model answering without a cue leads with the letter, e.g. "C.
+    I think ..."). A bare letter only counts when it terminates a clause or
+    leads the output, so a prose opener ("A cat sat ...") is not read as
+    choosing option A.
 
     Returns ``None`` when no option letter is present (e.g. a free-text answer
     like "Berlin", or a boxed VALUE like ``\\boxed{4}``).
@@ -127,12 +149,15 @@ def extract_mcq_letter(output: str) -> Optional[str]:
         letter = box.answer.upper()
         if len(letter) == 1 and letter in _MCQ_OPTIONS and (latest is None or box.end > latest[0]):
             latest = (box.end, letter)
-    for regex in (_CUE_RE, _PAREN_RE):
+    for regex in (_CUE_RE, _PAREN_RE, _WRAPPED_RE):
         for match in regex.finditer(output):
             if latest is None or match.end() > latest[0]:
                 latest = (match.end(), match.group(1))
     if latest is not None:
         return latest[1].upper()
+    leading = _LEADING_RE.match(output)
+    if leading is not None:
+        return leading.group(1)
     bare = _BARE_UPPER_RE.findall(output)
     if bare:
         return bare[0].upper()
@@ -194,11 +219,11 @@ MINI_MMLU: MiniBenchmark = [
      "answer": "C"},
     {"question": "Light travels faster than: (A) sound (B) nothing (C) radio waves",
      "answer": "A"},
-    {"question": "The square root of 81 is: (A) 8 (B) 9 (C) 18", "answer": "B"},
+    {"question": "The square root of 81 is: (A) 9 (B) 8 (C) 18", "answer": "A"},
     {"question": "Which gas do plants release during photosynthesis? "
                  "(A) oxygen (B) hydrogen (C) methane", "answer": "A"},
-    {"question": "The author of 'Romeo and Juliet' is: (A) Dickens (B) Shakespeare (C) Austen",
-     "answer": "B"},
+    {"question": "The author of 'Romeo and Juliet' is: (A) Dickens (B) Austen (C) Shakespeare",
+     "answer": "C"},
     {"question": "The freezing point of water in Fahrenheit is: (A) 0 (B) 32 (C) 100",
      "answer": "B"},
     {"question": "Which ocean is the largest? (A) Atlantic (B) Indian (C) Pacific",
@@ -219,6 +244,50 @@ MINI_MMLU: MiniBenchmark = [
     {"question": "The primary gas in Earth's atmosphere is: (A) oxygen (B) nitrogen (C) argon",
      "answer": "B"},
     {"question": "Sound cannot travel through a: (A) solid (B) liquid (C) vacuum", "answer": "C"},
+    # #1192 — the 26 rows above put a capable model at 1.000 (Qwen2.5-7B-Instruct,
+    # 26/26 in the #1111 tool-call discrimination record; Qwen2.5-1.5B-Instruct
+    # too). The rows below are 4-option, many with a common misconception as a
+    # distractor, selected from two 24-row candidate pools measured on two
+    # models. Two rows above had options swapped so no letter answers more
+    # than 30% of the suite.
+    {"question": "Which planet has the shortest day (fastest rotation)? (A) Mercury (B) Earth "
+                 "(C) Saturn (D) Jupiter",
+     "answer": "D"},
+    {"question": "The interior angles of a hexagon add up to: (A) 540 degrees (B) 900 degrees "
+                 "(C) 720 degrees (D) 1080 degrees",
+     "answer": "C"},
+    {"question": "Which country has the longest coastline? (A) Russia (B) Australia (C) Canada "
+                 "(D) Indonesia",
+     "answer": "C"},
+    {"question": "How many hearts does an octopus have? (A) 3 (B) 1 (C) 2 (D) 4",
+     "answer": "A"},
+    {"question": "Measured from base to peak, the tallest mountain on Earth is: (A) Mount "
+                 "Everest (B) Mauna Kea (C) K2 (D) Kilimanjaro",
+     "answer": "B"},
+    {"question": "In computing, a nibble is how many bits? (A) 4 (B) 2 (C) 8 (D) 16",
+     "answer": "A"},
+    {"question": "In which phase of mitosis do sister chromatids separate? (A) prophase (B) "
+                 "metaphase (C) telophase (D) anaphase",
+     "answer": "D"},
+    {"question": "Which planet has the highest average surface temperature? (A) Mercury (B) "
+                 "Venus (C) Mars (D) Jupiter",
+     "answer": "B"},
+    {"question": "Which element has the chemical symbol K? (A) krypton (B) calcium (C) "
+                 "phosphorus (D) potassium",
+     "answer": "D"},
+    {"question": "Which is the smallest of the world's five oceans? (A) the Southern (B) the "
+                 "Indian (C) the Atlantic (D) the Arctic",
+     "answer": "D"},
+    {"question": "The largest moon of Saturn is: (A) Ganymede (B) Europa (C) Titan (D) Callisto",
+     "answer": "C"},
+    {"question": "The hardest substance in the human body is: (A) tooth enamel (B) bone (C) "
+                 "cartilage (D) fingernail",
+     "answer": "A"},
+    {"question": "The Rock of Gibraltar is a territory of: (A) Spain (B) Morocco (C) Portugal "
+                 "(D) the United Kingdom",
+     "answer": "D"},
+    {"question": "The capital of Turkey is: (A) Istanbul (B) Izmir (C) Antalya (D) Ankara",
+     "answer": "D"},
 ]
 
 MINI_COMMON_SENSE: MiniBenchmark = [
@@ -228,19 +297,19 @@ MINI_COMMON_SENSE: MiniBenchmark = [
     {"question": "Fish live in: (A) trees (B) water (C) sand", "answer": "B"},
     {"question": "The sun rises in the: (A) west (B) south (C) east", "answer": "C"},
     {"question": "Ice melts when: (A) heated (B) frozen (C) pressed", "answer": "A"},
-    {"question": "To unlock a door you usually need a: (A) spoon (B) key (C) pillow",
-     "answer": "B"},
+    {"question": "To unlock a door you usually need a: (A) spoon (B) pillow (C) key",
+     "answer": "C"},
     {"question": "Before crossing a busy street you should: (A) close your eyes "
                  "(B) look both ways (C) run fast", "answer": "B"},
-    {"question": "If a glass falls on tile it will likely: (A) bounce (B) break (C) float",
-     "answer": "B"},
+    {"question": "If a glass falls on tile it will likely: (A) bounce (B) float (C) break",
+     "answer": "C"},
     {"question": "To write on paper you use a: (A) hammer (B) pen (C) plate", "answer": "B"},
     {"question": "A wet towel is best dried by: (A) folding it (B) hanging it in the sun "
                  "(C) burying it", "answer": "B"},
     {"question": "You feel cold, so you put on a: (A) swimsuit (B) coat (C) sandal",
      "answer": "B"},
-    {"question": "Plants need this to grow: (A) darkness (B) sunlight (C) television",
-     "answer": "B"},
+    {"question": "Plants need this to grow: (A) darkness (B) television (C) sunlight",
+     "answer": "C"},
     {"question": "To call a friend far away you use a: (A) phone (B) fork (C) broom",
      "answer": "A"},
     {"question": "After you finish eating, dirty dishes should be: (A) washed (B) painted "
@@ -249,8 +318,8 @@ MINI_COMMON_SENSE: MiniBenchmark = [
      "answer": "B"},
     {"question": "A baby is younger than a: (A) grandparent (B) newborn (C) egg", "answer": "A"},
     {"question": "To cut paper you use: (A) scissors (B) a magnet (C) glue", "answer": "A"},
-    {"question": "Bread that is very old may become: (A) fresh (B) moldy (C) cold",
-     "answer": "B"},
+    {"question": "Bread that is very old may become: (A) fresh (B) cold (C) moldy",
+     "answer": "C"},
     {"question": "If you are thirsty you should drink: (A) sand (B) water (C) paper",
      "answer": "B"},
     {"question": "A car needs this to run: (A) fuel (B) music (C) paint", "answer": "A"},
@@ -260,6 +329,72 @@ MINI_COMMON_SENSE: MiniBenchmark = [
     {"question": "If you are tired at night you should: (A) sleep (B) exercise hard (C) shout",
      "answer": "A"},
     {"question": "Rain falls from the: (A) ground (B) clouds (C) ocean floor", "answer": "B"},
+    # #1192 — the 24 rows above put a capable model at 1.000 (Qwen2.5-7B-Instruct,
+    # 24/24 in the #1111 tool-call discrimination record). The rows below are
+    # 4-option physical, temporal and relational reasoning, measured as a
+    # candidate pool on two models before selection. Four rows above had their
+    # B and C options swapped so no one letter answers more than 30% of the suite.
+    {"question": "You put a completely full, tightly sealed glass bottle of water in the freezer "
+                 "overnight. In the morning the bottle is most likely: (A) unchanged (B) warm "
+                 "(C) half empty (D) cracked",
+     "answer": "D"},
+    {"question": "A candle is burning inside a glass jar and you screw the lid on. The flame "
+                 "will: (A) grow brighter (B) burn for weeks (C) go out soon (D) turn the jar to "
+                 "water",
+     "answer": "C"},
+    {"question": "Your flight leaves at 7:00, the airport is 1 hour away, and you must arrive 2 "
+                 "hours before the flight. The latest time you can leave home is: (A) 4:00 (B) "
+                 "3:00 (C) 5:00 (D) 6:00",
+     "answer": "A"},
+    {"question": "Which would NOT help a phone battery last longer? (A) lowering the screen "
+                 "brightness (B) closing unused apps (C) turning on airplane mode (D) turning "
+                 "the volume up to maximum",
+     "answer": "D"},
+    {"question": "A heavy box and a light box of the same size are pushed across the same floor "
+                 "with the same force. Compared with the heavy box, the light box will: (A) move "
+                 "faster (B) move slower (C) not move at all (D) move at exactly the same speed",
+     "answer": "A"},
+    {"question": "A metal spoon and a wooden spoon are left standing in a pot of boiling soup "
+                 "for a few minutes. Which handle is hotter to touch? (A) the wooden one (B) "
+                 "neither is warm (C) both the same (D) the metal one",
+     "answer": "D"},
+    {"question": "Maria is taller than Ben, and Ben is taller than Chen. Who is the shortest? "
+                 "(A) Maria (B) Ben (C) Chen (D) it cannot be told",
+     "answer": "C"},
+    {"question": "Maria is taller than Ben, and Chen is taller than Ben. Who is the tallest? (A) "
+                 "Maria (B) Ben (C) Chen (D) it cannot be told",
+     "answer": "D"},
+    {"question": "You wash a wool sweater in very hot water and then tumble-dry it on high heat. "
+                 "It will most likely: (A) get bigger (B) turn white (C) shrink (D) become "
+                 "waterproof",
+     "answer": "C"},
+    {"question": "Ignoring air resistance, you drop a rubber ball and a stone of the same size "
+                 "from the same window at the same moment. Which lands first? (A) the ball (B) "
+                 "the stone (C) both at the same time (D) neither ever lands",
+     "answer": "C"},
+    {"question": "Where would you see the stars most clearly? (A) a city centre at noon (B) a "
+                 "countryside field on a clear, moonless night (C) a brightly lit stadium at "
+                 "night (D) a countryside field on a cloudy night",
+     "answer": "B"},
+    {"question": "It is 3 p.m. where you take off. You fly for 2 hours and land in a time zone 1 "
+                 "hour ahead. What is the local time when you land? (A) 3 p.m. (B) 5 p.m. (C) 6 "
+                 "p.m. (D) 4 p.m.",
+     "answer": "C"},
+    {"question": "It is raining and the wind is blowing hard from your left. To stay as dry as "
+                 "possible you tilt your umbrella: (A) to the left (B) to the right (C) straight "
+                 "behind you (D) you must keep it perfectly upright",
+     "answer": "A"},
+    {"question": "A fish tank has no lid and nobody adds water to it for a month. The water "
+                 "level will: (A) rise (B) freeze (C) stay exactly the same (D) fall",
+     "answer": "D"},
+    {"question": "You borrowed a friend's book and spilled coffee on it. The most considerate "
+                 "thing to do is: (A) return it without mentioning it (B) keep it and say you "
+                 "lost it (C) tell them and offer to replace it (D) say it was like that already",
+     "answer": "C"},
+    {"question": "A clock's hour hand points at 3 and its minute hand points at 12. What time "
+                 "did the clock show five hours earlier? (A) 8 o'clock (B) 7 o'clock (C) 2 "
+                 "o'clock (D) 10 o'clock",
+     "answer": "D"},
 ]
 
 MINI_INSTRUCTION: MiniBenchmark = [
@@ -316,18 +451,31 @@ MINI_ARITHMETIC: MiniBenchmark = [
     {"question": "What is 10 percent of 200?", "answer": "20"},
     {"question": "What is 16 + 25?", "answer": "41"},
     {"question": "What is 90 divided by 3?", "answer": "30"},
-    {"question": "What is 7 times 6?", "answer": "42"},
-    {"question": "What is 50 + 50?", "answer": "100"},
-    {"question": "What is 13 - 7?", "answer": "6"},
-    {"question": "What is 4 times 25?", "answer": "100"},
-    {"question": "What is 18 + 24?", "answer": "42"},
-    {"question": "What is 64 divided by 8?", "answer": "8"},
-    {"question": "What is 9 times 8?", "answer": "72"},
-    {"question": "What is 1000 - 1?", "answer": "999"},
-    {"question": "What is 3 cubed?", "answer": "27"},
-    {"question": "What is 40 + 60?", "answer": "100"},
-    {"question": "What is 21 divided by 7?", "answer": "3"},
-    {"question": "What is 12 times 12?", "answer": "144"},
+    # #1192 — the 24 single-step rows above put a capable model at 1.000
+    # (Qwen2.5-7B-Instruct, 36/36 in the #1111 gate record),
+    # so the suite could not see a numeracy regression. The rows below are
+    # multi-step or large-operand; no answer appears as a token in its own
+    # question, so echoing the prompt cannot score.
+    {"question": "What is 47 times 38?", "answer": "1786"},
+    {"question": "What is 1234 times 56?", "answer": "69104"},
+    {"question": "What is 7 + 3 times 4 - 6 divided by 2?", "answer": "16"},
+    {"question": "A shirt costs 80 dollars. It is discounted by 25 percent, then the "
+                 "discounted price is raised by 25 percent. What is the final price "
+                 "in dollars?", "answer": "75"},
+    {"question": "What is 2 to the power of 15?", "answer": "32768"},
+    {"question": "What is the remainder when 2024 is divided by 37?", "answer": "26"},
+    {"question": "How many seconds are in 3 days?", "answer": "259200"},
+    {"question": "What is 999 times 999?", "answer": "998001"},
+    {"question": "What is the sum of all the whole numbers from 1 to 250?", "answer": "31375"},
+    {"question": "What is 17 squared minus 13 squared?", "answer": "120"},
+    {"question": "A train leaves at 9:47 and arrives at 14:12 the same day. How many "
+                 "minutes long is the trip?", "answer": "265"},
+    {"question": "What is 15 percent of 15 percent of 4000?", "answer": "90"},
+    {"question": "What is 123456789 divided by 9?", "answer": "13717421"},
+    {"question": "What is the least common multiple of 18, 24 and 40?", "answer": "360"},
+    {"question": "What is 3/8 plus 5/12, as a fraction in lowest terms?", "answer": "19/24"},
+    {"question": "How many times is the digit 7 written when you write out every whole "
+                 "number from 1 to 100?", "answer": "20"},
 ]
 
 MINI_BENCHMARKS: dict[str, MiniBenchmark] = {
@@ -371,11 +519,12 @@ class ForgettingDetector:
 
     def _evaluate(self) -> float:
         correct = 0
-        for item in self.benchmark:
-            output = self.generate_fn(
-                build_mcq_prompt(item["question"], item.get("answer", ""))
-            )
-            if not isinstance(output, str):
+        outputs = generate_outputs(self.generate_fn, [
+            build_mcq_prompt(item["question"], item.get("answer", ""))
+            for item in self.benchmark
+        ])
+        for item, output in zip(self.benchmark, outputs):
+            if output is None:
                 continue
             if score_answer(output, item["answer"]):
                 correct += 1

@@ -66,6 +66,9 @@ STAGED_FIELDS: dict[tuple[str, str], Any] = {
     ("training", "checkpoint_keep_top"): 3,
     ("training", "convergence_window"): 50,
     ("training", "convergence_rel_tol"): 0.005,
+    # #808 item 2: accepted, but no save writes reference-model or rollout-buffer state.
+    ("training", "rl_checkpoint_include_ref_model"): False,
+    ("training", "rl_checkpoint_include_rollout_buffer"): False,
     ("data", "video_dir"): None,
     ("data", "video_fps"): None,
     ("data", "video_maxlen"): None,
@@ -135,6 +138,8 @@ def format_staged_fields(
     Per maintainer directive on #808:
     While warning, each staged field prints:
         <field> is accepted but read by nothing; v<STAGED_FIELD_REJECTION_VERSION> will refuse it
+    Once refused, each line also says what to do about it:
+        <field> is accepted but read by nothing; refused as of v<...>. Delete the line.
     """
     lines = []
     for item in staged:
@@ -146,6 +151,6 @@ def format_staged_fields(
         else:
             lines.append(
                 f"{item.path} is accepted but read by nothing; "
-                f"refused as of v{STAGED_FIELD_REJECTION_VERSION}"
+                f"refused as of v{STAGED_FIELD_REJECTION_VERSION}. Delete the line."
             )
     return "\n".join(lines)

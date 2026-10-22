@@ -207,6 +207,16 @@ def make_raft_trainer_class(base_cls: type) -> type:
     """
 
     class _RaftTrainer(base_cls):  # type: ignore[valid-type, misc]
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            # #1444 — Trainer's ``num_items_in_batch`` counts non-ignored
+            # labels, not the ``loss_weights`` mass (citation-span boosts
+            # skew it), so this weighted mean cannot honour it. Declining
+            # the loss kwargs makes training_step apply its
+            # ``1 / gradient_accumulation_steps`` normalisation; left True,
+            # logged loss and the clipped gradient came out Gx.
+            self.model_accepts_loss_kwargs = False
+
         def compute_loss(
             self,
             model,

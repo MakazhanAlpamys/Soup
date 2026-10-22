@@ -112,6 +112,10 @@ class TTSTrainerWrapper(SFTTrainerWrapper):
             from soup_cli.utils.tts_codec import csm_live_codec_error
 
             raise csm_live_codec_error()
+        if family in {"spark", "oute"}:
+            from soup_cli.utils.tts_codec import incompatible_live_codec_error
+
+            raise incompatible_live_codec_error(family)
         if family == "llasa":
             try:
                 __import__("torchaudio")

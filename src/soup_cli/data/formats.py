@@ -41,33 +41,66 @@ FORMAT_SIGNATURES = {
     "tool-calling": {"messages", "tools"},
 }
 
+# #1424: detection reads a bounded prefix of the file, not just row 0. A first
+# row that happens to lack an optional key (e.g. a text-only LLaVA row) must
+# not pick the converter for the WHOLE file and silently drop that key from
+# every row that has it. The cap keeps detection O(1)-ish on huge files.
+MAX_DETECT_ROWS = 100
 
-def detect_format(data: list[dict]) -> str:
-    """Auto-detect dataset format from first few rows."""
-    if not data:
-        raise ValueError("Empty dataset - cannot detect format")
+# Check more specific formats first (llava/sharegpt4v before sharegpt).
+# tool-calling (messages+tools) is checked BEFORE audio
+# (audio+messages): a row carrying both would otherwise match audio first
+# and silently drop its tools/tool_calls. tool-calling before chatml
+# (signature is a superset of chatml). asr ({audio, text}) is checked
+# BEFORE plaintext ({text}) — its signature is a superset, so plaintext
+# would otherwise win and silently drop the audio path. plaintext last.
+_CHECK_ORDER = [
+    "alpaca", "llava", "sharegpt4v", "kto", "dpo", "embedding",
+    "tool-calling", "audio", "asr", "sharegpt", "chatml", "plaintext",
+]
 
-    sample = data[0]
-    keys = set(sample.keys())
 
-    # Check more specific formats first (llava/sharegpt4v before sharegpt).
-    # tool-calling (messages+tools) is checked BEFORE audio
-    # (audio+messages): a row carrying both would otherwise match audio first
-    # and silently drop its tools/tool_calls. tool-calling before chatml
-    # (signature is a superset of chatml). asr ({audio, text}) is checked
-    # BEFORE plaintext ({text}) — its signature is a superset, so plaintext
-    # would otherwise win and silently drop the audio path. plaintext last.
-    check_order = [
-        "alpaca", "llava", "sharegpt4v", "kto", "dpo", "embedding",
-        "tool-calling", "audio", "asr", "sharegpt", "chatml", "plaintext",
-    ]
-    for fmt in check_order:
-        required_keys = FORMAT_SIGNATURES[fmt]
-        if required_keys.issubset(keys):
+def _richest_format(keys: set[str]) -> Optional[str]:
+    """First format in :data:`_CHECK_ORDER` whose signature fits ``keys``.
+
+    The check order is most-specific-first, so this is the richest format the
+    row's keys could be: a row with ``image`` + ``conversations`` is ``llava``,
+    a row with only ``conversations`` is ``sharegpt``.
+    """
+    for fmt in _CHECK_ORDER:
+        if FORMAT_SIGNATURES[fmt].issubset(keys):
             return fmt
+    return None
 
-    raise ValueError(
-        f"Cannot detect format. Keys found: {keys}. "
+
+def _richer_family_member(a: str, b: str) -> Optional[str]:
+    """Return ``a`` or ``b`` with the strictly larger signature, else ``None``.
+
+    The richer format's signature is a superset of the poorer one's, so a row
+    matching the richer signature also matches the poorer — that is what defines
+    a richer/poorer pair of the same family (llava/sharegpt,
+    tool-calling/chatml, audio/chatml, asr/plaintext). Two unrelated shapes
+    (e.g. alpaca and chatml) share no such relation and must not be merged.
+    """
+    if FORMAT_SIGNATURES[a] > FORMAT_SIGNATURES[b]:
+        return a
+    if FORMAT_SIGNATURES[b] > FORMAT_SIGNATURES[a]:
+        return b
+    return None
+
+
+def _cannot_detect_message(row: object, index: int) -> str:
+    """The existing unrecognised-keys error, naming the offending row.
+
+    ``row`` may be any JSON value, not just an object, so a bare scalar or array
+    is described by its type rather than by keys it does not have.
+    """
+    if isinstance(row, dict):
+        found = f"Keys found: {set(row.keys())}. "
+    else:
+        found = f"Row is a {type(row).__name__}, not an object. "
+    return (
+        f"Cannot detect format at row {index}. {found}"
         f"Expected one of: alpaca (instruction, output), "
         f"sharegpt (conversations), chatml (messages), "
         f"dpo (prompt, chosen, rejected), "
@@ -77,6 +110,111 @@ def detect_format(data: list[dict]) -> str:
         f"audio (audio, messages), "
         f"tool-calling (messages, tools), "
         f"plaintext (text)"
+    )
+
+
+def detect_format(data: list[dict]) -> str:
+    """Auto-detect dataset format from a bounded prefix of rows.
+
+    Reads up to :data:`MAX_DETECT_ROWS` rows — not just the first — because a
+    single first row missing an optional key must not force the poorer
+    converter on the whole file and silently drop that key everywhere (#1424).
+
+    Each sampled row resolves to its richest format (the first match in the
+    check order). If every row agrees, that format is returned — a uniform file
+    detects exactly as before. If they disagree the file is *mixed*:
+
+    - a richer/poorer pair of the same family (llava/sharegpt,
+      tool-calling/chatml, audio/chatml, asr/plaintext) upgrades to the richer
+      format, but only when its converter accepts the poorer rows too;
+    - otherwise (an unrelated pair, or a richer converter that rejects the
+      poorer rows) detection raises, naming both shapes and the row where each
+      was first seen and telling the user to set ``data.format`` explicitly.
+
+    Raises:
+    - ``ValueError`` on empty data, or when no row in the prefix matches any
+      format signature. A row that matches no signature is skipped and reported
+      like the converters do (#1217) rather than refusing the whole file. A file
+      that mixes shapes is also refused, naming both shapes and the row where
+      each was first seen.
+    """
+    if not data:
+        raise ValueError("Empty dataset - cannot detect format")
+
+    sampled = data[:MAX_DETECT_ROWS]
+    # First row index at which each richest format was seen, in sample order.
+    first_seen: dict[str, int] = {}
+    # The richest format of every sampled row, aligned with `sampled`.
+    row_formats: list[str] = []
+    ignored: list[int] = []
+    for index, row in enumerate(sampled):
+        # A JSONL line can be any JSON value, not just an object, so a bare
+        # scalar or array is skipped exactly as the converters drop it (#1217)
+        # instead of crashing on .keys().
+        fmt = _richest_format(set(row.keys())) if isinstance(row, dict) else None
+        if fmt is None:
+            # #1217: a row matching no signature is skipped by the converters
+            # rather than fatal, so detection ignores it here too and drops it
+            # from the decision. Refusing on one bad row would restore the
+            # "zero row stop" behaviour #1217 removed; the loader's own drop
+            # warning is what tells the user which row it was.
+            ignored.append(index)
+            row_formats.append("")
+            continue
+        row_formats.append(fmt)
+        first_seen.setdefault(fmt, index)
+
+    if not first_seen:
+        # Nothing in the prefix matched, so there is no format to resolve.
+        first_ignored = ignored[0]
+        raise ValueError(_cannot_detect_message(sampled[first_ignored], first_ignored))
+
+    if len(first_seen) == 1:
+        return next(iter(first_seen))
+
+    # The sampled rows disagree: this file is mixed.
+    ordered = sorted(first_seen.items(), key=lambda item: item[1])
+    if len(ordered) == 2:
+        (fmt_a, idx_a), (fmt_b, idx_b) = ordered
+        richer = _richer_family_member(fmt_a, fmt_b)
+        if richer is not None:
+            if richer == fmt_a:
+                poorer, poorer_idx, richer_idx = fmt_b, idx_b, idx_a
+            else:
+                poorer, poorer_idx, richer_idx = fmt_a, idx_a, idx_b
+            poorer_rows = [
+                row for row, fmt in zip(sampled, row_formats) if fmt == poorer
+            ]
+            # The richer converter must accept EVERY poorer row, and must
+            # convert it to the same messages the poorer one would: the
+            # tool-calling converter rebuilds each message from role, content,
+            # tool_calls and tool_call_id, so a chatml row whose messages carry
+            # name or weight converts "successfully" but loses them. An upgrade
+            # that silently drops a field is the defect this change exists to fix.
+            upgrades = all(
+                format_to_messages(row, richer) is not None
+                and format_to_messages(row, richer) == format_to_messages(row, poorer)
+                for row in poorer_rows
+            )
+            if upgrades:
+                # The richer converter handles the poorer rows too, so upgrading
+                # keeps every row's fields instead of dropping the poorer ones.
+                return richer
+            missing = sorted(FORMAT_SIGNATURES[richer] - FORMAT_SIGNATURES[poorer])
+            missing_text = ", ".join(f"'{key}'" for key in missing)
+            raise ValueError(
+                f"Cannot detect format: this dataset mixes '{poorer}' (row "
+                f"{poorer_idx}) and '{richer}' (row {richer_idx}). They are the "
+                f"same family, but the richer '{richer}' converter rejects the "
+                f"'{poorer}' rows — they have no {missing_text} key — so no "
+                f"single format covers every row. Set data.format explicitly."
+            )
+
+    shapes = " and ".join(f"'{fmt}' (row {idx})" for fmt, idx in ordered)
+    raise ValueError(
+        f"Cannot detect format: this dataset mixes unrelated shapes {shapes}. "
+        f"Converting every row with one of them would silently drop the other's "
+        f"fields. Set data.format explicitly."
     )
 
 
@@ -91,6 +229,8 @@ VALID_FORMATS = (
     "raft",
     # v0.71.32 — ASR (Whisper): {"audio": path, "text": transcript}.
     "asr",
+    # Issue #1219 — Cross-encoder paired text classification.
+    "cross_encoder",
 )
 
 # A malformed row makes a converter raise one of these; the drop contract is
@@ -139,6 +279,8 @@ def _dispatch_conversion(row: dict, fmt: str) -> dict:
         return _convert_raft(row)
     elif fmt == "asr":
         return _convert_asr(row)
+    elif fmt == "cross_encoder":
+        return _convert_cross_encoder(row)
     else:
         return _convert_vision(row)
 
@@ -149,8 +291,9 @@ def format_to_messages(row: dict, fmt: str) -> Optional[dict]:
     Returns:
     - SFT formats: {"messages": [{"role": ..., "content": ...}, ...]}
     - Vision formats: {"messages": [...], "image": "path"}
-    - DPO format: {"prompt": ..., "chosen": ..., "rejected": ...}
-    - KTO format: {"prompt": ..., "completion": ..., "label": bool}
+    - DPO format: {"prompt": ..., "chosen": ..., "rejected": ...}, the three all
+      strings or all message lists (see :func:`_convert_dpo`)
+    - KTO format: {"prompt": ..., "completion": ..., "label": bool}, likewise
 
     A malformed row is dropped (returns ``None``) rather than raising, so one
     bad line does not abort a whole dataset load.
@@ -245,25 +388,235 @@ def _convert_chatml(row: dict) -> dict:
     return {"messages": messages}
 
 
-def _convert_dpo(row: dict) -> dict:
-    """Convert DPO preference row to {prompt, chosen, rejected} for trl.DPOTrainer.
+# --- Preference rows (dpo / kto) ---------------------------------------------
+#
+# trl takes a preference row in one of two layouts. TEXT: the prompt and the
+# answers are strings, concatenated as written. CONVERSATIONAL: each is a list
+# of messages, rendered through the chat template. It decides which one it has
+# by asking ONE field of the row, taken from a set
+# (``trl.data_utils.is_conversational``), so a row whose fields are not all the
+# same kind fails inside the trainer, after the model has loaded, with an error
+# that changes with PYTHONHASHSEED (#1849). ORPO and CPO split a string prompt
+# beside conversations first (``maybe_extract_prompt``); ``DPOTrainer`` does
+# not, and BCO / KTO are handed unpaired rows with nothing left to split.
+# The two converters below therefore emit rows of exactly one kind, with the
+# prompt turns in ``prompt`` and nowhere else, and refuse what they cannot
+# write that way.
 
-    Note: chosen/rejected may legitimately be message LISTS (conversational
-    DPO), so this converter only rejects an explicit null rather than requiring
-    a plain string (unlike the alpaca / sharegpt / vision text converters).
+
+def _turn(role: str, text: str) -> dict:
+    return {"role": role, "content": text}
+
+
+def _as_messages(value: object, field: str) -> list[dict]:
+    """``value`` as a non-empty list of well-formed messages, or raise.
+
+    One message is read as a list of one. ``content`` is a string, or a list of
+    content blocks (a multimodal turn, prepared by trl), or null or absent: a
+    turn with no text is accepted on any message, with a ``tool_calls`` or
+    ``function_call`` key beside it or without one. Rows with such a turn
+    trained before and still do. Any other type is refused. A JSON object as
+    content (a tool result that was not serialised) never loaded beside string
+    contents: Arrow needs one type per column.
     """
-    for field in ("prompt", "chosen", "rejected"):
+    if isinstance(value, dict):
+        value = [value]
+    if not isinstance(value, list):
+        raise TypeError(
+            f"{field} must be a message or a list of messages, got {type(value).__name__}"
+        )
+    if not value:
+        raise ValueError(f"{field} is an empty message list")
+    for index, message in enumerate(value):
+        where = f"{field}[{index}]"
+        if not isinstance(message, dict):
+            raise TypeError(
+                f"{where} must be a message (an object with 'role' and 'content'), "
+                f"got {type(message).__name__}"
+            )
+        role = message.get("role")
+        if not isinstance(role, str) or not role:
+            raise TypeError(f"{where}.role must be a non-empty string")
+        content = message.get("content")
+        if content is None or isinstance(content, (str, list)):
+            continue
+        hint = ""
+        if isinstance(content, dict):
+            hint = " (write a JSON tool result as a JSON string)"
+        raise TypeError(
+            f"{where}.content must be a string or a list of content blocks, "
+            f"got {type(content).__name__}{hint}"
+        )
+    return value
+
+
+def _preference_field(value: object, field: str) -> "str | list[dict]":
+    """A prompt or an answer: its string, or its messages."""
+    if value is None:
+        raise TypeError(f"{field} must not be null")
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (dict, list)):
+        return _as_messages(value, field)
+    raise TypeError(
+        f"{field} must be a string, a message or a list of messages, "
+        f"got {type(value).__name__}"
+    )
+
+
+def _no_prompt(value: object) -> bool:
+    """Missing, null, a blank string or an empty list."""
+    return value is None or value == [] or (isinstance(value, str) and not value.strip())
+
+
+def _shared_leading_turns(chosen: list[dict], rejected: list[dict]) -> int:
+    """How many leading turns the two conversations share: their implicit prompt.
+
+    This is the split ``trl.data_utils.maybe_extract_prompt`` makes for the
+    trainers that call it (ORPO, CPO, BCO), so those see the rows they always
+    did. When one conversation is the start of the other, or the two are the
+    same, the last shared turn is the shorter one's answer if it is an
+    assistant turn (an identical pair still converts, and ``soup data lint``
+    reports it as ``identical_pairs``). Otherwise the shorter conversation
+    stops where the other one answers and has no answer of its own.
+    """
+    common = 0
+    for ours, theirs in zip(chosen, rejected):
+        if ours != theirs:
+            break
+        common += 1
+    if common < min(len(chosen), len(rejected)):
+        return common
+    name, other, shorter = (
+        ("chosen", "rejected", chosen)
+        if len(chosen) <= len(rejected)
+        else ("rejected", "chosen", rejected)
+    )
+    if shorter[-1]["role"] == "assistant":
+        return common - 1
+    raise ValueError(
+        f"dpo.{name} has no turn after the {common} it shares with dpo.{other}: "
+        f"there is no {name} answer"
+    )
+
+
+def _convert_dpo(row: dict) -> dict:
+    """Convert a DPO preference row to ``{prompt, chosen, rejected}`` in ONE layout.
+
+    The result is TEXT (three strings, returned as written) or CONVERSATIONAL
+    (three non-empty message lists, the prompt turns in ``prompt`` only):
+
+    - ``prompt`` / ``chosen`` / ``rejected`` all strings: text.
+    - ``prompt`` a message list (trl's explicit layout): conversational. A
+      string answer becomes one assistant turn; a prompt that both answers
+      repeat and continue is taken out of them.
+    - ``prompt`` a string beside message-list answers (every bundled example,
+      UltraFeedback): the leading turns the two answers share are the prompt
+      and the string is not read, which is what trl's ``maybe_extract_prompt``
+      does for the trainers that call it. With no shared turn the string is
+      the user turn.
+    - no ``prompt``: the shared leading turns (trl's implicit layout), else the
+      row's ``messages``.
+
+    A row that mixes a string answer with a message-list one, has no prompt, or
+    carries a malformed message is refused with a reason that names the field.
+    Other keys (``system``, scores, ids) are not read, as before.
+    """
+    for field in ("chosen", "rejected"):
         if row.get(field) is None:
             raise TypeError(f"dpo.{field} must not be null")
-    return {
-        "prompt": row["prompt"],
-        "chosen": row["chosen"],
-        "rejected": row["rejected"],
-    }
+    written = row.get("prompt")
+    # A blank string or an empty list beside conversations is no prompt at all.
+    prompt = None if _no_prompt(written) else _preference_field(written, "dpo.prompt")
+    chosen = _preference_field(row["chosen"], "dpo.chosen")
+    rejected = _preference_field(row["rejected"], "dpo.rejected")
+
+    text_answers = False
+    if isinstance(chosen, str) or isinstance(rejected, str):
+        if not (isinstance(chosen, str) and isinstance(rejected, str)):
+            kind = {True: "a string", False: "a message list"}
+            raise TypeError(
+                f"dpo.chosen is {kind[isinstance(chosen, str)]} and dpo.rejected is "
+                f"{kind[isinstance(rejected, str)]}: give both as strings or both as "
+                "message lists"
+            )
+        if isinstance(written, str):
+            return {"prompt": written, "chosen": chosen, "rejected": rejected}
+        text_answers = True
+        chosen, rejected = [_turn("assistant", chosen)], [_turn("assistant", rejected)]
+
+    if isinstance(prompt, list):
+        size = len(prompt)
+        if all(len(side) > size and side[:size] == prompt for side in (chosen, rejected)):
+            chosen, rejected = chosen[size:], rejected[size:]
+        return {"prompt": prompt, "chosen": chosen, "rejected": rejected}
+
+    # The turns the two answers share are the prompt, and a string beside them
+    # is not read: trl's own reading of this layout (maybe_extract_prompt).
+    shared = 0 if text_answers else _shared_leading_turns(chosen, rejected)
+    lead = chosen[:shared]
+    if not lead and isinstance(prompt, str):
+        lead = [_turn("user", prompt)]
+    elif not lead and not _no_prompt(row.get("messages")):
+        lead = _as_messages(row["messages"], "dpo.messages")
+    elif not lead and text_answers:
+        raise TypeError("dpo.prompt must not be null")
+    elif not lead:
+        raise ValueError(
+            "dpo.prompt is missing and dpo.chosen and dpo.rejected share no leading "
+            "turn to use as the prompt: add 'prompt' (a string or a message list)"
+        )
+    return {"prompt": lead, "chosen": chosen[shared:], "rejected": rejected[shared:]}
+
+
+def unify_preference_layout(rows: list[dict]) -> tuple[list[dict], int]:
+    """Give a set of converted ``dpo`` / ``kto`` rows ONE layout.
+
+    ``Dataset.from_list`` needs one type per column and trl reads the layout
+    off the first row, so text rows beside conversational ones cannot be
+    trained as they are. Each text row is rewritten as one user turn and one
+    assistant turn per answer, the way a ``chatml`` row beside ``tool-calling``
+    ones loads as ``tool-calling``. Returns ``(rows, rewritten)``; a set that
+    already has one layout, or holds no preference rows, is returned as the
+    same object with ``0``.
+    """
+    text: list[tuple[int, tuple[str, ...]]] = []
+    conversational = False
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict) or "prompt" not in row:
+            continue
+        if "chosen" in row and "rejected" in row:
+            answers: tuple[str, ...] = ("chosen", "rejected")
+        elif "completion" in row and "label" in row:
+            answers = ("completion",)
+        else:
+            continue
+        if isinstance(row["prompt"], list):
+            conversational = True
+        elif all(isinstance(row[name], str) for name in ("prompt", *answers)):
+            text.append((index, answers))
+    if not text or not conversational:
+        return rows, 0
+    unified = list(rows)
+    for index, answers in text:
+        row = dict(rows[index])
+        row["prompt"] = [_turn("user", row["prompt"])]
+        for name in answers:
+            row[name] = [_turn("assistant", row[name])]
+        unified[index] = row
+    return unified, len(text)
 
 
 def _convert_kto(row: dict) -> dict:
-    """Convert KTO row to {prompt, completion, label} for trl.KTOTrainer."""
+    """Convert a KTO row to ``{prompt, completion, label}`` in ONE layout.
+
+    The same contract as :func:`_convert_dpo`, over ``prompt`` and
+    ``completion``: both strings (text, returned as written) or both message
+    lists. A string prompt beside a message-list completion is the user turn,
+    unless the completion leads with turns of its own before its first
+    assistant turn; then those turns are the prompt and the string is not read
+    (the row a paired file with a string ``prompt`` column gives when unpaired).
+    """
     raw_label = row["label"]
     if isinstance(raw_label, str):
         low = raw_label.strip().lower()
@@ -284,11 +637,31 @@ def _convert_kto(row: dict) -> dict:
         label = raw_label > 0
     else:
         label = bool(raw_label)
-    return {
-        "prompt": row["prompt"],
-        "completion": row["completion"],
-        "label": label,
-    }
+    prompt = _preference_field(row.get("prompt"), "kto.prompt")
+    completion = _preference_field(row.get("completion"), "kto.completion")
+
+    if isinstance(completion, str):
+        if isinstance(prompt, str):
+            return {"prompt": prompt, "completion": completion, "label": label}
+        completion = [_turn("assistant", completion)]
+    if isinstance(prompt, list):
+        size = len(prompt)
+        if len(completion) > size and completion[:size] == prompt:
+            completion = completion[size:]
+        return {"prompt": prompt, "completion": completion, "label": label}
+
+    lead = next(
+        (index for index, turn in enumerate(completion) if turn["role"] == "assistant"),
+        len(completion),
+    )
+    if lead == 0:
+        return {"prompt": [_turn("user", prompt)], "completion": completion, "label": label}
+    if lead == len(completion):
+        raise ValueError(
+            f"kto.completion has no turn after the {lead} that lead it: there is no "
+            "assistant answer"
+        )
+    return {"prompt": completion[:lead], "completion": completion[lead:], "label": label}
 
 
 def _convert_plaintext(row: dict) -> dict:
@@ -353,6 +726,39 @@ def _convert_asr(row: dict) -> dict:
 
     audio, text = _validate_asr_row(row)
     return {"audio": audio, "text": text}
+
+
+def _convert_cross_encoder(row: dict) -> dict:
+    """Convert cross-encoder paired row (Issue #1219).
+
+    Input:  {"text_a": ..., "text_b": ..., "label": ...}
+        or: {"question": ..., "answer": ..., "label": ...}
+    Output: dict with the pair fields and optional label preserved.
+    """
+    if "text_a" in row and "text_b" in row:
+        a, b = row["text_a"], row["text_b"]
+        if not isinstance(a, str) or not isinstance(b, str):
+            raise TypeError(
+                "cross_encoder rows require 'text_a' and 'text_b' to be str; "
+                f"got text_a={type(a).__name__}, text_b={type(b).__name__}"
+            )
+        res = {"text_a": a, "text_b": b}
+    elif "question" in row and "answer" in row:
+        q, ans = row["question"], row["answer"]
+        if not isinstance(q, str) or not isinstance(ans, str):
+            raise TypeError(
+                "cross_encoder rows require 'question' and 'answer' to be str; "
+                f"got question={type(q).__name__}, answer={type(ans).__name__}"
+            )
+        res = {"question": q, "answer": ans}
+    else:
+        raise ValueError(
+            "cross_encoder row requires 'text_a' + 'text_b' (or 'question' + "
+            f"'answer'). Row keys: {sorted(row)!r}"
+        )
+    if "label" in row:
+        res["label"] = row["label"]
+    return res
 
 
 def _convert_vision(row: dict) -> dict:

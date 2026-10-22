@@ -372,6 +372,23 @@ def _node_llm_text(
     )
 
 
+#: A judge reply's verdict is its first word (#1467): ``OK`` or ``OKAY`` keeps the
+#: row, ``REJECT`` and ``NOT OK`` drop it. A substring test kept ``NOT OK`` and
+#: ``This looks broken`` (both contain ``OK``).
+_JUDGE_VERDICT = re.compile(r"^\W*(not\W+)?(ok(?:ay)?|reject(?:ed)?)\b", re.IGNORECASE)
+
+
+def _read_judge_verdict(text: str) -> Optional[bool]:
+    """``True`` keeps the row, ``False`` drops it, ``None`` means no verdict."""
+    match = _JUDGE_VERDICT.match(text)
+    if match is None:
+        return None
+    negated = match.group(1) is not None
+    if match.group(2).lower().startswith("reject"):
+        return None if negated else False
+    return not negated
+
+
 def _node_judge(
     node: "RecipeNode",
     inputs: Sequence[Sequence[Mapping[str, Any]]],
@@ -382,12 +399,13 @@ def _node_judge(
 ) -> _ProviderNodeResult:
     """Binary OK/REJECT classification via an LLM provider.
 
-    Rows for which the model emits a string containing ``"OK"`` are kept
-    (with ``<node.name>=True``); others are dropped.
+    Rows whose reply starts with ``OK`` are kept (with ``<node.name>=True``);
+    ``REJECT`` or ``NOT OK`` drops the row, and a reply with no verdict is
+    dropped and counted in ``failure_count`` (#1467).
     """
     prompt_template = node.config.get(
         "prompt",
-        "Classify the following as OK or REJECT.\n\n{text}",
+        "Classify the following as OK or REJECT. Reply with one word, OK or REJECT.\n\n{text}",
     )
     if not isinstance(prompt_template, str) or not prompt_template:
         raise ValueError(f"judge node {node.name!r}: 'prompt' must be a string")
@@ -430,8 +448,11 @@ def _node_judge(
         if not isinstance(text, str):
             failures += 1
             continue
-        text = text.upper()
-        if "OK" in text and "REJECT" not in text:
+        verdict = _read_judge_verdict(text)
+        if verdict is None:
+            _LOG.debug("judge node %s: no OK/REJECT verdict in %r", node.name, text[:80])
+            failures += 1
+        elif verdict:
             kept.append({**row, node.name: True})
     return _ProviderNodeResult(
         tuple(kept),

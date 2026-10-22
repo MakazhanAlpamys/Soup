@@ -116,8 +116,8 @@ def _resolve_format(rows: list, requested: str, path: str) -> str:
             )
         return requested
     if not isinstance(rows[0], dict):
-        # detect_format reads the first row's keys; anything else would
-        # surface as a bare AttributeError.
+        # The canary carrier is written into row 0, so it must be an object.
+        # (detect_format itself now skips non-dict rows rather than raising.)
         _refuse(
             f"{path}: the first row is a JSON {_json_type(rows[0])}, not an "
             "object; canary insert reads each row as a JSON object"
@@ -175,7 +175,8 @@ def insert(
             f"got {output!r}"
         )
 
-    rows = load_raw_data(file_path)
+    # _resolve_format needs the raw first row; insert writes later rows back as read.
+    rows = load_raw_data(file_path, skip_non_object=False)
     fmt = _resolve_format(rows, data_format, path)
     try:
         canaries = generate_canaries(count=count, seed=seed)
