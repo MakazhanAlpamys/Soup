@@ -74,6 +74,63 @@ def rewrite_member(bundle, name):
     (bundle / "manifest.json").write_text(json.dumps(manifest))
 
 
+@pytest.mark.parametrize("collision", ["same-contract", "different-contract", "older-in-place"])
+def test_resume_refuses_populated_output_collisions(saved, monkeypatch, tmp_path, collision):
+    import shutil
+
+    cfg, _, bundle = saved
+    # Both an in-place continuation and an external continuation into fresh
+    # output restore the actual saved optimizer before testing the refusal.
+    control = prepare_session(cfg, _rows(), bundle, monkeypatch)
+    control.prepare()
+    assert control.optimizer.step.item() == 2
+    fresh = cfg.model_copy(deep=True)
+    fresh.output = str(tmp_path / "fresh")
+    control = prepare_session(fresh, _rows(), bundle, monkeypatch)
+    control.prepare()
+    assert control.optimizer.step.item() == 2
+
+    changed = cfg.model_copy(deep=True)
+    if collision == "older-in-place":
+        source = bundle.parent / "mlx-state-1"
+    else:
+        source = bundle
+        changed.output = str(tmp_path / "populated")
+        shutil.copytree(cfg.output, changed.output)
+        if collision == "different-contract":
+            path = Path(changed.output) / "mlx-state-2" / "manifest.json"
+            manifest = json.loads(path.read_text())
+            manifest["contract"]["recipe"]["training"]["lr"] *= 2
+            path.write_text(json.dumps(manifest))
+    before = {
+        str(p.relative_to(changed.output)): _hash(p)
+        for p in Path(changed.output).rglob("*")
+        if p.is_file()
+    }
+    with pytest.raises(ValueError, match="populated output.*latest checkpoint"):
+        prepare_session(changed, _rows(), source, monkeypatch)
+    after = {
+        str(p.relative_to(changed.output)): _hash(p)
+        for p in Path(changed.output).rglob("*")
+        if p.is_file()
+    }
+    assert before == after
+
+
+def test_save_refuses_replaced_published_checkpoint(saved):
+    _, session, bundle = saved
+    # Repeated publication of the same completed boundary is an ordinary final-save path.
+    session.save(2)
+    path = bundle / "manifest.json"
+    manifest = json.loads(path.read_text())
+    manifest["contract"]["recipe"]["training"]["lr"] *= 2
+    path.write_text(json.dumps(manifest))
+    before = {p.name: _hash(p) for p in bundle.iterdir()}
+    with pytest.raises(ValueError, match="output collision"):
+        session.save(2)
+    assert before == {p.name: _hash(p) for p in bundle.iterdir()}
+
+
 @pytest.mark.parametrize(
     "change,diagnostic",
     [

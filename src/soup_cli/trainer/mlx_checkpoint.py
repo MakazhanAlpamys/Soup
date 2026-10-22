@@ -452,10 +452,18 @@ class FullStateSession:
             },
         }
         self.bundle = Path(resume) if resume and is_bundle(resume) else None
-        if self.bundle is None and discover_bundle(self.output) is not None:
-            raise ValueError(
-                "Existing MLX full-state checkpoints: use --resume auto or fresh output"
-            )
+        latest = discover_bundle(self.output)
+        if latest is not None:
+            if self.bundle is None:
+                raise ValueError(
+                    "Existing MLX full-state checkpoints: use --resume auto or fresh output"
+                )
+            if os.path.realpath(self.bundle) != os.path.realpath(latest):
+                raise ValueError(
+                    "MLX populated output requires its latest checkpoint; "
+                    "use fresh output to resume an external or earlier checkpoint"
+                )
+        self.published = {}
 
     def prepare(self):
         """Validate everything first, then restore after setup and before the next draw."""
@@ -522,6 +530,7 @@ class FullStateSession:
             np.random.set_state(numpy_state)
             random.setstate(python_state)
             self.cursor = cursor
+            self.published[os.path.realpath(self.bundle)] = manifest
         else:
             random.seed(self.cfg.training.seed if self.cfg.training.seed is not None else 42)
             self.cursor = BatchCursor(self.dataset, self.args.batch_size, self.seed)
@@ -562,7 +571,8 @@ class FullStateSession:
             raise ValueError("MLX full-state save requires a completed optimizer update")
         target = self.output / f"mlx-state-{update}"
         if target.exists():
-            read_bundle(target)
+            if read_bundle(target) != self.published.get(os.path.realpath(target)):
+                raise ValueError("MLX checkpoint output collision; use fresh output")
             return
         stage = Path(tempfile.mkdtemp(prefix=".mlx-state-staging-", dir=self.output))
         try:
@@ -604,6 +614,7 @@ class FullStateSession:
                     with open(member, "rb") as stream:
                         os.fsync(stream.fileno())
                 os.rename(stage, target)
+                self.published[os.path.realpath(target)] = manifest
         finally:
             if stage.exists():
                 shutil.rmtree(stage)
