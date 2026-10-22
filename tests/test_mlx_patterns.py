@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from soup_cli.config.schema import LoraConfig
+from soup_cli.config.schema import LoraConfig, SoupConfig
 from soup_cli.trainer.mlx_lora import resolve_module_parameters, validate_pattern_manifest
 from soup_cli.trainer.mlx_sft import build_mlx_adapter_config
 from soup_cli.utils.mlx_generation import read_native_adapter
@@ -26,7 +26,111 @@ def _manifest():
             "modules": resolve_module_parameters(NAMES, recipe)}
 
 
+def _config(*, backend="mlx", task="sft", **lora):
+    return SoupConfig(
+        base="test/model", backend=backend, task=task, data={"train": "train.jsonl"},
+        training={"quantization": "none", "lora": lora},
+    )
+
+
+@pytest.mark.parametrize("patterns", [
+    {"rank_pattern": {"q_proj": 2}},
+    {"alpha_pattern": {"v_proj": 12}},
+    {"rank_pattern": {"q_proj": 2}, "alpha_pattern": {"v_proj": 12}},
+])
+@pytest.mark.parametrize("rslora", [False, True])
+def test_supported_patterns_survive_public_config_roundtrip(patterns, rslora):
+    from soup_cli.config.loader import load_config_from_string
+
+    cfg = _config(r=4, alpha=8, use_rslora=rslora, **patterns)
+    restored = load_config_from_string(cfg.model_dump_json())
+    for actual in (cfg, restored):
+        assert actual.backend == "mlx" and actual.task == "sft"
+        assert (actual.training.lora.r, actual.training.lora.alpha) == (4, 8)
+        assert actual.training.lora.use_rslora is rslora
+        for field in ("rank_pattern", "alpha_pattern"):
+            assert getattr(actual.training.lora, field) == patterns.get(field)
+
+
+def test_patterns_survive_mcp_and_sweep_config_entry_points(tmp_path, monkeypatch):
+    from soup_cli.commands.sweep import _set_nested_param
+    from soup_cli.mcp_server.registry import _load_config_under_cwd
+
+    monkeypatch.chdir(tmp_path)
+    cfg = _config(backend="transformers", rank_pattern={"q_proj": 2},
+                  alpha_pattern={"v_proj": 12})
+    arm = cfg.model_dump()
+    _set_nested_param(arm, "backend", "mlx")
+    mlx_cfg = SoupConfig(**arm)
+    (tmp_path / "soup.yaml").write_text(mlx_cfg.model_dump_json(), encoding="utf-8")
+    loaded = _load_config_under_cwd("soup.yaml")
+    for actual in (mlx_cfg, loaded):
+        assert actual.backend == "mlx"
+        assert actual.training.lora.rank_pattern == {"q_proj": 2}
+        assert actual.training.lora.alpha_pattern == {"v_proj": 12}
+
+
+def test_public_pattern_config_passes_train_dry_run(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+    from tests.conftest import strip_ansi
+
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "train.jsonl"
+    source.write_text('{"text":"alpha beta gamma"}\n' * 2, encoding="utf-8")
+    cfg = _config(rank_pattern={"q_proj": 2}, alpha_pattern={"v_proj": 12})
+    cfg.data.train = str(source)
+    cfg.data.format = "plaintext"
+    cfg.data.val_split = 0
+    config = tmp_path / "soup.yaml"
+    config.write_text(cfg.model_dump_json(), encoding="utf-8")
+    result = CliRunner().invoke(app, ["train", "--config", str(config), "--dry-run"])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "Data OK: 2 train" in " ".join(strip_ansi(result.output).split())
+    assert not (tmp_path / "output" / "adapters.safetensors").exists()
+
+
+@pytest.mark.parametrize("task", ["sft", "dpo", "orpo", "simpo"])
+@pytest.mark.parametrize("empty", [None, {}])
+def test_uniform_mlx_recipes_remain_valid(task, empty):
+    cfg = _config(task=task, r=8, alpha=16, use_rslora=True,
+                  rank_pattern=empty, alpha_pattern=empty)
+    assert cfg.training.lora.rank_pattern == empty
+    assert cfg.training.lora.alpha_pattern == empty
+    assert (cfg.training.lora.r, cfg.training.lora.alpha) == (8, 16)
+
+
+@pytest.mark.parametrize("task", ["sft", "dpo", "orpo"])
+def test_transformers_keeps_patterns(task):
+    cfg = _config(backend="transformers", task=task, rank_pattern={"q_proj": 2},
+                  alpha_pattern={"v_proj": 12})
+    assert cfg.training.lora.rank_pattern == {"q_proj": 2}
+    assert cfg.training.lora.alpha_pattern == {"v_proj": 12}
+
+
+@pytest.mark.parametrize("field", ["rank_pattern", "alpha_pattern"])
+def test_mlx_dora_still_refuses_patterns_with_its_own_diagnostic(field):
+    assert _config(use_dora=True).training.lora.use_dora
+    with pytest.raises(ValueError, match="MLX DoRA does not support"):
+        _config(use_dora=True, **{field: {"q_proj": 2}})
+
+
+@pytest.mark.parametrize("task", ["grpo", "kto", "ipo", "pretrain"])
+def test_patterns_do_not_enable_unsupported_mlx_tasks(task):
+    assert _config(backend="transformers", task=task).task == task
+    with pytest.raises(ValueError, match="MLX backend only ships SFT"):
+        _config(task=task, rank_pattern={"q_proj": 2})
+
+
+def test_patterns_do_not_enable_mlx_full_fine_tuning():
+    assert _config(backend="transformers", r=0).training.lora.r == 0
+    with pytest.raises(ValueError, match="full fine-tuning.*requires backend='transformers'"):
+        _config(r=0, rank_pattern={"q_proj": 2})
+
+
 def test_independent_rank_alpha_defaults_and_ordered_regex_precedence():
+    """Reference: PEFT 0.21.2 ``peft.utils.other.get_pattern_key`` matching rules."""
     recipe = _recipe(
         rank_pattern={r"^model.layers.0.self_attn.q_proj": 2, "q_proj": 3},
         alpha_pattern={"v_proj": 20},

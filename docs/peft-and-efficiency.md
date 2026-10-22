@@ -417,8 +417,9 @@ explicit targets are layer-relative keys such as `self_attn.q_proj`, or exact
 qualified paths. Patterns match **qualified native paths**, for example
 `model.layers.0.self_attn.q_proj`; these can differ from Transformers paths.
 
-Rank and alpha resolve independently, with scalar `r`/`alpha` fallbacks. As in
-PEFT 0.20+, the first matching dictionary entry wins. Patterns are regexes with
+Rank and alpha resolve independently, with scalar `r`/`alpha` fallbacks. Checked
+against PEFT **0.21.2** (`peft.utils.other.get_pattern_key`), the first matching
+dictionary entry wins. Patterns are regexes with
 an optional dotted prefix and an implicit end anchor; `q_proj` matches that
 suffix, while `^model.layers.0.self_attn.q_proj` anchors the whole path. Place
 specific entries before general entries. A fully shadowed pattern is valid if it

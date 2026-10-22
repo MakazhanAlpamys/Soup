@@ -154,7 +154,7 @@ without a native trainer are refused when the config is loaded, with an error
 naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for
 ready-made Apple Silicon configs.
 
-`training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO, SimPO, KTO and GRPO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
+
 
 #### DPO on MLX
 
@@ -317,6 +317,7 @@ That shows the objective moving, not alignment quality.
   `task: preference` with `training.preference_loss: simpo` uses this same
   native trainer and these same restrictions. The other settings MLX DPO does not apply
   are not applied here either.
+
 
 #### KTO on MLX
 
@@ -603,6 +604,25 @@ The loader does not auto-detect bare `{"prompt", "answer"}` rows; use `messages`
   trainable once the adapter is attached is refused before the first update.
   `quantization: 4bit` is Soup's default and, on MLX, only names a pre-quantized
   base, so a dense base trains with it too.
+
+#### Per-module LoRA patterns on MLX
+
+Text SFT supports `training.lora.rank_pattern` and `training.lora.alpha_pattern`
+for ordinary LoRA and rsLoRA on dense or pre-quantized 4-bit linear targets.
+Each field independently uses the first matching suffix regular expression
+(checked against PEFT 0.21.2's `peft.utils.other.get_pattern_key`);
+unmatched modules keep the scalar `lora.r` or `lora.alpha`. The local scale is
+`alpha / rank`, or `alpha / sqrt(rank)` for rsLoRA. A pattern that matches no
+selected module is refused before the model is frozen or converted.
+
+The adapter records the resolved modules in Soup's `soup_lora` manifest. Use
+Soup's native MLX inference and fusion paths to reconstruct it; upstream
+`mlx_lm.load(..., adapter_path=...)` cannot reconstruct these per-module adapters.
+Resume restores adapter weights only and requires the same resolved recipe.
+DoRA, LoRA-FA, LoRA+, packing and non-SFT tasks are outside this pattern path;
+they are refused rather than silently converted to uniform LoRA. Empty or null
+patterns retain the existing scalar adapter behavior.
+
 
 #### DoRA on MLX
 

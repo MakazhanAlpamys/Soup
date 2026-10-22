@@ -305,7 +305,9 @@ def test_strict_artifact_and_warm_start_contracts(tmp_path, monkeypatch, quantiz
         resumed._load_checkpoint_weights(str(weights_file))
 
 
-@pytest.mark.parametrize("variant", ["packing", "lorafa", "loraplus", "pretrain"])
+@pytest.mark.parametrize("variant", [
+    "packing", "lorafa", "loraplus", "pretrain", "dpo", "orpo", "simpo",
+])
 def test_pattern_combinations_refused_with_ordinary_valid_control(tmp_path, variant):
     from mlx_lm import load
     from mlx_lm.tuner.lora import LoRALinear
@@ -323,10 +325,17 @@ def test_pattern_combinations_refused_with_ordinary_valid_control(tmp_path, vari
     elif variant == "loraplus":
         cfg.training.loraplus_lr_ratio = 2
     else:
-        cfg.task = "pretrain"
+        cfg.task = variant
+        if variant != "pretrain":
+            # These tasks are valid MLX configs, but their shared adapter path
+            # must refuse patterns before it can silently train uniform LoRA.
+            cfg = cfg.model_validate(cfg.model_dump())
     model, _ = load(str(base))
+    before = dict(tree_flatten(model.trainable_parameters()))
     with pytest.raises(ValueError, match="ordinary LoRA/rsLoRA text SFT only"):
         MLXSFTTrainerWrapper(cfg)._apply_lora(model)
+    assert not any(isinstance(module, LoRALinear) for _, module in model.named_modules())
+    assert set(dict(tree_flatten(model.trainable_parameters()))) == set(before)
 
 
 def test_periodic_adapter_is_reconstructible_after_interruption(tmp_path, monkeypatch):
