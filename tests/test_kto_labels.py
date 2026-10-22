@@ -21,10 +21,11 @@ REFUSED = [None, 0.5, 1.0, 0.0, -1.0, float("nan"), float("inf"),
 
 @pytest.mark.parametrize("value,expected", ACCEPTED)
 def test_accepted_kto_label_spellings(value, expected):
-    assert _convert_kto({"prompt": "Q", "completion": "A", "label": value}) == {
+    converted = _convert_kto({"prompt": "Q", "completion": "A", "label": value})
+    assert converted == {
         "prompt": "Q", "completion": "A", "label": expected,
     }
-    assert _convert_kto({"prompt": "Q", "completion": "A", "label": value})["label"] is expected
+    assert converted["label"] is expected
 
 
 @pytest.mark.parametrize("value", REFUSED)
