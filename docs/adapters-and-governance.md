@@ -527,6 +527,9 @@ entry can never outlive a discarded local bundle; browser OIDC is explicit opt-i
 Verification exits 3 on tamper or policy mismatch, and exits 1 when Sigstore
 verification itself is unavailable (for example TUF/network failure) so an
 operational outage is not reported as tampering. Usage/input errors exit 2.
+The statement and signature sidecar accept UTF-8 with or without a leading BOM.
+Verification still uses the same canonical JSON and preserves U+FEFF inside
+field values; a leading BOM does not bypass tamper or trusted-key checks.
 An explicit Sigstore signing request fails closed if OIDC/Fulcio/Rekor is
 unavailable; it is never silently downgraded to unsigned. A valid signature proves the signer
 *asserted* the statement; it does not re-verify the subject digest against an

@@ -693,6 +693,13 @@ Local JSONL, JSON, CSV and TXT files accept UTF-8 with or without a leading BOM,
 including Excel's CSV UTF-8 exports. The signature is removed before parsing;
 U+FEFF characters inside field values or document text are preserved.
 
+The same leading-BOM handling applies to tokenizer corpora, inference benchmark
+prompts, Agent Forge predictions, draft JSONL inputs, edit covariance corpora,
+shrink calibration prompts, diagnose evidence, Can attestation inputs, synthetic
+generation context documents, and Autopilot's local model `config.json` probe.
+Only the file's initial UTF-8 signature is consumed; embedded U+FEFF remains
+content, and these commands continue writing ordinary UTF-8 without a BOM.
+
 **Auto-detection.** It reads the first 100 rows, not just the first. Each row resolves
 to the richest format its keys fit. If every row agrees, that format is used. A file
 that mixes `chatml` and `tool-calling` rows loads as `tool-calling` (the plain rows
