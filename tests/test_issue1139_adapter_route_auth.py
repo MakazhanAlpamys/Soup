@@ -268,3 +268,29 @@ def test_the_activate_post_ignores_environment_proxies(monkeypatch):
     proxy.close()
     thread.join(5)
     assert not hits, "the tool token must not be sent to an environment proxy"
+
+
+def test_an_https_endpoint_keeps_the_environment_for_its_ca(monkeypatch):
+    # A LAN endpoint is https behind a TLS-terminating proxy, whose certificate for a
+    # private IP comes from a private CA. httpx trusts that CA only through SSL_CERT_FILE /
+    # SSL_CERT_DIR, which trust_env=False switches off; on https a proxy sees only CONNECT.
+    import httpx
+
+    import soup_cli.utils.loop_stages as ls
+
+    calls = []
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs.get("trust_env", True)))
+        return httpx.Response(200)
+
+    monkeypatch.setattr(ls, "_DEPLOY_POSTER", None)
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setenv(ls.TOOL_AUTH_TOKEN_ENV, TOKEN)
+
+    assert ls._post_activate("https://192.168.1.5:8443", "chat") is True
+    assert ls._post_activate("http://127.0.0.1:8000", "chat") is True
+    assert calls == [
+        ("https://192.168.1.5:8443/v1/adapters/activate/chat", True),
+        ("http://127.0.0.1:8000/v1/adapters/activate/chat", False),
+    ]

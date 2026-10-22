@@ -433,9 +433,12 @@ def _post_activate(endpoint: str, name: str) -> bool:
     token = os.environ.get(TOOL_AUTH_TOKEN_ENV)
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     try:
-        # trust_env=False: an HTTP_PROXY would otherwise receive the Bearer token
-        # in clear text on the loopback http case.
-        resp = httpx.post(url, headers=headers, timeout=5.0, trust_env=False)
+        # A plain-http endpoint (loopback only) ignores HTTP_PROXY / ALL_PROXY, which
+        # would otherwise receive the Bearer token in clear text. An https endpoint keeps
+        # trust_env: a proxy only sees a CONNECT tunnel there, and SSL_CERT_FILE /
+        # SSL_CERT_DIR are how a TLS proxy's private CA gets trusted.
+        plain_http = url.lower().startswith("http://")
+        resp = httpx.post(url, headers=headers, timeout=5.0, trust_env=not plain_http)
     except Exception:  # noqa: BLE001 — deploy must never crash the loop
         return False
     if resp.status_code == 401:
