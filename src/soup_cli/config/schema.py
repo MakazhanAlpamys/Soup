@@ -8883,10 +8883,8 @@ class SoupConfig(BaseModel):
         )
         if reason is not None:
             raise ValueError(
-                f"{reason}: base={self.base}. Its remote code uses removed APIs "
-                "and an inference-only MoE training path. The guarded native "
-                "training.stream_layers route is tracked in #2107; check its "
-                "availability before selecting it, or choose a compatible base."
+                f"{reason} base={self.base}. Its remote code uses removed APIs "
+                "and an inference-only MoE training path. Choose a compatible base."
             )
         return self
 

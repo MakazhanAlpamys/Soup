@@ -40,15 +40,18 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 The known Hugging Face Base, Instruct, Instruct-0905 and Thinking IDs load remote
 code using removed APIs, including `is_torch_fx_available`, and an inference-only
 MoE training path. `trust_remote_code` does not repair that incompatibility.
-Config validation stops before model loading. The guarded native streamed route
-is tracked in [#2107](https://github.com/MakazhanAlpamys/Soup/pull/2107); check its
-availability before selecting `training.stream_layers`. This refusal does not
+This is a behaviour change: these resident configurations previously passed validation
+and failed later at model loading; now config validation stops before model loading.
+For Base and Instruct only, the native `training.stream_layers` route is tracked in
+[#2107](https://github.com/MakazhanAlpamys/Soup/pull/2107), not available until it merges.
+Thinking and Instruct-0905 have no supported route yet. This refusal does not
 qualify local copies, other hubs or Unsloth as working routes. K2.5/K2.6 use
 native `kimi_k25` registration and are outside this boundary.
 
 `kimi-k2-sft` and `kimi-k2-thinking-grpo` remain discoverable with an unsupported
 resident-route description. `soup recipes show` preserves their YAML for inspection;
-`soup recipes use` exits 2 with the unavailability reason and writes no config.
+`soup recipes use` exits 3 (`EXIT_USAGE_ERROR`) with the per-recipe unavailability
+reason and writes no config.
 Catalog snapshots explicitly record this refusal rather than a usable config.
 This implements #2104's diagnostic option; native resident parity and full K2
 weight validation remain separate work.

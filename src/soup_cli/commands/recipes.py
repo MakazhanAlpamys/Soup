@@ -9,7 +9,7 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 
-from soup_cli.utils.exit_codes import GateCommand
+from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR, GateCommand
 from soup_cli.utils.terminal import for_terminal
 
 console = Console()
@@ -90,8 +90,7 @@ def use(
 
     if recipe.unavailable_reason:
         console.print(f"[red]{for_terminal(recipe.unavailable_reason)}[/]")
-        console.print("[dim]The guarded streamed route is tracked in #2107.[/]")
-        raise typer.Exit(2)
+        raise typer.Exit(EXIT_USAGE_ERROR)
 
     from soup_cli.migrate.common import validate_output_path
 

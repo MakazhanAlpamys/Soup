@@ -804,10 +804,10 @@
       "training.lr": 1e-05
     },
     "kimi-k2-sft": {
-      "$unavailable": "Resident Kimi K2 is unsupported on Transformers 5.x"
+      "$unavailable": "Resident Kimi K2 is unsupported on Transformers 5.x. The native training.stream_layers route is tracked in #2107, not available until it merges."
     },
     "kimi-k2-thinking-grpo": {
-      "$unavailable": "Resident Kimi K2 is unsupported on Transformers 5.x"
+      "$unavailable": "Resident Kimi K2 is unsupported on Transformers 5.x. No supported route yet."
     },
     "kimi-k2.5-dpo": {
       "base": "moonshotai/Kimi-K2.5",

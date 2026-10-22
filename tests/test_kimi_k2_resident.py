@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 
 from soup_cli.config.loader import load_config_from_string
 from soup_cli.recipes.catalog import RECIPES
+from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR
 from tests.conftest import strip_ansi
 
 BASES = ("moonshotai/Kimi-K2-Base", "moonshotai/Kimi-K2-Instruct",
@@ -16,13 +17,23 @@ REASON = "Resident Kimi K2 is unsupported on Transformers 5.x"
 BLOCKED = ("kimi-k2-sft", "kimi-k2-thinking-grpo")
 
 
+def _assert_route_text(text, base):
+    if base.casefold() in {"moonshotai/kimi-k2-base", "moonshotai/kimi-k2-instruct"}:
+        assert "training.stream_layers" in text and "#2107" in text
+        assert "not available until it merges" in text
+        assert "no supported route yet" not in text.lower()
+    else:
+        assert "no supported route yet" in text.lower()
+        assert "stream_layers" not in text and "#2107" not in text
+
+
 @pytest.mark.parametrize("base", BASES)
 @pytest.mark.parametrize("task", ["sft", "grpo"])
 def test_resident_k2_refuses_with_a_specific_remedy(base, task):
     with pytest.raises(ValueError, match=REASON) as error:
         load_config_from_string(f"base: {base}\ntask: {task}\ndata: {{train: data.jsonl}}\n")
     assert base in str(error.value)
-    assert "stream_layers" in str(error.value) and "#2107" in str(error.value)
+    _assert_route_text(str(error.value), base)
     assert "remote code" in str(error.value)
 
 
@@ -40,9 +51,11 @@ def test_a_relative_local_directory_is_not_mistaken_for_the_public_repo(tmp_path
     assert cfg.base == BASES[0]
 
 
-def test_hub_id_case_does_not_bypass_the_guard():
-    with pytest.raises(ValueError, match=REASON):
-        load_config_from_string(f"base: {BASES[0].upper()}\ndata: {{train: data.jsonl}}\n")
+@pytest.mark.parametrize("base", BASES)
+def test_hub_id_case_does_not_bypass_the_guard(base):
+    with pytest.raises(ValueError, match=REASON) as error:
+        load_config_from_string(f"base: {base.upper()}\ndata: {{train: data.jsonl}}\n")
+    _assert_route_text(str(error.value), base)
 
 
 @pytest.mark.parametrize("override", ["training: {stream_layers: true, batch_size: 1}",
@@ -75,6 +88,7 @@ def test_train_cli_refuses_before_any_model_or_config_download(tmp_path, monkeyp
     output = " ".join(strip_ansi(result.output).split())
     assert result.exit_code == 1, (output, result.exception)
     assert REASON in output and base in output
+    _assert_route_text(output, base)
     build.assert_not_called()
     metadata.assert_not_called()
 
@@ -84,7 +98,9 @@ def test_catalog_marks_refused_recipes_and_does_not_write_them(tmp_path, monkeyp
     from soup_cli.cli import app
 
     recipe = RECIPES[name]
-    assert recipe.unavailable_reason == REASON
+    assert recipe.unavailable_reason.startswith(REASON)
+    _assert_route_text(recipe.unavailable_reason, recipe.model)
+    _assert_route_text(recipe.description, recipe.model)
     assert "unsupported" in recipe.description.lower()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COLUMNS", "1000")
@@ -96,13 +112,25 @@ def test_catalog_marks_refused_recipes_and_does_not_write_them(tmp_path, monkeyp
     assert listed.exit_code == 0
     assert "unsupported" in strip_ansi(listed.output).lower()
     used = runner.invoke(app, ["recipes", "use", name, "--yes"])
-    assert used.exit_code == 2
-    assert REASON in " ".join(strip_ansi(used.output).split())
+    assert used.exit_code == EXIT_USAGE_ERROR == 3
+    output = " ".join(strip_ansi(used.output).split())
+    assert recipe.unavailable_reason in output
+    _assert_route_text(output, recipe.model)
     assert not (tmp_path / "soup.yaml").exists()
 
 
 def test_catalog_unavailability_is_limited_to_the_two_affected_recipes():
     assert {name for name, recipe in RECIPES.items() if recipe.unavailable_reason} == set(BLOCKED)
+
+
+def test_snapshot_records_each_recipes_own_route_reason():
+    from scripts.generate_recipe_snapshot import build_snapshot
+
+    snapshot = build_snapshot()
+    for name in BLOCKED:
+        record = snapshot["recipes"][name]
+        assert record == {"$unavailable": RECIPES[name].unavailable_reason}
+        _assert_route_text(record["$unavailable"], RECIPES[name].model)
 
 
 def test_snapshot_does_not_hide_an_unrelated_config_error(monkeypatch):

@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from soup_cli.utils.kimi import KIMI_K2_RESIDENT_REASON
+from soup_cli.utils.kimi import KIMI_K2_NO_SUPPORTED_ROUTE_REASON, KIMI_K2_PENDING_STREAM_REASON
 
 
 @dataclass(frozen=True)
@@ -2812,8 +2812,11 @@ output: ./output
         task="sft",
         size="N/A",
         tags=("kimi", "moonshot", "moe", "long-context"),
-        description="Kimi K2 SFT: unsupported resident route on Transformers 5.x (#2107)",
-        unavailable_reason=KIMI_K2_RESIDENT_REASON,
+        description=(
+            "Kimi K2 SFT: unsupported resident route. training.stream_layers tracked in #2107, "
+            "not available until it merges."
+        ),
+        unavailable_reason=KIMI_K2_PENDING_STREAM_REASON,
         yaml_str="""\
 base: moonshotai/Kimi-K2-Base
 task: sft
@@ -2843,8 +2846,8 @@ output: ./output
         task="grpo",
         size="N/A",
         tags=("kimi", "moonshot", "thinking", "grpo", "reasoning"),
-        description="Kimi K2 Thinking GRPO: unsupported resident route on Transformers 5.x (#2107)",
-        unavailable_reason=KIMI_K2_RESIDENT_REASON,
+        description="Kimi K2 Thinking GRPO: unsupported resident route; no supported route yet.",
+        unavailable_reason=KIMI_K2_NO_SUPPORTED_ROUTE_REASON,
         yaml_str="""\
 base: moonshotai/Kimi-K2-Thinking
 task: grpo
