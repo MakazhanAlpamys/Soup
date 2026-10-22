@@ -41,6 +41,7 @@ _NOT_PARSING = frozenset({"safe_dump", "dump", "YAMLError"})
 YAML_USERS = {
     "autopilot/generate_config.py": ("safe_dump",),
     "cans/pack.py": ("safe_dump",),
+    "cloud/runpod.py": ("YAMLError",),
     "commands/adapters.py": ("YAMLError",),
     "commands/deploy.py": ("YAMLError",),
     "commands/push.py": ("YAMLError",),
@@ -378,6 +379,12 @@ def _quant_config(text):
     return load_quant_config(_write("quant.yaml", text))
 
 
+def _runpod(text):
+    from soup_cli.cloud.runpod import render_runpod_stub
+
+    return render_runpod_stub(text, gpu="a100", output_dir="out", soup_version="0.76.0")
+
+
 def _sweep(text):
     from soup_cli.utils.sweep_config import parse_sweep_yaml
 
@@ -386,6 +393,7 @@ def _sweep(text):
 
 #: reader id -> (driver, how the refusal names the document)
 _RAISING_READERS = {
+    "cloud/runpod.py": (_runpod, "RunPod config"),
     "commands/plan.py": (_plan, "config 'soup.yaml'"),
     "eval/gate.py": (_gate_suite, "eval-gate suite 'gate.yaml'"),
     "eval/judge.py": (_rubric, "Rubric file rubric.yaml"),
@@ -586,6 +594,10 @@ def _cap(module: str, name: str) -> int:
 
 #: reader id -> (module, name of its cap, how it words a file one byte over the cap)
 _READER_CAPS = {
+    "cloud/runpod.py": (
+        "cloud.runpod", "_MAX_CONFIG_BYTES",
+        "RunPod config is larger than {cap} bytes; refusing",
+    ),
     "commands/plan.py": (
         "utils.yaml_limits", "MAX_CONFIG_BYTES",
         "config 'soup.yaml' is larger than {cap} bytes; refusing",
@@ -708,6 +720,7 @@ def test_license_frontmatter_falls_back_one_byte_over_its_cap(tmp_path, monkeypa
 #: Every call of the limited loader names its cap: a module constant, never a number.
 _CAP_NAMES = {
     "cans/unpack.py": {"MAX_CONFIG_BYTES", "MAX_MANIFEST_BYTES"},
+    "cloud/runpod.py": {"_MAX_CONFIG_BYTES"},
     "commands/adapters.py": {"MAX_CONFIG_BYTES"},
     "commands/deploy.py": {"MAX_CONFIG_BYTES"},
     "commands/plan.py": {"MAX_CONFIG_BYTES"},

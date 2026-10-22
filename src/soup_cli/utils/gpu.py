@@ -221,6 +221,27 @@ def detect_device(backend: Optional[str] = None) -> tuple[str, str]:
     return "cpu", "CPU (no GPU detected)"
 
 
+def configure_mps_async_load(device: Optional[str] = None) -> None:
+    """Set HF_DEACTIVATE_ASYNC_LOAD=1 by default when running on Apple Silicon MPS (#2076).
+
+    On Apple Silicon MPS hardware, Transformers' threaded weight loader can
+    crash with SIGABRT in _materialize_copy during model loading. Enforce
+    synchronous model loading by default while preserving any explicit user
+    environment setting.
+    """
+    if device is not None:
+        if str(device).startswith("mps"):
+            os.environ.setdefault("HF_DEACTIVATE_ASYNC_LOAD", "1")
+    else:
+        try:
+            import torch
+
+            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                os.environ.setdefault("HF_DEACTIVATE_ASYNC_LOAD", "1")
+        except (ImportError, AttributeError):
+            pass
+
+
 def resolve_quantization(
     device: str,
     backend: Optional[str],

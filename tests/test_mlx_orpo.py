@@ -631,6 +631,7 @@ class TestResume:
 
     @pytest.mark.parametrize("change, match", [
         ({"task": "dpo"}, "task='dpo'"),
+        ({"task": "simpo"}, "MLX ORPO: .* task='simpo', not 'orpo'"),
         ({"model": "other-base"}, "belongs to base"),
         (None, "no adapter_config.json"),
     ])
@@ -736,8 +737,9 @@ class TestConfig:
 
         alias = (_ORPO_YAML.replace("task: orpo", "task: preference")
                  .replace("  orpo_beta: 0.1\n", "  preference_loss: orpo\n"))
-        with pytest.raises(Exception, match="task='preference' has no trainer"):
+        with pytest.raises(Exception, match="task='preference' has no trainer") as info:
             load_config_from_string(alias)
+        assert "Use task: orpo for the native MLX trainer." in str(info.value)
 
     def test_the_transformers_route_is_unchanged(self):
         from soup_cli.config.loader import load_config_from_string

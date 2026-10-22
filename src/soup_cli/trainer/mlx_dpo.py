@@ -354,11 +354,6 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
         unsupported = []
         if tcfg.quantization == "8bit":
             unsupported.append("quantization=8bit (use mlx-community 4bit models)")
-        if self.config.data.chat_template:
-            unsupported.append(
-                f"data.chat_template (MLX {self.objective} renders with the model's own "
-                "template)"
-            )
         for name, label in (
             ("use_galore", "GaLore"),
             ("use_lorafa", "training.use_lorafa"),
@@ -488,9 +483,10 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
     # -- objective hooks --------------------------------------------------
     #
     # The loop below is shared by every native preference objective on MLX
-    # (DPO here, ORPO in mlx_orpo.py). A subclass changes the tokenized
-    # example, the arrays a batch needs, what is prepared before the first
-    # update, the loss and its metrics -- nothing else.
+    # (DPO here, ORPO in mlx_orpo.py, SimPO in mlx_simpo.py). A subclass
+    # changes the tokenized example, the arrays a batch needs, what is
+    # prepared before the first update, the loss and its metrics -- nothing
+    # else.
 
     #: Name used in messages and the adapter metadata.
     objective = "DPO"

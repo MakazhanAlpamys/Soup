@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
@@ -24,7 +25,12 @@ from soup_cli.data.loader import (
 )
 from soup_cli.monitoring.display import TrainingDisplay
 from soup_cli.trainer.classifier import CLASSIFICATION_TASKS
-from soup_cli.utils.gpu import detect_device, get_gpu_info, resolve_quantization
+from soup_cli.utils.gpu import (
+    configure_mps_async_load,
+    detect_device,
+    get_gpu_info,
+    resolve_quantization,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - type hints only, no runtime import
     from soup_cli.config.schema import SoupConfig
@@ -70,6 +76,11 @@ _UNWIRED_TRAINING_TUNABLES = (
     # the loader warns about them with the refusal date, so they are not listed here.
     "forgetting_threshold",
 )
+
+
+def _stdin_isatty() -> bool:
+    """True when standard input is an interactive terminal."""
+    return sys.stdin.isatty()
 
 
 def _nondefault_unwired_training_settings(training_config) -> list[str]:
@@ -335,9 +346,8 @@ def _build_hardware_fit_input(cfg):
     ``"auto"``, unknown model size, unsupported quant, out-of-range dims), in
     which case the caller skips the gate rather than guess.
     """
-    from soup_cli.trainer.sft import is_full_finetune
     from soup_cli.utils.gpu import model_size_from_name
-    from soup_cli.utils.hardware_fit import HardwareFitInput
+    from soup_cli.utils.hardware_fit import HardwareFitInput, resolve_peft_mode
 
     tcfg = cfg.training
     bs = getattr(tcfg, "batch_size", None)
@@ -352,41 +362,7 @@ def _build_hardware_fit_input(cfg):
     quant = _HW_FIT_QUANT.get(str(getattr(tcfg, "quantization", "none") or "none"))
     if quant is None:
         return None
-    task = getattr(cfg, "task", None)
-    if quant == "4bit":
-        peft = "qlora"
-    elif task == "prm" or (
-        task in CLASSIFICATION_TASKS
-        and not (tcfg.classifier_lora and tcfg.lora.r > 0)
-    ) or (task == "asr" and not (tcfg.asr_lora and tcfg.lora.r > 0)):
-        # #795: these trainers decide full fine-tuning themselves -- PRM always,
-        # the classifier family and ASR unless their own LoRA opt-in is on
-        # (classifier.py:262, asr.py::_should_use_lora). Budgeting them as LoRA
-        # under-predicts, the unsafe direction.
-        peft = "full"
-    elif is_full_finetune(tcfg):
-        # #471 — was an independent, hand-maintained check
-        # (unfrozen_parameters / freeze_layers / freeze_ratio) that had
-        # drifted from sft.py's real full-FT decision in BOTH directions:
-        # it missed lisa_enabled/lora.r==0 (under-predicting VRAM for those
-        # runs) and treated bare freeze_layers/freeze_ratio as sufficient on
-        # its own even with lora.r>0 still on (over-predicting — and able to
-        # falsely refuse a launch that would fit, since freeze_layers/
-        # freeze_ratio only reduce what's trainable WITHIN LoRA or full-FT,
-        # they don't select the mode). Now shares is_full_finetune with
-        # sft.py's SFTTrainerWrapper._resolve_load_dtype so the two cannot
-        # disagree again.
-        #
-        # #377 — lisa_train_embeddings=false freezes the always-on group and
-        # lowers real VRAM, but LISA stays "full" here on purpose: the analytical
-        # predictor has no measured constant for the frozen-embeddings trainable
-        # set, and over-predicting is the safe failure (under-predicting is a
-        # silent WDDM spill on Windows). A frozen-embeddings run that would fit
-        # can therefore still be refused by pre-flight; --allow-oom-attempt is
-        # the documented bypass, and crediting the saving is a hardware follow-up.
-        peft = "full"
-    else:
-        peft = "lora"
+    peft = resolve_peft_mode(cfg, quant=quant)
     optimizer = str(getattr(tcfg, "optimizer", "adamw_torch") or "adamw_torch")
     if optimizer not in _HW_FIT_OPTIMIZERS:
         optimizer = "adamw_torch"
@@ -708,7 +684,10 @@ def train(
         False,
         "--yes",
         "-y",
-        help="Skip confirmation prompt",
+        help=(
+            "Skip the start-training confirmation. Required when stdin is "
+            "not a TTY (scripts, CI, pipes)."
+        ),
     ),
     trust_remote_code: bool = typer.Option(
         False,
@@ -873,7 +852,7 @@ def train(
         "--cloud",
         help=(
             "Train on a cloud GPU instead of locally (v0.71.18 #16). Supported: "
-            "modal, lambda (runpod is planned). Renders a cloud app stub from the config "
+            "modal, lambda, runpod. Renders a cloud app stub from the config "
             "(plan-only); use --cloud-submit to submit live."
         ),
     ),
@@ -1094,10 +1073,7 @@ def train(
 
         cloud = cloud.lower()
         if cloud == "runpod":
-            console.print(
-                "[yellow]RunPod cloud training is not yet live; use --cloud modal or lambda.[/]"
-            )
-            raise typer.Exit(2)
+            from soup_cli.cloud import runpod as cloud_mod
         elif cloud == "modal":
             from soup_cli.cloud import modal as cloud_mod
         elif cloud == "lambda":
@@ -1105,7 +1081,7 @@ def train(
         else:
             console.print(
                 f"[red]Invalid --cloud:[/] {markup_escape(cloud)}. "
-                "Supported: modal, lambda (runpod is planned)."
+                "Supported: modal, lambda, runpod."
             )
             raise typer.Exit(2)
 
@@ -1501,6 +1477,8 @@ def train(
     device, device_name = detect_device(backend=cfg.backend)
     gpu_info = get_gpu_info(backend=cfg.backend)
 
+    configure_mps_async_load(device)
+
     # Quantization guard: explicit decision per #423.  See resolve_quantization()
     # docstring for the full rationale — MLX 4-bit uses pre-quantized mlx-community
     # weights (not bitsandbytes NF4), CPU cannot run bitsandbytes at all.
@@ -1754,6 +1732,18 @@ def train(
             raise typer.Exit(1) from exc
 
     if not dry_run and not yes:
+        # #1913: on a non-TTY stdin the confirm can never be answered — a pipe
+        # hangs until its writer closes (EOF aborts via typer) and an
+        # unattended service waits forever. Fail with the escape hatch named.
+        from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR
+
+        if not _stdin_isatty():
+            console.print(
+                "[red]stdin is not a TTY, so the start-training confirmation "
+                "cannot be answered.[/] Pass --yes to start without the "
+                "confirmation."
+            )
+            raise typer.Exit(EXIT_USAGE_ERROR)
         if not typer.confirm("Start training?", default=True):
             console.print("[yellow]Cancelled.[/]")
             raise typer.Exit()
@@ -1923,7 +1913,7 @@ def train(
         base_identity = BaseRevision(
             run_base,
             binding_supported=(cfg.backend == "transformers" and hub_name == "hf"
-                               and not cfg.training.stream_layers and not is_in_distributed()),
+                               and not is_in_distributed()),
         )
         with base_revision_scope(base_identity):
             trainer_wrapper = build_trainer(cfg, **trainer_kwargs)

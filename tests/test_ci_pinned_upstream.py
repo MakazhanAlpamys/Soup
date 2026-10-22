@@ -21,8 +21,8 @@ event, through the step's own shell. This file pins the constraints file itself:
   workflows) -- outside one, ``pip`` cannot resolve the cell at all, so a pull request
   that moves a bound moves the pin with it. An extra no pinned job installs is not read.
 
-``pyproject.toml`` is read with regular expressions, not ``tomllib``, which is 3.11+ while
-this repository supports 3.10: the convention of ``tests/test_requires_python_bound.py``.
+``pyproject.toml`` is read with regular expressions, not ``tomllib``: the convention of
+``tests/test_requires_python_bound.py``, set while the floor was 3.10, which has no ``tomllib``.
 """
 
 from __future__ import annotations

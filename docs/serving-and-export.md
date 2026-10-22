@@ -2,7 +2,7 @@
 
 [← Back to the Soup README](../README.md)
 
-> The OpenAI-compatible inference server, batch inference, benchmarking, merge/export (GGUF/ONNX/TensorRT/AWQ/GPTQ), the Anthropic Messages endpoint, speculative decoding, deploy autopilot, the Web UI, and Agent Forge.
+> The OpenAI-compatible inference server, batch inference, benchmarking, merge/export (GGUF/ONNX/TensorRT/BitNet/TorchAO), the Anthropic Messages endpoint, speculative decoding, deploy autopilot, the Web UI, and Agent Forge.
 
 **Contents:**
 
@@ -247,8 +247,8 @@ Auto-detected chat templates: `chatml`, `llama`, `mistral`, `vicuna`, `zephyr` (
 
 `soup export` integrates with Soup's local artifact registry and deployment workflows:
 
-- **Deploying on export (`--deploy`)**: `--deploy ollama` is supported for GGUF-family formats (`gguf`, `gguf-ud`, `bitnet`, `tq1_0`). For non-GGUF formats (`onnx`, `tensorrt`, `awq`, `gptq`, `torchao`), `--deploy` fails fast with an informative error because Ollama cannot load non-GGUF weight files. Use `--deploy-name` to assign a custom model name in Ollama.
-- **Registering exports (`--registry-id`)**: Pass `--registry-id <id>` to record and attach exported artifacts to a local registry entry across all export formats (`gguf`, `gguf-ud`, `bitnet`, `tq1_0`, `onnx`, `tensorrt`, `awq`, `gptq`, `torchao`). When an export produces a directory (such as multi-shard safetensors, ONNX data, or TensorRT engine files in `<output>/engine/*.engine`), all produced weight and engine files are discovered and attached to the registry entry.
+- **Deploying on export (`--deploy`)**: `--deploy ollama` is supported for GGUF-family formats (`gguf`, `gguf-ud`, `bitnet`, `tq1_0`). For non-GGUF formats (`onnx`, `tensorrt`, `torchao`), `--deploy` fails fast with an informative error because Ollama cannot load non-GGUF weight files. Use `--deploy-name` to assign a custom model name in Ollama.
+- **Registering exports (`--registry-id`)**: Pass `--registry-id <id>` to record and attach exported artifacts to a local registry entry across all export formats (`gguf`, `gguf-ud`, `bitnet`, `tq1_0`, `onnx`, `tensorrt`, `torchao`). When an export produces a directory (such as multi-shard safetensors, ONNX data, or TensorRT engine files in `<output>/engine/*.engine`), all produced weight and engine files are discovered and attached to the registry entry.
 
 
 ## Batch Inference
@@ -814,7 +814,7 @@ soup quantize ./out --to gguf --bits 4
 soup quantize ./out --to onnx -o ./out-onnx
 ```
 
-Prints the equivalent `soup export …` invocation (escaped via `shlex.quote`) for copy-paste. Intentionally does NOT in-process call `soup export` — Typer commands aren't safe to re-enter. `--to awq` and `--to gptq` still print their command, followed by a notice that the two formats are deprecated and will be removed in Soup v0.77.
+Prints the equivalent `soup export …` invocation (escaped via `shlex.quote`) for copy-paste. Intentionally does NOT in-process call `soup export` — Typer commands aren't safe to re-enter.
 
 
 ## Llama.cpp Proxy

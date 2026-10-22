@@ -1185,8 +1185,8 @@ def test_qwen4_oq_torch_floor_matches_project_and_doctor():
     # A substring test is satisfied by the string appearing anywhere --
     # a comment, another extra, or a docstring -- so it would keep passing
     # after the floor had been moved or removed from the place that matters.
-    # `tomllib` is 3.11+ and this repo supports 3.10, so this is a bounded
-    # regex over one block rather than a TOML parse.
+    # A bounded regex over one block rather than a TOML parse: written while the
+    # floor was 3.10, which has no `tomllib`.
     block = re.search(r"^train = \[(.*?)^\]", project, re.S | re.M)
     assert block is not None, "pyproject.toml has no `train` extra"
     entries = re.findall(r'"([^"]+)"', block.group(1))

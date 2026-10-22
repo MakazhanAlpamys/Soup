@@ -126,15 +126,22 @@ def _suite_runs(cell: dict[str, str], docs_only: str) -> str:
     return _render(str(_jobs()["test"]["env"]["RUN_SUITE"]), context)
 
 
-def _steps_that_run(cell: dict[str, str], docs_only: str) -> list[str]:
-    """The steps of the `test` job that run in *cell* of a pull-request run."""
+def _steps_that_run(
+    cell: dict[str, str],
+    docs_only: str,
+    *,
+    event_name: str = "pull_request",
+    ref: str = "refs/pull/7/merge",
+) -> list[str]:
+    """The steps of the `test` job that run in *cell* of a run: a pull-request run unless the
+    event is given (a pull request is the only run that can be docs-only)."""
     context = {
         **_plan_outputs(docs_only),
         "matrix": cell,
         "env": {"RUN_SUITE": _suite_runs(cell, docs_only)},
         "github": {
-            "event_name": "pull_request",
-            "ref": "refs/pull/7/merge",
+            "event_name": event_name,
+            "ref": ref,
             "repository": "MakazhanAlpamys/Soup",
         },
         "steps": {
@@ -445,7 +452,7 @@ class TestTheTestCellsSkipOnlyInADocsOnlyRun:
         ]
         assert sorted(f"{cell['os']} {cell['python-version']}" for cell in idle) == [
             "macos-latest 3.12",
-            "ubuntu-latest 3.10",
+            "ubuntu-latest 3.11",
             "windows-latest 3.12",
         ]
 
@@ -463,9 +470,26 @@ class TestTheTestCellsSkipOnlyInADocsOnlyRun:
 
     def test_the_coverage_cell_and_the_badge_step_never_run_in_a_docs_only_run(self) -> None:
         """No coverage report exists to upload when the cell that measures it did nothing."""
-        coverage_cell = {"os": "ubuntu-latest", "python-version": "3.10"}
-        assert "Upload coverage to Codecov" not in _steps_that_run(coverage_cell, "true")
-        assert "Upload coverage to Codecov" in _steps_that_run(coverage_cell, "false")
+        coverage_cell = {"os": "ubuntu-latest", "python-version": "3.11"}
+        assert _steps_that_run(coverage_cell, "true") == []
+
+    def test_no_pull_request_measures_or_uploads_coverage_and_the_nightly_run_does(self) -> None:
+        """2026-10-21: the approval run's ubuntu / 3.11 (the cell that measured and uploaded
+        coverage) runs the suite with `--no-cov`, docs-only or not, and uploads nothing; the
+        same cell of the nightly run measures, checks the floor and uploads."""
+        coverage_cell = {"os": "ubuntu-latest", "python-version": "3.11"}
+        for docs_only in ("true", "false"):
+            steps = _steps_that_run(coverage_cell, docs_only)
+            assert "Run unit tests with coverage" not in steps, docs_only
+            assert "Upload coverage to Codecov" not in steps, docs_only
+        pull_request = _steps_that_run(coverage_cell, "false")
+        assert "Run unit tests without coverage" in pull_request
+        nightly = _steps_that_run(
+            coverage_cell, "false", event_name="schedule", ref="refs/heads/main"
+        )
+        assert "Run unit tests with coverage" in nightly
+        assert "Upload coverage to Codecov" in nightly
+        assert "Run unit tests without coverage" not in nightly
 
     @pytest.mark.parametrize("matrix", ("QUICK_MATRIX", "APPROVAL_MATRIX"))
     def test_a_docs_only_run_still_creates_every_context_branch_protection_waits_on(

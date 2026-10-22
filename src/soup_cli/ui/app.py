@@ -1,5 +1,6 @@
 """FastAPI application for Soup Web UI."""
 
+import contextlib
 import ipaddress
 import json as json_mod
 import logging
@@ -319,11 +320,42 @@ class TrainLogBuffer:
             return available, self._done
 
 
-def _drain_stdout_worker(proc: subprocess.Popen, log_buffer: TrainLogBuffer) -> None:
+def _remove_temp_config(path: Optional[str]) -> None:
+    if not path:
+        return
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        logger.debug("Could not remove temp config %s: %s", path, exc)
+
+
+def _wait_and_remove_temp_config(
+    proc: Optional[subprocess.Popen], config_path: Optional[str]
+) -> None:
+    if not config_path:
+        return
+    try:
+        wait_fn = getattr(proc, "wait", None)
+        if callable(wait_fn):
+            wait_fn()
+    except Exception as exc:
+        logger.debug("Waiting for process %s failed: %s", proc, exc)
+        return
+    _remove_temp_config(config_path)
+
+
+def _drain_stdout_worker(
+    proc: subprocess.Popen,
+    log_buffer: TrainLogBuffer,
+    config_path: Optional[str] = None,
+) -> None:
     """Continuously read stdout of proc until EOF and write to log_buffer."""
     stdout = getattr(proc, "stdout", None)
     if stdout is None:
         log_buffer.mark_done()
+        _wait_and_remove_temp_config(proc, config_path)
         return
 
     try:
@@ -346,6 +378,7 @@ def _drain_stdout_worker(proc: subprocess.Popen, log_buffer: TrainLogBuffer) -> 
         except Exception:
             pass
         log_buffer.mark_done()
+        _wait_and_remove_temp_config(proc, config_path)
 
 
 def _resolve_train_argv(config_path: str) -> list[str]:
@@ -826,20 +859,33 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             fd, config_path = tempfile.mkstemp(
                 prefix="soup_ui_config_", suffix=".yaml"
             )
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(req.config_yaml)
+            try:
+                try:
+                    fh = os.fdopen(fd, "w", encoding="utf-8")
+                except BaseException:
+                    with contextlib.suppress(OSError):
+                        # os.fdopen can occasionally close the descriptor itself before raising;
+                        # practically unreachable with the fixed "w"/utf-8 arguments here.
+                        os.close(fd)
+                    raise
+                with fh:
+                    fh.write(req.config_yaml)
+                proc = subprocess.Popen(
+                    _resolve_train_argv(config_path),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                )
+            except Exception:
+                _remove_temp_config(config_path)
+                raise
 
             _train_config_path = config_path
-            _train_process = subprocess.Popen(
-                _resolve_train_argv(config_path),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-            )
+            _train_process = proc
             global _train_log_buffer, _train_drain_thread
             _train_log_buffer = TrainLogBuffer(maxlen=10000)
             _train_drain_thread = threading.Thread(
                 target=_drain_stdout_worker,
-                args=(_train_process, _train_log_buffer),
+                args=(_train_process, _train_log_buffer, config_path),
                 daemon=True,
                 name="soup_train_drain",
             )
