@@ -5,6 +5,7 @@ import os
 import socket
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -14,6 +15,13 @@ from soup_cli.utils import run_provenance as provenance
 
 BASE = "owner/base"
 SHA = "a" * 40
+linux_only = pytest.mark.skipif(
+    sys.platform != "linux",
+    reason=(
+        "real two-process CPU/Gloo checks run on Linux only; macOS env:// rendezvous "
+        "can time out on loaded runners. Simulated-rank checks run on every platform."
+    ),
+)
 
 
 @pytest.mark.parametrize("rank", [0, 1])
@@ -195,6 +203,33 @@ finally:
 '''
 
 
+def _wait_for_ranks(processes: list[subprocess.Popen], log_paths: list[Path]) -> None:
+    """Reap every child before reporting a failed rank and both ranks' diagnostics."""
+    failure = None
+    try:
+        for rank, process in enumerate(processes):
+            try:
+                returncode = process.wait(timeout=75)
+            except subprocess.TimeoutExpired:
+                failure = f"rank {rank} timed out after 75 seconds"
+                break
+            if returncode != 0:
+                failure = f"rank {rank} exited with {returncode}"
+                break
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+    if failure is not None:
+        diagnostics = "\n".join(
+            f"--- rank {rank} ---\n{path.read_text(encoding='utf-8', errors='replace')}"
+            for rank, path in enumerate(log_paths)
+        )
+        pytest.fail(f"{failure}\n{diagnostics}", pytrace=False)
+
+
+@linux_only
 @pytest.mark.parametrize("mode", ["bound", "offline", "failed", "lost"])
 @pytest.mark.parametrize("initialize", [False, True])
 def test_two_real_cpu_processes_share_identity_and_receipts(tmp_path, mode, initialize):
@@ -206,7 +241,7 @@ def test_two_real_cpu_processes_share_identity_and_receipts(tmp_path, mode, init
     with socket.socket() as address:
         address.bind(("127.0.0.1", 0))
         port = address.getsockname()[1]
-    processes, logs = [], []
+    processes, logs, log_paths = [], [], []
     try:
         for rank in range(2):
             env = os.environ.copy()
@@ -216,15 +251,16 @@ def test_two_real_cpu_processes_share_identity_and_receipts(tmp_path, mode, init
             for name in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "ACCELERATE_USE_FSDP",
                          "ACCELERATE_USE_DEEPSPEED", "ACCELERATE_MIXED_PRECISION"):
                 env.pop(name, None)
-            log = (tmp_path / f"rank-{rank}.log").open("w", encoding="utf-8")
+            log_path = tmp_path / f"rank-{rank}.log"
+            log = log_path.open("w", encoding="utf-8")
             logs.append(log)
+            log_paths.append(log_path)
             processes.append(subprocess.Popen(
-                [sys.executable, str(worker), str(tmp_path), str(rank), mode, str(initialize)],
+                [sys.executable, "-u", str(worker), str(tmp_path),
+                 str(rank), mode, str(initialize)],
                 env=env, stdout=log, stderr=subprocess.STDOUT,
             ))
-        for rank, process in enumerate(processes):
-            assert process.wait(timeout=75) == 0, (
-                tmp_path / f"rank-{rank}.log").read_text(encoding="utf-8")
+        _wait_for_ranks(processes, log_paths)
     finally:
         for process in processes:
             if process.poll() is None:

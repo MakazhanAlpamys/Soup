@@ -1009,8 +1009,11 @@ are broadcast as unknown, preserving existing loading behavior. A collective
 failure stops the run rather than letting workers resolve independent moving heads.
 Ranks compare identity receipts after setup and training; a conflicting loaded
 model commit on any rank clears the bound revision for every rank before recording
-the final artifact. CPU/Gloo coordination is covered by real two-process tests;
-NCCL/FSDP hardware execution is not established by those tests.
+the final artifact. CPU/Gloo coordination is covered by real two-process tests on
+Linux; simulated-rank checks run on every platform. The real cases skip on macOS
+and Windows because env:// rendezvous can time out on loaded macOS runners. Rank
+failures include both child logs after cleanup. NCCL/FSDP hardware execution is
+not established by those tests.
 
 **Remaining boundaries:** Non-HF hubs, Unsloth and MLX loads remain unbound and
 are recorded as such; a cache-path hint on any backend is still unverified. Standalone
