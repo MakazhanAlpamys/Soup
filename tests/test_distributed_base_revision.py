@@ -56,8 +56,24 @@ def test_each_rank_uses_only_the_coordinators_nullable_result(monkeypatch, rank,
     assert identity.source == source
     assert probe.call_count == (1 if rank == 0 and source != "offline" else 0)
     assert factory.call_args.kwargs["cpu"] is True
-    assert factory.call_args.kwargs["timeout"].total_seconds() == 120
+    assert factory.call_args.kwargs["timeout"].total_seconds() == 1800
     send.assert_called_once()
+
+
+@pytest.mark.parametrize("cpu", [False, True])
+def test_initial_group_timeout_is_not_shorter_than_trainers_collective_default(monkeypatch, cpu):
+    import accelerate
+    from transformers import TrainingArguments
+
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    factory = Mock(return_value=SimpleNamespace(num_processes=2))
+    monkeypatch.setattr(accelerate, "PartialState", factory)
+    provenance._distributed_state(provenance.BaseRevision(BASE), cpu=cpu)
+    # PartialState shares the first group's timeout with Trainer. Compare with
+    # Trainer's actual default, not the constant being tested in Soup.
+    trainer_seconds = TrainingArguments.__dataclass_fields__["ddp_timeout"].default
+    assert factory.call_args.kwargs["timeout"].total_seconds() >= trainer_seconds
+    assert factory.call_args.kwargs["cpu"] is cpu
 
 
 def test_single_process_stays_lazy_and_unsupported_backends_stay_unbound(monkeypatch):

@@ -23,6 +23,9 @@ PROVENANCE_FILENAME = "soup_run.json"
 _MAX_METADATA_BYTES = 64 * 1024
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+# Match TrainingArguments.ddp_timeout. PartialState shares the first group's
+# timeout with Trainer: it limits every collective, not only initialization.
+_TRAINER_DDP_TIMEOUT_SECONDS = 1800
 _SOURCES = {
     "hub_commit", "cache_path", "local", "unknown", "unsupported_backend", "offline",
     "resolution_failed",
@@ -110,9 +113,9 @@ def _distributed_state(identity: BaseRevision, *, cpu: bool = False) -> Any:
         return None
     from accelerate import PartialState
 
-    # Reuse the group Trainer will use. An unavailable coordinator must not hang
-    # forever or silently degrade into per-rank resolution of a moving HEAD.
-    state = PartialState(cpu=cpu, timeout=timedelta(seconds=120))
+    # Initialize/reuse Accelerate's shared group without shortening Trainer's
+    # collective budget for dataset preparation, checkpoint saves or evaluation.
+    state = PartialState(cpu=cpu, timeout=timedelta(seconds=_TRAINER_DDP_TIMEOUT_SECONDS))
     if state.num_processes < 2:
         raise RuntimeError("distributed base identity needs the launcher's process group")
     return state

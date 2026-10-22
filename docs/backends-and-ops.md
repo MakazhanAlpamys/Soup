@@ -943,8 +943,10 @@ the tokenizer still comes from the adapter folder.
 
 For a multi-process Hugging Face Transformers `soup train` launch, global rank zero
 resolves the base once and broadcasts its nullable result before trainer setup.
-Soup initializes or reuses Accelerate's process group (120-second initialization
-timeout); Trainer keeps ownership of that group. Offline/failed metadata requests
+Soup initializes or reuses Accelerate's shared process group with Trainer's default
+1800-second timeout. The first initialization sets the timeout for every collective,
+including later Trainer operations; an existing group keeps its original timeout.
+Offline/failed metadata requests
 are broadcast as unknown, preserving existing loading behavior. A collective
 failure stops the run rather than letting workers resolve independent moving heads.
 Ranks compare identity receipts after setup and training; a conflicting loaded
