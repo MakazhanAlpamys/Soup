@@ -36,8 +36,8 @@ def _ingest(source: Path, output: str = "rows.jsonl") -> list[dict]:
     return [json.loads(line) for line in source.with_name(output).read_text("utf-8").splitlines()]
 
 
-def test_documents_extra_declares_both_tested_reader_floors() -> None:
-    # Python 3.10 has no tomllib. Parse just this literal array with the stdlib.
+def test_documents_extra_declares_both_reader_floors() -> None:
+    # Pin the declared requirements independently of optional reader installs.
     text = (ROOT / "pyproject.toml").read_text("utf-8")
     table = text.split("[project.optional-dependencies]", 1)[1].split("\n[", 1)[0]
     match = re.search(r"^documents\s*=\s*(\[[^\]]*\])", table, re.M)
