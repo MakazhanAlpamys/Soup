@@ -5247,7 +5247,7 @@ def _unsloth_flag_clause(training: "TrainingConfig") -> str:
 #: DPO, ORPO, SimPO, KTO and GRPO through Soup's own loops (``trainer/mlx_dpo.py``,
 #: ``trainer/mlx_orpo.py``, ``trainer/mlx_grpo.py``). Validators that defer
 #: to :meth:`SoupConfig._validate_mlx_task_support` read this, not ``"sft"``.
-MLX_TASKS: frozenset[str] = frozenset({"sft", "dpo", "orpo", "simpo", "kto", "grpo"})
+MLX_TASKS: frozenset[str] = frozenset({"sft", "dpo", "orpo", "simpo", "kto", "grpo", "distill"})
 
 
 def resolve_mlx_task(task: str, preference_loss: str | None = None) -> str:
@@ -5625,6 +5625,14 @@ class SoupConfig(BaseModel):
         tcfg = self.training
         if tcfg.quantization == "none":
             return self
+        if self.backend == "mlx" and self.task == "distill":
+            # This newly supported route never emitted legacy quantized run
+            # configs. Do not normalize an explicit unsupported request away
+            # before the native guard can see it. Preserve the unset default.
+            if "quantization" not in tcfg.model_fields_set and tcfg.load_in_8bit is not True:
+                tcfg.quantization = "none"
+                return self
+            raise ValueError("MLX token distillation requires training.quantization: none")
         # ``bnb_4bit_quant_storage`` is checked against ``quantization`` by a
         # TrainingConfig validator that has already run on the unresolved default,
         # so it passed; setting it is a request for 4-bit and is refused here
@@ -6598,6 +6606,11 @@ class SoupConfig(BaseModel):
                     "loads a text-only student and teacher and does not process "
                     f"vision or audio inputs; got modality={self.modality!r}."
                 )
+
+            if self.backend == "mlx":
+                from soup_cli.utils.mlx_distill import validate_native_distill
+
+                validate_native_distill(self)
 
             chunk_offenders = [
                 name
@@ -8885,12 +8898,13 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_mlx_task_support(self) -> "SoupConfig":
-        """MLX backend supports sft, dpo, orpo, simpo, kto and grpo.
+        """MLX backend supports sft, dpo, orpo, simpo, kto, grpo and token distillation.
 
         SFT runs through mlx-lm's tuner; DPO, ORPO, SimPO, KTO and GRPO through
         Soup's own loops in ``trainer/mlx_dpo.py`` / ``trainer/mlx_orpo.py`` /
         ``trainer/mlx_simpo.py`` / ``trainer/mlx_kto.py`` / ``trainer/mlx_grpo.py``.
         Scalar preference aliases share their native task's scope restrictions.
+        Token distillation has its own native loop.
         Every other task is refused here rather than at ``train()`` time.
         """
         if self.backend != "mlx":
@@ -8937,7 +8951,7 @@ class SoupConfig(BaseModel):
         if task in MLX_TASKS:
             return self
         raise ValueError(
-            f"MLX backend only ships SFT, DPO, ORPO, SimPO, KTO and GRPO; "
+            f"MLX backend only ships SFT, DPO, ORPO, SimPO, KTO, GRPO and token distillation; "
             f"task='{self.task}' has "
             "no trainer on backend='mlx'."
             f" Use backend=transformers for task={self.task}."
@@ -9343,12 +9357,12 @@ class SoupConfig(BaseModel):
 
         if self.training.eval_steps is None:
             return self
-        if self.backend == "mlx" and self.task != "sft":
+        if self.backend == "mlx" and self.task not in ("sft", "distill"):
             # #1990 honours it for MLX SFT. The native preference loops evaluate
             # once per epoch and do not read it yet.
             raise ValueError(
                 f"training.eval_steps is not supported for task={self.task!r} on "
-                "backend='mlx': only task='sft' honours it there (#1990); the MLX "
+                "backend='mlx': only SFT and token distillation honour it (#1990, #1979); the MLX "
                 "preference loop evaluates once per epoch"
             )
         reason = EVAL_STEPS_UNSUPPORTED_TASKS.get(self.task)

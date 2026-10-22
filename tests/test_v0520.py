@@ -414,10 +414,9 @@ class TestDistillUtils:
     def test_validate_distill_compat_mlx(self):
         from soup_cli.utils.distill import validate_distill_compat
 
-        with pytest.raises(ValueError, match="mlx"):
-            validate_distill_compat(
-                task="distill", backend="mlx", teacher_model="t/model",
-            )
+        # The common teacher gate accepts MLX; SoupConfig applies the qualified
+        # token-only, ordinary-LoRA native slice and refuses unsupported modifiers.
+        validate_distill_compat(task="distill", backend="mlx", teacher_model="t/model")
 
     def test_validate_distill_compat_unsloth(self):
         from soup_cli.utils.distill import validate_distill_compat
