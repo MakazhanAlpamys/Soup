@@ -215,7 +215,7 @@ On the **MLX backend** (`backend: mlx`), SFT seeds MLX's own RNG
 (`mx.random`, which draws LoRA `A` and dropout) with `training.seed` before the
 adapter is built, and numpy's global RNG, which mlx-lm's batch shuffle draws
 from, with `training.data_seed` (or `training.seed` when that is unset) right
-before training starts (#1850). Through v0.76.0 it seeded neither and warned
+before training starts (#1850). Before #1850 it seeded neither and warned
 `MLX backend ignores: training.seed`, so every MLX run trained on a different
 batch order.
 

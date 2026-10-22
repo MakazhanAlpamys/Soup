@@ -200,12 +200,9 @@ _TRANSFORMERS_AUDIO_SFT: tuple[SupportEntry, ...] = (
 _UNSLOTH_SFT: tuple[SupportEntry, ...] = ()
 
 
-#: Fields MLX SFT warns about that have no meaning for DPO, or that MLX DPO
-#: honours: the seeds (its own loop seeds ``mx.random`` and the batch order)
-#: and SFT's response-masking switches (DPO supervises completions by design).
+#: Fields MLX SFT warns about that have no meaning for DPO: SFT's
+#: response-masking switches (DPO supervises completions by design).
 _NOT_DPO_GAPS = frozenset({
-    "training.seed",
-    "training.data_seed",
     "data.train_on_messages_with_train_field",
     "data.mask_history",
     "data.train_on_prompt",
