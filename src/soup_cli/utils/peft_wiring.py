@@ -453,8 +453,11 @@ def find_layer_unscoped_targets(model: Any, target_modules: Any) -> list[str]:
     peft applies ``layers_to_transform`` only to a LIST ``target_modules``,
     and even then only to matches that sit inside a numbered decoder layer
     (``...layers.N....`` / ``...h.N....``): a name that matches nothing else
-    just gets no adapter, with no error (#1432). ``embed_tokens`` and
-    ``lm_head`` are the common case, but any custom head is the same shape.
+    just gets no adapter, with no error (#1432). ``embed_tokens`` is the
+    common case. The exception is an EXACT module name such as a top-level
+    ``lm_head``: peft returns on an exact match before it reads
+    ``layers_to_transform``, so that target keeps its adapter and is not
+    flagged here.
 
     Returns every target whose matches in ``model.named_modules()`` are all
     outside a numbered layer. A target that resolves to nothing in this
@@ -469,6 +472,8 @@ def find_layer_unscoped_targets(model: Any, target_modules: Any) -> list[str]:
     module_names = [name for name, _ in model.named_modules() if name]
     unscoped = []
     for target in target_modules:
+        if target in module_names:
+            continue  # an exact module name: peft keeps it before reading layers_to_transform
         matches = [
             name for name in module_names
             if name == target or name.endswith(f".{target}")

@@ -291,22 +291,14 @@ class TestFreezeLayersRestrictsLoraAdapter:
         with pytest.raises(ValueError, match="use_vera"):
             wrapper.setup(dataset)
 
-    def test_freeze_with_expand_layers_keeps_appended_blocks_adapted(self, tmp_path, monkeypatch):
-        """#1494 review: lora_layers_to_transform's range was measured from
-        the layer count BEFORE apply_block_expansion_if_configured (LLaMA
-        Pro) runs, so blocks it appends land outside the range and get no
-        adapter even though freeze_model_layers never froze them."""
+    def test_freeze_with_expand_layers_under_lora_is_refused_at_load(self, tmp_path, monkeypatch):
+        """LLaMA Pro under LoRA is refused at config load (#1326), so the
+        freeze plan never has to cover blocks that expand_layers appends."""
         _requires_train_extra()
-        wrapper, dataset = _wrapper(
-            tmp_path, monkeypatch, n_layers=4,
-            freeze_layers=1, expand_layers=2, freeze_trainable_layers=-1,
-        )
-        wrapper.setup(dataset)
-        names = _lora_param_names(wrapper.model)
-        assert not any(".layers.0." in name for name in names)
-        for idx in (1, 2, 3, 4, 5):
-            assert any(f".layers.{idx}." in name for name in names), (
-                f"layer {idx} lost its adapter"
+        with pytest.raises(ValueError, match="cannot be combined with LoRA"):
+            _wrapper(
+                tmp_path, monkeypatch, n_layers=4,
+                freeze_layers=1, expand_layers=2, freeze_trainable_layers=2,
             )
 
     def test_freeze_with_embed_tokens_target_is_not_silently_dropped(self, tmp_path, monkeypatch):
@@ -344,6 +336,27 @@ class TestFreezeLayersRestrictsLoraAdapter:
         assert any(".layers.0." in name for name in names)
         assert any("embed_tokens" in name for name in names)
 
+    def test_lm_head_target_with_freeze_is_accepted_and_adapted(self, tmp_path, monkeypatch):
+        _requires_train_extra()
+        wrapper, dataset = _wrapper(
+            tmp_path, monkeypatch, n_layers=4, freeze_layers=2,
+            lora={"target_modules": ["q_proj", "v_proj", "lm_head"]},
+        )
+        wrapper.setup(dataset)
+        names = _lora_param_names(wrapper.model)
+        assert any("lm_head" in name for name in names)
+        assert not any(".layers.0." in name or ".layers.1." in name for name in names)
+
+    def test_a_target_absent_from_the_model_does_not_trip_the_refusal(self, tmp_path, monkeypatch):
+        _requires_train_extra()
+        wrapper, dataset = _wrapper(
+            tmp_path, monkeypatch, n_layers=4, freeze_layers=2,
+            lora={"target_modules": ["q_proj", "v_proj", "no_such_proj"]},
+        )
+        wrapper.setup(dataset)
+        names = _lora_param_names(wrapper.model)
+        assert any(".layers.2." in name for name in names)
+        assert not any(".layers.0." in name for name in names)
 
 class TestLayersToTransformIsWhatFixesIt:
     """MECHANISM control: reproduces #1432 directly against peft, without
@@ -409,3 +422,51 @@ class TestLayersToTransformIsWhatFixesIt:
         lora_names = [n for n, _ in peft_model.named_parameters() if "lora_" in n]
         assert not any(".layers.0." in n for n in lora_names)
         assert any(".layers.1." in n for n in lora_names)
+
+
+def _tiny_model(model_type="llama"):
+    _requires_train_extra()
+    from transformers import GPT2Config, GPT2LMHeadModel, LlamaConfig, LlamaForCausalLM
+
+    if model_type == "gpt2":
+        return GPT2LMHeadModel(
+            GPT2Config(vocab_size=64, n_embd=32, n_layer=4, n_head=4, n_positions=64)
+        )
+    return LlamaForCausalLM(LlamaConfig(
+        vocab_size=64, hidden_size=32, intermediate_size=64, num_hidden_layers=4,
+        num_attention_heads=4, num_key_value_heads=2,
+    ))
+
+
+class TestFindLayerUnscopedTargets:
+    def test_embed_tokens_is_unscoped_but_in_layer_targets_are_not(self):
+        from soup_cli.utils.peft_wiring import find_layer_unscoped_targets
+
+        assert find_layer_unscoped_targets(
+            _tiny_model(), ["q_proj", "v_proj", "embed_tokens"]
+        ) == ["embed_tokens"]
+
+    def test_gpt2_h_n_layout_counts_as_a_numbered_layer(self):
+        from soup_cli.utils.peft_wiring import find_layer_unscoped_targets
+
+        model = _tiny_model("gpt2")
+        assert find_layer_unscoped_targets(model, ["c_attn"]) == []
+        assert find_layer_unscoped_targets(model, ["wte"]) == ["wte"]
+
+    def test_a_target_the_model_does_not_have_is_left_alone(self):
+        from soup_cli.utils.peft_wiring import find_layer_unscoped_targets
+
+        assert find_layer_unscoped_targets(_tiny_model(), ["q_proj", "no_such_proj"]) == []
+
+    def test_lm_head_keeps_its_adapter_under_layers_to_transform_so_is_not_flagged(self):
+        """peft returns on an EXACT module-name match before it reads layers_to_transform."""
+        from peft import LoraConfig, get_peft_model
+
+        from soup_cli.utils.peft_wiring import find_layer_unscoped_targets
+
+        peft_model = get_peft_model(
+            _tiny_model(),
+            LoraConfig(r=4, target_modules=["q_proj", "lm_head"], layers_to_transform=[2, 3]),
+        )
+        assert any("lm_head" in n and "lora_" in n for n, _ in peft_model.named_parameters())
+        assert find_layer_unscoped_targets(_tiny_model(), ["q_proj", "lm_head"]) == []

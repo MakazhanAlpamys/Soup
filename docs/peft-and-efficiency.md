@@ -622,8 +622,11 @@ layers, so a frozen layer stays frozen rather than training through a fresh adap
 `freeze_layers`/`freeze_ratio` cannot currently be combined with LoRA when
 `training.lora.target_modules` is a regex string (an explicit one, or an `auto`-resolved
 architecture table entry such as Mistral 3.5's), when `training.lora.target_parameters` is
-set (per-parameter LoRA, e.g. fused MoE experts), or with `training.lora.use_vera`: all three
-refuse when the model is built rather than silently drop the freeze plan (#1432).
+set (per-parameter LoRA, e.g. fused MoE experts), or with `training.lora.use_vera`. A
+`target_modules` list entry that only matches modules outside a numbered decoder layer (such as
+`embed_tokens`) and a freeze plan that freezes every layer refuse too. Each of these refuses when
+the model is built rather than silently drop the freeze plan (#1432). A top-level `lm_head` target
+is accepted and keeps its adapter.
 
 ## LISA — Layerwise Importance Sampling (v0.71.34)
 

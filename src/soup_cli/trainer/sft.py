@@ -1778,8 +1778,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 # #1432: a zero cutoff freezes nothing, but peft still reads
                 # any layers_to_transform list as "restrict to these numbered
                 # layers only", which silently drops a target outside a
-                # numbered layer (embed_tokens, lm_head) even though nothing
-                # was frozen. Leave it unset rather than pass a no-op range.
+                # numbered layer (embed_tokens) even though nothing was
+                # frozen. Leave it unset rather than pass a no-op range.
                 if cutoff:
                     lora_layers_to_transform = list(range(cutoff, total_layers))
 
@@ -1792,11 +1792,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             apply_block_expansion_if_configured,
         )
 
-        post_expansion_total = apply_block_expansion_if_configured(self.model, tcfg, console)
-        if lora_layers_to_transform is not None:
-            lora_layers_to_transform = list(
-                range(cutoff, max(total_layers, int(post_expansion_total)))
-            )
+        apply_block_expansion_if_configured(self.model, tcfg, console)
 
         # v0.71.20 #136 — MoE expert quant. Applied BEFORE get_peft_model so
         # PEFT attaches its adapters to the quantized base (QLoRA-on-experts)
@@ -1922,9 +1918,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 )
 
             # #1432: peft only applies layers_to_transform to a list target
-            # that lives inside a numbered decoder layer. embed_tokens,
-            # lm_head, or any other target outside the stack silently gets
-            # no adapter otherwise. Refuse by name rather than drop it.
+            # that lives inside a numbered decoder layer, or to an exact
+            # module name (a top-level lm_head keeps its adapter). embed_tokens,
+            # or any other target outside the stack, silently gets no adapter
+            # otherwise. Refuse by name rather than drop it.
             if lora_layers_to_transform is not None and isinstance(target_modules, list):
                 from soup_cli.utils.peft_wiring import find_layer_unscoped_targets
 
