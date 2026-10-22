@@ -1852,7 +1852,10 @@ training:
 answers, so after it tokenizes, `soup train` cuts the prompt to
 `data.max_length // 2` tokens, keeping its end, and the answers to the room
 left, for the train and validation splits. Every sequence is then at most
-`data.max_length`; a row that already fits is unchanged.
+`data.max_length`. The cut goes by the prompt alone: a prompt longer than
+`data.max_length // 2` tokens loses its start even when prompt and answers
+would fit in `data.max_length`. A row whose prompt is at most
+`data.max_length // 2` tokens and which fits is unchanged.
 
 **Rows whose completion trl truncates away are refused.** trl's CPO trainer
 truncates each answer to `data.max_length` minus the **longer** answer's length,

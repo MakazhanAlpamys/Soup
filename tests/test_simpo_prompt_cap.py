@@ -152,6 +152,56 @@ class TestARowThatFits:
                 assert after[key] == value, (index, key)
 
 
+def _prompt_words_for(tmp_path, monkeypatch, n_tokens: int) -> int:
+    """How many prompt words TRL's CPO tokenizer turns into ``n_tokens`` prompt ids.
+
+    Asked of TRL itself (it may add a BOS), on a probe trainer, so the boundary
+    rows below hold exactly the token count they claim.
+    """
+    probe_dir = tmp_path / "probe"
+    probe_dir.mkdir()
+    probe = _setup_simpo(probe_dir, monkeypatch, [FITS] * 4)
+    for words in range(1, n_tokens + 1):
+        if len(_before(probe, _row(words, 2, 1))["prompt_input_ids"]) == n_tokens:
+            return words
+    raise AssertionError(f"no word count gives a {n_tokens}-token prompt")
+
+
+class TestThePromptBudgetBoundary:
+    """The cap cuts by the prompt alone: any prompt over ``max_length // 2``
+    tokens loses its start, even when prompt plus answers fit in
+    ``max_length``; one of exactly ``max_length // 2`` tokens is untouched."""
+
+    def test_a_prompt_of_exactly_the_budget_is_unchanged(self, tmp_path, monkeypatch):
+        raw = _row(_prompt_words_for(tmp_path, monkeypatch, PROMPT_BUDGET), 2, 1)
+        wrapper = _setup_simpo(tmp_path, monkeypatch, [raw] * 4)
+        before = _before(wrapper, raw)
+        assert len(before["prompt_input_ids"]) == PROMPT_BUDGET
+        after = wrapper.trainer.train_dataset[0]
+        for key, value in before.items():
+            assert after[key] == value, key
+
+    def test_one_token_over_the_budget_is_cut_although_the_row_fits(
+        self, tmp_path, monkeypatch
+    ):
+        raw = _row(_prompt_words_for(tmp_path, monkeypatch, PROMPT_BUDGET + 1), 2, 1)
+        wrapper = _setup_simpo(tmp_path, monkeypatch, [raw] * 4)
+        before = _before(wrapper, raw)
+        assert len(before["prompt_input_ids"]) == PROMPT_BUDGET + 1
+        # The whole row already fits: the cut comes from the prompt budget alone.
+        assert all(len(before[key]) <= MAX_LENGTH for key in SEQUENCE_KEYS), before
+
+        after = wrapper.trainer.train_dataset[0]
+        kept = before["prompt_input_ids"][-PROMPT_BUDGET:]
+        assert after["prompt_input_ids"] == kept
+        assert after["prompt_attention_mask"] == [1] * PROMPT_BUDGET
+        for side in ("chosen", "rejected"):
+            assert after[f"{side}_input_ids"][:PROMPT_BUDGET] == kept, side
+            assert after[f"{side}_labels"][:PROMPT_BUDGET] == [-100] * PROMPT_BUDGET, side
+            assert len(after[f"{side}_input_ids"]) == len(before[f"{side}_input_ids"]) - 1
+            assert _trainable(after, side) == _trainable(before, side), side
+
+
 class TestTheCapAndThe1208Refusal:
     """The cap runs before #1208's guard, so the guard sees capped rows.
 
