@@ -376,8 +376,16 @@ def _load_doctor_config(config_path: str):
         return load_config(config_path)
     except FileNotFoundError as exc:
         console.print(f"\n[red]Config not found:[/] {config_path}")
+        # Non-zero deliberately: this leg is meant to be gate-able in CI, and a
+        # config that cannot be read is not a clean bill of health. `doctor`
+        # without --config keeps its old exit status.
         raise typer.Exit(2) from exc
     except SystemExit as exc:
+        # load_config prints its own diagnosis and raises SystemExit(1) for a
+        # schema-invalid config. SystemExit is a BaseException, so it walks
+        # past `except Exception` and the exit code contradicted the 2
+        # documented in docs/commands.md. Re-raised as 2 so all three unreadable
+        # shapes -- missing, unparseable, schema-invalid -- agree.
         console.print("\n[red]Config could not be loaded (see above).[/]")
         raise typer.Exit(2) from exc
     except Exception as exc:  # invalid YAML, unreadable file
@@ -386,7 +394,13 @@ def _load_doctor_config(config_path: str):
 
 
 def _report_config_support(cfg) -> None:
-    """#755 — report the settings this config sets that its backend never reads."""
+    """#755 — report the settings this config sets that its backend never reads.
+
+    Only fields the user wrote and switched on are listed (a ``false`` or unset
+    value is not; ``seed: 0`` is). A wall of 275 rows is not a pre-flight check,
+    and the fields sitting at their schema default or written in their off
+    position are not what anyone came here to ask about.
+    """
     from soup_cli.config.backend_support import (
         DEFAULT_BACKEND,
         DEFAULT_MODALITY,
@@ -428,11 +442,6 @@ def _report_config_support(cfg) -> None:
         f"  [yellow]{len(gaps)} setting(s) switched on here are not read on "
         f"backend={backend}{modality_summary}.[/]"
     )
-
-
-def _check_config_support(config_path: str) -> None:
-    cfg = _load_doctor_config(config_path)
-    _report_config_support(cfg)
 
 
 def _get_mlx_info() -> dict:

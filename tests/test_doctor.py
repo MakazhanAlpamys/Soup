@@ -1031,7 +1031,7 @@ def test_doctor_nccl_mocked_success():
 # --- Doctor --config tests (#2100) ---
 
 
-def _mock_clean_doctor_env(monkeypatch):
+def _mock_clean_doctor_env(monkeypatch, missing: tuple[str, ...] | list[str] = ()):
     installed = {
         "pydantic": "2.10.0",
         "typer": "0.15.4",
@@ -1046,6 +1046,8 @@ def _mock_clean_doctor_env(monkeypatch):
         "bitsandbytes": "0.41.0",
         "accelerate": "0.27.0",
     }
+    for pkg in missing:
+        installed.pop(pkg, None)
     monkeypatch.setattr(
         "soup_cli.commands.doctor._installed_version_str",
         lambda imp, pkg: installed.get(pkg),
@@ -1074,28 +1076,7 @@ def test_doctor_refused_config_does_not_print_all_checks_passed(tmp_path, monkey
 
 def test_doctor_missing_package_and_refused_config_shows_issues_and_refusal(tmp_path, monkeypatch):
     """Environment issues are not hidden when a refused config exits 2 (#2100)."""
-    installed = {
-        "pydantic": "2.10.0",
-        "typer": "0.15.4",
-        "rich": "13.0.0",
-        "pyyaml": "6.0",
-        "plotext": "5.2.0",
-        "torch": "2.6.0",
-        "transformers": "5.16.1",
-        # peft missing
-        "trl": "0.29.0",
-        "datasets": "2.14.0",
-        "bitsandbytes": "0.41.0",
-        "accelerate": "0.27.0",
-    }
-    monkeypatch.setattr(
-        "soup_cli.commands.doctor._installed_version_str",
-        lambda imp, pkg: installed.get(pkg),
-    )
-    monkeypatch.setattr(
-        "soup_cli.commands.doctor._check_torchvision_compat",
-        lambda issues: None,
-    )
+    _mock_clean_doctor_env(monkeypatch, missing=["peft"])
     bad_config = tmp_path / "soup.yaml"
     bad_config.write_text(
         "base: meta-llama/Llama-3.1-8B-Instruct\nunknown_key: true\n",
@@ -1109,6 +1090,20 @@ def test_doctor_missing_package_and_refused_config_shows_issues_and_refusal(tmp_
     assert "unknown config key 'unknown_key'" in out
     assert "Config could not be loaded" in out
     assert "All checks passed!" not in out
+
+
+def test_doctor_missing_package_and_valid_config_omits_summary_and_reports_config(
+    sample_config, monkeypatch
+):
+    """When an issue exists, a valid config is reported but summary is omitted (#2100)."""
+    _mock_clean_doctor_env(monkeypatch, missing=["peft"])
+    result = runner.invoke(app, ["doctor", "--config", str(sample_config)])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    out = _strip_ansi(result.output)
+    assert "Found 1 issue(s):" in out
+    assert "All checks passed!" not in out
+    assert "Config check" in out
+    assert out.index("Found 1 issue(s):") < out.index("Config check")
 
 
 def test_doctor_valid_config_prints_all_checks_passed(sample_config, monkeypatch):
@@ -1150,4 +1145,30 @@ def test_doctor_without_config_unchanged(monkeypatch):
     assert result.exit_code == 0, (result.output, repr(result.exception))
     out = _strip_ansi(result.output)
     assert "All checks passed!" in out
+
+
+def test_doctor_nonexistent_config_exits_2(tmp_path, monkeypatch):
+    """A nonexistent config path prints 'Config not found' and exits 2 (#2100)."""
+    _mock_clean_doctor_env(monkeypatch)
+    missing_config = tmp_path / "does_not_exist.yaml"
+    result = runner.invoke(app, ["doctor", "--config", str(missing_config)])
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    out = _strip_ansi(result.output)
+    assert "Config not found:" in out
+    assert "All checks passed!" not in out
+
+
+def test_doctor_load_error_exception_exits_2(monkeypatch):
+    """An unexpected exception during config load prints error detail and exits 2 (#2100)."""
+    _mock_clean_doctor_env(monkeypatch)
+
+    def _fail_load(path):
+        raise RuntimeError("disk read failed")
+
+    monkeypatch.setattr("soup_cli.config.loader.load_config", _fail_load)
+    result = runner.invoke(app, ["doctor", "--config", "unreadable.yaml"])
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    out = _strip_ansi(result.output)
+    assert "Config could not be loaded: disk read failed" in out
+    assert "All checks passed!" not in out
 
