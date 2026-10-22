@@ -37,6 +37,16 @@ ERROR_MAP = [
             "enable gradient_checkpointing, use 4bit quantization, or use a smaller model."
         ),
     ),
+    # CPU allocator refused a request (#2154): after the GPU entries, so a CUDA
+    # message still gets the GPU hint.
+    (
+        "DefaultCPUAllocator: not enough memory",
+        "The CPU allocator could not reserve memory for a tensor.",
+        (
+            "Free memory by closing other programs, add swap (Linux) or enlarge the "
+            "page file (Windows), or use a smaller model."
+        ),
+    ),
     # Missing optional deps
     (
         "No module named 'fastapi'",

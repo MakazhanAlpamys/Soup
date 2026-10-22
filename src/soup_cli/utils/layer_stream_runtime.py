@@ -16,6 +16,7 @@ their adapters. This is physics, not an implementation detail.
 importing without the training stack.
 """
 
+import contextlib
 import logging
 import math
 import os
@@ -3129,6 +3130,75 @@ def _drop_fp8_source_quantization(config: Any) -> None:
         del config.quantization_config
 
 
+#: A CPU tensor-factory request of this many bytes or more is made on ``meta`` while the
+#: skeleton is built (#2154). Smaller requests stay real, so the small buffers
+#: (rotary ``inv_freq``, ``e_score_correction_bias``) keep their ``__init__`` values.
+SKELETON_META_REDIRECT_BYTES = 1 << 20
+
+_SKELETON_FACTORIES = ("empty", "zeros", "ones", "full", "empty_strided")
+
+
+@contextlib.contextmanager
+def _large_cpu_requests_on_meta(threshold: int) -> Iterator[None]:
+    """Make every CPU factory request of ``threshold`` bytes or more on ``meta``.
+
+    ``init_empty_weights()`` moves a parameter to ``meta`` only after it is registered,
+    and a fused-expert MoE builds its parameter with ``torch.empty(num_experts,
+    2 * intermediate, hidden)`` first: 22.5 GB of commit per layer for Kimi K2, never
+    touched, but charged (#2154). Redirecting the request itself is what avoids it.
+    The factories are put back however the build ends.
+    """
+    import torch
+
+    originals = {name: getattr(torch, name) for name in _SKELETON_FACTORIES}
+
+    def redirecting(original):
+        def factory(*args, **kwargs):
+            device = kwargs.get("device")
+            target = torch.device(device if device is not None else torch.get_default_device())
+            if target.type == "cpu" and "out" not in kwargs:
+                probe = original(*args, **{**kwargs, "device": "meta"})
+                if probe.numel() * probe.element_size() >= threshold:
+                    return probe
+            return original(*args, **kwargs)
+
+        return factory
+
+    for name, original in originals.items():
+        setattr(torch, name, redirecting(original))
+    try:
+        yield
+    finally:
+        for name, original in originals.items():
+            setattr(torch, name, original)
+
+
+def _skeleton_from_config(
+    config: Any, torch_dtype: Any, quant_config: Any, trust_remote_code: bool
+) -> Any:
+    from accelerate import init_empty_weights
+    from transformers import AutoModelForCausalLM
+
+    with init_empty_weights():
+        # Keep the model-construction spelling aligned with the load-site
+        # compatibility guard in tests/test_transformers_floor_compat.py.
+        model = AutoModelForCausalLM.from_config(
+            config, torch_dtype=torch_dtype, trust_remote_code=trust_remote_code
+        )
+        if quant_config is not None:
+            from transformers.integrations.bitsandbytes import replace_with_bnb_linear
+
+            # lm_head stays at the base dtype: it lives in extras (and is tied
+            # to the embeddings on most small Llamas), and quantising the output
+            # projection costs accuracy where it is felt most.
+            model = replace_with_bnb_linear(
+                model,
+                modules_to_not_convert=["lm_head"],
+                quantization_config=quant_config,
+            )
+    return model
+
+
 def build_meta_skeleton(
     model_id: str,
     *,
@@ -3142,10 +3212,12 @@ def build_meta_skeleton(
     Under ``quant='nf4'`` the decoder linears are replaced with
     ``bnb.nn.Linear4bit`` (still on ``meta``) so the streamed ``Params4bit``
     views land in modules that know how to consume them.
-    """
-    from accelerate import init_empty_weights
-    from transformers import AutoModelForCausalLM
 
+    Large CPU requests are made on ``meta`` during the build
+    (:func:`_large_cpu_requests_on_meta`). A buffer has to stay real, so if one
+    that large comes out on ``meta`` the model is built again without the
+    redirect, as before #2154, and the buffer is named.
+    """
     from soup_cli.utils.kimi_k2 import load_stream_model_config
     from soup_cli.utils.layer_shard import QUANT_NF4, SUPPORTED_STREAM_QUANTS
     from soup_cli.utils.run_provenance import base_revision_kwargs
@@ -3166,23 +3238,19 @@ def build_meta_skeleton(
     quant_config = None
     if quant == QUANT_NF4:
         quant_config = build_nf4_config(dtype, double_quant=double_quant)
-    with init_empty_weights():
-        # Keep the model-construction spelling aligned with the load-site
-        # compatibility guard in tests/test_transformers_floor_compat.py.
-        model = AutoModelForCausalLM.from_config(
-            config, torch_dtype=torch_dtype, trust_remote_code=trust_remote_code
+    with _large_cpu_requests_on_meta(SKELETON_META_REDIRECT_BYTES):
+        model = _skeleton_from_config(config, torch_dtype, quant_config, trust_remote_code)
+    meta_buffers = [name for name, buffer in model.named_buffers() if buffer.is_meta]
+    if meta_buffers:
+        logger.warning(
+            "%s registers a buffer of %d bytes or more (%s), which must hold real "
+            "values; building its skeleton without the meta redirect, so its large "
+            "parameters are allocated on the CPU before they move to meta (#2154)",
+            type(model).__name__,
+            SKELETON_META_REDIRECT_BYTES,
+            ", ".join(meta_buffers),
         )
-        if quant_config is not None:
-            from transformers.integrations.bitsandbytes import replace_with_bnb_linear
-
-            # lm_head stays at the base dtype: it lives in extras (and is tied
-            # to the embeddings on most small Llamas), and quantising the output
-            # projection costs accuracy where it is felt most.
-            model = replace_with_bnb_linear(
-                model,
-                modules_to_not_convert=["lm_head"],
-                quantization_config=quant_config,
-            )
+        model = _skeleton_from_config(config, torch_dtype, quant_config, trust_remote_code)
     # ``from_config`` does not reliably preserve the source reference that
     # ``from_pretrained`` stamps on both the model and its config.  PEFT reads
     # ``model.__dict__["name_or_path"]`` while wrapping LoRA and copies it to
