@@ -1034,6 +1034,9 @@ latest full-state bundle before considering legacy adapter files. Temporary
 `.mlx-state-*` directories are ignored; a corrupt committed bundle fails rather
 than falling back to another checkpoint. An explicit bundle activates full-state
 restoration even when the opt-in flag is absent from the recipe.
+For a populated output directory, resume its latest bundle. To resume an earlier
+bundle or a bundle from another directory, choose fresh output; existing later
+checkpoints are never silently reused or overwritten.
 
 Version 1 saves adapter tensors, AdamW moments/counter, the original scheduler
 plan, advanced MLX/NumPy/Python RNG states and the length-bucket sampler's current
