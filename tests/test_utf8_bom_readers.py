@@ -359,5 +359,5 @@ def test_bom_readers_still_enforce_raw_file_size(
             module._load_evidence(str(path))
         else:
             module._load_attestation_files([str(path)])
-    message = str(caught.value) + strip_ansi(capsys.readouterr().out)
+    message = " ".join((str(caught.value) + strip_ansi(capsys.readouterr().out)).split())
     assert "too large" in message or "exceeds" in message
