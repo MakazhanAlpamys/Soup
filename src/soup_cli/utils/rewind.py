@@ -105,16 +105,19 @@ def rank_rows(run: RewindRun, step: int) -> list[RankedRow]:
 
     ``share`` is ``loss * tokens`` over the step's total, because the row that
     moved the optimizer is the one that carried the loss, not the one with the
-    largest per-token mean. A NaN loss contributes 0 to the total (so the
-    shares of the finite rows still sum to 1) but is reported as NaN rather
-    than smoothed away. A step with no supervised tokens gives every row 0.0.
+    largest per-token mean. A non-finite loss (the log stores one as NaN)
+    contributes 0 to the total, so the shares of the finite rows still sum to 1
+    and an infinite loss cannot turn every share into NaN; the row is reported
+    with its non-finite loss rather than smoothed away, and it is listed FIRST:
+    it has no share to rank by, and last place at 0.0% buried the one row the
+    step blew up on. A step with no supervised tokens gives every row 0.0.
     """
     entries: list[tuple[int, float, int]] = []
     for batch in run.batches_for(step):
         for row, loss, tokens in zip(batch.rows, batch.row_loss, batch.row_tokens):
             entries.append((int(row), float(loss), int(tokens)))
 
-    weights = [0.0 if math.isnan(loss) else loss * tokens for _, loss, tokens in entries]
+    weights = [loss * tokens if math.isfinite(loss) else 0.0 for _, loss, tokens in entries]
     total = sum(weights)
 
     ranked = [
@@ -126,7 +129,7 @@ def rank_rows(run: RewindRun, step: int) -> list[RankedRow]:
         )
         for (row, loss, tokens), weight in zip(entries, weights)
     ]
-    ranked.sort(key=lambda r: (-r.share, r.row))
+    ranked.sort(key=lambda r: (math.isfinite(r.loss), -r.share, r.row))
     return ranked
 
 

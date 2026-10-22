@@ -400,7 +400,7 @@ class TestEveryAdapterBuildingTrainerReadsTheFlag:
     declared here as one whose task refuses ``moe_lora`` at config load."""
 
     #: Trainer modules whose task refuses the flag (schema ``_validate_moe_lora_task``).
-    REFUSED_MODULES = frozenset({"asr.py"})
+    REFUSED_MODULES = frozenset({"asr.py", "csm.py"})
 
     @staticmethod
     def _calls(path):
@@ -436,6 +436,18 @@ class TestEveryAdapterBuildingTrainerReadsTheFlag:
         """The exemption list must not drift from the schema's refusal."""
         with pytest.raises(ValueError, match="moe_lora.*task='asr'"):
             _config("asr", moe_lora=True)
+        from soup_cli.config.schema import SoupConfig
+
+        assert self.REFUSED_MODULES == {"asr.py", "csm.py"}
+        values = dict(
+            base="sesame/csm-1b", task="tts", modality="audio_out",
+            data={"train": "speech.jsonl", "format": "audio"},
+        )
+        training = {"tts_family": "sesame_csm", "quantization": "none",
+                    "lora": {"dropout": 0.0}}
+        SoupConfig(**values, training=training)
+        with pytest.raises(ValueError, match="moe_lora"):
+            SoupConfig(**values, training={**training, "moe_lora": True})
 
 
 class TestThePathsThatNeverReadIt:
@@ -470,17 +482,14 @@ class TestThePathsThatNeverReadIt:
         with pytest.raises(ValueError, match=f"modality={modality!r}"):
             load_config_from_string(yaml.safe_dump(raw))
 
-    @pytest.mark.parametrize("task", ["dpo", "grpo"])
-    def test_vision_on_a_task_that_reads_it_still_loads(self, task):
-        """The refusal is SFT's alone (#1179 review, round 3): dpo and grpo load a
-        vision config through _setup_transformers, which reads the flag. Dropping
-        the `task == "sft"` half refused pixtral-dpo / llama3.2-vision-grpo-shaped
-        configs and the suite stayed green."""
+    @pytest.mark.parametrize(("task", "data_format"), [("dpo", "dpo"), ("grpo", "llava")])
+    def test_vision_on_a_task_that_reads_it_still_loads(self, task, data_format):
+        """Non-preference vision tasks and text-format DPO load the flag."""
         import yaml
 
         raw = {
             "base": "org/m", "task": task, "modality": "vision",
-            "data": {"train": "./x.jsonl", "format": "llava"},
+            "data": {"train": "./x.jsonl", "format": data_format},
             "training": {"moe_lora": True, "lora": {"r": 4, "dropout": 0.0}},
         }
         cfg = load_config_from_string(yaml.safe_dump(raw))

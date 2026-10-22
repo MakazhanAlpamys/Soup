@@ -8,6 +8,8 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
+from soup_cli.utils.terminal import for_terminal
+
 console = Console()
 
 
@@ -139,7 +141,7 @@ def merge(
     console.print(
         Panel(
             f"Adapter: [bold]{adapter_path}[/]\n"
-            f"Base:    [bold]{base}[/]\n"
+            f"Base:    [bold]{for_terminal(base)}[/]\n"
             f"Output:  [bold]{output_path}[/]\n"
             f"Dtype:   [bold]{dtype}[/]",
             title="Merge Plan",
@@ -172,7 +174,7 @@ def merge(
             requires_remote_code=requires,
         )
 
-        console.print(f"[dim]Loading base model: {base}...[/]")
+        console.print(f"[dim]Loading base model: {for_terminal(base)}...[/]")
         model = AutoModelForCausalLM.from_pretrained(
             base,
             torch_dtype=model_dtype,
@@ -237,7 +239,7 @@ def merge(
         console.print("Run: [bold]pip install torch transformers peft[/]")
         raise typer.Exit(1)
     except Exception as exc:
-        console.print(f"[red]Merge failed: {exc}[/]")
+        console.print(f"[red]Merge failed: {for_terminal(exc)}[/]")
         raise typer.Exit(1)
 
     # Calculate output size

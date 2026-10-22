@@ -5,6 +5,11 @@ CPU. This is the record behind the statistic and `PRIOR_SCALE_ROWS` in
 [`src/soup_cli/utils/ab_test.py`](../src/soup_cli/utils/ab_test.py). It replaces the burn-in
 of [#1227](gate-1227-ab-burn-in.md).
 
+**Accept rule superseded by [#1418](gate-1418-ab-cs-accept.md):** `soup ab` now accepts H0
+once a confidence sequence from the same mixture lies inside +-effect_size, not at
+`log(beta/(1-alpha))`. The statistic, `PRIOR_SCALE_ROWS` and the reject rule recorded here are
+unchanged, and this record's runs are the baseline that sweep replays.
+
 ## What it gates
 
 The #1227 statistic plugged the estimated variance into a likelihood ratio built for a known
@@ -123,6 +128,19 @@ scale. k = 5 keeps almost all of k = 8's power for 3 fewer rows.
 - **Row order matters for the held-out rows.** The first k rows of each arm, in file order,
   set the scale. If an arm's first rows are all identical, more rows are held out until one
   differs; this depends only on the held-out rows, so the guarantee is unchanged.
+- **These sweeps predate the accept hold.** `ACCEPT_HOLD_SPREAD_RATIO` (#1419) was added after
+  this record was written, so every number above is from a run with the hold OFF. On Gaussian
+  rows the two spreads agree, so the hold changes almost no verdict — 2 of the 600 seeded runs in
+  `tests/test_issue1265_ab_nig.py`, one only in the number of rows it took and one rejecting
+  instead of accepting, which is the safe direction — and the conclusions here carry over. The
+  timing figures in particular were not measured with it on.
+- **A hold that fires on a saturated warm-up is never released by more rows.** The held-out
+  rows are fixed, so a run can sit at `continue` for the whole dataset while the confidence
+  sequence for the difference is already inside `+-effect_size`. `soup ab` now reports that
+  state (`accept_held` plus the two spreads) in the panel and on the `MsprtVerdict` that
+  `run_msprt` / `msprt_step` return, instead of only advising more samples (#1524). It has
+  no JSON output, and a held run sends no webhook. #1418 replaced the accept rule and kept
+  this hold, so the hold still applies.
 
 ## Environment
 

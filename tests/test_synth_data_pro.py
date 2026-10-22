@@ -12,6 +12,8 @@ from unittest.mock import patch as mock_patch
 
 import pytest
 
+BOUNDED_POST = "soup_cli.utils.http_response.post_capped"
+
 
 def _strip_ansi(text: str) -> str:
     """Remove ANSI escape codes from Rich-formatted output."""
@@ -174,7 +176,7 @@ class TestOllamaProvider:
             ]
         }
 
-        with mock_patch("httpx.post", return_value=mock_response) as mock_post:
+        with mock_patch(BOUNDED_POST, return_value=mock_response) as mock_post:
             result = generate_ollama(
                 prompt="test", count=1, fmt="alpaca",
                 model_name="llama3.1",
@@ -197,7 +199,7 @@ class TestOllamaProvider:
         mock_response.status_code = 404
         mock_response.text = "model not found"
 
-        with mock_patch("httpx.post", return_value=mock_response):
+        with mock_patch(BOUNDED_POST, return_value=mock_response):
             with pytest.raises(ValueError, match="Ollama returned 404"):
                 generate_ollama(
                     prompt="test", count=1, fmt="alpaca",
@@ -270,7 +272,7 @@ class TestAnthropicProvider:
         }
 
         with mock_patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}):
-            with mock_patch("httpx.post", return_value=mock_response) as mock_post:
+            with mock_patch(BOUNDED_POST, return_value=mock_response) as mock_post:
                 result = generate_anthropic(
                     prompt="test", count=1, fmt="alpaca",
                     model_name="claude-3-haiku-20240307",
@@ -311,7 +313,7 @@ class TestAnthropicProvider:
         mock_response.text = "Unauthorized"
 
         with mock_patch.dict(os.environ, {"ANTHROPIC_API_KEY": "bad-key"}):
-            with mock_patch("httpx.post", return_value=mock_response):
+            with mock_patch(BOUNDED_POST, return_value=mock_response):
                 with pytest.raises(ValueError, match="401"):
                     generate_anthropic(
                         prompt="test", count=1, fmt="alpaca",
@@ -344,7 +346,7 @@ class TestAnthropicProvider:
         }
 
         with mock_patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}):
-            with mock_patch("httpx.post", return_value=mock_response):
+            with mock_patch(BOUNDED_POST, return_value=mock_response):
                 result = generate_anthropic(
                     prompt="test", count=2, fmt="alpaca",
                     model_name="claude-3-haiku-20240307",
@@ -373,7 +375,7 @@ class TestVLLMProvider:
             ]
         }
 
-        with mock_patch("httpx.post", return_value=mock_response) as mock_post:
+        with mock_patch(BOUNDED_POST, return_value=mock_response) as mock_post:
             result = generate_vllm(
                 prompt="test", count=1, fmt="alpaca",
                 model_name="meta-llama/Llama-3.1-8B-Instruct",
@@ -398,7 +400,7 @@ class TestVLLMProvider:
             "choices": [{"message": {"content": "[]"}}]
         }
 
-        with mock_patch("httpx.post", return_value=mock_response) as mock_post:
+        with mock_patch(BOUNDED_POST, return_value=mock_response) as mock_post:
             generate_vllm(
                 prompt="test", count=1, fmt="alpaca",
                 model_name="m", base_url="http://localhost:8000",
@@ -416,7 +418,7 @@ class TestVLLMProvider:
         mock_response.status_code = 500
         mock_response.text = "Internal Server Error"
 
-        with mock_patch("httpx.post", return_value=mock_response):
+        with mock_patch(BOUNDED_POST, return_value=mock_response):
             with pytest.raises(ValueError, match="vLLM server returned 500"):
                 generate_vllm(
                     prompt="test", count=1, fmt="alpaca",
@@ -504,7 +506,7 @@ class TestProviderMalformedResponse:
         mock_response.json.return_value = {"unexpected": "format"}
 
         with mock_patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}):
-            with mock_patch("httpx.post", return_value=mock_response):
+            with mock_patch(BOUNDED_POST, return_value=mock_response):
                 with pytest.raises(ValueError, match="Unexpected"):
                     generate_anthropic(
                         prompt="test", count=1, fmt="alpaca",
@@ -521,7 +523,7 @@ class TestProviderMalformedResponse:
         mock_response.status_code = 200
         mock_response.json.return_value = {"unexpected": "format"}
 
-        with mock_patch("httpx.post", return_value=mock_response):
+        with mock_patch(BOUNDED_POST, return_value=mock_response):
             with pytest.raises(ValueError, match="Unexpected"):
                 generate_vllm(
                     prompt="test", count=1, fmt="alpaca",
@@ -539,7 +541,7 @@ class TestProviderMalformedResponse:
         mock_response.status_code = 200
         mock_response.json.return_value = {"unexpected": "format"}
 
-        with mock_patch("httpx.post", return_value=mock_response):
+        with mock_patch(BOUNDED_POST, return_value=mock_response):
             with pytest.raises(ValueError, match="Unexpected"):
                 generate_ollama(
                     prompt="test", count=1, fmt="alpaca",

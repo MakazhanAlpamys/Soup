@@ -29,6 +29,7 @@ training:
   batch_size: 4  # must stay a multiple of num_generations
   gradient_accumulation_steps: 2
   quantization: none
+  gradient_checkpointing: true
   scheduler: cosine
   warmup_ratio: 0.1
   weight_decay: 0.01

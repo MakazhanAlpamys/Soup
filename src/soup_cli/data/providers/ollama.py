@@ -83,7 +83,7 @@ def generate_ollama(
         List of generated example dicts.
     """
     try:
-        import httpx
+        import httpx  # noqa: F401 -- retain the optional-dependency diagnostic
     except ImportError:
         raise ImportError(
             "httpx is required for Ollama generation. Install: pip install httpx"
@@ -93,7 +93,9 @@ def generate_ollama(
 
     api_url = f"{base_url}/v1/chat/completions"
 
-    response = httpx.post(
+    from soup_cli.utils.http_response import GENERATION_RESPONSE_LIMIT_BYTES, post_capped
+
+    response = post_capped(
         api_url,
         headers={"Content-Type": "application/json"},
         json={
@@ -105,11 +107,12 @@ def generate_ollama(
             "temperature": temperature,
             "max_tokens": 4096,
         },
+        max_bytes=GENERATION_RESPONSE_LIMIT_BYTES,
+        endpoint_label="ollama --api-base / --base-url",
         timeout=300.0,
     )
 
     if response.status_code != 200:
-        logger.debug("Ollama error response: %s", response.text)
         raise ValueError(
             f"Ollama returned {response.status_code}. "
             "Check that Ollama is running and the model is pulled."

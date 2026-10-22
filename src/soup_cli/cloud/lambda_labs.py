@@ -45,6 +45,57 @@ _REMOTE_OUTPUT_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 _MAX_LAMBDA_CONFIG_BYTES = 700_000
 _LAMBDA_SUBMIT_OVERRIDE: Optional[Callable[["CloudPlan"], int]] = None
 
+# The local controller starts in an isolated interpreter (``-I``) with only the
+# environment it needs, listed here by name:
+#   * the Lambda variables the rendered controller reads in ``main()``;
+#   * the OS variables ``ssh`` / ``scp`` and ``os.path.expanduser`` use to find
+#     the executables, the home directory (keys, known_hosts) and temp files;
+#   * ``SSH_AUTH_SOCK``, so a passphrase-protected key still works under
+#     ``BatchMode=yes``;
+#   * the proxy and certificate variables ``urllib`` / ``ssl`` read for the
+#     Lambda API call;
+#   * the locale variables that pick the output encoding;
+#   * the dynamic-loader search paths, so an interpreter built against a shared
+#     ``libpython`` still finds its library.
+# ``-I`` also ignores every ``PYTHON*`` variable, so none is forwarded.
+_CONTROLLER_ENV_NAMES: frozenset[str] = frozenset({
+    "LAMBDA_API_KEY",
+    "LAMBDA_SSH_KEY_NAME",
+    "LAMBDA_SSH_PRIVATE_KEY",
+    "LAMBDA_REGION",
+    "PATH",
+    "HOME",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "USER",
+    "USERNAME",
+    "LOGNAME",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "SSH_AUTH_SOCK",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LD_LIBRARY_PATH",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_FALLBACK_LIBRARY_PATH",
+})
+
 
 def validate_cloud(name: object) -> str:
     """Validate and normalize the Lambda provider name."""
@@ -114,7 +165,7 @@ def render_lambda_stub(
         f"python3 -m pip install {pip_spec!r}\n"
         "cd /home/ubuntu/soup\n"
         f"printf '%s' {cfg_b64!r} | base64 -d > soup.yaml\n"
-        "soup train --config soup.yaml --yes\n"
+        "soup train --config soup.yaml --yes 2>&1 | tee /home/ubuntu/soup/train.log\n"
     )
 
     lines = [
@@ -129,6 +180,12 @@ def render_lambda_stub(
         "import time",
         "import urllib.error",
         "import urllib.request",
+        "",
+        "# Started with -I, which ignores PYTHONIOENCODING and PYTHONUTF8: replace what the",
+        "# output encoding cannot show, so a log line is printed rather than raising.",
+        "for _stream in (sys.stdout, sys.stderr):",
+        "    if hasattr(_stream, 'reconfigure'):",
+        "        _stream.reconfigure(errors='replace')",
         "",
         f"_INSTANCE_TYPE = {lambda_gpu!r}",
         f"_USER_DATA = {user_data!r}",
@@ -192,34 +249,141 @@ def render_lambda_stub(
         "            return",
         "        time.sleep(5)",
         "    raise RuntimeError('Lambda did not confirm termination within 5 minutes')",
+        "_SSH_OUTAGE_WINDOW = 900",
+        "_SCP_RETRY_WINDOW = 900",
+        "_LOG_TAIL_LINES = 50",
+        "_LOG_TAIL_BYTES = 50_000",
+        "_LOG_FETCH_TIMEOUT = 15",
+        "",
+        "_CONTROL_STRIP_TABLE = {i: None for i in range(0x20) if i not in (0x09, 0x0A, 0x0D)}",
+        "_CONTROL_STRIP_TABLE[0x7F] = None",
+        "_CONTROL_STRIP_TABLE.update(dict.fromkeys(range(0x80, 0xA0)))",
+        "",
+        "def _strip_control(text):",
+        "    return str(text).translate(_CONTROL_STRIP_TABLE)",
+        "",
+        "def _fetch_log_tail(ip, private_key):",
+        "    common = [",
+        "        '-i', private_key, '-o', 'BatchMode=yes',",
+        "        '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ConnectTimeout=15',",
+        "        '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=6',",
+        "    ]",
+        "    cmd = f'tail -n {_LOG_TAIL_LINES} /home/ubuntu/soup/train.log'",
+        "    try:",
+        "        res = subprocess.run(",
+        "            ['ssh', *common, f'ubuntu@{ip}', cmd],",
+        "            check=False, capture_output=True, encoding='utf-8', errors='replace',",
+        "            timeout=_LOG_FETCH_TIMEOUT,",
+        "        )",
+        "        if res.returncode != 0:",
+        "            err_lines = res.stderr.strip().splitlines()",
+        "            detail = err_lines[0] if err_lines else f'ssh exited {res.returncode}'",
+        "            clean_detail = _strip_control(detail)[:200]",
+        "            print(f'Could not fetch remote log tail: {clean_detail}')",
+        "            return",
+        "        output = res.stdout",
+        "        if not output:",
+        "            return",
+        "        encoded = output.encode('utf-8')",
+        "        if len(encoded) > _LOG_TAIL_BYTES:",
+        "            output = encoded[-_LOG_TAIL_BYTES:].decode('utf-8', errors='ignore')",
+        "        lines = output.splitlines()[-_LOG_TAIL_LINES:]",
+        "        clean_lines = [_strip_control(line) for line in lines]",
+        "        clean_tail = '\\n'.join(clean_lines).strip()",
+        "        if clean_tail:",
+        "            print(f'Remote log tail (last {_LOG_TAIL_LINES} lines):\\n{clean_tail}')",
+        "    except Exception as exc:",
+        "        clean_exc = _strip_control(str(exc))[:200]",
+        "        print(f'Could not fetch remote log tail: {clean_exc}')",
         "",
         "def _train_and_copy(ip, private_key):",
         "    common = [",
         "        '-i', private_key, '-o', 'BatchMode=yes',",
         "        # Trust on first use (TOFU) is acceptable for ephemeral instances created here",
         "        '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ConnectTimeout=15',",
+        "        '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=6',",
         "    ]",
-        "    wait = subprocess.run(",
-        "        ['ssh', *common, f'ubuntu@{ip}',",
-        "         'cloud-init status --wait >/dev/null 2>&1; cat /home/ubuntu/soup.exit'],",
-        "        check=False, capture_output=True, text=True, timeout=90000,",
+        "    poll_cmd = (",
+        '        \'case "$(cloud-init status 2>/dev/null)" in \'',
+        '        \'*running*|*"not started"*|*"not run"*) echo RUNNING ;; \'',
+        '        \'*) if [ -s /home/ubuntu/soup.exit ]; then cat /home/ubuntu/soup.exit; \'',
+        '        \'else echo MISSING; fi ;; \'',
+        '        \'esac\'',
         "    )",
-        "    if wait.returncode != 0:",
-        "        raise RuntimeError(f'remote training status failed: {wait.stderr.strip()}')",
-        "    try:",
-        "        training_rc = int(wait.stdout.strip().splitlines()[-1])",
-        "    except (IndexError, ValueError) as exc:",
-        "        raise RuntimeError('remote training did not publish an exit status') from exc",
-        "    if training_rc != 0:",
-        "        raise RuntimeError(f'remote soup train exited {training_rc}')",
+        "    overall_deadline = time.monotonic() + 90000",
+        "    outage_start = None",
+        "    backoff = 1",
+        "    while True:",
+        "        try:",
+        "            wait = subprocess.run(",
+        "                ['ssh', *common, f'ubuntu@{ip}', poll_cmd],",
+        "                check=False, capture_output=True, text=True, timeout=30,",
+        "            )",
+        "        except subprocess.TimeoutExpired:",
+        "            now = time.monotonic()",
+        "            if outage_start is None:",
+        "                outage_start = now",
+        "            if now - outage_start >= _SSH_OUTAGE_WINDOW:",
+        "                raise RuntimeError(",
+        "                    'lost contact with the instance for 15 minutes: timed out'",
+        "                )",
+        "            time.sleep(min(backoff, 60))",
+        "            backoff = min(backoff * 2, 60)",
+        "            continue",
+        "        if wait.returncode == 255:",
+        "            now = time.monotonic()",
+        "            if outage_start is None:",
+        "                outage_start = now",
+        "            detail = wait.stderr.strip()",
+        "            if now - outage_start >= _SSH_OUTAGE_WINDOW:",
+        "                msg = f': {detail}' if detail else ''",
+        "                raise RuntimeError(",
+        "                    f'lost contact with the instance for 15 minutes{msg}'",
+        "                )",
+        "            time.sleep(min(backoff, 60))",
+        "            backoff = min(backoff * 2, 60)",
+        "            continue",
+        "        outage_start = None",
+        "        backoff = 1",
+        "        if wait.returncode != 0:",
+        "            detail = wait.stderr.strip()",
+        "            raise RuntimeError(",
+        "                f'remote check failed with exit {wait.returncode}: {detail}'",
+        "            )",
+        "        status = wait.stdout.strip()",
+        "        if status == 'RUNNING':",
+        "            if time.monotonic() >= overall_deadline:",
+        "                raise RuntimeError('remote training timed out after 25 hours')",
+        "            time.sleep(30)",
+        "            continue",
+        "        try:",
+        "            training_rc = int(status.splitlines()[-1])",
+        "        except (IndexError, ValueError) as exc:",
+        "            raise RuntimeError('remote training did not publish an exit status') from exc",
+        "        if training_rc != 0:",
+        "            _fetch_log_tail(ip, private_key)",
+        "            raise RuntimeError(f'remote soup train exited {training_rc}')",
+        "        break",
         "    destination = pathlib.Path(_LOCAL_OUTPUT).parent",
         "    destination.mkdir(parents=True, exist_ok=True)",
         "    source = f'ubuntu@{ip}:/home/ubuntu/soup/{_REMOTE_OUTPUT}'",
-        "    copied = subprocess.run(",
-        "        ['scp', *common, '-r', source, str(destination)], check=False,",
-        "    )",
-        "    if copied.returncode != 0:",
-        "        raise RuntimeError(f'checkpoint copy failed with exit {copied.returncode}')",
+        "    scp_failure_start = None",
+        "    scp_backoff = 1",
+        "    while True:",
+        "        copied = subprocess.run(",
+        "            ['scp', *common, '-r', source, str(destination)], check=False,",
+        "        )",
+        "        if copied.returncode == 0:",
+        "            break",
+        "        now = time.monotonic()",
+        "        if scp_failure_start is None:",
+        "            scp_failure_start = now",
+        "        if now - scp_failure_start >= _SCP_RETRY_WINDOW:",
+        "            raise RuntimeError(",
+        "                f'checkpoint copy failed after 15 minutes: exit {copied.returncode}'",
+        "            )",
+        "        time.sleep(min(scp_backoff, 60))",
+        "        scp_backoff = min(scp_backoff * 2, 60)",
         "",
         "def main():",
         "    api_key = os.environ.get('LAMBDA_API_KEY')",
@@ -310,7 +474,7 @@ def plan_lambda_run(
         output_dir=output_dir,
         stub_path=stub_path,
         stub_text=stub_text,
-        run_command=f"python {stub_path}",
+        run_command=f"python -I {stub_path}",
     )
 
 
@@ -336,6 +500,23 @@ def _notify_waiting_for_controller() -> None:
         sys.stderr.flush()
     except BaseException:
         pass
+
+
+def _controller_environment(
+    environ: Mapping, *, case_insensitive: Optional[bool] = None
+) -> dict[str, str]:
+    """Return the variables of ``environ`` the local controller is started with.
+
+    Only the names in ``_CONTROLLER_ENV_NAMES`` are kept. Windows variable names
+    are case-insensitive (``SystemRoot`` is ``SYSTEMROOT``), so they are matched
+    folded to upper case there and exactly everywhere else.
+    """
+    if case_insensitive is None:
+        case_insensitive = os.name == "nt"
+    if case_insensitive:
+        wanted = {name.upper() for name in _CONTROLLER_ENV_NAMES}
+        return {key: value for key, value in environ.items() if key.upper() in wanted}
+    return {key: value for key, value in environ.items() if key in _CONTROLLER_ENV_NAMES}
 
 
 def submit_lambda_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:
@@ -376,9 +557,13 @@ def submit_lambda_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:
     while True:
         try:
             if proc is None:
+                # Isolated interpreter (-I) and only the environment the
+                # controller needs; the generated file imports the standard
+                # library alone, so it does not depend on its own directory
+                # or on any PYTHON* variable.
                 proc = subprocess.Popen(  # noqa: S603 — argv list, no shell
-                    [sys.executable, plan.stub_path],
-                    env=dict(environ),
+                    [sys.executable, "-I", plan.stub_path],
+                    env=_controller_environment(environ),
                 )
             return proc.wait()
         except BaseException as exc:

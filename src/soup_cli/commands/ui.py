@@ -67,6 +67,7 @@ def ui(
     """Launch the Soup Web UI.
 
     A Bearer auth token is auto-generated at startup and printed to the console.
+    The launch URL includes `?token=` so the first browser tab authenticates.
     API endpoints require 'Authorization: Bearer <token>'.
 
     `--public` exposes the server on 0.0.0.0 for phone-on-LAN access. The
@@ -128,9 +129,10 @@ def ui(
     app = create_app(host=host, port=port)
 
     url = f"http://{host}:{port}"
+    login_url = f"{url}/?token={token}"
 
     panel_body = (
-        f"URL:    [bold]{url}[/]\n"
+        f"URL:    [bold]{login_url}[/]\n"
         f"Token:  [bold]{token}[/]\n\n"
         f"API endpoints require:\n"
         f"  [dim]Authorization: Bearer {token}[/]\n\n"
@@ -203,7 +205,7 @@ def ui(
             import time
 
             time.sleep(1)
-            webbrowser.open(url)
+            webbrowser.open(login_url)
 
         threading.Thread(target=_open, daemon=True).start()
 

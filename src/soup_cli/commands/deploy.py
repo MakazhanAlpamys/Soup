@@ -727,15 +727,22 @@ def _auto_detect_template() -> Optional[str]:
     try:
         import yaml
 
-        with open(config_path, encoding="utf-8") as fh:
-            config = yaml.safe_load(fh)
+        from soup_cli.utils.yaml_limits import (
+            MAX_CONFIG_BYTES,
+            YamlLimitError,
+            load_yaml_file_limited,
+        )
+
+        config = load_yaml_file_limited(
+            config_path, "soup.yaml", max_bytes=MAX_CONFIG_BYTES
+        )
         if not isinstance(config, dict):
             return None
         data_section = config.get("data", {})
         if isinstance(data_section, dict):
             fmt = data_section.get("format")
             return infer_chat_template(fmt)
-    except (yaml.YAMLError, OSError, KeyError, ImportError):
+    except (yaml.YAMLError, YamlLimitError, OSError, KeyError, ImportError):
         return None
     return None
 
@@ -761,10 +768,11 @@ def _run_deploy_autopilot_measure(
         run_measure,
     )
     from soup_cli.utils.paths import is_under_cwd
+    from soup_cli.utils.terminal import for_terminal
 
     if not is_under_cwd(tasks_file):
         console.print(
-            f"[red]--tasks {escape(tasks_file)!r} must stay under cwd[/]"
+            f"[red]--tasks {for_terminal(repr(tasks_file))} must stay under cwd[/]"
         )
         raise typer.Exit(2)
     if not Path(tasks_file).is_file():

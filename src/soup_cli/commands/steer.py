@@ -22,6 +22,8 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
+from soup_cli.utils.terminal import for_terminal
+
 console = Console()
 
 app = typer.Typer(
@@ -95,7 +97,10 @@ def train_steer(
     ),
     registry_id: Optional[str] = typer.Option(
         None, "--registry-id",
-        help="Optional Registry entry id to attach the trained vector to.",
+        help=(
+            "Registry entry id to attach the trained vector file to, as a "
+            "steering_vector artifact. Exits 1 when the attach fails."
+        ),
     ),
 ) -> None:
     """Train a steering vector from contrastive prompt pairs."""
@@ -212,20 +217,31 @@ def train_steer(
     )
 
     if registry_id is not None:
+        _attach_vector(registry_id, artifact.output_dir)
+
+
+def _attach_vector(registry_id: str, output_dir: str) -> None:
+    """Attach the trained vector file to a registry entry as ``steering_vector``.
+
+    The registry stores one hashed file per artifact and refuses a directory,
+    so the row is the vector file; ``resolve_steering_dir`` loads the directory
+    around it. A requested attach is part of the command's success: when it
+    does not happen the command exits 1, with the vector already on disk.
+    """
+    from soup_cli.utils.steering import steering_vector_path
+
+    vector_path = steering_vector_path(output_dir)
+    try:
         from soup_cli.registry.attach import attach_artifact
 
-        try:
-            attach_artifact(
-                registry_id, path=artifact.output_dir, kind="steering_vector"
-            )
-            console.print(
-                f"[green]Attached steering_vector to Registry entry "
-                f"{escape(registry_id)}.[/]"
-            )
-        except (ValueError, FileNotFoundError) as exc:
-            console.print(
-                f"[yellow]Could not attach to Registry:[/] {escape(str(exc))}"
-            )
+        attach_artifact(registry_id, path=vector_path, kind="steering_vector")
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Error:[/] could not attach to registry: {for_terminal(exc)}")
+        raise typer.Exit(1) from exc
+    console.print(
+        f"[green]Attached[/] steering_vector to registry entry "
+        f"[bold]{for_terminal(registry_id)}[/] [dim]({for_terminal(vector_path)})[/]"
+    )
 
 
 @app.command(name="apply")

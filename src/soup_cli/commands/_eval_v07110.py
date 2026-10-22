@@ -143,7 +143,7 @@ def register(app: typer.Typer, console: Console) -> None:
             None, "--shuffle-seed",
             help=(
                 "For RAFT-shaped rows: the data.raft_shuffle_seed used at "
-                "train time, so the golden [doc-N] id matches what the model "
+                "train time, so the golden \\[doc-N] id matches what the model "
                 "saw. Ignored for {predicted, expected_ids} rows."
             ),
         ),

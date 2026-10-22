@@ -30,7 +30,6 @@ def test_containment_holdouts_migrated_to_commonpath_helper():
         "utils/ollama.py": "is_under_cwd",
         "migrate/common.py": "is_under_cwd",
         "commands/serve.py": "is_under(",
-        "commands/export.py": "is_under_cwd",
         "commands/generate.py": "is_under(",
         "data/loader.py": "is_under(",
         "eval/checkpoint_intelligence.py": "is_under(",

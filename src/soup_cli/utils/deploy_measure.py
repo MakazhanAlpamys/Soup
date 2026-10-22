@@ -22,6 +22,8 @@ import tempfile
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Callable, Optional, Sequence
 
+from soup_cli.eval.quant_check import classify_delta
+
 if TYPE_CHECKING:
     from rich.table import Table
 
@@ -298,16 +300,9 @@ def measure_candidate(
         )
     after = _score_tasks(tasks_file, after_gen)
     delta = after - before
-    if delta >= 0:
-        verdict = "OK"
-    else:
-        drop = -delta
-        if drop < DEFAULT_MINOR_THRESHOLD:
-            verdict = "OK"
-        elif drop < DEFAULT_MAJOR_THRESHOLD:
-            verdict = "MINOR"
-        else:
-            verdict = "MAJOR"
+    verdict = classify_delta(
+        delta, minor=DEFAULT_MINOR_THRESHOLD, major=DEFAULT_MAJOR_THRESHOLD
+    )
     return MeasureResult(
         candidate=candidate, before=before, after=after,
         delta=delta, verdict=verdict,

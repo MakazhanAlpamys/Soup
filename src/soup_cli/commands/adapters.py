@@ -98,18 +98,19 @@ def list_adapters(
                 rel_path = adapter_path.relative_to(dir_path)
             except ValueError:
                 rel_path = adapter_path
-            # Escape every adapter-config-sourced value — a crafted
-            # base_model_name_or_path like "[link=evil]click[/]" would
-            # otherwise render as live Rich markup in the terminal.
+            # Every value but ``size`` comes from the adapter directory or
+            # its adapter_config.json, so each goes through for_terminal():
+            # Rich markup such as "[link=...]" is shown literally and
+            # control characters (ESC, C1) are dropped.
             table.add_row(
-                escape(str(rel_path)),
-                escape(str(base)),
-                escape(lora_r),
-                escape(str(peft_type)),
+                for_terminal(rel_path),
+                for_terminal(base),
+                for_terminal(lora_r),
+                for_terminal(peft_type),
                 size,
             )
         except (json.JSONDecodeError, OSError):
-            table.add_row(escape(str(adapter_path)), "[red]error[/]", "-", "-", "-")
+            table.add_row(for_terminal(adapter_path), "[red]error[/]", "-", "-", "-")
 
     console.print(table)
     console.print(f"\n[dim]Found {len(adapters)} adapter(s).[/]")
@@ -147,22 +148,23 @@ def info(
     else:
         modules_str = str(target_modules)
 
-    # Escape every adapter-config-sourced value before embedding into
-    # Rich markup. A crafted base_model_name_or_path like
-    # "[link=http://evil]click[/]" would otherwise render as a live
-    # clickable link in the terminal.
+    # Every value read from adapter_config.json goes through for_terminal()
+    # before it is embedded in Rich markup: a tag such as "[link=...]" is
+    # shown literally and control characters (ESC, C1) are dropped.
     info_text = (
-        f"Base model: [bold]{escape(str(base_model))}[/]\n"
-        f"PEFT type:  [bold]{escape(str(peft_type))}[/]\n"
-        f"Task:       [bold]{escape(str(task_type))}[/]\n"
-        f"LoRA rank:  [bold]{escape(str(lora_r))}[/], "
-        f"alpha: [bold]{escape(str(lora_alpha))}[/], "
-        f"dropout: [bold]{escape(str(lora_dropout))}[/]\n"
-        f"Targets:    [bold]{escape(modules_str)}[/]\n"
+        f"Base model: [bold]{for_terminal(base_model)}[/]\n"
+        f"PEFT type:  [bold]{for_terminal(peft_type)}[/]\n"
+        f"Task:       [bold]{for_terminal(task_type)}[/]\n"
+        f"LoRA rank:  [bold]{for_terminal(lora_r)}[/], "
+        f"alpha: [bold]{for_terminal(lora_alpha)}[/], "
+        f"dropout: [bold]{for_terminal(lora_dropout)}[/]\n"
+        f"Targets:    [bold]{for_terminal(modules_str)}[/]\n"
         f"Size on disk: [bold]{size}[/]"
     )
 
-    console.print(Panel(info_text, title=f"Adapter Info -- {escape(adapter_path.name)}"))
+    console.print(
+        Panel(info_text, title=f"Adapter Info -- {for_terminal(adapter_path.name)}")
+    )
 
 
 @app.command()
@@ -212,15 +214,15 @@ def compare(
         if isinstance(val2, list):
             val2 = ", ".join(str(item) for item in val2)
 
-        # Escape always at the value layer; decoration wraps after.
-        # Mirrors v0.57.0 `adapters diff` / `info` policy — equal-value
-        # rows must NOT skip escape just because the highlight branch
-        # doesn't fire (otherwise a shared crafted value like
-        # "[link=evil]click[/]" still injects live markup).
-        val1_str = escape(str(val1))
-        val2_str = escape(str(val2))
+        # Sanitise always at the value layer; decoration wraps after.
+        # Mirrors the `adapters diff` / `info` policy: equal-value rows
+        # must NOT skip for_terminal() just because the highlight branch
+        # does not fire, or a value both adapters share would reach the
+        # terminal as live markup.
+        val1_str = for_terminal(val1)
+        val2_str = for_terminal(val2)
 
-        # Highlight differences (already-escaped values wrap in yellow).
+        # Highlight differences (already-sanitised values wrap in yellow).
         if val1_str != val2_str:
             val1_str = f"[yellow]{val1_str}[/]"
             val2_str = f"[yellow]{val2_str}[/]"
@@ -308,13 +310,18 @@ def diff(
         return
 
     # Default Rich table
-    table = Table(title=f"Adapter diff: {escape(report.adapter_a)} vs {escape(report.adapter_b)}")
+    table = Table(
+        title=(
+            f"Adapter diff: {for_terminal(report.adapter_a)} "
+            f"vs {for_terminal(report.adapter_b)}"
+        )
+    )
     table.add_column("Layer", style="bold")
     table.add_column("ΔW Frobenius", justify="right")
     table.add_column("Relative", justify="right")
     for layer in sorted(report.per_layer, key=lambda d: d.frobenius, reverse=True)[:top_k]:
         table.add_row(
-            escape(layer.name),
+            for_terminal(layer.name),
             f"{layer.frobenius:.4f}",
             f"{layer.relative:.2%}",
         )
@@ -426,7 +433,7 @@ def merge(
         if eval_suite is None:
             console.print(
                 "[red]--strategy cmaes requires --eval <suite> "
-                "(path to a YAML/JSONL eval).[/]"
+                "(path to a .jsonl eval suite; the loader accepts .jsonl only).[/]"
             )
             raise typer.Exit(2)
         if canary is not None or strict_verdict:
@@ -756,7 +763,7 @@ def arithmetic(
         name, path = name.strip(), path.strip()
         if not name_re.match(name):
             console.print(
-                f"[red]Invalid adapter name {escape(name)!r} "
+                f"[red]Invalid adapter name {for_terminal(repr(name))} "
                 "(use [A-Za-z0-9_.-]).[/]"
             )
             raise typer.Exit(1)
@@ -1263,7 +1270,7 @@ def sign(
     hash. ``ed25519`` (v0.71.2 #185) adds a real detached signature over that
     root — pass ``--key <priv.pem>``, set ``SOUP_SIGNING_KEY``, or use
     ``--generate-key <out.pem>``. ``sigstore`` uses keyless OIDC plus the
-    Sigstore public-good Fulcio/Rekor service; install ``soup-cli[sigstore]`` and
+    Sigstore public-good Fulcio/Rekor service; install ``soup-cli\\[sigstore]`` and
     run in an ambient-OIDC environment (for example GitHub Actions). Browser
     OIDC is opt-in with --interactive-oidc.
     """
@@ -1793,6 +1800,7 @@ def audit(
     # The schema is the single source of defaults; the audit module stays pure.
     try:
         from soup_cli.config.loader import load_config_from_string
+        from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, read_text_limited
 
         # The loader reports unknown keys through its own module-level Console,
         # which writes to STDOUT -- so `--json` emitted four lines of warning
@@ -1800,12 +1808,20 @@ def audit(
         # A diagnostic about the config is not this command's output; stderr
         # is where it belongs, and it stays just as visible there.
         with contextlib.redirect_stdout(sys.stderr):
-            soup_config = load_config_from_string(config_path.read_text())
+            soup_config = load_config_from_string(
+                read_text_limited(
+                    config_path, f"Config file {config}", max_bytes=MAX_CONFIG_BYTES
+                )
+            )
     except yaml.YAMLError as exc:
-        console.print(f"[red]Could not parse {config}: {exc}[/]")
+        console.print(
+            f"[red]Could not parse {for_terminal(config)}: {for_terminal(str(exc))}[/]"
+        )
         raise typer.Exit(1) from exc
     except (SystemExit, Exception) as exc:  # schema rejection prints its own
-        console.print(f"[red]Could not load {config}: {exc}[/]")
+        console.print(
+            f"[red]Could not load {for_terminal(config)}: {for_terminal(str(exc))}[/]"
+        )
         raise typer.Exit(1) from exc
     cfg = soup_config.model_dump()
 
@@ -1897,3 +1913,40 @@ def audit(
             f"{f', {result.unknown_count} unchecked' if result.unknown_count else ''}"
         )
     raise typer.Exit(result.exit_code)
+
+
+_err_console = Console(stderr=True)
+
+
+@app.command(name="check")
+def check_cmd(
+    adapter: str = typer.Argument(..., help="Path to adapter directory"),
+    json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON document"),
+):
+    """Audit whether an adapter is trained: Frobenius delta, zero B, inner keys (#1721)."""
+    from soup_cli.utils.adapter_check import (
+        check_adapter,
+        render_check_json,
+        render_check_terminal,
+    )
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    try:
+        enforce_under_cwd_and_no_symlink(adapter, "adapter directory")
+    except (ValueError, OSError) as exc:
+        _err_console.print(f"[red]Path refused: {for_terminal(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
+    try:
+        report = check_adapter(adapter)
+        rendered = render_check_json(report) if json_out else render_check_terminal(report)
+    except (FileNotFoundError, OSError, ValueError, TypeError, RuntimeError) as exc:
+        _err_console.print(f"[red]{for_terminal(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
+    print(rendered)
+
+    if report.verdict == "alive":
+        raise typer.Exit(0)
+    else:
+        raise typer.Exit(2)

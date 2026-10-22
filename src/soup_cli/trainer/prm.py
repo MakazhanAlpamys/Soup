@@ -27,8 +27,15 @@ from rich.console import Console
 from soup_cli.config.schema import SoupConfig
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.eval_schedule import training_eval_kwargs
-from soup_cli.utils.gpu import bf16_fp16_flags, resolve_base_load_dtype
+from soup_cli.utils.gpu import (
+    bf16_fp16_flags,
+    estimate_batch_size,
+    get_gpu_info,
+    model_size_from_name,
+    resolve_base_load_dtype,
+)
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 logger = logging.getLogger(__name__)
@@ -55,6 +62,16 @@ def make_prm_trainer_class(base_cls: type) -> type:
 
     class _PRMTrainer(base_cls):  # type: ignore[misc, valid-type]
         """HF Trainer subclass for PRM stepwise reward training."""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            # #1444 — Trainer derives ``num_items_in_batch`` by counting
+            # ``labels[..., 1:] != -100``, which means nothing for PRM's
+            # per-step float rewards, so compute_loss cannot honour the
+            # window total. Declining the loss kwargs makes training_step
+            # apply its ``1 / gradient_accumulation_steps`` normalisation;
+            # left True, logged loss and the clipped gradient came out Gx.
+            self.model_accepts_loss_kwargs = False
 
         def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
             # ``inputs`` carries input_ids, attention_mask, step_positions
@@ -258,7 +275,8 @@ class PRMTrainerWrapper:
         apply_training_seed(cfg.training)
 
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -275,6 +293,7 @@ class PRMTrainerWrapper:
             # GradScaler on pre-Ampere cards, and makes the Metal optimizer abort
             # on MPS (#564).
             torch_dtype=resolve_base_load_dtype(self.device, full_finetune=True),
+            **base_revision_kwargs(cfg.base),
         )
         hidden_size = base_model.config.hidden_size
         # The head trains too, so it is an fp32 master weight like the base.
@@ -323,19 +342,38 @@ class PRMTrainerWrapper:
                 self._dataset["val"], self.tokenizer, cfg.data.max_length
             )
 
-        # v0.53.11 review fix (python-review HIGH) — bool is subclass of int,
-        # so explicit bool reject before isinstance(int).
-        if isinstance(tcfg.batch_size, bool) or not isinstance(tcfg.batch_size, int):
-            bs = 1
-        else:
-            bs = tcfg.batch_size
+        batch_size = tcfg.batch_size
+        if batch_size == "auto":
+            gpu_info = get_gpu_info()
+            batch_size = estimate_batch_size(
+                model_params_b=model_size_from_name(cfg.base),
+                seq_length=cfg.data.max_length,
+                gpu_memory_bytes=gpu_info["memory_total_bytes"],
+                quantization=tcfg.quantization,
+                lora_r=tcfg.lora.r,
+            )
+            console.print(f"[green]Auto batch size (PRM):[/] {batch_size}")
+        bs = int(batch_size)
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
+
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
         use_bf16, use_fp16 = bf16_fp16_flags(self.device, allow_mps_bf16=True)
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
         args = TrainingArguments(
             output_dir=str(output_dir),
             num_train_epochs=tcfg.epochs,
             per_device_train_batch_size=bs,
             gradient_accumulation_steps=tcfg.gradient_accumulation_steps,
             learning_rate=tcfg.lr,
+            warmup_steps=warmup_steps,
+            gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
+            weight_decay=tcfg.weight_decay,
+            max_grad_norm=tcfg.max_grad_norm,
+            optim=tcfg.optimizer,
+            lr_scheduler_type=tcfg.scheduler,
             logging_steps=tcfg.logging_steps,
             save_steps=tcfg.save_steps,
             save_total_limit=3,

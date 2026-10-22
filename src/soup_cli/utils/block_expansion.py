@@ -14,14 +14,14 @@ v0.53.4 #83 lifts the stub with a real implementation:
 3. Append the clones to ``model.model.layers`` (HF causal-LM convention).
 4. Update ``model.config.num_hidden_layers`` so cached counts stay coherent.
 
-The new-block-only freeze policy is owned by the caller via
-``freeze_trainable_layers`` (positive = train top-N, negative = train
-bottom-N); ``apply_llama_pro_freeze`` is provided for the canonical
-"train only the appended blocks" case.
+The freeze is driven by ``freeze_trainable_layers``, which the schema requires
+to equal ``expand_layers`` (#1409): it freezes every parameter of the original
+model so only the appended blocks train (``apply_llama_pro_freeze``). It does
+not select top-N or bottom-N layers.
 
 References:
-- LlamaFactory ``freeze_trainable_layers`` (positive = train top-N, negative
-  = train bottom-N) + ``expand_layers`` (block count).
+- LlamaFactory's LLaMA Pro example, which sets ``freeze_trainable_layers``
+  to the same value as ``num_expand``.
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ def validate_expand_layers(value: object) -> int:
 
 
 def validate_freeze_trainable_layers(value: object) -> int:
-    """Signed int — positive = train top-N, negative = train bottom-N."""
+    """Type and magnitude check; the schema then requires it to equal ``expand_layers`` (#1409)."""
     if value is None:
         return 0
     if isinstance(value, bool) or not isinstance(value, int):
@@ -296,9 +296,9 @@ def apply_block_expansion_if_configured(
             f"(+{added} zero-init blocks)"
         )
     freeze = getattr(tcfg, "freeze_trainable_layers", None)
-    # Project policy ``is None`` over falsy — but a value of 0 means "no
-    # positive freeze direction", so the canonical "train only new blocks"
-    # path runs iff the user opted in with a positive ``freeze_trainable_layers``.
+    # The schema refuses any value other than ``expand_layers`` (#1409), so a
+    # loaded config only gets here with a positive value; the check stays as a
+    # guard for callers that build ``tcfg`` without the schema.
     if freeze is not None and freeze > 0 and added > 0:
         trainable = apply_llama_pro_freeze(model, added)
         if console is not None:
