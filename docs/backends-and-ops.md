@@ -395,8 +395,9 @@ training:
   from another task, or from another base, before any tensor loads.
 - **Refused at load:** `quantization: 8bit` (use `none`, or a pre-quantized
   4-bit base with `quantization: 4bit`), `training.lora.r: 0` (the reference is
-  the untrained LoRA policy), non-text `modality`, DoRA and LoRA+. The other
-  settings MLX DPO does not apply are not applied here either.
+  the untrained LoRA policy), non-text `modality`, DoRA, LoRA+ and
+  `data.chat_template` (as for MLX DPO and ORPO). The other settings MLX DPO
+  does not apply are not applied here either.
 
 #### DoRA on MLX
 
