@@ -316,6 +316,14 @@ forward this setting to their TRL/HF training arguments: `false` disables it
 and `true` enables it, including unquantized runs (`quantization: none`). These
 wrappers use full checkpointing for any enabled tier.
 
+Distillation (`task: distill`), the classifier wrapper (`classifier`,
+`reranker`, `cross_encoder`) and Whisper ASR (`asr`) forward it to their HF
+training arguments the same way, and unlearning (`task: unlearn`), which trains
+in its own loop rather than through a `Trainer`, turns checkpointing on for its
+LoRA policy model when the setting is enabled. Before, these four ignored the
+setting and always trained with checkpointing off. Every enabled tier is full
+checkpointing on them, and the default `false` keeps it off.
+
 
 ## Kernel Auto-Composition
 
