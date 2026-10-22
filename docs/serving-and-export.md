@@ -44,12 +44,23 @@ soup merge --adapter ./output --output ./merged --low-memory
 ```
 
 `--low-memory` reads the base `.safetensors` files and writes the merged files
-one tensor at a time, so peak RAM is about the largest single tensor instead of
-the whole model. The result is bit-identical to the regular merge. It needs the
-default `fp16` save format and a plain LoRA adapter; DoRA, `modules_to_save`,
-rank or alpha patterns, and adapters on embeddings are refused with a message
-to run the regular merge. Measured on a 1.4 GB Llama-shaped model: 1635 MiB of
-working memory for the regular merge against about 190 MiB with `--low-memory`.
+one tensor at a time, so peak RAM is about one shard (the largest `.safetensors`
+file; a single-file model is memory-mapped as a whole, so it saves little). The
+tensor values are the same as the regular merge, but the output keeps the base's
+shard layout instead of a single `model.safetensors`. It needs the default
+`fp16` save format and a plain LoRA adapter; DoRA, `modules_to_save`, rank or
+alpha patterns, adapters on embeddings or `lm_head`, and base weights stored in a
+quantized dtype are refused with a message to run the regular merge. The merge is
+written to a staging directory next to `--output` and moved into place only when
+complete; an existing non-empty `--output` is not overwritten, and base-model
+files that are symlinks pointing outside the model directory (other than a
+Hugging Face cache snapshot) are refused. Only tokenizer and config files
+(`.json`, `.model`, `.txt`, `.tiktoken`, `.jinja`) are copied from the base, plus
+`.py` files when `--trust-remote-code` is given. Adapter values that cannot be
+used safely (a non-positive `r`, a non-finite `lora_alpha`, non-boolean flags,
+mismatched LoRA shapes) are refused before anything is written.
+Measured on a 1.4 GB Llama-shaped model: 1635 MiB of working memory for the
+regular merge against about 190 MiB with `--low-memory`.
 
 ReLoRA training outputs are already standalone dense models: Soup merges the
 final active adapter into the accumulated in-memory base before writing the

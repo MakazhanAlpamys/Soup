@@ -300,17 +300,21 @@ def _merge_low_memory(
                 )
             )
 
+        def save_tokenizer(staging: Path) -> None:
+            console.print("[dim]Saving tokenizer...[/]")
+            AutoTokenizer.from_pretrained(
+                str(adapter_path), trust_remote_code=trc
+            ).save_pretrained(str(staging))
+
         merge_low_memory(
             base_dir,
             adapter_path,
             output_path,
             dtype,
-            progress=lambda message: console.print(f"[dim]{message}[/]"),
+            progress=lambda message: console.print(f"[dim]{for_terminal(message)}[/]"),
+            finalize=save_tokenizer,
+            trust_remote_code=trc,
         )
-        console.print("[dim]Saving tokenizer...[/]")
-        AutoTokenizer.from_pretrained(
-            str(adapter_path), trust_remote_code=trc
-        ).save_pretrained(str(output_path))
     except LowMemoryMergeError as exc:
         console.print(
             f"[red]Low-memory merge not possible: {for_terminal(exc)}[/]\n"
