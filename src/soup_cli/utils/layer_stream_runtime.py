@@ -2442,9 +2442,13 @@ def expandable_segments_status() -> tuple[bool, str]:
     if not torch.cuda.is_available():
         return (False, "no CUDA device")
     if torch.cuda.is_initialized():
-        already = "expandable_segments:True" in os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "")
-        if already:
+        conf = os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "")
+        if "expandable_segments:True" in conf:
             return (True, "")
+        if conf:
+            # ``soup train`` sets the hint before CUDA starts (#2149), with setdefault,
+            # so a value the user exported is what kept it out, not the ordering.
+            return (False, "PYTORCH_CUDA_ALLOC_CONF is set to something else")
         return (
             False,
             "CUDA was already initialised before Soup could set it — the "

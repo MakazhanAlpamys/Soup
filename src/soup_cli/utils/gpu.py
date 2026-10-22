@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import sys
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -219,6 +220,21 @@ def detect_device(backend: Optional[str] = None) -> tuple[str, str]:
         pass
 
     return "cpu", "CPU (no GPU detected)"
+
+
+def configure_cuda_alloc_hint(stream_layers: bool) -> None:
+    """Set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True for a streamed run (#2149).
+
+    The CUDA allocator reads the variable once, when the context is created, and
+    ``detect_device()`` creates it, so ``soup train`` calls this first. By the time
+    ``expandable_segments_status()`` runs, in the streamed setup, it is too late to
+    set it there. Linux only (WSL2 included): Windows ignores the hint and macOS has
+    no CUDA, so their environment is left as it is. A CPU-only Linux box gets it too,
+    harmlessly; checking for a card here would start CUDA, which is the bug. A value
+    the user exported is kept. No torch import: setting a variable does not need it.
+    """
+    if stream_layers and sys.platform.startswith("linux"):
+        os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 
 def configure_mps_async_load(device: Optional[str] = None) -> None:
