@@ -10,8 +10,27 @@ from typing import Any
 
 
 def _tokenizer_description(tokenizer: Any) -> dict[str, Any]:
-    if not getattr(tokenizer, "is_fast", False):
-        raise ValueError("MLX distillation requires a verifiable fast tokenizer pipeline")
+    from transformers import PreTrainedTokenizerFast
+
+    underlying, wrapper = tokenizer, None
+    cls = type(tokenizer)
+    if (cls.__module__, cls.__name__) == ("mlx_lm.tokenizer_utils", "TokenizerWrapper"):
+        # Import MLX only for its real wrapper, preserving portable HF checks.
+        from mlx_lm.tokenizer_utils import TokenizerWrapper
+
+        if type(tokenizer) is not TokenizerWrapper or tokenizer._chat_template is not None:
+            raise ValueError("MLX distillation cannot verify custom tokenizer renderers")
+        underlying = tokenizer._tokenizer
+        # MLX-LM 0.31 uses a fixed keyword; 0.32 stores its remapping.
+        wrapper = {"thinking_keyword": getattr(tokenizer, "_thinking_kwarg", "enable_thinking"),
+                   "thinking_default": tokenizer.has_thinking}
+    if type(underlying) is not PreTrainedTokenizerFast or any(
+        name in vars(obj) for obj in (tokenizer, underlying) for name in (
+            "encode", "__call__", "apply_chat_template", "get_chat_template",
+            "encode_plus", "_encode_plus", "batch_encode_plus", "_batch_encode_plus",
+        )
+    ):
+        raise ValueError("MLX distillation cannot verify custom tokenizer encoding or rendering")
     try:
         pipeline = json.loads(tokenizer.backend_tokenizer.to_str())
         vocab = tokenizer.get_vocab()
@@ -28,6 +47,13 @@ def _tokenizer_description(tokenizer: Any) -> dict[str, Any]:
             )},
             "eos_token_ids": sorted(eos_ids or []),
             "chat_template": tokenizer.chat_template,
+            # These live in Python, outside the serialized Rust pipeline.
+            "encoding_settings": {name: getattr(underlying, name, None) for name in (
+                "split_special_tokens", "add_bos_token", "add_eos_token", "add_prefix_space",
+                "padding_side", "truncation_side", "model_max_length", "model_input_names",
+                "clean_up_tokenization_spaces",
+            )},
+            "wrapper_rendering": wrapper,
         }
         json.dumps(description, allow_nan=False)
     except (AttributeError, TypeError, ValueError) as exc:
@@ -58,7 +84,7 @@ def compatibility_identity(
         raise ValueError("MLX distillation output vocabulary dimensions do not match token IDs")
     canonical = json.dumps(left, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return {
-        "method": "complete-fast-tokenizer-pipeline-and-mapping",
+        "method": "complete-fast-tokenizer-pipeline-mapping-and-effective-settings",
         "sha256": hashlib.sha256(canonical.encode()).hexdigest(),
         "named_tokens": len(left["vocab"]),
         "output_vocabulary_size": student_vocab,

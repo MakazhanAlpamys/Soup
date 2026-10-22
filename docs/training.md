@@ -707,8 +707,12 @@ MLX causal text models. The student trains ordinary linear LoRA; its base and th
 teacher remain frozen. Actual quantized modules are refused even if the recipe
 says `none`. Teacher and student may have different widths/depths, but must have
 identical complete fast-tokenizer pipelines, token-ID mappings, added/special
-tokens, effective templates and output vocabulary dimensions. Unverifiable pairs
-are refused before an update. Budget unified memory for **both** full models.
+tokens, Python encoding settings (including `split_special_tokens`), effective
+templates/wrapper thinking defaults and output vocabulary dimensions. This slice
+supports the standard Hugging Face fast tokenizer and its standard MLX-LM wrapper;
+custom tokenizer implementations, encoding overrides and custom Python chat
+renderers are unverifiable and refused before an update. Budget unified memory
+for **both** full models.
 
 The FP32 objective is `0.5 * CE + 0.5 * T**2 * divergence`, reduced by active
 causal targets. `forward_kl`/`kl` means `KL(teacher || student)`, `reverse_kl`
