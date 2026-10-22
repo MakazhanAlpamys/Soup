@@ -737,9 +737,23 @@ def _installed_extras() -> list[str]:
     return sorted(installed)
 
 
+def version_callback(value: bool) -> None:
+    if value:
+        console.print(f"[bold green]soup[/] v{__version__}")
+        console.print(f"[dim]{GITHUB_URL}[/]")
+        raise typer.Exit(code=0)
+
+
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
+    version: bool = typer.Option(
+        False,
+        "--version",
+        help="Show Soup CLI version.",
+        callback=version_callback,
+        is_eager=True,
+    ),
     verbose: bool = typer.Option(
         False,
         "--verbose",

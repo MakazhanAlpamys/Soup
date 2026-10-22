@@ -357,6 +357,11 @@ def _generate_combinations(
     if strategy == "grid":
         combos = [dict(zip(keys, vals)) for vals in itertools.product(*value_lists)]
     elif strategy == "random":
+        # Draw from each list's distinct values. A list that names a value twice
+        # (`lr=1e-5,2e-5,1e-5`, or `1e-5,0.00001`) has fewer distinct arms than the
+        # product of the list lengths; sampling until that many unique arms turned
+        # up never finished, and the run-them-all branch repeated an arm.
+        value_lists = [list(dict.fromkeys(vals)) for vals in value_lists]
         total_possible = 1
         for vals in value_lists:
             total_possible *= len(vals)

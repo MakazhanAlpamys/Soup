@@ -124,7 +124,7 @@ src/soup_cli/
   eval/               - Eval platform (custom tasks, LLM judge, human eval, leaderboard)
   bench/              - Benchmark instruments behind `soup bench train` (collector, train_report, train_run) (#836)
   migrate/            - Config migration (LLaMA-Factory, Axolotl, Unsloth)
-  recipes/            - Ready-made configs for popular models (169 recipes)
+  recipes/            - Ready-made configs for popular models (170 recipes)
   autopilot/          - Zero-config decision engine (v0.25.0)
   registry/           - Model Registry (hashing, store, diff, attach) (v0.26.0 + v0.33.0)
   cans/               - Shareable .can artifact format + run/publish orchestrator (v0.26.0 + v0.33.0)
@@ -266,7 +266,7 @@ an issue number or a version. Existing test files keep their names.
 | test_multi_adapter.py | Multi-adapter serving: validation, parsing, FastAPI endpoints, CLI |
 | test_data_sample.py | Data sampling: random/diverse/hard strategies, CLI, edge cases |
 | test_adapters.py | Adapter management: list/info/compare, discovery, metadata |
-| test_awq_gptq_export.py | AWQ/GPTQ export: format support, CLI, quantize mocks, calibration, security |
+| test_export_removed_formats.py | AWQ/GPTQ removal verification: rejection at CLI, pyproject extras, codebase clean |
 | test_packing.py | Sample packing: config, YAML, trainer integration, sweep |
 | test_data_split.py | Data split: ratio/absolute/stratified splits, seed, edge cases |
 | test_curriculum.py | Curriculum learning: config, length sort, buckets, sweep |

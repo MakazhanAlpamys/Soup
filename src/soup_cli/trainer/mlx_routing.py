@@ -24,6 +24,10 @@ class _MLXRegistry(dict):
             from soup_cli.trainer.mlx_orpo import MLXORPOTrainerWrapper
 
             return MLXORPOTrainerWrapper
+        if task == "simpo":
+            from soup_cli.trainer.mlx_simpo import MLXSimPOTrainerWrapper
+
+            return MLXSimPOTrainerWrapper
         if task == "grpo":
             from soup_cli.trainer.mlx_grpo import MLXGRPOTrainerWrapper
 
@@ -31,13 +35,13 @@ class _MLXRegistry(dict):
         raise KeyError(task)
 
     def __contains__(self, key: object) -> bool:
-        return key in ("sft", "dpo", "orpo", "grpo")
+        return key in ("sft", "dpo", "orpo", "simpo", "grpo")
 
     def __getitem__(self, key: str):
         return self._resolve(key)
 
     def keys(self):  # noqa: D401
-        return ("sft", "dpo", "orpo", "grpo")
+        return ("sft", "dpo", "orpo", "simpo", "grpo")
 
 
 MLX_TRAINER_REGISTRY: _MLXRegistry = _MLXRegistry()
