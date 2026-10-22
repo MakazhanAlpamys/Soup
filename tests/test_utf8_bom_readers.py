@@ -36,7 +36,9 @@ def _text_rows(suffix: str) -> str:
 
 
 @pytest.mark.parametrize("suffix", [".jsonl", ".txt"])
-def test_tokenizer_keeps_first_record_and_embedded_feff(tmp_path, suffix, bom, newline):
+def test_tokenizer_keeps_first_record_and_embedded_feff(
+    tmp_path: Path, suffix: str, bom: bool, newline: str
+) -> None:
     from soup_cli.commands.tokenizer import _extract_texts
 
     path = tmp_path / ("corpus" + suffix)
@@ -44,19 +46,21 @@ def test_tokenizer_keeps_first_record_and_embedded_feff(tmp_path, suffix, bom, n
     assert _extract_texts(path) == _TEXTS
 
 
-def test_draft_keeps_first_jsonl_record(tmp_path, monkeypatch, bom, newline):
+def test_draft_keeps_first_jsonl_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bom: bool, newline: str
+) -> None:
     from soup_cli.commands.draft import _read_jsonl
 
     monkeypatch.chdir(tmp_path)
     path = tmp_path / "prompts.jsonl"
     _write_input(path, _text_rows(".jsonl"), bom, newline)
-    assert _read_jsonl(str(path), "--prompts", max_rows=10) == [
-        {"text": text} for text in _TEXTS
-    ]
+    assert _read_jsonl(str(path), "--prompts", max_rows=10) == [{"text": text} for text in _TEXTS]
 
 
 @pytest.mark.parametrize("suffix", [".jsonl", ".txt"])
-def test_edit_covariance_corpus_extracts_text(tmp_path, monkeypatch, suffix, bom, newline):
+def test_edit_covariance_corpus_extracts_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, suffix: str, bom: bool, newline: str
+) -> None:
     from soup_cli.commands.edit import _load_cov_corpus
 
     monkeypatch.chdir(tmp_path)
@@ -66,7 +70,9 @@ def test_edit_covariance_corpus_extracts_text(tmp_path, monkeypatch, suffix, bom
 
 
 @pytest.mark.parametrize("suffix", [".jsonl", ".txt"])
-def test_shrink_calibration_extracts_text(tmp_path, monkeypatch, suffix, bom, newline):
+def test_shrink_calibration_extracts_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, suffix: str, bom: bool, newline: str
+) -> None:
     from soup_cli.commands.shrink import _load_calib
 
     monkeypatch.chdir(tmp_path)
@@ -75,7 +81,9 @@ def test_shrink_calibration_extracts_text(tmp_path, monkeypatch, suffix, bom, ne
     assert _load_calib(str(path)) == _TEXTS
 
 
-def test_diagnose_evidence_keeps_document(tmp_path, monkeypatch, bom, newline):
+def test_diagnose_evidence_keeps_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bom: bool, newline: str
+) -> None:
     from soup_cli.commands.diagnose import _load_evidence
 
     monkeypatch.chdir(tmp_path)
@@ -85,7 +93,9 @@ def test_diagnose_evidence_keeps_document(tmp_path, monkeypatch, bom, newline):
     assert _load_evidence(str(path)) == payload
 
 
-def test_can_attestation_keeps_document(tmp_path, monkeypatch, bom, newline):
+def test_can_attestation_keeps_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bom: bool, newline: str
+) -> None:
     from soup_cli.commands.can import _load_attestation_files
 
     monkeypatch.chdir(tmp_path)
@@ -100,7 +110,9 @@ def test_can_attestation_keeps_document(tmp_path, monkeypatch, bom, newline):
 
 
 @pytest.mark.parametrize("suffix", [".jsonl", ".txt"])
-def test_bench_passes_complete_prompts_to_inference(tmp_path, monkeypatch, suffix, bom, newline):
+def test_bench_passes_complete_prompts_to_inference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, suffix: str, bom: bool, newline: str
+) -> None:
     import torch
 
     import soup_cli.commands.infer as infer
@@ -125,7 +137,9 @@ def test_bench_passes_complete_prompts_to_inference(tmp_path, monkeypatch, suffi
 
 
 @pytest.mark.parametrize("sandbox", [False, True], ids=["heuristic", "sandbox"])
-def test_agent_scores_every_prediction(tmp_path, monkeypatch, sandbox, bom, newline):
+def test_agent_scores_every_prediction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sandbox: bool, bom: bool, newline: str
+) -> None:
     import soup_cli.trainer.rewards as rewards
     import soup_cli.utils.agent_sandbox as agent_sandbox
     from soup_cli.commands.agent import app
@@ -135,11 +149,13 @@ def test_agent_scores_every_prediction(tmp_path, monkeypatch, sandbox, bom, newl
         "openapi": "3.0.0",
         "info": {"title": "Synthetic", "version": "1"},
         "paths": {
-            "/ping": {"get": {
-                "operationId": "ping",
-                "parameters": [{"name": "name", "in": "query", "schema": {"type": "string"}}],
-                "responses": {"200": {"description": "OK"}},
-            }},
+            "/ping": {
+                "get": {
+                    "operationId": "ping",
+                    "parameters": [{"name": "name", "in": "query", "schema": {"type": "string"}}],
+                    "responses": {"200": {"description": "OK"}},
+                }
+            },
         },
     }
     (tmp_path / "spec.json").write_text(json.dumps(spec), encoding="utf-8")
@@ -162,7 +178,9 @@ def test_agent_scores_every_prediction(tmp_path, monkeypatch, sandbox, bom, newl
         score.assert_not_called()
 
 
-def test_generate_context_and_output_encoding(tmp_path, monkeypatch, bom, newline):
+def test_generate_context_and_output_encoding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bom: bool, newline: str
+) -> None:
     import soup_cli.commands.generate as generate
     from soup_cli.cli import app
 
@@ -172,11 +190,25 @@ def test_generate_context_and_output_encoding(tmp_path, monkeypatch, bom, newlin
     example = {"instruction": _TEXTS[0], "input": "", "output": _TEXTS[1]}
     batch = Mock(return_value=[example])
     monkeypatch.setattr(generate, "_generate_batch", batch)
-    result = CliRunner().invoke(app, [
-        "data", "generate", "--prompt", "synthetic", "--provider", "local",
-        "--context", "context.txt", "--template", "qa", "--count", "1",
-        "--output", "output.jsonl",
-    ])
+    result = CliRunner().invoke(
+        app,
+        [
+            "data",
+            "generate",
+            "--prompt",
+            "synthetic",
+            "--provider",
+            "local",
+            "--context",
+            "context.txt",
+            "--template",
+            "qa",
+            "--count",
+            "1",
+            "--output",
+            "output.jsonl",
+        ],
+    )
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert batch.call_args.kwargs["context_text"] == context
     output = (tmp_path / "output.jsonl").read_bytes()
@@ -186,16 +218,22 @@ def test_generate_context_and_output_encoding(tmp_path, monkeypatch, bom, newlin
 
 @pytest.mark.parametrize("quant_method, expected", [("gptq", "gptq"), ("gp\ufefftq", None)])
 def test_autopilot_reads_local_quantization_metadata(
-    tmp_path, monkeypatch, quant_method, expected, bom, newline,
-):
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    quant_method: str,
+    expected: str | None,
+    bom: bool,
+    newline: str,
+) -> None:
     from soup_cli.autopilot.decisions import detect_prequantized_format_from_path
 
     monkeypatch.chdir(tmp_path)
     model = tmp_path / "neutral-model"
     model.mkdir()
     config = {"quantization_config": {"quant_method": quant_method}}
-    _write_input(model / "config.json", json.dumps(config, ensure_ascii=False, indent=2),
-                 bom, newline)
+    _write_input(
+        model / "config.json", json.dumps(config, ensure_ascii=False, indent=2), bom, newline
+    )
     assert detect_prequantized_format_from_path(str(model)) == expected
 
 
@@ -206,8 +244,13 @@ def test_autopilot_reads_local_quantization_metadata(
 )
 @pytest.mark.parametrize("integrity", ["valid", "tampered", "wrong-key"])
 def test_attest_bom_preserves_signature_and_trust_checks(
-    tmp_path, monkeypatch, statement_bom, sidecar_bom, integrity, newline,
-):
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    statement_bom: bool,
+    sidecar_bom: bool,
+    integrity: str,
+    newline: str,
+) -> None:
     from soup_cli.commands.attest import app
     from soup_cli.utils.signing import (
         generate_ed25519_private_pem,
@@ -218,11 +261,26 @@ def test_attest_bom_preserves_signature_and_trust_checks(
     monkeypatch.chdir(tmp_path)
     private_pem = generate_ed25519_private_pem()
     (tmp_path / "signing.pem").write_text(private_pem, encoding="utf-8")
-    emitted = CliRunner().invoke(app, [
-        "emit", "--stage", "train", "--subject", "synthetic", "--sha", "a" * 64,
-        "--sign", "ed25519", "--key", "signing.pem", "--invocation", _TEXTS[0],
-        "--output", "statement.json",
-    ])
+    emitted = CliRunner().invoke(
+        app,
+        [
+            "emit",
+            "--stage",
+            "train",
+            "--subject",
+            "synthetic",
+            "--sha",
+            "a" * 64,
+            "--sign",
+            "ed25519",
+            "--key",
+            "signing.pem",
+            "--invocation",
+            _TEXTS[0],
+            "--output",
+            "statement.json",
+        ],
+    )
     assert emitted.exit_code == 0, (emitted.output, repr(emitted.exception))
     statement = tmp_path / "statement.json"
     sidecar = tmp_path / "statement.json.sig"
@@ -238,13 +296,22 @@ def test_attest_bom_preserves_signature_and_trust_checks(
     (tmp_path / "trusted.pub").write_text(public_pem, encoding="utf-8")
     # Change formatting and line endings as well as the file's BOM. Verification
     # must still use emit's canonical JSON, retaining the embedded U+FEFF.
-    _write_input(statement, json.dumps(document, ensure_ascii=False, indent=1),
-                 statement_bom, newline)
+    _write_input(
+        statement, json.dumps(document, ensure_ascii=False, indent=1), statement_bom, newline
+    )
     _write_input(sidecar, json.dumps(signature, indent=1), sidecar_bom, newline)
 
-    result = CliRunner().invoke(app, [
-        "verify", statement.name, "--signature", sidecar.name, "--public-key", "trusted.pub",
-    ])
+    result = CliRunner().invoke(
+        app,
+        [
+            "verify",
+            statement.name,
+            "--signature",
+            sidecar.name,
+            "--public-key",
+            "trusted.pub",
+        ],
+    )
     plain = " ".join(strip_ansi(result.output).split())
     if integrity == "valid":
         assert result.exit_code == 0, (plain, repr(result.exception))
@@ -256,7 +323,9 @@ def test_attest_bom_preserves_signature_and_trust_checks(
 
 
 @pytest.mark.parametrize("reader", ["draft", "edit", "shrink", "diagnose", "can"])
-def test_bom_readers_still_enforce_raw_file_size(tmp_path, monkeypatch, capsys, reader):
+def test_bom_readers_still_enforce_raw_file_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], reader: str
+) -> None:
     import importlib
 
     import typer
@@ -268,8 +337,10 @@ def test_bom_readers_still_enforce_raw_file_size(tmp_path, monkeypatch, capsys, 
     _write_input(path, text, True, "\n")
     limit = len(path.read_bytes()) - 1  # Decoded text fits; raw bytes including the BOM do not.
     caps = {
-        "draft": "_MAX_INPUT_BYTES", "edit": "_MAX_COV_CORPUS_BYTES",
-        "shrink": "_MAX_INPUT_BYTES", "diagnose": "_MAX_EVIDENCE_BYTES",
+        "draft": "_MAX_INPUT_BYTES",
+        "edit": "_MAX_COV_CORPUS_BYTES",
+        "shrink": "_MAX_INPUT_BYTES",
+        "diagnose": "_MAX_EVIDENCE_BYTES",
     }
     if reader == "can":
         from soup_cli.cans import schema
