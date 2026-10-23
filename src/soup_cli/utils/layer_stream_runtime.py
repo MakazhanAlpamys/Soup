@@ -3146,35 +3146,30 @@ def _large_cpu_requests_on_meta(threshold: int) -> Iterator[None]:
     and a fused-expert MoE builds its parameter with ``torch.empty(num_experts,
     2 * intermediate, hidden)`` first: 22.5 GB of commit per layer for Kimi K2, never
     touched, but charged (#2154). Redirecting the request itself is what avoids it.
-    The factories are put back however the build ends.
 
-    The redirect is process-wide while it is active: it assumes that no other thread
-    makes a CPU request of ``threshold`` bytes or more during the build, which would
-    get a meta tensor.
+    A ``TorchFunctionMode``, not a patch of the ``torch`` module: torch caches the
+    factories that ``with torch.device(...)`` applies to the first time a device context
+    is used, and a patched module seen then (``replace_with_bnb_linear`` opens one under
+    ``nf4``) would stay in that cache for the rest of the process. The mode also applies
+    to this thread only, and it ends with the build however the build ends.
     """
     import torch
+    from torch.overrides import TorchFunctionMode
 
-    originals = {name: getattr(torch, name) for name in _SKELETON_FACTORIES}
+    class _Redirect(TorchFunctionMode):
+        def __torch_function__(self, func, types, args=(), kwargs=None):
+            kwargs = kwargs or {}
+            if getattr(func, "__name__", None) in _SKELETON_FACTORIES and "out" not in kwargs:
+                device = kwargs.get("device")
+                target = torch.device(device if device is not None else torch.get_default_device())
+                if target.type == "cpu":
+                    probe = func(*args, **{**kwargs, "device": "meta"})
+                    if probe.numel() * probe.element_size() >= threshold:
+                        return probe
+            return func(*args, **kwargs)
 
-    def redirecting(original):
-        def factory(*args, **kwargs):
-            device = kwargs.get("device")
-            target = torch.device(device if device is not None else torch.get_default_device())
-            if target.type == "cpu" and "out" not in kwargs:
-                probe = original(*args, **{**kwargs, "device": "meta"})
-                if probe.numel() * probe.element_size() >= threshold:
-                    return probe
-            return original(*args, **kwargs)
-
-        return factory
-
-    for name, original in originals.items():
-        setattr(torch, name, redirecting(original))
-    try:
+    with _Redirect():
         yield
-    finally:
-        for name, original in originals.items():
-            setattr(torch, name, original)
 
 
 def _skeleton_from_config(

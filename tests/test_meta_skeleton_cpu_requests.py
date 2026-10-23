@@ -49,6 +49,10 @@ def twin(tmp_path_factory):
 @pytest.fixture()
 def cpu_requests(monkeypatch):
     """Every factory call while the fixture is active: ``(name, shape, device, bytes)``."""
+    # torch caches the factories ``torch.device(...)`` applies to on first use; fill that
+    # cache with the real ones before wrapping them, or a meta context would miss them.
+    with torch.device("meta"):
+        torch.empty(1)
     seen: list = []
 
     def recording(name, original):
@@ -62,6 +66,16 @@ def cpu_requests(monkeypatch):
     for name in _FACTORIES:
         monkeypatch.setattr(torch, name, recording(name, getattr(torch, name)))
     return seen
+
+
+def _runtime_warnings(caplog):
+    """WARNING records from the streaming runtime only: transformers logs a one-time
+    deprecation warning the first time a process builds a model."""
+    return [
+        r
+        for r in caplog.records
+        if r.name == "soup_cli.utils.layer_stream_runtime" and r.levelname == "WARNING"
+    ]
 
 
 def _large_cpu(seen):
@@ -160,7 +174,7 @@ def test_a_large_buffer_is_built_the_old_way_and_named(twin, monkeypatch, caplog
     table = dict(model.named_buffers())["model.rotary_emb.big_table"]
     assert not table.is_meta and bool((table == 1).all())
     assert all(p.is_meta for p in model.parameters())
-    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    warnings = _runtime_warnings(caplog)
     assert len(warnings) == 1 and "model.rotary_emb.big_table" in warnings[0].getMessage()
     # Built again without the redirect: the fused request is back on the CPU.
     assert ("empty", (EXPERTS, 2 * MOE_INTERMEDIATE, HIDDEN)) in {
@@ -174,23 +188,42 @@ def test_no_warning_when_every_buffer_is_small(twin, caplog):
     with caplog.at_level("WARNING", logger="soup_cli.utils.layer_stream_runtime"):
         build_meta_skeleton(twin, dtype="bfloat16", quant="none")
 
-    assert [r for r in caplog.records if r.levelname == "WARNING"] == []
+    assert _runtime_warnings(caplog) == []
 
 
-def test_the_factories_are_put_back_even_when_the_build_raises(twin, monkeypatch):
+def test_the_redirect_ends_with_the_build_even_when_it_raises(twin, monkeypatch):
     from soup_cli.utils import layer_stream_runtime as runtime
 
     before = {name: getattr(torch, name) for name in _FACTORIES}
 
     def failing_build(*args, **kwargs):
-        assert torch.empty is not before["empty"]  # the redirect is active here
+        assert torch.empty(LARGE, dtype=torch.float32).is_meta  # the redirect is active here
         raise RuntimeError("from_config failed")
 
     monkeypatch.setattr(runtime, "_skeleton_from_config", failing_build)
     with pytest.raises(RuntimeError, match="from_config failed"):
         runtime.build_meta_skeleton(twin, dtype="bfloat16", quant="none")
 
-    assert {name: getattr(torch, name) for name in _FACTORIES} == before
+    assert torch.empty(LARGE, dtype=torch.float32).device.type == "cpu"
+    assert {name: getattr(torch, name) for name in _FACTORIES} == before  # never patched
+
+
+def test_the_redirect_applies_to_the_building_thread_only():
+    import threading
+
+    from soup_cli.utils.layer_stream_runtime import _large_cpu_requests_on_meta
+
+    other: dict = {}
+    with _large_cpu_requests_on_meta(LARGE):
+        here = torch.empty(LARGE, dtype=torch.float32)
+        thread = threading.Thread(
+            target=lambda: other.update(t=torch.empty(LARGE, dtype=torch.float32))
+        )
+        thread.start()
+        thread.join()
+
+    assert here.is_meta
+    assert other["t"].device.type == "cpu"
 
 
 def test_a_small_or_non_cpu_request_is_left_as_it_is():
@@ -233,3 +266,38 @@ def test_the_streamed_model_builds_and_steps_on_the_twin(twin, tmp_path):
         assert torch.isfinite(loss)
     finally:
         runtime.close()
+
+
+_FRESH_PROCESS_CHECK = """
+import sys
+
+import torch
+
+from soup_cli.utils.layer_stream_runtime import build_meta_skeleton
+
+build_meta_skeleton(sys.argv[1], dtype="bfloat16", quant=sys.argv[2])
+with torch.device("meta"):
+    made = [torch.empty(2, 2), torch.zeros(2, 2), torch.ones(2, 2), torch.full((2, 2), 1.0)]
+print(" ".join(t.device.type for t in made))
+"""
+
+
+@pytest.mark.parametrize("quant", ["none", "nf4"])
+def test_a_meta_device_context_still_works_after_the_build(twin, tmp_path, quant):
+    """In a fresh process the build may be the first use of a device context, and torch
+    caches the factories that ``torch.device(...)`` applies to on that first use."""
+    import os
+    import subprocess
+    import sys
+
+    if quant == "nf4":
+        pytest.importorskip("bitsandbytes")
+    script = tmp_path / "check.py"
+    script.write_text(_FRESH_PROCESS_CHECK, encoding="utf-8")
+    env = dict(os.environ, CUDA_VISIBLE_DEVICES="-1")
+    done = subprocess.run(
+        [sys.executable, str(script), twin, quant], capture_output=True, text=True, env=env
+    )
+
+    assert done.returncode == 0, done.stderr[-2000:]
+    assert done.stdout.split() == ["meta"] * 4
