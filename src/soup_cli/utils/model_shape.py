@@ -17,10 +17,12 @@ No torch import, and no weight is downloaded.
 
 from __future__ import annotations
 
+import inspect
 import json
 import math
 import os
 import re
+import threading
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -34,6 +36,9 @@ _REPO_ID = re.compile(r"[A-Za-z0-9][\w.-]*(/[\w.-]+)?")
 
 #: Seconds allowed for each optional Hub metadata request.
 HUB_TIMEOUT_S = 5.0
+#: Seconds allowed for the whole safetensors-metadata lookup, which makes one request
+#: per shard; past this the count comes from config.json instead.
+HUB_METADATA_DEADLINE_S = 20.0
 
 # The sizes ``get_model_arch`` used to guess from a parameter count, kept as the
 # fallback when no config.json can be read: params (B) -> (hidden, layers, intermediate).
@@ -116,12 +121,37 @@ def _hub_lookup(repo: str, *, allow_network: bool) -> tuple[Optional[dict], Opti
     if not allow_network or hub_offline():
         return None, None
     try:
-        from huggingface_hub import hf_hub_download
+        from huggingface_hub import get_hf_file_metadata, hf_hub_download, hf_hub_url
 
+        # The size first, from a HEAD request: a file over the cap is never fetched.
+        head = get_hf_file_metadata(hf_hub_url(repo, "config.json"), timeout=HUB_TIMEOUT_S)
+        size = getattr(head, "size", None)
+        if not isinstance(size, int) or size > _MAX_CONFIG_BYTES:
+            return None, None
         path = hf_hub_download(repo, "config.json", etag_timeout=HUB_TIMEOUT_S)
     except Exception:  # noqa: BLE001 - gated, missing or offline: no config, and no echo
         return None, None
     return _read_json_file(path), os.path.dirname(path)
+
+
+def _within_deadline(call: Any, seconds: float) -> Any:
+    """``call()``'s result, or ``None`` if it raises or has not returned in ``seconds``.
+
+    It runs on a daemon thread, so a request that stalls past the deadline is left
+    behind instead of holding up the caller or the interpreter's exit.
+    """
+    result: list[Any] = []
+
+    def run() -> None:
+        try:
+            result.append(call())
+        except Exception:  # noqa: BLE001 - optional metadata; never echo provider errors
+            pass
+
+    worker = threading.Thread(target=run, name="soup-hub-metadata", daemon=True)
+    worker.start()
+    worker.join(seconds)
+    return result[0] if result else None
 
 
 def _hub_param_count(repo: str, *, allow_network: bool) -> Optional[int]:
@@ -140,7 +170,14 @@ def _hub_param_count(repo: str, *, allow_network: bool) -> Optional[int]:
         getter = getattr(api, "get_safetensors_metadata", None)
         if getter is None:
             return None
-        counts = getattr(getter(repo), "parameter_count", None)
+        # Newer hubs take a per-request timeout; the deadline bounds the whole lookup.
+        kwargs = (
+            {"timeout": HUB_TIMEOUT_S}
+            if "timeout" in inspect.signature(getter).parameters
+            else {}
+        )
+        metadata = _within_deadline(lambda: getter(repo, **kwargs), HUB_METADATA_DEADLINE_S)
+        counts = getattr(metadata, "parameter_count", None)
         if not isinstance(counts, dict) or not counts:
             return None
         total = sum(int(v) for v in counts.values())
