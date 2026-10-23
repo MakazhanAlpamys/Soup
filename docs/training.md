@@ -2056,14 +2056,21 @@ Both configs must write to different, non-nested output directories: `soup ra-di
 
 ## Curriculum-Aware Training (BETA)
 
-Layer dynamic re-weighting on top of the static `curriculum` bucketer. Every N steps the trainer aggregates per-sample loss + grad-norm into a per-bucket uncertainty signal, runs it through a softmax (temperature-controlled) with floor (water-filling so no bucket drops below `curriculum_dynamic_floor`), and re-weights the sampler. Empty buckets fall back to the median of populated buckets; degenerate inputs return uniform.
+Layer dynamic uncertainty telemetry on top of the static `curriculum` bucketer (#808).
+Every N steps the trainer aggregates per-sample loss + grad-norm into a per-bucket
+uncertainty signal, runs it through a softmax (temperature-controlled) with floor
+(water-filling so no bucket drops below `curriculum_dynamic_floor`), and logs the
+tracked bucket weights to `curriculum_history.jsonl` for curve inspection. The weights
+are only written to `curriculum_history.jsonl`; they do not change which samples a
+batch contains. Empty buckets fall back to the median of populated buckets;
+degenerate inputs return uniform.
 
 ```yaml
 training:
   curriculum: true                          # static bucketer (v0.23.0)
   curriculum_buckets: 4
   curriculum_metric: perplexity             # length (default) | loss | perplexity
-  curriculum_dynamic: true                  # NEW — dynamic re-weighting
+  curriculum_dynamic: true                  # dynamic uncertainty telemetry (#808)
   curriculum_dynamic_recompute_steps: 50    # refresh every 50 global steps
   curriculum_dynamic_floor: 0.05            # min weight per bucket
   curriculum_dynamic_temperature: 1.0       # softmax temp on uncertainty
