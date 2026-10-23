@@ -1,7 +1,7 @@
 """Independent closure audit for the fixed four-comparison #2050 protocol.
 
-Reads evidence only; never launches a model or changes a freeze. Writes the
-verified result and a concise Markdown record only after all checks succeed.
+Reads original or compact evidence; never launches a model or changes a freeze.
+Writes the verified result only after all checks succeed.
 """
 
 from __future__ import annotations
@@ -9,13 +9,78 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import random
+import re
 import statistics
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from rich.console import Console
+
+
+def canonical_digest(value: Any) -> str:
+    """SHA256 of UTF-8 JSON, sorted keys, compact separators and ASCII escapes."""
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def compact_gate(receipt: dict[str, Any]) -> dict[str, Any]:
+    """Fold all tensor hashes only after validating both complete optimizer updates."""
+    steps = receipt["steps"]
+    assert len(steps) == 2, "two complete updates required"
+    summaries = []
+    for step in steps:
+        assert len(step["gradients"]) == len(step["parameters"]) == 128
+        assert step["gradients"].keys() == step["parameters"].keys()
+        values = [step["logits"], step["loss"]]
+        values += list(step["gradients"].values()) + list(step["parameters"].values())
+        assert all(re.fullmatch(r"[0-9a-f]{64}", value) for value in values)
+        summaries.append(
+            {
+                "logits": step["logits"],
+                "loss": step["loss"],
+                "gradient_count": len(step["gradients"]),
+                "parameter_count": len(step["parameters"]),
+                "names_sha256": canonical_digest(sorted(step["gradients"])),
+                "gradients_sha256": canonical_digest(step["gradients"]),
+                "parameters_sha256": canonical_digest(step["parameters"]),
+            }
+        )
+    counts: Counter = Counter()
+    for key, value in receipt["operators"].items():
+        phase, name, _shapes = json.loads(key)
+        counts[f"{phase}:{name}"] += value
+    return {
+        **{key: value for key, value in receipt.items() if key not in ("steps", "operators")},
+        "tensor_hashes_sha256": canonical_digest(steps),
+        "tensor_hash_count": 516,
+        "step_summaries": summaries,
+        "operator_counts": dict(sorted(counts.items())),
+    }
+
+
+def logical_digest(path: Path) -> str:
+    """Pin retained data independently of a checkout's LF/CRLF conversion."""
+    if path.suffix == ".json":
+        return canonical_digest(json.loads(path.read_text(encoding="utf-8")))
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+def verify_source(tree: Path, frozen: dict[str, str], bindings: dict[str, Any]) -> None:
+    assert frozen.keys() == bindings.keys(), "source roster changed"
+    root = os.path.realpath(tree)
+    for name, expected in frozen.items():
+        path = os.path.realpath(tree / name)
+        assert os.path.commonpath([root, path]) == root, "source outside tree"
+        blob = Path(path).read_bytes().replace(b"\r\n", b"\n")
+        identity = hashlib.sha1(b"blob " + str(len(blob)).encode() + b"\0" + blob).hexdigest()
+        binding = bindings[name]
+        assert identity == binding["git_blob"], f"source Git blob mismatch: {name}"
+        assert binding["frozen_newlines"] in ("lf", "crlf")
+        original = blob.replace(b"\n", b"\r\n") if binding["frozen_newlines"] == "crlf" else blob
+        assert hashlib.sha256(original).hexdigest() == expected, f"frozen source mismatch: {name}"
 
 
 def bootstrap(reductions: list[float]) -> dict[str, Any]:
@@ -38,10 +103,39 @@ def audit(evidence: Path, tree: Path | None = None) -> dict[str, Any]:
 
     assert read("status.json")["phase"] == "completed", "campaign incomplete"
     freeze = read("freeze.json")
+    compact_path = evidence / "process-evidence.json"
+    compact = read("process-evidence.json") if compact_path.exists() else None
+    bindings = read("source-blobs.json") if compact is not None else None
+    if compact is not None:
+        assert compact["schema"] == "issue2050-compact-v1"
+        root = os.path.realpath(evidence)
+        for name, expected in compact["retained_files"].items():
+            path = os.path.realpath(evidence / name)
+            assert os.path.commonpath([root, path]) == root, "evidence outside directory"
+            assert logical_digest(Path(path)) == expected, f"retained evidence changed: {name}"
+
+    def gate(tag: str) -> dict[str, Any]:
+        if compact is None:
+            return compact_gate(read(f"{tag}-audit.json"))
+        receipt = compact["processes"][tag]
+        assert receipt["reference"] == tag.split("-")[0] + "-full"
+        assert receipt["matches_reference"] is True
+        assert receipt["tensor_hash_count"] == 516
+        assert re.fullmatch(r"[0-9a-f]{64}", receipt["tensor_hashes_sha256"])
+        assert len(receipt["step_summaries"]) == 2
+        for step in receipt["step_summaries"]:
+            assert step["gradient_count"] == step["parameter_count"] == 128
+            for key in ("logits", "loss", "names_sha256", "gradients_sha256", "parameters_sha256"):
+                assert re.fullmatch(r"[0-9a-f]{64}", step[key])
+        return receipt
+
     if tree is not None:
-        for name, expected in freeze["files"].items():
-            actual = hashlib.sha256((tree / name).read_bytes()).hexdigest()
-            assert actual == expected, f"frozen file mismatch: {name}"
+        if bindings is not None:
+            verify_source(tree, freeze["files"], bindings["files"])
+        else:
+            for name, expected in freeze["files"].items():
+                actual = hashlib.sha256((tree / name).read_bytes()).hexdigest()
+                assert actual == expected, f"frozen file mismatch: {name}"
     assert freeze["base"] == "e05b6f6db42f9cc804fdece2b6eb812432d6aabd"
     assert freeze["model"]["revision"] == "60b99dcbc7f853b7cd18472a607e8d045b96f03e"
     expected_tags = [
@@ -60,6 +154,8 @@ def audit(evidence: Path, tree: Path | None = None) -> dict[str, Any]:
     ledger = read("ledger.json")
     assert [entry["tag"] for entry in ledger] == expected_tags
     assert all(entry["rc"] == 0 for entry in ledger)
+    if compact is not None:
+        assert set(compact["processes"]) == set(expected_tags[:14])
     result: dict[str, Any] = {
         "verified": False,
         "full_size_gate_processes": 14,
@@ -69,13 +165,7 @@ def audit(evidence: Path, tree: Path | None = None) -> dict[str, Any]:
     }
     versions = None
     for seq in (512, 2048):
-        reference = read(f"s{seq}-full-audit.json")["steps"]
-        assert len(reference) == 2
-        for step in reference:
-            assert len(step["gradients"]) == len(step["parameters"]) == 128
-            assert step["gradients"].keys() == step["parameters"].keys()
-            for category in ("gradients", "parameters"):
-                assert all(len(value) == 64 for value in step[category].values())
+        reference = gate(f"s{seq}-full")
         for mode in (
             "full",
             "full-repeat",
@@ -85,8 +175,10 @@ def audit(evidence: Path, tree: Path | None = None) -> dict[str, Any]:
             "profile-qkv",
             "profile-qkvo",
         ):
-            receipt = read(f"s{seq}-{mode}-audit.json")
-            assert receipt["status"] == "ok" and receipt["steps"] == reference, (seq, mode)
+            receipt = gate(f"s{seq}-{mode}")
+            assert receipt["status"] == "ok"
+            assert receipt["tensor_hashes_sha256"] == reference["tensor_hashes_sha256"], (seq, mode)
+            assert receipt["step_summaries"] == reference["step_summaries"], (seq, mode)
             assert receipt["attention_backend"] == "sdpa_math"
             assert receipt["deterministic_algorithms"] and receipt["cache_checked"]
             assert receipt["gpu_uuid"] == freeze["gpu_uuid"]
@@ -97,10 +189,7 @@ def audit(evidence: Path, tree: Path | None = None) -> dict[str, Any]:
             assert receipt["saved_bytes"] == 32 * width * seq * 2
             assert receipt["saved_tensors"] == tensors
             if mode.startswith("profile-"):
-                counts: Counter = Counter()
-                for key, value in receipt["operators"].items():
-                    phase, name, _shapes = json.loads(key)
-                    counts[f"{phase}:{name}"] += value
+                counts = receipt["operator_counts"]
                 assert counts, "empty operator profile"
                 result["operators"][f"s{seq}-{policy}"] = dict(sorted(counts.items()))
         for policy, width in (("qkv", 6144), ("qkvo", 10240)):
@@ -208,7 +297,13 @@ def audit(evidence: Path, tree: Path | None = None) -> dict[str, Any]:
             )
     result["verified"] = True
     result["timing_arms"] = 40
-    result["freeze_sha256"] = hashlib.sha256((evidence / "freeze.json").read_bytes()).hexdigest()
+    frozen_bytes = (evidence / "freeze.json").read_bytes()
+    if bindings is not None:
+        frozen_bytes = frozen_bytes.replace(b"\r\n", b"\n")
+        if bindings["freeze_newlines"] == "crlf":
+            frozen_bytes = frozen_bytes.replace(b"\n", b"\r\n")
+        assert hashlib.sha256(frozen_bytes).hexdigest() == bindings["freeze_original_sha256"]
+    result["freeze_sha256"] = hashlib.sha256(frozen_bytes).hexdigest()
     return result
 
 

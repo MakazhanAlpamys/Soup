@@ -15,7 +15,10 @@ The predeclared rule passed for QKVO/seq2048. A separate opt-in/predictor follow
 
 Positive reduction means less measured-window wall time. This is a speed measurement, not a model-quality score. Each comparison has five complete fresh-process AB/BA pairs; none were excluded or repeated.
 
+With five pairs, the bootstrap median equals the smallest pair in about 5.8% of resamples, above both lower-tail cutoffs (2.5% and 0.625%). Both intervals therefore span the observed minimum and maximum here; the family correction does not change them. QKVO/seq2048 passes with all five pairs above +3.0% and a median reduction of 3.141%.
+
 QKV/seq512 includes pair 4 with a -34.197% reduction; that pair remains in the result. This campaign did not isolate the cause of the short-sequence timing variation. QKV/seq2048 has a 1.916% median against the fixed 2% threshold.
+The slow QKV/seq512 saved arm stayed at 0.798-0.871 s per step with 89% sampled GPU utilization, versus 0.586-0.590 s and 99% in the fast saved arm. This was a sustained slower state across all 50 steps, rather than a few long steps.
 
 QKVO/seq2048 retained 1.342177280 GB of projection outputs. Across its five pairs, the largest allocated peaks were 4.990 GB versus 3.690 GB for full recompute. The per-pair memory gate passed. This measurement adds no public Soup option.
 
@@ -45,6 +48,7 @@ Every process verified actual unique retained storage and tensor count:
 - Operator tracing and tensor hashing run only in separate untimed processes. Their hashes also matched the unprofiled correctness gates. Timing hooks check cache storage once during warm-up, then remove themselves.
 - The wrapper fixes telemetry to the selected physical UUID. The reused #361 runner's default sampler otherwise reads the first physical GPU.
 - Temperatures, admission records and clocks are in each row. No services, power limits or other GPUs were changed for this campaign.
+- The other three RTX 3090s were inventoried, but their activity throughout the campaign was not checked. Only the selected GPU was sampled during the timing arms. Shared host CPU or RAM-bandwidth contention cannot be ruled out; the seq512 slowdown's cause remains unisolated.
 
 ## All pairs
 
@@ -75,7 +79,7 @@ Allocated/reserved peaks are decimal GB and include warm-up, following #361. The
 
 ## Executed operations in the separate profiles
 
-Counts below cover two complete updates, separated by original forward and backward (which includes checkpoint recomputation). They count dispatched operations, rather than Python projection calls or inferred FLOPs. Full shape-level counts remain in each profile receipt. An unchanged dequantization count means that saving GEMM outputs did not remove dequantization for backward.
+Counts below cover two complete updates, separated by original forward and backward (which includes checkpoint recomputation). They count dispatched operations, rather than Python projection calls or inferred FLOPs. Aggregated counts are retained in the compact process evidence. An unchanged dequantization count means that saving GEMM outputs did not remove dequantization for backward.
 
 | sequence/mode | phase:operator | two-update count |
 |---|---|---:|
@@ -134,30 +138,17 @@ seq512 QKV: 96 fewer backward/recompute matrix multiplications per update; dequa
 
 The frozen rule requires median reduction >= 2%, ordinary 95% and family 98.75% whole-pair bootstrap lower bounds above 0, exactness and the memory gate. 10000 resamples, seed 42. Five pairs give a small, discrete bootstrap sample; the bounds describe this experiment and do not guarantee population coverage. All four planned comparisons stay in the correction family.
 
-See the [pre-timing protocol](protocol-2050-selective-checkpoint.md), [independent audit](results/issue2050-rtx3090-v1/independent-audit.json), [preparation record](results/issue2050-rtx3090-v1/preparation-notes.md) and raw receipts/rows beside it. The campaign froze hashes before its first full-size gate and timing arm, then rechecked them before every subprocess. The independent local audit also checks those frozen source bytes.
+See the [pre-timing protocol](protocol-2050-selective-checkpoint.md), [independent audit](results/issue2050-rtx3090-v1/independent-audit.json), [compact process evidence](results/issue2050-rtx3090-v1/process-evidence.json) and all four raw pair directories beside it. The campaign froze hashes before its first full-size gate and timing arm, then rechecked them before every subprocess.
 
-[source-snapshot.zip](results/issue2050-rtx3090-v1/source-snapshot.zip) preserves the exact 11 frozen source files and their original line endings; [source preservation receipt](results/issue2050-rtx3090-v1/source-preservation.json) verifies every entry against the freeze. The evidence directory disables Git text conversion so its byte hashes survive checkout. For an exact source replay, overlay the snapshot onto a fresh checkout of the recorded base before running the campaign. The optional audit --tree check expects these exact source bytes.
+The 14 original gate/profile receipts were validated before folding them into one file. Each process records SHA256 over its complete two-update tensor-hash record, per-update summaries, tensor counts and the full-reference comparison. The digest uses UTF-8 JSON with sorted keys, compact separators and ASCII escapes. All four comparisons, operator counts and the original independent-audit result reproduce exactly. The compact data compares digests; the individual tensor hashes and shape-level profiles remain in the [original submitted commit](https://github.com/MakazhanAlpamys/Soup/tree/95a08a21544359ed81ffd0581fc80ce642cbd9e8/benchmarks/results/issue2050-rtx3090-v1).
+
+[source-blobs.json](results/issue2050-rtx3090-v1/source-blobs.json) pins all 11 frozen files by Git blob ID and records their original LF/CRLF form. Retrieve a blob with `git cat-file blob <id>` from the recorded commit; for an exact campaign replay, restore its recorded line endings and overlay the files onto the recorded base. The audit's optional `--tree` check verifies both the Git blob identity and the original frozen SHA256 after reconstructing those line endings. Retained JSON and text have logical digests that survive checkout newline conversion, so no binary source archive or special `.gitattributes` is needed.
 
 ```powershell
-# Dedicated root containing source/, model/, model-manifest.json
-$env:CUBLAS_WORKSPACE_CONFIG = ':4096:8'
-python source/benchmarks/harness/issue2050_campaign.py --root D:/experiment --gpu GPU-...
-python source/benchmarks/harness/issue2050_audit.py D:/experiment/evidence-v1 `
-  --tree source --output independent-audit.json
+# From this PR's checkout; reads evidence and source only, without a model load
+python benchmarks/harness/issue2050_audit.py `
+  benchmarks/results/issue2050-rtx3090-v1 `
+  --tree . --output independent-audit.json
 ```
 
 No #674 checkpoints or datasets were accessed, and no model weights are included in the evidence. AI-assisted implementation and measurement with OpenAI Codex.
-
-## Submission test validation
-
-These checks ran after the scientific timing campaign. Return code 0 means success; the nonzero full-suite attempts stopped at five errors and are retained. The requested empty CUDA mask did not prevent four-device reports in simulated-CUDA tests. Later attempts exposed Windows long-path and temporary-directory admission failures. No production code or scientific result was changed for these attempts. The final broad run reached 38300 passed and 184 skipped before its five-failure stop. The same five cases also failed in isolation on an unchanged checkout of the recorded base and on the candidate; see [baseline verification](results/issue2050-rtx3090-v1/baseline-verification.json). The full suite is not green, and tests beyond the early stop remain unrun.
-
-| test run | return code | pytest summary | evidence |
-|---|---:|---|---|
-| Targeted CPU/CUDA NF4 subset | 0 | 138 passed in 35.55s | [receipt](results/issue2050-rtx3090-v1/tests-lab.json) |
-| Full suite, requested empty CUDA visibility | 2 | 5 failed, 9768 passed, 15 skipped, 5 warnings in 93.97s (0:01:33) | [receipt](results/issue2050-rtx3090-v1/tests-full-cpu.json) |
-| Full suite, one GPU, default TEMP | 2 | 14638 passed, 30 skipped, 5 warnings, 5 errors in 106.04s (0:01:46) | [receipt](results/issue2050-rtx3090-v1/tests-full-single-gpu.json) |
-| Full suite, one GPU, short basetemp only | 2 | 5 failed, 7776 passed, 11 skipped, 4 warnings in 51.63s | [receipt](results/issue2050-rtx3090-v1/tests-full-single-short.json) |
-| Full suite, one GPU, short TEMP and basetemp | 2 | 5 failed, 38300 passed, 184 skipped, 805 warnings in 635.18s (0:10:35) | [receipt](results/issue2050-rtx3090-v1/tests-full-single-temp.json) |
-| Five failures isolated on clean base | 1 | 5 failed, 1 warning in 19.41s | [receipt](results/issue2050-rtx3090-v1/tests-failure-comparison-baseline.json) |
-| Same five isolated on candidate | 1 | 5 failed, 1 warning in 17.47s | [receipt](results/issue2050-rtx3090-v1/tests-failure-comparison-source.json) |

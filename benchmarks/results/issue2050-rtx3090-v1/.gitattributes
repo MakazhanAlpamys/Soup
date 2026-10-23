@@ -1,3 +1,0 @@
-# Captured CRLF and console padding are evidence, not source formatting.
-# Preserve byte-level hashes and suppress whitespace cleanup for these artifacts.
-* -text -whitespace

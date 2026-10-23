@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 from pathlib import Path
 
 from rich.console import Console
@@ -23,11 +22,18 @@ def render(evidence: Path, audit_path: Path, output: Path) -> None:
     long_qkvo = by_case[(2048, "qkvo")]
     full_peak = max(pair["a_peak_gb"]["allocated"] for pair in long_qkvo["pairs"])
     saved_peak = max(pair["b_peak_gb"]["allocated"] for pair in long_qkvo["pairs"])
+    slow = json.loads((evidence / "s512-qkv-pairs/p4-B.json").read_text(encoding="utf-8"))
+    fast = json.loads((evidence / "s512-qkv-pairs/p0-B.json").read_text(encoding="utf-8"))
     observations = [
         f"QKV/seq512 includes pair {worst['pair']} with a {worst['reduction_pct']:+.3f}% "
         "reduction; that pair remains in the result. This campaign did not isolate "
         "the cause of the short-sequence timing variation. "
         f"QKV/seq2048 has a {long_qkv['median_pct']:.3f}% median against the fixed 2% threshold.",
+        f"The slow QKV/seq512 saved arm stayed at {min(slow['step_times_s']):.3f}-"
+        f"{max(slow['step_times_s']):.3f} s per step with {slow['gpu']['util']}% sampled GPU "
+        f"utilization, versus {min(fast['step_times_s']):.3f}-{max(fast['step_times_s']):.3f} s "
+        f"and {fast['gpu']['util']}% in the fast saved arm. This was a sustained slower "
+        "state across all 50 steps, rather than a few long steps.",
         "",
         f"QKVO/seq2048 retained {long_qkvo['saved_bytes'] / 1e9:.9f} GB of projection outputs. "
         f"Across its five pairs, the largest allocated peaks were {saved_peak:.3f} GB "
@@ -71,6 +77,12 @@ def render(evidence: Path, audit_path: Path, output: Path) -> None:
         "Positive reduction means less measured-window wall time. This is a speed "
         "measurement, not a model-quality score. Each comparison has five complete "
         "fresh-process AB/BA pairs; none were excluded or repeated.",
+        "",
+        "With five pairs, the bootstrap median equals the smallest pair in about 5.8% "
+        "of resamples, above both lower-tail cutoffs (2.5% and 0.625%). Both intervals "
+        "therefore span the observed minimum and maximum here; the family correction "
+        "does not change them. QKVO/seq2048 passes with all five pairs above +3.0% "
+        "and a median reduction of 3.141%.",
         "",
         *observations,
         "",
@@ -118,6 +130,10 @@ def render(evidence: Path, audit_path: Path, output: Path) -> None:
         "runner's default sampler otherwise reads the first physical GPU.",
         "- Temperatures, admission records and clocks are in each row. No services, "
         "power limits or other GPUs were changed for this campaign.",
+        "- The other three RTX 3090s were inventoried, but their activity throughout "
+        "the campaign was not checked. Only the selected GPU was sampled during the "
+        "timing arms. Shared host CPU or RAM-bandwidth contention cannot be ruled out; "
+        "the seq512 slowdown's cause remains unisolated.",
         "",
         "## All pairs",
         "",
@@ -145,8 +161,8 @@ def render(evidence: Path, audit_path: Path, output: Path) -> None:
         "",
         "Counts below cover two complete updates, separated by original forward and "
         "backward (which includes checkpoint recomputation). They count dispatched "
-        "operations, rather than Python projection calls or inferred FLOPs. Full "
-        "shape-level counts remain in each profile receipt. An unchanged dequantization "
+        "operations, rather than Python projection calls or inferred FLOPs. Aggregated "
+        "counts are retained in the compact process evidence. An unchanged dequantization "
         "count means that saving GEMM outputs did not remove dequantization for backward.",
         "",
         "| sequence/mode | phase:operator | two-update count |",
@@ -184,73 +200,40 @@ def render(evidence: Path, audit_path: Path, output: Path) -> None:
         "",
         "See the [pre-timing protocol](protocol-2050-selective-checkpoint.md), "
         f"[independent audit]({prefix}/independent-audit.json), "
-        f"[preparation record]({prefix}/preparation-notes.md) and raw receipts/rows beside it. "
+        f"[compact process evidence]({prefix}/process-evidence.json) and all four raw pair "
+        "directories beside it. "
         "The campaign froze hashes before its first full-size gate and timing arm, "
-        "then rechecked them before every subprocess. The independent local audit also "
-        "checks those frozen source bytes.",
+        "then rechecked them before every subprocess.",
         "",
-        f"[source-snapshot.zip]({prefix}/source-snapshot.zip) preserves the exact 11 frozen "
-        f"source files and their original line endings; [source preservation receipt]"
-        f"({prefix}/source-preservation.json) verifies every entry against the freeze. "
-        "The evidence directory disables Git text conversion so its byte hashes survive "
-        "checkout. For an exact source replay, overlay the snapshot onto a fresh checkout "
-        "of the recorded base before running the campaign. The optional audit --tree "
-        "check expects these exact source bytes.",
+        "The 14 original gate/profile receipts were validated before folding them into "
+        "one file. Each process records SHA256 over its complete two-update tensor-hash "
+        "record, per-update summaries, tensor counts and the full-reference comparison. "
+        "The digest uses UTF-8 JSON with sorted keys, compact separators and ASCII escapes. "
+        "All four comparisons, operator counts and the original independent-audit result "
+        "reproduce exactly. The compact data compares digests; the individual tensor hashes "
+        "and shape-level profiles remain in the "
+        "[original submitted commit](https://github.com/MakazhanAlpamys/Soup/tree/"
+        "95a08a21544359ed81ffd0581fc80ce642cbd9e8/benchmarks/results/issue2050-rtx3090-v1).",
+        "",
+        f"[source-blobs.json]({prefix}/source-blobs.json) pins all 11 frozen files by Git "
+        "blob ID and records their original LF/CRLF form. Retrieve a blob with "
+        "`git cat-file blob <id>` from the recorded commit; for an exact campaign replay, "
+        "restore its recorded line endings and overlay the files onto the recorded base. "
+        "The audit's optional `--tree` check verifies both the Git blob identity and the "
+        "original frozen SHA256 after reconstructing those line endings. Retained JSON "
+        "and text have logical digests that survive checkout newline conversion, so no "
+        "binary source archive or special `.gitattributes` is needed.",
         "",
         "```powershell",
-        "# Dedicated root containing source/, model/, model-manifest.json",
-        "$env:CUBLAS_WORKSPACE_CONFIG = ':4096:8'",
-        "python source/benchmarks/harness/issue2050_campaign.py --root D:/experiment --gpu GPU-...",
-        "python source/benchmarks/harness/issue2050_audit.py D:/experiment/evidence-v1 `",
-        "  --tree source --output independent-audit.json",
+        "# From this PR's checkout; reads evidence and source only, without a model load",
+        "python benchmarks/harness/issue2050_audit.py `",
+        "  benchmarks/results/issue2050-rtx3090-v1 `",
+        "  --tree . --output independent-audit.json",
         "```",
         "",
         "No #674 checkpoints or datasets were accessed, and no model weights are "
         "included in the evidence. AI-assisted implementation and measurement with OpenAI Codex.",
     ]
-    validation = []
-    for filename, label in (
-        ("tests-lab.json", "Targeted CPU/CUDA NF4 subset"),
-        ("tests-full-cpu.json", "Full suite, requested empty CUDA visibility"),
-        ("tests-full-single-gpu.json", "Full suite, one GPU, default TEMP"),
-        ("tests-full-single-short.json", "Full suite, one GPU, short basetemp only"),
-        ("tests-full-single-temp.json", "Full suite, one GPU, short TEMP and basetemp"),
-        ("tests-failure-comparison-baseline.json", "Five failures isolated on clean base"),
-        ("tests-failure-comparison-source.json", "Same five isolated on candidate"),
-    ):
-        path = evidence / filename
-        if path.exists():
-            receipt = json.loads(path.read_text(encoding="utf-8"))
-            summaries = [
-                line.strip()
-                for line in receipt["stdout"].splitlines()
-                if re.search(r"\b\d+ (?:passed|failed|errors?|skipped)\b", line)
-            ]
-            summary = summaries[-1] if summaries else "See receipt"
-            validation.append(
-                f"| {label} | {receipt['rc']} | {summary} | [receipt]({prefix}/{filename}) |"
-            )
-    if validation:
-        lines += [
-            "",
-            "## Submission test validation",
-            "",
-            "These checks ran after the scientific timing campaign. Return code 0 "
-            "means success; the nonzero full-suite attempts stopped at five errors "
-            "and are retained. The requested empty CUDA mask did not prevent "
-            "four-device reports in simulated-CUDA tests. Later attempts exposed "
-            "Windows long-path and temporary-directory admission failures. No "
-            "production code or scientific result was changed for these attempts. "
-            "The final broad run reached 38300 passed and 184 skipped before its "
-            "five-failure stop. The same five cases also failed in isolation on "
-            "an unchanged checkout of the recorded base and on the candidate; "
-            f"see [baseline verification]({prefix}/baseline-verification.json). "
-            "The full suite is not green, and tests beyond the early stop remain unrun.",
-            "",
-            "| test run | return code | pytest summary | evidence |",
-            "|---|---:|---|---|",
-            *validation,
-        ]
     output.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
