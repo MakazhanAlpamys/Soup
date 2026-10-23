@@ -79,9 +79,32 @@ _LARGE_SLOT_ACCOUNTING_ROW = {
 }
 
 
-def _predict(row):
-    from soup_cli.utils.layer_stream import estimate_stream_peak_vram
+#: Compute capability major of the cards both measured grids were read on: an
+#: RTX 3050 (8.6) and an A10G (8.6). #1407 — both are below Hopper, so
+#: PyTorch's cuBLAS workspace is 8,320 KiB on each, and both grids' measured
+#: ``max_memory_allocated`` peaks already contain two of them. Charging the
+#: workspace these grids actually held is what keeps their accuracy bands.
+_GRID_CC_MAJOR = 8
 
+
+def _predict(row, *, compute_capability_major=None, cublas_workspace_bytes=None):
+    """The shipped formula's prediction for a grid row.
+
+    ``compute_capability_major`` / ``cublas_workspace_bytes`` forward #1407's
+    cuBLAS workspace term. Passing no device charges nothing, which is the
+    pre-#1407 formula; passing ``compute_capability_major`` charges what that
+    device's step would really hold.
+    """
+    from soup_cli.utils.layer_stream import (
+        estimate_cublas_workspace_bytes,
+        estimate_stream_peak_vram,
+    )
+
+    workspace = (
+        estimate_cublas_workspace_bytes(compute_capability_major)
+        if cublas_workspace_bytes is None and compute_capability_major is not None
+        else cublas_workspace_bytes
+    )
     return estimate_stream_peak_vram(
         layer_bytes=row["pool"] // 2,
         buffers=2,
@@ -94,6 +117,7 @@ def _predict(row):
         seq_len=row["seq"],
         batch_size=row["batch"],
         large_layer_bytes=row.get("large_layer_bytes", 0),
+        cublas_workspace_bytes=workspace or 0,
     )
 
 
@@ -115,7 +139,9 @@ class TestSecondStackDirectionProperty:
         "row", SECOND_STACK_VRAM_GRID, ids=lambda r: r["label"]
     )
     def test_never_under_predicts_on_the_second_stack(self, row):
-        assert _predict(row) >= row["peak"], row["label"]
+        assert _predict(row, compute_capability_major=_GRID_CC_MAJOR) >= row["peak"], (
+            row["label"]
+        )
 
     @pytest.mark.parametrize(
         "row", SECOND_STACK_VRAM_GRID, ids=lambda r: r["label"]
@@ -169,6 +195,11 @@ class TestSecondStackDirectionProperty:
         for a fixed-fraction over-estimate rather than a term that grows with
         either. If this spread widened, the decomposition in the record would
         no longer hold.
+
+        #1407: deliberately on the no-workspace basis (``_predict(row)``), like
+        the decomposition it measures. The cuBLAS workspace is a constant, so
+        charging it inflates this ratio by a fixed amount and would say nothing
+        about the shape of the residual.
         """
         from soup_cli.utils.layer_stream import (
             LOGITS_LOSS_BYTES_PER_ELEMENT,
@@ -259,14 +290,58 @@ class TestActivationBytes:
 
 class TestPeakVramReproducesTheMeasuredGrid:
     """GATE 2: worst absolute error 0.85% over 10 real runs spanning two models,
-    a 3.1x vocab contrast, batch 1..8 and two sequence lengths."""
+    a 3.1x vocab contrast, batch 1..8 and two sequence lengths.
+
+    #1407 RE-SCOPE. These peaks were read on an RTX 3050 (compute capability 8.6)
+    with ``torch.cuda.max_memory_allocated()``, which COUNTS the two 8,320 KiB
+    cuBLAS workspaces a step holds (16.3 MB). The formula named no workspace, so
+    that 16.3 MB sat inside ``STREAM_FIXED_SLACK_BYTES`` implicitly. #1407 names
+    it, which moves every row to +1.04%..+6.57% over-prediction (worst row
+    SmolLM2-135M B1 S256).
+
+    So the accuracy claim is split in two rather than deleted: the <1% band is
+    kept against the formula WITHOUT the term, and a second assertion pins the
+    band WITH it and requires it to stay an over-prediction. The workspace is now
+    charged twice on this card -- once by the new term, once by the constant
+    fitted against peaks that already contained it. That 16.3 MB double count
+    errs in the only safe direction for a gate that refuses runs; removing it
+    needs the RTX 3050 back to re-derive the constant, which this fix does not
+    have. The direction property below is untouched, and it is the one that can
+    OOM a user.
+    """
+
+    #: The pre-#1407 accuracy band, against the formula without the term.
+    PRE_1407_BAND = 0.01
+    #: With the workspace named, on the card the grid was measured on.
+    POST_1407_BAND = 0.08
 
     @pytest.mark.parametrize("row", MEASURED_VRAM_GRID, ids=lambda r: r["label"])
     def test_within_one_percent_of_measured(self, row):
         measured = row["peak"]
         predicted = _predict(row)
         err = abs(predicted - measured) / measured
-        assert err < 0.01, f"predicted {predicted} vs measured {measured} ({err:.2%})"
+        assert err < self.PRE_1407_BAND, (
+            f"predicted {predicted} vs measured {measured} ({err:.2%})"
+        )
+
+    @pytest.mark.parametrize("row", MEASURED_VRAM_GRID, ids=lambda r: r["label"])
+    def test_the_workspace_term_is_charged_on_the_grid_card_too(self, row):
+        """#1407: the grid's own card holds two 8,320 KiB workspaces, so the shipped
+        formula now charges 16.3 MB the old band did not. Asserted rather than
+        assumed, so a future reader sees that the 1% figure is a claim about the
+        pre-#1407 formula and not about this one."""
+        from soup_cli.utils.layer_stream import CUBLAS_WORKSPACE_BYTES_LEGACY
+
+        measured = row["peak"]
+        predicted = _predict(row, compute_capability_major=_GRID_CC_MAJOR)
+        assert predicted - _predict(row) == 2 * CUBLAS_WORKSPACE_BYTES_LEGACY
+
+        err = (predicted - measured) / measured
+        assert 0 < err < self.POST_1407_BAND, (
+            f"{row['label']}: predicted {predicted} vs measured {measured} "
+            f"({err:+.2%}) -- the charge must stay an OVER-prediction inside "
+            f"{self.POST_1407_BAND:.0%}"
+        )
 
     @pytest.mark.parametrize(
         "row", MEASURED_VRAM_GRID + [_LARGE_SLOT_ACCOUNTING_ROW], ids=lambda r: r["label"]
@@ -306,7 +381,9 @@ class TestPeakVramReproducesTheMeasuredGrid:
             "this grid's evidence is seq<=512; a longer row added here would "
             "silently widen a claim the measurements do not support (#349)"
         )
-        assert _predict(row) >= row["peak"], row["label"]
+        assert _predict(row, compute_capability_major=_GRID_CC_MAJOR) >= row["peak"], (
+            row["label"]
+        )
 
     def test_logits_term_dominates_at_large_batch(self):
         """The finding that makes batch budgeting the estimator rather than a
