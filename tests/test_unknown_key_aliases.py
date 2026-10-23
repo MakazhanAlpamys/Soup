@@ -142,3 +142,15 @@ class TestAliasSuggestions:
         assert unknown[0].alias is None
         assert "lr" not in unknown[0].suggestions
 
+    def test_declared_cutoff_rejects_lerning_rate_when_no_alias_applies(
+        self, monkeypatch
+    ) -> None:
+        """Declared cutoff 0.65 rejects distant suggestions (e.g. use_ring_attention)."""
+        monkeypatch.setattr("soup_cli.config.unknown_keys.CONFIG_ALIASES", {})
+        unknown = find_unknown_config_keys({"training": {"lerning_rate": 2e-5}})
+        assert len(unknown) == 1
+        assert unknown[0].suggestions == ()
+        message = format_unknown_keys(unknown)
+        assert "use_ring_attention" not in message
+        assert "did you mean" not in message
+

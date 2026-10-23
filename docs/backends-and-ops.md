@@ -851,8 +851,11 @@ with the field you probably meant:
 Config validation error:
 
   unknown config key 'data.max_len' - did you mean 'max_length' or 'video_maxlen'? Refused.
-unknown config key 'training.quantizaton' - did you mean 'quantization' or 'quantization_aware'? Refused.
+  unknown config key 'training.learning_rate' - use training.lr. Refused.
+  unknown config key 'training.quantizaton' - did you mean 'quantization' or 'quantization_aware'? Refused.
 ```
+
+Known foreign parameter names (such as Hugging Face `learning_rate` or `num_train_epochs`) get an authoritative `use <field>` hint instead of a guess.
 
 **Since v0.75 an unknown config key refuses the load.** v0.74 shipped the same report
 as a warning that named this deadline, so there was exactly one release of notice —

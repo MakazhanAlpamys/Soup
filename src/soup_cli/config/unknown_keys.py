@@ -152,8 +152,6 @@ def _walk(
             alias_target = None
             if path in CONFIG_ALIASES:
                 alias_target = CONFIG_ALIASES[path]
-            elif f"{prefix}{key}" in CONFIG_ALIASES:
-                alias_target = CONFIG_ALIASES[f"{prefix}{key}"]
             else:
                 # Check fuzzy match against alias keys under the same prefix
                 prefix_aliases = [
