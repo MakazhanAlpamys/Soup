@@ -88,6 +88,16 @@ def test_a_value_the_user_exported_is_kept(monkeypatch, tmp_path):
     assert seen == ["max_split_size_mb:128"]
 
 
+def test_an_empty_export_counts_as_unset(monkeypatch, tmp_path):
+    """``setdefault`` would keep ``""``: the hint stays off and the old reason comes back."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "")
+
+    seen = _value_at_detect_device(monkeypatch, tmp_path, stream_layers=True)
+
+    assert seen == [HINT]
+
+
 def test_the_helper_does_not_import_torch(monkeypatch):
     from soup_cli.utils.gpu import configure_cuda_alloc_hint
 

@@ -231,10 +231,12 @@ def configure_cuda_alloc_hint(stream_layers: bool) -> None:
     set it there. Linux only (WSL2 included): Windows ignores the hint and macOS has
     no CUDA, so their environment is left as it is. A CPU-only Linux box gets it too,
     harmlessly; checking for a card here would start CUDA, which is the bug. A value
-    the user exported is kept. No torch import: setting a variable does not need it.
+    the user exported is kept; an empty one counts as unset. No torch import: setting a
+    variable does not need it.
     """
     if stream_layers and sys.platform.startswith("linux"):
-        os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+        if not os.environ.get("PYTORCH_CUDA_ALLOC_CONF"):
+            os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 
 def configure_mps_async_load(device: Optional[str] = None) -> None:
