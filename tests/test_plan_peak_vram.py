@@ -63,6 +63,7 @@ def test_a_readable_model_gets_the_pre_flight_s_number(workdir):
         (_config("someone/unreadable-7B"), "config.json"),
         (_config("TINY", batch_size="auto"), "batch_size auto"),
         (_config("TINY", stream_layers=True), "layer streaming"),
+        ({**_config("TINY"), "backend": "mlx"}, "backend mlx: no CUDA estimate"),
     ],
 )
 def test_a_run_it_cannot_price_is_unknown_with_a_reason(workdir, config, reason):
@@ -129,8 +130,13 @@ def test_the_peak_is_still_not_part_of_drift(workdir):
     assert not detect_drift(state, after).has_drift
 
 
-def test_soup_plan_prints_unknown_and_the_reason(workdir):
+def test_soup_plan_prints_unknown_and_the_reason(workdir, monkeypatch):
     import yaml
+    from rich.console import Console
+
+    # Wide enough for the whole reason on one line: at 80 columns Rich wraps the
+    # cell, and the check would match only up to wherever the wrap fell.
+    monkeypatch.setattr("soup_cli.commands.plan.console", Console(width=200))
 
     Path("soup.yaml").write_text(
         yaml.safe_dump(_config("someone/unreadable-7B")), encoding="utf-8"
@@ -138,4 +144,4 @@ def test_soup_plan_prints_unknown_and_the_reason(workdir):
     result = CliRunner().invoke(app, ["plan", "--config", "soup.yaml"])
     assert result.exit_code == 0, result.output
     plain = " ".join(strip_ansi(result.output).split())
-    assert "unknown: could not read the model's config.json" in plain
+    assert "unknown: could not read the model's config.json (local, cache or Hub)" in plain
