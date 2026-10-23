@@ -212,15 +212,21 @@ def _sweep_with_fake_processes(monkeypatch, returncode=0, write_result=True):
         pytest.fail("the sweep's own process must not initialise CUDA")
 
     monkeypatch.setattr(torch.cuda, "_lazy_init", no_cuda_here)
-    state = {"in_child": False, "launched": [], "ran": []}
+    # The fake children run in this process: keep them off a card if one is visible.
+    monkeypatch.setattr(harness, "trainer_device", lambda: "cpu")
+    state = {"in_child": False, "launched": [], "ran": [], "events": []}
 
     def fake_run_one(base, seq, chunk, quantization, device, work_dir, measure=True):
         if not state["in_child"]:
             pytest.fail("no arm may run in the sweep's own process")
-        state["ran"].append((seq, chunk))
+        state["ran"].append((base, seq, chunk, quantization))
         return _arm(seq=seq, chunk=chunk, realised=seq)
 
+    flush = sys.stdout.flush
+    monkeypatch.setattr(sys.stdout, "flush", lambda: (state["events"].append("flush"), flush()))
+
     def fake_run(argv, **kwargs):
+        state["events"].append("run")
         state["launched"].append(argv)
         if not write_result:
             return subprocess.CompletedProcess(argv, returncode)
@@ -243,14 +249,35 @@ def test_each_measured_arm_runs_in_a_process_of_its_own(monkeypatch, capsys):
     assert harness.sweep("test/model", [512, 1024], 128, "4bit") == harness.EXIT_OK
 
     assert [argv[:2] for argv in state["launched"]] == [[sys.executable, str(_HARNESS)]] * 4
-    assert state["ran"] == [(512, None), (512, 128), (1024, None), (1024, 128)]
-    rows = [line for line in capsys.readouterr().out.splitlines() if line.endswith("| ok")]
-    assert [row.split()[:3] for row in rows] == [
+    # Every flag the sweep was given reaches every arm: a dropped --quantization would
+    # measure the child's default and print a table that looks normal.
+    assert state["ran"] == [
+        ("test/model", 512, None, "4bit"),
+        ("test/model", 512, 128, "4bit"),
+        ("test/model", 1024, None, "4bit"),
+        ("test/model", 1024, 128, "4bit"),
+    ]
+    lines = capsys.readouterr().out.splitlines()
+    rows = [i for i, line in enumerate(lines) if line.endswith("| ok")]
+    assert [lines[i].split()[:3] for i in rows] == [
         ["512", "512", "off"],
         ["512", "512", "128"],
         ["1024", "1024", "off"],
         ["1024", "1024", "128"],
     ]
+    # One header, before the first row; one device line, from the first arm's result.
+    assert [i for i, line in enumerate(lines) if line == harness.HEADER] == [rows[0] - 1]
+    assert [line for line in lines if line.startswith("# device ")] == ["# device cpu"]
+
+
+def test_the_sweep_flushes_its_output_before_each_arm_starts(monkeypatch, capsys):
+    """A child writes straight to the same stdout, so unflushed lines would follow it."""
+    state = _sweep_with_fake_processes(monkeypatch)
+
+    harness.sweep("test/model", [512], 128, "none")
+
+    runs = [i for i, event in enumerate(state["events"]) if event == "run"]
+    assert len(runs) == 2 and all(i > 0 and state["events"][i - 1] == "flush" for i in runs)
 
 
 @pytest.mark.parametrize(("returncode", "write_result"), [(1, True), (0, False)])
@@ -266,6 +293,7 @@ def test_an_arm_process_that_fails_stops_the_sweep(monkeypatch, capsys, returnco
 def test_an_arm_runs_end_to_end_in_a_real_child_process(tmp_path, monkeypatch):
     base = harness._tiny_llama(tmp_path / "model")
     monkeypatch.setenv("SOUP_LAYER_STREAM_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "-1")  # no peak read, card or not
 
     seq = harness._SELF_TEST_SEQ
     arm, device = harness.run_arm_process(base, seq, 16, "none", tmp_path / "arm")

@@ -361,6 +361,9 @@ def run_arm_process(
         "--arm", f"{seq}:{_arm_name(chunk)}",
         "--arm-out", str(result),
     ]  # fmt: skip
+    # The child writes to the same stdout; without this, a redirected run's header
+    # lines would land after the first arm's output.
+    sys.stdout.flush()
     status = subprocess.run(argv, check=False).returncode
     if status != 0 or not result.exists():
         raise RuntimeError(
@@ -379,7 +382,9 @@ def run_arm(base: str, seq: int, chunk: Optional[int], quantization: str, out: s
     out_path = pathlib.Path(out)
     arm = run_one(base, seq, chunk, quantization, device, out_path.parent)
     if device == "cuda":
-        # After the arm, so that the setup is what first initialises CUDA, as in a real run.
+        # After the arm, so that this process does not initialise CUDA before the setup does.
+        # A real `soup train` initialises it earlier still, in detect_device(), so in both
+        # the setup reports the allocator hint as not enabled and the rows stay comparable.
         props = torch.cuda.get_device_properties(0)
         device = f"{props.name} | {props.total_memory / 1e9:.3f} GB"
     doc = {"arm": dataclasses.asdict(arm), "device": device}
