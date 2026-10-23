@@ -760,7 +760,9 @@ recipe. Exit code 3 under `--strict` for CI gating.
 
 ## Pre-Flight Adapter Health Audit (`soup adapters check`)
 
-Pre-flight scan auditing single LoRA adapters for silent training failures (#1721):
+Pre-flight scan auditing single LoRA adapters for silent training failures (#1721).
+Inspection runs without a PyTorch dependency, but requires `numpy`
+(`pip install "soup-cli[train]"` or `pip install numpy`):
 - **Total and per-layer ||dW||_F**: Frobenius norm of LoRA parameter updates (dW = scaling * (B @ A), with alpha / r for standard LoRA and alpha / sqrt(r) for rsLoRA) with float64 accumulation via matrix trace contraction.
 - **Live fraction**: Proportion of adapter layers with active, non-zero updates.
 - **All-zero lora_B layers**: Flags un-trained or zero-initialized layers that failed to move during training.
