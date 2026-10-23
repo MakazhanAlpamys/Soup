@@ -142,6 +142,9 @@ def test_existing_keys_resolve_as_before(name, key, memory_gb):
         ("rtx 3050 6gb", "rtx3050_6gb"),
         ("A100 40GB", "a100_40gb"),
         ("rtx5060ti 8gb", "rtx5060ti_8gb"),
+        # A hyphen before the size reads the same as a space.
+        ("A100-40GB", "a100_40gb"),
+        ("rtx-3050-6gb", "rtx3050_6gb"),
     ],
 )
 def test_a_size_written_as_a_word_finds_the_suffixed_key(name, key):
@@ -151,12 +154,41 @@ def test_a_size_written_as_a_word_finds_the_suffixed_key(name, key):
     assert key in GPU_MEMORY
 
 
+@pytest.mark.parametrize(
+    ("name", "key", "memory_gb"),
+    [
+        ("rtx 3080 laptop 16gb", "rtx3080laptop", 16),
+        ("A100 80GB", "a100", 80),
+        ("rtx 3060 laptop 6gb", "rtx3060laptop", 6),
+        ("NVIDIA GeForce RTX 3060 12GB", "rtx3060", 12),
+    ],
+)
+def test_a_size_the_plain_key_already_holds_resolves_to_it(name, key, memory_gb):
+    # Only the smaller size of a two-size part has a suffixed key; the plain key
+    # is the larger one, so naming that size has to reach the plain key.
+    assert normalize_gpu_key(name) == key
+    assert GPU_MEMORY[key] == memory_gb
+
+
+@pytest.mark.parametrize(
+    ("name", "key"),
+    [
+        # A size the plain key does not hold stays unknown, not the plain key's.
+        ("rtx 3060 8gb", "rtx3060_8gb"),
+        ("A100 20GB", "a100_20gb"),
+    ],
+)
+def test_a_size_no_key_holds_stays_unknown(name, key):
+    assert normalize_gpu_key(name) == key
+    assert key not in GPU_MEMORY
+
+
 def test_profile_takes_the_laptop_3060_from_the_issue(config_file, no_gpu):
     result = runner.invoke(
         app, ["profile", "--config", str(config_file), "--gpu", "rtx3060 laptop", "--json"]
     )
 
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 0, (result.output, repr(result.exception))
     data = _json(result)
     assert data["gpu_memory_gb"] == 6
     assert data["gpu_memory_source"] == "flag"
@@ -175,16 +207,17 @@ def test_profile_takes_a_size_named_driver_name(config_file, no_gpu):
         ],
     )
 
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 0, (result.output, repr(result.exception))
     assert _json(result)["gpu_memory_gb"] == 6
 
 
 def test_the_unknown_gpu_list_names_the_30_series_laptop_keys(config_file):
     result = runner.invoke(app, ["profile", "--config", str(config_file), "--gpu", "rtx9999"])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 1, (result.output, repr(result.exception))
     # Rich wraps the list at the terminal width, so drop all whitespace first.
     output = re.sub(r"\s+", "", _ANSI.sub("", result.output))
+    assert "UnknownGPU:rtx9999" in output
     listed = set(output.split("Validoptions:", 1)[1].split(","))
     assert set(_NVIDIA_SPEC) <= listed
 
