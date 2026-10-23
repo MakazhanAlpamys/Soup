@@ -8378,9 +8378,10 @@ class SoupConfig(BaseModel):
         ``backend: mlx``. Stop-gap: delete this validator (and
         ``tests/test_mlx_lora_pattern_refusal.py``) when the MLX trainer honours them.
 
-        SFT, DPO, ORPO and SimPO all build the adapter in ``MLXSFTTrainerWrapper._apply_lora``
-        from one scalar ``lora.r`` and ``lora.alpha``, so a config that set a pattern
-        trained a uniform-rank adapter without a word. Not part of
+        SFT, DPO, ORPO, SimPO and KTO all build the adapter in
+        ``MLXSFTTrainerWrapper._apply_lora`` from one scalar ``lora.r`` and
+        ``lora.alpha``, so a config that set a pattern trained a uniform-rank adapter
+        without a word. Not part of
         :meth:`_validate_peft_variant_backend_and_quantization`, which returns early
         for plain LoRA; defined after :meth:`_validate_mlx_task_support` (and the
         ``lora.r=0`` check) on purpose, so a task MLX cannot run, or a config with no
