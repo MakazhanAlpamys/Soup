@@ -94,6 +94,24 @@ class TestAliasSuggestions:
         assert "use training.lr" in msg
         assert "use_ring_attention" not in msg
 
+    @pytest.mark.parametrize(
+        "typo, canonical",
+        [
+            ("warmup_ato", "warmup_auto"),
+            ("grad_accumauto_tune", "grad_accum_auto_tune"),
+        ],
+    )
+    def test_closer_declared_field_outranks_fuzzy_alias(self, typo: str, canonical: str) -> None:
+        """An alias typo must not hide a closer match to an actual Soup field."""
+        unknown = find_unknown_config_keys(_raw_with_training(**{typo: True}))
+        assert len(unknown) == 1
+        assert unknown[0].alias is None
+        assert unknown[0].suggestions[0] == canonical
+        message = format_unknown_keys(unknown, include_deadline=False)
+        assert f"did you mean '{canonical}'" in message
+        assert "use training.warmup_ratio" not in message
+        assert "use training.gradient_accumulation_steps" not in message
+
     def test_unrecognized_key_has_no_suggestion_and_no_use_hint(self) -> None:
         """A key with no near match gets no suggestion and no 'use' hint."""
         raw = _raw_with_training(zzzzzzzz=1)

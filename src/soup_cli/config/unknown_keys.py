@@ -147,7 +147,8 @@ def _walk(
         path = f"{prefix}{shown}"
         if key not in declared:
             # 1. Alias lookup (#2099): check exact alias table match or typo of an alias
-            # ahead of declared field difflib suggestions. An alias match outranks difflib.
+            # ahead of declared field difflib suggestions. Exact aliases take priority;
+            # fuzzy aliases must not hide a closer match to a declared field.
             alias_target = None
             if path in CONFIG_ALIASES:
                 alias_target = CONFIG_ALIASES[path]
@@ -164,7 +165,17 @@ def _walk(
                     key, prefix_aliases, n=1, cutoff=0.7
                 )
                 if close_aliases:
-                    alias_target = CONFIG_ALIASES.get(f"{prefix}{close_aliases[0]}")
+                    closest_alias = close_aliases[0]
+                    closest_declared = difflib.get_close_matches(
+                        key, list(declared), n=1, cutoff=_SUGGESTION_CUTOFF
+                    )
+                    alias_score = difflib.SequenceMatcher(None, key, closest_alias).ratio()
+                    declared_score = (
+                        difflib.SequenceMatcher(None, key, closest_declared[0]).ratio()
+                        if closest_declared else 0.0
+                    )
+                    if alias_score > declared_score:
+                        alias_target = CONFIG_ALIASES[f"{prefix}{closest_alias}"]
 
             if alias_target is not None:
                 short_field = alias_target.split(".")[-1]
