@@ -1,0 +1,52 @@
+{
+  "written_utc": "2026-10-23T09:41:45Z",
+  "gpu_uuid": "GPU-7b0178c9-5f01-96cd-6911-25d9e5fa4126",
+  "files": {
+    "benchmarks/harness/issue2050_campaign.py": "b658515f340b5379b2328437933769d2553f8a75b17e90503e42f3b891158a2a",
+    "benchmarks/harness/issue2050_selective_checkpoint.py": "7dfa309a33cd6e978a65dbcbf77c562aa716ca62412ad7482fbab1485dc3574f",
+    "benchmarks/harness/stream_selective_checkpoint.py": "3a5fd16741beb44f73f82a8cbd99377edfdbd340cd1f03ff28c991784607a8ff",
+    "benchmarks/harness/stream_ab_pairs.py": "7863401ee62f8906cc32fc8d682750e237a90a303f570142878a83597b7acdf3",
+    "benchmarks/harness/issue361_nf4_throughput.py": "12b823707edb6fe164224931134dbe0689bc1be306ef9d4cdc5238a1dd9bcd23",
+    "benchmarks/harness/source_provenance.py": "667157469e166a38d27f44ba31c98a0e6bdcf07912139968b81243e1d88b7885",
+    "benchmarks/protocol-2050-selective-checkpoint.md": "8b45bd4e9954e1051832b2a47c050e3abab2b4e171e774eabe0dae8bf068c96c",
+    "tests/test_stream_selective_checkpoint_harness.py": "7adcf195fefc61d4801edd8e632c34be1db5a1723470e3ccd58223a9d1842f1d",
+    "src/soup_cli/utils/layer_stream_runtime.py": "dca6919d0032dc00300cd453a92aa152e9fe2e136a5b41a04658e9eef3b73f72",
+    "src/soup_cli/utils/layer_stream.py": "0ef051ed6036f61ea8a1b61d55f396fbc858a7c1d32d7182a3234061d6753aeb",
+    "src/soup_cli/utils/layer_shard.py": "4ffa16fd8938557dd7216161d072c5734dc893c8946adcaf24d1158e579eb682"
+  },
+  "model": {
+    "model": "unsloth/mistral-7b-instruct-v0.3",
+    "revision": "60b99dcbc7f853b7cd18472a607e8d045b96f03e",
+    "files": [
+      {
+        "file": "config.json",
+        "bytes": 724,
+        "sha256": "9262d15f830e511429ccd175a71680e51c656ef3a4aa7460f3e9596508d32487"
+      },
+      {
+        "file": "model-00001-of-00003.safetensors",
+        "bytes": 4949453792,
+        "sha256": "ce6fb6f6f4d0183f4813cbf4ece24109da629a08d4210da46f77e1d8b0bd5c19"
+      },
+      {
+        "file": "model-00002-of-00003.safetensors",
+        "bytes": 4999819336,
+        "sha256": "8c0e72f148366b6a3709e002a98706a33d31aec8515090c856c95b2044f92ae0"
+      },
+      {
+        "file": "model-00003-of-00003.safetensors",
+        "bytes": 4546807800,
+        "sha256": "905dd405363e43d95779c1c1155a2dbfd36155914ae95dbd934e12e490cfb4ca"
+      },
+      {
+        "file": "model.safetensors.index.json",
+        "bytes": 23950,
+        "sha256": "e489ba553b87cde188d921b1a8283c2e0b9d33d635b88147d96ff0fcd6250016"
+      }
+    ]
+  },
+  "base": "e05b6f6db42f9cc804fdece2b6eb812432d6aabd",
+  "python": "3.13.7 (tags/v3.13.7:bcee1c3, Aug 14 2025, 14:15:11) [MSC v.1944 64 bit (AMD64)]",
+  "environment": "accelerate==1.15.0\naiohappyeyeballs==2.7.1\naiohttp==3.14.5\naiosignal==1.4.0\nannotated-doc==0.0.5\nannotated-types==0.8.0\nanyio==4.15.1\nast_serialize==0.13.1\nattrs==26.1.0\nbitsandbytes==0.50.2\ncertifi==2026.10.19\ncffi==2.1.1\ncfgv==3.5.0\ncharset-normalizer==3.5.2\nclick==8.4.2\ncloudpickle==3.1.2\ncolorama==0.4.6\ncoverage==7.17.0\ncryptography==50.0.2\ndatasets==5.1.0\ndatasketch==2.0.0\ndill==0.4.1\ndistlib==0.4.4\nfastapi==0.161.1\nfilelock==3.32.3\nfrozenlist==1.8.0\nfsspec==2026.7.0\nh11==0.16.0\nhf-xet==1.7.0\nhttpcore==1.0.9\nhttpcore2==2.16.0\nhttpx==0.28.1\nhttpx2==2.16.0\nhuggingface_hub==2.2.0\nidentify==2.6.20\nidna==3.20\niniconfig==2.3.1\nJinja2==3.1.6\njoblib==1.6.0\njsonschema==4.26.0\njsonschema-specifications==2025.9.1\nlibrt==0.16.0\nmarkdown-it-py==4.2.0\nMarkupSafe==3.0.3\nmcp==2.3.0\nmcp-types==2.3.0\nmdurl==0.1.2\nmpmath==1.3.0\nmultidict==7.1.0\nmultiprocess==0.70.19\nmypy==2.4.0\nmypy_extensions==1.1.0\nnarwhals==2.27.1\nnetworkx==3.6.1\nnodeenv==1.11.0\nnumpy==2.5.4\nopentelemetry-api==1.45.1\npackaging==26.3\npandas==3.1.0\npathspec==1.1.1\npeft==0.21.2\npillow==13.0.0\nplatformdirs==4.13.5\nplotext==6.1.0\npluggy==1.7.0\npre_commit==4.7.0\npropcache==0.5.4\npsutil==7.2.2\npyarrow==26.0.0\npycparser==3.12\npydantic==2.14.1\npydantic_core==2.50.1\nPygments==2.21.0\nPyJWT==2.15.1\npytest==9.1.1\npytest-cov==7.1.0\npytest-timeout==2.4.0\npython-dateutil==3.0.0\npython-discovery==1.6.4\npython-multipart==0.0.32\npywin32==312\nPyYAML==6.0.3\nreferencing==0.37.0\nregex==2026.9.29\nreportlab==5.1.0\nrequests==2.34.2\nrich==15.0.0\nrpds-py==2026.9.1\nruff==0.17.2\nsafetensors==0.8.0\nscikit-learn==1.9.1\nscipy==1.18.1\nsetuptools==78.1.0\nshellingham==1.5.4\nsix==1.17.0\n-e git+https://github.com/MakazhanAlpamys/Soup.git@e05b6f6db42f9cc804fdece2b6eb812432d6aabd#egg=soup_cli\nsse-starlette==3.5.0\nstarlette==1.9.0\nsympy==1.14.0\nthreadpoolctl==3.7.0\ntokenizers==0.23.3\ntorch==2.14.1+cu130\ntqdm==4.70.1\ntransformers==5.19.0\ntrl==0.29.1\ntruststore==0.10.5\ntyper==0.27.3\ntyping-inspection==0.4.4\ntyping_extensions==4.16.0\ntzdata==2026.5\nurllib3==2.8.0\nuvicorn==0.54.0\nvirtualenv==21.14.13\nxxhash==4.0.2\nyarl==1.25.1\n",
+  "gpu_inventory": "index, uuid, name, driver_version, memory.total [MiB], power.limit [W]\n0, GPU-05919122-a78e-9af3-3b3c-f9a14fb4d2f4, NVIDIA GeForce RTX 3090, 610.88, 24576 MiB, 420.00 W\n1, GPU-7b0178c9-5f01-96cd-6911-25d9e5fa4126, NVIDIA GeForce RTX 3090, 610.88, 24576 MiB, 350.00 W\n2, GPU-7c1f2b70-2fd5-9552-b36f-8bb959f66fd6, NVIDIA GeForce RTX 3090, 610.88, 24576 MiB, 420.00 W\n3, GPU-928172b9-95ec-7dce-c9aa-5bcbe966c3f7, NVIDIA GeForce RTX 3090, 610.88, 24576 MiB, 420.00 W\n"
+}

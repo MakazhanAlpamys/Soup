@@ -1,0 +1,20 @@
+{
+  "verified": true,
+  "archive": "source-snapshot.zip",
+  "bytes": 140155,
+  "sha256": "4391f4b52c0f688b3c2af533941a43021a4ee6bb25a733d292e492d9bcb6a975",
+  "files": {
+    "benchmarks/harness/issue2050_campaign.py": "b658515f340b5379b2328437933769d2553f8a75b17e90503e42f3b891158a2a",
+    "benchmarks/harness/issue2050_selective_checkpoint.py": "7dfa309a33cd6e978a65dbcbf77c562aa716ca62412ad7482fbab1485dc3574f",
+    "benchmarks/harness/stream_selective_checkpoint.py": "3a5fd16741beb44f73f82a8cbd99377edfdbd340cd1f03ff28c991784607a8ff",
+    "benchmarks/harness/stream_ab_pairs.py": "7863401ee62f8906cc32fc8d682750e237a90a303f570142878a83597b7acdf3",
+    "benchmarks/harness/issue361_nf4_throughput.py": "12b823707edb6fe164224931134dbe0689bc1be306ef9d4cdc5238a1dd9bcd23",
+    "benchmarks/harness/source_provenance.py": "667157469e166a38d27f44ba31c98a0e6bdcf07912139968b81243e1d88b7885",
+    "benchmarks/protocol-2050-selective-checkpoint.md": "8b45bd4e9954e1051832b2a47c050e3abab2b4e171e774eabe0dae8bf068c96c",
+    "tests/test_stream_selective_checkpoint_harness.py": "7adcf195fefc61d4801edd8e632c34be1db5a1723470e3ccd58223a9d1842f1d",
+    "src/soup_cli/utils/layer_stream_runtime.py": "dca6919d0032dc00300cd453a92aa152e9fe2e136a5b41a04658e9eef3b73f72",
+    "src/soup_cli/utils/layer_stream.py": "0ef051ed6036f61ea8a1b61d55f396fbc858a7c1d32d7182a3234061d6753aeb",
+    "src/soup_cli/utils/layer_shard.py": "4ffa16fd8938557dd7216161d072c5734dc893c8946adcaf24d1158e579eb682"
+  },
+  "purpose": "Exact frozen source bytes, including original line endings; no model weights."
+}

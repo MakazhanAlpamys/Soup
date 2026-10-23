@@ -1,0 +1,224 @@
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [  0%]
+........................................................................ [  0%]
+........................................................................ [  0%]
+........................................................................ [  0%]
+........................................................................ [  0%]
+........................................................................ [  0%]
+........................................................................ [  1%]
+........................................................................ [  1%]
+........................................................................ [  1%]
+........................................................................ [  1%]
+........................................................................ [  1%]
+........................................................................ [  1%]
+........................................................................ [  2%]
+........................................................................ [  2%]
+........................................................................ [  2%]
+........................................................................ [  2%]
+........................................................................ [  2%]
+........................................................................ [  2%]
+........................................................................ [  3%]
+........................................................................ [  3%]
+........................................................................ [  3%]
+........................................................................ [  3%]
+........................................................................ [  3%]
+........................................................................ [  3%]
+........................................................................ [  4%]
+........................................................................ [  4%]
+........................................................................ [  4%]
+........................................................................ [  4%]
+........................................................................ [  4%]
+........................................................................ [  4%]
+........................................................................ [  5%]
+........................................................................ [  5%]
+........................................................................ [  5%]
+........................................................................ [  5%]
+.........s....s...s..................................................... [  5%]
+........................................................................ [  5%]
+........................................................................ [  5%]
+........................................................................ [  6%]
+........................................................................ [  6%]
+........................................................................ [  6%]
+........................................................................ [  6%]
+........................................................................ [  6%]
+........................................................................ [  6%]
+........................................................................ [  7%]
+........................................................................ [  7%]
+........................................................................ [  7%]
+........................................................................ [  7%]
+........................................................................ [  7%]
+........................................................................ [  7%]
+........................................................................ [  8%]
+........................................................................ [  8%]
+........................................................................ [  8%]
+........................................................................ [  8%]
+........................................................................ [  8%]
+........................................................................ [  8%]
+........................................................................ [  9%]
+........................................................................ [  9%]
+........................................................................ [  9%]
+........................................................................ [  9%]
+........................................................................ [  9%]
+........................................................................ [  9%]
+........................................................................ [ 10%]
+........................................................................ [ 10%]
+........................................................................ [ 10%]
+........................................................................ [ 10%]
+........................................................................ [ 10%]
+........................................................................ [ 10%]
+........................................................................ [ 10%]
+........................................................................ [ 11%]
+........................................................................ [ 11%]
+........................................................................ [ 11%]
+........................................................................ [ 11%]
+........................................................................ [ 11%]
+........................................................................ [ 11%]
+........................................................................ [ 12%]
+........................................................................ [ 12%]
+........................................................................ [ 12%]
+........................................................................ [ 12%]
+........................................................................ [ 12%]
+.................................................................s...... [ 12%]
+........................................................................ [ 13%]
+........................................................................ [ 13%]
+........................................................................ [ 13%]
+........................................................................ [ 13%]
+........................................................................ [ 13%]
+........................................................................ [ 13%]
+........................................................................ [ 14%]
+........................................................................ [ 14%]
+........................................................................ [ 14%]
+........................................................................ [ 14%]
+........................................................................ [ 14%]
+........................................................................ [ 14%]
+.....................................................s.................. [ 15%]
+........................................................................ [ 15%]
+........................................................................ [ 15%]
+...................................s.s...............................s.s [ 15%]
+........................................................................ [ 15%]
+........................................................................ [ 15%]
+........................................................................ [ 15%]
+........................................................................ [ 16%]
+........................................................................ [ 16%]
+........................................................................ [ 16%]
+........................................................................ [ 16%]
+........................................................................ [ 16%]
+........................................................................ [ 16%]
+........................................................................ [ 17%]
+................................s....................................... [ 17%]
+........................................................................ [ 17%]
+........................................................................ [ 17%]
+........................................................................ [ 17%]
+........................................................................ [ 17%]
+...................................s.................................... [ 18%]
+........................................................................ [ 18%]
+........................................................................ [ 18%]
+........................................................................ [ 18%]
+........................................................................ [ 18%]
+........................................................................ [ 18%]
+............................F.........F...........F..................... [ 19%]
+........................................................................ [ 19%]
+........................................................................ [ 19%]
+........................................................................ [ 19%]
+........................................................................ [ 19%]
+........................................................................ [ 19%]
+........................................................................ [ 20%]
+........................................................................ [ 20%]
+........................................................................ [ 20%]
+........................................................................ [ 20%]
+........................................................................ [ 20%]
+........................................................................ [ 20%]
+........................................................................ [ 20%]
+........................................................................ [ 21%]
+........................................................................ [ 21%]
+..............................................................s.s....... [ 21%]
+........................................................................ [ 21%]
+..................................F..F.................................. [ 21%]
+..................................................................
+================================== FAILURES ===================================
+_______ TestStreamingEndToEndSetup.test_setup_builds_a_real_trl_trainer _______
+[gw1] win32 -- Python 3.13.7 D:\Soup-2050-v1\.venv\Scripts\python.exe
+D:\Soup-2050-v1\source\tests\test_v07200.py:2451: in test_setup_builds_a_real_trl_trainer
+    wrapper.setup(dataset)
+D:\Soup-2050-v1\source\src\soup_cli\trainer\sft.py:763: in setup
+    self._setup_streaming_transformers(cfg, tcfg)
+D:\Soup-2050-v1\source\src\soup_cli\trainer\stream_setup.py:899: in _setup_streaming_transformers
+    refuse_if_data_parallel(self.device)
+D:\Soup-2050-v1\source\src\soup_cli\trainer\stream_setup.py:764: in refuse_if_data_parallel
+    raise ValueError(
+E   ValueError: training.stream_layers=true, but 4 CUDA devices are visible. transformers wraps the model in nn.DataParallel whenever more than one GPU is visible and the run is not distributed, and DataParallel requires every parameter on cuda:0 � layer streaming keeps the decoder on 'meta' by design, so the two cannot be combined. Layer streaming is a single-GPU technique: re-run with one card visible, e.g. CUDA_VISIBLE_DEVICES=0, or set stream_layers=false to train resident across all 4.
+_ TestStreamingEndToEndSetup.test_hf_gradient_checkpointing_is_off_under_streaming _
+[gw1] win32 -- Python 3.13.7 D:\Soup-2050-v1\.venv\Scripts\python.exe
+D:\Soup-2050-v1\source\tests\test_v07200.py:2459: in test_hf_gradient_checkpointing_is_off_under_streaming
+    wrapper.setup(dataset)
+D:\Soup-2050-v1\source\src\soup_cli\trainer\sft.py:763: in setup
+    self._setup_streaming_transformers(cfg, tcfg)
+D:\Soup-2050-v1\source\src\soup_cli\trainer\stream_setup.py:899: in _setup_streaming_transformers
+    refuse_if_data_parallel(self.device)
+D:\Soup-2050-v1\source\src\soup_cli\trainer\stream_setup.py:764: in refuse_if_data_parallel
+    raise ValueError(
+E   ValueError: training.stream_layers=true, but 4 CUDA devices are visible. transformers wraps the model in nn.DataParallel whenever more than one GPU is visible and the run is not distributed, and DataParallel requires every parameter on cuda:0 � layer streaming keeps the decoder on 'meta' by design, so the two cannot be combined. Layer streaming is a single-GPU technique: re-run with one card visible, e.g. CUDA_VISIBLE_DEVICES=0, or set stream_layers=false to train resident across all 4.
+_______ TestStreamingEndToEndSetup.test_one_training_step_actually_runs _______
+[gw1] win32 -- Python 3.13.7 D:\Soup-2050-v1\.venv\Scripts\python.exe
+D:\Soup-2050-v1\source\tests\test_v07200.py:2465: in test_one_training_step_actually_runs
+    wrapper.setup(dataset)
+D:\Soup-2050-v1\source\src\soup_cli\trainer\sft.py:763: in setup
+    self._setup_streaming_transformers(cfg, tcfg)
+D:\Soup-2050-v1\source\src\soup_cli\trainer\stream_setup.py:899: in _setup_streaming_transformers
+    refuse_if_data_parallel(self.device)
+D:\Soup-2050-v1\source\src\soup_cli\trainer\stream_setup.py:764: in refuse_if_data_parallel
+    raise ValueError(
+E   ValueError: training.stream_layers=true, but 4 CUDA devices are visible. transformers wraps the model in nn.DataParallel whenever more than one GPU is visible and the run is not distributed, and DataParallel requires every parameter on cuda:0 � layer streaming keeps the decoder on 'meta' by design, so the two cannot be combined. Layer streaming is a single-GPU technique: re-run with one card visible, e.g. CUDA_VISIBLE_DEVICES=0, or set stream_layers=false to train resident across all 4.
+_ TestAutoTierFallback.test_stream_pin_true_reaches_the_runtime_as_true_on_cuda _
+[gw1] win32 -- Python 3.13.7 D:\Soup-2050-v1\.venv\Scripts\python.exe
+D:\Soup-2050-v1\source\tests\test_v07203.py:2185: in test_stream_pin_true_reaches_the_runtime_as_true_on_cuda
+    captured = self._run_on_simulated_cuda(
+D:\Soup-2050-v1\source\tests\test_v07203.py:2169: in _run_on_simulated_cuda
+    self._run(
+D:\Soup-2050-v1\source\tests\test_v07203.py:2036: in _run
+    wrapper._setup_streaming_transformers(cfg, cfg.training)
+D:\Soup-2050-v1\source\src\soup_cli\trainer\stream_setup.py:899: in _setup_streaming_transformers
+    refuse_if_data_parallel(self.device)
+D:\Soup-2050-v1\source\src\soup_cli\trainer\stream_setup.py:764: in refuse_if_data_parallel
+    raise ValueError(
+E   ValueError: training.stream_layers=true, but 4 CUDA devices are visible. transformers wraps the model in nn.DataParallel whenever more than one GPU is visible and the run is not distributed, and DataParallel requires every parameter on cuda:0 � layer streaming keeps the decoder on 'meta' by design, so the two cannot be combined. Layer streaming is a single-GPU technique: re-run with one card visible, e.g. CUDA_VISIBLE_DEVICES=0, or set stream_layers=false to train resident across all 4.
+_ TestAutoTierFallback.test_unset_stream_pin_reaches_the_runtime_as_false_on_cuda _
+[gw1] win32 -- Python 3.13.7 D:\Soup-2050-v1\.venv\Scripts\python.exe
+D:\Soup-2050-v1\source\tests\test_v07203.py:2195: in test_unset_stream_pin_reaches_the_runtime_as_false_on_cuda
+    captured = self._run_on_simulated_cuda(tmp_path, monkeypatch, "")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+D:\Soup-2050-v1\source\tests\test_v07203.py:2169: in _run_on_simulated_cuda
+    self._run(
+D:\Soup-2050-v1\source\tests\test_v07203.py:2036: in _run
+    wrapper._setup_streaming_transformers(cfg, cfg.training)
+D:\Soup-2050-v1\source\src\soup_cli\trainer\stream_setup.py:899: in _setup_streaming_transformers
+    refuse_if_data_parallel(self.device)
+D:\Soup-2050-v1\source\src\soup_cli\trainer\stream_setup.py:764: in refuse_if_data_parallel
+    raise ValueError(
+E   ValueError: training.stream_layers=true, but 4 CUDA devices are visible. transformers wraps the model in nn.DataParallel whenever more than one GPU is visible and the run is not distributed, and DataParallel requires every parameter on cuda:0 � layer streaming keeps the decoder on 'meta' by design, so the two cannot be combined. Layer streaming is a single-GPU technique: re-run with one card visible, e.g. CUDA_VISIBLE_DEVICES=0, or set stream_layers=false to train resident across all 4.
+============================== warnings summary ===============================
+C:\Python313\Lib\importlib\__init__.py:88
+C:\Python313\Lib\importlib\__init__.py:88
+C:\Python313\Lib\importlib\__init__.py:88
+C:\Python313\Lib\importlib\__init__.py:88
+  C:\Python313\Lib\importlib\__init__.py:88: TRLExperimentalWarning: You are importing from 'trl.experimental'. APIs here are unstable and may change or be removed without notice. Silence this warning by setting environment variable TRL_EXPERIMENTAL_SILENCE=1.
+    return _bootstrap._gcd_import(name[level:], package, level)
+
+tests/test_v07200.py::TestStreamedTrainingParityCuda::test_five_steps_match_resident
+  D:\Soup-2050-v1\source\tests\test_v07200.py:1791: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+  Consider using tensor.detach() first. (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\torch\csrc\autograd\generated\python_variable_methods.cpp:821.)
+    run.append(float(out.loss))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/test_v07200.py::TestStreamingEndToEndSetup::test_setup_builds_a_real_trl_trainer
+FAILED tests/test_v07200.py::TestStreamingEndToEndSetup::test_hf_gradient_checkpointing_is_off_under_streaming
+FAILED tests/test_v07200.py::TestStreamingEndToEndSetup::test_one_training_step_actually_runs
+FAILED tests/test_v07203.py::TestAutoTierFallback::test_stream_pin_true_reaches_the_runtime_as_true_on_cuda
+FAILED tests/test_v07203.py::TestAutoTierFallback::test_unset_stream_pin_reaches_the_runtime_as_false_on_cuda
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 5 failures !!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!! xdist.dsession.Interrupted: stopping after 5 failures !!!!!!!!!!!!
+5 failed, 9768 passed, 15 skipped, 5 warnings in 93.97s (0:01:33)
+

@@ -1,0 +1,463 @@
+{
+  "verified": true,
+  "full_size_gate_processes": 14,
+  "updates_per_gate": 2,
+  "comparisons": [
+    {
+      "seq": 512,
+      "policy": "qkv",
+      "saved_bytes": 201326592,
+      "pairs": [
+        {
+          "pair": 0,
+          "order": "AB",
+          "a_s": 30.1161,
+          "b_s": 29.4236,
+          "reduction_pct": 2.2994345217342187,
+          "a_peak_gb": {
+            "allocated": 1.374,
+            "reserved": 1.546
+          },
+          "b_peak_gb": {
+            "allocated": 1.568,
+            "reserved": 1.625
+          },
+          "memory_delta_upper_bytes": 194999999.99999994
+        },
+        {
+          "pair": 1,
+          "order": "BA",
+          "a_s": 30.0843,
+          "b_s": 29.4447,
+          "reduction_pct": 2.126025867312844,
+          "a_peak_gb": {
+            "allocated": 1.374,
+            "reserved": 1.546
+          },
+          "b_peak_gb": {
+            "allocated": 1.568,
+            "reserved": 1.625
+          },
+          "memory_delta_upper_bytes": 194999999.99999994
+        },
+        {
+          "pair": 2,
+          "order": "AB",
+          "a_s": 30.11,
+          "b_s": 29.447,
+          "reduction_pct": 2.20192627034208,
+          "a_peak_gb": {
+            "allocated": 1.374,
+            "reserved": 1.546
+          },
+          "b_peak_gb": {
+            "allocated": 1.568,
+            "reserved": 1.625
+          },
+          "memory_delta_upper_bytes": 194999999.99999994
+        },
+        {
+          "pair": 3,
+          "order": "BA",
+          "a_s": 30.3786,
+          "b_s": 29.4931,
+          "reduction_pct": 2.9148808700861806,
+          "a_peak_gb": {
+            "allocated": 1.374,
+            "reserved": 1.546
+          },
+          "b_peak_gb": {
+            "allocated": 1.568,
+            "reserved": 1.625
+          },
+          "memory_delta_upper_bytes": 194999999.99999994
+        },
+        {
+          "pair": 4,
+          "order": "AB",
+          "a_s": 31.2147,
+          "b_s": 41.8891,
+          "reduction_pct": -34.19670860203686,
+          "a_peak_gb": {
+            "allocated": 1.374,
+            "reserved": 1.546
+          },
+          "b_peak_gb": {
+            "allocated": 1.568,
+            "reserved": 1.625
+          },
+          "memory_delta_upper_bytes": 194999999.99999994
+        }
+      ],
+      "median_pct": 2.20192627034208,
+      "ci95": [
+        -34.19670860203686,
+        2.9148808700861806
+      ],
+      "ci98_75": [
+        -34.19670860203686,
+        2.9148808700861806
+      ],
+      "memory_pass": true,
+      "verdict": "INCONCLUSIVE"
+    },
+    {
+      "seq": 512,
+      "policy": "qkvo",
+      "saved_bytes": 335544320,
+      "pairs": [
+        {
+          "pair": 0,
+          "order": "AB",
+          "a_s": 30.9013,
+          "b_s": 39.1166,
+          "reduction_pct": -26.585612903017026,
+          "a_peak_gb": {
+            "allocated": 1.374,
+            "reserved": 1.546
+          },
+          "b_peak_gb": {
+            "allocated": 1.699,
+            "reserved": 1.743
+          },
+          "memory_delta_upper_bytes": 325999999.99999994
+        },
+        {
+          "pair": 1,
+          "order": "BA",
+          "a_s": 30.773600000000002,
+          "b_s": 36.338,
+          "reduction_pct": -18.08173239400005,
+          "a_peak_gb": {
+            "allocated": 1.374,
+            "reserved": 1.546
+          },
+          "b_peak_gb": {
+            "allocated": 1.699,
+            "reserved": 1.743
+          },
+          "memory_delta_upper_bytes": 325999999.99999994
+        },
+        {
+          "pair": 2,
+          "order": "AB",
+          "a_s": 30.31,
+          "b_s": 37.2586,
+          "reduction_pct": -22.92510722533818,
+          "a_peak_gb": {
+            "allocated": 1.374,
+            "reserved": 1.546
+          },
+          "b_peak_gb": {
+            "allocated": 1.699,
+            "reserved": 1.743
+          },
+          "memory_delta_upper_bytes": 325999999.99999994
+        },
+        {
+          "pair": 3,
+          "order": "BA",
+          "a_s": 30.3308,
+          "b_s": 31.8804,
+          "reduction_pct": -5.108998114128218,
+          "a_peak_gb": {
+            "allocated": 1.374,
+            "reserved": 1.546
+          },
+          "b_peak_gb": {
+            "allocated": 1.699,
+            "reserved": 1.743
+          },
+          "memory_delta_upper_bytes": 325999999.99999994
+        },
+        {
+          "pair": 4,
+          "order": "AB",
+          "a_s": 30.2189,
+          "b_s": 40.0592,
+          "reduction_pct": -32.56339575563636,
+          "a_peak_gb": {
+            "allocated": 1.374,
+            "reserved": 1.546
+          },
+          "b_peak_gb": {
+            "allocated": 1.699,
+            "reserved": 1.743
+          },
+          "memory_delta_upper_bytes": 325999999.99999994
+        }
+      ],
+      "median_pct": -22.92510722533818,
+      "ci95": [
+        -32.56339575563636,
+        -5.108998114128218
+      ],
+      "ci98_75": [
+        -32.56339575563636,
+        -5.108998114128218
+      ],
+      "memory_pass": true,
+      "verdict": "NO GAIN"
+    },
+    {
+      "seq": 2048,
+      "policy": "qkv",
+      "saved_bytes": 805306368,
+      "pairs": [
+        {
+          "pair": 0,
+          "order": "AB",
+          "a_s": 128.8632,
+          "b_s": 126.3122,
+          "reduction_pct": 1.9796186964160456,
+          "a_peak_gb": {
+            "allocated": 3.69,
+            "reserved": 4.238
+          },
+          "b_peak_gb": {
+            "allocated": 4.47,
+            "reserved": 5.077
+          },
+          "memory_delta_upper_bytes": 780999999.9999998
+        },
+        {
+          "pair": 1,
+          "order": "BA",
+          "a_s": 128.5733,
+          "b_s": 126.2602,
+          "reduction_pct": 1.7990515915823828,
+          "a_peak_gb": {
+            "allocated": 3.69,
+            "reserved": 4.238
+          },
+          "b_peak_gb": {
+            "allocated": 4.47,
+            "reserved": 5.077
+          },
+          "memory_delta_upper_bytes": 780999999.9999998
+        },
+        {
+          "pair": 2,
+          "order": "AB",
+          "a_s": 128.6287,
+          "b_s": 125.9847,
+          "reduction_pct": 2.0555288205509386,
+          "a_peak_gb": {
+            "allocated": 3.69,
+            "reserved": 4.238
+          },
+          "b_peak_gb": {
+            "allocated": 4.47,
+            "reserved": 5.077
+          },
+          "memory_delta_upper_bytes": 780999999.9999998
+        },
+        {
+          "pair": 3,
+          "order": "BA",
+          "a_s": 128.5043,
+          "b_s": 126.0425,
+          "reduction_pct": 1.9157335591104707,
+          "a_peak_gb": {
+            "allocated": 3.69,
+            "reserved": 4.238
+          },
+          "b_peak_gb": {
+            "allocated": 4.47,
+            "reserved": 5.077
+          },
+          "memory_delta_upper_bytes": 780999999.9999998
+        },
+        {
+          "pair": 4,
+          "order": "AB",
+          "a_s": 128.5977,
+          "b_s": 126.6677,
+          "reduction_pct": 1.5008044467358335,
+          "a_peak_gb": {
+            "allocated": 3.69,
+            "reserved": 4.238
+          },
+          "b_peak_gb": {
+            "allocated": 4.47,
+            "reserved": 5.077
+          },
+          "memory_delta_upper_bytes": 780999999.9999998
+        }
+      ],
+      "median_pct": 1.9157335591104707,
+      "ci95": [
+        1.5008044467358335,
+        2.0555288205509386
+      ],
+      "ci98_75": [
+        1.5008044467358335,
+        2.0555288205509386
+      ],
+      "memory_pass": true,
+      "verdict": "INCONCLUSIVE"
+    },
+    {
+      "seq": 2048,
+      "policy": "qkvo",
+      "saved_bytes": 1342177280,
+      "pairs": [
+        {
+          "pair": 0,
+          "order": "AB",
+          "a_s": 128.7374,
+          "b_s": 124.6924,
+          "reduction_pct": 3.1420550671366683,
+          "a_peak_gb": {
+            "allocated": 3.69,
+            "reserved": 4.238
+          },
+          "b_peak_gb": {
+            "allocated": 4.99,
+            "reserved": 5.614
+          },
+          "memory_delta_upper_bytes": 1301000000.0000002
+        },
+        {
+          "pair": 1,
+          "order": "BA",
+          "a_s": 129.0499,
+          "b_s": 124.9966,
+          "reduction_pct": 3.1408780634467806,
+          "a_peak_gb": {
+            "allocated": 3.69,
+            "reserved": 4.238
+          },
+          "b_peak_gb": {
+            "allocated": 4.99,
+            "reserved": 5.614
+          },
+          "memory_delta_upper_bytes": 1301000000.0000002
+        },
+        {
+          "pair": 2,
+          "order": "AB",
+          "a_s": 128.7891,
+          "b_s": 124.8414,
+          "reduction_pct": 3.065243875452191,
+          "a_peak_gb": {
+            "allocated": 3.69,
+            "reserved": 4.238
+          },
+          "b_peak_gb": {
+            "allocated": 4.99,
+            "reserved": 5.614
+          },
+          "memory_delta_upper_bytes": 1301000000.0000002
+        },
+        {
+          "pair": 3,
+          "order": "BA",
+          "a_s": 128.9365,
+          "b_s": 125.0337,
+          "reduction_pct": 3.0269163502964633,
+          "a_peak_gb": {
+            "allocated": 3.69,
+            "reserved": 4.238
+          },
+          "b_peak_gb": {
+            "allocated": 4.99,
+            "reserved": 5.614
+          },
+          "memory_delta_upper_bytes": 1301000000.0000002
+        },
+        {
+          "pair": 4,
+          "order": "AB",
+          "a_s": 128.9876,
+          "b_s": 124.5604,
+          "reduction_pct": 3.432267907922921,
+          "a_peak_gb": {
+            "allocated": 3.69,
+            "reserved": 4.238
+          },
+          "b_peak_gb": {
+            "allocated": 4.99,
+            "reserved": 5.614
+          },
+          "memory_delta_upper_bytes": 1301000000.0000002
+        }
+      ],
+      "median_pct": 3.1408780634467806,
+      "ci95": [
+        3.0269163502964633,
+        3.432267907922921
+      ],
+      "ci98_75": [
+        3.0269163502964633,
+        3.432267907922921
+      ],
+      "memory_pass": true,
+      "verdict": "CONFIRMED"
+    }
+  ],
+  "operators": {
+    "s512-full": {
+      "backward:aten.bmm.default": 382,
+      "backward:aten.mm.default": 1592,
+      "backward:bitsandbytes.dequantize_4bit.default": 448,
+      "backward:bitsandbytes.dequantize_blockwise.default": 448,
+      "forward:aten.bmm.default": 128,
+      "forward:aten.mm.default": 706,
+      "forward:bitsandbytes.dequantize_4bit.default": 448,
+      "forward:bitsandbytes.dequantize_blockwise.default": 448
+    },
+    "s512-qkv": {
+      "backward:aten.bmm.default": 382,
+      "backward:aten.mm.default": 1400,
+      "backward:bitsandbytes.dequantize_4bit.default": 448,
+      "backward:bitsandbytes.dequantize_blockwise.default": 448,
+      "forward:aten.bmm.default": 128,
+      "forward:aten.mm.default": 706,
+      "forward:bitsandbytes.dequantize_4bit.default": 448,
+      "forward:bitsandbytes.dequantize_blockwise.default": 448
+    },
+    "s512-qkvo": {
+      "backward:aten.bmm.default": 382,
+      "backward:aten.mm.default": 1336,
+      "backward:bitsandbytes.dequantize_4bit.default": 448,
+      "backward:bitsandbytes.dequantize_blockwise.default": 448,
+      "forward:aten.bmm.default": 128,
+      "forward:aten.mm.default": 706,
+      "forward:bitsandbytes.dequantize_4bit.default": 448,
+      "forward:bitsandbytes.dequantize_blockwise.default": 448
+    },
+    "s2048-full": {
+      "backward:aten.bmm.default": 382,
+      "backward:aten.mm.default": 1592,
+      "backward:bitsandbytes.dequantize_4bit.default": 448,
+      "backward:bitsandbytes.dequantize_blockwise.default": 448,
+      "forward:aten.bmm.default": 128,
+      "forward:aten.mm.default": 706,
+      "forward:bitsandbytes.dequantize_4bit.default": 448,
+      "forward:bitsandbytes.dequantize_blockwise.default": 448
+    },
+    "s2048-qkv": {
+      "backward:aten.bmm.default": 382,
+      "backward:aten.mm.default": 1400,
+      "backward:bitsandbytes.dequantize_4bit.default": 448,
+      "backward:bitsandbytes.dequantize_blockwise.default": 448,
+      "forward:aten.bmm.default": 128,
+      "forward:aten.mm.default": 706,
+      "forward:bitsandbytes.dequantize_4bit.default": 448,
+      "forward:bitsandbytes.dequantize_blockwise.default": 448
+    },
+    "s2048-qkvo": {
+      "backward:aten.bmm.default": 382,
+      "backward:aten.mm.default": 1336,
+      "backward:bitsandbytes.dequantize_4bit.default": 448,
+      "backward:bitsandbytes.dequantize_blockwise.default": 448,
+      "forward:aten.bmm.default": 128,
+      "forward:aten.mm.default": 706,
+      "forward:bitsandbytes.dequantize_4bit.default": 448,
+      "forward:bitsandbytes.dequantize_blockwise.default": 448
+    }
+  },
+  "timing_arms": 40,
+  "freeze_sha256": "87bf7c610868eae69d5c875a4572784074d404bff3c76316ef6d3778e8ce32b3"
+}

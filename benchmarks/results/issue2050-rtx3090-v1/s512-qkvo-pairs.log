@@ -1,0 +1,16 @@
+pair 0 arm A: rc=0 wall=56s free_before=102.61GiB
+pair 0 arm B: rc=0 wall=66s free_before=100.77GiB
+pair 1 arm B: rc=0 wall=59s free_before=100.69GiB
+pair 1 arm A: rc=0 wall=55s free_before=100.28GiB
+pair 2 arm A: rc=0 wall=50s free_before=104.01GiB
+pair 2 arm B: rc=0 wall=57s free_before=105.41GiB
+pair 3 arm B: rc=0 wall=56s free_before=105.47GiB
+pair 3 arm A: rc=0 wall=51s free_before=105.43GiB
+pair 4 arm A: rc=0 wall=50s free_before=103.57GiB
+pair 4 arm B: rc=0 wall=63s free_before=102.62GiB
+pair 0 (AB): A 30.901s B 39.117s -> -26.586% | tok/s 828.4 -> 654.5 | peak alloc 1.374 -> 1.699 GB | cache B 0
+pair 1 (BA): A 30.774s B 36.338s -> -18.082% | tok/s 831.9 -> 704.5 | peak alloc 1.374 -> 1.699 GB | cache B 0
+pair 2 (AB): A 30.310s B 37.259s -> -22.925% | tok/s 844.6 -> 687.1 | peak alloc 1.374 -> 1.699 GB | cache B 0
+pair 3 (BA): A 30.331s B 31.880s -> -5.109% | tok/s 844.0 -> 803.0 | peak alloc 1.374 -> 1.699 GB | cache B 0
+pair 4 (AB): A 30.219s B 40.059s -> -32.563% | tok/s 847.1 -> 639.0 | peak alloc 1.374 -> 1.699 GB | cache B 0
+{"pairs": 5, "reductions_pct": [-26.586, -18.082, -22.925, -5.109, -32.563], "median_pct": -22.925, "ci95": [-32.563, -5.109], "verdict": "NO GAIN"}
