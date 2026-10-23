@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
+<!-- synced-from: README.md sha256:9343dd2ef0ba99ba0dd4b9b61580a19426055bc2f5466f07e7b7472aba08f7ec -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <strong>中文</strong></p>
 
 <p align="center">
@@ -73,6 +73,8 @@ NF4 达到 **952 MHz 下 119.6 tok/s，峰值 3.32 GB**（修复前）——与�
 [全部实测数据](benchmarks/) · [论文](https://doi.org/10.5281/zenodo.21771064) ·
 **[在免费 Colab T4 上亲自验证](notebooks/proof-4gb.ipynb)**（把进程限制在 4 GB，
 然后断言流式模型与常驻模型逐位一致）
+
+针对流式输入嵌入层和输出头的 LoRA 也支持默认的适配器保存和从检查点恢复；请参阅 [CPU 快照的内存开销与限制](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724)。
 
 <p align="center">
   <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="在 4 GB 卡上对 Llama-3.1-8B 执行 soup train 的预检：3.60 GB 基座固定在内存中跨 32 层流转，配两个 113 MB 显存缓冲，实测峰值 3.32 GB、119.6 tok/s，停在 4 GB 线以内（修复前的那组数据，测于 v0.72.2，952 MHz；#331 修复后的那组数据见下方说明）"></a><br>
