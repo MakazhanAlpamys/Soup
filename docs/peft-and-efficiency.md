@@ -628,6 +628,11 @@ set (per-parameter LoRA, e.g. fused MoE experts), or with `training.lora.use_ver
 the model is built rather than silently drop the freeze plan (#1432). A top-level `lm_head` target
 is accepted and keeps its adapter.
 
+Known limitation: a `target_modules` entry spelled as a full module path, such as
+`model.layers.0.self_attn.q_proj`, keeps its adapter even when that layer is frozen, because peft
+accepts an exact module name before it reads `layers_to_transform`. Use module-name suffixes such
+as `q_proj` with `freeze_layers` / `freeze_ratio`.
+
 ## LISA — Layerwise Importance Sampling (v0.71.34)
 
 LISA (Layerwise Importance Sampled AdamW, [arXiv:2403.17919](https://arxiv.org/abs/2403.17919)) targets full-fine-tuning quality at LoRA-like memory. **Measured at 7B+, it delivers the first half and not the second** — see [what it actually costs](#what-lisa-actually-costs-measured-at-3b-and-8b) below before choosing it over LoRA. Instead of picking layers once (that's Spectrum's static `unfrozen_parameters`), LISA re-samples a small random set of decoder layers **every N steps** and freezes the rest; the input embeddings, the LM head, and the final norm stay trainable throughout by default (set `lisa_train_embeddings: false` to freeze that group too — see [the memory trade-off](#reclaiming-the-always-on-overhead-lisa_train_embeddings) below).

@@ -1897,24 +1897,23 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 raise ValueError(
                     "training.freeze_layers / training.freeze_ratio freezes "
                     "every decoder layer, leaving no layer for the LoRA "
-                    "adapter to attach to. Reduce freeze_layers/freeze_ratio, "
-                    "or set training.lora.r=0 for full fine-tuning of the "
-                    "(empty) unfrozen range instead."
+                    "adapter to attach to. Reduce freeze_layers/freeze_ratio."
                 )
 
             # #1432: peft only applies layers_to_transform when
-            # target_modules is a list, never a regex string, so refuse
-            # rather than silently ship the same bug for that shape.
+            # target_modules is a list, never a string (a regex or
+            # all-linear), so refuse rather than silently ship the same bug
+            # for that shape.
             if lora_layers_to_transform is not None and isinstance(target_modules, str):
                 raise ValueError(
                     "training.freeze_layers / training.freeze_ratio cannot "
-                    "currently be combined with a regex "
-                    f"training.lora.target_modules ({target_modules!r}): peft "
-                    "only restricts layers_to_transform when target_modules "
-                    "is a list of module-name suffixes. Give an explicit "
-                    "training.lora.target_modules list (the module names are "
-                    "in model.named_modules()) instead of a regex, or drop "
-                    "freeze_layers/freeze_ratio."
+                    "currently be combined with a string "
+                    f"training.lora.target_modules ({target_modules!r}, a regex "
+                    "or all-linear): peft only restricts layers_to_transform "
+                    "when target_modules is a list of module-name suffixes. "
+                    "Give an explicit training.lora.target_modules list (the "
+                    "module names are in model.named_modules()) instead, or "
+                    "drop freeze_layers/freeze_ratio."
                 )
 
             # #1432: peft only applies layers_to_transform to a list target
