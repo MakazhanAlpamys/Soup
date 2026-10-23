@@ -131,6 +131,11 @@
     "training.grpo_beta": 0.1,
     "training.grpo_delta": null,
     "training.grpo_fp16": false,
+    "training.grpo_judge": null,
+    "training.grpo_judge_max_calls": null,
+    "training.grpo_judge_max_failure_rate": null,
+    "training.grpo_judge_max_tokens": null,
+    "training.grpo_judge_rubric": null,
     "training.grpo_variant": null,
     "training.hub": "hf",
     "training.ipo_tau": 0.1,
@@ -1836,6 +1841,16 @@
       "training.lora.r": 32,
       "training.lr": 5e-06,
       "training.moe_lora": true
+    },
+    "qwen3.5-4b-dpo": {
+      "base": "Qwen/Qwen3.5-4B",
+      "data.format": "dpo",
+      "data.max_length": 4096,
+      "data.train": "./data/preference_train.jsonl",
+      "task": "dpo",
+      "training.lora.alpha": 32,
+      "training.lora.r": 16,
+      "training.lr": 5e-06
     },
     "qwen3.5-4b-pretrain": {
       "base": "Qwen/Qwen3.5-4B-Base",

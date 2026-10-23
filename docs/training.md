@@ -1468,6 +1468,8 @@ when the fraction exceeds 5%) and persisted in `trainer_state.json` so
 **Built-in reward functions:**
 - `accuracy` — 1.0 when the completion's final answer matches the gold's, else 0.0 (no partial credit)
 - `format` — checks for structured `<think>...</think>` reasoning blocks
+- `judge_rank` — an LLM judge scores each prompt's completions against each other, from 0 to 1;
+  see [LLM-judge ranking reward](#llm-judge-ranking-reward-reward_fn-judge_rank) below
 
 `accuracy` and verifiable `math` read the completion and the gold with the same parser. The final
 answer is, in this order of precedence:
@@ -1563,6 +1565,79 @@ This also unlocks the `rm_ensemble` reward-hack detector, which needs ≥ 2 rewa
 training:
   reward_fn: "accuracy,format"   # both are scored every step
 ```
+
+### LLM-judge ranking reward (`reward_fn: judge_rank`)
+
+For tasks without a checkable answer (writing, support replies, agent turns), `judge_rank` asks an
+LLM judge to compare the completions of each prompt with each other. GRPO normalises rewards within
+a prompt's group, so only the order inside a group matters: one judge call sees all
+`num_generations` completions of a prompt together and scores each from 0 to 1 (relative scoring,
+as in OpenPipe's RULER). Where an answer can be checked, a rule-based reward (`accuracy`,
+`verifiable`, a `.py` file) is cheaper and cannot be talked into a score. `judge_rank` also runs in
+an ensemble, e.g. `reward_fn: "format,judge_rank"`.
+
+```yaml
+task: grpo
+training:
+  reward_fn: judge_rank
+  grpo_judge: "ollama://llama3.1"        # or https://host/model, http://localhost:8000/model
+  grpo_judge_max_calls: 20000            # required: the run is refused if it could make more
+  # grpo_judge_rubric: ./rubric.yaml     # optional; only each criterion's name + description
+  # grpo_judge_max_tokens: 1024          # judge reply budget (default 1024)
+  # grpo_judge_max_failure_rate: 0.2     # stop past this share of failed groups (default 0.2)
+```
+
+`grpo_judge` takes the same URL form as `online_dpo_judge` and is checked at load: an unsupported
+scheme, plain `http://` to a host other than localhost, or a private IP literal is refused before
+anything downloads. A rubric (the `soup eval` judge format) contributes the `name` and
+`description` of each criterion; a ranking scores from 0 to 1, so `weight` and `scale` are not
+used. Without a rubric the judge uses Soup's default criteria (helpfulness, accuracy, safety).
+
+**What it costs.** One judge call per group, i.e. per training prompt per epoch, plus one per
+held-out prompt at each evaluation (`training.eval_steps`). A reply that does not parse is asked
+for once more, so a group takes at most 2 calls. Inside each counted call, a request the judge
+answers with 429 or a 5xx, or that times out or loses its connection, is retried up to twice, so
+the judge host can see up to three requests per counted call. The calls are made one after
+another while the step waits, so a step takes at least one judge round trip per prompt in its
+generation batch.
+After the dataset loads and before the model does, Soup counts
+`(train rows x epochs + held-out rows x evaluations) x 2` and refuses the run when that exceeds
+`grpo_judge_max_calls`, stating the numbers and the value to raise it to. The number of
+evaluations is counted at the smallest batch the run can train at, so under `batch_size: auto` it
+is an upper bound. `rollout_backend` is refused with `judge_rank`, because it replaces the prompts
+after they were counted.
+
+**What the judge host receives.** The whole conversation of each prompt (system prompt, earlier
+turns and the last user turn) and every completion of the group. Only point `grpo_judge` at a host
+you would send your training data to. The conversation and each completion are enclosed between
+BEGIN/END lines that carry a code drawn for that call, which none of them contains, and the judge
+is told to ignore instructions inside them. The completions are shown in a fresh order on every
+call (seeded from `training.seed`), so a judge that favours a position does not keep favouring the
+same completion.
+
+**The judge's answer** must be one JSON object with exactly one key per response number, `"1"` to
+`"N"`, each a number from 0 to 1 (one ```` ```json ```` fence around it is accepted). A duplicate,
+missing or extra key, `NaN` or `Infinity`, a boolean, a string or a number outside [0, 1] makes
+the reply unusable, and it is asked for once more. Soup never shortens a completion: a prompt that
+does not fit the judge's context fails its group when the server refuses it (OpenAI-compatible
+servers answer with a 4xx). Some servers, Ollama among them, cut an over-long prompt instead of
+refusing it, so give the judge model a context that holds a whole group.
+
+**Failures are visible.** A group with no usable answer scores `None`: TRL leaves it out of
+`rewards/judge_rank/mean` (its summed `reward` counts it as 0), and the group gets no advantage.
+The share of such training groups is logged as `judge/failed_group_rate`, and the share of answered
+groups whose completions all got the same score (no advantage either) as
+`judge/equal_score_group_rate`. Once at least 20 training groups have been judged, training stops
+with an error naming the judge when more than `grpo_judge_max_failure_rate` of them failed;
+evaluation groups are counted separately and never stop the run. A shorter run in which the judge
+scored no training group at all fails at its end instead of saving an adapter. A judge that cannot
+be reached at all (3 requests in a row with their retries spent) ends the run at once. The counters
+are per process, so `judge_rank` refuses a run with more than one process (`WORLD_SIZE` above 1).
+
+**Reward hacking.** The policy is trained to please the judge, not to be right, and it can learn
+what a particular judge rewards: length, a confident tone, flattery, or text addressed to the
+judge. Read samples while it trains, keep a held-out check with a different judge or a person,
+and consider the reward-hacking detectors under Loop Hardening above.
 
 ### Synthesize a verifier from your data (`soup reward synth`)
 
@@ -1847,6 +1922,15 @@ training:
     alpha: 16
   quantization: 4bit
 ```
+
+**Long prompts are capped as in DPO and ORPO.** trl's CPO trainer cuts only the
+answers, so after it tokenizes, `soup train` cuts the prompt to
+`data.max_length // 2` tokens, keeping its end, and the answers to the room
+left, for the train and validation splits. Every sequence is then at most
+`data.max_length`. The cut goes by the prompt alone: a prompt longer than
+`data.max_length // 2` tokens loses its start even when prompt and answers
+would fit in `data.max_length`. A row whose prompt is at most
+`data.max_length // 2` tokens and which fits is unchanged.
 
 **Rows whose completion trl truncates away are refused.** trl's CPO trainer
 truncates each answer to `data.max_length` minus the **longer** answer's length,

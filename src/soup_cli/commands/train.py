@@ -315,6 +315,23 @@ def _refuse_empty_train(dcfg, dataset) -> None:
     raise typer.Exit(1)
 
 
+def _refuse_over_judge_budget(cfg, dataset) -> None:
+    """Refuse a ``judge_rank`` run that could exceed its judge-call budget (#2047).
+
+    The rows are known only once the dataset is loaded, and the trainer loads
+    the model before it reads them, so this runs between the two.
+    """
+    from rich.markup import escape
+
+    from soup_cli.trainer.grpo_judge import check_judge_rank_budget
+
+    try:
+        check_judge_rank_budget(cfg, dataset)
+    except ValueError as exc:
+        console.print(f"[red]Judge budget:[/] {escape(str(exc))}")
+        raise typer.Exit(1) from exc
+
+
 def _build_hardware_fit_input(cfg, gpu_memory_gb=None):
     """Best-effort ``HardwareFitInput`` from a ``SoupConfig``.
 
@@ -1735,6 +1752,7 @@ def train(
         _refuse_empty_train(cfg.data, dataset)
         _validate_classification_dataset_if_applicable(cfg, dataset)
         _validate_csm_dataset_if_applicable(cfg, dataset)
+        _refuse_over_judge_budget(cfg, dataset)
         console.print(
             f"[green]Data OK:[/] {_train_sample_count(cfg.data, dataset)} train samples"
         )
@@ -1760,6 +1778,7 @@ def train(
     _refuse_empty_train(cfg.data, dataset)
     _validate_classification_dataset_if_applicable(cfg, dataset)
     _validate_csm_dataset_if_applicable(cfg, dataset)
+    _refuse_over_judge_budget(cfg, dataset)
     console.print(
         f"[green]Loaded:[/] {_train_sample_count(cfg.data, dataset)} train samples"
     )
@@ -1875,17 +1894,24 @@ def train(
         # to keep separate chains and sweep's copy fell ten tasks and the MLX
         # route behind. See soup_cli/trainer/dispatch.py.
         from soup_cli.trainer.dispatch import build_trainer
-        from soup_cli.utils.launcher import is_in_distributed
-        from soup_cli.utils.run_provenance import BaseRevision, base_revision_scope
+        from soup_cli.utils.run_provenance import (
+            BaseRevision,
+            base_revision_scope,
+            confirm_distributed_base_revision,
+            synchronize_base_revision,
+        )
 
         base_identity = BaseRevision(
             run_base,
-            binding_supported=(cfg.backend == "transformers" and hub_name == "hf"
-                               and not is_in_distributed()),
+            binding_supported=(cfg.backend == "transformers" and hub_name == "hf"),
         )
+        synchronize_base_revision(base_identity, cpu=device == "cpu")
         with base_revision_scope(base_identity):
             trainer_wrapper = build_trainer(cfg, **trainer_kwargs)
             trainer_wrapper.setup(dataset)
+        confirm_distributed_base_revision(
+            base_identity, model=getattr(trainer_wrapper, "model", None),
+        )
         tracker.record_base_revision(
             run_id, revision=base_identity.revision, source=base_identity.source,
         )
@@ -1993,6 +2019,9 @@ def train(
 
         from soup_cli.utils.run_provenance import write_run_provenance
 
+        confirm_distributed_base_revision(
+            base_identity, model=getattr(trainer_wrapper, "model", None),
+        )
         tracker.record_base_revision(
             run_id, revision=base_identity.revision, source=base_identity.source,
         )
@@ -2065,7 +2094,9 @@ def train(
             f"{merge_hint}\n"
             f"Export GGUF: [bold]soup export --model {result['output_dir']}[/]\n"
             f"Run details: [bold]soup runs show {run_id}[/]",
-            title="[bold green]Training Complete![/]",
+            title=("[bold yellow]Training Stopped — Loss watchdog[/]"
+                   if result.get("stop_reason") == "loss_watchdog"
+                   else "[bold green]Training Complete![/]"),
         )
     )
 

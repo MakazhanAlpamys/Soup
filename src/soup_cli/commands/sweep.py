@@ -357,6 +357,11 @@ def _generate_combinations(
     if strategy == "grid":
         combos = [dict(zip(keys, vals)) for vals in itertools.product(*value_lists)]
     elif strategy == "random":
+        # Draw from each list's distinct values. A list that names a value twice
+        # (`lr=1e-5,2e-5,1e-5`, or `1e-5,0.00001`) has fewer distinct arms than the
+        # product of the list lengths; sampling until that many unique arms turned
+        # up never finished, and the run-them-all branch repeated an arm.
+        value_lists = [list(dict.fromkeys(vals)) for vals in value_lists]
         total_possible = 1
         for vals in value_lists:
             total_possible *= len(vals)
@@ -513,6 +518,10 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
         preserve_source_columns=task_preserves_source_columns(cfg.task),
     )
     console.print(f"[dim]Loaded {len(dataset['train'])} train samples[/]")
+    # #2047 -- the judge_rank cost guard, between the data load and the model load.
+    from soup_cli.trainer.grpo_judge import check_judge_rank_budget
+
+    check_judge_rank_budget(cfg, dataset)
 
     # Start tracking
     tracker = ExperimentTracker()

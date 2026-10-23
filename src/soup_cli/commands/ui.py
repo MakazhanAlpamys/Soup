@@ -9,6 +9,8 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
+from soup_cli.utils.terminal import for_terminal
+
 console = Console()
 
 
@@ -20,6 +22,22 @@ def _is_loopback(host: str) -> bool:
         return ipaddress.ip_address(host.strip("[]")).is_loopback
     except ValueError:
         return False
+
+
+def _url_host(host: str) -> str:
+    """Return the host to put in the URL a browser opens for a server bound to ``host``.
+
+    ``0.0.0.0`` and ``::`` are bind addresses, not destinations: Windows refuses
+    to connect to them (#2054), so they map to loopback. IPv6 literals are
+    bracketed, as a URL needs.
+    """
+    try:
+        addr = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return host
+    if addr.is_unspecified:
+        addr = ipaddress.ip_address("127.0.0.1" if addr.version == 4 else "::1")
+    return f"[{addr}]" if addr.version == 6 else str(addr)
 
 
 def ui(
@@ -128,11 +146,12 @@ def ui(
 
     app = create_app(host=host, port=port)
 
-    url = f"http://{host}:{port}"
+    # The server stays bound to `host`; only the printed and opened URL changes.
+    url = f"http://{_url_host(host)}:{port}"
     login_url = f"{url}/?token={token}"
 
     panel_body = (
-        f"URL:    [bold]{login_url}[/]\n"
+        f"URL:    [bold]{for_terminal(login_url)}[/]\n"
         f"Token:  [bold]{token}[/]\n\n"
         f"API endpoints require:\n"
         f"  [dim]Authorization: Bearer {token}[/]\n\n"

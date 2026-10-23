@@ -727,7 +727,8 @@ For `dpo`, `ipo`, `simpo`, `orpo`, `bco`, `preference` and `reward_model`, train
 resolves an omitted `data.format` or `data.format: auto` to `dpo`. This preserves
 `chosen` and `rejected` when the prompt is a `messages` conversation instead of a
 `prompt` string. The existing converter decides prompt precedence and normalises
-string/message-list answers; mixed text and conversational pairs are unified.
+string/message-list answers; mixed text and conversational pairs are unified (see
+[Preference row layouts (dpo, kto)](#preference-row-layouts-dpo-kto) below).
 Ordinary SFT auto-detection and KTO's unpaired layout are unchanged. Standalone
 `soup data validate` has no training-task context: use `--format dpo` to inspect
 these preference layouts. A training or validation split without preference-pair
@@ -737,6 +738,92 @@ columns is refused before loading a model, including with `soup train --dry-run`
 ```json
 {"prompt": "Explain gravity", "completion": "Gravity is a force...", "label": true}
 ```
+
+`label` accepts booleans; strings `true`, `1`, `yes`, `false`, `0`, `no`
+(ignoring case and surrounding spaces); and integers `1`, `0`, `-1`.
+`1` is desirable; `0` and `-1` are undesirable. Nulls, floats (including
+`1.0` and non-finite numbers), containers and other integers are refused instead
+of coerced. `soup data validate --format kto` reports the offending label;
+training drops malformed rows with the same reason and refuses an empty result,
+including with `--dry-run`. Use `--min-valid-fraction 1.0` to reject any bad row
+in standalone validation.
+
+### Preference row layouts (dpo, kto)
+
+Preference training normalises each row into either plain text (all fields are strings)
+or conversational turns (all fields are non-empty message lists with prompt turns confined
+to `prompt`).
+
+- **Task routing:** `data.format: dpo` feeds `dpo`, `ipo`, `orpo`, `simpo`, `bco`,
+  `preference` and `reward_model`. `data.format: kto` feeds `kto`.
+- **Detection:** For the seven preference tasks above, training resolves an omitted
+  `data.format` or `format: auto` to `dpo` (both in live training and under `--dry-run`),
+  so prompt-less preference files load automatically during training. However, the standalone
+  detector and `soup data validate <file>` run without a training task: a prompt-less file
+  (`{"chosen": ..., "rejected": ...}`) fails bare detection with `Cannot detect format at row 0`,
+  and a file with `{"messages": ..., "chosen": ..., "rejected": ...}` detects as `chatml`
+  (losing the answers). Standalone validation of these layouts needs `--format dpo`.
+  Tasks outside those seven get no automatic `dpo` resolution.
+- **Ignored keys:** A top-level `system` key, `scores`, and `ids` are ignored (system instructions
+  belong in the conversation message list).
+- **Refusals:** A refused row is dropped with `Warning: N of M rows dropped: they do not convert as 'dpo'. First: row I: <reason>.`
+  followed by `List them all with: soup data validate <source> --format dpo`.
+  `soup data validate` prints the total drop count and up to the first three reasons,
+  followed by `... and N more`. If zero usable training rows remain, `soup train`
+  stops with exit code 1 before loading the model, including under `--dry-run`.
+
+#### Accepted preference pair layouts (`data.format: dpo`)
+
+| Layout | Example row | What the trainer gets |
+|---|---|---|
+| all strings | `{"prompt":"Q","chosen":"good","rejected":"bad"}` | unchanged (empty strings and equal answers load) |
+| string prompt, answers repeat the question (bundled files, UltraFeedback) | `{"prompt":"Q","chosen":[{"role":"user","content":"Q"},{"role":"assistant","content":"good"}],"rejected":[{"role":"user","content":"Q"},{"role":"assistant","content":"bad"}]}` | prompt `[{"role":"user","content":"Q"}]`, chosen `[{"role":"assistant","content":"good"}]`, rejected `[{"role":"assistant","content":"bad"}]`; the prompt string is not read |
+| string prompt, answers only | `{"prompt":"Q","chosen":[{"role":"assistant","content":"good"}],"rejected":[{"role":"assistant","content":"bad"}]}` | prompt `[{"role":"user","content":"Q"}]`, answers as written |
+| message-list prompt | `{"prompt":[{"role":"user","content":"Q"}],"chosen":[{"role":"assistant","content":"good"}],"rejected":[{"role":"assistant","content":"bad"}]}` | unchanged; a prompt both answers repeat is cut from them |
+| message-list prompt, string answers | `{"prompt":[{"role":"user","content":"Q"}],"chosen":"good","rejected":"bad"}` | each answer becomes one assistant turn |
+| one message object for a list | `{"prompt":"Q","chosen":{"role":"assistant","content":"good"},"rejected":{"role":"assistant","content":"bad"}}` | read as a list of one |
+| no prompt, shared leading turns (format: auto on preference tasks; validate needs --format dpo) | `{"chosen":[{"role":"user","content":"Q"},{"role":"assistant","content":"good"}],"rejected":[{"role":"user","content":"Q"},{"role":"assistant","content":"bad"}]}` | the shared turns are the prompt |
+| no prompt, messages (format: auto on preference tasks; validate needs --format dpo) | `{"messages":[{"role":"user","content":"Q"}],"chosen":"good","rejected":"bad"}` | messages is the prompt, answers become assistant turns |
+| turn with no text | `{"prompt":"Q","chosen":[{"role":"assistant","content":null}],"rejected":[{"role":"assistant","content":"bad"}]}` | content null or absent, with or without tool_calls; a list of content blocks: unchanged |
+| text rows and conversational rows in one file | any two of the above | text rows rewritten as user + assistant turns; Note: N of M train rows are plain-text preference rows in a dataset whose other rows are conversations. Each was rewritten ... |
+
+#### Refused preference pair layouts (`data.format: dpo`)
+
+| Row | Message |
+|---|---|
+| `{"prompt":"Q","chosen":"good","rejected":[{"role":"assistant","content":"bad"}]}` | `dpo.chosen is a string and dpo.rejected is a message list: give both as strings or both as message lists` |
+| `{"chosen":[{"role":"user","content":"Q"}],"rejected":[{"role":"user","content":"Q"},{"role":"assistant","content":"bad"}]}` | `dpo.chosen has no turn after the 1 it shares with dpo.rejected: there is no chosen answer` |
+| `{"chosen":[{"role":"assistant","content":"good"}],"rejected":[{"role":"assistant","content":"bad"}]}` | `dpo.prompt is missing and dpo.chosen and dpo.rejected share no leading turn to use as the prompt: add 'prompt' (a string or a message list)` |
+| `{"prompt":"Q","chosen":[],"rejected":[{"role":"assistant","content":"bad"}]}` | `dpo.chosen is an empty message list` |
+| `{"prompt":5,"chosen":"g","rejected":"b"}` | `dpo.prompt must be a string, a message or a list of messages, got int` |
+| `{"prompt":"Q","chosen":[{"role":"user","content":"Q"},"oops"],"rejected":[{"role":"user","content":"Q"},{"role":"assistant","content":"bad"}]}` | `dpo.chosen[1] must be a message (an object with 'role' and 'content'), got str` |
+| `{"prompt":"Q","chosen":[{"role":"user","content":"Q"},{"content":"x"}],"rejected":[{"role":"user","content":"Q"},{"role":"assistant","content":"bad"}]}` | `dpo.chosen[1].role must be a non-empty string` |
+| `{"prompt":"Q","chosen":[{"role":"user","content":"Q"},{"role":"assistant","content":"good"}],"rejected":[{"role":"user","content":"Q"},{"role":"assistant","content":3}]}` | `dpo.rejected[1].content must be a string or a list of content blocks, got int` |
+| `{"prompt":"Q","chosen":[{"role":"user","content":"Q"},{"role":"assistant","content":"good"},{"role":"tool","content":{"a":1}}],"rejected":[{"role":"user","content":"Q"},{"role":"assistant","content":"bad"}]}` | `dpo.chosen[2].content must be a string or a list of content blocks, got dict (write a JSON tool result as a JSON string)` |
+| `{"prompt":"Q","chosen":null,"rejected":"bad"}` | `dpo.chosen must not be null` |
+| `{"chosen":"good","rejected":"bad"}` | `dpo.prompt must not be null` |
+
+#### Unpaired preference layouts (`data.format: kto`)
+
+KTO follows the same contract over `prompt` and `completion`: both strings or both message lists.
+
+##### Accepted KTO rows
+
+| Layout | Example row | What the trainer gets |
+|---|---|---|
+| all strings | `{"prompt":"Q","completion":"good","label":true}` | unchanged |
+| message-list prompt, string completion | `{"prompt":[{"role":"user","content":"Q"}],"completion":"good","label":true}` | completion becomes one assistant turn |
+| string prompt, message-list completion | `{"prompt":"Q","completion":[{"role":"assistant","content":"good"}],"label":true}` | prompt becomes one user turn |
+| string prompt, completion leads with history | `{"prompt":"Q","completion":[{"role":"user","content":"Q"},{"role":"assistant","content":"good"}],"label":true}` | leading turns become prompt; prompt string is not read |
+
+##### Refused KTO rows
+
+| Row | Message |
+|---|---|
+| `{"prompt":"Q","completion":[{"role":"user","content":"Q"},{"role":"user","content":"Q2"}],"label":true}` | `kto.completion has no turn after the 2 that lead it: there is no assistant answer` |
+| `{"completion":"good","label":true}` | `kto.prompt must not be null` |
+| `{"prompt":"Q","completion":[],"label":true}` | `kto.completion is an empty message list` |
+| `{"prompt":"Q","completion":"good","label":"maybe"}` | `KTO label must be true/false, got string: 'maybe'` |
 
 **LLaVA (vision):**
 ```json

@@ -89,7 +89,10 @@ FLOPS_PER_PARAM_PER_TOKEN = 6
 #: ``deepseek_v3`` is the DeepSeek-V3 family (MLA attention, DeepSeekMoE with
 #: a shared expert, the first ``first_k_dense_replace`` layers dense). Kimi K2
 #: ships the same decoder under ``model_type='kimi_k2'``, which transformers
-#: does not register, so that name stays refused here too.
+#: does not register. The streamed model's config loader (``utils/kimi_k2.py``)
+#: reads such a config into the native ``DeepseekV3Config`` behind a guard, so a
+#: K2 that passes it streams as ``deepseek_v3``; the name ``kimi_k2`` is not in
+#: this list, and a config still carrying it did not pass that guard.
 SUPPORTED_STREAM_ARCHS = (
     "llama",
     "qwen2",
