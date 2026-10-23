@@ -999,6 +999,40 @@ soup eval quant-check --before X --after Y --tasks t.jsonl --allow-stub
 
 Paths are containment-checked, and `registry://` refs are resolved with an optional `kinds` filter so you never pick the wrong artifact. Standalone `.gguf` file paths are refused up front; pass directory paths containing safetensors/HuggingFace weights or `registry://` references.
 
+### Native MLX custom evaluation
+
+```bash
+soup eval custom --backend mlx --model ./native-adapter \
+  --tasks eval_tasks.jsonl --output native-eval.json --max-tokens 512 --temperature 0
+```
+
+The native path reuses the loader and chat renderer from `soup infer --backend mlx`.
+Pass a local MLX base directory or an ordinary native linear text-LoRA adapter;
+its saved metadata identifies the base. Dense and genuine 4-bit bases are supported.
+DoRA, full fine-tunes, embeddings and other unqualified adapter variants are refused
+by the shared loader. Install `soup-cli[mlx]`; Torch/PEFT/TRL are unnecessary.
+
+Each task is rendered as one user message and its actual completion is passed to
+Soup's existing answer, text or tool-call scorer. Greedy generation is the default;
+positive temperature uses top-p 0.9. `--max-tokens` and `--temperature` configure
+only this explicit backend; stopping, token counting and template handling match
+native inference. The default Transformers path keeps its existing generation settings.
+
+A load, generation or scoring error exits 1 with an **incomplete** diagnostic and
+writes no aggregate report or tracker result. Completed examples are not silently
+removed from a denominator. A successful empty completion is still scored normally;
+it is distinct from a generator failure. Interrupted runs also produce no complete report.
+
+The JSON retains `model`, `tasks`, `total`, `correct`, `accuracy` and `category_scores`.
+Native reports additionally record complete/requested/evaluated counts, base/adapter
+metadata, SHA-256 of the corpus bytes, runtime package versions and generation
+settings, plus every prompt, expected answer, completion, score, category and native
+token count in input order. The same native evidence is retained in the experiment
+tracker when no JSON output is requested. Save reports for both base and adapter to compare them.
+Local paths identify local artifacts; keep their weights and metadata with the reports.
+A corpus score is a measurement of those generated strings, not a quality guarantee.
+Training-time `eval_gate` and `soup eval benchmark` are separate workflows.
+
 ### Custom Eval Format
 
 `scoring` must be a supported string label; omitted values default to `exact`.

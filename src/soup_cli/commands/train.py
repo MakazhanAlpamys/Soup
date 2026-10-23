@@ -196,6 +196,7 @@ def _run_auto_eval_after_training(
             from soup_cli.commands.eval import custom
 
             custom(
+                backend="transformers", max_tokens=512, temperature=0.0,
                 tasks=custom_tasks,
                 model=output_dir,
                 run_id=run_id,

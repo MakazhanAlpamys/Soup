@@ -477,3 +477,34 @@ def _create_default_generator(model_path: str, trust_remote_code: bool = False):
         return out[0]["generated_text"] if out else ""
 
     return generate
+
+
+def native_eval_identity(
+    model_path: Path, tasks_path: Path, max_tokens: int, temperature: float,
+    trust_remote_code: bool,
+) -> dict:
+    """Record the actual corpus and bounded native generation contract."""
+    import hashlib
+    import importlib.metadata
+    import platform
+
+    from soup_cli.utils.mlx_generation import read_native_adapter
+
+    metadata = read_native_adapter(model_path)
+    versions = {}
+    for package in ("soup-cli", "mlx", "mlx-lm", "transformers"):
+        try:
+            versions[package] = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            versions[package] = None
+    return {
+        "backend": "mlx", "base": metadata["model"] if metadata else str(model_path),
+        "adapter": str(model_path) if metadata else None,
+        "adapter_metadata": metadata,
+        "dataset_sha256": hashlib.sha256(tasks_path.read_bytes()).hexdigest(),
+        "runtime": {"python": platform.python_version(), "platform": platform.platform(),
+                    "packages": versions},
+        "generation": {"max_tokens": max_tokens, "temperature": temperature,
+                       "top_p": 0.9 if temperature > 0 else 1.0,
+                       "prompt_format": "single-user-chat", "trust_remote_code": trust_remote_code},
+    }

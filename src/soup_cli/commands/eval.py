@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Optional
 
@@ -340,6 +341,15 @@ def custom(
         ..., "--model", "-m",
         help="Path to model directory",
     ),
+    backend: str = typer.Option(
+        "transformers", "--backend", help="Generation backend: transformers or mlx",
+    ),
+    max_tokens: int = typer.Option(
+        512, "--max-tokens", min=1, max=16384, help="MLX maximum generated tokens (1-16384)",
+    ),
+    temperature: float = typer.Option(
+        0.0, "--temperature", help="MLX sampling temperature (0 = greedy)",
+    ),
     run_id: Optional[str] = typer.Option(
         None, "--run-id",
         help="Link results to an existing training run",
@@ -366,6 +376,23 @@ def custom(
 ):
     """Run custom evaluation tasks from a JSONL file."""
     from soup_cli.eval.custom import load_eval_tasks
+
+    if backend not in {"transformers", "mlx"}:
+        console.print("[red]Unknown backend; select transformers or mlx.[/]")
+        raise typer.Exit(1)
+    if backend == "transformers" and (max_tokens != 512 or temperature != 0):
+        console.print("[red]--max-tokens and --temperature configure the MLX backend only.[/]")
+        raise typer.Exit(1)
+    if backend == "mlx":
+        from soup_cli.utils.mlx_generation import validate_native_options
+
+        try:
+            validate_native_options(
+                max_tokens=max_tokens, temperature=temperature, device=None, hub="hf",
+            )
+        except ValueError as exc:
+            console.print(f"[red]{for_terminal(exc)}[/]")
+            raise typer.Exit(1) from exc
 
     tasks_path = Path(tasks)
     model_path = Path(model)
@@ -406,9 +433,29 @@ def custom(
     from soup_cli.eval.custom import _create_default_generator, score_task
 
     console.print("[dim]Loading model...[/]")
-    generate_fn = _create_default_generator(
-        str(model_path), trust_remote_code=trust_remote_code,
-    )
+    native_details = None
+    records = []
+    try:
+        if backend == "mlx":
+            from soup_cli.eval.custom import native_eval_identity
+            from soup_cli.utils.mlx_generation import generate_native, load_native_model
+
+            native_details = native_eval_identity(
+                model_path, tasks_path, max_tokens, temperature, trust_remote_code,
+            )
+            native_model, tokenizer = load_native_model(
+                str(model_path), trust_remote_code=trust_remote_code,
+            )
+        else:
+            from soup_cli.utils.mlx_generation import reject_native_adapter
+
+            reject_native_adapter(str(model_path))
+            generate_fn = _create_default_generator(
+                str(model_path), trust_remote_code=trust_remote_code,
+            )
+    except Exception as exc:
+        console.print(f"[red]Evaluation incomplete during loading: {for_terminal(exc)}[/]")
+        raise typer.Exit(1) from exc
 
     with progress:
         task_bar = progress.add_task(
@@ -417,10 +464,36 @@ def custom(
         # v0.40.1 Part D / G10 — keep the CLI ``--output`` path separate
         # from the per-task model response (was previously shadowed by the
         # loop variable, masking ``-o`` whenever attach-to-registry was off).
-        for eval_task in eval_tasks:
-            response = generate_fn(eval_task.prompt)
-            result = score_task(eval_task, response)
+        for index, eval_task in enumerate(eval_tasks, 1):
+            stage = "generation"
+            try:
+                if backend == "mlx":
+                    response, tokens = generate_native(
+                        native_model, tokenizer, [{"role": "user", "content": eval_task.prompt}],
+                        max_tokens=max_tokens, temperature=temperature,
+                    )
+                else:
+                    response = generate_fn(eval_task.prompt)
+                if not isinstance(response, str):
+                    raise ValueError("Generator must return completion text")
+                stage = "scoring"
+                result = score_task(eval_task, response)
+                if not math.isfinite(result.score) or not 0 <= result.score <= 1:
+                    raise ValueError("Scorer must return a finite score in [0, 1]")
+            except Exception as exc:
+                console.print(
+                    f"[red]Evaluation incomplete at task {index}/{len(eval_tasks)} "
+                    f"during {stage}: {for_terminal(exc)}. No complete report saved.[/]"
+                )
+                raise typer.Exit(1) from exc
             results_list.append(result)
+            if backend == "mlx":
+                records.append({
+                    "index": index, "prompt": eval_task.prompt, "expected": eval_task.expected,
+                    "category": eval_task.category, "scoring": eval_task.scoring,
+                    "output": response, "tokens_generated": tokens, "score": result.score,
+                    "matched": result.matched,
+                })
             progress.advance(task_bar)
 
     from soup_cli.eval.custom import EvalResults
@@ -431,8 +504,14 @@ def custom(
     # Display results
     _display_custom_results(eval_results)
 
-    # Save to tracker
-    _save_custom_results(eval_results, str(model_path), run_id)
+    # Keep native evidence even when no standalone JSON was requested.
+    if native_details is not None:
+        native_details.update(
+            complete=True, requested=len(eval_tasks), evaluated=eval_results.total, results=records,
+        )
+        _save_custom_results(eval_results, str(model_path), run_id, extra_details=native_details)
+    else:
+        _save_custom_results(eval_results, str(model_path), run_id)
     console.print("\n[green]Results saved to experiment tracker.[/]")
 
     # v0.40.1 Part D / G10 — write `--output` JSON regardless of registry
@@ -450,6 +529,8 @@ def custom(
             "accuracy": eval_results.accuracy,
             "category_scores": eval_results.category_scores,
         }
+        if native_details is not None:
+            payload.update(native_details)
         write_target = output or "eval_results.json"
         try:
             json_path = write_eval_json(write_target, payload=payload)
@@ -768,6 +849,7 @@ def auto(
             custom(
                 tasks=tasks_file,
                 model=str(output_dir),
+                backend="transformers", max_tokens=512, temperature=0.0,
                 run_id=None,
                 attach_to_registry=None,
                 output=None,
@@ -1156,6 +1238,7 @@ def _save_custom_results(
     eval_results: object,
     model_path: str,
     run_id: Optional[str],
+    *, extra_details: Optional[dict] = None,
 ) -> None:
     """Save custom eval results to the experiment tracker."""
     from soup_cli.eval.custom import TASK_NAME
@@ -1170,6 +1253,7 @@ def _save_custom_results(
             "total": eval_results.total,
             "correct": eval_results.correct,
             "category_scores": eval_results.category_scores,
+            **(extra_details or {}),
         },
         run_id=run_id,
     )
