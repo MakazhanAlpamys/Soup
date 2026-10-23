@@ -122,6 +122,8 @@ BOUNDARY_BYTES = {"lora": 2.0, "nf4": 2.0, "int8": 2.0, "full": 2.0}
 #: Under 4-bit and 8-bit loading the output head is fp32 (``KBIT_UNQUANTIZED_BYTES``),
 #: so its logits cost 4 bytes an element, not 2.
 KBIT_LOGITS_EXTRA_BYTES = 2
+#: Config flags whose fused loss can avoid building the full logits.
+FUSED_LOSS_FLAGS = frozenset({"use_liger", "use_cut_ce"})
 
 # --- 4-bit dequantization --------------------------------------------------------
 
@@ -168,8 +170,19 @@ class RunSpec:
     gradient_checkpointing: Union[bool, str] = False
     lora_r: int = 64
     target_modules: Any = "auto"
+    #: False for a model with no vocabulary-sized output (a classification or
+    #: embedding head): it builds no logits over the vocabulary.
+    lm_head: bool = True
+    #: The fused-loss flags set on a run whose trainer applies them
+    #: (``use_liger``, ``use_cut_ce``). The logits term is still charged, since
+    #: whether the patch lands is only known at train time, and a note says so.
+    fused_loss: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        if not isinstance(self.lm_head, bool):
+            raise TypeError(f"lm_head must be bool, got {type(self.lm_head).__name__}")
+        if not set(self.fused_loss) <= FUSED_LOSS_FLAGS:
+            raise ValueError(f"unknown fused_loss {self.fused_loss!r}")
         for name in ("seq_len", "batch_size", "lora_r"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
@@ -282,8 +295,9 @@ def logits_bytes(shape: ModelShape, run: RunSpec) -> int:
     (``layer_stream.LOGITS_LOSS_BYTES_PER_ELEMENT``). The resident rows fit 11.6
     bytes an element, so they do not carry the extra retained copy #327 measured on
     the streaming path (``LOGITS_RETENTION_BYTES_PER_ELEMENT``), and it is not charged.
+    A model without an LM head builds no logits over the vocabulary.
     """
-    if shape.vocab_size is None:
+    if shape.vocab_size is None or not run.lm_head:
         return 0
     from soup_cli.utils.layer_stream import LOGITS_LOSS_BYTES_PER_ELEMENT
 
@@ -330,6 +344,24 @@ def estimate_vram(shape: ModelShape, run: RunSpec) -> VramEstimate:
         )
     elif shape.params_source == "config.json":
         notes.append("Parameter count from config.json (no safetensors headers were read).")
+    if run.gradient_checkpointing == "medium":
+        notes.append(
+            "Medium checkpointing (every other block) is priced from the per-layer costs "
+            "measured with checkpointing off and on; the tier itself is not measured."
+        )
+    elif run.gradient_checkpointing == "selective":
+        notes.append(
+            "Selective checkpointing (attention only) is priced as no checkpointing, an "
+            "upper bound; the tier is not measured."
+        )
+    if run.fused_loss and terms["logits"]:
+        flags = " and ".join(f"training.{flag}" for flag in sorted(run.fused_loss))
+        notes.append(
+            f"{flags} {'is' if len(run.fused_loss) == 1 else 'are'} set: if the fused loss "
+            "applies, the full logits are not built, "
+            f"so the logits term ({terms['logits'] / GB:.1f} GB) overstates the peak. "
+            "The fused path is not measured."
+        )
     return VramEstimate(terms=terms, shape=shape, run=run, notes=tuple(notes))
 
 
