@@ -10,7 +10,10 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,6 +27,10 @@ from soup_cli.utils.model_shape import (
 )
 from tests._tiny_checkpoint import TINY_LLAMA as _CONFIG
 from tests._tiny_checkpoint import write_tiny_model
+
+# The real lookups, taken before the suite's autouse stub replaces them for a test.
+_REAL_HUB_LOOKUP = model_shape._hub_lookup
+_REAL_HUB_PARAM_COUNT = model_shape._hub_param_count
 
 
 @pytest.fixture
@@ -134,11 +141,19 @@ class TestOfflineAndOldHub:
         The lookups swallow errors on purpose (a gated or missing repo is no config),
         so a fence that raised would pass unseen; the calls are recorded and asserted.
         """
-        monkeypatch.undo()  # drop the suite's stub for these tests only
+        # Put the real lookups back for these tests only. monkeypatch.undo() would
+        # also drop every other autouse fixture's patch for the test.
+        monkeypatch.setattr(model_shape, "_hub_lookup", _REAL_HUB_LOOKUP)
+        monkeypatch.setattr(model_shape, "_hub_param_count", _REAL_HUB_PARAM_COUNT)
         import huggingface_hub
 
         calls = []
         monkeypatch.setattr(huggingface_hub, "try_to_load_from_cache", lambda *a, **k: None)
+        monkeypatch.setattr(
+            huggingface_hub,
+            "get_hf_file_metadata",
+            lambda *a, **k: calls.append("head") or SimpleNamespace(size=600),
+        )
         monkeypatch.setattr(
             huggingface_hub,
             "hf_hub_download",
@@ -170,7 +185,7 @@ class TestOfflineAndOldHub:
         _, calls = network
         model_shape._hub_lookup("someone/x", allow_network=True)
         model_shape._hub_param_count("someone/x", allow_network=True)
-        assert calls == ["download", "api"]
+        assert calls == ["head", "download", "api"]
 
     def test_a_hub_without_the_header_call_counts_from_the_config(self, network):
         # huggingface-hub < 0.20 has no get_safetensors_metadata; Soup's floor is 0.16.
@@ -188,6 +203,72 @@ class TestOfflineAndOldHub:
 
         monkeypatch.setattr(huggingface_hub, "hf_hub_download", gated)
         assert model_shape._hub_lookup("someone/x", allow_network=True) == (None, None)
+
+    @pytest.mark.parametrize("size", [5 * 1024 * 1024, None])
+    def test_a_config_over_the_cap_or_of_unknown_size_is_never_downloaded(self, network, size):
+        import huggingface_hub
+
+        monkeypatch, calls = network
+        monkeypatch.setattr(
+            huggingface_hub,
+            "get_hf_file_metadata",
+            lambda *a, **k: calls.append("head") or SimpleNamespace(size=size),
+        )
+        assert model_shape._hub_lookup("someone/x", allow_network=True) == (None, None)
+        assert calls == ["head"]
+
+    def test_the_head_request_has_the_timeout(self, network):
+        import huggingface_hub
+
+        monkeypatch, _ = network
+        seen = {}
+        monkeypatch.setattr(
+            huggingface_hub,
+            "get_hf_file_metadata",
+            lambda *a, **k: seen.update(k) or SimpleNamespace(size=600),
+        )
+        model_shape._hub_lookup("someone/x", allow_network=True)
+        assert seen["timeout"] == model_shape.HUB_TIMEOUT_S
+
+    def _api(self, monkeypatch, getter):
+        monkeypatch.setattr(
+            "soup_cli.utils.hf.get_hf_api",
+            lambda *a, **k: SimpleNamespace(get_safetensors_metadata=getter),
+        )
+
+    def test_a_hub_that_takes_a_timeout_gets_one(self, network):
+        monkeypatch, _ = network
+        seen = {}
+
+        def getter(repo, *, timeout=None):
+            seen["timeout"] = timeout
+            return SimpleNamespace(parameter_count={"BF16": 123})
+
+        self._api(monkeypatch, getter)
+        assert model_shape._hub_param_count("someone/x", allow_network=True) == 123
+        assert seen["timeout"] == model_shape.HUB_TIMEOUT_S
+
+    def test_a_hub_without_the_timeout_argument_still_counts(self, network):
+        monkeypatch, _ = network
+        self._api(monkeypatch, lambda repo: SimpleNamespace(parameter_count={"BF16": 123}))
+        assert model_shape._hub_param_count("someone/x", allow_network=True) == 123
+
+    def test_a_stalled_metadata_lookup_gives_up_at_the_deadline(self, network):
+        monkeypatch, _ = network
+        monkeypatch.setattr(model_shape, "HUB_METADATA_DEADLINE_S", 0.2)
+        release = threading.Event()
+
+        def stalled(repo):
+            release.wait(10)
+            return SimpleNamespace(parameter_count={"BF16": 123})
+
+        self._api(monkeypatch, stalled)
+        started = time.monotonic()
+        try:
+            assert model_shape._hub_param_count("someone/x", allow_network=True) is None
+            assert time.monotonic() - started < 2
+        finally:
+            release.set()
 
 
 class TestLoraCount:
