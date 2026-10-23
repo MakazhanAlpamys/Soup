@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
+<!-- synced-from: README.md sha256:a3fd67f4c14a8288329c0d98575f5cc89fcf228a302534e1a9befcca02b8ae09 -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -327,6 +327,10 @@ Soup, [HuggingFace Hub](https://huggingface.co/models?pipeline_tag=text-generati
 **herhangi** bir metin üretim modeliyle çalışır — `AutoModelForCausalLM` ile yükleniyorsa, sıfır
 yapılandırma değişikliğiyle çalışır. Llama 3.x/4, Qwen 2.5/3, Gemma 3, Mistral, Mixtral, DeepSeek
 R1/V3, Phi-4 ve 100'den fazlası hazır tarifler olarak gelir (`soup recipes list`).
+
+Metin tercih çiftleri için `soup recipes use qwen3.5-2b-dpo`, Qwen3.5-2B modeline
+yönelik bir DPO başlangıç yapılandırması yazar; devralınan ayarlar ve doğrulamanın
+sınırları için [model kılavuzuna](docs/models.md) bakın.
 
 | VRAM | En büyük model (QLoRA 4-bit) | Örnek |
 |---|---|---|
