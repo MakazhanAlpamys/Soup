@@ -3,7 +3,7 @@
 ``soup ci init`` writes ``.github/workflows/soup-gate.yml`` — a CI job that
 gates every PR on three Soup checks:
 
-    soup data validate <data>      # dataset format compliance
+    soup data validate <data> --min-valid-fraction 1.0  # every row must convert
     soup expect <data> <suite>     # expectations suite (PII / length / refusal)
     soup ship --evidence <ev.json> # SHIP / DON'T-SHIP verdict (exit 2 = block)
 
@@ -43,6 +43,7 @@ _WORKFLOW_TEMPLATE = """\
 # Gates every PR on: data validate -> expectations -> SHIP verdict.
 # Edit the paths below to match your repo. The `soup ship` step needs a
 # committed evidence JSON (see `soup ship --evidence`); remove it if unused.
+# Data validation requires every row; edit --min-valid-fraction to allow drops.
 name: Soup Fine-tuning Gate
 
 on:
@@ -69,7 +70,7 @@ jobs:
       - name: Validate training data
         run: |
           set +e
-          soup data validate {data}
+          soup data validate {data} --min-valid-fraction 1.0
           rc=$?
           set -e
           if [ "$rc" -eq 2 ]; then

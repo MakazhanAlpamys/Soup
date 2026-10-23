@@ -51,6 +51,9 @@ from typing import Any, Optional, Protocol, Sequence
 from rich.console import Console
 from rich.markup import escape
 
+# Where a chunked step (#1693) leaves what its trainer collected.
+from soup_cli.utils.stream_loss_chunk import STEP_ATTR as _CHUNKED_STEP_ATTR
+
 console = Console()
 
 # Hidden attr on the trainer instance -- read by the overrides below.
@@ -160,6 +163,21 @@ class RewindState:
             return None
         noun = "micro-batch" if self.dropped == 1 else "micro-batches"
         return f"rewind: {self.dropped} {noun} dropped (FIFO underflow)"
+
+
+def row_losses_from_token_losses(token_loss: Any, labels: Any) -> tuple[list[float], list[int]]:
+    """:func:`row_losses` for a step that has no logits (#1693).
+
+    ``token_loss`` is ``(B, T)``: position ``t`` holds the cross-entropy of
+    ``labels[:, t + 1]``, and 0.0 where that label is ``-100`` or there is none.
+    """
+    import torch
+
+    with torch.no_grad():
+        tokens = (labels[:, 1:] != -100).sum(dim=1)
+        totals = token_loss.float().sum(dim=1).to(tokens.device)
+        means = totals / tokens.clamp(min=1).to(totals.dtype)
+    return [float(mean) for mean in means], [int(count) for count in tokens]
 
 
 def row_losses(logits: Any, labels: Any) -> tuple[list[float], list[int]]:
@@ -325,12 +343,20 @@ def make_rewind_trainer_class(base_cls: type) -> type:
             )
             try:
                 logits = getattr(outputs, "logits", None)
-                if logits is None:
+                # #1693 -- a chunked step returns no logits and leaves each
+                # token's loss here instead.
+                chunked = getattr(self, _CHUNKED_STEP_ATTR, None)
+                if logits is not None:
+                    row_loss, row_tokens = row_losses(logits, labels)
+                elif chunked is not None:
+                    row_loss, row_tokens = row_losses_from_token_losses(
+                        chunked.token_loss, labels
+                    )
+                else:
                     raise RuntimeError(
                         "the model returned no logits (use_liger_kernel skips them "
                         "during training), so per-row losses cannot be computed"
                     )
-                row_loss, row_tokens = row_losses(logits, labels)
                 # ``state.global_step`` is the number of COMPLETED optimizer
                 # steps, so +1 is the 1-based step this micro-batch belongs to.
                 state.on_micro_batch(

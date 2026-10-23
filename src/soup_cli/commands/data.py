@@ -3543,7 +3543,10 @@ def best_of_n(
     from soup_cli.utils import best_of_n_artifact as bon_artifact
     from soup_cli.utils import best_of_n_checkpoint as bon_checkpoint
     from soup_cli.utils.magpie import make_magpie_generate_fn
-    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+    from soup_cli.utils.paths import (
+        enforce_under_cwd_and_no_symlink,
+        ensure_distinct_paths,
+    )
     from soup_cli.utils.trust_remote import (
         model_requires_trust_remote_code,
         resolve_trust_remote_code,
@@ -3615,6 +3618,23 @@ def best_of_n(
             if manifest_path:
                 enforce_under_cwd_and_no_symlink(manifest_path, "--manifest path")
                 paths.append(manifest_path)
+
+            ensure_distinct_paths(
+                [
+                    ("--candidate-artifact", candidate_artifact),
+                    ("--judgments", judgments),
+                ],
+                [
+                    (field, path)
+                    for field, path in (
+                        ("--output", output),
+                        ("--emit-pairs", emit_pairs),
+                        ("--manifest", manifest_path),
+                    )
+                    if path
+                ],
+            )
+
             if len({os.path.normcase(os.path.realpath(path)) for path in paths}) != len(paths):
                 raise ValueError("offline input and output paths must be distinct")
         except (FileNotFoundError, OSError, TypeError, ValueError) as exc:
@@ -3751,6 +3771,20 @@ def best_of_n(
                     "prompt source, candidate artifact, and checkpoint paths "
                     "must be distinct"
                 )
+        ensure_distinct_paths(
+            [("--prompts", prompts)],
+            [
+                (field, path)
+                for field, path in (
+                    ("--output", output),
+                    ("--emit-pairs", emit_pairs),
+                    ("--checkpoint", checkpoint_path),
+                    ("--manifest", manifest_path),
+                    ("--export-candidates", export_candidates),
+                )
+                if path
+            ],
+        )
     except (FileNotFoundError, TypeError, ValueError) as exc:
         console.print(f"[red]{_escape(str(exc))}[/]")
         raise typer.Exit(2) from exc

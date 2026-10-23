@@ -1,5 +1,6 @@
-"""Tests for Issue #1069: loss_watchdog, loss_spike_recovery and grad_accum_auto_tune
-are refused at config load on backend: mlx; no unreachable doctor row remains.
+"""#1069 monitoring refusals, updated for native SFT watchdog support (#1989).
+
+Recovery and auto-tuning remain refused on MLX.
 """
 
 from __future__ import annotations
@@ -15,23 +16,16 @@ from tests.conftest import strip_ansi
 
 
 class TestSchemaRejectionOnMlxBackend:
-    """Validate that backend: mlx rejects watchdog, spike recovery,
-    and grad_accum_auto_tune at config validation time with exact reasons.
+    """MLX still rejects recovery and auto-tuning with exact reasons.
     """
 
     @pytest.mark.parametrize(
         ("field", "training_payload", "reason"),
         [
             (
-                "loss_watchdog",
-                {"loss_watchdog": True},
-                "Soup does not implement the watchdog on the MLX callback, "
-                "which has no stop control",
-            ),
-            (
                 "loss_spike_recovery",
                 {"loss_watchdog": True, "loss_spike_recovery": True},
-                "spike recovery is driven by the watchdog and the watchdog cannot fire on MLX",
+                "MLX does not implement checkpoint rollback or recovery hints",
             ),
             (
                 "grad_accum_auto_tune",
@@ -96,9 +90,9 @@ class TestBackendSupportRegistryAndDoctor:
 
 
 class TestMlxTrainerCheckUnsupported:
-    """Verify MLXSFTTrainerWrapper._check_unsupported prints warnings for all three fields."""
+    """The internal trainer guard warns only about the remaining refused fields."""
 
-    def test_trainer_warns_on_all_three_fields(self, capsys) -> None:
+    def test_trainer_warns_only_on_refused_fields(self, capsys) -> None:
         from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
 
         wrapper = object.__new__(MLXSFTTrainerWrapper)
@@ -114,33 +108,28 @@ class TestMlxTrainerCheckUnsupported:
         wrapper._check_unsupported()
         out = " ".join(strip_ansi(capsys.readouterr().out).split())
 
-        expected_watchdog = (
-            "training.loss_watchdog (Soup does not implement the watchdog "
-            "on the MLX callback, which has no stop control)"
-        )
         expected_spike = (
             "training.loss_spike_recovery "
-            "(spike recovery is driven by the watchdog and the watchdog cannot fire on MLX)"
+            "(MLX does not implement checkpoint rollback or recovery hints)"
         )
         expected_tune = (
             "training.grad_accum_auto_tune "
             "(there is no VRAM total to measure pressure against on unified memory)"
         )
 
-        assert expected_watchdog in out
+        assert "training.loss_watchdog" not in out
         assert expected_spike in out
         assert expected_tune in out
 
 
 class TestReasonStringsByteIdenticalAcrossSurfaces:
     """Verify the reason strings across schema.py, backend_support.py, and mlx_sft.py
-    are byte-identical for all three monitoring fields.
+    are byte-identical for the refused monitoring fields.
     """
 
     @pytest.mark.parametrize(
         "field",
         [
-            "loss_watchdog",
             "loss_spike_recovery",
             "grad_accum_auto_tune",
         ],

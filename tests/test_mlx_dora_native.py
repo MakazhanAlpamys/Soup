@@ -1,4 +1,7 @@
-"""Native DoRA lifecycle on a tiny, local random Llama; no model downloads."""
+"""Native adapter lifecycles (DoRA and SFT watchdog); no model downloads.
+
+Kept together because mlx-smoke already selects this file on Apple Silicon.
+"""
 
 import json
 import math
@@ -247,3 +250,129 @@ def test_plain_lora_still_constructs_lora_layers(tmp_path):
     assert isinstance(wrapper.model.layers[0].self_attn.q_proj, LoRALinear)
     assert not any(name.endswith(".m")
                    for name, _ in tree_flatten(wrapper.model.trainable_parameters()))
+
+
+def _watchdog_wrapper(base, output, *, accum=1, enabled=True, patience=2, epochs=3, train_count=4):
+    mx.random.seed(17)
+    cfg = _config(base, output, dora=False)
+    cfg.training.epochs = epochs
+    cfg.training.gradient_accumulation_steps = accum
+    cfg.training.loss_watchdog = enabled
+    cfg.training.loss_watchdog_threshold = 0.000001
+    cfg.training.loss_watchdog_patience = patience
+    cfg.training.logging_steps = 1
+    cfg.training.rewind_log = False
+    # Validate through the same serialized configuration loader as the CLI.
+    from soup_cli.config.loader import load_config_from_string
+
+    wrapper = MLXSFTTrainerWrapper(load_config_from_string(cfg.model_dump_json()))
+    wrapper.setup({"train": _rows()["train"][:1] * train_count})
+    return wrapper
+
+
+@pytest.mark.parametrize("accum, logging, patience", [(1, 1, 2), (2, 1, 2), (3, 1, 2), (2, 2, 1)])
+def test_native_watchdog_stops_at_exact_update_and_reloads(
+    tmp_path, monkeypatch, accum, logging, patience
+):
+    import soup_cli.trainer.mlx_optim as optim
+
+    base = _checkpoint(tmp_path / "base")
+    built = []
+    build = optim.build_optimizer
+
+    def record(plan):
+        optimizer = build(plan)
+        built.append(optimizer)
+        return optimizer
+
+    monkeypatch.setattr(optim, "build_optimizer", record)
+    wrapper = _watchdog_wrapper(base, tmp_path / "stopped", accum=accum, patience=patience)
+    wrapper.config.training.logging_steps = logging
+    result = wrapper.train()
+    assert result["stop_reason"] == "loss_watchdog"
+    assert result["training_outcome"] == "stopped"
+    assert result["completed_updates"] == 2
+    assert result["total_steps"] == 2 * accum
+    assert built[0].step.item() == 2
+    metadata = json.loads((tmp_path / "stopped" / "adapter_config.json").read_text())
+    assert metadata["completed_updates"] == 2
+    assert metadata["completed_iterations"] == 2 * accum
+    assert metadata["training_outcome"] == "stopped"
+    assert metadata["stop_reason"] == "loss_watchdog"
+    assert metadata["watchdog_report_unit"] == "optimizer updates"
+    restored, _ = load(str(base), adapter_path=str(tmp_path / "stopped"))
+    wrapper.model.eval()
+    tokens = mx.array([[5, 6, 7]])
+    assert mx.allclose(restored(tokens), wrapper.model(tokens), atol=1e-5, rtol=1e-5).item()
+
+    # Identical initial model/data/constant LR: the stopped parameters must equal
+    # exactly two updates, and differ from a disabled run's complete budget.
+    control = _watchdog_wrapper(base, tmp_path / "control", accum=accum, enabled=False,
+                                epochs=1, train_count=2 * accum)
+    control.train()
+    stopped_weights = dict(tree_flatten(wrapper.model.trainable_parameters()))
+    control_weights = dict(tree_flatten(control.model.trainable_parameters()))
+    assert built[1].step.item() == 2
+    assert all(mx.allclose(value, control_weights[name], atol=1e-6, rtol=1e-6).item()
+               for name, value in stopped_weights.items())
+    full = _watchdog_wrapper(base, tmp_path / "full", accum=accum, enabled=False)
+    full_result = full.train()
+    full_weights = dict(tree_flatten(full.model.trainable_parameters()))
+    assert full_result["total_steps"] > result["total_steps"]
+    assert built[2].step.item() > 2
+    assert any(not mx.array_equal(value, full_weights[name]).item()
+               for name, value in stopped_weights.items())
+
+
+def test_public_cli_watchdog_reports_early_stop_and_saves(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    base = _checkpoint(tmp_path / "base")
+    wrapper = _watchdog_wrapper(base, tmp_path / "out", accum=2)
+    wrapper.config.training.rewind_log = True
+    data = tmp_path / "data.jsonl"
+    data.write_text("\n".join(json.dumps(row) for row in _rows()["train"]) + "\n")
+    wrapper.config.data.train = str(data)
+    wrapper.config.data.format = "plaintext"
+    wrapper.config.data.val_split = 0
+    config = tmp_path / "soup.json"
+    config.write_text(wrapper.config.model_dump_json())
+    outcome = CliRunner().invoke(app, ["train", "--config", str(config), "--yes"])
+    assert outcome.exit_code == 0, (outcome.output, repr(outcome.exception))
+    assert "Loss watchdog" in outcome.output
+    assert "Training Stopped" in outcome.output
+    assert "Training Complete!" not in outcome.output
+    metadata = json.loads((tmp_path / "out" / "adapter_config.json").read_text())
+    assert metadata["completed_updates"] == 2
+    assert metadata["stop_reason"] == "loss_watchdog"
+    from soup_cli.experiment.tracker import ExperimentTracker
+
+    tracker = ExperimentTracker()
+    run = tracker.list_runs()[0]
+    assert run["status"] == "completed"  # successful finalization, documented separately
+    assert run["total_steps"] == 4
+    assert [row["step"] for row in tracker.get_metrics(run["run_id"])
+            if row["loss"] is not None] == [2, 4]
+    records = [json.loads(line) for line in (tmp_path / "out" / "rewind.jsonl")
+               .read_text().splitlines()]
+    assert [(row["step"], row["micro"]) for row in records if row["kind"] == "batch"] == [
+        (1, 0), (1, 1), (2, 0), (2, 1),
+    ]
+    restored, _ = load(str(base), adapter_path=str(tmp_path / "out"))
+    assert mx.isfinite(restored(mx.array([[5, 6, 7]]))).all().item()
+
+
+def test_native_watchdog_runs_final_eval_at_stopped_update(tmp_path):
+    base = _checkpoint(tmp_path / "base")
+    wrapper = _watchdog_wrapper(base, tmp_path / "out", accum=2)
+    wrapper.config.training.eval_steps = 3
+    wrapper._dataset["val"] = _rows()["train"][:1]
+    result = wrapper.train()
+    assert result["completed_updates"] == 2
+    assert result["eval_updates"] == [2]
+    assert wrapper._eval_log[0]["optimizer_step"] == 2
+    assert math.isfinite(result["val_loss"])

@@ -7,7 +7,7 @@ Four things are held here.
    parameters. Wording is NOT compared, on purpose: a pull request that rewords a help
    string or a description must not go red here. The byte-exact check (``--check``) is
    a release-time one and runs only with ``SOUP_DOCS_EXACT=1``.
-2. **The render is the same everywhere.** CI runs this on Python 3.10 and 3.12, on
+2. **The render is the same everywhere.** CI runs this on Python 3.11 to 3.13, on
    Linux, Windows and macOS, so every helper that keeps the output identical across
    them is pinned on its own: the type spelling, the default and constraint rendering,
    the cell escaping, the Rich-markup stripping.
@@ -47,6 +47,7 @@ import typer
 from pydantic import BaseModel, Field, create_model
 
 from scripts import gen_reference_docs as gen
+from soup_cli.utils.typer_compat import is_argument, is_group, is_option
 
 _ROOT = Path(__file__).resolve().parents[1]
 _HEAVY = ("torch", "transformers", "accelerate", "peft", "trl", "datasets", "bitsandbytes")
@@ -228,7 +229,7 @@ def test_check_fails_when_a_command_gains_an_option(
     title, command = next(
         (title, cmd)
         for title, cmd in _command_tree(root).items()
-        if not isinstance(cmd, click.Group) and _visible(cmd)
+        if not is_group(cmd) and _visible(cmd)
     )
     command.params.append(
         click.Option(["--brand-new-flag"], is_flag=True, default=False, help="Not yet.")
@@ -501,7 +502,7 @@ def _command_tree(cmd: click.Command, path: tuple[str, ...] = ()) -> dict[str, c
     found: dict[str, click.Command] = {}
     if path:
         found["soup " + " ".join(path)] = cmd
-    if isinstance(cmd, click.Group):
+    if is_group(cmd):
         for name in cmd.list_commands(None) or []:
             sub = cmd.get_command(None, name)
             if sub is not None and not sub.hidden:
@@ -531,7 +532,7 @@ def _row_names(row: list[str]) -> set[str]:
 
 def test_every_registered_command_has_exactly_one_section(cli_page: str) -> None:
     tree = _command_tree(_live_root())
-    leaves = [title for title, cmd in tree.items() if not isinstance(cmd, click.Group)]
+    leaves = [title for title, cmd in tree.items() if not is_group(cmd)]
     assert len(leaves) >= 200, len(leaves)
 
     sections = _cli_sections(cli_page)
@@ -551,7 +552,7 @@ def test_every_visible_option_and_argument_is_one_row_of_its_command(cli_page: s
         params = _visible(cmd)
         assert len(rows) == len(params), (title, len(rows), len(params))
         for param, row in zip(params, rows):
-            if isinstance(param, click.Option):
+            if is_option(param):
                 options += 1
                 assert _row_names(row) == {*param.opts, *param.secondary_opts}, (title, row[0])
             else:
@@ -801,7 +802,7 @@ def test_argument_help_reads_the_same_whether_or_not_click_kept_it() -> None:
     kept, reset = _toy_root(), _toy_root()
     for root, value in ((kept, declared), (reset, {})):
         for param in root.commands["bake"].params:
-            if isinstance(param, click.Argument):
+            if is_argument(param):
                 param.help = value.get(param.name)
 
     assert gen.render_cli_reference(kept) == gen.render_cli_reference(reset)

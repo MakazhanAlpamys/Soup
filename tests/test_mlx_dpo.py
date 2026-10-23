@@ -468,13 +468,24 @@ class TestConfig:
         fields = {entry.field for entry in check_config(cfg)}
         assert fields == {"training.use_galore"}
 
-    @pytest.mark.parametrize("task", ["ipo", "kto", "orpo", "simpo", "ppo"])
+    # orpo and simpo have their own MLX trainers since #2004 / #1999
+    # (tests/test_mlx_orpo.py, tests/test_mlx_simpo.py).
+    @pytest.mark.parametrize("task", ["ipo", "kto", "ppo"])
     def test_other_preference_tasks_still_refused(self, task):
         from soup_cli.config.loader import load_config_from_string
 
         yaml_str = _MLX_DPO_YAML.replace("task: dpo", f"task: {task}")
         with pytest.raises(Exception, match="MLX backend"):
             load_config_from_string(yaml_str)
+
+    def test_the_preference_alias_is_refused_naming_task_dpo(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        alias = (_MLX_DPO_YAML.replace("task: dpo", "task: preference")
+                 .replace("  lr: 1e-6\n", "  lr: 1e-6\n  preference_loss: dpo\n"))
+        with pytest.raises(Exception, match="task='preference' has no trainer") as info:
+            load_config_from_string(alias)
+        assert "Use task: dpo for the native MLX trainer." in str(info.value)
 
 
 # --------------------------------------------------------------------------

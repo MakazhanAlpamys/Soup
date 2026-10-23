@@ -63,7 +63,7 @@ def main(
 ) -> None:
     """Run (or plan) a two-stage RA-DIT pipeline."""
     from soup_cli.utils.ra_dit_run import (
-        resolve_retriever_for_generator,
+        load_ra_dit_configs,
         run_ra_dit,
         validate_ra_dit_config_path,
     )
@@ -78,18 +78,29 @@ def main(
         raise typer.Exit(2) from exc
 
     if plan_only:
-        # Preview the retriever link without touching the Registry write path.
-        if retriever_model is not None:
-            link_preview = (
-                f"manual override: {escape(retriever_model)}"
+        try:
+            _, _, retriever_output, generator_output = load_ra_dit_configs(
+                retr_path,
+                gen_path,
             )
+        except (TypeError, ValueError, FileNotFoundError) as exc:
+            console.print(f"[red]Invalid ra-dit config:[/] {escape(str(exc))}")
+            raise typer.Exit(2) from exc
+
+        if retriever_model is not None:
+            link_preview = f"manual override: {escape(retriever_model)}"
         else:
-            resolved, advisory = resolve_retriever_for_generator(None)
-            link_preview = escape(advisory)
+            link_preview = (
+                "auto-link to stage-1 output: "
+                f"{escape(retriever_output)}"
+            )
+
         console.print(
             Panel(
                 f"[bold]Stage 1 (retriever):[/] {escape(retr_path)}\n"
+                f"[bold]Retriever output:[/] {escape(retriever_output)}\n"
                 f"[bold]Stage 2 (generator):[/] {escape(gen_path)}\n"
+                f"[bold]Generator output:[/] {escape(generator_output)}\n"
                 f"[bold]Retriever link:[/] {link_preview}\n"
                 f"[bold]Per-stage timeout:[/] {timeout}s",
                 title="soup ra-dit (plan-only)",
@@ -97,8 +108,8 @@ def main(
             )
         )
         console.print(
-            "[green]Plan-only mode — config paths validated. "
-            "Drop --plan-only to run both stages.[/]"
+            "[green]Plan-only mode — config paths and output directories "
+            "validated. Drop --plan-only to run both stages.[/]"
         )
         return
 

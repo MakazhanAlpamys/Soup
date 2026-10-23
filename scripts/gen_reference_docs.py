@@ -679,7 +679,7 @@ def iter_commands(root: click.Command) -> list[CommandEntry]:
     def walk(command: click.Command, path: tuple[str, ...]) -> None:
         if path:
             entries.append(CommandEntry(path, command))
-        if isinstance(command, click.Group):
+        if _is_group(command):
             for name in sorted(command.commands):
                 sub = command.commands[name]
                 if not getattr(sub, "hidden", False):
@@ -705,26 +705,37 @@ def _range_words(param_type: Any) -> str:
     return ", ".join(parts)
 
 
+def _is_group(command: object) -> bool:
+    return isinstance(getattr(command, "commands", None), collections.abc.Mapping)
+
+
+def _is_option(parameter: object) -> bool:
+    return getattr(parameter, "param_type_name", None) == "option"
+
+
+def _is_argument(parameter: object) -> bool:
+    return getattr(parameter, "param_type_name", None) == "argument"
+
+
 def _click_type_name(param_type: click.ParamType) -> str:
-    if isinstance(param_type, click.Choice):
+    # These are parameter capabilities, shared by Click and Typer's own types.
+    # The script also accepts plain Click trees without importing Soup's CLI.
+    if hasattr(param_type, "choices"):
         values = [str(getattr(choice, "value", choice)) for choice in param_type.choices]
         return "one of " + ", ".join(_code(value) for value in values)
-    if isinstance(param_type, (click.IntRange, click.FloatRange)):
-        name = "integer" if isinstance(param_type, click.IntRange) else "float"
-        return ", ".join(part for part in (name, _range_words(param_type)) if part)
-    if isinstance(param_type, click.types.IntParamType):
-        return "integer"
-    if isinstance(param_type, click.types.FloatParamType):
-        return "float"
-    if isinstance(param_type, click.types.BoolParamType):
-        return "boolean"
-    if isinstance(param_type, click.Path):
-        return "path"
-    if isinstance(param_type, click.File):
-        return "file"
-    if isinstance(param_type, click.DateTime):
-        return "datetime"
-    return "text"
+    name = getattr(param_type, "name", "")
+    if name in ("integer range", "int range", "float range"):
+        kind = "float" if name == "float range" else "integer"
+        return ", ".join(part for part in (kind, _range_words(param_type)) if part)
+    return {
+        "integer": "integer",
+        "int": "integer",
+        "float": "float",
+        "boolean": "boolean",
+        "path": "path",
+        "filename": "file",
+        "datetime": "datetime",
+    }.get(name, "text")
 
 
 def format_click_type(param: click.Parameter) -> str:
@@ -766,7 +777,7 @@ def format_click_default(param: click.Parameter) -> str:
 
 
 def _param_name(param: click.Parameter) -> str:
-    if isinstance(param, click.Option):
+    if _is_option(param):
         names = ", ".join(_code(opt) for opt in param.opts)
         if param.secondary_opts:
             names += " / " + ", ".join(_code(opt) for opt in param.secondary_opts)
@@ -839,21 +850,21 @@ def _param_rows(command: click.Command) -> list[str]:
 def _usage(path: tuple[str, ...], command: click.Command) -> str:
     params = _visible_params(command)
     parts = ["soup", *path]
-    if any(isinstance(param, click.Option) for param in params):
+    if any(_is_option(param) for param in params):
         parts.append("[OPTIONS]")
-    if isinstance(command, click.Group):
+    if _is_group(command):
         # `<command>`, not Click's `COMMAND`: the docs guard that resolves every
         # documented invocation (#1465) reads a bare capitalised word as a subcommand.
         optional = bool(path) and command.invoke_without_command
         parts.append("[<command>] [ARGS]..." if optional else "<command> [ARGS]...")
     for param in params:
-        if isinstance(param, click.Argument):
+        if _is_argument(param):
             name = _argument_name(param)
             name = name if param.required else f"[{name}]"
             parts.append(f"{name}..." if param.nargs == -1 else name)
     passes_extra = (command.context_settings or {}).get("allow_extra_args")
-    variadic = any(isinstance(param, click.Argument) and param.nargs == -1 for param in params)
-    if passes_extra and not variadic and not isinstance(command, click.Group):
+    variadic = any(_is_argument(param) and param.nargs == -1 for param in params)
+    if passes_extra and not variadic and not _is_group(command):
         parts.append("[ARGS]...")
     return " ".join(parts)
 
@@ -870,7 +881,7 @@ def _command_section(entry: CommandEntry, anchors: dict[tuple[str, ...], str]) -
     if summary:
         blocks.append([summary])
     blocks.append([f"Usage: {_code(_usage(entry.path, command))}"])
-    if isinstance(command, click.Group):
+    if _is_group(command):
         subs = [
             f"- [{_code(name)}](#{anchors[(*entry.path, name)]})"
             for name in sorted(command.commands)
@@ -881,7 +892,7 @@ def _command_section(entry: CommandEntry, anchors: dict[tuple[str, ...], str]) -
     rows = _param_rows(command)
     if rows:
         blocks.append([*_table_head("Name", "Type", "Default", "Required", "Help"), *rows])
-    elif not isinstance(command, click.Group):
+    elif not _is_group(command):
         blocks.append(["Takes no options or arguments."])
     return [line for block in blocks for line in ("", *block)]
 

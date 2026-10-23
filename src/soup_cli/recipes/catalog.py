@@ -2687,39 +2687,6 @@ training:
 output: ./output
 """,
     ),
-    "pixtral-dpo": RecipeMeta(
-        model="mistralai/Pixtral-12B-2409",
-        task="dpo",
-        size="12B",
-        tags=("mistral", "pixtral", "vision", "multimodal", "dpo", "alignment"),
-        description="Pixtral 12B DPO multimodal preference alignment",
-        yaml_str="""\
-base: mistralai/Pixtral-12B-2409
-task: dpo
-modality: vision
-
-data:
-  train: ./data/vision_preference_train.jsonl
-  format: llava
-  image_dir: ./data/images
-  max_length: 4096
-
-training:
-  epochs: 3
-  lr: 5e-6
-  batch_size: 1
-  gradient_accumulation_steps: 16
-  lora:
-    r: 16
-    alpha: 32
-    target_modules: auto
-  quantization: 4bit
-  dpo_beta: 0.1
-  gradient_checkpointing: true
-
-output: ./output
-""",
-    ),
     # ------------------------------------------------------------------
     # v0.51.0 Part A — Reasoning + agent (~5 model families)
     # ------------------------------------------------------------------
@@ -3805,6 +3772,36 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "qwen3.5-4b-dpo": RecipeMeta(
+        model="Qwen/Qwen3.5-4B",
+        task="dpo",
+        size="4B",
+        tags=("qwen", "qwen3.5", "dpo", "alignment", "preference", "small"),
+        description="Qwen 3.5 4B text DPO alignment (Apache-2.0)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-4B
+task: dpo
+modality: text
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 5e-6
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
 
 output: ./output
 """,

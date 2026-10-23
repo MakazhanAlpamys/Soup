@@ -2,7 +2,7 @@
 
 [← Back to the Soup README](../README.md)
 
-> The OpenAI-compatible inference server, batch inference, benchmarking, merge/export (GGUF/ONNX/TensorRT/AWQ/GPTQ), the Anthropic Messages endpoint, speculative decoding, deploy autopilot, the Web UI, and Agent Forge.
+> The OpenAI-compatible inference server, batch inference, benchmarking, merge/export (GGUF/ONNX/TensorRT/BitNet/TorchAO), the Anthropic Messages endpoint, speculative decoding, deploy autopilot, the Web UI, and Agent Forge.
 
 **Contents:**
 
@@ -86,6 +86,20 @@ or cloning/running the toolchain. It never runs pip. Install the packages throug
 your environment manager and retry. This flag does not disable toolchain lookup or
 cloning; use `--llama-cpp` to supply your own checkout. Both new flags apply only to
 `--format gguf`; other formats refuse them rather than ignore them.
+
+### MTP checkpoint inspection
+
+When a model declares `mtp_num_hidden_layers` but its saved safetensors headers
+contain no `mtp.*` or `model.mtp.*` tensors, Soup passes `--no-mtp` to conversion
+(including the f16 intermediate for quantized exports). It reads headers only,
+including indexed shards, and leaves the model/config unchanged. Actual MTP tensors
+are preserved. Malformed or missing checkpoint metadata is refused rather than
+treated as absent weights. The selected converter must advertise `--no-mtp` in a
+successful `--help` probe; otherwise choose a compatible checkout with
+`--llama-cpp`. The default `b5270` pin does not support this flag.
+The shared safetensors header reader currently refuses unsupported dtypes such as
+`F8_E4M3`; this inspection can therefore refuse an FP8 checkpoint even when its MTP
+tensors are present.
 
 ### Converter compatibility
 
@@ -233,8 +247,8 @@ Auto-detected chat templates: `chatml`, `llama`, `mistral`, `vicuna`, `zephyr` (
 
 `soup export` integrates with Soup's local artifact registry and deployment workflows:
 
-- **Deploying on export (`--deploy`)**: `--deploy ollama` is supported for GGUF-family formats (`gguf`, `gguf-ud`, `bitnet`, `tq1_0`). For non-GGUF formats (`onnx`, `tensorrt`, `awq`, `gptq`, `torchao`), `--deploy` fails fast with an informative error because Ollama cannot load non-GGUF weight files. Use `--deploy-name` to assign a custom model name in Ollama.
-- **Registering exports (`--registry-id`)**: Pass `--registry-id <id>` to record and attach exported artifacts to a local registry entry across all export formats (`gguf`, `gguf-ud`, `bitnet`, `tq1_0`, `onnx`, `tensorrt`, `awq`, `gptq`, `torchao`). When an export produces a directory (such as multi-shard safetensors, ONNX data, or TensorRT engine files in `<output>/engine/*.engine`), all produced weight and engine files are discovered and attached to the registry entry.
+- **Deploying on export (`--deploy`)**: `--deploy ollama` is supported for GGUF-family formats (`gguf`, `gguf-ud`, `bitnet`, `tq1_0`). For non-GGUF formats (`onnx`, `tensorrt`, `torchao`), `--deploy` fails fast with an informative error because Ollama cannot load non-GGUF weight files. Use `--deploy-name` to assign a custom model name in Ollama.
+- **Registering exports (`--registry-id`)**: Pass `--registry-id <id>` to record and attach exported artifacts to a local registry entry across all export formats (`gguf`, `gguf-ud`, `bitnet`, `tq1_0`, `onnx`, `tensorrt`, `torchao`). When an export produces a directory (such as multi-shard safetensors, ONNX data, or TensorRT engine files in `<output>/engine/*.engine`), all produced weight and engine files are discovered and attached to the registry entry.
 
 
 ## Batch Inference
@@ -800,7 +814,7 @@ soup quantize ./out --to gguf --bits 4
 soup quantize ./out --to onnx -o ./out-onnx
 ```
 
-Prints the equivalent `soup export …` invocation (escaped via `shlex.quote`) for copy-paste. Intentionally does NOT in-process call `soup export` — Typer commands aren't safe to re-enter. `--to awq` and `--to gptq` still print their command, followed by a notice that the two formats are deprecated and will be removed in Soup v0.77.
+Prints the equivalent `soup export …` invocation (escaped via `shlex.quote`) for copy-paste. Intentionally does NOT in-process call `soup export` — Typer commands aren't safe to re-enter.
 
 
 ## Llama.cpp Proxy

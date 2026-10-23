@@ -45,6 +45,57 @@ _REMOTE_OUTPUT_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 _MAX_LAMBDA_CONFIG_BYTES = 700_000
 _LAMBDA_SUBMIT_OVERRIDE: Optional[Callable[["CloudPlan"], int]] = None
 
+# The local controller starts in an isolated interpreter (``-I``) with only the
+# environment it needs, listed here by name:
+#   * the Lambda variables the rendered controller reads in ``main()``;
+#   * the OS variables ``ssh`` / ``scp`` and ``os.path.expanduser`` use to find
+#     the executables, the home directory (keys, known_hosts) and temp files;
+#   * ``SSH_AUTH_SOCK``, so a passphrase-protected key still works under
+#     ``BatchMode=yes``;
+#   * the proxy and certificate variables ``urllib`` / ``ssl`` read for the
+#     Lambda API call;
+#   * the locale variables that pick the output encoding;
+#   * the dynamic-loader search paths, so an interpreter built against a shared
+#     ``libpython`` still finds its library.
+# ``-I`` also ignores every ``PYTHON*`` variable, so none is forwarded.
+_CONTROLLER_ENV_NAMES: frozenset[str] = frozenset({
+    "LAMBDA_API_KEY",
+    "LAMBDA_SSH_KEY_NAME",
+    "LAMBDA_SSH_PRIVATE_KEY",
+    "LAMBDA_REGION",
+    "PATH",
+    "HOME",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "USER",
+    "USERNAME",
+    "LOGNAME",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "SSH_AUTH_SOCK",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LD_LIBRARY_PATH",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_FALLBACK_LIBRARY_PATH",
+})
+
 
 def validate_cloud(name: object) -> str:
     """Validate and normalize the Lambda provider name."""
@@ -129,6 +180,12 @@ def render_lambda_stub(
         "import time",
         "import urllib.error",
         "import urllib.request",
+        "",
+        "# Started with -I, which ignores PYTHONIOENCODING and PYTHONUTF8: replace what the",
+        "# output encoding cannot show, so a log line is printed rather than raising.",
+        "for _stream in (sys.stdout, sys.stderr):",
+        "    if hasattr(_stream, 'reconfigure'):",
+        "        _stream.reconfigure(errors='replace')",
         "",
         f"_INSTANCE_TYPE = {lambda_gpu!r}",
         f"_USER_DATA = {user_data!r}",
@@ -417,7 +474,7 @@ def plan_lambda_run(
         output_dir=output_dir,
         stub_path=stub_path,
         stub_text=stub_text,
-        run_command=f"python {stub_path}",
+        run_command=f"python -I {stub_path}",
     )
 
 
@@ -443,6 +500,23 @@ def _notify_waiting_for_controller() -> None:
         sys.stderr.flush()
     except BaseException:
         pass
+
+
+def _controller_environment(
+    environ: Mapping, *, case_insensitive: Optional[bool] = None
+) -> dict[str, str]:
+    """Return the variables of ``environ`` the local controller is started with.
+
+    Only the names in ``_CONTROLLER_ENV_NAMES`` are kept. Windows variable names
+    are case-insensitive (``SystemRoot`` is ``SYSTEMROOT``), so they are matched
+    folded to upper case there and exactly everywhere else.
+    """
+    if case_insensitive is None:
+        case_insensitive = os.name == "nt"
+    if case_insensitive:
+        wanted = {name.upper() for name in _CONTROLLER_ENV_NAMES}
+        return {key: value for key, value in environ.items() if key.upper() in wanted}
+    return {key: value for key, value in environ.items() if key in _CONTROLLER_ENV_NAMES}
 
 
 def submit_lambda_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:
@@ -483,9 +557,13 @@ def submit_lambda_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:
     while True:
         try:
             if proc is None:
+                # Isolated interpreter (-I) and only the environment the
+                # controller needs; the generated file imports the standard
+                # library alone, so it does not depend on its own directory
+                # or on any PYTHON* variable.
                 proc = subprocess.Popen(  # noqa: S603 — argv list, no shell
-                    [sys.executable, plan.stub_path],
-                    env=dict(environ),
+                    [sys.executable, "-I", plan.stub_path],
+                    env=_controller_environment(environ),
                 )
             return proc.wait()
         except BaseException as exc:

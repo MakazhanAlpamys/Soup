@@ -643,7 +643,9 @@ def _mutated_checkpoint(tmp_path, spelling):
     elif spelling == "per-tensor-config":
         quant = {"quant_method": "fp8", "weight_block_size": None}
     elif spelling == "compressed-tensors":
-        quant = {"quant_method": "compressed-tensors"}
+        # compressed-tensors' own FP8 spelling: a bare quant_method no longer says FP8,
+        # and is refused as a quantised source of unknown format.
+        quant = {"quant_method": "compressed-tensors", "format": "float-quantized"}
     elif spelling == "no-config":
         quant = None
     elif spelling == "llama":
@@ -739,7 +741,9 @@ def test_the_estimate_refuses_an_fp8_config_spelling_before_reading_a_header(tmp
         (b"", None),
         (b"not json", None),
         (b"[1, 2]", None),
-        (b'{"quantization_config": "fp8"}', None),
+        # Returned as found since the review round of the packed-quant refusal: the
+        # gate refuses a declaration that is not a mapping as malformed.
+        (b'{"quantization_config": "fp8"}', "fp8"),
         (b'{"model_type": "deepseek_v3"}', None),
         (b'{"quantization_config": {"quant_method": "fp8"}}', {"quant_method": "fp8"}),
     ],
@@ -1499,7 +1503,9 @@ def test_the_plain_read_backstop_refuses_every_fp8_spelling(key, dtype):
         _refuse_fp8(key, dtype)
 
 
-@pytest.mark.parametrize("dtype", ["BF16", "F16", "F32", "U8"])
+# U8 used to pass here too: the backstop now refuses every integer or packed type
+# (tests/test_stream_refuses_packed_quant.py), so a plain tensor is a floating one.
+@pytest.mark.parametrize("dtype", ["BF16", "F16", "F32", "F64"])
 def test_the_plain_read_backstop_passes_a_plain_tensor(dtype):
     from soup_cli.utils.layer_shard import _refuse_fp8
 

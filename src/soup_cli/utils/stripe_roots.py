@@ -184,10 +184,12 @@ def check_stripe_root(
             "letter or UNC share"
         )
     expanded = os.path.expanduser(entry)
+    # Checked before isabs: Python 3.13 no longer calls a rooted path without a drive
+    # ("\data", "/data") absolute on Windows, and 3.11-3.12 do; the message is the same on all.
+    if os.name == "nt" and expanded[:1] in ("\\", "/") and not os.path.splitdrive(expanded)[0]:
+        return None, "must name a drive letter or a UNC share"
     if not os.path.isabs(expanded):
         return None, "must be an absolute path"
-    if os.name == "nt" and not os.path.splitdrive(expanded)[0]:
-        return None, "must name a drive letter or a UNC share"
     if os.path.islink(expanded):
         return None, "must not be a symlink"
     if os.name == "nt":

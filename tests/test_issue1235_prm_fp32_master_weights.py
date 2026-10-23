@@ -116,7 +116,7 @@ def _cfg(base, out_dir, *, lr=1.0e-5, epochs=2, batch_size=1, training=None):
 
     block = {
         "epochs": epochs, "lr": lr, "batch_size": batch_size, "logging_steps": 1,
-        "save_steps": 10_000, "gradient_accumulation_steps": 1,
+        "save_steps": 10_000, "gradient_accumulation_steps": 1, "warmup_ratio": 0.0,
     }
     block.update(training or {})
     return load_config_from_string(yaml.safe_dump({

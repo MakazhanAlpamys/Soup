@@ -293,7 +293,9 @@ def format_to_messages(row: dict, fmt: str) -> Optional[dict]:
     - Vision formats: {"messages": [...], "image": "path"}
     - DPO format: {"prompt": ..., "chosen": ..., "rejected": ...}, the three all
       strings or all message lists (see :func:`_convert_dpo`)
-    - KTO format: {"prompt": ..., "completion": ..., "label": bool}, likewise
+    - KTO format: {"prompt": ..., "completion": ..., "label": bool}, likewise.
+      Labels accept bool, true/1/yes or false/0/no strings (case/space ignored),
+      and integers 1, 0, -1 only; -1 means undesirable. Other values are refused.
 
     A malformed row is dropped (returns ``None``) rather than raising, so one
     bad line does not abort a whole dataset load.
@@ -618,7 +620,9 @@ def _convert_kto(row: dict) -> dict:
     (the row a paired file with a string ``prompt`` column gives when unpaired).
     """
     raw_label = row["label"]
-    if isinstance(raw_label, str):
+    if isinstance(raw_label, bool):
+        label = raw_label
+    elif isinstance(raw_label, str):
         low = raw_label.strip().lower()
         if low in ("true", "1", "yes"):
             label = True
@@ -628,15 +632,15 @@ def _convert_kto(row: dict) -> dict:
             raise ValueError(
                 f"KTO label must be true/false, got string: {raw_label!r}"
             )
-    elif isinstance(raw_label, bool):
-        label = raw_label
-    elif isinstance(raw_label, (int, float)):
+    elif isinstance(raw_label, int) and raw_label in (-1, 0, 1):
         # Both the ±1 convention (+1 desirable / -1 undesirable) and the 0/1
         # convention map "positive == desirable". `bool(-1)` is True, which
         # would silently INVERT a -1 "bad" label — flip it to False here.
         label = raw_label > 0
     else:
-        label = bool(raw_label)
+        raise ValueError(
+            f"KTO label must be a bool, true/false string or -1/0/1 integer, got: {raw_label!r}"
+        )
     prompt = _preference_field(row.get("prompt"), "kto.prompt")
     completion = _preference_field(row.get("completion"), "kto.completion")
 

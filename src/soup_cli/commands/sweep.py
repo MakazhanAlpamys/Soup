@@ -357,6 +357,11 @@ def _generate_combinations(
     if strategy == "grid":
         combos = [dict(zip(keys, vals)) for vals in itertools.product(*value_lists)]
     elif strategy == "random":
+        # Draw from each list's distinct values. A list that names a value twice
+        # (`lr=1e-5,2e-5,1e-5`, or `1e-5,0.00001`) has fewer distinct arms than the
+        # product of the list lengths; sampling until that many unique arms turned
+        # up never finished, and the run-them-all branch repeated an arm.
+        value_lists = [list(dict.fromkeys(vals)) for vals in value_lists]
         total_possible = 1
         for vals in value_lists:
             total_possible *= len(vals)
@@ -495,12 +500,13 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
     from soup_cli.monitoring.display import TrainingDisplay
     from soup_cli.trainer.dispatch import build_trainer
     from soup_cli.utils.eval_schedule import loader_data_config, validation_notice
-    from soup_cli.utils.gpu import detect_device, get_gpu_info
+    from soup_cli.utils.gpu import configure_mps_async_load, detect_device, get_gpu_info
 
     cfg = SoupConfig(**config_dict)
 
     # Detect hardware
     device, device_name = detect_device()
+    configure_mps_async_load(device)
     gpu_info = get_gpu_info()
 
     # Load data -- the same split `soup train` would use (#1223).

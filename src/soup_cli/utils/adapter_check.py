@@ -20,12 +20,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
-from soup_cli.utils.adapter_diff import _adapter_weights_path, _require_str
+from soup_cli.utils.adapter_diff import _adapter_weights_path, _read_safetensors_numpy
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, is_under_cwd
 from soup_cli.utils.terminal import strip_control
 
 INNER_NAMESPACE_MARKER = ".inner."
-_MAX_LAYERS = 10_000
 
 #: The largest adapter weights file ``soup adapters check`` will read: 2 GiB. The check
 #: loads every tensor into memory and accumulates in float64, so the resident size is a
@@ -99,16 +98,9 @@ def _read_config(adapter_dir: Path) -> dict[str, Any]:
 
 
 def _load_safetensors_numpy(path: Path) -> dict[str, Any]:
-    """Lazy-load adapter tensors using safetensors numpy framework."""
-    try:
-        from safetensors import safe_open
-    except ImportError as exc:
-        raise RuntimeError(
-            "safetensors package required; pip install safetensors"
-        ) from exc
-
+    """Load adapter tensors as numpy arrays (bfloat16 widened to float32)."""
     # Size first, from the filesystem and before the file is opened: the tensor-count
-    # cap below does not bound memory, one 100 GB tensor is a single key.
+    # cap does not bound memory, one 100 GB tensor is a single key.
     try:
         size = os.stat(str(path)).st_size
     except OSError as exc:
@@ -119,23 +111,14 @@ def _load_safetensors_numpy(path: Path) -> dict[str, Any]:
             f"{MAX_ADAPTER_BYTES:,} bytes ({MAX_ADAPTER_BYTES // 1024**3} GiB) "
             "because it loads every tensor into memory"
         )
-
-    result: dict[str, Any] = {}
     try:
-        with safe_open(str(path), framework="numpy") as f:
-            keys = list(f.keys())
-            if len(keys) > _MAX_LAYERS:
-                raise ValueError(f"adapter has >{_MAX_LAYERS} tensors")
-            for key in keys:
-                _require_str(key, "tensor name")
-                result[key] = f.get_tensor(key)
+        return _read_safetensors_numpy(path)
     except (ValueError, RuntimeError):
         raise
     except Exception as exc:
         raise ValueError(
             f"Corrupt or unreadable safetensors weights in {path.name}: {exc}"
         ) from exc
-    return result
 
 
 def _split_lora_role(name: str) -> Optional[Tuple[str, str]]:
