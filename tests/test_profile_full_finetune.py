@@ -157,8 +157,9 @@ class TestProfileFullFinetune:
             # LoRA r=16 on peft's default q_proj / v_proj: 16 * (4096 + 4096) per
             # module, two modules, 32 layers. Its gradients are the adapters' only.
             assert data["trainable_params"] == 8_388_608
-            assert data["gradients_memory_gb"] < 0.1
-            assert data["optimizer_memory_gb"] < 0.1
+            # 8,388,608 x 4 bytes of fp32 gradients and x 8 of AdamW state.
+            assert data["gradients_memory_gb"] == 0.03
+            assert data["optimizer_memory_gb"] == 0.07
 
     @pytest.mark.parametrize("name,yaml_text,expected_peft,is_full_ft", ALL_CONFIGS)
     def test_cli_and_preflight_peft_classification_agree(
