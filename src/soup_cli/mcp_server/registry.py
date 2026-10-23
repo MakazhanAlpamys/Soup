@@ -495,10 +495,20 @@ def tool_profile(args: dict) -> dict:
     gpu = _opt_str(args, "gpu")
     gpu_memory_gb, gpu_memory_source = _resolve_gpu_memory_mcp(gpu)
 
-    # The train pre-flight's estimate, from the model's own shape (#2049).
-    result = profile_from_config(cfg)
+    # The train pre-flight's estimate, from the model's own shape (#2049). An assumed
+    # card is not one to resolve `auto` checkpointing on, so it prices as full then.
+    # Offline: a read-only tool must not send requests, with the server's token, for a
+    # model id the client chose. A local directory and the local cache are still read.
+    result = profile_from_config(
+        cfg,
+        allow_network=False,
+        gpu_memory_gb=None if gpu_memory_source == "assumed" else gpu_memory_gb,
+    )
     if result is None:
-        raise McpToolError("batch_size or max_length is outside the estimate's range")
+        raise McpToolError(
+            "batch_size, max_length or the model's size (over 1,000B parameters) is "
+            "outside the estimate's range"
+        )
     batch_size = result["batch_size"]
     tokens_per_sec = estimate_speed(
         result["model_params_b"], cfg.training.quantization, batch_size
