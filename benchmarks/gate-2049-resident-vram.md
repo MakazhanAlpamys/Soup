@@ -23,8 +23,18 @@ Qwen2.5-0.5B-Instruct `7ae55760`, Llama-3.2-1B-Instruct (unsloth) `5a8abab4`,
 TinyLlama-1.1B-Chat-v1.0 `fe8a4ea1`, Qwen2.5-1.5B-Instruct `989aa798`,
 Qwen2.5-3B-Instruct `aa8e7253`. Vocabularies from 32,000 to 151,936.
 
-The raw results, every field the harness printed, are in
-[`evidence/vram-2049-resident.json`](evidence/vram-2049-resident.json).
+The raw results are in
+[`evidence/vram-2049-resident.json`](evidence/vram-2049-resident.json): the 39 result lines
+of the two-step runs in the order printed, every field as the harness printed it, with one
+change. The harness names each model by its local snapshot directory (`row.base` and
+`model.base`); the file names it by its Hugging Face id (`model`) and full commit
+(`revision`) instead, so `row` is renamed `run` and `model` is renamed `config`. No
+two-step row was left out: none failed, was void or ran out of memory.
+
+Not in the file: 22 lines from an earlier version of the harness that ran one step per
+row. They are the first 22 rows of the table below, measured again with two steps,
+because one step misses AdamW's state: the two-step peak is 1.000 to 1.288 times the
+one-step one, and on the full fine-tuning row at 1024 x 2 it is 3.085 GB against 2.756.
 
 ---
 
@@ -131,6 +141,18 @@ checkpoint boundary at half its size.
 6. **The gate records named in #2049 do not calibrate the resident total.**
    `gate-v0.73.1-measured-vram-fit.md` and `gate-395-second-stack-vram.md` are streamed
    runs (`stream_buffers: 2`), which the resident pre-flight skips.
+
+## What the rows do not cover
+
+- **Only checkpointing off and on (`full`) was measured.** The `medium` tier (every
+  other layer) is priced from those two: the layers it keeps at the off cost, the rest
+  at the boundary, plus the one being recomputed. `selective` (attention only) is
+  priced as no checkpointing, an upper bound. Neither tier has a row.
+- **Seven dense decoders of 135M to 3B parameters,** at up to 4,096 tokens and batch 4,
+  on one card and one stack. No model of 7B or more, and no mixture-of-experts model,
+  which the estimate sizes as dense.
+- **The coefficients are fitted on these same 39 rows,** so the bands above show how
+  well they fit them, not the error on a run they were not fitted to.
 
 ## Reproduce
 
