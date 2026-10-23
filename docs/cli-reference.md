@@ -2088,6 +2088,12 @@ Usage: `soup eval benchmark [OPTIONS]`
 | `--run-id` | text |  |  | Link results to an existing training run |
 | `--device` | text |  |  | Device: cuda, mps, cpu. Auto-detected if not set. |
 | `--trust-remote-code` | flag | off |  | Allow loading models that ship custom Python via auto_map. Default deny (v0.36.0). Only enable if you trust the source. |
+| `--backend` | text | `transformers` |  | transformers or mlx |
+| `--base` | text |  |  | Native adapter base identity |
+| `--limit` | integer | `32` |  | Native sample cap per task (1..1024) |
+| `--max-length` | integer | `2048` |  | Native context token cap |
+| `--max-tokens` | integer | `256` |  | Native generation token cap |
+| `--seed` | integer | `0` |  | Native harness seed |
 
 ### `soup eval capability`
 
@@ -2387,6 +2393,7 @@ Usage: `soup infer [OPTIONS]`
 | `--model`, `-m` | text |  | yes | Path to model (LoRA adapter or full model) |
 | `--input`, `-i` | text |  | yes | Path to input JSONL file (each line: {"prompt": "..."}) |
 | `--output`, `-o` | text |  | yes | Path to output JSONL file for results |
+| `--backend` | text | `transformers` |  | Text backend: transformers or mlx |
 | `--base`, `-b` | text |  |  | Base model for LoRA adapter (auto-detected if not set) |
 | `--max-tokens` | integer, 1 to 16384 | `256` |  | Maximum tokens to generate per response (1-16384) |
 | `--temperature`, `-t` | float | `0.7` |  | Sampling temperature (0 = greedy) |

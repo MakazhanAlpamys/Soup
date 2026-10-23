@@ -85,8 +85,64 @@ def benchmark(
             "Default deny (v0.36.0). Only enable if you trust the source."
         ),
     ),
+    backend: str = typer.Option("transformers", "--backend", help="transformers or mlx"),
+    base_model: Optional[str] = typer.Option(None, "--base", help="Native adapter base identity"),
+    limit: int = typer.Option(32, "--limit", help="Native sample cap per task (1..1024)"),
+    max_length: int = typer.Option(2048, "--max-length", help="Native context token cap"),
+    max_tokens: int = typer.Option(256, "--max-tokens", help="Native generation token cap"),
+    seed: int = typer.Option(0, "--seed", help="Native harness seed"),
 ):
     """Evaluate on standard benchmarks (wraps lm-evaluation-harness)."""
+    if backend not in {"transformers", "mlx"}:
+        console.print("[red]Select --backend transformers or mlx[/]")
+        raise typer.Exit(1)
+    if backend == "mlx":
+        from soup_cli.eval.mlx_benchmark import run_native_benchmark, validate_options
+        from soup_cli.utils.mlx_generation import read_native_adapter
+
+        names = [name.strip() for name in benchmarks.split(",")]
+        try:
+            validate_options(
+                names, batch_size=batch_size, limit=limit, max_length=max_length,
+                max_tokens=max_tokens, seed=seed, num_fewshot=num_fewshot, device=device,
+            )
+            _reject_lm_eval_injection(model, "--model")
+            native = read_native_adapter(Path(model), base_model)
+            if native:
+                _reject_lm_eval_injection(native["model"], "native base metadata")
+            results = run_native_benchmark(
+                model, names, base_model=base_model, num_fewshot=num_fewshot,
+                batch_size=batch_size, limit=limit, max_length=max_length,
+                max_tokens=max_tokens, seed=seed, trust_remote_code=trust_remote_code,
+            )
+        except ImportError as exc:
+            console.print(
+                f"[red]Native benchmark dependency unavailable: {for_terminal(str(exc))}[/]\n"
+                'Install soup-cli[mlx,eval] with lm-eval>=0.4.12,<0.4.14'
+            )
+            raise typer.Exit(1) from exc
+        except KeyboardInterrupt:
+            console.print("[yellow]Native benchmark interrupted; nothing measured or saved.[/]")
+            raise typer.Exit(130) from None
+        except Exception as exc:
+            console.print(f"[red]Native benchmark failed: {for_terminal(str(exc))}[/]")
+            raise typer.Exit(1) from exc
+        _display_benchmark_results(results, names)
+        saved = _save_benchmark_results(results, model, names, run_id)
+        console.print(f"[green]Results saved to experiment tracker: {saved} of {len(names)}.[/]")
+        return
+    from soup_cli.utils.mlx_generation import reject_native_adapter
+
+    try:
+        reject_native_adapter(model)
+    except ValueError as exc:
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    if base_model is not None or (limit, max_length, max_tokens, seed) != (32, 2048, 256, 0):
+        console.print(
+            "[red]--base/--limit/--max-length/--max-tokens/--seed require --backend mlx[/]"
+        )
+        raise typer.Exit(1)
     model_path = Path(model)
     if not model_path.exists():
         console.print(f"[red]Model path not found: {for_terminal(model_path)}[/]")
@@ -746,6 +802,8 @@ def auto(
                 run_id=None,
                 device=None,
                 trust_remote_code=trust_remote_code,
+                backend="transformers", base_model=None, limit=32,
+                max_length=2048, max_tokens=256, seed=0,
             )
         except (typer.Exit, SystemExit):
             # benchmark() signals failure with typer.Exit (a RuntimeError, NOT
@@ -1077,7 +1135,8 @@ def _display_benchmark_results(results: dict, benchmarks: list[str]) -> None:
         if bench not in task_results:
             table.add_row(for_terminal(bench), "-", "[red]not found[/]")
             continue
-        metric = _benchmark_metric(bench_data)
+        metric = (results["_soup_metrics"][bench] if "_soup_metrics" in results
+                  else _benchmark_metric(bench_data))
         if metric is not None:
             metric_name, score = metric
             table.add_row(for_terminal(bench), for_terminal(metric_name), f"{score:.4f}")
@@ -1102,7 +1161,8 @@ def _save_benchmark_results(
     try:
         for bench in benchmarks:
             bench_data = task_results.get(bench, {})
-            metric = _benchmark_metric(bench_data)
+            metric = (results["_soup_metrics"][bench] if "_soup_metrics" in results
+                  else _benchmark_metric(bench_data))
             if metric is None:
                 reason = "not found" if bench not in task_results else "no numeric result"
                 console.print(f"[yellow]Skipped {for_terminal(bench)}: {reason}[/]")
@@ -1112,7 +1172,14 @@ def _save_benchmark_results(
                 model_path=model_path,
                 benchmark=bench,
                 score=score,
-                details=bench_data,
+                details=(
+                    {**bench_data, "native": results["_soup_native"],
+                     "task_config": results["configs"][bench],
+                     "task_version": results["versions"][bench],
+                     "n_samples": results["n-samples"][bench],
+                     "samples": results["samples"][bench]}
+                    if "_soup_native" in results else bench_data
+                ),
                 run_id=run_id,
             )
             saved += 1

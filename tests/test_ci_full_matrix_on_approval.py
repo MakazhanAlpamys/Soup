@@ -1145,6 +1145,8 @@ PINNED_ON_PR_AND_PUSH = frozenset(
     {
         ("recipe-validation.yml", "validate-recipes"),
         ("recipe-attach.yml", "verify"),
+        # Native harness installs [mlx,eval]; keep its Transformers dependencies pinned on PRs.
+        ("mlx-eval.yml", "native-harness"),
     }
 )
 
@@ -1484,7 +1486,7 @@ class TestEveryWorkflow:
     def test_the_extras_the_pinned_jobs_install(self):
         """What `tests/test_ci_pinned_upstream.py` checks the pins against. A job that starts
         installing another extra adds its bounds to that check; update this with it."""
-        assert pinned_job_extras() == {"dev", "qat", "mlx", "train"}
+        assert pinned_job_extras() == {"dev", "qat", "mlx", "train", "eval"}
 
 
 class TestADraftRunsNothing:

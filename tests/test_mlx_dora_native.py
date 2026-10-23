@@ -247,3 +247,116 @@ def test_plain_lora_still_constructs_lora_layers(tmp_path):
     assert isinstance(wrapper.model.layers[0].self_attn.q_proj, LoRALinear)
     assert not any(name.endswith(".m")
                    for name, _ in tree_flatten(wrapper.model.trainable_parameters()))
+
+
+@pytest.mark.parametrize("quantized", [False, True])
+def test_native_generation_fresh_process_consumers_and_strict_weights(
+    tmp_path, quantized, monkeypatch,
+):
+    """A real trained LoRA survives inference in a fresh process."""
+    import os
+    import subprocess
+    import sys
+
+    monkeypatch.chdir(tmp_path)
+    base = _checkpoint(tmp_path / "base", quantized)
+    adapter = tmp_path / "adapter"
+    cfg = _config(base, adapter, dora=False, quantized=quantized, targets=["lm_head"])
+    cfg.training.lr = 0.01
+    cfg.training.epochs = 4
+    wrapper = MLXSFTTrainerWrapper(cfg)
+    wrapper.setup(_rows())
+    assert isinstance(wrapper.model.lm_head, nn.QuantizedLinear) is quantized
+    if quantized:
+        assert wrapper.model.lm_head.bits == 4
+        assert wrapper.model.lm_head.weight.dtype == mx.uint32
+    frozen = dict(tree_flatten(wrapper.model.parameters()))
+    mx.eval(frozen)
+    outcome = wrapper.train()
+    assert math.isfinite(outcome["final_loss"])
+    trained = dict(tree_flatten(wrapper.model.parameters()))
+    for name, value in frozen.items():
+        parent, leaf = name.rsplit(".", 1)
+        actual = trained.get(f"{parent}.linear.{leaf}", trained.get(name))
+        assert mx.array_equal(value, actual).item(), name
+    saved = mx.load(str(adapter / "adapters.safetensors"))
+    assert any(not mx.array_equal(value, mx.zeros_like(value)).item()
+               for name, value in saved.items() if name.endswith("lora_b"))
+    wrapper.model.eval()
+    expected_logits = wrapper.model(mx.array([[5, 6, 7, 5]]))
+    mx.save_safetensors(str(tmp_path / "trained-logits.safetensors"), {"logits": expected_logits})
+    metadata = json.loads((adapter / "adapter_config.json").read_text())
+    assert metadata["model"] == str(base)
+    assert metadata["lora_parameters"]["scale"] == 2.0
+    script = r'''
+import json
+from pathlib import Path
+import mlx.core as mx
+from typer.testing import CliRunner
+from soup_cli.cli import app
+from soup_cli.utils.mlx_generation import load_native_model, generate_native
+model, tokenizer = load_native_model("adapter")
+base, _ = load_native_model("base")
+tokens = mx.array([[5, 6, 7, 5]])
+assert mx.allclose(model(tokens), mx.load("trained-logits.safetensors")["logits"],
+                   atol=1e-5, rtol=1e-5).item()
+assert not mx.allclose(model(tokens), base(tokens), atol=1e-5, rtol=1e-5).item()
+messages = [{"role": "user", "content": "alpha"}]
+expected, count = generate_native(model, tokenizer, messages, max_tokens=4, temperature=0)
+control, _ = generate_native(base, tokenizer, messages, max_tokens=4, temperature=0)
+assert expected != control, (expected, control)
+Path("prompts.jsonl").write_text('{"prompt":"alpha"}\n{"prompt":"beta"}\n')
+runner = CliRunner()
+result = runner.invoke(app, ["infer", "--backend", "mlx", "--model", "adapter",
+                            "--input", "prompts.jsonl", "--output", "results.jsonl",
+                            "--temperature", "0", "--max-tokens", "4"])
+assert result.exit_code == 0, (result.output, repr(result.exception))
+rows = [json.loads(line) for line in Path("results.jsonl").read_text().splitlines()]
+assert [row["prompt"] for row in rows] == ["alpha", "beta"]
+assert rows[0]["response"] == expected
+assert rows[0]["tokens_generated"] == count
+Path("consumer-evidence.json").write_text(json.dumps({"response": expected, "base": control,
+                                                    "tokens_generated": count}))
+'''
+    env = dict(os.environ, HF_HUB_OFFLINE="1")
+    env["PYTHONPATH"] = str(__import__("pathlib").Path(__file__).parents[1] / "src")
+    completed = subprocess.run(
+        [sys.executable, "-c", script], cwd=tmp_path, env=env,
+        text=True, capture_output=True, timeout=120,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    evidence = json.loads((tmp_path / "consumer-evidence.json").read_text())
+    assert evidence["response"] != evidence["base"]
+
+    from soup_cli.utils.mlx_generation import load_native_model
+
+    for mutation in ("missing", "extra", "shape", "nonfinite", "integer"):
+        weights = dict(saved)
+        name = next(iter(weights))
+        if mutation == "missing":
+            del weights[name]
+        elif mutation == "extra":
+            weights["not.an.adapter"] = mx.zeros((1,))
+        elif mutation == "shape":
+            weights[name] = mx.zeros((1, 1))
+        elif mutation == "nonfinite":
+            weights[name] = mx.full(weights[name].shape, float("nan"))
+        else:
+            weights[name] = mx.zeros(weights[name].shape, dtype=mx.int32)
+        mx.save_safetensors(str(adapter / "adapters.safetensors"), weights)
+        diagnostic = (
+            "finite floating" if mutation in ("nonfinite", "integer") else "tensor keys/shapes"
+        )
+        with pytest.raises(ValueError, match=diagnostic):
+            load_native_model(str(adapter))
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        args = ["infer", "--backend", "mlx", "--model", str(adapter),
+                "--input", "prompts.jsonl", "--output", "corrupt-results.jsonl"]
+        failed = CliRunner().invoke(app, args)
+        assert failed.exit_code == 1, failed.output
+        assert "Model loaded" not in failed.output
+        assert not (tmp_path / "corrupt-results.jsonl").exists()
+    mx.save_safetensors(str(adapter / "adapters.safetensors"), saved)

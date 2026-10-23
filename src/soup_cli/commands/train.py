@@ -179,6 +179,8 @@ def _run_auto_eval_after_training(
                 run_id=run_id,
                 device=None,
                 trust_remote_code=trust_remote_code,
+                backend="transformers", base_model=None, limit=32,
+                max_length=2048, max_tokens=256, seed=0,
             )
         except typer.Exit:
             logger.debug("Auto-eval benchmark skipped", exc_info=True)

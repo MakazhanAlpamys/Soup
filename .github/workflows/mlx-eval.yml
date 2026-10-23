@@ -1,0 +1,62 @@
+name: native MLX evaluation
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    paths:
+      - 'src/soup_cli/eval/**'
+      - 'src/soup_cli/utils/mlx_generation.py'
+      - 'src/soup_cli/commands/eval.py'
+      - 'tests/test_mlx_harness_native.py'
+      - 'tests/test_mlx_dora_native.py'
+      - 'pyproject.toml'
+      - '.github/constraints/**'
+      - '.github/constraints/pinned-upstream.txt'
+      - '.github/workflows/mlx-eval.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  native-harness:
+    # Like the existing native smoke job, spend Apple Silicon capacity at approval.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (!github.event.pull_request.draft &&
+       contains(github.event.pull_request.labels.*.name, 'ci:full') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'ci:full'))
+    runs-on: macos-14
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [floor, current]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install the bounded native evaluation stack
+        run: |
+          if [ '${{ matrix.stack }}' = floor ]; then
+            pip install -e '.[mlx,eval]' pytest ${{ github.event_name == 'pull_request' && '-c .github/constraints/pinned-upstream.txt' || '' }} 'mlx==0.31.2' 'mlx-lm==0.31.3' 'lm-eval==0.4.12'
+          else
+            pip install -e '.[mlx,eval]' pytest ${{ github.event_name == 'pull_request' && '-c .github/constraints/pinned-upstream.txt' || '' }} 'lm-eval>=0.4.12,<0.4.14'
+          fi
+          python -m pip check
+      - name: Verify actual native imports and model training stack isolation
+        run: |
+          python -c "import mlx.core, mlx_lm, lm_eval; from lm_eval.api.model import TemplateLM"
+          python -c "import importlib.util; assert all(importlib.util.find_spec(n) is None for n in ('torch','peft','trl','bitsandbytes','accelerate'))"
+      - name: Run offline official-harness requests and native lifecycle evidence
+        env:
+          HF_HUB_OFFLINE: '1'
+          HF_DATASETS_OFFLINE: '1'
+          PYTHONPATH: src
+        run: pytest -o addopts= -q tests/test_mlx_harness_native.py tests/test_mlx_dora_native.py

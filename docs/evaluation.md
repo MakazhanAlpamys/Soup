@@ -1193,3 +1193,46 @@ soup eval irt-subset per_item_correctness.jsonl --size small --model 2pl
 ```
 
 `--model` picks the item-response model (default `1pl`). `1pl` is the closed-form Rasch fit (`β̂_i = -log(p̂_i / (1 - p̂_i))`); `2pl` adds a per-item discrimination parameter and `3pl` a guessing floor, both via joint coordinate-ascent MLE (v0.71.6). Items rank by Fisher information at θ=0 (`p̂ · (1-p̂)` in 1PL — maximised at 50/50 items, since extremes carry no new ranking information). `full` keeps 100%, `small` keeps 30%, `tiny` keeps 10%.
+
+### Native MLX benchmark evaluation
+
+On Apple Silicon, install `pip install 'soup-cli[mlx,eval]' 'lm-eval>=0.4.12,<0.4.14'`.
+Select the native backend explicitly; native adapters load directly through the
+shared strict loader, without requiring fusion or a Transformers model:
+
+```bash
+soup eval benchmark --backend mlx --model ./native-adapter \
+  --benchmarks hellaswag,gsm8k --fewshot 0 --limit 32 \
+  --batch-size 4 --max-length 2048 --max-tokens 256 --seed 0
+```
+
+The initial slice supports ordinary linear text LoRA and base-only causal models,
+`hellaswag` (task version 1.0, multiple-choice conditional loglikelihood) and
+`gsm8k` (version 3.0, greedy generation with its strict-match/flexible-extract
+filters). These are the official harness tasks and prompts. Omitted `--fewshot`
+uses each task's own default (0 and 5 respectively); raw prompts are not passed
+through an additional chat template. Rolling likelihood, other task names,
+sampling and arbitrary generation options are refused. Tokenization follows
+harness joint context/continuation and trailing-space conventions; a merge across
+a non-whitespace boundary that invalidates the context prefix is explicitly
+refused. Empty context uses the tokenizer's EOS prefix. Long contexts are left
+truncated; continuations exceeding `--max-length` are refused.
+
+Native defaults cap each task at 32 examples, context at 2048 tokens and generation
+at 256 tokens. The actual generation cap is the smaller of the CLI and task caps;
+space for it is reserved within the context limit. `--limit` accepts 1..1024,
+`--batch-size` 1..64, and `--max-length` 2..32768. Larger settings can use substantial
+memory; choose a batch size suitable for the model and device. `--base` optionally
+checks an adapter's declared identity. Remote model/tokenizer code still requires
+`--trust-remote-code`, and model/base delimiter injection is refused.
+
+SQLite details retain backend/base/adapter identities and artifact hashes,
+runtime and harness versions, exact task configs/versions, selected metrics,
+per-sample requests/responses, effective sample counts, filters/few-shot settings,
+seed, limits, scored-token counts, generation truncation, elapsed time and process
+MLX peak memory. Every requested task must produce finite measured scores and
+complete sample evidence before anything is saved. Missing dependencies, corrupt
+artifacts, runtime errors and incomplete results exit without a successful result.
+The peak is process-wide, so use a fresh process for comparable resource readings.
+Limited samples and token caps do not establish a full-suite score or model-quality
+gain. The Transformers backend remains the default with its existing controls.
