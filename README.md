@@ -323,6 +323,10 @@ Soup works with **any** text-generation model on the
 `AutoModelForCausalLM`, it works, zero config changes. Llama 3.x/4, Qwen 2.5/3, Gemma 3, Mistral,
 Mixtral, DeepSeek R1/V3, Phi-4, and 100+ others ship as ready-made recipes (`soup recipes list`).
 
+For text preference pairs, `soup recipes use qwen3.5-2b-dpo` writes a Qwen3.5-2B
+DPO starter config; see the [model guide](docs/models.md) for its inherited settings
+and validation limits.
+
 | VRAM | Max model (QLoRA 4-bit) | Example |
 |---|---|---|
 | 8 GB | ~7B | Llama-3.1-8B, Mistral-7B |
