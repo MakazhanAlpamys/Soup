@@ -502,13 +502,17 @@ jobs:
       - name: Run one-step MLX SFT through the real CLI
         if: needs.plan.outputs.docs_only != 'true'
         run: pytest -o addopts= -m smoke -k mlx_sft_smoke -q tests/test_smoke_train.py
-      - name: Run the MLX flight-recorder and DoRA lifecycle tests
+      - name: Run the MLX tests that need the real library
         if: needs.plan.outputs.docs_only != 'true'
         # These importorskip on `mlx.core` / `mlx_lm`, which the 3x3 matrix does
         # not install (`mlx` is not in [dev]), so this is the only job that can
         # execute them. Without this step, replacing the whole MLX per-row loss
-        # with a constant 0.0 left the suite green (#1018 review).
-        run: pytest -o addopts= -q tests/test_rewind_mlx.py tests/test_mlx_dora_native.py
+        # with a constant 0.0 left the suite green (#1018 review). The DPO, ORPO
+        # and eval-steps files (#1846, #2073, #2074) were missing from it: their
+        # loss, gradient and training-loop tests ran on no job at all.
+        # tests/test_ci_mlx_smoke_files.py fails when a tests/test_mlx_*.py that
+        # needs the real library is neither listed here nor exempted there.
+        run: pytest -o addopts= -q tests/test_rewind_mlx.py tests/test_mlx_dora_native.py tests/test_mlx_dpo.py tests/test_mlx_orpo.py tests/test_mlx_eval_steps.py tests/test_mlx_simpo.py
   torchao-contract:
     needs: plan
     # Not on a pull request, approval run included: it is not a required check.
@@ -531,6 +535,11 @@ jobs:
         # One spec with both extras: `-e ".[dev]" ".[qat]"` asks pip for
         # soup-cli twice, once editable and once not, and resolution fails.
         # Ends with `plan`'s stack: pinned on a pull request, the newest at night; torchao floats.
+        # Deliberately NOT on the CPU torch index (2026-10-21), unlike the other Linux jobs:
+        # that index also hosts `torchao`, as `0.18.0+cpu` (pure Python), and pip prefers it to
+        # PyPI's `0.18.0` (the compiled abi3 wheel), so this job would test a build no user
+        # installs from PyPI. It runs nightly and on release/** only, so the CUDA download is a
+        # small cost. tests/test_ci_cpu_torch_on_linux.py names this exemption.
         run: pip install -e ".[dev,qat]" "torch>=2.6.0" ${{ needs.plan.outputs.constraints }}
       - name: Prove torchao is actually importable, so the tests do not skip
         run: python -c "import torchao; print(torchao.__version__)"
@@ -594,6 +603,9 @@ jobs:
         # already pulls torch" breaks the job with a message naming the CVE
         # rather than the cause.
         # Ends with `plan`'s stack: pinned on a pull request, the newest at night.
+        # CPU-only torch (2026-10-21), as in the `test` job: see the comment there.
+        env:
+          PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
         run: pip install -e ".[dev]" "torch>=2.6.0" ${{ needs.plan.outputs.constraints }}
 
       - name: Warm tiny GPT-2 cache
@@ -706,6 +718,12 @@ jobs:
           python-version: "3.11"
       - name: Install with Transformers floor constraints
         if: needs.plan.outputs.docs_only != 'true'
+        # CPU-only torch and torchaudio (2026-10-21), as in the `test` job: see the comment
+        # there. 2.6.0+cpu exists on the CPU index for cp311, cp312 and cp313 (linux x86_64)
+        # for both, and the pins in transformers-floor.txt accept it (PEP 440). The version
+        # it reports is `2.6.0+cpu`, which the next-but-one step compares by public version.
+        env:
+          PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
         run: pip install -e ".[dev,audio]" -c .github/constraints/transformers-floor.txt
       - name: Verify constrained dependency graph
         if: needs.plan.outputs.docs_only != 'true'
@@ -717,6 +735,8 @@ jobs:
           import importlib.metadata as md
           import re
           from pathlib import Path
+
+          from packaging.version import Version
 
           constraints = Path(".github/constraints/transformers-floor.txt").read_text(
               encoding="utf-8"
@@ -735,7 +755,8 @@ jobs:
               assert name in expected, f"floor constraints missing exact {name} pin"
               want = expected[name]
               got = md.version(name)
-              assert got == want, (
+              # The public part: a CPU wheel reports `2.6.0+cpu` for the pin `==2.6.0`.
+              assert Version(got).public == want, (
                   f"floor job expected {name}=={want} from "
                   f".github/constraints/transformers-floor.txt, got {got} — "
                   f"pip silently upgraded, ignored -c, or constraints drifted"
@@ -911,6 +932,21 @@ jobs:
         # and not in the dev extra: a local run stays serial unless a contributor
         # asks for workers.
         # Ends with `plan`'s stack: pinned on a pull request and a push to main, the newest at night.
+        #
+        # 2026-10-21: the Linux cells install the CPU-only torch wheel. PyPI's Linux torch
+        # drags in the CUDA stack (19 packages, 2.43 GB beside the 555 MB torch wheel for
+        # 2.14.1) on runners that have no GPU; the CPU wheel (196 MB, no nvidia-* and no
+        # triton) comes from PyTorch's own index. `PIP_EXTRA_INDEX_URL`, not a flag on the
+        # command: the line above is pinned by tests/test_ci_full_matrix_on_approval.py, and
+        # PyPI stays the main index for every other package (the CPU index mirrors only
+        # older or equal copies of them). On this step only, so a pip a test runs is not
+        # redirected. Windows and macOS already get CPU wheels from PyPI, so it is empty
+        # there. `torch==2.14.1` and `torch>=2.6.0` both accept `2.14.1+cpu` (PEP 440) and
+        # pip prefers the local version to PyPI's plain one. If PyPI ever has a torch the CPU
+        # index does not, the CUDA wheel is resolved silently: the install log says which.
+        # tests/test_ci_cpu_torch_on_linux.py pins every job that does this.
+        env:
+          PIP_EXTRA_INDEX_URL: ${{ runner.os == 'Linux' && 'https://download.pytorch.org/whl/cpu' || '' }}
         run: pip install -e ".[dev]" "pytest-xdist[psutil]" ${{ needs.plan.outputs.constraints }}
       - name: Warm HF Hub cache (models the tests load)
         if: env.RUN_SUITE == 'true'

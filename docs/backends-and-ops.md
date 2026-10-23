@@ -138,6 +138,8 @@ training:
 
 MLX backend supports SFT, DPO, ORPO, SimPO and KTO. Any other task with `backend: mlx` (`grpo`, `ipo`, `preference`, ...) is refused when the config is loaded, with an error naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for ready-made Apple Silicon configs.
 
+`training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO and SimPO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
+
 #### DPO on MLX
 
 `task: dpo` with `backend: mlx` runs Soup's own training loop (`mlx-lm` ships no DPO helper), with the sigmoid loss TRL uses by default and `training.dpo_beta`.

@@ -85,11 +85,7 @@ def test_every_actual_base_loader_call_receives_the_bound_commit(call, receiver,
     assert seen == [(BASE, REVISION)]
 
 
-@pytest.mark.parametrize("receiver,remote_code", [("AutoConfig", False), ("AutoTokenizer", True)])
-def test_streamed_loads_preserve_native_model_policy_and_bound_revision(
-    receiver, remote_code, monkeypatch,
-):
-    """Execute the merged calls: tokenizer trust must not enable remote model code."""
+def _stream_setup_tree():
     path = ROOT / "src/soup_cli/trainer/stream_setup.py"
     tree = ast.parse(path.read_text(encoding="utf-8"))
     model_code = next(
@@ -100,29 +96,111 @@ def test_streamed_loads_preserve_native_model_policy_and_bound_revision(
         )
     )
     assert model_code is False
-    calls = [node for node in ast.walk(tree)
-             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-             and isinstance(node.func.value, ast.Name) and node.func.value.id == receiver
-             and node.func.attr == "from_pretrained"]
-    assert len(calls) == 1
-    seen = []
+    return tree, model_code
 
-    def load(model_id, *, trust_remote_code, revision):
-        assert model_id == BASE and revision == REVISION
-        assert trust_remote_code is remote_code
-        seen.append(model_id)
 
-    env = {
-        "cfg": SimpleNamespace(base=BASE),
-        "self": SimpleNamespace(_trust_remote_code=True, _STREAM_NATIVE_MODEL_CODE=model_code),
-        receiver: SimpleNamespace(from_pretrained=load),
-        "base_revision_kwargs": provenance.base_revision_kwargs,
-    }
+def _from_pretrained_calls(tree, receiver):
+    return [node for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name) and node.func.value.id == receiver
+            and node.func.attr == "from_pretrained"]
+
+
+def _bind_revision(monkeypatch):
     monkeypatch.setattr(provenance, "get_hf_api", lambda: SimpleNamespace(
         model_info=lambda *args, **kwargs: SimpleNamespace(sha=REVISION),
     ))
     monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
     monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+
+
+@pytest.mark.parametrize("kimi_k2", [False, True], ids=["autoconfig", "kimi-k2-raw-read"])
+def test_streamed_config_load_preserves_native_model_policy_and_bound_revision(
+    kimi_k2, monkeypatch,
+):
+    """Execute the merged call through the real loader: tokenizer trust must not enable remote
+    model code, and every read the loader makes carries the bound commit.
+
+    #2107 moved the streamed model's config read from ``AutoConfig.from_pretrained`` in
+    stream_setup into ``utils/kimi_k2.load_stream_model_config``, which reads ``AutoConfig``
+    and, for a Kimi K2 file ``AutoConfig`` refuses as custom code, the raw ``config.json``.
+    Both reads are strict receivers here: a dropped revision or a True policy fails."""
+    pytest.importorskip("transformers")
+    from transformers import AutoConfig, PretrainedConfig
+
+    from soup_cli.utils.kimi_k2 import load_stream_model_config
+    from tests.test_kimi_k2_streaming import K2_BASE_CONFIG
+
+    tree, model_code = _stream_setup_tree()
+    # No second, unguarded config read beside the loader.
+    assert _from_pretrained_calls(tree, "AutoConfig") == []
+    calls = [node for node in ast.walk(tree)
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+             and node.func.id == "load_stream_model_config"]
+    assert len(calls) == 1
+    seen = []
+    native = object()
+
+    def auto_config(model_id, *, trust_remote_code, revision):
+        assert model_id == BASE and revision == REVISION
+        assert trust_remote_code is False
+        seen.append("AutoConfig")
+        if kimi_k2:
+            raise ValueError("The repository contains custom code")
+        return native
+
+    def raw_read(model_id, *, revision, name_or_path):
+        assert model_id == name_or_path == BASE and revision == REVISION
+        seen.append("get_config_dict")
+        return dict(K2_BASE_CONFIG), {}
+
+    monkeypatch.setattr(AutoConfig, "from_pretrained", auto_config)
+    monkeypatch.setattr(PretrainedConfig, "get_config_dict", raw_read)
+    env = {
+        "cfg": SimpleNamespace(base=BASE),
+        "self": SimpleNamespace(_trust_remote_code=True, _STREAM_NATIVE_MODEL_CODE=model_code),
+        "load_stream_model_config": load_stream_model_config,
+        "base_revision_kwargs": provenance.base_revision_kwargs,
+    }
+    _bind_revision(monkeypatch)
     with provenance.base_revision_scope(provenance.BaseRevision(BASE)):
-        eval(compile(ast.Expression(body=calls[0]), "<streamed base load>", "eval"), env)
+        config = eval(
+            compile(ast.Expression(body=calls[0]), "<streamed config load>", "eval"), env,
+        )
+    if kimi_k2:
+        assert seen == ["AutoConfig", "get_config_dict"]
+        assert config.model_type == "deepseek_v3"
+    else:
+        assert seen == ["AutoConfig"]
+        assert config is native
+
+
+def test_streamed_tokenizer_load_keeps_user_trust_bound_revision_and_the_native_config(
+    monkeypatch,
+):
+    """The tokenizer gets the user's trust flag, the bound commit, and the model config already
+    loaded: without ``config=``, ``AutoTokenizer`` reads the config again with the user's flag
+    and, for a repository with an ``auto_map`` (Kimi K2, Moonlight), imports its code."""
+    tree, model_code = _stream_setup_tree()
+    calls = _from_pretrained_calls(tree, "AutoTokenizer")
+    assert len(calls) == 1
+    seen = []
+    model_config = object()
+
+    def load(model_id, *, config, trust_remote_code, revision):
+        assert model_id == BASE and revision == REVISION
+        assert config is model_config
+        assert trust_remote_code is True
+        seen.append(model_id)
+
+    env = {
+        "cfg": SimpleNamespace(base=BASE),
+        "self": SimpleNamespace(_trust_remote_code=True, _STREAM_NATIVE_MODEL_CODE=model_code),
+        "AutoTokenizer": SimpleNamespace(from_pretrained=load),
+        "model_config": model_config,
+        "base_revision_kwargs": provenance.base_revision_kwargs,
+    }
+    _bind_revision(monkeypatch)
+    with provenance.base_revision_scope(provenance.BaseRevision(BASE)):
+        eval(compile(ast.Expression(body=calls[0]), "<streamed tokenizer load>", "eval"), env)
     assert seen == [BASE]

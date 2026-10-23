@@ -62,7 +62,9 @@ def test_stream_setup_pins_tokenizer_and_architecture_config(monkeypatch, moving
         with pytest.raises(AfterConfigError):
             wrapper._setup_streaming_transformers(cfg, cfg.training)
     assert identity.revision == SHA
-    assert calls == ["tokenizer", "config"]
+    # The model config is read first (#2107: a refused Kimi K2 config is reported before
+    # the tokenizer load), and both reads are pinned to the one bound commit.
+    assert calls == ["config", "tokenizer"]
     moving_hub.assert_called_once()
 
 

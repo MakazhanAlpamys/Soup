@@ -40,12 +40,19 @@ Qwen3.5, Qwen3.6, and Qwen3.8 checkpoints advertise a multimodal conditional-gen
 architecture on the Hub, but Soup's catalog recipes are deliberately text-only.
 Their explicit `modality: text` selects `AutoModelForCausalLM`, which instantiates the
 language decoder without the visual tower. This is appropriate for text-only SFT,
-pre-training, and GRPO data; it is not a full multimodal fine-tune. The Transformers
+pre-training, DPO and GRPO data; it is not a full multimodal fine-tune. The Transformers
 backend requires Transformers 5.16.1 or newer, which also supplies the
 `qwen4_exp` text decoder used by Qwen3.8-Flash-Next (#571). On Torch runtimes
 whose `scatter` operator still requires `int64` indices, Soup widens only the
 QSA indexer's local index tensors before LoRA injection; Torch and the upstream
 Transformers class remain unchanged.
+
+`soup recipes use qwen3.5-4b-dpo` selects the 4B language decoder for text
+preference pairs (`prompt`, `chosen`, `rejected`). It inherits the shipped
+Qwen3.5-9B DPO settings: `lr: 5e-6`, three epochs, LoRA rank 16 / alpha 32,
+4-bit quantization and a 4096-token limit. These are inherited starting values,
+not a measured 4B tuning recommendation. The model's visual tower is excluded;
+image preference data is not supported by this recipe.
 
 With `training.stream_layers: true`, the Qwen4-Exp text decoder is admitted by
 its own parity-tested path. Its very large frozen PLE N-gram table is excluded

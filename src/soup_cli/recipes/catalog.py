@@ -48,7 +48,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (169 recipes)
+# Recipe catalog (170 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -3772,6 +3772,36 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "qwen3.5-4b-dpo": RecipeMeta(
+        model="Qwen/Qwen3.5-4B",
+        task="dpo",
+        size="4B",
+        tags=("qwen", "qwen3.5", "dpo", "alignment", "preference", "small"),
+        description="Qwen 3.5 4B text DPO alignment (Apache-2.0)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-4B
+task: dpo
+modality: text
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 5e-6
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
 
 output: ./output
 """,

@@ -8373,6 +8373,42 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_mlx_lora_patterns(self) -> "SoupConfig":
+        """#1996 - ``lora.rank_pattern`` / ``alpha_pattern`` are not applied on
+        ``backend: mlx``. Stop-gap: delete this validator (and
+        ``tests/test_mlx_lora_pattern_refusal.py``) when the MLX trainer honours them.
+
+        SFT, DPO, ORPO and SimPO all build the adapter in ``MLXSFTTrainerWrapper._apply_lora``
+        from one scalar ``lora.r`` and ``lora.alpha``, so a config that set a pattern
+        trained a uniform-rank adapter without a word. Not part of
+        :meth:`_validate_peft_variant_backend_and_quantization`, which returns early
+        for plain LoRA; defined after :meth:`_validate_mlx_task_support` (and the
+        ``lora.r=0`` check) on purpose, so a task MLX cannot run, or a config with no
+        adapter at all, is refused for that reason first and "use backend:
+        transformers" below always leads to a config that loads. MLX DoRA already
+        refuses both fields in its own words, earlier. An empty ``{}`` sets nothing
+        (``peft_wiring`` reads ``if rank_pattern:``) and still loads.
+        """
+        if self.backend != "mlx":
+            return self
+        lcfg = self.training.lora
+        set_fields = [
+            f"training.lora.{name}"
+            for name in ("rank_pattern", "alpha_pattern")
+            if getattr(lcfg, name)
+        ]
+        if not set_fields:
+            return self
+        names = " and ".join(set_fields)
+        verb = "are" if len(set_fields) > 1 else "is"
+        raise ValueError(
+            f"{names} {verb} not applied by backend: mlx — the MLX trainer builds every "
+            "adapter from one scalar training.lora.r and training.lora.alpha, so "
+            f"per-module ranks and alphas would be dropped. Remove {names}, or use "
+            "backend: transformers."
+        )
+
+    @model_validator(mode="after")
     def _validate_uld_compat(self) -> "SoupConfig":
         """v0.70.0 Part B — Universal Logit Distillation gate.
 

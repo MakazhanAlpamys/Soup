@@ -183,7 +183,7 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 169 ready-made recipes
+soup recipes list                             List all 170 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
 soup recipes search "reasoning"              Search by keyword/task/size
@@ -381,6 +381,7 @@ soup train  # task in {sft,tts} + train_router_only=true [+moe_lora]  Freeze MoE
 soup train  # quantization='bitnet_1.58'  BitNet 1.58 training is not implemented; config load refuses it
 soup export --model ./output --format bitnet|tq1_0  BitNet 1.58 TQ1_0 ternary GGUF via llama.cpp — LIVE (v0.71.20)
 soup version [--full] [--json]                Show version (--full: system info, --json: JSON output)
+soup --version                                Show version (prints the same text as soup version)
 soup --verbose <command>                      Full traceback on errors
 ```
 
