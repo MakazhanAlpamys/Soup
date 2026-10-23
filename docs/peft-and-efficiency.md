@@ -409,6 +409,56 @@ at it. `sft`, `orpo`, `simpo`, `reward_model`, `pretrain`, `embedding`, `grpo` w
 reference the same way as `kto` and `bco` but has not been measured.
 
 
+### Native MLX rank and alpha patterns
+
+Text SFT on `backend: mlx` supports ordinary linear LoRA and rsLoRA patterns
+on dense and genuine 4-bit targets. Automatic targets retain MLX's Q/V default;
+explicit targets are layer-relative keys such as `self_attn.q_proj`, or exact
+qualified paths. Patterns match **qualified native paths**, for example
+`model.layers.0.self_attn.q_proj`; these can differ from Transformers paths.
+
+Rank and alpha resolve independently, with scalar `r`/`alpha` fallbacks. As in
+PEFT 0.20+, the first matching dictionary entry wins. Patterns are regexes with
+an optional dotted prefix and an implicit end anchor; `q_proj` matches that
+suffix, while `^model.layers.0.self_attn.q_proj` anchors the whole path. Place
+specific entries before general entries. A fully shadowed pattern is valid if it
+matches a selected module; a pattern matching no selected module is an error.
+Existing pattern length/count/value/regex safety limits apply. Each selected
+layer uses its own `alpha / rank`, or `alpha / sqrt(rank)` for rsLoRA.
+
+```yaml
+backend: mlx
+training:
+  lora:
+    target_modules: [self_attn.q_proj, self_attn.v_proj]
+    r: 4
+    alpha: 8
+    rank_pattern: {q_proj: 2}
+    alpha_pattern: {v_proj: 12}
+```
+
+Patterned artifacts use the versioned `soup_lora` per-module manifest in
+`adapter_config.json`, containing the original recipe and resolved shapes and
+scales. Soup reconstructs modules before strict tensor loading; metadata drift,
+missing/extra tensors, incompatible shapes and nonfinite values are refused.
+Use `soup infer --backend mlx`, `soup merge --backend mlx`, or
+`from soup_cli.utils.mlx_generation import load_native_model` to load them.
+Generic `mlx_lm.load(..., adapter_path=...)` cannot reconstruct this format and
+fails on its missing uniform `lora_parameters` block. Uniform legacy artifacts
+keep their existing format and loading path. Metadata is available before the
+training loop so periodic checkpoints are reconstructible after interruption.
+Warm starts require matching per-module recipes and restore weights only.
+Metadata writes are atomic. Reusing an output containing incompatible adapter
+weights is refused before writing; choose a fresh output directory for a
+different recipe or base identity.
+
+DoRA, LoRA+, LoRA-FA, packing, non-text/non-SFT paths, embeddings and switch/MoE
+adapter targets remain refused with patterns until their combinations are
+qualified. Heterogeneous ranks alone do not establish better quality, speed or
+memory use. Native offline lifecycle tests cover MLX 0.31.2 / MLX-LM 0.31.3 and
+0.32.4 / 0.32.2.
+
+
 ## DoRA (Weight-Decomposed LoRA)
 
 Enable DoRA for improved LoRA quality with magnitude decomposition:
@@ -469,7 +519,7 @@ training:
 - **Measured Adapter Operating Point:** Trains exactly 50.0% fewer parameters per adapted projection (trains $B$, freezes $A$), reducing AdamW optimizer states (`exp_avg_B`, `exp_avg_sq_B`) by half for square projections.
 - **Analytic Activation Retention:** Freezing $A$ avoids storing input activations $x \in \mathbb{R}^{B \times L \times d_{in}}$ for adapter backpropagation through $A$. Only $u = A x \in \mathbb{R}^{B \times L \times r}$ is retained, yielding an analytic adapter activation ratio of $r / d_{in}$ (~64× reduction for rank 64 on hidden dim 4096; the exact ratio scales with your rank choice).
 - **Scope & Limitations:** These values represent a micro-benchmark operating point and an analytic saved-tensor ratio for the adapter projections — **they are not total or peak LLM VRAM savings, an end-to-end throughput result, or a quality claim.** Peak training VRAM in full LLM fine-tuning is dominated by base model activations, KV caches, and weights; total end-to-end VRAM savings are substantially smaller. Downstream task quality and end-to-end throughput vs standard LoRA remain unmeasured. See [`benchmarks/gate-725-lorafa-operating-point.md`](../benchmarks/gate-725-lorafa-operating-point.md) for measured figures.
-- **Compatibility:** Supported on the `transformers` backend for `sft`, `pretrain`, and `embedding` tasks. Mutually exclusive with `loraplus_lr_ratio` (which differentiates $A$ and $B$ rates), `use_galore`, `lora.use_vera` (VeRA trains scaling vectors, so `create_lorafa_optimizer` finds no $B$ matrices), non-AdamW optimizers, and the `mlx` backend. Requires explicit `lora.r` and `lora.alpha`. LoRA-FA has not been validated under `stream_layers: true` (layer streaming); combining them is not recommended.
+- **Compatibility:** Supported on the `transformers` backend for `sft`, `pretrain`, and `embedding` tasks. Mutually exclusive with `loraplus_lr_ratio` (which differentiates $A$ and $B$ rates), `use_galore`, `lora.use_vera` (VeRA trains scaling vectors, so `create_lorafa_optimizer` finds no $B$ matrices), non-AdamW optimizers. Native MLX text SFT supports ordinary linear LoRA on dense or pre-quantized 4-bit bases, with explicit positive integer rank/alpha and `adamw_torch`, `adamw`, or `adamw_torch_fused`. DoRA, rsLoRA, patterns, other initializers/families/tasks/modalities and quantizations are refused. Requires explicit `lora.r` and `lora.alpha`. LoRA-FA has not been validated under `stream_layers: true` (layer streaming); combining them is not recommended.
 
 
 ## Fast-LoRA kernels (`training.fast_lora`)

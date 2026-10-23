@@ -340,8 +340,9 @@ def test_soup_config_lorafa_task_and_backend_gating(tmp_path):
     data_file = tmp_path / "train.jsonl"
     data_file.write_text('{"instruction": "a", "output": "b"}\n', encoding="utf-8")
 
-    # Incompatible backend (MLX)
-    with pytest.raises(ValidationError, match="requires backend='transformers'"):
+    # Native MLX requires explicit positive dimensions; the default object lacks them.
+    with pytest.raises(ValidationError, match="requires explicit positive integer"):
+
         SoupConfig(
             base="some-model",
             task="sft",

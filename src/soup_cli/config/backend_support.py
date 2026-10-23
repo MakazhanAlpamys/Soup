@@ -110,13 +110,6 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
         trainer_reads=True,
     ),
     SupportEntry(
-        "training.use_lorafa",
-        IGNORED,
-        "LoRA-FA has no MLX implementation",
-        issue=725,
-        trainer_reads=True,
-    ),
-    SupportEntry(
         "training.use_ring_attention",
         IGNORED,
         "Ring Attention has no MLX path",
@@ -264,6 +257,8 @@ _TRANSFORMERS_SFT_MODULES = (
 TRAINER_MODULES: dict[tuple[str, str, str], tuple[str, ...]] = {
     ("sft", "mlx", "text"): (
         "soup_cli/trainer/mlx_sft.py",
+        "soup_cli/trainer/mlx_lora.py",
+        "soup_cli/trainer/mlx_lorafa.py",
         "soup_cli/trainer/mlx_optim.py",
         "soup_cli/trainer/mlx_masking.py",
         "soup_cli/trainer/rewind_mlx.py",

@@ -4,7 +4,7 @@ import math
 import re
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, TypeAdapter, field_validator, model_validator
 
 # Stream-buffer, read-ahead and noise-floor bounds come from a dependency-free
 # leaf that layer_stream, async_disk_source and ship_verdict re-export, so the
@@ -5593,6 +5593,25 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
+    def _validate_mlx_lorafa_dimensions(cls, data):
+        if isinstance(data, dict) and data.get("backend") == "mlx":
+            training = data.get("training", {})
+            if isinstance(training, dict) and TypeAdapter(bool).validate_python(
+                training.get("use_lorafa", False)
+            ):
+                lora = training.get("lora", {})
+                for field in ("r", "alpha"):
+                    value = (lora.get(field) if isinstance(lora, dict)
+                             else getattr(lora, field, None))
+                    if type(value) is not int or value <= 0:
+                        raise ValueError(
+                            "training.use_lorafa requires explicit positive integer "
+                            f"lora.{field} on MLX"
+                        )
+        return data
+
+    @model_validator(mode="before")
+    @classmethod
     def _remap_root_level_misplaced_keys(cls, values):
         """v0.40.1 Part B — QA finding C2: users naturally write top-level
         ``lora:`` (LlamaFactory / Axolotl convention) but Soup nests it
@@ -6652,6 +6671,22 @@ class SoupConfig(BaseModel):
     def _validate_lorafa_task_and_backend(self) -> "SoupConfig":
         """#725 — LoRA-FA task and backend gating."""
         if not self.training.use_lorafa:
+            return self
+        if self.backend == "mlx":
+            lora = self.training.lora
+            for field in ("r", "alpha"):
+                if field not in lora.model_fields_set or getattr(lora, field) <= 0:
+                    raise ValueError(
+                        "training.use_lorafa requires explicit positive integer "
+                        f"lora.{field} on MLX"
+                    )
+            if (self.task != "sft" or self.modality != "text" or
+                    self.training.quantization not in ("none", "4bit") or
+                    lora.use_dora or lora.use_rslora or lora.rank_pattern or lora.alpha_pattern):
+                raise ValueError(
+                    "training.use_lorafa on MLX requires ordinary linear LoRA text SFT, "
+                    "dense/4bit, without DoRA, rsLoRA or patterns; use transformers otherwise"
+                )
             return self
         if self.backend != "transformers":
             raise ValueError(

@@ -238,7 +238,9 @@ def mlx_lora_scale(lora_cfg: object) -> float:
     return alpha / rank
 
 
-def build_mlx_adapter_config(lora_cfg: object, *, adapter_path: str, **extra: object) -> dict:
+def build_mlx_adapter_config(
+    lora_cfg: object, *, adapter_path: str, soup_lora: dict | None = None, **extra: object,
+) -> dict:
     """The ``lora_parameters`` block, keyed off the RESOLVED module list.
 
     Separate from the writer so a test can assert the file's ``keys`` against
@@ -256,6 +258,10 @@ def build_mlx_adapter_config(lora_cfg: object, *, adapter_path: str, **extra: ob
             "keys": resolve_mlx_target_keys(lora_cfg),
         },
     }
+    if soup_lora is not None:
+        # A uniform block would let generic loaders silently use wrong scales.
+        config.pop("lora_parameters")
+        config["soup_lora"] = soup_lora
     config.update(extra)
     return config
 
@@ -397,10 +403,6 @@ class MLXSFTTrainerWrapper:
             unsupported.append("quantization=8bit (use mlx-community 4bit models)")
         if tcfg.use_galore:
             unsupported.append("GaLore")
-        if getattr(tcfg, "use_lorafa", False):
-            unsupported.append(
-                "training.use_lorafa (LoRA-FA has no MLX implementation)"
-            )
         if tcfg.use_ring_attention:
             unsupported.append("Ring Attention")
         if tcfg.use_flash_attn:
@@ -535,6 +537,16 @@ class MLXSFTTrainerWrapper:
         cfg = self.config
         lora_cfg = cfg.training.lora
         target_keys = resolve_mlx_target_keys(lora_cfg)
+        if lora_cfg.rank_pattern or lora_cfg.alpha_pattern:
+            from soup_cli.trainer.mlx_lora import apply_pattern_manifest, build_pattern_manifest
+
+            if (cfg.task != "sft" or cfg.modality != "text" or lora_cfg.use_dora or
+                    cfg.training.use_lorafa or cfg.training.loraplus_lr_ratio is not None or
+                    cfg.training.packing):
+                raise ValueError("MLX patterns support ordinary LoRA/rsLoRA text SFT only")
+            self._lora_manifest = build_pattern_manifest(model, lora_cfg, target_keys)
+            apply_pattern_manifest(model, self._lora_manifest)
+            return
         if target_keys == MLX_DEFAULT_TARGET_KEYS and lora_cfg.target_modules in (
             None,
             [],
@@ -545,6 +557,10 @@ class MLXSFTTrainerWrapper:
                 "[yellow]MLX backend: target_modules: auto cannot be resolved for "
                 f"all architectures; defaulting to {target_keys}[/]"
             )
+        if cfg.training.use_lorafa:
+            from soup_cli.trainer.mlx_lora import selected_linear_modules
+
+            selected_linear_modules(model, target_keys)
         keys = set(target_keys)
         use_dora = bool(lora_cfg.use_dora)
         if use_dora:
@@ -614,6 +630,21 @@ class MLXSFTTrainerWrapper:
         model's LoRA-shaped parameter names — the other half — needs mlx
         itself to introspect, which isn't available to verify here.
         """
+        if getattr(self, "_lora_manifest", None) is not None:
+            from soup_cli.trainer.mlx_lora import load_pattern_checkpoint
+
+            load_pattern_checkpoint(self.model, checkpoint_path, self._lora_manifest)
+            return
+        # Uniform training must not silently warm-start a same-shaped artifact
+        # whose per-module scale differs from the requested uniform recipe.
+        metadata_path = Path(checkpoint_path).parent / "adapter_config.json"
+        if metadata_path.is_file() and "soup_lora" in json.loads(metadata_path.read_text()):
+            raise ValueError("MLX per-module warm-start requires matching rank/alpha patterns")
+        if self.config.training.use_lorafa:
+            from soup_cli.trainer.mlx_lorafa import load_fa_checkpoint
+
+            load_fa_checkpoint(self.model, checkpoint_path)
+            return
         tensor_count = _count_safetensors_tensors(checkpoint_path)
         if tensor_count == 0:
             raise ValueError(
@@ -671,8 +702,23 @@ class MLXSFTTrainerWrapper:
 
         self._apply_lora(self.model)
 
+        pattern_metadata = None
+        if getattr(self, "_lora_manifest", None) is not None:
+            from soup_cli.trainer.mlx_lora import check_pattern_output, write_pattern_metadata
+
+            pattern_metadata = build_mlx_adapter_config(
+                cfg.training.lora, adapter_path=str(output_dir),
+                soup_lora=self._lora_manifest, model=str(cfg.base),
+                num_layers=len(self.model.layers),
+            )
+            check_pattern_output(output_dir, pattern_metadata)
+
         if resume_from_checkpoint is not None:
             self._load_checkpoint_weights(resume_from_checkpoint)
+
+        if pattern_metadata is not None:
+            # After warm-start checks, before any loop can save a checkpoint.
+            write_pattern_metadata(output_dir, pattern_metadata)
 
         batch_size = _resolved_batch_size(cfg.training)
         train_rows = list(self._dataset.get("train", []))
@@ -836,11 +882,27 @@ class MLXSFTTrainerWrapper:
         # one that clips the global gradient norm before delegating. Applied
         # here rather than inside build_optimizer so the plan stays a pure
         # description of the schedule and the two fixes stay separable.
-        optimizer = _clipping_optimizer(
-            build_optimizer(optimizer_plan), float(cfg.training.max_grad_norm)
-        )
+        if cfg.training.use_lorafa:
+            from soup_cli.trainer.mlx_lorafa import build_lorafa_optimizer, train_lorafa
+
+            native_optimizer = build_lorafa_optimizer(optimizer_plan, self.model)
+            train = train_lorafa
+        else:
+            native_optimizer = build_optimizer(optimizer_plan)
+        optimizer = _clipping_optimizer(native_optimizer, float(cfg.training.max_grad_norm))
 
         captured: dict = {}
+        fa_metadata = None
+        if cfg.training.use_lorafa:
+            from soup_cli.trainer.mlx_lora import write_pattern_metadata
+            from soup_cli.trainer.mlx_lorafa import SETTINGS, check_fa_output
+
+            fa_metadata = build_mlx_adapter_config(
+                cfg.training.lora, adapter_path=str(output_dir), model=str(cfg.base),
+                num_layers=len(self.model.layers), lorafa=SETTINGS,
+            )
+            check_fa_output(output_dir, fa_metadata)
+            write_pattern_metadata(output_dir, fa_metadata)
         total_epochs = float(cfg.training.epochs)
 
         class _Callback(TrainingCallback):
@@ -1148,46 +1210,50 @@ class MLXSFTTrainerWrapper:
 
         # mlx-lm's tuner only saves adapters.safetensors; write the
         # adapter_config.json so the output dir is directly loadable with
-        # mlx_lm.load(..., adapter_path=output).
+        # the selected native loader.
         lora_cfg = cfg.training.lora
-        (output_dir / "adapter_config.json").write_text(
-            json.dumps(
-                {
-                    **build_mlx_adapter_config(lora_cfg, adapter_path=str(output_dir)),
-                    "model": str(cfg.base),
-                    "num_layers": len(getattr(self.model, "layers", [])),
-                    "batch_size": batch_size,
-                    "iters": iters,
-                    "learning_rate": float(cfg.training.lr),
-                    "steps_per_report": steps_per_report,
-                    "steps_per_eval": steps_per_eval,
-                    # #1990: an explicit interval, in completed optimizer updates.
-                    **({"eval_steps": int(eval_every), "eval_unit": "optimizer updates"}
-                       if eval_every is not None else {}),
-                    "steps_per_save": steps_per_save,
-                    "max_seq_length": max_seq_length,
-                    # #683: the EFFECTIVE masking, not a hardcoded False.
-                    # `mask_prompt` stays upstream's meaning (a single masked
-                    # prefix); `response_token_mask` is Soup's per-token mask,
-                    # which is what a multi-turn chat run actually used.
-                    "mask_prompt": bool(args.mask_prompt),
-                    "response_token_mask": use_token_mask,
-                    "train_on_responses_only": responses_only,
-                    "grad_checkpoint": grad_checkpoint,
-                    "grad_accumulation_steps": grad_accumulation_steps,
-                    # #686: the EFFECTIVE optimizer and schedule, so an adapter
-                    # records the recipe that ran rather than the one requested.
-                    **optimizer_plan.as_metadata(),
-                    # #749: the norm gradients were actually clipped at.
-                    # Recorded because MLX honours it through a Soup-side
-                    # wrapper rather than through anything mlx-lm writes, so
-                    # the output dir is the only place a finished run says
-                    # whether it clipped.
-                    "max_grad_norm": float(cfg.training.max_grad_norm),
-                },
-                indent=2,
-            )
-        )
+        adapter_metadata = {
+            **build_mlx_adapter_config(
+                lora_cfg, adapter_path=str(output_dir),
+                soup_lora=getattr(self, "_lora_manifest", None),
+            ),
+            "model": str(cfg.base),
+            "num_layers": len(getattr(self.model, "layers", [])),
+            "batch_size": batch_size,
+            "iters": iters,
+            "learning_rate": float(cfg.training.lr),
+            "steps_per_report": steps_per_report,
+            "steps_per_eval": steps_per_eval,
+            # #1990: an explicit interval, in completed optimizer updates.
+            **({"eval_steps": int(eval_every), "eval_unit": "optimizer updates"}
+               if eval_every is not None else {}),
+            "steps_per_save": steps_per_save,
+            "max_seq_length": max_seq_length,
+            # #683: the EFFECTIVE masking, not a hardcoded False.
+            # `mask_prompt` stays upstream's meaning (a single masked
+            # prefix); `response_token_mask` is Soup's per-token mask,
+            # which is what a multi-turn chat run actually used.
+            "mask_prompt": bool(args.mask_prompt),
+            "response_token_mask": use_token_mask,
+            "train_on_responses_only": responses_only,
+            "grad_checkpoint": grad_checkpoint,
+            "grad_accumulation_steps": grad_accumulation_steps,
+            # #686: the EFFECTIVE optimizer and schedule, so an adapter
+            # records the recipe that ran rather than the one requested.
+            **optimizer_plan.as_metadata(),
+            **({"lorafa": SETTINGS, "optimizer": "LoRAFAProjectedAdamW"}
+               if fa_metadata is not None else {}),
+            # #749: the norm gradients were actually clipped at.
+            # Recorded because MLX honours it through a Soup-side
+            # wrapper rather than through anything mlx-lm writes, so
+            # the output dir is the only place a finished run says
+            # whether it clipped.
+            "max_grad_norm": float(cfg.training.max_grad_norm),
+        }
+        if pattern_metadata is not None or fa_metadata is not None:
+            write_pattern_metadata(output_dir, adapter_metadata)
+        else:
+            (output_dir / "adapter_config.json").write_text(json.dumps(adapter_metadata, indent=2))
 
         loss_summary = summarize_training_loss(
             [{"loss": loss} for loss in captured.get("losses", [])]

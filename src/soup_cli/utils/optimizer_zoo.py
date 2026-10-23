@@ -81,7 +81,7 @@ _TORCH_REJECTED: frozenset = frozenset({
 # transformers 5.x rejects these in TrainingArguments, but the MLX backend
 # never builds TrainingArguments and has its own optimizer map for both
 # names (trainer/mlx_optim.py), so only a non-MLX run refuses them (#1283).
-MLX_ONLY_OPTIMIZERS: frozenset = frozenset({"adamw_hf", "muon"})
+MLX_ONLY_OPTIMIZERS: frozenset = frozenset({"adamw_hf", "adamw", "muon"})
 
 SUPPORTED_OPTIMIZERS: frozenset = (
     _HF_NATIVE | _BNB_BACKED | _NEW_V0_41_0 | MLX_ONLY_OPTIMIZERS

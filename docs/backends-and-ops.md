@@ -1573,3 +1573,42 @@ soup doctor    # GPU, system resources, dependencies, and version in one place
   wheel is CPU-only. Reinstall a CUDA build; `soup doctor` prints the
   `pip install` command for the wheel your driver can run.
 - **`soup version` ≠ `pip show soup-cli`** — multiple Python installs; use a virtualenv.
+
+
+### Native MLX LoRA-FA
+
+`training.use_lorafa: true` supports ordinary linear LoRA text SFT on dense or
+pre-quantized 4-bit bases. Set explicit positive integer `lora.r` and `lora.alpha`;
+use `adamw_torch`, `adamw` or `adamw_torch_fused`. DoRA, rsLoRA, rank/alpha patterns,
+other initializers/families, other tasks/modalities/quantizations and LoRA+/GaLore/
+VeRA remain refused. Actual targets must all be supported dense/4-bit linear layers.
+The first implementation runs on one device and requires FP32 adapter tensors;
+the base may remain BF16 or 4-bit.
+
+A and the base stay frozen; gradients still flow through A to earlier layers.
+B uses `pinv(A.T @ A + 1e-8 I) @ raw_grad_B / (alpha/r)**2`. The FP32 CPU NumPy
+SVD is computed once from the actual loaded A, with relative cutoff
+`rank * float32_eps`, matching the pinned PEFT 0.21.2 FP32 reference policy.
+Rank-deficient A is handled by that pseudoinverse, without an identity fallback;
+nonfinite A/B/projections or incompatible shapes/dtypes are refused.
+The optimizer uses betas `(0.9, 0.999)`, epsilon `1e-6`, bias correction and
+**post-update** decoupled decay. Raw gradients are clipped globally before the
+projection, following Soup's Trainer clipping-before-optimizer order.
+
+The FA-only compiled loop reuses mlx-lm loss/batching/evaluation/checkpointing
+helpers, with Soup callbacks, masking and Rewind. A separate saver is necessary:
+mlx-lm's trainer serializes only trainable tensors and exposes no save hook, which
+would omit frozen A. Every periodic/final checkpoint includes the complete A/B set.
+Metadata records effective projection/optimizer settings before the first save;
+incompatible existing artifacts require a fresh output directory. Native Soup
+load/infer/fusion use the ordinary linear adapter representation.
+
+Schedules count optimizer updates. Accumulation retains the existing MLX wrapper
+policy: round iterations down to a complete window, with at least one full window;
+a dataset shorter than a window loops to fill it. Weights-only warm-start strictly
+checks all A/B names, shapes, FP32 dtype and finite values, loads A/B, rebuilds the
+projection and starts new optimizer/schedule counters. Full-state training resume
+is not provided. PyTorch/PEFT are used only for the separate numerical reference,
+not required by native runtime. See the measured, bounded
+[operating point](../benchmarks/gate-1978-mlx-lorafa.md); frozen parameter counts do
+not establish total memory savings, model quality or a general speedup.

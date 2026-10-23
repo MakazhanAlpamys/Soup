@@ -9,6 +9,7 @@
 - [Merge LoRA Adapter](#merge-lora-adapter)
 - [Export to GGUF](#export-to-gguf)
 - [Batch Inference](#batch-inference)
+- [Native MLX text generation](#native-mlx-text-generation)
 - [Inference Benchmarking](#inference-benchmarking)
 - [Inference Server](#inference-server)
 - [Web UI](#web-ui)
@@ -44,6 +45,35 @@ ReLoRA training outputs are already standalone dense models: Soup merges the
 final active adapter into the accumulated in-memory base before writing the
 training output. Load or export that directory directly; `soup merge` is only
 for adapter-only outputs and must not be used to reconstruct a ReLoRA run.
+
+
+### Native MLX adapter fusion
+
+On Apple Silicon, merge an ordinary native text LoRA into a standalone dense checkpoint:
+
+```bash
+soup merge --backend mlx --adapter ./mlx-adapter --output ./fused --dtype float32
+# Explicit opt-in for a genuinely 4-bit source; output remains dense:
+soup merge --backend mlx --adapter ./mlx-4bit-adapter --output ./fused --dequantize
+soup infer --backend mlx --model ./fused --input prompts.jsonl --output results.jsonl
+```
+
+The shared native loader resolves the saved base identity and validates all adapter
+keys/shapes before applying tensors. `--base`, if supplied, must match that identity.
+Fusion uses MLX-LM's linear LoRA fusion and dequantizes the whole model, including
+untargeted embeddings. `--dtype` chooses float16 (default), bfloat16 or float32;
+`--save-format fp16` names the standard dense format, independently of this dtype.
+There is no automatic requantization. The saved weights, model configuration and
+tokenizer reload without the original base/adapter directories; quantization metadata
+and live adapter tensors are removed, while tied-weight configuration is preserved.
+
+Output must be new, contained under the current directory and disjoint from both
+inputs, including through symlinks. Writes are staged in its parent; failed or
+interrupted saves do not publish an incomplete checkpoint. Inputs remain unchanged.
+DoRA and other unqualified adapter variants, BNB save formats and explicit
+`--double-quant` controls, and non-HF hubs are refused on the native path.
+`--trust-remote-code` remains opt-in. This qualifies the bounded native lifecycle on
+tiny dense/4-bit text fixtures, not general model quality or GGUF conversion.
 
 
 ## Export to GGUF
@@ -268,6 +298,45 @@ soup infer --model ./output --input prompts.jsonl --output results.jsonl \
 ```
 
 Output is JSONL with `prompt`, `response`, and `tokens_generated` fields. Shows a progress bar and throughput summary.
+
+
+### Native MLX text generation
+
+On Apple Silicon, install `soup-cli[mlx]` and select the native backend explicitly:
+
+```bash
+soup infer --backend mlx --model ./mlx-adapter --input prompts.jsonl --output results.jsonl
+# A local native base model also works without an adapter:
+soup infer --backend mlx --model ./mlx-base --input prompts.jsonl --output results.jsonl
+```
+
+Inference uses a shared MLX loader and generation implementation. Native Soup
+adapters carry `model`, `num_layers` and resolved `lora_parameters` in
+`adapter_config.json`, alongside `adapters.safetensors`. The base identity comes from
+that metadata; `--base`, if supplied, must identify the same base. All saved tensor
+names and shapes must exactly match the reconstructed adapter. Missing, extra,
+nonfinite or incompatible tensors fail before generation. A native adapter supplied
+to the default Transformers backend is refused with a backend hint.
+
+The initial native consumer supports ordinary linear text LoRA (including the saved
+rsLoRA scale), with dense or genuinely 4-bit MLX bases, and base-only generation.
+DoRA, full-finetune adapters, embedding/switch-layer targets and other quantized
+adapter targets are refused. This does not add MLX serving or adapter fusion.
+Use the base tokenizer's chat template; rendered special tokens are encoded once.
+Temperature zero selects greedy decoding; positive temperature uses nucleus sampling
+with `top_p=0.9`, matching the Transformers inference default. `--max-tokens`
+limits generation to 1–16384 tokens. No seed flag or reproducibility promise for
+sampling is introduced. The tokenizer's EOS/EOT IDs terminate generation; batch
+`tokens_generated` includes a sampled terminating token, while `response` contains
+completion text only.
+
+MLX selects its native device: omit `--device`. Only the HF/local source path,
+`--task text` and `--batch-size 1` are supported; CUDA graphs are refused. Batch
+rows retain their input order and JSONL schema. If generation fails, already flushed
+rows remain available and the command fails without reporting completion.
+Model loading remains subject
+to `--trust-remote-code`; it is disabled by default. The MLX path does not import
+Torch, PEFT or TRL.
 
 
 ## Inference Benchmarking
