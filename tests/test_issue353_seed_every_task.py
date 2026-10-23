@@ -121,7 +121,7 @@ def _prompt_rows(n=8):
 #: KTO refuses `per_device_train_batch_size == 1` (its KL term is degenerate
 #: there), so the floor is per task rather than global. GRPO needs the batch to
 #: be divisible by `num_generations`.
-_MIN_BATCH = {"kto": 2, "grpo": 2}
+_MIN_BATCH = {"kto": 2, "grpo": 2, "embedding": 2}
 
 #: task -> (module, wrapper class, rows, extra `training:` keys)
 #: Every entry here is driven through a real `setup()`.
@@ -178,6 +178,7 @@ def _cfg(weights, out_dir, task, **training_over):
         "batch_size": _MIN_BATCH.get(task, 1),
         "quantization": "none",
         "epochs": 1,
+        "warmup_ratio": 0.0,
         "logging_steps": 1,
         "save_steps": 1000,
         "lora": {"r": 4, "alpha": 8, "target_modules": ["q_proj", "v_proj"]},
@@ -513,7 +514,6 @@ _NOT_SEEDED = {
                   "model_copy carries the seed into",
     "bitnet": "raises before it builds anything; hardware-gated path",
     "mlx_sft": "MLX backend, which seeds nothing on any path yet",
-    "mlx_dpo": "MLX backend, which seeds nothing on any path yet",
     "mlx_grpo": "MLX backend, which seeds nothing on any path yet",
 }
 

@@ -63,7 +63,7 @@ def _gate(tmp_path, cache_dir, chat_template=None):
         _config("pre_tokenized", chat_template, f"  tokenized_path: {path}\n")
         + "output: ./out\n"
     )
-    return _maybe_load_pretokenized(cfg.data, cfg.base, MagicMock())
+    return _maybe_load_pretokenized(cfg.data, cfg.base, MagicMock(), task="sft")
 
 
 def _first_row(cache_dir):

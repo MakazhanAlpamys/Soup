@@ -33,7 +33,9 @@ _MAX_REFUSAL_SCAN = 8192
 _MAX_LANG_CODE_LEN = 32
 
 _REFUSAL_PATTERNS = re.compile(
-    r"\b(i (?:can(?:not|'t)|won't|am unable|am not able))|"
+    # "i'm unable" / "i'm not able" (#1228): the contracted forms missed the
+    # "i am unable" branch, so "I'm unable to help with that." read as an answer.
+    r"\b(i (?:can(?:not|'t)|won't|am unable|am not able)|i'm (?:unable|not able))|"
     r"\b(sorry,? (?:but |i ))|"
     r"\b(as an? (?:ai|assistant|language model))|"
     r"\b(refuse to|cannot (?:help|assist|comply))",

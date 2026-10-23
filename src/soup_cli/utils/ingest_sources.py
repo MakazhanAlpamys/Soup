@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Dict, Iterable, Iterator, Mapping, Optional
 
+from soup_cli.data.traces.messages import content_text, conversation_prompt, message_list_text
 from soup_cli.utils.paths import is_under_cwd
 
 # ---------------------------------------------------------------------------
@@ -156,7 +157,7 @@ def resolve_auth_env(name: object) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-def _coerce_str(value: Any) -> str:
+def _coerce_str(value: Any, *, prompt: bool = True) -> str:
     """Best-effort string extraction for messy SaaS payloads."""
     if isinstance(value, str):
         return value
@@ -164,39 +165,15 @@ def _coerce_str(value: Any) -> str:
         # Common shapes: {messages: [...]}, {content: "..."}, {text: "..."}
         messages = value.get("messages")
         if isinstance(messages, list):
-            parts: list[str] = []
-            for msg in messages:
-                if isinstance(msg, dict):
-                    content = msg.get("content")
-                    if isinstance(content, str):
-                        parts.append(content)
-                    elif isinstance(content, list):
-                        for chunk in content:
-                            if isinstance(chunk, dict):
-                                text = chunk.get("text")
-                                if isinstance(text, str):
-                                    parts.append(text)
-            joined = "\n".join(parts).strip()
-            if joined:
-                return joined
+            return message_list_text(messages, prompt=prompt)
         for key in ("content", "text", "prompt", "response", "output", "input"):
             sub = value.get(key)
             if isinstance(sub, str):
                 return sub
             if isinstance(sub, list):
-                # OpenAI Stored Completions style: input/output as list of msgs
-                for msg in sub:
-                    if isinstance(msg, dict):
-                        c = msg.get("content")
-                        if isinstance(c, str):
-                            return c
+                return message_list_text(sub, prompt=prompt)
     if isinstance(value, list):
-        # OpenAI Stored Completions: list of role/content turns
-        for msg in value:
-            if isinstance(msg, dict):
-                c = msg.get("content")
-                if isinstance(c, str):
-                    return c
+        return message_list_text(value, prompt=prompt)
     return ""
 
 
@@ -228,7 +205,7 @@ def parse_langfuse(events: Iterable[Any]) -> Iterator[TraceRecord]:
         if not isinstance(event, dict):
             continue
         prompt = _coerce_str(event.get("input"))
-        output = _coerce_str(event.get("output"))
+        output = _coerce_str(event.get("output"), prompt=False)
         if not prompt or not output:
             continue
         trace_id = str(event.get("id") or f"langfuse-{idx}")
@@ -270,10 +247,9 @@ def parse_langsmith(events: Iterable[Any]) -> Iterator[TraceRecord]:
                     item = first
                 if isinstance(item, dict):
                     text = item.get("text") or item.get("content")
-                    if isinstance(text, str):
-                        output = text
+                    output = content_text(text)
             if not output:
-                output = _coerce_str(outputs)
+                output = _coerce_str(outputs, prompt=False)
         if not prompt or not output:
             continue
         trace_id = str(event.get("id") or f"langsmith-{idx}")
@@ -320,14 +296,13 @@ def parse_helicone(events: Iterable[Any]) -> Iterator[TraceRecord]:
                         msg = first.get("message")
                         if isinstance(msg, dict):
                             content = msg.get("content")
-                            if isinstance(content, str):
-                                output = content
+                            output = content_text(content)
                         if not output:
-                            output = _coerce_str(first.get("text"))
+                            output = _coerce_str(first.get("text"), prompt=False)
             if not output:
-                output = _coerce_str(body)
+                output = _coerce_str(body, prompt=False)
         else:
-            output = _coerce_str(resp)
+            output = _coerce_str(resp, prompt=False)
         if not prompt or not output:
             continue
         trace_id = str(event.get("request_id") or event.get("id") or f"helicone-{idx}")
@@ -350,17 +325,10 @@ def parse_openpipe(events: Iterable[Any]) -> Iterator[TraceRecord]:
         if not isinstance(event, dict):
             continue
         messages = event.get("messages")
-        prompt = ""
-        if isinstance(messages, list):
-            user_msgs = [
-                str(m.get("content") or "")
-                for m in messages
-                if isinstance(m, dict) and m.get("role") == "user"
-            ]
-            prompt = "\n".join(p for p in user_msgs if p).strip()
+        prompt = conversation_prompt(messages)
         if not prompt:
             prompt = _coerce_str(event.get("prompt"))
-        output = _coerce_str(event.get("response") or event.get("output"))
+        output = _coerce_str(event.get("response") or event.get("output"), prompt=False)
         if not prompt or not output:
             continue
         trace_id = str(event.get("id") or f"openpipe-{idx}")
@@ -417,7 +385,7 @@ def parse_openai_stored(events: Iterable[Any]) -> Iterator[TraceRecord]:
         if not isinstance(event, dict):
             continue
         prompt = _coerce_str(event.get("input"))
-        output = _coerce_str(event.get("output"))
+        output = _coerce_str(event.get("output"), prompt=False)
         if not prompt or not output:
             continue
         trace_id = str(event.get("id") or f"openai-stored-{idx}")

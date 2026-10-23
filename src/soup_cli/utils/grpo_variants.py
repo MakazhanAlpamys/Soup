@@ -204,18 +204,32 @@ def apply_variant_loss(
     - ``logp_new``: policy log-probs from current model, shape ``[B, T]``.
     - ``logp_old``: log-probs from rollout policy (detached), shape ``[B, T]``.
     - ``advantages``: group-relative advantages, shape ``[B]`` or ``[B, T]``.
-    - ``beta``: PPO-style KL coefficient (used by variants that reference
-      a frozen ref model).
+    - ``beta``: KL coefficient (``GRPOConfig.beta``, i.e. ``grpo_beta``).
+      Every variant applies it -- see *KL penalty* below; ``0`` means no KL
+      term.
     - ``delta``: symmetric clipping radius (used by ``two_sided`` and, as the
       sequence-level clipping radius, by ``gspo``).
     - ``completion_mask``: optional ``[B, T]`` 0/1 mask (1 where token is in
       the completion). When supplied, length-normalising variants
       (``bnpo``) divide by ``mask.sum(-1).clamp(min=1)``.
-    - ``reference_logp``: frozen reference log-probs ``[B, T]`` for KL
-      penalty (used by ``standard``-with-beta and ``dr_grpo``).
+    - ``reference_logp``: the frozen reference policy's per-token log-probs,
+      shape ``[B, T]`` (trl's ``ref_per_token_logps``). Required when
+      ``beta > 0``; not read at all when ``beta == 0``.
 
     Returns a scalar torch tensor (or ``None`` for the standard variant —
-    callers should fall through to the existing TRL ``GRPOTrainer.compute_loss``).
+    callers should fall through to the existing TRL ``GRPOTrainer.compute_loss``,
+    which applies ``beta`` itself).
+
+    KL penalty (#1232). With ``beta > 0`` every variant adds trl 0.29's
+    per-token KL estimate against the reference,
+    ``kl_t = exp(ref_t - logp_t) - (ref_t - logp_t) - 1``, as
+    ``per_token_loss + beta * kl_t`` ahead of the variant's own reduction --
+    where ``GRPOTrainer._compute_loss`` puts it -- so ``beta`` weighs the KL
+    against the policy term per token exactly as it does in trl. A policy
+    equal to its reference adds exactly zero. ``beta > 0`` with
+    ``reference_logp=None`` raises ``ValueError`` instead of dropping the
+    term; ``beta == 0`` skips it and reproduces the pre-#1232 loss bit for
+    bit.
 
     The math is intentionally minimal — these are *reference* kernels for
     routing + unit tests. Production correctness on multi-billion-param
@@ -227,17 +241,24 @@ def apply_variant_loss(
       Sequence-level importance ratio length-normalized by completion length:
       ``s_i = exp((1/|y_i|) * sum (log p_new - log p_old))``, optimized with
       sequence-level surrogate clipping: ``-min(s * A, clip(s, 1-eps, 1+eps) * A)``.
+      KL: each sequence's masked mean ``kl_t`` joins that sequence's loss
+      before the mean over non-empty sequences.
     - ``dapo``: decoupled-clip — uses asymmetric clipping bounds
       ``[1-eps_lo, 1+eps_hi]`` (here ``eps_lo=0.2, eps_hi=0.28`` per the
-      paper).
+      paper). KL: per token, inside the masked token mean over the batch.
     - ``dr_grpo``: GRPO without length normalisation (the doubly-robust
       bias-correction term is left to v0.53.12+; the schema gate keeps
-      misconfigured runs out).
+      misconfigured runs out). KL: per token, inside the masked token sum
+      that is then averaged over the batch, like the policy term.
     - ``bnpo``: length-normalised PPO loss — divides by ``mask.sum(-1)``.
+      KL: per token, inside the per-sequence length-normalised mean.
     - ``two_sided``: symmetric clipping with operator-supplied ``delta``;
-      ``delta=None`` raises ``ValueError`` (schema requires it).
+      ``delta=None`` raises ``ValueError`` (schema requires it). KL: per
+      token, inside the masked token mean over the batch.
     - ``rft``: rejection-sampling fine-tuning — only positive-advantage
-      samples contribute (zero-advantage rows masked out before mean).
+      samples contribute (zero-advantage rows masked out before mean). KL:
+      on those same accepted tokens only, over the same denominator, so a
+      batch with no accepted completion still contributes zero.
     - ``standard``: returns ``None`` so the caller delegates to the
       existing v0.50.0 ``GRPOTrainerWrapper`` path.
     """
@@ -257,6 +278,13 @@ def apply_variant_loss(
     if not math.isfinite(beta_f) or beta_f < 0.0:
         raise ValueError("beta must be a finite non-negative number")
 
+    # #1232 — at beta == 0 the reference is not read at all, so the loss is the
+    # pre-#1232 one bit for bit and a reference whose exp() overflows cannot
+    # leak NaN into it through a 0 * inf.
+    per_token_kl = (
+        _per_token_kl(normalised, beta_f, logp_new, reference_logp) if beta_f > 0.0 else None
+    )
+
     if normalised == "two_sided":
         if delta is None:
             raise ValueError("two_sided variant requires grpo_delta (got None)")
@@ -271,9 +299,26 @@ def apply_variant_loss(
     else:
         advantages_2d = advantages
 
-    # token-level importance ratio (PPO building block)
-    log_ratio = logp_new - logp_old
-    ratio = torch.exp(log_ratio)
+    # token-level importance ratio (PPO building block).
+    # Clamped from above to prevent torch.exp() overflow to +inf under extreme
+    # policy divergence, avoiding IEEE-754 0.0 * inf = NaN in backward autograd.
+    # The bound is adapted to max(|A|, 1.0) so ratio * A never overflows finfo.max
+    # without prematurely clamping moderate ratios in float16 (#1610).
+    max_log_ratio = math.log(torch.finfo(logp_new.dtype).max) - 1.0
+
+    if normalised in ("dapo", "dr_grpo", "bnpo", "two_sided"):
+        adv_bound = max_log_ratio - torch.log(
+            torch.clamp(torch.abs(advantages_2d.detach()), min=1.0)
+        )
+        log_ratio = torch.clamp_max(logp_new - logp_old, adv_bound)
+        ratio = torch.exp(log_ratio)
+    elif normalised == "gspo":
+        # GSPO sequence ratio is bounded at sequence level before exp().
+        log_ratio = logp_new - logp_old
+        ratio = None
+    else:
+        log_ratio = None
+        ratio = None
 
     if normalised == "gspo":
         # Group Sequence Policy Optimization (Qwen, arXiv:2507.18071):
@@ -291,70 +336,180 @@ def apply_variant_loss(
         elif advantages.dim() == 2 and advantages.size(-1) == 1:
             adv_seq = advantages.squeeze(-1)
         elif completion_mask is not None:
-            adv_seq = (advantages * completion_mask).sum(dim=-1) / completion_mask.sum(
+            adv_masked = torch.where(
+                completion_mask.bool(), advantages, torch.zeros_like(advantages)
+            )
+            adv_seq = adv_masked.sum(dim=-1) / completion_mask.to(dtype=advantages.dtype).sum(
                 dim=-1
             ).clamp(min=1.0)
         else:
             adv_seq = advantages.mean(dim=-1)
 
         if completion_mask is not None:
-            mask = completion_mask.to(dtype=log_ratio.dtype)
-            lengths = mask.sum(dim=-1)
-            valid_seq_mask = (lengths > 0).to(dtype=log_ratio.dtype)
-            seq_log_ratio = (log_ratio * mask).sum(dim=-1) / lengths.clamp(min=1.0)
+            lengths = completion_mask.to(dtype=log_ratio.dtype).sum(dim=-1)
+            valid_seq_mask = lengths > 0
+            masked_log_ratio = torch.where(
+                completion_mask.bool(), log_ratio, torch.zeros_like(log_ratio)
+            )
+            seq_log_ratio = masked_log_ratio.sum(dim=-1) / lengths.clamp(min=1.0)
         else:
             seq_log_ratio = log_ratio.mean(dim=-1)
-            valid_seq_mask = torch.ones_like(seq_log_ratio)
+            valid_seq_mask = torch.ones(
+                seq_log_ratio.shape, dtype=torch.bool, device=seq_log_ratio.device
+            )
 
+        adv_seq_bound = max_log_ratio - torch.log(torch.clamp(torch.abs(adv_seq.detach()), min=1.0))
+        seq_log_ratio = torch.clamp_max(seq_log_ratio, adv_seq_bound)
         seq_ratio = torch.exp(seq_log_ratio)
         surr1 = seq_ratio * adv_seq
         surr2 = torch.clamp(seq_ratio, min=1.0 - eps, max=1.0 + eps) * adv_seq
         seq_loss = -torch.min(surr1, surr2)
-        denom = valid_seq_mask.sum().clamp(min=1.0)
-        return (seq_loss * valid_seq_mask).sum() / denom
+        if per_token_kl is not None:
+            # Sequence level, like the policy term: trl's sequence-level
+            # importance sampling adds beta * kl_t to the per-sequence loss and
+            # takes each sequence's masked token mean.
+            if completion_mask is not None:
+                masked_kl = torch.where(
+                    completion_mask.bool(), per_token_kl, torch.zeros_like(per_token_kl)
+                )
+                seq_kl = masked_kl.sum(dim=-1) / lengths.clamp(min=1.0)
+            else:
+                seq_kl = per_token_kl.mean(dim=-1)
+            seq_loss = seq_loss + beta_f * seq_kl
+        masked_seq_loss = torch.where(valid_seq_mask, seq_loss, torch.zeros_like(seq_loss))
+        denom = valid_seq_mask.to(dtype=log_ratio.dtype).sum().clamp(min=1.0)
+        loss = masked_seq_loss.sum() / denom
 
-    if normalised == "dapo":
+    elif normalised == "dapo":
         # Decoupled clip — asymmetric bounds.
         eps_lo, eps_hi = 0.2, 0.28
         clipped = torch.clamp(ratio, min=1 - eps_lo, max=1 + eps_hi)
         # PPO surrogate: min(ratio * A, clipped * A).
         token_loss = -torch.min(ratio * advantages_2d, clipped * advantages_2d)
-        return _masked_mean(token_loss, completion_mask)
+        token_loss = _with_kl(token_loss, per_token_kl, beta_f)
+        loss = _masked_mean(token_loss, completion_mask)
 
-    if normalised == "dr_grpo":
+    elif normalised == "dr_grpo":
         # No length normalisation — sum across tokens then mean across batch.
         token_loss = -(ratio * advantages_2d)
+        token_loss = _with_kl(token_loss, per_token_kl, beta_f)
         if completion_mask is not None:
-            token_loss = token_loss * completion_mask
+            token_loss = torch.where(
+                completion_mask.bool(), token_loss, torch.zeros_like(token_loss)
+            )
         # sum-over-tokens, mean-over-batch (no division by completion length)
-        return token_loss.sum(dim=-1).mean()
+        loss = token_loss.sum(dim=-1).mean()
 
-    if normalised == "bnpo":
+    elif normalised == "bnpo":
         # Batch-normalised PPO with length-normalisation.
         eps = 0.2
         clipped = torch.clamp(ratio, min=1 - eps, max=1 + eps)
         token_loss = -torch.min(ratio * advantages_2d, clipped * advantages_2d)
-        return _masked_mean(token_loss, completion_mask, normalize_by_length=True)
+        token_loss = _with_kl(token_loss, per_token_kl, beta_f)
+        loss = _masked_mean(token_loss, completion_mask, normalize_by_length=True)
 
-    if normalised == "two_sided":
+    elif normalised == "two_sided":
         # Symmetric clipping at [1-delta, 1+delta].
         clipped = torch.clamp(ratio, min=1 - delta_f, max=1 + delta_f)
         token_loss = -torch.min(ratio * advantages_2d, clipped * advantages_2d)
-        return _masked_mean(token_loss, completion_mask)
+        token_loss = _with_kl(token_loss, per_token_kl, beta_f)
+        loss = _masked_mean(token_loss, completion_mask)
 
-    if normalised == "rft":
+    elif normalised == "rft":
         # Rejection sampling fine-tuning: only positive-advantage tokens
         # contribute to the gradient.
-        positive_mask = (advantages_2d > 0).to(logp_new.dtype)
+        pos_bool = advantages_2d > 0
         if completion_mask is not None:
-            positive_mask = positive_mask * completion_mask
+            pos_bool = pos_bool & completion_mask.bool()
         # Standard SFT-style negative log-likelihood weighted by positive mask.
-        token_loss = -(logp_new * positive_mask)
-        denom = positive_mask.sum().clamp(min=1.0)
-        return token_loss.sum() / denom
+        token_loss = torch.where(pos_bool, -logp_new, torch.zeros_like(logp_new))
+        if per_token_kl is not None:
+            # rft trains on the accepted completions only, so its KL covers the
+            # same tokens over the same denominator (#1232): a batch with no
+            # accepted completion still contributes zero.
+            token_loss = token_loss + beta_f * torch.where(
+                pos_bool, per_token_kl, torch.zeros_like(per_token_kl)
+            )
+        denom = pos_bool.to(dtype=logp_new.dtype).sum().clamp(min=1.0)
+        loss = token_loss.sum() / denom
+    else:
+        # Defensive fallback — schema rejects everything outside the allowlist.
+        raise ValueError(f"Unhandled grpo_variant={normalised!r}")
 
-    # Defensive fallback — schema rejects everything outside the allowlist.
-    raise ValueError(f"Unhandled grpo_variant={normalised!r}")
+    return loss
+
+
+def _per_token_kl(variant: str, beta: float, logp_new, reference_logp):
+    """trl 0.29's per-token KL estimate against the frozen reference (#1232).
+
+    ``exp(ref - logp) - (ref - logp) - 1``: the expression
+    ``GRPOTrainer._compute_loss`` weights by ``beta``. It is non-negative and
+    exactly zero where the policy equals the reference. The reference is
+    detached because it is a frozen policy, not a parameter.
+    """
+    import torch  # lazy import — utility module is dependency-light
+
+    if reference_logp is None:
+        # Inside the trainer this text reaches the user through the #159
+        # fallback warning (for a KL-free run, set grpo_beta: 0; #1247),
+        # so it names the batch key trl should have filled instead.
+        raise ValueError(
+            f"grpo_variant={variant!r} with beta={beta} needs reference_logp, the "
+            "frozen reference policy's per-token log-probs, for its KL penalty "
+            "(#1232); in a trl batch that is 'ref_per_token_logps', and it is missing"
+        )
+    if tuple(reference_logp.shape) != tuple(logp_new.shape):
+        raise ValueError(
+            f"reference_logp shape {tuple(reference_logp.shape)} does not match "
+            f"logp_new shape {tuple(logp_new.shape)}"
+        )
+    ref_minus_logp = reference_logp.detach() - logp_new
+    max_log_ratio = math.log(torch.finfo(logp_new.dtype).max) - 1.0
+    ref_minus_logp_clamped = torch.clamp_max(ref_minus_logp, max_log_ratio)
+    return torch.exp(ref_minus_logp_clamped) - ref_minus_logp_clamped - 1
+
+
+def _with_kl(token_loss, per_token_kl, beta: float):
+    """``token_loss + beta * kl_t``, trl's placement; a no-op without a KL term."""
+    if per_token_kl is None:
+        return token_loss
+    return token_loss + beta * per_token_kl
+
+
+def variant_kl_metric(
+    name: str,
+    *,
+    logp_new,
+    advantages,
+    beta: float,
+    completion_mask=None,
+    reference_logp=None,
+):
+    """Batch-mean per-token KL for the ``kl`` metric of a variant run (#1263).
+
+    trl 0.29's stock loss logs ``(kl_t * mask).sum() / mask.sum().clamp(min=1)``.
+    This is the same quantity over the tokens the variant applies its KL term
+    to: the completion tokens, or the accepted ones for ``rft``. Returns
+    ``None`` when ``beta == 0`` (no KL term, so trl logs nothing either) and
+    for ``standard``, whose loss and ``kl`` metric are trl's own.
+    """
+    normalised = validate_grpo_variant(name)
+    if normalised == "standard" or float(beta) == 0.0:
+        return None
+    import torch  # lazy import — utility module is dependency-light
+
+    per_token_kl = _per_token_kl(normalised, float(beta), logp_new, reference_logp).detach()
+    mask = completion_mask
+    if normalised == "rft":
+        advantages_2d = advantages.unsqueeze(-1) if advantages.dim() == 1 else advantages
+        mask = (advantages_2d > 0).to(per_token_kl.dtype).expand_as(per_token_kl)
+        if completion_mask is not None:
+            mask = mask * completion_mask
+    if mask is None:
+        return per_token_kl.mean()
+    masked_kl = torch.where(mask.bool(), per_token_kl, torch.zeros_like(per_token_kl))
+    acc_dtype = torch.promote_types(per_token_kl.dtype, torch.float32)
+    return masked_kl.sum(dtype=acc_dtype) / mask.to(dtype=acc_dtype).sum().clamp(min=1.0)
 
 
 def _masked_mean(
@@ -366,12 +521,15 @@ def _masked_mean(
     """Mean over a masked tensor; helper for :func:`apply_variant_loss`."""
     if completion_mask is None:
         return token_loss.mean()
-    masked = token_loss * completion_mask
+    import torch  # lazy import — utility module is dependency-light
+
+    masked = torch.where(completion_mask.bool(), token_loss, torch.zeros_like(token_loss))
+    mask_in_dtype = completion_mask.to(dtype=token_loss.dtype)
     if normalize_by_length:
-        lengths = completion_mask.sum(dim=-1).clamp(min=1.0)
+        lengths = mask_in_dtype.sum(dim=-1).clamp(min=1.0)
         per_sample = masked.sum(dim=-1) / lengths
         return per_sample.mean()
-    denom = completion_mask.sum().clamp(min=1.0)
+    denom = mask_in_dtype.sum().clamp(min=1.0)
     return masked.sum() / denom
 
 

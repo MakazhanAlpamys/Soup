@@ -30,6 +30,7 @@ from soup_cli.config.unknown_keys import (
     find_unknown_config_keys,
     format_unknown_keys,
 )
+from tests.ui_helpers import ui_client
 
 _VALID = """
 base: hf/model
@@ -1236,11 +1237,10 @@ class TestTheWebUiKeepsTheHint:
 
     def test_the_400_names_the_key_and_the_suggestion(self, monkeypatch) -> None:
         pytest.importorskip("fastapi")
-        from fastapi.testclient import TestClient
 
         from soup_cli.ui.app import create_app, get_auth_token
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.post(
             "/api/train/start",
             json={"config_yaml": TestTheLoaderIsActuallyWiredUp.TYPOD},
@@ -1288,11 +1288,11 @@ class TestTheWebUiErrorBranchesAreDistinct:
     @staticmethod
     def _client():
         pytest.importorskip("fastapi")
-        from fastapi.testclient import TestClient
 
         from soup_cli.ui.app import create_app, get_auth_token
 
-        return TestClient(create_app()), {"Authorization": f"Bearer {get_auth_token()}"}
+        client = ui_client(create_app())
+        return client, {"Authorization": f"Bearer {get_auth_token()}"}
 
     def test_from_form_names_the_field_on_a_validation_error(self) -> None:
         client, headers = self._client()

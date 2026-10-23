@@ -200,7 +200,8 @@ def test_setup_passes_current_schedule_to_trainer(tmp_path, capsys) -> None:
         patch.object(wrapper, "_get_or_create_reward_model", return_value=MagicMock()),
         patch.object(wrapper, "_create_value_model", return_value=MagicMock()),
     ):
-        wrapper.setup({"train": [{"prompt": "Q?", "answer": "A"}]})
+        # #1391: one rollout batch is batch_size (1 here) x gradient_accumulation_steps (4)
+        wrapper.setup({"train": [{"prompt": "Q?", "answer": "A"}] * 4})
 
     assert wrapper.trainer.args.num_train_epochs == 7
     assert wrapper.trainer.args.num_ppo_epochs == 2

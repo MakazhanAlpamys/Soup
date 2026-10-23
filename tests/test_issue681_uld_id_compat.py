@@ -140,7 +140,11 @@ class TestDistillSetupRejectsIncompatibleUld:
             staticmethod(_fake_model),
         )
         monkeypatch.setattr(
-            peft_wiring, "resolve_lora_target_modules", lambda model, configured: ["q_proj"]
+            peft_wiring,
+            "resolve_lora_target_modules",
+            # ``console`` is the #1122 partial-coverage advisory; accepted and
+            # ignored here, the stub only stands in for the resolution.
+            lambda model, configured, console=None: ["q_proj"],
         )
         monkeypatch.setattr(peft_wiring, "apply_pre_lora_patches", lambda *a, **k: None)
         monkeypatch.setattr(peft_wiring, "apply_post_lora_patches", lambda *a, **k: None)

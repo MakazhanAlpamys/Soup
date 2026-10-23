@@ -22,9 +22,28 @@ class LRFinderResult(TypedDict):
     diverged_at: Optional[float]
     smoothed_losses: list[float]
 
+
+class SweepTooShortError(ValueError):
+    """The sweep cannot yield ``MIN_NUM_STEPS`` pairs (#1189).
+
+    A refusal for the user, never a reason to fall back to a synthetic curve.
+    """
+
+
+class LrSweepUnavailableError(RuntimeError):
+    """The live sweep cannot run at all (#1203).
+
+    Raised instead of answering with a synthetic curve, whose shape depends only
+    on the LR schedule: a base model that does not exist, or a config that will
+    not parse, used to write a report with a confident ``recommended_lr`` and
+    exit 0.
+    """
+
+
 # Bounds prevent runaway sweeps and silly inputs.
 MAX_NUM_STEPS = 10_000
-MIN_NUM_STEPS = 2
+# find_optimal_lr needs 4 (lr, loss) pairs; a shorter sweep can never produce a report.
+MIN_NUM_STEPS = 4
 DIVERGENCE_FACTOR = 4.0
 SMOOTHING_BETA = 0.98
 
@@ -73,8 +92,8 @@ def find_optimal_lr(
         raise ValueError(
             f"lrs and losses must have equal length (got {len(lrs)} vs {len(losses)})"
         )
-    if len(lrs) < 4:
-        raise ValueError(f"Need at least 4 (lr, loss) pairs, got {len(lrs)}")
+    if len(lrs) < MIN_NUM_STEPS:
+        raise ValueError(f"Need at least {MIN_NUM_STEPS} (lr, loss) pairs, got {len(lrs)}")
 
     smoothed = _smooth(losses)
 

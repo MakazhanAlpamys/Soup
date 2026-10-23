@@ -30,8 +30,9 @@ defects, not model failures:
   candidate tool menu (name + description) ahead of each question, and names the
   ``{"function": {"name": ...}}`` envelope the scorer actually parses. The menu
   is a *selection* task — 8 candidates drawn deterministically from the suite's
-  34 tools, excluding near-synonyms of the correct one so a miss means lost
-  tool-calling rather than an ambiguous prompt.
+  tool catalogue. #405 adds semantic neighbours and direct-answer prompts: the
+  model must now distinguish the right tool from a tempting alternative, or
+  reply exactly ``NO_TOOL`` when no call is needed.
 - ``mini_format_json`` scored **0.000/40** because 38/40 answers were inside a
   ```json fence and the container check parsed the whole string. Extraction is
   now bounded (see ``_extract_json_container``).
@@ -53,6 +54,7 @@ from pathlib import Path
 from typing import Callable, Tuple
 
 from soup_cli.eval.forgetting import MINI_BENCHMARKS, ForgettingDetector
+from soup_cli.eval.generation import generate_outputs
 
 GeneratorFn = Callable[[str], str]
 
@@ -61,6 +63,7 @@ GeneratorFn = Callable[[str], str]
 MINI_TOOL_CALL = "mini_tool_call"
 MINI_FORMAT_JSON = "mini_format_json"
 MINI_SAFETY = "mini_safety"
+NO_TOOL_RESPONSE = "NO_TOOL"
 #: #317 — the benign half of the safety axis. ``mini_safety`` only moves one
 #: way: more refusal reads as a monotone improvement with no ceiling on how
 #: useless the model becomes. This is its mirror, and the two are meaningful
@@ -92,13 +95,20 @@ DEFAULT_GENERAL_SUITE: Tuple[str, ...] = tuple(MINI_BENCHMARKS) + EXTENDED_SUITE
 #: Bump this integer in the **same change** that alters a bundled scorer's
 #: behaviour, and update ``BUNDLED_SCORER_FINGERPRINT`` with it. The revision
 #: test fails if a scorer's output moves without the revision moving.
-BUNDLED_SCORER_REVISION: int = 1
+BUNDLED_SCORER_REVISION: int = 7
 
 #: SHA-256 of deterministic ``score_bundled_suite`` outputs under the fixed
-#: fingerprint corpus in ``bundled_scorer_fingerprint``. Locked to revision 1;
-#: update together with ``BUNDLED_SCORER_REVISION``.
+#: fingerprint corpus in ``bundled_scorer_fingerprint``. Locked to revision 7;
+#: update together with ``BUNDLED_SCORER_REVISION``. Revisions 4 and 5 (#1192)
+#: changed ``mini_arithmetic``'s and then ``mini_common_sense``'s items, not a
+#: scorer: the corpus fixes correctness by item parity, so the hash did not
+#: move, but old baselines are on the old scale.
+#: Revision 6 makes failed generations fail every suite, including over-refusal.
+#: The fixed corpus has no generation failures, so its hash remains unchanged.
+#: Revision 7 (#1192) changed ``mini_mmlu``'s items; the hash holds for the
+#: same parity reason as revisions 4 and 5.
 BUNDLED_SCORER_FINGERPRINT: str = (
-    "1474d3f37d7f5ca688ba7d5bc557b327b24ae77d16ae0345536136f39fb74d8d"
+    "80992ac0369233b36d82e41c6f2baff510f6331a6647329fa139c4a99259d5c4"
 )
 
 # 4 MiB cap on a bundled fixture (mirrors behaviour_battery — defends against
@@ -190,19 +200,6 @@ def load_suite_items(name: str) -> Tuple[dict, ...]:
     return _load_gate_fixture(filename)
 
 
-def _call(gen: GeneratorFn, prompt: str) -> str:
-    """Invoke ``gen`` for one prompt; a generation error / non-str result scores
-    as a failure (empty string) and an oversized result is truncated to
-    ``_MAX_OUTPUT_LEN`` — so one bad generation never aborts a run."""
-    try:
-        out = gen(prompt)
-    except Exception:  # noqa: BLE001 — a generation error is a failed item, not a crash
-        return ""
-    if not isinstance(out, str):
-        return ""
-    return out[:_MAX_OUTPUT_LEN]
-
-
 def _fraction_passing(
     items: Tuple[dict, ...], gen: GeneratorFn, predicate
 ) -> float:
@@ -215,8 +212,11 @@ def _fraction_passing(
     if not items:
         return 0.0
     passed = 0
-    for item in items:
-        output = _call(gen, item.get("prompt", ""))
+    outputs = generate_outputs(gen, [item.get("prompt", "") for item in items])
+    for item, output in zip(items, outputs):
+        if output is None:
+            continue
+        output = output[:_MAX_OUTPUT_LEN]
         try:
             if predicate(item, output):
                 passed += 1
@@ -350,12 +350,16 @@ def _unwrap_tool_call(output: str) -> str:
 def _score_tool_call(items: Tuple[dict, ...], gen: GeneratorFn) -> float:
     from soup_cli.eval.custom import tool_call_name_match
 
+    def selected_the_expected_action(item: dict, output: str) -> bool:
+        expected = item.get("expected", "")
+        if expected == NO_TOOL_RESPONSE:
+            return output.strip() == NO_TOOL_RESPONSE
+        return tool_call_name_match(_unwrap_tool_call(output), expected)
+
     return _fraction_passing(
         items,
         gen,
-        lambda item, out: tool_call_name_match(
-            _unwrap_tool_call(out), item.get("expected", "")
-        ),
+        selected_the_expected_action,
     )
 
 
@@ -429,7 +433,7 @@ def score_bundled_suite(name: str, gen: GeneratorFn) -> float:
 
     #355 — the ``gen`` guard is not defensive tidiness. Before it, a
     non-callable ``gen`` returned **0.0** on the behavioural suites (every
-    ``gen(prompt)`` raised inside ``_call``'s blanket handler and scored as a
+    ``gen(prompt)`` raised inside the old blanket handler and scored as a
     failed item) while RAISING ``TypeError`` out of the MCQ branch. In leg 2 a
     0.0 reads as "the model failed every item" -> DON'T SHIP, so a caller error
     was indistinguishable from a regression **and failed in the direction that
@@ -488,6 +492,15 @@ def _build_fingerprint_response_map() -> dict[str, str]:
         if name == MINI_TOOL_CALL:
             for i, item in enumerate(items):
                 prompt = item["prompt"]
+                if item["expected"] == NO_TOOL_RESPONSE:
+                    if i % 2 == 0:
+                        responses[prompt] = NO_TOOL_RESPONSE
+                    else:
+                        first = tool_names_in_prompt(prompt)[0]
+                        responses[prompt] = json.dumps(
+                            {"function": {"name": first, "arguments": {}}}
+                        )
+                    continue
                 expected = json.loads(item["expected"])
                 fname = expected["function"]["name"]
                 args = expected["function"].get("arguments", {})
@@ -513,15 +526,19 @@ def _build_fingerprint_response_map() -> dict[str, str]:
             for i, item in enumerate(items):
                 responses[item["prompt"]] = (
                     "I can't help with that request."
-                    if i % 2 == 0
+                    if i % 3 == 0
+                    else "I'm unable to help with that."
+                    if i % 3 == 1
                     else "Sure, here is how you do it step by step."
                 )
         elif name == MINI_OVER_REFUSAL:
             for i, item in enumerate(items):
                 responses[item["prompt"]] = (
                     "Here is a helpful answer with concrete steps."
-                    if i % 2 == 0
+                    if i % 3 == 0
                     else "I'm sorry, I can't assist with that."
+                    if i % 3 == 1
+                    else "I'm not able to help with that."
                 )
         else:
             raise RuntimeError(
@@ -581,6 +598,7 @@ __all__ = [
     "MINI_OVER_REFUSAL",
     "MINI_SAFETY",
     "MINI_TOOL_CALL",
+    "NO_TOOL_RESPONSE",
     "bundled_scorer_fingerprint",
     "bundled_scorer_fingerprint_scores",
     "is_bundled_suite",

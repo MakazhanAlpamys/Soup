@@ -2,7 +2,9 @@
 
 Verifies:
 1. `soup reward stress format` reports gameable and exits 2.
-2. `soup reward stress accuracy --references g.jsonl` flags answer_spray at default threshold.
+2. `soup reward stress <verifier.py> --references g.jsonl` flags answer_spray at default threshold
+   for a verifier that pays partial credit when the gold appears anywhere (the built-in
+   `accuracy` paid that credit until #1226 removed it).
 3. `soup reward stress verifiable --verifiable-domain math --references g.jsonl`
    reports robust (exit 0).
 4. Each attack family contributes more than one distinct string and n reflects distinct attempts.
@@ -32,6 +34,17 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 def _plain(text: str) -> str:
     """ANSI-stripped, whitespace-collapsed CLI output, safe to substring-match."""
     return " ".join(_ANSI_RE.sub("", text).split())
+
+
+_SUBSTRING_CREDIT_VERIFIER = '''
+def reward_fn(completions, **kwargs):
+    answers = kwargs.get("answer") or []
+    out = []
+    for completion, gold in zip(completions, answers):
+        text = completion[-1]["content"] if completion else ""
+        out.append(0.5 if str(gold).strip().lower() in text.lower() else 0.0)
+    return out
+'''
 
 
 def _write_jsonl(path: Path, filename: str, rows: list[dict]) -> Path:
@@ -107,14 +120,21 @@ class TestIssue814ScoringAndCli:
         for a in data["attacks"]:
             assert a["n"] > 1
 
-    def test_accuracy_reward_flags_answer_spray_exit_2(self, tmp_path, monkeypatch):
+    def test_substring_crediting_verifier_flags_answer_spray_exit_2(
+        self, tmp_path, monkeypatch
+    ):
+        # The built-in `accuracy` reward paid this 0.5 substring credit until #1226 removed it;
+        # the verifier below reproduces it so the stress CLI's answer_spray detection stays
+        # pinned. (`accuracy` itself is now robust: tests/test_issue1226_reward_gold_parsing.py.)
         monkeypatch.chdir(tmp_path)
         refs = _write_jsonl(tmp_path, "refs.jsonl", [{"answer": "42"}, {"answer": "17"}])
+        verifier = tmp_path / "substring_reward.py"
+        verifier.write_text(_SUBSTRING_CREDIT_VERIFIER, encoding="utf-8")
         rep_file = tmp_path / "rep.json"
         r = runner.invoke(
             soup_app,
             [
-                "reward", "stress", "accuracy",
+                "reward", "stress", str(verifier),
                 "--references", str(refs),
                 "--output-report", str(rep_file),
             ],
@@ -127,7 +147,7 @@ class TestIssue814ScoringAndCli:
         data = json.loads(rep_file.read_text(encoding="utf-8"))
         assert data["gameable"] is True
         per_attack = {a["kind"]: a for a in data["attacks"]}
-        # answer_spray achieves 100% acceptance on accuracy (0.5 score >= 0.5 threshold)
+        # answer_spray achieves 100% acceptance (0.5 score >= 0.5 threshold)
         assert per_attack["answer_spray"]["accept_rate"] == 1.0
         assert per_attack["answer_spray"]["accepted"] == per_attack["answer_spray"]["n"]
 

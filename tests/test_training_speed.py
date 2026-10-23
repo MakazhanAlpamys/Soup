@@ -590,13 +590,14 @@ class TestFP8Config:
         cfg = SoupConfig(base="test/model", data={"train": "./data.jsonl"})
         assert cfg.training.quantization_aware is False
 
-    def test_quantization_aware_bool_true(self):
-        cfg = SoupConfig(
-            base="test/model",
-            data={"train": "./data.jsonl"},
-            training={"quantization_aware": True},
-        )
-        assert cfg.training.quantization_aware is True
+    def test_quantization_aware_bool_true_is_refused(self):
+        """The bool form (int8 QAT) is refused at load since #1222."""
+        with pytest.raises(ValidationError, match="#1222"):
+            SoupConfig(
+                base="test/model",
+                data={"train": "./data.jsonl"},
+                training={"quantization_aware": True},
+            )
 
     def test_quantization_aware_fp8(self):
         cfg = SoupConfig(
@@ -671,42 +672,6 @@ class TestFP8Availability:
             from soup_cli.utils.fp8 import is_fp8_gpu_supported
 
             assert is_fp8_gpu_supported() is True
-
-
-class TestFP8Validation:
-    """FP8 training config validation."""
-
-    def test_validate_fp8_not_requested_returns_empty(self):
-        from soup_cli.utils.fp8 import validate_fp8_config
-
-        errors = validate_fp8_config(False, "transformers", "cuda")
-        assert errors == []
-
-    def test_validate_fp8_bool_returns_empty(self):
-        """Bool True means int8 QAT (existing path), not FP8."""
-        from soup_cli.utils.fp8 import validate_fp8_config
-
-        errors = validate_fp8_config(True, "transformers", "cuda")
-        # Bool True is int8 QAT, handled by qat.py, not fp8
-        assert errors == []
-
-    def test_validate_fp8_cpu_rejected(self):
-        from soup_cli.utils.fp8 import validate_fp8_config
-
-        errors = validate_fp8_config("fp8", "transformers", "cpu")
-        assert any("CUDA" in err for err in errors)
-
-    def test_validate_fp8_unsloth_rejected(self):
-        from soup_cli.utils.fp8 import validate_fp8_config
-
-        errors = validate_fp8_config("fp8", "unsloth", "cuda")
-        assert any("unsloth" in err.lower() for err in errors)
-
-    def test_validate_fp8_mlx_rejected(self):
-        from soup_cli.utils.fp8 import validate_fp8_config
-
-        errors = validate_fp8_config("fp8", "mlx", "mps")
-        assert any("mlx" in err.lower() or "CUDA" in err for err in errors)
 
 
 # ─── Part C: Gradient checkpointing tiers ─────────────────────────────────
@@ -1294,15 +1259,15 @@ class TestV028SFTOnlyValidator:
         )
         assert cfg.task == "dpo"
 
-    def test_quantization_aware_bool_true_allowed_on_dpo(self):
-        """Int8 QAT (bool True) still works on non-SFT — only fp8 is restricted."""
-        cfg = SoupConfig(
-            base="m",
-            task="dpo",
-            data={"train": "./d.jsonl", "format": "dpo"},
-            training={"quantization_aware": True},
-        )
-        assert cfg.training.quantization_aware is True
+    def test_quantization_aware_bool_true_refused_on_dpo(self):
+        """Int8 QAT (bool True) is refused on non-SFT tasks too (#1222)."""
+        with pytest.raises(ValidationError, match="#1222"):
+            SoupConfig(
+                base="m",
+                task="dpo",
+                data={"train": "./d.jsonl", "format": "dpo"},
+                training={"quantization_aware": True},
+            )
 
     def test_gradient_checkpointing_tier_allowed_on_dpo(self):
         """Tier strings fall back to truthy (bool True) in non-SFT wrappers — no crash."""

@@ -23,6 +23,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
+from soup_cli.utils.net_guard import UNSPECIFIED_HOST_HINT
 from soup_cli.utils.net_guard import is_private_or_link_local as _is_private_or_link_local
 
 DEFAULT_ENDPOINT = "https://huggingface.co"
@@ -100,9 +101,7 @@ def resolve_endpoint() -> str:
 
     host = parsed.hostname or ""
     if host == "0.0.0.0":
-        raise ValueError(
-            "HF_ENDPOINT 0.0.0.0 is ambiguous; use 127.0.0.1 or localhost"
-        )
+        raise ValueError(f"HF_ENDPOINT {UNSPECIFIED_HOST_HINT}")
     host_clean = host.lower().rstrip(".")
     if parsed.scheme == "http" and host_clean not in _LOOPBACK_HOSTS:
         # Reject plain HTTP for RFC1918 / link-local / cloud metadata too —

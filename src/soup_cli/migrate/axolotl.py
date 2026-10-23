@@ -3,10 +3,9 @@
 from pathlib import Path
 from typing import Any, Dict, List
 
-import yaml
-
 from soup_cli.config.schema import SFT_KERNEL_AWARE_TASKS
-from soup_cli.migrate.common import to_number
+from soup_cli.migrate.common import to_number, unmapped_keys_warning, validation_split
+from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_file_limited
 
 # Axolotl rl → Soup task mapping
 _RL_MAP = {
@@ -14,6 +13,9 @@ _RL_MAP = {
     "kto": "kto",
     "grpo": "grpo",
     "gdpo": "grpo",
+    "orpo": "orpo",
+    "ipo": "ipo",
+    "simpo": "simpo",
 }
 
 # Axolotl dataset type → Soup format
@@ -29,12 +31,25 @@ _OPTIMIZER_MAP = {
     "adamw_8bit": "adamw_bnb_8bit",
 }
 
+# Every top-level key this migrator reads, mapped or warned about by name. Any
+# other key in the source is listed in one "not migrated" warning (#1807).
+_HANDLED_KEYS = frozenset({
+    "base_model", "rl", "datasets", "sequence_len", "val_set_size", "adapter", "lora_r",
+    "lora_alpha", "lora_dropout", "lora_target_linear", "lora_target_modules",
+    "micro_batch_size", "gradient_accumulation_steps", "num_epochs", "learning_rate",
+    "optimizer", "lr_scheduler", "warmup_ratio", "load_in_4bit", "load_in_8bit",
+    "flash_attention", "output_dir", "sample_packing", "wandb_project",
+})
+
 # Task → default data format
 _TASK_FORMAT_MAP = {
     "sft": None,  # Use dataset type
     "dpo": "dpo",
     "kto": "kto",
     "grpo": "auto",
+    "orpo": "dpo",
+    "ipo": "dpo",
+    "simpo": "dpo",
 }
 
 
@@ -44,8 +59,9 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
     Returns a dict suitable for config_to_yaml(). Includes a ``_warnings``
     key with a list of human-readable migration notes.
     """
-    raw_text = config_path.read_text(encoding="utf-8")
-    raw = yaml.safe_load(raw_text)
+    raw = load_yaml_file_limited(
+        config_path, f"Config file {config_path}", max_bytes=MAX_CONFIG_BYTES
+    )
     if not raw or not isinstance(raw, dict):
         raise ValueError("Config file is empty or not a valid YAML mapping")
 
@@ -59,7 +75,16 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
 
     # --- Task ---
     rl_type = raw.get("rl")
-    task = _RL_MAP.get(rl_type, "sft") if rl_type else "sft"
+    if rl_type:
+        if rl_type not in _RL_MAP:
+            supported = ", ".join(sorted(_RL_MAP))
+            raise ValueError(
+                f"No Soup task matches axolotl rl: {rl_type}. Supported rl "
+                f"values are {supported}."
+            )
+        task = _RL_MAP[rl_type]
+    else:
+        task = "sft"
 
     # --- Data ---
     data: Dict[str, Any] = {}
@@ -88,11 +113,20 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
 
     if "sequence_len" in raw:
         data["max_length"] = raw["sequence_len"]
+    # val_set_size: axolotl's default is 0 (train on every row); without this
+    # mapping every migrated config got Soup's default of 0.1 (#1807).
+    val_split = validation_split(raw.get("val_set_size"), "val_set_size", warnings)
+    if val_split is not None:
+        data["val_split"] = val_split
 
-    # --- LoRA ---
+    # --- LoRA / Full Fine-tuning ---
     adapter = raw.get("adapter")
     lora_section: Dict[str, Any] = {}
     include_lora = adapter in ("lora", "qlora")
+
+    if adapter and not include_lora:
+        warnings.append(f"adapter: {adapter} has no Soup equivalent. Using LoRA instead.")
+        include_lora = True
 
     if include_lora:
         if "lora_r" in raw:
@@ -102,9 +136,25 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
         if "lora_dropout" in raw:
             lora_section["dropout"] = raw["lora_dropout"]
         if raw.get("lora_target_linear"):
-            lora_section["target_modules"] = "auto"
+            # Every linear layer; peft's spelling is ``all-linear``. ``auto`` would
+            # resolve to q_proj / v_proj on Llama, two of seven (#1807).
+            lora_section["target_modules"] = "all-linear"
         elif "lora_target_modules" in raw:
             lora_section["target_modules"] = raw["lora_target_modules"]
+    else:
+        # No adapter specified -> full fine-tuning requested
+        if task in ("sft", "embedding"):
+            warnings.append(
+                f"No adapter specified for task '{task}' - "
+                "full fine-tuning will be used (lora.r: 0)."
+            )
+            lora_section["r"] = 0
+        else:
+            raise ValueError(
+                f"No adapter specified for task '{task}', but Soup only supports full "
+                "fine-tuning (lora.r: 0) for sft and embedding tasks. "
+                "Specify an adapter (lora/qlora)."
+            )
 
     # --- Training ---
     training: Dict[str, Any] = {}
@@ -125,10 +175,14 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
         training["warmup_ratio"] = raw["warmup_ratio"]
 
     # Quantization
-    if adapter == "qlora" or raw.get("load_in_4bit"):
+    if lora_section.get("r") == 0:
+        training["quantization"] = "none"
+    elif adapter == "qlora" or raw.get("load_in_4bit"):
         training["quantization"] = "4bit"
     elif raw.get("load_in_8bit"):
         training["quantization"] = "8bit"
+    else:
+        training["quantization"] = "none"
 
     # Flash attention. use_flash_attn is only read by the SFT-family trainer
     # (#806), so mapping it for any other task produces a config the loader
@@ -144,7 +198,7 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
             )
 
     # Add lora section
-    if include_lora and lora_section:
+    if lora_section:
         training["lora"] = lora_section
 
     # --- Output ---
@@ -160,6 +214,9 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
         warnings.append(
             f"wandb_project: {raw['wandb_project']}. Use --wandb flag with soup train."
         )
+    dropped = unmapped_keys_warning(raw, _HANDLED_KEYS, "axolotl")
+    if dropped is not None:
+        warnings.append(dropped)
 
     result: Dict[str, Any] = {
         "base": base,

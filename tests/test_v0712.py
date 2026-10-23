@@ -1,7 +1,7 @@
 """v0.71.2 — "Governance & supply-chain live" (no GPU).
 
-Closes (in this patch): #186, #187, #190, #191, #192 fully; #179 / #185 get the
-ed25519 half live (Sigstore keyless stays infra-blocked — needs OIDC + network).
+v0.71.2 closed #186/#187/#190/#191/#192 and shipped the ed25519 halves of
+#179/#185. Follow-up work makes the remaining Sigstore backends live.
 
 Test organisation (one class per concern):
 - TestSigningPrimitives        — utils/signing.py ed25519 helpers (#179/#185 core)
@@ -33,7 +33,7 @@ def _strip_ansi(text: str) -> str:
     """
     import re
 
-    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+    return " ".join(re.sub(r"\x1b\[[0-9;]*m", "", text).split())
 
 
 # ---------------------------------------------------------------------------
@@ -342,12 +342,22 @@ class TestAdapterSignEd25519:
         # The generated key must round-trip verify.
         assert verify_adapter(str(adir)).valid is True
 
-    def test_sigstore_still_deferred(self, tmp_path, monkeypatch):
+    def test_sigstore_missing_extra_is_actionable(self, tmp_path, monkeypatch):
+        import builtins
+
         monkeypatch.chdir(tmp_path)
         from soup_cli.utils.adapter_sign import sign_adapter
 
+        real_import = builtins.__import__
+
+        def force_missing_sigstore(name, *args, **kwargs):
+            if name == "sigstore" or name.startswith("sigstore."):
+                raise ImportError("forced missing sigstore")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", force_missing_sigstore)
         adir = _write_fake_adapter(tmp_path)
-        with pytest.raises(NotImplementedError, match="sigstore"):
+        with pytest.raises(ValueError, match=r"soup-cli\[sigstore\]"):
             sign_adapter(str(adir), backend="sigstore")
 
     def test_unsigned_still_works(self, tmp_path, monkeypatch):
@@ -402,11 +412,19 @@ class TestAttestEd25519:
         sig = sign_attestation(b"x", backend="unsigned")
         assert sig == {"signature": "", "backend": "unsigned"}
 
-    def test_sign_attestation_sigstore_deferred(self):
+    def test_sign_attestation_sigstore_live_with_injected_signer(self, monkeypatch):
+        from soup_cli.utils import sigstore_signing
         from soup_cli.utils.attest import sign_attestation
 
-        with pytest.raises(NotImplementedError):
-            sign_attestation(b"x", backend="sigstore")
+        monkeypatch.setattr(
+            sigstore_signing,
+            "sign_payload_sigstore",
+            lambda payload, *, interactive=False: '{"bundle":"ok"}',
+        )
+        result = sign_attestation(b"x", backend="sigstore")
+        assert result["backend"] == "sigstore"
+        assert result["signature"] == ""
+        assert result["sigstore_bundle"] == '{"bundle":"ok"}'
 
 
 # ---------------------------------------------------------------------------
@@ -1041,17 +1059,25 @@ class TestCli:
         assert r2.exit_code == 0, r2.output
 
     def test_sigstore_backend_exits_nonzero(self, tmp_path, monkeypatch):
+        import builtins
+
         from typer.testing import CliRunner
 
         from soup_cli.commands.adapters import app
 
+        real_import = builtins.__import__
+
+        def force_missing_sigstore(name, *args, **kwargs):
+            if name == "sigstore" or name.startswith("sigstore."):
+                raise ImportError("forced missing sigstore")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", force_missing_sigstore)
         monkeypatch.chdir(tmp_path)
         adir = _write_fake_adapter(tmp_path)
         r = CliRunner().invoke(app, ["sign", str(adir), "--backend", "sigstore"])
-        # L5 — pin to the exact handled exit code (NotImplementedError -> 2),
-        # so a regression changing the failure mode is distinguishable.
         assert r.exit_code == 2, r.output
-        assert "infra-blocked" in r.output.lower() or "sigstore" in r.output.lower()
+        assert "soup-cli[sigstore]" in _strip_ansi(r.output)
 
 
 # ---------------------------------------------------------------------------
@@ -1115,7 +1141,7 @@ class TestReviewFollowups:
         )
         r = runner.invoke(app, ["verify", "stmt.json", "--signature", "stmt.json.sig"])
         assert r.exit_code == 3, r.output
-        assert "not ed25519" in r.output.lower()
+        assert "not cryptographically verifiable" in r.output.lower()
 
     def test_attest_verify_no_pubkey_exit3(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner

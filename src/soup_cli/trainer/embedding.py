@@ -1,6 +1,5 @@
 """Embedding model trainer — contrastive/triplet loss for sentence embeddings."""
 
-import math
 import time
 from pathlib import Path
 from typing import Optional
@@ -9,6 +8,7 @@ from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig, TrainingConfig
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -17,6 +17,7 @@ from soup_cli.utils.gpu import (
     resolve_device_map,
 )
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -100,6 +101,30 @@ class EmbeddingTrainerWrapper:
             f" / {total:,} total ({pct:.2f}%)"
         )
 
+        # --- Dataset ---
+        train_ds = Dataset.from_list(dataset["train"])
+        eval_ds = None
+        if "val" in dataset and dataset["val"]:
+            eval_ds = Dataset.from_list(dataset["val"])
+
+        # --- Output dir ---
+        output_dir = Path(cfg.output)
+        if cfg.experiment_name:
+            output_dir = output_dir / cfg.experiment_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # --- Determine loss function ---
+        loss_type = tcfg.embedding_loss
+        margin = tcfg.embedding_margin
+        has_negatives = "negative" in train_ds.column_names
+
+        if loss_type == "triplet" and not has_negatives:
+            console.print(
+                "[yellow]Warning: triplet loss requires 'negative' field. "
+                "Falling back to contrastive loss.[/]"
+            )
+            loss_type = "contrastive"
+
         # --- Batch size ---
         batch_size = tcfg.batch_size
         if batch_size == "auto":
@@ -114,45 +139,40 @@ class EmbeddingTrainerWrapper:
                 quantization=tcfg.quantization,
                 lora_r=tcfg.lora.r,
             )
-            # Embedding processes pairs/triplets → roughly 2-3x memory per sample
-            batch_size = max(1, batch_size // 3)
+            # Embedding processes pairs/triplets → roughly 2-3x memory per sample.
+            # Contrastive in-batch negatives need batch_size >= 2 (#1234).
+            min_batch = 2 if loss_type == "contrastive" else 1
+            batch_size = max(min_batch, batch_size // 3)
             console.print(f"[green]Auto batch size (embedding):[/] {batch_size}")
-
-        # --- Dataset ---
-        train_ds = Dataset.from_list(dataset["train"])
-        eval_ds = None
-        if "val" in dataset and dataset["val"]:
-            eval_ds = Dataset.from_list(dataset["val"])
-
-        # --- Output dir ---
-        output_dir = Path(cfg.output)
-        if cfg.experiment_name:
-            output_dir = output_dir / cfg.experiment_name
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        # --- Calculate warmup steps from ratio ---
-        total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
-        )
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
-
-        # --- Determine loss function ---
-        loss_type = tcfg.embedding_loss
-        margin = tcfg.embedding_margin
-        has_negatives = "negative" in train_ds.column_names
-
-        if loss_type == "triplet" and not has_negatives:
-            console.print(
-                "[yellow]Warning: triplet loss requires 'negative' field. "
-                "Falling back to contrastive loss.[/]"
+        elif batch_size == 1 and loss_type == "contrastive":
+            raise ValueError(
+                "contrastive in-batch negatives need batch_size >= 2; "
+                "use triplet (with negatives) or cosine for batch 1"
             )
-            loss_type = "contrastive"
+
+        if loss_type == "contrastive":
+            if len(train_ds) < 2:
+                raise ValueError(
+                    "contrastive in-batch negatives need at least 2 training samples; "
+                    f"got {len(train_ds)}"
+                )
+            if batch_size > len(train_ds):
+                batch_size = len(train_ds)
+                console.print(
+                    f"[yellow]Batch size capped at training set size ({batch_size}) "
+                    "so dataloader_drop_last does not drop all samples.[/]"
+                )
 
         console.print(
             f"[green]Embedding config:[/] loss={loss_type}, margin={margin}, "
             f"pooling={tcfg.embedding_pooling}"
         )
+
+        # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
+
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
 
         # --- Training args ---
         _bf16, _fp16 = bf16_fp16_flags(self.device)
@@ -163,6 +183,9 @@ class EmbeddingTrainerWrapper:
             "gradient_accumulation_steps": tcfg.gradient_accumulation_steps,
             "learning_rate": tcfg.lr,
             "warmup_steps": warmup_steps,
+            "gradient_checkpointing": should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
             "weight_decay": tcfg.weight_decay,
             "max_grad_norm": tcfg.max_grad_norm,
             "optim": tcfg.optimizer,
@@ -174,8 +197,10 @@ class EmbeddingTrainerWrapper:
             "fp16": _fp16,
             "report_to": self.report_to,
             "remove_unused_columns": False,
+            "dataloader_drop_last": (loss_type == "contrastive"),
             "deepspeed": self.deepspeed_config,
             **training_seed_kwargs(tcfg),
+            **training_eval_kwargs(cfg, eval_ds, batch_size=batch_size),
         }
 
         if self.fsdp_config:
@@ -244,7 +269,8 @@ class EmbeddingTrainerWrapper:
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -270,9 +296,12 @@ class EmbeddingTrainerWrapper:
             model_kwargs["quantization_config"] = quant_config_obj
 
         # Use AutoModel (not AutoModelForCausalLM) for embedding models
-        self.model = AutoModel.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModel.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
 
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantization in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
             self.model = prepare_model_for_kbit_training(
@@ -302,7 +331,9 @@ class EmbeddingTrainerWrapper:
                 resolve_lora_target_modules,
             )
 
-            target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+            target_modules = resolve_lora_target_modules(
+                self.model, tcfg.lora.target_modules, console
+            )
             # #1099: moe_lora picks the expert-FFN targets. Only reachable with
             # lora.r >= 1 -- at r == 0 this trainer full-fine-tunes and builds no
             # adapter at all, so there is nothing for the flag to select.
@@ -336,7 +367,13 @@ class EmbeddingTrainerWrapper:
 
     def _setup_unsloth(self, cfg: SoupConfig, tcfg: TrainingConfig) -> None:
         """Load model via unsloth FastLanguageModel (2-5x faster)."""
+        from soup_cli.utils import unsloth
         from soup_cli.utils.unsloth import load_model_and_tokenizer
+        # #797: resolve training.gradient_checkpointing for the Unsloth path
+        # (streaming layers already checkpoint every layer, so it stays off).
+        use_gradient_checkpointing = unsloth.resolve_unsloth_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=getattr(tcfg, "stream_layers", False)
+        )
 
         console.print(f"[dim]Loading model via [bold]unsloth[/]: {cfg.base}[/]")
         self.model, self.tokenizer = load_model_and_tokenizer(
@@ -347,6 +384,8 @@ class EmbeddingTrainerWrapper:
             lora_alpha=tcfg.lora.alpha,
             lora_dropout=tcfg.lora.dropout,
             target_modules=tcfg.lora.target_modules,
+            use_rslora=tcfg.lora.use_rslora,
+            use_gradient_checkpointing=use_gradient_checkpointing,
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -367,23 +406,16 @@ class EmbeddingTrainerWrapper:
         start = time.time()
 
         if display:
-            from soup_cli.monitoring.callback import (
-                SoupTrainerCallback,
-                soup_callback_kwargs,
-            )
+            from soup_cli.monitoring.callback import build_soup_trainer_callback
 
             self.trainer.add_callback(
-                SoupTrainerCallback(
+                build_soup_trainer_callback(
                     display,
+                    config=self.config,
                     tracker=tracker,
                     run_id=run_id,
-                    eval_gate_config=self.config.training.eval_gate,
-                    **soup_callback_kwargs(
-                        self.config.training,
-                        batch_size=self._batch_size,
-                        output_dir=self._output_dir,
-                        include_eval_gate=False,
-                    ),
+                    batch_size=self._batch_size,
+                    output_dir=self._output_dir,
                 )
             )
 
@@ -400,7 +432,14 @@ class EmbeddingTrainerWrapper:
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
-        self.trainer.save_model(self._output_dir)
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
+
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
         self.tokenizer.save_pretrained(self._output_dir)
 
         logs = self.trainer.state.log_history
@@ -417,6 +456,10 @@ class EmbeddingTrainerWrapper:
             "output_dir": self._output_dir,
             "total_steps": self.trainer.state.global_step,
         }
+
+    @property
+    def args(self):
+        return self.trainer.args if self.trainer is not None else None
 
 
 def _pool_embeddings(last_hidden_state, attention_mask, pooling: str):
@@ -475,6 +518,20 @@ class _EmbeddingTrainer:
                     model, inputs, return_outputs
                 )
 
+            def prediction_step(
+                self, model, inputs, prediction_loss_only, ignore_keys=None
+            ):
+                # #1223: HF's default runs model(**inputs), and no model
+                # forward accepts the anchor_/positive_/negative_ keys this
+                # collator produces, so the first evaluation crashed. Score the
+                # same objective training optimises, under the same autocast.
+                import torch
+
+                inputs = self._prepare_inputs(inputs)
+                with torch.no_grad(), self.compute_loss_context_manager():
+                    loss = embedding_trainer._compute_embedding_loss(model, inputs)
+                return loss.detach(), None, None
+
         self._trainer = _CustomTrainer(
             model=model,
             args=args,
@@ -521,6 +578,17 @@ class _EmbeddingTrainer:
         """Compute contrastive, triplet, or cosine loss on embeddings."""
         import torch
         from torch.nn import functional as nn_func
+
+        # Fail fast if contrastive batch is degenerate (< 2) before running model forwards (#1234)
+        if (
+            self._loss_type == "contrastive"
+            or (self._loss_type == "triplet" and "negative_input_ids" not in inputs)
+        ):
+            batch_sz = inputs["anchor_input_ids"].size(0)
+            if batch_sz < 2:
+                raise ValueError(
+                    f"contrastive in-batch negatives need batch_size >= 2; got {batch_sz}"
+                )
 
         # Encode anchor
         anchor_out = model(
@@ -601,3 +669,6 @@ class _EmbeddingTrainer:
     @property
     def args(self):
         return self._trainer.args
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        return self._compute_embedding_loss(model, inputs, return_outputs)

@@ -634,14 +634,16 @@ class TestCli:
         )
         assert result.exit_code == 1
 
-    def test_diagnose_attach_to_registry_without_output_warns(
+    def test_diagnose_attach_to_registry_without_output_is_refused(
         self, tmp_path: Path
     ) -> None:
+        # A requested attach that cannot happen is an input error, not a
+        # warning with exit 0.
         os.chdir(tmp_path)
         result = runner.invoke(
             app, ["diagnose", "myrun", "--attach-to-registry", "abc"]
         )
-        assert result.exit_code == 0
+        assert result.exit_code == 3, (result.output, repr(result.exception))
         assert "needs --output" in _strip_ansi(result.output)
 
     def test_diagnose_run_id_oversize(self, tmp_path: Path) -> None:
@@ -708,6 +710,91 @@ class TestTrainDiagnoseGate:
         )
         from soup_cli.commands.train import _run_diagnose_gate
         _run_diagnose_gate(str(evidence), "run1", "base", "adapter")
+
+    def test_run_diagnose_gate_helper_not_run_exits_3(self, tmp_path: Path) -> None:
+        import typer
+
+        # #1435: an unmeasured mode must not pass the gate.
+        os.chdir(tmp_path)
+        evidence = tmp_path / "ev.json"
+        evidence.write_text(
+            json.dumps(
+                {
+                    "scores": {
+                        "format": {
+                            "score": 0.0,
+                            "verdict": "NOT_RUN",
+                            "evidence": "probe not run (no rows)",
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        from soup_cli.commands.train import _run_diagnose_gate
+
+        with pytest.raises(typer.Exit) as excinfo:
+            _run_diagnose_gate(str(evidence), "run1", "base", "adapter")
+        assert excinfo.value.exit_code == 3
+
+    def test_run_diagnose_gate_major_beats_not_run(self, tmp_path: Path) -> None:
+        import typer
+
+        os.chdir(tmp_path)
+        evidence = tmp_path / "ev.json"
+        evidence.write_text(
+            json.dumps(
+                {
+                    "scores": {
+                        "format": {"verdict": "NOT_RUN", "evidence": "never ran"},
+                        "refusal": {"score": 0.1, "verdict": "MAJOR", "evidence": "worse"},
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        from soup_cli.commands.train import _run_diagnose_gate
+
+        with pytest.raises(typer.Exit) as excinfo:
+            _run_diagnose_gate(str(evidence), "run1", "base", "adapter")
+        assert excinfo.value.exit_code == 2
+
+    @pytest.mark.parametrize("verdict", ["NOT_RUN", "MAJOR"])
+    def test_run_diagnose_gate_escapes_evidence_markup(
+        self, tmp_path: Path, verdict: str
+    ) -> None:
+        import typer
+
+        os.chdir(tmp_path)
+        evidence = tmp_path / "ev.json"
+        score = 0.0 if verdict == "NOT_RUN" else 0.1
+        evidence.write_text(
+            json.dumps(
+                {"scores": {"format": {"score": score, "verdict": verdict,
+                                       "evidence": "[/bad] [red]x"}}}
+            ),
+            encoding="utf-8",
+        )
+        from soup_cli.commands.train import _run_diagnose_gate
+
+        # An unescaped "[/bad]" would raise rich.errors.MarkupError, not typer.Exit.
+        with pytest.raises(typer.Exit):
+            _run_diagnose_gate(str(evidence), "run1", "base", "adapter")
+
+    @pytest.mark.parametrize("bad_score", [None, True, "0.5"])
+    def test_run_diagnose_gate_rejects_non_numeric_score(
+        self, tmp_path: Path, bad_score: object
+    ) -> None:
+        os.chdir(tmp_path)
+        evidence = tmp_path / "ev.json"
+        evidence.write_text(
+            json.dumps({"scores": {"format": {"score": bad_score, "verdict": "OK"}}}),
+            encoding="utf-8",
+        )
+        from soup_cli.commands.train import _run_diagnose_gate
+
+        with pytest.raises(ValueError, match="must be a number"):
+            _run_diagnose_gate(str(evidence), "run1", "base", "adapter")
 
     def test_diagnose_gate_skips_nonzero_local_rank(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.commands.train import _should_run_diagnose_gate_on_rank

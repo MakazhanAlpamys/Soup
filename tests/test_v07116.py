@@ -1170,21 +1170,24 @@ class TestMixtralForwardOverride:
 
 
 class TestMixtralSchemaGate:
-    def test_schema_accepts_mixtral(self, monkeypatch):
+    def test_schema_refuses_mixtral_until_s2_exists(self, monkeypatch):
+        """#1240 — the schema refuses ``use_longlora: true`` on every base,
+        Mixtral included. The allowlist gate still accepts Mixtral; that is
+        pinned directly in ``TestValidateLongloraCompatMixtral``."""
         from soup_cli.config.loader import load_config_from_string
 
         monkeypatch.setattr(
             "soup_cli.utils.flash_attn.is_flash_attn_v3_available", lambda: False
         )
-        cfg = load_config_from_string(
-            "base: mistralai/Mixtral-8x7B-v0.1\n"
-            "task: sft\n"
-            "data:\n"
-            "  train: data.jsonl\n"
-            "training:\n"
-            "  use_longlora: true\n"
-        )
-        assert cfg.training.use_longlora is True
+        with pytest.raises(ValueError, match="#1240"):
+            load_config_from_string(
+                "base: mistralai/Mixtral-8x7B-v0.1\n"
+                "task: sft\n"
+                "data:\n"
+                "  train: data.jsonl\n"
+                "training:\n"
+                "  use_longlora: true\n"
+            )
 
 
 # ===========================================================================

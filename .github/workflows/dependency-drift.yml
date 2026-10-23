@@ -13,6 +13,12 @@
 # Running the same resolve on a schedule turns "we find out when someone opens a
 # PR" into "we find out on Monday", and writes the resolved-vs-declared table
 # into the run summary so the gap is visible without reading logs.
+#
+# 2026-10-12: the first sentence above is history. Pull-request runs and pushes
+# to `main` in ci.yml now install the pinned stack in
+# .github/constraints/pinned-upstream.txt; the newest stack is resolved by
+# ci.yml's nightly full run and by this job, which must never take that file
+# (tests/test_ci_full_matrix_on_approval.py::TestPinnedUpstream).
 name: dependency drift
 
 on:
@@ -36,7 +42,9 @@ jobs:
           python-version: "3.12"
 
       - name: Install the latest resolvable stack
-        run: pip install -e ".[dev]"
+        # PyPI only, on purpose (2026-10-21): ci.yml's Linux jobs install the CPU torch wheel,
+        # and this weekly job is the one that resolves what a Linux user gets from PyPI.
+        run: pip install -e ".[dev,audio]"
 
       - name: Report resolved versions against the declared bounds
         run: |
@@ -51,7 +59,7 @@ jobs:
           # The stack whose drift has actually cost releases (#323).
           WATCHED = {
               "torch", "transformers", "peft", "trl", "datasets",
-              "bitsandbytes", "accelerate",
+              "bitsandbytes", "accelerate", "torchaudio",
           }
 
           rows, floor_only = [], []

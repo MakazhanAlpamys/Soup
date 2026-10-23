@@ -34,7 +34,9 @@ def _write_config(tmp_path):
     (tmp_path / "soup.yaml").write_text(
         "base: sshleifer/tiny-gpt2\n"
         "task: sft\n"
-        "data: {train: data.jsonl, format: alpaca}\n"
+        # val_split 0: at the default 0.1 the one row goes to validation and
+        # `soup train` stops on an empty train split (#1217).
+        "data: {train: data.jsonl, format: alpaca, val_split: 0.0}\n"
         "training: {epochs: 1, lr: 1e-4, batch_size: 1}\n",
         encoding="utf-8",
     )

@@ -153,6 +153,44 @@ class TestPartANewFormats:
         with pytest.raises(Exception, match="tokenized_path"):
             DataConfig(train="data.jsonl", format="pre_tokenized")
 
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("add_new_tokens", ["<x>"]),
+            ("new_special_tokens", ["<x>"]),
+            ("prompt_strategy", "pkg:fn"),
+        ],
+    )
+    def test_pre_tokenized_rejects_live_text_transform(self, field, value):
+        with pytest.raises(
+            Exception,
+            match=fr"pre_tokenized.*data\.{field}.*cached ids do not contain it",
+        ):
+            DataConfig(
+                train="data.jsonl",
+                format="pre_tokenized",
+                tokenized_path="./cache",
+                **{field: value},
+            )
+
+    @pytest.mark.parametrize("modality", ["vision", "audio", "audio_out"])
+    def test_pre_tokenized_rejects_non_text_modality(self, modality):
+        with pytest.raises(
+            Exception,
+            match=fr"pre_tokenized.*modality='{modality}'",
+        ):
+            load_config_from_string(
+                f"""
+base: x/y
+task: sft
+modality: {modality}
+data:
+  train: ./data.jsonl
+  format: pre_tokenized
+  tokenized_path: ./cache
+"""
+            )
+
 
 # ---------------------------------------------------------------------------
 # Part B — Remote loading allowlist + streaming + sharding
@@ -272,11 +310,11 @@ class TestPartCPreprocess:
     def test_cache_key_deterministic(self):
         a = dp.make_preprocess_cache_key(
             dataset_path="d.jsonl", tokenizer_name="x/y", max_length=512,
-            format_name="alpaca",
+            format_name="alpaca", mask_mode="responses_only", task="sft",
         )
         b = dp.make_preprocess_cache_key(
             dataset_path="d.jsonl", tokenizer_name="x/y", max_length=512,
-            format_name="alpaca",
+            format_name="alpaca", mask_mode="responses_only", task="sft",
         )
         assert a == b
         assert len(a) == 16
@@ -284,24 +322,24 @@ class TestPartCPreprocess:
     def test_cache_key_changes_on_each_arg(self):
         baseline = dp.make_preprocess_cache_key(
             dataset_path="d.jsonl", tokenizer_name="x/y", max_length=512,
-            format_name="alpaca",
+            format_name="alpaca", mask_mode="responses_only", task="sft",
         )
         # Different dataset path → different key.
         diff_path = dp.make_preprocess_cache_key(
             dataset_path="other.jsonl", tokenizer_name="x/y", max_length=512,
-            format_name="alpaca",
+            format_name="alpaca", mask_mode="responses_only", task="sft",
         )
         diff_tok = dp.make_preprocess_cache_key(
             dataset_path="d.jsonl", tokenizer_name="z/w", max_length=512,
-            format_name="alpaca",
+            format_name="alpaca", mask_mode="responses_only", task="sft",
         )
         diff_len = dp.make_preprocess_cache_key(
             dataset_path="d.jsonl", tokenizer_name="x/y", max_length=1024,
-            format_name="alpaca",
+            format_name="alpaca", mask_mode="responses_only", task="sft",
         )
         diff_fmt = dp.make_preprocess_cache_key(
             dataset_path="d.jsonl", tokenizer_name="x/y", max_length=512,
-            format_name="sharegpt",
+            format_name="sharegpt", mask_mode="responses_only", task="sft",
         )
         assert len({baseline, diff_path, diff_tok, diff_len, diff_fmt}) == 5
 
@@ -309,22 +347,22 @@ class TestPartCPreprocess:
         with pytest.raises(ValueError):
             dp.make_preprocess_cache_key(
                 dataset_path="", tokenizer_name="x", max_length=1,
-                format_name="a",
+                format_name="a", mask_mode="responses_only", task="sft",
             )
         with pytest.raises(ValueError, match="null bytes"):
             dp.make_preprocess_cache_key(
                 dataset_path="d\x00", tokenizer_name="x", max_length=1,
-                format_name="a",
+                format_name="a", mask_mode="responses_only", task="sft",
             )
         with pytest.raises(ValueError, match="bool"):
             dp.make_preprocess_cache_key(
                 dataset_path="d", tokenizer_name="x", max_length=True,
-                format_name="a",
+                format_name="a", mask_mode="responses_only", task="sft",
             )
         with pytest.raises(ValueError):
             dp.make_preprocess_cache_key(
                 dataset_path="d", tokenizer_name="x", max_length=0,
-                format_name="a",
+                format_name="a", mask_mode="responses_only", task="sft",
             )
 
     def test_tokenized_path_schema(self):

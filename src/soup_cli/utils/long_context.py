@@ -8,7 +8,8 @@ windows beyond their pre-training length. Supports multiple scaling strategies:
 - yarn: YaRN (Yet another RoPE extensioN) — best quality for 4-8x extension
   (v0.49.0 Part A — math kernel + config-emit; HF Transformers owns the
   actual rotation under the hood)
-- longrope: LongRoPE — progressive extension with search-based factors
+- longrope: LongRoPE — progressive extension with search-based factors.
+  Refused since #1239: its factors exist only on already-scaled checkpoints.
 - llama3: Llama 3.1 frequency-band NTK-aware scaling (v0.49.0 Part D)
 
 Also handles gradient checkpointing configuration for memory efficiency
@@ -21,13 +22,33 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
-# Supported RoPE scaling methods (v0.49.0 adds "llama3").
+# Supported RoPE scaling methods (v0.49.0 adds "llama3"). get_rope_scaling_config
+# can still emit "longrope"; soup.yaml and apply_long_context_config refuse it (#1239).
 ROPE_SCALING_TYPES = ("linear", "dynamic", "yarn", "longrope", "llama3")
 
 # Values that remain meaningful when switching from one RoPE algorithm to
 # another. Algorithm-specific keys (for example Llama 3 frequency bands) must
 # not leak into the replacement block.
 _ROPE_TYPE_AGNOSTIC_KEYS = ("rope_theta", "partial_rotary_factor")
+
+# The RoPE type transformers assumes when a checkpoint ships no scaling block.
+# Any other native type is a block Soup must not silently replace (#1239).
+_UNSCALED_ROPE_TYPE = "default"
+
+# #1239: LongRoPE's per-dimension factors were searched for one extension and
+# ship only with checkpoints already scaled by it, which may not be extended
+# again, so the type can extend nothing. Config load (schema.py) and
+# apply_long_context_config both refuse it with this text.
+LONGROPE_REFUSAL = (
+    "training.rope_scaling_type='longrope' is refused (#1239): it cannot extend any "
+    "checkpoint. Its per-dimension short_factor and long_factor vectors exist only on "
+    "checkpoints already scaled with LongRoPE, and extending an already-scaled "
+    "checkpoint is refused, because replacing its RoPE block would discard the scaling "
+    "it was trained with. To extend a checkpoint without RoPE scaling, use linear, "
+    "dynamic, yarn or llama3; on a Llama 3.1-style checkpoint, llama3 composes with its "
+    "own block. To fine-tune a LongRoPE checkpoint (Phi-3-mini-128k, for example) at "
+    "its native length, leave rope_scaling_type unset."
+)
 
 # Default context lengths for known model families.
 MODEL_DEFAULT_CONTEXT: dict[str, int] = {
@@ -278,6 +299,112 @@ def detect_llama3_rope_in_config(config: Mapping[str, Any]) -> bool:
     return isinstance(type_value, str) and type_value.lower() == "llama3"
 
 
+def _native_rope_type(rope: Mapping[str, Any]) -> str:
+    """Return a checkpoint's RoPE type, read the way transformers reads it."""
+    for key in ("rope_type", "type"):
+        value = rope.get(key)
+        if value is not None:
+            return str(value)
+    return _UNSCALED_ROPE_TYPE
+
+
+def compose_llama3_rope_parameters(
+    native: Mapping[str, Any],
+    *,
+    max_position_embeddings: int,
+    target_length: float,
+) -> dict[str, Any]:
+    """Extend a checkpoint's own Llama 3.1 RoPE block instead of replacing it (#1239).
+
+    Keeps the checkpoint's ``original_max_position_embeddings``,
+    ``low_freq_factor`` and ``high_freq_factor`` and multiplies its ``factor``
+    by ``target_length / max_position_embeddings``. The frequency bands depend
+    only on the kept values, so high-frequency pairs are untouched and every
+    other pair only slows down. At ``target_length == max_position_embeddings``
+    the block is the checkpoint's own. A missing
+    ``original_max_position_embeddings`` means ``max_position_embeddings``, as
+    in transformers.
+    """
+    native_type = _native_rope_type(native)
+    if native_type.lower() != "llama3":
+        raise ValueError(
+            "compose_llama3_rope_parameters needs a llama3 RoPE block "
+            f"(got rope_type={native_type!r})"
+        )
+    if (
+        isinstance(max_position_embeddings, bool)
+        or not isinstance(max_position_embeddings, int)
+        or max_position_embeddings <= 0
+    ):
+        raise ValueError(
+            f"max_position_embeddings must be a positive int (got {max_position_embeddings!r})"
+        )
+    target = _finite_positive(target_length, "target_length")
+    if target < max_position_embeddings:
+        raise ValueError(
+            f"target_length ({target_length}) is below max_position_embeddings "
+            f"({max_position_embeddings}): a smaller llama3 factor would make the "
+            "checkpoint's low-frequency pairs rotate faster than it was trained with (#1239)"
+        )
+    factor = _finite_positive(native.get("factor"), "the checkpoint's llama3 factor")
+    low = _finite_positive(native.get("low_freq_factor"), "the checkpoint's llama3 low_freq_factor")
+    # No high > low check: the bands are the checkpoint's own, and some ship
+    # high == low (Llama 4 Scout), which transformers only warns about.
+    high = _finite_positive(
+        native.get("high_freq_factor"), "the checkpoint's llama3 high_freq_factor"
+    )
+    original = native.get("original_max_position_embeddings", max_position_embeddings)
+    if isinstance(original, float) and original.is_integer():
+        original = int(original)  # transformers accepts 8192.0 there, with a warning
+    if isinstance(original, bool) or not isinstance(original, int) or original <= 0:
+        raise ValueError(
+            "the checkpoint's llama3 original_max_position_embeddings must be a positive "
+            f"int (got {original!r})"
+        )
+    return {
+        "rope_type": "llama3",
+        "factor": factor * (target / max_position_embeddings),
+        "original_max_position_embeddings": original,
+        "low_freq_factor": low,
+        "high_freq_factor": high,
+    }
+
+
+def _requested_label(requested: str | None, resolved: str) -> str:
+    """How a refusal names the requested type, auto-detection included."""
+    return repr(resolved) if requested is not None else f"None (auto-detected {resolved!r})"
+
+
+def _already_scaled_error(
+    native: Mapping[str, Any],
+    *,
+    native_type: str,
+    requested: str | None,
+    resolved: str,
+    original_length: int,
+    target_length: Any,
+) -> ValueError:
+    """Refusal for extending a checkpoint whose RoPE block is already scaled (#1239)."""
+    shown = _requested_label(requested, resolved)
+    if native_type.lower() == "llama3":
+        way_out = (
+            "Use rope_scaling_type='llama3', which composes with the checkpoint's own "
+            f"llama3 block, or keep data.max_length at or below {original_length}."
+        )
+    else:
+        way_out = (
+            f"Keep data.max_length at or below {original_length}, or start from a "
+            "checkpoint without RoPE scaling."
+        )
+    return ValueError(
+        f"training.rope_scaling_type={shown} cannot extend this checkpoint from "
+        f"{original_length} to {target_length} tokens: its RoPE block is already scaled "
+        f"(rope_type={native_type!r}, factor={native.get('factor')!r}) and {resolved!r} "
+        "has no defined composition with it, so replacing the block would discard the "
+        f"scaling the checkpoint was trained with (#1239). {way_out}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public config emission
 # ---------------------------------------------------------------------------
@@ -396,6 +523,15 @@ def apply_long_context_config(
     constructed.  Transformers 5 derives ``inv_freq`` in the rotary embedding
     constructor, so mutating the config after ``from_pretrained`` is a no-op.
     Existing model-native values such as ``rope_theta`` are retained.
+
+    A checkpoint whose RoPE block is already scaled (any ``rope_type`` other
+    than ``default``) is never replaced (#1239). ``llama3`` on a native
+    ``llama3`` block composes through :func:`compose_llama3_rope_parameters`;
+    every other combination raises ``ValueError`` before ``model_config`` is
+    touched, naming the checkpoint's ``rope_type`` and ``factor``. ``longrope``
+    is refused on a checkpoint without scaling too (:data:`LONGROPE_REFUSAL`),
+    so it extends nothing. A ``target_length`` at or below
+    ``max_position_embeddings`` stays a no-op.
     """
     original_length = getattr(
         model_config,
@@ -417,34 +553,50 @@ def apply_long_context_config(
             f"sections found: {', '.join(nested_sections)}. Soup refuses to "
             "change max_position_embeddings without scaling every RoPE section"
         )
+    # #1239: a scaled native block was already extended to max_position_embeddings,
+    # so rebuilding a block over that length discards the scaling it was trained with.
+    # One reader, transformers' key order, serves both the auto-detect and the check.
+    native_type = _native_rope_type(existing)
+    requested_type = rope_scaling_type
     if rope_scaling_type is None:
-        if isinstance(existing, Mapping) and detect_llama3_rope_in_config(
-            {"rope_scaling": existing}
-        ):
-            rope_scaling_type = "llama3"
-        else:
-            rope_scaling_type = "dynamic"
-    rope_config = get_rope_scaling_config(
-        scaling_type=rope_scaling_type,
-        target_length=target_length,
-        original_length=original_length,
-        yarn_factor=yarn_factor,
-        yarn_attn_factor=yarn_attn_factor,
-        yarn_beta_fast=yarn_beta_fast,
-        yarn_beta_slow=yarn_beta_slow,
-    )
+        rope_scaling_type = "llama3" if native_type.lower() == "llama3" else "dynamic"
+    if native_type.lower() == _UNSCALED_ROPE_TYPE:
+        if rope_scaling_type == "longrope":
+            raise ValueError(LONGROPE_REFUSAL)
+        rope_config = get_rope_scaling_config(
+            scaling_type=rope_scaling_type,
+            target_length=target_length,
+            original_length=original_length,
+            yarn_factor=yarn_factor,
+            yarn_attn_factor=yarn_attn_factor,
+            yarn_beta_fast=yarn_beta_fast,
+            yarn_beta_slow=yarn_beta_slow,
+        )
+    elif native_type.lower() == "llama3" and rope_scaling_type == "llama3":
+        try:
+            rope_config = compose_llama3_rope_parameters(
+                existing,
+                max_position_embeddings=original_length,
+                target_length=target_length,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"training.rope_scaling_type={_requested_label(requested_type, 'llama3')} "
+                f"cannot compose with this checkpoint's llama3 RoPE block (#1239): {exc}. "
+                "Fix the checkpoint's rope_parameters, or keep data.max_length at or below "
+                f"{original_length}."
+            ) from exc
+    else:
+        raise _already_scaled_error(
+            existing,
+            native_type=native_type,
+            requested=requested_type,
+            resolved=rope_scaling_type,
+            original_length=original_length,
+            target_length=target_length,
+        )
     if not rope_config:
         return None
-    if rope_scaling_type == "longrope":
-        missing = [name for name in ("short_factor", "long_factor") if name not in existing]
-        if missing:
-            raise ValueError(
-                "rope_scaling_type='longrope' requires model-native "
-                f"{', '.join(missing)} vectors; choose a checkpoint that ships "
-                "LongRoPE factors or use linear, dynamic, yarn, or llama3"
-            )
-        rope_config["short_factor"] = existing["short_factor"]
-        rope_config["long_factor"] = existing["long_factor"]
     merged = {
         name: existing[name]
         for name in _ROPE_TYPE_AGNOSTIC_KEYS

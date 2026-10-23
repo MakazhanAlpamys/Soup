@@ -11,7 +11,7 @@ import os
 
 import pytest
 
-from tests.conftest import cuda_available
+from tests.conftest import accelerator_device, mps_is_the_accelerator
 
 
 # ==========================================================================
@@ -1227,25 +1227,6 @@ class TestStreamBufferBounds:
 # runs and still converges. That is exactly why they are tests, not comments.
 # ==========================================================================
 
-def _mps_is_the_accelerator():
-    """True on an Apple-Silicon runner with no CUDA.
-
-    transformers picks `mps` as its default device there, while this suite
-    builds the streamed model on `cpu` — the two then disagree and any real
-    training step raises "found at least two devices". Most historical step
-    tests therefore stay on CPU; dedicated MPS controls exercise the hardware
-    path explicitly.
-    """
-    try:
-        import torch
-
-        if cuda_available():
-            return False
-        backend = getattr(torch.backends, "mps", None)
-        return bool(backend is not None and backend.is_available())
-    except Exception:
-        return False
-
 
 def _tiny_llama_dir(tmp_path, n_layers=2, tie=True):
     """A real (tiny) Llama checkpoint on disk: config.json + model.safetensors."""
@@ -1739,7 +1720,7 @@ class TestStreamedForwardParityCpu:
             assert torch.equal(two(input_ids=ids).logits, three(input_ids=ids).logits)
 
 
-@pytest.mark.skipif(not _mps_is_the_accelerator(), reason="needs Apple Silicon MPS")
+@pytest.mark.skipif(not mps_is_the_accelerator(), reason="needs Apple Silicon MPS")
 class TestStreamedLargeLayerParityMps:
     def test_untied_logits_match_resident(self, tmp_path):
         """Supplementary #324 hardware control; the required CI oracle is CPU."""
@@ -2183,47 +2164,11 @@ class TestStreamLoraVariantGates:
 class TestStreamLoraHeadTargetGate:
     """#1012 follow-up (#1019 review): the forward pass for a LoRA target on
     lm_head/embed_tokens under streaming is correct, but saving and resuming
-    that adapter is not implemented yet (save_pretrained() raises copying a
-    meta tensor; a save -> load_adapter round trip silently drops most of the
-    adapter's tensors). Refuse at parse time, before any shard I/O runs, the
-    same way lora.use_dora / lora.use_vera are refused above."""
-
-    def test_lm_head_target_rejected(self):
-        with pytest.raises(ValueError, match="lm_head"):
-            _load(
-                _stream_yaml(
-                    training={"lora": {"r": 4, "target_modules": ["q_proj", "lm_head"]}}
-                )
-            )
-
-    def test_embed_tokens_target_rejected(self):
-        with pytest.raises(ValueError, match="embed_tokens"):
-            _load(
-                _stream_yaml(
-                    training={
-                        "lora": {"r": 4, "target_modules": ["q_proj", "embed_tokens"]}
-                    }
-                )
-            )
-
-    def test_both_boundary_modules_named_together(self):
-        with pytest.raises(ValueError, match="embed_tokens.*lm_head|lm_head.*embed_tokens"):
-            _load(
-                _stream_yaml(
-                    training={
-                        "lora": {
-                            "r": 4,
-                            "target_modules": ["embed_tokens", "q_proj", "lm_head"],
-                        }
-                    }
-                )
-            )
-
-    def test_bare_string_target_is_checked_too(self):
-        """target_modules accepts a bare string (Union[str, List[str]]), not
-        only a list: the guard must not assume a list."""
-        with pytest.raises(ValueError, match="lm_head"):
-            _load(_stream_yaml(training={"lora": {"r": 4, "target_modules": "lm_head"}}))
+    that adapter is not implemented yet. The refusal moved from parse time to
+    the streamed setup (#1048), which knows whether the checkpoint streams
+    those modules and which ones a target spelling matched; it is tested in
+    tests/test_layer_stream_boundary_lora.py. What stays here is that ordinary
+    targets load."""
 
     def test_non_boundary_targets_still_accepted(self):
         """Negative control: q_proj/v_proj/o_proj/k_proj are unaffected. This
@@ -2495,10 +2440,10 @@ class TestStreamingEndToEndSetup:
                 for _ in range(4)
             ]
         }
-        # Use the REAL device: TrainingArguments picks cuda when it is
+        # Use the REAL device: TrainingArguments picks cuda or mps when one is
         # available, so forcing the model to cpu here would only produce a
         # device mismatch that no user would ever hit.
-        device = "cuda" if cuda_available() else "cpu"
+        device = accelerator_device()
         return SFTTrainerWrapper(cfg, device=device), dataset
 
     def test_setup_builds_a_real_trl_trainer(self, tmp_path, monkeypatch):
@@ -2514,10 +2459,6 @@ class TestStreamingEndToEndSetup:
         wrapper.setup(dataset)
         assert wrapper.trainer.args.gradient_checkpointing is False
 
-    @pytest.mark.skipif(
-        _mps_is_the_accelerator(),
-        reason="MPS is untested in v0.72.0 (measured on CUDA + CPU only)",
-    )
     def test_one_training_step_actually_runs(self, tmp_path, monkeypatch):
         """Forward + backward + optimizer step through the streamed layers."""
         wrapper, dataset = self._wrapper(tmp_path, monkeypatch)

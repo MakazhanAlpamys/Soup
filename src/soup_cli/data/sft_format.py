@@ -81,11 +81,13 @@ def build_format_row(
                 "has no chat_template — falling back to text path. Pass "
                 "data.chat_template explicitly to enable masking.[/]"
             )
-        return _wrap_with_prompt_strategy(
-            _wrap_with_reasoning_effort(
-                _legacy_text_format_row(tokenizer), reasoning_effort
-            ),
-            prompt_strategy_spec,
+        return _wrap_dropping_arrow_nulls(
+            _wrap_with_prompt_strategy(
+                _wrap_with_reasoning_effort(
+                    _legacy_text_format_row(tokenizer), reasoning_effort
+                ),
+                prompt_strategy_spec,
+            )
         )
 
     if use_train_field:
@@ -99,10 +101,40 @@ def build_format_row(
         )
     else:
         inner = _build_full_sequence_format_row(tokenizer, max_length)
-    return _wrap_with_prompt_strategy(
-        _wrap_with_reasoning_effort(inner, reasoning_effort),
-        prompt_strategy_spec,
+    return _wrap_dropping_arrow_nulls(
+        _wrap_with_prompt_strategy(
+            _wrap_with_reasoning_effort(inner, reasoning_effort),
+            prompt_strategy_spec,
+        )
     )
+
+
+# Per-message keys only some turns carry (#1217). ``Dataset.from_list`` gives
+# every message every key seen in the column, so a plain user turn reaches the
+# formatter as ``{"tool_calls": None, "tool_call_id": None, ...}``, and a
+# template that branches on ``'tool_calls' in message`` (Llama 3.x) renders
+# it as a call.
+_SPARSE_MESSAGE_KEYS = ("tool_calls", "tool_call_id")
+
+
+def _wrap_dropping_arrow_nulls(inner: Callable[[dict], dict]) -> Callable[[dict], dict]:
+    """Decorate ``inner`` so the ``None`` placeholders Arrow adds are removed."""
+
+    def wrapped(example: dict) -> dict:
+        msgs = example.get("messages")
+        if not isinstance(msgs, list):
+            return inner(example)
+        cleaned = [
+            {
+                key: value for key, value in msg.items()
+                if not (key in _SPARSE_MESSAGE_KEYS and value is None)
+            }
+            if isinstance(msg, dict) else msg
+            for msg in msgs
+        ]
+        return inner({**example, "messages": cleaned})
+
+    return wrapped
 
 
 def _wrap_with_prompt_strategy(

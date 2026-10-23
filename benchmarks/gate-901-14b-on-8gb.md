@@ -298,10 +298,12 @@ writes the installed version; the `_soup_synthetic` marker stays.
 
 - **A real Qwen2.5-14B-Instruct.** Shapes only; no quality, no loss curve, no
   throughput. The 5070's step times above are not comparable to anything.
+  *Since measured by the reporter on a real checkpoint; see section 8.*
 - **The reporter's card.** An RTX 3070 is Ampere; the stale-error mechanism is
   a CUDA-runtime property and the rounding is a torch host-allocator property,
   neither card-specific, but the reporter has offered to test a fix and the
   record says so rather than assuming.
+  *The reporter has since run it on the RTX 3070; see section 8.*
 - **Linux.** Every number here is Windows/WDDM. The characterisation test in
   the test file will say whether the stale error exists there.
 - **The disk tier's staging**, which still pins per tensor and pays the same
@@ -313,3 +315,13 @@ writes the installed version; the `_soup_synthetic` marker stays.
 - **Baseline commit-charge stamps for runs 2, 3 and the end-to-end run** were
   not taken; the run-1 stamp is above, and the pin experiments started at
   21.0-21.7 GB free physical. Named rather than tidied away.
+
+## 8. Addendum (2026-09-25): the reporter's run on a real Qwen2.5-14B-Instruct
+
+Measured by @hasheng on 2026-09-15 and reported on #901 (14:42Z); this is a third-party
+measurement on their card, not re-run here. Qwen2.5-14B-Instruct, the original `soup_14b.yaml`,
+RTX 3070 8 GB (Ampere), Windows, `main` at `614b7f64`. The base store is 9.93 GB across 48 layers,
+pinned (10.74 GB page-locked) with no pageable fallback. The VRAM probe measured a 2.92 GB peak
+(3.27 GB reserved) at batch 1 x seq 384 against a predicted 3.39 GB; 18 of 18 steps ran in about
+3 minutes, the GPU peaked at 2.7 of 8.0 GB, and a real adapter was written. Sections 0-7 are left
+as written.

@@ -63,7 +63,8 @@ class TrainingDisplay:
         self.current_step = 0
         self.total_steps = 0
         self.current_epoch = 0
-        self.loss = 0.0
+        #: None until a loss is measured (#1225); the panel shows "-"
+        self.loss: Optional[float] = None
         self.lr = 0.0
         self.grad_norm: Optional[float] = None
         self.gpu_mem = ""
@@ -71,6 +72,9 @@ class TrainingDisplay:
         #: None until an evaluation actually runs. Its own series --
         #: never folded into `self.loss`, which is the training curve.
         self.val_loss = None
+        #: grpo's validation number: the mean reward on the held-out
+        #: completions, higher is better (#1389). Its own row, never a "loss".
+        self.val_reward = None
         self._live: Optional[Live] = None
 
     def start(self, total_steps: int):
@@ -79,7 +83,7 @@ class TrainingDisplay:
         self._live = Live(self._render(), console=console, refresh_per_second=2)
         self._live.start()
 
-    def update(self, step: int, epoch: float, loss: float, lr: float, **kwargs):
+    def update(self, step: int, epoch: float, loss: Optional[float], lr: float, **kwargs):
         """Update display with new metrics."""
         self.current_step = step
         self.current_epoch = epoch
@@ -93,6 +97,8 @@ class TrainingDisplay:
         # than blinking out on every training step.
         if kwargs.get("val_loss") is not None:
             self.val_loss = kwargs["val_loss"]
+        if kwargs.get("val_reward") is not None:
+            self.val_reward = kwargs["val_reward"]
 
         if self._live:
             self._live.update(self._render())
@@ -118,10 +124,14 @@ class TrainingDisplay:
         lines = []
         lines.append(f"{epoch_str}  [{bar}] {progress_pct:.0f}%")
         lines.append(f"Step:  {self.current_step}/{self.total_steps}")
-        lines.append(f"Loss:  {self.loss:.4f}    LR: {self.lr:.2e}")
+        # None until a loss is measured (#1225): shown as "-", not as 0.0000
+        loss_text = "-" if self.loss is None else f"{self.loss:.4f}"
+        lines.append(f"Loss:  {loss_text}    LR: {self.lr:.2e}")
 
         if self.val_loss is not None:
             lines.append(f"Val loss: {self.val_loss:.4f}")
+        if self.val_reward is not None:
+            lines.append(f"Val reward: {self.val_reward:.4f}")
         if self.speed > 0:
             lines.append(f"Speed: {self.speed:.2f} it/s")
         if self.gpu_mem:

@@ -1,0 +1,12 @@
+{
+  "identical_responses": true,
+  "rows": 24,
+  "wall_seconds": {
+    "a1": 282.2454737,
+    "b1": 101.5466282,
+    "b2": 96.2936871,
+    "a2": 131.3516435
+  },
+  "d_pass": true,
+  "pass": true
+}

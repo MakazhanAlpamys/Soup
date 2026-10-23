@@ -2,43 +2,102 @@
 
 const API = '';  // same origin
 
-// v0.53.9 #95 — Pick up Bearer token from `?token=…` (phone QR landing)
-// or from sessionStorage on subsequent navigations. Stripped from the URL
-// after read so the token doesn't sit in browser history.
-(function _bootstrapAuthToken() {
+// #1136 — The Bearer token lives only in this closure: never on `window`, in
+// web storage or in a cookie, so a future rendering mistake cannot read it
+// back. Every request goes through authFetch, which adds the header itself and
+// never returns the token. A reload keeps the session only through the
+// HttpOnly cookie `/?token=` sets on a loopback bind (#1191), which this
+// script never touches; otherwise it asks for the token again.
+// This narrows what injected script can take away; it does not stop script
+// already running in the page (the CSP is the defence there).
+const authFetch = (() => {
+  // Bound at load, so replacing window.fetch later cannot observe the header.
+  const nativeFetch = window.fetch.bind(window);
+  let token = '';
+  let asking = null;     // one prompt shared by concurrent 401s
+  let declined = false;  // a cancelled prompt is not re-raised by polling
+
+  // v0.53.9 #95 — pick up `?token=…` (phone QR landing) and drop it from the
+  // URL so it doesn't sit in browser history.
   try {
     const params = new URLSearchParams(window.location.search);
     const fromUrl = params.get('token');
     if (fromUrl) {
-      window._authToken = fromUrl;
-      try { sessionStorage.setItem('soup_auth_token', fromUrl); } catch (e) {}
-      // Drop ?token=… from the URL so refresh history doesn't leak it.
+      token = fromUrl;
       params.delete('token');
       const qs = params.toString();
       const clean = window.location.pathname + (qs ? '?' + qs : '') +
         window.location.hash;
       window.history.replaceState(null, '', clean);
-    } else {
-      try {
-        const saved = sessionStorage.getItem('soup_auth_token');
-        if (saved) window._authToken = saved;
-      } catch (e) {}
     }
   } catch (e) {
     // Defensive: never block app load.
   }
+
+  // A cancel holds until the user acts again, so a stray Escape does not
+  // leave the page signed out until a reload.
+  document.addEventListener('click', () => { declined = false; }, true);
+
+  // No regex touches the token: a match leaves its input readable to any page
+  // script through the legacy RegExp.input / RegExp.lastMatch globals.
+  function stripPrefix(text, prefix) {
+    return text.toLowerCase().startsWith(prefix) ? text.slice(prefix.length).trim() : text;
+  }
+
+  function readToken() {
+    let entered;
+    try {
+      entered = String(window.prompt(
+        'Paste the auth token printed by `soup ui` (not kept across reloads):') || '');
+    } catch (e) {
+      // Dialogs disabled (some webviews): behave as a cancel instead of wedging.
+      entered = '';
+    }
+    // The `soup ui` panel prints `Authorization: Bearer <token>` under the token.
+    entered = stripPrefix(stripPrefix(entered.trim(), 'authorization:'), 'bearer ');
+    if (!entered) {
+      declined = true;
+      return false;
+    }
+    // Outside printable ASCII it can never match, and the server answers 500
+    // rather than 401 (#1195); treat it as a wrong token and ask again later.
+    if (![...entered].every((ch) => ch > ' ' && ch <= '~')) return false;
+    token = entered;
+    return true;
+  }
+
+  function askForToken() {
+    if (!asking) {
+      asking = Promise.resolve().then(readToken).finally(() => { asking = null; });
+    }
+    return asking;
+  }
+
+  return async function authFetch(url, opts = {}) {
+    // The header only ever goes to this origin, whatever the CSP allows.
+    if (new URL(url, window.location.href).origin !== window.location.origin) {
+      throw new Error('authFetch: refusing a cross-origin URL');
+    }
+    const send = () => {
+      const headers = { ...(opts.headers || {}) };
+      if (token) headers['Authorization'] = 'Bearer ' + token;
+      return nativeFetch(url, { ...opts, headers });
+    };
+    const sentWith = token;
+    let resp = await send();
+    if (resp.status !== 401) return resp;
+    // Another request may already have been answered with a new token.
+    if (token !== sentWith || (!declined && await askForToken())) resp = await send();
+    return resp;
+  };
 })();
 
 // v0.74.x #687 — Request ephemeral single-use ticket for SSE endpoints
 async function getAuthTicket() {
-  if (!window._authToken) return '';
   try {
-    const resp = await fetch(API + '/api/auth/ticket', {
+    const resp = await authFetch(API + '/api/auth/ticket', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + window._authToken,
-      },
+      headers: { 'Content-Type': 'application/json' },
     });
     if (!resp.ok) return '';
     const data = await resp.json();
@@ -148,11 +207,7 @@ async function renderToolOutputs() {
   if (!container) return;
   let payload;
   try {
-    const headers = {};
-    if (window._authToken) {
-      headers['Authorization'] = 'Bearer ' + window._authToken;
-    }
-    const resp = await fetch('/api/tool-outputs?limit=100', { headers });
+    const resp = await authFetch('/api/tool-outputs?limit=100');
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     payload = await resp.json();
   } catch (err) {
@@ -209,10 +264,7 @@ async function renderToolOutputs() {
 // --- API Helpers ---
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
-  if (window._authToken && !headers['Authorization']) {
-    headers['Authorization'] = 'Bearer ' + window._authToken;
-  }
-  const resp = await fetch(API + path, {
+  const resp = await authFetch(API + path, {
     ...opts,
     headers,
   });
@@ -574,6 +626,9 @@ async function loadTrainingPage() {
     ]);
     window._recipes = recipesResp.recipes || [];
     renderTrainingPage(templatesResp.templates, statusResp);
+    // A run started earlier (another tab, before a reload) is still streaming
+    // its log: open the panel for it unless this page is already following it.
+    if (statusResp.running && !trainingStreamOpen) connectTrainingSSE();
   } catch (err) {
     setHtml(document.getElementById('training-content'),
       html`<div class="empty-state"><div class="empty-state-text">Error: ${err.message}</div></div>`);
@@ -700,6 +755,9 @@ async function startTraining() {
     });
     setHtml(document.getElementById('config-status'),
       html`<span style="color:var(--accent)">Training started! PID: ${String(result.pid)}</span>`);
+    // Follow the log from here, not from the status refresh below: a run that
+    // exits at once reports "not running", and its output is the error to read.
+    connectTrainingSSE();
     // Refresh status
     loadTrainingPage();
   } catch (err) {
@@ -861,12 +919,9 @@ async function sendChatMessage() {
   const adapter = document.getElementById('chat-adapter')?.value?.trim() || undefined;
 
   try {
-    const resp = await fetch(API + '/api/chat/send', {
+    const resp = await authFetch(API + '/api/chat/send', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + (window._authToken || ''),
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         messages: allMessages,
         endpoint: serverUrl,
@@ -952,21 +1007,35 @@ function handleChatKey(event) {
 let logEventSource = null;
 let metricsEventSource = null;
 const LOG_MAX_LINES = 500;
+// True from a connect until the stream ends, fails or is disconnected, so the
+// status refresh does not open a second stream next to the one just started.
+let trainingStreamOpen = false;
+// Bumped by every connect and disconnect: a connect that was waiting for its
+// ticket when a newer one began must not open its EventSource.
+let trainingStreamSeq = 0;
 
+// Opens the log panel and follows /api/train/logs. Called when a run is
+// started from this page and when the page loads while a run is in progress.
+// The progress card (#train-progress) stays hidden: no route reports a total
+// step count for the run this server started, so nothing could move its bar.
 async function connectTrainingSSE() {
   disconnectTrainingSSE();
 
   const logPanel = document.getElementById('train-log-panel');
-  const progressPanel = document.getElementById('train-progress');
   const liveBadge = document.getElementById('live-badge');
   if (!logPanel) return;
 
+  trainingStreamOpen = true;
+  const seq = trainingStreamSeq;
+  // The server replays the run's log from its first line on a new connection.
+  const output = document.getElementById('log-output');
+  if (output) output.textContent = '';
   logPanel.style.display = 'block';
-  progressPanel.style.display = 'block';
   if (liveBadge) liveBadge.style.display = 'inline-flex';
 
   let url = API + '/api/train/logs';
   const ticket = await getAuthTicket();
+  if (seq !== trainingStreamSeq) return;
   if (ticket) {
     url += '?ticket=' + encodeURIComponent(ticket);
   }
@@ -991,6 +1060,8 @@ async function connectTrainingSSE() {
 }
 
 function disconnectTrainingSSE() {
+  trainingStreamOpen = false;
+  trainingStreamSeq += 1;
   if (logEventSource) { logEventSource.close(); logEventSource = null; }
   if (metricsEventSource) { metricsEventSource.close(); metricsEventSource = null; }
   const liveBadge = document.getElementById('live-badge');

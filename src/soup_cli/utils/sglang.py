@@ -50,6 +50,7 @@ def generate_with_runtime(
     prompt: str,
     prompt_token_ids: Optional[list[int]],
     sampling_params: dict,
+    lora_name: Optional[str] = None,
 ) -> dict:
     """Run one generation on an SGLang ``Runtime`` and return the response dict (#785).
 
@@ -75,9 +76,19 @@ def generate_with_runtime(
     ``Runtime.generate`` re-encodes the server's JSON as a string (#76), the
     direct post has the dict already, and :func:`decode_sglang_response`
     accepts both.
+
+    ``lora_name`` is the name :func:`create_sglang_runtime` registered the
+    adapter under. SGLang applies a LoRA only to a request that names it in
+    ``lora_path`` and runs any other request on the base weights, so both
+    routes send the name whenever there is one (#1724). A full model has none,
+    and its requests carry no ``lora_path`` at all.
     """
+    # ``lora_path`` is SGLang's field name; it takes the registered name.
+    selector = {} if lora_name is None else {"lora_path": lora_name}
     if prompt_token_ids is None:
-        return decode_sglang_response(runtime.generate(prompt, sampling_params=sampling_params))
+        return decode_sglang_response(
+            runtime.generate(prompt, sampling_params=sampling_params, **selector)
+        )
 
     try:
         import httpx  # the repo's HTTP client (utils/webhooks.py, commands/generate.py)
@@ -91,7 +102,7 @@ def generate_with_runtime(
     # ``runtime.url`` from producing ``//generate``.
     response = httpx.post(
         runtime.url.rstrip("/") + "/generate",
-        json={"input_ids": prompt_token_ids, "sampling_params": sampling_params},
+        json={"input_ids": prompt_token_ids, "sampling_params": sampling_params, **selector},
         timeout=300.0,
     )
     response.raise_for_status()
@@ -173,7 +184,9 @@ def create_sglang_runtime(
             custom code whether or not the user opted in.
 
     Returns:
-        (runtime, runtime_model_name) tuple.
+        (runtime, runtime_model_name, lora_name) tuple. ``lora_name`` is the
+        name the adapter is registered under, to be sent with every request
+        (#1724); None for a full model.
     """
     import re
 
@@ -187,18 +200,22 @@ def create_sglang_runtime(
                 "not a URL"
             )
 
-    # For LoRA adapters, load the base model
+    # For LoRA adapters, load the base model and register the adapter under a
+    # name of its own: SGLang names a bare path entry after the whole string,
+    # and splits one that holds ``=`` into a name and a different path.
     if is_adapter and base_model:
+        lora_name = "adapter"  # the name the vLLM backend gives its LoRARequest
         runtime = sgl.Runtime(
             model_path=base_model,
             tp_size=tensor_parallel_size,
             mem_fraction_static=mem_fraction_static,
             dtype=dtype,
             trust_remote_code=trust_remote_code,
-            lora_paths=[model_path],
+            lora_paths=[f"{lora_name}={model_path}"],
         )
         runtime_model_name = base_model
     else:
+        lora_name = None
         runtime = sgl.Runtime(
             model_path=model_path,
             tp_size=tensor_parallel_size,
@@ -208,7 +225,7 @@ def create_sglang_runtime(
         )
         runtime_model_name = model_path
 
-    return runtime, runtime_model_name
+    return runtime, runtime_model_name, lora_name
 
 
 def create_sglang_app(
@@ -217,6 +234,7 @@ def create_sglang_app(
     model_name: str,
     max_tokens_default: int = 512,
     tokenizer=None,
+    lora_name: Optional[str] = None,
 ):
     """Create a FastAPI app using SGLang runtime for inference.
 
@@ -230,6 +248,10 @@ def create_sglang_app(
             encodes the rendered prompt so the server does not add a second
             BOS to it (#785). None degrades to the legacy role-prefixed
             format, same as the vLLM backend.
+        lora_name: The name ``create_sglang_runtime`` registered the adapter
+            under. Every request, streaming or not, names it as ``lora_path``,
+            since SGLang runs a request that names no adapter on the base
+            weights (#1724). None for a full model.
 
     Returns:
         FastAPI application.
@@ -316,6 +338,7 @@ def create_sglang_app(
                     sampling_params=sampling_params,
                     request_id=request_id,
                     model_name=model_name,
+                    lora_name=lora_name,
                 ),
                 media_type="text/event-stream",
             )
@@ -323,7 +346,7 @@ def create_sglang_app(
         # Non-streaming
         try:
             response = generate_with_runtime(
-                runtime, prompt, prompt_token_ids, sampling_params
+                runtime, prompt, prompt_token_ids, sampling_params, lora_name
             )
             response_text = response["text"]
             prompt_tokens = response.get("meta_info", {}).get("prompt_tokens", 0)
@@ -366,13 +389,14 @@ def create_sglang_app(
         sampling_params: dict,
         request_id: str,
         model_name: str,
+        lora_name: Optional[str],
     ):
         """Stream SSE chunks from SGLang runtime."""
         created = int(time.time())
 
         try:
             response = generate_with_runtime(
-                runtime, prompt, prompt_token_ids, sampling_params
+                runtime, prompt, prompt_token_ids, sampling_params, lora_name
             )
             response_text = response["text"]
             meta_info = response.get("meta_info")

@@ -77,6 +77,12 @@ def parse_args() -> argparse.Namespace:
         help="architecture to write: llama (no attention biases) or qwen2 (q/k/v biases)",
     )
     parser.add_argument("--layers", type=int, default=None, help="override the layer count")
+    parser.add_argument("--hidden", type=int, default=None, help="override the hidden size")
+    parser.add_argument(
+        "--intermediate", type=int, default=None, help="override the MLP intermediate size"
+    )
+    parser.add_argument("--heads", type=int, default=None, help="override attention heads")
+    parser.add_argument("--kv-heads", type=int, default=None, help="override key/value heads")
     parser.add_argument(
         "--vocab",
         type=int,
@@ -187,6 +193,14 @@ def main() -> int:
     shape = dict(SHAPES[args.shape])
     if args.layers is not None:
         shape["layers"] = int(args.layers)
+    if args.hidden is not None:
+        shape["hidden"] = int(args.hidden)
+    if args.intermediate is not None:
+        shape["intermediate"] = int(args.intermediate)
+    if args.heads is not None:
+        shape["heads"] = int(args.heads)
+    if args.kv_heads is not None:
+        shape["kv_heads"] = int(args.kv_heads)
     if args.vocab is not None:
         shape["vocab"] = int(args.vocab)
     out = Path(args.out)

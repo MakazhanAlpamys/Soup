@@ -7,6 +7,8 @@ clipped surrogate objectives with a KL penalty against a frozen reference model.
 Full RLHF pipeline:  SFT → Reward Model → PPO
 """
 
+import math
+import os
 import time
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -18,12 +20,14 @@ from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.gpu import (
+    bf16_fp16_flags,
     estimate_batch_size,
     model_size_from_name,
     resolve_device_map,
     resolve_frozen_base_load_dtype,
 )
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -33,6 +37,9 @@ def _set_ppo_training_kwargs(
     ppo_kwargs: dict[str, object],
     ppo_config_cls: type,
     tcfg: Any,
+    *,
+    total_steps: int | None = None,
+    device: str = "cpu",
 ) -> dict[str, str]:
     """Forward Soup's three PPO schedules across TRL parameter renames."""
     from soup_cli.trainer._trl_compat import config_accepts, kl_penalty_kwargs
@@ -55,6 +62,30 @@ def _set_ppo_training_kwargs(
     for name in kl_kwargs:
         applied["kl_coef"] = name
 
+    if total_steps is not None:
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
+
+        use_bf16, use_fp16 = bf16_fp16_flags(device)
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
+        training_kwargs = {
+            "warmup_steps": warmup_steps,
+            "weight_decay": tcfg.weight_decay,
+            "max_grad_norm": tcfg.max_grad_norm,
+            "optim": tcfg.optimizer,
+            "lr_scheduler_type": tcfg.scheduler,
+            "logging_steps": tcfg.logging_steps,
+            "save_steps": tcfg.save_steps,
+            "bf16": use_bf16,
+            "fp16": use_fp16,
+            "gradient_checkpointing": should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
+        }
+        for name, value in training_kwargs.items():
+            if config_accepts(ppo_config_cls, name):
+                ppo_kwargs[name] = value
+
     return applied
 
 
@@ -68,6 +99,45 @@ def _effective_ppo_setting(
     if field is None:
         return f"{fallback} (not forwarded)"
     return getattr(config, field, kwargs[field])
+
+
+def _unsupported_rl_flags(tcfg) -> list[str]:
+    """The RL-signal flags PPO cannot feed on the experimental trl API (#1441)."""
+    flags = []
+    if getattr(tcfg, "reward_hack_detector", None) is not None:
+        flags.append("reward_hack_detector")
+    if getattr(tcfg, "echo_trap_enabled", False):
+        flags.append("echo_trap_enabled")
+    if getattr(tcfg, "reward_hack_mitigation", "off") != "off":
+        flags.append("reward_hack_mitigation")
+    return flags
+
+
+def refuse_unfed_rl_flags(tcfg, *, is_experimental: bool) -> None:
+    """Refuse RL-signal flags PPO cannot feed, before anything is loaded.
+
+    #1441: the experimental ``PPOTrainer`` takes no ``reward_funcs`` — its
+    reward comes from the reward model it calls internally — so the wrappers
+    built at :282-299 were dropped on the floor. The buffer was still created,
+    and because the buffer object existed, the detector's ``on_log`` fallback
+    returned early, so nothing was ever written *and* nothing was ever read from
+    trl's logs. A run with a detector, a mitigation mode or the echo trap was
+    announced, loaded and inert.
+
+    Refusing beats a dead callback: the run stops before the model load, and the
+    message names every flag that was set.
+    """
+    if not is_experimental:
+        return
+    flags = _unsupported_rl_flags(tcfg)
+    if not flags:
+        return
+    raise ValueError(
+        f"task: ppo cannot use {', '.join(flags)}: this trl's experimental "
+        "PPOTrainer takes no reward functions, so the reward/completion signal "
+        "these callbacks read is never captured. They are wired on GRPO only. "
+        "Remove the flag(s), or run task: grpo where the signal buffer is fed."
+    )
 
 
 class PPOTrainerWrapper:
@@ -119,10 +189,13 @@ class PPOTrainerWrapper:
 
     def setup(self, dataset: dict):
         """Load model, tokenizer, reward model/fn, apply LoRA, create PPO trainer."""
-        from datasets import Dataset
-
         # Import PPOTrainer/PPOConfig — trl >=0.28 moved to trl.experimental
         ppo_trainer_cls, ppo_config_cls, is_experimental = _import_ppo_classes()
+
+        from soup_cli.trainer._trl_compat import config_accepts
+
+        if self.deepspeed_config and not config_accepts(ppo_config_cls, "deepspeed"):
+            raise ValueError("task: ppo does not support --deepspeed on this trl version")
 
         # Enable Rich progress bar for HuggingFace downloads
         from soup_cli.trainer.sft import _enable_hf_transfer_progress
@@ -132,10 +205,45 @@ class PPOTrainerWrapper:
         cfg = self.config
         tcfg = cfg.training
 
+        # #1441 — refuse before anything is loaded, including `datasets` and the
+        # model. These callbacks read a signal buffer the experimental
+        # PPOTrainer leaves empty, so a run with them is announced and inert.
+        refuse_unfed_rl_flags(tcfg, is_experimental=is_experimental)
+
+        # Deferred below the refusal: a config that cannot run at all should say
+        # which flag stopped it, not fail on an unrelated import first.
+        from datasets import Dataset
+
         # #353: seed before the model and any adapter are built.
         apply_training_seed(tcfg)
 
         use_unsloth = cfg.backend == "unsloth"
+
+        # --- Batch size ---
+        batch_size = tcfg.batch_size
+        if batch_size == "auto":
+            from soup_cli.utils.gpu import get_gpu_info
+
+            gpu_info = get_gpu_info()
+            model_size = model_size_from_name(cfg.base)
+            batch_size = estimate_batch_size(
+                model_params_b=model_size,
+                seq_length=cfg.data.max_length,
+                gpu_memory_bytes=gpu_info["memory_total_bytes"],
+                quantization=tcfg.quantization,
+                lora_r=tcfg.lora.r,
+            )
+            # PPO needs memory for policy + ref model + reward model → conservative
+            batch_size = max(1, batch_size // 4)
+            console.print(f"[green]Auto batch size (PPO):[/] {batch_size}")
+
+        # #1391: a train set smaller than one rollout batch never reaches a
+        # step. _prepare_ppo_dataset turns every row into exactly one prompt,
+        # so the count is known before any model is loaded.
+        if is_experimental:
+            _check_one_rollout_batch(
+                len(dataset["train"]), batch_size, tcfg.gradient_accumulation_steps
+            )
 
         # --- Load reward source ---
         self._setup_reward(cfg, tcfg)
@@ -156,24 +264,6 @@ class PPOTrainerWrapper:
             f" / {total:,} total ({pct:.2f}%)"
         )
 
-        # --- Batch size ---
-        batch_size = tcfg.batch_size
-        if batch_size == "auto":
-            from soup_cli.utils.gpu import get_gpu_info
-
-            gpu_info = get_gpu_info()
-            model_size = model_size_from_name(cfg.base)
-            batch_size = estimate_batch_size(
-                model_params_b=model_size,
-                seq_length=cfg.data.max_length,
-                gpu_memory_bytes=gpu_info["memory_total_bytes"],
-                quantization=tcfg.quantization,
-                lora_r=tcfg.lora.r,
-            )
-            # PPO needs memory for policy + ref model + reward model → conservative
-            batch_size = max(1, batch_size // 4)
-            console.print(f"[green]Auto batch size (PPO):[/] {batch_size}")
-
         # --- Dataset ---
         train_data = _prepare_ppo_dataset(dataset["train"], tokenizer=self.tokenizer)
         train_ds = Dataset.from_list(train_data)
@@ -191,6 +281,10 @@ class PPOTrainerWrapper:
             )
 
         train_ds = train_ds.map(_tokenize_ppo, batched=True)
+        # #1391: trl's PPOTrainer pads every column with DataCollatorWithPadding and
+        # never drops unused ones, so the prompt_text strings crash the collator.
+        # The manual (trl<0.28) loop below still reads prompt_text from _train_ds.
+        trl_train_ds = train_ds.select_columns(["input_ids", "attention_mask"])
 
         # --- Output dir ---
         output_dir = Path(cfg.output)
@@ -216,12 +310,27 @@ class PPOTrainerWrapper:
 
         ppo_params = inspect.signature(ppo_config_cls).parameters
 
+        total_steps = math.ceil(
+            len(train_ds) / batch_size / tcfg.gradient_accumulation_steps
+        ) * tcfg.epochs
         applied_ppo_fields = _set_ppo_training_kwargs(
-            ppo_kwargs, ppo_config_cls, tcfg
+            ppo_kwargs, ppo_config_cls, tcfg,
+            total_steps=total_steps, device=self.device,
         )
+
+        from soup_cli.trainer._trl_compat import config_accepts
 
         if "cliprange" in ppo_params:
             ppo_kwargs["cliprange"] = tcfg.ppo_clip_ratio
+
+        if config_accepts(ppo_config_cls, "deepspeed"):
+            ppo_kwargs["deepspeed"] = self.deepspeed_config
+
+        if config_accepts(ppo_config_cls, "response_length"):
+            ppo_kwargs["response_length"] = cfg.data.max_length
+
+        if config_accepts(ppo_config_cls, "save_total_limit"):
+            ppo_kwargs["save_total_limit"] = 3
 
         # Optional params that may not exist in all trl versions
         if "log_with" in ppo_params:
@@ -304,6 +413,48 @@ class PPOTrainerWrapper:
         # Store for use in train() — experimental API has different .train() signature
         self._is_experimental = is_experimental
 
+        # LoRA+ optimizer (#724/#745), PPO's shape. The other LoRA
+        # trainers are plain transformers.Trainer subclasses whose
+        # create_optimizer runs lazily at train(), so a post-construction
+        # attach_loraplus_optimizer lands cleanly and the scheduler is built
+        # around it. trl.experimental's PPOTrainer is not that shape: its
+        # __init__ builds the optimizer AND scheduler eagerly
+        # (create_optimizer_and_scheduler) and then calls
+        # accelerator.prepare(model, optimizer, dataloader) without the
+        # scheduler. Assigning trainer.optimizer afterwards is still stepped
+        # (B does train at lr*ratio), but self.lr_scheduler stays bound to the
+        # discarded default optimizer, so warmup and decay never reach the B
+        # group and get_last_lr() reports the wrong optimizer. Build the LoRA+
+        # optimizer up front and hand it to the constructor via
+        # optimizers=(opt, None) so create_optimizer_and_scheduler binds the
+        # scheduler to it. If trl ever makes the PPO optimizer lazy, delete this
+        # branch and let PPO join the post-construction attach.
+        #
+        # Detect the shape, not the trl version (see trainer/_trl_compat.py):
+        # the eager shape is exactly the one whose __init__ accepts an
+        # `optimizers` tuple. If a future trl.experimental drops that keyword,
+        # fail loudly here rather than silently fall back to the post-attach and
+        # reintroduce the flat-LR bug.
+        loraplus_optimizer = None
+        if getattr(tcfg, "loraplus_lr_ratio", None) is not None:
+            if "optimizers" not in ppo_trainer_params:
+                raise RuntimeError(
+                    "training.loraplus_lr_ratio is set, but this trl PPOTrainer "
+                    f"({ppo_trainer_cls.__module__}.{ppo_trainer_cls.__qualname__}) "
+                    "does not accept an `optimizers` argument, so the LoRA+ "
+                    "optimizer cannot be bound to the LR scheduler at "
+                    "construction. A post-construction attach would train the "
+                    "LoRA B group at a flat lr*ratio with warmup and decay never "
+                    "reaching it. Pin a trl whose PPO trainer takes "
+                    "optimizers=(optimizer, scheduler), or remove "
+                    "loraplus_lr_ratio for this run."
+                )
+            from soup_cli.utils.peft_wiring import build_loraplus_optimizer
+
+            loraplus_optimizer = build_loraplus_optimizer(
+                self.model, ppo_config, tcfg
+            )
+
         if is_experimental:
             # trl >=0.28 experimental API: PPOTrainer(args, processing_class,
             #   model, ref_model, reward_model, train_dataset, value_model, ...)
@@ -318,9 +469,15 @@ class PPOTrainerWrapper:
                 "model": self.model,
                 "ref_model": None,
                 "reward_model": reward_model_obj,
-                "train_dataset": train_ds,
+                "train_dataset": trl_train_ds,
                 "value_model": value_model_obj,
             }
+            # LoRA+ (#724/#745): inject so the eagerly-built scheduler binds to it.
+            if loraplus_optimizer is not None:
+                self._complete_loraplus_optimizer(
+                    loraplus_optimizer, value_model_obj, ppo_config
+                )
+                trainer_kwargs["optimizers"] = (loraplus_optimizer, None)
             self._dataset_in_constructor = True
             self.trainer = ppo_trainer_cls(**trainer_kwargs)
 
@@ -332,9 +489,9 @@ class PPOTrainerWrapper:
                 "processing_class": self.tokenizer,
             }
             if "train_dataset" in ppo_trainer_params:
-                trainer_kwargs["train_dataset"] = train_ds
+                trainer_kwargs["train_dataset"] = trl_train_ds
             elif "dataset" in ppo_trainer_params:
-                trainer_kwargs["dataset"] = train_ds
+                trainer_kwargs["dataset"] = trl_train_ds
             if reward_funcs and "reward_funcs" in ppo_trainer_params:
                 trainer_kwargs["reward_funcs"] = reward_funcs
             # Pass ref/reward/value models if required positionally
@@ -348,6 +505,12 @@ class PPOTrainerWrapper:
                 )
             if "value_model" in ppo_trainer_params:
                 trainer_kwargs["value_model"] = self._create_value_model(cfg, tcfg)
+            # LoRA+ (#724/#745): inject so the eagerly-built scheduler binds to it.
+            if loraplus_optimizer is not None:
+                self._complete_loraplus_optimizer(
+                    loraplus_optimizer, trainer_kwargs.get("value_model"), ppo_config
+                )
+                trainer_kwargs["optimizers"] = (loraplus_optimizer, None)
             self._dataset_in_constructor = (
                 "train_dataset" in trainer_kwargs or "dataset" in trainer_kwargs
             )
@@ -364,12 +527,30 @@ class PPOTrainerWrapper:
             self._dataset_in_constructor = True
             self.trainer = ppo_trainer_cls(**trainer_kwargs)
 
+        # #1675 - trl.experimental's PPOTrainer subclasses transformers.Trainer
+        # but never runs Trainer.__init__, and its save_model / _save_checkpoint
+        # delegate to Trainer's. An attribute Trainer.__init__ assigns and those
+        # methods read is then missing: transformers 5.19.0 added one
+        # (is_distributed_loading_by_transformers) and the first checkpoint save
+        # raised AttributeError. Fill in what is absent, whichever branch built
+        # the trainer.
+        from soup_cli.trainer._trl_compat import ensure_trainer_init_attrs
+
+        ensure_trainer_init_attrs(self.trainer)
+
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the
         # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
         # scheduler keeps two base_lrs until torch's strict zip raises at the
         # first step. The guard prunes inside create_optimizer, i.e. before
         # the scheduler is built. No-op for full fine-tuning, and only under
         # DeepSpeed so the ordinary path keeps its own optimizer.
+        #
+        # On PPO's eager shape (trl.experimental and the transitional branch)
+        # this guard does nothing: the trainer built its optimizer inside
+        # __init__ and trl never calls create_optimizer again. That is safe for
+        # the default optimizer, whose no-decay group is filled by the value
+        # model's biases and norm weights. The LoRA+ optimizer can have empty
+        # groups, so _complete_loraplus_optimizer prunes it before injection.
         if self.deepspeed_config:
             from soup_cli.utils.deepspeed import attach_empty_param_group_guard
 
@@ -388,7 +569,10 @@ class PPOTrainerWrapper:
             task="ppo",
         )
 
-        # v0.40.6 #67 — ReLoRA callback (magnitude-prune LoRA every N steps).
+        # v0.40.6 #67 — ReLoRA merge-and-reinitialize restart callback.
+        # LoRA+ (#724/#745) is wired ABOVE via constructor injection, not here:
+        # PPO's trainer builds its scheduler eagerly, so the optimizer has to be
+        # passed to the constructor rather than attached after it.
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
             attach_plugin_callback,
@@ -402,6 +586,7 @@ class PPOTrainerWrapper:
 
         self._output_dir = str(output_dir)
         self._train_ds = train_ds
+        self._trl_train_ds = trl_train_ds
         self._batch_size = batch_size
         self._num_epochs = tcfg.epochs
         self._max_length = cfg.data.max_length
@@ -451,9 +636,34 @@ class PPOTrainerWrapper:
             trust_remote_code=self._trust_remote_code,
             num_labels=1,
             device_map=resolve_device_map(self.device) if self.device != "cpu" else None,
+            **base_revision_kwargs(cfg.base),
         )
         reward_model.eval()
         return reward_model
+
+    def _complete_loraplus_optimizer(self, optimizer, value_model, args):
+        """Finish the LoRA+ optimizer before it is handed to PPOTrainer (#745).
+
+        trl's default PPO optimizer covers PolicyAndValueWrapper(policy,
+        value_model); the LoRA+ one is built over the policy alone. Give the
+        value model its decay / no-decay groups at the base learning rate, or
+        no optimizer owns the critic and it never trains.
+
+        Under DeepSpeed, drop empty groups (#359): LoRA+ emits groups such as
+        embedding and groupB_no_decay that hold nothing with LoRA, DeepSpeed
+        drops them, and the scheduler built from this optimizer would keep one
+        base_lr too many. Pruning in place here, before the constructor builds
+        the scheduler, is the same order the guard enforces elsewhere.
+        """
+        from soup_cli.utils.peft_wiring import add_value_model_param_groups
+
+        if value_model is not None:
+            add_value_model_param_groups(optimizer, value_model, args)
+        if self.deepspeed_config:
+            from soup_cli.utils.deepspeed import prune_empty_param_groups
+
+            prune_empty_param_groups(optimizer)
+        return optimizer
 
     def _create_value_model(self, cfg, tcfg):
         """Create a value model for trl experimental PPO API.
@@ -469,6 +679,7 @@ class PPOTrainerWrapper:
             trust_remote_code=self._trust_remote_code,
             num_labels=1,
             device_map=resolve_device_map(self.device) if self.device != "cpu" else None,
+            **base_revision_kwargs(cfg.base),
         )
         return value_model
 
@@ -510,7 +721,8 @@ class PPOTrainerWrapper:
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -532,9 +744,12 @@ class PPOTrainerWrapper:
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
 
-        self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
 
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantization in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
             self.model = prepare_model_for_kbit_training(
@@ -549,7 +764,7 @@ class PPOTrainerWrapper:
             resolve_lora_target_modules,
         )
 
-        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
         # #1099: moe_lora picks the expert-FFN targets. Without this the flag
         # was accepted and ignored here, and on a fused-expert MoE the auto
         # resolution leaves peft with nothing to attach.
@@ -590,7 +805,13 @@ class PPOTrainerWrapper:
 
     def _setup_unsloth(self, cfg, tcfg):
         """Load model via unsloth FastLanguageModel (2-5x faster)."""
+        from soup_cli.utils import unsloth
         from soup_cli.utils.unsloth import load_model_and_tokenizer
+        # #797: resolve training.gradient_checkpointing for the Unsloth path
+        # (streaming layers already checkpoint every layer, so it stays off).
+        use_gradient_checkpointing = unsloth.resolve_unsloth_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=getattr(tcfg, "stream_layers", False)
+        )
 
         console.print(f"[dim]Loading model via [bold]unsloth[/]: {cfg.base}[/]")
         self.model, self.tokenizer = load_model_and_tokenizer(
@@ -601,6 +822,8 @@ class PPOTrainerWrapper:
             lora_alpha=tcfg.lora.alpha,
             lora_dropout=tcfg.lora.dropout,
             target_modules=tcfg.lora.target_modules,
+            use_rslora=tcfg.lora.use_rslora,
+            use_gradient_checkpointing=use_gradient_checkpointing,
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -634,28 +857,20 @@ class PPOTrainerWrapper:
         # If dataset wasn't accepted by constructor, set it on the trainer
         if not self._dataset_in_constructor:
             if hasattr(self.trainer, "train_dataset"):
-                self.trainer.train_dataset = self._train_ds
+                self.trainer.train_dataset = self._trl_train_ds
             elif hasattr(self.trainer, "dataset"):
-                self.trainer.dataset = self._train_ds
+                self.trainer.dataset = self._trl_train_ds
 
         if display:
-            from soup_cli.monitoring.callback import (
-                SoupTrainerCallback,
-                soup_callback_kwargs,
-            )
-
+            from soup_cli.monitoring.callback import build_soup_trainer_callback
             self.trainer.add_callback(
-                SoupTrainerCallback(
+               build_soup_trainer_callback(
                     display,
+                    config=self.config,
                     tracker=tracker,
                     run_id=run_id,
-                    eval_gate_config=self.config.training.eval_gate,
-                    **soup_callback_kwargs(
-                        self.config.training,
-                        batch_size=self._batch_size,
-                        output_dir=self._output_dir,
-                        include_eval_gate=False,
-                    ),
+                    batch_size=self._batch_size,
+                    output_dir=self._output_dir,
                 )
             )
 
@@ -689,13 +904,21 @@ class PPOTrainerWrapper:
                 self.trainer.train()
         duration = time.time() - start
 
-        # Save final model (LoRA adapter)
-        self.trainer.save_model(self._output_dir)
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
+
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
         self.tokenizer.save_pretrained(self._output_dir)
 
-        # Extract metrics
+        # Extract metrics. trl's PPO trainer (0.29) logs per-step losses under
+        # ``loss/policy_avg`` rather than ``loss``; the key is declared here
+        # instead of guessed (see #1413).
         logs = self.trainer.state.log_history
-        loss_summary = summarize_training_loss(logs)
+        loss_summary = summarize_training_loss(logs, loss_key="loss/policy_avg")
 
         hours = int(duration // 3600)
         minutes = int((duration % 3600) // 60)
@@ -785,8 +1008,14 @@ class PPOTrainerWrapper:
 
         duration = time.time() - start
 
-        # Save final model (LoRA adapter)
-        self.model.save_pretrained(self._output_dir)
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
+
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
         self.tokenizer.save_pretrained(self._output_dir)
 
         # Extract metrics
@@ -840,6 +1069,29 @@ class PPOTrainerWrapper:
             rewards = [torch.tensor(0.0) for _ in range(num_samples)]
 
         return rewards
+
+
+def _world_size() -> int:
+    try:
+        return max(1, int(os.environ.get("WORLD_SIZE", "1") or "1"))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _check_one_rollout_batch(rows: int, batch_size: int, grad_accum: int) -> None:
+    """#1391: trl's PPO DataLoader uses ``drop_last=True`` with one rollout batch
+    (``batch_size * gradient_accumulation_steps`` rows per process) and repeats it
+    with ``while True``, so a smaller train set spins forever without a step."""
+    processes = _world_size()
+    needed = batch_size * grad_accum * processes
+    if rows < needed:
+        per_process = f" x {processes} processes" if processes > 1 else ""
+        raise ValueError(
+            f"PPO needs at least one rollout batch of training prompts: the train set "
+            f"has {rows} rows, but batch_size={batch_size} x "
+            f"gradient_accumulation_steps={grad_accum}{per_process} = {needed}. "
+            f"Add prompts, or lower batch_size / gradient_accumulation_steps."
+        )
 
 
 def _import_ppo_classes():

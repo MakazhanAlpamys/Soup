@@ -57,7 +57,9 @@ training:
         assert cfg.training.gptq_disable_exllama is False
 
     def test_gptq_quantization_aware_combo_rejected(self):
-        # GPTQ + int8 QAT does not compose — torchao.quant_api expects bf16/fp16.
+        # GPTQ + QAT/FP8 prepare does not compose — the checkpoint carries its
+        # own scale. `fp8`, because `true` is refused on its own (#1222) before
+        # this cross-validator runs.
         with pytest.raises(
             ValueError,
             match="gptq.*quantization_aware|quantization_aware.*gptq|incompatible",
@@ -69,7 +71,7 @@ task: sft
 data: {train: d.jsonl}
 training:
   quantization: gptq
-  quantization_aware: true
+  quantization_aware: fp8
 """
             )
 
@@ -143,7 +145,7 @@ training: {quantization: awq}
 base: m
 task: sft
 data: {train: d.jsonl}
-training: {quantization: awq, quantization_aware: true}
+training: {quantization: awq, quantization_aware: fp8}
 """
             )
 
@@ -241,7 +243,7 @@ training: {quantization: aqlm}
 base: m
 task: sft
 data: {train: d.jsonl}
-training: {quantization: aqlm, quantization_aware: true}
+training: {quantization: aqlm, quantization_aware: fp8}
 """
             )
 
@@ -287,12 +289,11 @@ training: {quantization: mxfp4}
         )
         assert cfg.training.quantization == "mxfp4"
 
-    def test_build_mxfp4_config_uses_bnb_4bit(self):
+    def test_build_mxfp4_config_dequantizes_on_load(self):
+        # #1466: MXFP4 is transformers' Mxfp4Config, not a BNB quant_type.
         from soup_cli.utils.quant_menu import build_mxfp4_config
 
-        cfg = build_mxfp4_config()
-        assert cfg["load_in_4bit"] is True
-        assert cfg["bnb_4bit_quant_type"] == "mxfp4"
+        assert build_mxfp4_config() == {"dequantize": True}
 
 
 class TestFP8Dequant:
@@ -353,16 +354,17 @@ training: {quantization: 8bit, bnb_4bit_quant_storage: bfloat16}
 """
             )
 
-    def test_quant_storage_with_mxfp4_accepted(self):
-        cfg = load_config_from_string(
-            """
+    def test_quant_storage_with_mxfp4_rejected(self):
+        # #1466: the storage dtype is a BitsAndBytesConfig argument.
+        with pytest.raises(ValueError, match="bnb_4bit_quant_storage"):
+            load_config_from_string(
+                """
 base: m
 task: sft
 data: {train: d.jsonl}
 training: {quantization: mxfp4, bnb_4bit_quant_storage: bfloat16}
 """
-        )
-        assert cfg.training.bnb_4bit_quant_storage == "bfloat16"
+            )
 
     def test_quant_storage_invalid_dtype_rejected(self):
         with pytest.raises(ValueError, match="quant_storage|Input should"):

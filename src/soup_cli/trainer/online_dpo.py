@@ -24,6 +24,15 @@ normalized to the OnlineDPO ``prompt`` column (chat, minus the assistant turn).
 ``_ONLINE_DPO_JUDGE_OVERRIDE`` is a test seam for injecting a synthetic Soup
 evaluator (has ``.compare_pair`` + ``.evaluate``); it is adapted to whichever
 API the installed trl exposes.
+
+**Pairs the judge cannot rank (#1225).** The pairwise judge answers ``-1`` for a
+tie, a failed or unreadable call, or a verdict that changes when the two
+completions are swapped. trl's ``OnlineDPOTrainer`` reads every rank that is not
+``0`` as "the second completion wins", so on the ``judge=`` path Soup builds the
+trainer from :func:`soup_cli.trainer.online_dpo_ranking.make_ranked_pairs_trainer`,
+which leaves those pairs out of the loss, logs their share as
+``judge/invalid_rate``, and stops the run when the judge ranks nothing for too
+long.
 """
 
 import time
@@ -35,6 +44,11 @@ from rich.console import Console
 from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.trainer.online_dpo_ranking import (
+    judge_label,
+    make_ranked_pairs_trainer,
+    report_unranked_pairs,
+)
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -43,6 +57,7 @@ from soup_cli.utils.gpu import (
     resolve_frozen_base_load_dtype,
 )
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -126,6 +141,7 @@ def _trl_has_judges() -> bool:
     """
     return _trl_accepts("judge")
 
+
 # Fallback chat template for base models that ship none. Unlike the shared
 # ``constants.DEFAULT_CHAT_TEMPLATE``, this one emits an assistant generation
 # cue on ``add_generation_prompt`` so on-policy generation continues the
@@ -187,13 +203,17 @@ class OnlineDPOTrainerWrapper:
           last user turn (interleaved assistant turns are KEPT so multi-turn
           context and user/assistant alternation are preserved); the trailing
           assistant turn is dropped because the model generates it on-policy.
+        - ``{"prompt": [...]}`` (a conversational preference row, #1849) ->
+          read the same way as ``messages``.
         """
         out = []
         for row in rows:
-            if isinstance(row.get("prompt"), str):
-                out.append({"prompt": [{"role": "user", "content": row["prompt"]}]})
-            elif isinstance(row.get("messages"), list):
-                msgs = row["messages"]
+            prompt = row.get("prompt")
+            if isinstance(prompt, str):
+                out.append({"prompt": [{"role": "user", "content": prompt}]})
+                continue
+            msgs = prompt if isinstance(prompt, list) else row.get("messages")
+            if isinstance(msgs, list):
                 last_user = -1
                 for idx, msg in enumerate(msgs):
                     if isinstance(msg, dict) and msg.get("role") == "user":
@@ -254,8 +274,8 @@ class OnlineDPOTrainerWrapper:
         prompt_rows = self._to_prompt_rows(dataset["train"])
         if not prompt_rows:
             raise ValueError(
-                "online_dpo: no usable prompts (rows need a 'prompt' string or "
-                "'messages' with a user/system turn)"
+                "online_dpo: no usable prompts (rows need a 'prompt' string, or a "
+                "'prompt' message list or 'messages' with a user turn)"
             )
         train_ds = Dataset.from_list(prompt_rows)
 
@@ -265,14 +285,11 @@ class OnlineDPOTrainerWrapper:
             output_dir = output_dir / cfg.experiment_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # --- Warmup from ratio ---
-        import math
+        # --- Warmup from ratio (#1431) ---
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
 
-        total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
-        )
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
 
         _bf16, _fp16 = bf16_fp16_flags(self.device)
         odpo_config = online_dpo_config_cls(
@@ -282,6 +299,9 @@ class OnlineDPOTrainerWrapper:
             gradient_accumulation_steps=tcfg.gradient_accumulation_steps,
             learning_rate=tcfg.lr,
             warmup_steps=warmup_steps,
+            gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
             weight_decay=tcfg.weight_decay,
             max_grad_norm=tcfg.max_grad_norm,
             optim=tcfg.optimizer,
@@ -292,6 +312,9 @@ class OnlineDPOTrainerWrapper:
             bf16=_bf16,
             fp16=_fp16,
             report_to=self.report_to,
+            # #1204: both were stored on the wrapper and never reached the config
+            deepspeed=self.deepspeed_config,
+            **(self.fsdp_config or {}),
             **training_seed_kwargs(tcfg),
             beta=tcfg.dpo_beta,
             loss_type=tcfg.online_dpo_loss_type,
@@ -301,6 +324,11 @@ class OnlineDPOTrainerWrapper:
         )
 
         judge_or_reward = self._build_judge_or_reward(tcfg)
+        uses_judge = "judge" in judge_or_reward
+        if uses_judge:
+            # #1225: trl trains a pair its judge could not rank as "the second
+            # completion wins"; this subclass leaves such pairs out instead.
+            online_dpo_trainer_cls = make_ranked_pairs_trainer(online_dpo_trainer_cls)
 
         self.trainer = online_dpo_trainer_cls(
             model=self.model,
@@ -310,6 +338,8 @@ class OnlineDPOTrainerWrapper:
             peft_config=self.peft_config,
             **judge_or_reward,
         )
+        if uses_judge:
+            self.trainer._soup_judge_label = judge_label(tcfg.online_dpo_judge)
 
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the
         # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
@@ -325,9 +355,15 @@ class OnlineDPOTrainerWrapper:
         # Curriculum + plugin callbacks (relora is a no-op unless relora_steps).
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
+            attach_loraplus_optimizer,
             attach_plugin_callback,
         )
 
+        # LoRA+ optimizer (#724/#745). TRL applies the adapter from peft_config
+        # inside its __init__, so trainer.model is the PEFT model by now, and
+        # OnlineDPOTrainer builds its optimizer lazily at train(), so the
+        # scheduler is still built around the one attached here.
+        attach_loraplus_optimizer(self.trainer, tcfg)
         attach_curriculum_callback(self.trainer, tcfg, str(output_dir), console)
         attach_plugin_callback(self.trainer, console)
 
@@ -346,7 +382,8 @@ class OnlineDPOTrainerWrapper:
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -374,7 +411,10 @@ class OnlineDPOTrainerWrapper:
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
 
-        self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
 
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
@@ -383,7 +423,7 @@ class OnlineDPOTrainerWrapper:
         # QLoRA stabilization: k-bit-loaded models need fp32 layer-norm casting +
         # input-grad enabling BEFORE LoRA. OnlineDPOTrainer's peft_config path
         # does NOT do this internally (unlike DPOTrainer), so do it here.
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantization in ("4bit", "8bit"):
             from peft import prepare_model_for_kbit_training
 
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
@@ -400,7 +440,7 @@ class OnlineDPOTrainerWrapper:
             resolve_lora_target_modules,
         )
 
-        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
         # #1099: moe_lora picks the expert-FFN targets, as on every other
         # build_lora_config trainer. The config is attached by TRL later, so
         # this is where the flag has to act.
@@ -492,23 +532,15 @@ class OnlineDPOTrainerWrapper:
         start = time.time()
 
         if display:
-            from soup_cli.monitoring.callback import (
-                SoupTrainerCallback,
-                soup_callback_kwargs,
-            )
-
+            from soup_cli.monitoring.callback import build_soup_trainer_callback
             self.trainer.add_callback(
-                SoupTrainerCallback(
+               build_soup_trainer_callback(
                     display,
+                    config=self.config,
                     tracker=tracker,
                     run_id=run_id,
-                    eval_gate_config=self.config.training.eval_gate,
-                    **soup_callback_kwargs(
-                        self.config.training,
-                        batch_size=self._batch_size,
-                        output_dir=self._output_dir,
-                        include_eval_gate=False,
-                    ),
+                    batch_size=self._batch_size,
+                    output_dir=self._output_dir,
                 )
             )
 
@@ -522,6 +554,11 @@ class OnlineDPOTrainerWrapper:
             )
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
+        # #1225: a run in which the judge ranked nothing trained nothing; it
+        # raises here instead of saving an adapter as if it had succeeded.
+        unranked_summary = report_unranked_pairs(self.trainer)
+        if unranked_summary:
+            console.print(f"[yellow]Online DPO: {unranked_summary}[/]")
 
         self.trainer.save_model(self._output_dir)
         self.tokenizer.save_pretrained(self._output_dir)

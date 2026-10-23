@@ -1,6 +1,5 @@
 """Tests for soup doctor command."""
 
-import re
 import sys
 from unittest.mock import patch
 
@@ -8,16 +7,16 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.commands.doctor import _version_ok
+from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
-# Rich/Typer emits per-character ANSI escapes when colour is forced
-# (FORCE_COLOR=1), which would break substring assertions on commands.
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
-
-
 def _strip_ansi(text: str) -> str:
-    return _ANSI_RE.sub("", text)
+    return strip_ansi(text)
+
+
+def _plain(text: str) -> str:
+    return " ".join(strip_ansi(text).split())
 
 
 # --- _version_ok tests ---
@@ -64,60 +63,537 @@ def test_doctor_runs():
     """soup doctor runs without crashing."""
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
-    assert "Soup Doctor" in result.output
+    assert "Soup Doctor" in _strip_ansi(result.output)
 
 
 def test_doctor_shows_system_info():
     """soup doctor shows system info panel."""
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
-    assert "Python" in result.output
-    assert "Platform" in result.output
+    output = _strip_ansi(result.output)
+    assert "Python" in output
+    assert "Platform" in output
 
 
 def test_doctor_shows_dependencies():
     """soup doctor shows dependency table."""
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
-    assert "Dependencies" in result.output
-    assert "Package" in result.output
+    output = _strip_ansi(result.output)
+    assert "Dependencies" in output
+    assert "Package" in output
+
+
+def test_gpu_arch_mismatch_advisory_uses_driver_cuda_wheel(monkeypatch):
+    from soup_cli.commands.doctor import _detect_gpu_arch_mismatch_advisory
+
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._nvidia_smi_cuda_version",
+        lambda: (13, 2),
+    )
+
+    advisory = _detect_gpu_arch_mismatch_advisory()
+
+    assert "download.pytorch.org/whl/cu132" in advisory
+    assert "pip install torch" in advisory
+
+
+def test_gpu_arch_mismatch_advisory_falls_back_for_unsupported_driver(
+    monkeypatch,
+):
+    from soup_cli.commands.doctor import _detect_gpu_arch_mismatch_advisory
+
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._nvidia_smi_cuda_version",
+        lambda: (11, 7),
+    )
+
+    advisory = _detect_gpu_arch_mismatch_advisory()
+
+    assert "whl/None" not in advisory
+    assert "CUDA-enabled PyTorch build" in advisory
+
+
+def test_format_gpu_capability_handles_missing_torch_cuda_attribute():
+    from types import SimpleNamespace
+
+    from soup_cli.commands.doctor import _format_gpu_capability
+
+    fake_torch = SimpleNamespace(cuda=SimpleNamespace())
+
+    assert _format_gpu_capability(fake_torch, 0) == ("unknown", False)
+
+
+def test_gpu_architecture_name_maps_legacy_nvidia_architectures():
+    from soup_cli.commands.doctor import _gpu_architecture_name
+
+    assert _gpu_architecture_name(6, 0) == "Pascal"
+    assert _gpu_architecture_name(6, 1) == "Pascal"
+    assert _gpu_architecture_name(7, 0) == "Volta"
+    assert _gpu_architecture_name(7, 2) == "Volta"
+    assert _gpu_architecture_name(7, 5) == "Turing"
+
+
+def test_torch_gpu_arch_supported_accepts_suffixed_sm_target():
+    from types import SimpleNamespace
+
+    from soup_cli.commands.doctor import _torch_gpu_arch_supported
+
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            get_arch_list=lambda: ["sm_90a", "sm_100a"],
+        )
+    )
+
+    assert _torch_gpu_arch_supported(fake_torch, 9, 0) is True
+    assert _torch_gpu_arch_supported(fake_torch, 10, 0) is True
+
+
+def test_torch_gpu_arch_supported_accepts_exact_sm_target():
+    from types import SimpleNamespace
+
+    from soup_cli.commands.doctor import _torch_gpu_arch_supported
+
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            get_arch_list=lambda: ["sm_90", "sm_120"],
+        )
+    )
+
+    assert _torch_gpu_arch_supported(fake_torch, 12, 0) is True
+
+
+def test_torch_gpu_arch_supported_accepts_later_minor_same_major():
+    from types import SimpleNamespace
+
+    from soup_cli.commands.doctor import _torch_gpu_arch_supported
+
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            get_arch_list=lambda: ["sm_75", "sm_80", "sm_86", "sm_90"],
+        )
+    )
+
+    assert _torch_gpu_arch_supported(fake_torch, 8, 9) is True
+
+
+def test_torch_gpu_arch_supported_rejects_earlier_minor_same_major():
+    from types import SimpleNamespace
+
+    from soup_cli.commands.doctor import _torch_gpu_arch_supported
+
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(get_arch_list=lambda: ["sm_86"])
+    )
+
+    assert _torch_gpu_arch_supported(fake_torch, 8, 0) is False
+
+
+def test_torch_gpu_arch_supported_keeps_suffixed_arch_exact():
+    from types import SimpleNamespace
+
+    from soup_cli.commands.doctor import _torch_gpu_arch_supported
+
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(get_arch_list=lambda: ["sm_100a"])
+    )
+
+    assert _torch_gpu_arch_supported(fake_torch, 10, 3) is False
+
+
+def test_torch_gpu_arch_supported_accepts_lower_ptx_target():
+    from types import SimpleNamespace
+
+    from soup_cli.commands.doctor import _torch_gpu_arch_supported
+
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            get_arch_list=lambda: ["sm_90", "compute_90"],
+        )
+    )
+
+    assert _torch_gpu_arch_supported(fake_torch, 12, 0) is True
+
+
+def test_torch_gpu_arch_supported_rejects_higher_only_ptx_target():
+    from types import SimpleNamespace
+
+    from soup_cli.commands.doctor import _torch_gpu_arch_supported
+
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            get_arch_list=lambda: ["sm_80", "compute_120"],
+        )
+    )
+
+    assert _torch_gpu_arch_supported(fake_torch, 9, 0) is False
+
+
+def test_torch_gpu_arch_supported_accepts_a_suffixed_architectures():
+    from types import SimpleNamespace
+
+    from soup_cli.commands.doctor import _torch_gpu_arch_supported
+
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            get_arch_list=lambda: ["sm_90a", "sm_100a"],
+        )
+    )
+
+    assert _torch_gpu_arch_supported(fake_torch, 9, 0) is True
+    assert _torch_gpu_arch_supported(fake_torch, 10, 0) is True
+
+
+def test_doctor_gpu_panel_shows_compute_capability_and_precision(monkeypatch):
+    """GPU panel reports compute capability and precision feature gates."""
+    import importlib.machinery
+    import types
+
+    fake_cuda = types.SimpleNamespace(
+        is_available=lambda: True,
+        device_count=lambda: 1,
+        get_device_name=lambda idx: "NVIDIA GeForce RTX 5070 Laptop GPU",
+        get_device_properties=lambda idx: types.SimpleNamespace(
+            total_memory=8 * 1024**3
+        ),
+        get_device_capability=lambda idx: (12, 0),
+        get_arch_list=lambda: ["sm_75", "sm_80", "sm_90", "sm_120"],
+        is_bf16_supported=lambda including_emulation=True: True,
+    )
+
+    fake_torch = types.SimpleNamespace(
+        __spec__=importlib.machinery.ModuleSpec("torch", None),
+        cuda=fake_cuda,
+        version=types.SimpleNamespace(cuda="13.0"),
+    )
+
+    monkeypatch.setitem(__import__("sys").modules, "torch", fake_torch)
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._installed_version_str",
+        lambda import_name, pkg_name: None,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.fp8.is_fp8_gpu_supported",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.fp8.is_fp8_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision.is_blackwell_gpu",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision._torchao_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.torchao_compat.resolve_torchao_class",
+        lambda key: object,
+    )
+
+    fake_torchao = types.ModuleType("torchao")
+    fake_quantization = types.ModuleType("torchao.quantization")
+    fake_quantization.NVFP4Config = object
+    fake_quantization.quantize_ = lambda *args, **kwargs: None
+    fake_torchao.quantization = fake_quantization
+
+    monkeypatch.setitem(__import__("sys").modules, "torchao", fake_torchao)
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "torchao.quantization",
+        fake_quantization,
+    )
+
+    result = runner.invoke(
+        app,
+        ["doctor"],
+        env={"COLUMNS": "120", "FORCE_COLOR": "1"},
+    )
+    out = _plain(result.output)
+
+    assert result.exit_code == 0
+    assert "sm_120 (Blackwell)" in out
+    assert "Precision features" in out
+    assert "BF16: hardware=yes" in out
+    assert "FP8: hardware=yes, software=yes" in out
+    assert "NVFP4: hardware=yes, software=yes" in out
+
+
+def test_get_precision_capabilities_reports_negative_nvfp4_software(
+    monkeypatch,
+):
+    """NVFP4 software support must report false when the runtime gate is absent."""
+    import types
+
+    fake_torch = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(
+            is_bf16_supported=lambda including_emulation=True: True,
+        )
+    )
+
+    monkeypatch.setattr(
+        "soup_cli.utils.fp8.is_fp8_gpu_supported",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision._torchao_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision.is_blackwell_gpu",
+        lambda: True,
+    )
+    fake_torchao = types.ModuleType("torchao")
+    fake_quantization = types.ModuleType("torchao.quantization")
+    fake_quantization.quantize_ = lambda *args, **kwargs: None
+    fake_torchao.quantization = fake_quantization
+    monkeypatch.setitem(sys.modules, "torchao", fake_torchao)
+    monkeypatch.setitem(sys.modules, "torchao.quantization", fake_quantization)
+
+    from soup_cli.commands.doctor import _get_precision_capabilities
+
+    result = _get_precision_capabilities(fake_torch)
+
+    assert result["NVFP4"] == (True, False)
+
+
+def test_is_nvfp4_software_supported_requires_nvfp4_training_config(monkeypatch):
+    from tests.test_v07121 import _install_fake_torchao_quant
+
+    _install_fake_torchao_quant(monkeypatch, {}, with_nvfp4=False)
+
+    from soup_cli.utils.advanced_precision import is_nvfp4_software_supported
+
+    assert is_nvfp4_software_supported() is False
+
+
+def test_is_nvfp4_software_supported_accepts_nvfp4_training_config(monkeypatch):
+    from tests.test_v07121 import _install_fake_torchao_quant
+
+    _install_fake_torchao_quant(monkeypatch, {})
+
+    from soup_cli.utils.advanced_precision import is_nvfp4_software_supported
+
+    assert is_nvfp4_software_supported() is True
+
+
+def test_is_nvfp4_software_supported_requires_quantize(monkeypatch):
+    from tests.test_v07121 import _install_fake_torchao_quant
+
+    _install_fake_torchao_quant(monkeypatch, {})
+
+    fake_quantization = sys.modules["torchao.quantization"]
+    del fake_quantization.quantize_
+
+    from soup_cli.utils.advanced_precision import is_nvfp4_software_supported
+
+    assert is_nvfp4_software_supported() is False
+
+
+def test_get_precision_capabilities_requires_torchao_for_fp8_attention(
+    monkeypatch,
+):
+    """FP8 software support follows the torchao-specific attention gate."""
+    import types
+
+    fake_torch = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(
+            is_bf16_supported=lambda including_emulation=True: True,
+        )
+    )
+
+    monkeypatch.setattr(
+        "soup_cli.utils.fp8.is_fp8_gpu_supported",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision._torchao_available",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision.is_blackwell_gpu",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision.is_nvfp4_software_supported",
+        lambda: False,
+    )
+
+    from soup_cli.commands.doctor import _get_precision_capabilities
+
+    result = _get_precision_capabilities(fake_torch)
+
+    assert result["FP8"] == (True, False)
+
+
+def test_get_precision_capabilities_reports_negative_bf16(monkeypatch):
+    """BF16 hardware support must reflect the real Torch probe."""
+    import importlib.machinery
+    import types
+
+    fake_cuda = types.SimpleNamespace(
+        is_bf16_supported=lambda including_emulation=True: False,
+    )
+    fake_torch = types.SimpleNamespace(
+        __spec__=importlib.machinery.ModuleSpec("torch", None),
+        cuda=fake_cuda,
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    monkeypatch.setattr(
+        "soup_cli.utils.fp8.is_fp8_gpu_supported",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision.is_blackwell_gpu",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision._torchao_available",
+        lambda: False,
+    )
+
+    from soup_cli.commands.doctor import _get_precision_capabilities
+
+    result = _get_precision_capabilities(fake_torch)
+
+    assert result["BF16"] == (False, None)
+
+
+def test_get_precision_capabilities_bf16_matches_trainer_gate_on_pre_ampere(
+    monkeypatch,
+):
+    """Doctor must match the trainer's non-emulated BF16 hardware gate."""
+    import importlib.machinery
+    import types
+
+    def is_bf16_supported(including_emulation=True):
+        return including_emulation
+
+    fake_torch = types.SimpleNamespace(
+        __spec__=importlib.machinery.ModuleSpec("torch", None),
+        cuda=types.SimpleNamespace(
+            is_available=lambda: True,
+            get_device_capability=lambda idx=0: (7, 5),
+            is_bf16_supported=is_bf16_supported,
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(
+        "soup_cli.utils.fp8.is_fp8_gpu_supported",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision.is_blackwell_gpu",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision._torchao_available",
+        lambda: False,
+    )
+
+    from soup_cli.commands.doctor import _get_precision_capabilities
+    from soup_cli.utils.gpu import cuda_supports_bf16
+
+    assert cuda_supports_bf16() is False
+    assert _get_precision_capabilities(fake_torch)["BF16"] == (False, None)
+
+
+def test_doctor_gpu_panel_warns_when_torch_lacks_gpu_arch(monkeypatch):
+    """GPU panel warns when Torch does not include the detected GPU architecture."""
+    import importlib.machinery
+    import types
+
+    fake_cuda = types.SimpleNamespace(
+        is_available=lambda: True,
+        device_count=lambda: 1,
+        get_device_name=lambda idx: "NVIDIA GeForce RTX 5070 Laptop GPU",
+        get_device_properties=lambda idx: types.SimpleNamespace(
+            total_memory=8 * 1024**3
+        ),
+        get_device_capability=lambda idx: (12, 0),
+        get_arch_list=lambda: ["sm_75", "sm_80", "sm_90"],
+        is_bf16_supported=lambda including_emulation=True: True,
+    )
+
+    fake_torch = types.SimpleNamespace(
+        __spec__=importlib.machinery.ModuleSpec("torch", None),
+        cuda=fake_cuda,
+        version=types.SimpleNamespace(cuda="13.0"),
+    )
+
+    monkeypatch.setitem(__import__("sys").modules, "torch", fake_torch)
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._installed_version_str",
+        lambda import_name, pkg_name: None,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.fp8.is_fp8_gpu_supported",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.fp8.is_fp8_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision.is_blackwell_gpu",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision._torchao_available",
+        lambda: True,
+    )
+
+    result = runner.invoke(
+        app,
+        ["doctor"],
+        env={"COLUMNS": "120", "FORCE_COLOR": "1"},
+    )
+
+    assert result.exit_code == 0
+    normalized = _plain(result.output)
+    assert "Torch build" in normalized
+    assert "architecture" in normalized
 
 
 def test_doctor_shows_gpu_section():
     """soup doctor shows GPU section."""
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
-    assert "GPU" in result.output
+    assert "GPU" in _strip_ansi(result.output)
 
 
 def test_doctor_shows_system_resources():
     """soup doctor shows System Resources section."""
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
-    assert "System Resources" in result.output
-    assert "RAM" in result.output
-    assert "Disk" in result.output
+    output = _strip_ansi(result.output)
+    assert "System Resources" in output
+    assert "RAM" in output
+    assert "Disk" in output
 
 
 def test_doctor_checks_torch():
     """soup doctor checks for torch."""
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
-    assert "torch" in result.output
+    assert "torch" in _strip_ansi(result.output)
 
 
 def test_doctor_checks_pydantic():
     """soup doctor checks for pydantic."""
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
-    assert "pydantic" in result.output
+    assert "pydantic" in _strip_ansi(result.output)
 
 
 def test_doctor_checks_optional_deps():
     """soup doctor shows optional deps."""
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
-    assert "optional" in result.output
+    assert "optional" in _strip_ansi(result.output)
 
 
 def test_doctor_missing_dep():
@@ -130,7 +606,7 @@ def test_doctor_missing_dep():
     ):
         result = runner.invoke(app, ["doctor"])
         assert result.exit_code == 1
-        assert "MISSING" in result.output
+        assert "MISSING" in _strip_ansi(result.output)
 
 
 def test_doctor_outdated_dep():
@@ -448,6 +924,10 @@ def test_doctor_nvidia_partial_stack_with_torch_present(monkeypatch):
     monkeypatch.setattr(
         "soup_cli.commands.doctor._nvidia_smi_cuda_version", lambda: (13, 0)
     )
+    # The GPU panel runs the REAL nvidia-smi when torch has no CUDA; on a box
+    # with a GPU that prints its own reinstall hint (with --index-url), which is
+    # not the partial-stack hint under test. Pin it off so every box agrees.
+    monkeypatch.setattr("soup_cli.commands.doctor._nvidia_smi_executable", lambda: None)
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     out = _strip_ansi(result.output)
@@ -460,7 +940,7 @@ def test_doctor_missing_core_dependency_exits_nonzero(monkeypatch):
     monkeypatch.setitem(sys.modules, "plotext", None)
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code != 0
-    assert "MISSING" in result.output
+    assert "MISSING" in _strip_ansi(result.output)
 
 
 def test_doctor_full_install_exits_zero():
@@ -546,3 +1026,149 @@ def test_doctor_nccl_mocked_success():
         assert result.exit_code == 0
         assert "Measuring NCCL bandwidth" in _strip_ansi(result.output)
         assert "Result (H100 over NVLINK)" in _strip_ansi(result.output)
+
+
+# --- Doctor --config tests (#2100) ---
+
+
+def _mock_clean_doctor_env(monkeypatch, missing: tuple[str, ...] | list[str] = ()):
+    installed = {
+        "pydantic": "2.10.0",
+        "typer": "0.15.4",
+        "rich": "13.0.0",
+        "pyyaml": "6.0",
+        "plotext": "5.2.0",
+        "torch": "2.6.0",
+        "transformers": "5.16.1",
+        "peft": "0.20.0",
+        "trl": "0.29.0",
+        "datasets": "2.14.0",
+        "bitsandbytes": "0.41.0",
+        "accelerate": "0.27.0",
+    }
+    for pkg in missing:
+        installed.pop(pkg, None)
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._installed_version_str",
+        lambda imp, pkg: installed.get(pkg),
+    )
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._check_torchvision_compat",
+        lambda issues: None,
+    )
+
+
+def test_doctor_refused_config_does_not_print_all_checks_passed(tmp_path, monkeypatch):
+    """A refused config must not print 'All checks passed!' before exit 2 (#2100)."""
+    _mock_clean_doctor_env(monkeypatch)
+    bad_config = tmp_path / "soup.yaml"
+    bad_config.write_text(
+        "base: meta-llama/Llama-3.1-8B-Instruct\nunknown_key: true\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["doctor", "--config", str(bad_config)])
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    out = _strip_ansi(result.output)
+    assert "All checks passed!" not in out
+    assert "unknown config key 'unknown_key'" in out
+    assert "Config could not be loaded" in out
+
+
+def test_doctor_missing_package_and_refused_config_shows_issues_and_refusal(tmp_path, monkeypatch):
+    """Environment issues are not hidden when a refused config exits 2 (#2100)."""
+    _mock_clean_doctor_env(monkeypatch, missing=["peft"])
+    bad_config = tmp_path / "soup.yaml"
+    bad_config.write_text(
+        "base: meta-llama/Llama-3.1-8B-Instruct\nunknown_key: true\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["doctor", "--config", str(bad_config)])
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    out = _strip_ansi(result.output)
+    assert "Found 1 issue(s):" in out
+    assert 'pip install "soup-cli[train]"' in out
+    assert "unknown config key 'unknown_key'" in out
+    assert "Config could not be loaded" in out
+    assert "All checks passed!" not in out
+
+
+def test_doctor_missing_package_and_valid_config_omits_summary_and_reports_config(
+    sample_config, monkeypatch
+):
+    """When an issue exists, a valid config is reported but summary is omitted (#2100)."""
+    _mock_clean_doctor_env(monkeypatch, missing=["peft"])
+    result = runner.invoke(app, ["doctor", "--config", str(sample_config)])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    out = _strip_ansi(result.output)
+    assert "Found 1 issue(s):" in out
+    assert "All checks passed!" not in out
+    assert "Config check" in out
+    assert out.index("Found 1 issue(s):") < out.index("Config check")
+
+
+def test_doctor_valid_config_prints_all_checks_passed(sample_config, monkeypatch):
+    """A valid config check allows 'All checks passed!' on a healthy environment (#2100)."""
+    _mock_clean_doctor_env(monkeypatch)
+    result = runner.invoke(app, ["doctor", "--config", str(sample_config)])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    out = _strip_ansi(result.output)
+    assert "All checks passed!" in out
+    assert "Config check" in out
+
+
+def test_doctor_loadable_config_with_gaps_prints_findings_after_summary(tmp_path, monkeypatch):
+    """Config check findings for a loadable config are printed after summary (#2100)."""
+    _mock_clean_doctor_env(monkeypatch)
+    gap_config = tmp_path / "soup.yaml"
+    gap_config.write_text(
+        "base: Qwen/Qwen2-VL-7B-Instruct\n"
+        "task: sft\n"
+        "modality: vision\n"
+        "data:\n"
+        "  train: ./data.jsonl\n"
+        "  format: llava\n"
+        "  mask_history: true\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["doctor", "--config", str(gap_config)])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    out = _strip_ansi(result.output)
+    assert "All checks passed!" in out
+    assert "Config check" in out
+    assert out.index("All checks passed!") < out.index("Config check")
+
+
+def test_doctor_without_config_unchanged(monkeypatch):
+    """Without --config, doctor still prints 'All checks passed!' and exits 0 (#2100)."""
+    _mock_clean_doctor_env(monkeypatch)
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    out = _strip_ansi(result.output)
+    assert "All checks passed!" in out
+
+
+def test_doctor_nonexistent_config_exits_2(tmp_path, monkeypatch):
+    """A nonexistent config path prints 'Config not found' and exits 2 (#2100)."""
+    _mock_clean_doctor_env(monkeypatch)
+    missing_config = tmp_path / "does_not_exist.yaml"
+    result = runner.invoke(app, ["doctor", "--config", str(missing_config)])
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    out = _strip_ansi(result.output)
+    assert "Config not found:" in out
+    assert "All checks passed!" not in out
+
+
+def test_doctor_load_error_exception_exits_2(monkeypatch):
+    """An unexpected exception during config load prints error detail and exits 2 (#2100)."""
+    _mock_clean_doctor_env(monkeypatch)
+
+    def _fail_load(path):
+        raise RuntimeError("disk read failed")
+
+    monkeypatch.setattr("soup_cli.config.loader.load_config", _fail_load)
+    result = runner.invoke(app, ["doctor", "--config", "unreadable.yaml"])
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    out = _strip_ansi(result.output)
+    assert "Config could not be loaded: disk read failed" in out
+    assert "All checks passed!" not in out
+

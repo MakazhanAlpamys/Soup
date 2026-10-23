@@ -339,6 +339,12 @@ def shape_reward_fn(
             return rewards
 
     _shaped.__name__ = getattr(inner, "__name__", "reward")
+    # A reward that may score ``None`` (#2047) still may once shaped: the shim
+    # passes a ``None`` through unchanged, so the declaration travels with it.
+    from soup_cli.trainer.rewards import REWARD_MAY_RETURN_NONE
+
+    if getattr(inner, REWARD_MAY_RETURN_NONE, False) is True:
+        setattr(_shaped, REWARD_MAY_RETURN_NONE, True)
     return _shaped
 
 
@@ -993,9 +999,10 @@ class _RewardHackMitigationCallback_body:  # type: ignore[misc, valid-type]  # n
     def _apply_coefficient(self, value: float) -> None:
         """Write the controller's coefficient to the trainer.
 
-        GRPO: β must be dual-written — stock ``GRPOTrainer.compute_loss`` reads
-        ``self.beta`` (the instance) while Soup's ``_GRPOTrainerVariant`` reads
-        ``self.args.beta`` (the config). PPO: ``args.kl_coef``.
+        GRPO: stock ``GRPOTrainer.compute_loss`` and Soup's
+        ``_GRPOTrainerVariant`` both weight the KL by ``self.beta`` (#1232);
+        ``args.beta`` is written too, for bases that expose only the config (the
+        variant falls back to it). PPO: ``args.kl_coef``.
         """
         trainer = self._trainer
         if trainer is None:

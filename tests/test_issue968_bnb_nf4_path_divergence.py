@@ -1,53 +1,35 @@
-"""#968 — pin the bitsandbytes fused-vs-dequant NF4 divergence that #857 rests on.
+"""#968 — pin Soup's streamed NF4 path to native bitsandbytes dispatch.
 
-#857 (merged ``d456a1d3``) moved the NF4 bit-exactness reference in
-``tests/test_issue385_stream_dtype.py`` onto the streamed model's *computation
-path*: the resident reference now gets ``install_dequant_forward`` applied too.
-The justification is that production streams NF4 through ``dequantize_4bit`` +
-``F.linear`` (``utils/layer_stream_runtime.py``, the #331 repair), while an
-unpatched resident ``Linear4bit`` goes through bitsandbytes' own fused kernel —
-so the old comparison was measuring two KERNELS against each other, not
-streaming against itself.
-
-That correction is right. The problem #968 records is that after the merge, the
-property it rests on is asserted NOWHERE: it survives only in two docstrings.
-A bitsandbytes release that fixed the fused path would make the correction
-unnecessary and nothing would say so; a release that worsened it would change
-the magnitude and nothing would notice.
-
-So this file asserts the property directly, with **no streaming anywhere in the
-experiment**. Two resident NF4 models are built from the same checkpoint, their
-packed weights are asserted byte-identical, and the only difference between them
-is whether ``install_dequant_forward`` was applied. On sm_120 with bitsandbytes
-0.50.2 they disagree; with the patch applied to BOTH (or to NEITHER) they agree
-exactly, which is what makes the divergence attributable to the path and not to
-the harness.
+#842 deliberately changes #857's reference. ``install_dequant_forward`` no
+longer means "always dequantise": it follows bitsandbytes' own CUDA decision.
+At a custom-GEMM shape it runs the native op through Soup's checkpoint-visible
+Function; at a fallback shape it keeps dequantise + ``F.linear``. A patched
+resident model must therefore agree bit for bit with an unpatched resident model
+at the fused shape, and a counter must prove this is not agreement obtained by
+silently disabling the Function.
 
 WHAT THE "FUSED" PATH ACTUALLY IS, in bitsandbytes 0.50.2. ``#331``'s docstring
 names ``MatMul4Bit``, which is where the *aliasing* bug lives, but numerically
 both routes land on the same kernel: ``matmul_4bit`` calls
 ``torch.ops.bitsandbytes.gemm_4bit`` directly when no gradient is needed and
 ``MatMul4Bit.apply`` otherwise, and ``MatMul4Bit.forward`` calls that same op.
-Measured: the divergence below is bit-identical under ``torch.no_grad()`` and
-under ``torch.enable_grad()``, which is the evidence for that reading.
+The low-level control below still shows that the raw custom GEMM and a manually
+dequantised linear can differ; Soup no longer substitutes the latter when native
+bitsandbytes selected the former.
 
 THE DIVERGENCE IS SHAPE-GATED, and this is the part that is easy to get wrong.
 ``gemm_4bit`` only runs its own fused dequantise-and-multiply for a small
-leading dimension; above it, bitsandbytes dequantises and calls a normal GEMM,
-which agrees with our path bit-for-bit. Measured on this card at
+leading dimension; above it, bitsandbytes dequantises and calls a normal GEMM.
+Measured on this card at
 ``M in {1..32}`` -> divergent, ``M >= 33`` -> exactly 0.0. That is why
-``test_issue385``'s ``(1, 12)`` input sees the divergence at all, and it is the
-trap the first attempt at this probe fell into (see the class docstring in
+the old always-dequantised ``test_issue385`` arm saw a divergence at ``(1, 12)``;
+it is the trap the first attempt at this probe fell into (see
 ``TestTheDivergenceIsGatedOnTheLeadingDimension``).
 
 This can only ever be a dev-box signal: GitHub runners have no GPU, so the whole
 module skips in CI, exactly like its neighbours in ``test_issue385_stream_dtype``.
 It is additionally pinned to the bitsandbytes version it was measured against, so
 a version bump reports "unverified" rather than silently passing.
-
-**#968 does not resolve #776.** Which of the two bitsandbytes paths is
-numerically CORRECT on sm_120 is still unestablished. This file pins that they
-differ, and by how much.
 
 Environment the constants below were measured on: RTX 5070 Laptop GPU (sm_120),
 driver 616.92 / CUDA 13.4, torch 2.14.0+cu130, bitsandbytes 0.50.2,
@@ -57,26 +39,9 @@ transformers 5.17.0, peft 0.20.0, Python 3.12.10, Windows 11.
 import pytest
 
 # --------------------------------------------------------------------------
-# The measurement, as data. Prose in a docstring is what #968 exists to replace.
+# Pinned native dispatch record.
 # --------------------------------------------------------------------------
 PINNED_BITSANDBYTES = "0.50.2"
-
-#: maxabs logit difference between two resident NF4 models that differ ONLY in
-#: whether ``install_dequant_forward`` was applied. Byte-identical packed
-#: weights, identical inputs, no streaming.
-MEASURED_LOGIT_DIVERGENCE = {
-    "float16": 0.0006103515625,
-    "bfloat16": 0.00439453125,
-}
-
-#: The assertion is about EXISTENCE and ROUGH MAGNITUDE, never equality. An
-#: exact-float assertion would break on any driver-level change in GEMM kernel
-#: selection and teach the next person to delete the test. One order of
-#: magnitude either side is wide enough to absorb that (repeated runs on this
-#: box are bit-stable, and re-seeding the model moves it by ~1.3x) and tight
-#: enough that a bitsandbytes release which fixed the fused path (-> 0.0) or
-#: worsened it (-> 10x) turns this red.
-MAGNITUDE_BAND = 10.0
 
 #: ``gemm_4bit`` runs its fused path only up to this leading dimension; above
 #: it bitsandbytes dequantises and calls an ordinary GEMM, which agrees with
@@ -86,8 +51,6 @@ FUSED_KERNEL_MAX_ROWS = 32
 _SEED = 7
 _HIDDEN = 64
 _SEQ_LEN = 12  # <= FUSED_KERNEL_MAX_ROWS, and the shape test_issue385 uses
-
-
 
 def _bnb_version() -> str:
     try:
@@ -103,7 +66,7 @@ CUDA = pytest.mark.gpu(reason="the bitsandbytes 4-bit kernels are GPU-only")
 PINNED = pytest.mark.skipif(
     _bnb_version() != PINNED_BITSANDBYTES,
     reason=(
-        f"UNVERIFIED: the fused-vs-dequant NF4 divergence was measured against "
+        f"UNVERIFIED: the native NF4 dispatch was measured against "
         f"bitsandbytes {PINNED_BITSANDBYTES}, this env has "
         f"{_bnb_version() or 'no bitsandbytes'}. Re-measure and re-pin (#968) "
         f"rather than widening the band."
@@ -176,7 +139,7 @@ def _logits(model, ids):
         return model(input_ids=ids).logits.float()
 
 
-def _divergence(tmp_path, dtype: str, *, patch_reference: bool) -> float:
+def _divergence(tmp_path, dtype: str, *, patch_reference: bool, monkeypatch=None):
     """maxabs logit gap between two resident NF4 models built from one file.
 
     ``patch_reference=False`` is the real comparison: fused kernel vs
@@ -199,13 +162,26 @@ def _divergence(tmp_path, dtype: str, *, patch_reference: bool) -> float:
         "below would be quantiser nondeterminism rather than a path difference"
     )
 
+    calls = {"checkpoint_visible": 0}
+    if monkeypatch is not None:
+        import soup_cli.utils.layer_stream_runtime as runtime_module
+
+        real = runtime_module.checkpoint_visible_nf4_linear
+
+        def counting(*args, **kwargs):
+            calls["checkpoint_visible"] += 1
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(runtime_module, "checkpoint_visible_nf4_linear", counting)
+
     if patch_reference:
         assert install_dequant_forward(reference) > 0
     assert install_dequant_forward(patched) > 0
 
     generator = torch.Generator(device="cuda").manual_seed(3)
     ids = torch.randint(0, 64, (1, _SEQ_LEN), device="cuda", generator=generator)
-    return (_logits(reference, ids) - _logits(patched, ids)).abs().max().item()
+    gap = (_logits(reference, ids) - _logits(patched, ids)).abs().max().item()
+    return gap, calls
 
 
 def _require_bf16():
@@ -217,30 +193,27 @@ def _require_bf16():
 
 @CUDA
 @PINNED
-class TestTheTwoBitsandbytesFourBitPathsDisagree:
-    """The property #857's reference correction rests on, asserted.
+class TestSoupMatchesNativeBitsandbytesDispatch:
+    """The #842 reference: patched and native resident models agree exactly.
 
     No streaming is involved. Two resident NF4 models, byte-identical packed
     weights, identical input, differing only in ``install_dequant_forward``.
     """
 
     @pytest.mark.parametrize("dtype", ["float16", "bfloat16"])
-    def test_the_paths_diverge_by_the_measured_magnitude(self, tmp_path, dtype):
+    def test_patched_and_unpatched_agree_at_a_fused_m(
+        self, tmp_path, dtype, monkeypatch
+    ):
         if dtype == "bfloat16":
             _require_bf16()
-        expected = MEASURED_LOGIT_DIVERGENCE[dtype]
-
-        got = _divergence(tmp_path, dtype, patch_reference=False)
-
-        assert got > 0.0, (
-            f"the two bitsandbytes 4-bit paths now AGREE in {dtype}. If that is "
-            f"real, #857's reference correction is no longer load-bearing and "
-            f"#776 may be resolvable — re-measure before deleting anything."
+        gap, calls = _divergence(
+            tmp_path, dtype, patch_reference=False, monkeypatch=monkeypatch
         )
-        assert expected / MAGNITUDE_BAND <= got <= expected * MAGNITUDE_BAND, (
-            f"{dtype}: divergence {got!r} is outside one order of magnitude of "
-            f"the recorded {expected!r} on bitsandbytes {PINNED_BITSANDBYTES}"
+        assert calls["checkpoint_visible"] > 0, (
+            "the patched arm never ran Soup's checkpoint-visible Function at "
+            "the fused shape, so exact agreement would not pin #842"
         )
+        assert gap == 0.0
 
     @pytest.mark.parametrize("dtype", ["float16", "bfloat16"])
     def test_the_same_path_twice_is_exact(self, tmp_path, dtype):
@@ -249,15 +222,8 @@ class TestTheTwoBitsandbytesFourBitPathsDisagree:
         would read the same. Patch both -> the only difference is gone -> 0.0."""
         if dtype == "bfloat16":
             _require_bf16()
-        assert _divergence(tmp_path, dtype, patch_reference=True) == 0.0
-
-    def test_bfloat16_diverges_further_than_float16(self):
-        """Structural, and it survives a change of shape or seed: bf16 carries
-        8 mantissa bits to fp16's 11, so the same relative kernel difference
-        lands about an order of magnitude larger."""
-        assert (
-            MEASURED_LOGIT_DIVERGENCE["bfloat16"] > MEASURED_LOGIT_DIVERGENCE["float16"]
-        )
+        gap, _calls = _divergence(tmp_path, dtype, patch_reference=True)
+        assert gap == 0.0
 
 
 @CUDA

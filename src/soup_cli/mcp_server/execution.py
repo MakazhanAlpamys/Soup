@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
+import logging
 import os
+import re
 import secrets
 import stat
 import subprocess
@@ -14,8 +17,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from soup_cli.experiment.tracker import ExperimentTracker, generate_run_id
-from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
+from soup_cli.utils.paths import (
+    enforce_under_cwd_and_no_symlink,
+    open_no_follow,
+    refuse_linked_dirs,
+)
 from soup_cli.utils.process_liveness import process_is_alive as _pid_is_alive
+
+logger = logging.getLogger(__name__)
 
 TOKEN_TTL_SECONDS = 5 * 60
 DEFAULT_MAX_TREE_FILES = 10_000
@@ -31,6 +40,10 @@ _STATUS_RUNNING = "running"
 # only upgrades to _STATUS_RUNNING (with a pid) once Popen() returns. A crash
 # in between leaves a row stuck here with no pid to check liveness against.
 _STATUS_LAUNCHING = "launching"
+
+# A run id names one directory under .soup/mcp-runs: no separator, no "." or
+# "..", no NUL. generate_run_id() always matches (run_YYYYMMDD_HHMMSS_<hex>).
+_SNAPSHOT_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
 
 
 class ExecutionError(ValueError):
@@ -67,6 +80,31 @@ class PendingPlan:
     expires_at: float
     run_id: str = ""
     consumed: bool = False
+
+
+def _open_binary_no_follow(path: str):
+    """Open ``path`` for binary reading, refusing a symlink at open time.
+
+    ``enforce_under_cwd_and_no_symlink`` is an ``lstat`` check, so a symlink
+    swapped in between that check and the read would silently redirect the
+    digest — the TOCTOU window the plan/execute split exists to close.
+
+    This delegates to :func:`soup_cli.utils.paths.open_no_follow` (#820) rather
+    than passing ``O_NOFOLLOW`` itself. The patch-release backport could not:
+    that helper landed after the tag the release was cut from, so the
+    released copy carries a bare flag and is therefore UNGUARDED ON WINDOWS,
+    where ``os.O_NOFOLLOW`` does not exist. The shared helper closes that half
+    with a pre-open ``lstat`` and a post-open ``fstat`` cross-check, so this
+    port is strictly stronger than what shipped.
+
+    ``O_BINARY`` (Windows-only) keeps the read free of CRLF translation, so a
+    digest is the same on every platform.
+
+    ``OSError`` propagates to ``digest_file``'s handler, which maps it to the
+    path-free ``ExecutionError``.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+    return os.fdopen(open_no_follow(path, flags), "rb")
 
 
 def digest_file(
@@ -106,7 +144,7 @@ def digest_file(
                     rel_posix = Path(rel_path).as_posix()
 
                     file_hasher = hashlib.sha256()
-                    with open(file_path, "rb") as handle:
+                    with _open_binary_no_follow(file_path) as handle:
                         while chunk := handle.read(65536):
                             total_bytes += len(chunk)
                             if total_bytes > max_bytes:
@@ -128,7 +166,15 @@ def digest_file(
                 raise ExecutionError(f"{field} is not a regular file")
             hasher = hashlib.sha256()
             total_bytes = 0
-            with open(real, "rb") as handle:
+            # Open ``path`` AS GIVEN, never ``real``: ``os.path.realpath``
+            # RESOLVES a symlink, so opening the resolved path means
+            # ``O_NOFOLLOW`` can never fire and a link swapped in at ``path``
+            # after the lstat guard would be silently followed and its target
+            # digested — the very TOCTOU window this reader exists to close.
+            # The digest of an ordinary file is unaffected (same inode, same
+            # bytes), and the RESOLVED path is still what gets recorded below,
+            # because that is what ``_revalidate`` compares against.
+            with _open_binary_no_follow(path) as handle:
                 while chunk := handle.read(65536):
                     total_bytes += len(chunk)
                     if total_bytes > max_bytes:
@@ -142,6 +188,18 @@ def digest_file(
     except (OSError, ValueError) as exc:
         raise ExecutionError(f"{field} is unavailable for execution") from exc
     return ProtectedFile(path=real, digest=digest)
+
+
+def _snapshot_refusal(exc: OSError) -> str:
+    """The path-free reason a plan-time config snapshot could not be written."""
+    if exc.errno == errno.ELOOP:
+        return (
+            "cannot plan: config snapshot directory or file is a "
+            "symbolic link or junction"
+        )
+    if exc.errno == errno.EEXIST:
+        return "cannot plan: config snapshot directory or file already exists"
+    return f"cannot plan: could not write the config snapshot ({type(exc).__name__})"
 
 
 class ExecutionManager:
@@ -158,11 +216,40 @@ class ExecutionManager:
         return generate_run_id()
 
     def snapshot_config(self, run_id: str, content: str) -> str:
-        """Write the exact validated config content to .soup/mcp-runs/<run_id>/config.yaml."""
-        run_dir = Path(self.cwd) / ".soup" / "mcp-runs" / run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
-        snapshot_file = str(run_dir / "config.yaml")
-        atomic_write_text(content, snapshot_file, field="config snapshot")
+        """Write the exact validated config content to .soup/mcp-runs/<run_id>/config.yaml.
+
+        Nothing is written through a link or into a directory this call did not
+        create. ``.soup``, ``.soup/mcp-runs`` and the run directory itself are
+        refused when one of them is a symbolic link or junction (#1211); the run
+        directory must not exist yet and is created here; and ``config.yaml`` is
+        created with ``O_EXCL`` through :func:`open_no_follow`, which inspects the
+        parent directories again at open time. Every refusal is a path-free
+        :class:`ExecutionError`. A process with concurrent write access inside
+        ``.soup`` can still race these checks; that is the same window the run
+        log open in :meth:`execute` accepts.
+        """
+        if not isinstance(run_id, str) or not _SNAPSHOT_RUN_ID.fullmatch(run_id):
+            raise ExecutionError("cannot plan: invalid run id for the config snapshot")
+        runs_root = Path(self.cwd) / ".soup" / "mcp-runs"
+        run_dir = runs_root / run_id
+        snapshot_file = run_dir / "config.yaml"
+        try:
+            refuse_linked_dirs(run_dir, stop_at=self.cwd)
+            runs_root.mkdir(parents=True, exist_ok=True)
+            # Check again now that the parents exist, so the run directory is
+            # never created through a link that replaced one of them meanwhile.
+            refuse_linked_dirs(runs_root, stop_at=self.cwd)
+            run_dir.mkdir()
+            snapshot_fd = open_no_follow(
+                snapshot_file,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+                0o600,
+                check_parent=True,
+            )
+            with os.fdopen(snapshot_fd, "w", encoding="utf-8") as handle:
+                handle.write(content)
+        except OSError as exc:
+            raise ExecutionError(_snapshot_refusal(exc)) from exc
         return os.path.realpath(snapshot_file)
 
     def issue(
@@ -250,7 +337,6 @@ class ExecutionManager:
             run_id = plan.run_id or generate_run_id()
             self._active_run_id = run_id
 
-        log_path = self._log_path(run_id)
         digest = hashlib.sha256(
             json.dumps(plan.argv, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
@@ -258,6 +344,7 @@ class ExecutionManager:
         env["SOUP_MCP_RUN_ID"] = run_id
 
         try:
+            log_path = self._log_path(run_id)
             tracker = ExperimentTracker()
             tracker.launch_run(
                 run_id=run_id,
@@ -267,7 +354,33 @@ class ExecutionManager:
                 log_path=log_path,
             )
             try:
-                log_handle = open(log_path, "ab")
+                # open_no_follow (#820, #1138, #1158): refuses a file symlink at
+                # the log path, a directory symlink or junction in its parent
+                # hierarchy, or a pre-planted hardlink (refuse_hardlink=True).
+                # Note: this check closes uncoordinated redirection; a residual
+                # TOCTOU window remains between the parent walk and os.open if an
+                # attacker has concurrent write access inside .soup. Mode 0o666
+                # keeps plain open()'s permissions (umask still applies).
+                try:
+                    log_fd = open_no_follow(
+                        log_path,
+                        os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+                        0o666,
+                        check_parent=True,
+                        refuse_hardlink=True,
+                    )
+                    log_handle = os.fdopen(log_fd, "ab")
+                except OSError as exc:
+                    if exc.errno == errno.ELOOP:
+                        raise ExecutionError(
+                            "cannot execute: run log directory or file is a "
+                            "symbolic link or junction"
+                        ) from exc
+                    if exc.errno == errno.EMLINK:
+                        raise ExecutionError(
+                            "cannot execute: run log path is a hard link"
+                        ) from exc
+                    raise
                 process = subprocess.Popen(  # noqa: S603 - internal argv, no shell
                     list(plan.argv),
                     cwd=plan.cwd,
@@ -302,7 +415,7 @@ class ExecutionManager:
         except Exception as exc:
             # No record of a live pid and no watcher: stop the child rather
             # than leave it running unsupervised, then free the slot.
-            self._stop_child(process)
+            self._stop_child(process, run_id)
             try:
                 ExperimentTracker().finish_execution(run_id, status="spawn_failed", exit_code=None)
             except Exception:
@@ -316,27 +429,54 @@ class ExecutionManager:
         return {"run_id": run_id, "status": "running", "pid": process.pid, "log_path": log_path}
 
     @staticmethod
-    def _stop_child(process: subprocess.Popen) -> None:
-        """Terminate, then kill after 10 s; never raises."""
+    def _stop_child(process: subprocess.Popen, run_id: str | None = None) -> None:
+        """Terminate, then kill after 10 s; never raises.
+
+        Every failure here leaves a child running that nothing supervises any
+        more, so each swallowed exception is logged at debug with the run_id
+        and pid: the contract stays "never raises", but a leaked process is no
+        longer invisible to whoever reads the log afterwards.
+        """
+        pid = getattr(process, "pid", None)
         try:
             process.terminate()
         except Exception:
-            pass
+            logger.debug(
+                "mcp execution %s: terminate() failed for pid %s", run_id, pid, exc_info=True
+            )
         try:
             process.wait(timeout=10)
             return
         except subprocess.TimeoutExpired:
-            pass
+            logger.debug(
+                "mcp execution %s: pid %s still alive 10s after terminate(); killing",
+                run_id,
+                pid,
+            )
         except Exception:
+            logger.debug(
+                "mcp execution %s: wait() after terminate() failed for pid %s; "
+                "giving up without kill()",
+                run_id,
+                pid,
+                exc_info=True,
+            )
             return
         try:
             process.kill()
         except Exception:
-            pass
+            logger.debug(
+                "mcp execution %s: kill() failed for pid %s", run_id, pid, exc_info=True
+            )
         try:
             process.wait(timeout=10)
         except Exception:
-            pass
+            logger.debug(
+                "mcp execution %s: pid %s did not reap after kill(); it may still be running",
+                run_id,
+                pid,
+                exc_info=True,
+            )
 
     def _watch(self, process: subprocess.Popen, run_id: str) -> None:
         try:
@@ -373,5 +513,12 @@ class ExecutionManager:
 
     def _log_path(self, run_id: str) -> str:
         root = Path(self.cwd) / ".soup" / "mcp-runs"
+        try:
+            refuse_linked_dirs(root, stop_at=self.cwd)
+        except OSError as exc:
+            raise ExecutionError(
+                "cannot execute: run log directory or file is a "
+                "symbolic link or junction"
+            ) from exc
         root.mkdir(parents=True, exist_ok=True)
         return str(root / f"{run_id}.log")

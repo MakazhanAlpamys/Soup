@@ -13,6 +13,8 @@ from rich.console import Console
 from soup_cli.config.schema import SoupConfig, TrainingConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.utils import final_answer
+from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -20,7 +22,12 @@ from soup_cli.utils.gpu import (
     resolve_device_map,
     resolve_frozen_base_load_dtype,
 )
-from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.mixed_precision import (
+    align_trainable_dtype_for_fp16,
+    keep_trainable_dtype_on_resume,
+    reload_root_adapter_on_resume,
+)
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -48,7 +55,7 @@ def make_grpo_trainer_variant(base_cls: type, variant: str) -> type:
 @lru_cache(maxsize=8)
 def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
     """Cached factory body — keyed on already-normalised variant."""
-    from soup_cli.utils.grpo_variants import apply_variant_loss
+    from soup_cli.utils.grpo_variants import apply_variant_loss, variant_kl_metric
 
     class _GRPOTrainerVariant(base_cls):  # type: ignore[misc, valid-type]
         """GRPOTrainer subclass that routes compute_loss through Soup's variants."""
@@ -127,7 +134,14 @@ def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
                 self._warn_fallback("missing per-token log-prob inputs")
                 return None
 
-            beta_attr = getattr(getattr(self, "args", None), "beta", None)
+            # #1232: the KL weight is trl's own ``self.beta``. trl reads that
+            # attribute to decide whether to run the reference forward and to
+            # weight the KL in its stock loss, so the reference is in ``inputs``
+            # exactly when this loss needs it; the reward-hack controller writes
+            # it at runtime. ``args.beta`` covers bases without the attribute.
+            beta_attr = getattr(self, "beta", None)
+            if beta_attr is None:
+                beta_attr = getattr(getattr(self, "args", None), "beta", None)
             beta = float(beta_attr) if beta_attr is not None else 0.0
             delta = getattr(self, "_soup_grpo_delta", None)
             ref_logp = _read_attr(inputs, "ref_per_token_logps")
@@ -155,6 +169,19 @@ def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
                 return None
 
             mode = "train" if getattr(getattr(self, "model", model), "training", True) else "eval"
+            # #1263: this loss replaces trl's, which is where trl logs the ``kl``
+            # metric, so log it here the same way (same key, same gather).
+            mean_kl = variant_kl_metric(
+                self._soup_grpo_variant,
+                logp_new=logp_new,
+                advantages=advantages,
+                beta=beta,
+                completion_mask=mask,
+                reference_logp=ref_logp,
+            )
+            metrics = getattr(self, "_metrics", None)
+            if mean_kl is not None and metrics is not None:
+                metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
             normalizer = (
                 getattr(self, "current_gradient_accumulation_steps", 1.0)
                 if mode == "train"
@@ -215,9 +242,15 @@ def _select_reward_fn(
     # v0.71.40 #311 — ``reward_fn`` may be comma-separated ("accuracy,format").
     # Return a single callable for one reward (back-compat) or a list for several
     # (TRL's reward_funcs=[...] + the rm_ensemble detector both accept the list).
+    # #2047 — ``judge_rank`` is built from this config, like the PRM reward above.
+    from soup_cli.trainer.grpo_judge import JUDGE_RANK_REWARD, build_judge_rank_reward
     from soup_cli.trainer.rewards import load_reward_fns
 
-    fns = load_reward_fns(tcfg.reward_fn, verifiable_domain=tcfg.verifiable_domain)
+    fns = load_reward_fns(
+        tcfg.reward_fn,
+        verifiable_domain=tcfg.verifiable_domain,
+        builders={JUDGE_RANK_REWARD: lambda: build_judge_rank_reward(tcfg)},
+    )
     return fns[0] if len(fns) == 1 else fns
 
 
@@ -279,10 +312,11 @@ class GRPOTrainerWrapper:
           #387; ``grpo_fp16`` was the only way to run GRPO there and nothing
           said so.
 
-        ``auto_mixed_precision`` is mutually exclusive with ``grpo_fp16``
-        (rejected at schema load via ``_validate_grpo_fp16_amp_exclusive``);
-        when only ``auto_mixed_precision`` is set, the v0.32.0 picker runs
-        elsewhere in the training loop and overrides this default.
+        ``auto_mixed_precision`` is refused on ``task='grpo'`` at schema
+        load (#1618 — this wrapper never reads the field, so it would train
+        at whatever precision these lines pick); ``grpo_fp16`` is the only
+        way to choose the dtype here, and the grpo_fp16 + auto_mixed_precision
+        combo is rejected by ``_validate_grpo_fp16_amp_exclusive``.
         """
         device_name = str(self.device).lower()
         if device_name.startswith("mps"):
@@ -327,6 +361,10 @@ class GRPOTrainerWrapper:
         # v0.71.30 — when tcfg.prm_reward is set, a trained Soup PRM replaces
         # the configured reward (process-supervision); otherwise load reward_fn.
         reward_fn = _select_reward_fn(tcfg, self.device, self._trust_remote_code)
+        # #2047 — the judge_rank reward's counters, read by its callback below.
+        from soup_cli.trainer.grpo_judge import judge_rank_state
+
+        self._judge_rank_state = judge_rank_state(reward_fn)
 
         # v0.71.11 #235/#240 — when the reward-hack or echo-trap detector is
         # enabled, wrap the reward function(s) with a capture shim so the
@@ -442,13 +480,11 @@ class GRPOTrainerWrapper:
             output_dir = output_dir / cfg.experiment_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # --- Calculate warmup steps from ratio ---
-        import math
+        # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
 
-        total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps) * tcfg.epochs
-        )
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
 
         # --- Warn if running on CPU (trl GRPO has known CPU issues) ---
         if self.device == "cpu":
@@ -456,6 +492,25 @@ class GRPOTrainerWrapper:
                 "[yellow]Warning: GRPO on CPU is experimental. "
                 "trl's GRPOTrainer may produce empty generations on CPU, "
                 "causing tensor size errors. A CUDA GPU is recommended.[/]"
+            )
+
+        # #1223: TRL evaluates num_generations completions per held-out prompt
+        # and refuses an eval batch that does not hold whole groups (a batch of
+        # 3 with 2 generations and gradient accumulation 2 trains, then raised
+        # at setup). Evaluate at the largest multiple of num_generations that
+        # fits in the train batch -- the bump above guarantees at least one.
+        eval_kwargs = training_eval_kwargs(
+            cfg, eval_ds, batch_size=batch_size - batch_size % num_gen
+        )
+        if (
+            eval_kwargs["eval_strategy"] != "no"
+            and eval_kwargs["per_device_eval_batch_size"] != batch_size
+        ):
+            console.print(
+                "[yellow]Note:[/] grpo evaluates at batch "
+                f"{eval_kwargs['per_device_eval_batch_size']}, not the train batch "
+                f"{batch_size}: TRL's evaluation needs whole groups of "
+                f"num_generations={num_gen} completions."
             )
 
         # --- GRPO config ---
@@ -466,6 +521,9 @@ class GRPOTrainerWrapper:
             "gradient_accumulation_steps": tcfg.gradient_accumulation_steps,
             "learning_rate": tcfg.lr,
             "warmup_steps": warmup_steps,
+            "gradient_checkpointing": should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
             "weight_decay": tcfg.weight_decay,
             "max_grad_norm": tcfg.max_grad_norm,
             "optim": tcfg.optimizer,
@@ -478,6 +536,7 @@ class GRPOTrainerWrapper:
             "remove_unused_columns": False,
             "deepspeed": self.deepspeed_config,
             **training_seed_kwargs(tcfg),
+            **eval_kwargs,
             **(self.fsdp_config or {}),
             "beta": tcfg.grpo_beta,
             "num_generations": tcfg.num_generations,
@@ -548,10 +607,26 @@ class GRPOTrainerWrapper:
             and tcfg.grpo_delta is not None
         ):
             self.trainer._soup_grpo_delta = float(tcfg.grpo_delta)
+        # #2047 — log judge_rank's failed / equal-score group rates under judge/
+        # and stop the run when too many training groups get no scores.
+        if self._judge_rank_state is not None:
+            from soup_cli.trainer.grpo_judge import attach_judge_rank_callback
+
+            attach_judge_rank_callback(self.trainer, self._judge_rank_state)
         # v0.53.11 #127 — wire the live stability callback.
         from soup_cli.utils.peft_wiring import attach_grpo_stability_callback
 
         attach_grpo_stability_callback(self.trainer, tcfg)
+
+        # #342 — gradient watchdog (on_pre_optimizer_step) must be always-on.
+        # attach_grpo_stability_callback only fires when stability knobs
+        # are set.  ensure_grpo_stability_callback is a no-op if already
+        # attached, otherwise attaches with defaults (only watchdog fires).
+        from soup_cli.utils.peft_wiring import (
+            ensure_grpo_stability_callback,
+        )
+
+        ensure_grpo_stability_callback(self.trainer)
 
         # v0.71.11 #235/#238/#240 — wire the live RL callbacks (reward-hack,
         # echo-trap, mid-epoch RL checkpoint).
@@ -566,13 +641,16 @@ class GRPOTrainerWrapper:
             task="grpo",
         )
 
-        # v0.40.6 #67 — ReLoRA callback (magnitude-prune LoRA every N steps).
+        # v0.40.6 #67 — ReLoRA merge-and-reinitialize restart callback.
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
+            attach_loraplus_optimizer,
             attach_plugin_callback,
             attach_relora_callback,
         )
 
+        # LoRA+ optimizer (#724/#745) — build and attach now that the trainer exists.
+        attach_loraplus_optimizer(self.trainer, tcfg)
         attach_relora_callback(self.trainer, tcfg)
         # v0.53.5 #114/#115 — dynamic curriculum live callback.
         attach_curriculum_callback(self.trainer, tcfg, str(output_dir), console)
@@ -589,7 +667,8 @@ class GRPOTrainerWrapper:
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -614,7 +693,10 @@ class GRPOTrainerWrapper:
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
 
-        self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
         apply_vocab_expansion(
@@ -622,7 +704,7 @@ class GRPOTrainerWrapper:
             self.model,
             cfg.data,
         )
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantization in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
             self.model = prepare_model_for_kbit_training(
@@ -637,7 +719,7 @@ class GRPOTrainerWrapper:
             resolve_lora_target_modules,
         )
 
-        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
         # #798: moe_lora picks the expert-FFN targets. Without this the flag
         # was accepted and ignored here, and on a fused-expert MoE the auto
         # resolution leaves peft with nothing to attach.
@@ -684,7 +766,13 @@ class GRPOTrainerWrapper:
 
     def _setup_unsloth(self, cfg, tcfg):
         """Load model via unsloth FastLanguageModel (2-5x faster)."""
+        from soup_cli.utils import unsloth
         from soup_cli.utils.unsloth import load_model_and_tokenizer
+        # #797: resolve training.gradient_checkpointing for the Unsloth path
+        # (streaming layers already checkpoint every layer, so it stays off).
+        use_gradient_checkpointing = unsloth.resolve_unsloth_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=getattr(tcfg, "stream_layers", False)
+        )
 
         console.print(f"[dim]Loading model via [bold]unsloth[/]: {cfg.base}[/]")
         self.model, self.tokenizer = load_model_and_tokenizer(
@@ -695,6 +783,8 @@ class GRPOTrainerWrapper:
             lora_alpha=tcfg.lora.alpha,
             lora_dropout=tcfg.lora.dropout,
             target_modules=tcfg.lora.target_modules,
+            use_rslora=tcfg.lora.use_rslora,
+            use_gradient_checkpointing=use_gradient_checkpointing,
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -711,23 +801,19 @@ class GRPOTrainerWrapper:
 
         # Add callback for live display and experiment tracking
         if display:
-            from soup_cli.monitoring.callback import (
-                SoupTrainerCallback,
-                soup_callback_kwargs,
-            )
+            from soup_cli.monitoring.callback import build_soup_trainer_callback
 
             self.trainer.add_callback(
-                SoupTrainerCallback(
+                build_soup_trainer_callback(
                     display,
+                    config=self.config,
                     tracker=tracker,
+                    batch_size=self._batch_size,
                     run_id=run_id,
-                    eval_gate_config=self.config.training.eval_gate,
-                    **soup_callback_kwargs(
-                        self.config.training,
-                        batch_size=self._batch_size,
-                        output_dir=self._output_dir,
-                        include_eval_gate=False,
-                    ),
+                    output_dir=self._output_dir,
+                    # #1389: grpo's validation number is the held-out
+                    # reward, not TRL's policy objective in `eval_loss`.
+                    task=self.config.task,
                 )
             )
 
@@ -742,12 +828,25 @@ class GRPOTrainerWrapper:
                 fp16=getattr(self.trainer.args, "fp16", False),
                 bf16=getattr(self.trainer.args, "bf16", False),
             )
+            if resume_from_checkpoint is not None:
+                reload_root_adapter_on_resume(self.trainer)
+                keep_trainable_dtype_on_resume(self.trainer)
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
-        # Save final model (LoRA adapter)
-        self.trainer.save_model(self._output_dir)
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
+
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
         self.tokenizer.save_pretrained(self._output_dir)
+        # #342 — persist trainer_state.json (including nan_skip_count
+        # from the stability callback) next to adapter_config.json so
+        # ``soup adapters audit`` can read the skipped-step fraction.
+        self.trainer.save_state()
 
         # Extract metrics
         logs = self.trainer.state.log_history
@@ -821,6 +920,11 @@ def _copy_grpo_metadata(row: dict, entry: dict) -> None:
             entry[key] = value
 
 
+# Rewards that compare a completion's final answer with the gold's (#1226). A gold they cannot
+# read would score every completion 0.0, so the group advantage would be zero with no warning.
+_GOLD_PARSING_REWARDS = frozenset({"accuracy", "verifiable/math"})
+
+
 def _validate_grpo_reward_metadata(
     data: list[dict],
     tcfg: TrainingConfig,
@@ -855,6 +959,53 @@ def _validate_grpo_reward_metadata(
                 "dataset or include an assistant response that Soup can use as "
                 "'answer'."
             )
+
+    gold_rewards = [name for name, _ in requirements if name in _GOLD_PARSING_REWARDS]
+    # Seed rows that a rollout backend replaces are never scored (#565 still wants them
+    # present); the rollout's own rows are validated as split "rollout".
+    if gold_rewards and not (split == "train" and tcfg.rollout_backend is not None):
+        _check_golds_are_readable(data, list(dict.fromkeys(gold_rewards)), split=split)
+
+
+def _check_golds_are_readable(data: list[dict], reward_names: list[str], *, split: str) -> None:
+    """Refuse golds with no single extractable final answer (none, a "####" line that may be a
+    markdown heading, or a hedge such as "The answer is either 41 or 42."); report the ones
+    compared as text."""
+    unreadable: list[int] = []
+    text_golds = 0
+    for row_index, row in enumerate(data):
+        reference = final_answer.parse_reference(str(row["answer"]))
+        if reference is None:
+            unreadable.append(row_index)
+        elif reference.number is None:
+            text_golds += 1
+    if unreadable:
+        raise ValueError(_unreadable_gold_message(unreadable, len(data), reward_names, split))
+    if text_golds:
+        console.print(
+            f"[dim]GRPO {split}: {text_golds} of {len(data)} golds are non-numeric and are "
+            "compared as normalised text.[/]"
+        )
+
+
+def _unreadable_gold_message(
+    rows: list[int], total: int, reward_names: list[str], split: str
+) -> str:
+    names = " and ".join(repr(name) for name in reward_names)
+    label = "reward" if len(reward_names) == 1 else "rewards"
+    more = (
+        f" {len(rows) - 1} more of the {total} rows have the same problem." if len(rows) > 1 else ""
+    )
+    return (
+        f"GRPO {split} row {rows[0]} 'answer' states no single final answer that {label} "
+        f"{names} can compare against: it states none (a '####' line that is not a number and "
+        "has more text after it reads as a markdown heading), or its answer phrase names more "
+        "than one number (a hedge such as 'The answer is either 41 or 42.'), so every "
+        f"completion would score 0.0.{more} The field comes from an 'answer' column, an Alpaca "
+        "'output' or the final assistant turn; rows count from 0 after the train/validation "
+        "split. Put one answer after '####' on the last line, inside \\boxed{}, or after 'The "
+        "answer is' or 'Answer:', make the field the bare answer on one line, or drop the row."
+    )
 
 
 def _has_grpo_reward_metadata(value: object) -> bool:

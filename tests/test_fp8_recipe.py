@@ -118,18 +118,22 @@ class TestFP8RecipeRequiresFP8:
             )
         assert "quantization_aware" in str(exc.value)
 
-    def test_rowwise_with_bool_true_qat_rejected(self):
-        """Bool True = int8 QAT, not FP8 — recipe should be rejected."""
+    def test_rowwise_with_non_fp8_quantization_aware_rejected(self):
+        """A truthy value other than 'fp8' does not satisfy the recipe either.
+
+        This used `true`, which is now refused on its own (#1222) before this
+        validator runs; `quest` keeps the recipe check itself under test.
+        """
         with pytest.raises(ValidationError) as exc:
             SoupConfig(
                 base="test/model",
                 data={"train": "./data.jsonl"},
                 training={
-                    "quantization_aware": True,
+                    "quantization_aware": "quest",
                     "fp8_recipe": "rowwise",
                 },
             )
-        assert "quantization_aware" in str(exc.value)
+        assert "fp8_recipe='rowwise' requires quantization_aware='fp8'" in str(exc.value)
 
 
 # ─── Dispatch: apply_fp8_training recipe parameter ────────────────────────
@@ -262,13 +266,17 @@ class TestFP8RecipeDispatch:
         mock_from_recipe.assert_called_once_with("rowwise_with_gw_hp")
         assert result is True
 
-    def test_apply_fp8_returns_false_when_unavailable(self):
-        """When FP8 deps are missing, apply_fp8_training returns False."""
-        from soup_cli.utils.fp8 import apply_fp8_training
+    def test_apply_fp8_stops_when_unavailable(self):
+        """INVERTED by the #835 ruling: FP8 deps missing on a card that can run
+        the recipe now raise instead of returning False."""
+        from soup_cli.utils.fp8 import FP8DependencyMissingError, apply_fp8_training
 
-        with patch("soup_cli.utils.fp8.is_fp8_available", return_value=False):
+        with patch("soup_cli.utils.fp8.is_fp8_available", return_value=False), patch(
+            "soup_cli.utils.fp8.fp8_training_supported", return_value=(True, "")
+        ):
             model = MagicMock()
-            assert apply_fp8_training(model, recipe="rowwise") is False
+            with pytest.raises(FP8DependencyMissingError):
+                apply_fp8_training(model, recipe="rowwise")
 
     def test_apply_fp8_default_recipe_is_tensorwise(self):
         """Calling without recipe= uses 'tensorwise' (v0.28.0 compat)."""
@@ -393,15 +401,14 @@ class TestFP8RecipeBackwardCompat:
         assert cfg.training.quantization_aware == "fp8"
         assert cfg.training.fp8_recipe == "tensorwise"
 
-    def test_v028_bool_true_unaffected(self):
-        """Bool True (int8 QAT) is unaffected by fp8_recipe field."""
-        cfg = SoupConfig(
-            base="test/model",
-            data={"train": "./data.jsonl"},
-            training={"quantization_aware": True},
-        )
-        assert cfg.training.quantization_aware is True
-        assert cfg.training.fp8_recipe == "tensorwise"  # default, unused
+    def test_v028_bool_true_is_refused(self):
+        """Bool True (int8 QAT) no longer loads at all (#1222)."""
+        with pytest.raises(ValidationError, match="#1222"):
+            SoupConfig(
+                base="test/model",
+                data={"train": "./data.jsonl"},
+                training={"quantization_aware": True},
+            )
 
     def test_training_config_fp8_recipe_default(self):
         """TrainingConfig alone defaults fp8_recipe to tensorwise."""

@@ -22,7 +22,7 @@ import subprocess
 import sys
 import tempfile
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
@@ -30,6 +30,8 @@ from typing import Any
 
 from rich.console import Console
 from rich.panel import Panel
+
+from soup_cli.utils import final_answer
 
 console = Console()
 
@@ -202,10 +204,15 @@ def _show_code_exec_warning_once() -> None:
 
 
 def accuracy_reward(completions: list[list[dict]], **kwargs) -> list[float]:
-    """Reward based on whether the final answer matches the expected answer.
+    """Reward 1.0 when the completion's final answer matches the gold's, else 0.0.
 
-    Looks for the answer after the last '####' or in a \\boxed{} block.
-    Falls back to checking if the expected answer appears anywhere in the response.
+    The completion and the gold are read by the same parser,
+    :mod:`soup_cli.utils.final_answer`: the answer after the last '####', in the last
+    \\boxed{}, or after 'answer is' / 'answer:'; an unmarked completion by its last line and
+    its last number. A numeric gold is compared by value ('42' equals '#### 42.0'), any other
+    gold as normalised text (case, whitespace and LaTeX wrappers ignored). There is no partial
+    credit (#1226): the old 0.5 for "the gold appears somewhere in the completion" paid
+    '#### 420' for a gold of 42.
 
     Args:
         completions: list of message lists, each containing a completion with 'content'.
@@ -218,17 +225,12 @@ def accuracy_reward(completions: list[list[dict]], **kwargs) -> list[float]:
     rewards = []
     for completion, expected in zip(completions, answers):
         content = completion[-1]["content"] if completion else ""
-        expected_text = "" if expected is None else str(expected).strip()
-        if not expected_text:
+        reference = None if expected is None else final_answer.parse_reference(str(expected))
+        if reference is None:
             rewards.append(0.0)
             continue
-        predicted = _extract_answer(content)
-        if predicted is not None and predicted.strip() == expected_text:
-            rewards.append(1.0)
-        elif expected_text.lower() in content.lower():
-            rewards.append(0.5)
-        else:
-            rewards.append(0.0)
+        predicted = final_answer.parse_completion(content)
+        rewards.append(1.0 if final_answer.answers_match(predicted, reference) else 0.0)
     return rewards
 
 
@@ -262,46 +264,14 @@ def format_reward(completions: list[list[dict]], **kwargs) -> list[float]:
 
 
 def _extract_answer(text: str) -> str | None:
-    """Extract the final answer from model output.
+    """Return the final answer ``text`` states explicitly ('####', \\boxed{}, 'answer is').
 
-    Supports:
-      - #### <answer> format (GSM8K style)
-      - \\boxed{<answer>} format (math style)
+    Kept as a thin alias: the parser lives in :mod:`soup_cli.utils.final_answer` (#1226).
     """
-    # Try #### format
-    parts = text.split("####")
-    if len(parts) > 1:
-        return parts[-1].strip()
-    # Try \\boxed{} format
-    match = re.search(r"\\boxed\{([^}]+)\}", text)
-    if match:
-        return match.group(1).strip()
-    return None
+    return final_answer.extract_final_answer(text)
 
 
 # --- RLVR: verifiable rewards (Part C of v0.25.0) ---
-
-_MATH_NUM_RE = re.compile(r"-?\d+(?:\.\d+)?")
-
-
-def _extract_numeric_answer(text: str) -> "float | None":
-    """Extract a numeric answer using safe regex (never calls eval())."""
-    answer_str = _extract_answer(text)
-    if answer_str is None:
-        # Fallback: find the last number in text
-        nums = _MATH_NUM_RE.findall(text)
-        if not nums:
-            return None
-        answer_str = nums[-1]
-
-    # Accept only simple numeric literals — reject anything else
-    match = _MATH_NUM_RE.fullmatch(answer_str.strip())
-    if match is None:
-        return None
-    try:
-        return float(match.group(0))
-    except (ValueError, TypeError):
-        return None
 
 
 def math_verify_reward(
@@ -309,28 +279,39 @@ def math_verify_reward(
     tolerance: float = 1e-4,
     **kwargs,
 ) -> list[float]:
-    """RLVR math reward: compare extracted numeric answer to expected.
+    """RLVR math reward: compare the completion's final answer with the gold's.
 
-    Security: never uses ``eval()``. Only numeric literals that match a strict
-    regex are accepted. Non-numeric answers score 0.0.
+    Both sides are read by :mod:`soup_cli.utils.final_answer`, so a GSM8K-shaped gold such as
+    '6*7=42\\n#### 42' is the number 42 (#1226). A numeric gold scores 1.0 within ``tolerance``
+    and 0.6 within max(100 x ``tolerance``, 1e-2). A gold that is not a number, such as
+    '\\frac{14}{3}' or 'p - q', is compared as normalised text: 1.0 on an exact match, else
+    0.0. Security: never uses ``eval()``; nothing is evaluated.
     """
     answers = kwargs.get("answer", [])
     rewards: list[float] = []
     for completion, expected in zip(completions, answers):
         content = completion[-1]["content"] if completion else ""
-        predicted = _extract_numeric_answer(content)
+        reference = None if expected is None else final_answer.parse_reference(str(expected))
+        parsed = final_answer.parse_completion(content)
+        if reference is None or parsed is None:
+            rewards.append(0.0)
+            continue
+        if reference.number is None:
+            matched = final_answer.answers_match(parsed, reference)
+            rewards.append(1.0 if matched else 0.0)
+            continue
+        if parsed.number is None or final_answer.variables_conflict(parsed, reference):
+            rewards.append(0.0)
+            continue
         try:
-            expected_num = float(str(expected).strip())
-        except (ValueError, TypeError):
-            expected_num = None
-
-        if predicted is None or expected_num is None:
+            error = float(abs(parsed.number - reference.number))
+        except ArithmeticError:  # an exponent beyond Decimal's range cannot be compared
             rewards.append(0.0)
             continue
 
-        if abs(predicted - expected_num) <= tolerance:
+        if error <= tolerance:
             rewards.append(1.0)
-        elif abs(predicted - expected_num) <= max(tolerance * 100, 1e-2):
+        elif error <= max(tolerance * 100, 1e-2):
             rewards.append(0.6)
         else:
             rewards.append(0.0)
@@ -675,9 +656,19 @@ VERIFIABLE_DOMAINS: dict[str, Callable] = {
 }
 
 
+#: A reward function that carries this attribute set to True may score a
+#: completion ``None``: no score, which TRL 0.29 turns into NaN and leaves out of
+#: the logged mean (#2047). Every other reward must return finite numbers.
+REWARD_MAY_RETURN_NONE = "_soup_reward_may_return_none"
+
+
 def _validated_reward_fn(reward_fn: Callable) -> Callable:
-    """Wrap one reward function with TRL's one-score-per-completion contract."""
+    """Wrap one reward function with TRL's one-score-per-completion contract.
+
+    ``None`` passes only for a reward that declares :data:`REWARD_MAY_RETURN_NONE`.
+    """
     reward_name = getattr(reward_fn, "__name__", "reward_fn")
+    allows_none = getattr(reward_fn, REWARD_MAY_RETURN_NONE, False) is True
 
     @wraps(reward_fn)
     def checked(*args: Any, **kwargs: Any) -> Any:
@@ -707,6 +698,8 @@ def _validated_reward_fn(reward_fn: Callable) -> Callable:
                 "score per completion and verify the required dataset columns"
             )
         for index, reward in enumerate(rewards):
+            if reward is None and allows_none:
+                continue
             if isinstance(reward, bool):
                 raise ValueError(
                     f"Reward function {reward_name!r} returned boolean score at "
@@ -765,6 +758,13 @@ def load_reward_fn(
         )
         return VERIFIABLE_DOMAINS[verifiable_domain]
 
+    if reward_fn_spec == "judge_rank":
+        raise ValueError(
+            "judge_rank needs a GRPO config: it is built from training.grpo_judge and "
+            "the other training.grpo_judge_* fields, so it runs only as a task: grpo "
+            "reward (#2047)"
+        )
+
     # Built-in reward function
     if reward_fn_spec in BUILTIN_REWARDS:
         console.print(f"[dim]Using built-in reward function: {reward_fn_spec}[/]")
@@ -800,7 +800,10 @@ def load_reward_fn(
 
 
 def load_reward_fns(
-    reward_fn_spec: str, verifiable_domain: "str | None" = None,
+    reward_fn_spec: str,
+    verifiable_domain: "str | None" = None,
+    *,
+    builders: "Mapping[str, Callable[[], Callable]] | None" = None,
 ) -> list[Callable]:
     """Load one OR MORE reward functions from a comma-separated spec (v0.71.40 #311).
 
@@ -815,6 +818,10 @@ def load_reward_fns(
     by ``__name__`` in the ``rm_ensemble`` capture buffer, silently shrinking the
     ensemble). A ``.py`` path containing a literal comma is not supported — rename
     the file.
+
+    ``builders`` maps a segment name to a function that builds that reward from
+    the caller's config (GRPO's ``judge_rank``, #2047); every other segment goes
+    through :func:`load_reward_fn`.
     """
     if not isinstance(reward_fn_spec, str):
         raise ValueError(
@@ -837,4 +844,9 @@ def load_reward_fns(
                 "duplicate rewards collide in the ensemble"
             )
         seen.add(seg)
-    return [load_reward_fn(seg, verifiable_domain=verifiable_domain) for seg in segments]
+    builders = builders or {}
+    return [
+        builders[seg]() if seg in builders
+        else load_reward_fn(seg, verifiable_domain=verifiable_domain)
+        for seg in segments
+    ]

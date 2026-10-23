@@ -88,10 +88,10 @@ class TestLRFinderSchedule:
             compute_lr_schedule(1e-7, 1e-1, 100_000)
 
     def test_schedule_min_steps_accepted(self):
-        from soup_cli.utils.lr_finder import compute_lr_schedule
+        from soup_cli.utils.lr_finder import MIN_NUM_STEPS, compute_lr_schedule
 
-        lrs = compute_lr_schedule(1e-7, 1e-1, 2)
-        assert len(lrs) == 2
+        lrs = compute_lr_schedule(1e-7, 1e-1, MIN_NUM_STEPS)
+        assert len(lrs) == MIN_NUM_STEPS
         assert lrs[0] == pytest.approx(1e-7, rel=1e-6)
         assert lrs[-1] == pytest.approx(1e-1, rel=1e-6)
 
@@ -783,6 +783,70 @@ class TestAutopilotConfigEmission:
         cfg = yaml.safe_load(out.read_text(encoding="utf-8"))
         assert cfg["training"].get("use_flash_attn") is not True
         assert cfg["training"].get("use_liger") is not True
+
+    def test_generated_config_scopes_auto_mixed_precision_to_sft_family(
+        self, tmp_path, monkeypatch,
+    ):
+        """#1618: generate_config scopes auto_mixed_precision like the kernel
+        flags. A dpo decisions dict with mixed_precision set must not raise,
+        and the emitted config must not carry auto_mixed_precision: true —
+        the task gate would refuse it at load."""
+        from soup_cli.autopilot.generate_config import generate_config
+
+        monkeypatch.chdir(tmp_path)
+        decisions = {
+            "task": "dpo",
+            "format": "dpo",
+            "max_length": 2048,
+            "quantization": "4bit",
+            "lora": {"r": 16, "alpha": 32, "use_dora": False},
+            "lr": 2e-4,
+            "epochs": 3,
+            "batch_size": 4,
+            "grad_accum": 2,
+            "perf": {
+                "use_flash_attn": False, "use_liger": False,
+                "gradient_checkpointing": False,
+            },
+            "mixed_precision": "bf16",
+        }
+        out = Path("soup.yaml")
+        generate_config(
+            base="meta-llama/Llama-3-8B",
+            data_path="data.jsonl",
+            decisions=decisions,
+            output_path=out,
+        )
+        cfg = yaml.safe_load(out.read_text(encoding="utf-8"))
+        assert cfg["training"].get("auto_mixed_precision") is not True
+
+    def test_generated_sft_config_keeps_auto_mixed_precision(self, tmp_path, monkeypatch):
+        """#1618 control: the scoping must not drop the field where the
+        trainer reads it — an SFT decisions dict with mixed_precision set
+        still emits auto_mixed_precision: true."""
+        from soup_cli.autopilot.generate_config import generate_config
+
+        monkeypatch.chdir(tmp_path)
+        decisions = {
+            "task": "sft", "format": "alpaca", "max_length": 2048,
+            "quantization": "4bit",
+            "lora": {"r": 16, "alpha": 32, "use_dora": False},
+            "lr": 2e-4, "epochs": 3, "batch_size": 4, "grad_accum": 2,
+            "perf": {
+                "use_flash_attn": False, "use_liger": False,
+                "gradient_checkpointing": False,
+            },
+            "mixed_precision": "bf16",
+        }
+        out = Path("soup.yaml")
+        generate_config(
+            base="meta-llama/Llama-3-8B",
+            data_path="data.jsonl",
+            decisions=decisions,
+            output_path=out,
+        )
+        cfg = yaml.safe_load(out.read_text(encoding="utf-8"))
+        assert cfg["training"]["auto_mixed_precision"] is True
 
     def test_decisions_output_must_stay_under_cwd(self, tmp_path, monkeypatch):
         from soup_cli.autopilot.generate_config import generate_config

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from soup_cli.eval.results import newest_eval_rows
+
 
 @dataclass(frozen=True)
 class ConfigChange:
@@ -57,8 +59,14 @@ def eval_delta(
     left: list[dict], right: list[dict],
 ) -> list[dict]:
     """Compute per-benchmark delta given two eval_results lists."""
-    left_map = {row.get("benchmark"): row.get("score") for row in left}
-    right_map = {row.get("benchmark"): row.get("score") for row in right}
+    left_map = {
+        row["benchmark"]: row.get("score")
+        for row in newest_eval_rows(left)
+    }
+    right_map = {
+        row["benchmark"]: row.get("score")
+        for row in newest_eval_rows(right)
+    }
 
     deltas: list[dict] = []
     for bench in sorted(set(left_map) | set(right_map)):

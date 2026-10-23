@@ -51,10 +51,13 @@ from __future__ import annotations
 import argparse
 import json
 import statistics
+import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
+
+from source_provenance import source_sha
 
 DEFAULT_SEQ = 512
 DEFAULT_BATCH = 1
@@ -97,29 +100,8 @@ def _soup_version() -> str:
 
 
 def _source_sha() -> str:
-    """The tree the row was produced from, or ``unknown``.
-
-    ``soup-cli`` reports a release version that does not move between commits,
-    so without this a row cannot name its own tree — and this harness measures a
-    path that three post-#361-base commits changed (#989 above all).
-    """
-    import shutil
-    import subprocess
-
-    tool = shutil.which("git")
-    if tool is None:
-        return "unknown"
-    try:
-        out = subprocess.run(
-            [tool, "rev-parse", "HEAD"],
-            cwd=Path(__file__).resolve().parents[2],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except Exception:
-        return "unknown"
-    return out.stdout.strip() or "unknown"
+    """Shared with the other harnesses; see ``source_provenance``."""
+    return source_sha()
 
 
 def _versions() -> dict:
@@ -170,6 +152,18 @@ def parse_args() -> argparse.Namespace:
         "--no-ceiling",
         action="store_true",
         help="skip the same-session GEMM ceiling (not the published protocol)",
+    )
+    parser.add_argument(
+        "--nf4-scale-cache",
+        action="store_true",
+        help="build with training.stream_nf4_scale_cache on (#1892); not the published protocol",
+    )
+    parser.add_argument(
+        "--train-threads",
+        type=int,
+        default=None,
+        help="torch.set_num_threads(N) for the warm-up and measured steps only; "
+        "a measurement knob, not a Soup setting",
     )
     parser.add_argument(
         "--json",
@@ -271,7 +265,6 @@ class GpuSampler:
 
     def _poll(self) -> None:
         import shutil
-        import subprocess
 
         tool = shutil.which("nvidia-smi")
         if tool is None:
@@ -435,6 +428,7 @@ def main() -> int:  # noqa: C901 — a protocol is a sequence, not a branch tree
         tier="ram",
         quant=args.quant,
         weights_dir=weights_dir,
+        nf4_scale_cache=args.nf4_scale_cache,
     )
     build_secs = time.time() - t0
     assert runtime.source.pinned, "require_pin=True but the source is not pinned"
@@ -456,6 +450,8 @@ def main() -> int:  # noqa: C901 — a protocol is a sequence, not a branch tree
     labels = input_ids.clone()
 
     model.train()
+    if args.train_threads is not None:
+        torch.set_num_threads(args.train_threads)
     torch.cuda.synchronize()
     torch.cuda.reset_peak_memory_stats()
 
@@ -563,6 +559,10 @@ def main() -> int:  # noqa: C901 — a protocol is a sequence, not a branch tree
                 "targets": args.targets,
                 "pin_required": True,
                 "store_gb_pinned": round(store_gb, 3),
+                "nf4_scale_cache": args.nf4_scale_cache,
+                "nf4_scale_cache_bytes": runtime.stats()["nf4_scale_cache_bytes"],
+                "train_threads": args.train_threads,
+                "step_times_s": [round(t, 4) for t in step_times],
                 "param_split": {
                     "decoder": split["decoder"],
                     "embed": split["embed"],

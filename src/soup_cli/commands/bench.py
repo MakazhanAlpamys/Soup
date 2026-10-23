@@ -78,10 +78,13 @@ def bench(
             "v0.53.9 #28."
         ),
     ),
+    cuda_graphs: bool = typer.Option(
+        False,
+        "--cuda-graphs",
+        help="Experimental CUDA graph decode for resident, unquantized Qwen2/Llama models.",
+    ),
 ) -> None:
     """Run an inference benchmark (speed and memory) on a loaded model."""
-    import torch
-
     from soup_cli.commands.infer import _generate, _load_model, _resolve_model_source
     from soup_cli.utils.gpu import detect_device
 
@@ -101,8 +104,6 @@ def bench(
         )
     model_target = model_ref
 
-    device, _ = detect_device()
-
     # v0.53.9 #28 — backend auto-detect.
     from soup_cli.utils.backend_detect import SUPPORTED_BACKENDS, detect_backend
 
@@ -120,6 +121,29 @@ def bench(
             )
             raise typer.Exit(2)
         backend_resolved = backend_lower
+
+    if cuda_graphs is True and backend_resolved != "transformers":
+        raise typer.BadParameter(
+            "--cuda-graphs requires --backend transformers. Omit --cuda-graphs to bench this "
+            "backend"
+        )
+
+    if cuda_graphs is True:
+        from soup_cli.commands.infer import _with_omit_hint
+        from soup_cli.utils.cuda_graphs import check_cuda_graphs_preflight
+        from soup_cli.utils.terminal import for_terminal
+
+        try:
+            check_cuda_graphs_preflight(
+                device=None,
+                model_target=model_ref if model_kind == "local" else None,
+                base=base,
+            )
+        except RuntimeError as exc:
+            console.print(f"[red]{for_terminal(_with_omit_hint(str(exc)))}[/]")
+            raise typer.Exit(1) from exc
+
+    device, _ = detect_device()
 
     if device == "cpu":
         console.print(
@@ -209,6 +233,8 @@ def bench(
 
     # Reset peak stats before load -- "Max VRAM" reflects total footprint
     # (model load + inference), i.e. what users need for deployment planning.
+    import torch
+
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
 
@@ -226,6 +252,18 @@ def bench(
         console.print(f"[red]Failed to load model:[/] {exc}")
         raise typer.Exit(1) from exc
 
+    if cuda_graphs is True:
+        from soup_cli.utils.cuda_graphs import cuda_graph_generation_kwargs
+
+        try:
+            cuda_graph_generation_kwargs(model_obj)
+        except RuntimeError as exc:
+            from soup_cli.commands.infer import _with_omit_hint
+            from soup_cli.utils.terminal import for_terminal
+
+            console.print(f"[red]{for_terminal(_with_omit_hint(str(exc)))}[/]")
+            raise typer.Exit(1) from exc
+
     load_time = time.time() - start_load
     console.print(f"[green]Model loaded in {load_time:.2f}s.[/]\n")
 
@@ -234,11 +272,18 @@ def bench(
     # Warmup run: first inference includes CUDA kernel JIT compilation,
     # which would skew the average. Discarded from timing.
     console.print("[dim]Warmup run (discarded from timing)...[/]")
-    warmup_messages = [{"role": "user", "content": test_prompts[0]}]
-    _generate(
-        model_obj, tokenizer, warmup_messages,
-        max_tokens=min(max_tokens, 32), temperature=0.0,
-    )
+    if cuda_graphs is True:
+        from soup_cli.commands.infer import _warm_cuda_graphs
+
+        # Capture on the longest prompt at the timed length, so no timed request
+        # changes the static cache's shape and recompiles inside the measurement.
+        _warm_cuda_graphs(model_obj, tokenizer, list(dict.fromkeys(test_prompts)), max_tokens)
+    else:
+        warmup_messages = [{"role": "user", "content": test_prompts[0]}]
+        _generate(
+            model_obj, tokenizer, warmup_messages,
+            max_tokens=min(max_tokens, 32), temperature=0.0,
+        )
 
     total_tokens = 0
     total_latency = 0.0
@@ -250,10 +295,18 @@ def bench(
         messages = [{"role": "user", "content": prompt_text}]
         start_time = time.time()
 
-        _, token_count = _generate(
-            model_obj, tokenizer, messages,
-            max_tokens=max_tokens, temperature=0.0,
-        )
+        try:
+            _, token_count = _generate(
+                model_obj, tokenizer, messages,
+                max_tokens=max_tokens, temperature=0.0,
+                **({"cuda_graphs": True} if cuda_graphs is True else {}),
+            )
+        except Exception as exc:
+            if cuda_graphs is not True:
+                raise
+            from soup_cli.commands.infer import _cuda_graph_failure
+
+            raise _cuda_graph_failure(exc) from exc
 
         latency = time.time() - start_time
         total_tokens += token_count
@@ -322,6 +375,25 @@ def train(
     # The contract and why each check exists: #836.
     from rich.markup import escape
 
+    from soup_cli.utils.paths import atomic_write_text, check_report_output_path
+    from soup_cli.utils.terminal import for_terminal
+
+    # The destination is validated first, before the config is read and before any
+    # model is built: a path that will be refused must fail in milliseconds, not after
+    # the whole run has finished and its measurements are about to be lost.
+    try:
+        check_report_output_path(output, "--output")
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]Invalid output:[/] {for_terminal(exc)}")
+        raise typer.Exit(2) from exc
+
+    from soup_cli.bench.train_run import check_steps_warmup
+
+    err = check_steps_warmup(steps, warmup)
+    if err is not None:
+        console.print(f"[red]{err}[/]")
+        raise typer.Exit(1)
+
     from soup_cli.bench.train_run import bench_scope_error, run_bench_train
     from soup_cli.config.loader import load_config
     from soup_cli.data.loader import load_dataset
@@ -350,7 +422,17 @@ def train(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(1) from exc
 
-    Path(output).write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+    try:
+        atomic_write_text(
+            json.dumps(report, indent=2, default=str),
+            output,
+            prefix=".bench.",
+            suffix=".json.tmp",
+            field="--output",
+        )
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]Cannot write the report:[/] {for_terminal(exc)}")
+        raise typer.Exit(1) from exc
     timing, tokens = report["timing"], report["tokens"]
     tok_s = report["throughput"]["useful_tokens_per_second"]
     console.print(

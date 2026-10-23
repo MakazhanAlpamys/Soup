@@ -30,6 +30,7 @@ import typer
 
 from soup_cli.config.backend_support import REGISTRY as _REGISTRY
 from soup_cli.config.schema import DataConfig, TrainingConfig
+from tests._source_scan import memoized_scan
 from tests.conftest import strip_ansi
 
 MLX_SFT = pathlib.Path(__file__).resolve().parents[1] / (
@@ -38,7 +39,7 @@ MLX_SFT = pathlib.Path(__file__).resolve().parents[1] / (
 
 #: Every entry the registry declares as read-only-to-warn. Tests parametrise
 #: over this so a new entry is covered without editing an assertion.
-_WARNED_ENTRIES = [e for e in _REGISTRY[("sft", "mlx")] if e.trainer_reads]
+_WARNED_ENTRIES = [e for e in _REGISTRY[("sft", "mlx", "text")] if e.trainer_reads]
 
 
 def _yaml_block(text: str) -> str:
@@ -178,7 +179,15 @@ def test_registry_covers_every_field_the_mlx_trainer_warns_about():
     unknown = sorted(warned - known)
     assert unknown == [], f"warning list names fields that do not exist: {unknown}"
     registered = {e.field for e in unsupported_for("sft", "mlx")}
-    missing = sorted(warned - registered)
+    # These warnings are internal guards for schema-refused values. Their
+    # load-time refusal is pinned by test_issue1069 (monitoring flags) and
+    # test_mlx_use_mod_is_refused_at_load_and_has_no_doctor_row below (use_mod,
+    # #1752); doctor cannot list them.
+    schema_refused = {
+        "training.loss_watchdog", "training.loss_spike_recovery",
+        "training.grad_accum_auto_tune", "training.use_mod",
+    }
+    missing = sorted(warned - registered - schema_refused)
     assert missing == [], (
         f"mlx_sft.py warns about {missing} but the registry does not list them"
     )
@@ -252,27 +261,48 @@ def test_new_mlx_gaps_use_liger_and_neftune_alpha_are_reported(config_at):
     assert {"training.use_liger", "training.neftune_alpha"} <= reported
 
 
-def test_961_four_reachable_fields_reported_together(config_at):
-    """#961 box 4: several new fields at once -> rows+count."""
+def test_961_reachable_fields_reported_together(config_at):
+    """#961 box 4: several new fields at once -> rows+count.
+
+    #961 declared four reachable fields. ``training.quantization_aware`` is no
+    longer one of them on MLX: ``true`` is refused at load on every backend
+    (#1222), and ``fp8`` and ``quest`` are refused on mlx. ``training.use_mod``
+    is refused at load too (#1752). The two that still load are reported
+    together, and adding either refused field stops the load instead.
+    """
     from soup_cli.config.backend_support import check_config
     from soup_cli.config.loader import load_config
 
-    cfg = load_config(
-        config_at(
-            "sft",
-            "mlx",
-            "  use_mod: true\n  moe_lora: true\n"
-            "  quantization_aware: true\n  use_fsdp2_compile: true",
-        )
-    )
+    fields = "  moe_lora: true\n  use_fsdp2_compile: true"
+    cfg = load_config(config_at("sft", "mlx", fields))
     rows = check_config(cfg)
     assert {e.field for e in rows} == {
-        "training.use_mod",
         "training.moe_lora",
-        "training.quantization_aware",
         "training.use_fsdp2_compile",
     }
-    assert len(rows) == 4
+    assert len(rows) == 2
+
+    with pytest.raises(SystemExit):
+        load_config(config_at("sft", "mlx", fields + "\n  quantization_aware: true"))
+
+
+def test_mlx_use_mod_is_refused_at_load_and_has_no_doctor_row(config_at):
+    """#1752 — ``use_mod: true`` on MLX SFT stops at config load, so doctor can
+    never see it and the registry lists no row for it (a ``REJECTED`` row would
+    be unreachable, #1330). ``mlx_sft.py`` keeps its own warning for the field."""
+    from soup_cli.config.backend_support import unsupported_for
+    from soup_cli.config.loader import load_config, load_config_from_string
+
+    assert "training.use_mod" not in {e.field for e in unsupported_for("sft", "mlx")}
+
+    path = config_at("sft", "mlx", "  use_mod: true")
+    with pytest.raises(ValueError) as info:
+        load_config_from_string(pathlib.Path(path).read_text(encoding="utf-8"))
+    message = " ".join(str(info.value).split())
+    assert "training.use_mod is not applied by task='sft' with backend='mlx'" in message, message
+    assert message.endswith("Use backend: transformers, or set use_mod: false.")
+    with pytest.raises(SystemExit):
+        load_config(path)
 
 
 def test_only_fields_the_user_actually_set_are_reported(config_at):
@@ -458,7 +488,20 @@ def test_doctor_without_config_does_not_read_one(config_at, capsys):
 
 def _fields_read_by(path: pathlib.Path) -> set[str]:
     """Attribute names and exact string constants in a module, docstrings out."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return _names_read_in(path.read_text(encoding="utf-8"))
+
+
+@memoized_scan
+def _names_read_in(source: str) -> set[str]:
+    """The scan behind ``_fields_read_by``, run once per distinct module text.
+
+    ``_registry_drift`` asks for every module under ``src/`` once per registry pair,
+    and three tests run it on the real tree: twelve parses of the package for one
+    answer. Keyed on the text, so the synthetic trees the tests below write are each
+    scanned for what they contain. ``ast.parse`` and not the shared tree, because the
+    first loop edits what it walks.
+    """
+    tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(
             node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
@@ -485,7 +528,9 @@ def _fields_read_outside(repo_root: pathlib.Path, modules) -> set[str]:
     declared = {(repo_root / "src" / m).resolve() for m in modules}
     names: set[str] = set()
     for path in src.rglob("*.py"):
-        if path.resolve() in declared or path.name == "schema.py":
+        # schema.py declares every field, and config/staged_fields.py lists the
+        # ones nothing reads (#808): naming a field there is not reading it.
+        if path.resolve() in declared or path.name in ("schema.py", "staged_fields.py"):
             continue
         names |= _fields_read_by(path)
     return names
@@ -599,12 +644,12 @@ def test_an_unfounded_gap_claim_is_caught():
     fabricated = bs.SupportEntry(
         "training.lr_groups", bs.IGNORED, "fabricated, unfounded claim"
     )
-    real = bs.REGISTRY[("sft", "mlx")]
+    real = bs.REGISTRY[("sft", "mlx", "text")]
     try:
-        bs.REGISTRY[("sft", "mlx")] = (fabricated,) + real
+        bs.REGISTRY[("sft", "mlx", "text")] = (fabricated,) + real
         problems = _registry_drift(repo_root)
     finally:
-        bs.REGISTRY[("sft", "mlx")] = real
+        bs.REGISTRY[("sft", "mlx", "text")] = real
 
     assert any(
         "lr_groups" in p and "globally unconsumed" in p for p in problems
@@ -626,7 +671,7 @@ def test_a_declared_module_that_does_not_exist_is_caught(tmp_path, monkeypatch):
     import soup_cli.config.backend_support as bs
 
     monkeypatch.setitem(
-        bs.TRAINER_MODULES, ("sft", "mlx"), ("soup_cli/trainer/gone.py",)
+        bs.TRAINER_MODULES, ("sft", "mlx", "text"), ("soup_cli/trainer/gone.py",)
     )
     problems = _registry_drift(tmp_path)
     assert any("does not exist" in p for p in problems), problems
@@ -653,12 +698,12 @@ def test_a_field_wired_only_inside_a_helper_is_caught(tmp_path, monkeypatch):
     )
     monkeypatch.setitem(
         bs.REGISTRY,
-        ("sft", "mlx"),
+        ("sft", "mlx", "text"),
         (bs.SupportEntry("training.warmup_ratio", bs.IGNORED, "stale on purpose"),),
     )
     monkeypatch.setitem(
         bs.TRAINER_MODULES,
-        ("sft", "mlx"),
+        ("sft", "mlx", "text"),
         ("soup_cli/trainer/mlx_sft.py", "soup_cli/trainer/mlx_optim.py"),
     )
 
@@ -692,7 +737,7 @@ def test_wiring_a_field_makes_its_stale_entry_fail(tmp_path, monkeypatch):
     )
     monkeypatch.setitem(
         bs.REGISTRY,
-        ("sft", "mlx"),
+        ("sft", "mlx", "text"),
         (
             bs.SupportEntry(
                 "training.max_grad_norm",
@@ -702,7 +747,7 @@ def test_wiring_a_field_makes_its_stale_entry_fail(tmp_path, monkeypatch):
         ),
     )
     monkeypatch.setitem(
-        bs.TRAINER_MODULES, ("sft", "mlx"), ("soup_cli/trainer/mlx_sft.py",)
+        bs.TRAINER_MODULES, ("sft", "mlx", "text"), ("soup_cli/trainer/mlx_sft.py",)
     )
 
     problems = _registry_drift(tmp_path)
@@ -728,9 +773,9 @@ def test_deleting_a_warning_makes_its_entry_fail(entry, tmp_path, monkeypatch):
     (trainer / "mlx_sft.py").write_text(
         "def build(tcfg):\n    return None\n", encoding="utf-8"
     )
-    monkeypatch.setitem(bs.REGISTRY, ("sft", "mlx"), (entry,))
+    monkeypatch.setitem(bs.REGISTRY, ("sft", "mlx", "text"), (entry,))
     monkeypatch.setitem(
-        bs.TRAINER_MODULES, ("sft", "mlx"), ("soup_cli/trainer/mlx_sft.py",)
+        bs.TRAINER_MODULES, ("sft", "mlx", "text"), ("soup_cli/trainer/mlx_sft.py",)
     )
 
     problems = _registry_drift(tmp_path)

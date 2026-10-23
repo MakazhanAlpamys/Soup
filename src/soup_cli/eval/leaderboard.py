@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 from dataclasses import dataclass, field
 from typing import Optional
+
+from soup_cli.eval.results import newest_eval_rows
+from soup_cli.utils.csv_safe import spreadsheet_safe
 
 
 @dataclass
@@ -64,7 +69,9 @@ def build_leaderboard_from_tracker(
     eval_results = tracker.get_eval_results(run_id=run_id)
 
     entries = []
-    for row in eval_results:
+    for row in newest_eval_rows(
+        eval_results, key_fields=("model_path", "benchmark")
+    ):
         entries.append(LeaderboardEntry(
             model_path=row.get("model_path", ""),
             benchmark=row.get("benchmark", ""),
@@ -91,11 +98,11 @@ def compare_runs(
     results_2 = tracker.get_eval_results(run_id=run_id_2)
 
     scores_1: dict[str, float] = {}
-    for row in results_1:
+    for row in newest_eval_rows(results_1):
         scores_1[row["benchmark"]] = row["score"]
 
     scores_2: dict[str, float] = {}
-    for row in results_2:
+    for row in newest_eval_rows(results_2):
         scores_2[row["benchmark"]] = row["score"]
 
     all_benchmarks = sorted(set(scores_1.keys()) | set(scores_2.keys()))
@@ -127,6 +134,13 @@ def compare_runs(
     }
 
 
+def _csv_line(values: list[str]) -> str:
+    output = io.StringIO(newline="")
+    # Legacy csv writers quote CR only when it is in the record terminator.
+    csv.writer(output, lineterminator="\r\n").writerow(values)
+    return output.getvalue()[:-2]
+
+
 def export_leaderboard(
     leaderboard: Leaderboard,
     fmt: str = "json",
@@ -139,12 +153,15 @@ def export_leaderboard(
         all_benchmarks = set()
         for _, scores, _ in sorted_models:
             all_benchmarks.update(scores.keys())
-        benchmarks = sorted(all_benchmarks)
+        # Preserve the existing empty benchmark column for an empty export.
+        benchmarks = sorted(all_benchmarks) or [""]
 
-        lines = ["model," + ",".join(benchmarks) + ",average"]
+        # Names are free text; scores and the average are numbers and stay as they are.
+        header = ["model", *(spreadsheet_safe(name) for name in benchmarks), "average"]
+        lines = [_csv_line(header)]
         for model, scores, avg in sorted_models:
             vals = [str(scores.get(bench, "")) for bench in benchmarks]
-            lines.append(f"{model},{','.join(vals)},{avg:.4f}")
+            lines.append(_csv_line([spreadsheet_safe(model), *vals, f"{avg:.4f}"]))
         return "\n".join(lines)
 
     # Default: JSON

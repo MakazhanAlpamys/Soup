@@ -11,9 +11,42 @@ Why mSPRT and not a t-test:
   errors *for any stopping time*. You can monitor live and stop as soon as
   the log-likelihood ratio crosses either decision boundary.
 
-We use the canonical Gaussian-mixture-prior formulation. The likelihood
-ratio is computed at each step and compared against `log(beta/(1-alpha))`
-(accept H0) and `log((1-beta)/alpha)` (reject H0).
+The test is two-sided (#1227). Since #1265 the statistic is a Bayes factor
+that mixes over the variance as well as the mean: the normal-inverse-gamma
+mixture in its right-Haar limit (a flat prior on the common mean, 1/sigma on
+the standard deviation) with a N(0, g) prior on the standardised difference
+delta / sigma. It depends on the rows only through the two-sample t statistic,
+so it is scale-invariant, and under H0 it is a test martingale whatever sigma
+is. Ville's inequality then bounds the chance that it EVER reaches 1/alpha by
+alpha, from the first rows on and at any horizon, with no burn-in.
+
+`effect_size` is in the metric's units, but the prior needs it in standard
+deviations. So the first `PRIOR_SCALE_ROWS` rows of each arm are held out:
+their pooled standard deviation s0 sets g = (effect_size / s0) ** 2, and the
+Bayes factor runs on the rows after them. The prior is fixed before those rows
+are seen, which is what keeps the guarantee exact. It rejects H0 at
+`log(1/alpha)`. A `reject_h0` reports its direction, `better` or `worse`, from
+the metric's polarity in `HIGHER_IS_BETTER`. Record:
+benchmarks/gate-1265-ab-nig.md.
+
+Since #1418 it accepts H0 from the same mixture read the other way: the
+differences it does not reject at level alpha form an always-valid confidence
+sequence for the difference, and `accept_h0` comes once that sequence lies
+inside (-effect_size, +effect_size). By the same Ville argument, a difference of
+effect_size or more ends in `accept_h0` in at most an alpha share of runs,
+however often the operator looks, so alpha bounds both wrong verdicts and beta
+is retired. Record: benchmarks/gate-1418-ab-cs-accept.md.
+
+#1419 added a hold on `accept_h0` (see ACCEPT_HOLD_SPREAD_RATIO) which fixes the
+wrong accepts after a saturated start but, because the held-out rows are fixed,
+can leave a run at `continue` for the whole dataset with the confidence sequence
+for the difference already inside (-effect_size, +effect_size). That state is
+reported, not fixed, here (#1524): the verdict carries `accept_held` and the two
+spreads, so the panel can advise dropping or reordering the saturated rows rather
+than collecting more samples that provably cannot help. The accept rule itself is
+unchanged. #1418's confidence sequence covers at its level for any prior scale
+fixed before the tested rows, so it does not need the hold for its guarantee;
+whether the hold stays is #1524's question, and until then it is unchanged.
 
 Two known limitations:
 1. Single metric per pass — multi-metric correction (Bonferroni / Holm)
@@ -28,19 +61,70 @@ from __future__ import annotations
 import json
 import math
 import os
+import sys
 from dataclasses import dataclass
-from typing import Sequence
+from types import MappingProxyType
+from typing import Mapping, Sequence
 
+from soup_cli.config.deprecation import warn_deprecated_value
 from soup_cli.utils.paths import is_under_cwd
 
 SUPPORTED_METRICS: frozenset[str] = frozenset(
     {"latency", "judge_score", "retry_rate"}
 )
+# Which way is an improvement, per metric (#1227). Every supported metric must
+# appear here (a test pins it), so a new metric cannot inherit a direction.
+HIGHER_IS_BETTER: Mapping[str, bool] = MappingProxyType(
+    {"judge_score": True, "latency": False, "retry_rate": False}
+)
+# Rows per arm held out to put `effect_size` in standard deviations (#1265).
+# Their pooled standard deviation sets the prior scale, and the Bayes factor
+# runs on the rows after them. While both arms are still constant, more rows are
+# held out until one varies. This is not a Type-I burn-in: the guarantee holds
+# for any value. It trades power at small effect_size / sigma (fewer rows left)
+# against power at large ones (a less noisy prior scale). Chosen by the sweep in
+# benchmarks/gate-1265-ab-nig.md; changing it means re-running that sweep.
+PRIOR_SCALE_ROWS = 5
+# accept_h0 is held at continue while the tested rows' pooled standard deviation
+# is more than this many times the held-out rows' (#1265 review). It was added
+# because, with a saturated start, the prior scale was far too small and #1265's
+# Bayes-factor accept boundary was crossed whether or not there was a real
+# difference. #1418's confidence sequence covers at its level for any prior
+# scale fixed before the tested rows, so it does not need the hold for its
+# guarantee; whether the hold stays is #1524's question, and until then it is
+# unchanged. On Gaussian rows the two spreads agree and it changes no verdict.
+# Only accepts are held back, so Type-I is untouched.
+ACCEPT_HOLD_SPREAD_RATIO = 3.0
+
+def retired_beta_message(beta: str = "beta", alpha: str = "alpha") -> str:
+    """What a passed ``beta`` is told (#1418), before the deadline clause.
+
+    The CLI passes its flag names, ``--beta`` and ``--alpha``.
+    """
+    return (
+        f"{beta} no longer does anything (#1418): soup ab now accepts H0 once the "
+        f"confidence sequence for the difference at level {alpha} lies inside "
+        f"+-effect_size, so {alpha} bounds both a wrong reject_h0 and a wrong "
+        f"accept_h0. Remove {beta}; to make accept_h0 stricter, lower {alpha}."
+    )
+
+
+# #1339 - the largest standardised effect whose square is still a float.
+MAX_STANDARDISED_EFFECT = math.sqrt(sys.float_info.max)
 _MAX_METRIC_NAME_LEN = 32
 _MAX_SAMPLES_PER_ARM = 1_000_000
+# The prior variance enters the statistic as 1 + n_eff * effect**2, and n_eff
+# grows with every row. So effect_size / s0 is checked against the largest n_eff
+# the tool accepts (half of _MAX_SAMPLES_PER_ARM), not the row count so far:
+# otherwise the same held-out rows would give a silent -inf accept_h0 at a few
+# rows and be refused only later, and an operator who stops at the first
+# verdict would never see the refusal. About 1.9e151. Any statistic that is
+# still non-finite is refused in msprt_step before the boundaries are compared.
+_MAX_PRIOR_EFFECT = math.sqrt(sys.float_info.max / (_MAX_SAMPLES_PER_ARM / 2))
 _VALID_DECISIONS: frozenset[str] = frozenset(
     {"continue", "reject_h0", "accept_h0"}
 )
+_VALID_DIRECTIONS: frozenset[str] = frozenset({"better", "worse"})
 
 
 def validate_metric_name(name: object) -> str:
@@ -97,8 +181,8 @@ class MsprtConfig:
     """Parameters for an mSPRT pass."""
 
     metric: str
-    alpha: float = 0.05  # Type-I error rate
-    beta: float = 0.20  # Type-II error rate
+    alpha: float = 0.05  # bounds both wrong reject_h0 and wrong accept_h0 (#1418)
+    beta: float | None = None  # retired in #1418: ignored, with a warning
     effect_size: float = 0.1  # Minimum detectable difference in means
 
     def __post_init__(self) -> None:
@@ -106,7 +190,13 @@ class MsprtConfig:
         # cannot smuggle through a non-canonical metric.
         object.__setattr__(self, "metric", validate_metric_name(self.metric))
         object.__setattr__(self, "alpha", _require_unit_open(self.alpha, field="alpha"))
-        object.__setattr__(self, "beta", _require_unit_open(self.beta, field="beta"))
+        # #1418 retired beta: accept_h0 now comes from a confidence sequence at
+        # level alpha, so alpha bounds both wrong verdicts and there is no
+        # Type-II rate left to set. A beta that is passed is not used, and it
+        # says so rather than being dropped silently. #1339's alpha + beta < 1
+        # check guarded the old accept boundary and went with it.
+        if self.beta is not None:
+            warn_deprecated_value(retired_beta_message())
         object.__setattr__(
             self,
             "effect_size",
@@ -116,7 +206,20 @@ class MsprtConfig:
 
 @dataclass(frozen=True)
 class MsprtVerdict:
-    """Outcome of an mSPRT step."""
+    """Outcome of an mSPRT step.
+
+    ``direction`` is ``"better"`` or ``"worse"`` (the treatment relative to
+    control, by the metric's polarity) on a ``reject_h0``, and ``None`` on
+    ``accept_h0`` / ``continue``.
+
+    ``accept_held`` is ``True`` only when ``ACCEPT_HOLD_SPREAD_RATIO`` is what
+    keeps the verdict at ``continue`` (#1524), and then ``held_out_spread`` and
+    ``tested_spread`` carry the two pooled standard deviations the 3x rule
+    compared. Both are ``None`` on every other verdict: there is no hold, so
+    there is nothing to report, and a consumer must not print the note for a
+    run it does not describe. All three are additive, so a verdict from before
+    this change still reads as "not held".
+    """
 
     decision: str
     log_likelihood_ratio: float
@@ -124,12 +227,76 @@ class MsprtVerdict:
     n_treatment: int
     mean_control: float
     mean_treatment: float
+    direction: str | None = None
+    accept_held: bool = False
+    held_out_spread: float | None = None
+    tested_spread: float | None = None
+    held_out_rows: int = 0
 
     def __post_init__(self) -> None:
         if self.decision not in _VALID_DECISIONS:
             raise ValueError(
                 f"decision must be one of {sorted(_VALID_DECISIONS)}, "
                 f"got {self.decision!r}"
+            )
+        if self.direction is not None and self.direction not in _VALID_DIRECTIONS:
+            raise ValueError(
+                f"direction must be one of {sorted(_VALID_DIRECTIONS)} or None, "
+                f"got {self.direction!r}"
+            )
+        if self.decision == "reject_h0" and self.direction is None:
+            raise ValueError("a reject_h0 verdict must carry a direction (better / worse)")
+        if self.decision != "reject_h0" and self.direction is not None:
+            raise ValueError(
+                f"only a reject_h0 verdict has a direction; got {self.direction!r} "
+                f"with decision {self.decision!r}"
+            )
+        if isinstance(self.accept_held, bool) is False:
+            raise TypeError(f"accept_held must be a bool, got {self.accept_held!r}")
+        # #1524 - the hold only ever fires on the accept branch, so a terminal
+        # decision claiming to be held is a caller bug, not a verdict.
+        if self.accept_held and self.decision != "continue":
+            raise ValueError(
+                f"only a continue verdict can be held by the spread rule; got "
+                f"accept_held=True with decision {self.decision!r}"
+            )
+        for name in ("held_out_spread", "tested_spread"):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise TypeError(f"{name} must be a number or None, got {value!r}")
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(
+                    f"{name} must be a finite spread >= 0, got {value!r}"
+                )
+        if self.accept_held and (self.held_out_spread is None or self.tested_spread is None):
+            missing = [
+                name
+                for name in ("held_out_spread", "tested_spread")
+                if getattr(self, name) is None
+            ]
+            raise ValueError(
+                f"a held verdict must carry both spreads; missing {', '.join(missing)}"
+            )
+        # No hold, no explanation: the spreads only exist to explain one.
+        if not self.accept_held and (
+            self.held_out_spread is not None or self.tested_spread is not None
+        ):
+            raise ValueError(
+                "held_out_spread / tested_spread are only meaningful with "
+                f"accept_held=True; got them with accept_held={self.accept_held!r}"
+            )
+        if isinstance(self.held_out_rows, bool) or not isinstance(self.held_out_rows, int):
+            raise TypeError(f"held_out_rows must be an int, got {self.held_out_rows!r}")
+        if self.held_out_rows < 0:
+            raise ValueError(
+                f"held_out_rows must be >= 0, got {self.held_out_rows}"
+            )
+        if self.accept_held and self.held_out_rows < 1:
+            raise ValueError(
+                "a held verdict must say how many rows were held out; got "
+                f"held_out_rows={self.held_out_rows}"
             )
 
 
@@ -157,100 +324,355 @@ def _validate_sample_list(samples: object, *, arm: str) -> list[float]:
     return out
 
 
+def _direction(metric: str, diff: float) -> str:
+    """``better`` / ``worse`` for a treatment-minus-control difference, by polarity."""
+    treatment_higher = diff > 0.0
+    return "better" if treatment_higher == HIGHER_IS_BETTER[metric] else "worse"
+
+
+def _nig_log_bayes_factor(
+    *,
+    n_control: int,
+    n_treatment: int,
+    mean_difference: float,
+    pooled_variance: float,
+    prior_variance: float,
+) -> float:
+    """Log Bayes factor of the normal-inverse-gamma mixture (right-Haar limit).
+
+    H1: the treatment-minus-control difference is delta = d * sigma with
+    d ~ N(0, ``prior_variance``); H0: delta = 0. Both share a flat prior on the
+    common mean and 1/sigma on sigma, which integrate out in closed form
+    (Gönen, Johnson, Lu and Westfall, 2005). With the pooled two-sample t
+    statistic, nu = n_c + n_t - 2 and n_eff = n_c * n_t / (n_c + n_t):
+
+        log BF = -0.5 * log(1 + n_eff * g)
+                 - (nu + 1) / 2 * [log1p(t**2 / (nu * (1 + n_eff * g)))
+                                   - log1p(t**2 / nu)]
+
+    It depends on the rows only through t, so under H0 its distribution does
+    not depend on sigma, and as a ratio of two marginal likelihoods it is a
+    martingale under H0 in the order the rows arrive. Ville's inequality then
+    gives P(sup_n BF_n >= 1/alpha) <= alpha. Needs ``n >= 2`` per arm and
+    ``pooled_variance > 0``; split out so the sweep in
+    benchmarks/harness/ab_nig_sweep.py can check its vectorised copy
+    against exactly this code.
+    """
+    nu = n_control + n_treatment - 2
+    n_eff = (n_control * n_treatment) / (n_control + n_treatment)
+    # Squared with * so an overflow is inf, which msprt_step refuses, not a bare
+    # OverflowError (** raises).
+    t_squared = mean_difference * mean_difference * n_eff / pooled_variance
+    spread = 1.0 + n_eff * prior_variance
+    return -0.5 * math.log(spread) - 0.5 * (nu + 1) * (
+        math.log1p(t_squared / (nu * spread)) - math.log1p(t_squared / nu)
+    )
+
+
+def _nig_confidence_half_width(
+    *,
+    n_control: int,
+    n_treatment: int,
+    pooled_variance: float,
+    prior_variance: float,
+    level: float,
+) -> float:
+    """Half-width of the always-valid confidence sequence for the difference (#1418).
+
+    Shifting the treatment by a candidate difference delta0 leaves the pooled
+    variance as it is and moves t to (mean_difference - delta0) / se, with
+    se = sqrt(pooled_variance / n_eff). So the Bayes factor for "delta0 is the
+    difference" is ``_nig_log_bayes_factor`` at that t, and it is a martingale
+    when delta0 is the true difference. The differences it has not rejected at
+    ``1 / level`` are mean_difference +- this half-width, and Ville's inequality
+    keeps the true one inside at every look with probability at least
+    1 - ``level``.
+
+    The Bayes factor grows with t**2, and the edge has a closed form. With
+    spread = 1 + n_eff * g and c = exp(-(2 log(1 / level) + log(spread)) / (nu + 1)),
+    log BF = log(1 / level) where t**2 = nu (1 - c) / (c - 1 / spread). When
+    c <= 1 / spread no t reaches it (too few rows for this prior): every
+    difference is still in the sequence, and the half-width is inf.
+    """
+    nu = n_control + n_treatment - 2
+    n_eff = (n_control * n_treatment) / (n_control + n_treatment)
+    spread = 1.0 + n_eff * prior_variance
+    c = math.exp(-(2.0 * math.log(1.0 / level) + math.log(spread)) / (nu + 1))
+    if c <= 1.0 / spread:
+        return math.inf
+    t_squared = nu * (1.0 - c) / (c - 1.0 / spread)
+    return math.sqrt(t_squared * pooled_variance / n_eff)
+
+
+def _held_out_rows(control: Sequence[float], treatment: Sequence[float]) -> int | None:
+    """Rows per arm that set the prior scale, or ``None`` if there are not enough yet.
+
+    ``PRIOR_SCALE_ROWS``, or more while the held-out rows of both arms are still
+    constant (their pooled standard deviation would be 0). The count depends
+    only on the held-out rows themselves, so the rows after them are still
+    untouched by the prior, and the guarantee is unchanged.
+    """
+    def first_change(values: Sequence[float]) -> int:
+        return next((i for i, x in enumerate(values) if x != values[0]), len(values))
+
+    shortest = min(len(control), len(treatment))
+    held = max(PRIOR_SCALE_ROWS, min(first_change(control), first_change(treatment)) + 1)
+    return held if held <= shortest else None
+
+
+def _require_finite_means(
+    metric: str,
+    control: Sequence[float],
+    treatment: Sequence[float],
+    mean_c: float,
+    mean_t: float,
+) -> None:
+    """#1384 - refuse an arm whose values sum past the largest float.
+
+    Its mean is infinite however little the values spread, so the message names
+    their size, not their spread.
+    """
+    if math.isfinite(mean_c) and math.isfinite(mean_t):
+        return
+    values = [*control, *treatment]
+    raise ValueError(
+        f"The {metric!r} column's values are too large for the test "
+        f"statistic: they run from {min(values):.3g} to {max(values):.3g}, "
+        "and an arm's sum overflows a float. Rescale the metric (divide its "
+        "values by a large constant) and re-run."
+    )
+
+
+def _means_and_pooled_variance(
+    metric: str, control: Sequence[float], treatment: Sequence[float]
+) -> tuple[float, float, float]:
+    """Per-arm means and the Bessel-pooled variance (each arm needs ``>= 2`` rows).
+
+    Called for the held-out rows and for the tested rows, so the #1384 refusals
+    cover both: an arm sum past the largest float, and deviations whose squares
+    are.
+    """
+    mean_c = sum(control) / len(control)
+    mean_t = sum(treatment) / len(treatment)
+    _require_finite_means(metric, control, treatment, mean_c, mean_t)
+    # Squared as d * d, not d ** 2: ** raises OverflowError where * returns inf,
+    # and inf is refused below.
+    sum_sq = sum((x - mean_c) * (x - mean_c) for x in control) + sum(
+        (x - mean_t) * (x - mean_t) for x in treatment
+    )
+    variance = sum_sq / (len(control) + len(treatment) - 2)
+    # #1384 - deviations past about 1.3e154 square past the largest float.
+    if not math.isfinite(variance):
+        values = [*control, *treatment]
+        raise ValueError(
+            f"The {metric!r} column's spread is above what the test "
+            f"statistic can represent: its values run from {min(values):.3g} to "
+            f"{max(values):.3g}, and their variance overflows a float. Rescale "
+            "the metric (divide its values by a large constant) and re-run."
+        )
+    return mean_c, mean_t, variance
+
+
+def _standardised_effect(
+    config: MsprtConfig,
+    control: Sequence[float],
+    treatment: Sequence[float],
+    *,
+    scale_rows: int,
+) -> float:
+    """``effect_size`` over the pooled standard deviation of the first ``scale_rows``.
+
+    Those are the held-out rows once there are enough of them, and until then
+    every row so far, which are the first of them. Checking that early refuses an
+    impossible ``--effect-size`` on the first run instead of after
+    ``PRIOR_SCALE_ROWS`` rows (#1339). Returns 0.0 while the scale is not known yet
+    (fewer than 2 rows per arm, or all of them equal); the caller does not use it
+    then.
+    """
+    if scale_rows < 2:
+        return 0.0
+    _, _, variance = _means_and_pooled_variance(
+        config.metric, control[:scale_rows], treatment[:scale_rows]
+    )
+    if variance <= 0.0:
+        # Rows that differ can still have a variance of 0.0 in floats (0 and
+        # 1e-170). Held out, they would set a prior variance of 0 and a continue
+        # that never ends, so only rows that are all equal wait for more.
+        if len(set(control[:scale_rows])) > 1 or len(set(treatment[:scale_rows])) > 1:
+            raise ValueError(
+                f"The {config.metric!r} column's spread is below what the test "
+                f"statistic can represent: its first {scale_rows} rows per arm "
+                "differ, but their variance underflows to 0. Rescale the metric "
+                "(multiply its values by a large constant) and re-run."
+            )
+        return 0.0
+    scale = math.sqrt(variance)
+    effect = config.effect_size / scale
+    too_large = effect > _MAX_PRIOR_EFFECT
+    # #1384 - a variance below the smallest normal float is a spread the
+    # statistic cannot carry at any --effect-size: say so, and how to fix it.
+    if too_large and variance < sys.float_info.min:
+        raise ValueError(
+            f"The {config.metric!r} column's spread is below what the test "
+            f"statistic can represent: its first {scale_rows} rows per arm have a "
+            f"pooled standard deviation of {scale:.3g}, which puts --effect-size "
+            f"{config.effect_size!r} at {effect:.3g} standard deviations, past the "
+            f"{_MAX_PRIOR_EFFECT:.3g} the statistic can carry. Rescale the "
+            "metric (multiply its values by a large constant) and re-run."
+        )
+    if too_large:
+        raise ValueError(
+            f"--effect-size {config.effect_size!r} is {effect:.3g} standard "
+            f"deviations at a pooled standard deviation of {scale:.3g}, and the "
+            f"test statistic overflows above {_MAX_PRIOR_EFFECT:.3g}. "
+            f"Lower --effect-size, or check the {config.metric!r} column: a "
+            "near-constant column reaches this at any --effect-size."
+        )
+    return effect
+
+
 def msprt_step(
     config: MsprtConfig,
     *,
     control: Sequence[float],
     treatment: Sequence[float],
 ) -> MsprtVerdict:
-    """Run a single mSPRT decision step.
+    """Run a single two-sided mSPRT decision step.
 
     Returns ``MsprtVerdict`` with one of:
-    - ``continue``: keep collecting samples
-    - ``reject_h0``: difference is real (treatment != control)
-    - ``accept_h0``: difference is not significant
+    - ``continue``: keep collecting samples; always the answer until each arm
+      has at least 2 rows past the ``PRIOR_SCALE_ROWS`` held-out ones
+    - ``reject_h0``: difference is real (treatment != control), in either
+      direction; ``direction`` says whether the treatment is ``better`` or
+      ``worse`` than control, by the metric's polarity
+    - ``accept_h0``: any difference is smaller than ``effect_size``: the
+      confidence sequence at coverage 1 - ``alpha`` lies inside
+      (-``effect_size``, +``effect_size``). ``log_likelihood_ratio`` is still
+      the Bayes factor against "no difference", so on an accept it can be
+      anything below ``log(1 / alpha)``, positive included
+
+    ``mean_control`` / ``mean_treatment`` and the row counts cover every row;
+    the statistic and the direction use the rows after the held-out ones.
+
+    A ``continue`` may carry ``accept_held`` (#1524): when the 3x spread rule is
+    what is keeping the accept back, the verdict reports it and names both
+    spreads. That case is reported rather than fixed here — the held-out rows
+    are fixed, so a saturated warm-up is never released by more rows — and the
+    accept rule itself is unchanged. #1418's confidence sequence covers at its
+    level for any prior scale fixed before the tested rows, so it does not need
+    the hold for its guarantee; whether the hold stays is #1524's question, and
+    until then it is unchanged.
     """
     ctrl = _validate_sample_list(control, arm="control")
     treat = _validate_sample_list(treatment, arm="treatment")
 
     n_c, n_t = len(ctrl), len(treat)
-    mean_c = sum(ctrl) / n_c if n_c else 0.0
-    mean_t = sum(treat) / n_t if n_t else 0.0
+    if n_c and n_t:
+        _require_finite_means(config.metric, ctrl, treat, sum(ctrl) / n_c, sum(treat) / n_t)
 
-    if n_c < 2 or n_t < 2:
+    def verdict(
+        llr: float = 0.0,
+        decision: str = "continue",
+        direction: str | None = None,
+        *,
+        accept_held: bool = False,
+        held_out_spread: float | None = None,
+        tested_spread: float | None = None,
+        held_out_rows: int = 0,
+    ):
         return MsprtVerdict(
-            decision="continue",
-            log_likelihood_ratio=0.0,
+            decision=decision,
+            log_likelihood_ratio=llr,
             n_control=n_c,
             n_treatment=n_t,
-            mean_control=mean_c,
-            mean_treatment=mean_t,
+            mean_control=sum(ctrl) / n_c if n_c else 0.0,
+            mean_treatment=sum(treat) / n_t if n_t else 0.0,
+            direction=direction,
+            accept_held=accept_held,
+            held_out_spread=held_out_spread,
+            tested_spread=tested_spread,
+            held_out_rows=held_out_rows,
         )
 
-    # Pooled variance with Bessel correction.
-    var_c = sum((x - mean_c) ** 2 for x in ctrl) / (n_c - 1)
-    var_t = sum((x - mean_t) ** 2 for x in treat) / (n_t - 1)
-    raw_pooled_var = ((n_c - 1) * var_c + (n_t - 1) * var_t) / (n_c + n_t - 2)
+    held = _held_out_rows(ctrl, treat)
+    standardised_effect = _standardised_effect(
+        config, ctrl, treat, scale_rows=held if held is not None else min(n_c, n_t)
+    )
+    if held is None or n_c - held < 2 or n_t - held < 2:
+        return verdict()
+    rest_c, rest_t = ctrl[held:], treat[held:]
+    mean_c, mean_t, pooled_variance = _means_and_pooled_variance(
+        config.metric, rest_c, rest_t
+    )
+    # Both tested arms constant: t is 0/0, and without measurement noise
+    # sequential testing cannot bound the Type-I error honestly (code-review LOW
+    # fix v0.63.0), so keep collecting.
+    if pooled_variance <= 0.0:
+        return verdict()
     diff = mean_t - mean_c
-    # Degenerate (zero variance) — both arms are constant. If the means
-    # are also identical, defer to ``continue`` (no information). If the
-    # means differ, fall back to ``continue`` as well: with zero observed
-    # variance the SPRT cannot bound Type-I error honestly. Operators
-    # need real measurement noise to use sequential testing (code-review
-    # LOW fix v0.63.0 — the equality check was previously dead under the
-    # `max(_, 1e-9)` floor).
-    if raw_pooled_var <= 0.0:
-        return MsprtVerdict(
-            decision="continue",
-            log_likelihood_ratio=0.0,
-            n_control=n_c,
-            n_treatment=n_t,
-            mean_control=mean_c,
-            mean_treatment=mean_t,
+    prior_variance = standardised_effect * standardised_effect
+    llr = _nig_log_bayes_factor(
+        n_control=len(rest_c),
+        n_treatment=len(rest_t),
+        mean_difference=diff,
+        pooled_variance=pooled_variance,
+        prior_variance=prior_variance,
+    )
+    # A non-finite statistic cannot be compared with the boundaries: nan crosses
+    # neither (a continue that never ends) and -inf is a silent accept_h0.
+    if not math.isfinite(llr):
+        n_eff = len(rest_c) * len(rest_t) / (len(rest_c) + len(rest_t))
+        if not math.isfinite(1.0 + n_eff * prior_variance):
+            raise ValueError(
+                f"--effect-size {config.effect_size!r} is {standardised_effect:.3g} "
+                f"standard deviations of the {config.metric!r} column's held-out "
+                f"rows, and at {len(rest_c)} + {len(rest_t)} tested rows the prior "
+                "variance of the test statistic overflows a float. Lower "
+                f"--effect-size, or check the {config.metric!r} column: a "
+                "near-constant held-out column reaches this at any --effect-size."
+            )
+        raise ValueError(
+            f"The {config.metric!r} column's tested rows are outside what the "
+            f"test statistic can represent: the arm means differ by {diff:.3g} at "
+            f"a pooled variance of {pooled_variance:.3g}, and the t statistic "
+            "overflows a float. Check the column for a near-constant arm, or "
+            "rescale the metric (divide its values by a large constant) if its "
+            "values are very large, and re-run."
         )
-    pooled_se = math.sqrt(raw_pooled_var * (1.0 / n_c + 1.0 / n_t))
-
-    # Standardised effect size (z-statistic of the difference of means).
-    diff = mean_t - mean_c
-    z = diff / pooled_se
-
-    # SPRT log-likelihood-ratio for the point alternative H1: delta = effect_size.
-    # In standardised units (z), this is Wald's classic SPRT — a martingale
-    # under H0 (E[exp(LLR_n)] = 1) so Type-I error is controlled at every
-    # stopping time per the optional stopping theorem.
-    #
-    # log(LR_n) = z * mu_h1 * sqrt(n_eff / (n_eff + 1))
-    #           - 0.5 * mu_h1**2 * n_eff / (n_eff + 1)
-    #
-    # (Code-review CRITICAL fix v0.63.0: earlier draft used a malformed
-    # mixture-prior LLR with the wrong sign on the log term, which drove
-    # the LLR positive under H0 as n grew → unbounded Type-I error.)
-    n_eff = (n_c * n_t) / (n_c + n_t)
-    mu_h1 = config.effect_size / pooled_se  # in standardised units
-    n_ratio = n_eff / (n_eff + 1.0)
-    llr = (
-        z * mu_h1 * math.sqrt(n_ratio)
-        - 0.5 * mu_h1**2 * n_ratio
+    if llr >= math.log(1.0 / config.alpha):
+        return verdict(llr, "reject_h0", _direction(config.metric, diff))
+    half_width = _nig_confidence_half_width(
+        n_control=len(rest_c),
+        n_treatment=len(rest_t),
+        pooled_variance=pooled_variance,
+        prior_variance=prior_variance,
+        level=config.alpha,
     )
-
-    upper = math.log((1.0 - config.beta) / config.alpha)
-    lower = math.log(config.beta / (1.0 - config.alpha))
-
-    if llr >= upper:
-        decision = "reject_h0"
-    elif llr <= lower:
-        decision = "accept_h0"
-    else:
-        decision = "continue"
-
-    return MsprtVerdict(
-        decision=decision,
-        log_likelihood_ratio=llr,
-        n_control=n_c,
-        n_treatment=n_t,
-        mean_control=mean_c,
-        mean_treatment=mean_t,
-    )
+    if abs(diff) + half_width < config.effect_size:
+        # Held-out rows far tighter than the tested ones (a warm cache, a judge
+        # that saturates early): hold the accept back until the spreads agree,
+        # as #1265 shipped it. Why it is still here, and what decides whether
+        # it stays, is at ACCEPT_HOLD_SPREAD_RATIO. A reject is never held
+        # back, so the Type-I bound is unchanged.
+        held_out_sd = config.effect_size / standardised_effect
+        tested_sd = math.sqrt(pooled_variance)
+        if tested_sd > ACCEPT_HOLD_SPREAD_RATIO * held_out_sd:
+            # #1524 - the held-out rows are fixed, so once the hold fires no
+            # amount of extra data of the same kind releases it: the run stays
+            # at `continue` however many rows arrive, with the confidence
+            # sequence for the difference already inside +-effect_size. Say so
+            # on the verdict, with the two spreads that decided it, so the panel
+            # can advise something the operator can act on instead of "collect
+            # more samples".
+            return verdict(
+                llr,
+                accept_held=True,
+                held_out_spread=held_out_sd,
+                tested_spread=tested_sd,
+                held_out_rows=held,
+            )
+        return verdict(llr, "accept_h0")
+    return verdict(llr)
 
 
 def run_msprt(
@@ -305,10 +727,15 @@ def run_msprt(
 
 
 __all__ = [
+    "ACCEPT_HOLD_SPREAD_RATIO",
+    "HIGHER_IS_BETTER",
+    "MAX_STANDARDISED_EFFECT",
     "MsprtConfig",
     "MsprtVerdict",
+    "PRIOR_SCALE_ROWS",
     "SUPPORTED_METRICS",
     "msprt_step",
+    "retired_beta_message",
     "run_msprt",
     "validate_metric_name",
 ]

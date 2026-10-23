@@ -35,6 +35,20 @@ _SECRET_GROUPS = 3
 _SECRET_GROUP_LEN = 4
 _SLUG = "zorbex"
 
+# Formats ``insert`` renders canaries in (#1216). Each puts the carrier in
+# one user turn and the secret in the assistant turn after it, which is
+# exactly how ``check`` scores a canary (``_tokenize_pair`` in
+# utils/live_eval.py renders the carrier through the chat template). Any
+# other format is refused: dpo/kto/embedding have no single supervised
+# target, plaintext trains on raw text with no template, tool-calling's
+# converter puts a tool-schema system turn before the prompt (which
+# ``check`` does not render), and the multimodal formats need a real image
+# or audio file per row.
+CANARY_FORMATS = ("alpaca", "sharegpt", "chatml")
+# Every manifest written before #1216 has no format field and describes
+# chatml rows, since that is all ``insert`` ever wrote.
+_LEGACY_MANIFEST_FORMAT = "chatml"
+
 _MAX_CANARIES = 10_000
 _MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 
@@ -117,20 +131,81 @@ def generate_controls(
     return _generate(_require_count(count, "count"), seed, exclude)
 
 
-def canary_rows(canaries: Sequence[Canary]) -> list[dict]:
-    """Render canaries as ``{"messages": [...]}`` training rows."""
-    return [
-        {
-            "messages": [
-                {"role": "user", "content": canary.carrier},
-                {"role": "assistant", "content": canary.secret.strip()},
+def _require_canary_format(fmt: object) -> str:
+    if not isinstance(fmt, str) or fmt not in CANARY_FORMATS:
+        raise ValueError(
+            f"unsupported canary format {fmt!r}; "
+            f"supported: {', '.join(CANARY_FORMATS)}"
+        )
+    return fmt
+
+
+def _canary_row(canary: Canary, fmt: str) -> dict:
+    secret = canary.secret.strip()
+    if fmt == "alpaca":
+        return {"instruction": canary.carrier, "output": secret}
+    if fmt == "sharegpt":
+        return {
+            "conversations": [
+                {"from": "human", "value": canary.carrier},
+                {"from": "gpt", "value": secret},
             ]
         }
-        for canary in canaries
+    return {
+        "messages": [
+            {"role": "user", "content": canary.carrier},
+            {"role": "assistant", "content": secret},
+        ]
+    }
+
+
+def canary_rows(canaries: Sequence[Canary], fmt: str = "chatml") -> list[dict]:
+    """Render canaries as training rows in dataset format ``fmt``.
+
+    The carrier is the prompt and the secret the supervised target, in
+    every format, so the secret sits where the trainer computes loss.
+    """
+    _require_canary_format(fmt)
+    return [_canary_row(canary, fmt) for canary in canaries]
+
+
+def interleave_canary_rows(
+    rows: Sequence[Any], inserted: Sequence[dict], *, seed: int
+) -> tuple[list, tuple[int, ...]]:
+    """Spread ``inserted`` through ``rows``; return the mix and their positions.
+
+    ``positions[i]`` is the 0-based row of ``inserted[i]`` in the mix. The mix
+    is cut into ``len(inserted)`` equal stretches and each canary goes to a
+    seeded random row of its own stretch, so the canaries cannot sit together
+    at either end (#1331). Appending them put every one in the tail that
+    ``data.val_split`` holds out for validation, where no model trains on
+    them and ``check`` can only report OK. Spread evenly, a tail of fraction
+    ``v`` holds about ``v`` of them, whatever the seed.
+    """
+    count = len(inserted)
+    total = len(rows) + count
+    rng = random.Random(seed)
+    positions = tuple(
+        rng.randrange(i * total // count, (i + 1) * total // count)
+        for i in range(count)
+    )
+    slots = dict(zip(positions, inserted))
+    source = iter(rows)
+    mixed = [
+        slots[index] if index in slots else next(source)
+        for index in range(total)
     ]
+    return mixed, positions
 
 
-def write_manifest(canaries: Sequence[Canary], path: str) -> str:
+def write_manifest(
+    canaries: Sequence[Canary],
+    path: str,
+    fmt: str = "chatml",
+    *,
+    positions: Sequence[int] | None = None,
+    total_rows: int | None = None,
+) -> str:
     """Persist the secrets. THIS FILE IS THE SENSITIVE ARTIFACT.
 
     Anyone holding it can reproduce the canaries, so it must not be
@@ -138,17 +213,29 @@ def write_manifest(canaries: Sequence[Canary], path: str) -> str:
     POSIX: under the usual 022 umask a generic write lands 0644, letting
     any local user on a shared box read every canary without ever running
     ``check``. Mirrors registry/store.py, adapter_sign.py, audit_log.py.
+
+    ``positions`` (from :func:`interleave_canary_rows`) and ``total_rows``
+    record where each canary sits in the written dataset, so which canaries a
+    given ``data.val_split`` trains on can be worked out later (#1331).
     """
+    _require_canary_format(fmt)
     safe = enforce_under_cwd_and_no_symlink(str(path), "manifest")
+    entries = [
+        {"carrier": canary.carrier, "secret": canary.secret}
+        for canary in canaries
+    ]
+    if positions is not None:
+        for entry, position in zip(entries, positions):
+            entry["row"] = position
     payload = {
         "version": 1,
         "carrier_template": CARRIER_TEMPLATE,
         "slug": _SLUG,
-        "canaries": [
-            {"carrier": canary.carrier, "secret": canary.secret}
-            for canary in canaries
-        ],
+        "format": fmt,
+        "canaries": entries,
     }
+    if total_rows is not None:
+        payload["rows"] = total_rows
     atomic_write_text(json.dumps(payload, indent=2), safe)
     _harden_permissions(safe)
     return safe
@@ -181,6 +268,12 @@ def load_manifest(path: str) -> tuple[Canary, ...]:
         raise ValueError(f"manifest is not valid JSON: {exc}") from exc
     if not isinstance(payload, dict):
         raise ValueError("manifest must be a JSON object")
+    # Every supported format is scored the same way (carrier as one user
+    # turn), so the value only has to be one ``check`` knows. An unknown one
+    # is refused rather than scored as chat: a plaintext canary scored after
+    # a chat-templated prompt the model never trained on would read as
+    # "not memorized" whatever the model learned.
+    _require_canary_format(payload.get("format", _LEGACY_MANIFEST_FORMAT))
     entries = payload.get("canaries")
     if not isinstance(entries, list):
         raise ValueError("manifest 'canaries' must be a list")

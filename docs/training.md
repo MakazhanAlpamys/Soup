@@ -7,9 +7,13 @@
 > **Training a model bigger than your GPU?** `training.stream_layers: true` streams the
 > frozen base from CPU RAM (with NVMe disk overflow) one decoder layer at a time, so peak
 > VRAM is bounded by one layer instead of the whole model. Add `quantization: 4bit` and an
-> 8B base fits a 4 GB card. Works for `sft` and, from v0.72.4, for `dpo` / `orpo` /
+> 8B base fits a 4 GB card at batch 1 and 512 tokens per step; on a 128k-vocabulary model
+> every further 512 tokens costs about 1 GB more (see
+> [Sizing a streaming run](performance-and-quantization.md#sizing-a-streaming-run-v0723)).
+> Works for `sft` and, from v0.72.4, for `dpo` / `orpo` /
 > `simpo` / `kto` — DPO's reference model is the same streamed base with its adapters
-> switched off, so it costs no extra weights — see
+> switched off, so it needs no second copy of the model (on an untied checkpoint `dpo` and
+> `kto` still hold one copy of the output head per step) — see
 > [Layer Streaming](performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724).
 
 **Contents:**
@@ -43,14 +47,103 @@
 - [RAFT — Retrieval-Augmented Fine-Tuning](#raft--retrieval-augmented-fine-tuning)
 - [RA-DIT — Retrieval-Augmented Dual Instruction Tuning](#ra-dit--retrieval-augmented-dual-instruction-tuning)
 - [Curriculum-Aware Training (BETA)](#curriculum-aware-training-beta)
-- [TTS Fine-Tuning (BETA, v0.52.0)](#tts-fine-tuning-beta-v0520)
+- [TTS Fine-Tuning (BETA, live in v0.71.20)](#tts-fine-tuning-tasktts-beta-live-in-v07120)
 - [Classifier / Reranker / Cross-Encoder Training (BETA, v0.52.0)](#classifier--reranker--cross-encoder-training-beta-v0520)
 - [Knowledge Distillation (BETA, v0.52.0)](#knowledge-distillation-beta-v0520)
 - [EBFT + GDPO (BETA, v0.52.0)](#ebft--gdpo-beta-v0520)
 - [gpt-oss `reasoning_effort` + `train_on_eot` (v0.52.0)](#gpt-oss-reasoning_effort--train_on_eot-v0520)
+- [Validation split & evaluation (`training.eval_steps`)](#validation-split--evaluation-trainingeval_steps)
 - [Seeds & reproducibility (`training.seed`)](#seeds--reproducibility-trainingseed)
 - [Rewind — which row spiked the loss (`soup rewind`)](#rewind--which-row-spiked-the-loss-soup-rewind)
 - [Full fine-tuning (`lora.r: 0`)](#full-fine-tuning-lorar-0)
+
+---
+
+Multimodal SFT (`task: sft` with `modality: vision` or `audio`) requires
+`backend: transformers` rather than `backend: unsloth`. The vision and audio setup
+paths do not use Unsloth; requesting it is refused at config load instead of
+silently falling back to transformers. Text SFT continues to support Unsloth.
+
+## Validation split & evaluation (`training.eval_steps`)
+
+`data.val_split` (default `0.1`) holds that share of the rows out of training,
+and the run evaluates them:
+
+```yaml
+data:
+  val_split: 0.1    # the default
+training:
+  eval_steps: 50    # optional; unset = evaluate at the end of every epoch
+```
+
+- **Default: every epoch.** At the end of each epoch the trainer runs one pass
+  over the validation split and records `eval_loss`. It shows up as the **Val
+  loss** row on the live panel, is stored as `val_loss` in the run's metrics in
+  the experiment tracker, and is streamed as `TrainEvent.val_loss` to the Web UI.
+  The pass is a forward over the held-out rows, a few percent of the run at the
+  default split.
+- **`training.eval_steps: N`** evaluates every N optimizer steps instead,
+  counted after gradient accumulation like `save_steps`. The last step is
+  evaluated too when it is not a multiple of N, so a value larger than the run
+  still evaluates once.
+- **Batch size.** The evaluation runs at the resolved per-device train batch
+  (after `batch_size: auto`), not Hugging Face's default of 8, so a card sized
+  to train fits the evaluation too. Layer-streamed runs (`stream_layers: true`)
+  evaluate the same way, streaming the frozen layers as a training step does.
+- **`val_split: 0`** trains on every row and evaluates nothing, unless the data
+  brings its own validation split: an HF-hub dataset's `validation` split, or a
+  pre-tokenized cache's `val` / `validation` split.
+
+**Generation-based tasks (`grpo`, `ppo`, `online_dpo`).** Evaluating them means
+generating completions, which costs about as much per row as training on it. So
+they do not evaluate by default, and they do not withhold rows either:
+`data.val_split` is ignored, every row trains, and the run prints a one-line note
+saying so. On `grpo`, set `training.eval_steps` to hold the split out and
+evaluate it; TRL generates completions for the held-out prompts and logs
+`eval_loss` with the evaluation rewards. On `grpo` the run's validation number
+is the held-out reward, `eval_reward` (the mean reward over the held-out
+completions, higher is better): the live panel shows it as `Val reward`, the
+tracker stores it in the `val_reward` column of the metrics table, and the
+training event stream carries it as `val_reward` (#1389). TRL's `eval_loss` on
+`grpo` is its policy objective at importance ratio 1, not a likelihood:
+advantages are normalised within each group, so it stays near zero, can be
+negative, and does not measure held-out quality. It is not recorded or shown as
+a loss: a `grpo` run's `val_loss` series is empty, and `Val loss` does not
+appear. The per-task choice lives in `VALIDATION_METRICS` in
+`utils/eval_schedule.py`; every other task records `eval_loss` as `val_loss`.
+TRL needs whole groups of
+`num_generations` completions in an evaluation batch, so `grpo` evaluates at the
+largest multiple of `num_generations` that fits in the train batch, and says so
+when that differs from the train batch. The evaluation's rewards never reach the
+reward-hack detector, the mitigation controller or the echo-trap detector: they
+read training generations only. `ppo` and `online_dpo` refuse
+`training.eval_steps`: TRL's PPO loop never calls `evaluate()`, and online DPO's
+`evaluate()` crashes on prompt-only rows. A generation-based evaluation for
+those two is a separate feature.
+
+**On `backend: mlx`** (#1990) `task: sft` honours `training.eval_steps` in the
+same unit: completed optimizer updates, after gradient accumulation. Soup runs
+those evaluations itself, after updates N, 2N, ... and once after the last
+update, over every validation row (a tail smaller than one batch included),
+weighted by supervised tokens. mlx-lm's own pass would evaluate before the
+update it is scheduled at and read at most 25 whole batches. An evaluation
+takes no step and leaves the training order and the model's mode as they were.
+Unset, MLX keeps mlx-lm's cadence (a quarter of the run). The MLX preference
+tasks (`dpo`, `orpo`) evaluate once per epoch and refuse the field.
+
+**Refused at config load.** `training.eval_steps` on the MLX preference tasks
+(see above), on `task: unlearn` (it trains on
+`forget_set` / `retain_set` and has no validation split), and with
+`val_split: 0` on local files or remote URIs, where there would be nothing to
+evaluate.
+
+**Evaluated but not tracked: `prm` and `moe_lora_routing`.** They attach no live
+training callback (#802), so their `eval_loss` reaches the trainer's log history
+and not the experiment tracker.
+
+Until #1223 no trainer on the transformers backend scheduled an evaluation: the
+default split was held out of training and never used, and `val_loss` stayed
+empty.
 
 ---
 
@@ -231,6 +324,13 @@ decides what trains. It cannot be combined with layer streaming: streaming keeps
 the decoder on the meta device and trains only the adapter, so there would be
 nothing to full fine-tune.
 
+`task: pretrain` refuses `lora.r: 0` at config load
+([#1813](https://github.com/MakazhanAlpamys/Soup/issues/1813)): its trainer
+always attaches a LoRA adapter, so a rank of 0 would only fail inside peft when
+training starts. To train the base weights there, use LISA (`lisa_enabled: true`),
+which trains a rotating set of whole layers without an adapter and so still
+accepts `lora.r: 0`, or switch to `task: sft`.
+
 `freeze_layers` / `freeze_ratio` **do** stay legal with `r: 0` — "train
 everything above layer N" is a real technique — and the trainer respects
 whatever they froze instead of silently unfreezing it. If they leave nothing
@@ -269,7 +369,8 @@ above.
 ## Which tasks apply `training.quantization`
 
 `quantization` defaults to `4bit`, but not every trainer reads it. These eight load the base
-(and, for `distill`, the teacher) at checkpoint precision whatever the field says:
+(and, for `distill`, the teacher) unquantised whatever the field says; `prm` loads it as fp32
+master weights (see [Process Reward Model](#process-reward-model-prm)):
 
 | task | quantization | notes |
 |---|---|---|
@@ -372,7 +473,9 @@ soup train --config soup.yaml
 # Cross-tokenizer distillation for DIFFERENT tokenizers, e.g. Llama -> Mistral,
 # no shared vocab needed (v0.71.18). Aligns student/teacher token sequences
 # over decoded character spans, so you can distill a GPT-2 BPE student from a
-# Llama SentencePiece teacher.
+# Llama SentencePiece teacher. A student token with no teacher counterpart
+# (a byte-fallback piece, an empty piece, a student-only special token) has
+# no target and is left out of the loss.
 #   training:
 #     uld_strategy: wasserstein_aligned
 
@@ -430,16 +533,32 @@ whitespace tokens to the active tokenizer's integer ids. This catches subword
 repetition that punctuation-heavy decoded text can hide, but the score becomes
 tokenizer-specific rather than vocabulary-agnostic.
 
+The `info_rm` detector stays silent on any step whose median split leaves
+either half constant — a two-valued reward (e.g. `reward_fn: accuracy`'s 0/1)
+always does, and so does a continuous reward where half the batch lands on
+the same value (e.g. rewards clipped at 0). The separation index there would
+measure the success rate rather than reward-model health, so the step casts
+no vote: no baseline is recorded and nothing halts or mutates β (one warning
+is logged per run). The single exception: once a baseline exists, a step
+where *every* reward is identical still votes 0.0 — a 0/1 run never records
+a baseline and stays silent, while a genuinely collapsed continuous reward
+reads HACK as before. For two-valued rewards use
+`reward_hack_detector: rm_ensemble` or the length/repetition signals instead.
+**Changed:** before this version a constant-half split could record an
+inflated separation (~3×10⁴ at a 50% first step) as the baseline and classify
+later, healthier steps as HACK — detector logs and `mitigation_log.jsonl`
+files from runs before this version are not comparable.
+
 ### Closed-loop reward-hacking auto-mitigation (v0.71.26)
 
-The detectors above *halt*; `training.reward_hack_mitigation` (or the `--reward-hack-mitigation` flag) makes the trainer *self-correct* mid-run. It requires `reward_hack_detector` on a `grpo`/`ppo` transformers run, and has four modes:
+The detectors above *halt*; `training.reward_hack_mitigation` (or the `--reward-hack-mitigation` flag) makes the trainer *self-correct* mid-run. It requires `reward_hack_detector` on a `grpo` transformers run, and has four modes:
 
 - **`log_only`** — observe only. Appends a per-step `mitigation_log.jsonl` under the run's output dir (the InfoRM/ensemble drop, the OK/WARN/HACK verdict, reward mean/std, completion-length trend, repetition) and provably never mutates β. Run this first to *see* hacking before you let a controller act on it.
 - **`kl_control`** — a reversible **bang-bang + hysteresis** controller. When a multi-signal vote (`reward_hack_signals`: the detector drop + `length_trend` + `repetition`) stays above `reward_hack_trip_band` for `reward_hack_dwell_steps`, it multiplies β by `reward_hack_kl_gain` (clamped to `[reward_hack_beta_floor > 0, reward_hack_beta_ceil]`, never crossing 0); after `reward_hack_release_patience` below-band steps it relaxes β back toward the floor. Dwell + release-patience stop it flapping. β is written to **both** `trainer.beta` and `trainer.args.beta` so it takes effect on stock GRPO *and* Soup's GRPO variants (and `trainer.args.kl_coef` on PPO).
 - **`pid_lagrangian`** — a **PID-Lagrangian** controller (Stooke et al. 2020) that holds the hacking signal at `reward_hack_signal_target` (Kp/Ki/Kd with integral anti-windup via `reward_hack_integral_clamp`), plus an **escalation ladder**: raise β → after `reward_hack_rollback_patience` persistent-HACK steps roll back to the last-good RL checkpoint (needs `rl_checkpoint_save_every_steps`) → after `reward_hack_max_recovery_attempts` rollbacks, early-stop with a plain-English give-up explanation.
 - **Anti-gaming hardening** (any control mode): `reward_hack_signal_smoothing` (`ema`/`median` over `reward_hack_smoothing_window`), `reward_hack_conservative_on_disagreement` (when detectors disagree, keep KL high + guard against a bimodal reward-distribution collapse), and `reward_hack_reward_shaping` (subtract a bounded `reward_hack_shaping_strength` penalty on the gamed proxy — `length`/`repetition`/`sentinel` — over the reward-fn seam).
 
-**Scope:** proof-of-mechanism only. Validated on SmolLM2-135M + a synthetic length-hacking task on a single RTX 3050 (all four modes live, including a real mid-run rollback). PPO ships **BETA** — the buffer + `kl_coef` mutation are wired and unit-tested, but the on-GPU proof is GRPO-only. Whether the loop suppresses hacking without collapsing true reward on 7B+ with a real reward model is an open, community-validatable question. `reward_hack_mitigation ∈ {kl_control, pid_lagrangian}` is mutually exclusive with `ref_model_ema_alpha` (both drive the KL/ref dynamics).
+**Scope:** proof-of-mechanism only. Validated on SmolLM2-135M + a synthetic length-hacking task on a single RTX 3050 (all four modes live, including a real mid-run rollback). The on-GPU proof is GRPO-only. **On `task: ppo` the reward-hacking and echo-trap flags are refused** (`reward_hack_detector`, `reward_hack_mitigation`, `echo_trap_enabled`): the trl PPO trainer this build supports takes no reward functions, so the reward/completion signal those callbacks read is never captured, and a run carrying them would be announced and then inert. Whether the loop suppresses hacking without collapsing true reward on 7B+ with a real reward model is an open, community-validatable question. `reward_hack_mitigation ∈ {kl_control, pid_lagrangian}` is mutually exclusive with `ref_model_ema_alpha` (both drive the KL/ref dynamics).
 
 Every detector composes with v0.34 `soup why` (anomaly explainer), v0.32 spike recovery, and the v0.53.11 #127 `GRPOStabilityCallback` so a single GRPO run can have InfoRM + echo-trap + spike-recovery + in-place ref-model EMA all active simultaneously without duplicating trajectory / state collection. The reward-hack and echo-trap callbacks read the per-step rewards through a shared, thread-safe capture buffer (Soup wraps your reward functions so it never has to monkeypatch TRL); `rm_ensemble` needs ≥2 reward functions to compute a divergence. The MiniLLM teacher-mix is an offline distribution-blend analog of the paper's on-policy teacher-mixed *sampling*, and ULD compares the distributions after clamping teacher ids to the teacher vocab (correct for same-family / extended-vocab pairs; a genuinely different tokenization needs a sequence-alignment step). The reference-model EMA (`--ref-model-ema-alpha`) updates in place — no full `state_dict` round-trip — so it is cheap at 70B+ scale.
 
@@ -475,6 +594,21 @@ soup eval unlearning <run-id> --benchmark tofu --evidence evidence.json --output
 
 `task: unlearn` is live (v0.71.9): it loads a LoRA-wrapped policy, a frozen reference copy (NPO / RMU), and the forget / retain JSONL sets, then optimises the per-method loss — NPO's `(2/β)·mean(-logσ(-β·(π_logp − ref_logp)))` drives the policy's forget-set log-prob below the reference (= forgetting), while the retain set anchors capability. Run NPO/SimNPO **with** a `retain_set` — without one the policy has no utility anchor and Soup warns loudly.
 
+Unlearning honors `training.optimizer`, `scheduler`, `warmup_ratio`, `weight_decay`,
+`max_grad_norm`, `batch_size` and `gradient_accumulation_steps`. The default
+`batch_size: auto` resolves to 1 for unlearning rather than to the memory estimate
+the other trainers use, so a config makes the same number of updates on any card. This
+memory-constrained loop processes one example at a time and accumulates gradients
+for `batch_size * gradient_accumulation_steps` examples per optimizer update;
+a final partial group is averaged by its actual size. `initial_loss` and
+`final_loss` remain unscaled per-example losses, and `total_steps` and the 2,000-step
+budget continue to count examples rather than optimizer updates.
+
+`data.max_length` now controls forget and retain tokenization instead of the old
+256-token cap. Its default is 2,048, so existing configurations can use more memory
+and take longer. Set `data.max_length: 256` to retain the old sequence-length limit,
+or explicitly choose a value that fits the model and device.
+
 Three orthogonal axes: **Forget Quality** (pre/post forget-loss delta), **Model Utility** (retain-accuracy preserved), **PrivLeak** (membership-inference AUC distance from 0.5). Bundled mini-fixtures for all three benchmarks ship in the box (v0.71.1 added MUSE + WMDP alongside the existing TOFU set), so `--benchmark muse|wmdp` runs without supplying evidence. The WMDP forget-set probes ship **redacted** (placeholder prompts + `REFUSED` responses) — Soup never bundles verbatim hazardous-knowledge content.
 
 
@@ -505,7 +639,7 @@ soup train
 
 ## Knowledge Distillation
 
-Train a small student model to match a larger teacher's output distribution.
+Train a small student model to match a larger teacher's output distribution. Every train/val row must keep at least one causal-loss target after truncation at `data.max_length`, and a row without one is refused at setup by split and row number, as SFT does. Both token-level and sequence-level distillation require `modality: text`; vision and audio inputs are refused at config load because this trainer is text-only.
 
 ```yaml
 base: HuggingFaceTB/SmolLM2-135M
@@ -531,6 +665,9 @@ training:
 Loss = student CE + (T**2) × KL(teacher_logits / T  ||  student_logits / T).
 Teacher is loaded once, frozen via `requires_grad_(False)` + `.eval()`, and its
 inputs / logits are auto-bridged across CPU / CUDA devices.
+
+Distillation runs on `backend: transformers` only; `backend: mlx` and
+`backend: unsloth` are refused at config load.
 Gradient accumulation uses the number of shifted, non-masked training targets across the complete
 optimizer window. Splitting the same rows into unequal-length microbatches therefore preserves the
 full-batch token mean instead of weighting every microbatch equally.
@@ -574,10 +711,12 @@ Soup provides two controls to bound activation memory:
 
 
 Set `distill_mode: sequence` (default `token`) to train on the teacher's **generated
-continuations** instead of per-token logit matching — a hard-label, cross-tokenizer-friendly
+continuations** instead of per-token logit matching - a hard-label, cross-tokenizer-friendly
 KD that works when student and teacher do not share a vocabulary. `sequence` mode is mutually
 exclusive with the cross-tokenizer `uld_strategy` logit path (they are different objectives over
-the same task; the trainer rejects the combination at setup). (v0.71.12)
+the same task; the trainer rejects the combination at setup). Rows with no prompt turn are
+skipped, the count and first positions are printed at setup, a split left with no usable row is
+refused before training, and a refusal names the row's position in your data. (v0.71.12)
 
 
 ## Sequence Classification
@@ -592,7 +731,7 @@ modality: text
 backend: transformers
 
 data:
-  train: ./data/labelled.jsonl   # rows: {"text": "...", "label": "spam"} or {"text": "...", "label": [0, 1, 0]}
+  train: ./data/labelled.jsonl   # rows: {"text": "...", "label": "spam"} or {"text": "...", "label": [0, 2]}
   max_length: 256
 
 training:
@@ -603,6 +742,11 @@ training:
   lr: 2e-5
   batch_size: 32
 ```
+
+**Row shapes by task:**
+- `task: classifier`: Single-input sequences via `{"text": "sample", "label": 1}` or `{"text": "sample", "label": "spam"}` (also accepts ChatML rows carrying `label`). Multi-label datasets pass lists of active label indices or names: `{"text": "sample", "label": [0, 2]}` or `{"text": "sample", "label": ["ham", "promo"]}`.
+- `task: reranker`: Query and document text via `{"text": "query doc", "label": "relevant"}` (or an integer class index).
+- `task: cross_encoder`: Paired inputs via `{"text_a": "query", "text_b": "doc", "label": 1}` or `{"question": "query", "answer": "doc", "label": 1}`.
 
 Routes `classifier` / `reranker` / `cross_encoder` through
 `AutoModelForSequenceClassification`. Multi-label heads cap at 1024 entries per
@@ -641,23 +785,31 @@ masking it out. Both are gated to the SFT-family of tasks.
 
 ## EBFT / GDPO Loss Variants
 
-Entropy-regularised SFT (`ebft_variant: structured | strided`) and generalised
-DPO (`gdpo_variant: standard | length_normalized | margin`) — both attach
-idempotently via `compute_loss` wrappers and auto-fire when the corresponding
-variant field is set on `TrainingConfig`.
+**`training.gdpo_variant` is refused at config load**
+([#1309](https://github.com/MakazhanAlpamys/Soup/issues/1309)). This breaks configs
+that set `standard`, `length_normalized`, or `margin`: previously they loaded but
+silently trained the default loss, because supported TRL versions (0.29 and later)
+do not expose the `DPOTrainer.dpo_loss` hook. Every non-null value is refused;
+unset and null still load. No shipped recipe, template or example sets the field.
+
+Remove `gdpo_variant` to train plain `task: dpo` for `standard`. For
+`length_normalized`, `task: simpo` is the nearest objective, **not an identical
+replacement**. `margin` has no equivalent. Plain DPO, without a GDPO setting:
 
 ```yaml
-# SFT with EBFT structured
-training:
-  ebft_variant: structured
-  ebft_temperature: 1.0
-
-# DPO with GDPO length_normalized
 task: dpo
 training:
-  gdpo_variant: length_normalized
   dpo_beta: 0.1
 ```
+
+EBFT (`ebft_variant: structured | strided`) is refused at config load
+([#1230](https://github.com/MakazhanAlpamys/Soup/issues/1230)): it is not yet a
+distinct objective. The term it added scored each position's logits against that
+position's own input token, with no causal shift, so it rewarded copying the input
+over predicting the next token; shifted onto the next token it is the model's own
+cross-entropy, so the loss would count cross-entropy twice. A config that set it
+never trained correctly. Remove `ebft_variant` and `ebft_temperature`; the refusal
+stays until the intended EBFT objective is implemented from its reference.
 
 
 ## GRPO Objective Variants
@@ -687,6 +839,20 @@ Variants:
 - **two_sided** — symmetric clipping with operator-supplied `grpo_delta`.
 - **rft** — rejection-sampling fine-tuning (only positive-advantage tokens contribute).
 
+Every variant applies `grpo_beta` (default `0.1`) as a KL penalty against the
+reference policy, where trl's own GRPO loss puts it: trl's per-token estimator
+`exp(ref - logp) - (ref - logp) - 1`, weighted by `grpo_beta` and reduced the
+same way as that variant's policy term. `rft` applies it only to the accepted
+completions it trains on. The β that the reward-hack controller sets at runtime
+(`kl_control` / `pid_lagrangian`) reaches every variant the same way.
+Set `grpo_beta: 0` for a KL-free run (no KL penalty against the reference policy,
+skipping the reference forward pass entirely), as used by the published DAPO and
+Dr. GRPO recipes ([#1247](https://github.com/MakazhanAlpamys/Soup/issues/1247)).
+
+With a non-zero `grpo_beta`, a variant run logs the same `kl` metric as trl's stock
+loss: the batch mean of that per-token estimate over the completion tokens (over the
+accepted tokens only, for `rft`), as `kl` in training and `eval_kl` in evaluation.
+
 The stability callback (EMA ref-model update, replay buffer, TIS alert counter)
 attaches automatically when any of `ref_model_ema_alpha` / `replay_buffer_size`
 / `tis_threshold` / etc. is set.
@@ -715,12 +881,28 @@ and the per-step labels. The reward head is saved inside the model checkpoint
 (`reward_head.*` in `model.safetensors`) and the tokenizer is saved alongside it,
 so the resulting directory is loadable standalone.
 
+PRM trains every base parameter along with the head, so all of them load as fp32
+master weights on every device. On CUDA, autocast runs the forward pass in bf16 (fp16 on
+pre-Ampere cards); on MPS it uses bf16 where the runtime supports it; CPU trains in fp32.
+With the default optimizer (AdamW), budget about 16 bytes per parameter before
+activations (fp32 weights, fp32 gradients and two fp32 AdamW moments), which is what the
+VRAM pre-flight predicts for `task: prm` when `batch_size` is an integer (with the
+default `batch_size: auto` the pre-flight does not run). The saved checkpoint is fp32, and
+without DeepSpeed loading the fp32 base needs about twice the host RAM of a bf16 load. Under DeepSpeed,
+each rank loads the base in fp32 on the host before the engine exists (4 bytes per
+parameter of host RAM per rank); the engine then casts it to its bf16/fp16 dtype, keeps
+its own fp32 master copy and saves a 16-bit checkpoint. A bf16 base without master
+weights would round most updates away at these learning rates (#1235).
+
 
 ## PRM-guided GRPO (process-supervised RL)
 
 Use a trained PRM as the **per-step reward** inside GRPO — the o1-era
 process-supervision signal. Set `training.prm_reward` to a PRM directory (a
-`task=prm` checkpoint) or HF id; the PRM splits each generated completion into
+`task=prm` checkpoint) or a Hub id, `org/name` or `org/name@revision`; a Hub id is
+downloaded (weights, tokenizer and custom-code files) when the reward is built,
+before training, and a repo that is not a Soup-trained PRM (no reward head) is
+refused there, naming the configured value (#1466). The PRM splits each generated completion into
 reasoning steps (newline heuristic), scores every step with its reward head, and
 folds the per-step scores into one scalar reward that GRPO optimises. It
 **replaces** `reward_fn` and rides the existing reward-shaping +
@@ -795,7 +977,23 @@ The judge is Soup's own OpenAI-compatible `JudgeEvaluator` adapted to TRL's
 B,A orders agree). Recipe: `online-dpo-smollm2-135m`. Proof-of-mechanism was
 validated on SmolLM2-135M with a synthetic judge (not a production RLHF claim; #286).
 An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other
-hosts are called as an OpenAI-compatible server without that key.
+hosts are called as an OpenAI-compatible server without that key. An `online_dpo_judge` whose
+host is a private, link-local or reserved IP literal is refused when soup.yaml loads (loopback
+stays allowed); address an internal judge by its hostname. A host written only as numbers that
+is not a valid IPv4 address (`10.0.0.256`, `4294967296`) is refused as well.
+
+A pair the judge cannot rank is left out of the loss: a tie, a failed or unreadable judge
+call, or a verdict that changes when the two completions are swapped. Such a pair adds no
+gradient, and the loss is the mean over the ranked pairs of each batch. The share of unranked
+pairs is logged as `judge/invalid_rate`, with a WARNING the first time it happens and on every
+step in which nothing was ranked. The logged `loss` and `train_loss` average only the batches
+that ranked a pair, and a logging window in which nothing was ranked logs no `loss` at all.
+A step in which nothing was ranked is not skipped: the optimizer still steps, so AdamW
+momentum and weight decay keep moving the weights and the learning-rate schedule advances.
+That drift is bounded: if the judge ranks none of 32 pairs in a row (for example because its
+server is down), training stops with an error that names the judge, and a shorter run in
+which it ranked no pair at all fails the same way instead of saving an adapter. Before this,
+TRL trained every such pair as if the second completion had won (#1225).
 
 
 ## Weighted Multi-Objective Preference Loss
@@ -807,15 +1005,86 @@ Mix DPO / SimPO / ORPO / IPO terms in one training run by setting
 task: preference
 training:
   preference_loss_weights:
-    dpo: 0.6
-    simpo: 0.4
+    simpo: 0.6
+    orpo: 0.4
 ```
 
-The combine wrapper reads policy + reference summed log-probs from the inner
-TRL trainer's per-batch inputs and computes a true weighted sum via the
-in-tree `compute_dpo_term` / `compute_simpo_term` / `compute_orpo_term` /
-`compute_ipo_term` kernels. BCO cannot be mixed with paired losses (data
-format incompatible — rejected at config load).
+The combine wrapper computes a weighted sum via the in-tree
+`compute_dpo_term` / `compute_simpo_term` / `compute_orpo_term` /
+`compute_ipo_term` kernels. The loss with the largest weight is the *primary*:
+its trl trainer is the one that is built, and on trl 0.29 the per-sequence
+log-probs the kernels need are read out of that trainer's own forward pass.
+Where they come from depends on which trainer is built:
+
+| Blend | Result on trl 0.29 |
+| --- | --- |
+| `simpo` + `orpo` | Trains. The CPO (SimPO) and ORPO trainers both return their per-sequence log-probs (`concatenated_forward`). |
+| `dpo` or `ipo` has the largest weight, with any of `dpo`, `ipo`, `simpo`, `orpo` beside it | Trains. Both build trl's `DPOTrainer`: the policy log-probs are taken from the logits of its own forward pass, the reference log-probs from its `compute_ref_log_probs`. |
+| `simpo` or `orpo` has the largest weight, and the blend names `dpo` or `ipo` | Trains. The CPO / ORPO trainers run no reference, so the blend runs one: the same forward once more, without gradients and with the LoRA adapter switched off. Refused with `init_strategy: pissa` / `olora` / `loftq` or `relora_steps`, where that is not the starting model ("Which reference" below). |
+| `bco` mixed with anything | Rejected at config load (data format incompatible). |
+
+**What a term is.** In a blend, `simpo` and `orpo` are their *preference terms
+only* — the margin / odds-ratio objective — without the likelihood (NLL) term
+the standalone `preference_loss: simpo` / `preference_loss: orpo` runs carry. A
+`{simpo: 1.0}` blend is therefore not the same number as a `preference_loss:
+simpo` run, and `training.cpo_alpha` does not affect it. Use
+`training.preference_loss` when you want the full standalone loss. Each term
+does honour its own config field: `training.simpo_gamma` for SimPO,
+`training.orpo_beta` for ORPO, whichever loss has the larger weight or not.
+
+The `dpo` and `ipo` terms are the losses `preference_loss: dpo` and
+`preference_loss: ipo` train: DPO's sigmoid loss with `training.dpo_beta`, and
+IPO's squared loss with `training.ipo_tau`, where each side's log-ratio is
+divided by its response length, as trl does. They read those two fields
+whichever of them is the primary, so `{dpo: 0.5, ipo: 0.5}` and
+`{ipo: 0.5, dpo: 0.5}` are the same loss. `dpo_beta_schedule` is not available
+with a blend.
+
+**Which reference.** Under a `dpo` / `ipo` primary it is trl's: the frozen
+`ref` adapter, a copy of the adapter as it started. Under a `simpo` / `orpo`
+primary it is the base model with the adapter switched off. For a new LoRA
+adapter, whose update starts at zero, the two compute the same thing.
+
+That holds while the base weights are the ones that were loaded, which covers
+the default init (`init_strategy: random`), DoRA and rsLoRA.
+`init_strategy: pissa`, `olora` and `loftq` (and `use_olora`) move part of
+every targeted weight into the adapter and leave a residual in the base, and
+`relora_steps` merges the adapter into the base at every restart; with the
+adapter off the model is then no longer the one the policy started from. A
+`dpo` / `ipo` term under a `simpo` / `orpo` primary is refused with either of
+them, before the model is loaded. With such an init, give `dpo` or `ipo` the
+largest weight: trl's copy of the adapter carries the residual's other half,
+so its reference is still the starting model. `relora_steps` has no such way
+out: trl's `ref` adapter sits on the same base weights, so a blend that names
+`dpo` or `ipo` refuses it whatever the largest weight is
+([ReLoRA](peft-and-efficiency.md#lora-quality--pissa-relora-per-pattern-rank-surgical-patches)).
+
+**Which tokens.** The terms are computed on the primary trainer's batch, and
+the two trainer families do not render a row the same way: the CPO / ORPO
+batches start with the tokenizer's BOS token, and the `DPOTrainer`'s need not
+(with a plain tokenizer and no chat template they do not). An even split
+between a reference loss and a reference-free one therefore depends on which
+key comes first, because the first key is the primary.
+
+**Cost.** The policy is run once per step, as in a single-loss run. A `dpo` /
+`ipo` primary runs the reference twice: trl computes its own reference
+log-probs inline and keeps only their means, so the blend asks the trainer for
+them again (`compute_ref_log_probs`, without gradients). A `simpo` / `orpo`
+primary runs the reference once, and only when the blend names `dpo` or `ipo`;
+with `val_split` it runs on evaluation batches too.
+
+With 16-bit logits (bf16 or fp16 autocast) a `dpo` / `ipo` primary also keeps
+one more tensor the size of the logits for the backward pass, next to the one
+trl's own loss keeps: 2 bytes × rows × tokens × vocabulary, where a batch of 4
+pairs is 8 rows. That is about 250 MiB for 4 pairs of 512 tokens and a
+32,000-token vocabulary. With float32 logits it keeps none.
+
+**Evaluation.** With `val_split` set and a `simpo` / `orpo` primary, trl's
+`prediction_step` calls `get_batch_loss_metrics` directly, so the eval loss is
+the primary loss's own trl loss — not the blend's value. Training and
+evaluation therefore report different numbers for the same batch. With a `dpo`
+/ `ipo` primary, trl's `prediction_step` goes through `compute_loss`, so the
+eval loss is the blend's value.
 
 
 ## MoE Model Support
@@ -832,7 +1101,7 @@ training:
   quantization: 4bit
 ```
 
-Soup auto-detects MoE architectures. Works with all training tasks.
+Soup auto-detects MoE architectures. Not every task reads `moe_lora`: the per-task table in [Performance and quantization](performance-and-quantization.md#moe-expert-quantization--router-only-training-live-in-v07120) lists the tasks that apply it and the ones that refuse it at config load.
 
 ```bash
 soup init --template moe
@@ -887,7 +1156,15 @@ training:
 {"image": "chart.png", "conversations": [{"from": "human", "value": "<image>\nWhat does this show?"}, {"from": "gpt", "value": "Quarterly revenue."}]}
 ```
 
-`soup data inspect` automatically shows image statistics (count, formats, missing files) for vision datasets.
+A relative `image` path resolves against `data.image_dir`, or against the data file's
+directory when it is unset. A Hub dataset or a remote URI has no data file directory, so set
+`data.image_dir` when its rows hold image paths; see
+[Data Pipeline Pro](data.md#data-pipeline-pro).
+Decoded in-memory PIL images (such as from a Hugging Face Hub `Image()` column) and Parquet
+image structs (`{"bytes": ..., "path": ...}`) written by `datasets` are also accepted; a struct's
+`path` follows the same directory resolution and path containment rules as a plain path string.
+
+`soup data inspect` resolves image paths the same way, or uses `--image-dir` when provided, and automatically shows image statistics (count, formats, missing files) for vision datasets.
 
 
 ## Audio / Speech Fine-tuning
@@ -975,7 +1252,7 @@ good for before/after deltas, not leaderboard-comparable absolutes.
 
 ## GRPO Plus — Objective Variants, Long-Context RL, Multi-Turn Agents
 
-Soup ships seven GRPO objective variants, between-rollouts vLLM standby, four agent-rollout backends, seven stability/efficiency knobs, plus Process Reward Models and Vision-RL.
+Soup ships seven GRPO objective variants, between-rollouts vLLM standby, four agent-rollout backends, seven stability/efficiency knobs, plus Process Reward Models.
 
 ```yaml
 # soup.yaml — DAPO with replay buffer and TIS truncation masking
@@ -992,7 +1269,7 @@ training:
   # grpo_delta: 0.2                   # required when grpo_variant: two_sided (optional for gspo)
   grpo_fp16: true                     # FP16 RL (unsloth parity)
   # Long-context + memory-efficient RL
-  long_context_grpo: true             # wires Tiled MLP when available
+  # long_context_grpo: true           # staged for future Tiled MLP; refused as of v0.77 — #808
   vllm_sleep_mode: true               # between-rollouts vLLM standby — LIVE (vLLM >= 0.7)
   # Multi-turn agent rollout — openenv is LIVE: your function's rows replace the prompt dataset
   rollout_backend: openenv            # one of: art / ruler / nemo_gym / openenv
@@ -1022,7 +1299,7 @@ training:
   lr: 1e-5
 ```
 
-Vision RL on Qwen2-VL / Pixtral / InternVL:
+Vision RL on Qwen2-VL / Pixtral / InternVL (Staged):
 
 ```yaml
 # soup.yaml
@@ -1034,10 +1311,10 @@ data:
   format: llava
 training:
   reward_fn: accuracy
-  vision_grpo: true                    # VLM-RL opt-in
+  # vision_grpo: true                  # staged for VLM-RL; refused as of v0.77 — #808
 ```
 
-All flags ship as schema gates in v0.50.0; live loss kernels, vLLM sleep-mode plumbing, ART/RULER/NeMo Gym/OpenEnv launchers, and the PRM trainer wrapper land in v0.50.1 — schema accepts the values now so configs are stable.
+All flags shipped as schema gates in v0.50.0. `vllm_sleep_mode`, `openenv` rollout, and PRM training (`task: prm`) are live. Other rollout backends (`art`, `ruler`, `nemo_gym`) raise "not yet validated", while unconsumed staged flags (e.g. `long_context_grpo`, `vision_grpo`) warn in v0.76 and are refused as of v0.77 (#808).
 
 
 ## DPO Training
@@ -1060,6 +1337,13 @@ training:
     alpha: 16
   quantization: 4bit
 ```
+
+A base published as a vision-language wrapper (MiniMax-M3, `model_type: minimax_m3_vl`) is not
+registered under `AutoModelForCausalLM`, so a plain DPO config cannot load it. Set `modality: vision`
+and DPO loads it the way SFT's vision path does, through `AutoModelForImageTextToText` with the
+model's processor, and trains the language tower; the LoRA targets resolve to that tower as before.
+Preference rows carry no images, and `soup recipes verify` builds the same class the trainer loads.
+`backend: unsloth` does not read `modality` for DPO and is refused at config load for it (#1393).
 
 
 ## Preference Variety — BCO + Unified Dispatcher + KL Variants
@@ -1102,7 +1386,7 @@ unified surface is additive.
 
 ### KL-controlled DPO variants
 
-Anneal β over training, periodically refresh the reference model:
+Anneal β over training with `dpo_beta_schedule`:
 
 ```yaml
 task: dpo   # or task: preference + preference_loss: dpo, or task: ipo
@@ -1110,26 +1394,35 @@ training:
   dpo_beta: 0.1
   dpo_beta_schedule: linear   # linear | cosine | exponential
   dpo_beta_end: 0.01
-  dpo_ref_regen_epochs: 2     # copy student → ref model every 2 epochs
 ```
 
-Both controls are gated to DPO-family tasks (`dpo`, `ipo`, or
-`preference` with `preference_loss in {dpo, ipo}`); transformers
-backend only.
+Gated to DPO-family tasks (`dpo`, `ipo`, or `preference` with `preference_loss in {dpo, ipo}`); transformers backend only.
 
-### Multi-objective preference loss (schema-only in v0.40.0)
+Periodically sync the frozen reference model with the active student using `dpo_ref_regen_epochs`:
+
+```yaml
+training:
+  epochs: 4
+  dpo_beta: 0.1
+  dpo_ref_regen_epochs: 2  # copies .default. adapter weights into .ref. every 2 epochs
+```
+
+With LoRA, TRL creates a frozen `.ref.` adapter on the model. On every Nth epoch (1-indexed, skipping epoch 0), parameters from the active `.default.` adapter are copied into the frozen `.ref.` adapter under `torch.no_grad()`. Requires LoRA (`lora.r >= 1`); full fine-tuning (`lora.r: 0`) is refused at config load (#1345).
+
+### Multi-objective preference loss
 
 ```yaml
 task: preference
 training:
-  preference_loss_weights: {dpo: 0.7, bco: 0.3}
+  preference_loss_weights: {simpo: 0.7, orpo: 0.3}
 ```
 
-Schema validates 2–5 entries summing to 1. Live runtime weighted-loss
-combination is wired in v0.40.1; v0.40.0 fails fast with an actionable
-`NotImplementedError` if you actually try to train (same stub-then-live
-pattern as v0.27.0 MII / v0.37.0 multipack / v0.38.0 quant menu /
-v0.39.0 ReLoRA).
+Schema validates 2–5 entries summing to 1, and rejects `bco` mixed with a
+paired loss at config load. On trl 0.29 every blend of `dpo`, `ipo`, `simpo`
+and `orpo` trains; which reference and which tokens the terms use depends on
+the loss with the largest weight
+(see [Weighted Multi-Objective Preference Loss](#weighted-multi-objective-preference-loss)).
+Set `training.preference_loss` for a single loss.
 
 
 ## GRPO Training (Reasoning)
@@ -1148,7 +1441,7 @@ data:
 training:
   epochs: 3
   lr: 1e-5
-  grpo_beta: 0.1
+  grpo_beta: 0.1  # KL penalty; 0 = KL-free (DAPO / Dr. GRPO)
   num_generations: 4
   reward_fn: accuracy   # or 'format', or path to custom .py
   lora:
@@ -1165,9 +1458,68 @@ soup init --template reasoning
 soup train --config soup.yaml
 ```
 
+**Gradient watchdog (#342).** If non-finite gradients (NaN or Inf) appear during
+a GRPO run, the optimizer step is skipped: weights and optimizer state are
+unchanged, and the step still counts toward the step total and the LR schedule.
+The skipped-step count is logged at the end of the run (as a console warning
+when the fraction exceeds 5%) and persisted in `trainer_state.json` so
+`soup adapters audit` can see it.
+
 **Built-in reward functions:**
-- `accuracy` — checks if the final answer matches expected (supports `####` and `\boxed{}` formats)
+- `accuracy` — 1.0 when the completion's final answer matches the gold's, else 0.0 (no partial credit)
 - `format` — checks for structured `<think>...</think>` reasoning blocks
+- `judge_rank` — an LLM judge scores each prompt's completions against each other, from 0 to 1;
+  see [LLM-judge ranking reward](#llm-judge-ranking-reward-reward_fn-judge_rank) below
+
+`accuracy` and verifiable `math` read the completion and the gold with the same parser. The final
+answer is, in this order of precedence:
+
+1. the rest of the line after the last `####` (a `#### Final Answer` heading means the next line);
+2. the content of the last `\boxed{}` (a space before the brace and nested braces such as
+   `\boxed{\frac{1}{2}}` are fine);
+3. what follows the last `The answer is` or `Answer:` (also `**Answer**:`, and the answer may be
+   on the next line), up to the end of its clause: a `. `, `, ` or `; ` outside brackets, or at
+   the connective `because` or `since` (case-insensitive, requiring whitespace on both sides; not `as`).
+   A comma or semicolon that a number follows continues a list instead (`41, 42 or 43`), and a
+   parenthetical aside belongs to the clause. So `The answer is Washington, D.C.`
+   reads `Washington`, `The answer is 42 (six times seven).` reads `42`, and `The answer is (3, 4).`
+   reads `(3, 4)`.
+
+A box outranks a phrase, and a `\boxed{}` or phrase that comes after a `####` line outranks it (the
+line was a markdown heading, or an answer the text went on to correct). That includes chatter:
+`#### Paris` followed by `I hope this answer is helpful!` reads `helpful`, so end a completion at
+its `####` line. A completion with none of these is read by its last line and its last number, so
+`Six times seven is 42.` and even `Not 42.` read as 42; only the final number counts, so listing
+candidates earns nothing.
+
+An answer phrase's number is read from its own clause: `The answer is 41 apples, not 42.` reads
+41, because the clause ends at the comma. A clause that names **more than one distinct value** is
+a hedge and states no answer: `The answer is either 41 or 42.`, `Answer: 41 or 42`,
+`The answer is 42 (or 43).` and `the answer is 41, 42 or 43` score 0.0 against every gold, and a
+gold written that way is refused. A `because` / `since` inline or after punctuation ends the clause
+(`The answer is 42 because 6*7=42.` and `The answer is 42, because 6*7=42.` both read 42),
+while parenthetical justifications belong to the clause and hedge it (`The answer is 42 (6*7=42).`).
+The same value twice is not a hedge (`42 (i.e. 42.0)`), and the digits of one bracketed or LaTeX
+answer (`(3, 4)`, `\begin{pmatrix} 3 \\ 4 \end{pmatrix}`, `\frac{14}{3}`, `2^{10}`) or of a time
+or a ratio (`3:45`, `1:1,000`) are not separate values; such an answer is compared as text.
+`\boxed{}` and `####` answers are compared whole, so a list there is one answer, and it can only
+match a gold that is the same list.
+
+A numeric gold is compared by value, so `#### 1,000`, `\boxed{1000}` and `The answer is $1000.`
+all match a gold of `1000`. Any other gold (`\frac{14}{3}`, `p - q`, `Paris`) is compared as text,
+ignoring case and whitespace, `$`, `\(...\)` and `\[...\]`, `\left` / `\right`, and `\dfrac` /
+`\tfrac` versus `\frac`; so `\boxed{\dfrac{14}{3}}` matches a gold of `\frac{14}{3}`. Both sides
+also drop the trailing punctuation `. , ; : !`, LaTeX thousands separators such as `1{,}000`, the
+LaTeX spacing commands `\,` `\!` `\;` `\:` and `\ `, and a Unicode minus sign. A `\\` row break is
+kept whole, so a matrix matches however its rows are spaced. One `\text{}` / `\textbf{}` /
+`\mathrm{}` / `\mbox{}` wrapper is unwrapped to its contents, `^\circ` / `^{\circ}` / `°` are
+dropped, a compact `\frac` argument is braced to match whether it is a single bare character or
+an already-braced group, with or without a space before it (`\frac12`, `\frac1{2}`, `\frac{1}2`,
+`\frac 34` and `\frac9{19}` all read `\frac{N}{D}`), and a one-letter variable prefix reads its
+right-hand side (`x = 7` reads `7`, on either side), though when both sides name a variable and
+the names differ (`x = 3` against `y = 3`), the pair scores 0.0, since a directrix or an
+asymptote's variable is part of its answer. Units are still not stripped (`42 apples` against
+`42`), and nothing is evaluated (`\frac{1}{2}` does not equal `0.5`).
 
 For GRPO, Soup preserves source dataset columns and TRL passes them to reward functions as
 keyword arguments. An Alpaca `output` or the final assistant turn in ShareGPT/ChatML is also
@@ -1176,9 +1528,20 @@ validate their inputs before generation:
 
 | Reward | Required source metadata |
 |---|---|
-| `accuracy` or verifiable `math` | `answer`, or an assistant reference response |
+| `accuracy` or verifiable `math` | `answer`, or an assistant reference response, that states a final answer |
 | verifiable `code` | `expected` or `answer` |
 | verifiable `json_schema` | `schema` |
+
+A gold states its final answer with `####`, `\boxed{}`, `The answer is` or `Answer:`, or by being
+the bare answer on one line (`42`, `Paris`, `\frac{14}{3}`). A row whose gold states none (for
+example a multi-line reference solution with no marked answer, or one under a `#### Solution`
+heading: a `####` line that is not a number and has more text after it may be a markdown heading,
+so a gold cannot rely on it), or whose answer phrase hedges between values
+(`The answer is either 41 or 42.`), is refused before generation, with its split,
+row number and field and a count of the other rows with the same problem, because such a gold
+would score every completion 0.0 and give GRPO no signal. A dataset that mixes numeric and
+LaTeX golds, such as MATH-500, loads under `math` too; validation prints how many golds are
+non-numeric and therefore compared as normalised text.
 
 **Custom reward functions** — point to a Python file:
 ```python
@@ -1248,6 +1611,79 @@ training:
   reward_fn: "accuracy,format"   # both are scored every step
 ```
 
+### LLM-judge ranking reward (`reward_fn: judge_rank`)
+
+For tasks without a checkable answer (writing, support replies, agent turns), `judge_rank` asks an
+LLM judge to compare the completions of each prompt with each other. GRPO normalises rewards within
+a prompt's group, so only the order inside a group matters: one judge call sees all
+`num_generations` completions of a prompt together and scores each from 0 to 1 (relative scoring,
+as in OpenPipe's RULER). Where an answer can be checked, a rule-based reward (`accuracy`,
+`verifiable`, a `.py` file) is cheaper and cannot be talked into a score. `judge_rank` also runs in
+an ensemble, e.g. `reward_fn: "format,judge_rank"`.
+
+```yaml
+task: grpo
+training:
+  reward_fn: judge_rank
+  grpo_judge: "ollama://llama3.1"        # or https://host/model, http://localhost:8000/model
+  grpo_judge_max_calls: 20000            # required: the run is refused if it could make more
+  # grpo_judge_rubric: ./rubric.yaml     # optional; only each criterion's name + description
+  # grpo_judge_max_tokens: 1024          # judge reply budget (default 1024)
+  # grpo_judge_max_failure_rate: 0.2     # stop past this share of failed groups (default 0.2)
+```
+
+`grpo_judge` takes the same URL form as `online_dpo_judge` and is checked at load: an unsupported
+scheme, plain `http://` to a host other than localhost, or a private IP literal is refused before
+anything downloads. A rubric (the `soup eval` judge format) contributes the `name` and
+`description` of each criterion; a ranking scores from 0 to 1, so `weight` and `scale` are not
+used. Without a rubric the judge uses Soup's default criteria (helpfulness, accuracy, safety).
+
+**What it costs.** One judge call per group, i.e. per training prompt per epoch, plus one per
+held-out prompt at each evaluation (`training.eval_steps`). A reply that does not parse is asked
+for once more, so a group takes at most 2 calls. Inside each counted call, a request the judge
+answers with 429 or a 5xx, or that times out or loses its connection, is retried up to twice, so
+the judge host can see up to three requests per counted call. The calls are made one after
+another while the step waits, so a step takes at least one judge round trip per prompt in its
+generation batch.
+After the dataset loads and before the model does, Soup counts
+`(train rows x epochs + held-out rows x evaluations) x 2` and refuses the run when that exceeds
+`grpo_judge_max_calls`, stating the numbers and the value to raise it to. The number of
+evaluations is counted at the smallest batch the run can train at, so under `batch_size: auto` it
+is an upper bound. `rollout_backend` is refused with `judge_rank`, because it replaces the prompts
+after they were counted.
+
+**What the judge host receives.** The whole conversation of each prompt (system prompt, earlier
+turns and the last user turn) and every completion of the group. Only point `grpo_judge` at a host
+you would send your training data to. The conversation and each completion are enclosed between
+BEGIN/END lines that carry a code drawn for that call, which none of them contains, and the judge
+is told to ignore instructions inside them. The completions are shown in a fresh order on every
+call (seeded from `training.seed`), so a judge that favours a position does not keep favouring the
+same completion.
+
+**The judge's answer** must be one JSON object with exactly one key per response number, `"1"` to
+`"N"`, each a number from 0 to 1 (one ```` ```json ```` fence around it is accepted). A duplicate,
+missing or extra key, `NaN` or `Infinity`, a boolean, a string or a number outside [0, 1] makes
+the reply unusable, and it is asked for once more. Soup never shortens a completion: a prompt that
+does not fit the judge's context fails its group when the server refuses it (OpenAI-compatible
+servers answer with a 4xx). Some servers, Ollama among them, cut an over-long prompt instead of
+refusing it, so give the judge model a context that holds a whole group.
+
+**Failures are visible.** A group with no usable answer scores `None`: TRL leaves it out of
+`rewards/judge_rank/mean` (its summed `reward` counts it as 0), and the group gets no advantage.
+The share of such training groups is logged as `judge/failed_group_rate`, and the share of answered
+groups whose completions all got the same score (no advantage either) as
+`judge/equal_score_group_rate`. Once at least 20 training groups have been judged, training stops
+with an error naming the judge when more than `grpo_judge_max_failure_rate` of them failed;
+evaluation groups are counted separately and never stop the run. A shorter run in which the judge
+scored no training group at all fails at its end instead of saving an adapter. A judge that cannot
+be reached at all (3 requests in a row with their retries spent) ends the run at once. The counters
+are per process, so `judge_rank` refuses a run with more than one process (`WORLD_SIZE` above 1).
+
+**Reward hacking.** The policy is trained to please the judge, not to be right, and it can learn
+what a particular judge rewards: length, a confident tone, flattery, or text addressed to the
+judge. Read samples while it trains, keep a held-out check with a different judge or a person,
+and consider the reward-hacking detectors under Loop Hardening above.
+
 ### Synthesize a verifier from your data (`soup reward synth`)
 
 Don't hand-write a verifier — generate one from reference (gold) outputs. Soup infers a
@@ -1270,7 +1706,23 @@ References are a JSONL where each row's gold answer is in an `answer` field (ove
 `--field`) or the last assistant turn of a `messages` list. `--min-discrimination` sets how
 strongly the verifier must separate references from perturbed negatives before it's emitted.
 v1 is deterministic families only — a `\boxed{}`/`####` marker helps the numeric verifier, and
-completions are prompted to mark their answer (standard RLVR practice).
+completions are prompted to mark their answer (standard RLVR practice). The numeric verifier
+reads both the gold and the completion with the parser the built-in `math` / `accuracy` rewards
+use (`soup_cli.utils.final_answer`), so `#### 1,000`, `\boxed {42}` and a `6*7=42\n#### 42` gold
+score the same under both; references written `1,000` count as numeric. The calibration report
+names every reference the emitted verifier rejects (`rejected_references` in `--output-report`).
+
+**Changed:** a `reward.py` synthesized before this version pulled the last number with a local
+regex; ones synthesized now read both sides with the shared answer parser, so `1,000`-style
+golds and `The answer is …` completions score where they scored 0 before — regenerate old
+verifiers before comparing runs. Regeneration also stops paying some completions the old regex
+paid: a `####` or `\boxed{}` answer carrying units, `%` or a non-dollar currency symbol or
+code (`#### 42 apples`, `\boxed{42\%}`, `#### €42`, `#### 42 USD`), a hedged or justified answer phrase (`The answer is either 41 or
+42`, `The answer is 42 because 6*7=42`), and a completion whose last `\boxed{}` is wrong after
+a right first one now score 0 — matching the built-ins. A bare `42%` or `The answer is 42%.`
+still pays, as under the built-ins; only marker-delimited answers refuse suffixes. The emitted
+file imports `soup_cli`, so it runs where Soup is installed rather than being fully
+self-contained.
 
 ### Stress-test a verifier for gameability (`soup reward stress`)
 
@@ -1327,7 +1779,7 @@ Three built-in domains:
 
 | Domain | What it checks |
 |---|---|
-| `math` | Extracts the final numeric answer (supports `####`, `\boxed{}`) and compares via `float()` equality — no `eval()` on user output |
+| `math` | Reads the final answer of the completion and of the gold with the shared parser described under "Built-in reward functions" (`####`, `\boxed{}`, `The answer is` / `Answer:`, else the completion's last number). A numeric gold scores 1.0 within 1e-4 and 0.6 within 1e-2 (compared as exact decimals); any other gold scores 1.0 on a normalised text match. Nothing is evaluated: no `eval()` on user output |
 | `code` | Executes generated Python with a 5s timeout, 512 MB RLIMIT on POSIX, `python -I -S`, socket patch, ephemeral cwd. Output capped at 10KB. Warning panel on first use |
 | `json_schema` | Validates output against a JSON Schema provided per-example in the dataset |
 
@@ -1362,6 +1814,8 @@ training:
   ]}
 ]}
 ```
+
+Add a top-level `tools` list (OpenAI function schemas) to put the schemas in front of the model as a system turn; with `format: auto`, a row with `messages` and `tools` is detected as tool-calling. Multi-turn trajectories keep their order: each assistant turn keeps its `tool_calls` and each `tool` turn its `tool_call_id`. The older shape, with the calls in a top-level `tool_calls` list, still loads: those calls become one assistant turn after `messages`.
 
 Arguments are parsed as JSON only — never `eval()`. `soup eval custom` can score tool-call accuracy (function name + argument JSON equality).
 
@@ -1422,7 +1876,15 @@ output: ./output_ppo
 `epochs` controls complete passes over the training dataset. `ppo_epochs`
 controls optimization passes within each PPO update. Soup forwards both values,
 plus `ppo_kl_penalty`, to the active TRL `PPOConfig` names and prints the
-effective schedule during setup.
+effective schedule during setup. `data.max_length` sets PPO's response length
+(moving the default from TRL's 53 to `data.max_length`), `--deepspeed` is forwarded,
+and `save_total_limit=3` keeps up to 3 checkpoints.
+
+One PPO rollout batch is `batch_size` x `gradient_accumulation_steps` prompts on
+every process, and TRL drops a partial batch, so the train set needs at least
+`batch_size` x `gradient_accumulation_steps` x the number of processes rows.
+A smaller one would never reach a step, so `soup train` refuses it before loading
+any model and names the row count and both settings.
 
 PPO supports two reward sources:
 - **Reward model** (`reward_model`): pre-trained reward model (from step 2)
@@ -1449,6 +1911,8 @@ training:
     alpha: 16
   quantization: 4bit
 ```
+
+**Batch size.** KTO needs a per-device `batch_size` of at least 2: TRL's KL term is degenerate at batch 1, so `batch_size: 1` is refused when the config is loaded. `batch_size: auto` never resolves below 2, and `soup local-rl train --train-method kto` writes `batch_size: 2`. Raise `gradient_accumulation_steps` for a larger effective batch.
 
 **KTO data format:**
 ```json
@@ -1478,6 +1942,9 @@ training:
   quantization: 4bit
 ```
 
+On Apple Silicon, `backend: mlx` runs ORPO natively with the same objective; see
+[ORPO on MLX](backends-and-ops.md#orpo-on-mlx).
+
 
 ## SimPO Training (Simple Preference)
 
@@ -1500,6 +1967,27 @@ training:
     alpha: 16
   quantization: 4bit
 ```
+
+**Long prompts are capped as in DPO and ORPO.** trl's CPO trainer cuts only the
+answers, so after it tokenizes, `soup train` cuts the prompt to
+`data.max_length // 2` tokens, keeping its end, and the answers to the room
+left, for the train and validation splits. Every sequence is then at most
+`data.max_length`. The cut goes by the prompt alone: a prompt longer than
+`data.max_length // 2` tokens loses its start even when prompt and answers
+would fit in `data.max_length`. A row whose prompt is at most
+`data.max_length // 2` tokens and which fits is unchanged.
+
+**Rows whose completion trl truncates away are refused.** trl's CPO trainer
+truncates each answer to `data.max_length` minus the **longer** answer's length,
+so a long `chosen` beside a short `rejected` leaves the short side with zero
+trainable tokens — SimPO's length-normalised log-probability is then 0/0, every
+adapter tensor trains to NaN, and transformers' nan-inf filter reports the loss
+as `0.0`. `soup train` stops before the first step, naming how many rows and
+which, with the `data.max_length` involved. Raise `data.max_length`, balance the
+pair, or drop the row.
+
+On Apple Silicon, `backend: mlx` runs SimPO natively with the same objective; see
+[SimPO on MLX](backends-and-ops.md#simpo-on-mlx).
 
 
 ## IPO Training (Regularized Preference)
@@ -1537,8 +2025,9 @@ data:
 training:
   citation_faithful: true        # enable citation precision/recall scoring
   citation_style: bracket        # cite as [doc-1] inline
-  citation_recall_threshold: 0.8 # gate final save on recall >= 80%
 ```
+
+`training.citation_recall_threshold` is validated but nothing gates a save or a run on it. Setting it warns in v0.76 and is refused as of v0.77 (#761).
 
 ```jsonl
 # RAFT JSONL row shape
@@ -1563,7 +2052,7 @@ score = score_citations(
 # CitationScore(precision=1.0, recall=1.0, f1=1.0, predicted_count=1, expected_count=1)
 ```
 
-Citation-faithful FT is gated to `task in {sft, pretrain}` + `data.format='raft'` — misconfigured runs fail at config load with a named-field message.
+Citation-faithful FT requires `task: sft` + `data.format: raft` — misconfigured runs fail at config load with a named-field message. The pretrain trainer does not apply citation span weights and refuses `training.citation_faithful: true`.
 
 Under the hood, a `format: raft` run trains **answer-only**: each row is composed into a prompt (golden + distractor docs, shuffled deterministically by `data.raft_shuffle_seed`, each labelled `[doc-N]`) followed by the answer; the prompt span is masked out of the loss and — when `citation_faithful: true` — the bracketed `[doc-id]` spans in the answer get a boosted per-token loss weight. Rows whose prompt fills `max_length` (answer fully truncated) are dropped with a warning rather than silently shrinking the dataset.
 
@@ -1607,6 +2096,8 @@ soup ra-dit -r retriever.yaml -g generator.yaml --plan-only
 
 It trains the retriever, then **records** that trained retriever as the generator's paired retriever (writing its output dir into the generator's `training.ra_dit_retriever_model`) and trains the generator RAFT-style. The recorded retriever is the one used at deploy/serve time — stage-2 does not fuse the retriever weights. A plain `soup train` of a generator-stage config with no retriever model set **auto-links** the most-recent RA-DIT retriever run from the Registry; pass `--retriever-model <m>` to override.
 
+Both configs must write to different, non-nested output directories: `soup ra-dit` refuses a pair whose effective outputs (`output` plus `experiment_name`, exactly as the trainers build them) are equal or nested, so give each stage its own `output`, or give both stages different `experiment_name` values. The two shipped recipes both declare `output: ./output`, so setting an `experiment_name` on only one stage is not enough.
+
 
 ## Curriculum-Aware Training (BETA)
 
@@ -1632,20 +2123,23 @@ DDP / grad-accum safety: multi-rank launches must wire an `all_reduce` hook on p
 
 ## TTS Fine-Tuning (`task='tts'`, BETA, live in v0.71.20)
 
-Live as of v0.71.20 (lifted from the v0.52.0 schema stub). The five families
-(`orpheus`, `sesame_csm`, `llasa`, `spark`, `oute`) are all decoder language
-models, so a TTS fine-tune is **next-token cross-entropy over interleaved
-`[text][audio-codec-token]` chat sequences** — the same objective the SFT
-trainer already runs. `TTSTrainerWrapper` reuses the SFT model/tokenizer/LoRA/CE
-machinery and adds two TTS-specific pieces: per-family emotion-control
-templating and registration of operator-supplied codec special tokens.
+Live as of v0.71.20 (lifted from the v0.52.0 schema stub). The codec-string
+families (`orpheus`, `llasa`, `spark`, `oute`) train with **next-token
+cross-entropy over interleaved `[text][audio-codec-token]` chat sequences**,
+so `TTSTrainerWrapper` reuses the SFT model/tokenizer/LoRA/CE machinery and
+adds per-family emotion templating plus codec-token registration. `sesame_csm`
+is different: current CSM training uses text plus 32 Mimi codebooks as parallel
+multimodal frames. Soup routes it to a dedicated native trainer (see below),
+and continues to refuse pre-encoded CSM codec-string chat.
 
 There are two workflows:
 
-**Pre-encoded chat (live, validated).** Run the family's audio codec **offline**
-so the assistant turn already contains the discrete codec-token string, then
-train with `data.format: chat`. This is plain cross-entropy and runs on any GPU
-(validated end-to-end on SmolLM2-135M-Instruct).
+**Pre-encoded chat (live for codec-string families).** Run the family's audio
+codec **offline** so the assistant turn already contains the discrete
+codec-token string, then train with `data.format: chatml`. This is plain
+cross-entropy and runs on any GPU (validated end-to-end on
+SmolLM2-135M-Instruct). This workflow does not turn Sesame CSM's parallel Mimi
+codebooks into a valid CSM training example.
 
 ```yaml
 base: HuggingFaceTB/SmolLM2-135M-Instruct   # or canopylabs/orpheus-3b-0.1-ft
@@ -1653,37 +2147,111 @@ task: tts
 modality: audio_out
 data:
   train: ./data/tts_pre_encoded.jsonl   # assistant turns carry codec tokens
-  format: chat
+  format: chatml
   new_special_tokens: ["<|codec_0|>", "<|codec_1|>"]   # your codec vocab
 training:
   tts_family: orpheus
   tts_emotion: neutral   # Orpheus + Oute only
-  lora: true
+  lora:
+    r: 16
+    alpha: 32
 ```
 
 Operator-supplied `data.new_special_tokens` are registered (deduplicated, only
 tokens not already in the vocab) and the embedding matrix is resized through the
-(possibly PEFT-wrapped) model so the codec-token ids have rows. Orpheus + Oute
+(possibly PEFT-wrapped) model so the codec-token ids have rows. That happens on
+`backend: transformers` only: the unsloth setup has no step that adds tokens, so
+`backend: unsloth` with `new_special_tokens` is refused at load (#1358). Orpheus + Oute
 support emotion conditioning via `training.tts_emotion` from a per-family
 allowlist (Orpheus: neutral / happy / sad / angry / excited / calm / whisper /
 laugh; Oute: neutral / happy / sad / angry / calm / excited) — the wrapper
 prepends the family's emotion control string to the first user turn.
 
 **Live-codec (hardware/dependency-gated).** Setting `data.format: audio` asks
-the trainer to encode raw audio into codec tokens **at train time**, which needs
-the family's heavyweight codec package (`snac` for Orpheus, `moshi` for
-Sesame-CSM, `xcodec2` for Llasa, `sparktts` for Spark, `outetts` for Oute). The
-**Orpheus** path is live — install `pip install snac` and a 24 kHz mono wav is
-encoded to SNAC codec tokens end-to-end (audio is duration- and byte-capped and
-read through an `O_NOFOLLOW` fd). The other four families still surface a
-friendly per-family `RuntimeError` naming the required `pip install` and are not
-yet validated on the maintainer's box — use the pre-encoded workflow above for a
-runnable fine-tune with those.
+the trainer to encode raw audio **at train time**. Orpheus and Llasa are live on
+the codec-string path: Orpheus uses `pip install snac` at 24 kHz; Llasa uses
+Soup's `[audio]` extra (torchaudio + soundfile). Torchaudio must match the
+installed Torch release — recent torchaudio metadata may not make pip enforce
+that pairing — then Soup resamples to 16 kHz and calls the
+Transformers-native `HKUSTAudio/xcodec2-hf` codec, and
+renders the resulting ids as `<|s_ID|>` between Llasa's speech-generation
+boundary tokens. Audio remains duration/byte-capped and is read through an
+`O_NOFOLLOW` fd. Spark and Oute raw-audio live encoding now fails closed:
+Spark-TTS has no installable `sparktts` package and its official environment pins
+Torch/Transformers below Soup's supported stack; current `outetts` pins
+Transformers 4.52.3 and Oute preparation also needs transcript/word alignment.
+For those two families, pre-encode in the upstream environment and train the
+resulting codec-token chat with `data.format: chatml`. Sesame CSM uses the native
+multimodal path below, rather than this codec-string adapter.
 
-Five ready-made recipes ship: `orpheus-tts-sft`, `sesame-csm-tts`, `llasa-tts`,
-`spark-tts`, `oute-tts` — copy with `soup recipes use <name>`. Cross-validators
+Three ready-made codec-string recipes ship: `orpheus-tts-sft`, `llasa-tts`,
+`oute-tts` — copy with `soup recipes use <name>`. Cross-validators
 reject the `mlx` backend, `modality != audio_out`, and emotion tags outside the
 per-family allowlist.
+
+### Native Sesame CSM
+
+`training.tts_family: sesame_csm` selects `CsmForConditionalGeneration` and
+`CsmProcessor` from Transformers, with no separate Moshi installation. The
+processor builds text conditioning and audio-frame labels; the model encodes
+audio with its frozen Mimi codec and optimizes the sum of the backbone loss
+(first codebook) and depth-decoder loss (the other 31 codebooks). Text and padding
+are excluded from the audio targets. Mimi stays in evaluation mode during training.
+This follows the [Transformers CSM training contract](https://huggingface.co/docs/transformers/model_doc/csm#training).
+
+Install `pip install 'soup-cli[train,audio]'`, then prepare one local clip and
+its exact transcript per JSONL row. `role` is the native speaker id `"0"` or `"1"`:
+
+```json
+{"audio": "hello.wav", "messages": [{"role": "0", "content": "Hello, how are you?"}]}
+```
+
+```yaml
+base: sesame/csm-1b
+backend: transformers
+task: tts
+modality: audio_out
+output: ./output/csm
+data:
+  train: ./data/speech.jsonl
+  format: audio
+  audio_dir: ./data/audio
+  max_length: 2048
+training:
+  tts_family: sesame_csm
+  quantization: none
+  epochs: 3
+  batch_size: 1
+  gradient_accumulation_steps: 4
+  lr: 0.00002
+  lora:
+    r: 16
+    alpha: 32
+```
+
+Run `soup train -c csm.yaml`. The checkpoint may require Hugging Face access;
+obtain that access and authenticate before running. Local Transformers-format
+CSM checkpoints are also accepted. Audio is loaded through Soup's local-file
+safety checks and resampled to mono 24 kHz. Sequences longer than `max_length`
+are refused rather than truncating audio markers and breaking codec alignment.
+
+The initial native path supports one device, single-clip rows, standard LoRA
+on the backbone and depth decoder (excluding Mimi), or full fine-tuning with
+`lora.r: 0` (Mimi remains frozen). `batch_size: auto` conservatively selects 1.
+Validation loss, boolean gradient checkpointing, seeds, checkpoint resume and
+processor saving are supported. Multi-turn rows, quantization, packing,
+distributed training and additional SFT optimization knobs are refused explicitly.
+The MLX backend remains unsupported for TTS. On Apple Silicon, contributor @Amix29
+ran `test_native_mps_training_step` with PyTorch/MPS, torch 2.13.0 and transformers
+5.16.1: one LoRA training step on a tiny randomly initialized CSM/Mimi model,
+with finite loss and a frozen codec. This is the evidence for the MPS bf16 opt-in.
+Full fine-tuning, gradient checkpointing, evaluation, resume and the pretrained
+`sesame/csm-1b` checkpoint were not run on MPS.
+
+Offline tests construct a tiny real CSM model with all 32 Mimi codebooks and
+exercise forward/backward, training, evaluation, save/reload and resume. These
+tests validate the integration; they do not establish speech quality or a full
+training run on the pretrained `sesame/csm-1b` checkpoint.
 
 
 ## Classifier / Reranker / Cross-Encoder Training (BETA, v0.52.0)
@@ -1719,12 +2287,20 @@ training:
   distill_temperature: 2.0
 ```
 
-The cross-validator rejects `task='distill'` without `teacher_model`, and rejects `teacher_model` / `distill_*` fields when `task` is anything other than `distill`.
+The cross-validator rejects `task='distill'` without `teacher_model`, and rejects `teacher_model` / `distill_*` fields when `task` is anything other than `distill`. It also refuses `task='distill'` on `backend: mlx` and `backend: unsloth` at config load; distillation runs on `backend: transformers` only. Both token-level and sequence-level distillation require `modality: text`; `vision` and `audio` are refused at config load because the distill trainer has no multimodal input path.
 
 
 ## EBFT + GDPO (BETA, v0.52.0)
 
-Energy-Based Fine-Tuning (axolotl) lands as `training.ebft_variant ∈ {structured, strided}` + `training.ebft_temperature` (bounded `[1e-4, 100.0]`). Gated to `task: sft`. Generalized DPO lands as `training.gdpo_variant ∈ {standard, length_normalized, margin}` — gated to `task ∈ {dpo, preference}`. Live loss kernels in v0.52.1.
+Both fields are refused at config load. `training.gdpo_variant` silently did
+nothing on supported TRL versions because the DPO loss hook no longer exists
+([#1309](https://github.com/MakazhanAlpamys/Soup/issues/1309)); remove it and use
+plain DPO for `standard`, or SimPO as the nearest (not identical) objective for
+`length_normalized`. `margin` has no equivalent. Energy-Based Fine-Tuning
+(`training.ebft_variant` + `training.ebft_temperature`) remains refused
+([#1230](https://github.com/MakazhanAlpamys/Soup/issues/1230)): its term had no
+causal shift, so it rewarded copying the input, and shifted it would duplicate
+the cross-entropy. See [EBFT / GDPO Loss Variants](#ebft--gdpo-loss-variants).
 
 
 ## gpt-oss `reasoning_effort` + `train_on_eot` (v0.52.0)
@@ -1758,16 +2334,46 @@ training:
   epochs: 1
 ```
 
-The gate is the only trainable parameter; it is saved as `mole_gate.pt` alongside the run.
+The gate is the only trainable parameter; it is saved as `mole_gate.pt` alongside the run, saved into every `checkpoint-N`, and restored by `--resume`.
+It trains as an fp32 master weight on every device, so its gradient and AdamW moments are
+fp32 too, even where the frozen base loads in bf16 (on CUDA), and `mole_gate.pt` is saved in
+fp32: a `Linear(hidden, N)` of `4 x hidden x N` bytes, about 7 KB for the example above and
+2 MiB at hidden 8192 with 64 adapters. A bf16 gate with no fp32 copy would round most AdamW
+steps away at the default `lr` (#1266).
 `compute_loss` runs N+1 forwards per step (base + each adapter under `torch.no_grad()`, blended
-by the per-token gate weights) so step time scales with the number of task adapters. Training
-only — there is no serve-time MoLE path yet. (v0.71.12)
+by the per-token gate weights) so step time scales with the number of task adapters. To serve
+the trained router, see `soup serve --mole` in [Serving and Export](serving-and-export.md).
+(v0.71.12)
 
 
 ## Architecture Knobs — Mixture-of-Depths, LLaMA Pro, LongLoRA
 
-Three architecture transforms that were schema-only are now live for SFT / Pretrain on
-Llama / Qwen / Mistral (LongLoRA also covers Phi). All apply at trainer setup:
+Two architecture transforms that were schema-only are now live on Llama / Qwen / Mistral:
+Mixture-of-Depths on SFT and pretrain, LLaMA Pro on SFT only
+([#1813](https://github.com/MakazhanAlpamys/Soup/issues/1813)). Both apply at trainer setup.
+
+`training.use_mod: true` installs a per-layer top-k token router
+(`mod_capacity_factor`, default 0.125). It is applied only on the routes
+below. Every other active request is refused at config load, naming
+`training.use_mod`, the task, the settings that leave the applying path, and
+what to change or `use_mod: false` (#1752).
+
+| Config | `use_mod: true` |
+| --- | --- |
+| `task: sft`, `backend: transformers`, `modality: text`, no layer streaming, `lora.r` >= 1, LISA off, no `unfrozen_parameters` | applied |
+| `task: tts`, `modality: audio_out`, `backend: transformers`, `lora.r` >= 1 | applied (`tts` trains through that SFT LoRA arm) |
+| `task: pretrain`, `backend: transformers`, LoRA or LISA | applied |
+| `task: sft` with `modality: vision` or `audio`, `stream_layers: true`, LISA, nonempty `unfrozen_parameters`, or `lora.r: 0` | refused |
+| `task: sft` or `tts` with `backend: unsloth`, or `task: sft` with `backend: mlx` | refused |
+| `task: tts` with `lora.r: 0` | refused |
+| `task: pretrain` with `backend: unsloth` | refused |
+| any other task | refused |
+
+Pretrain follows its own dispatch. Modality and streaming are not MoD
+refusals there, and a pretrain LISA run still installs the router. A config
+that is already invalid — `backend: mlx` on `tts` or `pretrain`,
+`stream_layers` outside its task list, or `lora.r: 0` on `pretrain` without
+LISA — keeps that earlier error instead of this one.
 
 ```yaml
 training:
@@ -1775,20 +2381,33 @@ training:
   # block. capacity_factor is the fraction of tokens that get the residual update.
   use_mod: true
   mod_capacity_factor: 0.125
-
-  # LLaMA Pro: append zero-initialised identity decoder blocks and train only the new
-  # ones (freeze_trainable_layers freezes the originals).
-  expand_layers: 4
-  freeze_trainable_layers: 4
-
-  # LongLoRA S²: shifted-sparse attention on the Q/K projections for long-context tuning.
-  use_longlora: true
 ```
 
-`use_mod` / `expand_layers` attach AFTER `get_peft_model` so the new routers / blocks are
-trainable. Unsupported architectures warn + skip (MoD, block expansion); `use_longlora` is
-rejected at the schema gate for non-supported arches and for `use_ring_attention` / FlashAttention-3.
-Pick one of MoD / LLaMA Pro / LongLoRA per run. (v0.71.12)
+```yaml
+training:
+  # LLaMA Pro: append zero-initialised identity decoder blocks and train only the new
+  # ones (freeze_trainable_layers must equal expand_layers and freezes the
+  # originals). Needs quantization: none and lora.r: 0 (task: sft).
+  expand_layers: 4
+  freeze_trainable_layers: 4
+  quantization: none
+  lora:
+    r: 0
+```
+
+`use_mod` attaches AFTER `get_peft_model` on the SFT/TTS LoRA arm, and after the LISA/LoRA
+split on pretrain, so the new routers are trainable. `expand_layers`
+runs BEFORE it, and `get_peft_model` would freeze the appended blocks again, so a LoRA rank is
+refused with `expand_layers` and the blocks train with `lora.r: 0`
+([#1326](https://github.com/MakazhanAlpamys/Soup/issues/1326)). Unsupported architectures
+warn + skip. Pick one of MoD / LLaMA Pro per run. (v0.71.12; `use_mod` route gate #1752)
+
+LongLoRA S² (`use_longlora: true`) is refused at config load
+([#1240](https://github.com/MakazhanAlpamys/Soup/issues/1240)). Its override rolled the
+query/key projections of half the heads with wrap-around under full causal attention, so
+earlier positions saw the last tokens of the sequence, and it applied no grouped attention.
+To extend the context, use `rope_scaling_type` with plain LoRA; see
+[Long Context](peft-and-efficiency.md#long-context--yarn-llama-31-ntk-longlora).
 
 
 ## Spectrum — Targeted Training on Layer SNR (`soup spectrum scan`, v0.71.23)
@@ -1834,3 +2453,32 @@ a conflicting combo is rejected loudly at config load. Scans cache under `~/.sou
 `all` default) is recommended for very large models — it skips the giant embedding/lm_head matrices.
 The SNR kernel is pure-numpy and transpose-invariant, so GPT-2 `Conv1D` weights score the same as
 Linear weights. (v0.71.23)
+
+## Training source identity
+
+`soup train` captures `training_data_sha256` before loading or transforming a
+supported single local raw text-training file. The digest is SHA-256 of the
+complete file bytes, including any BOM and original newline encoding. It records
+source bytes at startup; it does not prove which transformed examples, external
+assets or later streaming reads trained the model. The source is not frozen.
+
+Capture uses 1 MiB reads, a 256 MiB byte limit and a 5-second time budget checked
+between filesystem operations. An operation already blocked on I/O cannot be
+interrupted by that budget. Larger, unreadable, changing or incomplete files are
+recorded as unknown (`NULL`), never as the hash of a prefix. Descriptor and path
+metadata detect accidental replacement/modification during capture; this is not
+an adversarial filesystem snapshot.
+
+Mixed/interleaved/replay, remote, streaming, tokenized and directory inputs remain
+unknown. The initial scope is text input through `data.train`; TTS, unlearning and
+non-text modalities remain unknown. No unknown component is silently omitted to
+manufacture an identity for a composite input. Dry runs do not capture a digest.
+
+The recorded value is retained in `soup_run.json` beside the final artifact and
+copied by `soup registry push --run-id` without reopening today's source. Explicit
+`--data` still describes the file registered now: its hash takes precedence for
+`data_hash` and the entry fingerprint, while `training_data_sha256` keeps the
+historical startup digest. Copied artifacts retain that digest without the
+original dataset. Existing runs stay unknown; no historical identity is inferred
+from today's files. Sweep and other training entry points do not gain capture in
+this change.

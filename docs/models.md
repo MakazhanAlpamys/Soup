@@ -4,6 +4,8 @@
 
 > Recommended model families, the VRAM size guide, and the pip extras matrix.
 
+> Model sizes across recipes represent the total parameter count (all resident parameters for MoE models, answering card VRAM requirements).
+
 ## Supported Models
 
 Soup works with **any** of the **340,000+** text-generation models on [HuggingFace Hub](https://huggingface.co/models?pipeline_tag=text-generation). If a model supports `AutoModelForCausalLM`, it works with Soup — zero config changes needed.
@@ -12,7 +14,7 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 
 | Model Family | Models | Sizes | Best For |
 |---|---|---|---|
-| **Llama 4** | Llama-4-Scout-17B, Llama-4-Maverick-17B | 17B | General, multilingual |
+| **Llama 4** | Llama-4-Scout-17B, Llama-4-Maverick-17B | 109B-400B | General, multilingual |
 | **Llama 3.x** | Llama-3.1-8B-Instruct, Llama-3.3-70B-Instruct | 1B–70B | Chat, instruction following |
 | **Llama 3.2 Vision** | Llama-3.2-11B-Vision-Instruct, Llama-3.2-90B-Vision | 11B–90B | Image understanding |
 | **Gemma 3** | Gemma-3-4B-IT, Gemma-3-9B-IT, Gemma-3-27B-IT | 4B–27B | Efficient, multilingual |
@@ -20,11 +22,11 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 | **Qwen 3** | Qwen3-8B, Qwen3-14B, Qwen3-32B, Qwen3-235B-A22B | 0.6B–235B | Reasoning, code, MoE |
 | **Qwen 2.5** | Qwen2.5-7B-Instruct, Qwen2.5-Coder-32B-Instruct, Qwen2.5-Math-7B-Instruct | 0.5B–72B | Code, math |
 | **DeepSeek** | DeepSeek-R1-Distill-Llama-8B, DeepSeek-V3-0324, DeepSeek-V4-Flash/Pro | 1.5B–1.6T | Reasoning (GRPO), code, MoE |
-| **GLM** | GLM-5, GLM-5.1 | 9B–754B | Chinese + English, MoE |
+| **GLM** | GLM-4.6, GLM-5, GLM-5.1 | 357B-754B | Chinese + English, MoE |
 | **Kimi** | Kimi-K2, Kimi-K2.5, Kimi-K2.6 | ~1T (MoE) | Long-context agentic, MoE |
 | **MiniMax** | MiniMax-M2, MiniMax-M3 | 230B–428B | Agentic, MoE (community license) |
 | **Phi-4** | Phi-4-14B, Phi-4-mini-reasoning | 3.8B–14B | Compact reasoning |
-| **Mistral** | Mistral-7B-Instruct-v0.3, Mistral-Small-24B, Mistral-Large-3 | 7B–675B | Fast, efficient, MoE |
+| **Mistral** | Mistral-7B-Instruct-v0.3, Mistral-Small-24B | 7B–24B | Fast, efficient |
 | **Mixtral** | Mixtral-8x7B-Instruct-v0.1, Mixtral-8x22B | 47B–141B | MoE architecture |
 | **CodeLlama** | CodeLlama-7b-Instruct-hf, CodeLlama-34b-Instruct | 7B–34B | Code generation |
 | **StarCoder 2** | StarCoder2-15B, StarCoder2-7B | 3B–15B | Code completion |
@@ -32,16 +34,25 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 | **InternLM 3** | InternLM3-8B-Instruct | 8B | Chinese + English |
 | **Falcon** | Falcon-11B, Falcon-40B-Instruct | 7B–180B | Open-weight |
 
+**Mistral-Large-3 is not shipped as a recipe.** `mistralai` publishes it in Mistral's native layout (`params.json` + `consolidated-*.safetensors`), with no `config.json`, which `AutoConfig` cannot read, and no flag changes that. A Hugging Face-format conversion exists on the Hub as `FriendliAI/Mistral-Large-3-675B-Instruct-2512-BF16`; it is a third party's re-upload, so Soup does not point a recipe at it (#1145).
+
 Qwen3.5, Qwen3.6, and Qwen3.8 checkpoints advertise a multimodal conditional-generation
 architecture on the Hub, but Soup's catalog recipes are deliberately text-only.
 Their explicit `modality: text` selects `AutoModelForCausalLM`, which instantiates the
 language decoder without the visual tower. This is appropriate for text-only SFT,
-pre-training, and GRPO data; it is not a full multimodal fine-tune. The Transformers
+pre-training, DPO and GRPO data; it is not a full multimodal fine-tune. The Transformers
 backend requires Transformers 5.16.1 or newer, which also supplies the
 `qwen4_exp` text decoder used by Qwen3.8-Flash-Next (#571). On Torch runtimes
 whose `scatter` operator still requires `int64` indices, Soup widens only the
 QSA indexer's local index tensors before LoRA injection; Torch and the upstream
 Transformers class remain unchanged.
+
+`soup recipes use qwen3.5-4b-dpo` selects the 4B language decoder for text
+preference pairs (`prompt`, `chosen`, `rejected`). It inherits the shipped
+Qwen3.5-9B DPO settings: `lr: 5e-6`, three epochs, LoRA rank 16 / alpha 32,
+4-bit quantization and a 4096-token limit. These are inherited starting values,
+not a measured 4B tuning recommendation. The model's visual tower is excluded;
+image preference data is not supported by this recipe.
 
 With `training.stream_layers: true`, the Qwen4-Exp text decoder is admitted by
 its own parity-tested path. Its very large frozen PLE N-gram table is excluded
@@ -98,11 +109,13 @@ Rows are `{"audio": <path>, "text": <transcript>}` with `data.format: asr`. See
 
 ## Optional Extras
 
-> **Python 3.10, 3.11 or 3.12.** Since v0.73.0 the package declares
-> `requires-python = ">=3.10,<3.13"`. Those are exactly the versions CI tests. Without the
-> upper bound, pip on 3.13+ resolved PyTorch wheels nobody had validated, and the failure was
-> not a Soup error message — it was a loader crash inside `c10.dll` / `libc10.so` before any
-> Soup code ran. If you are on 3.13+, create a 3.12 environment; support widens when CI does.
+> **Python 3.11, 3.12 or 3.13.** Since v0.77 the package declares
+> `requires-python = ">=3.11,<3.14"` (v0.73.0 to v0.76: `">=3.10,<3.13"`). Those are exactly
+> the versions CI tests. Python 3.10 reached end of life on 2026-10-01; on it, pip keeps
+> installing v0.76. Without the upper bound, pip on an untested Python resolved PyTorch wheels
+> nobody had validated, and the failure was not a Soup error message — it was a loader crash
+> inside `c10.dll` / `libc10.so` before any Soup code ran. If you are on 3.14+, create a 3.13
+> environment; support widens when CI does.
 
 ### Quoting the extra
 
@@ -138,8 +151,8 @@ spelling is unchanged. See [the README's install section](../README.md#1-install
 | `fast` | `pip install "soup-cli[fast]"` | Unsloth backend (2-5x faster, lower VRAM) |
 | `vision` | `pip install "soup-cli[vision]"` | Vision / multimodal fine-tuning (Pillow) |
 | `audio` | `pip install "soup-cli[audio]"` | Audio / speech fine-tuning (librosa, soundfile) |
-| `mlx` | `pip install "soup-cli[mlx]"` | Standalone Apple Silicon SFT backend for local data; `[train]` is not required |
-| `qat` | `pip install "soup-cli[qat]"` | Quantization-Aware Training (torchao) |
+| `mlx` | `pip install "soup-cli[mlx]"` | Standalone Apple Silicon SFT, DPO, ORPO and SimPO backend for local data; `[train]` is not required |
+| `qat` | `pip install "soup-cli[qat]"` | torchao: FP8 training (`quantization_aware: fp8`), FP8 attention, NVFP4, the `ao_adamw_*` optimizers and `soup export --format torchao` |
 | `serve` | `pip install "soup-cli[serve]"` | Inference server (FastAPI + uvicorn) |
 | `serve-fast` | `pip install "soup-cli[serve-fast]"` | vLLM inference backend (2-4x throughput) |
 | `sglang` | `pip install "soup-cli[sglang]"` | SGLang inference backend |
@@ -153,7 +166,6 @@ spelling is unchanged. See [the README's install section](../README.md#1-install
 | `liger` | `pip install "soup-cli[liger]"` | Liger Kernel fused ops |
 | `ring-attn` | `pip install "soup-cli[ring-attn]"` | Ring FlashAttention (sequence parallelism) |
 | `onnx` / `tensorrt` | `pip install "soup-cli[onnx]"` | ONNX / TensorRT-LLM export |
-| `awq` / `gptq` | `pip install "soup-cli[awq]"` | AWQ / GPTQ quantized export |
 | `trackers` | `pip install "soup-cli[trackers]"` | MLflow / SwanLab / Trackio logging |
 | `remote` | `pip install "soup-cli[remote]"` | Remote datasets (s3 / gs / az / oci) |
 | `dev` | `pip install "soup-cli[dev]"` | Tests + lint + types (pytest, ruff, mypy, pre-commit) |

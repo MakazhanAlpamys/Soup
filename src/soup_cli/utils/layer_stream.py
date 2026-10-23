@@ -19,9 +19,23 @@ stay resident.
 
 import math
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple, Union
 
 from rich.panel import Panel
+
+# Buffer, read-ahead and task bounds live in a dependency-free leaf so the schema
+# can import them without this module's rich subtree (#780). Re-exported here, not
+# redeclared, so the schema bound and the runtime message are the same object.
+from soup_cli.utils.config_bounds import (
+    DEFAULT_STREAM_BUFFERS,
+    DEFAULT_STREAM_READ_AHEAD,
+    MAX_STREAM_BUFFERS,
+    MAX_STREAM_READ_AHEAD,  # noqa: F401
+    MIN_STREAM_BUFFERS,
+    MIN_STREAM_READ_AHEAD,  # noqa: F401
+    ROLLOUT_STREAM_TASKS,  # noqa: F401
+    SUPPORTED_STREAM_TASKS,  # noqa: F401
+)
 
 # Quantisation names are re-exported, NOT redeclared: layer_shard owns the shard
 # format and these same strings key its cache-invalidation check. Two copies
@@ -56,35 +70,6 @@ PHYSICAL_RAM_TIER_HEADROOM_PERCENT = round(PHYSICAL_RAM_TIER_HEADROOM * 100)
 PIN_THROUGHPUT_GAIN_REAL = 6.56
 PIN_THROUGHPUT_GAIN_SYNTHETIC = 7.41
 
-# --- buffers --------------------------------------------------------------
-MIN_STREAM_BUFFERS = 2
-MAX_STREAM_BUFFERS = 8
-DEFAULT_STREAM_BUFFERS = 2
-
-# Re-exported, not redeclared: the schema imports its bound from here and the
-# runtime declares it, so the message and the check cannot disagree (the same
-# reasoning as stream_buffers).
-from soup_cli.utils.async_disk_source import (  # noqa: E402
-    DEFAULT_STREAM_READ_AHEAD,  # noqa: F401
-    MAX_STREAM_READ_AHEAD,  # noqa: F401
-    MIN_STREAM_READ_AHEAD,  # noqa: F401
-)
-
-# --- tasks ----------------------------------------------------------------
-#: Tasks whose trainers can run against a streamed base (v0.72.4).
-#:
-#: DPO and KTO take their reference model from the SAME streamed base with the
-#: adapters disabled (TRL's ``null_ref_context``), so the reference costs no
-#: extra weights at all — measured 0.914x the SFT peak, where forcing a real
-#: second instance cost 9.92x. ORPO and SimPO are reference-free.
-SUPPORTED_STREAM_TASKS = ("sft", "dpo", "orpo", "simpo", "kto")
-
-#: Tasks PERMANENTLY excluded, not merely unimplemented. Generation rollouts
-#: re-read every layer once per generated token, which destroys the whole
-#: premise: streaming amortises one weight read over a training step, not over a
-#: single decoded token (plan §3.2).
-ROLLOUT_STREAM_TASKS = ("grpo", "ppo")
-
 #: FLOPs per parameter per token. 6 == WITH gradient checkpointing
 #: (2 forward + 2 recompute + 2 dL/dx; base weight-grads are skipped because
 #: the base is frozen). Streaming always checkpoints, so this is never 4.
@@ -100,6 +85,14 @@ FLOPS_PER_PARAM_PER_TOKEN = 6
 #: reports ``model_type='gemma3'`` for the vision-capable wrapper, and streaming
 #: a multimodal wrapper as though it were a causal LM is exactly the failure the
 #: allowlist exists to prevent.
+#:
+#: ``deepseek_v3`` is the DeepSeek-V3 family (MLA attention, DeepSeekMoE with
+#: a shared expert, the first ``first_k_dense_replace`` layers dense). Kimi K2
+#: ships the same decoder under ``model_type='kimi_k2'``, which transformers
+#: does not register. The streamed model's config loader (``utils/kimi_k2.py``)
+#: reads such a config into the native ``DeepseekV3Config`` behind a guard, so a
+#: K2 that passes it streams as ``deepseek_v3``; the name ``kimi_k2`` is not in
+#: this list, and a config still carrying it did not pass that guard.
 SUPPORTED_STREAM_ARCHS = (
     "llama",
     "qwen2",
@@ -111,6 +104,7 @@ SUPPORTED_STREAM_ARCHS = (
     "gemma3_text",
     "phi",
     "phi3",
+    "deepseek_v3",
 )
 
 # Model types whose text decoders reuse an admitted streaming family.  Each
@@ -669,38 +663,65 @@ def _measure_seq_read_bytes_per_s(path: str) -> Optional[float]:
                 pass
 
 
+_LINUX_SYS_DEV_BLOCK = "/sys/dev/block"
+
+
+def _linux_block_kind(device: str, ancestors: frozenset[str] = frozenset()) -> str:
+    """Classify one sysfs device, following partitions and stacked-volume members."""
+    import os
+
+    device = os.path.realpath(device)
+    if device in ancestors or len(ancestors) >= 32 or not os.path.isdir(device):
+        return "unknown"
+    ancestors = ancestors | {device}
+    if os.path.exists(os.path.join(device, "partition")):
+        return _linux_block_kind(os.path.dirname(device), ancestors)
+    slaves = os.path.join(device, "slaves")
+    if os.path.isdir(slaves):
+        members = os.listdir(slaves)
+        if members:
+            kinds = {_linux_block_kind(os.path.join(slaves, name), ancestors) for name in members}
+            return next(kind for kind in ("hdd", "unknown", "ssd", _NVME) if kind in kinds)
+    if os.path.basename(device).startswith("nvme"):
+        return _NVME
+    rotational = os.path.join(device, "queue", "rotational")
+    if os.path.isfile(rotational):
+        with open(rotational, encoding="utf-8") as handle:
+            value = handle.read().strip()
+        return {"0": "ssd", "1": "hdd"}.get(value, "unknown")
+    return "unknown"
+
+
+def _linux_path_disk_kind(path: str) -> str:
+    """Attribute the volume to sysfs before reading its media type."""
+    import os
+
+    try:
+        dev = os.stat(os.path.expanduser(path)).st_dev
+        device = f"{_LINUX_SYS_DEV_BLOCK}/{os.major(dev)}:{os.minor(dev)}"
+        return _linux_block_kind(device)
+    except (OSError, ValueError):
+        return "unknown"
+
+
 def _probe_disk_kind(path: str) -> DiskClassification:
     """Classify the volume holding ``path``, carrying the measured rate only when
     the verdict was DERIVED from a read (so a refusal can never cite a rate that
     did not produce its own verdict — see ``DiskClassification``)."""
-    import os
     import platform
     import subprocess
 
     system = platform.system()
     try:
         if system == "Linux":
-            # /sys/block/<dev>/queue/rotational: 1 spinning, 0 solid state.
-            # The device name distinguishes NVMe, and rotational=0 is
-            # authoritative — a device that declares itself solid state is one.
-            # rotational=1 is NOT authoritative: virtio defaults it to 1 with no
-            # media hint, so a fast cloud disk lies as spinning (#365). Fall back
-            # to a measured read there rather than trust the flag.
-            names = sorted(os.listdir("/sys/block"))
-            for dev in names:
-                if not dev.startswith("nvme"):
-                    continue
-                return DiskClassification(_NVME)
-            for dev in names:
-                rot = os.path.join("/sys/block", dev, "queue", "rotational")
-                if os.path.exists(rot):
-                    with open(rot, encoding="utf-8") as handle:
-                        value = handle.read().strip()
-                    if value == "0":
-                        return DiskClassification("ssd")
-                    measured = _measure_seq_read_bytes_per_s(path)
-                    return DiskClassification(_classify_measured_read(measured), measured)
-            return DiskClassification("unknown")
+            kind = _linux_path_disk_kind(path)
+            if kind in (_NVME, "ssd"):
+                return DiskClassification(kind)
+            # rotational=1 can describe fast virtio storage (#365). Unknown
+            # volumes (network, overlay, missing sysfs) also need a path-based
+            # read, never the name of an unrelated physical disk (#1800).
+            measured = _measure_seq_read_bytes_per_s(path)
+            return DiskClassification(_classify_measured_read(measured), measured)
         if system == "Windows":
             shell = _resolve_tool("powershell", _POWERSHELL_FALLBACK)
             if shell is None:
@@ -996,9 +1017,13 @@ def estimate_stream_store_bytes(
 
     Deliberately coarse: it assumes the source is stored at ``dtype`` and
     charges the NF4 rate to every parameter, while layernorms and (in the shard
-    set) the embeddings actually stay unquantised. That errs slightly LOW, which
-    is the safe direction — the authoritative check runs after sharding, on the
-    real shard sizes.
+    set) the embeddings actually stay unquantised. That errs LOW — the
+    authoritative check runs after sharding, on the real shard sizes. It errs far
+    low for a fused MoE base, whose stacked routed experts stay at ``dtype``, and
+    for an FP8 block source, whose files hold one byte per weight. So the disk
+    pre-flight and the early RAM check both size the cache from the source headers
+    instead (``layer_shard.estimate_shard_cache_bytes``) and fall back to this
+    ratio only when those headers cannot be listed or read.
     """
     if quant not in SUPPORTED_STREAM_QUANTS:
         raise ValueError(
@@ -1187,6 +1212,116 @@ def estimate_optimizer_bytes(
     return adapter_params * bytes_per_param
 
 
+def nf4_scale_cache_bytes(quant_specs: Mapping[str, Any], n_layers: int) -> int:
+    """Device bytes ``training.stream_nf4_scale_cache`` holds once every layer ran.
+
+    One fp32 scale per block of every double-quantised decoder weight, in every
+    layer. ``quant_specs`` is keyed by the layer-relative name shared across
+    layers, so a model whose layers do not all carry a weight is over-counted,
+    which is the safe direction for a number that can refuse a run.
+    """
+    per_layer = sum(
+        4 * -(-math.prod(spec.shape) // spec.blocksize)
+        for spec in quant_specs.values()
+        if spec.nested
+    )
+    return per_layer * n_layers
+
+
+#: training.stream_recompute='auto' — the share of the card's total memory the
+#: retained activations may grow the step into.
+STREAM_RECOMPUTE_HEADROOM = 0.85
+
+#: The three caps of :func:`stream_recompute_budget`, by the name it reports.
+RECOMPUTE_CAP_CARD = "card"
+RECOMPUTE_CAP_FREE = "free"
+RECOMPUTE_CAP_OVERRIDE = "override"
+
+
+@dataclass(frozen=True)
+class RecomputeBudget:
+    """The VRAM the retained activations of ``stream_recompute='auto'`` may use."""
+
+    #: The smallest of the caps, in bytes.
+    cap_bytes: int
+    #: Which cap that was: RECOMPUTE_CAP_CARD / _FREE / _OVERRIDE.
+    bound: str
+    #: ``cap_bytes`` minus the measured reserved peak; <= 0 means none.
+    budget_bytes: int
+
+
+def stream_recompute_budget(
+    *,
+    total_bytes: int,
+    free_bytes: int,
+    reserved_bytes: int,
+    reserved_peak_bytes: int,
+    override_bytes: Optional[int] = None,
+    headroom: float = STREAM_RECOMPUTE_HEADROOM,
+) -> RecomputeBudget:
+    """``min(headroom x card, free + reserved now, stream_vram_override) - reserved peak``.
+
+    The card term keeps headroom below the physical size; the free term is what
+    this process can still reach on a card other processes share
+    (``mem_get_info`` free plus what the allocator already holds); the override,
+    when set, is the user's own cap for what the driver cannot report. The peak
+    is the RESERVED one, not the allocated one: the caching allocator's
+    fragmentation is real VRAM.
+    """
+    if (
+        isinstance(headroom, bool)
+        or not isinstance(headroom, (int, float))
+        or not 0.0 < headroom <= 1.0
+    ):
+        raise ValueError(f"headroom must be a float in (0, 1]; got {headroom!r}")
+    caps = {
+        RECOMPUTE_CAP_CARD: int(headroom * total_bytes),
+        RECOMPUTE_CAP_FREE: int(free_bytes) + int(reserved_bytes),
+    }
+    if override_bytes is not None:
+        caps[RECOMPUTE_CAP_OVERRIDE] = int(override_bytes)
+    bound = min(caps, key=lambda name: caps[name])
+    cap = caps[bound]
+    return RecomputeBudget(cap_bytes=cap, bound=bound, budget_bytes=cap - int(reserved_peak_bytes))
+
+
+def retained_layer_charge(
+    allocated_bytes: int, peak_reserved_bytes: int, peak_allocated_bytes: int
+) -> int:
+    """One retained layer's charge: its allocated bytes times the step's
+    reserved/allocated ratio when that is above 1 (the allocator's rounding and
+    fragmentation grow with what it holds), rounded up."""
+    allocated_bytes = int(allocated_bytes)
+    if peak_allocated_bytes <= 0 or peak_reserved_bytes <= peak_allocated_bytes:
+        return allocated_bytes
+    return -(-allocated_bytes * int(peak_reserved_bytes) // int(peak_allocated_bytes))
+
+
+def plan_retained_layers(budget_bytes: int, per_layer_bytes: int, n_layers: int) -> int:
+    """How many of the last streamed layers may skip the checkpoint recompute:
+    ``budget_bytes // per_layer_bytes`` clamped to ``[0, n_layers]``. A zero or
+    negative budget, or a layer charged at zero bytes or less, plans nothing,
+    which is the checkpoint recompute everywhere."""
+    if budget_bytes <= 0 or per_layer_bytes <= 0:
+        return 0
+    return max(0, min(int(n_layers), int(budget_bytes) // int(per_layer_bytes)))
+
+
+def estimate_loss_chunk_bytes(
+    *, hidden_size: int, seq_len: int, batch_size: int = 1, dtype: str = "bfloat16"
+) -> int:
+    """What ``training.stream_loss_chunk`` keeps that an unchunked step does not (#1693).
+
+    Two ``[batch, seq, hidden]`` tensors in the stream dtype: the gradient on
+    the hidden states that the forward fills chunk by chunk, and its product
+    with the incoming gradient in the backward. They are not live together with
+    a chunk's logits, so charging both next to the logits term errs high.
+    """
+    if hidden_size <= 0 or seq_len <= 0 or batch_size <= 0:
+        raise ValueError("hidden_size, seq_len and batch_size must all be positive")
+    return 2 * hidden_size * seq_len * batch_size * dtype_bytes(dtype)
+
+
 def estimate_stream_peak_vram(
     *,
     layer_bytes: int,
@@ -1202,6 +1337,8 @@ def estimate_stream_peak_vram(
     dtype: str = "bfloat16",
     logits_bytes_per_element: Optional[float] = None,
     large_layer_bytes: int = 0,
+    persistent_bytes: int = 0,
+    loss_chunk: Optional[int] = None,
 ) -> int:
     """Predicted ``torch.cuda.max_memory_allocated()`` for a streaming step.
 
@@ -1215,7 +1352,9 @@ def estimate_stream_peak_vram(
     ``extras_bytes`` contains only the genuinely resident non-decoder weights.
     ``large_layer_bytes`` is one reusable slot sized to the larger of
     ``embed_tokens`` and an untied ``lm_head``; the two matrices no longer add
-    together at peak (#324).
+    together at peak (#324). A loss with a second forward per step on an untied
+    checkpoint also holds a private copy of the head (#1049); the caller charges
+    that as a second slot, so pass the sum.
 
     Returns allocator-visible bytes only. The CUDA context and driver reservation
     sit outside the caching allocator (0.85 GB on the dev box, which also drives
@@ -1225,10 +1364,28 @@ def estimate_stream_peak_vram(
     ``logits_bytes_per_element`` forwards a stack measurement from
     :func:`calibrated_logits_bytes_per_element`; it is floored at the shipped
     constant, so passing it can only raise the prediction.
+
+    ``persistent_bytes`` is device memory the runtime holds for the whole run on
+    top of the pool, such as :func:`nf4_scale_cache_bytes`.
+
+    ``loss_chunk`` is ``training.stream_loss_chunk`` (#1693): the logits term is
+    charged on ``min(seq_len, loss_chunk)`` tokens, at the same bytes per
+    element, and :func:`estimate_loss_chunk_bytes` is added. None of the runs
+    this formula was fitted to used it.
     """
+    logits_tokens = seq_len
+    chunk_bytes = 0
+    if loss_chunk is not None:
+        if isinstance(loss_chunk, bool) or not isinstance(loss_chunk, int) or loss_chunk < 1:
+            raise ValueError(f"loss_chunk must be a positive integer, got {loss_chunk!r}")
+        logits_tokens = min(seq_len, loss_chunk)
+        chunk_bytes = estimate_loss_chunk_bytes(
+            hidden_size=hidden_size, seq_len=seq_len, batch_size=batch_size, dtype=dtype
+        )
     return (
         layer_bytes * buffers
         + large_layer_bytes
+        + persistent_bytes
         + extras_bytes
         + estimate_optimizer_bytes(adapter_params)
         + STREAM_FIXED_SLACK_BYTES
@@ -1242,10 +1399,11 @@ def estimate_stream_peak_vram(
         )
         + estimate_logits_bytes(
             vocab_size=vocab_size,
-            seq_len=seq_len,
+            seq_len=logits_tokens,
             batch_size=batch_size,
             bytes_per_element=logits_bytes_per_element,
         )
+        + chunk_bytes
     )
 
 

@@ -7,7 +7,7 @@ document ids, and measures recall against the ground-truth golden-doc id.
 
 The ``FailureScore`` follows the same OK/MINOR/MAJOR taxonomy as every other
 diagnose mode (``classify_score`` on the mean recall). The training-config
-``citation_recall_threshold`` is a separate eval-gate knob — the diagnose
+``citation_recall_threshold`` is not read here, or anywhere (#761): the diagnose
 badge uses the shared 0.85/0.60 bands so it reads consistently next to the
 other six probes.
 

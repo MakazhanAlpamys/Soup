@@ -100,6 +100,33 @@ def _schema_descriptions(path: Path = SCHEMA_PATH) -> list[tuple[str, int, str]]
     return descriptions
 
 
+def _constant_text(node: ast.AST) -> str | None:
+    """The literal text of a string, f-string included (its constant parts)."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        return "".join(
+            part.value
+            for part in node.values
+            if isinstance(part, ast.Constant) and isinstance(part.value, str)
+        )
+    return None
+
+
+def _raise_messages(path: Path) -> list[tuple[int, str]]:
+    """Literal exception arguments, including constant parts of f-strings."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    messages: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Raise) or not isinstance(node.exc, ast.Call):
+            continue
+        for arg in node.exc.args:
+            text = _constant_text(arg)
+            if text:
+                messages.append((node.lineno, text))
+    return messages
+
+
 def _cli_help_strings() -> list[tuple[Path, int, str]]:
     strings: list[tuple[Path, int, str]] = []
     for path in COMMAND_PATHS:
@@ -135,6 +162,74 @@ def test_schema_descriptions_have_no_expired_release_promises() -> None:
     assert offenders == []
 
 
+def test_source_raise_messages_have_no_expired_release_promises() -> None:
+    paths = sorted((ROOT / "src" / "soup_cli").rglob("*.py"))
+    # Helper refusals must remain covered if the scan root changes.
+    assert ROOT / "src/soup_cli/utils/unlearning.py" in paths
+    messages = [
+        (path, line, text)
+        for path in paths
+        for line, text in _raise_messages(path)
+    ]
+    assert len(messages) >= 300
+    offenders = [
+        f"{path.relative_to(ROOT)}:{line}: {text}"
+        for path, line, text in messages
+        if _has_expired_version_promise(text)
+    ]
+    assert offenders == []
+
+
+def test_the_raise_scanner_reads_f_strings(tmp_path: Path) -> None:
+    sample = tmp_path / "schema.py"
+    sample.write_text(
+        'def check(task):\n'
+        '    raise ValueError(f"got {task!r}; " "the runtime ships in v0.62.1.")\n',
+        encoding="utf-8",
+    )
+
+    ((line, text),) = _raise_messages(sample)
+
+    assert line == 2
+    assert _has_expired_version_promise(text)
+
+
+def test_unlearning_docstrings_have_no_expired_release_promises() -> None:
+    paths = (
+        SCHEMA_PATH,
+        ROOT / "src/soup_cli/utils/unlearning.py",
+        ROOT / "src/soup_cli/utils/unlearning_eval.py",
+        ROOT / "src/soup_cli/commands/_eval_v0610.py",
+    )
+    offenders = []
+    for path in paths:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                text = ast.get_docstring(node) or ""
+                if _has_expired_version_promise(text):
+                    offenders.append(f"{path.relative_to(ROOT)}: {text}")
+    assert offenders == []
+
+
+def test_unlearning_mlx_refusal_names_supported_backend() -> None:
+    import pytest
+
+    from soup_cli.config.schema import SoupConfig
+
+    with pytest.raises(ValueError) as exc_info:
+        SoupConfig(
+            base="test/model", task="unlearn", backend="mlx",
+            data={"train": "d.jsonl", "forget_set": "forget.jsonl"},
+            training={"unlearn_method": "npo"},
+        )
+    message = str(exc_info.value)
+    assert "task='unlearn'" in message
+    assert "backend=mlx" in message
+    assert "backend: transformers" in message
+    assert not _has_expired_version_promise(message)
+
+
 def test_cli_help_has_no_expired_promises_or_internal_phase_labels() -> None:
     help_strings = _cli_help_strings()
     assert len(help_strings) >= 1_000
@@ -152,6 +247,7 @@ def test_stale_copy_scanner_can_fail_without_banning_future_notices() -> None:
     assert _has_expired_version_promise(f"Runtime lands in v{current}")
     assert _has_expired_version_promise("Runtime was deferred to v0.74.1")
     assert not _has_expired_version_promise(f"Removal ships in v{future}")
+    assert not _has_expired_version_promise("Supported since v0.61.1")
     assert not _help_text_is_stale("Applies the post-v2 attention kernel")
     assert _schema_description_is_stale("reserved", "Reserved (schema-only).")
     assert not _schema_description_is_stale(
@@ -208,3 +304,25 @@ def test_named_docs_no_longer_promise_past_follow_up_releases() -> None:
             f"{relative_path}: {fragment}" for fragment in fragments if fragment in text
         )
     assert offenders == []
+
+
+def test_all_soup_config_fields_have_descriptions() -> None:
+    """Every soup.yaml setting reachable from SoupConfig carries a description (#1794)."""
+    import typing
+
+    from pydantic import BaseModel
+
+    from soup_cli.config.schema import SoupConfig
+
+    missing: list[str] = []
+
+    def walk(model: type[BaseModel], prefix: str = "") -> None:
+        for name, info in model.model_fields.items():
+            if not info.description:
+                missing.append(prefix + name)
+            for member in (info.annotation, *typing.get_args(info.annotation)):
+                if isinstance(member, type) and issubclass(member, BaseModel):
+                    walk(member, prefix + name + ".")
+
+    walk(SoupConfig)
+    assert missing == [], f"Config fields missing description: {missing}"

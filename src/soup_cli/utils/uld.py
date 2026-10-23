@@ -464,6 +464,19 @@ def aggregate_aligned_logits(teacher_logits, alignment):
     return out
 
 
+def aligned_position_mask(alignment, teacher_len: int):
+    """``[Ts]`` bools: True where a student position has a teacher target.
+
+    A position counts only when its alignment names at least one teacher
+    index inside ``[0, teacher_len)`` — the same rule
+    :func:`aggregate_aligned_logits` uses. Any other position gets an all-zero
+    teacher row, which softmaxes to uniform and is not a distillation target
+    (#1426).
+    """
+
+    return [any(0 <= j < teacher_len for j in idxs) for idxs in alignment]
+
+
 def uld_aligned_loss(
     student_logits,
     teacher_logits,
@@ -541,13 +554,17 @@ def uld_aligned_loss(
         s_sorted, _ = torch.sort(p_s, dim=-1, descending=True)
         t_sorted, _ = torch.sort(p_t, dim=-1, descending=True)
         per_pos = _sorted_w1(s_sorted, t_sorted)  # [Ts]
+        # #1426: a student position with no aligned teacher token has no
+        # target, so it is left out of both the sum and the denominator.
+        mask = torch.tensor(
+            aligned_position_mask(align[:ts], teacher_logits.shape[1]),
+            dtype=per_pos.dtype,
+            device=per_pos.device,
+        )
         if labels is not None:
-            mask = (labels[b, :ts] != -100).to(per_pos.dtype)
+            mask = mask * (labels[b, :ts] != -100).to(per_pos.dtype)
         elif attention_mask is not None:
-            mask = attention_mask[b, :ts].to(per_pos.dtype)
-        else:
-            per_seq.append(per_pos.mean())
-            continue
+            mask = mask * attention_mask[b, :ts].to(per_pos.dtype)
         denom = mask.sum().clamp(min=1.0)
         per_seq.append((per_pos * mask).sum() / denom)
     return torch.stack(per_seq).mean()

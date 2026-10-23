@@ -471,7 +471,7 @@ V0510_RECIPE_NAMES = [
     "kimi-k2-sft", "kimi-k2-thinking-grpo", "minimax-m2-sft",
     "qwq-32b-grpo", "qvq-72b-sft",
     # Part B — small / specialist
-    "granite-4-sft", "lfm2-sft", "cogito-v2-sft", "mistral-small-3-sft",
+    "granite-4-sft", "lfm2-sft", "mistral-small-3-sft",
     "mistral-medium-3-5-sft", "magistral-small-sft", "devstral-sft",
     "ministral-sft", "medgemma-sft", "embedding-gemma-sft",
     # Part C — vision / multimodal

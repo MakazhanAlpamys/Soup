@@ -1,6 +1,5 @@
 """Pretrain (Continued Pre-training) trainer — wraps HuggingFace SFTTrainer for CLM."""
 
-import math
 import time
 from pathlib import Path
 from typing import Optional
@@ -9,6 +8,7 @@ from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -17,6 +17,7 @@ from soup_cli.utils.gpu import (
     resolve_device_map,
 )
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -130,7 +131,15 @@ class PretrainTrainerWrapper:
         # via `soup data preprocess`. Skips the raw-text load entirely.
         from soup_cli.trainer.sft import _maybe_load_pretokenized
 
-        pretok = _maybe_load_pretokenized(cfg.data, cfg.base, console)
+        # #1054: pass ``tcfg`` -- ``preprocess_mask_mode`` reads
+        # ``training.train_on_eot`` from it, and ``task: pretrain`` is in the
+        # sft-family set the schema allows that flag on. Omitting it dropped the
+        # ``+eot`` suffix here but not in ``soup data preprocess``, so the cache
+        # was refused by a hash the re-run advised in the error reproduces.
+        pretok = _maybe_load_pretokenized(
+            cfg.data, cfg.base, console, getattr(cfg, "training", None),
+            task=cfg.task,
+        )
         if pretok is not None:
             train_ds, eval_ds = pretok
         else:
@@ -146,12 +155,11 @@ class PretrainTrainerWrapper:
             output_dir = output_dir / cfg.experiment_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # --- Calculate warmup steps from ratio ---
-        total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
-        )
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
+
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
 
         # --- Training args ---
         _bf16, _fp16 = bf16_fp16_flags(self.device)
@@ -162,6 +170,9 @@ class PretrainTrainerWrapper:
             "gradient_accumulation_steps": tcfg.gradient_accumulation_steps,
             "learning_rate": tcfg.lr,
             "warmup_steps": warmup_steps,
+            "gradient_checkpointing": should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
             "weight_decay": tcfg.weight_decay,
             "max_grad_norm": tcfg.max_grad_norm,
             "optim": tcfg.optimizer,
@@ -175,6 +186,7 @@ class PretrainTrainerWrapper:
             "remove_unused_columns": False,
             "deepspeed": self.deepspeed_config,
             **training_seed_kwargs(tcfg),
+            **training_eval_kwargs(cfg, eval_ds, batch_size=batch_size),
         }
 
         # FSDP2 — alternative to DeepSpeed
@@ -271,7 +283,7 @@ class PretrainTrainerWrapper:
 
             attach_empty_param_group_guard(self.trainer)
 
-        # v0.40.6 #67 — ReLoRA callback (magnitude-prune LoRA every N steps).
+        # v0.40.6 #67 — ReLoRA merge-and-reinitialize restart callback.
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
             attach_lisa_callback,
@@ -304,7 +316,8 @@ class PretrainTrainerWrapper:
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -335,7 +348,8 @@ class PretrainTrainerWrapper:
             from soup_cli.utils.long_context import apply_long_context_config
 
             model_config = AutoConfig.from_pretrained(
-                cfg.base, trust_remote_code=self._trust_remote_code
+                cfg.base, trust_remote_code=self._trust_remote_code,
+                **base_revision_kwargs(cfg.base),
             )
             rope_config = apply_long_context_config(
                 model_config,
@@ -350,7 +364,10 @@ class PretrainTrainerWrapper:
             if rope_config:
                 model_kwargs["config"] = model_config
 
-        self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
         if rope_config:
             console.print(
                 f"[green]Long-context enabled:[/] RoPE {tcfg.rope_scaling_type} "
@@ -368,7 +385,7 @@ class PretrainTrainerWrapper:
                 f"[green]MoE detected:[/] aux_loss_coeff={tcfg.moe_aux_loss_coeff}"
             )
 
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantization in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
             self.model = prepare_model_for_kbit_training(
@@ -398,7 +415,9 @@ class PretrainTrainerWrapper:
 
         if not apply_lisa_setup(self.model, tcfg, console):
             # LoRA — with MoE-aware target modules if moe_lora is enabled
-            target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+            target_modules = resolve_lora_target_modules(
+                self.model, tcfg.lora.target_modules, console
+            )
             target_parameters = resolve_lora_target_parameters(
                 self.model, tcfg.lora.target_parameters
             )
@@ -446,7 +465,13 @@ class PretrainTrainerWrapper:
 
     def _setup_unsloth(self, cfg: SoupConfig, tcfg) -> None:
         """Load model via unsloth FastLanguageModel (2-5x faster)."""
+        from soup_cli.utils import unsloth
         from soup_cli.utils.unsloth import load_model_and_tokenizer
+        # #797: resolve training.gradient_checkpointing for the Unsloth path
+        # (streaming layers already checkpoint every layer, so it stays off).
+        use_gradient_checkpointing = unsloth.resolve_unsloth_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=getattr(tcfg, "stream_layers", False)
+        )
 
         console.print(f"[dim]Loading model via [bold]unsloth[/]: {cfg.base}[/]")
         self.model, self.tokenizer = load_model_and_tokenizer(
@@ -457,6 +482,8 @@ class PretrainTrainerWrapper:
             lora_alpha=tcfg.lora.alpha,
             lora_dropout=tcfg.lora.dropout,
             target_modules=tcfg.lora.target_modules,
+            use_rslora=tcfg.lora.use_rslora,
+            use_gradient_checkpointing=use_gradient_checkpointing,
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -478,23 +505,15 @@ class PretrainTrainerWrapper:
 
         # Add callback for live display and experiment tracking
         if display:
-            from soup_cli.monitoring.callback import (
-                SoupTrainerCallback,
-                soup_callback_kwargs,
-            )
-
+            from soup_cli.monitoring.callback import build_soup_trainer_callback
             self.trainer.add_callback(
-                SoupTrainerCallback(
+               build_soup_trainer_callback(
                     display,
+                    config=self.config,
                     tracker=tracker,
                     run_id=run_id,
-                    eval_gate_config=self.config.training.eval_gate,
-                    **soup_callback_kwargs(
-                        self.config.training,
-                        batch_size=self._batch_size,
-                        output_dir=self._output_dir,
-                        include_eval_gate=False,
-                    ),
+                    batch_size=self._batch_size,
+                    output_dir=self._output_dir,
                 )
             )
 
@@ -511,8 +530,15 @@ class PretrainTrainerWrapper:
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
-        # Save final model (LoRA adapter)
-        self.trainer.save_model(self._output_dir)
+        # Save final model; ReLoRA output is dense.
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
+
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
         self.tokenizer.save_pretrained(self._output_dir)
 
         # Extract metrics

@@ -1,7 +1,29 @@
 """Tests for soup sweep — hyperparameter search."""
 
+from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture
+def bounded_random_choice(monkeypatch):
+    """Fail a random search that keeps drawing instead of letting it spin forever.
+
+    Every random sweep in these tests needs well under 10 000 draws, so reaching the
+    cap means the sampler cannot finish.
+    """
+    import random
+
+    draw = random.choice
+    calls = {"n": 0}
+
+    def capped(seq):
+        calls["n"] += 1
+        if calls["n"] > 10_000:
+            raise AssertionError("random search kept drawing: it can never finish")
+        return draw(seq)
+
+    monkeypatch.setattr(random, "choice", capped)
 
 
 class TestParseSweepParams:
@@ -147,6 +169,56 @@ class TestGenerateCombinations:
         combo_tuples = [tuple(sorted(c.items())) for c in combos]
         assert len(combo_tuples) == len(set(combo_tuples))
 
+    @pytest.mark.parametrize(
+        ("params", "max_runs", "expected_runs"),
+        [
+            # 3 x 4 = 12 list entries but 2 x 4 = 8 distinct arms: the default
+            # min(12, 10) asked for 10 unique arms and never stopped sampling.
+            ({"lr": [1e-5, 2e-5, 1e-5], "lora_r": [8, 16, 32, 64]}, None, 8),
+            # An explicit --max-runs between the distinct count and the product.
+            ({"lr": [1e-5, 2e-5, 1e-5], "lora_r": [8, 16]}, 5, 4),
+            # The same value spelled two ways parses to one float.
+            ({"lr": [1e-5, 0.00001, 2e-5], "epochs": [1, 2, 3, 4]}, 9, 8),
+        ],
+    )
+    def test_random_search_with_repeated_values_terminates(
+        self, bounded_random_choice, params, max_runs, expected_runs
+    ):
+        """A repeated value in a list must not make random search loop forever."""
+        from soup_cli.commands.sweep import _generate_combinations
+
+        combos = _generate_combinations(params, "random", max_runs)
+        combo_tuples = [tuple(sorted(c.items())) for c in combos]
+        assert len(combos) == expected_runs
+        assert len(set(combo_tuples)) == expected_runs
+
+    def test_random_search_runs_each_distinct_arm_once(self):
+        """When every arm runs, a repeated value does not run its arms twice."""
+        from soup_cli.commands.sweep import _generate_combinations
+
+        combos = _generate_combinations({"lr": [1e-5, 2e-5, 1e-5]}, "random", None)
+        assert sorted(c["lr"] for c in combos) == [1e-5, 2e-5]
+
+    def test_random_search_dedups_every_list_and_keeps_first_seen_order(self, monkeypatch):
+        """Every list is deduplicated, not only the first, and keeps its first-seen order."""
+        import random
+
+        from soup_cli.commands.sweep import _generate_combinations
+
+        drawn = []
+        real_choice = random.choice
+
+        def recording_choice(seq):
+            drawn.append(list(seq))
+            return real_choice(seq)
+
+        monkeypatch.setattr(random, "choice", recording_choice)
+        params = {"epochs": [3, 1, 3, 2], "batch_size": [6, 4, 6, 5]}
+        # 3 x 3 = 9 distinct arms; asking for 4 takes the sampling branch.
+        combos = _generate_combinations(params, "random", 4)
+        assert len(combos) == 4
+        assert drawn[:2] == [[3, 1, 2], [6, 4, 5]]
+
     def test_random_search_defaults_to_10(self):
         """Random search without max_runs should default to min(total, 10)."""
         from soup_cli.commands.sweep import _generate_combinations
@@ -285,6 +357,34 @@ class TestSweepCLI:
         assert "Sweep Plan" in result.output
         assert "lr" in result.output
 
+    def test_sweep_random_dry_run_with_a_repeated_value(self, tmp_path, bounded_random_choice):
+        """`--strategy random` with a value listed twice plans the distinct arms and exits."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        config_file = tmp_path / "soup.yaml"
+        config_file.write_text(
+            "base: test-model\n"
+            "data:\n"
+            "  train: ./data.jsonl\n"
+        )
+
+        result = CliRunner().invoke(app, [
+            "sweep",
+            "--config", str(config_file),
+            "--param", "lr=1e-5,2e-5,1e-5",
+            "--param", "lora_r=8,16",
+            "--strategy", "random",
+            "--max-runs", "5",
+            "--dry-run",
+        ])
+        assert result.exit_code == 0, result.output
+        from .conftest import strip_ansi
+
+        plain = " ".join(strip_ansi(result.output).split())
+        assert "Runs: 4" in plain
+
     def test_sweep_config_not_found(self):
         """Should fail if config doesn't exist."""
         from typer.testing import CliRunner
@@ -320,3 +420,64 @@ class TestSweepCLI:
             "--strategy", "bayesian",
         ])
         assert result.exit_code != 0
+
+
+def test_a_failed_arm_prints_its_error_verbatim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`backend: mlx` arms now reach the MLX wrapper, whose install hint has brackets (#1213)."""
+    import re
+
+    from typer.testing import CliRunner
+
+    import soup_cli.commands.sweep as sweep_mod
+    from soup_cli.cli import app
+
+    def fail(*args, **kwargs):
+        raise ImportError('Install with: pip install "soup-cli[mlx]"')
+
+    monkeypatch.setattr(sweep_mod, "_run_single", fail)
+    config = tmp_path / "soup.yaml"
+    config.write_text("base: some-model\ndata:\n  train: ./d.jsonl\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app, ["sweep", "--config", str(config), "--param", "lr=1e-5", "--yes"]
+    )
+
+    plain = " ".join(re.sub(r"\x1b\[[0-9;]*m", "", result.output).split())
+    assert 'pip install "soup-cli[mlx]"' in plain, plain
+
+
+@pytest.mark.parametrize("failure_stage", ["construction", "setup"])
+def test_sweep_setup_failure_marks_run_failed(tmp_path, monkeypatch, failure_stage):
+    """An arm that fails before training must not remain running (#1464)."""
+    from unittest.mock import Mock
+
+    from soup_cli.commands.sweep import _run_single
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.experiment.tracker import ExperimentTracker
+
+    cfg = SoupConfig(base="test/model", data={"train": "data.jsonl"})
+    failure = OSError("repo not found")
+    trainer = Mock()
+    factory = Mock(return_value=trainer)
+    if failure_stage == "construction":
+        factory.side_effect = failure
+    else:
+        trainer.setup.side_effect = failure
+
+    monkeypatch.setattr("soup_cli.trainer.dispatch.build_trainer", factory)
+    monkeypatch.setattr("soup_cli.data.loader.load_dataset", lambda *a, **kw: {"train": [{}]})
+    monkeypatch.setattr("soup_cli.utils.gpu.detect_device", lambda: ("cpu", "CPU"))
+    monkeypatch.setattr("soup_cli.utils.gpu.get_gpu_info", lambda: {})
+
+    with pytest.raises(OSError) as excinfo:
+        _run_single(cfg, {}, "sweep_1", tmp_path / "soup.yaml")
+
+    assert excinfo.value is failure
+    trainer.train.assert_not_called()
+    runs = ExperimentTracker().list_runs()
+    assert len(runs) == 1
+    assert runs[0]["experiment_name"] == "sweep_1"
+    assert runs[0]["status"] == "failed", runs[0]
+    assert runs[0]["error_message"] == "OSError: repo not found", runs[0]

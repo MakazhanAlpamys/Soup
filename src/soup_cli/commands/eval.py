@@ -18,6 +18,7 @@ from soup_cli.utils.exit_codes import (
     EXIT_USAGE_ERROR,
     GateCommand,
 )
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -41,7 +42,7 @@ def _reject_lm_eval_injection(value: str, field: str) -> None:
     if "," in value or "=" in value:
         console.print(
             f"[red]Refusing to evaluate:[/] {field} contains ',' or '=' "
-            f"({value!r}); these are lm-eval model_args delimiters and could "
+            f"({for_terminal(repr(value))}); these are lm-eval model_args delimiters and could "
             "smuggle trust_remote_code=True (arbitrary code execution)."
         )
         raise typer.Exit(1)
@@ -76,11 +77,19 @@ def benchmark(
         None, "--device",
         help="Device: cuda, mps, cpu. Auto-detected if not set.",
     ),
+    trust_remote_code: bool = typer.Option(
+        False,
+        "--trust-remote-code",
+        help=(
+            "Allow loading models that ship custom Python via auto_map. "
+            "Default deny (v0.36.0). Only enable if you trust the source."
+        ),
+    ),
 ):
     """Evaluate on standard benchmarks (wraps lm-evaluation-harness)."""
     model_path = Path(model)
     if not model_path.exists():
-        console.print(f"[red]Model path not found: {model_path}[/]")
+        console.print(f"[red]Model path not found: {for_terminal(model_path)}[/]")
         raise typer.Exit(1)
 
     # Both the user-supplied path and the adapter's declared base model are
@@ -100,15 +109,21 @@ def benchmark(
             )
             model_arg = f"pretrained={base_model},peft={model_path}"
             console.print(
-                f"[dim]LoRA adapter detected. Base model: {base_model}[/]"
+                f"[dim]LoRA adapter detected. Base model: {for_terminal(base_model)}[/]"
             )
         else:
             model_arg = f"pretrained={model_path}"
     else:
         model_arg = f"pretrained={model_path}"
 
+    if trust_remote_code:
+        # Appended only from the resolved --trust-remote-code flag, never
+        # from adapter_config.json: _reject_lm_eval_injection above already
+        # refused a base_model_name_or_path smuggling its own ','/'=' pair.
+        model_arg = f"{model_arg},trust_remote_code=True"
+
     benchmark_list = [b.strip() for b in benchmarks.split(",")]
-    console.print(f"[dim]Evaluating on: {', '.join(benchmark_list)}[/]")
+    console.print(f"[dim]Evaluating on: {', '.join(for_terminal(b) for b in benchmark_list)}[/]")
 
     # Lazy import lm_eval
     try:
@@ -135,8 +150,13 @@ def benchmark(
     )
 
     _display_benchmark_results(results, benchmark_list)
-    _save_benchmark_results(results, str(model_path), benchmark_list, run_id)
-    console.print("\n[green]Results saved to experiment tracker.[/]")
+    saved = _save_benchmark_results(results, str(model_path), benchmark_list, run_id)
+    if not saved:
+        console.print("[red]Nothing measured; nothing saved to experiment tracker.[/]")
+        raise typer.Exit(1)
+    console.print(
+        f"\n[green]Results saved to experiment tracker: {saved} of {len(benchmark_list)}.[/]"
+    )
 
 
 # ─── soup eval aider ───
@@ -335,6 +355,14 @@ def custom(
             "--attach-to-registry (v0.40.1 / G10)."
         ),
     ),
+    trust_remote_code: bool = typer.Option(
+        False,
+        "--trust-remote-code",
+        help=(
+            "Allow loading models that ship custom Python via auto_map. "
+            "Default deny (v0.36.0). Only enable if you trust the source."
+        ),
+    ),
 ):
     """Run custom evaluation tasks from a JSONL file."""
     from soup_cli.eval.custom import load_eval_tasks
@@ -343,7 +371,7 @@ def custom(
     model_path = Path(model)
 
     if not model_path.exists():
-        console.print(f"[red]Model path not found: {model_path}[/]")
+        console.print(f"[red]Model path not found: {for_terminal(model_path)}[/]")
         raise typer.Exit(1)
 
     # Load and validate tasks
@@ -354,7 +382,7 @@ def custom(
         raise typer.Exit(1)
 
     console.print(
-        f"[dim]Loaded {len(eval_tasks)} eval tasks from {tasks_path}[/]"
+        f"[dim]Loaded {len(eval_tasks)} eval tasks from {for_terminal(tasks_path)}[/]"
     )
 
     # Run evaluation with progress
@@ -378,7 +406,9 @@ def custom(
     from soup_cli.eval.custom import _create_default_generator, score_task
 
     console.print("[dim]Loading model...[/]")
-    generate_fn = _create_default_generator(str(model_path))
+    generate_fn = _create_default_generator(
+        str(model_path), trust_remote_code=trust_remote_code,
+    )
 
     with progress:
         task_bar = progress.add_task(
@@ -475,7 +505,9 @@ def judge(
 ):
     """Evaluate model outputs using LLM-as-a-judge."""
     from soup_cli.eval.judge import (
+        JudgeDownError,
         JudgeEvaluator,
+        JudgeUnavailableError,
         load_rubric,
         validate_judge_api_base,
     )
@@ -519,7 +551,8 @@ def judge(
         try:
             rubric_data = load_rubric(Path(rubric))
         except (FileNotFoundError, ValueError) as exc:
-            console.print(f"[red]{exc}[/]")
+            # The message quotes the path it was given.
+            console.print(f"[red]{for_terminal(str(exc))}[/]")
             raise typer.Exit(1)
 
     console.print(
@@ -551,6 +584,7 @@ def judge(
 
     judge_scores = []
     skipped_count = 0
+    down = None
     progress = Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -568,12 +602,28 @@ def judge(
                     category=item.get("category", "default"),
                 )
                 judge_scores.append(score)
-            except (ValueError, OSError, KeyError) as exc:
+            except JudgeDownError as exc:
+                # #1522: it has stopped answering, so the rest would fail alike.
+                down = exc.for_rows(len(items) - len(judge_scores), len(items), "items")
+                break
+            except (ValueError, OSError, KeyError, JudgeUnavailableError) as exc:
                 skipped_count += 1
                 console.print(
-                    f"[yellow]Warning: judge failed for prompt: {exc}[/]"
+                    f"[yellow]Warning: judge failed for prompt: {for_terminal(exc)}[/]"
                 )
             progress.advance(task_bar)
+
+    if down is not None:
+        console.print(f"[red]Judging stopped: {for_terminal(down)}[/]")
+        if judge_scores:
+            # Not saved to the tracker: a mean over the rows before the outage
+            # is not this benchmark's score.
+            results = JudgeResults(scores=judge_scores)
+            results.compute()
+            _display_judge_results(results)
+        else:
+            console.print("[red]All items failed. Check judge configuration.[/]")
+        raise typer.Exit(1)
 
     if skipped_count > 0:
         console.print(
@@ -680,6 +730,10 @@ def auto(
         border_style="blue",
     ))
 
+    # #1808: a leg that could not run used to be swallowed, and "Auto-eval
+    # complete." exited 0 even when it was the only leg. Count what ran.
+    legs_ran = 0
+
     # Run standard benchmarks if specified
     if bench_list:
         console.print("\n[bold]Standard Benchmarks[/]")
@@ -691,6 +745,7 @@ def auto(
                 batch_size=8,
                 run_id=None,
                 device=None,
+                trust_remote_code=trust_remote_code,
             )
         except (typer.Exit, SystemExit):
             # benchmark() signals failure with typer.Exit (a RuntimeError, NOT
@@ -698,6 +753,8 @@ def auto(
             # benchmark failure aborted the whole auto-eval instead of falling
             # through to the custom eval below.
             console.print("[yellow]Benchmark eval skipped (see above).[/]")
+        else:
+            legs_ran += 1
 
     # Run custom eval if specified
     if tasks_file:
@@ -714,9 +771,22 @@ def auto(
                 run_id=None,
                 attach_to_registry=None,
                 output=None,
+                trust_remote_code=trust_remote_code,
             )
-        except SystemExit:
+        except (typer.Exit, SystemExit):
+            # The same pair as the benchmark leg (#1808): custom() also fails
+            # with typer.Exit, which `except SystemExit` alone never caught, so
+            # the exit code depended on which leg had failed.
             console.print("[yellow]Custom eval skipped (see above).[/]")
+        else:
+            legs_ran += 1
+
+    if legs_ran == 0:
+        console.print(
+            "\n[red]Auto-eval failed: nothing was evaluated.[/] Every leg was skipped "
+            "(see above); fix the cause and run again."
+        )
+        raise typer.Exit(1)
 
     console.print("\n[green]Auto-eval complete.[/]")
 
@@ -820,7 +890,10 @@ def leaderboard(
 
     if fmt in ("json", "csv"):
         output = export_leaderboard(lb, fmt=fmt)
-        console.print(output)
+        # Machine-readable JSON/CSV: raw stdout, not console.print — Rich folds
+        # rows/lines at the console width and parses ``[...]`` as markup when
+        # piped, corrupting the output (issue #1468).
+        typer.echo(output)
         return
 
     # Table format
@@ -892,14 +965,14 @@ def human(
     # Verify models exist
     for mpath in [model_a, model_b]:
         if not Path(mpath).exists():
-            console.print(f"[red]Model not found: {mpath}[/]")
+            console.print(f"[red]Model not found: {for_terminal(mpath)}[/]")
             raise typer.Exit(1)
 
     console.print(Panel(
         f"[bold]Human Evaluation[/]\n"
         f"Prompts: {len(prompts)}\n"
-        f"Model A: {model_a}\n"
-        f"Model B: {model_b}",
+        f"Model A: {for_terminal(model_a)}\n"
+        f"Model B: {for_terminal(model_b)}",
         title="A/B Comparison",
         border_style="blue",
     ))
@@ -920,9 +993,9 @@ def human(
 
         # Display for human judgment
         console.print(f"\n[bold]--- Prompt {idx + 1}/{len(prompts)} ---[/]")
-        console.print(Panel(prompt_text, title="Prompt", border_style="dim"))
-        console.print(Panel(resp_a, title="[blue]Response A[/]"))
-        console.print(Panel(resp_b, title="[magenta]Response B[/]"))
+        console.print(Panel(for_terminal(prompt_text), title="Prompt", border_style="dim"))
+        console.print(Panel(for_terminal(resp_a), title="[blue]Response A[/]"))
+        console.print(Panel(for_terminal(resp_b), title="[magenta]Response B[/]"))
 
         # Get human choice
         while True:
@@ -953,7 +1026,7 @@ def human(
 
     # Save results
     save_results(results, Path(output))
-    console.print(f"\n[green]Results saved to {output}[/]")
+    console.print(f"\n[green]Results saved to {for_terminal(output)}[/]")
 
 
 # ─── Helper functions ───
@@ -980,6 +1053,17 @@ def _run_lm_eval(
     return results
 
 
+def _benchmark_metric(bench_data: dict) -> Optional[tuple[str, int | float]]:
+    """Use the same measured-score selection for the table and tracker."""
+    preferred = ["acc,none", "acc_norm,none", "exact_match,none", "em,none"]
+    for key in [*preferred, *(key for key in bench_data if key not in preferred)]:
+        value = bench_data.get(key)
+        if (isinstance(value, (int, float)) and not isinstance(value, bool)
+                and not key.startswith("alias")):
+            return key.split(",")[0], value
+    return None
+
+
 def _display_benchmark_results(results: dict, benchmarks: list[str]) -> None:
     """Display benchmark results as a rich table."""
     table = Table(title="Evaluation Results")
@@ -990,26 +1074,15 @@ def _display_benchmark_results(results: dict, benchmarks: list[str]) -> None:
     task_results = results.get("results", {})
     for bench in benchmarks:
         bench_data = task_results.get(bench, {})
-        if not bench_data:
-            table.add_row(bench, "-", "[red]not found[/]")
+        if bench not in task_results:
+            table.add_row(for_terminal(bench), "-", "[red]not found[/]")
             continue
-
-        for metric_key in [
-            "acc,none", "acc_norm,none", "exact_match,none", "em,none",
-        ]:
-            if metric_key in bench_data:
-                metric_name = metric_key.split(",")[0]
-                score = bench_data[metric_key]
-                table.add_row(bench, metric_name, f"{score:.4f}")
-                break
+        metric = _benchmark_metric(bench_data)
+        if metric is not None:
+            metric_name, score = metric
+            table.add_row(for_terminal(bench), for_terminal(metric_name), f"{score:.4f}")
         else:
-            for key, val in bench_data.items():
-                if isinstance(val, (int, float)) and not key.startswith("alias"):
-                    metric_name = key.split(",")[0] if "," in key else key
-                    table.add_row(bench, metric_name, f"{val:.4f}")
-                    break
-            else:
-                table.add_row(bench, "-", "[yellow]no numeric result[/]")
+            table.add_row(for_terminal(bench), "-", "[yellow]no numeric result[/]")
 
     console.print(table)
 
@@ -1019,35 +1092,36 @@ def _save_benchmark_results(
     model_path: str,
     benchmarks: list[str],
     run_id: Optional[str],
-) -> None:
-    """Save benchmark results to the experiment tracker."""
+) -> int:
+    """Save measured requested results, reporting skipped names and returning the count."""
     from soup_cli.experiment.tracker import ExperimentTracker
 
     tracker = ExperimentTracker()
     task_results = results.get("results", {})
-
-    for bench in benchmarks:
-        bench_data = task_results.get(bench, {})
-        score = 0.0
-        for metric_key in [
-            "acc,none", "acc_norm,none", "exact_match,none", "em,none",
-        ]:
-            if metric_key in bench_data:
-                score = bench_data[metric_key]
-                break
-        else:
-            for val in bench_data.values():
-                if isinstance(val, (int, float)):
-                    score = val
-                    break
-
-        tracker.save_eval_result(
-            model_path=model_path,
-            benchmark=bench,
-            score=score,
-            details=bench_data,
-            run_id=run_id,
-        )
+    saved = 0
+    try:
+        for bench in benchmarks:
+            bench_data = task_results.get(bench, {})
+            metric = _benchmark_metric(bench_data)
+            if metric is None:
+                reason = "not found" if bench not in task_results else "no numeric result"
+                console.print(f"[yellow]Skipped {for_terminal(bench)}: {reason}[/]")
+                continue
+            _, score = metric
+            tracker.save_eval_result(
+                model_path=model_path,
+                benchmark=bench,
+                score=score,
+                details=bench_data,
+                run_id=run_id,
+            )
+            saved += 1
+    finally:
+        tracker.close()
+    skipped = len(benchmarks) - saved
+    if skipped:
+        console.print(f"[yellow]Skipped {skipped} of {len(benchmarks)} requested benchmarks.[/]")
+    return saved
 
 
 def _display_custom_results(eval_results: object) -> None:
@@ -1160,8 +1234,8 @@ def _short_model_name(path: str) -> str:
     """Shorten model path for display."""
     parts = Path(path).parts
     if len(parts) > 2:
-        return "/".join(parts[-2:])
-    return path
+        return for_terminal("/".join(parts[-2:]))
+    return for_terminal(path)
 
 
 # ─── soup eval gate (v0.26.0 Part B) ───
@@ -1215,13 +1289,13 @@ def gate_cmd(
     try:
         eval_suite = load_suite(suite)
     except (FileNotFoundError, ValueError) as exc:
-        console.print(f"[red]Cannot load suite:[/] {exc}")
+        console.print(f"[red]Cannot load suite:[/] {for_terminal(str(exc))}")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     try:
         baseline_scores = resolve_baseline(
             baseline,
-            warn=lambda msg: console.print(f"[yellow]Warning:[/] {msg}"),
+            warn=lambda msg: console.print(f"[yellow]Warning:[/] {for_terminal(msg)}"),
         )
     except (FileNotFoundError, ValueError) as exc:
         console.print(f"[red]Cannot resolve baseline:[/] {exc}")
@@ -1324,8 +1398,14 @@ def quant_check_cmd(
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
-    resolved_before = resolve_model_ref(before)
-    resolved_after = resolve_model_ref(after)
+    resolved: dict[str, Optional[str]] = {}
+    for label, ref in (("--before", before), ("--after", after)):
+        try:
+            resolved[label] = resolve_model_ref(ref)
+        except ValueError as exc:  # AmbiguousRefError: a registry prefix or name:tag with twins
+            console.print(f"[red]Cannot resolve {label}:[/] {for_terminal(str(exc))}")
+            raise typer.Exit(EXIT_USAGE_ERROR) from exc
+    resolved_before, resolved_after = resolved["--before"], resolved["--after"]
     if resolved_before is None:
         console.print(f"[red]Cannot resolve --before: {before}[/]")
         raise typer.Exit(EXIT_USAGE_ERROR)

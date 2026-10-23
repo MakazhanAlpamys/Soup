@@ -2,7 +2,8 @@
 
 Per-step reward prediction over stepwise-supervised data. Consumes the
 v0.42.0 Part A ``data.format='prm'`` rows (segments + per-segment labels)
-and trains a scalar reward head on top of a causal LM via LoRA.
+and trains a scalar reward head on top of a causal LM, fine-tuning every base
+parameter with it (no LoRA, #795).
 
 Loss: MSE between predicted scalar rewards and the supervised labels at
 each step boundary. The math kernel is
@@ -25,8 +26,16 @@ from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.trainer.loss_summary import summarize_training_loss
-from soup_cli.utils.gpu import bf16_fp16_flags
+from soup_cli.utils.eval_schedule import training_eval_kwargs
+from soup_cli.utils.gpu import (
+    bf16_fp16_flags,
+    estimate_batch_size,
+    get_gpu_info,
+    model_size_from_name,
+    resolve_base_load_dtype,
+)
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 logger = logging.getLogger(__name__)
@@ -53,6 +62,16 @@ def make_prm_trainer_class(base_cls: type) -> type:
 
     class _PRMTrainer(base_cls):  # type: ignore[misc, valid-type]
         """HF Trainer subclass for PRM stepwise reward training."""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            # #1444 — Trainer derives ``num_items_in_batch`` by counting
+            # ``labels[..., 1:] != -100``, which means nothing for PRM's
+            # per-step float rewards, so compute_loss cannot honour the
+            # window total. Declining the loss kwargs makes training_step
+            # apply its ``1 / gradient_accumulation_steps`` normalisation;
+            # left True, logged loss and the clipped gradient came out Gx.
+            self.model_accepts_loss_kwargs = False
 
         def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
             # ``inputs`` carries input_ids, attention_mask, step_positions
@@ -81,7 +100,12 @@ def make_prm_trainer_class(base_cls: type) -> type:
             )
             step_hidden = last_hidden.gather(1, idx)
             # Project to scalar: [B, S, 1] -> [B, S]
-            predictions = self.model.reward_head(step_hidden).squeeze(-1)
+            reward_head = self.model.reward_head
+            # #1235: the head runs here, outside ``model.forward``, which is all
+            # Accelerate autocasts; under bf16/fp16 mixed precision it also
+            # converts the forward's outputs to fp32. Feed the head its own
+            # weight dtype, whatever dtype the forward handed back.
+            predictions = reward_head(step_hidden.to(reward_head.weight.dtype)).squeeze(-1)
             loss = compute_prm_loss(predictions, labels, mask=valid_mask)
             if return_outputs:
                 return loss, {"predictions": predictions}
@@ -251,7 +275,8 @@ class PRMTrainerWrapper:
         apply_training_seed(cfg.training)
 
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -259,19 +284,20 @@ class PRMTrainerWrapper:
         base_model = AutoModelForCausalLM.from_pretrained(
             cfg.base,
             trust_remote_code=self._trust_remote_code,
-            # MPS PRM keeps fp32 master weights while TrainingArguments below
-            # autocasts the forward to bf16. Loading the trainable base itself
-            # as bf16 makes the Metal optimizer abort: its accumulator and
-            # destination matrix dtypes differ. CUDA retains its established
-            # bf16-parameter policy; CPU remains fp32.
-            torch_dtype=torch.bfloat16 if self.device == "cuda" else torch.float32,
+            # #1235: PRM is a full fine-tune (every base parameter plus the
+            # reward head), so the optimizer steps these weights directly and
+            # they load as fp32 master weights on every device, the #339 policy;
+            # bf16/fp16 is left to the autocast TrainingArguments below asks for.
+            # A bf16 base rounds most AdamW steps away at PRM learning rates (an
+            # RMSNorm weight at 1.0 never moves), cannot go through the fp16
+            # GradScaler on pre-Ampere cards, and makes the Metal optimizer abort
+            # on MPS (#564).
+            torch_dtype=resolve_base_load_dtype(self.device, full_finetune=True),
+            **base_revision_kwargs(cfg.base),
         )
         hidden_size = base_model.config.hidden_size
-        # Cast the reward head to the base model's dtype. On CUDA the base loads
-        # in bf16 while nn.Linear defaults to fp32, so without this cast the
-        # first compute_loss forward (hidden_states[bf16] @ reward_head[fp32])
-        # raises a dtype-mismatch RuntimeError (v0.71.30 code-review fix).
-        base_model.reward_head = nn.Linear(hidden_size, 1, bias=True).to(base_model.dtype)
+        # The head trains too, so it is an fp32 master weight like the base.
+        base_model.reward_head = nn.Linear(hidden_size, 1, bias=True, dtype=torch.float32)
         self.model = base_model
         self._dataset = dataset
         console.print(
@@ -279,8 +305,17 @@ class PRMTrainerWrapper:
             f"head=Linear({hidden_size}, 1)"
         )
 
-    def train(self, **_kwargs) -> dict:
+    def train(
+        self,
+        display=None,
+        tracker=None,
+        run_id=None,
+        resume_from_checkpoint: Optional[str] = None,
+        **_kwargs,
+    ) -> dict:
         """Run training with the PRM Trainer subclass."""
+        # #802 contract: display, tracker, and run_id are accepted for caller
+        # uniformity but not wired here.
         if self.model is None:
             raise RuntimeError("PRMTrainerWrapper.train() called before setup()")
         from datasets import Dataset
@@ -307,19 +342,38 @@ class PRMTrainerWrapper:
                 self._dataset["val"], self.tokenizer, cfg.data.max_length
             )
 
-        # v0.53.11 review fix (python-review HIGH) — bool is subclass of int,
-        # so explicit bool reject before isinstance(int).
-        if isinstance(tcfg.batch_size, bool) or not isinstance(tcfg.batch_size, int):
-            bs = 1
-        else:
-            bs = tcfg.batch_size
+        batch_size = tcfg.batch_size
+        if batch_size == "auto":
+            gpu_info = get_gpu_info()
+            batch_size = estimate_batch_size(
+                model_params_b=model_size_from_name(cfg.base),
+                seq_length=cfg.data.max_length,
+                gpu_memory_bytes=gpu_info["memory_total_bytes"],
+                quantization=tcfg.quantization,
+                lora_r=tcfg.lora.r,
+            )
+            console.print(f"[green]Auto batch size (PRM):[/] {batch_size}")
+        bs = int(batch_size)
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
+
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
         use_bf16, use_fp16 = bf16_fp16_flags(self.device, allow_mps_bf16=True)
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
         args = TrainingArguments(
             output_dir=str(output_dir),
             num_train_epochs=tcfg.epochs,
             per_device_train_batch_size=bs,
             gradient_accumulation_steps=tcfg.gradient_accumulation_steps,
             learning_rate=tcfg.lr,
+            warmup_steps=warmup_steps,
+            gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
+            weight_decay=tcfg.weight_decay,
+            max_grad_norm=tcfg.max_grad_norm,
+            optim=tcfg.optimizer,
+            lr_scheduler_type=tcfg.scheduler,
             logging_steps=tcfg.logging_steps,
             save_steps=tcfg.save_steps,
             save_total_limit=3,
@@ -328,7 +382,9 @@ class PRMTrainerWrapper:
             report_to=self.report_to,
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
+            **(self.fsdp_config or {}),  # #1204: --fsdp was stored and dropped
             **training_seed_kwargs(tcfg),
+            **training_eval_kwargs(cfg, eval_rows, batch_size=bs),
         )
 
         prm_trainer_cls = make_prm_trainer_class(Trainer)
@@ -355,6 +411,7 @@ class PRMTrainerWrapper:
             from soup_cli.utils.deepspeed import attach_empty_param_group_guard
 
             attach_empty_param_group_guard(self.trainer)
+
         console.print("[green]Starting PRM training...[/]")
         start = time.time()
         align_trainable_dtype_for_fp16(
@@ -362,7 +419,7 @@ class PRMTrainerWrapper:
             fp16=getattr(self.trainer.args, "fp16", False),
             bf16=getattr(self.trainer.args, "bf16", False),
         )
-        result = self.trainer.train()
+        result = self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         self.trainer.save_model(str(output_dir))
         # v0.71.30 — save the tokenizer alongside the model so the PRM
         # checkpoint is loadable standalone (soup shrink / PRMScorer /

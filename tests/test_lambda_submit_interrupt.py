@@ -101,7 +101,7 @@ def test_keyboard_interrupt_keeps_waiting_and_never_kills(monkeypatch, capsys):
 
     assert len(_FakePopen.instances) == 1
     proc = _FakePopen.instances[0]
-    assert proc.argv == [sys.executable, "x.py"]
+    assert proc.argv == [sys.executable, "-I", "x.py"]
     assert proc.env == _ENV
     assert proc.wait_calls == 3
     assert proc.kill_calls == 0
@@ -278,8 +278,14 @@ import os
 import pathlib
 import time
 
-pathlib.Path("ready").write_text("ready")
 try:
+    # Readiness is announced from INSIDE the try, and atomically. `exists()`
+    # turns true the moment write_text creates the file, so a "ready" written
+    # before the try let the test's SIGINT land inside write_text, raise there,
+    # and skip the finally below: a missing marker that no parent caused.
+    ready = pathlib.Path("ready.tmp")
+    ready.write_text("ready")
+    os.replace(ready, "ready")
     while True:
         time.sleep(0.1)
 finally:

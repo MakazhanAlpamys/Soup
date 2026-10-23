@@ -352,18 +352,30 @@ class TestTheValidationRowInventsNoTrainingNumbers:
         self, tmp_path, monkeypatch
     ):
         """The honest edge: mlx-lm evaluates at it=0, before a single training
-        loss exists. 0.0 there is not a fabrication, it is the initial value,
-        and the transformers callback reports the same at the same point
-        (`callback.py:61-63`). Pinned so the carrying above cannot quietly
-        start inventing a number for this row instead."""
+        loss exists, so there is no measured loss to carry into that row.
+
+        #1225: the row records None, not 0.0. A leading 0.0 is the lowest point
+        of the loss series, which `soup runs replay` and the TUI report as the
+        best step, and it switches off `soup why`'s plateau and divergence
+        checks. The transformers callback records None at the same point. The
+        panel is fed None too, so it shows "-" rather than 0.0000. Pinned so
+        the carrying above cannot quietly start inventing a number for this
+        row instead."""
         tracker = _RecordingTracker()
+        display = _RecordingDisplay()
         _run(monkeypatch, tmp_path,
              sequence=[("val", _VAL_1), ("train", _TRAIN_1)],
-             display=_RecordingDisplay(), tracker=tracker)
+             display=display, tracker=tracker)
 
         val_rows = [m for m in tracker.metrics if m.get("val_loss") is not None]
         assert len(val_rows) == 1
-        assert val_rows[0]["loss"] == pytest.approx(0.0)
+        # #1225: nothing was measured yet, so nothing is recorded or shown
+        assert val_rows[0]["loss"] is None
+        # the evaluation runs first, so the panel's first update is its own
+        # (later training updates also carry the sticky validation loss)
+        first = display.updates[0]
+        assert first["val_loss"] is not None
+        assert first["loss"] is None
 
     def test_the_carried_values_survive_a_run_with_no_display(
         self, tmp_path, monkeypatch

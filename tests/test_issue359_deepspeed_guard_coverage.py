@@ -32,6 +32,8 @@ _BUILDS_TRAINER = re.compile(r"self\.trainer\s*=\s*(?!None\b)[A-Za-z_][\w.]*\s*\
 _GUARD_CALL = re.compile(r"attach_empty_param_group_guard\s*\(")
 #: DeepSpeed reachability: the wrapper takes a config it can be launched with.
 _DEEPSPEED_CAPABLE = re.compile(r"\bdeepspeed_config\b")
+# Unlike forwarding exemptions, these trainers reject DeepSpeed before setup.
+_DEEPSPEED_REFUSING = {"csm.py"}
 
 
 def _code_without_comments(text: str) -> str:
@@ -40,6 +42,8 @@ def _code_without_comments(text: str) -> str:
 
 
 def _needs_guard(path: pathlib.Path) -> bool:
+    if path.name in _DEEPSPEED_REFUSING:
+        return False
     code = _code_without_comments(path.read_text(encoding="utf-8"))
     return bool(_DEEPSPEED_CAPABLE.search(code)) and bool(_BUILDS_TRAINER.search(code))
 
@@ -76,12 +80,13 @@ class TestGuardCoverage:
             "with LoRA it dies at the first lr_scheduler.step() (#359)."
         )
 
-    #: preference.py forwards ``deepspeed_config`` into five wrappers that each
-    #: carry the guard, and builds no trainer of its own. It is the ONLY module
-    #: allowed to hold a deepspeed_config without calling the guard, and it is
-    #: named here so that the next such module has to be argued for rather than
+    #: Modules that forward a ``deepspeed_config`` without calling the guard,
+    #: because they build no trainer of their own. Today: ``preference.py``
+    #: forwards it into five wrappers that each carry the guard, and
+    #: ``dispatch.py`` (#1213) forwards it to whichever wrapper it resolves.
+    #: Named here so that the next such module has to be argued for rather than
     #: slipping through a regex that stopped matching.
-    _GUARD_EXEMPT = {"preference.py"}
+    _GUARD_EXEMPT = {"preference.py", "dispatch.py"}
 
     def test_no_deepspeed_capable_module_quietly_loses_the_guard(self):
         """Closes the rebind evasion: ``_BUILDS_TRAINER`` requires the
@@ -95,7 +100,7 @@ class TestGuardCoverage:
             code = _code_without_comments(path.read_text(encoding="utf-8"))
             if not _DEEPSPEED_CAPABLE.search(code):
                 continue
-            if path.name in self._GUARD_EXEMPT:
+            if path.name in self._GUARD_EXEMPT or path.name in _DEEPSPEED_REFUSING:
                 continue
             if not _GUARD_CALL.search(code):
                 offenders.append(path.name)
@@ -439,3 +444,19 @@ class TestUserSuppliedDeepspeedFileIsResolved:
             ds, "resolve_user_deepspeed_file", lambda *a, **k: pytest.fail("not a file")
         )
         assert _resolve_deepspeed("zero2") == "preset:zero2"
+
+
+def test_deepspeed_refusing_exemption_is_earned():
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.trainer.csm import CSMTrainerWrapper
+
+    assert _DEEPSPEED_REFUSING == {"csm.py"}
+    config = SoupConfig(
+        base="sesame/csm-1b", task="tts", modality="audio_out",
+        data={"train": "speech.jsonl", "format": "audio"},
+        training={"tts_family": "sesame_csm", "quantization": "none"},
+    )
+    wrapper = CSMTrainerWrapper(config, device="cpu", deepspeed_config="ds.json")
+    with pytest.raises(ValueError, match="single-device"):
+        wrapper.setup({})
+    assert wrapper.model is None and wrapper.trainer is None

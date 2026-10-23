@@ -24,6 +24,8 @@
 - [Health Check](#health-check)
 - [Version Info](#version-info)
 - [Error Handling](#error-handling)
+- [Unknown config keys](#unknown-config-keys)
+- [Config size limits](#config-size-limits)
 - [Experiment Tracking](#experiment-tracking)
 - [Profiling Extras](#profiling-extras)
 - [VS Code Setup (`.vscode/launch.json`)](#vs-code-setup-vscodelaunchjson)
@@ -37,7 +39,7 @@
 - [Standalone Sweep Config](#standalone-sweep-config)
 - [Alternative Model Hubs (ModelScope / Modelers)](#alternative-model-hubs-modelscope--modelers)
 - [Experiment Trackers (MLflow / SwanLab / Trackio)](#experiment-trackers-mlflow--swanlab--trackio)
-- [Telemetry (opt-IN, hardware-info-only)](#telemetry-opt-in-hardware-info-only)
+- [Telemetry (opt-in)](#telemetry-opt-in)
 - [Plugin System](#plugin-system)
 - [External Integrations Catalog](#external-integrations-catalog)
 - [Advanced Trainer Plugins](#advanced-trainer-plugins)
@@ -72,6 +74,8 @@ soup autopilot --model <id> --data d.jsonl --goal chat --dry-run
 
 Autopilot writes a ready-to-run `soup.yaml`. Edit it by hand if needed, then `soup train`.
 
+For the goals that train with SFT, Autopilot turns on FlashAttention and Liger only when the GPU has compute capability 8.0 or higher and the package is installed. When the card qualifies but a package is missing, the Autopilot Decisions panel names the package and the command that installs it.
+
 
 ## Apple Silicon (MLX Backend)
 
@@ -96,6 +100,31 @@ dependency; the local file path below does not.
 CUDA-shaped analytical VRAM preflight is skipped on the MLX path because Apple
 unified memory is managed by Metal, not a fixed CUDA VRAM pool.
 
+mlx-lm trains and evaluates in whole batches of `training.batch_size`
+([#1851](https://github.com/MakazhanAlpamys/Soup/issues/1851)). A validation
+split with fewer rows than one batch, which the default `data.val_split: 0.1`
+produces on a small file, is not evaluated: the run warns, naming both numbers,
+and records no `val_loss`. Lower `batch_size`, raise `val_split`, or set
+`val_split: 0` to train on those rows instead. A training split with fewer rows
+than one batch is refused before the model loads.
+
+`training.eval_steps: N` on MLX SFT evaluates after every N completed optimizer
+updates and after the last one, over every validation row including a short
+tail, and is recorded in `adapter_config.json` as `eval_steps` / `eval_unit`
+([#1990](https://github.com/MakazhanAlpamys/Soup/issues/1990)); with it set, a
+split smaller than one batch is evaluated rather than skipped. The validation
+loss uses the training loss: for plain-text rows that is mlx-lm's
+`default_loss`, which also scores the first padding token after each row.
+Soup triggers each evaluation when mlx-lm asks for the next training batch,
+which mlx-lm 0.31 and 0.32 do only after the previous step; if a release reads
+batches ahead, the run says once that the evaluation ran before its update.
+
+MLX text SFT also supports the opt-in [loss watchdog](peft-and-efficiency.md#loss-watchdog)
+with the existing threshold and patience fields. Its reports count completed
+optimizer updates; a triggering report stops further updates and saves the last
+adapter with the actual completed work and termination reason in
+`adapter_config.json`. Recovery and watchdogs on preference tasks remain refused.
+
 ```yaml
 base: mlx-community/Llama-3.2-3B-Instruct-4bit
 task: sft
@@ -113,7 +142,195 @@ training:
     alpha: 32
 ```
 
-MLX backend supports SFT. `backend: mlx` with `task: dpo` or `task: grpo` is refused when the config is loaded, with an error naming the task — upstream `mlx-lm` ships no DPO/GRPO training helper, so those wrappers exist only as a backstop for callers that bypass config validation. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search --tag mlx` for ready-made Apple Silicon configs.
+MLX backend supports SFT, DPO, ORPO and SimPO. Any other task with `backend: mlx` (`grpo`, `ipo`, `kto`, `preference`, ...) is refused when the config is loaded, with an error naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for ready-made Apple Silicon configs.
+
+`training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO and SimPO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
+
+#### DPO on MLX
+
+`task: dpo` with `backend: mlx` runs Soup's own training loop (`mlx-lm` ships no DPO helper), with the sigmoid loss TRL uses by default and `training.dpo_beta`.
+
+```yaml
+base: mlx-community/Qwen2.5-0.5B-Instruct-4bit
+task: dpo
+backend: mlx
+
+data:
+  train: ./prefs.jsonl
+  format: dpo
+  max_length: 1024
+
+training:
+  lr: 2e-5
+  dpo_beta: 0.1
+  batch_size: 2
+  gradient_accumulation_steps: 4
+  gradient_checkpointing: true
+  seed: 42
+  lora:
+    r: 16
+    alpha: 32
+```
+
+- **No second model in memory.** LoRA `B` starts at zero, so before the first update the policy *is* the base model. Reference log-probs are computed once from it before training, which is what TRL's `precompute_ref_log_probs` does. `--resume` computes them before the checkpoint loads, so the reference is always the base model.
+- **The rows `load_dataset` gives every backend.** Each row is read by the loader's own `format: dpo` converter, so MLX accepts exactly the layouts the transformers backend does: text (three strings) or conversational (a message-list prompt, or full `chosen` / `rejected` conversations that repeat the user turn, as the bundled examples do). Text rows get EOS appended; conversational rows go through the model's chat template; the prompt is capped at `max_length // 2` and completions at what remains, as on TRL 0.29. Where this differs from TRL, it does on purpose: a pair whose `chosen` equals its `rejected` is skipped with a count (TRL trains it at a constant loss and zero gradient), and a row the chat template is not prefix-stable for is skipped with a count and the first row's index (TRL warns and slices anyway). Fewer pairs than `training.batch_size` after skipping is refused, naming both.
+- **Seeded.** `training.seed` seeds `mx.random` (LoRA init, dropout) and the batch order; `training.data_seed`, when set, owns the batch order instead. Two runs with the same seed reproduce each other's losses.
+- **LoRA dropout applies.** `lora.dropout` (default 0.05) is active during training, as in MLX SFT; TRL's `disable_dropout` (on by default in 0.29.1) turns it off on the transformers backend. Set `lora.dropout: 0` to match it.
+- **Memory.** Log-probs are computed from the first completion position on, with the vocabulary head run in checkpointed chunks, so the full-vocabulary logits of a batch are never held at once. The chunked path is checked against the full model on the first batch and dropped, with a warning, for an architecture that changes logits after the head. Set `training.gradient_checkpointing: true` for long sequences: measured once on an M4 Pro, Qwen2.5-0.5B-4bit with 792-token pairs, it took a training step from 10.05 GB to 3.63 GB.
+- **Learning rate.** DPO is more sensitive than SFT. In one run on UltraFeedback pairs with Qwen2.5-0.5B-4bit, LoRA r=16 on attention, `lr: 5e-5` diverged to NaN within a dozen updates while `lr: 2e-5` trained; start at `2e-5` or below.
+- **Progress.** The panel and `soup ui` show loss and validation loss. Reward accuracy and margin print per logged step when there is no live panel, and are returned in the run result; the reference precompute prints its progress before the panel starts.
+- **Refused at load:** `modality: vision` / `audio` (MLX DPO trains on text and chat rows) and `training.lora.r: 0` (the reference is the untrained LoRA policy, so an adapter must exist), plus `dpo_beta_schedule` / `dpo_ref_regen_epochs`, LoRA+ and `data.chat_template` (MLX renders the model's shipped template only; use `backend: transformers` to apply an override).
+- **Not applied on MLX:** per-row `tools` / `chat_template_kwargs` columns (TRL reads them; MLX DPO renders with the model's own template and nothing else), NEFTune, Liger, FlashAttention and the other CUDA-path options MLX SFT also warns about.
+
+#### ORPO on MLX
+
+`task: orpo` with `backend: mlx` runs the same loop as MLX DPO with ORPO's
+objective, matched to TRL 0.29.1's ORPO trainer (the one the transformers
+backend runs): the mean log-probability of each completion, the stable
+odds-ratio term `log_odds = (a - b) - (log(1 - e^a) - log(1 - e^b))`, and
+`loss = chosen NLL - orpo_beta * mean(logsigmoid(log_odds))`, where the NLL is a
+token mean over the whole chosen sequence, prompt included. There is no
+reference model and nothing is precomputed. Qualified on
+Qwen2.5-0.5B-Instruct in bf16 and 4-bit on an M4 Pro.
+
+```yaml
+base: mlx-community/Qwen2.5-0.5B-Instruct-4bit
+task: orpo
+backend: mlx
+
+data:
+  train: ./prefs.jsonl
+  format: dpo
+  max_length: 1024
+
+training:
+  lr: 5e-5
+  orpo_beta: 0.1
+  batch_size: 2
+  gradient_accumulation_steps: 4
+  gradient_checkpointing: true
+  quantization: 4bit
+  lora:
+    r: 16
+    alpha: 32
+```
+
+- **Tokens.** Rows are read by the `format: dpo` converter and tokenized as
+  TRL's ORPO trainer does: rendered to text with the chat template (keeping
+  only the prefix the prompt and `prompt + answer` renderings share), the
+  answer located even when the tokenizer merges the last prompt token into it,
+  BOS prepended and EOS appended when missing. Over-long rows are cut as on the
+  transformers backend (prompt to `max_length // 2`, keeping its end, answers to
+  the remaining room); TRL's own earlier answer cut, which can leave the shorter
+  answer empty, is not reproduced. A pair the template cannot split is skipped
+  with a count; a row with no room for an answer is refused.
+- **Ties train.** A pair whose `chosen` equals its `rejected` is kept, as in
+  TRL: its odds-ratio term is the constant `log 2` and the NLL still learns.
+- **Stops on a nonfinite loss** instead of training on NaN. The check reads
+  the loss, not the gradient: a completion whose mean log-probability is
+  exactly 0 gives a finite loss and a NaN gradient, as in TRL.
+- **LoRA dropout applies**, as in MLX DPO above; set `lora.dropout: 0` to
+  match TRL's `disable_dropout`.
+- **Reported:** loss, NLL, log-odds ratio, mean log-odds, reward accuracy and
+  margin (`orpo_beta * logp`, as TRL logs them), per logged step and in the run
+  result (`val_*` for the validation split).
+- **Saved:** `adapters.safetensors` and `adapter_config.json` (with `task:
+  orpo`, `orpo_beta` and the base model), loadable with
+  `mlx_lm.load(base, adapter_path=output)`, both written atomically and the
+  metadata before the first step. A run that stops before its first save
+  leaves the new `adapter_config.json` beside the previous run's adapter
+  file. `--resume` refuses a checkpoint without that
+  metadata, from another task, or from another base, before any tensor loads.
+- **Refused at load:** `quantization: 8bit` (use `none`, or a pre-quantized
+  4-bit base with `quantization: 4bit`), `training.lora.r: 0`, non-text
+  `modality`, LoRA+, and `task: preference` with `preference_loss: orpo` on
+  `backend: mlx` (use `task: orpo`). The other settings MLX DPO does not apply
+  are not applied here either.
+
+#### SimPO on MLX
+
+`task: simpo` with `backend: mlx` runs the same loop as MLX DPO with SimPO's
+objective, matched to TRL 0.29.1's CPO trainer with `loss_type: simpo` (the one
+the transformers backend runs). With `a` and `b` the mean log-probability of the
+chosen and rejected completion tokens:
+
+`loss = mean(-logsigmoid(beta * (a - b) - simpo_gamma)) + cpo_alpha * NLL`
+
+Qualified on Qwen2.5-0.5B-Instruct in bf16 and 4-bit on an M4 Pro: one epoch on
+600 UltraFeedback pairs took about 4.5 minutes and 7.5-8.6 GB, and the mean
+log-probability margin on 200 held-out pairs rose 1.9x (bf16) and 3.1x (4-bit),
+while held-out pairwise accuracy barely moved (0.540 to 0.565, 0.545 to 0.550).
+That shows the objective moving, not alignment quality.
+
+- **Beta is 0.1, fixed.** Soup's transformers backend passes no beta to TRL, so
+  `CPOConfig`'s default 0.1 applies; MLX uses the same value and records it as
+  `simpo_beta` in the adapter metadata. `dpo_beta` and `orpo_beta` are not
+  read. The margin `simpo_gamma` sits outside the temperature, as in TRL (which
+  writes it `beta * (a - b - simpo_gamma / beta)`). Label smoothing is TRL's
+  default 0.
+- **The NLL covers the chosen completion only.** CPO's labels mask the prompt,
+  so the NLL is a token mean over the chosen completion tokens of the whole
+  batch (not a mean of per-row means). This differs from ORPO, whose NLL
+  includes the prompt. `cpo_alpha` weights it (`> 0`, as on the transformers
+  backend). With `gradient_accumulation_steps > 1` the NLL is a token mean per
+  micro-batch and the micro-batches are averaged with equal weight, as the
+  transformers Trainer does for TRL's CPO.
+- **Tokens** are ORPO's above: TRL's CPO and ORPO trainers tokenize rows with
+  the same code, so rows that fit in `data.max_length` train on the same tokens
+  on either backend. Over-long rows are cut with Soup's cap (prompt to
+  `max_length // 2`, keeping its end, answers to the remaining room). The
+  transformers SimPO path applies no prompt cap: TRL 0.29.1 cuts only the
+  answers there, and Soup refuses a row whose shorter answer that cut empties.
+- **Ties train**, as in TRL: the preference term is the constant
+  `softplus(simpo_gamma)` and the NLL still learns.
+- **Stops on a nonfinite loss** instead of training on NaN.
+- **LoRA dropout applies**, as in MLX DPO above; set `lora.dropout: 0` to
+  match TRL's `disable_dropout`.
+- **Reported:** loss, NLL, chosen and rejected rewards (`0.1 * logp`, as TRL
+  logs them), reward accuracy and margin, and the mean chosen and rejected
+  log-probabilities, per logged step and in the run result (`val_*` for the
+  validation split). TRL's mean-logit metrics are not computed: the vocabulary
+  head runs in chunks and the full logits are never held.
+- **Saved:** `adapters.safetensors` and `adapter_config.json` (with `task:
+  simpo`, `simpo_beta`, `simpo_gamma`, `cpo_alpha` and the base model),
+  loadable with `mlx_lm.load(base, adapter_path=output)`, written as MLX ORPO
+  writes them. `--resume` refuses a checkpoint without that metadata, from
+  another task (ORPO and DPO included), or from another base, before any tensor
+  loads.
+- **Refused at load:** `quantization: 8bit`, `training.lora.r: 0`, non-text
+  `modality`, LoRA+, `data.chat_template` (as for MLX DPO and ORPO), and
+  `task: preference` with `preference_loss: simpo` on
+  `backend: mlx` (use `task: simpo`). The other settings MLX DPO does not apply
+  are not applied here either.
+
+#### DoRA on MLX
+
+For text SFT, set `training.lora.use_dora: true` to use MLX-LM's native
+weight-decomposed adapter instead of plain LoRA. Soup supports dense linear
+targets on unquantized or pre-quantized 4-bit bases, with the same scalar
+`lora.r`, `lora.alpha` and `target_modules` settings as MLX LoRA. The base remains
+frozen; the low-rank factors and magnitude parameters train. Switch/expert layers,
+embedding targets, unmatched target names and 8-bit target layers are refused
+before adapter conversion. `use_rslora`, `rank_pattern` and `alpha_pattern` are
+not supported with MLX DoRA. Unsloth DoRA remains refused.
+
+The output records `fine_tune_type: dora` and is loadable with
+`mlx_lm.load(base, adapter_path=output)`. `soup train --resume auto` warm-starts
+the DoRA weights, including magnitudes; it refuses missing, extra or differently
+shaped adapter tensors before loading any of them. This restores weights only,
+not optimizer state, dataset position or the iteration counter.
+
+To fuse the adapter, use the native MLX-LM command (this is not `soup merge`):
+
+```bash
+mlx_lm.fuse --model ./mlx-base --adapter-path ./output \
+  --save-path ./fused-model --dequantize
+```
+
+Native regression tests use a local, randomly initialized one-layer Llama and
+check training, frozen base weights, gradients, reload and dequantized fusion.
+They require no model downloads. They establish adapter lifecycle correctness;
+they do not establish pretrained-model quality or a speed advantage over LoRA.
 
 #### Optimizers and schedules
 
@@ -147,7 +364,7 @@ what ran is recoverable from the output directory.
 
 ### Transformers on MPS
 
-The regular `backend: transformers` path can run more than MLX's SFT-only
+The regular `backend: transformers` path can run more than MLX's SFT, DPO, ORPO and SimPO
 surface. On a live MPS runtime that accepts bfloat16, Soup enables BF16 autocast
 for the hardware-validated text trainers: SFT, DPO, GRPO/RLVR, reward modelling,
 and PRM.
@@ -164,6 +381,8 @@ runs on Apple Silicon for all five tasks. GRPO validation uses local
 Transformers generation (`use_vllm: false`) and deterministic RLVR; vLLM remains
 a CUDA-oriented optional path. Other Transformers trainers remain FP32 on MPS
 until their task-specific kernels receive equivalent hardware coverage.
+
+On Apple Silicon MPS hardware, Transformers' threaded weight loader has been reported to crash with SIGABRT in `_materialize_copy` on some setups (#2076). Soup sets `HF_DEACTIVATE_ASYNC_LOAD=1` by default when running on MPS to enforce synchronous model loading while preserving any explicit user environment setting. To opt out and re-enable threaded loading, export `HF_DEACTIVATE_ASYNC_LOAD=0` before training.
 
 
 ## Unsloth Backend (2-5x Faster Training)
@@ -195,14 +414,29 @@ training:
     alpha: 16
 ```
 
-Works with all training tasks: SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, and Pretrain. If unsloth is installed but not enabled, Soup will suggest it automatically.
+Works with the tasks that have an unsloth setup: SFT (text; SFT vision and audio still run the transformers setup), DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, BCO, preference, Pretrain, Embedding and TTS. The others (`reward_model`, `prm`, `classifier`, `reranker`, `cross_encoder`, `distill`, `unlearn`, `moe_lora_routing`, `online_dpo` and `asr`) have no unsloth setup, so `backend: unsloth` is refused at config load for them (#1357). If unsloth is installed but not enabled, Soup suggests it, but only for a config that would still load with `backend: unsloth` (#1736): a config one of these refusals would stop gets no suggestion.
 
-> **Tip:** Soup auto-detects unsloth. When installed, you'll see a hint during `soup train` if you haven't enabled it yet.
+`quantization: 8bit` with `backend: unsloth` is refused at config load: Soup's Unsloth loader passes `load_in_4bit` only, so `8bit` used to load the model in 16-bit with no word (#1811). Use `4bit` or `none` on this backend, or `backend: transformers` for 8-bit.
+
+> **Tip:** Soup auto-detects unsloth. When it is installed, `soup train` prints a hint if you haven't enabled it yet and your config would load with it.
+
+### Gradient checkpointing on Unsloth
+
+On `backend: unsloth`, `training.gradient_checkpointing` is honoured instead of silently ignored ([#797](https://github.com/MakazhanAlpamys/Soup/issues/797)):
+
+- `false` (the schema default) disables checkpointing and may increase activation memory.
+- `true` (or a tier: `selective`, `medium`, `full`, `auto`) enables Unsloth's optimized checkpointing; throughput and maximum context depend on the workload.
+- Layer streaming (`training.stream_layers: true`) already checkpoints every layer, so the Unsloth kernel stays off there whatever the flag says.
+
+```yaml
+training:
+  gradient_checkpointing: true  # keep Unsloth's optimized checkpointing
+```
 
 
 ## Cloud GPU Training
 
-No local GPU? `soup train --cloud modal|lambda` renders a provider-specific controller
+No local GPU? `soup train --cloud modal|lambda|runpod` renders a provider-specific controller
 from your `soup.yaml`. The config YAML is base64-embedded as **data**; credentials are read from
 the environment only when a live submission starts.
 
@@ -227,22 +461,82 @@ including after a failed run, the app downloads every file in that directory int
 output directory and prints a `modal volume get soup-outputs /<run name> <output dir> --force`
 command that retries the download; that command places the files under `<output dir>/<run name>`.
 
-### RunPod (Planned)
+### RunPod
 
-RunPod support is currently in development and descoped from live CLI dispatch pending automated
-lifecycle and termination safeguards. Running `soup train --cloud runpod` informs the operator that
-RunPod is not yet live and points to active cloud backends (`--cloud modal` and `--cloud lambda`).
+`soup train --cloud runpod --gpu a100` writes `soup_runpod_app.py` without contacting
+RunPod. GPUs: `a100` (80 GB SXM), `h100`, `a40`, `rtx3090`, `rtx4090`. The controller
+uses Python's standard library and local OpenSSH `ssh`/`scp`; no RunPod SDK extra
+is needed. For live submission, set `RUNPOD_API_KEY` and `RUNPOD_SSH_PRIVATE_KEY`
+to your private key path, with its matching OpenSSH public key at `<path>.pub`.
+Only ed25519 and RSA public keys are accepted:
+
+```bash
+soup train --config soup.yaml --cloud runpod --gpu rtx4090 --cloud-submit
+```
+
+The local controller creates one Secure Cloud GPU Pod with TCP SSH access, installs
+the running Soup version, runs training over SSH and copies the configured relative
+output directory back before deleting the Pod. Choose a fresh local output path;
+existing outputs, symlink/junction paths and path components starting with `-` are
+refused before allocation and rechecked before copying. SCP separates options from
+its operands with `--`. Submission starts Python in isolated mode (`-I`) and passes
+only the RunPod token/key path, `PATH`, `HOME`, `USERPROFILE`, proxy settings
+(`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` and their lowercase forms),
+temporary-directory settings (`TEMP`, `TMP`, `TMPDIR`), Windows settings
+(`SYSTEMROOT`, `SYSTEMDRIVE`, `WINDIR`) and `SSH_AUTH_SOCK` when
+present. Environment names are matched case-insensitively on Windows. The controller
+reconfigures stdout/stderr to replace characters the pipe encoding cannot represent,
+because isolated Python ignores `PYTHONIOENCODING` and `PYTHONUTF8`.
+SSH/SCP use `IdentitiesOnly=yes` with the selected key and a temporary per-run known-hosts
+file, removed even after failure; the user's known-hosts file is not modified.
+The config is base64-embedded data; planning applies the
+shared YAML size, nesting and alias-expansion limits, and refuses inline credential
+fields. The API key and private SSH key remain local;
+only the public key enters the Pod environment. Models and datasets must be publicly
+accessible remotely: local input files and local credentials are not uploaded.
+
+Deletion runs in `finally` on training/copy failure, timeout and Ctrl+C, and polls
+until the API returns 404. The parent waits through interrupts so it does not kill
+the cleanup controller. Transient transport failures, including truncated HTTP
+responses during DELETE or confirmation GET, are retried within the five-minute
+cleanup window. A lost or ambiguous create response (including HTTP 5xx and 408)
+is reconciled by the unique run name, without repeating the create request or
+deleting unrelated Pods. A definite HTTP 4xx rejection other than 408 reports the
+status without claiming that cleanup of an allocated Pod failed. Fixed controller
+failure reasons are shown; arbitrary transport/subprocess exception text is hidden.
+Keep the controller running; force-killing it or losing API access can leave cleanup
+unconfirmed. An unconfirmed cleanup exits nonzero and names the run to check in
+the RunPod console. A single interrupted SSH training session is failed rather
+than retried, to avoid duplicate training. Keepalive probes run every 30 seconds
+with six missed probes allowed (roughly three minutes); the training command has
+a 25-hour timeout. Artifacts are copied only after a successful training command,
+with one SCP attempt capped at 15 minutes. A failed copy still terminates the Pod,
+so an incomplete download cannot be recovered from that Pod afterward. Remote log
+tail retrieval and a copy retry window are not implemented in this controller.
+
+**Not yet live-validated.** Tests use local mocked API/SSH transports. The code
+PR does not include a paid run; provider execution, GPU behavior, retrieval and
+billing termination remain a separate live-validation task, per #264's ruling.
+API contract: [RunPod REST v1 OpenAPI](https://rest.runpod.io/v1/openapi.json),
+[SSH setup](https://docs.runpod.io/pods/configuration/use-ssh).
 
 ### Lambda Cloud
 
 Lambda uses an instance rather than a serverless function. The generated local controller sends a
 secret-free cloud-init script as API `user_data`, waits for it over SSH, copies the configured
-output back, and requests instance termination in a `finally` block. Keep the controller running
+output back, and requests instance termination in a `finally` block. The controller polls training
+status over short SSH connections with keepalive probes rather than holding a single persistent
+session open. It tolerates transient network drops and disconnects for up to 15 minutes with exponential
+backoff before terminating the instance to prevent runaway billing. Keep the controller running
 until it reports that termination succeeded; shutting down the guest does not terminate billing.
 Pressing Ctrl+C during `--cloud-submit` interrupts the controller, which still runs that `finally`
 block, and `soup` waits for it to terminate the instance and exit rather than killing it; the only
 way to skip that cleanup is to kill the controller process itself (for example with `kill` from
-another terminal), which can leave the instance running.
+another terminal), which can leave the instance running. If remote training fails with a non-zero exit
+code, the controller fetches the last 50 lines of `/home/ubuntu/soup/train.log` over SSH (capped at 50 KB
+and sanitized of terminal control sequences) and prints them before terminating the instance so
+the root cause is immediately visible (the log file holds only `soup train` output; an earlier failure
+during cloud-init or `pip install` is not captured in it).
 
 Register the public half of an SSH key with Lambda first, then set:
 
@@ -258,7 +552,7 @@ soup train --config soup.yaml --cloud lambda --gpu a100 --cloud-submit
 controller can copy the artifact back safely. The API key stays on the caller and is never embedded
 in cloud-init or instance logs.
 
-The Lambda submission path still requires the paid live-validation checklist in #264 before
+The Lambda submission path still requires the paid live-validation checklist in #1280 before
 it can be described as provider-validated. Plan-only rendering and the lifecycle boundaries are
 covered by offline tests.
 
@@ -363,6 +657,8 @@ writes that shape. This is a weights-only warm start — mlx-lm's LoRA trainer
 exposes no optimizer state or step count, so the resumed run starts counting
 from step 0 regardless of how far the checkpoint got.
 
+`task: unlearn` refuses `--resume` / `--hf-resume`, because it writes no checkpoints.
+
 
 ## Run Management & Cleanup
 
@@ -370,7 +666,7 @@ LLM training generates massive checkpoint files. Soup automatically manages an S
 
 ```bash
 # List all historical training runs
-soup runs list
+soup runs
 
 # Compare two differing experiments side-by-side
 soup runs compare run_202611... run_202612...
@@ -383,7 +679,7 @@ soup runs clean run_202611...
 soup runs clean --all --dry-run
 ```
 
-By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later. Pass `--no-keep-weights` to delete whole non-best checkpoints instead (the checkpoint with the lowest loss is always kept); combine it with `--dry-run` to see what would go first.
+By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later. Pass `--no-keep-weights` to delete whole non-best checkpoints instead (the checkpoint with the lowest loss is always kept); combine it with `--dry-run` to see what would go first. The checkpoint kept whole is the one with the lowest loss recorded at its step. When no checkpoint has a recorded loss, for example in a run shorter than `logging_steps`, which logs none, it is the latest checkpoint, and `clean` says so.
 
 
 ## Alternative Model Hubs
@@ -459,6 +755,11 @@ soup recipes search "reasoning"
 soup recipes search --size 7b
 soup recipes search "medical"
 soup recipes search "vision"
+
+# Check every shipped config can attach its LoRA adapter (no weights downloaded)
+soup recipes verify
+soup recipes verify --config soup.yaml
+soup recipes verify --json    # one row per config on stdout, for CI
 ```
 
 **What's covered:**
@@ -471,7 +772,7 @@ soup recipes search "vision"
 | **Reasoning** | All 6 DeepSeek-R1-Distill sizes (Qwen 1.5B / 7B / 14B / 32B + Llama 8B / 70B), Qwen3-Coder 30B, Qwen3-30B-A3B reasoning, Phi-4 reasoning |
 | **Small / edge / mobile** | SmolLM2 (135M / 360M / 1.7B), Qwen2.5 (0.5B / 1.5B / 3B), Gemma 2 2B, Phi-3.5-mini, Llama-3.2 (1B / 3B) |
 | **Domain specialists** | BioMistral 7B, Meditron 7B (medical) — CodeLlama (13B / 70B), Magicoder 6.7B (code) — Mathstral 7B (math) — Llama-2-13b-finance (FinGPT-style starter) — Nemotron-4 340B |
-| **Multimodal reasoning** | Llama-3.2-Vision GRPO, Pixtral DPO |
+| **Multimodal reasoning** | Llama-3.2-Vision GRPO |
 | **Multi-GPU** | llama3-70b-fsdp2, qwen3-32b-zeropp, deepseek-v3-pipeline |
 | **Apple Silicon (MLX)** | llama3.1-8b / qwen3-8b / gemma3-9b SFT-MLX |
 | **Tool-calling / agentic** | qwen3-8b-tools, llama4-scout-tools |
@@ -496,6 +797,10 @@ soup sweep --config soup.yaml --param lr=1e-5,2e-5 --param epochs=2,3 --dry-run
 # Early stopping: skip remaining runs if loss exceeds 1.5x best
 soup sweep --config soup.yaml --param lr=1e-5,2e-5,5e-5 --early-stop 1.5
 ```
+
+Every arm builds the trainer `soup train` builds for the config's `task` and
+`backend`, so an arm on a `task: distill` config distills, and an arm on
+`backend: mlx` uses the MLX wrapper.
 
 
 ## Model Comparison
@@ -540,6 +845,24 @@ soup doctor [--nccl]
 
 Shows: Python version, GPU availability, system resources (RAM/Disk), all dependency versions, and fix suggestions. Use `--nccl` to measure and check multi-GPU communication bandwidth against expected hardware ceilings.
 
+With `soup doctor --config soup.yaml`, the declared support report lists only
+explicitly written, active settings that differ from their schema defaults.
+Writing a default counts as leaving it unwritten, so a full YAML dump and its
+minimal source have the same report; `seed: 0` still counts because the seed
+default is unset. Settings refused at config load are not listed as doctor rows:
+their active values fail before the report can run. This report describes the
+reviewed gaps, not a guarantee that every unlisted setting is supported.
+
+### GPU diagnostics
+
+When an NVIDIA GPU is available, `soup doctor` reports its compute capability
+and architecture family, whether the installed PyTorch build contains native
+or PTX support for that architecture, and the hardware/software gates for
+BF16, FP8, and NVFP4. A missing architecture warning includes a CUDA-enabled
+PyTorch reinstall hint based on the CUDA version reported by the driver. When
+the driver version cannot be mapped to a supported wheel, the hint remains
+actionable without constructing a `whl/None` URL.
+
 
 ## Version Info
 
@@ -570,7 +893,7 @@ Soup shows friendly error messages by default (2-3 lines with a fix suggestion).
 soup --verbose train --config soup.yaml
 
 # Works with any command
-soup --verbose eval --model ./output --benchmarks mmlu
+soup --verbose eval benchmark --model ./output --benchmarks mmlu
 ```
 
 > **Note:** `--verbose` is a global flag — it must go **before** the command name, not after.
@@ -628,9 +951,84 @@ for the same reason. A sweep whose swept knob is never applied produces arms tha
 identical, so there is no partially-useful result to preserve by continuing.
 
 
+## Config size limits
+
+A config file may be at most 1 MiB, nest mappings and lists at most 100 levels,
+and expand through anchors, aliases and `<<` merge keys to at most one node per byte plus 10,000.
+A file over a limit is refused with a message naming the file and the limit (`soup ship`: 4 MiB).
+
+
 ## Experiment Tracking
 
 Every `soup train` run is automatically tracked in a local SQLite database (`~/.soup/experiments.db`).
+
+### Recorded base identity
+
+For single-process Hugging Face loads on the Transformers backend (resident or
+layer-streamed), `soup train` resolves
+the base's commit once, immediately before its first model/tokenizer/processor/config
+load, and passes that commit to the run's subsequent base loads. The original `base`
+name stays in the config and experiments row; unrelated teacher, reward and scorer
+repositories do not receive its revision. `soup runs show` displays the revision and
+its source.
+
+Layer streaming pins its tokenizer, architecture config, probe/final meta
+skeletons and both checkpoint download passes. Known Hub commits use separate
+shard and materialized-weight cache slots; repeated loads of one commit reuse
+its slot. Local paths and unknown revisions retain the existing cache behavior.
+The config, PEFT base name and run metadata continue to name the original base.
+The first pinned streamed run after upgrading re-shards and re-copies the base
+into the new `<slug>@<commit>` cache slots, costing disk space and time; old slots
+are left in place.
+
+The new nullable `runs.base_revision`, `runs.base_revision_source` and
+`runs.training_data_sha256` columns upgrade existing databases in place. Historical
+rows stay unknown; Soup never fills them from today's Hub state or dataset bytes.
+Training-data hash capture remains separate work (#1764 part 2); this change reserves
+its storage/transfer contract without hashing training inputs.
+
+An unavailable/offline Hub metadata lookup preserves the existing load flow and
+records an unknown revision. A local `snapshots/<40-hex>` directory records
+`base_revision_source: cache_path`: this is a hint derived from the directory name,
+**not proof that its local bytes match the Hub commit**. Other local directories
+also have unknown content identity. There is no new config field or new default
+offline, legacy-export or `--base` refusal.
+
+The saving rank writes `soup_run.json` beside the final training artifact, containing
+the schema version, run ID, original base ID, nullable revision/source and nullable
+training-data hash. Keep that file when copying an adapter. Shared live-eval loading
+and GGUF's adapter-merge path can then reuse a matching recorded Hub commit without
+access to the original experiments database. An explicit different base or missing,
+malformed or future-version metadata keeps the existing flow, without guessing a
+historical commit. This metadata is provenance, not a signed integrity attestation.
+Loading a local adapter folder directly also reuses that commit when its
+`adapter_config.json` names the same base and has no conflicting explicit revision;
+the tokenizer still comes from the adapter folder.
+
+For a multi-process Hugging Face Transformers `soup train` launch, global rank zero
+resolves the base once and broadcasts its nullable result before trainer setup.
+Soup initializes or reuses Accelerate's shared process group with Trainer's default
+1800-second timeout. The first initialization sets the timeout for every collective,
+including later Trainer operations; an existing group keeps its original timeout.
+Offline/failed metadata requests
+are broadcast as unknown, preserving existing loading behavior. A collective
+failure stops the run rather than letting workers resolve independent moving heads.
+Ranks compare identity receipts after setup and training; a conflicting loaded
+model commit on any rank clears the bound revision for every rank before recording
+the final artifact. CPU/Gloo coordination is covered by real two-process tests on
+Linux; simulated-rank checks run on every platform. The real cases skip on macOS
+and Windows because env:// rendezvous can time out on loaded macOS runners. Rank
+failures include both child logs after cleanup. NCCL/FSDP hardware execution is
+not established by those tests.
+
+**Remaining boundaries:** Non-HF hubs, Unsloth and MLX loads remain unbound and
+are recorded as such; a cache-path hint on any backend is still unverified. Standalone
+wrapper/sweep invocations do not automatically establish a run scope. Metadata is
+written for the final artifact, not each intermediate checkpoint. Other exporters
+(including ONNX/TensorRT and native torchao loaders), remote adapter sidecars
+and independent teacher/reward/scorer repositories do not gain a binding guarantee.
+Evaluation engines that bypass the shared live-eval loader (including lm-eval's
+adapter benchmark path and vLLM) also remain unbound in this stage.
 
 ```bash
 # List all training runs
@@ -698,7 +1096,7 @@ zero telemetry network requests.
 You can also explicitly disable telemetry for a specific invocation using the `--no-telemetry` flag:
 
 ```bash
-soup train --config soup.yaml --no-telemetry
+soup --no-telemetry train --config soup.yaml
 ```
 
 When enabled, telemetry performs a synchronous fire-and-forget HTTP POST with a 1-second connect and read timeout (DNS resolution excluded) on command exit. The anonymous identifier is stored at `~/.soup/telemetry_id`; deleting `~/.soup/telemetry_id` regenerates it on the next opt-in. See [Privacy Policy](#privacy-policy) for details.
@@ -872,8 +1270,12 @@ Five-question wizard input → fully-validated `soup.yaml`. Literal allowlists o
 
 ## Standalone Sweep Config
 
+`--config` stays the base `soup.yaml` to train against; `--sweep-config` points at a
+separate file holding the strategy, run count, seed and swept parameters, in place of
+repeating `--param` on the command line.
+
 ```bash
-soup sweep --config sweep.yaml
+soup sweep --config soup.yaml --sweep-config sweep.yaml
 ```
 
 ```yaml
@@ -887,6 +1289,17 @@ params:
 ```
 
 Strict scalar allowlist on values (`str` / `int` / `float` / `bool`); `_MAX_FILE_BYTES=256KB`, `_MAX_PARAM_KEYS=32`, `_MAX_VALUES_PER_KEY=64`; `SweepSpec.params` is `MappingProxyType[str, Tuple[Any, ...]]` for genuine immutability.
+
+`--param` and `--sweep-config` are mutually exclusive. With `--sweep-config`:
+
+- The file's `strategy` and `seed` win over `--strategy`.
+- A non-zero `n_runs` wins over `--max-runs`; `0` or absent falls back to `--max-runs`.
+- `n_runs` only caps the run count, so a grid smaller than `n_runs` runs every combination
+  (the example above is 3 x 3 = 9, so it runs 9 trials, not 20).
+- `seed` seeds the random sampler.
+
+A file that omits `strategy`, combined with `--strategy random --max-runs 2` on the command
+line, silently runs grid, because the file's default `grid` wins over both flags.
 
 
 ## Alternative Model Hubs (ModelScope / Modelers)
@@ -1111,6 +1524,11 @@ soup env check
 
 Given (params, seq_len, batch_size, optimizer, quant, peft, gradient_checkpointing), the analytical predictor returns a 5-bucket peak-VRAM breakdown (weights / optimizer / gradients / activations / overhead) and an OK/OOM verdict with a 10% safety margin.
 
+For `soup train`, `params_b` is derived by `model_size_from_name`:
+- A local checkpoint path is measured directly from safetensors metadata headers. The files measured are the checkpoint's own: the ones `model.safetensors.index.json` names; without an index `model.safetensors`, else the `model-*-of-*.safetensors` shards, else every `*.safetensors` except `consolidated*`. The Hub download for layer streaming and `soup spectrum scan` fetches by the same rule, so what is downloaded is what is counted. A `consolidated.safetensors` beside the checkpoint (the mistral-inference copy Mistral's repositories ship, which transformers never loads) is not counted, not downloaded for layer streaming or `soup spectrum scan`, not copied out of the HF cache, and not sharded; a directory holding only such a file is refused with its name (#1806).
+- A Hub id is parsed: e.g. `72B`, `8x7B` → `46.7` total, `17B-16E` → `109` total, with active-parameter markers (`-A22B`) ignored.
+- An id with no size token (e.g. `DeepSeek-V3`, `Kimi-K2`, `GLM-5`, `MiniMax-M2`) still falls back to `7B`, which under-predicts these models (they have 229B to 1T parameters). Point `base:` at a local download to have the checkpoint measured instead.
+
 ```python
 from soup_cli.utils.hardware_fit import HardwareFitInput, decide_hardware_fit
 
@@ -1127,6 +1545,8 @@ print(report.ok, report.reason)
 When it doesn't fit, the report names actionable knobs: `--batch-size halve`, `--quantization 4bit`, `--gradient-checkpointing auto`. Composes with v0.40.3 live CUDA OOM probe (`make_cuda_probe_fn`) which still runs when `auto_batch_size_strategy: probe`.
 
 The weights bucket assumes 2 bytes/param under `quant="none"` (a frozen base now really does load at the checkpoint's own dtype, typically bf16/fp16 — #339), except `peft="full"` (full fine-tuning), which explicitly loads fp32 master weights and so assumes 4 bytes/param instead.
+
+`mxfp4` and `fp8` are dequantized on load, so they take the same 2 bytes/param. `gptq`, `awq`, `aqlm` and `eetq` stay packed and are priced at their own figures. `soup train` has no figure for `hqq:*` and says it skipped the check ([Quant Menu](performance-and-quantization.md#quant-menu--9-quantization-formats)).
 
 
 ## Shell Completions (`soup completions`)
@@ -1145,7 +1565,7 @@ soup completions zsh > "${fpath[1]}/_soup"
 soup completions fish > ~/.config/fish/completions/soup.fish
 ```
 
-Recipe names auto-complete from the 115+ catalogue; `--target-modules` falls back to canonical Llama-shape defaults (`q_proj` / `k_proj` / `v_proj` / etc.). Live HF-config introspection per `base` lands in v0.64.1.
+Command names and option names complete, straight from the live command tree: `rec` + Tab gives `recipes`, and after `soup train`, `--res` + Tab gives `--resume`. Values do not complete yet — recipe names after `soup recipes show`, for instance — because no option or argument is wired to a value completer. Two are ready for that wiring in `soup_cli/utils/completions.py`: `complete_recipe_name`, and `complete_target_modules`, which since v0.71.1 looks the base model's architecture up in its Hugging Face config when that config is already in the local cache (config only, never a download) and offers that architecture's module names, falling back to the canonical Llama-shape defaults (`q_proj` / `k_proj` / `v_proj` / etc.).
 
 
 ## License Advisor (`soup license-advisor`)

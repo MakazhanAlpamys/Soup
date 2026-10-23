@@ -1,6 +1,5 @@
 """KTO (Kahneman-Tversky Optimization) trainer — wraps trl.KTOTrainer."""
 
-import math
 import time
 from pathlib import Path
 from typing import Optional
@@ -11,6 +10,7 @@ from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.trainer.stream_setup import StreamingSetupMixin
+from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -19,6 +19,7 @@ from soup_cli.utils.gpu import (
     resolve_frozen_base_load_dtype,
 )
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -36,6 +37,9 @@ class KTOTrainerWrapper(StreamingSetupMixin):
     #: KTO runs its KL batch as a SEPARATE forward rather than concatenating
     #: it (``kto_trainer.py`` :939-977), so the row count per forward is 1x.
     _STREAM_ROWS_PER_EXAMPLE = 1
+
+    #: The reference forward runs after the policy forward, before its backward.
+    _STREAM_REFILL_BEFORE_BACKWARD = True
 
     def __init__(
         self,
@@ -133,8 +137,11 @@ class KTOTrainerWrapper(StreamingSetupMixin):
                 quantization=tcfg.quantization,
                 lora_r=tcfg.lora.r,
             )
-            # KTO processes unpaired samples — similar memory to DPO
-            batch_size = max(1, batch_size // 2)
+            # KTO processes unpaired samples — similar memory to DPO. The
+            # floor is 2, not 1: TRL's KTOTrainer refuses a per-device batch
+            # of 1 (degenerate KL term), so handing it 1 just moves the
+            # failure after the model has loaded (#1420).
+            batch_size = max(2, batch_size // 2)
             console.print(f"[green]Auto batch size (KTO):[/] {batch_size}")
 
         # --- Dataset ---
@@ -150,12 +157,10 @@ class KTOTrainerWrapper(StreamingSetupMixin):
             output_dir = output_dir / cfg.experiment_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # --- Calculate warmup steps from ratio ---
-        total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
-        )
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
+
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
 
         # --- KTO config ---
         from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
@@ -193,6 +198,7 @@ class KTOTrainerWrapper(StreamingSetupMixin):
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
             **training_seed_kwargs(tcfg),
+            **training_eval_kwargs(cfg, eval_ds, batch_size=batch_size),
             **(self.fsdp_config or {}),
             beta=tcfg.kto_beta,
             max_length=cfg.data.max_length,
@@ -223,12 +229,15 @@ class KTOTrainerWrapper(StreamingSetupMixin):
 
             attach_empty_param_group_guard(self.trainer)
 
-        # v0.40.6 #67 — ReLoRA callback (magnitude-prune LoRA every N steps).
+        # v0.40.6 #67 — ReLoRA merge-and-reinitialize restart callback.
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
+            attach_loraplus_optimizer,
             attach_plugin_callback,
             attach_relora_callback,
         )
+        # LoRA+ optimizer (#724/#745) — build and attach now that the trainer exists.
+        attach_loraplus_optimizer(self.trainer, tcfg)
         attach_relora_callback(self.trainer, tcfg)
         # v0.53.5 #114/#115 — dynamic curriculum live callback.
         attach_curriculum_callback(self.trainer, tcfg, str(output_dir), console)
@@ -245,7 +254,8 @@ class KTOTrainerWrapper(StreamingSetupMixin):
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -267,7 +277,10 @@ class KTOTrainerWrapper(StreamingSetupMixin):
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
 
-        self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
         apply_vocab_expansion(
@@ -275,7 +288,7 @@ class KTOTrainerWrapper(StreamingSetupMixin):
             self.model,
             cfg.data,
         )
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantization in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
             self.model = prepare_model_for_kbit_training(
@@ -290,7 +303,7 @@ class KTOTrainerWrapper(StreamingSetupMixin):
             resolve_lora_target_modules,
         )
 
-        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
         # #798: moe_lora picks the expert-FFN targets. Without this the flag
         # was accepted and ignored here, and on a fused-expert MoE the auto
         # resolution leaves peft with nothing to attach.
@@ -330,7 +343,13 @@ class KTOTrainerWrapper(StreamingSetupMixin):
 
     def _setup_unsloth(self, cfg: SoupConfig, tcfg) -> None:
         """Load model via unsloth FastLanguageModel (2-5x faster)."""
+        from soup_cli.utils import unsloth
         from soup_cli.utils.unsloth import load_model_and_tokenizer
+        # #797: resolve training.gradient_checkpointing for the Unsloth path
+        # (streaming layers already checkpoint every layer, so it stays off).
+        use_gradient_checkpointing = unsloth.resolve_unsloth_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=getattr(tcfg, "stream_layers", False)
+        )
 
         console.print(f"[dim]Loading model via [bold]unsloth[/]: {cfg.base}[/]")
         self.model, self.tokenizer = load_model_and_tokenizer(
@@ -341,6 +360,8 @@ class KTOTrainerWrapper(StreamingSetupMixin):
             lora_alpha=tcfg.lora.alpha,
             lora_dropout=tcfg.lora.dropout,
             target_modules=tcfg.lora.target_modules,
+            use_rslora=tcfg.lora.use_rslora,
+            use_gradient_checkpointing=use_gradient_checkpointing,
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -362,23 +383,15 @@ class KTOTrainerWrapper(StreamingSetupMixin):
 
         # Add callback for live display and experiment tracking
         if display:
-            from soup_cli.monitoring.callback import (
-                SoupTrainerCallback,
-                soup_callback_kwargs,
-            )
-
+            from soup_cli.monitoring.callback import build_soup_trainer_callback
             self.trainer.add_callback(
-                SoupTrainerCallback(
+               build_soup_trainer_callback(
                     display,
+                    config=self.config,
                     tracker=tracker,
                     run_id=run_id,
-                    eval_gate_config=self.config.training.eval_gate,
-                    **soup_callback_kwargs(
-                        self.config.training,
-                        batch_size=self._batch_size,
-                        output_dir=self._output_dir,
-                        include_eval_gate=False,
-                    ),
+                    batch_size=self._batch_size,
+                    output_dir=self._output_dir,
                 )
             )
 
@@ -386,6 +399,7 @@ class KTOTrainerWrapper(StreamingSetupMixin):
 
         # v0.72.4 — the shared context releases the streaming weight source even
         # if training raises (see StreamingSetupMixin._training_context).
+        self._attach_streamed_save_guard()
         with self._training_context(
             activation_offloading_context(self.config.training, self._output_dir)
         ):
@@ -397,8 +411,17 @@ class KTOTrainerWrapper(StreamingSetupMixin):
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
-        # Save final model (LoRA adapter)
-        self.trainer.save_model(self._output_dir)
+        # Save final model; ReLoRA output is dense.
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
+
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
+        if self.config.training.relora_steps is None:
+            self._assert_streamed_adapter_saved(self._output_dir)
         self.tokenizer.save_pretrained(self._output_dir)
 
         # Extract metrics

@@ -20,12 +20,30 @@ import copy
 import hashlib
 import json
 import math
+import ntpath
 import os
+import posixpath
+import stat
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
+LEGACY_FORMAT_VERSION = 1
+LOCAL_BASE_PREFIX = "local-sha256:"
+_LOCAL_TOKENIZER_FILES = (
+    "tokenizer_config.json",
+    "tokenizer.json",
+    "tokenizer.model",
+    "sentencepiece.bpe.model",
+    "spiece.model",
+    "vocab.json",
+    "vocab.txt",
+    "merges.txt",
+    "added_tokens.json",
+    "special_tokens_map.json",
+    "chat_template.jinja",
+)
 METADATA_NAME = "quest_mixed_precision.json"
 RECIPE = "w4a4-group128-block23-a16"
 GROUP_SIZE = 128
@@ -47,6 +65,7 @@ SUFFIXES = (
 EXPECTED_MODULES = tuple(
     f"model.layers.{block}.{suffix}" for block in BLOCKS for suffix in SUFFIXES
 )
+LAYER_COUNT_REFUSAL = "QuEST first slice requires the measured 24 blocks"
 A16_MODULES = tuple(f"model.layers.23.{suffix}" for suffix in SUFFIXES)
 ROUTE_PROVENANCE = {
     "schema_version": 1,
@@ -93,6 +112,201 @@ _METADATA_KEYS = frozenset(
         "route_provenance",
     }
 )
+
+
+def _read_local_config(root: Path) -> dict[str, Any]:
+    """Read the base ``config.json`` and check the fingerprint's own contract."""
+    config = root / "config.json"
+    if not config.is_file():
+        raise ValueError("QuEST local base requires config.json")
+    try:
+        config_data = json.loads(config.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("QuEST local base config.json is unreadable") from exc
+    if not isinstance(config_data, dict) or config_data.get("auto_map"):
+        raise ValueError("QuEST local base fingerprint requires a standard model config")
+    return config_data
+
+
+def _selected_local_model_files(root: Path) -> list[tuple[str, Path]]:
+    """Mirror the default local weight choice in AutoModelForCausalLM.from_pretrained.
+
+    QuEST supplies no variant, subfolder, or use_safetensors override. A single
+    safetensors file takes precedence over its index, then PyTorch files. The
+    selected weights, their index, model configuration, and tokenizer inputs
+    bind the base.
+    """
+    _read_local_config(root)
+
+    config = root / "config.json"
+    files: list[tuple[str, Path]] = [("config.json", config)]
+    generation_config = root / "generation_config.json"
+    if generation_config.is_file():
+        files.append(("generation_config.json", generation_config))
+    # SFT also calls AutoTokenizer.from_pretrained on this same directory.
+    # Include its standard local inputs so a tokenizer-only change is not
+    # mistaken for the original base on resume.
+    for name in _LOCAL_TOKENIZER_FILES:
+        tokenizer_file = root / name
+        if tokenizer_file.is_file():
+            files.append((name, tokenizer_file))
+    # Transformers also loads named chat templates from this directory. Bind
+    # the relative names as well as the bytes so relocation remains portable.
+    for template in sorted(
+        (root / "additional_chat_templates").glob("*.jinja"), key=lambda path: path.name
+    ):
+        if template.is_file():
+            files.append((f"additional_chat_templates/{template.name}", template))
+    tokenizer_config = root / "tokenizer_config.json"
+    if tokenizer_config.is_file():
+        try:
+            tokenizer_config_data = json.loads(tokenizer_config.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError("QuEST local base tokenizer_config.json is unreadable") from exc
+        if not isinstance(tokenizer_config_data, dict) or tokenizer_config_data.get("auto_map"):
+            raise ValueError("QuEST local base fingerprint requires a standard tokenizer")
+        if "fast_tokenizer_files" in tokenizer_config_data:
+            raise ValueError("QuEST local base fingerprint does not support fast_tokenizer_files")
+
+    selected = next(
+        (
+            name
+            for name in (
+                "model.safetensors",
+                "model.safetensors.index.json",
+                "pytorch_model.bin",
+                "pytorch_model.bin.index.json",
+            )
+            if (root / name).is_file()
+        ),
+        None,
+    )
+    if selected is None:
+        raise ValueError("QuEST local base has no supported model weights")
+    files.append((selected, root / selected))
+    if not selected.endswith(".index.json"):
+        return files
+
+    index_path = root / selected
+    if index_path.stat().st_size > 4 * 1024 * 1024:
+        raise ValueError("QuEST local base shard index exceeds 4 MiB")
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("QuEST local base shard index is unreadable") from exc
+    weight_map = index.get("weight_map") if isinstance(index, dict) else None
+    if not isinstance(weight_map, dict) or not weight_map:
+        raise ValueError("QuEST local base shard index has no weight_map")
+    if any(not isinstance(name, str) for name in weight_map.values()):
+        raise ValueError("QuEST local base shard name must be a string")
+    shards = set(weight_map.values())
+    if len(shards) > 1024:
+        raise ValueError("QuEST local base has too many shards")
+    for name in sorted(shards):
+        if (
+            not name
+            or "\\" in name
+            or ntpath.splitdrive(name)[0]
+            or any(part in {"", ".", ".."} for part in name.split("/"))
+        ):
+            raise ValueError("QuEST local base shard name must stay inside the base directory")
+        shard = root.joinpath(*PurePosixPath(name).parts)
+        if not shard.is_file():
+            raise ValueError("QuEST local base shard is missing")
+        files.append((name, shard))
+    return files
+
+
+def _hash_local_file(path: Path) -> tuple[int, str]:
+    """Hash one regular file and reject changes during the read."""
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        before = os.fstat(stream.fileno())
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError("QuEST local base contains a non-regular file")
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+        after = os.fstat(stream.fileno())
+    current = path.stat()
+
+    def identity(value: os.stat_result) -> tuple[int, int, int, int]:
+        return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
+
+    if identity(before) != identity(after) or identity(before) != identity(current):
+        raise ValueError("QuEST local base changed during fingerprinting")
+    return before.st_size, digest.hexdigest()
+
+
+def _config_topology(config_data: dict[str, Any]) -> dict[str, Any]:
+    """Return the QuEST topology the local ``config.json`` already declares.
+
+    A multimodal config keeps the text stack under ``text_config``; the route
+    only ever adapts that stack, so prefer it when it is present.
+    """
+    nested = config_data.get("text_config")
+    if isinstance(nested, dict):
+        return {**config_data, **nested}
+    return config_data
+
+
+def _local_topology_widths(config_data: dict[str, Any]) -> list[tuple[str, int]]:
+    """Collect the input widths ``_validate_raw_topology`` will later measure.
+
+    Only values present as real ints are returned. A width we cannot read is
+    left to the post-load gate rather than guessed at here.
+    """
+    config = _config_topology(config_data)
+    widths: list[tuple[str, int]] = []
+    for field in ("hidden_size", "intermediate_size"):
+        value = config.get(field)
+        if type(value) is int:
+            widths.append((field, value))
+    heads = config.get("num_attention_heads")
+    # ``o_proj`` takes num_attention_heads * head_dim, which a config may pin; with no
+    # explicit head_dim it is as wide as hidden_size, which the loop above already checked.
+    head_dim = config.get("head_dim")
+    if type(heads) is int and type(head_dim) is int:
+        widths.append(("num_attention_heads * head_dim", heads * head_dim))
+    return widths
+
+
+def _refuse_disqualifying_local_topology(config_data: dict[str, Any]) -> None:
+    """Gate a local base on the cheap parts of the topology before hashing it.
+
+    ``_validate_raw_topology`` runs inside calibration, so on ``main`` a base
+    that can never satisfy the route had every byte of its weights read and
+    SHA-256-hashed first. This repeats the two checks that ``config.json``
+    answers on its own — the block count and the group-128 / power-of-two
+    widths — with the same refusal text the post-load gate uses. The module
+    coverage, the dtype check and the topology that only a loaded model can
+    show stay where they are; this narrows nothing, it only refuses earlier.
+    """
+    config = _config_topology(config_data)
+    layers = config.get("num_hidden_layers")
+    if type(layers) is int and layers != len(BLOCKS):
+        raise ValueError(LAYER_COUNT_REFUSAL)
+    for _field, width in _local_topology_widths(config_data):
+        validate_group(width)
+
+
+def resolve_base_model_identity(source: str) -> str:
+    """Keep Hub IDs intact; replace a local directory with its loaded-file digest."""
+    if not isinstance(source, str) or not source:
+        raise ValueError("QuEST base source must be a non-empty string")
+    if not os.path.isdir(source):
+        return source
+    root = Path(os.path.realpath(source))
+    _refuse_disqualifying_local_topology(_read_local_config(root))
+    files = _selected_local_model_files(root)
+    digest = hashlib.sha256(b"soup.quest.local-base.v2\0")
+    for name, path in files:
+        size, file_sha256 = _hash_local_file(path)
+        record = json.dumps([name, size, file_sha256], separators=(",", ":")).encode("utf-8")
+        digest.update(len(record).to_bytes(8, "big"))
+        digest.update(record)
+    if os.path.realpath(source) != str(root):
+        raise ValueError("QuEST local base moved during fingerprinting")
+    return LOCAL_BASE_PREFIX + digest.hexdigest()
 
 
 def validate_scale(value: Any) -> float:
@@ -183,8 +397,8 @@ def _validate_raw_topology(model: Any) -> dict[str, Any]:
 
     targets = _target_linears(model)
     layers = getattr(getattr(model, "model", None), "layers", None)
-    if layers is None or len(layers) != 24:
-        raise ValueError("QuEST first slice requires the measured 24 blocks")
+    if layers is None or len(layers) != len(BLOCKS):
+        raise ValueError(LAYER_COUNT_REFUSAL)
     if set(targets) != set(EXPECTED_MODULES) or len(targets) != 168:
         raise ValueError(
             "QuEST calibration must cover exactly all 168 measured Llama transformer linears"
@@ -444,6 +658,7 @@ def build_metadata(
     activation_scales: dict[str, float],
     base_model: str,
     calibration_sha256: str,
+    format_version: int = FORMAT_VERSION,
 ) -> dict[str, Any]:
     """Build and validate the complete serialized route description."""
     if not isinstance(activation_scales, dict) or set(activation_scales) != set(EXPECTED_MODULES):
@@ -452,7 +667,7 @@ def build_metadata(
         raise ValueError("QuEST base_model must be a non-empty string")
     normalized = {name: validate_scale(activation_scales[name]) for name in EXPECTED_MODULES}
     metadata = {
-        "format_version": FORMAT_VERSION,
+        "format_version": format_version,
         "backend": "quest-fake-quant",
         "recipe": RECIPE,
         "base_model": base_model,
@@ -491,6 +706,7 @@ def install_mixed_quest(
     activation_scales: dict[str, float],
     base_model: str,
     calibration_sha256: str,
+    format_version: int = FORMAT_VERSION,
 ) -> dict[str, Any]:
     """Install the exact 161-A4 / 7-A16 route after full validation.
 
@@ -502,6 +718,7 @@ def install_mixed_quest(
         activation_scales=activation_scales,
         base_model=base_model,
         calibration_sha256=calibration_sha256,
+        format_version=format_version,
     )
     for name in EXPECTED_MODULES:
         parent, _, child = name.rpartition(".")
@@ -541,7 +758,10 @@ def validate_metadata(metadata: Any) -> dict[str, Any]:
     """Validate a route manifest as a closed, versioned schema."""
     if not isinstance(metadata, dict) or set(metadata) != _METADATA_KEYS:
         raise ValueError("Invalid QuEST metadata fields")
-    if type(metadata["format_version"]) is not int or metadata["format_version"] != FORMAT_VERSION:
+    if (
+        type(metadata["format_version"]) is not int
+        or metadata["format_version"] not in (LEGACY_FORMAT_VERSION, FORMAT_VERSION)
+    ):
         raise ValueError("Unsupported QuEST metadata format_version")
     if metadata["backend"] != "quest-fake-quant":
         raise ValueError("Invalid QuEST backend")
@@ -549,6 +769,21 @@ def validate_metadata(metadata: Any) -> dict[str, Any]:
         raise ValueError("Unknown QuEST recipe")
     if not isinstance(metadata["base_model"], str) or not metadata["base_model"]:
         raise ValueError("Invalid QuEST base_model")
+    if metadata["format_version"] == FORMAT_VERSION:
+        base_model = metadata["base_model"]
+        if base_model.startswith(LOCAL_BASE_PREFIX):
+            value = base_model[len(LOCAL_BASE_PREFIX) :]
+            if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+                raise ValueError("Invalid QuEST local base_model digest")
+        elif (
+            posixpath.isabs(base_model)
+            or ntpath.isabs(base_model)
+            # By name, not only through isabs: Python 3.13's ntpath.isabs no longer calls a
+            # rooted path without a drive ("\x") absolute, and 3.11-3.12 do.
+            or base_model.startswith(("/", "\\"))
+            or base_model.startswith(".")
+        ):
+            raise ValueError("QuEST v2 base_model must not contain a local path")
     if metadata["group_size"] != GROUP_SIZE or metadata["weight_bits"] != WEIGHT_BITS:
         raise ValueError("Invalid QuEST W4 group declaration")
     if metadata["weight_scale"] != WEIGHT_SCALE:
@@ -709,9 +944,56 @@ def _route_contract(metadata: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in metadata.items() if key != "route_provenance"}
 
 
-def validate_resume_metadata(checkpoint: str | os.PathLike[str], current: dict[str, Any]) -> None:
-    """Refuse resume when calibration or routing differs from the checkpoint."""
+def validate_resume_metadata(
+    checkpoint: str | os.PathLike[str],
+    current: dict[str, Any],
+    *,
+    legacy_base_model: str | None = None,
+    legacy_base_identity: str | None = None,
+) -> None:
+    """Refuse resume when calibration or routing differs from the checkpoint.
+
+    ``legacy_base_identity`` is a caller-supplied content identity for
+    ``legacy_base_model``, used instead of resolving it here. #1199 fix 2: resolving it
+    here re-read and re-hashed every selected file of the local base, which the caller
+    had already done in the same run. Passing it removes that third pass on a first v1
+    resume.
+
+    It is compared, never trusted, and it is NOT interchangeable with
+    ``current["base_model"]``: a caller that passes that field instead would make the
+    check below compare ``current["base_model"]`` with itself, which can never refuse.
+    The value to pass is the identity of ``legacy_base_model`` resolved earlier in the
+    run — ``SFTTrainerWrapper._quest_base_identity_before``, which is resolved from
+    ``config.base`` before the load. Passing anything else is caught by the comparison
+    here, not accommodated: a wrong identity still gets the same refusal it would have
+    got by resolving it.
+    """
     stored = load_metadata(checkpoint)
+    if (
+        stored["format_version"] == LEGACY_FORMAT_VERSION
+        and current["format_version"] == FORMAT_VERSION
+    ):
+        # v1 never recorded content. Its only available identity is the exact
+        # source string, so old checkpoints retain that rule on first resume.
+        if legacy_base_model is None:
+            raise ValueError("QuEST v1 resume requires the original base model reference")
+        if stored["base_model"] != legacy_base_model:
+            raise ValueError(
+                "QuEST v1 resume requires the original base model reference; "
+                "set base: to the exact path or Hub ID recorded in the checkpoint"
+            )
+        identity = (
+            legacy_base_identity
+            if legacy_base_identity is not None
+            else resolve_base_model_identity(legacy_base_model)
+        )
+        if current["base_model"] != identity:
+            raise ValueError("QuEST original base model reference does not match current identity")
+        current = {
+            **current,
+            "format_version": LEGACY_FORMAT_VERSION,
+            "base_model": legacy_base_model,
+        }
     if _route_contract(stored) != _route_contract(current):
         raise ValueError("QuEST resume metadata does not match this run's calibration and route")
 
@@ -724,6 +1006,7 @@ def restore_mixed_quest(model: Any, metadata: dict[str, Any]) -> Any:
         activation_scales=metadata["activation_scales"],
         base_model=metadata["base_model"],
         calibration_sha256=metadata["calibration"]["rows_sha256"],
+        format_version=metadata["format_version"],
     )
     if _route_contract(rebuilt) != _route_contract(metadata):
         raise ValueError("Reconstructed QuEST route differs from artifact metadata")

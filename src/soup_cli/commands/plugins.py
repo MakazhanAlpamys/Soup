@@ -46,6 +46,7 @@ def install_cmd(name: str = typer.Argument(..., help="Plugin name")) -> None:
 
 @app.command("enable")
 def enable_cmd(name: str = typer.Argument(..., help="Plugin name")) -> None:
+    """Enable a registered Soup plugin."""
     safe = escape(name)
     try:
         plugins_pkg.load_plugins()
@@ -62,6 +63,7 @@ def enable_cmd(name: str = typer.Argument(..., help="Plugin name")) -> None:
 
 @app.command("disable")
 def disable_cmd(name: str = typer.Argument(..., help="Plugin name")) -> None:
+    """Disable a registered Soup plugin."""
     safe = escape(name)
     try:
         plugins_pkg.load_plugins()

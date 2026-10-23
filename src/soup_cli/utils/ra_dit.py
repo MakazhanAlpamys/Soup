@@ -8,12 +8,9 @@ Meta 2023 recipe. Two-stage:
 * ``generator`` — RAFT-style SFT on the query + golden_doc + distractor
   bundle (uses v0.62.0 Part A ``data.format='raft'``).
 
-Schema-only release. Both stages share the existing trainer wrappers;
-v0.62.0 ships the ``ra_dit_stage`` schema field + cross-validator so a
-``soup.yaml`` can lock both stages in a hub-shareable recipe. Live
-orchestration that chains the two stages in a single ``soup train`` call
-is deferred to v0.62.1 (mirrors the v0.50.0 / v0.52.0 / v0.61.0
-stub-then-live pattern).
+Both stages share the existing trainer wrappers. The ``ra_dit_stage``
+schema field + cross-validator let a ``soup.yaml`` lock both stages in a
+hub-shareable recipe, and ``soup ra-dit`` chains the two stages.
 """
 
 from __future__ import annotations

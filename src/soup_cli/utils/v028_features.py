@@ -38,9 +38,10 @@ def apply_v028_speed_memory(
     """Apply Cut-CE / FP8 features to ``model``.
 
     Returns a dict ``{feature_name: applied}`` so the caller can log the
-    decisions for the run record. Each feature degrades silently to a
-    yellow advisory if the underlying lib isn't available — never crashes
-    the training kick-off.
+    decisions for the run record. Cut-CE degrades to a yellow advisory when
+    its library is missing. An explicitly requested FP8 does not: a card that
+    cannot run it, a missing torchao (#835), or a conversion that fails
+    (#1152) stops the run, before anything trains.
     """
     applied: dict[str, bool] = {
         "cut_ce": False,
@@ -74,42 +75,28 @@ def apply_v028_speed_memory(
     # --- FP8 training --------------------------------------------------------
     if getattr(tcfg, "quantization_aware", None) == "fp8":
         recipe = getattr(tcfg, "fp8_recipe", "tensorwise")
-        from soup_cli.utils.fp8 import FP8HardwareUnsupportedError
-        try:
-            from soup_cli.utils.fp8 import apply_fp8_training
-            ok = bool(apply_fp8_training(model, recipe=recipe))
-        except FP8HardwareUnsupportedError:
-            # #835 ruling: FP8 was asked for explicitly and this card cannot run
-            # it. Warning and training on without it is the silent-setting
-            # defect; the run stops here, before anything trains.
-            raise
-        except Exception:  # noqa: BLE001
-            ok = False
-        applied["fp8"] = ok
-        if ok:
-            _say(f"FP8 training enabled (Float8Linear, recipe={recipe})")
-        else:
-            _say(
-                "FP8 training requested but unavailable (torchao.float8 missing)",
-                style="yellow",
-            )
+        # FP8 was asked for explicitly: a card that cannot run it, no torchao
+        # (#835), or a conversion that fails (#1152) raises out of here and stops
+        # the run. Warning and training on without it is the silent-setting defect.
+        from soup_cli.utils.fp8 import apply_fp8_training
+
+        apply_fp8_training(model, recipe=recipe)
+        applied["fp8"] = True
+        _say(f"FP8 training enabled (Float8Linear, recipe={recipe})")
 
     # --- FP8 attention (v0.71.21 #141) ---------------------------------------
     # Key added only when the flag is set — keeps the legacy 3-key dict
     # contract on the no-features path (test_part_c exact-equality).
     if getattr(tcfg, "fp8_attention", False):
         recipe = getattr(tcfg, "fp8_recipe", "tensorwise")
-        from soup_cli.utils.fp8 import FP8HardwareUnsupportedError
-        try:
-            from soup_cli.utils.advanced_precision import apply_fp8_attention
-            converted = apply_fp8_attention(model, recipe=recipe)
-            applied["fp8_attention"] = True
-            _say(f"FP8 attention enabled ({converted} projections)")
-        except FP8HardwareUnsupportedError:
-            raise
-        except (RuntimeError, ValueError, TypeError) as exc:
-            applied["fp8_attention"] = False
-            _say(f"FP8 attention: {exc}", style="yellow")
+        # Every refusal apply_fp8_attention raises stops the run (#835, #1152):
+        # a partial conversion must not train, and neither may the no-op on a
+        # model with no attention projections.
+        from soup_cli.utils.advanced_precision import apply_fp8_attention
+
+        converted = apply_fp8_attention(model, recipe=recipe)
+        applied["fp8_attention"] = True
+        _say(f"FP8 attention enabled ({converted} projections)")
 
     # --- NVFP4 (v0.71.21 #141 — Blackwell-only) ------------------------------
     if getattr(tcfg, "nvfp4", False):

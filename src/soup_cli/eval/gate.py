@@ -9,16 +9,18 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal, Mapping, Optional
 from urllib.parse import urlparse
 
-import yaml
 from pydantic import BaseModel, Field, field_validator
 
 from soup_cli import __version__
+from soup_cli.eval.results import newest_eval_rows
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
+from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_file_limited
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +64,7 @@ class GateTask(BaseModel):
     tasks: Optional[str] = Field(
         default=None, description="JSONL file of custom eval tasks",
     )
-    scorer: Optional[Literal["exact", "contains", "regex", "semantic"]] = Field(
+    scorer: Optional[Literal["exact", "contains", "answer", "regex", "semantic"]] = Field(
         default=None, description="Scorer for type=custom",
     )
     # type=judge
@@ -92,12 +94,20 @@ class GateTask(BaseModel):
         if value is None:
             return None
         # Allowlist of schemes — SSRF hardening consistent with the project.
+        from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
+
         parsed = urlparse(value)
 
-        if parsed.scheme in ("ollama","https"):
+        if parsed.scheme == "ollama":
             return value
 
-        if (parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1"}):
+        if parsed.scheme == "https":
+            # A private IP literal is refused when the suite is parsed, so a
+            # suite file cannot name one any more than --judge-model can.
+            refuse_private_ip_literal(parsed.hostname, label="judge_model URL")
+            return value
+
+        if parsed.scheme == "http" and parsed.hostname in LOOPBACK_HOSTS:
             return value
 
         raise ValueError(
@@ -113,6 +123,20 @@ class EvalSuite(BaseModel):
     tasks: list[GateTask] = Field(default_factory=list)
 
 
+def _require_gate_tasks(suite: EvalSuite) -> None:
+    if not suite.tasks:
+        raise ValueError(
+            f"eval-gate suite {suite.suite!r} field 'tasks' must contain at least one task"
+        )
+    names: set[str] = set()
+    for task in suite.tasks:
+        if task.name in names:
+            raise ValueError(
+                f"eval-gate suite {suite.suite!r} repeats task name {task.name!r}"
+            )
+        names.add(task.name)
+
+
 def load_suite(path: str) -> EvalSuite:
     """Load and validate an eval suite from disk."""
     suite_path = Path(path)
@@ -122,8 +146,12 @@ def load_suite(path: str) -> EvalSuite:
         )
     if not suite_path.exists():
         raise FileNotFoundError(f"eval-gate suite not found: {path}")
-    data = yaml.safe_load(suite_path.read_text(encoding="utf-8")) or {}
-    return EvalSuite(**data)
+    data = load_yaml_file_limited(
+        suite_path, f"eval-gate suite '{path}'", max_bytes=MAX_CONFIG_BYTES
+    ) or {}
+    suite = EvalSuite(**data)
+    _require_gate_tasks(suite)
+    return suite
 
 
 def current_baseline_stamp() -> dict[str, object]:
@@ -134,6 +162,21 @@ def current_baseline_stamp() -> dict[str, object]:
         _STAMP_SOUP_VERSION: str(__version__),
         _STAMP_SCORER_REVISION: int(BUNDLED_SCORER_REVISION),
     }
+
+
+def _finite_score(value: object, *, name: str, context: str) -> float:
+    """Convert and validate that a score is a finite float (#1865)."""
+    try:
+        fval = float(value)  # type: ignore[arg-type]
+    except OverflowError as exc:
+        raise ValueError(
+            f"{context}: score for {name!r} is out of range (must be finite)"
+        ) from exc
+    if not math.isfinite(fval):
+        raise ValueError(
+            f"{context}: score for {name!r} must be finite"
+        )
+    return fval
 
 
 def stamp_baseline_scores(scores: Mapping[str, float]) -> dict[str, object]:
@@ -155,7 +198,7 @@ def stamp_baseline_scores(scores: Mapping[str, float]) -> dict[str, object]:
                 f"baseline score for {name!r} must be a number, "
                 f"got {type(value).__name__}"
             )
-        clean[name] = float(value)
+        clean[name] = _finite_score(value, name=name, context="baseline score")
     return {
         _BASELINE_SCORES_KEY: clean,
         _BASELINE_PROVENANCE_KEY: current_baseline_stamp(),
@@ -195,7 +238,7 @@ def _coerce_score_map(raw: Mapping[object, object], *, context: str) -> dict[str
                 f"{context}: score for {name!r} must be a number, "
                 f"got {type(value).__name__}"
             )
-        out[name] = float(value)
+        out[name] = _finite_score(value, name=name, context=context)
     return out
 
 
@@ -265,21 +308,20 @@ def _emit_baseline_warning(
     logger.warning("%s", message)
 
 
-def _registry_provenance(rows: list[dict]) -> Optional[dict[str, object]]:
-    """Best-effort stamp from eval_results ``details_json`` rows."""
-    for row in rows:
-        raw = row.get("details_json")
-        if not raw:
-            continue
-        try:
-            details = json.loads(raw) if isinstance(raw, str) else raw
-        except (TypeError, ValueError, json.JSONDecodeError):
-            continue
-        if not isinstance(details, Mapping):
-            continue
-        prov = details.get(_BASELINE_PROVENANCE_KEY)
-        if isinstance(prov, Mapping):
-            return dict(prov)
+def _row_provenance(row: Mapping[str, object]) -> Optional[dict[str, object]]:
+    """Best-effort stamp from one eval_results row's ``details_json``."""
+    raw = row.get("details_json")
+    if not raw:
+        return None
+    try:
+        details = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(details, Mapping):
+        return None
+    prov = details.get(_BASELINE_PROVENANCE_KEY)
+    if isinstance(prov, Mapping):
+        return dict(prov)
     return None
 
 
@@ -298,8 +340,10 @@ def resolve_baseline(
 
     Provenance is checked on read. A correctly stamped baseline matching the
     running scorer revision is silent. An unstamped (pre-existing) baseline
-    warns exactly once naming unknown provenance. A stamp whose
-    ``scorer_revision`` disagrees warns about the mismatch.
+    warns about unknown provenance, and a stamp whose ``scorer_revision``
+    disagrees warns about the mismatch. A file baseline warns at most once;
+    a registry baseline warns once per distinct problem and names the
+    affected benchmarks.
     """
     if not spec:
         return {}
@@ -317,16 +361,28 @@ def resolve_baseline(
                     f"registry baseline not found: {ref} (use `soup registry list`)"
                 )
             rows = store.get_eval_results(entry_id)
-        scores = {
-            row.get("benchmark", ""): float(row.get("score", 0.0))
-            for row in rows
-            if row.get("benchmark") and row.get("score") is not None
+        newest = {
+            row["benchmark"]: row
+            for row in newest_eval_rows(rows)
         }
+        scores = _coerce_score_map(
+            {name: row["score"] for name, row in newest.items()},
+            context="registry baseline",
+        )
         # Registry rows predate the stamp (or carry it inside details_json).
-        provenance = _registry_provenance(rows)
-        message = _provenance_warning(provenance)
-        if message is not None and scores:
-            _emit_baseline_warning(message, warn=warn)
+        # Checked per benchmark: re-measuring one benchmark says nothing about
+        # the scale of another that was not re-measured. Benchmarks sharing a
+        # problem share one warning, which names them.
+        stale: dict[str, list[str]] = {}
+        for name, row in newest.items():
+            message = _provenance_warning(_row_provenance(row))
+            if message is not None:
+                stale.setdefault(message, []).append(name)
+        for message, names in stale.items():
+            _emit_baseline_warning(
+                f"{message} Affected benchmark(s): {', '.join(sorted(names))}.",
+                warn=warn,
+            )
         return scores
 
     # Filesystem path
@@ -396,6 +452,10 @@ def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
     if parsed.scheme == "ollama":
         return ("ollama", judge_model[len("ollama://"):], None)
 
+    # One loopback set for every outbound gate (#1548): the shared
+    # net_guard.LOOPBACK_HOSTS decides ::1 once, here and in every caller.
+    from soup_cli.utils.net_guard import LOOPBACK_HOSTS
+
     if parsed.scheme == "https":
         # Only the OpenAI API host is given the OpenAI provider (and so
         # OPENAI_API_KEY); any other https judge is an OpenAI-compatible
@@ -406,7 +466,7 @@ def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
             default_provider = "server"
     elif (
         parsed.scheme == "http"
-        and parsed.hostname in ("localhost", "127.0.0.1")
+        and parsed.hostname in LOOPBACK_HOSTS
     ):
         default_provider = "server"
     else:
@@ -474,7 +534,7 @@ def _run_judge_task(
             })
 
     if not items:
-        return 0.0
+        raise ValueError(f"No judge prompts found in {task.prompts} for task '{task.name}'")
 
     results = evaluator.evaluate_batch(items)
     # Normalise to [0, 1] using the judge's ACTUAL rubric scale (DEFAULT_RUBRIC
@@ -523,7 +583,7 @@ def _run_custom_task(
     """Run a type=custom task and return its aggregate score in [0, 1]."""
     from dataclasses import replace
 
-    from soup_cli.eval.custom import load_eval_tasks, score_task
+    from soup_cli.eval.custom import load_eval_tasks, require_single_answer, score_task
 
     if not task.tasks:
         raise ValueError(f"task '{task.name}' is type=custom but 'tasks' is missing")
@@ -531,6 +591,9 @@ def _run_custom_task(
     if not tasks:
         return 0.0
     # Override scoring if the suite specified one (EvalTask.scoring field)
+    if task.scorer == "answer":
+        for row, eval_task in enumerate(tasks, start=1):
+            require_single_answer(eval_task.expected, f"task '{task.name}' row {row}")
     if task.scorer is not None:
         tasks = [replace(t, scoring=task.scorer) for t in tasks]
     total = 0.0
@@ -553,7 +616,22 @@ def run_gate(
     ``generate_fn`` accepts a prompt and returns the model output. Injecting
     this keeps the gate testable without a live model.
     """
-    baseline = baseline or {}
+    if baseline is None:
+        baseline = {}
+    elif not isinstance(baseline, Mapping):
+        raise TypeError(f"baseline must be a mapping, got {type(baseline).__name__}")
+    for base_name, base_val in baseline.items():
+        if isinstance(base_val, bool) or not isinstance(base_val, (int, float)):
+            raise TypeError(
+                f"baseline score for {base_name!r} must be a number, "
+                f"got {type(base_val).__name__}"
+            )
+        _finite_score(
+            base_val,
+            name=str(base_name),
+            context="baseline score",
+        )
+    _require_gate_tasks(suite)
     task_results: list[GateTaskResult] = []
     any_regressed = False
     any_failed_threshold = False

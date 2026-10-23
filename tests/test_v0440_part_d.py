@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
@@ -38,6 +39,8 @@ from soup_cli.utils.sweep_config import (
     load_sweep_yaml,
     parse_sweep_yaml,
 )
+
+from .conftest import strip_ansi
 
 runner = CliRunner()
 
@@ -372,6 +375,166 @@ def test_load_sweep_yaml_rejects_null_byte(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     with pytest.raises(ValueError):
         load_sweep_yaml("bad\x00.yaml")
+
+
+# --- sweep --sweep-config (#1465) -------------------------------------------
+#
+# docs/backends-and-ops.md's "Standalone Sweep Config" section documented
+# `soup sweep --config sweep.yaml` (issue #1465): --param is a required
+# option that this invocation never supplies, and load_sweep_yaml/SweepSpec
+# above had no caller anywhere in the CLI. --sweep-config is the new,
+# dedicated flag; --config keeps meaning "base soup.yaml" throughout.
+
+_BASE_SOUP_YAML = """\
+base: hf/model
+task: sft
+data:
+  train: ./t.jsonl
+  format: auto
+output: ./o
+"""
+
+_SWEEP_YAML = """\
+strategy: grid
+n_runs: 20
+seed: 42
+params:
+  lr: [0.0001, 0.0005]
+  epochs: [1, 3]
+"""
+
+
+def _write_sweep_fixture(tmp_path):
+    (tmp_path / "soup.yaml").write_text(_BASE_SOUP_YAML, encoding="utf-8")
+    (tmp_path / "sweep.yaml").write_text(_SWEEP_YAML, encoding="utf-8")
+
+
+def test_cli_sweep_config_dry_run_lists_the_grid(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_sweep_fixture(tmp_path)
+    result = runner.invoke(
+        app,
+        ["sweep", "--config", "soup.yaml", "--sweep-config", "sweep.yaml", "--dry-run"],
+    )
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    # 2 lr values x 2 epochs values = 4 grid combinations, matching sweep.yaml.
+    assert "Runs:     4" in strip_ansi(result.output)
+    assert "Strategy: grid" in strip_ansi(result.output)
+
+
+def test_cli_sweep_config_seed_makes_random_reproducible(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "soup.yaml").write_text(_BASE_SOUP_YAML, encoding="utf-8")
+    (tmp_path / "sweep.yaml").write_text(
+        "strategy: random\nn_runs: 2\nseed: 7\n"
+        "params:\n  lr: [1, 2, 3, 4, 5]\n  epochs: [1, 2, 3, 4, 5]\n",
+        encoding="utf-8",
+    )
+    first = runner.invoke(
+        app,
+        ["sweep", "--config", "soup.yaml", "--sweep-config", "sweep.yaml", "--dry-run"],
+    )
+    second = runner.invoke(
+        app,
+        ["sweep", "--config", "soup.yaml", "--sweep-config", "sweep.yaml", "--dry-run"],
+    )
+    assert first.exit_code == 0 and second.exit_code == 0
+    assert "Runs:     2" in strip_ansi(first.output)
+    assert first.output == second.output
+
+
+def test_cli_sweep_config_overrides_cli_strategy_and_max_runs(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_sweep_fixture(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "sweep",
+            "--config", "soup.yaml",
+            "--sweep-config", "sweep.yaml",
+            "--strategy", "random",
+            "--max-runs", "1",
+            "--dry-run",
+        ],
+    )
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    # sweep.yaml says strategy: grid, so its 4 combinations win over the
+    # --strategy/--max-runs flags above, not a 1-run random sample.
+    assert "Strategy: grid" in strip_ansi(result.output)
+    assert "Runs:     4" in strip_ansi(result.output)
+
+
+def test_cli_sweep_without_param_or_sweep_config_fails(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "soup.yaml").write_text(_BASE_SOUP_YAML, encoding="utf-8")
+    result = runner.invoke(app, ["sweep", "--config", "soup.yaml"])
+    assert result.exit_code == 1
+    assert "--sweep-config" in result.output
+
+
+def test_cli_sweep_rejects_param_and_sweep_config_together(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_sweep_fixture(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "sweep",
+            "--config", "soup.yaml",
+            "--param", "lr=1e-5,2e-5",
+            "--sweep-config", "sweep.yaml",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "not both" in result.output
+
+
+def test_cli_sweep_config_invalid_file_fails_cleanly(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "soup.yaml").write_text(_BASE_SOUP_YAML, encoding="utf-8")
+    (tmp_path / "sweep.yaml").write_text("strategy: bogus\n", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        ["sweep", "--config", "soup.yaml", "--sweep-config", "sweep.yaml", "--dry-run"],
+    )
+    assert result.exit_code == 1
+    assert "Failed to load --sweep-config" in result.output
+
+
+def _plan(tmp_path, monkeypatch, sweep_text):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "soup.yaml").write_text(_BASE_SOUP_YAML, encoding="utf-8")
+    (tmp_path / "sweep.yaml").write_text(sweep_text, encoding="utf-8")
+    return runner.invoke(
+        app,
+        ["sweep", "--config", "soup.yaml", "--sweep-config", "sweep.yaml", "--dry-run"],
+    )
+
+
+def test_cli_sweep_config_yaml_syntax_error_fails_cleanly(tmp_path, monkeypatch):
+    result = _plan(tmp_path, monkeypatch, "strategy: [unclosed\nparams: {\n")
+    assert result.exit_code == 1
+    assert not isinstance(result.exception, yaml.YAMLError), repr(result.exception)
+    assert "Failed to load --sweep-config" in strip_ansi(result.output)
+
+
+def test_cli_sweep_config_error_keeps_the_bracketed_key(tmp_path, monkeypatch):
+    result = _plan(tmp_path, monkeypatch, "params:\n  lr: 0.1\n")
+    assert result.exit_code == 1
+    assert "params[lr] must be a list" in strip_ansi(result.output)
+
+
+def test_cli_sweep_config_seed_comes_from_the_file(tmp_path, monkeypatch):
+    body = (
+        "strategy: random\nn_runs: 2\n"
+        "params:\n  lr: [1, 2, 3, 4, 5]\n  epochs: [1, 2, 3, 4, 5]\n"
+    )
+    plans = {
+        seed: strip_ansi(_plan(tmp_path, monkeypatch, f"seed: {seed}\n" + body).output)
+        for seed in (7, 8)
+    }
+    again = strip_ansi(_plan(tmp_path, monkeypatch, "seed: 7\n" + body).output)
+    assert plans[7] == again
+    assert plans[7] != plans[8]
 
 
 # --- llama_proxy ------------------------------------------------------------

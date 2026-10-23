@@ -30,7 +30,7 @@ def test_display_init():
     display = TrainingDisplay(_make_config(), device_name="cuda")
     assert display.current_step == 0
     assert display.total_steps == 0
-    assert display.loss == 0.0
+    assert display.loss is None  # #1225: no loss measured yet, shown as "-"
     assert display.device_name == "cuda"
 
 

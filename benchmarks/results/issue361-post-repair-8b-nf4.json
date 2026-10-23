@@ -1,0 +1,62 @@
+{
+  "status": "ok",
+  "issue": 361,
+  "weights": "C:\\llama31-8b-instruct",
+  "quant": "nf4",
+  "stream_dtype": "bfloat16",
+  "seq": 512,
+  "batch": 1,
+  "warmup_steps": 10,
+  "measured_steps": 50,
+  "buffers": 2,
+  "lora_r": 16,
+  "targets": "q_proj,v_proj",
+  "pin_required": true,
+  "store_gb_pinned": 5.702,
+  "param_split": {
+    "decoder": 6979588096,
+    "embed": 525336576,
+    "lm_head_file": 525336576,
+    "lm_head_effective": 525336576,
+    "tied": false
+  },
+  "tokens_per_s": 208.6,
+  "step_time_ms": {
+    "median": 2431.5,
+    "min": 2421.4,
+    "max": 3479.0,
+    "stdev": 146.7
+  },
+  "loss_first": 11.704187393188477,
+  "loss_last": 0.11134996265172958,
+  "peak_vram_gb": {
+    "allocated": 2.397,
+    "reserved": 2.661
+  },
+  "gpu": {
+    "util": 100,
+    "clock": 1935,
+    "temp_max": 59,
+    "n": 208
+  },
+  "sm_clock_mhz_end": 1957,
+  "gflop_per_token": 43.9789,
+  "effective_tflops": 9.174,
+  "gemm_ceiling": {
+    "tflops": 15.635,
+    "sm_clock_mhz": 1957
+  },
+  "shard_build_s": 58.3,
+  "model_build_s": 20.3,
+  "versions": {
+    "python": "3.10.11",
+    "soup-cli": "0.75.0",
+    "commit": "9635673c58767ba5b850d70f3ea56fdc1ac7d8f6",
+    "torch": "2.6.0+cu124",
+    "bitsandbytes": "0.50.2",
+    "transformers": "5.16.1",
+    "peft": "0.21.0",
+    "trl": "0.29.1",
+    "accelerate": "1.15.0"
+  }
+}

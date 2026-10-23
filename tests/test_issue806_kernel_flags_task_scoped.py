@@ -64,7 +64,7 @@ class TestKernelFlagsRejectedForNonSftTasks:
 
 class TestAutopilotScopesKernelFlagsToTask:
     def _build(self, tmp_path, monkeypatch, goal):
-        from soup_cli.autopilot import generate_config
+        from soup_cli.autopilot import decisions, generate_config
         from soup_cli.autopilot.analyzer import HardwareProfile
 
         monkeypatch.setattr(
@@ -77,6 +77,15 @@ class TestAutopilotScopesKernelFlagsToTask:
                 compute_capability=8.0,
                 system_ram_gb=64.0,
             ),
+        )
+        # #1212 — the decision is install-aware now, so an Ampere test that
+        # expects the flags on must also say the packages are present (CI
+        # installs neither liger-kernel nor flash-attn).
+        monkeypatch.setattr(decisions, "check_liger_available", lambda: True)
+        monkeypatch.setattr(
+            decisions,
+            "check_flash_attn_available",
+            lambda: "flash_attention_2",
         )
         return generate_config.build_soup_config(
             model="meta-llama/Llama-3.1-8B-Instruct",

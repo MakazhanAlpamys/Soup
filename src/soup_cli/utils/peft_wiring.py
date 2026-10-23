@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -85,8 +86,51 @@ _DEEPSEEK_V3_ATTENTION = (
     "o_proj",
 )
 
+#: The same attention when the checkpoint has no low-rank query. DeepSeek-V3's MLA
+#: builds ONE of two query paths, picked by the config: ``q_proj`` when
+#: ``q_lora_rank`` is ``None``, ``q_a_proj -> q_a_layernorm -> q_b_proj`` otherwise
+#: (``DeepseekV3Attention``, transformers 5.17). Moonlight-16B-A3B ships
+#: ``q_lora_rank: null``. peft refuses an attach only when NO target matches, so
+#: there the tuple above attached on its kv/o names and silently left the whole
+#: query path without an adapter.
+_DEEPSEEK_V3_ATTENTION_FULL_RANK_QUERY = (
+    "q_proj",
+    "kv_a_proj_with_mqa",
+    "kv_b_proj",
+    "o_proj",
+)
+
 MOE_TEXT_LORA_TARGETS: dict[str, Any] = {
     "qwen3_moe": ("q_proj", "k_proj", "v_proj", "o_proj"),
+    # GLM-4.6 (``zai-org/GLM-4.6``, 92 layers). Ordinary attention, the same
+    # four projections as ``qwen3_moe``: enumerated on the meta device, every
+    # layer carries ``self_attn.{q,k,v,o}_proj`` and nothing else that is a
+    # ``nn.Linear``. The ``q_norm`` / ``k_norm`` siblings are RMSNorms, not
+    # Linears, so a suffix list cannot reach them by accident. Not ``glm_moe_dsa``
+    # (GLM-5/5.1): that one is V3-shaped attention plus the DSA indexer, and its
+    # names are different. Previously invisible to the ratchet because the
+    # recipe named ``THUDM/glm-4.6``, which 404s (#1132 repoints it).
+    "glm4_moe": ("q_proj", "k_proj", "v_proj", "o_proj"),
+    # Granite 4.0 (``ibm-granite/granite-4.0-h-tiny-base``, the base the
+    # ``granite-4-sft`` recipe names since #1132, laid out exactly like its
+    # ``-tiny-base-preview``) is a HYBRID:
+    # ``config.layer_types`` is 36 ``linear_attention`` blocks and only 4
+    # ``full_attention`` ones, and only those 4 of the 40 decoder layers define a
+    # ``self_attn`` at all (measured: layers 5, 15, 25, 35). So this entry adapts
+    # a TENTH of the decoder, which is why ``granitemoehybrid`` also has a row in
+    # :data:`PARTIAL_COVERAGE_NOTES` -- a comment here is not where a user reads
+    # why their adapter is small.
+    #
+    # The other 36 layers are Mamba-2 blocks (``mamba.in_proj`` 36,
+    # ``mamba.out_proj`` 36, plus a ``conv1d``) and every layer carries
+    # ``shared_mlp.input_linear`` / ``shared_mlp.output_linear`` (40 each). They
+    # are deliberately NOT adapted: this table is the attention-projection
+    # baseline on every other row, and whether LoRA on a state-space projection
+    # trains well is a separate decision from #1070's "auto resolved to nothing".
+    # A user who wants them writes an explicit ``target_modules`` list.
+    # Routed experts are fused 3-D ``block_sparse_moe.experts`` parameters, so
+    # ``target_modules`` cannot reach them here either (#798).
+    "granitemoehybrid": ("q_proj", "k_proj", "v_proj", "o_proj"),
     # Two MoE bases whose recipes set no MoE flag at all, so the flag-based
     # sizing of this table missed them; found by attaching every shipped config
     # on the meta device. Both keep their experts as fused 3-D parameters, like
@@ -127,7 +171,149 @@ MOE_TEXT_LORA_TARGETS: dict[str, Any] = {
     # text tower MiniMax-M3's wrapper exposes, and a config loaded without the
     # wrapper reaches the resolver as this type instead of ``minimax_m3_vl``.
     "minimax_m3_vl_text": ("q_proj", "k_proj", "v_proj", "o_proj"),
+    # Mistral 3.5 (``mistralai/Mistral-Medium-3.5-128B``, shipped in
+    # ``mistral-medium-3-5-sft``): a vision-language wrapper (model_type
+    # "mistral3") containing a Pixtral vision encoder and a Mistral text tower.
+    # The vision tower defines its own attention projections under
+    # ``model.vision_tower.transformer.layers.<N>.attention.(q|k|v|o)_proj``,
+    # so target_modules: auto must be scoped to ``language_model`` via regex.
+    # Measured on the meta device: adapts 8 modules on a 2-layer skeleton,
+    # 0 in the vision tower (#1395).
+    "mistral3": r".*language_model\..*\.self_attn\.(q_proj|k_proj|v_proj|o_proj)",
 }
+
+#: What replaces a :data:`MOE_TEXT_LORA_TARGETS` entry when the base's config sets
+#: ``q_lora_rank`` to ``None`` -- only for the types whose attention is
+#: ``DeepseekV3Attention`` and so has that split:
+#:
+#: - ``deepseek_v3``: the class itself (Moonlight-16B-A3B).
+#: - ``kimi_k2``: Kimi-K2 checkpoints declare ``DeepseekV3ForCausalLM``, and
+#:   transformers' own ``Kimi_K25Config`` rewrites a ``kimi_k2`` text config to
+#:   ``deepseek_v3``. Every shipped Kimi-K2 config sets 1536, so this row is for a
+#:   checkpoint that does not.
+#:
+#: Absent on purpose:
+#:
+#: - ``glm_moe_dsa``: ``GlmMoeDsaConfig`` refuses ``q_lora_rank: None`` at
+#:   construction, and its DSA indexer and forward use ``q_a_proj``
+#:   unconditionally, so no GLM-5 base has a ``q_proj`` to adapt.
+#: - ``kimi_k25``: its ``vision_tower`` has a ``q_proj`` of its own (measured on a
+#:   tiny real model), so a row would have to be a language-tower regex, and
+#:   ``resolve_moe_lora_targets`` (``utils/moe.py``) keeps the resolved targets only
+#:   when they are a list. Under ``moe_lora: true`` such a row cost the language
+#:   tower its ``kv_a_proj_with_mqa`` / ``kv_b_proj`` adapters. No shipped Kimi K2.5 /
+#:   K2.6 config sets ``null`` (``text_config.q_lora_rank: 1536``), so the wrapper
+#:   keeps the low-rank tuple; one that did would train no adapter on ``q_proj``.
+MLA_FULL_RANK_QUERY_TARGETS: dict[str, Any] = {
+    "deepseek_v3": _DEEPSEEK_V3_ATTENTION_FULL_RANK_QUERY,
+    "kimi_k2": _DEEPSEEK_V3_ATTENTION_FULL_RANK_QUERY,
+}
+
+#: ``getattr`` default telling "the config has no ``q_lora_rank``" from ``None``.
+_ABSENT = object()
+
+
+def _q_lora_rank(model: Any) -> Any:
+    """``q_lora_rank`` of the config whose ``model_type`` chose the row, or ``_ABSENT``.
+
+    Only that config is read. Both rows are text-only types that keep the MLA
+    fields on the config itself (``DeepseekV3Config`` has no ``text_config``);
+    ``kimi_k25``, which keeps them on ``text_config``, has no row. ``model`` may
+    be the config: ``stream_setup`` resolves from the bare ``AutoConfig``. A config
+    without the field is ``_ABSENT``, never ``None`` -- guessing a layout from a
+    missing field would swap a list that matches for one that may not. ``0`` is
+    not ``None`` either: ``DeepseekV3Attention`` tests ``is None``.
+    """
+    return getattr(getattr(model, "config", model), "q_lora_rank", _ABSENT)
+
+
+def _moe_table_entry(model_type: str, model: Any) -> Any:
+    """The table entry for ``model_type``, for THIS checkpoint's MLA query path."""
+    full_rank = MLA_FULL_RANK_QUERY_TARGETS.get(model_type)
+    if full_rank is not None and _q_lora_rank(model) is None:
+        return full_rank
+    return MOE_TEXT_LORA_TARGETS[model_type]
+
+
+#: Entries of :data:`MOE_TEXT_LORA_TARGETS` that cover only PART of the decoder,
+#: each with what is left unadapted. A declared table rather than a branch in the
+#: resolver: the next hybrid architecture is a row here, and an entry that grows
+#: partial coverage is a reviewed edit instead of an ``if`` someone forgets.
+#:
+#: The note is PRINTED, not just commented, because "your LoRA touched a tenth of
+#: the model" is not something a user can be expected to infer from a silent
+#: ``target_modules: auto``.
+PARTIAL_COVERAGE_NOTES: dict[str, str] = {
+    "granitemoehybrid": (
+        "the remaining layers are Mamba-2 blocks (mamba.in_proj / mamba.out_proj), "
+        "and every layer's shared-expert projections (shared_mlp.input_linear / "
+        "shared_mlp.output_linear) and fused routed experts are unadapted too. "
+        "Set training.lora.target_modules explicitly to include them."
+    ),
+}
+
+#: A decoder-layer index in a module key: ``model.layers.7.self_attn`` -> ``7``.
+_DECODER_LAYER_RE = re.compile(r"(?:^|\.)layers\.(\d+)(?:\.|$)")
+
+
+def _self_attention_coverage(model: Any) -> tuple[int, int] | None:
+    """``(layers defining a self_attn, decoder layers)``, or ``None`` if unknown.
+
+    COUNTED off the model when the caller passed one, so the notice describes the
+    checkpoint in hand rather than the one this table was measured on -- the
+    granite-4.0 family ships several depths, and a hard-coded "4 of 40" would be
+    wrong on all but one of them. ``stream_setup`` resolves from a bare config, so
+    ``config.layer_types`` is the fallback; a model with neither gets the notice
+    without a fraction rather than no notice.
+
+    Only consulted for a ``model_type`` in :data:`PARTIAL_COVERAGE_NOTES`, i.e.
+    for a text-only decoder, so ``layers.N`` is unambiguous here. A hybrid VL
+    wrapper would need the tower prefix taken into account first.
+    """
+    try:
+        named_modules = getattr(model, "named_modules", None)
+        if callable(named_modules):
+            total: set[str] = set()
+            attentive: set[str] = set()
+            for name, _module in named_modules():
+                match = _DECODER_LAYER_RE.search(str(name))
+                if match is None:
+                    continue
+                total.add(match.group(1))
+                if str(name).endswith(".self_attn"):
+                    attentive.add(match.group(1))
+            if total:
+                return len(attentive), len(total)
+    except Exception:  # noqa: BLE001 -- a notice never breaks a training run
+        logger.debug("self-attention coverage not countable", exc_info=True)
+
+    config = getattr(model, "config", model)
+    config = getattr(config, "text_config", None) or config
+    layer_types = getattr(config, "layer_types", None)
+    if isinstance(layer_types, (list, tuple)) and layer_types:
+        return sum(1 for kind in layer_types if kind == "full_attention"), len(layer_types)
+    return None
+
+
+def _note_partial_coverage(model_type: Any, model: Any, console: Any) -> None:
+    """Print the partial-coverage advisory for ``model_type``, if it has one."""
+    note = PARTIAL_COVERAGE_NOTES.get(model_type)
+    if note is None or console is None:
+        return
+    coverage = _self_attention_coverage(model)
+    scope = (
+        f"{coverage[0]} of {coverage[1]} decoder layers"
+        if coverage is not None
+        else "only the layers that define one"
+    )
+    try:
+        console.print(
+            f"[yellow]Partial LoRA coverage:[/yellow] {model_type} -- "
+            f"target_modules: auto adapts the attention projections of {scope}; "
+            f"{note}"
+        )
+    except Exception:  # noqa: BLE001 -- never crash on console issues.
+        logger.debug("partial-coverage notice not printed", exc_info=True)
 
 
 def _model_types(model: Any) -> set[Any]:
@@ -192,7 +378,7 @@ class UnmappedTargets:
         return f"UnmappedTargets({self.model_types!r})"
 
 
-def resolve_lora_target_modules(model: Any, configured: Any) -> Any:
+def resolve_lora_target_modules(model: Any, configured: Any, console: Any = None) -> Any:
     """Resolve ``target_modules: auto`` for models PEFT does not know yet.
 
     Existing architectures remain delegated to PEFT by returning ``None``.
@@ -201,9 +387,18 @@ def resolve_lora_target_modules(model: Any, configured: Any) -> Any:
     inspect both configs without importing Transformers or PEFT at module load.
     Qwen4-Exp's causal-LM loader exposes ``qwen4_exp_text`` directly.
 
+    On DeepSeek-V3-style MLA the entry also follows the config's ``q_lora_rank``
+    (:data:`MLA_FULL_RANK_QUERY_TARGETS`): ``None`` means the base has ``q_proj``
+    and no ``q_a_proj`` / ``q_b_proj``.
+
     An architecture neither Soup nor peft maps returns :class:`UnmappedTargets`
     rather than raising; :func:`build_lora_config` decides, once a ``moe_lora``
     override and ``target_parameters`` have had their chance (#1070).
+
+    ``console`` is optional so the pure resolution stays callable without one.
+    When it is supplied and the resolved entry covers only part of the decoder
+    (:data:`PARTIAL_COVERAGE_NOTES`), the advisory is printed here -- this is the
+    one place that knows WHICH entry was chosen.
     """
     if configured != "auto" and configured != ["auto"]:
         return configured
@@ -223,9 +418,16 @@ def resolve_lora_target_modules(model: Any, configured: Any) -> Any:
     # language tower in the module path and the text-only entry does not.
     for value in (getattr(getattr(model, "config", model), "model_type", None),):
         if value in MOE_TEXT_LORA_TARGETS:
-            return _as_targets(MOE_TEXT_LORA_TARGETS[value])
+            _note_partial_coverage(value, model, console)
+            return _as_targets(_moe_table_entry(value, model))
     for value in sorted(str(v) for v in model_types if v is not None):
         if value in MOE_TEXT_LORA_TARGETS:
+            _note_partial_coverage(value, model, console)
+            # Only a text config gets here, inside a wrapper with no row of its
+            # own. The table's MLA names exist only in a text tower, but a bare
+            # ``q_proj`` can also name a vision tower's projection (Kimi K2.5's
+            # has one), so the ``q_lora_rank`` rule needs a row that scopes it
+            # and is not applied here.
             return _as_targets(MOE_TEXT_LORA_TARGETS[value])
 
     named = sorted(value for value in model_types if isinstance(value, str))
@@ -342,6 +544,23 @@ def build_peft_config_spec(
     }
 
 
+def _with_moe_parameters(target_modules: Any, target_parameters: Any) -> Any:
+    """Add the fused expert parameters ``moe_lora`` resolved (#1421).
+
+    ``resolve_moe_lora_targets`` returns a ``MoeLoraTargets`` list (or, for a
+    string target, a ``MoeLoraTargetString``) that carries them as
+    ``target_parameters``; merging here, rather than at each call site,
+    is what makes every MoE-wired trainer adapt the experts without passing a new
+    argument. An explicit ``lora.target_parameters`` list is kept and extended.
+    """
+    extra = getattr(target_modules, "target_parameters", None)
+    if not extra:
+        return target_parameters
+    merged = list(target_parameters) if isinstance(target_parameters, (list, tuple)) else []
+    merged.extend(name for name in extra if name not in merged)
+    return merged
+
+
 def _settle_unmapped(target_modules: Any, target_parameters: Any) -> Any:
     """Refuse an unmappable ``auto`` here, where the final targets are known.
 
@@ -381,13 +600,23 @@ def build_lora_config(
     """
     import peft
 
+    # The MoE router / gate modules a string target kept under ``moe_lora`` would
+    # otherwise reach (only ever with LoRA: VeRA gets an explicit list instead).
+    exclude_modules = list(getattr(target_modules, "exclude_modules", None) or ())
+    target_parameters = _with_moe_parameters(target_modules, target_parameters)
     target_modules = _settle_unmapped(target_modules, target_parameters)
+    if isinstance(target_modules, str):
+        # A ``MoeLoraTargetString`` has handed over what rides along with it above;
+        # peft, and the adapter_config.json it saves, get the plain string.
+        target_modules = str(target_modules)
     spec = build_peft_config_spec(
         lora_cfg,
         target_modules=target_modules,
         target_parameters=target_parameters,
         task_type=task_type,
     )
+    if exclude_modules:
+        spec["init_kwargs"]["exclude_modules"] = exclude_modules
     config_cls = getattr(peft, spec["peft_cls"])
     return config_cls(**spec["init_kwargs"])
 
@@ -427,6 +656,80 @@ def apply_post_lora_patches(model: Any) -> None:
         logger.debug("strip_lora_dropout_for_3d_experts skipped: %s", exc)
 
 
+def apply_fast_lora_patches(model: Any, tcfg: Any) -> dict[str, int] | None:
+    """Switch the Fast-LoRA kernels on for ``training.fast_lora`` (#792).
+
+    The two group kernels first, then the single projection for every adapted
+    Linear they did not take (#1165: the order does not change the result).
+    Returns how many modules each kernel can run on, or None when the flag is
+    off. With the flag on and none it can run on, it takes the patches off and
+    raises, since the run would train through peft's own modules while the
+    config says otherwise.
+    """
+    if not getattr(tcfg, "fast_lora", False):
+        return None
+    from soup_cli.utils.fast_lora import (
+        eligible_single_projections,
+        patch_fast_lora_single_projection,
+        unpatch_fast_lora_single_projection,
+    )
+    from soup_cli.utils.fast_lora_mlp import patch_fast_lora_mlp, unpatch_fast_lora_mlp
+    from soup_cli.utils.fast_lora_qkv import patch_fast_lora_qkv, unpatch_fast_lora_qkv
+
+    counts = {
+        "q/k/v": patch_fast_lora_qkv(model),
+        "MLP": patch_fast_lora_mlp(model),
+        "single projection": patch_fast_lora_single_projection(model),
+    }
+    counts["single projection"] = eligible_single_projections(model)
+    if not any(counts.values()):
+        for unpatch in (
+            unpatch_fast_lora_single_projection,
+            unpatch_fast_lora_mlp,
+            unpatch_fast_lora_qkv,
+        ):
+            unpatch(model)
+        raise ValueError(
+            "training.fast_lora is on, but no LoRA module was patched: the model "
+            "has no adapted Linear the kernels support. Remove training.fast_lora "
+            "or check lora.target_modules."
+        )
+    return counts
+
+
+def fast_lora_summary(counts: dict[str, int]) -> str:
+    """The setup line that says what the kernels took over."""
+    return "Fast-LoRA kernels on: " + ", ".join(
+        f"{count} {name}" for name, count in counts.items()
+    )
+
+
+def _relora_merge_target(trainer: Any) -> tuple[Any, Any, str | None, Any]:
+    """Return the save owner, model holder, optional policy attr, and PEFT model."""
+    owner = getattr(trainer, "__dict__", {}).get("_trainer", trainer)
+    holder = getattr(owner, "model", None)
+    policy = getattr(holder, "policy", None)
+    if policy is not None and callable(getattr(policy, "merge_and_unload", None)):
+        return owner, holder, "policy", policy
+    return owner, holder, None, holder
+
+
+def _validate_relora_save_capability(trainer: Any) -> None:
+    """Reject ReLoRA trainers whose final model cannot be merged into a dense model."""
+    try:
+        import torch.nn as nn
+    except ImportError:
+        return
+
+    _owner, _holder, _policy_attr, model = _relora_merge_target(trainer)
+    if isinstance(model, nn.Module) and not callable(
+        getattr(model, "merge_and_unload", None)
+    ):
+        raise RuntimeError(
+            "ReLoRA requires a PEFT model with merge_and_unload() for dense final saving."
+        )
+
+
 def attach_relora_callback(trainer: Any, tcfg: Any) -> bool:
     """Attach :class:`ReLoRACallback` when ``training.relora_steps`` is set.
 
@@ -441,9 +744,49 @@ def attach_relora_callback(trainer: Any, tcfg: Any) -> bool:
     # rather than a silent skip. Matches project policy (v0.34.0 / v0.39.0).
     if relora_steps is None:
         return False
+
+    args = getattr(trainer, "args", None)
+    try:
+        world_size = int(getattr(args, "world_size", 1)) if args is not None else 1
+    except (TypeError, ValueError):
+        world_size = 1
+    if world_size > 1:
+        raise ValueError(
+            "ReLoRA is not supported with world_size > 1 "
+            f"(got world_size={world_size}): restarts are single-process only. "
+            "Run with one process or remove training.relora_steps."
+        )
+    # `is True` is intentional: MagicMock trainers expose unset flags as
+    # truthy mocks, but only an actual Trainer flag should refuse the run.
+    if getattr(trainer, "is_deepspeed_enabled", False) is True:
+        raise ValueError(
+            "ReLoRA is not supported with DeepSpeed "
+            "(is_deepspeed_enabled=True): restarts cannot merge sharded bases. "
+            "Run without DeepSpeed or remove training.relora_steps."
+        )
+    if getattr(trainer, "is_fsdp_enabled", False) is True:
+        raise ValueError(
+            "ReLoRA is not supported with FSDP "
+            "(is_fsdp_enabled=True): restarts cannot merge sharded bases. "
+            "Run without FSDP or remove training.relora_steps."
+        )
+
     # Pydantic schema guarantees these fields exist on `TrainingConfig`. Read
     # them directly so a misnamed attr fails loudly with `AttributeError`.
-    from soup_cli.utils.relora import ReLoRACallback, ReLoRAPolicy
+    from soup_cli.utils.relora import (
+        ReLoRACallback,
+        ReLoRAPolicy,
+        _preflight_writable_bases,
+    )
+
+    model = getattr(trainer, "model", None)
+    try:
+        import torch.nn as nn
+    except ImportError:
+        nn = None
+    if nn is not None and isinstance(model, nn.Module):
+        _preflight_writable_bases(model)
+    _validate_relora_save_capability(trainer)
 
     policy = ReLoRAPolicy(
         steps=int(relora_steps),
@@ -451,12 +794,59 @@ def attach_relora_callback(trainer: Any, tcfg: Any) -> bool:
         reset_optimizer=bool(tcfg.relora_reset_optimizer),
         prune_ratio=float(tcfg.relora_prune_ratio),
     )
+    if "relora_prune_ratio" in getattr(tcfg, "model_fields_set", ()):
+        logger.warning(
+            "training.relora_prune_ratio is ignored: ReLoRA restarts no longer prune "
+            "adapter weights"
+        )
     trainer.add_callback(ReLoRACallback(policy=policy))
     return True
 
 
-def attach_loraplus_optimizer(trainer: Any, tcfg: Any) -> bool:
-    """Attach a PEFT LoRA+ optimizer when ``training.loraplus_lr_ratio`` is set.
+def save_model_with_relora(
+    trainer: Any,
+    output_dir: str,
+    relora_steps: int | None,
+) -> None:
+    """Save a dense final model when ReLoRA has been configured."""
+    if relora_steps is None:
+        trainer.save_model(output_dir)
+        return
+
+    owner, holder, policy_attr, model = _relora_merge_target(trainer)
+    merge_and_unload = getattr(model, "merge_and_unload", None)
+    if merge_and_unload is None:
+        raise RuntimeError(
+            "ReLoRA final save requires a PEFT model with merge_and_unload()."
+        )
+
+    merged_model = merge_and_unload()
+    if policy_attr is not None:
+        setattr(holder, policy_attr, merged_model)
+    else:
+        owner.model = merged_model
+        if getattr(owner, "model_wrapped", None) is not None:
+            owner.model_wrapped = merged_model
+    trainer.save_model(output_dir)
+
+
+def build_loraplus_optimizer(model: Any, args: Any, tcfg: Any) -> Any:
+    """Build a PEFT LoRA+ optimizer from a model + ``TrainingArguments``, or ``None``.
+
+    Returns ``None`` when ``training.loraplus_lr_ratio`` is unset, so a caller can
+    treat "no LoRA+" and "a LoRA+ optimizer" uniformly. This is the shared core of
+    the two wiring shapes LoRA+ needs:
+
+    - :func:`attach_loraplus_optimizer` assigns the result onto an already-built
+      ``trainer.optimizer`` — the SFT-family and preference/RL trainers, whose
+      ``Trainer.create_optimizer`` runs lazily at ``train()`` and so respects a
+      pre-assigned optimizer, building the scheduler around it.
+    - The PPO wrapper hands it to the trainer *constructor* via
+      ``optimizers=(optimizer, None)``, because ``trl.experimental``'s
+      ``PPOTrainer`` builds its optimizer and scheduler eagerly inside
+      ``__init__``; a post-construction assignment there trains the B group at
+      ``lr * ratio`` but leaves ``self.lr_scheduler`` bound to the discarded
+      default optimizer (see ``trainer/ppo.py``).
 
     LoRA+ is not a ``TrainingArguments`` field — it belongs to PEFT's optimizer
     construction (``create_loraplus_optimizer``), which gives the LoRA B matrices
@@ -464,20 +854,15 @@ def attach_loraplus_optimizer(trainer: Any, tcfg: Any) -> bool:
     Forwarding it into ``TrainingArguments`` raised ``TypeError`` before the first
     step, so the advertised option always crashed (#724).
 
-    Assigning ``trainer.optimizer`` here is respected because
-    ``Trainer.create_optimizer`` builds one only when ``self.optimizer is None``,
-    and the scheduler is still built from it with the configured warmup/schedule.
     The optimizer class and its betas/eps come from the run's configured optimizer
     via ``Trainer.get_optimizer_cls_and_kwargs``, so LoRA+ uses the same optimizer
     the user asked for; weight decay is applied through PEFT's own
     ``loraplus_weight_decay`` (the plain ``weight_decay`` kwarg is ignored by
     ``create_loraplus_optimizer``).
-
-    Returns ``True`` when an optimizer was attached, ``False`` otherwise.
     """
     ratio = getattr(tcfg, "loraplus_lr_ratio", None)
     if ratio is None:
-        return False
+        return None
 
     # GaLore projects full-parameter gradients; LoRA+ tunes LoRA A/B matrices.
     # They cannot both own the optimizer — fail loudly rather than let this
@@ -499,7 +884,6 @@ def attach_loraplus_optimizer(trainer: Any, tcfg: Any) -> bool:
     from peft.optimizers import create_loraplus_optimizer
     from transformers import Trainer
 
-    model = trainer.model
     if not isinstance(model, PeftModel):
         raise ValueError(
             "training.loraplus_lr_ratio requires a LoRA (PEFT) model, but the "
@@ -507,18 +891,77 @@ def attach_loraplus_optimizer(trainer: Any, tcfg: Any) -> bool:
             "loraplus_lr_ratio."
         )
 
-    optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(trainer.args)
+    optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(args)
     # create_loraplus_optimizer takes lr explicitly and re-inserts it into the
     # per-group kwargs itself; drop the duplicate so it is not passed twice.
     optimizer_kwargs.pop("lr", None)
-    trainer.optimizer = create_loraplus_optimizer(
+    return create_loraplus_optimizer(
         model=model,
         optimizer_cls=optimizer_cls,
-        lr=trainer.args.learning_rate,
+        lr=args.learning_rate,
         loraplus_lr_ratio=float(ratio),
-        loraplus_weight_decay=trainer.args.weight_decay,
+        loraplus_weight_decay=args.weight_decay,
         **optimizer_kwargs,
     )
+
+
+def add_value_model_param_groups(optimizer: Any, value_model: Any, args: Any) -> int:
+    """Add a PPO value model's trainable parameters to a LoRA+ optimizer.
+
+    trl's ``PPOTrainer`` builds its default optimizer over
+    ``PolicyAndValueWrapper(policy, value_model)``, so the critic trains with
+    the policy. A LoRA+ optimizer injected through ``optimizers=`` is built over
+    the PEFT policy alone, so without this the critic's parameters belong to no
+    optimizer and its value head never leaves its random initialisation (#745).
+
+    The critic gets what ``Trainer.create_optimizer`` would have given it: a
+    decay and a no-decay group at ``args.learning_rate``, split by the installed
+    transformers' own ``get_decay_parameter_names`` (which does not use
+    ``self``). Parameters the optimizer already holds are skipped, so a critic
+    that shares tensors with the policy is not added twice. Empty groups are
+    not added.
+
+    Returns how many tensors were added.
+    """
+    from transformers import Trainer
+
+    held = {id(p) for group in optimizer.param_groups for p in group["params"]}
+    decay_names = set(Trainer.get_decay_parameter_names(None, value_model))
+    decay, no_decay = [], []
+    for name, param in value_model.named_parameters():
+        if not param.requires_grad or id(param) in held:
+            continue
+        (decay if name in decay_names else no_decay).append(param)
+    for params, weight_decay in ((decay, args.weight_decay), (no_decay, 0.0)):
+        if params:
+            optimizer.add_param_group(
+                {
+                    "params": params,
+                    "lr": args.learning_rate,
+                    "weight_decay": weight_decay,
+                }
+            )
+    return len(decay) + len(no_decay)
+
+
+def attach_loraplus_optimizer(trainer: Any, tcfg: Any) -> bool:
+    """Attach a PEFT LoRA+ optimizer when ``training.loraplus_lr_ratio`` is set.
+
+    Assigning ``trainer.optimizer`` here is respected because
+    ``Trainer.create_optimizer`` builds one only when ``self.optimizer is None``,
+    and the scheduler is still built from it with the configured warmup/schedule.
+    That ordering holds for every trainer whose optimizer is created lazily at
+    ``train()`` time; PPO is the one exception (its ``trl.experimental`` trainer
+    builds the optimizer and scheduler eagerly in ``__init__``), and it uses
+    :func:`build_loraplus_optimizer` with constructor injection instead — see
+    ``trainer/ppo.py``.
+
+    Returns ``True`` when an optimizer was attached, ``False`` otherwise.
+    """
+    optimizer = build_loraplus_optimizer(trainer.model, trainer.args, tcfg)
+    if optimizer is None:
+        return False
+    trainer.optimizer = optimizer
     return True
 
 
@@ -582,7 +1025,6 @@ def attach_lorafa_optimizer(trainer: Any, tcfg: Any) -> bool:
     if opt_name is not None and opt_name not in (
         "adamw_torch",
         "adamw",
-        "adamw_hf",
         "adamw_torch_fused",
     ):
         raise ValueError(
@@ -864,6 +1306,49 @@ def attach_grpo_stability_callback(trainer: Any, tcfg: Any) -> bool:
     return True
 
 
+def ensure_grpo_stability_callback(trainer: Any) -> bool:
+    """Ensure the stability callback is attached for the gradient watchdog.
+
+    #342 — ``on_pre_optimizer_step`` in ``GRPOStabilityCallback`` must run
+    unconditionally.  ``attach_grpo_stability_callback`` only attaches when
+    stability knobs are set.  This function is a no-op if the callback is
+    already attached; otherwise it attaches with all stability knobs at
+    their defaults (inactive) so only the gradient watchdog hooks fire.
+
+    The public ``add_callback`` API is the primary capability gate.
+    ``callback_handler`` is treated as optional because it is an internal
+    ``Trainer`` implementation detail and may be absent on test doubles or
+    future TRL versions.
+    """
+    from soup_cli.monitoring.grpo_stability_callback import (
+        GRPOStabilityCallback,
+    )
+
+    add_callback = getattr(trainer, "add_callback", None)
+    if not callable(add_callback):
+        return False
+
+    # Optional duplicate-detection via the private callback list.
+    handler = getattr(trainer, "callback_handler", None)
+    callbacks = getattr(handler, "callbacks", None) if handler is not None else None
+    if callbacks is not None:
+        try:
+            for cb in callbacks:
+                if isinstance(cb, GRPOStabilityCallback):
+                    return False  # already wired — watchdog will fire
+        except TypeError:
+            pass
+
+    # Attach with defaults: all stability knobs inactive, watchdog active.
+    callback = GRPOStabilityCallback()
+    try:
+        add_callback(callback)
+    except Exception as exc:  # noqa: BLE001 — best-effort callback attachment
+        logger.debug("ensure_grpo_stability_callback add_callback failed: %s", exc)
+        return False
+    return True
+
+
 def rl_callbacks_need_buffer(tcfg: Any) -> bool:
     """True when a reward-fn capture buffer is needed (v0.71.11 #235/#240).
 
@@ -1053,6 +1538,14 @@ def attach_rl_callbacks(
         except (TypeError, ValueError) as exc:
             logger.debug("attach echo-trap callback rejected: %s", exc)
 
+    # #1223: the detectors above read ``buffer`` at every step end. An
+    # evaluation pass calls the same wrapped reward functions on held-out
+    # prompts, so keep it out of the buffer they read.
+    if buffer is not None:
+        from soup_cli.utils.rl_signal_buffer import exclude_evaluation
+
+        exclude_evaluation(trainer, buffer)
+
     return attached
 
 
@@ -1071,12 +1564,6 @@ def _build_rl_checkpoint_cb(tcfg: Any, *, output_dir: str, task: str) -> Any:
             save_every_steps=int(save_every),
             include_optimizer_state=bool(
                 getattr(tcfg, "rl_checkpoint_include_optimizer", True)
-            ),
-            include_ref_model=bool(
-                getattr(tcfg, "rl_checkpoint_include_ref_model", False)
-            ),
-            include_rollout_buffer=bool(
-                getattr(tcfg, "rl_checkpoint_include_rollout_buffer", False)
             ),
             keep_last=int(getattr(tcfg, "rl_checkpoint_keep_last", 3)),
         )

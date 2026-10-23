@@ -305,7 +305,8 @@ def test_a_partial_positional_call_names_only_the_unfilled_parameters():
     )
 
     assert _leaking_calls([caller], commands) == [
-        "caller.py:2 calls custom() without ['attach_to_registry', 'output', 'run_id']"
+        "caller.py:2 calls custom() without "
+        "['attach_to_registry', 'output', 'run_id', 'trust_remote_code']"
     ]
 
 

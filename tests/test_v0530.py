@@ -555,7 +555,9 @@ class TestNVFP4:
             "soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: True
         )
         monkeypatch.setitem(sys.modules, "torchao", None)
-        with pytest.raises(RuntimeError, match="requires torchao") as excinfo:
+        with pytest.raises(
+            RuntimeError, match="requires torchao"
+        ) as excinfo:
             apply_nvfp4(_tiny_linear_model())
         assert "no Blackwell device detected" not in str(excinfo.value)
 
@@ -954,13 +956,15 @@ class TestSaveFormats:
         assert off["load_in_4bit"] is True
         assert off["bnb_4bit_quant_type"] == "nf4"
         assert "bnb_4bit_skip_modules" not in off
+        assert "llm_int8_skip_modules" not in off
 
         on = _build_merge_4bit_bnb_kwargs(
             compute_dtype="bfloat16", forced=True, double_quant=True
         )
         assert on["bnb_4bit_use_double_quant"] is True
         # ``forced`` still quantizes every Linear (empty skip list) — unchanged.
-        assert on["bnb_4bit_skip_modules"] == []
+        assert "bnb_4bit_skip_modules" not in on
+        assert on["llm_int8_skip_modules"] == []
 
     def test_merge_4bit_rejects_non_bool_double_quant(self):
         """Matches the existing ``forced``/``dtype`` type guards."""
@@ -988,7 +992,43 @@ class TestSaveFormats:
 
 class TestCrossCutting:
     def test_full_v053_roundtrip(self):
-        yaml_text = (
+        # Transformers backend roundtrip with FP8 attention + KV cache + double quant
+        yaml_tf = (
+            "base: a/b\n"
+            "task: sft\n"
+            "backend: transformers\n"
+            "data: {train: x.jsonl}\n"
+            "training:\n"
+            "  quantization: 4bit\n"
+            "  quantization_aware: fp8\n"
+            "  fp8_attention: true\n"
+            "  kv_cache_type: q8_0\n"
+            "  bnb_4bit_use_double_quant: true\n"
+        )
+        cfg_tf = load_config_from_string(yaml_tf)
+        assert cfg_tf.training.fp8_attention is True
+        assert cfg_tf.training.kv_cache_type == "q8_0"
+        assert cfg_tf.training.bnb_4bit_use_double_quant is True
+
+        # Unsloth backend roundtrip with unsloth_bnb_4bit + KV cache (FP8 rejected on unsloth #1124)
+        yaml_unsloth = (
+            "base: a/b\n"
+            "task: sft\n"
+            "backend: unsloth\n"
+            "data: {train: x.jsonl}\n"
+            "training:\n"
+            "  quantization: 4bit\n"
+            "  kv_cache_type: q8_0\n"
+            "  unsloth_bnb_4bit: true\n"
+            "  bnb_4bit_use_double_quant: true\n"
+        )
+        cfg_unsloth = load_config_from_string(yaml_unsloth)
+        assert cfg_unsloth.training.kv_cache_type == "q8_0"
+        assert cfg_unsloth.training.unsloth_bnb_4bit is True
+        assert cfg_unsloth.training.bnb_4bit_use_double_quant is True
+
+        # Inverted assertion (#1124): unsloth + fp8 combination is refused at config load
+        yaml_rejected = (
             "base: a/b\n"
             "task: sft\n"
             "backend: unsloth\n"
@@ -997,15 +1037,10 @@ class TestCrossCutting:
             "  quantization: 4bit\n"
             "  quantization_aware: fp8\n"
             "  fp8_attention: true\n"
-            "  kv_cache_type: q8_0\n"
             "  unsloth_bnb_4bit: true\n"
-            "  bnb_4bit_use_double_quant: true\n"
         )
-        cfg = load_config_from_string(yaml_text)
-        assert cfg.training.fp8_attention is True
-        assert cfg.training.kv_cache_type == "q8_0"
-        assert cfg.training.unsloth_bnb_4bit is True
-        assert cfg.training.bnb_4bit_use_double_quant is True
+        with pytest.raises(ValueError, match="not supported on the unsloth backend"):
+            load_config_from_string(yaml_rejected)
 
     def test_gguf_metadata_immutable(self):
         from soup_cli.utils.gguf_quant import _GGUF_METADATA
