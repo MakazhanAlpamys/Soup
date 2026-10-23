@@ -16,6 +16,12 @@ console = Console(stderr=True)
 # The `\\[` escapes the literal `[` for Rich markup (it renders as `[train]`).
 _TRAIN_FIX = "Training needs the \\[train] extra. Run: pip install \"soup-cli\\[train]\""
 
+_CPU_OOM_MESSAGE = "The CPU allocator could not reserve memory for a tensor."
+_CPU_OOM_FIX = (
+    "Free memory by closing other programs, add swap (Linux) or enlarge the "
+    "page file (Windows), or use a smaller model."
+)
+
 # Map known error patterns to (short message, fix suggestion)
 ERROR_MAP = [
     # CUDA OOM
@@ -38,14 +44,18 @@ ERROR_MAP = [
         ),
     ),
     # CPU allocator refused a request (#2154): after the GPU entries, so a CUDA
-    # message still gets the GPU hint.
+    # message still gets the GPU hint. torch words it two ways (c10's alloc_cpu.cpp):
+    # "can't allocate memory" from posix_memalign (Linux, macOS), "not enough memory"
+    # on Windows, Android and mimalloc builds.
+    (
+        "DefaultCPUAllocator: can't allocate memory",
+        _CPU_OOM_MESSAGE,
+        _CPU_OOM_FIX,
+    ),
     (
         "DefaultCPUAllocator: not enough memory",
-        "The CPU allocator could not reserve memory for a tensor.",
-        (
-            "Free memory by closing other programs, add swap (Linux) or enlarge the "
-            "page file (Windows), or use a smaller model."
-        ),
+        _CPU_OOM_MESSAGE,
+        _CPU_OOM_FIX,
     ),
     # Missing optional deps
     (

@@ -68,9 +68,14 @@ def _large_cpu(seen):
     return [entry for entry in seen if entry[2] == "cpu" and entry[3] >= LARGE]
 
 
-def test_the_twin_has_a_fused_expert_tensor_of_at_least_the_threshold():
-    fused = EXPERTS * 2 * MOE_INTERMEDIATE * HIDDEN * 2  # bf16
-    assert fused >= LARGE  # otherwise the tests below would pass on main
+def test_the_twin_has_a_fused_expert_tensor_of_at_least_the_threshold(twin):
+    """Otherwise the tests below would pass on main."""
+    from transformers import AutoModelForCausalLM
+
+    model = AutoModelForCausalLM.from_pretrained(twin, dtype=torch.bfloat16)
+    gate_up = model.model.layers[1].mlp.experts.gate_up_proj
+    assert tuple(gate_up.shape) == (EXPERTS, 2 * MOE_INTERMEDIATE, HIDDEN)
+    assert gate_up.nbytes >= LARGE
 
 
 @pytest.mark.parametrize("quant", ["none", "nf4"])
@@ -103,13 +108,20 @@ def _shape(model):
     }
 
 
+@pytest.mark.parametrize("threshold", [LARGE, 64 << 10], ids=["1MiB", "64KiB"])
 @pytest.mark.parametrize("quant", ["none", "nf4"])
-def test_the_skeleton_is_the_one_built_without_the_redirect(twin, monkeypatch, quant):
+def test_the_skeleton_is_the_one_built_without_the_redirect(
+    twin, monkeypatch, cpu_requests, quant, threshold
+):
+    """At 64 KiB the twin's 128 KiB linears go through the redirect too, under ``nf4`` the
+    ``Linear4bit`` ones that ``replace_with_bnb_linear`` builds; the buffers stay real."""
     if quant == "nf4":
         pytest.importorskip("bitsandbytes")
     from soup_cli.utils import layer_stream_runtime as runtime
 
+    monkeypatch.setattr(runtime, "SKELETON_META_REDIRECT_BYTES", threshold)
     redirected = runtime.build_meta_skeleton(twin, dtype="bfloat16", quant=quant)
+    assert [e for e in cpu_requests if e[2] == "cpu" and e[3] >= threshold] == []
     monkeypatch.setattr(runtime, "SKELETON_META_REDIRECT_BYTES", 1 << 62)  # nothing redirected
     plain = runtime.build_meta_skeleton(twin, dtype="bfloat16", quant=quant)
 
@@ -148,7 +160,8 @@ def test_a_large_buffer_is_built_the_old_way_and_named(twin, monkeypatch, caplog
     table = dict(model.named_buffers())["model.rotary_emb.big_table"]
     assert not table.is_meta and bool((table == 1).all())
     assert all(p.is_meta for p in model.parameters())
-    assert "model.rotary_emb.big_table" in caplog.text and "#2154" in caplog.text
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1 and "model.rotary_emb.big_table" in warnings[0].getMessage()
     # Built again without the redirect: the fused request is back on the CPU.
     assert ("empty", (EXPERTS, 2 * MOE_INTERMEDIATE, HIDDEN)) in {
         entry[:2] for entry in _large_cpu(cpu_requests)
@@ -161,7 +174,7 @@ def test_no_warning_when_every_buffer_is_small(twin, caplog):
     with caplog.at_level("WARNING", logger="soup_cli.utils.layer_stream_runtime"):
         build_meta_skeleton(twin, dtype="bfloat16", quant="none")
 
-    assert "#2154" not in caplog.text
+    assert [r for r in caplog.records if r.levelname == "WARNING"] == []
 
 
 def test_the_factories_are_put_back_even_when_the_build_raises(twin, monkeypatch):

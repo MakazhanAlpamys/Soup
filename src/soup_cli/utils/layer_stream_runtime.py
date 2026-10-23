@@ -3147,6 +3147,10 @@ def _large_cpu_requests_on_meta(threshold: int) -> Iterator[None]:
     2 * intermediate, hidden)`` first: 22.5 GB of commit per layer for Kimi K2, never
     touched, but charged (#2154). Redirecting the request itself is what avoids it.
     The factories are put back however the build ends.
+
+    The redirect is process-wide while it is active: it assumes that no other thread
+    makes a CPU request of ``threshold`` bytes or more during the build, which would
+    get a meta tensor.
     """
     import torch
 
@@ -3245,7 +3249,7 @@ def build_meta_skeleton(
         logger.warning(
             "%s registers a buffer of %d bytes or more (%s), which must hold real "
             "values; building its skeleton without the meta redirect, so its large "
-            "parameters are allocated on the CPU before they move to meta (#2154)",
+            "parameters are allocated on the CPU before they move to meta",
             type(model).__name__,
             SKELETON_META_REDIRECT_BYTES,
             ", ".join(meta_buffers),
