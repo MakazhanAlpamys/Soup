@@ -20,6 +20,9 @@ def chat(
         "-m",
         help="Path to LoRA adapter directory or full model",
     ),
+    backend: str = typer.Option(
+        "transformers", "--backend", help="Text backend: transformers or mlx",
+    ),
     base_model: Optional[str] = typer.Option(
         None,
         "--base",
@@ -67,6 +70,21 @@ def chat(
     ),
 ):
     """Chat with a fine-tuned model in the terminal."""
+    from soup_cli.utils.mlx_generation import reject_native_adapter, validate_native_options
+
+    if backend not in ("transformers", "mlx"):
+        raise typer.BadParameter("--backend must be transformers or mlx")
+    try:
+        if backend == "mlx":
+            validate_native_options(
+                temperature=temperature, max_tokens=max_tokens, device=device, hub=hub,
+            )
+        else:
+            reject_native_adapter(model)
+    except ValueError as exc:
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
     # v0.53.10 #152 — pre-fetch base from a non-HF hub before any path
     # resolution. Local paths and HF repo IDs are passed through unchanged.
     if hub and hub != "hf":
@@ -93,57 +111,68 @@ def chat(
     adapter_config_path = model_path / "adapter_config.json"
     is_adapter = adapter_config_path.exists()
 
-    # Resolve base model
-    if is_adapter and not base_model:
-        base_model = _detect_base_model(adapter_config_path)
-        if not base_model:
-            console.print(
-                "[red]Cannot detect base model from adapter_config.json.[/]\n"
-                "Please specify with [bold]--base[/] flag."
+    if backend == "mlx":
+        from soup_cli.utils.mlx_generation import load_native_model
+
+        try:
+            model_obj, tokenizer = load_native_model(
+                str(model_path), base_model, trust_remote_code=trust_remote_code,
             )
-            raise typer.Exit(1)
+        except (ImportError, OSError, ValueError) as exc:
+            console.print(f"[red]{for_terminal(str(exc))}[/]")
+            raise typer.Exit(1) from exc
+    else:
+        # Resolve base model
+        if is_adapter and not base_model:
+            base_model = _detect_base_model(adapter_config_path)
+            if not base_model:
+                console.print(
+                    "[red]Cannot detect base model from adapter_config.json.[/]\n"
+                    "Please specify with [bold]--base[/] flag."
+                )
+                raise typer.Exit(1)
 
-    # Detect device
-    if not device:
-        from soup_cli.utils.gpu import detect_device
+        # Detect device
+        if not device:
+            from soup_cli.utils.gpu import detect_device
 
-        device, _ = detect_device()
+            device, _ = detect_device()
 
-    console.print(
-        Panel(
-            f"Model:  [bold]{for_terminal(model_path)}[/]\n"
-            + (f"Base:   [bold]{for_terminal(base_model)}[/]\n" if is_adapter else "")
-            + f"Device: [bold]{device}[/]\n"
-            f"Type:   [bold]{'LoRA adapter' if is_adapter else 'Full model'}[/]",
-            title="Loading model",
+        console.print(
+            Panel(
+                f"Model:  [bold]{for_terminal(model_path)}[/]\n"
+                + (f"Base:   [bold]{for_terminal(base_model)}[/]\n" if is_adapter else "")
+                + f"Device: [bold]{device}[/]\n"
+                f"Type:   [bold]{'LoRA adapter' if is_adapter else 'Full model'}[/]",
+                title="Loading model",
+            )
         )
-    )
 
-    # Resolve --trust-remote-code (v0.36.0 Part B). Uses the base model id
-    # for LoRA adapters since that's what gets executed; otherwise the
-    # local model path.
-    from soup_cli.utils.trust_remote import (
-        model_requires_trust_remote_code,
-        resolve_trust_remote_code,
-    )
+        # Resolve --trust-remote-code (v0.36.0 Part B). Uses the base model id
+        # for LoRA adapters since that's what gets executed; otherwise the
+        # local model path.
+        from soup_cli.utils.trust_remote import (
+            model_requires_trust_remote_code,
+            resolve_trust_remote_code,
+        )
 
-    probe_target = base_model or str(model_path)
-    requires = model_requires_trust_remote_code(str(model_path)) or False
-    resolved_trust = resolve_trust_remote_code(
-        probe_target,
-        requested=trust_remote_code,
-        console=console,
-        requires_remote_code=requires,
-    )
+        probe_target = base_model or str(model_path)
+        requires = model_requires_trust_remote_code(str(model_path)) or False
+        resolved_trust = resolve_trust_remote_code(
+            probe_target,
+            requested=trust_remote_code,
+            console=console,
+            requires_remote_code=requires,
+        )
 
-    # Load model + tokenizer
-    model_obj, tokenizer = _load_model(
-        model_path=str(model_path),
-        base_model=base_model,
-        is_adapter=is_adapter,
-        device=device,
-        trust_remote_code=resolved_trust,
-    )
+        # Load model + tokenizer
+        model_obj, tokenizer = _load_model(
+            model_path=str(model_path),
+            base_model=base_model,
+            is_adapter=is_adapter,
+            device=device,
+            trust_remote_code=resolved_trust,
+        )
 
     console.print("[bold green]Model loaded![/] Type your message. Commands:")
     console.print("  [dim]/quit[/]  - exit chat")
@@ -189,11 +218,24 @@ def chat(
         history.append({"role": "user", "content": user_input})
 
         # Generate response
-        response = _generate(
-            model_obj, tokenizer, history,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+        try:
+            if backend == "mlx":
+                from soup_cli.utils.mlx_generation import generate_native
+
+                response, _ = generate_native(
+                    model_obj, tokenizer, history,
+                    max_tokens=max_tokens, temperature=temperature,
+                )
+            else:
+                response = _generate(
+                    model_obj, tokenizer, history,
+                    max_tokens=max_tokens, temperature=temperature,
+                )
+        except (KeyboardInterrupt, EOFError):
+            if backend != "mlx":
+                raise
+            console.print("\n[dim]Goodbye![/]")
+            break
 
         history.append({"role": "assistant", "content": response})
         console.print(f"[bold green]Assistant:[/] {for_terminal(response)}\n")

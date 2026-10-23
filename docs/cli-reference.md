@@ -835,6 +835,7 @@ Usage: `soup chat [OPTIONS]`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `--model`, `-m` | text |  | yes | Path to LoRA adapter directory or full model |
+| `--backend` | text | `transformers` |  | Text backend: transformers or mlx |
 | `--base`, `-b` | text |  |  | Base model ID. Auto-detected from adapter_config.json if not set. |
 | `--device` | text |  |  | Device: cuda, mps, cpu. Auto-detected if not set. |
 | `--max-tokens` | integer | `512` |  | Maximum number of tokens to generate |
@@ -2387,6 +2388,7 @@ Usage: `soup infer [OPTIONS]`
 | `--model`, `-m` | text |  | yes | Path to model (LoRA adapter or full model) |
 | `--input`, `-i` | text |  | yes | Path to input JSONL file (each line: {"prompt": "..."}) |
 | `--output`, `-o` | text |  | yes | Path to output JSONL file for results |
+| `--backend` | text | `transformers` |  | Text backend: transformers or mlx |
 | `--base`, `-b` | text |  |  | Base model for LoRA adapter (auto-detected if not set) |
 | `--max-tokens` | integer, 1 to 16384 | `256` |  | Maximum tokens to generate per response (1-16384) |
 | `--temperature`, `-t` | float | `0.7` |  | Sampling temperature (0 = greedy) |
