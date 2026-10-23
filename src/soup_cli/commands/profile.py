@@ -53,12 +53,15 @@ def profile(
     # Resolve GPU memory
     gpu_memory_gb, gpu_memory_source = _resolve_gpu_memory(gpu)
 
-    # The train pre-flight's estimate, from the model's own shape (#2049).
-    result = profile_from_config(cfg)
+    # The train pre-flight's estimate, from the model's own shape (#2049). An assumed
+    # card is not one to resolve `auto` checkpointing on, so it prices as full then.
+    result = profile_from_config(
+        cfg, gpu_memory_gb=None if gpu_memory_source == "assumed" else gpu_memory_gb
+    )
     if result is None:
         console.print(
-            "[red]Cannot estimate this run:[/] batch_size or max_length is outside "
-            "the range the estimate supports."
+            "[red]Cannot estimate this run:[/] batch_size, max_length or the model's "
+            "size (over 1,000B parameters) is outside the range the estimate supports."
         )
         raise typer.Exit(1)
     model_params_b = result["model_params_b"]
