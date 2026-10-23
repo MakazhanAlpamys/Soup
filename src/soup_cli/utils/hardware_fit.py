@@ -102,6 +102,10 @@ class HardwareFitInput:
     shape: Optional[ModelShape] = None
     lora_r: int = 64
     target_modules: Any = "auto"
+    #: False for a task whose model has no LM head (``NO_LM_HEAD_TASKS``).
+    lm_head: bool = True
+    #: The fused-loss flags the run's trainer applies (``use_liger``, ``use_cut_ce``).
+    fused_loss: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if isinstance(self.params_b, bool):
@@ -277,9 +281,43 @@ CONFIG_QUANT_TO_FIT = {
 #: ``batch_size: auto`` resolves at train time; ``soup profile`` prices this instead.
 PROFILE_AUTO_BATCH = 4
 
+#: Tasks whose model has no vocabulary-sized output, so the estimate charges no
+#: logits: the classifier family and reward_model load
+#: ``AutoModelForSequenceClassification`` (``trainer/classifier.py``,
+#: ``trainer/reward_model.py``), embedding loads ``AutoModel`` (``trainer/embedding.py``).
+NO_LM_HEAD_TASKS: frozenset[str] = frozenset(
+    {"classifier", "reranker", "cross_encoder", "embedding", "reward_model"}
+)
+
+#: Tasks whose trainer installs the checkpointing tiers: ``trainer/sft.py``'s
+#: ``plan_gradient_checkpointing``, inherited by tts. Every other trainer hands any
+#: truthy ``gradient_checkpointing`` to HF as plain checkpointing, which is ``full``.
+CHECKPOINT_TIER_TASKS: frozenset[str] = frozenset({"sft", "tts"})
+
+
+def checkpointing_for_task(
+    value: Any, *, task: str, gpu_memory_gb: Optional[float] = None
+) -> Union[bool, str]:
+    """The checkpointing the run's trainer will apply: ``False`` or a tier name.
+
+    ``auto`` resolves on the card's memory in GiB, as ``trainer/sft.py`` reads it
+    (``gradient_ckpt.resolve_granularity``); with no card it is ``full``, as there.
+    """
+    if not value:
+        return False
+    if task not in CHECKPOINT_TIER_TASKS:
+        return "full"
+    from soup_cli.utils.gradient_ckpt import resolve_granularity
+
+    return resolve_granularity(value, gpu_memory_gb=gpu_memory_gb) or False
+
 
 def hardware_fit_input_from_config(
-    cfg: Any, *, allow_network: bool = True, profile_defaults: bool = False
+    cfg: Any,
+    *,
+    allow_network: bool = True,
+    profile_defaults: bool = False,
+    gpu_memory_gb: Optional[float] = None,
 ) -> Optional[HardwareFitInput]:
     """The estimate's input for a ``SoupConfig``: the train pre-flight, ``soup profile``
     and the MCP ``profile`` tool all build it here, so they price the same run (#2049).
@@ -288,7 +326,8 @@ def hardware_fit_input_from_config(
     ``"auto"``, a quantization with no memory model, out-of-range dims), in which
     case the pre-flight skips rather than guess. ``profile_defaults`` is ``soup
     profile``'s reading instead: ``auto`` is priced at batch 4 and a quantization
-    with no memory model at bf16, as ``soup profile`` always did.
+    with no memory model at bf16, as ``soup profile`` always did. ``gpu_memory_gb``
+    is the card's memory in GiB, which ``gradient_checkpointing: auto`` resolves on.
     """
     from soup_cli.utils.model_shape import read_model_shape
 
@@ -314,6 +353,16 @@ def hardware_fit_input_from_config(
     if optimizer not in _VALID_OPTIMIZERS:
         optimizer = "adamw_torch"
     lora = getattr(tcfg, "lora", None)
+    from soup_cli.config.schema import SFT_KERNEL_AWARE_TASKS
+
+    task = getattr(cfg, "task", "sft")
+    # Only the SFT-family trainer applies the fused losses (``trainer/sft.py``,
+    # inherited by tts); on any other task the flags change nothing.
+    fused_loss = (
+        tuple(flag for flag in ("use_cut_ce", "use_liger") if getattr(tcfg, flag, False))
+        if task in SFT_KERNEL_AWARE_TASKS
+        else ()
+    )
     try:
         return HardwareFitInput(
             params_b=shape.params / GB,
@@ -322,10 +371,16 @@ def hardware_fit_input_from_config(
             optimizer=optimizer,
             quant=quant,
             peft=peft,
-            gradient_checkpointing=getattr(tcfg, "gradient_checkpointing", False) or False,
+            gradient_checkpointing=checkpointing_for_task(
+                getattr(tcfg, "gradient_checkpointing", False),
+                task=task,
+                gpu_memory_gb=gpu_memory_gb,
+            ),
             shape=shape,
             lora_r=int(getattr(lora, "r", 64) or 0),
             target_modules=getattr(lora, "target_modules", "auto"),
+            lm_head=task not in NO_LM_HEAD_TASKS,
+            fused_loss=fused_loss,
         )
     except (ValueError, TypeError):
         return None  # dims out of the predictor's supported range
@@ -351,6 +406,8 @@ def estimate_peak_vram_gb(inp: HardwareFitInput) -> VRAMBreakdown:
             gradient_checkpointing=inp.gradient_checkpointing,
             lora_r=inp.lora_r,
             target_modules=inp.target_modules,
+            lm_head=inp.lm_head,
+            fused_loss=inp.fused_loss,
         ),
     )
     return breakdown_from_estimate(est)
