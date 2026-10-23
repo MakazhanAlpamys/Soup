@@ -315,17 +315,18 @@ def _refuse_empty_train(dcfg, dataset) -> None:
     raise typer.Exit(1)
 
 
-def _build_hardware_fit_input(cfg):
+def _build_hardware_fit_input(cfg, gpu_memory_gb=None):
     """Best-effort ``HardwareFitInput`` from a ``SoupConfig``.
 
     Returns ``None`` when the run is not statically predictable (batch_size
     ``"auto"``, unsupported quant, out-of-range dims), in which case the caller
     skips the gate rather than guess. Built by the shared
     ``hardware_fit_input_from_config``, as ``soup profile``'s input is (#2049).
+    ``gpu_memory_gb`` (GiB) resolves ``gradient_checkpointing: auto``.
     """
     from soup_cli.utils.hardware_fit import hardware_fit_input_from_config
 
-    return hardware_fit_input_from_config(cfg)
+    return hardware_fit_input_from_config(cfg, gpu_memory_gb=gpu_memory_gb)
 
 
 def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
@@ -360,7 +361,8 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
         return  # no CUDA VRAM to predict against
     from soup_cli.utils.hardware_fit import CONFIG_QUANT_TO_FIT
 
-    inp = _build_hardware_fit_input(cfg)
+    # The card in GiB, as trainer/sft.py reads it to resolve `auto` checkpointing.
+    inp = _build_hardware_fit_input(cfg, gpu_memory_gb=total_bytes / 1024**3)
     if inp is None:
         quantization = str(getattr(cfg.training, "quantization", "none") or "none")
         if quantization not in CONFIG_QUANT_TO_FIT:
