@@ -2812,7 +2812,7 @@ output: ./output
         task="sft",
         size="N/A",
         tags=("kimi", "moonshot", "moe", "long-context"),
-        description="Kimi K2 SFT: " + KIMI_K2_GUARDED_STREAM_REASON,
+        description="Kimi K2 SFT: resident unsupported; guarded streaming only (see recipes use).",
         unavailable_reason=KIMI_K2_GUARDED_STREAM_REASON,
         yaml_str="""\
 base: moonshotai/Kimi-K2-Base

@@ -45,7 +45,7 @@ and failed later at model loading; now config validation stops before model load
 For Base and Instruct only, use the guarded `training.stream_layers: true` route
 added by [#2107](https://github.com/MakazhanAlpamys/Soup/pull/2107). It requires
 `--trust-remote-code` for the tokenizer and `pip install tiktoken`; see
-[Kimi K2 section of the streaming guide](performance-and-quantization.md)
+[streaming guide, Kimi K2 paragraph](performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724)
 for the guard and prerequisites. Its evidence is CPU-only parity on a tiny
 K2-like checkpoint; full K2 weights, training and GPU execution remain unverified.
 Thinking and Instruct-0905 have no supported route yet. This refusal does not

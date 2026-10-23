@@ -106,7 +106,13 @@ def test_catalog_marks_refused_recipes_and_does_not_write_them(tmp_path, monkeyp
     recipe = RECIPES[name]
     assert recipe.unavailable_reason.startswith(REASON)
     _assert_route_text(recipe.unavailable_reason, recipe.model)
-    _assert_route_text(recipe.description, recipe.model)
+    if name == "kimi-k2-sft":
+        assert len(recipe.description) <= 100
+        assert "resident unsupported" in recipe.description
+        assert "guarded streaming only" in recipe.description
+        assert "recipes use" in recipe.description
+    else:
+        _assert_route_text(recipe.description, recipe.model)
     assert "unsupported" in recipe.description.lower()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COLUMNS", "1000")
