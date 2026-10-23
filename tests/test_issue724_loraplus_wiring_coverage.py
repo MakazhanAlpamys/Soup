@@ -75,7 +75,7 @@ _BUILDS_PEFT = re.compile(r"(?:get_peft_model|linear_to_lora_layers)\s*\(")
 #: or build before it and inject via ``optimizers=``. A wrapper counts as wiring
 #: LoRA+ if it does either.
 _ATTACH_CALL = re.compile(r"attach_loraplus_optimizer\s*\(")
-_INJECT_CALL = re.compile(r"build_loraplus_optimizer\s*\(")
+_INJECT_CALL = re.compile(r"(?<!def )build_loraplus_optimizer\s*\(")
 
 #: PEFT-building wrappers that do NOT wire ``attach_loraplus_optimizer``, each
 #: with the reason it is allowed to. After #745 there is exactly one: ``unlearn``
@@ -95,12 +95,7 @@ _LORAPLUS_EXEMPT = {
         "is refused at config parse for task='unlearn' instead of being silently "
         "ignored (see test_unlearn_loraplus_is_refused_at_config_parse)."
     ),
-    "mlx_sft.py": (
-        "builds its adapter with mlx-lm's linear_to_lora_layers and its optimizer "
-        "from one learning rate (plan_optimizer), so there is no LoRA B group to "
-        "give lr * ratio. loraplus_lr_ratio is refused at config parse for "
-        "backend='mlx' instead (#1324, tests/test_issue1324_mlx_loraplus_refusal.py)."
-    ),
+
 }
 
 
@@ -339,6 +334,8 @@ class TestLoraPlusWiringCoverage:
         explains the wiring would pass without calling it."""
         source = "self.trainer = SFTTrainer()  # attach_loraplus_optimizer(x)\n"
         assert not _ATTACH_CALL.search(_code_without_comments(source))
+        assert not _wires_source("def build_loraplus_optimizer(plan, model, ratio): pass")
+        assert _wires_source("optimizer = build_loraplus_optimizer(plan, model, ratio)")
 
 
 class TestPpoWiresLoraPlusByInjectionNotAttach:

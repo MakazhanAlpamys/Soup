@@ -64,7 +64,7 @@ _NEW_V0_41_0: frozenset = frozenset({
 # TrainingArguments (verified on 5.17, #1269). Kept separately so the config
 # loader can refuse them with a message that names working alternatives
 # instead of letting the run die inside the trainer after the model loads.
-# `adamw_hf` and `muon` are NOT here: the MLX backend builds them itself
+# `adamw`, `adamw_hf` and `muon` are NOT here: the MLX backend builds them itself
 # (trainer/mlx_optim.py _OPTIMIZER_MAP), so they stay allowlisted and are
 # refused per-backend by SoupConfig instead (see MLX_ONLY_OPTIMIZERS).
 _TORCH_REJECTED: frozenset = frozenset({
@@ -79,9 +79,9 @@ _TORCH_REJECTED: frozenset = frozenset({
 })
 
 # transformers 5.x rejects these in TrainingArguments, but the MLX backend
-# never builds TrainingArguments and has its own optimizer map for both
+# never builds TrainingArguments and has its own optimizer map for these
 # names (trainer/mlx_optim.py), so only a non-MLX run refuses them (#1283).
-MLX_ONLY_OPTIMIZERS: frozenset = frozenset({"adamw_hf", "muon"})
+MLX_ONLY_OPTIMIZERS: frozenset = frozenset({"adamw_hf", "adamw", "muon"})
 
 SUPPORTED_OPTIMIZERS: frozenset = (
     _HF_NATIVE | _BNB_BACKED | _NEW_V0_41_0 | MLX_ONLY_OPTIMIZERS

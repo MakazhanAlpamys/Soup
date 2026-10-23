@@ -2387,6 +2387,7 @@ Usage: `soup infer [OPTIONS]`
 | `--model`, `-m` | text |  | yes | Path to model (LoRA adapter or full model) |
 | `--input`, `-i` | text |  | yes | Path to input JSONL file (each line: {"prompt": "..."}) |
 | `--output`, `-o` | text |  | yes | Path to output JSONL file for results |
+| `--backend` | text | `transformers` |  | Text backend: transformers or mlx |
 | `--base`, `-b` | text |  |  | Base model for LoRA adapter (auto-detected if not set) |
 | `--max-tokens` | integer, 1 to 16384 | `256` |  | Maximum tokens to generate per response (1-16384) |
 | `--temperature`, `-t` | float | `0.7` |  | Sampling temperature (0 = greedy) |
@@ -2801,6 +2802,8 @@ Usage: `soup merge [OPTIONS]`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `--adapter`, `-a` | text |  | yes | Path to the LoRA adapter directory |
+| `--backend` | text | `transformers` |  | Merge backend: transformers or mlx |
+| `--dequantize` | flag | off |  | Explicitly dequantize an MLX base for dense fused output |
 | `--base`, `-b` | text |  |  | Base model ID. Auto-detected from adapter_config.json if not set. |
 | `--output`, `-o` | text | `./merged` |  | Output directory for the merged model |
 | `--dtype` | text | `float16` |  | Data type for the merged model: float16, bfloat16, float32 |

@@ -1,18 +1,7 @@
-"""Issue #1324 — ``training.loraplus_lr_ratio`` is refused on ``backend: mlx``.
+"""Historical #1324 refusal now follows the bounded native #1975 support.
 
-On ``backend: mlx`` (``task: sft`` is the only reachable MLX LoRA case), the
-config used to load, validate, pass ``soup train --dry-run`` and
-``soup doctor --config``, and then train plain LoRA: the MLX optimizer is
-built from a single scalar (``plan_optimizer`` in ``trainer/mlx_optim.py``
-takes no parameter groups), so A and B ran at one learning rate with no
-warning. Mirroring LoRA-FA's backend gate (#725), the field is now refused
-at load on every backend except ``transformers`` and ``unsloth`` (unsloth
-reaches the transformers wrappers' ``attach_loraplus_optimizer`` call, so it
-stays allowed — regression guard for #1080's wiring).
-
-The pre-existing ``training.use_lorafa`` row in the ``_MLX_SFT`` doctor
-table stays: the mlx trainer itself warns about it at runtime, and the
-#755 drift test requires the table to match that warning list.
+Keep unsupported combinations refused before loading data/models and preserve
+Transformers/Unsloth wiring while the qualified MLX SFT slice loads.
 """
 
 import re
@@ -54,12 +43,9 @@ def _plain(text: str) -> str:
     return " ".join(re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text or "").split())
 
 
-def test_mlx_loraplus_is_refused_at_load_with_message():
-    with pytest.raises(ValueError) as excinfo:
-        load_config_from_string(_MLX_LORAPLUS)
-    msg = str(excinfo.value)
-    assert "training.loraplus_lr_ratio is not implemented on backend='mlx'" in msg
-    assert "Remove training.loraplus_lr_ratio, or use backend: transformers." in msg
+def test_mlx_loraplus_now_loads_in_qualified_slice():
+    cfg = load_config_from_string(_MLX_LORAPLUS)
+    assert cfg.training.loraplus_lr_ratio == 16
 
 
 def test_transformers_loraplus_still_loads():
@@ -82,14 +68,10 @@ def test_mlx_loraplus_without_ratio_still_loads():
     assert cfg.backend == "mlx"
 
 
-def test_train_dry_run_exits_nonzero_on_mlx_loraplus(tmp_path: Path):
-    cfg_file = tmp_path / "c1_mlx_loraplus.yaml"
-    cfg_file.write_text(_MLX_LORAPLUS, encoding="utf-8")
+def test_train_dry_run_accepts_qualified_mlx_loraplus(tmp_path: Path):
+    cfg_file = _write_runnable_config(tmp_path)
     result = CliRunner().invoke(app, ["train", "--config", str(cfg_file), "--dry-run"])
-    assert result.exit_code == 1, (result.output, repr(result.exception))
-    assert "training.loraplus_lr_ratio is not implemented on backend='mlx'" in _plain(
-        result.output
-    )
+    assert result.exit_code == 0, (result.output, repr(result.exception))
 
 
 @pytest.mark.parametrize(
@@ -138,32 +120,21 @@ def test_mlx_doctor_table_has_no_loraplus_row():
 # More paths to the same refusal, and the controls around it
 # --------------------------------------------------------------------------
 
-_REFUSAL = "training.loraplus_lr_ratio is not implemented on backend='mlx'"
+_REFUSAL = "MLX loraplus_lr_ratio cannot be combined with DoRA"
 
 
 @pytest.mark.parametrize("ratio", ["16", "1.0", "0.5", "2"])
-def test_every_ratio_is_refused_on_mlx(ratio):
-    """The refusal is about the backend, not the size of the ratio."""
+def test_supported_ratios_load_on_mlx(ratio):
     text = _MLX_LORAPLUS.replace("loraplus_lr_ratio: 16", f"loraplus_lr_ratio: {ratio}")
-    with pytest.raises(ValueError) as excinfo:
-        load_config_from_string(text)
-    assert _REFUSAL in _plain(str(excinfo.value))
+    assert load_config_from_string(text).training.loraplus_lr_ratio == float(ratio)
 
 
-def test_direct_construction_is_refused_too():
-    """``soup sweep``, ``soup rewind`` and autopilot build ``SoupConfig`` directly,
-    without going through the YAML loader."""
+def test_direct_construction_enforces_new_boundary():
     from soup_cli.config.schema import SoupConfig
 
-    with pytest.raises(ValueError) as excinfo:
-        SoupConfig(
-            base="mlx-community/Qwen2.5-0.5B-Instruct-4bit",
-            task="sft",
-            backend="mlx",
-            data={"train": "t.jsonl"},
-            training={"loraplus_lr_ratio": 16.0},
-        )
-    assert _REFUSAL in _plain(str(excinfo.value))
+    with pytest.raises(ValueError, match="cannot be combined with DoRA"):
+        SoupConfig(base="owner/base", backend="mlx", data={"train": "t.jsonl"},
+                   training={"loraplus_lr_ratio": 16, "lora": {"use_dora": True}})
 
 
 def test_an_explicit_null_ratio_still_loads_on_mlx():
@@ -209,6 +180,7 @@ def test_plain_soup_train_stops_at_config_load(tmp_path, monkeypatch):
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
     monkeypatch.chdir(tmp_path)
     config = _write_runnable_config(tmp_path)
+    config.write_text(config.read_text().replace("    r: 8", "    use_dora: true\n    r: 8"))
 
     result = CliRunner().invoke(app, ["train", "--config", str(config)])
 
@@ -227,6 +199,7 @@ def test_soup_doctor_config_reports_the_config_as_unloadable(tmp_path, capsys):
     from soup_cli.commands.doctor import doctor
 
     config = _write_runnable_config(tmp_path)
+    config.write_text(config.read_text().replace("    r: 8", "    use_dora: true\n    r: 8"))
 
     with pytest.raises(typer.Exit) as excinfo:
         doctor(nccl=False, disk=False, config=str(config))
@@ -240,5 +213,5 @@ def test_the_loraplus_docs_state_the_mlx_refusal_and_the_unsloth_wiring():
     text = (root / "docs" / "peft-and-efficiency.md").read_text(encoding="utf-8")
     section = text.split("## LoRA+ (Differentiated Learning Rates)", 1)[1]
     flat = " ".join(section.split("\n## ", 1)[0].split())
-    assert "Also refused on the `mlx` backend (#1324)" in flat, flat
+    assert "Native MLX text SFT" in flat, flat
     assert "`backend: unsloth` gets the same LoRA+ optimizer as `transformers`" in flat, flat

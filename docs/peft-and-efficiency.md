@@ -409,6 +409,56 @@ at it. `sft`, `orpo`, `simpo`, `reward_model`, `pretrain`, `embedding`, `grpo` w
 reference the same way as `kto` and `bco` but has not been measured.
 
 
+### Native MLX rank and alpha patterns
+
+Text SFT on `backend: mlx` supports ordinary linear LoRA and rsLoRA patterns
+on dense and genuine 4-bit targets. Automatic targets retain MLX's Q/V default;
+explicit targets are layer-relative keys such as `self_attn.q_proj`, or exact
+qualified paths. Patterns match **qualified native paths**, for example
+`model.layers.0.self_attn.q_proj`; these can differ from Transformers paths.
+
+Rank and alpha resolve independently, with scalar `r`/`alpha` fallbacks. As in
+PEFT 0.20+, the first matching dictionary entry wins. Patterns are regexes with
+an optional dotted prefix and an implicit end anchor; `q_proj` matches that
+suffix, while `^model.layers.0.self_attn.q_proj` anchors the whole path. Place
+specific entries before general entries. A fully shadowed pattern is valid if it
+matches a selected module; a pattern matching no selected module is an error.
+Existing pattern length/count/value/regex safety limits apply. Each selected
+layer uses its own `alpha / rank`, or `alpha / sqrt(rank)` for rsLoRA.
+
+```yaml
+backend: mlx
+training:
+  lora:
+    target_modules: [self_attn.q_proj, self_attn.v_proj]
+    r: 4
+    alpha: 8
+    rank_pattern: {q_proj: 2}
+    alpha_pattern: {v_proj: 12}
+```
+
+Patterned artifacts use the versioned `soup_lora` per-module manifest in
+`adapter_config.json`, containing the original recipe and resolved shapes and
+scales. Soup reconstructs modules before strict tensor loading; metadata drift,
+missing/extra tensors, incompatible shapes and nonfinite values are refused.
+Use `soup infer --backend mlx`, `soup merge --backend mlx`, or
+`from soup_cli.utils.mlx_generation import load_native_model` to load them.
+Generic `mlx_lm.load(..., adapter_path=...)` cannot reconstruct this format and
+fails on its missing uniform `lora_parameters` block. Uniform legacy artifacts
+keep their existing format and loading path. Metadata is available before the
+training loop so periodic checkpoints are reconstructible after interruption.
+Warm starts require matching per-module recipes and restore weights only.
+Metadata writes are atomic. Reusing an output containing incompatible adapter
+weights is refused before writing; choose a fresh output directory for a
+different recipe or base identity.
+
+DoRA, LoRA+, LoRA-FA, packing, non-text/non-SFT paths, embeddings and switch/MoE
+adapter targets remain refused with patterns until their combinations are
+qualified. Heterogeneous ranks alone do not establish better quality, speed or
+memory use. Native offline lifecycle tests cover MLX 0.31.2 / MLX-LM 0.31.3 and
+0.32.4 / 0.32.2.
+
+
 ## DoRA (Weight-Decomposed LoRA)
 
 Enable DoRA for improved LoRA quality with magnitude decomposition:
@@ -448,7 +498,7 @@ training:
     alpha: 16
 ```
 
-- **Compatibility:** Wired on every Trainer-based task that trains a LoRA adapter, including the preference and RL tasks (`dpo`, `kto`, `orpo`, `simpo`, `ipo`, `bco`, `grpo`, `online_dpo`, `ppo`, `reward_model`, `distill`). Most attach the LoRA+ optimizer once the trainer is built; `ppo` passes it to the trainer's constructor instead, because trl's PPO trainer builds its optimizer and LR scheduler eagerly, and adds the value model to it at the base learning rate, as trl's default optimizer does. `classifier`, `reranker`, `cross_encoder` and `asr` full fine-tune by default, so LoRA+ applies there only with `classifier_lora: true` / `asr_lora: true` and `lora.r > 0`. Refused at config parse on tasks with no trainable LoRA $B$ matrix: `prm` (full fine-tune), `moe_lora_routing` (only the routing gate trains), and `classifier` / `reranker` / `cross_encoder` / `asr` without their LoRA flag. Also refused on `unlearn`, which runs its own optimizer loop rather than a Trainer. Refused with `lora.use_vera` (VeRA trains scaling vectors, not $A$/$B$ matrices, so every trainable tensor would run at `lr * ratio`). Also refused on the `mlx` backend (#1324): the MLX optimizer Soup builds (`trainer/mlx_optim.py`) runs every LoRA tensor at one learning rate (no parameter groups), so the ratio would be silently ignored; remove it or use `backend: transformers`. `backend: unsloth` gets the same LoRA+ optimizer as `transformers`. Mutually exclusive with `use_lorafa`.
+- **Compatibility:** Wired on every Trainer-based task that trains a LoRA adapter, including the preference and RL tasks (`dpo`, `kto`, `orpo`, `simpo`, `ipo`, `bco`, `grpo`, `online_dpo`, `ppo`, `reward_model`, `distill`). Most attach the LoRA+ optimizer once the trainer is built; `ppo` passes it to the trainer's constructor instead, because trl's PPO trainer builds its optimizer and LR scheduler eagerly, and adds the value model to it at the base learning rate, as trl's default optimizer does. `classifier`, `reranker`, `cross_encoder` and `asr` full fine-tune by default, so LoRA+ applies there only with `classifier_lora: true` / `asr_lora: true` and `lora.r > 0`. Refused at config parse on tasks with no trainable LoRA $B$ matrix: `prm` (full fine-tune), `moe_lora_routing` (only the routing gate trains), and `classifier` / `reranker` / `cross_encoder` / `asr` without their LoRA flag. Also refused on `unlearn`, which runs its own optimizer loop rather than a Trainer. Refused with `lora.use_vera` (VeRA trains scaling vectors, not $A$/$B$ matrices, so every trainable tensor would run at `lr * ratio`). Native MLX text SFT supports ordinary linear LoRA/rsLoRA on dense or pre-quantized 4-bit bases, using `adamw_torch`, `adamw_hf`, `adamw` or `adamw_torch_fused`. A uses the existing update-based schedule and B uses `loraplus_lr_ratio` times that schedule; gradients are clipped globally once before splitting. DoRA, per-module patterns, other adapter families, other tasks/modalities and other quantizations/optimizers remain refused. Ratios must be finite positive numbers (null/omitted disables LoRA+). Saved metadata records both peak rates, ratio and update units; warm-start restores weights with fresh optimizer/scheduler counters, not full training state. `backend: unsloth` gets the same LoRA+ optimizer as `transformers`. Mutually exclusive with `use_lorafa`.
 - **Optimizers:** LoRA+ builds its optimizer without the model, so it is refused at config load with `optimizer: apollo_adamw`, `lomo` or `adalomo` (transformers can only build those from the model) and with `use_galore`.
 
 

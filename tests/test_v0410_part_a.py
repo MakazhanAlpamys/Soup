@@ -55,7 +55,7 @@ class TestSupportedOptimizers:
 
     def test_mlx_only_entries_stay_allowlisted(self):
         # #1283: refused per backend by SoupConfig, not by name.
-        assert MLX_ONLY_OPTIMIZERS == {"adamw_hf", "muon"}
+        assert MLX_ONLY_OPTIMIZERS == {"adamw", "adamw_hf", "muon"}
         for name in sorted(MLX_ONLY_OPTIMIZERS):
             assert name in SUPPORTED_OPTIMIZERS, name
             assert validate_optimizer_name(name) == name

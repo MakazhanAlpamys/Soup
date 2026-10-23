@@ -5608,13 +5608,13 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_mlx_only_optimizers(self) -> "SoupConfig":
-        """#1283 — `adamw_hf` and `muon` only build on ``backend: mlx``.
+        """#1283 — `adamw`, `adamw_hf` and `muon` only build on ``backend: mlx``.
 
-        transformers 5.x rejects both names in TrainingArguments
+        transformers 5.x rejects these names in TrainingArguments
         (OptimizerNames), so a transformers/unsloth run would pass config
         load and crash inside the trainer after the model had loaded
         (#1269). The MLX backend never builds TrainingArguments — it has
-        its own optimizer map (trainer/mlx_optim.py) with entries for both
+        its own optimizer map (trainer/mlx_optim.py) with entries for these names
         — so MLX keeps them and every other backend refuses them here.
         """
         from soup_cli.utils.optimizer_zoo import MLX_ONLY_OPTIMIZERS
@@ -8344,30 +8344,36 @@ class SoupConfig(BaseModel):
             + (hint or f" Use backend=transformers for task={self.task}.")
         )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _finite_mlx_loraplus_ratio(cls, values):
+        if isinstance(values, dict) and values.get("backend") == "mlx":
+            training = values.get("training", {})
+            value = (training.get("loraplus_lr_ratio") if isinstance(training, dict)
+                     else getattr(training, "loraplus_lr_ratio", None))
+            if value is not None and (type(value) not in (int, float) or
+                                      not math.isfinite(value) or value <= 0):
+                raise ValueError("loraplus_lr_ratio must be a finite positive number or null")
+        return values
+
     @model_validator(mode="after")
     def _validate_loraplus_backend(self) -> "SoupConfig":
-        """#1324: ``loraplus_lr_ratio`` is not implemented on ``backend: mlx``.
-
-        MLX builds its LoRA adapter with ``mlx_lm``'s ``linear_to_lora_layers``
-        and its optimizer from a single learning rate (``plan_optimizer`` in
-        ``trainer/mlx_optim.py`` takes no parameter groups), so the ratio would
-        validate, print nothing in ``soup doctor --config``, and train A and B
-        at one learning rate. ``unsloth`` reaches the transformers wrappers'
-        ``attach_loraplus_optimizer`` call, so it stays allowed (#1080).
-
-        Defined after :meth:`_validate_mlx_task_support` and
-        :meth:`_validate_loraplus_has_a_trainable_lora_b` on purpose: a task
-        MLX cannot run, or one with no LoRA B matrix on any backend, is refused
-        for that reason first, so "use backend: transformers" below always
-        leads to a config that loads.
-        """
-        if self.backend == "mlx" and self.training.loraplus_lr_ratio is not None:
-            raise ValueError(
-                "Refused: training.loraplus_lr_ratio is not implemented on "
-                "backend='mlx' (the MLX optimizer uses one "
-                "learning rate for every LoRA tensor). Remove "
-                "training.loraplus_lr_ratio, or use backend: transformers."
-            )
+        """Enable only the natively qualified linear text-SFT LoRA+ slice."""
+        tcfg = self.training
+        if self.backend != "mlx" or tcfg.loraplus_lr_ratio is None:
+            return self
+        if self.task != "sft" or self.modality != "text":
+            raise ValueError("MLX loraplus_lr_ratio supports text SFT only; use transformers")
+        if tcfg.optimizer not in ("adamw_torch", "adamw_hf", "adamw", "adamw_torch_fused"):
+            raise ValueError("MLX loraplus_lr_ratio requires an AdamW optimizer alias")
+        if tcfg.quantization not in ("none", "4bit"):
+            raise ValueError("MLX loraplus_lr_ratio requires quantization none or 4bit")
+        if tcfg.lora.use_dora:
+            raise ValueError("MLX loraplus_lr_ratio cannot be combined with DoRA")
+        if tcfg.lora.rank_pattern or tcfg.lora.alpha_pattern:
+            raise ValueError("MLX loraplus_lr_ratio cannot be combined with per-module patterns")
+        if not math.isfinite(tcfg.lr * tcfg.loraplus_lr_ratio):
+            raise ValueError("MLX loraplus_lr_ratio times training.lr must remain finite")
         return self
 
     @model_validator(mode="after")

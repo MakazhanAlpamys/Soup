@@ -140,6 +140,13 @@ MLX backend supports SFT, DPO, ORPO and SimPO. Any other task with `backend: mlx
 
 `training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO and SimPO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
 
+MLX LoRA+ text SFT uses two native AdamW groups: A at the configured update-based
+schedule, B at `training.loraplus_lr_ratio` times it. One global clipping pass
+precedes routing; accumulation does not advance schedules between updates.
+Dense/4-bit linear ordinary LoRA/rsLoRA are qualified; DoRA and per-module
+patterns are refused together with LoRA+. Metadata records the effective rates.
+See [LoRA+](peft-and-efficiency.md#lora-differentiated-learning-rates).
+
 #### DPO on MLX
 
 `task: dpo` with `backend: mlx` runs Soup's own training loop (`mlx-lm` ships no DPO helper), with the sigmoid loss TRL uses by default and `training.dpo_beta`.

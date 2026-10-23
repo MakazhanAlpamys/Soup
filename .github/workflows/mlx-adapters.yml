@@ -1,0 +1,75 @@
+name: native MLX adapters
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    paths:
+      - 'src/soup_cli/trainer/**'
+      - 'src/soup_cli/utils/mlx_generation.py'
+      - 'src/soup_cli/utils/mlx_merge.py'
+      - 'src/soup_cli/config/**'
+      - 'src/soup_cli/commands/infer.py'
+      - 'src/soup_cli/commands/merge.py'
+      - 'tests/test_mlx_loraplus.py'
+      - 'tests/test_mlx_loraplus_native.py'
+      - 'tests/test_mlx_patterns.py'
+      - 'tests/test_mlx_patterns_native.py'
+      - 'tests/test_mlx_generation.py'
+      - 'tests/test_mlx_merge.py'
+      - 'tests/test_mlx_dora_native.py'
+      - 'tests/test_issue634_mlx_resume.py'
+      - 'pyproject.toml'
+      - '.github/constraints/**'
+      - '.github/constraints/pinned-upstream.txt'
+      - '.github/workflows/mlx-adapters.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  native-adapters:
+    # Like the existing native smoke job, spend Apple Silicon capacity at approval.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (!github.event.pull_request.draft &&
+       contains(github.event.pull_request.labels.*.name, 'ci:full') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'ci:full'))
+    runs-on: macos-14
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [floor, current]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install and verify the standalone native runtime
+        run: |
+          if [ '${{ matrix.stack }}' = floor ]; then
+            pip install -e '.[mlx]' pytest ${{ github.event_name == 'pull_request' && '-c .github/constraints/pinned-upstream.txt' || '' }} 'mlx==0.31.2' 'mlx-lm==0.31.3'
+          else
+            pip install -e '.[mlx]' pytest ${{ github.event_name == 'pull_request' && '-c .github/constraints/pinned-upstream.txt' || '' }}
+          fi
+          python -c "import mlx.core, mlx_lm; import importlib.util; assert all(importlib.util.find_spec(n) is None for n in ('torch','trl','datasets','peft','accelerate','bitsandbytes'))"
+      - name: Add only the optional Arrow cache reader
+        run: |
+          pip install datasets ${{ github.event_name == 'pull_request' && '-c .github/constraints/pinned-upstream.txt' || '' }}
+          python -m pip check
+          python -c "import datasets; import importlib.util; assert all(importlib.util.find_spec(n) is None for n in ('torch','trl','peft','accelerate','bitsandbytes'))"
+      - name: Run offline native adapter construction and consumer contracts
+        env:
+          HF_HUB_OFFLINE: '1'
+          HF_DATASETS_OFFLINE: '1'
+          PYTHONPATH: src
+        run: >-
+          pytest -o addopts= -q tests/test_mlx_loraplus.py tests/test_mlx_loraplus_native.py
+          tests/test_mlx_patterns.py tests/test_mlx_patterns_native.py
+          tests/test_mlx_generation.py tests/test_mlx_merge.py tests/test_mlx_dora_native.py
