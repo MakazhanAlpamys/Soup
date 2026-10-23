@@ -267,12 +267,15 @@ def profile_result(breakdown: Any, *, model_name: str) -> dict:
     }
 
 
-def profile_from_config(cfg: Any, *, allow_network: bool = True) -> Optional[dict]:
+def profile_from_config(
+    cfg: Any, *, allow_network: bool = True, gpu_memory_gb: Optional[float] = None
+) -> Optional[dict]:
     """The memory profile of a ``SoupConfig``, from the model's own shape.
 
     Built from the same input as the train pre-flight
     (``hardware_fit.hardware_fit_input_from_config``), so the two report the same
     peak for the same config (#2049). ``None`` when the run cannot be priced.
+    ``gpu_memory_gb`` (GiB) is the card ``gradient_checkpointing: auto`` resolves on.
     """
     from soup_cli.utils.hardware_fit import (
         estimate_peak_vram_gb,
@@ -280,7 +283,7 @@ def profile_from_config(cfg: Any, *, allow_network: bool = True) -> Optional[dic
     )
 
     inp = hardware_fit_input_from_config(
-        cfg, allow_network=allow_network, profile_defaults=True
+        cfg, allow_network=allow_network, profile_defaults=True, gpu_memory_gb=gpu_memory_gb
     )
     if inp is None:
         return None
@@ -344,9 +347,11 @@ def estimate_training_time(
 def recommend_batch_size(total_memory_gb: float, gpu_memory_gb: float) -> int:
     """Recommend batch size based on available GPU memory.
 
-    Leaves headroom for memory spikes during training.
+    Leaves headroom for memory spikes during training. ``total_memory_gb`` is the
+    estimate's GB (1e9 bytes); ``gpu_memory_gb`` is a card's GB as the table and the
+    driver give it (GiB), so it is converted before the two are compared.
     """
-    available = gpu_memory_gb - total_memory_gb
+    available = gpu_memory_gb * 1024**3 / 1e9 - total_memory_gb
     if available <= 0:
         return 1
 
@@ -367,9 +372,13 @@ def recommend_gpu(total_memory_gb: float) -> list[str]:
 
     Returns list of GPU names that have enough VRAM.
     """
+    from soup_cli.utils.vram_estimate import fit_verdict
+
     compatible = []
     for name, vram in sorted(GPU_MEMORY.items(), key=lambda item: item[1]):
-        if vram >= total_memory_gb * 1.1:  # 10% headroom
+        # In bytes, as ``soup profile``'s fit is: the table's GB are GiB, the
+        # estimate's are 1e9 bytes. Only a card that fits with the 10% margin.
+        if fit_verdict(total_memory_gb * 1e9, vram * 1024**3) == "fits":
             compatible.append(f"{name.upper()} ({vram} GB)")
 
     if not compatible:
