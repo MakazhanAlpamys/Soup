@@ -1375,6 +1375,14 @@ class TrainingConfig(BaseModel):
     )
     scheduler: str = Field(default="cosine", description="LR scheduler type")
     save_steps: int = Field(default=100, description="Save checkpoint every N steps")
+    mlx_full_state: bool = Field(
+        default=False,
+        description=(
+            "Opt in to versioned full-state checkpoints for single-device MLX text SFT "
+            "with ordinary linear LoRA and AdamW. save_steps counts completed optimizer "
+            "updates in this mode. Exact continuation requires the same runtime/device."
+        ),
+    )
     logging_steps: int = Field(default=10, description="Log metrics every N steps")
     # #1223 — the validation split is evaluated at the end of every epoch by
     # default; this switches to a step schedule. Unset rather than defaulted so
@@ -8343,6 +8351,14 @@ class SoupConfig(BaseModel):
             "trainer on backend='mlx'."
             + (hint or f" Use backend=transformers for task={self.task}.")
         )
+
+    @model_validator(mode="after")
+    def _validate_mlx_full_state(self) -> "SoupConfig":
+        if self.training.mlx_full_state:
+            from soup_cli.trainer.mlx_checkpoint import validate_config
+
+            validate_config(self)
+        return self
 
     @model_validator(mode="after")
     def _validate_loraplus_backend(self) -> "SoupConfig":

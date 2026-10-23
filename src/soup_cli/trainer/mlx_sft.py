@@ -434,14 +434,6 @@ class MLXSFTTrainerWrapper:
                 "training.use_fsdp2_compile (torch.compile on FSDP2 requires "
                 "CUDA and the transformers backend)"
             )
-        # #353's fourth criterion. #381 threaded training.seed through every
-        # transformers task wrapper; MLX has its own RNG (mx.random) and reads
-        # neither field, so a seeded MLX run is silently unseeded. `is not None`
-        # rather than truthiness: 0 is a real seed.
-        if tcfg.seed is not None:
-            unsupported.append("training.seed (MLX seeds through mx.random)")
-        if tcfg.data_seed is not None:
-            unsupported.append("training.data_seed (MLX seeds through mx.random)")
         if isinstance(tcfg.gradient_checkpointing, str):
             unsupported.append(
                 f"gradient_checkpointing tier {tcfg.gradient_checkpointing!r} "
@@ -593,14 +585,9 @@ class MLXSFTTrainerWrapper:
         LoRA-shaped tensors, which don't exist on the model until the linear
         layers have been converted.
 
-        This restores adapter WEIGHTS only. mlx-lm's LoRA trainer exposes no
-        optimizer state and no step/iteration count, so it is a warm start,
-        not a resume of training state: the step count and data position
-        both restart from zero regardless of how far the checkpoint got.
-        Say so rather than implying a full resume. Replaying the dataset
-        from the saved iteration is a separate, harder claim — it needs a
-        reproducible iteration order tied to training.seed/data_seed, which
-        the MLX path does not thread yet (#353) — and is out of scope here.
+        This restores adapter weights only: optimizer moments, schedule counters,
+        random state and data position restart. Full-state bundles use the separate
+        session path in ``train`` and never reach this legacy loader.
 
         ``strict=False`` means a checkpoint saved under a different
         ``lora.r`` or ``target_modules`` drops every tensor in silence —
@@ -641,6 +628,10 @@ class MLXSFTTrainerWrapper:
             f"[green]MLX: loading checkpoint weights from[/] {checkpoint_path} "
             f"({tensor_count} tensors)"
         )
+        console.print(
+            "[yellow]MLX weights-only warm start: optimizer moments, schedule counters, "
+            "RNG and data position restart.[/]"
+        )
         self.model.load_weights(checkpoint_path, strict=False)
 
     def train(self, display=None, tracker=None, run_id=None, resume_from_checkpoint=None) -> dict:
@@ -669,9 +660,34 @@ class MLXSFTTrainerWrapper:
                 "MLX backend: setup(dataset) must be called before train()"
             )
 
+        # #1850: mlx-lm's `train()` shuffles through numpy's global RNG
+        # (`iterate_batches` is called without a seed) and LoRA `A` init and
+        # dropout draw from `mx.random`. The `mlx_lm.lora` CLI seeds both before
+        # training; calling `train()` directly seeded neither, so every run
+        # trained on a different batch order. `mx.random` is seeded here, before
+        # the adapter exists; numpy right before `train()` below, so nothing in
+        # between can move the batch order.
+        import mlx.core as mx
+
+        from soup_cli.utils.seeding import resolve_training_seed
+
+        seed = resolve_training_seed(cfg.training)
+        data_seed = (
+            seed if cfg.training.data_seed is None else int(cfg.training.data_seed)
+        )
+        mx.random.seed(seed)
+
         self._apply_lora(self.model)
 
-        if resume_from_checkpoint is not None:
+        from soup_cli.trainer.mlx_checkpoint import is_bundle
+
+        full_resume = resume_from_checkpoint is not None and is_bundle(resume_from_checkpoint)
+        full_state = bool(cfg.training.mlx_full_state or full_resume)
+        resume_mode = (
+            "full-state" if full_resume else "weights-only" if resume_from_checkpoint
+            else "fresh-full-state" if full_state else "fresh"
+        )
+        if resume_from_checkpoint is not None and not full_resume:
             self._load_checkpoint_weights(resume_from_checkpoint)
 
         batch_size = _resolved_batch_size(cfg.training)
@@ -1035,6 +1051,24 @@ class MLXSFTTrainerWrapper:
                     pass
 
         callback = _Callback()
+        session = None
+        if full_state:
+            from mlx_lm.tuner.trainer import iterate_batches as default_iterate
+
+            from soup_cli.trainer.mlx_checkpoint import FullStateSession
+
+            session = FullStateSession(
+                cfg=cfg, model=self.model, optimizer=optimizer, plan=optimizer_plan,
+                train_dataset=train_dataset, val_dataset=val_dataset, args=args,
+                iterate=train_hooks.get("iterate_batches", default_iterate),
+                metadata={**build_mlx_adapter_config(cfg.training.lora,
+                                                    adapter_path=str(output_dir)),
+                          "model": str(cfg.base),
+                          "num_layers": len(getattr(self.model, "layers", []))},
+                resume=resume_from_checkpoint,
+            )
+            train_hooks = {**train_hooks, "iterate_batches": session.iterate}
+            callback = session.callback(callback)
         eval_log: list = []
         self._eval_log = eval_log
         if eval_every is not None:
@@ -1083,6 +1117,7 @@ class MLXSFTTrainerWrapper:
                 callback.on_val_loss_report({
                     "iteration": update * accum, "val_loss": value,
                     "val_time": time.time() - tic,
+                    **({"full_state_global": True} if session is not None else {}),
                 })
 
             def scheduled_iterate(**kwargs):
@@ -1094,7 +1129,7 @@ class MLXSFTTrainerWrapper:
                     yield from stream
                     return
                 due = set(schedule)
-                consumed = 0
+                consumed = session.start_micro if session is not None else 0
                 for batch in stream:
                     if consumed and consumed % accum == 0 and consumed // accum in due:
                         run_eval(consumed // accum)
@@ -1107,7 +1142,10 @@ class MLXSFTTrainerWrapper:
             display.start(iters)
 
         rewind = None
-        if cfg.training.rewind_log:
+        if full_state and cfg.training.rewind_log:
+            console.print("[yellow]Rewind log off: full-state continuation preserves "
+                          "training state; recording across resumes is not qualified.[/]")
+        if cfg.training.rewind_log and not full_state:
             rewind = _start_rewind(
                 output_dir=output_dir,
                 rows=train_rows,
@@ -1120,6 +1158,20 @@ class MLXSFTTrainerWrapper:
                 train_dataset = rewind.wrap(train_dataset)
                 train_hooks = {**train_hooks, "loss": rewind.loss}
 
+        import numpy as np
+
+        np.random.seed(data_seed)
+        if session is not None:
+            session.prepare()
+            console.print(
+                f"[green]MLX full-state {'resume' if full_resume else 'checkpoints'}:[/] "
+                f"{session.start_micro // grad_accumulation_steps}/{total_updates} "
+                "completed optimizer updates; original schedule/budget preserved"
+            )
+        if session is not None and args.iters == 0:
+            console.print(
+                "[green]MLX full-state checkpoint already complete: zero remaining updates.[/]"
+            )
         t0 = time.time()
         try:
             train(
@@ -1159,6 +1211,7 @@ class MLXSFTTrainerWrapper:
                     "batch_size": batch_size,
                     "iters": iters,
                     "learning_rate": float(cfg.training.lr),
+                    "resume_mode": resume_mode,
                     "steps_per_report": steps_per_report,
                     "steps_per_eval": steps_per_eval,
                     # #1990: an explicit interval, in completed optimizer updates.
@@ -1184,6 +1237,10 @@ class MLXSFTTrainerWrapper:
                     # the output dir is the only place a finished run says
                     # whether it clipped.
                     "max_grad_norm": float(cfg.training.max_grad_norm),
+                    **({"completed_updates": total_updates,
+                        "resumed_from_update": session.start_micro // grad_accumulation_steps,
+                        "checkpoint_unit": "completed optimizer updates"}
+                       if session is not None else {}),
                 },
                 indent=2,
             )
@@ -1195,10 +1252,15 @@ class MLXSFTTrainerWrapper:
         result = {
             **loss_summary,
             "total_steps": iters,
+            "resume_mode": resume_mode,
             "duration_secs": duration,
             "duration": f"{duration:.0f}s",
             "output_dir": str(output_dir),
         }
+        if session is not None:
+            result.update(resume_mode=resume_mode,
+                          resumed_from_update=session.start_micro // grad_accumulation_steps,
+                          completed_updates=total_updates)
         if eval_log:
             result["val_loss"] = eval_log[-1]["val_loss"]
             result["eval_updates"] = [entry["update"] for entry in eval_log]

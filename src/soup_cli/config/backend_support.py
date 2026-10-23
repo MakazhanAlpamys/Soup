@@ -57,11 +57,6 @@ def _default_active(value: Any) -> bool:
     return bool(value)
 
 
-def _seed_active(value: Any) -> bool:
-    """0 is a valid random seed, so any non-None value is active."""
-    return value is not None
-
-
 @dataclass(frozen=True)
 class SupportEntry:
     """One declared gap: a field, what happens to it, and why."""
@@ -89,20 +84,6 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
     # max_grad_norm, warmup_ratio, weight_decay, optimizer, scheduler -- were
     # wired by #734 and #750 and are now honoured, so they are gone rather than
     # reclassified. The guard is what noticed; see the PR body.
-    SupportEntry(
-        "training.seed",
-        IGNORED,
-        "MLX seeds through mx.random, not this field",
-        trainer_reads=True,
-        active=_seed_active,
-    ),
-    SupportEntry(
-        "training.data_seed",
-        IGNORED,
-        "MLX seeds through mx.random, not this field",
-        trainer_reads=True,
-        active=_seed_active,
-    ),
     SupportEntry(
         "training.use_galore",
         IGNORED,
@@ -265,6 +246,7 @@ TRAINER_MODULES: dict[tuple[str, str, str], tuple[str, ...]] = {
     ("sft", "mlx", "text"): (
         "soup_cli/trainer/mlx_sft.py",
         "soup_cli/trainer/mlx_optim.py",
+        "soup_cli/trainer/mlx_checkpoint.py",
         "soup_cli/trainer/mlx_masking.py",
         "soup_cli/trainer/rewind_mlx.py",
         "soup_cli/trainer/loss_summary.py",
@@ -323,7 +305,7 @@ def check_config(cfg: "SoupConfig") -> list[SupportEntry]:
     at their schema default, which is the difference between a useful pre-flight
     check and a wall of 275 rows. ``entry.active`` then drops a field written in
     its off position (e.g. ``false``). A written schema default counts as
-    unwritten, including a default of ``true``; ``seed: 0`` still counts as set.
+    unwritten, including a default of ``true``.
     """
     backend = getattr(cfg, "backend", DEFAULT_BACKEND)
     modality = getattr(cfg, "modality", DEFAULT_MODALITY)

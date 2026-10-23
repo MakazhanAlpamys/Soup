@@ -127,6 +127,7 @@ Sections:
 | `training.load_in_16bit` | `bool \| null` | `null` |  | Friendly alias: when True, sets quantization='none' (full bf16/fp16 LoRA). Conflicts with load_in_8bit. (v0.41.0) |
 | `training.scheduler` | `str` | `"cosine"` |  | LR scheduler type |
 | `training.save_steps` | `int` | `100` |  | Save checkpoint every N steps |
+| `training.mlx_full_state` | `bool` | `false` |  | Opt in to versioned full-state checkpoints for single-device MLX text SFT with ordinary linear LoRA and AdamW. save_steps counts completed optimizer updates in this mode. Exact continuation requires the same runtime/device. |
 | `training.logging_steps` | `int` | `10` |  | Log metrics every N steps |
 | `training.eval_steps` | `int \| null` | `null` | `>= 1` | Evaluate the validation split every N optimizer steps (counted after gradient accumulation, like save_steps). Unset = evaluate at the end of every epoch. grpo evaluates only when this is set, because an evaluation there generates completions. (#1223) |
 | `training.dpo_beta` | `float` | `0.1` | `> 0` | DPO beta — KL penalty coefficient |

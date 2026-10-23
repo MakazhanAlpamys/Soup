@@ -354,7 +354,7 @@ The effective plan is written to `adapter_config.json` (`optimizer`,
 `scheduler`, `warmup_updates`, `total_updates`, `weight_decay`, `peak_lr`), so
 what ran is recoverable from the output directory.
 
-`--resume auto` finds mlx-lm's step-numbered `NNNNNNN_adapters.safetensors` checkpoints and warm-starts the LoRA weights from them ([#634](https://github.com/MakazhanAlpamys/Soup/issues/634)). This restores adapter weights only, not training state: mlx-lm's LoRA trainer exposes no optimizer state or step count, so training restarts from step 0 regardless of how far the checkpoint got. See [Resume Training](#resume-training) below for the MLX-specific checkpoint shape.
+`--resume auto` prefers committed full-state MLX bundles when present; otherwise it finds the existing numbered/final adapter files for a weights-only warm start. See [Resume Training](#resume-training) for the opt-in continuation contract.
 
 ### Transformers on MPS
 
@@ -642,14 +642,65 @@ soup train --config soup.yaml --resume auto
 soup train --config soup.yaml --resume ./output/checkpoint-500
 ```
 
-`backend: mlx` writes and resumes a different checkpoint shape: a
-step-numbered `NNNNNNN_adapters.safetensors` file (or the final
-`adapters.safetensors`) directly under `output`, not a `checkpoint-N`
-directory. `--resume auto` and `--resume ./output/0011800_adapters.safetensors`
-both work; `--resume ./output/checkpoint-500` does not, because MLX never
-writes that shape. This is a weights-only warm start — mlx-lm's LoRA trainer
-exposes no optimizer state or step count, so the resumed run starts counting
-from step 0 regardless of how far the checkpoint got.
+### Native MLX text SFT
+
+Ordinary linear LoRA on a local dense or genuinely pre-quantized 4-bit base can
+opt into full training-state checkpoints:
+
+```yaml
+backend: mlx
+base: ./pinned-local-model
+training:
+  mlx_full_state: true
+  optimizer: adamw_torch
+  save_steps: 100  # completed optimizer updates in full-state mode
+```
+
+Run `soup train --config soup.yaml --resume auto`, or pass a specific committed
+directory such as `--resume ./output/mlx-state-100`. Bundles live directly under
+`output`, including when `experiment_name` is set. Auto selects the numerically
+latest full-state bundle before considering legacy adapter files. Temporary
+`.mlx-state-*` directories are ignored; a corrupt committed bundle fails rather
+than falling back to another checkpoint. An explicit bundle activates full-state
+restoration even when the opt-in flag is absent from the recipe.
+For a populated output directory, resume its latest bundle. To resume an earlier
+bundle or a bundle from another directory, choose fresh output; existing later
+checkpoints are never silently reused or overwritten.
+
+Version 1 saves adapter tensors, AdamW moments/counter, the original scheduler
+plan, advanced MLX/NumPy/Python RNG states and the length-bucket sampler's current
+permutation/cursor. Saving happens only after a completed optimizer update.
+Interruption during accumulation replays work after the last committed checkpoint;
+pending gradients are not saved. Resume performs only the remaining original
+budget, preserving warmup/decay; a completed checkpoint performs zero updates.
+Each bundle is written in a temporary directory and published by an atomic rename.
+Failed writes retain the preceding committed bundle. Keep enough disk space for
+both the previous checkpoint and the next complete bundle; there is no automatic
+full-state checkpoint pruning.
+
+Exact continuation requires the same pinned runtime and device. The manifest
+binds Python/OS/device and MLX, mlx-lm, NumPy, Transformers and tokenizer versions,
+actual local model/tokenizer/template file hashes, processed train/validation
+contents, resolved adapter/configuration and original optimization budget.
+Different data (even the same row count), model, rank/targets, schedule, budget or
+runtime is refused before checkpoint weights are applied. Restore the original
+recipe/environment or use fresh output for a new optimization run. Output path,
+run labels/descriptions, logging and save cadence may differ; other recipe fields
+must match. Checksums detect damage, not authenticity: use trusted checkpoints.
+
+The initial contract is single-process/device text SFT, ordinary linear LoRA,
+`quantization: none` or genuine `4bit`, and AdamW's declared aliases
+`adamw_torch`, `adamw_hf`, `adamw_torch_fused`. DoRA, rsLoRA, VeRA, LoRA-FA/+, rank
+patterns, other initialization methods/tasks/optimizers are refused for full-state
+mode; their existing fresh/weights-only behavior is unchanged. Rewind recording
+is disabled in this mode because recording across resumes is not qualified.
+
+Without full-state bundles, MLX retains its numbered
+`NNNNNNN_adapters.safetensors` and final `adapters.safetensors` files, directly under
+`output`. `--resume auto` or an explicit adapter-file path is a **weights-only
+warm start**: optimizer moments, scheduler counters, RNG and data position restart.
+The console identifies this mode. Full-state runs still write the final adapter
+and configuration for existing MLX adapter loading/export tooling.
 
 `task: unlearn` refuses `--resume` / `--hf-resume`, because it writes no checkpoints.
 
