@@ -284,6 +284,8 @@ class TestSpikeRecoveryHint:
             assert target.read_bytes() == original
         assert cb._spike_recovery_attempts == 0
         assert "Failed to write spike recovery hint" in caplog.text
+        reason = "must stay under cwd" if outside_cwd else "must not be a symlink"
+        assert "spike_recovery hint" in caplog.text and reason in caplog.text
         # Refusal must not spend an attempt: replacing the link with an ordinary
         # output permits the first recovery as usual.
         hint.unlink()
