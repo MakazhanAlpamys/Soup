@@ -7346,13 +7346,13 @@ class SoupConfig(BaseModel):
         # `attn_implementation`. A streamed run goes to
         # `_setup_streaming_transformers` (the streamed branch of
         # `SFTTrainerWrapper.setup`), and its model is built by
-        # `AutoModelForCausalLM.from_config(...)` in `build_meta_skeleton`
-        # (`utils/layer_stream_runtime.py`) with NO attention argument and no Liger
-        # patch, so neither switch reaches the backend. `_liger_applied` is never
-        # set there either, so `use_liger_kernel` misses `TrainingArguments` as
-        # well. These are the switches a user reaches for when a streamed run will
-        # not fit, so silently dropping them is the worst outcome: refuse until
-        # each is wired and shown to engage on a streamed model.
+        # `AutoModelForCausalLM.from_config(...)` in `_skeleton_from_config`, called by
+        # `build_meta_skeleton` (`utils/layer_stream_runtime.py`), with NO attention
+        # argument and no Liger patch, so neither switch reaches the backend.
+        # `_liger_applied` is never set there either, so `use_liger_kernel` misses
+        # `TrainingArguments` as well. These are the switches a user reaches for when
+        # a streamed run will not fit, so silently dropping them is the worst outcome:
+        # refuse until each is wired and shown to engage on a streamed model.
         # CCE is refused separately above (#1206).
         if tcfg.use_liger:
             conflicts.append("use_liger")
