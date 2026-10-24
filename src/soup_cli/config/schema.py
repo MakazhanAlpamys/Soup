@@ -6175,6 +6175,8 @@ class SoupConfig(BaseModel):
         """v0.50.0 Part E — ``vision_grpo=True`` compat gate."""
         if not self.training.vision_grpo:
             return self
+        if self.backend == "mlx" and self.task == "grpo":
+            return self  # #1976: _refuse_mlx_grpo_scope gives the MLX GRPO refusal
         from soup_cli.utils.prm import validate_vision_grpo_compat
 
         try:

@@ -1368,7 +1368,7 @@ output: ./output
         "tis_threshold: 2.0", "skip_zero_advantage: true", "off_policy_mask_threshold: 0.5",
         "grpo_fp16: true", "async_grpo_prefetch: true", "ref_model_ema_alpha: 0.9",
         "replay_buffer_size: 8", "defer_rerolling: true", "rollout_backend: openenv",
-        "long_context_grpo: true",
+        "long_context_grpo: true", "vision_grpo: true",
     ])
     def test_older_gates_defer_to_the_mlx_grpo_refusal_with_its_remedy(self, line):
         """The v0.50.0 gates used to answer first, with no remedy (review of #1976)."""
@@ -1412,12 +1412,20 @@ output: ./output
         with pytest.raises(Exception, match="reward_fn='verifiable' is not supported"):
             _config(reward_fn="verifiable", verifiable_domain="math")
 
-    def test_vision_modality_is_refused(self):
+    @pytest.mark.parametrize("extra", ["", "  vision_grpo: true\n"])
+    def test_vision_modality_is_refused(self, extra):
+        """With vision_grpo too: the MLX GRPO refusal, not the v0.50.0 gate's."""
         from soup_cli.config.loader import load_config_from_string
 
-        with pytest.raises(Exception, match="modality='vision' is not supported by task='grpo'"):
-            load_config_from_string(_GRPO_YAML.replace("backend: mlx\n",
-                                                       "backend: mlx\nmodality: vision\n"))
+        text = _GRPO_YAML.replace("backend: mlx\n", "backend: mlx\nmodality: vision\n")
+        with pytest.raises(Exception) as info:
+            load_config_from_string(text.replace("  quantization: none\n",
+                                                 "  quantization: none\n" + extra))
+        message = " ".join(str(info.value).split())
+        assert ("modality='vision' is not supported by task='grpo' on backend='mlx': MLX "
+                "GRPO trains on text prompts only. Use backend=transformers, or modality: "
+                "text.") in message
+        assert "v0.50.0" not in message
 
     def test_the_transformers_route_is_unchanged(self):
         from soup_cli.config.loader import load_config_from_string
