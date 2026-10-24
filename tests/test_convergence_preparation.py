@@ -115,6 +115,15 @@ def test_tamper_and_overwrite_fail(sources: dict, tmp_path: Path) -> None:
         verify(output)
 
 
+def test_empty_existing_directory_is_also_preserved(sources: dict, tmp_path: Path) -> None:
+    # POSIX rename can replace an empty directory; refusal must be explicit.
+    output = tmp_path / "existing"
+    output.mkdir()
+    with pytest.raises(FileExistsError):
+        prepare(output=output, **sources)
+    assert output.is_dir() and list(output.iterdir()) == []
+
+
 @pytest.mark.parametrize("corruption", ["overlap", "heldout", "label", "roles", "count"])
 def test_verifier_checks_semantics_even_with_updated_hash(
     sources: dict, tmp_path: Path, corruption: str,
