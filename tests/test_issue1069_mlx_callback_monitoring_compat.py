@@ -97,6 +97,7 @@ class TestMlxTrainerCheckUnsupported:
 
         wrapper = object.__new__(MLXSFTTrainerWrapper)
         wrapper.config = SimpleNamespace(
+            task="sft", modality="text",
             training=TrainingConfig(
                 loss_watchdog=True,
                 loss_spike_recovery=True,
@@ -163,6 +164,7 @@ class TestReasonStringsByteIdenticalAcrossSurfaces:
         # 3. Trainer warning reason extracted from MLXSFTTrainerWrapper._check_unsupported
         wrapper = object.__new__(MLXSFTTrainerWrapper)
         wrapper.config = SimpleNamespace(
+            task="sft", modality="text",
             training=TrainingConfig(**payload),
             data=SimpleNamespace(),
         )

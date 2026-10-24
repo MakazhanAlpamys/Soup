@@ -739,13 +739,13 @@ class TestTheUnsupportedPerMessageFlagIsSaidOutLoud:
         MLXSFTTrainerWrapper(cfg)._check_unsupported()
         return "\n".join(printed)
 
-    def test_the_per_message_train_field_is_reported_as_ignored(self, monkeypatch):
+    def test_supported_per_message_train_field_is_not_reported_as_ignored(self, monkeypatch):
         out = self._warned(
             monkeypatch,
             train_on_responses_only=False,
             train_on_messages_with_train_field=True,
         )
-        assert "train_on_messages_with_train_field" in out
+        assert "train_on_messages_with_train_field" not in out
 
     def test_nothing_is_reported_for_a_plain_config(self, monkeypatch):
         """Reject-everything control: the warning must depend on the setting."""
