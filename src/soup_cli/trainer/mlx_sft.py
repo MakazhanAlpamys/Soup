@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import math
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from rich.console import Console
@@ -30,6 +31,27 @@ console = Console()
 
 # Chat key for the masked dataset, matching upstream's `chat_feature` default.
 _CHAT_KEY = "messages"
+
+
+class _LossWatchdogStop(Exception):  # noqa: N818 — a control signal, not a training error
+    """Internal control signal, raised only after a completed optimizer update."""
+
+
+@dataclass
+class _LossWatchdog:
+    """Count consecutive measured reports strictly above an absolute threshold."""
+
+    threshold: float
+    patience: int
+    counter: int = 0
+
+    def observe(self, loss: float | None) -> bool:
+        if loss is None:
+            return False
+        if not math.isfinite(loss):
+            raise FloatingPointError("MLX loss watchdog: non-finite training loss")
+        self.counter = self.counter + 1 if loss > self.threshold else 0
+        return self.counter >= self.patience
 
 
 def _count_safetensors_tensors(path: str) -> int:
@@ -447,15 +469,10 @@ class MLXSFTTrainerWrapper:
                 f"gradient_checkpointing tier {tcfg.gradient_checkpointing!r} "
                 "(MLX has a single on/off switch; enabling it)"
             )
-        if getattr(tcfg, "loss_watchdog", False):
-            unsupported.append(
-                "training.loss_watchdog (Soup does not implement the watchdog "
-                "on the MLX callback, which has no stop control)"
-            )
         if getattr(tcfg, "loss_spike_recovery", False):
             unsupported.append(
                 "training.loss_spike_recovery "
-                "(spike recovery is driven by the watchdog and the watchdog cannot fire on MLX)"
+                "(MLX does not implement checkpoint rollback or recovery hints)"
             )
         if getattr(tcfg, "grad_accum_auto_tune", False):
             unsupported.append(
@@ -716,6 +733,16 @@ class MLXSFTTrainerWrapper:
         # tier string ("selective"/"medium"/"full"/"auto") resolves to True here too.
         grad_checkpoint = bool(cfg.training.gradient_checkpointing)
         grad_accumulation_steps = int(cfg.training.gradient_accumulation_steps)
+        watchdog = (
+            _LossWatchdog(cfg.training.loss_watchdog_threshold,
+                          cfg.training.loss_watchdog_patience)
+            if cfg.training.loss_watchdog else None
+        )
+        if watchdog is not None:
+            # mlx-lm reports after executing a micro-batch. An enabled watchdog
+            # reports every logging_steps *updates*, so a stop never discards a
+            # partial accumulation group. The disabled cadence is unchanged.
+            steps_per_report *= grad_accumulation_steps
         # mlx-lm updates the optimizer only when it % accum == 0 (trainer.py) and
         # never flushes a partial group, so round iters down to a whole number of
         # groups, keeping at least one group so a small dataset does not train
@@ -963,6 +990,23 @@ class MLXSFTTrainerWrapper:
                     pass
 
             def on_train_loss_report(self, train_info: dict) -> None:
+                should_stop = (
+                    watchdog.observe(train_info.get("train_loss"))
+                    if watchdog is not None else False
+                )
+                self._report_train_loss(train_info)
+                if should_stop:
+                    iteration = int(train_info["iteration"])
+                    if iteration <= 0 or iteration % grad_accumulation_steps:
+                        raise RuntimeError("MLX watchdog report is not at an optimizer boundary")
+                    # Verify the native optimizer too, rather than trusting a
+                    # callback index if a future mlx-lm changes loop ordering.
+                    if int(optimizer.step.item()) != iteration // grad_accumulation_steps:
+                        raise RuntimeError("MLX watchdog report precedes its optimizer update")
+                    captured["completed_iterations"] = iteration
+                    raise _LossWatchdogStop
+
+            def _report_train_loss(self, train_info: dict) -> None:
                 loss = train_info.get("train_loss", 0.0)
                 captured.setdefault("losses", []).append(loss)
                 # Carried for the validation row, which has no training numbers
@@ -1121,30 +1165,53 @@ class MLXSFTTrainerWrapper:
                 train_hooks = {**train_hooks, "loss": rewind.loss}
 
         t0 = time.time()
+        completed_iterations = iters
+        stopped = False
         try:
-            train(
-                model=self.model,
-                optimizer=optimizer,
-                train_dataset=train_dataset,
-                val_dataset=val_dataset,
-                args=args,
-                training_callback=callback,
-                **train_hooks,
-            )
-            last_update = iters // max(1, grad_accumulation_steps)
+            try:
+                train(
+                    model=self.model,
+                    optimizer=optimizer,
+                    train_dataset=train_dataset,
+                    val_dataset=val_dataset,
+                    args=args,
+                    training_callback=callback,
+                    **train_hooks,
+                )
+            except _LossWatchdogStop:
+                import mlx.core as mx
+                from mlx.utils import tree_flatten
+
+                stopped = True
+                completed_iterations = captured["completed_iterations"]
+                # Raising out of mlx-lm bypasses its trailing final save. Save
+                # precisely the completed state; a save error remains an error.
+                if mx.distributed.init().rank() == 0:
+                    mx.save_safetensors(
+                        args.adapter_file, dict(tree_flatten(self.model.trainable_parameters()))
+                    )
+            last_update = completed_iterations // max(1, grad_accumulation_steps)
             if eval_every is not None and (not eval_log or eval_log[-1]["update"] != last_update):
                 # The last update has no next fetch to trigger it.
                 run_eval(last_update)
         finally:
             # The final iteration has no next fetch to flush it, and it is the
             # one that matters most when a non-finite loss ends the run.
-            if rewind is not None:
-                rewind.finish()
-            # A Live display left attached would corrupt the terminal if
-            # mlx-lm raises, so this is a finally rather than a trailing call.
-            if display is not None:
-                display.stop()
+            try:
+                if rewind is not None:
+                    rewind.finish()
+            finally:
+                # Even a recorder/save failure must release the live display.
+                if display is not None:
+                    display.stop()
         duration = time.time() - t0
+        outcome = ({
+            "training_outcome": "stopped" if stopped else "completed",
+            "stop_reason": "loss_watchdog" if stopped else "budget_completed",
+            "completed_iterations": completed_iterations,
+            "completed_updates": last_update,
+            "watchdog_report_unit": "optimizer updates",
+        } if watchdog is not None else {})
 
         # mlx-lm's tuner only saves adapters.safetensors; write the
         # adapter_config.json so the output dir is directly loadable with
@@ -1158,6 +1225,7 @@ class MLXSFTTrainerWrapper:
                     "num_layers": len(getattr(self.model, "layers", [])),
                     "batch_size": batch_size,
                     "iters": iters,
+                    **outcome,
                     "learning_rate": float(cfg.training.lr),
                     "steps_per_report": steps_per_report,
                     "steps_per_eval": steps_per_eval,
@@ -1194,7 +1262,8 @@ class MLXSFTTrainerWrapper:
         )
         result = {
             **loss_summary,
-            "total_steps": iters,
+            "total_steps": completed_iterations,
+            **outcome,
             "duration_secs": duration,
             "duration": f"{duration:.0f}s",
             "output_dir": str(output_dir),
@@ -1202,5 +1271,13 @@ class MLXSFTTrainerWrapper:
         if eval_log:
             result["val_loss"] = eval_log[-1]["val_loss"]
             result["eval_updates"] = [entry["update"] for entry in eval_log]
-        console.print(f"[green]MLX training complete:[/] {output_dir}")
+        if stopped:
+            console.print(
+                f"[yellow]Loss watchdog stopped MLX training after {last_update} "
+                f"optimizer updates ({completed_iterations} iterations); "
+                f"loss exceeded {watchdog.threshold} for {watchdog.patience} "
+                f"consecutive reports. Last adapter saved:[/] {output_dir}"
+            )
+        else:
+            console.print(f"[green]MLX training complete:[/] {output_dir}")
         return result

@@ -13,6 +13,7 @@ import tempfile
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -22,6 +23,9 @@ PROVENANCE_FILENAME = "soup_run.json"
 _MAX_METADATA_BYTES = 64 * 1024
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+# Match TrainingArguments.ddp_timeout. PartialState shares the first group's
+# timeout with Trainer: it limits every collective, not only initialization.
+_TRAINER_DDP_TIMEOUT_SECONDS = 1800
 _SOURCES = {
     "hub_commit", "cache_path", "local", "unknown", "unsupported_backend", "offline",
     "resolution_failed",
@@ -101,6 +105,63 @@ class BaseRevision:
 
 
 _ACTIVE_BASE: ContextVar[BaseRevision | None] = ContextVar("soup_base_revision", default=None)
+
+
+def _distributed_state(identity: BaseRevision, *, cpu: bool = False) -> Any:
+    """Initialize/reuse Trainer's Accelerate group only for a supported launch."""
+    if not identity.binding_supported or int(os.environ.get("WORLD_SIZE", "1")) < 2:
+        return None
+    from accelerate import PartialState
+
+    # Initialize/reuse Accelerate's shared group without shortening Trainer's
+    # collective budget for dataset preparation, checkpoint saves or evaluation.
+    state = PartialState(cpu=cpu, timeout=timedelta(seconds=_TRAINER_DDP_TIMEOUT_SECONDS))
+    if state.num_processes < 2:
+        raise RuntimeError("distributed base identity needs the launcher's process group")
+    return state
+
+
+def synchronize_base_revision(identity: BaseRevision, *, cpu: bool = False) -> None:
+    """Resolve once on global rank zero, broadcasting even an unknown outcome.
+
+    Single-process resolution stays lazy. Provider errors/offline state preserve
+    existing loader behavior; collective failure propagates instead of inventing
+    independent bindings. The process group belongs to Accelerate/Trainer.
+    """
+    state = _distributed_state(identity, cpu=cpu)
+    if state is None:
+        return
+    from accelerate.utils import broadcast_object_list
+
+    payload: list[Any] = [None]
+    if state.is_main_process:
+        identity.load_kwargs(identity.base)
+        payload[0] = identity.metadata("coordinator")
+    broadcast_object_list(payload, from_process=0)
+    recorded = _validate_metadata(payload[0])
+    if recorded["base_model"] != identity.base:
+        raise ValueError("distributed ranks disagree on the configured base model")
+    identity.revision = recorded["base_revision"]
+    identity.source = recorded["base_revision_source"]
+    identity._pending = False
+
+
+def confirm_distributed_base_revision(identity: BaseRevision, *, model: Any = None) -> None:
+    """Downgrade all ranks if a receiver contradicts the broadcast identity."""
+    state = _distributed_state(identity)
+    if state is None:
+        return
+    from accelerate.utils import gather_object
+
+    loaded_revision = getattr(getattr(model, "config", None), "_commit_hash", None)
+    if (identity.source == "hub_commit" and isinstance(loaded_revision, str)
+            and loaded_revision != identity.revision):
+        identity.revision, identity.source = None, "unsupported_backend"
+    records = gather_object([identity.metadata("coordinator")])
+    if not records:
+        raise RuntimeError("distributed base identity received no rank receipts")
+    if any(record != records[0] for record in records):
+        identity.revision, identity.source, identity._pending = None, "unsupported_backend", False
 
 
 @contextmanager

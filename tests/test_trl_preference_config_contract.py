@@ -200,7 +200,7 @@ class TestEveryPreferenceTrainerReachesALiveTrlTrainer:
             )
         assert args.max_length == 64, (task, args.max_length)
 
-    @pytest.mark.parametrize("task", ("dpo", "orpo"))
+    @pytest.mark.parametrize("task", ("dpo", "orpo", "simpo"))
     def test_removed_prompt_cap_is_enforced_on_the_effective_batch(
         self, tmp_path, monkeypatch, task
     ):
@@ -208,7 +208,8 @@ class TestEveryPreferenceTrainerReachesALiveTrlTrainer:
 
         The assertion is on the tensors the model receives, not the config or
         an intermediate column: 0.29 accepted ``max_length=64`` while emitting
-        164/165-token DPO/ORPO batches from this exact 161-token prompt.
+        164/165-token DPO/ORPO batches from this exact 161-token prompt, and
+        SimPO did the same until #2112 gave it the cap.
         """
         from soup_cli.trainer._trl_compat import config_accepts
 

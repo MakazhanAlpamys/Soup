@@ -131,11 +131,9 @@ class PretrainTrainerWrapper:
         # via `soup data preprocess`. Skips the raw-text load entirely.
         from soup_cli.trainer.sft import _maybe_load_pretokenized
 
-        # #1054: pass ``tcfg`` -- ``preprocess_mask_mode`` reads
-        # ``training.train_on_eot`` from it, and ``task: pretrain`` is in the
-        # sft-family set the schema allows that flag on. Omitting it dropped the
-        # ``+eot`` suffix here but not in ``soup data preprocess``, so the cache
-        # was refused by a hash the re-run advised in the error reproduces.
+        # #1054: pass ``tcfg`` so the cache key is derived the same way as in
+        # ``soup data preprocess``. The schema refuses ``training.train_on_eot``
+        # on ``task: pretrain`` (#806), so the mask mode here is the default.
         pretok = _maybe_load_pretokenized(
             cfg.data, cfg.base, console, getattr(cfg, "training", None),
             task=cfg.task,

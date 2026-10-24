@@ -22,7 +22,7 @@ import subprocess
 import sys
 import tempfile
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
@@ -656,9 +656,19 @@ VERIFIABLE_DOMAINS: dict[str, Callable] = {
 }
 
 
+#: A reward function that carries this attribute set to True may score a
+#: completion ``None``: no score, which TRL 0.29 turns into NaN and leaves out of
+#: the logged mean (#2047). Every other reward must return finite numbers.
+REWARD_MAY_RETURN_NONE = "_soup_reward_may_return_none"
+
+
 def _validated_reward_fn(reward_fn: Callable) -> Callable:
-    """Wrap one reward function with TRL's one-score-per-completion contract."""
+    """Wrap one reward function with TRL's one-score-per-completion contract.
+
+    ``None`` passes only for a reward that declares :data:`REWARD_MAY_RETURN_NONE`.
+    """
     reward_name = getattr(reward_fn, "__name__", "reward_fn")
+    allows_none = getattr(reward_fn, REWARD_MAY_RETURN_NONE, False) is True
 
     @wraps(reward_fn)
     def checked(*args: Any, **kwargs: Any) -> Any:
@@ -688,6 +698,8 @@ def _validated_reward_fn(reward_fn: Callable) -> Callable:
                 "score per completion and verify the required dataset columns"
             )
         for index, reward in enumerate(rewards):
+            if reward is None and allows_none:
+                continue
             if isinstance(reward, bool):
                 raise ValueError(
                     f"Reward function {reward_name!r} returned boolean score at "
@@ -746,6 +758,13 @@ def load_reward_fn(
         )
         return VERIFIABLE_DOMAINS[verifiable_domain]
 
+    if reward_fn_spec == "judge_rank":
+        raise ValueError(
+            "judge_rank needs a GRPO config: it is built from training.grpo_judge and "
+            "the other training.grpo_judge_* fields, so it runs only as a task: grpo "
+            "reward (#2047)"
+        )
+
     # Built-in reward function
     if reward_fn_spec in BUILTIN_REWARDS:
         console.print(f"[dim]Using built-in reward function: {reward_fn_spec}[/]")
@@ -781,7 +800,10 @@ def load_reward_fn(
 
 
 def load_reward_fns(
-    reward_fn_spec: str, verifiable_domain: "str | None" = None,
+    reward_fn_spec: str,
+    verifiable_domain: "str | None" = None,
+    *,
+    builders: "Mapping[str, Callable[[], Callable]] | None" = None,
 ) -> list[Callable]:
     """Load one OR MORE reward functions from a comma-separated spec (v0.71.40 #311).
 
@@ -796,6 +818,10 @@ def load_reward_fns(
     by ``__name__`` in the ``rm_ensemble`` capture buffer, silently shrinking the
     ensemble). A ``.py`` path containing a literal comma is not supported — rename
     the file.
+
+    ``builders`` maps a segment name to a function that builds that reward from
+    the caller's config (GRPO's ``judge_rank``, #2047); every other segment goes
+    through :func:`load_reward_fn`.
     """
     if not isinstance(reward_fn_spec, str):
         raise ValueError(
@@ -818,4 +844,9 @@ def load_reward_fns(
                 "duplicate rewards collide in the ensemble"
             )
         seen.add(seg)
-    return [load_reward_fn(seg, verifiable_domain=verifiable_domain) for seg in segments]
+    builders = builders or {}
+    return [
+        builders[seg]() if seg in builders
+        else load_reward_fn(seg, verifiable_domain=verifiable_domain)
+        for seg in segments
+    ]
