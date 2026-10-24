@@ -186,7 +186,7 @@ def bench(
         prompts = []
         try:
             if p_path.suffix == ".jsonl":
-                with open(p_path, encoding="utf-8") as fh:
+                with open(p_path, encoding="utf-8-sig") as fh:
                     for line in fh:
                         line = line.strip()
                         if line:
@@ -194,7 +194,7 @@ def bench(
                             if "prompt" in data:
                                 prompts.append(data["prompt"])
             else:
-                with open(p_path, encoding="utf-8") as fh:
+                with open(p_path, encoding="utf-8-sig") as fh:
                     for line in fh:
                         line = line.strip()
                         if line:

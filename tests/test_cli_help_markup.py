@@ -6,7 +6,7 @@ without a trace unless escaped as `\\[tag]`.
 
 This ratchet walks the live Click command tree derived from Typer and ensures:
 1. No command or parameter help string has unescaped non-style markup tags dropped.
-2. The 7 fixed help strings retain their literal bracketed text in rendered `--help`.
+2. The fixed help strings retain their literal bracketed text in rendered `--help`.
 """
 
 from __future__ import annotations
@@ -163,7 +163,7 @@ class TestMarkupScannerDetection:
 
 
 class TestEscapedHelpStringsReachTerminal:
-    """The 7 fixed sites must actually display their literal bracketed text in --help."""
+    """The fixed sites must actually display their literal bracketed text in --help."""
 
     @pytest.mark.parametrize(
         ("argv", "expected_literal"),
@@ -175,6 +175,7 @@ class TestEscapedHelpStringsReachTerminal:
             (["eval", "citation", "--help"], "[doc-N]"),
             (["adapters", "sign", "--help"], "soup-cli[sigstore]"),
             (["data", "brain-rot", "--help"], "[data-pro]"),
+            (["data", "ingest", "--help"], 'pip install "soup-cli[documents]"'),
         ],
     )
     def test_help_contains_literal_bracketed_text(self, argv: list[str], expected_literal: str):

@@ -2744,6 +2744,7 @@ Usage: `soup loop watch [OPTIONS]`
 | `--poll-interval` | float | `60.0` |  | Seconds between iterations \[1, 3600]. |
 | `--pre-wired` | flag | off |  | Force the pre-wired production stages even if loop.yaml didn't set it. |
 | `--pack-cans` | flag | off |  | Pack each iteration as a v0.26 Soup Can + Registry entry (v0.71.4). |
+| `--tool-auth-token` | text |  |  | The soup serve --tool-auth-token value, sent as a Bearer token when the deploy stage activates an adapter. Defaults to \$SOUP_TOOL_AUTH_TOKEN, which keeps it out of the shell history. Env: `SOUP_TOOL_AUTH_TOKEN`. |
 
 ## `soup mcp`
 

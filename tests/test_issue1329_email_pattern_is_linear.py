@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.utils import data_score
-from tests._growth_timing import assert_grows_linearly
+from tests._growth_timing import assert_grows_linearly, linux_only
 
 _BASELINE_EMAIL_PATTERN = re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b")
 _PATHOLOGICAL_RUNS = ("1-", "1.", "a.", "a-", "a+")
@@ -34,6 +34,7 @@ def _row(run: str, length: int) -> str:
     return (run * ((length + len(run) - 1) // len(run)))[:length]
 
 
+@linux_only
 def test_email_pattern_growth_is_linear() -> None:
     """The pattern alone: an 8x longer row must not take 32x the time (linear 8x, quadratic 64x).
 
@@ -48,6 +49,7 @@ def test_email_pattern_growth_is_linear() -> None:
         )
 
 
+@linux_only
 def test_email_detection_growth_is_subquadratic(monkeypatch: pytest.MonkeyPatch) -> None:
     """``detect_pii`` end to end (all four patterns), within the rows it scans in full."""
     monkeypatch.setattr(data_score, "_presidio_pii", lambda _text: None)

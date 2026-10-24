@@ -119,6 +119,12 @@ Soup triggers each evaluation when mlx-lm asks for the next training batch,
 which mlx-lm 0.31 and 0.32 do only after the previous step; if a release reads
 batches ahead, the run says once that the evaluation ran before its update.
 
+MLX text SFT also supports the opt-in [loss watchdog](peft-and-efficiency.md#loss-watchdog)
+with the existing threshold and patience fields. Its reports count completed
+optimizer updates; a triggering report stops further updates and saves the last
+adapter with the actual completed work and termination reason in
+`adapter_config.json`. Recovery and watchdogs on preference tasks remain refused.
+
 ```yaml
 base: mlx-community/Llama-3.2-3B-Instruct-4bit
 task: sft
@@ -520,6 +526,8 @@ training:
 Works with the tasks that have an unsloth setup: SFT (text; SFT vision and audio still run the transformers setup), DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, BCO, preference, Pretrain, Embedding and TTS. The others (`reward_model`, `prm`, `classifier`, `reranker`, `cross_encoder`, `distill`, `unlearn`, `moe_lora_routing`, `online_dpo` and `asr`) have no unsloth setup, so `backend: unsloth` is refused at config load for them (#1357). If unsloth is installed but not enabled, Soup suggests it, but only for a config that would still load with `backend: unsloth` (#1736): a config one of these refusals would stop gets no suggestion.
 
 `quantization: 8bit` with `backend: unsloth` is refused at config load: Soup's Unsloth loader passes `load_in_4bit` only, so `8bit` used to load the model in 16-bit with no word (#1811). Use `4bit` or `none` on this backend, or `backend: transformers` for 8-bit.
+
+`training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: unsloth` for every task that has an unsloth setup ([#2153](https://github.com/MakazhanAlpamys/Soup/issues/2153)): the unsloth loader attaches every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
 
 > **Tip:** Soup auto-detects unsloth. When it is installed, `soup train` prints a hint if you haven't enabled it yet and your config would load with it.
 
@@ -1108,7 +1116,23 @@ Loading a local adapter folder directly also reuses that commit when its
 `adapter_config.json` names the same base and has no conflicting explicit revision;
 the tokenizer still comes from the adapter folder.
 
-**Remaining boundaries:** Non-HF hubs, Unsloth, MLX and distributed loads remain unbound and
+For a multi-process Hugging Face Transformers `soup train` launch, global rank zero
+resolves the base once and broadcasts its nullable result before trainer setup.
+Soup initializes or reuses Accelerate's shared process group with Trainer's default
+1800-second timeout. The first initialization sets the timeout for every collective,
+including later Trainer operations; an existing group keeps its original timeout.
+Offline/failed metadata requests
+are broadcast as unknown, preserving existing loading behavior. A collective
+failure stops the run rather than letting workers resolve independent moving heads.
+Ranks compare identity receipts after setup and training; a conflicting loaded
+model commit on any rank clears the bound revision for every rank before recording
+the final artifact. CPU/Gloo coordination is covered by real two-process tests on
+Linux; simulated-rank checks run on every platform. The real cases skip on macOS
+and Windows because env:// rendezvous can time out on loaded macOS runners. Rank
+failures include both child logs after cleanup. NCCL/FSDP hardware execution is
+not established by those tests.
+
+**Remaining boundaries:** Non-HF hubs, Unsloth and MLX loads remain unbound and
 are recorded as such; a cache-path hint on any backend is still unverified. Standalone
 wrapper/sweep invocations do not automatically establish a run scope. Metadata is
 written for the final artifact, not each intermediate checkpoint. Other exporters

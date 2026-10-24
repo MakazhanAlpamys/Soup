@@ -9,7 +9,7 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 
-from soup_cli.utils.exit_codes import GateCommand
+from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR, GateCommand
 from soup_cli.utils.terminal import for_terminal
 
 console = Console()
@@ -87,6 +87,10 @@ def use(
     if recipe is None:
         console.print(f"[red]Recipe not found: {name}[/]")
         raise typer.Exit(1)
+
+    if recipe.unavailable_reason:
+        console.print(f"[red]{for_terminal(recipe.unavailable_reason)}[/]")
+        raise typer.Exit(EXIT_USAGE_ERROR)
 
     from soup_cli.migrate.common import validate_output_path
 

@@ -2935,10 +2935,13 @@ def ingest_document(
     """Ingest a document into JSONL with one row per page / heading.
 
     Lazy-imports the per-format extractor so missing optional deps don't
-    break the rest of `soup data --help`. Supported formats:
-    - .pdf  → pypdf
-    - .docx → python-docx
-    - .md   → markdown
+    break the rest of `soup data --help`.
+    Install PDF/DOCX readers with `pip install "soup-cli\\[documents]"`.
+
+    Supported formats:
+    - .pdf  → pypdf (documents extra)
+    - .docx → python-docx (documents extra)
+    - .md   → built-in heading splitter
     - .txt  → built-in
     """
     import stat
@@ -3018,7 +3021,7 @@ def ingest_document(
             from pypdf import PdfReader
         except ImportError:
             console.print(
-                "[red]pypdf not installed.[/] Run: pip install pypdf"
+                r'[red]pypdf not installed.[/] Run: pip install "soup-cli\[documents]"'
             )
             raise typer.Exit(1) from None
         reader = PdfReader(in_real)
@@ -3033,7 +3036,7 @@ def ingest_document(
             from docx import Document
         except ImportError:
             console.print(
-                "[red]python-docx not installed.[/] Run: pip install python-docx"
+                r'[red]python-docx not installed.[/] Run: pip install "soup-cli\[documents]"'
             )
             raise typer.Exit(1) from None
         doc = Document(in_real)

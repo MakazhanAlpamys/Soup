@@ -1,8 +1,7 @@
 """Tests for Issue #1330: soup doctor --config reports settings by spelling, not value.
 
 Ensures that settings written in their inactive state (e.g. false) do not produce
-false positive 'ignored' or 'rejected' rows, and that active values like seed: 0
-are properly detected.
+false positive 'ignored' or 'rejected' rows.
 """
 
 from __future__ import annotations
@@ -101,8 +100,11 @@ def test_a_full_dump_reports_what_the_minimal_config_reports(key, tmp_path):
     assert [e.field for e in check_config(full)] == [e.field for e in check_config(minimal)]
 
 
-def test_seed_zero_on_mlx_is_still_reported():
-    """AC3: training.seed: 0 and data_seed: 0 on MLX are still reported (0 is an active seed)."""
+def test_seed_zero_on_mlx_is_not_reported_now_that_mlx_seeds():
+    """AC3 was "seed: 0 on MLX is still reported (0 is an active seed)". Since
+    #1850 MLX SFT honours both seeds, so neither value is a gap any more. That
+    0 is a real seed rather than "unset" is now pinned where it matters, in the
+    run itself: tests/test_mlx_sft_seed.py::test_seed_zero_is_a_seed."""
     yaml_text = textwrap.dedent(
         """\
         base: mlx-community/Qwen2.5-0.5B-Instruct-4bit
@@ -120,8 +122,8 @@ def test_seed_zero_on_mlx_is_still_reported():
     )
     cfg = load_config_from_string(yaml_text)
     reported_fields = {g.field for g in check_config(cfg)}
-    assert "training.seed" in reported_fields
-    assert "training.data_seed" in reported_fields
+    assert "training.seed" not in reported_fields
+    assert "training.data_seed" not in reported_fields
 
 
 def test_schema_refused_settings_have_no_doctor_rows():

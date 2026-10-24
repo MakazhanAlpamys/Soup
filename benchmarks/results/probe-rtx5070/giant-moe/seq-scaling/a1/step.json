@@ -1,0 +1,77 @@
+{
+  "label": "random weights, shape only; routing forced uniform (token t -> experts kt..kt+k-1 mod E)",
+  "args": {
+    "store": "D:/soup-bench/moe-k2-synth",
+    "weights": null,
+    "model": null,
+    "expert_layout": "per_expert",
+    "out": "C:\\Users\\user\\projects\\soup-wt\\moe-seq-scaling\\benchmarks\\results\\probe-rtx5070\\giant-moe\\seq-scaling\\a1\\step.json",
+    "seq": 512,
+    "batch": 1,
+    "steps": 1,
+    "loss_tokens": 512,
+    "lora_r": 8,
+    "buffers": 2,
+    "tier": "disk",
+    "no_pin": true,
+    "seed": 3,
+    "label": "random weights, shape only",
+    "route": "uniform"
+  },
+  "steps": [
+    {
+      "step": 0,
+      "seconds": 1036.4,
+      "tokens_per_second": 0.494,
+      "loss": 13.47708511352539,
+      "loss_positions": 512,
+      "loss_finite": true,
+      "grads_finite": true,
+      "grads_present": 610,
+      "expert_fetches": 69120,
+      "expert_bytes_read": 1570336174080,
+      "layer_loads": 120,
+      "os_io": {
+        "process_read_bytes": 1587506334220,
+        "disk_read_bytes": {
+          "PhysicalDrive0": 2312677888,
+          "PhysicalDrive1": 1586785970176
+        }
+      },
+      "peak_vram_mib": 4342,
+      "peak_reserved_mib": 5052,
+      "peak_host_bytes_so_far": 7773634560
+    }
+  ],
+  "store_bytes": 533242299230,
+  "store_expert_layout": "per_expert",
+  "store_quant": "nf4",
+  "store_double_quant": true,
+  "build_seconds": 4.47,
+  "routers_overridden": 60,
+  "trainable_params": 30513664,
+  "stats": {
+    "n_layers": 61,
+    "buffers": 2,
+    "buffer_bytes": 2918596920,
+    "large_buffer_bytes": 2348810240,
+    "store_bytes": 5115134896,
+    "pinned": false,
+    "pinned_bytes": 0,
+    "tier": "disk",
+    "read_ahead": 2,
+    "disk_bytes": 9779642448,
+    "drive_count": 1,
+    "direct_io_drives": 1,
+    "direct_io_roots": {
+      "D:/soup-bench/moe-k2-synth": true
+    },
+    "layer_loads": 120,
+    "large_loads": 3,
+    "device": "cuda",
+    "total_params": 1026408232448,
+    "nf4_scale_cache_bytes": 0,
+    "expert_fetches": 69120,
+    "expert_bytes_read": 1570336174080
+  }
+}

@@ -247,7 +247,7 @@ def generate(
         if not ctx_path.exists():
             console.print(f"[red]Context file not found: {ctx_path}[/]")
             raise typer.Exit(1)
-        context_text = ctx_path.read_text(encoding="utf-8")
+        context_text = ctx_path.read_text(encoding="utf-8-sig")
 
     # Generate
     console.print(f"[dim]Generating {count} examples using {provider}/{model_name}...[/]")

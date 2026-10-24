@@ -23,7 +23,7 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 | **Qwen 2.5** | Qwen2.5-7B-Instruct, Qwen2.5-Coder-32B-Instruct, Qwen2.5-Math-7B-Instruct | 0.5B–72B | Code, math |
 | **DeepSeek** | DeepSeek-R1-Distill-Llama-8B, DeepSeek-V3-0324, DeepSeek-V4-Flash/Pro | 1.5B–1.6T | Reasoning (GRPO), code, MoE |
 | **GLM** | GLM-4.6, GLM-5, GLM-5.1 | 357B-754B | Chinese + English, MoE |
-| **Kimi** | Kimi-K2, Kimi-K2.5, Kimi-K2.6 | ~1T (MoE) | Long-context agentic, MoE |
+| **Kimi** | Kimi-K2.5, Kimi-K2.6 | ~1T (MoE) | Long-context agentic, MoE |
 | **MiniMax** | MiniMax-M2, MiniMax-M3 | 230B–428B | Agentic, MoE (community license) |
 | **Phi-4** | Phi-4-14B, Phi-4-mini-reasoning | 3.8B–14B | Compact reasoning |
 | **Mistral** | Mistral-7B-Instruct-v0.3, Mistral-Small-24B | 7B–24B | Fast, efficient |
@@ -35,6 +35,30 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 | **Falcon** | Falcon-11B, Falcon-40B-Instruct | 7B–180B | Open-weight |
 
 **Mistral-Large-3 is not shipped as a recipe.** `mistralai` publishes it in Mistral's native layout (`params.json` + `consolidated-*.safetensors`), with no `config.json`, which `AutoConfig` cannot read, and no flag changes that. A Hugging Face-format conversion exists on the Hub as `FriendliAI/Mistral-Large-3-675B-Instruct-2512-BF16`; it is a third party's re-upload, so Soup does not point a recipe at it (#1145).
+
+**Resident Kimi K2 is refused on the supported Transformers 5.x stack.**
+The known Hugging Face Base, Instruct, Instruct-0905 and Thinking IDs load remote
+code using removed APIs, including `is_torch_fx_available`, and an inference-only
+MoE training path. `trust_remote_code` does not repair that incompatibility.
+This is a behaviour change: these resident configurations previously passed validation
+and failed later at model loading; now config validation stops before model loading.
+For Base and Instruct only, use the guarded `training.stream_layers: true` route
+added by [#2107](https://github.com/MakazhanAlpamys/Soup/pull/2107). It requires
+`--trust-remote-code` for the tokenizer and `pip install tiktoken`; see
+[streaming guide, Kimi K2 paragraph](performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724)
+for the guard and prerequisites. Its evidence is CPU-only parity on a tiny
+K2-like checkpoint; full K2 weights, training and GPU execution remain unverified.
+Thinking and Instruct-0905 have no supported route yet. This refusal does not
+qualify local copies, other hubs or Unsloth as working routes. K2.5/K2.6 use
+native `kimi_k25` registration and are outside this boundary.
+
+`kimi-k2-sft` and `kimi-k2-thinking-grpo` remain discoverable with an unsupported
+resident-route description. `soup recipes show` preserves their YAML for inspection;
+`soup recipes use` exits 3 (`EXIT_USAGE_ERROR`) with the per-recipe unavailability
+reason and writes no config.
+Catalog snapshots explicitly record this refusal rather than a usable config.
+This implements #2104's diagnostic option; native resident parity and full K2
+weight validation remain separate work.
 
 Qwen3.5, Qwen3.6, and Qwen3.8 checkpoints advertise a multimodal conditional-generation
 architecture on the Hub, but Soup's catalog recipes are deliberately text-only.
@@ -161,6 +185,7 @@ spelling is unchanged. See [the README's install section](../README.md#1-install
 | `eval` | `pip install "soup-cli[eval]"` | Benchmark evaluation (lm-evaluation-harness) |
 | `aider` | `pip install "soup-cli[aider]"` | Aider CLI; Polyglot evaluation also needs Aider's source-built Docker image |
 | `data` | `pip install "soup-cli[data]"` | Deduplication (MinHash via datasketch) |
+| `documents` | `pip install "soup-cli[documents]"` | PDF / DOCX ingestion (pypdf, python-docx); Markdown and TXT need no extra |
 | `data-pro` | `pip install "soup-cli[data-pro]"` | Language detection + PII (langdetect, presidio) |
 | `deepspeed` | `pip install "soup-cli[deepspeed]"` | Multi-GPU training (DeepSpeed ZeRO) |
 | `liger` | `pip install "soup-cli[liger]"` | Liger Kernel fused ops |

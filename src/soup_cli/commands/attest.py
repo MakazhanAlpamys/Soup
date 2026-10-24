@@ -265,9 +265,9 @@ def verify_cmd(
         raise typer.Exit(2)
 
     try:
-        with open(statement, encoding="utf-8") as fh:
+        with open(statement, encoding="utf-8-sig") as fh:
             raw_text = fh.read()
-        with open(signature, encoding="utf-8") as fh:
+        with open(signature, encoding="utf-8-sig") as fh:
             sig_doc = json.load(fh)
     except (OSError, ValueError) as exc:
         console.print(f"[red]Could not read inputs: {escape(str(exc))}[/]")

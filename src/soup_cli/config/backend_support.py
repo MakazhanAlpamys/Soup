@@ -57,11 +57,6 @@ def _default_active(value: Any) -> bool:
     return bool(value)
 
 
-def _seed_active(value: Any) -> bool:
-    """0 is a valid random seed, so any non-None value is active."""
-    return value is not None
-
-
 @dataclass(frozen=True)
 class SupportEntry:
     """One declared gap: a field, what happens to it, and why."""
@@ -89,20 +84,6 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
     # max_grad_norm, warmup_ratio, weight_decay, optimizer, scheduler -- were
     # wired by #734 and #750 and are now honoured, so they are gone rather than
     # reclassified. The guard is what noticed; see the PR body.
-    SupportEntry(
-        "training.seed",
-        IGNORED,
-        "MLX seeds through mx.random, not this field",
-        trainer_reads=True,
-        active=_seed_active,
-    ),
-    SupportEntry(
-        "training.data_seed",
-        IGNORED,
-        "MLX seeds through mx.random, not this field",
-        trainer_reads=True,
-        active=_seed_active,
-    ),
     SupportEntry(
         "training.use_galore",
         IGNORED,
@@ -213,12 +194,9 @@ _TRANSFORMERS_AUDIO_SFT: tuple[SupportEntry, ...] = (
 _UNSLOTH_SFT: tuple[SupportEntry, ...] = ()
 
 
-#: Fields MLX SFT warns about that have no meaning for DPO, or that MLX DPO
-#: honours: the seeds (its own loop seeds ``mx.random`` and the batch order)
-#: and SFT's response-masking switches (DPO supervises completions by design).
+#: Fields MLX SFT warns about that have no meaning for DPO: SFT's
+#: response-masking switches (DPO supervises completions by design).
 _NOT_DPO_GAPS = frozenset({
-    "training.seed",
-    "training.data_seed",
     "data.train_on_messages_with_train_field",
     "data.mask_history",
     "data.train_on_prompt",
@@ -336,7 +314,7 @@ def check_config(cfg: "SoupConfig") -> list[SupportEntry]:
     at their schema default, which is the difference between a useful pre-flight
     check and a wall of 275 rows. ``entry.active`` then drops a field written in
     its off position (e.g. ``false``). A written schema default counts as
-    unwritten, including a default of ``true``; ``seed: 0`` still counts as set.
+    unwritten, including a default of ``true``.
     """
     backend = getattr(cfg, "backend", DEFAULT_BACKEND)
     modality = getattr(cfg, "modality", DEFAULT_MODALITY)

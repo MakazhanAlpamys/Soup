@@ -609,6 +609,17 @@ curl http://localhost:8000/v1/adapters
 # → {"adapters": [{"name": "chat", "active": true}, ...], "active": "chat"}
 ```
 
+A server started with `--tool-auth-token` requires that token on all three adapter
+routes, loopback included, and answers 401 without it. A non-loopback bind always has
+one, since `soup serve` refuses to start there without it:
+
+```bash
+soup serve --model base-model --adapters chat=./chat-adapter --host 0.0.0.0 --tool-auth-token "$TOKEN"
+
+curl -X POST -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/v1/adapters/activate/chat
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/v1/adapters
+```
+
 Names are validated against `^[a-zA-Z0-9][a-zA-Z0-9-]*$`; activate/deactivate calls are thread-safe behind a lock. Activate/deactivate also check the `Host` and `Origin` headers (see [Server-Side Tool Endpoints](#server-side-tool-endpoints)).
 
 ### Multi-Tenant Vector Bank (`soup serve --bank`)
@@ -974,7 +985,11 @@ Three POST routes are now available on `soup serve`:
 
 - **`POST /v1/tools/python`** — runs caller-supplied Python code in an isolated
   sub-process. Bounded by 512 MB memory, 5-second wall-clock timeout, and a
-  single-worker concurrency cap.
+  cap of four concurrent runs (shared with the code-execution rewards). Like `/v1/tools/bash`, it runs the code only under
+  OS-level isolation: on Linux with Python 3.12+ when `os.unshare` creates new user,
+  network and PID namespaces for the run, and on macOS when `sandbox-exec` is on `PATH`.
+  Anywhere else it answers HTTP 501 without running the code, including on Windows, on
+  Linux with Python 3.11, and on a Linux host or container that refuses those namespaces.
 - **`POST /v1/tools/web_search`** — searches the web and returns domain-filtered results
   as `[{url, title, snippet}]` with snippets sanitized (null bytes stripped).
   Deny-by-default via `WebSearchConfig.domain_allowlist`.
@@ -991,7 +1006,10 @@ Three POST routes are now available on `soup serve`:
 
 Tool routes, `/v1/thumbs` and adapter activate/deactivate accept requests only when the
 `Host` header names the bound address (any loopback name for a loopback bind) and any
-`Origin` header names the same; otherwise they answer 421 or 403.
+`Origin` header names the same; otherwise they answer 421 or 403. That check runs first.
+The tool routes and all three adapter routes (`GET /v1/adapters`, activate, deactivate)
+then also require `Authorization: Bearer <token>` whenever `--tool-auth-token` is set,
+on loopback too, and answer 401 without it.
 
 The generation routes (`/v1/chat/completions`, `/v1/messages`) and the adapter listing
 (`GET /v1/adapters`) carry the narrower half of that check: a request whose `Origin` names

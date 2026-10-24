@@ -60,7 +60,7 @@ def _extract_texts(input_path: Path) -> list[str]:
     texts: list[str] = []
     total_bytes = 0
     if input_path.suffix.lower() == ".jsonl":
-        with open(input_path, encoding="utf-8") as fh:
+        with open(input_path, encoding="utf-8-sig") as fh:
             for raw in fh:
                 if len(raw.encode("utf-8", errors="replace")) > _MAX_LINE_BYTES:
                     continue  # silently skip oversized line
@@ -92,7 +92,7 @@ def _extract_texts(input_path: Path) -> list[str]:
                 elif isinstance(row, str):
                     texts.append(row)
     else:
-        with open(input_path, encoding="utf-8") as fh:
+        with open(input_path, encoding="utf-8-sig") as fh:
             for raw in fh:
                 if len(raw.encode("utf-8", errors="replace")) > _MAX_LINE_BYTES:
                     continue

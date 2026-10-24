@@ -28,14 +28,27 @@ growing past that length and pass whatever it did before it: give ``cap`` the le
 ``TIMER_SLACK_SECONDS`` is added to the bound for the case where the call is so fast that the
 cap is reached before the reference is long. A quadratic scan fails by a wide margin at either
 size: 64x against a 32x limit.
+
+Linux only
+----------
+Every test that calls ``assert_grows_linearly`` carries ``@linux_only`` (on the test, its class,
+or the module's ``pytestmark``); ``tests/test_growth_timing.py`` fails a test that does not.
+``re`` behaves the same on every OS, so what the tests pin (a scan is linear, not quadratic) is
+decided on Linux, and every Linux CI cell runs them. A macOS or Windows runner adds only noise
+to a wall-clock ratio: cold regex compilation and timer noise. To run them on any OS, for a
+local check or a change to one of the scanners, set ``SOUP_RUN_GROWTH_TESTS=1``.
 """
 
 from __future__ import annotations
 
 import gc
+import os
+import sys
 import time
 from collections.abc import Callable
 from typing import Any
+
+import pytest
 
 SCALE = 8
 LIMIT = 4.0 * SCALE  # 4x slack over linear (8x), as in #1932; a quadratic scan measures 64x
@@ -45,6 +58,26 @@ ROUNDS = 5
 MIN_ROUNDS = 2  # a failing scan still gets this many rounds, however slow
 BUDGET_SECONDS = 2.0  # ...and no more once the rounds have spent this long
 TIMER_SLACK_SECONDS = 0.002
+
+#: Set to ``1`` to run the growth tests on an OS that skips them (see "Linux only" above).
+RUN_ENV_VAR = "SOUP_RUN_GROWTH_TESTS"
+
+
+def _runs_here() -> bool:
+    """True on Linux, or anywhere when ``SOUP_RUN_GROWTH_TESTS=1``. Read when it is called."""
+    return sys.platform.startswith("linux") or os.environ.get(RUN_ENV_VAR) == "1"
+
+
+#: THE gate for a test that calls ``assert_grows_linearly``. One definition; the test file
+#: ``tests/test_growth_timing.py`` fails a growth test that does not carry it.
+linux_only = pytest.mark.skipif(
+    not _runs_here(),
+    reason=(
+        "linear-growth timing test, run on Linux only: re behaves the same on every OS, a "
+        "macOS or Windows runner only adds cold-compile and timer noise to the ratio, and "
+        "every Linux CI cell runs it. Set SOUP_RUN_GROWTH_TESTS=1 to run it on this OS."
+    ),
+)
 
 
 def _seconds(call: Callable[[Any], object], payload: Any) -> float:
