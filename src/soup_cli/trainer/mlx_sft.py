@@ -145,6 +145,7 @@ def _start_rewind(
     batch_size: int,
     grad_accum: int,
     masked: bool,
+    labeled: bool = False,
 ):
     """Create the rewind log and recorder for an MLX run, or return None.
 
@@ -182,7 +183,7 @@ def _start_rewind(
             batch_size=batch_size,
             grad_accum=grad_accum,
         )
-        loss = make_rewind_loss(state, kind="masked" if masked else "span")
+        loss = make_rewind_loss(state, kind="labels" if labeled else "masked" if masked else "span")
     except Exception as exc:  # noqa: BLE001 — a recorder must never stop a run
         from rich.markup import escape
 
@@ -389,27 +390,11 @@ class MLXSFTTrainerWrapper:
     def _check_unsupported(self) -> None:
         tcfg = self.config.training
         dcfg = self.config.data
+        if self.config.task == "sft" and self.config.modality != "text" and (
+            dcfg.mask_history or dcfg.train_on_messages_with_train_field
+        ):
+            raise ValueError("Native selective message masks support text SFT only")
         unsupported = []
-        # #683 review: the per-message `train` field has no MLX equivalent --
-        # `MaskedChatDataset` supervises every assistant turn and reads no
-        # per-message flag. It looked rejected only because the mutual-
-        # exclusion validator fires while `train_on_responses_only` is at its
-        # `true` default; set that to false and the field was dropped in
-        # silence, which is the shape of the defect #683 reports.
-        if getattr(dcfg, "train_on_messages_with_train_field", False):
-            unsupported.append(
-                "data.train_on_messages_with_train_field (MLX supervises "
-                "every assistant turn; the per-message flag is not read)"
-            )
-        # #761: mask_history narrows the transformers label builder
-        # (data/loss_mask.py) to the last assistant turn. MLX SFT builds its own
-        # mask and never goes through it, so without this line the same soup.yaml
-        # trained the last turn on transformers and every turn here, in silence.
-        if getattr(dcfg, "mask_history", False):
-            unsupported.append(
-                "data.mask_history (MLX supervises every assistant turn, not "
-                "only the last)"
-            )
         if getattr(dcfg, "train_on_prompt", False):
             unsupported.append(
                 "data.train_on_prompt (MLX masks the prompt or supervises the "
@@ -524,6 +509,20 @@ class MLXSFTTrainerWrapper:
         """Load MLX model, configure LoRA, prepare dataset."""
         self._require_mlx()
         self._check_unsupported()
+        if self.config.data.format == "pre_tokenized":
+            if self.config.task != "sft" or self.config.modality != "text":
+                raise ValueError("Native pre_tokenized consumption supports text SFT only")
+            from soup_cli.utils.pretokenized import maybe_load_pretokenized
+
+            train_rows, val_rows = maybe_load_pretokenized(
+                self.config.data, self.config.base, console, self.config.training,
+                task=self.config.task,
+            )
+            if isinstance(train_rows, dict):
+                raise ValueError("pre_tokenized cache requires a train split")
+            dataset = {"train": train_rows, "val": val_rows if val_rows is not None else []}
+            if not len(train_rows):
+                raise ValueError("pre_tokenized train split is empty")
         self._check_train_split_size(dataset)
         self._check_eval_steps_has_rows(dataset)
 
@@ -538,6 +537,17 @@ class MLXSFTTrainerWrapper:
             f"[green]MLX model loaded:[/] {cfg.base} "
             f"(task={cfg.task}, lora_r={cfg.training.lora.r})"
         )
+        if cfg.data.format == "pre_tokenized":
+            from soup_cli.trainer.mlx_pretokenized import PretokenizedDataset
+
+            vocab_size = getattr(getattr(self.model, "args", None), "vocab_size", None)
+            if vocab_size is None:
+                vocab_size = len(self.tokenizer)
+            dataset = {
+                name: PretokenizedDataset(rows, vocab_size=vocab_size,
+                                          max_length=cfg.data.max_length or 2048)
+                for name, rows in dataset.items()
+            }
         self._dataset = dataset
 
     def _apply_lora(self, model) -> None:
@@ -779,18 +789,31 @@ class MLXSFTTrainerWrapper:
         # drops the earlier ones -- a different wrong distribution, not a fix.
         # Chat rows therefore go through Soup's own per-token mask, injected
         # via `train(loss=..., iterate_batches=...)`.
-        from soup_cli.trainer.mlx_masking import plan_response_masking
+        from soup_cli.trainer.mlx_masking import MaskingPlan, plan_response_masking
 
+        cached_labels = cfg.data.format == "pre_tokenized"
         responses_only = bool(getattr(cfg.data, "train_on_responses_only", False))
-        plan = plan_response_masking(
-            responses_only, train_rows[0] if train_rows else {}
+        train_field = bool(getattr(cfg.data, "train_on_messages_with_train_field", False))
+        mask_history = bool(getattr(cfg.data, "mask_history", False))
+        plan = (
+            MaskingPlan(token_mask=True, mask_prompt=False) if cached_labels
+            else plan_response_masking(
+                responses_only, train_rows[0] if train_rows else {},
+                train_field=train_field, mask_history=mask_history,
+            )
         )
         use_token_mask = plan.token_mask
         args.mask_prompt = plan.mask_prompt
         if plan.warning:
             console.print(f"[yellow]MLX backend ignores: {plan.warning}[/]")
 
-        if use_token_mask:
+        if cached_labels:
+            from soup_cli.trainer.mlx_pretokenized import labeled_iterate_batches, labeled_loss
+
+            train_dataset = CacheDataset(self._dataset["train"])
+            val_dataset = CacheDataset(self._dataset["val"]) if val_rows else None
+            train_hooks = {"loss": labeled_loss, "iterate_batches": labeled_iterate_batches}
+        elif use_token_mask:
             from soup_cli.trainer.mlx_masking import (
                 MaskedChatDataset,
                 ResponseMaskError,
@@ -799,7 +822,8 @@ class MLXSFTTrainerWrapper:
             )
 
             masked_train = MaskedChatDataset(
-                train_rows, self.tokenizer, chat_key=_CHAT_KEY
+                train_rows, self.tokenizer, chat_key=_CHAT_KEY,
+                train_field=train_field, mask_history=mask_history, max_length=max_seq_length,
             )
             # Probe row 0 now. `process` is otherwise called lazily by
             # `CacheDataset` from inside `train()`, so a template this cannot
@@ -813,15 +837,19 @@ class MLXSFTTrainerWrapper:
                     masked_train.process(train_rows[0])
                 except ResponseMaskError as exc:
                     raise ResponseMaskError(
-                        f"{exc}. Set `data.train_on_responses_only: false` to "
-                        "train on the full sequence on this model, or run the "
-                        "recipe on the transformers backend."
+                        f"{exc}. Use a prefix-stable native chat template and keep selected "
+                        "targets within data.max_length, or disable selective masking "
+                        "and set data.train_on_responses_only: false for full-sequence loss."
                     ) from exc
 
             train_dataset = CacheDataset(masked_train)
             val_dataset = (
                 CacheDataset(
-                    MaskedChatDataset(val_rows, self.tokenizer, chat_key=_CHAT_KEY)
+                    MaskedChatDataset(
+                        val_rows, self.tokenizer, chat_key=_CHAT_KEY,
+                        train_field=train_field, mask_history=mask_history,
+                        max_length=max_seq_length,
+                    )
                 )
                 if val_rows
                 else None
@@ -1159,6 +1187,7 @@ class MLXSFTTrainerWrapper:
                 batch_size=batch_size,
                 grad_accum=grad_accumulation_steps,
                 masked=use_token_mask,
+                **({"labeled": True} if cached_labels else {}),
             )
             if rewind is not None:
                 train_dataset = rewind.wrap(train_dataset)
@@ -1240,7 +1269,10 @@ class MLXSFTTrainerWrapper:
                     # which is what a multi-turn chat run actually used.
                     "mask_prompt": bool(args.mask_prompt),
                     "response_token_mask": use_token_mask,
+                    "pre_tokenized": cached_labels,
                     "train_on_responses_only": responses_only,
+                    "train_on_messages_with_train_field": train_field,
+                    "mask_history": mask_history,
                     "grad_checkpoint": grad_checkpoint,
                     "grad_accumulation_steps": grad_accumulation_steps,
                     # #686: the EFFECTIVE optimizer and schedule, so an adapter

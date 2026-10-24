@@ -368,8 +368,8 @@ class TestMlxDoesNotReadIt:
 
         return {entry.field for entry in check_config(load_config_from_string(self._MLX + extra))}
 
-    def test_mlx_reports_mask_history_as_ignored(self):
-        assert "data.mask_history" in self._gaps("  mask_history: true\n")
+    def test_mlx_supports_mask_history(self):
+        assert "data.mask_history" not in self._gaps("  mask_history: true\n")
 
     def test_it_is_not_reported_when_the_config_does_not_set_it(self):
         """``check_config`` reports only fields the user wrote. A doctor that named
@@ -400,7 +400,7 @@ class TestMlxDoesNotReadIt:
         MLXSFTTrainerWrapper(cfg)._check_unsupported()
         return "\n".join(printed)
 
-    def test_the_run_itself_warns_not_only_the_doctor(self, monkeypatch):
+    def test_the_run_does_not_warn_for_supported_mask_history(self, monkeypatch):
         """The registry entry fixes ``soup doctor``; it does not fix ``soup train``,
         which would still have trained every turn in silence -- the #683 shape.
         So the MLX trainer names it in its "MLX backend ignores:" line, which is
@@ -410,7 +410,7 @@ class TestMlxDoesNotReadIt:
             monkeypatch, train_on_responses_only=True, mask_history=True
         )
 
-        assert "MLX backend ignores" in out and "data.mask_history" in out, out
+        assert "data.mask_history" not in out, out
 
     def test_the_run_is_quiet_about_it_when_unset(self, monkeypatch):
         out = self._mlx_warning(monkeypatch, train_on_responses_only=True)
