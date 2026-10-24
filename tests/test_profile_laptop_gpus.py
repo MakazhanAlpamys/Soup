@@ -183,6 +183,21 @@ def test_a_size_no_key_holds_stays_unknown(name, key):
     assert key not in GPU_MEMORY
 
 
+def test_a_size_too_long_to_read_as_a_number_stays_unknown(config_file):
+    # The size word is user text and the regex takes any number of digits, so a
+    # 5000-digit size must not be turned into an int: that raises instead of
+    # answering, and ``profile`` should still say Unknown GPU.
+    typed = "a100 " + "9" * 5000 + "gb"
+
+    key = normalize_gpu_key(typed)
+    assert key not in GPU_MEMORY
+
+    result = runner.invoke(app, ["profile", "--config", str(config_file), "--gpu", typed])
+
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "UnknownGPU:" in re.sub(r"\s+", "", _ANSI.sub("", result.output))
+
+
 def test_profile_takes_the_laptop_3060_from_the_issue(config_file, no_gpu):
     result = runner.invoke(
         app, ["profile", "--config", str(config_file), "--gpu", "rtx3060 laptop", "--json"]
