@@ -2431,6 +2431,8 @@ def _refuse_trainable_streamed_boundary(model: Any, index: Any, lora_config: Any
     targets = getattr(lora_config, "modules_to_save", None)
     if not targets or not tuple(getattr(index, "large_keys", ()) or ()):
         return
+    if isinstance(targets, str):
+        targets = (targets,)
     boundaries = (model.get_input_embeddings(), model.get_output_embeddings())
     for name, module in model.named_modules():
         if any(module is boundary for boundary in boundaries) and any(
@@ -2589,10 +2591,11 @@ def _build_streamed_large_layer_class():
             state = self.inner.state_dict(
                 destination=destination, prefix=prefix, keep_vars=keep_vars
             )
-            if self.weight_path is not None:
+            if self.weight_path is not None and self._weight_param_name != "weight":
                 # PEFT obtains state_dict BEFORE deciding auto/True/False for
-                # save_embedding_layers. Export independent CPU boundary bytes
-                # here so its public save path needs no PEFT-specific patch.
+                # save_embedding_layers. Only tuner-wrapped boundaries need
+                # independent CPU bytes; leave untargeted weights on meta and
+                # avoid reading their vocabulary-sized shards on every save.
                 state[prefix + self._weight_param_name] = self._frozen_weight_snapshot()
             return state
 

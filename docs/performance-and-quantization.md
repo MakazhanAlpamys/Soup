@@ -904,11 +904,12 @@ and dotted paths, default PEFT saves, Trainer checkpoints and resume. Adapter-on
 keeps both weights resident and follows the normal PEFT path. This completes the path
 protected by the build-time guard from #2082 by @ybai08.
 
-Saving a streamed model's state exports independent CPU snapshots of its frozen input
-embedding and output head directly from the shard cache. The shared streaming slot and
-the meta parameters remain unchanged, so this adds no persistent GPU base allocation.
+Saving a streamed model's state exports an independent CPU snapshot only for an input
+embedding or output head with a LoRA target, read directly from its shard cache. An
+untargeted boundary stays on meta without opening its shard. The shared streaming slot
+and the meta parameters remain unchanged, so this adds no persistent GPU base allocation.
 PEFT obtains the state before deciding which embedding weights to save; even an
-adapter-only save therefore temporarily needs CPU memory for both boundary matrices.
+adapter-only save therefore temporarily needs CPU memory for each adapted boundary matrix.
 Keep the run's matching shard cache available through saving and resume. Loading an
 included frozen boundary weight that differs from that cache is refused with a base/cache
 diagnostic rather than silently ignoring it. The lower-level streaming builder also

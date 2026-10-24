@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:9343dd2ef0ba99ba0dd4b9b61580a19426055bc2f5466f07e7b7472aba08f7ec -->
+<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -74,8 +74,6 @@ Llama-3.1-8B-Instruct + NF4 で **952 MHz 時に 119.6 tok/s、ピーク 3.32 GB
 [すべての測定結果](benchmarks/) · [論文](https://doi.org/10.5281/zenodo.21771064) ·
 **[無料の Colab T4 で自分で確かめる](notebooks/proof-4gb.ipynb)**（プロセスを 4 GB に制限した上で、
 ストリーミングしたモデルが通常のモデルとビット単位で同一であることを検証します）
-
-ストリーミングされる入力埋め込み層と出力ヘッドを LoRA の対象にする場合も、デフォルト設定でのアダプター保存とチェックポイントからの再開をサポートします。[CPU スナップショットのメモリ使用量と制限](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724)を参照してください。
 
 <p align="center">
   <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="4 GB のカードでの Llama-3.1-8B 向け soup train の事前チェック: 32 層にわたって RAM 上に固定された 3.60 GB のベースストアと、113 MB の VRAM バッファ 2 つ。その後、119.6 tok/s で測定されたピークは 3.32 GB で、4 GB のラインの手前に収まっています（修正前の行。v0.72.2、952 MHz で測定。#331 修正後の行は下のキャプションを参照）"></a><br>

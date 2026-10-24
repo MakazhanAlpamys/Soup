@@ -74,9 +74,6 @@ and still BETA —
 **[check it yourself on a free Colab T4](notebooks/proof-4gb.ipynb)** (caps the process to
 4 GB, then asserts a streamed model is bit-identical to a normal one)
 
-LoRA targets on streamed input embeddings and output heads also support default adapter
-saves and checkpoint resume; see the [CPU snapshot memory cost and limits](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724).
-
 <p align="center">
   <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="soup train pre-flight for Llama-3.1-8B on a 4 GB card: a 3.60 GB base store pinned in RAM across 32 layers and two 113 MB VRAM buffers, then a measured peak of 3.32 GB at 119.6 tok/s, stopping short of the 4 GB line (pre-repair row, measured on v0.72.2 at 952 MHz; the post-#331 row is in the caption below)"></a><br>
   <sub>Llama-3.1-8B-Instruct + NF4, LoRA, batch 1, seq 512 on an RTX 3050 Laptop 4 GB — <b>3.32 GB peak, 119.6 tok/s</b> at 952 MHz (pre-repair, v0.72.2; post-#331: 208.6 tok/s at 1935 MHz in 2.40 GB, not directly comparable, @umran666, #1103). <a href="https://youtu.be/T1LCErE943E">Full video (90s)</a></sub>

@@ -7,8 +7,10 @@ The base remains meta; exporting its frozen bytes must never read the shared slo
 from __future__ import annotations
 
 import warnings
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import pytest
 
@@ -19,6 +21,33 @@ from tests.test_issue1048_lora_head_save_resume import (
 )
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+
+
+def _opened_during(call: Callable[[], Any]) -> tuple[list[str], Any]:
+    import safetensors
+
+    opened = []
+    real_open = safetensors.safe_open
+
+    def counting(*args: Any, **kwargs: Any) -> Any:
+        opened.append(Path(str(args[0])).name)
+        return real_open(*args, **kwargs)
+
+    with mock.patch.object(safetensors, "safe_open", counting):
+        result = call()
+    return opened, result
+
+
+def _evaluation_logits(model: Any) -> Any:
+    import torch
+
+    training = model.training
+    model.eval()
+    try:
+        with torch.no_grad():
+            return model(input_ids=torch.tensor([[1, 2, 3, 4]]), use_cache=False).logits.clone()
+    finally:
+        model.train(training)
 
 
 def _adapters(model: Any) -> dict[str, Any]:
@@ -36,6 +65,73 @@ def _assert_adapters(model: Any, expected: dict[str, Any]) -> None:
     assert actual.keys() == expected.keys()
     for name, value in expected.items():
         assert torch.equal(actual[name], value), name
+
+
+@pytest.mark.parametrize("tier", ["ram", "disk"])
+@pytest.mark.parametrize("save_embeddings", ["default", True, False])
+def test_untargeted_boundaries_are_not_read_or_materialised(
+    tmp_path: Path, tier: str, save_embeddings: bool | str
+) -> None:
+    _requires_train_extra()
+    from safetensors.torch import load_file
+
+    model, runtime = _build_streamed(
+        tmp_path, tie=False, target_modules=["q_proj", "v_proj"], seed=3, tier=tier
+    )
+    try:
+        opened, state = _opened_during(model.state_dict)
+        assert opened == []
+        boundary_keys = [name for name in state if "embed_tokens" in name or "lm_head" in name]
+        assert boundary_keys
+        assert all(state[name].is_meta for name in boundary_keys)
+        options = {} if save_embeddings == "default" else {"save_embedding_layers": save_embeddings}
+        checkpoint = tmp_path / "adapter"
+        opened, _ = _opened_during(lambda: model.save_pretrained(checkpoint, **options))
+        assert opened == []
+        artifact = load_file(str(checkpoint / "adapter_model.safetensors"))
+        assert len(artifact) == 8
+        assert all("lora_" in name for name in artifact)
+        assert model.get_input_embeddings().weight.is_meta
+        assert model.get_output_embeddings().weight.is_meta
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("tier", ["ram", "disk"])
+@pytest.mark.parametrize("save_embeddings", ["default", True, False])
+@pytest.mark.parametrize(
+    "target,shard", [("lm_head", "large_lm_head"), ("embed_tokens", "large_embed_tokens")]
+)
+def test_only_the_adapted_boundary_is_exported(
+    tmp_path: Path, target: str, shard: str, tier: str, save_embeddings: bool | str
+) -> None:
+    _requires_train_extra()
+    from safetensors.torch import load_file
+
+    model, runtime = _build_streamed(
+        tmp_path, tie=False, target_modules=["q_proj", target], seed=3, tier=tier
+    )
+    try:
+        opened, state = _opened_during(model.state_dict)
+        assert [name.split(".")[0] for name in opened] == [shard]
+        other = "embed_tokens" if target == "lm_head" else "lm_head"
+        untouched = [value for name, value in state.items() if other in name]
+        exported = [
+            value for name, value in state.items() if target in name and "base_layer.weight" in name
+        ]
+        assert untouched and all(value.is_meta for value in untouched)
+        assert len(exported) == 1 and exported[0].device.type == "cpu"
+        options = {} if save_embeddings == "default" else {"save_embedding_layers": save_embeddings}
+        checkpoint = tmp_path / "adapter"
+        opened, _ = _opened_during(lambda: model.save_pretrained(checkpoint, **options))
+        assert [name.split(".")[0] for name in opened] == [shard]
+        artifact = load_file(str(checkpoint / "adapter_model.safetensors"))
+        assert len([name for name in artifact if "lora_" in name]) == 6
+        assert not any(other in name for name in artifact)
+        assert model.get_input_embeddings().weight.is_meta
+        assert model.get_output_embeddings().weight.is_meta
+    finally:
+        runtime.close()
 
 
 def test_streamed_embedding_starts_as_the_unchanged_base(tmp_path: Path) -> None:
@@ -205,6 +301,7 @@ def test_public_save_load_and_strict_round_trip(
         _perturb_lora(fresh, seed=9876)
         fresh.load_adapter(checkpoint, adapter_name="default", is_trainable=True)
         _assert_adapters(fresh, expected)
+        assert torch.equal(_evaluation_logits(fresh), expected_logits)
         for assign in (False, True):
             _perturb_lora(fresh, seed=9876)
             with warnings.catch_warnings(record=True) as emitted:
@@ -269,8 +366,9 @@ def test_frozen_boundary_export_is_independent_and_conflicting_base_is_refused(
 
 
 @pytest.mark.parametrize("target", ["lm_head", "model.embed_tokens"])
+@pytest.mark.parametrize("as_string", [False, True])
 def test_modules_to_save_is_refused_before_peft_or_streaming(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str, as_string: bool
 ) -> None:
     _requires_train_extra()
     import peft
@@ -283,7 +381,7 @@ def test_modules_to_save_is_refused_before_peft_or_streaming(
     shards = str(tmp_path / "shards")
     index = shard_checkpoint(weights, shards, dtype="float32", arch="llama")
     lora = _lora(["q_proj"])
-    lora.modules_to_save = [target]
+    lora.modules_to_save = target if as_string else [target]
 
     def must_not_run(*args: Any, **kwargs: Any) -> None:
         pytest.fail("unsupported trainable boundary reached PEFT or buffer allocation")
@@ -324,10 +422,28 @@ def test_trainer_checkpoint_and_resume(
         save_steps=1,
     )
     wrapper.trainer.args.max_steps = 1
+
+    class CaptureCheckpointLogits(TrainerCallback):
+        logits: Any = None
+
+        def on_save(
+            self,
+            args: Any,
+            state: Any,
+            control: Any,
+            model: Any = None,
+            **kwargs: Any,
+        ) -> None:
+            self.logits = _evaluation_logits(model)
+
+    saved_outputs = CaptureCheckpointLogits()
+    wrapper.trainer.add_callback(saved_outputs)
     try:
         wrapper.train()
         trained = _adapters(wrapper.model)
         assert len(trained) == (20 if task == "dpo" else 10)
+        trained_logits = saved_outputs.logits
+        assert trained_logits is not None
     finally:
         wrapper._close_stream_runtime()
     checkpoint = tmp_path / "run" / "out" / "checkpoint-1"
@@ -357,6 +473,7 @@ def test_trainer_checkpoint_and_resume(
                 **kwargs: Any,
             ) -> None:
                 _assert_adapters(model, trained)
+                assert torch.equal(_evaluation_logits(model), trained_logits)
                 assert state.global_step == 1
                 assert optimizer.state
                 assert all(float(item["step"]) == 1 for item in optimizer.state.values())

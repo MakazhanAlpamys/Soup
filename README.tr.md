@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:9343dd2ef0ba99ba0dd4b9b61580a19426055bc2f5466f07e7b7472aba08f7ec -->
+<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -75,8 +75,6 @@ bu oran bile bire bir karşılaştırma değildir — [kayıt](benchmarks/gate-v
 [tüm ölçümler](benchmarks/) · [makale](https://doi.org/10.5281/zenodo.21771064) ·
 **[ücretsiz bir Colab T4'te kendiniz doğrulayın](notebooks/proof-4gb.ipynb)** (süreci 4 GB ile
 sınırlar, ardından akışlı bir modelin normal bir modelle bit düzeyinde özdeş olduğunu doğrular)
-
-Akışla yüklenen giriş gömme katmanları ve çıkış başlıklarını hedefleyen LoRA da varsayılan adaptör kaydetmeyi ve kontrol noktasından sürdürmeyi destekler; [CPU anlık görüntülerinin bellek maliyeti ve sınırlarına](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724) bakın.
 
 <p align="center">
   <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="4 GB bir kartta Llama-3.1-8B için soup train ön kontrolü: 32 katman boyunca RAM'e sabitlenmiş 3.60 GB'lık bir taban deposu ve iki adet 113 MB VRAM tamponu, ardından 119.6 tok/s'de ölçülen 3.32 GB tepe; 4 GB çizgisinin altında kalıyor (onarım öncesi satır, v0.72.2'de 952 MHz'de ölçüldü; #331 sonrası satır aşağıdaki açıklamada)"></a><br>
