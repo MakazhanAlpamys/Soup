@@ -5,6 +5,7 @@ when a later step fails.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +17,13 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.commands import export as export_mod
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    """Help/console text with ANSI color removed and whitespace collapsed."""
+    return " ".join(_ANSI_RE.sub("", text).split())
 
 
 def _adapter_dir(tmp_path: Path, base_model: str = "some/base") -> Path:
@@ -61,44 +69,27 @@ def _make_partial_merge(merges: list[str]):
 
 @pytest.fixture(autouse=True)
 def _isolate_env(tmp_path, monkeypatch):
+    """Hermetic test environment: redirect home and clear toolchain env vars."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv("SOUP_HOME", str(tmp_path / ".soup"))
+    monkeypatch.delenv("LLAMA_CPP_PATH", raising=False)
 
 
 # ---------------------------------------------------------------------------
-# Failing tests (each RED on main, green after fix)
+# Hermeticity verification (Section 4a)
 # ---------------------------------------------------------------------------
 
 
-def test_gguf_llama_cpp_path_missing_cleans_up(tmp_path, monkeypatch):
-    """Test 1: gguf, llama.cpp path missing, real code: --llama-cpp <tmp>/missing.
+def test_environment_isolation_points_home_to_tmp(tmp_path):
+    """4a hermeticity: Path.home() resolves inside tmp_path, never real user home."""
+    assert Path.home().resolve() == tmp_path.resolve()
 
-    Issue #1464 repro (b).
-    """
-    adapter = _adapter_dir(tmp_path)
-    merges: list[str] = []
-    monkeypatch.setattr(export_mod, "_merge_adapter", _make_fake_merge(merges))
 
-    runner = CliRunner()
-    result = runner.invoke(
-        app,
-        [
-            "export",
-            "--model",
-            str(adapter),
-            "--format",
-            "gguf",
-            "--quant",
-            "q4_0",
-            "--llama-cpp",
-            str(tmp_path / "missing"),
-        ],
-    )
-
-    assert merges != []
-    assert result.exit_code == 1
-    assert _leftovers(tmp_path) == []
+# ---------------------------------------------------------------------------
+# Failing tests (each RED on main before #1464 fix, GREEN on branch HEAD)
+# ---------------------------------------------------------------------------
 
 
 def test_gguf_auto_clone_fails_cleans_up(tmp_path, monkeypatch):
@@ -128,7 +119,8 @@ def test_gguf_auto_clone_fails_cleans_up(tmp_path, monkeypatch):
     )
 
     assert merges != []
-    assert result.exit_code == 1
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "Failed to clone llama.cpp" in _plain(result.output)
     assert _leftovers(tmp_path) == []
 
 
@@ -142,6 +134,7 @@ def test_gguf_dep_install_fails_cleans_up(tmp_path, monkeypatch):
     llama.mkdir()
     (llama / "convert_hf_to_gguf.py").write_text("# stub", encoding="utf-8")
     monkeypatch.setattr(export_mod, "_find_llama_cpp", lambda p=None: llama)
+    monkeypatch.setattr(export_mod, "_existing_llama_cpp", lambda p=None: llama)
 
     def failing_install():
         raise typer.Exit(1)
@@ -163,7 +156,7 @@ def test_gguf_dep_install_fails_cleans_up(tmp_path, monkeypatch):
     )
 
     assert merges != []
-    assert result.exit_code == 1
+    assert result.exit_code == 1, (result.output, repr(result.exception))
     assert _leftovers(tmp_path) == []
 
 
@@ -196,7 +189,8 @@ def test_bitnet_and_gguf_ud_missing_llama_cpp_cleans_up(tmp_path, monkeypatch, f
     )
 
     assert merges != []
-    assert result.exit_code == 1
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "llama.cpp not found at" in _plain(result.output)
     assert _leftovers(tmp_path) == []
 
 
@@ -238,7 +232,9 @@ def test_merge_dies_halfway_matrix_cleans_up(tmp_path, monkeypatch, fmt, extra_a
     )
 
     assert merges != []
-    assert result.exit_code != 0
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert isinstance(result.exception, RuntimeError)
+    assert "tokenizer failed" in str(result.exception)
     assert _leftovers(tmp_path) == []
 
 
@@ -275,7 +271,9 @@ def test_real_tokenizerless_adapter_e2e_cleans_up(tmp_path, monkeypatch):
         ],
     )
 
-    assert result.exit_code != 0
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert isinstance(result.exception, ValueError)
+    assert "Couldn't instantiate the backend tokenizer" in str(result.exception)
     assert _leftovers(tmp_path) == []
 
 
@@ -298,15 +296,110 @@ def test_merge_adapter_direct_cleans_own_created_directory(tmp_path):
     out = tmp_path / "merge_output"
     assert not out.exists()
 
-    with pytest.raises(
-        (ValueError, OSError), match=r"(?i)tokenizer|Couldn't instantiate the backend tokenizer"
-    ):
+    with pytest.raises(ValueError, match=r"Couldn't instantiate the backend tokenizer"):
         export_mod._merge_adapter(str(adapter_dir), str(tiny_base), str(out))
 
     assert not out.exists()
 
 
-def test_merge_adapter_direct_preserves_caller_owned_directory(tmp_path):
+def test_ctrl_c_during_gguf_export_cleans_up(tmp_path, monkeypatch):
+    """Test 3a: Ctrl-C in CLI step after merge removes temporary merge directory."""
+    adapter = _adapter_dir(tmp_path)
+    merges: list[str] = []
+    monkeypatch.setattr(export_mod, "_merge_adapter", _make_fake_merge(merges))
+
+    llama = tmp_path / "llama"
+    llama.mkdir()
+    (llama / "convert_hf_to_gguf.py").write_text("# stub", encoding="utf-8")
+    monkeypatch.setattr(export_mod, "_find_llama_cpp", lambda p=None: llama)
+    monkeypatch.setattr(export_mod, "_existing_llama_cpp", lambda p=None: llama)
+    monkeypatch.setattr(
+        export_mod, "_install_convert_deps", mock.Mock(side_effect=KeyboardInterrupt)
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "export",
+            "--model",
+            str(adapter),
+            "--format",
+            "gguf",
+            "--quant",
+            "q4_0",
+        ],
+    )
+
+    assert merges != []
+    assert result.exit_code == 130, (result.output, repr(result.exception))
+    assert "Cleaning up temporary merge files..." in _plain(result.output)
+    assert _leftovers(tmp_path) == []
+
+
+def test_ctrl_c_during_merge_adapter_direct_cleans_up(tmp_path):
+    """Test 3b: Ctrl-C during tokenizer save inside _merge_adapter cleans up created output dir."""
+    pytest.importorskip("peft")
+    pytest.importorskip("torch")
+    from peft import LoraConfig, get_peft_model
+    from transformers import AutoModelForCausalLM
+
+    from tests._tiny_hf_models import tiny_model_dir
+
+    tiny_base = tiny_model_dir("llama")
+    base = AutoModelForCausalLM.from_pretrained(tiny_base)
+    adapter = get_peft_model(base, LoraConfig(r=4, target_modules=["q_proj", "v_proj"]))
+    adapter.peft_config["default"].base_model_name_or_path = str(tiny_base)
+    adapter_dir = tmp_path / "adapter"
+    adapter.save_pretrained(adapter_dir)
+
+    out = tmp_path / "merge_output_ctrl_c"
+    assert not out.exists()
+
+    fake_tok = mock.MagicMock()
+    fake_tok.save_pretrained.side_effect = KeyboardInterrupt("Ctrl-C during tokenizer save")
+
+    with mock.patch("transformers.AutoTokenizer.from_pretrained", return_value=fake_tok):
+        with pytest.raises(KeyboardInterrupt, match=r"Ctrl-C during tokenizer save"):
+            export_mod._merge_adapter(str(adapter_dir), str(tiny_base), str(out))
+
+    assert not out.exists()
+
+
+# ---------------------------------------------------------------------------
+# Control tests (GREEN on main AND after fix)
+# ---------------------------------------------------------------------------
+
+
+def test_control_gguf_llama_cpp_path_missing_cleans_up(tmp_path, monkeypatch):
+    """Control (4b): gguf, llama.cpp path missing: handled cleanly by inner guard on main too."""
+    adapter = _adapter_dir(tmp_path)
+    merges: list[str] = []
+    monkeypatch.setattr(export_mod, "_merge_adapter", _make_fake_merge(merges))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "export",
+            "--model",
+            str(adapter),
+            "--format",
+            "gguf",
+            "--quant",
+            "q4_0",
+            "--llama-cpp",
+            str(tmp_path / "missing"),
+        ],
+    )
+
+    assert merges != []
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "llama.cpp not found at" in _plain(result.output)
+    assert _leftovers(tmp_path) == []
+
+
+def test_control_merge_adapter_direct_preserves_caller_owned_directory(tmp_path):
     """Test 8: _merge_adapter direct, caller-owned directory: directory and marker are kept."""
     pytest.importorskip("peft")
     pytest.importorskip("torch")
@@ -327,19 +420,12 @@ def test_merge_adapter_direct_preserves_caller_owned_directory(tmp_path):
     marker = out / "marker.txt"
     marker.write_text("keep me", encoding="utf-8")
 
-    with pytest.raises(
-        (ValueError, OSError), match=r"(?i)tokenizer|Couldn't instantiate the backend tokenizer"
-    ):
+    with pytest.raises(ValueError, match=r"Couldn't instantiate the backend tokenizer"):
         export_mod._merge_adapter(str(adapter_dir), str(tiny_base), str(out))
 
     assert out.exists()
     assert marker.exists()
     assert marker.read_text(encoding="utf-8") == "keep me"
-
-
-# ---------------------------------------------------------------------------
-# Control tests (GREEN on main AND after fix)
-# ---------------------------------------------------------------------------
 
 
 def test_control_gguf_export_success_cleans_up(tmp_path, monkeypatch):
@@ -419,7 +505,9 @@ def test_control_failure_in_already_guarded_region_cleans_up(tmp_path, monkeypat
         ],
     )
 
-    assert result.exit_code != 0
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert isinstance(result.exception, RuntimeError)
+    assert "convert step crashed" in str(result.exception)
     assert _leftovers(tmp_path) == []
 
 
@@ -435,7 +523,7 @@ def test_control_unrelated_sibling_survives(tmp_path, monkeypatch):
     marker.write_text("precious data", encoding="utf-8")
 
     runner = CliRunner()
-    runner.invoke(
+    result = runner.invoke(
         app,
         [
             "export",
@@ -450,6 +538,7 @@ def test_control_unrelated_sibling_survives(tmp_path, monkeypatch):
         ],
     )
 
+    assert result.exit_code == 1, (result.output, repr(result.exception))
     assert sibling.exists()
     assert marker.exists()
     assert marker.read_text(encoding="utf-8") == "precious data"
@@ -479,7 +568,7 @@ def test_control_non_adapter_model_creates_no_merge_dir(tmp_path, monkeypatch):
         ],
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 1, (result.output, repr(result.exception))
     assert _leftovers(tmp_path) == []
     assert (model_dir / "config.json").exists()
 
@@ -506,8 +595,8 @@ def test_control_error_preserved_on_llama_cpp_missing(tmp_path, monkeypatch):
         ],
     )
 
-    assert result.exit_code == 1
-    assert "llama.cpp not found at" in result.output
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "llama.cpp not found at" in _plain(result.output)
 
 
 @pytest.mark.parametrize("fmt", ["awq", "gptq"])
@@ -529,6 +618,56 @@ def test_control_awq_gptq_refused_no_merge(tmp_path, monkeypatch, fmt):
         ],
     )
 
-    assert result.exit_code != 0
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert f"--format {fmt} was removed in v0.77" in _plain(result.output)
     assert merges == []
+    assert _leftovers(tmp_path) == []
+
+
+def test_control_onnx_main_export_failure_cleans_up(tmp_path, monkeypatch):
+    """Control (4d): onnx with main_export raising after successful merge cleans up."""
+    adapter = _adapter_dir(tmp_path)
+    merges: list[str] = []
+    monkeypatch.setattr(export_mod, "_merge_adapter", _make_fake_merge(merges))
+
+    mock_main_export = mock.MagicMock(side_effect=RuntimeError("onnx export failed"))
+    monkeypatch.setitem(sys.modules, "optimum", mock.MagicMock())
+    monkeypatch.setitem(sys.modules, "optimum.exporters", mock.MagicMock())
+    monkeypatch.setitem(
+        sys.modules, "optimum.exporters.onnx", mock.MagicMock(main_export=mock_main_export)
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["export", "--model", str(adapter), "--format", "onnx"])
+    assert merges != []
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "ONNX export failed" in _plain(result.output)
+    assert _leftovers(tmp_path) == []
+
+
+def test_control_tensorrt_build_failure_cleans_up(tmp_path, monkeypatch):
+    """Control (4d): tensorrt with trtllm-build failure after merge cleans up."""
+    adapter = _adapter_dir(tmp_path)
+    merges: list[str] = []
+    monkeypatch.setattr(export_mod, "_merge_adapter", _make_fake_merge(merges))
+
+    monkeypatch.setitem(sys.modules, "optimum", mock.MagicMock())
+    monkeypatch.setitem(sys.modules, "optimum.exporters", mock.MagicMock())
+    monkeypatch.setitem(sys.modules, "optimum.exporters.onnx", mock.MagicMock())
+    monkeypatch.setitem(sys.modules, "tensorrt_llm", mock.MagicMock())
+    monkeypatch.setitem(sys.modules, "tensorrt_llm.commands", mock.MagicMock())
+    monkeypatch.setitem(sys.modules, "tensorrt_llm.commands.convert_checkpoint", mock.MagicMock())
+
+    # Step 1 succeeds (checkpoint conversion), Step 2 fails (trtllm-build)
+    mock_ckpt_res = mock.MagicMock(returncode=0)
+    mock_build_res = mock.MagicMock(returncode=1, stderr="build failed")
+    monkeypatch.setattr(
+        subprocess, "run", mock.MagicMock(side_effect=[mock_ckpt_res, mock_build_res])
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["export", "--model", str(adapter), "--format", "tensorrt"])
+    assert merges != []
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "TensorRT engine build failed" in _plain(result.output)
     assert _leftovers(tmp_path) == []
