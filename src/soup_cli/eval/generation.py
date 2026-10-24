@@ -1,9 +1,9 @@
 """Ordered optional batch generation shared by the pure evaluation scorers."""
 
-from typing import Callable, Optional
+from typing import Callable, Iterator, Optional
 
 
-def generate_outputs(gen: Callable[[str], str], prompts: list[str]) -> list[Optional[str]]:
+def iter_outputs(gen: Callable[[str], str], prompts: list[str]) -> Iterator[Optional[str]]:
     """Return one output per prompt; ``None`` marks a failed generation.
 
     A callable ``batch(prompts) -> list[str]`` is optional. If a batch raises,
@@ -14,7 +14,7 @@ def generate_outputs(gen: Callable[[str], str], prompts: list[str]) -> list[Opti
     if not callable(gen):
         raise TypeError("gen must be callable")
     if not prompts:
-        return []
+        return
     batch = getattr(gen, "batch", None)
     if callable(batch):
         try:
@@ -23,13 +23,13 @@ def generate_outputs(gen: Callable[[str], str], prompts: list[str]) -> list[Opti
             pass
         else:
             if not isinstance(outputs, list) or len(outputs) != len(prompts):
-                return [None] * len(prompts)
-            return [output if isinstance(output, str) else None for output in outputs]
-    outputs = []
+                yield from [None] * len(prompts)
+                return
+            yield from (output if isinstance(output, str) else None for output in outputs)
+            return
     for prompt in prompts:
         try:
             output = gen(prompt)
         except Exception:  # noqa: BLE001 — a generation error is a failed item
             output = None
-        outputs.append(output if isinstance(output, str) else None)
-    return outputs
+        yield output if isinstance(output, str) else None

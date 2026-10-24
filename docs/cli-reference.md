@@ -3459,6 +3459,7 @@ Usage: `soup ship [OPTIONS] [<command>] [ARGS]...`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
+| `--progress` | text |  |  | Opt-in JSONL progress on stderr (jsonl). |
 | `--base` | text |  |  | Base model id/path (the 'before'). |
 | `--tuned` | text |  |  | Tuned model id/path (a separate 'after' model). |
 | `--adapter` | text |  |  | LoRA adapter path (tuned = base + this adapter). |
