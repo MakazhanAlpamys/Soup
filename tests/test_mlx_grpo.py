@@ -1437,6 +1437,27 @@ output: ./output
                                                    "  quantization: none\n  use_galore: true\n"))
         assert {e.field for e in check_config(cfg)} == {"training.use_galore"}
 
+    def test_every_doctor_row_can_load_and_is_reported(self):
+        """Doctor rows only for settings a GRPO config on MLX can carry (#755, #1330)."""
+        from soup_cli.config.backend_support import check_config, unsupported_for
+
+        fields = [e.field for e in unsupported_for("grpo", "mlx")]
+        assert fields
+        for field in fields:
+            cfg = _config(**{field.split(".", 1)[1]: "true"})
+            assert [e.field for e in check_config(cfg)] == [field]
+
+    @pytest.mark.parametrize("line", ["use_lorafa: true", "use_flash_attn: true",
+                                      "use_liger: true", "neftune_alpha: 5.0",
+                                      "quantization_aware: true"])
+    def test_settings_refused_at_load_have_no_doctor_row(self, line):
+        from soup_cli.config.backend_support import unsupported_for
+
+        key, value = line.split(": ", 1)
+        with pytest.raises(Exception, match=key):
+            _config(**{key: value})
+        assert f"training.{key}" not in {e.field for e in unsupported_for("grpo", "mlx")}
+
     def test_the_ignored_settings_are_printed_without_the_template(self, monkeypatch):
         from io import StringIO
 

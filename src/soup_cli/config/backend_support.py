@@ -215,10 +215,17 @@ _MLX_SIMPO: tuple[SupportEntry, ...] = _MLX_ORPO
 #: MLX KTO runs MLX DPO's loop and reference precompute: the same fields.
 _MLX_KTO: tuple[SupportEntry, ...] = _MLX_DPO
 
-#: MLX GRPO (#1976) reuses MLX DPO's warning list but applies ``data.chat_template``
-#: (with the transformers path's fallback template), so that row is not a gap.
+#: MLX GRPO (#1976) prints MLX DPO's warning list, but only these of its rows can
+#: load with ``task: grpo``: LoRA-FA, FlashAttention, Liger, NEFTune and QAT are
+#: refused at config load for this task, and load-time refusals have no rows.
+_MLX_GRPO_FIELDS = frozenset({
+    "training.use_galore",
+    "training.use_ring_attention",
+    "training.moe_lora",
+    "training.use_fsdp2_compile",
+})
 _MLX_GRPO: tuple[SupportEntry, ...] = tuple(
-    entry for entry in _MLX_DPO if entry.field != "data.chat_template"
+    entry for entry in _MLX_DPO if entry.field in _MLX_GRPO_FIELDS
 )
 
 #: ``(task, backend, modality)`` -> the settings that combination does not honour.
