@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from soup_cli.trainer.rewards import accuracy_reward, math_verify_reward
-from tests._growth_timing import assert_grows_linearly
+from tests._growth_timing import assert_grows_linearly, linux_only
 
 _SCALE_N = 100  # the starting size; the helper doubles it until the run is long enough to time
 
@@ -41,6 +41,7 @@ def _score(text: str) -> None:
     math_verify_reward(_msg(text), answer=["42"])
 
 
+@linux_only
 @pytest.mark.parametrize("build", list(REWRITE_INPUTS.values()), ids=list(REWRITE_INPUTS))
 def test_each_rewrite_grows_linearly(build):
     assert_grows_linearly(_score, build, _SCALE_N)

@@ -142,9 +142,9 @@ training:
     alpha: 32
 ```
 
-MLX backend supports SFT, DPO, ORPO and SimPO. Any other task with `backend: mlx` (`grpo`, `ipo`, `kto`, `preference`, ...) is refused when the config is loaded, with an error naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for ready-made Apple Silicon configs.
+MLX backend supports SFT, DPO, ORPO, SimPO and KTO. Any other task with `backend: mlx` (`grpo`, `ipo`, `preference`, ...) is refused when the config is loaded, with an error naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for ready-made Apple Silicon configs.
 
-`training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO and SimPO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
+`training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO, SimPO and KTO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
 
 #### DPO on MLX
 
@@ -286,11 +286,14 @@ That shows the objective moving, not alignment quality.
 - **Stops on a nonfinite loss** instead of training on NaN.
 - **LoRA dropout applies**, as in MLX DPO above; set `lora.dropout: 0` to
   match TRL's `disable_dropout`.
-- **Reported:** loss, NLL, chosen and rejected rewards (`0.1 * logp`, as TRL
-  logs them), reward accuracy and margin, and the mean chosen and rejected
-  log-probabilities, per logged step and in the run result (`val_*` for the
-  validation split). TRL's mean-logit metrics are not computed: the vocabulary
-  head runs in chunks and the full logits are never held.
+- **Reported:** the panel and `soup ui` show loss and validation loss. Without a
+  live panel each logged step prints loss, NLL, reward accuracy and margin. The
+  run result has, for the validation split, `val_preference_loss` (the SimPO
+  term without the NLL, which is not on the per-step line), `val_nll_loss`, the
+  chosen and rejected rewards (`0.1 * logp`, as TRL logs them), reward accuracy
+  and margin, and the mean chosen and rejected log-probabilities. TRL's
+  mean-logit metrics are not computed: the vocabulary head runs in chunks and
+  the full logits are never held.
 - **Saved:** `adapters.safetensors` and `adapter_config.json` (with `task:
   simpo`, `simpo_beta`, `simpo_gamma`, `cpo_alpha` and the base model),
   loadable with `mlx_lm.load(base, adapter_path=output)`, written as MLX ORPO
@@ -302,6 +305,112 @@ That shows the objective moving, not alignment quality.
   `task: preference` with `preference_loss: simpo` on
   `backend: mlx` (use `task: simpo`). The other settings MLX DPO does not apply
   are not applied here either.
+
+#### KTO on MLX
+
+`task: kto` with `backend: mlx` runs the same loop and reference precompute as
+MLX DPO with KTO's objective, matched to TRL 0.29.1's KTO trainer (the one the
+transformers backend runs, with `training.kto_beta` as `beta` and every other
+`KTOConfig` setting at its default):
+
+- `r` is the policy minus the reference **summed** log-probability of the
+  completion;
+- `z = max(0, mean(policy_KL - reference_KL))` over the batch's KL rows,
+  without gradient;
+- a desirable row (`label: true`) loses `1 - sigmoid(kto_beta * (r - z))`, an
+  undesirable one `1 - sigmoid(kto_beta * (z - r))`, each weighted 1.0
+  (`desirable_weight` / `undesirable_weight` are not exposed), and the loss is
+  the mean over every row of the batch. A batch with only one label trains on
+  that label's rows alone.
+
+Qualified on Qwen2.5-0.5B-Instruct in bf16 and 4-bit on an M4 Pro: one epoch on
+1,200 unpaired UltraFeedback rows (`batch_size: 4`, accumulation 2) took about
+9 minutes and 8.0-9.3 GB, and the KTO loss on 400 held-out rows fell from 0.500
+to 0.448 (bf16) and 0.456 (4-bit). The desirable term fell while the undesirable
+one grew, the usual one-epoch KTO shape; that shows the objective moving, not
+alignment quality.
+
+```yaml
+base: mlx-community/Qwen2.5-0.5B-Instruct-4bit
+task: kto
+backend: mlx
+
+data:
+  train: ./kto.jsonl
+  format: kto
+  max_length: 1024
+
+training:
+  lr: 2e-5
+  kto_beta: 0.1
+  batch_size: 4
+  gradient_accumulation_steps: 4
+  gradient_checkpointing: true
+  lora:
+    r: 16
+    alpha: 32
+    dropout: 0
+```
+
+- **KL rows, as TRL builds them.** Each row's KL row is its own prompt with the
+  completion of the previous row in its group of `batch_size` consecutive rows,
+  the first row taking the last one's; a shorter last group rotates within
+  itself, and a last group of one row is its own KL row. Batches run in
+  dataset order, the last partial batch included, because TRL's KTO samples
+  sequentially: each training batch is one KL group, so its `z` is estimated
+  from the same completions it scores. With `gradient_accumulation_steps`
+  above 1 the plan is cut to whole accumulation windows, as in MLX DPO and
+  ORPO; in dataset order that always leaves the same final batches untrained
+  (TRL instead updates on the partial window at each epoch's end), and the run
+  warns before training, naming those batches and their rows. `training.seed` / `data_seed` do not
+  reorder rows (on either backend); shuffle the file to mix labels.
+- **Reference, precomputed.** The reference log-probs of every row and of its KL
+  row come from the base model before the first update, as in MLX DPO
+  (`--resume` included); the policy's KL log-probs are computed live, without
+  gradient, at every step.
+- **Tokens.** Rows are read by the `format: kto` converter and tokenized as
+  TRL's KTO trainer does: rendered to text with the chat template (keeping the
+  prefix the prompt and `prompt + completion` renderings share), the
+  completion located even when the tokenizer merges the last prompt token
+  into it, BOS prepended to the prompt and EOS appended to the completion when
+  missing. A row longer than `data.max_length` loses the end of its completion;
+  the prompt is never cut (TRL 0.29.1 has no prompt cap, and the transformers
+  path adds none). A KL row is re-cut to its own prompt's room.
+- **Labels** are read by the loader's `format: kto` converter, exactly as on the
+  transformers backend (`true` / `false`, and the strings and numbers that
+  converter accepts); MLX adds no reading of its own. Only a row handed to the
+  trainer without the loader is checked for a real `true` / `false`.
+- **Refused before any update:** a row with no `label`; an empty completion;
+  and a row whose prompt leaves no room for one completion token in
+  `data.max_length` (TRL keeps such a prompt whole and trains it past
+  `max_length`). A refusal names the split and row index.
+- **Batch size at least 2**, as on the transformers backend: `batch_size: 1` is
+  refused at load and `batch_size: auto` runs at 2. A training split smaller
+  than `batch_size` trains as one partial batch and one KL group, as in TRL;
+  fewer than 2 rows is refused, because a row's KL completion is another
+  row's.
+- **Stops on a nonfinite loss** instead of training on it (TRL's `nanmean`
+  drops a NaN row silently).
+- **LoRA dropout applies**, as in MLX DPO above; set `lora.dropout: 0` to match
+  TRL's `disable_dropout`. With dropout on, the KL forward draws its own mask.
+- **Reported:** the panel and `soup ui` show loss and validation loss. Without a
+  live panel each logged step also prints `kl`, `rewards/chosen` and
+  `rewards/rejected` (`kto_beta * r` averaged per label, as TRL logs them;
+  `n/a` for a label the step did not see). The run result has `val_kl`,
+  `val_rewards_chosen`, `val_rewards_rejected`, `val_rewards_margins`,
+  `val_logps_chosen` and `val_logps_rejected` for the validation split, which
+  is scored in `batch_size` chunks in order. TRL's `logits/*` and `count/*`
+  metrics are not reported.
+- **Saved:** `adapters.safetensors` and `adapter_config.json` (with `task: kto`,
+  `kto_beta`, the loss type, both weights, the KL group size and the base
+  model), loadable with `mlx_lm.load(base, adapter_path=output)`, written as
+  MLX ORPO writes them. `--resume` refuses a checkpoint without that metadata,
+  from another task, or from another base, before any tensor loads.
+- **Refused at load:** `quantization: 8bit` (use `none`, or a pre-quantized
+  4-bit base with `quantization: 4bit`), `training.lora.r: 0` (the reference is
+  the untrained LoRA policy), non-text `modality`, DoRA, LoRA+ and
+  `data.chat_template` (as for MLX DPO and ORPO). The other settings MLX DPO
+  does not apply are not applied here either.
 
 #### DoRA on MLX
 
@@ -364,8 +473,8 @@ what ran is recoverable from the output directory.
 
 ### Transformers on MPS
 
-The regular `backend: transformers` path can run more than MLX's SFT, DPO, ORPO and SimPO
-surface. On a live MPS runtime that accepts bfloat16, Soup enables BF16 autocast
+The regular `backend: transformers` path can run more than MLX's SFT, DPO, ORPO,
+SimPO and KTO surface. On a live MPS runtime that accepts bfloat16, Soup enables BF16 autocast
 for the hardware-validated text trainers: SFT, DPO, GRPO/RLVR, reward modelling,
 and PRM.
 The decision comes from a live MPS allocation probe rather than a macOS version
@@ -417,6 +526,8 @@ training:
 Works with the tasks that have an unsloth setup: SFT (text; SFT vision and audio still run the transformers setup), DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, BCO, preference, Pretrain, Embedding and TTS. The others (`reward_model`, `prm`, `classifier`, `reranker`, `cross_encoder`, `distill`, `unlearn`, `moe_lora_routing`, `online_dpo` and `asr`) have no unsloth setup, so `backend: unsloth` is refused at config load for them (#1357). If unsloth is installed but not enabled, Soup suggests it, but only for a config that would still load with `backend: unsloth` (#1736): a config one of these refusals would stop gets no suggestion.
 
 `quantization: 8bit` with `backend: unsloth` is refused at config load: Soup's Unsloth loader passes `load_in_4bit` only, so `8bit` used to load the model in 16-bit with no word (#1811). Use `4bit` or `none` on this backend, or `backend: transformers` for 8-bit.
+
+`training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: unsloth` for every task that has an unsloth setup ([#2153](https://github.com/MakazhanAlpamys/Soup/issues/2153)): the unsloth loader attaches every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
 
 > **Tip:** Soup auto-detects unsloth. When it is installed, `soup train` prints a hint if you haven't enabled it yet and your config would load with it.
 

@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
+from soup_cli.utils.kimi import KIMI_K2_GUARDED_STREAM_REASON, KIMI_K2_NO_SUPPORTED_ROUTE_REASON
+
 
 @dataclass(frozen=True)
 class RecipeMeta:
@@ -14,6 +16,7 @@ class RecipeMeta:
     tags: Tuple[str, ...]
     description: str
     yaml_str: str
+    unavailable_reason: Optional[str] = None
 
 
 def list_recipes() -> List[RecipeMeta]:
@@ -2809,7 +2812,8 @@ output: ./output
         task="sft",
         size="N/A",
         tags=("kimi", "moonshot", "moe", "long-context"),
-        description="Kimi K2 SFT (Moonshot MoE, long-context-aware)",
+        description="Kimi K2 SFT: resident unsupported; guarded streaming only (see recipes use).",
+        unavailable_reason=KIMI_K2_GUARDED_STREAM_REASON,
         yaml_str="""\
 base: moonshotai/Kimi-K2-Base
 task: sft
@@ -2839,7 +2843,8 @@ output: ./output
         task="grpo",
         size="N/A",
         tags=("kimi", "moonshot", "thinking", "grpo", "reasoning"),
-        description="Kimi K2 Thinking GRPO reasoning",
+        description="Kimi K2 Thinking GRPO: unsupported resident route; no supported route yet.",
+        unavailable_reason=KIMI_K2_NO_SUPPORTED_ROUTE_REASON,
         yaml_str="""\
 base: moonshotai/Kimi-K2-Thinking
 task: grpo

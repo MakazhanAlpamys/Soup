@@ -13,7 +13,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-from soup_cli.config.loader import load_config_from_string
 from soup_cli.config.schema import TEMPLATES
 from soup_cli.recipes.catalog import RECIPES
 from soup_cli.templates import list_templates, load_template
@@ -61,4 +60,6 @@ def test_shipped_config_sets_gradient_checkpointing(source_id, text):
 
 @pytest.mark.parametrize(("source_id", "text"), SHIPPED, ids=[s for s, _ in SHIPPED])
 def test_shipped_config_still_loads(source_id, text):
-    load_config_from_string(text)
+    from tests.recipe_contracts import load_shipped_config
+
+    load_shipped_config(source_id, text)

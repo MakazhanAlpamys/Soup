@@ -15,7 +15,7 @@ import re
 import pytest
 
 from soup_cli.eval.custom import score_contains
-from tests._growth_timing import assert_grows_linearly
+from tests._growth_timing import assert_grows_linearly, linux_only
 
 _SCALE_N = 250  # the starting size; the helper doubles it until the run is long enough to time
 
@@ -27,6 +27,7 @@ SHAPES = {
 }
 
 
+@linux_only
 @pytest.mark.parametrize("build", list(SHAPES.values()), ids=list(SHAPES))
 def test_contains_grows_linearly(build):
     assert_grows_linearly(lambda pair: score_contains(*pair), build, _SCALE_N)

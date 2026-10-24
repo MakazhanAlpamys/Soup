@@ -36,6 +36,7 @@ soup infer|chat|diff ... --device cpu|cuda|cuda:N|mps  Pick where the model load
 soup push --model ./output --repo user/name   Upload to HuggingFace
 soup push --model ./output --repo user/name --collection user/coll-abc123  Add to HF Collection
 soup merge --adapter ./output                 Merge LoRA with base model
+soup merge --adapter ./output --low-memory    Merge tensor by tensor without loading the whole model into RAM
 soup merge --adapter ./output --save-format 4bit --no-double-quant  Save a BNB-4bit merge with double-quantization disabled (default on; #321)
 soup merge-sharded-fsdp-weights ./shards -o merged.safetensors  Consolidate FSDP shards into one safetensors (v0.71.14; --plan-only previews)
 soup delinearize-llama4 ./src --target ./out [--num-experts N] [--plan-only]  Live Llama-4 fused-expert reshape [E*din,dout] -> [E,din,dout] + sidecar copy (v0.71.21)
@@ -144,7 +145,7 @@ soup data push --input d.jsonl --hf-dataset u/n --hub modelscope|modelers  Uploa
 soup data registry                           List all registered datasets
 soup data demo                                List bundled demo JSONL fixtures
 soup data demo alpaca_demo --output ./d.jsonl  Copy a bundled demo JSONL fixture
-soup data ingest <file>                         PDF/DOCX/MD/TXT -> JSONL (one row per page/heading)
+soup data ingest <file>                         PDF/DOCX/MD/TXT -> JSONL (PDF/DOCX: pip install "soup-cli[documents]")
 soup data preprocess <config>                   AOT-tokenize and cache for reuse across runs
 soup data recipe <path>                         Validate / execute a Data Recipe DAG
 soup data mix                                 BETA mixture-weight optimiser (proxy runs)
@@ -173,7 +174,7 @@ soup adapters checkout <name>                   Restore a snapshotted branch's c
 soup adapters diff <a> <b>                      Per-layer ΔW Frobenius diff + effective-rank drift
 soup loop init <model> --eval <s> --baseline <b> [--pre-wired] [--thumbs-db <db>]  Create .soup/loop.yaml (data flywheel; --pre-wired = real stages; --thumbs-db = harvest `serve --record-thumbs` thumbs)
 soup loop status                              Counters + status + pre_wired flag
-soup loop watch [--detach] [--max-iterations N] [--pre-wired] [--pack-cans]  Harvest → train → gate → deploy daemon (pre-wired stages + Soup Can packing)
+soup loop watch [--detach] [--max-iterations N] [--pre-wired] [--pack-cans] [--tool-auth-token T]  Harvest → train → gate → deploy daemon (pre-wired stages + Soup Can packing)
 soup loop pause                              Atomic status flip: pause watch daemon at next iteration boundary
 soup loop resume                             Atomic status flip: resume a paused loop
 soup loop canary <adapter> --traffic 5%      Route keyed serve traffic to a loaded adapter; watch auto-rolls back on MAJOR

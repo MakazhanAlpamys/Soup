@@ -221,11 +221,13 @@ pick `seed` up for their samplers as well.
 Through v0.73.0 this reached the **SFT** trainer only, so `training.seed: 7` on
 a DPO or GRPO run was accepted and silently trained at 42.
 
-The one path that still ignores both fields is the **MLX backend**
-(`backend: mlx`), whose trainers seed nothing at all — MLX has its own RNG
-(`mx.random`). Setting either field there now prints a warning naming it
-(`MLX backend ignores: training.seed ...`) rather than accepting it in silence,
-so an MLX run cannot look seeded while it is not.
+On the **MLX backend** (`backend: mlx`), SFT seeds MLX's own RNG
+(`mx.random`, which draws LoRA `A` and dropout) with `training.seed` before the
+adapter is built, and numpy's global RNG, which mlx-lm's batch shuffle draws
+from, with `training.data_seed` (or `training.seed` when that is unset) right
+before training starts (#1850). Before #1850 it seeded neither and warned
+`MLX backend ignores: training.seed`, so every MLX run trained on a different
+batch order.
 
 **Not a determinism guarantee.** A fixed seed makes the *software* RNG
 reproducible. It does not make CUDA kernels bit-reproducible — non-deterministic
@@ -595,7 +597,8 @@ soup eval unlearning <run-id> --benchmark tofu --evidence evidence.json --output
 `task: unlearn` is live (v0.71.9): it loads a LoRA-wrapped policy, a frozen reference copy (NPO / RMU), and the forget / retain JSONL sets, then optimises the per-method loss — NPO's `(2/β)·mean(-logσ(-β·(π_logp − ref_logp)))` drives the policy's forget-set log-prob below the reference (= forgetting), while the retain set anchors capability. Run NPO/SimNPO **with** a `retain_set` — without one the policy has no utility anchor and Soup warns loudly.
 
 Unlearning honors `training.optimizer`, `scheduler`, `warmup_ratio`, `weight_decay`,
-`max_grad_norm`, `batch_size` and `gradient_accumulation_steps`. The default
+`max_grad_norm`, `batch_size`, `gradient_accumulation_steps` and
+`gradient_checkpointing` (any enabled tier checkpoints the whole policy model). The default
 `batch_size: auto` resolves to 1 for unlearning rather than to the memory estimate
 the other trainers use, so a config makes the same number of updates on any card. This
 memory-constrained loop processes one example at a time and accumulates gradients
@@ -780,7 +783,7 @@ training:
 `reasoning_effort` injects `<|reasoning_effort|>high<|/reasoning_effort|>` into
 the system turn (creating one if absent). `train_on_eot=True` makes the model
 learn when to stop generating by training on the trailing EOS token instead of
-masking it out. Both are gated to the SFT-family of tasks.
+masking it out. Both load only on `task: sft`, `tts` and `distill`.
 
 
 ## EBFT / GDPO Loss Variants
@@ -1875,6 +1878,9 @@ training:
 {"prompt": "What is 2+2?", "completion": "Fish", "label": false}
 ```
 
+On Apple Silicon, `backend: mlx` runs KTO natively with the same objective; see
+[KTO on MLX](backends-and-ops.md#kto-on-mlx).
+
 
 ## ORPO Training (No Reference Model)
 
@@ -2260,7 +2266,7 @@ the cross-entropy. See [EBFT / GDPO Loss Variants](#ebft--gdpo-loss-variants).
 
 ## gpt-oss `reasoning_effort` + `train_on_eot` (v0.52.0)
 
-`training.reasoning_effort: low | medium | high` injects a system-prefix token at training time for gpt-oss models; `training.train_on_eot: true` includes explicit EOT/EOS control tokens in the SFT loss (axolotl `train_on_eot`). Both are gated to the SFT-family task set (`sft` / `pretrain` / `distill` / `classifier` / `reranker` / `cross_encoder`) — setting them on DPO / GRPO / PPO / etc. fails at config load. Live formatter wiring in v0.52.1.
+`training.reasoning_effort: low | medium | high` injects a system-prefix token at training time for gpt-oss models; `training.train_on_eot: true` includes explicit EOT/EOS control tokens in the SFT loss (axolotl `train_on_eot`). Both are applied by the SFT formatter, which runs on `sft`, `tts` and `distill`, so those are the tasks they load on. Setting either on any other task (`pretrain`, DPO, GRPO, PPO, `classifier`, `reranker`, `cross_encoder`) fails at config load. Live formatter wiring in v0.52.1.
 
 
 ## MoLE — Per-Token Adapter Routing (`task='moe_lora_routing'`)

@@ -172,6 +172,17 @@ def _isolate_experiments_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.fixture(autouse=True)
+def _no_ambient_tool_auth_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start every test without ``SOUP_TOOL_AUTH_TOKEN`` from the developer's shell.
+
+    ``soup serve --tool-auth-token`` reads it, so an exported token would turn a test
+    of a refused bind, or of a route without a token, into one that passes the check.
+    A test that needs it sets it itself.
+    """
+    monkeypatch.delenv("SOUP_TOOL_AUTH_TOKEN", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _no_hub_model_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the VRAM estimate's model-shape reader off the Hugging Face cache and Hub.
 

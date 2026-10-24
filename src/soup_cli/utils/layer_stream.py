@@ -1228,6 +1228,85 @@ def nf4_scale_cache_bytes(quant_specs: Mapping[str, Any], n_layers: int) -> int:
     return per_layer * n_layers
 
 
+#: training.stream_recompute='auto' — the share of the card's total memory the
+#: retained activations may grow the step into.
+STREAM_RECOMPUTE_HEADROOM = 0.85
+
+#: The three caps of :func:`stream_recompute_budget`, by the name it reports.
+RECOMPUTE_CAP_CARD = "card"
+RECOMPUTE_CAP_FREE = "free"
+RECOMPUTE_CAP_OVERRIDE = "override"
+
+
+@dataclass(frozen=True)
+class RecomputeBudget:
+    """The VRAM the retained activations of ``stream_recompute='auto'`` may use."""
+
+    #: The smallest of the caps, in bytes.
+    cap_bytes: int
+    #: Which cap that was: RECOMPUTE_CAP_CARD / _FREE / _OVERRIDE.
+    bound: str
+    #: ``cap_bytes`` minus the measured reserved peak; <= 0 means none.
+    budget_bytes: int
+
+
+def stream_recompute_budget(
+    *,
+    total_bytes: int,
+    free_bytes: int,
+    reserved_bytes: int,
+    reserved_peak_bytes: int,
+    override_bytes: Optional[int] = None,
+    headroom: float = STREAM_RECOMPUTE_HEADROOM,
+) -> RecomputeBudget:
+    """``min(headroom x card, free + reserved now, stream_vram_override) - reserved peak``.
+
+    The card term keeps headroom below the physical size; the free term is what
+    this process can still reach on a card other processes share
+    (``mem_get_info`` free plus what the allocator already holds); the override,
+    when set, is the user's own cap for what the driver cannot report. The peak
+    is the RESERVED one, not the allocated one: the caching allocator's
+    fragmentation is real VRAM.
+    """
+    if (
+        isinstance(headroom, bool)
+        or not isinstance(headroom, (int, float))
+        or not 0.0 < headroom <= 1.0
+    ):
+        raise ValueError(f"headroom must be a float in (0, 1]; got {headroom!r}")
+    caps = {
+        RECOMPUTE_CAP_CARD: int(headroom * total_bytes),
+        RECOMPUTE_CAP_FREE: int(free_bytes) + int(reserved_bytes),
+    }
+    if override_bytes is not None:
+        caps[RECOMPUTE_CAP_OVERRIDE] = int(override_bytes)
+    bound = min(caps, key=lambda name: caps[name])
+    cap = caps[bound]
+    return RecomputeBudget(cap_bytes=cap, bound=bound, budget_bytes=cap - int(reserved_peak_bytes))
+
+
+def retained_layer_charge(
+    allocated_bytes: int, peak_reserved_bytes: int, peak_allocated_bytes: int
+) -> int:
+    """One retained layer's charge: its allocated bytes times the step's
+    reserved/allocated ratio when that is above 1 (the allocator's rounding and
+    fragmentation grow with what it holds), rounded up."""
+    allocated_bytes = int(allocated_bytes)
+    if peak_allocated_bytes <= 0 or peak_reserved_bytes <= peak_allocated_bytes:
+        return allocated_bytes
+    return -(-allocated_bytes * int(peak_reserved_bytes) // int(peak_allocated_bytes))
+
+
+def plan_retained_layers(budget_bytes: int, per_layer_bytes: int, n_layers: int) -> int:
+    """How many of the last streamed layers may skip the checkpoint recompute:
+    ``budget_bytes // per_layer_bytes`` clamped to ``[0, n_layers]``. A zero or
+    negative budget, or a layer charged at zero bytes or less, plans nothing,
+    which is the checkpoint recompute everywhere."""
+    if budget_bytes <= 0 or per_layer_bytes <= 0:
+        return 0
+    return max(0, min(int(n_layers), int(budget_bytes) // int(per_layer_bytes)))
+
+
 def estimate_loss_chunk_bytes(
     *, hidden_size: int, seq_len: int, batch_size: int = 1, dtype: str = "bfloat16"
 ) -> int:

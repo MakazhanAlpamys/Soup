@@ -13,6 +13,14 @@ synthetic store every number is "random weights, shape only".
 With ``--weights`` a real checkpoint is sharded into ``--store`` first (NF4 on
 CUDA, the way ``soup train`` does it: native transformers class, the config's
 layer count, ``--expert-layout``), unless ``--store`` already holds an index.
+
+``--loss-tokens N`` takes the loss over the last N positions only (transformers'
+``logits_to_keep``). Every position still runs forward and backward through every
+decoder layer; only the vocabulary projection and the cross entropy shrink. At a
+163,840-entry vocabulary they hold about 1.9 MB of VRAM per loss position, which
+is what stops a long step from fitting (``probe-rtx5070-giant-moe-seq-scaling.md``).
+Each step also records ``os_io``: the bytes the process read and the bytes each
+physical drive read during the step, from the OS counters.
 """
 
 from __future__ import annotations
@@ -24,6 +32,16 @@ import sys
 import time
 
 _ATTENTION = ["q_proj", "q_a_proj", "q_b_proj", "kv_a_proj_with_mqa", "kv_b_proj", "o_proj"]
+
+
+def _loss_window(text):
+    try:
+        value = int(text)
+    except ValueError:
+        value = -1
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"--loss-tokens must be a whole number >= 0, got {text!r}")
+    return value
 
 
 def _args(argv=None):
@@ -38,6 +56,10 @@ def _args(argv=None):
     parser.add_argument("--seq", type=int, default=512)
     parser.add_argument("--batch", type=int, default=1)
     parser.add_argument("--steps", type=int, default=1)
+    parser.add_argument(
+        "--loss-tokens", type=_loss_window, default=0,
+        help="loss over the last N positions of each row only (0, or N >= --seq: all)",
+    )
     parser.add_argument("--lora-r", type=int, default=8)
     parser.add_argument("--buffers", type=int, default=2)
     parser.add_argument("--tier", choices=("ram", "disk"), default="ram")
@@ -108,6 +130,65 @@ def _uniform_routing(model):
     return replaced
 
 
+def _loss_inputs(ids, loss_tokens):
+    """``(labels, extra forward kwargs)`` for a loss over the last ``loss_tokens`` positions.
+
+    0, or a window at least as long as the row, is the full loss: ``labels=ids`` and no
+    extra kwargs, the harness's behaviour before ``--loss-tokens``. Otherwise
+    ``logits_to_keep=N`` projects only the last N hidden states and the labels are the
+    last N ids, so the loss's own shift keeps next-token targets: position T-N+j
+    predicts id T-N+j+1, and the window's last position is ignored as the row's is.
+    """
+    if loss_tokens <= 0 or loss_tokens >= int(ids.shape[-1]):
+        return ids, {}
+    return ids[:, -loss_tokens:], {"logits_to_keep": int(loss_tokens)}
+
+
+def _forward_loss(model, ids, loss_tokens):
+    """The step's loss and the number of loss positions per row."""
+    labels, extra = _loss_inputs(ids, loss_tokens)
+    return model(input_ids=ids, labels=labels, **extra).loss, int(labels.shape[-1])
+
+
+def _io_snapshot():
+    """Bytes read so far by this process and by each physical drive (psutil).
+
+    ``None`` for a counter the platform does not give. Drive read TIMES are not
+    recorded: psutil's Windows ``read_time`` was not credible on this box (seconds
+    for terabytes).
+    """
+    try:
+        import psutil
+    except ImportError:
+        return {"process_read_bytes": None, "disk_read_bytes": None}
+    refused = (AttributeError, OSError, RuntimeError, psutil.Error)
+    try:
+        process = int(psutil.Process().io_counters().read_bytes)
+    except refused:
+        process = None
+    try:
+        counters = psutil.disk_io_counters(perdisk=True) or {}
+        disks = {name: int(value.read_bytes) for name, value in counters.items()}
+    except refused:
+        disks = None
+    return {"process_read_bytes": process, "disk_read_bytes": disks}
+
+
+def _io_delta(before, after):
+    """What was read between two snapshots: the process's bytes and each drive's."""
+    process = None
+    if before["process_read_bytes"] is not None and after["process_read_bytes"] is not None:
+        process = after["process_read_bytes"] - before["process_read_bytes"]
+    disks = None
+    if before["disk_read_bytes"] is not None and after["disk_read_bytes"] is not None:
+        disks = {
+            name: value - before["disk_read_bytes"][name]
+            for name, value in after["disk_read_bytes"].items()
+            if name in before["disk_read_bytes"]
+        }
+    return {"process_read_bytes": process, "disk_read_bytes": disks}
+
+
 def _peak_host_bytes():
     try:
         import psutil
@@ -167,8 +248,9 @@ def main(argv=None):
             before = runtime.stats()
             torch.cuda.synchronize()
             torch.cuda.reset_peak_memory_stats()
+            io_before = _io_snapshot()
             tick = time.perf_counter()
-            loss = model(input_ids=ids, labels=ids).loss
+            loss, loss_positions = _forward_loss(model, ids, args.loss_tokens)
             loss.backward()
             torch.cuda.synchronize()
             seconds_to_grads = time.perf_counter() - tick
@@ -183,6 +265,7 @@ def main(argv=None):
             optimizer.zero_grad(set_to_none=True)
             torch.cuda.synchronize()
             seconds = seconds_to_grads + (time.perf_counter() - tick_opt)
+            io_after = _io_snapshot()
             after = runtime.stats()
             report["steps"].append(
                 {
@@ -190,12 +273,17 @@ def main(argv=None):
                     "seconds": round(seconds, 2),
                     "tokens_per_second": round(args.batch * args.seq / seconds, 3),
                     "loss": float(loss.detach()),
+                    "loss_positions": loss_positions,
                     "loss_finite": bool(torch.isfinite(loss.detach())),
                     "grads_finite": grads_finite,
                     "grads_present": grads_present,
                     "expert_fetches": after["expert_fetches"] - before["expert_fetches"],
                     "expert_bytes_read": after["expert_bytes_read"] - before["expert_bytes_read"],
                     "layer_loads": after["layer_loads"] - before["layer_loads"],
+                    # OS counters over the timed region: every byte this process read
+                    # (experts, dense layer files, vocabulary matrices) and what each
+                    # physical drive read, whoever asked for it.
+                    "os_io": _io_delta(io_before, io_after),
                     # This step's peaks (reset at its start); the host figure is the
                     # process's peak working set so far (Windows ``peak_wset``).
                     "peak_vram_mib": torch.cuda.max_memory_allocated() // 2**20,

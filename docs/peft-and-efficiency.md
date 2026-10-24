@@ -616,7 +616,22 @@ training:
   freeze_ratio: 0.75   # Freeze 75% of layers from the bottom
 ```
 
-Works with and without LoRA. When used with LoRA, LoRA is applied only to unfrozen layers.
+Works with and without LoRA. When used with LoRA, the adapter is attached only to the unfrozen
+layers, so a frozen layer stays frozen rather than training through a fresh adapter.
+
+`freeze_layers`/`freeze_ratio` cannot currently be combined with LoRA when
+`training.lora.target_modules` is a regex string (an explicit one, or an `auto`-resolved
+architecture table entry such as Mistral 3.5's), when `training.lora.target_parameters` is
+set (per-parameter LoRA, e.g. fused MoE experts), or with `training.lora.use_vera`. A
+`target_modules` list entry that only matches modules outside a numbered decoder layer (such as
+`embed_tokens`) and a freeze plan that freezes every layer refuse too. Each of these refuses when
+the model is built rather than silently drop the freeze plan (#1432). A top-level `lm_head` target
+is accepted and keeps its adapter.
+
+Known limitation: a `target_modules` entry spelled as a full module path, such as
+`model.layers.0.self_attn.q_proj`, keeps its adapter even when that layer is frozen, because peft
+accepts an exact module name before it reads `layers_to_transform`. Use module-name suffixes such
+as `q_proj` with `freeze_layers` / `freeze_ratio`.
 
 ## LISA — Layerwise Importance Sampling (v0.71.34)
 

@@ -274,11 +274,12 @@
     "training.stream_disk_kind": null,
     "training.stream_expert_layout": "fused",
     "training.stream_layers": false,
-    "training.stream_nf4_scale_cache": false,
     "training.stream_loss_chunk": null,
+    "training.stream_nf4_scale_cache": false,
     "training.stream_ngram_source": "auto",
     "training.stream_pin": null,
     "training.stream_read_ahead": 2,
+    "training.stream_recompute": "on",
     "training.stream_source": "auto",
     "training.stream_vram_override": null,
     "training.stream_vram_probe": false,
@@ -809,32 +810,10 @@
       "training.lr": 1e-05
     },
     "kimi-k2-sft": {
-      "base": "moonshotai/Kimi-K2-Base",
-      "data.format": "auto",
-      "data.max_length": 8192,
-      "data.train": "./data/train.jsonl",
-      "training.epochs": 2,
-      "training.lora.alpha": 32,
-      "training.lora.dropout": 0.0,
-      "training.lora.r": 16,
-      "training.lr": 0.0001,
-      "training.moe_lora": true
+      "$unavailable": "Resident Kimi K2 is unsupported on Transformers 5.x. Use the guarded training.stream_layers: true route (#2107), with --trust-remote-code for the tokenizer and pip install tiktoken. See docs/performance-and-quantization.md, Kimi K2: CPU-only parity on a tiny K2-like checkpoint; full K2/GPU training is unverified."
     },
     "kimi-k2-thinking-grpo": {
-      "base": "moonshotai/Kimi-K2-Thinking",
-      "data.format": "auto",
-      "data.max_length": 4096,
-      "data.train": "./data/reasoning_prompts.jsonl",
-      "task": "grpo",
-      "training.batch_size": 1,
-      "training.epochs": 1,
-      "training.gradient_accumulation_steps": 8,
-      "training.gradient_checkpointing": true,
-      "training.grpo_beta": 0.04,
-      "training.lora.alpha": 32,
-      "training.lora.r": 16,
-      "training.lr": 5e-06,
-      "training.verifiable_domain": "math"
+      "$unavailable": "Resident Kimi K2 is unsupported on Transformers 5.x. No supported route yet."
     },
     "kimi-k2.5-dpo": {
       "base": "moonshotai/Kimi-K2.5",

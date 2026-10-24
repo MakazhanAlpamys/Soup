@@ -2744,6 +2744,7 @@ Usage: `soup loop watch [OPTIONS]`
 | `--poll-interval` | float | `60.0` |  | Seconds between iterations \[1, 3600]. |
 | `--pre-wired` | flag | off |  | Force the pre-wired production stages even if loop.yaml didn't set it. |
 | `--pack-cans` | flag | off |  | Pack each iteration as a v0.26 Soup Can + Registry entry (v0.71.4). |
+| `--tool-auth-token` | text |  |  | The soup serve --tool-auth-token value, sent as a Bearer token when the deploy stage activates an adapter. Defaults to \$SOUP_TOOL_AUTH_TOKEN, which keeps it out of the shell history. Env: `SOUP_TOOL_AUTH_TOKEN`. |
 
 ## `soup mcp`
 
@@ -2807,6 +2808,7 @@ Usage: `soup merge [OPTIONS]`
 | `--trust-remote-code` | flag | off |  | Allow loading models that ship custom Python via auto_map. Default deny (v0.36.0). Only enable if you trust the source. |
 | `--save-format` | text | `fp16` |  | Merged-checkpoint save format. fp16 (default) writes a standard fp16 merge. 4bit / 4bit_forced write a single BNB-4bit-quantized merge without the dequant-merge-requant cycle (v0.53.1 #142). |
 | `--double-quant` / `--no-double-quant` | flag | on |  | BNB double-quantization for the 4bit / 4bit_forced save formats (#321). Default on, matching the training loaders; pass --no-double-quant to disable. Ignored for the fp16 save format. |
+| `--low-memory` | flag | off |  | Merge tensor by tensor straight from the base safetensors files instead of loading the whole model into RAM. Needs the fp16 save format and a plain LoRA adapter. |
 | `--hub` | text | `hf` |  | Source hub for the base model: hf (default) / modelscope / modelers. Non-HF hubs require the matching SDK (v0.53.10 #152). |
 
 ## `soup merge-sharded-fsdp-weights`
@@ -3447,7 +3449,7 @@ Usage: `soup serve [OPTIONS]`
 | `--bank-strength` | float | `1.0` |  | Vector-bank delta strength multiplier. Ignored when --bank is unset. |
 | `--mole` | text |  |  | Path to a MoLE training output dir (mole_gate.pt + mole_manifest.json). Serves the base + N frozen task LoRAs with per-token gate blending at decode time. Requires --backend transformers; not combinable with --bank / --steer / --adapters. (v0.71.17 #259) |
 | `--kv-cache-type` | text |  |  | KV-cache type for decoding: q8_0 (8-bit quantized, needs hqq) / bf16 / f16 (cache dtype) / fp8 (vLLM+Hopper only). Transformers backend only — vLLM / SGLang routing is in the blocked tail. v0.71.14 (#140). |
-| `--tool-auth-token` | text |  |  | Require 'Authorization: Bearer &lt;token>' on the code-exec tool endpoints (/v1/tools/python, /v1/tools/bash, /v1/tools/web_search). Strongly recommended whenever --host is not loopback, since those endpoints run caller-supplied Python in a best-effort sandbox. |
+| `--tool-auth-token` | text |  |  | Require 'Authorization: Bearer &lt;token>' on the tool endpoints (/v1/tools/python, /v1/tools/bash, /v1/tools/web_search). Without it, /v1/tools/python and /v1/tools/bash answer 401 on every bind and a non-loopback --host is refused. Env: `SOUP_TOOL_AUTH_TOKEN`. |
 
 ## `soup ship`
 

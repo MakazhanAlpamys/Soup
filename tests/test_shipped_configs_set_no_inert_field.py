@@ -9,17 +9,19 @@ would get no effect from, or a warning they did not write.
 
 from __future__ import annotations
 
+import re
 import warnings
+from dataclasses import replace
 
 import pytest
 import yaml
 
 from soup_cli.config.deprecation import SoupConfigDeprecationWarning
-from soup_cli.config.loader import load_config_from_string
 from soup_cli.config.schema import SoupConfig, remap_root_level_misplaced_keys
 from soup_cli.config.staged_fields import find_staged_config_fields
 from soup_cli.recipes.catalog import RECIPES
 from soup_cli.templates import list_templates, load_template
+from tests.recipe_contracts import load_shipped_config
 from tests.test_issue748_config_fields_reach_a_consumer import KNOWN_UNCONSUMED
 
 
@@ -29,21 +31,29 @@ def _shipped() -> list[tuple[str, str]]:
     return configs
 
 
-def inert_fields_set(text: str) -> list[str]:
+def inert_fields_set(text: str, *, name: str = "") -> list[str]:
     """Every field ``text`` sets that is unconsumed, staged, or a deprecated value."""
     loaded = yaml.safe_load(text) or {}
     raw = remap_root_level_misplaced_keys(loaded)
     found = []
     for section in ("training", "data"):
-        for name in (raw.get(section) or {}):
-            if f"{section}.{name}" in KNOWN_UNCONSUMED:
-                found.append(f"{section}.{name} (read by nothing)")
-    config = load_config_from_string(text)  # the shipped text must load at all
+        for field in (raw.get(section) or {}):
+            if f"{section}.{field}" in KNOWN_UNCONSUMED:
+                found.append(f"{section}.{field} (read by nothing)")
+    config = load_shipped_config(name, text)
     # The loader turns deprecation warnings into console lines (#759), so they are
     # recorded here from the same construction it performs.
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        SoupConfig(**loaded)
+        if config is None:
+            # A documented refusal still validates nested fields and emits their
+            # warnings before the root Kimi guard. Keep inspecting all raw fields.
+            reason = RECIPES[name.removeprefix("recipe:")].unavailable_reason
+            assert reason is not None
+            with pytest.raises(ValueError, match=re.escape(reason)):
+                SoupConfig(**loaded)
+        else:
+            SoupConfig(**loaded)
     found += [f"{item.path} (staged)" for item in find_staged_config_fields(raw, config=config)]
     found += [
         f"deprecated value: {w.message}"
@@ -78,7 +88,25 @@ def test_the_enumeration_covers_both_catalogs_exactly():
 
 @pytest.mark.parametrize("name,text", _shipped(), ids=[n for n, _ in _shipped()])
 def test_a_shipped_config_sets_no_inert_field(name, text):
-    assert inert_fields_set(text) == [], name
+    assert inert_fields_set(text, name=name) == [], name
+
+
+@pytest.mark.parametrize("name", ["kimi-k2-sft", "kimi-k2-thinking-grpo"])
+@pytest.mark.parametrize("section,field,value,expected", [
+    ("training", "warmup_auto", True, "training.warmup_auto (read by nothing)"),
+    ("training", "forgetting_stop", True, "training.forgetting_stop (staged)"),
+    ("data", "remove_unused_columns", True, "deprecated value:"),
+])
+def test_refused_recipes_still_check_every_inert_field(
+    monkeypatch, name, section, field, value, expected,
+):
+    recipe = RECIPES[name]
+    raw = yaml.safe_load(recipe.yaml_str)
+    raw.setdefault(section, {})[field] = value
+    text = yaml.safe_dump(raw)
+    monkeypatch.setitem(RECIPES, name, replace(recipe, yaml_str=text))
+    found = inert_fields_set(text, name=f"recipe:{name}")
+    assert any(item.startswith(expected) for item in found), found
 
 
 class TestTheCheckCanFail:

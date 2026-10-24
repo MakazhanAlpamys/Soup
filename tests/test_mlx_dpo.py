@@ -468,9 +468,9 @@ class TestConfig:
         fields = {entry.field for entry in check_config(cfg)}
         assert fields == {"training.use_galore"}
 
-    # orpo and simpo have their own MLX trainers since #2004 / #1999
-    # (tests/test_mlx_orpo.py, tests/test_mlx_simpo.py).
-    @pytest.mark.parametrize("task", ["ipo", "kto", "ppo"])
+    # orpo, simpo and kto have their own MLX trainers since #2004 / #1999 / #2000
+    # (tests/test_mlx_orpo.py, tests/test_mlx_simpo.py, tests/test_mlx_kto.py).
+    @pytest.mark.parametrize("task", ["ipo", "ppo"])
     def test_other_preference_tasks_still_refused(self, task):
         from soup_cli.config.loader import load_config_from_string
 
@@ -714,6 +714,60 @@ class TestPromptCapIsWired:
         (example,), _ = wrapper._examples([{"prompt": long_prompt, "chosen": "a", "rejected": "b"}])
         assert len(example.prompt_ids) == 20
         assert len(example.prompt_ids) + len(example.chosen_ids) <= 40
+
+
+class TestThePlanHooksKeepDpoAndOrpoBehaviour:
+    """Pins the 5ce31005 refactor (no MLX): DPO and ORPO still plan seeded,
+    shuffled, whole batches and run ``auto`` at 1; only KTO overrides the hooks."""
+
+    def _wrapper(self, cls, yaml_text):
+        from soup_cli.config.loader import load_config_from_string
+
+        return cls(load_config_from_string(yaml_text))
+
+    def _both(self):
+        from soup_cli.trainer.mlx_dpo import MLXDPOTrainerWrapper
+        from soup_cli.trainer.mlx_orpo import MLXORPOTrainerWrapper
+        from tests.test_mlx_orpo import _ORPO_YAML
+
+        return [self._wrapper(MLXDPOTrainerWrapper, _MLX_DPO_YAML),
+                self._wrapper(MLXORPOTrainerWrapper, _ORPO_YAML)]
+
+    def test_the_plan_is_seeded_shuffled_and_drops_the_partial_batch(self):
+        for wrapper in self._both():
+            plan = wrapper._plan_batches(7, 2, 2, 3)
+            assert plan == wrapper._plan_batches(7, 2, 2, 3)
+            assert plan != wrapper._plan_batches(7, 2, 2, 4)
+            assert len(plan) == 6 and all(len(b) == 2 for b in plan)
+            for epoch in (plan[:3], plan[3:]):  # 6 distinct rows; the 7th never trains
+                rows = [i for b in epoch for i in b]
+                assert len(set(rows)) == 6 and set(rows) <= set(range(7))
+            sequential = [[0, 1], [2, 3], [4, 5]] * 2
+            assert any(wrapper._plan_batches(7, 2, 2, s) != sequential for s in range(3))
+
+    def test_auto_batch_size_is_one(self):
+        for wrapper in self._both():
+            wrapper.config.training.batch_size = "auto"
+            assert wrapper._resolve_batch_size() == 1
+            wrapper.config.training.batch_size = 3
+            assert wrapper._resolve_batch_size() == 3
+
+    def test_only_kto_overrides_the_hooks(self):
+        from soup_cli.trainer.mlx_dpo import MLXDPOTrainerWrapper
+        from soup_cli.trainer.mlx_kto import MLXKTOTrainerWrapper
+        from soup_cli.trainer.mlx_orpo import MLXORPOTrainerWrapper
+
+        for hook in ("_plan_batches", "_resolve_batch_size", "_check_train_rows",
+                     "_on_plan_cut"):
+            base = getattr(MLXDPOTrainerWrapper, hook)
+            assert getattr(MLXORPOTrainerWrapper, hook) is base, hook
+            assert getattr(MLXKTOTrainerWrapper, hook) is not base, hook
+
+    def test_fewer_pairs_than_a_batch_is_still_refused(self):
+        wrapper = self._both()[0]
+        with pytest.raises(ValueError, match=r"3 training pair\(s\) remain, fewer than "
+                                             r"training.batch_size \(4\), after skipping 1"):
+            wrapper._check_train_rows(3, 4, 1)
 
 
 class TestConfigRefusals:

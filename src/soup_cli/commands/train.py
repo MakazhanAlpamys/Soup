@@ -26,6 +26,7 @@ from soup_cli.data.loader import (
 from soup_cli.monitoring.display import TrainingDisplay
 from soup_cli.trainer.classifier import CLASSIFICATION_TASKS
 from soup_cli.utils.gpu import (
+    configure_cuda_alloc_hint,
     configure_mps_async_load,
     detect_device,
     get_gpu_info,
@@ -1457,6 +1458,9 @@ def train(
                     gpu_count=num_gpus, interconnect=topo["interconnect"], num_machines=nodes,
                 ).items():
                     os.environ.setdefault(key, val)
+
+    # Before detect_device, which creates the CUDA context the allocator reads it at (#2149).
+    configure_cuda_alloc_hint(cfg.training.stream_layers)
 
     # Detect hardware with backend awareness
     device, device_name = detect_device(backend=cfg.backend)

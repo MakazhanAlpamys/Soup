@@ -38,7 +38,29 @@ soup merge --adapter ./output --output ./merged
 
 # Specify base model and dtype
 soup merge --adapter ./output --base meta-llama/Llama-3.1-8B --dtype bfloat16
+
+# Merge tensor by tensor without loading the model into RAM
+soup merge --adapter ./output --output ./merged --low-memory
 ```
+
+`--low-memory` reads the base `.safetensors` files and writes the merged files
+one tensor at a time, so peak RAM is about one shard (the largest `.safetensors`
+file; a single-file model is memory-mapped as a whole, so it saves little). The
+tensor values are the same as the regular merge, but the output keeps the base's
+shard layout instead of a single `model.safetensors`. It needs the default
+`fp16` save format and a plain LoRA adapter; DoRA, `modules_to_save`, rank or
+alpha patterns, adapters on embeddings or `lm_head`, and base weights stored in a
+quantized dtype are refused with a message to run the regular merge. The merge is
+written to a staging directory next to `--output` and moved into place only when
+complete; an existing non-empty `--output` is not overwritten, and base-model
+files that are symlinks pointing outside the model directory (other than a
+Hugging Face cache snapshot) are refused. Only tokenizer and config files
+(`.json`, `.model`, `.txt`, `.tiktoken`, `.jinja`) are copied from the base, plus
+`.py` files when `--trust-remote-code` is given. Adapter values that cannot be
+used safely (a non-positive `r`, a non-finite `lora_alpha`, non-boolean flags,
+mismatched LoRA shapes) are refused before anything is written.
+Measured on a 1.4 GB Llama-shaped model: 1635 MiB of working memory for the
+regular merge against about 190 MiB with `--low-memory`.
 
 ReLoRA training outputs are already standalone dense models: Soup merges the
 final active adapter into the accumulated in-memory base before writing the
@@ -609,6 +631,17 @@ curl http://localhost:8000/v1/adapters
 # → {"adapters": [{"name": "chat", "active": true}, ...], "active": "chat"}
 ```
 
+A server started with `--tool-auth-token` requires that token on all three adapter
+routes, loopback included, and answers 401 without it. A non-loopback bind always has
+one, since `soup serve` refuses to start there without it:
+
+```bash
+soup serve --model base-model --adapters chat=./chat-adapter --host 0.0.0.0 --tool-auth-token "$TOKEN"
+
+curl -X POST -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/v1/adapters/activate/chat
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/v1/adapters
+```
+
 Names are validated against `^[a-zA-Z0-9][a-zA-Z0-9-]*$`; activate/deactivate calls are thread-safe behind a lock. Activate/deactivate also check the `Host` and `Origin` headers (see [Server-Side Tool Endpoints](#server-side-tool-endpoints)).
 
 ### Multi-Tenant Vector Bank (`soup serve --bank`)
@@ -974,14 +1007,18 @@ Three POST routes are now available on `soup serve`:
 
 - **`POST /v1/tools/python`** — runs caller-supplied Python code in an isolated
   sub-process. Bounded by 512 MB memory, 5-second wall-clock timeout, and a
-  single-worker concurrency cap.
+  cap of four concurrent runs (shared with the code-execution rewards). Like `/v1/tools/bash`, it runs the code only under
+  OS-level isolation: on Linux with Python 3.12+ when `os.unshare` creates new user,
+  network and PID namespaces for the run, and on macOS when `sandbox-exec` is on `PATH`.
+  Anywhere else it answers HTTP 501 without running the code, including on Windows, on
+  Linux with Python 3.11, and on a Linux host or container that refuses those namespaces.
 - **`POST /v1/tools/web_search`** — searches the web and returns domain-filtered results
   as `[{url, title, snippet}]` with snippets sanitized (null bytes stripped).
   Deny-by-default via `WebSearchConfig.domain_allowlist`.
 
 - **`POST /v1/tools/bash`** — runs a bash command with strict OS-level network
   isolation (`unshare` on supported Linux runtimes, `sandbox-exec` on macOS).
-  Enforces mandatory Bearer token authentication when bound to a non-loopback host,
+  Enforces the `--tool-auth-token` Bearer token on every bind,
   a 5-second wall-clock timeout, a minimal secret-scrubbed environment, and a combined
   10KB stdout/stderr streaming kill limit. Returns the real stdout, stderr, exit code,
   and timeout state. This is not a filesystem sandbox: the child retains the server
@@ -989,9 +1026,33 @@ Three POST routes are now available on `soup serve`:
   HTTP 501 when strict OS isolation is unavailable (including on Windows or restricted
   Linux containers).
 
+**`/v1/tools/python` and `/v1/tools/bash` need `--tool-auth-token` on every bind.** A
+server started without it answers both routes with 401 on loopback too, as it already did
+on any other bind, and the reply names the fix. The token is checked before the OS-level
+isolation requirement above, so without it the reply is 401 even on a host where the route
+would answer 501; with it, the isolation rule decides. Start the server with a token, from
+the option or from `SOUP_TOOL_AUTH_TOKEN` (which keeps it off the command line and out of
+the shell history), and send it as a Bearer header:
+
+```bash
+export SOUP_TOOL_AUTH_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+soup serve --model ./output
+
+curl -X POST http://127.0.0.1:8000/v1/tools/python \
+  -H "Authorization: Bearer $SOUP_TOOL_AUTH_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"code": "print(1)"}'
+```
+
+`/v1/tools/web_search`, `/v1/thumbs` and the adapter routes keep their rule: on a loopback
+bind they take a token only when the server has one.
+
 Tool routes, `/v1/thumbs` and adapter activate/deactivate accept requests only when the
 `Host` header names the bound address (any loopback name for a loopback bind) and any
-`Origin` header names the same; otherwise they answer 421 or 403.
+`Origin` header names the same; otherwise they answer 421 or 403. That check runs first.
+The tool routes and all three adapter routes (`GET /v1/adapters`, activate, deactivate)
+then also require `Authorization: Bearer <token>` whenever `--tool-auth-token` is set,
+on loopback too, and answer 401 without it.
 
 The generation routes (`/v1/chat/completions`, `/v1/messages`) and the adapter listing
 (`GET /v1/adapters`) carry the narrower half of that check: a request whose `Origin` names

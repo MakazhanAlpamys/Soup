@@ -133,6 +133,16 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # Background subprocess (writes PID, no shell)
 soup loop watch --detach
 
+# The deploy stage activates the adapter on SOUP_LOOP_SERVE_ENDPOINT. A server
+# started with --tool-auth-token requires that token on the adapter routes, so
+# give the loop the same one: --tool-auth-token, or SOUP_TOOL_AUTH_TOKEN to keep
+# it out of the shell history. A --detach child gets it through its environment
+# (so does the train stage's `soup train` child, which ignores it). soup serve has
+# no TLS and the loop refuses plain http off-loopback, so run the loop on the
+# serving box against loopback, or put a TLS-terminating proxy in front.
+soup serve --model base-model --adapters chat=./chat --host 0.0.0.0 --tool-auth-token "$TOKEN" &
+SOUP_LOOP_SERVE_ENDPOINT=http://127.0.0.1:8000 SOUP_TOOL_AUTH_TOKEN="$TOKEN" soup loop watch --detach
+
 # Start serve with the candidate loaded, then promote it at 5% traffic.
 soup serve --model ./base --adapters candidate=./candidate
 soup loop canary candidate --traffic 5% --autoroll-on-regress
@@ -527,6 +537,9 @@ entry can never outlive a discarded local bundle; browser OIDC is explicit opt-i
 Verification exits 3 on tamper or policy mismatch, and exits 1 when Sigstore
 verification itself is unavailable (for example TUF/network failure) so an
 operational outage is not reported as tampering. Usage/input errors exit 2.
+The statement and signature sidecar accept UTF-8 with or without a leading BOM.
+Verification still uses the same canonical JSON and preserves U+FEFF inside
+field values; a leading BOM does not bypass tamper or trusted-key checks.
 An explicit Sigstore signing request fails closed if OIDC/Fulcio/Rekor is
 unavailable; it is never silently downgraded to unsigned. A valid signature proves the signer
 *asserted* the statement; it does not re-verify the subject digest against an

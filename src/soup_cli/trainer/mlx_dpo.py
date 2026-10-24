@@ -427,7 +427,10 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
         self.model.eval()
         chosen, rejected = [], []
         total = len(examples)
-        console.print(f"[dim]MLX DPO: computing reference log-probs for {total} pair(s)[/]")
+        console.print(
+            f"[dim]MLX {self.objective}: computing reference log-probs for {total} "
+            f"{self.reference_unit}[/]"
+        )
         every = max(batch_size, (total // 10) // batch_size * batch_size)
         for start in range(0, total, batch_size):
             if start and start % every == 0:
@@ -510,6 +513,33 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
         """``(tokens, completion mask)`` for the head-split check."""
         return self._to_arrays(examples)
 
+    #: What one precomputed reference entry scores, for the progress message.
+    reference_unit = "pair(s)"
+
+    def _resolve_batch_size(self) -> int:
+        """``training.batch_size`` as this loop runs it (``auto`` is 1 here)."""
+        tcfg = self.config.training
+        return int(tcfg.batch_size) if isinstance(tcfg.batch_size, int) else 1
+
+    def _plan_batches(self, n_rows: int, batch_size: int, epochs: int, seed: int) -> list:
+        """Every epoch's batches of example indices, in training order."""
+        return plan_batches(n_rows, batch_size, epochs, seed)
+
+    def _check_train_rows(self, n_rows: int, batch_size: int, ties: int) -> None:
+        """Refuse a training split this objective cannot batch."""
+        if n_rows < batch_size:
+            raise ValueError(
+                f"MLX {self.objective}: {n_rows} training pair(s) remain, fewer than "
+                f"training.batch_size ({batch_size})"
+                + (f", after skipping {ties} tie(s)" if ties else "")
+                + f". Lower training.batch_size to at most {max(1, n_rows)} "
+                "or add rows."
+            )
+
+    def _on_plan_cut(self, dropped: list, kept: int, accum: int) -> None:
+        """Called with the batches an accumulation cut leaves untrained; the
+        shuffled plans of DPO and ORPO drop different rows each run, silently."""
+
     def _check_finite(self, loss: Any, split: str) -> None:
         import math as _math
 
@@ -576,7 +606,7 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
 
         output_dir = Path(cfg.output)
         output_dir.mkdir(parents=True, exist_ok=True)
-        batch_size = int(tcfg.batch_size) if isinstance(tcfg.batch_size, int) else 1
+        batch_size = self._resolve_batch_size()
         accum = max(1, int(tcfg.gradient_accumulation_steps))
 
         train_examples, train_ties = self._examples(list(self._dataset.get("train", [])))
@@ -587,22 +617,19 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
                 f"[yellow]MLX {name}: skipped {skipped} {name.lower()} row(s) with "
                 "identical chosen and rejected (a tie carries no preference signal)[/]"
             )
-        if len(train_examples) < batch_size:
-            raise ValueError(
-                f"MLX {name}: {len(train_examples)} training pair(s) remain, fewer than "
-                f"training.batch_size ({batch_size})"
-                + (f", after skipping {train_ties} tie(s)" if train_ties else "")
-                + f". Lower training.batch_size to at most {max(1, len(train_examples))} "
-                "or add rows."
-            )
-        plan = plan_batches(len(train_examples), batch_size, int(tcfg.epochs), data_seed)
+        self._check_train_rows(len(train_examples), batch_size, train_ties)
+        epoch_count = max(1, int(tcfg.epochs))
+        plan = self._plan_batches(len(train_examples), batch_size, epoch_count, data_seed)
+        batches_per_epoch = max(1, len(plan) // epoch_count)
         iters = len(plan)
         if accum > 1:
             # Like MLX SFT: no partial accumulation group is ever flushed.
-            iters = max(accum, iters - iters % accum)
+            cut = max(accum, iters - iters % accum)
+            if cut < iters:
+                self._on_plan_cut(plan[cut:], cut, accum)
+            iters = cut
             plan = (plan * math.ceil(iters / len(plan)))[:iters]
         total_updates = max(1, iters // accum)
-        batches_per_epoch = max(1, len(train_examples) // batch_size)
 
         self._apply_lora(self.model)
         if tcfg.gradient_checkpointing:

@@ -146,7 +146,7 @@ def _read_jsonl(path: str, label: str, max_rows: int) -> list[dict]:
     except OSError as exc:
         raise ValueError(f"{label} unreadable: {exc}") from exc
     rows: list[dict] = []
-    with os.fdopen(fd, "r", encoding="utf-8") as handle:
+    with os.fdopen(fd, "r", encoding="utf-8-sig") as handle:
         if os.fstat(handle.fileno()).st_size > _MAX_INPUT_BYTES:
             raise ValueError(f"{label} exceeds {_MAX_INPUT_BYTES} bytes")
         for line in handle:

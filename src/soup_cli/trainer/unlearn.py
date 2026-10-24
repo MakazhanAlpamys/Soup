@@ -213,6 +213,17 @@ class UnlearnTrainerWrapper:
         self.model = get_peft_model(self.model, lora_cfg)
         self.model.train()
 
+        # This loop has no Trainer, so nothing else switches checkpointing on.
+        # Do what Trainer.train() does for the other wrappers (#797): every
+        # enabled tier is full checkpointing, with Transformers' default
+        # (non-reentrant) kwargs, and HF enables input grads for the frozen base.
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+        if should_enable_hf_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+        ):
+            self.model.gradient_checkpointing_enable()
+
         # NPO + RMU need a frozen reference copy of the base.
         if method in ("npo", "rmu"):
             ref, _, _ = load_model_and_tokenizer(

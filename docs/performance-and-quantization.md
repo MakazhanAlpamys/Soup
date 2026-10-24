@@ -316,6 +316,14 @@ forward this setting to their TRL/HF training arguments: `false` disables it
 and `true` enables it, including unquantized runs (`quantization: none`). These
 wrappers use full checkpointing for any enabled tier.
 
+Distillation (`task: distill`), the classifier wrapper (`classifier`,
+`reranker`, `cross_encoder`) and Whisper ASR (`asr`) forward it to their HF
+training arguments the same way, and unlearning (`task: unlearn`), which trains
+in its own loop rather than through a `Trainer`, turns checkpointing on for its
+LoRA policy model when the setting is enabled. Before, these four ignored the
+setting and always trained with checkpointing off. Every enabled tier is full
+checkpointing on them, and the default `false` keeps it off.
+
 
 ## Kernel Auto-Composition
 
@@ -454,6 +462,7 @@ training:
   # stream_vram_override: 4_000_000_000   # Bytes to assume free (v0.73.x); see below
   # stream_vram_probe: true    # Decide the fit by MEASURING one step (sft only); see below
   # stream_nf4_scale_cache: true  # Keep expanded NF4 scales resident (4bit + double quant); see below
+  # stream_recompute: auto     # Keep activations instead of the checkpoint recompute: on/off/auto; see below
   # stream_loss_chunk: 128     # Output head and loss N tokens at a time, for long contexts (sft only)
   # stream_disk_kind: nvme     # Override auto disk-kind detection: nvme/ssd/hdd; see below
 ```
@@ -583,6 +592,29 @@ inside its kernel and is unchanged, so on a shape bitsandbytes sends there the
 cache stays empty. Needs `quantization: 4bit` with double quantization (the
 default). It trades VRAM for time, and the time saved has not been measured
 across machines yet, so it is off by default.
+
+**`stream_recompute` (`on` by default).** A streamed layer normally runs its
+forward twice: once in the forward and again as the checkpoint recompute in the
+backward. `off` keeps every layer's activations instead. The backward still
+re-reads each layer's weights into the buffer pool before it uses them, so pool
+slots are never read stale (#331), and the gradients are the recompute's
+(bit-identical under deterministic algorithms, measured on Mistral-7B NF4 and in
+the CPU tests). On the RAM tier it measured 22% / 17% / 8.5% off the step at 512 /
+1024 / 2048 tokens per step on an 8 GB card, as far as the activations fit; it
+costs every layer's activations in VRAM, which the formula pre-flight does not
+count (`stream_vram_probe: true` measures it, and runs after the switch). `auto`
+decides at setup, before step 1: one synthetic forward+backward at the configured
+`batch_size` x `data.max_length` (the worst case any batch can pad up to) measures
+what one layer keeps allocated and the step's reserved peak. The last K layers then
+keep their activations and the rest recompute, with K = (the smallest of 85% of
+the card, free + reserved VRAM and `stream_vram_override`, minus that peak) divided
+by the layer's bytes times the step's reserved/allocated ratio. It prints K and the
+figures it used, and keeps the recompute (saying why) when it cannot measure. On
+the disk tier `auto` keeps the recompute and `off` warns: the step is read-bound
+there and skipping the recompute does not skip the backward read (no gain measured
+on a read-bound 14B, worse at a high VRAM fill). `off` and `auto` are `task: sft`
+only and refused beside `activation_offloading`, whose hooks would never see the
+activations a retained layer keeps.
 
 **Qwen3.8-Flash-Next / Qwen4-Exp PLE.** The frozen PLE N-gram table is not a
 decoder-layer weight for storage purposes: putting it in the PLE layer's shard
@@ -889,7 +921,7 @@ prints this advice when it sees you accumulating.
 - `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers` → each independently rewrites or re-freezes the same layers
 - `use_cut_ce` is refused with `stream_layers` (#1206): streamed setup does not install the resident CCE patch. Disable CCE to stream with the conservative full-logits budget, or disable streaming to use resident CCE. A tiny local streamed Llama was exercised through sharding, forward/loss and backward on CPU; this is no CUDA memory measurement.
 - `use_liger` / `use_flash_attn` → **not reached at all** under streaming (#1692). Both are read by the *resident* setup: Liger patches the MLP forward there, and flash-attn is handed to `from_pretrained` as `attn_implementation`. A streamed model is built by `from_config` with no attention argument and no Liger patch, and `_liger_applied` is never set, so `use_liger_kernel` misses `TrainingArguments` too. These are the switches you reach for when a streamed run will not fit, so they are refused rather than dropped; each is offered again once it is wired and shown to engage on a streamed model. On every task outside `{sft, tts}` they are already refused at config load (#806)
-- `stream_source` / `stream_ngram_source` / `stream_buffers` / `stream_read_ahead` / `stream_vram_override` / `stream_vram_probe` / `stream_nf4_scale_cache` / `stream_expert_layout` / `stream_disk_kind` / `stream_pin` / `stream_loss_chunk` set while `stream_layers: false` → a footgun, refused
+- `stream_source` / `stream_ngram_source` / `stream_buffers` / `stream_read_ahead` / `stream_vram_override` / `stream_vram_probe` / `stream_nf4_scale_cache` / `stream_recompute` / `stream_expert_layout` / `stream_disk_kind` / `stream_pin` / `stream_loss_chunk` set while `stream_layers: false` → a footgun, refused
 - `stream_expert_layout: per_expert` with `moe_lora` → refused: a routed expert streamed one at a time has nowhere to keep an adapter. On a base that is not `model_type: deepseek_v3` → refused at setup, before the weights are resolved
 - an FP8 checkpoint in any format other than DeepSeek-V3's block FP8, or an FP8 base that is not `model_type: deepseek_v3` → refused naming the supported format: at setup when `config.json` gives it away, otherwise before the cache is written. The block format itself is dequantised at shard time (see "FP8 block-quantised bases" above)
 - any other quantised checkpoint → refused by name, before a byte of the cache is written, and in the same words by the sharder, the disk pre-flight and the setup. The sharder checks the source first, from its `config.json` and headers, so a refusal creates no cache folder, leaves an existing cache and its `index.json` untouched, and never reuses a cache an older Soup sharded from such a source. Layer streaming reads plain floating-point weights, DeepSeek-V3's block FP8 and, on qwen4_exp only, oMLX/oQ affine bundles; the message says which format it found, that layer streaming cannot dequantise it, and to point `training.base` at a bf16 or FP8-block copy. Refused:

@@ -527,6 +527,7 @@ class TestTraining:
         assert result["val_reward_accuracy"] == pytest.approx(1.0)
         assert result["val_reward_margin"] > 0
         assert math.isfinite(result["val_nll_loss"])
+        assert math.isfinite(result["val_preference_loss"])
         assert result["skipped_identical_pairs"] == 0
         meta = json.loads((tmp_path / "output" / "adapter_config.json").read_text())
         assert meta["task"] == "simpo" and meta["fine_tune_type"] == "lora"
@@ -755,7 +756,7 @@ class TestConfig:
     def test_other_tasks_name_simpo_among_the_mlx_ones(self):
         from soup_cli.config.loader import load_config_from_string
 
-        with pytest.raises(Exception, match="only ships SFT, DPO, ORPO and SimPO"):
+        with pytest.raises(Exception, match="only ships SFT, DPO, ORPO, SimPO and KTO"):
             load_config_from_string(_SIMPO_YAML.replace("task: simpo", "task: ipo"))
 
     def test_the_transformers_route_is_unchanged(self):

@@ -238,15 +238,16 @@ def test_a_setting_the_backend_ignores_is_reported(config_at):
 
     This used to assert on ``training.max_grad_norm``. #750 wired it, so it is
     honoured and no longer in the registry -- the guard below is what caught
-    that. ``training.seed`` is the live example now: MLX seeds through
-    ``mx.random`` and reads the field only to say so.
+    that. So, later, was ``training.seed``, which MLX honours since #1850.
+    ``training.use_galore`` is the live example now: MLX reads it only to say
+    it is ignored.
     """
     from soup_cli.config.backend_support import check_config
     from soup_cli.config.loader import load_config
 
-    cfg = load_config(config_at("sft", "mlx", "  seed: 42"))
+    cfg = load_config(config_at("sft", "mlx", "  use_galore: true"))
     reported = {e.field for e in check_config(cfg)}
-    assert "training.seed" in reported
+    assert "training.use_galore" in reported
 
 
 def test_new_mlx_gaps_use_liger_and_neftune_alpha_are_reported(config_at):
@@ -310,9 +311,9 @@ def test_only_fields_the_user_actually_set_are_reported(config_at):
     from soup_cli.config.backend_support import check_config
     from soup_cli.config.loader import load_config
 
-    cfg = load_config(config_at("sft", "mlx", "  seed: 42"))
+    cfg = load_config(config_at("sft", "mlx", "  use_galore: true"))
     reported = {e.field for e in check_config(cfg)}
-    assert reported == {"training.seed"}, (
+    assert reported == {"training.use_galore"}, (
         f"reported fields the user never set: {sorted(reported)}"
     )
 
@@ -321,7 +322,7 @@ def test_the_transformers_path_reports_nothing_for_the_same_config(config_at):
     from soup_cli.config.backend_support import check_config
     from soup_cli.config.loader import load_config
 
-    cfg = load_config(config_at("sft", "transformers", "  seed: 42"))
+    cfg = load_config(config_at("sft", "transformers", "  use_galore: true"))
     assert check_config(cfg) == []
 
 
@@ -369,13 +370,13 @@ def test_doctor_config_names_the_ignored_field_and_its_reason(
     from soup_cli.commands.doctor import doctor
 
     monkeypatch.setattr(doctor_module, "console", Console(width=200))
-    path = config_at("sft", "mlx", "  seed: 42")
+    path = config_at("sft", "mlx", "  use_galore: true")
     # Every typer parameter passed explicitly — see #752.
     doctor(nccl=False, disk=False, config=path)
 
     out = strip_ansi(capsys.readouterr().out)
-    assert "seed" in out
-    assert "mx.random" in out, "the row must carry the reason, not just the name"
+    assert "use_galore" in out
+    assert "no MLX implementation" in out, "the row must carry the reason, not just the name"
 
 
 @pytest.mark.parametrize(
@@ -445,7 +446,7 @@ def test_the_setting_name_survives_at_any_pinned_width(
     from soup_cli.commands.doctor import doctor
 
     monkeypatch.setattr(doctor_module, "console", Console(width=width))
-    doctor(nccl=False, disk=False, config=config_at("sft", "mlx", "  seed: 42"))
+    doctor(nccl=False, disk=False, config=config_at("sft", "mlx", "  use_galore: true"))
 
     # Scope to the config section: the environment report above it has its own
     # tables, and the dependency table legitimately ellipsises at 35 columns.
@@ -467,7 +468,7 @@ def test_the_setting_name_survives_at_any_pinned_width(
         for line in section.splitlines()
         if line.startswith("\u2502")
     )
-    assert "training.seed" in first_column, (
+    assert "training.use_galore" in first_column, (
         f"name lost at width={width}; first column read as {first_column!r}"
     )
     assert "\u2026" not in section, f"a config row was ellipsised at width={width}"
@@ -659,8 +660,8 @@ def test_an_unfounded_gap_claim_is_caught():
 def test_a_gap_for_a_field_another_backend_reads_is_accepted():
     """Control for the above — the check must not fire on a real gap.
 
-    ``training.seed`` is read by the transformers path and ignored by MLX, so
-    it is exactly the shape the registry exists to record.
+    ``training.use_galore`` is read by the transformers path and ignored by
+    MLX, so it is exactly the shape the registry exists to record.
     """
     repo_root = pathlib.Path(__file__).resolve().parents[1]
     assert _registry_drift(repo_root) == []

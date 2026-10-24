@@ -135,11 +135,13 @@ class TestTheOtherPathsThatDropThem:
         assert "data.add_new_tokens is not applied on backend='mlx'" in message, message
 
     @pytest.mark.parametrize("field", _FIELDS)
-    @pytest.mark.parametrize("task", ["dpo", "orpo", "simpo"])
-    def test_mlx_preference_loops(self, task, field):
-        """The native DPO, ORPO and SimPO loops tokenize with the base tokenizer as
-        it is; the refusal rests on each being in ``MLX_TASKS`` (review of #2073)."""
-        message = _refusal(_yaml(task, backend="mlx", field=field, data={"format": "dpo"}))
+    @pytest.mark.parametrize("task, fmt", [
+        ("dpo", "dpo"), ("orpo", "dpo"), ("simpo", "dpo"), ("kto", "kto"),
+    ])
+    def test_mlx_preference_loops(self, task, fmt, field):
+        """The native DPO, ORPO, SimPO and KTO loops tokenize with the base tokenizer
+        as it is; the refusal rests on each being in ``MLX_TASKS`` (review of #2073)."""
+        message = _refusal(_yaml(task, backend="mlx", field=field, data={"format": fmt}))
 
         assert f"data.{field} is not applied on backend='mlx'" in message, message
 
@@ -286,7 +288,6 @@ class TestABackendTheTaskCannotRunOnIsNamedFirst:
     @pytest.mark.parametrize(("task", "backend", "expected"), [
         ("online_dpo", "unsloth", "task='online_dpo' requires backend='transformers'"),
         ("ipo", "mlx", "MLX backend only ships SFT"),
-        ("kto", "mlx", "MLX backend only ships SFT"),
     ])
     def test_the_backend_refusal_comes_first(self, task, backend, expected):
         message = _refusal(_yaml(task, backend=backend))
