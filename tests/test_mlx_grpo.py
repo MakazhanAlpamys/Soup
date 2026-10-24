@@ -1743,3 +1743,120 @@ class TestUpdateBookkeeping:
         assert (meta["task"], meta["reward_fn"], meta["skipped_steps"]) == ("grpo", "format", 0)
         assert (meta["prompts_per_update"], meta["completions_per_update"]) == (2, 8)
         assert meta["reference"].startswith("none" if beta == 0.0 else "base model")
+
+
+def _scripted_group(model, prompt_ids, *, num_generations, max_tokens, eos_token_id,
+                    sampler=None):
+    """Completions of 2, 3 and 4 tokens ending in EOS, then one truncated at 3."""
+    out = [([4 + i] * (i + 1) + [eos_token_id], True) for i in range(num_generations - 1)]
+    return out + [([5, 6, 7], False)]
+
+
+class TestTheLoopsBookkeeping:
+    def test_num_items_and_rewards_see_every_token_and_no_special_text(self, tmp_path,
+                                                                        monkeypatch):
+        """The normaliser is every completion token, EOS included; rewards read the
+        text with special tokens skipped and the ids with EOS kept."""
+        from soup_cli.trainer import mlx_grpo
+        from soup_cli.trainer.rewards import validate_reward_funcs
+
+        monkeypatch.setattr(mlx_grpo, "generate_group", _scripted_group)
+        seen = []
+
+        def reward(completions, completion_ids, **_):
+            seen.extend(zip([c[0]["content"] for c in completions], completion_ids))
+            return [float(len(ids)) for ids in completion_ids]
+
+        wrapper = _wrapper(tmp_path, monkeypatch, train=_prompt_rows(2), grpo_beta=0.0)
+        wrapper._prepare(wrapper._dataset)
+        wrapper._reward_fn = validate_reward_funcs(reward)
+        result = wrapper.train()
+        assert [h["num_items"] for h in result["history"]] == [2 + 3 + 4 + 3] * 2
+        assert all(math.isfinite(x) for x in result["losses"])
+        assert len(seen) == 8 and sum(ids[-1] == EOS for _, ids in seen) == 6
+        assert all("$" not in text and text for text, _ in seen)
+
+    def test_the_schedule_spans_updates_not_micro_steps(self, tmp_path, monkeypatch):
+        from soup_cli.trainer import mlx_optim
+
+        seen = []
+        real = mlx_optim.plan_optimizer
+
+        def plan(**kwargs):
+            seen.append(kwargs["total_updates"])
+            return real(**kwargs)
+
+        monkeypatch.setattr(mlx_optim, "plan_optimizer", plan)
+        result = _wrapper(tmp_path, monkeypatch, train=_prompt_rows(4), batch_size=4,
+                          gradient_accumulation_steps=2, scheduler="linear").train()
+        assert result["total_steps"] == 2 and seen == [2]
+
+    def test_kl_is_the_token_mean_over_every_micro_step(self, tmp_path, monkeypatch):
+        mx = pytest.importorskip("mlx.core")
+        from soup_cli.trainer import mlx_grpo
+
+        calls = []
+        real = mlx_grpo.grpo_token_loss
+
+        def loss(logps, advantages, mask, **kwargs):
+            value, sums = real(logps, advantages, mask, **kwargs)
+            calls.append((mx.stop_gradient(sums["kl"]), mask.sum()))
+            return value, sums
+
+        monkeypatch.setattr(mlx_grpo, "grpo_token_loss", loss)
+        result = _wrapper(tmp_path, monkeypatch, train=_prompt_rows(4), batch_size=4,
+                          gradient_accumulation_steps=2, lr=0.2).train()
+        last = calls[-2:]
+        kl = sum(k.item() for k, _ in last) / sum(n.item() for _, n in last)
+        assert kl > 1e-6 and result["kl"] == pytest.approx(kl, rel=1e-5)
+
+    def test_validation_samples_in_eval_mode(self, tmp_path, monkeypatch):
+        """With LoRA dropout on, validation is the eval-mode model's sampling."""
+        mx = pytest.importorskip("mlx.core")
+        from soup_cli.trainer import mlx_grpo
+
+        real = mlx_grpo.generate_group
+        calls = []
+
+        def spy(model, prompt_ids, **kwargs):
+            out = real(model, prompt_ids, **kwargs)
+            calls.append((bool(model.training), list(prompt_ids), out))
+            return out
+
+        monkeypatch.setattr(mlx_grpo, "generate_group", spy)
+        wrapper = _wrapper(tmp_path, monkeypatch, train=_prompt_rows(2),
+                           val=_prompt_rows(2, prefix="v"), seed=5,
+                           lora="{r: 4, alpha: 8, dropout: 0.3}")
+        wrapper.train()
+        val = [c for c in calls if not c[0]]
+        assert len(calls) == 4 and calls[2:] == val, "rollouts train, validation evaluates"
+
+        def replay(train_mode):
+            wrapper.model.train(train_mode)
+            mx.random.seed(5)
+            return [real(wrapper.model, ids, num_generations=4, max_tokens=64,
+                         eos_token_id=EOS) for _, ids, _ in val]
+
+        assert replay(False) == [out for *_, out in val]
+        assert replay(True) != replay(False), "dropout must change the sampling"
+
+    def test_gradient_checkpointing_trains_the_same_update(self, tmp_path, monkeypatch):
+        pytest.importorskip("mlx_lm")
+        from mlx_lm.models import llama
+
+        # mlx-lm's grad_checkpoint patches the block class process-wide; the
+        # monkeypatch restores it after this test.
+        original = llama.TransformerBlock.__call__
+        monkeypatch.setattr(llama.TransformerBlock, "__call__", original)
+
+        def run(path, **training):
+            wrapper = _wrapper(path, monkeypatch, train=_prompt_rows(2), seed=3, **training)
+            return wrapper.train(), _flat(wrapper.model.trainable_parameters())
+
+        plain, w_plain = run(tmp_path / "a")
+        assert llama.TransformerBlock.__call__ is original
+        ckpt, w_ckpt = run(tmp_path / "b", gradient_checkpointing="true")
+        assert llama.TransformerBlock.__call__ is not original
+        np.testing.assert_allclose(ckpt["losses"], plain["losses"], rtol=1e-4, atol=1e-6)
+        for name in w_plain:
+            np.testing.assert_allclose(w_ckpt[name], w_plain[name], atol=1e-5, err_msg=name)
