@@ -99,6 +99,7 @@ def render_modal_stub(
     output_dir: str,
     soup_version: str,
     run_name: str | None = None,
+    local_train_inputs=(),
 ) -> str:
     """Render the Modal app stub for ``config_yaml`` (v0.71.18 #16).
 
@@ -135,6 +136,17 @@ def render_modal_stub(
     cfg_b64 = base64.b64encode(encoded).decode("ascii")
     # repr()-embed so a stray quote / backslash cannot break out of the literal
     # (defence-in-depth on top of the _VERSION_RE allowlist above).
+    input_manifest = [
+        {
+            "local_path": item.local_path,
+            "remote_path": item.remote_path,
+            "size_bytes": item.size_bytes,
+            "mtime_ns": item.mtime_ns,
+            "device": item.device,
+            "inode": item.inode,
+        }
+        for item in local_train_inputs
+    ]
     pip_spec = f"soup-cli[train]=={soup_version}"
 
     # Built by concatenation so there is no triple-quote / brace escaping. The
@@ -146,6 +158,8 @@ def render_modal_stub(
         '(authenticate once with `modal setup`).\n"""\n'
         "import base64\n"
         "import pathlib\n"
+        "import re\n"
+        "import stat\n"
         "import subprocess\n"
         "\n"
         "import modal\n"
@@ -153,6 +167,7 @@ def render_modal_stub(
         f'_CONFIG_B64 = "{cfg_b64}"\n'
         f"_LOCAL_OUTPUT = {output_dir!r}\n"
         f"_RUN_NAME = {run_name!r}\n"
+        f"_LOCAL_TRAIN_INPUTS = {input_manifest!r}\n"
         f"_VOLUME_NAME = {MODAL_OUTPUT_VOLUME!r}\n"
         '_REMOTE_ROOT = "/outputs"\n'
         '_CONFIG_PATH = "/root/soup.yaml"\n'
@@ -230,9 +245,38 @@ def render_modal_stub(
         "    )\n"
         "\n"
         "\n"
+        "def _upload_local_train_inputs() -> None:\n"
+        "    for item in _LOCAL_TRAIN_INPUTS:\n"
+        "        source = item['local_path']\n"
+        "        try:\n"
+        "            info = pathlib.Path(source).lstat()\n"
+        "        except OSError as exc:\n"
+        "            raise RuntimeError(\n"
+        "                f'local training input is unavailable: {source}: {exc}'\n"
+        "            ) from exc\n"
+        "        if (\n"
+        "            not stat.S_ISREG(info.st_mode)\n"
+        "            or info.st_size != item['size_bytes']\n"
+        "            or info.st_mtime_ns != item['mtime_ns']\n"
+        "            or info.st_dev != item['device']\n"
+        "            or info.st_ino != item['inode']\n"
+        "        ):\n"
+        "            raise RuntimeError(f'local training input changed after planning: {source}')\n"
+        "        remote = item['remote_path']\n"
+        "        if not re.fullmatch(r'inputs/train-\\d+(?:\\.[a-z0-9]+)?', remote):\n"
+        "            raise RuntimeError(f'invalid generated remote input path: {remote!r}')\n"
+        "        subprocess.run(\n"
+        "            [\n"
+        "                'modal', 'volume', 'put', '--force', _VOLUME_NAME,\n"
+        "                source, f'/{_RUN_NAME}/{remote}',\n"
+        "            ],\n"
+        "            check=True,\n"
+        "        )\n"
+        "\n"
         "@app.local_entrypoint()\n"
         "def main() -> None:\n"
         "    try:\n"
+        "        _upload_local_train_inputs()\n"
         "        train.remote()\n"
         "    except BaseException:\n"
         "        # Save whatever the failed run left on the volume, but never let a\n"
@@ -254,8 +298,15 @@ def plan_modal_run(
     output_dir: str,
     soup_version: str,
     stub_path: str = "soup_modal_app.py",
+    config_yaml: str | None = None,
+    local_train_inputs=(),
 ) -> CloudPlan:
     """Build a :class:`CloudPlan` from a cwd-contained ``soup.yaml``.
+
+    ``config_yaml`` is the text to embed: the caller passes the *effective*
+    config, with every CLI override applied, so the remote run trains what the
+    local run said it would (#1430). Reading ``config_path`` is the fallback
+    for a direct caller.
 
     Reads the config (cwd-containment + symlink rejection), renders the
     Modal stub, and returns the plan (stub text + planned ``modal run``
@@ -264,8 +315,9 @@ def plan_modal_run(
     from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
     enforce_under_cwd_and_no_symlink(config_path, "--config")
-    with open(config_path, encoding="utf-8") as fh:
-        config_yaml = fh.read(_MAX_CONFIG_BYTES + 1)
+    if config_yaml is None:
+        with open(config_path, encoding="utf-8") as fh:
+            config_yaml = fh.read(_MAX_CONFIG_BYTES + 1)
     if len(config_yaml.encode("utf-8")) > _MAX_CONFIG_BYTES:
         raise ValueError(f"config exceeds {_MAX_CONFIG_BYTES} bytes")
     gpu_key = validate_gpu(gpu)
@@ -283,6 +335,7 @@ def plan_modal_run(
         gpu=gpu_key,
         output_dir=output_dir,
         soup_version=soup_version,
+        local_train_inputs=local_train_inputs,
     )
     run_command = f"modal run {stub_path}"
     return CloudPlan(
@@ -292,6 +345,7 @@ def plan_modal_run(
         stub_path=stub_path,
         stub_text=stub_text,
         run_command=run_command,
+        local_train_inputs=tuple(local_train_inputs),
     )
 
 
