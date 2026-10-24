@@ -116,7 +116,9 @@ class TestRecipeCatalog:
 
         from soup_cli.recipes.catalog import RECIPES
 
-        preference_tasks = {"dpo", "ipo", "simpo", "orpo", "bco", "preference"}
+        preference_tasks = {
+            "dpo", "ipo", "simpo", "orpo", "bco", "preference", "kto", "reward_model",
+        }
         vision_preference_formats = {"llava", "sharegpt4v"}
         for name, recipe in RECIPES.items():
             parsed = yaml.safe_load(recipe.yaml_str)
