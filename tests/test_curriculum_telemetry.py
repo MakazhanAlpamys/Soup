@@ -48,6 +48,11 @@ runner = CliRunner()
         ].description
         or "",
         utils_curriculum_dynamic.__doc__ or "",
+        DynamicCurriculumPolicy.__doc__ or "",
+        utils_curriculum_dynamic.compute_bucket_weights.__doc__ or "",
+        utils_curriculum_dynamic.validate_distributed_curriculum.__doc__ or "",
+        cb_mod.__doc__ or "",
+        DynamicCurriculumCallback.__doc__ or "",
     ],
     ids=[
         "curriculum_dynamic",
@@ -55,16 +60,42 @@ runner = CliRunner()
         "curriculum_dynamic_floor",
         "curriculum_dynamic_temperature",
         "utils_curriculum_dynamic_doc",
+        "dynamic_curriculum_policy_doc",
+        "compute_bucket_weights_doc",
+        "validate_distributed_curriculum_doc",
+        "callback_module_doc",
+        "dynamic_curriculum_callback_doc",
     ],
 )
 def test_telemetry_descriptions_avoid_steering_and_sampler_terms(
     source_text: str,
 ):
-    """Schema fields and module docstring never use 'sampler', 'starv', or 're-weight'."""
+    """Schema fields and curriculum docstrings avoid claims of steering the sampler."""
     lower = source_text.lower()
     assert "sampler" not in lower
     assert "starv" not in lower
     assert "re-weight" not in lower
+
+
+def test_training_guide_documents_telemetry_without_changing_batch_samples() -> None:
+    """The curriculum guide must retain the user-visible telemetry limitation."""
+    guide = Path(__file__).resolve().parents[1] / "docs" / "training.md"
+    section = guide.read_text(encoding="utf-8").split(
+        "## Curriculum-Aware Training (BETA)\n", 1,
+    )[1].split("\n## ", 1)[0]
+    text = " ".join(section.split())
+    assert "they do not change which samples a batch contains" in text
+    assert "re-weights the sampler" not in text
+
+
+def test_dynamic_curriculum_validation_explains_the_telemetry_requirement() -> None:
+    """The refusal must describe telemetry rather than dynamic sampling."""
+    with pytest.raises(ValueError) as caught:
+        TrainingConfig(curriculum_dynamic=True, curriculum=False)
+    message = str(caught.value)
+    assert "curriculum_dynamic requires curriculum=true" in message
+    assert "dynamic curriculum telemetry needs the static bucketer" in message
+    assert "re-weighting" not in message
 
 
 def test_schema_curriculum_dynamic_telemetry_contract():

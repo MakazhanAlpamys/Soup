@@ -4209,12 +4209,12 @@ class TrainingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_curriculum_dynamic_requires_curriculum(self) -> "TrainingConfig":
-        """v0.48.0 Part A — dynamic re-weighting layers on the static
+        """v0.48.0 Part A — dynamic curriculum telemetry uses the static
         curriculum bucketer; it cannot run alone."""
         if self.curriculum_dynamic and not self.curriculum:
             raise ValueError(
                 "curriculum_dynamic requires curriculum=true "
-                "(dynamic re-weighting needs the static bucketer)."
+                "(dynamic curriculum telemetry needs the static bucketer)."
             )
         # Cross-check: floor must leave room above uniform/N.
         if self.curriculum_dynamic:
@@ -5869,7 +5869,7 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_curriculum_dynamic_supported(self) -> "SoupConfig":
-        """v0.48.0 Part A — Curriculum-Aware dynamic re-weighting.
+        """v0.48.0 Part A — Curriculum-Aware dynamic telemetry.
 
         BETA: v0.53.5 #115 widens the allowlist to every transformer-backend
         trainer (sft / pretrain / dpo / grpo / kto / orpo / simpo / ipo / bco /
