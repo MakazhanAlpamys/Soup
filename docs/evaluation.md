@@ -469,12 +469,13 @@ Add `--progress jsonl` to follow a verdict without parsing console text:
 
 ```bash
 soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
-  --progress jsonl 2>progress.jsonl
+  --progress jsonl
 ```
 
 The ordinary verdict and status output stay on stdout. During command execution,
 stderr contains only JSONL; foreign warnings, logs and native dependency diagnostics
 are suppressed in this mode. Leave the flag unset for the existing diagnostics.
+Use your shell's stderr redirection to save the events to a file.
 Argument-parser errors before command execution (for example an unknown option)
 retain the ordinary CLI error format.
 
