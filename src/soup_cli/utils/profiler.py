@@ -6,7 +6,9 @@ import re
 # GPU memory lookup table (name → GB VRAM). Keys are normalized by
 # ``normalize_gpu_key``. Every laptop part has its own key, including those with
 # the same memory as the desktop card: that is what lets the device name torch
-# reports ("... Laptop GPU") resolve at all.
+# reports ("... Laptop GPU") resolve at all. A part that ships in two sizes gets a
+# ``_<N>gb`` key for the size its name carries ("RTX 3050 6GB Laptop GPU"); where
+# one name covers both sizes, the plain key is the larger one.
 GPU_MEMORY: dict[str, int] = {
     "rtx3050": 8,
     "rtx3050_6gb": 6,
@@ -29,6 +31,19 @@ GPU_MEMORY: dict[str, int] = {
     "rtx5070ti": 16,
     "rtx5080": 16,
     "rtx5090": 32,
+    # NVIDIA's 30-series laptop specification: "RTX 3050: 4 GB or 6 GB" and
+    # "RTX 3080: 8 GB or 16 GB". The driver names the 3050 by size (4GB, 6GB)
+    # or not at all (the original 4 GB part); both 3080 sizes share one name.
+    "rtx3050laptop": 4,
+    "rtx3050laptop_4gb": 4,
+    "rtx3050laptop_6gb": 6,
+    "rtx3050tilaptop": 4,
+    "rtx3060laptop": 6,
+    "rtx3070laptop": 8,
+    "rtx3070tilaptop": 8,
+    "rtx3080laptop": 16,
+    "rtx3080laptop_8gb": 8,
+    "rtx3080tilaptop": 16,
     "rtx4050laptop": 6,
     "rtx4060laptop": 8,
     "rtx4070laptop": 8,
@@ -60,16 +75,29 @@ GPU_MEMORY: dict[str, int] = {
 ASSUMED_GPU_MEMORY_GB = 24.0
 
 _GPU_NAME_NOISE = re.compile(r"\b(nvidia|geforce|tesla|gpu)\b")
+# A memory size written as its own word, which the table spells as a suffix.
+_GPU_NAME_SIZE = re.compile(r"[\s-](\d+)\s*gb\b")
 
 
 def normalize_gpu_key(name: str) -> str:
     """Map a ``--gpu`` value or a device name torch reports to a ``GPU_MEMORY`` key.
 
     ``"NVIDIA GeForce RTX 5070 Laptop GPU"`` and ``"rtx 5070 laptop"`` both
-    become ``"rtx5070laptop"``; ``"RTX-4090"`` becomes ``"rtx4090"``.
+    become ``"rtx5070laptop"``; ``"RTX-4090"`` becomes ``"rtx4090"``. A size
+    word moves to the end as a suffix: ``"NVIDIA GeForce RTX 3050 6GB Laptop
+    GPU"`` becomes ``"rtx3050laptop_6gb"``. A size whose suffixed key does not
+    exist but which the plain key holds resolves to the plain key: ``"rtx 3080
+    laptop 16gb"`` becomes ``"rtx3080laptop"``.
     """
     key = _GPU_NAME_NOISE.sub("", name.lower())
-    return re.sub(r"[\s-]+", "", key)
+    size = _GPU_NAME_SIZE.search(key)
+    if size is None:
+        return re.sub(r"[\s-]+", "", key)
+    key = re.sub(r"[\s-]+", "", key[: size.start()] + " " + key[size.end() :])
+    suffixed = f"{key}_{size.group(1)}gb"
+    if suffixed not in GPU_MEMORY and str(GPU_MEMORY.get(key)) == size.group(1):
+        return key
+    return suffixed
 
 
 # Known model architectures: model_size_b → (hidden_size, num_layers, intermediate_size)
