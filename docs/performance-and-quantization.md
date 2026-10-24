@@ -576,6 +576,37 @@ Not measured:
 - Known numeric differences from K2's own code that remain: the MoE combine (K2 sums the weighted expert outputs in fp32 and rounds once; transformers rounds each weighted output to the model dtype before accumulating, which is bf16 rounding noise), eager versus sdpa attention, and the router bias kept as a float32 buffer rather than a Parameter (float32 in the checkpoint either way).
 - The checkpoint carries 61 stale `self_attn.rotary_emb.inv_freq` tensors. The sharder writes them into the layer files as stored, and nothing streams or reads them: K2's code keeps that buffer non-persistent, and transformers computes the rope from the config.
 
+**Experimental two-read replay (API only, off by default).**
+`build_streamed_model(..., two_read_experts=True)` keeps the decoder checkpoint but
+does not fetch routed experts during its replay. The original forward and the expert's
+own backward each fetch once. The router reuses the forward's top-k decisions while
+recomputing the differentiable scores, preserving the routing-weight contribution to
+the input gradient. No expert weights are retained between visits.
+
+This requires the `per_expert` layout and still refuses routed-expert adapters. There is
+no training-config switch or default change. It reaches only DeepSeek-V3-family bases:
+`per_expert` admits only `deepseek_v3`, and a direct
+`install_expert_streaming(..., two_reads=True)` call refuses every decoder class other
+than `DeepseekV3DecoderLayer`. A layer that
+`stream_recompute` switches off runs without the checkpoint and so without the replay:
+it reads each expert in the forward and the backward, as the default path does there.
+
+The replay runs the layer with the routed experts' output at zero, so the outputs of the
+decoder layer, its MoE block and its routed experts differ from the forward's there. A
+forward hook on one of those three modules, or a global forward hook, is therefore refused
+with a `RuntimeError` when the layer's forward or recompute starts, including a hook
+registered after `build_streamed_model` or between forward and backward. No hook is judged
+safe by what it does, and nothing falls back to three reads. Forward pre-hooks, and hooks
+on the router, attention, norms or the streamed layer wrapper, see the forward's values and
+are allowed. A patched or replaced `forward` inside a two-read layer is not detected: if it
+uses the MoE output's values in the backward, its gradients are wrong without an error.
+
+On CPU, against the resident eager model and the default path, losses, `dX`, the router
+gradients and every LoRA gradient are bit-identical with exactly two reads per expert visit,
+including gradient accumulation, two forwards before one backward, `retain_graph`, a
+no-grad forward and an exception mid-step. Hardware measurements are not part of this
+change and are discussed with its design.
+
 **`stream_nf4_scale_cache` (opt-in).** On the dequantise + `F.linear` path, a
 double-quantised NF4 weight expands its 8-bit block scales to fp32 on every visit,
 forward and recompute alike: two small kernels and a temporary per projection.
