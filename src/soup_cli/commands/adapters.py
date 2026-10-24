@@ -424,7 +424,19 @@ def merge(
         console.print("[red]Need at least 2 adapter paths to merge[/]")
         raise typer.Exit(2)
 
-    # cmaes argument validation runs FIRST (before any file I/O / scanning):
+    from soup_cli.utils.adapter_diff import (
+        WRITE_ADAPTER_DEPS,
+        require_adapter_dependencies,
+    )
+
+    try:
+        require_adapter_dependencies(WRITE_ADAPTER_DEPS)
+    except RuntimeError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
+    # Dependency pre-flight runs before heavy operations.
+    # cmaes argument validation runs next (before any file I/O / scanning):
     # a user who forgot --eval should get that error immediately, not a scan
     # error on their inputs. The cmaes *search* itself still runs after the
     # security gates below (v0.71.4 review — preserves the "reject missing
@@ -638,6 +650,12 @@ def merge(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
 
+    except RuntimeError as exc:
+        # The root package pre-flight cannot establish that the writer's
+        # submodule will import successfully when the output is saved.
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
     # v0.71.4 #172 — live canary verdict. With --canary, score the merged
     # adapter vs the first input and classify OK/MINOR/MAJOR; without it the
     # verdict stays UNKNOWN (advisory).
@@ -792,6 +810,17 @@ def arithmetic(
 
     referenced = [t.name for t in terms]
     ref_paths = [mapping[n] for n in referenced]
+
+    from soup_cli.utils.adapter_diff import (
+        WRITE_ADAPTER_DEPS,
+        require_adapter_dependencies,
+    )
+
+    try:
+        require_adapter_dependencies(WRITE_ADAPTER_DEPS)
+    except RuntimeError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
 
     # 3. Backdoor-scan gate (mirrors `adapters merge`, #192). Refuse FAIL /
     #    un-scannable inputs unless --allow-unscanned; WARN is advisory.

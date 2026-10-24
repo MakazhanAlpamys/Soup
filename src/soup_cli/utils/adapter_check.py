@@ -20,7 +20,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
-from soup_cli.utils.adapter_diff import _adapter_weights_path, _read_safetensors_numpy
+from soup_cli.utils.adapter_diff import (
+    READ_ADAPTER_DEPS,
+    _adapter_weights_path,
+    _read_safetensors_numpy,
+    require_adapter_dependencies,
+)
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, is_under_cwd
 from soup_cli.utils.terminal import strip_control
 
@@ -99,6 +104,7 @@ def _read_config(adapter_dir: Path) -> dict[str, Any]:
 
 def _load_safetensors_numpy(path: Path) -> dict[str, Any]:
     """Load adapter tensors as numpy arrays (bfloat16 widened to float32)."""
+    require_adapter_dependencies(READ_ADAPTER_DEPS)
     # Size first, from the filesystem and before the file is opened: the tensor-count
     # cap does not bound memory, one 100 GB tensor is a single key.
     try:
@@ -164,6 +170,7 @@ def check_adapter(adapter_dir: str | Path) -> AdapterCheckReport:
     3. All-zero lora_B layers: layers that remained at initial zero state.
     4. .inner. keys: layer-streaming wrapper namespace leaks.
     """
+    require_adapter_dependencies(READ_ADAPTER_DEPS)
     enforce_under_cwd_and_no_symlink(str(adapter_dir), "adapter")
     dir_path = Path(adapter_dir).resolve()
     if not dir_path.is_dir():
