@@ -999,6 +999,36 @@ soup eval quant-check --before X --after Y --tasks t.jsonl --allow-stub
 
 Paths are containment-checked, and `registry://` refs are resolved with an optional `kinds` filter so you never pick the wrong artifact. Standalone `.gguf` file paths are refused up front; pass directory paths containing safetensors/HuggingFace weights or `registry://` references.
 
+### Export Behavior Check
+
+After merging a LoRA adapter, check that the merged Hugging Face model still carries the
+adapter's behavior rather than silently reverting to the base model:
+
+```bash
+soup eval export-check \
+  --adapter ./output/adapter \
+  --exported ./output/merged \
+  --prompts ./evals/adapter-probes.jsonl
+```
+
+The checker greedily generates from the base model, base plus adapter, and exported model
+on identical prompts. A prompt contributes evidence only when the adapter changes the base
+output. For each such prompt, an export that is closer to the base than to the adapter is
+reported as `DELTA_LOST`; this fails with exit code 2. The report also includes exported-
+to-reference agreement, exact-match rate, and the first divergent character.
+
+`--min-agreement` defaults to `0.80`: it tolerates small wording differences from a merge,
+while the independent closer-to-base check still rejects a reverted adapter delta. If no
+prompt changes with the adapter, the command fails with exit code 2 rather than claiming a
+pass; provide held-out prompts that exercise the adapter's intended behavior. Input paths
+must stay under the current working directory. JSONL prompt rows use a `prompt` string;
+plain-text files use one prompt per line.
+
+This first implementation supports merged Hugging Face directories with `.safetensors` or
+`.bin` weights. Standalone GGUF files and MLX-fused directories are refused clearly; their
+live inference backends are not yet integrated. `--allow-stub` is only for exercising the
+command in environments without model dependencies and always fails the gate.
+
 ### Custom Eval Format
 
 `scoring` must be a supported string label; omitted values default to `exact`.

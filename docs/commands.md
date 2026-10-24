@@ -68,6 +68,7 @@ soup eval leaderboard                         Local model leaderboard
 soup eval human --model-a ./a --model-b ./b --input p.jsonl   Human A/B evaluation
 soup eval gate --suite gate.yaml              Run eval-gate suite standalone
 soup eval quant-check --before X --after Y --tasks t.jsonl  Before/after quantization eval (OK/MINOR/MAJOR verdict)
+soup eval export-check --adapter A --exported M --prompts p.jsonl  Verify a merged HF export preserved adapter behavior
 soup eval design <data> --goal "..."          Draft an eval suite from training data + goal
 soup eval discover <data>                       Discover a held-out canary set
 soup eval lock <design>                         Freeze a design as a checksummed suite
