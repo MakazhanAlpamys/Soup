@@ -155,22 +155,23 @@ def _setup_trained_callback(output_dir: Path) -> DynamicCurriculumCallback:
         output_dir=str(output_dir),
     )
 
-    # Feed clearly different losses and grad norms to make bucket 1 the hardest
-    # global_step=0 -> bucket 0 (easy)
+    # The first sample uses round-robin warm-up; later samples are assigned by
+    # their loss percentile against the previously observed signal window.
+    # global_step=0 -> bucket 0 (warm-up)
     callback.on_log(
         DummyArgs(),
         DummyState(0),
         DummyControl(),
         logs={"loss": 1.0, "grad_norm": 0.2},
     )
-    # global_step=1 -> bucket 1 (hardest)
+    # loss=10 exceeds the previous signal -> bucket 2 (hardest)
     callback.on_log(
         DummyArgs(),
         DummyState(1),
         DummyControl(),
         logs={"loss": 10.0, "grad_norm": 8.0},
     )
-    # global_step=2 -> bucket 2 (medium)
+    # loss=2.5 lies between the previous signals -> bucket 1 (medium)
     callback.on_log(
         DummyArgs(),
         DummyState(2),
