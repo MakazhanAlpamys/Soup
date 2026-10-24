@@ -523,7 +523,11 @@ The loader does not auto-detect bare `{"prompt", "answer"}` rows; use `messages`
   and std, the fraction of groups with zero reward std, completion mean, min
   and max length, the truncated (no-EOS) fraction, KL (when `beta > 0`), clip
   ratios and skipped updates. They are printed when there is no live panel and
-  returned in the run's `history`.
+  returned in the run's `history`. KL and the clip ratios are token means over
+  the whole update; TRL averages each micro-step's token mean, which differs
+  when micro-steps hold different token counts. The truncated fraction counts
+  completions without EOS; TRL also counts one that ends in the pad token as
+  finished.
 - **Saved:** `adapters.safetensors` and `adapter_config.json`, loadable with
   `mlx_lm.load(base, adapter_path=output)`. Both are written atomically, and the
   metadata before the first update. The metadata records every setting in the
