@@ -36,6 +36,8 @@ _WRAPPERS = {
     "distill": ("soup_cli.trainer.distill", "DistillTrainerWrapper"),
     "classifier": ("soup_cli.trainer.classifier", "ClassifierTrainerWrapper"),
     "asr": ("soup_cli.trainer.asr", "AsrTrainerWrapper"),
+    # The shape of the three Whisper recipes: the same wrapper with ``asr_lora: true``.
+    "asr_lora": ("soup_cli.trainer.asr", "AsrTrainerWrapper"),
 }
 
 
@@ -183,12 +185,17 @@ def _build(
             return (0.1 * np.sin(2 * np.pi * 220.0 * seconds)).astype(np.float32)
 
         monkeypatch.setattr(tts_codec, "load_audio_mono", sine)
-        cfg = _config(task, _tiny_whisper_dir(tmp_path), tmp_path / "out", checkpointing)
+        extra = {"asr_lora": True} if task == "asr_lora" else {}
+        cfg = _config(
+            "asr", _tiny_whisper_dir(tmp_path), tmp_path / "out", checkpointing, **extra
+        )
         rows = [{"audio": f"clip{index}.wav", "text": "hello world"} for index in range(4)]
     module_name, class_name = _WRAPPERS[task]
     wrapper = getattr(importlib.import_module(module_name), class_name)(cfg, device="cpu")
     wrapper.setup({"train": rows})
     trainer = wrapper.trainer
+    if task == "asr_lora":
+        assert any("lora_" in name for name, _ in trainer.model.named_parameters())
     assert trainer.args.device.type == "cpu"
     assert next(trainer.model.parameters()).device.type == "cpu"
     return wrapper, trainer
@@ -226,12 +233,18 @@ def test_checkpointing_state_after_one_cpu_training_step(
     trainer.args.max_steps = 1
     trainer.args.save_strategy = "no"
     trainer.args.disable_tqdm = True
+    import torch
+
+    trainable = [p for p in trainer.model.parameters() if p.requires_grad]
+    before = [p.detach().clone() for p in trainable]
     calls = _count_layer_calls(trainer.model)
     trainer.train()
     assert trainer.state.global_step == 1
     assert trainer.model.is_gradient_checkpointing is checkpointing, task
     # One forward per step, plus the backward recompute when checkpointing is on.
     assert calls[0] == (2 if checkpointing else 1), task
+    # The recompute count cannot show this: the step still trained the model.
+    assert any(not torch.equal(old, new.detach()) for old, new in zip(before, trainable)), task
 
 
 @pytest.mark.parametrize("task", _WRAPPERS)
