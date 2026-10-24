@@ -1,5 +1,6 @@
 """Progress describes completed scoring work and owns stderr only when opted in."""
 
+import inspect
 import io
 import json
 import os
@@ -8,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
 from soup_cli.eval.custom import EvalTask, run_eval
 from soup_cli.eval.gate_suites import DEFAULT_GENERAL_SUITE, score_bundled_suite
@@ -16,6 +18,13 @@ from soup_cli.utils.ship_progress import group, session
 
 def events(stream: io.StringIO) -> list[dict]:
     return [json.loads(line) for line in stream.getvalue().splitlines()]
+
+
+def capture_runner() -> CliRunner:
+    # Old standalone Click defaults to mixing stderr, newer Typer always splits it.
+    separate = "mix_stderr" in inspect.signature(CliRunner).parameters
+    options = {"mix_stderr": False} if separate else {}
+    return CliRunner(**options)
 
 
 @pytest.mark.parametrize("batched", [False, True])
@@ -225,8 +234,6 @@ def test_judge_completion_and_repeated_groups(mode: str, tmp_path: Path, monkeyp
 
 
 def test_inprocess_runner_exit_and_stderr_restored(tmp_path: Path, monkeypatch) -> None:
-    from typer.testing import CliRunner
-
     from soup_cli.commands.ship import app
 
     monkeypatch.chdir(tmp_path)
@@ -234,10 +241,10 @@ def test_inprocess_runner_exit_and_stderr_restored(tmp_path: Path, monkeypatch) 
         "task": {"mode": "metric", "base": 0.5, "tuned": 0.5},
         "benchmarks": {"a": {"base": 0.8, "tuned": 0.8}},
     }))
-    result = CliRunner().invoke(app, ["--evidence", "evidence.json", "--progress", "jsonl"])
+    result = capture_runner().invoke(app, ["--evidence", "evidence.json", "--progress", "jsonl"])
     assert result.exit_code == 2, result.output
     assert json.loads(result.stderr.splitlines()[-1])["event"] == "end"
-    bad = CliRunner().invoke(app, ["--progress", "typo"])
+    bad = capture_runner().invoke(app, ["--progress", "typo"])
     assert bad.exit_code == 3
 
 
@@ -267,8 +274,6 @@ def test_unavailable_judge_aborts_without_completed_item(
 
 
 def test_inprocess_dependency_diagnostics_stay_off_jsonl(tmp_path: Path, monkeypatch) -> None:
-    from typer.testing import CliRunner
-
     from soup_cli.commands.ship import app
     from soup_cli.utils import live_eval
 
@@ -280,7 +285,7 @@ def test_inprocess_dependency_diagnostics_stay_off_jsonl(tmp_path: Path, monkeyp
         return lambda prompt: "yes"
 
     monkeypatch.setattr(live_eval, "make_generator", make)
-    result = CliRunner().invoke(app, live_flags() + ["--progress", "jsonl"])
+    result = capture_runner().invoke(app, live_flags() + ["--progress", "jsonl"])
     assert result.exit_code == 2, result.output
     assert "PRIVATE" not in result.stderr
     assert [json.loads(line) for line in result.stderr.splitlines()][-1]["event"] == "end"
