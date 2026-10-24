@@ -9,6 +9,7 @@
 - [Merge LoRA Adapter](#merge-lora-adapter)
 - [Export to GGUF](#export-to-gguf)
 - [Batch Inference](#batch-inference)
+- [Native MLX text generation](#native-mlx-text-generation)
 - [Inference Benchmarking](#inference-benchmarking)
 - [Inference Server](#inference-server)
 - [Web UI](#web-ui)
@@ -290,6 +291,48 @@ soup infer --model ./output --input prompts.jsonl --output results.jsonl \
 ```
 
 Output is JSONL with `prompt`, `response`, and `tokens_generated` fields. Shows a progress bar and throughput summary.
+
+
+### Native MLX text generation
+
+On Apple Silicon, install `soup-cli[mlx]` and select the native backend explicitly:
+
+```bash
+soup infer --backend mlx --model ./mlx-adapter --input prompts.jsonl --output results.jsonl
+# A local native base model also works without an adapter:
+soup infer --backend mlx --model ./mlx-base --input prompts.jsonl --output results.jsonl
+```
+
+Inference uses a shared MLX loader and generation implementation. Native Soup
+adapters carry `model`, `num_layers` and resolved `lora_parameters` in
+`adapter_config.json`, alongside `adapters.safetensors`. The base identity comes from
+that metadata; `--base`, if supplied, must identify the same base. A relative base
+path in the metadata is resolved from the inference command's current directory,
+so run from the training directory or use an absolute base path when training.
+All saved tensor names and shapes must exactly match the reconstructed adapter. Missing, extra,
+nonfinite or incompatible tensors fail before generation. A native adapter supplied
+to the default Transformers backend is refused with a backend hint.
+
+The initial native consumer supports ordinary linear text LoRA (including the saved
+rsLoRA scale), with dense or genuinely 4-bit MLX bases, and base-only generation.
+DoRA, full-finetune adapters, embedding/switch-layer targets and other quantized
+adapter targets are refused. This does not add MLX serving or adapter fusion.
+Use the base tokenizer's chat template; rendered special tokens are encoded once.
+Temperature zero selects greedy decoding; positive temperature uses nucleus sampling
+with `top_p=0.9`, matching the Transformers inference default. `--max-tokens`
+limits generation to 1–16384 tokens. No seed flag or reproducibility promise for
+sampling is introduced. Declared model and tokenizer EOS IDs terminate generation; batch
+`tokens_generated` includes a sampled terminating token, while `response` contains
+completion text only.
+
+MLX selects its native device: omit `--device`. Only the HF/local source path,
+`--task text` and `--batch-size 1` are supported; CUDA graphs are refused. Batch
+rows retain their input order and JSONL schema. If generation fails, already flushed
+rows remain available and the command fails without reporting completion.
+Model loading remains subject to `--trust-remote-code`; it is disabled by default.
+The shared remote-code policy refuses a local base that declares custom code
+unless the flag is supplied, and prints the same opt-in warning as Transformers.
+The MLX path does not import Torch, PEFT or TRL.
 
 
 ## Inference Benchmarking
