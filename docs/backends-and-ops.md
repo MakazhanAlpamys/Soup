@@ -820,11 +820,15 @@ Cloud training exits 2 before writing a stub for `--push-as`, `--gate`, `--resum
 Use the local `soup train` command for those options. `--dry-run` is accepted for
 plan-only cloud runs. Combining it with `--cloud-submit` exits 2 before a submission.
 
-A local `data.train` is refused at plan time too, naming the field and pointing at a Hub dataset
-id (every built-in template sets one, so users hit this first). The same applies to local model
-paths (`base`, `teacher_model`, `reward_model`, `mole_task_adapters`): they are refused at plan
-time rather than silently shipped. Uploading local input files is tracked in
-[#1704](https://github.com/MakazhanAlpamys/Soup/issues/1704) and is not done yet.
+Local `data.train` files are uploaded automatically for Lambda and Modal cloud training.
+Files must be regular files inside the project directory, without symlinked path components,
+and the combined upload size must not exceed 256 MiB. The effective remote config references
+the uploaded files. Local `data.train` directories are refused. RunPod does not support
+uploading local training files and refuses them at plan time; use a Hub dataset id instead.
+
+The same local-path restriction applies to model paths (`base`, `teacher_model`,
+`reward_model`, `mole_task_adapters`): they are refused at plan time rather than silently
+shipped.
 
 ```bash
 pip install "soup-cli[modal]"   # only needed for live submit
