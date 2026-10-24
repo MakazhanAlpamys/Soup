@@ -108,6 +108,19 @@ def _nondefault_unwired_training_settings(training_config) -> list[str]:
 UNSUPPORTED_RESUME_TASKS: frozenset[str] = frozenset({"unlearn"})
 
 
+def _resume_refusal(cfg: "SoupConfig", flag: str) -> str | None:
+    """Why ``flag`` (``--resume`` / ``--hf-resume``) cannot run for ``cfg``, or None."""
+    if cfg.task in UNSUPPORTED_RESUME_TASKS:
+        return f"{flag} is not supported for task {cfg.task!r}"
+    if cfg.task == "grpo" and cfg.backend == "mlx":
+        # #1977: the native MLX GRPO loop saves the adapter only. The message
+        # lives with the trainer (imported lazily: it pulls in mlx-free code only).
+        from soup_cli.trainer.mlx_grpo import RESUME_REFUSAL
+
+        return RESUME_REFUSAL.replace("--resume", flag, 1)
+    return None
+
+
 def _format_training_complete_loss(result: dict) -> str:
     """Render only a loss comparison that the trainer actually measured."""
     summary_kind = result.get("loss_summary_kind")
@@ -1168,8 +1181,9 @@ def train(
     if hf_resume and not push_as:
         console.print("[red]--hf-resume requires --push-as <repo>[/]")
         raise typer.Exit(1)
-    if hf_resume and cfg.task in UNSUPPORTED_RESUME_TASKS:
-        console.print(f"[red]--hf-resume is not supported for task {cfg.task!r}[/]")
+    hf_refusal = _resume_refusal(cfg, "--hf-resume") if hf_resume else None
+    if hf_refusal:
+        console.print(f"[red]{hf_refusal}[/]")
         raise typer.Exit(1)
 
     # --- Eval-gate shortcut: --gate <path> sets training.eval_gate ---
@@ -2680,8 +2694,9 @@ def _resolve_resume_or_exit(resume: str, cfg: "SoupConfig") -> str | None:
     """
     if not resume:
         return None
-    if cfg.task in UNSUPPORTED_RESUME_TASKS:
-        console.print(f"[red]--resume is not supported for task {cfg.task!r}[/]")
+    refusal = _resume_refusal(cfg, "--resume")
+    if refusal:
+        console.print(f"[red]{refusal}[/]")
         raise typer.Exit(1)
     resume_from = _resolve_checkpoint(resume, cfg.output, cfg.experiment_name, backend=cfg.backend)
     if resume_from:
