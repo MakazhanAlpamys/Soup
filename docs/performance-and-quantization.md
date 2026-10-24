@@ -905,6 +905,33 @@ accum 1→4, where raising batch cost 0.842 → 2.28 GB). So the rule is: **rais
 `batch_size` until the VRAM pre-flight refuses, then accumulate for the rest.** Soup
 prints this advice when it sees you accumulating.
 
+**Saving and resuming boundary adapters (#1048 item 1).** LoRA targets on the
+streamed `embed_tokens` or `lm_head` of an untied checkpoint support names, regexes
+and dotted paths, default PEFT saves, Trainer checkpoints and resume. Adapter-only
+`save_embedding_layers=False` and explicit `True` exports also work. A tied checkpoint
+keeps both weights resident and follows the normal PEFT path. This completes the path
+protected by the build-time guard from #2082 by @ybai08.
+
+Saving a streamed model's state exports an independent CPU snapshot only for an input
+embedding or output head with a LoRA target, read directly from its shard cache. An
+untargeted boundary stays on meta without opening its shard. The shared streaming slot
+and the meta parameters remain unchanged, so this adds no persistent GPU base allocation.
+PEFT obtains the state before deciding which embedding weights to save; even an
+adapter-only save therefore temporarily needs CPU memory for each adapted boundary matrix.
+Keep the run's matching shard cache available through saving and resume. Loading an
+adapter through `load_adapter` defaults to the existing runtime's device and device
+map, so a CPU runtime stays on CPU even when another accelerator is available.
+PEFT placement overrides must stay consistent with the runtime's own buffers;
+automatic redistribution cannot relocate those buffers.
+Loading an included frozen boundary weight that differs from that cache is refused with a base/cache
+diagnostic rather than silently ignoring it. The lower-level streaming builder also
+refuses `modules_to_save` on these frozen boundaries; Soup does not expose that PEFT field.
+CPU tests with PEFT 0.20.0 and 0.21.0 cover exact default-adapter reloads and SFT/DPO
+checkpoint continuation, including DPO's frozen `ref` adapter. Creating that reference
+uses a model-scoped injection bridge that restores streaming wrappers even if PEFT fails.
+Loading weights into an arbitrary new named adapter remains unsupported. These checks
+establish CPU correctness, not CUDA performance or memory measurements.
+
 **Rejected at config load (each names the release that lifts it):**
 - `batch_size: "auto"` → OOM-probes a resident model that streaming never loads; explicit batch sizes allowed (v0.72.3)
 - `quantization` other than `none` or `4bit` → other formats cannot be streamed into a pooled buffer
@@ -913,7 +940,6 @@ prints this advice when it sees you accumulating.
 - `task: kto` with `batch_size: 1` → TRL's KL term is degenerate at batch 1; refused when the config is read (this applies to every KTO run, not only to streaming) rather than minutes later after sharding
 - `lora.use_dora` / `lora.use_vera` / `lora.init_strategy` other than `random` → these initialise from the real base weight, which is on the meta device under streaming
 - `moe_expert_quant` → expert quantization runs only in the resident model-construction path and would otherwise be silently ignored
-- a LoRA target on the streamed `embed_tokens` or `lm_head` of an untied checkpoint, however `target_modules` spells it (a name, a regex, a dotted path) → refused while the streamed model is built, after the adapter is attached and before any streaming buffer is allocated, not at config load: only then is it known whether the checkpoint streams them and which modules the spelling matched. Saving or resuming that adapter is not supported yet (#1048). The dotted `[q_proj, model.embed_tokens]` is refused like the other spellings until item 1 of #1048 (save and resume) lands. A tied checkpoint streams neither weight, so a target there trains, saves with the defaults and loads back unchanged, as it does without streaming
 - `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers` → each independently rewrites or re-freezes the same layers
 - `use_cut_ce` is refused with `stream_layers` (#1206): streamed setup does not install the resident CCE patch. Disable CCE to stream with the conservative full-logits budget, or disable streaming to use resident CCE. A tiny local streamed Llama was exercised through sharding, forward/loss and backward on CPU; this is no CUDA memory measurement.
 - `use_liger` / `use_flash_attn` → **not reached at all** under streaming (#1692). Both are read by the *resident* setup: Liger patches the MLP forward there, and flash-attn is handed to `from_pretrained` as `attn_implementation`. A streamed model is built by `from_config` with no attention argument and no Liger patch, and `_liger_applied` is never set, so `use_liger_kernel` misses `TrainingArguments` too. These are the switches you reach for when a streamed run will not fit, so they are refused rather than dropped; each is offered again once it is wired and shown to engage on a streamed model. On every task outside `{sft, tts}` they are already refused at config load (#806)

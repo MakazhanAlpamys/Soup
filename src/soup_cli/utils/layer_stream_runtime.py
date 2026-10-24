@@ -2422,36 +2422,26 @@ def _unwrap_tuner_base(module: Any) -> Any:
     return module
 
 
-def _refuse_lora_on_streamed_boundary(model: Any, index: Any, lora_config: Any) -> None:
-    """Refuse a LoRA target on the streamed embedding or head (#1048).
+def _refuse_trainable_streamed_boundary(model: Any, index: Any, lora_config: Any) -> None:
+    """An externally supplied modules_to_save must not unfreeze a streamed base.
 
-    Saving or resuming that adapter is not supported yet. Checked after
-    get_peft_model(), so it covers every spelling of ``target_modules`` that
-    matched the module, and only when the checkpoint streams those weights: a
-    tied one has no large-layer keys and keeps both modules resident.
+    Soup exposes LoRA targets, not modules_to_save. Guard the lower-level build
+    API before PEFT wraps/copies these meta modules, where it would fail late.
     """
-    if not tuple(getattr(index, "large_keys", ()) or ()):
+    targets = getattr(lora_config, "modules_to_save", None)
+    if not targets or not tuple(getattr(index, "large_keys", ()) or ()):
         return
-    from peft.tuners.tuners_utils import BaseTunerLayer
-
-    wrapped = [
-        role
-        for role, module in (
-            ("embed_tokens", model.get_input_embeddings()),
-            ("lm_head", model.get_output_embeddings()),
-        )
-        if isinstance(module, BaseTunerLayer)
-    ]
-    if wrapped:
-        names = ", ".join(wrapped)
-        raise ValueError(
-            f"training.stream_layers does not yet support a LoRA target on the "
-            f"streamed {names} of an untied checkpoint: the forward pass is "
-            f"correct, but saving or resuming that adapter is not supported yet. "
-            f"Change training.lora.target_modules (now "
-            f"{lora_config.target_modules!r}) so it does not match {names}, or "
-            f"train without stream_layers."
-        )
+    if isinstance(targets, str):
+        targets = (targets,)
+    boundaries = (model.get_input_embeddings(), model.get_output_embeddings())
+    for name, module in model.named_modules():
+        if any(module is boundary for boundary in boundaries) and any(
+            name == target or name.endswith("." + target) for target in targets
+        ):
+            raise ValueError(
+                f"modules_to_save targets the frozen streamed boundary {name!r}; "
+                "use a LoRA target for this module or train without stream_layers"
+            )
 
 
 def _build_streamed_large_layer_class():
@@ -2463,12 +2453,18 @@ def _build_streamed_large_layer_class():
         """Embedding or output projection backed by the shared large slot."""
 
         def __init__(
-            self, inner: Any, key: str, pool: Any, refill_before_backward: bool = False
-        ):
+            self,
+            inner: Any,
+            key: str,
+            pool: Any,
+            refill_before_backward: bool = False,
+            weight_path: Optional[str] = None,
+        ) -> None:
             super().__init__()
             self.inner = inner
             self.key = str(key)
             self.pool = pool
+            self.weight_path = weight_path
             # #1049 -- set by the trainers whose loss runs a second forward before
             # the step's backward (see `_needs_a_private_weight`).
             self.refill_before_backward = bool(refill_before_backward)
@@ -2494,6 +2490,30 @@ def _build_streamed_large_layer_class():
                         f"malformed, re-save the adapter"
                     )
                 state_dict[redirected] = value
+            # PEFT's embedding export may include the frozen base alongside
+            # the adapter. It must agree with the shard feeding forward: a
+            # torch copy into a meta parameter would silently discard a
+            # different base. Keep the placeholder, even with assign=True.
+            weight_key = inner_prefix + self._weight_param_name
+            value = state_dict.get(weight_key)
+            if self.weight_path is not None and value is not None and not value.is_meta:
+                if not torch.equal(value.detach().cpu(), self._frozen_weight_snapshot()):
+                    raise ValueError(
+                        f"checkpoint frozen base for {self.key!r} differs from the "
+                        "streaming shard; resume with the original base checkpoint "
+                        "and its matching shard cache"
+                    )
+                state_dict[weight_key] = self.inner.get_parameter(self._weight_param_name).detach()
+
+        def _frozen_weight_snapshot(self) -> Any:
+            from safetensors import safe_open
+
+            # Never read pool.wait(): input and output share storage and the
+            # slot may currently hold the other boundary (or an async copy).
+            # Reading the shard also works independently of a disk-tier
+            # source's live staging buffers. Clone before closing its mapping.
+            with safe_open(self.weight_path, framework="pt", device="cpu") as handle:
+                return handle.get_tensor(self.key).clone()
 
         def _apply(self, fn: Any, recurse: bool = True) -> Any:
             def _skip_meta(tensor: Any) -> Any:
@@ -2568,9 +2588,16 @@ def _build_streamed_large_layer_class():
                     prefix = args[1]
                 if len(args) > 2 and keep_vars is False:
                     keep_vars = args[2]
-            return self.inner.state_dict(
+            state = self.inner.state_dict(
                 destination=destination, prefix=prefix, keep_vars=keep_vars
             )
+            if self.weight_path is not None and hasattr(self.inner, "base_layer"):
+                # PEFT obtains state_dict BEFORE deciding auto/True/False for
+                # save_embedding_layers. Only tuner-wrapped boundaries need
+                # independent CPU bytes; leave untargeted weights on meta and
+                # avoid reading their vocabulary-sized shards on every save.
+                state[prefix + self._weight_param_name] = self._frozen_weight_snapshot()
+            return state
 
         def __getattr__(self, name: str) -> Any:
             try:
@@ -2669,6 +2696,76 @@ def _replace_module_references(root: Any, target: Any, replacement: Any) -> int:
                 setattr(module, name, replacement)
                 replaced += 1
     return replaced
+
+
+def _attach_streamed_boundary_adapter_bridge(model: Any) -> None:
+    """Let PEFT inject/load adapters without changing streaming placement.
+
+    PEFT resolves a target through its parent attribute, which is our streamed
+    wrapper rather than the canonical tuner yielded by named_modules(). TRL
+    DPO uses add_adapter to make its reference. Expose the tuner only during
+    injection and restore streaming even if PEFT raises partway through it.
+    PEFT's load_adapter otherwise re-plans CPU/disk models across available
+    accelerators, which cannot move this runtime's independently owned pools.
+    This is scoped to this model, never a patch of PEFT's global classes.
+    """
+    if not hasattr(model, "peft_config"):
+        return
+    from types import MethodType
+
+    add_adapter = type(model).add_adapter
+    load_adapter = type(model).load_adapter
+
+    def _load_adapter(
+        self: Any, model_id: Any, adapter_name: str, is_trainable: bool = False,
+        torch_device: Optional[str] = None, *args: Any, **kwargs: Any,
+    ) -> Any:
+        runtime_map = getattr(self, "hf_device_map", None)
+        if isinstance(runtime_map, dict) and "" in runtime_map:
+            if torch_device is None:
+                device = runtime_map[""]
+                torch_device = f"cuda:{device}" if isinstance(device, int) else str(device)
+            kwargs.setdefault("device_map", dict(runtime_map))
+        return load_adapter(
+            self, model_id, adapter_name, is_trainable, torch_device, *args, **kwargs
+        )
+
+    def _add_adapter(self: Any, *args: Any, **kwargs: Any) -> Any:
+        boundaries = {}
+        for getter in (self.get_input_embeddings, self.get_output_embeddings):
+            wrapper = getter()
+            if isinstance(wrapper, _streamed_large_layer_class()):
+                boundaries[id(wrapper)] = (wrapper, [])
+        seen = set()
+        stack = [self]
+        while stack:
+            parent = stack.pop()
+            if id(parent) in seen:
+                continue
+            seen.add(id(parent))
+            for name, child in parent._modules.items():
+                if id(child) in boundaries:
+                    boundaries[id(child)][1].append((parent, name))
+                elif child is not None:
+                    stack.append(child)
+        for wrapper, references in boundaries.values():
+            for parent, name in references:
+                parent._modules[name] = wrapper.inner
+        try:
+            return add_adapter(self, *args, **kwargs)
+        finally:
+            for wrapper, references in boundaries.values():
+                if not references:
+                    continue
+                parent, name = references[0]
+                inner = parent._modules[name]
+                wrapper.inner = inner
+                wrapper._weight_param_name = _large_layer_weight_param_name(inner)
+                for parent, name in references:
+                    parent._modules[name] = wrapper
+
+    model.add_adapter = MethodType(_add_adapter, model)
+    model.load_adapter = MethodType(_load_adapter, model)
 
 
 def canonical_named_parameters(model: Any) -> Iterator[Tuple[str, Any]]:
@@ -3327,8 +3424,10 @@ def materialize_meta_adapters(model: Any, *, seed: int = 0, device: str = "cuda"
             if not param.is_meta or "lora_" not in full:
                 continue
             data = torch.empty(param.shape, dtype=torch.float32)
-            if "lora_B" in full:
+            if "lora_embedding_A" in full or "lora_B" in full:
                 data.zero_()
+            elif "lora_embedding_B" in full:
+                nn.init.normal_(data, generator=generator)
             else:
                 nn.init.kaiming_uniform_(data, a=5**0.5, generator=generator)
             module._parameters[pname] = nn.Parameter(data.to(device), requires_grad=True)
@@ -3465,9 +3564,16 @@ def materialize_meta_adapter_copy(
     copied = 0
 
     for target_name, target_param in list(parameters.items()):
-        if target_marker not in target_name or not target_param.is_meta:
+        # Linear adapters have .ref.weight; embedding adapters are parameters
+        # in a ParameterDict and end with .ref instead.
+        has_target = target_marker in target_name or target_name.endswith("." + target_adapter)
+        if not has_target or not target_param.is_meta:
             continue
-        source_name = target_name.replace(target_marker, source_marker, 1)
+        source_name = (
+            target_name.replace(target_marker, source_marker, 1)
+            if target_marker in target_name
+            else target_name[: -len(target_adapter)] + source_adapter
+        )
         source_param = parameters.get(source_name)
         if source_param is None:
             raise RuntimeError(
@@ -3483,7 +3589,9 @@ def materialize_meta_adapter_copy(
         copied += 1
 
     stranded = [
-        name for name, param in model.named_parameters() if target_marker in name and param.is_meta
+        name
+        for name, param in model.named_parameters()
+        if (target_marker in name or name.endswith("." + target_adapter)) and param.is_meta
     ]
     if stranded:
         raise RuntimeError(
@@ -3947,21 +4055,34 @@ def install_streaming(
             if embed_key != output_key:
                 raise ValueError("one module cannot represent two untied large-layer weights")
             shared = large_cls(
-                input_module, embed_key, large_pool, refill_before_backward=refill_before_backward
+                input_module,
+                embed_key,
+                large_pool,
+                refill_before_backward=refill_before_backward,
+                weight_path=large_shard_path(shard_dir, embed_key),
             )
             if not _replace_module_references(model, input_module, shared):
                 raise RuntimeError("could not install the streamed tied embedding module")
         else:
             streamed_input = large_cls(
-                input_module, embed_key, large_pool, refill_before_backward=refill_before_backward
+                input_module,
+                embed_key,
+                large_pool,
+                refill_before_backward=refill_before_backward,
+                weight_path=large_shard_path(shard_dir, embed_key),
             )
             streamed_output = large_cls(
-                output_module, output_key, large_pool, refill_before_backward=refill_before_backward
+                output_module,
+                output_key,
+                large_pool,
+                refill_before_backward=refill_before_backward,
+                weight_path=large_shard_path(shard_dir, output_key),
             )
             if not _replace_module_references(model, input_module, streamed_input):
                 raise RuntimeError("could not install the streamed input embedding")
             if not _replace_module_references(model, output_module, streamed_output):
                 raise RuntimeError("could not install the streamed output head")
+        _attach_streamed_boundary_adapter_bridge(model)
 
     def _prime(*_args: Any, **_kwargs: Any) -> None:
         # #975 — the backward-tail prefetch above already loads this for every
@@ -4417,8 +4538,8 @@ def build_streamed_model(
         from soup_cli.utils.peft_wiring import apply_pre_lora_patches
 
         apply_pre_lora_patches(model, model_id)
+        _refuse_trainable_streamed_boundary(model, index, lora_config)
         model = get_peft_model(model, lora_config)
-        _refuse_lora_on_streamed_boundary(model, index, lora_config)
         materialize_meta_adapters(model, seed=seed, device=device)
         assert_trainable_adapters_materialized(model)
         runtime = install_streaming(
