@@ -224,9 +224,12 @@ def _checked_shard_name(name: Any) -> str:
     return name
 
 
-def _weight_files(base_dir: Path) -> Tuple[List[str], Optional[Dict[str, Any]]]:
+def _weight_files(
+    base_dir: Path, roots: List[str]
+) -> Tuple[List[str], Optional[Dict[str, Any]]]:
     index_path = base_dir / _INDEX_NAME
     if index_path.is_file():
+        _checked_source(base_dir, _INDEX_NAME, roots)
         with open(index_path, encoding="utf-8") as handle:
             index = json.load(handle)
         weight_map = index.get("weight_map") if isinstance(index, dict) else None
@@ -385,8 +388,8 @@ def merge_low_memory(
         raise FileExistsError(f"output directory {output_dir} already exists and is not empty")
 
     config, adapter = load_adapter(adapter_dir)
-    files, index = _weight_files(base_dir)
     roots = _source_roots(base_dir)
+    files, index = _weight_files(base_dir, roots)
     sources = {name: _checked_source(base_dir, name, roots) for name in files}
     support = _support_files(base_dir, roots, trust_remote_code)
     _preflight(sources, adapter, config)

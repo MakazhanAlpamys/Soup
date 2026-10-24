@@ -777,3 +777,90 @@ class TestAtomicOutput:
         )
         assert (output / "tokenizer.json").is_file()
         assert not any(path.name.startswith(".merged.") for path in output.parent.iterdir())
+
+
+class TestOrderAndDefenceInDepth:
+    def test_non_2d_lora_tensors_are_refused(self, checkpoints):
+        from soup_cli.utils.lowmem_merge import LowMemoryMergeError, merge_low_memory
+
+        base, adapter, output = checkpoints
+
+        def flatten_one_a(weights):
+            key = next(key for key in weights if key.endswith(".lora_A.weight"))
+            weights[key] = weights[key].reshape(-1)
+
+        _rewrite_adapter_weights(adapter, flatten_one_a)
+        with pytest.raises(LowMemoryMergeError, match="2-D"):
+            merge_low_memory(base, adapter, output, "float16")
+        assert not output.exists()
+
+    def test_a_bad_shape_is_found_before_any_shard_is_written(self, checkpoints, monkeypatch):
+        from soup_cli.utils import lowmem_merge
+
+        base, adapter, output = checkpoints
+
+        def shrink_one_a(weights):
+            key = next(key for key in weights if key.endswith(".lora_A.weight"))
+            weights[key] = weights[key][:, :16].contiguous()
+
+        _rewrite_adapter_weights(adapter, shrink_one_a)
+
+        def no_write(*args, **kwargs):
+            raise AssertionError("a shard was written before the shapes were checked")
+
+        monkeypatch.setattr(lowmem_merge, "_write_shard", no_write)
+        with pytest.raises(lowmem_merge.LowMemoryMergeError, match="does not match"):
+            lowmem_merge.merge_low_memory(base, adapter, output, "float16")
+
+    def test_load_adapter_itself_refuses_bad_config_values(self, checkpoints):
+        from soup_cli.utils.lowmem_merge import LowMemoryMergeError, load_adapter
+
+        _, adapter, _ = checkpoints
+        _rewrite_adapter_config(adapter, r=0)
+        with pytest.raises(LowMemoryMergeError, match="'r'"):
+            load_adapter(adapter)
+
+    def test_write_shard_alone_refuses_a_quantized_tensor_under_an_adapter(self, tmp_path):
+        from soup_cli.utils import lowmem_merge
+
+        base = _tiny_base(tmp_path / "base", shard_size="10MB")
+        adapter = _tiny_adapter(base, tmp_path / "adapter")
+        target = _first_adapter_target(base, adapter)
+        weights = safetensors_torch.load_file(str(base / "model.safetensors"))
+        weights[target] = torch.zeros(weights[target].numel(), dtype=torch.uint8)
+        safetensors_torch.save_file(
+            weights, str(base / "model.safetensors"), metadata={"format": "pt"}
+        )
+        config, paired = lowmem_merge.load_adapter(adapter)
+        with pytest.raises(lowmem_merge.LowMemoryMergeError, match="not a float type"):
+            lowmem_merge._write_shard(
+                base / "model.safetensors", tmp_path / "out.safetensors", "float16", paired, config
+            )
+
+    def test_write_shard_checks_the_bytes_it_writes(self, checkpoints, tmp_path, monkeypatch):
+        from soup_cli.utils import lowmem_merge
+
+        base, adapter, _ = checkpoints
+        config, paired = lowmem_merge.load_adapter(adapter)
+        monkeypatch.setattr(lowmem_merge, "merged_tensor", lambda *args, **kwargs: torch.zeros(3))
+        weight_map = json.loads((base / "model.safetensors.index.json").read_text())["weight_map"]
+        shard = base / weight_map[_first_adapter_target(base, adapter)]
+        with pytest.raises(lowmem_merge.LowMemoryMergeError, match="header declares"):
+            lowmem_merge._write_shard(
+                shard, tmp_path / "out.safetensors", "float16", paired, config
+            )
+
+
+class TestIndexContainment:
+    @pytest.mark.requires_symlink
+    def test_index_symlinked_outside_the_model_is_refused(self, checkpoints, tmp_path):
+        from soup_cli.utils.lowmem_merge import LowMemoryMergeError, merge_low_memory
+
+        base, adapter, output = checkpoints
+        index = base / "model.safetensors.index.json"
+        outside = tmp_path / "outside.index.json"
+        index.rename(outside)
+        index.symlink_to(outside)
+        with pytest.raises(LowMemoryMergeError, match="outside the base model directory"):
+            merge_low_memory(base, adapter, output, "float16")
+        assert not output.exists()
