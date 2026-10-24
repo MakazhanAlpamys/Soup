@@ -63,6 +63,7 @@ from soup_cli.utils.exit_codes import (
     GateGroup,
 )
 from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
+from soup_cli.utils.ship_progress import group, jsonl_command
 
 if TYPE_CHECKING:  # pydantic models — import for typing only (no eager cost)
     from soup_cli.config.schema import ShipConfig, SoupConfig
@@ -607,24 +608,27 @@ def _resolve_generators(
     template_options = (
         {"chat_template_kwargs": chat_template_kwargs} if chat_template_kwargs is not None else {}
     )
-    base_gen = live_eval.make_generator(
-        base, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
-        dtype=dtype, quantization=quantization,
-        **template_options,
-    )
+    with group("load", side="base"):
+        base_gen = live_eval.make_generator(
+            base, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
+            dtype=dtype, quantization=quantization,
+            **template_options,
+        )
     if adapter:
-        tuned_gen = live_eval.make_generator(
-            base, adapter=adapter, device=device,
-            max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
-            dtype=dtype, quantization=quantization,
-            **template_options,
-        )
+        with group("load", side="tuned"):
+            tuned_gen = live_eval.make_generator(
+                base, adapter=adapter, device=device,
+                max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
+                dtype=dtype, quantization=quantization,
+                **template_options,
+            )
     elif tuned:
-        tuned_gen = live_eval.make_generator(
-            tuned, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
-            dtype=dtype, quantization=quantization,
-            **template_options,
-        )
+        with group("load", side="tuned"):
+            tuned_gen = live_eval.make_generator(
+                tuned, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
+                dtype=dtype, quantization=quantization,
+                **template_options,
+            )
     else:  # pragma: no cover — _verdict_live guarantees one of tuned/adapter
         raise ValueError("need --tuned or --adapter")
     return base_gen, tuned_gen
@@ -642,8 +646,10 @@ def _leg1_metric(
     tasks = load_eval_tasks(task_eval)
     if not tasks:
         raise ValueError(f"task-eval file {task_eval!r} has no tasks")
-    base_acc = run_eval(base_id, tasks, generate_fn=base_gen).accuracy
-    tuned_acc = run_eval(tuned_id, tasks, generate_fn=tuned_gen).accuracy
+    with group("task_eval", side="base", countable=True):
+        base_acc = run_eval(base_id, tasks, generate_fn=base_gen).accuracy
+    with group("task_eval", side="tuned", countable=True):
+        tuned_acc = run_eval(tuned_id, tasks, generate_fn=tuned_gen).accuracy
     return build_task_win("metric", base_acc, tuned_acc)
 
 
@@ -703,7 +709,11 @@ def _leg1_judge(
     judge_model: str,
 ) -> TaskWin:
     score = _build_judge_scorer(task_eval, judge_model)
-    return build_task_win("judge_score", score(base_gen), score(tuned_gen))
+    with group("task_eval", side="base", countable=True):
+        base_score = score(base_gen)
+    with group("task_eval", side="tuned", countable=True):
+        tuned_score = score(tuned_gen)
+    return build_task_win("judge_score", base_score, tuned_score)
 
 
 def _build_pairwise_scorer(
@@ -749,7 +759,8 @@ def _leg1_pairwise(
     ``TaskWin(base=0.5 coin-flip, tuned=win-rate)`` so ``won <=> win-rate > 0.5``.
     """
     winrate = _build_pairwise_scorer(task_eval, judge_model)
-    return build_task_win("pairwise", 0.5, winrate(base_gen, tuned_gen))
+    with group("task_eval", side="tuned", countable=True):
+        return build_task_win("pairwise", 0.5, winrate(base_gen, tuned_gen))
 
 
 def _extract_lm_score(bench_data: Mapping[str, object]) -> Optional[float]:
@@ -792,9 +803,10 @@ def _lm_eval_leg2(
     base_map: Dict[str, object] = {}
     tuned_map: Dict[str, object] = {}
 
-    tuned_results = eval_cmd._run_lm_eval(
-        tuned_arg, names, None, _LM_EVAL_BATCH_SIZE, dev
-    )
+    with group("suite_eval", side="tuned", suite=",".join(names)):
+        tuned_results = eval_cmd._run_lm_eval(
+            tuned_arg, names, None, _LM_EVAL_BATCH_SIZE, dev
+        )
     tuned_blocks = tuned_results.get("results", {})
     for name in names:
         score = _extract_lm_score(tuned_blocks.get(name, {}))
@@ -808,9 +820,10 @@ def _lm_eval_leg2(
         else:
             base_to_run.append(name)
     if base_to_run:
-        base_results = eval_cmd._run_lm_eval(
-            base_arg, base_to_run, None, _LM_EVAL_BATCH_SIZE, dev
-        )
+        with group("suite_eval", side="base", suite=",".join(base_to_run)):
+            base_results = eval_cmd._run_lm_eval(
+                base_arg, base_to_run, None, _LM_EVAL_BATCH_SIZE, dev
+            )
         base_blocks = base_results.get("results", {})
         for name in base_to_run:
             score = _extract_lm_score(base_blocks.get(name, {}))
@@ -851,11 +864,13 @@ def _leg2_scores(
     tuned_map: Dict[str, object] = {}
 
     for name in bundled_names:
-        tuned_map[name] = score_bundled_suite(name, tuned_gen)
+        with group("suite_eval", side="tuned", suite=name, countable=True):
+            tuned_map[name] = score_bundled_suite(name, tuned_gen)
         if name in baseline_scores:
             base_map[name] = float(baseline_scores[name])
         else:
-            base_map[name] = score_bundled_suite(name, base_gen)
+            with group("suite_eval", side="base", suite=name, countable=True):
+                base_map[name] = score_bundled_suite(name, base_gen)
 
     if other_names:
         lm_base, lm_tuned = _lm_eval_leg2(
@@ -989,8 +1004,11 @@ def _measure_noise_floor(
         console.print(f"[dim]noise floor: base repeat {index + 1}/{runs}[/]")
         run: Dict[str, float] = {}
         for name in bundled:
-            run[name] = score_bundled_suite(name, base_gen)
-        run[TASK_AXIS] = task_score()
+            with group("suite_eval", side="base", suite=name,
+                       repeat=index + 1, countable=True):
+                run[name] = score_bundled_suite(name, base_gen)
+        with group("task_eval", side="base", repeat=index + 1, countable=True):
+            run[TASK_AXIS] = task_score()
         samples.append(run)
 
     floor = compute_noise_floor(samples, judge_inclusive=judge_inclusive)
@@ -1248,8 +1266,12 @@ def _emit_and_exit(
 # ---------------------------------------------------------------------------
 
 @app.callback(invoke_without_command=True)
+@jsonl_command
 def ship(
     ctx: typer.Context,
+    progress: Optional[str] = typer.Option(
+        None, "--progress", help="Opt-in JSONL progress on stderr (jsonl).",
+    ),
     base: Optional[str] = typer.Option(
         None, "--base", help="Base model id/path (the 'before')."
     ),
@@ -1350,6 +1372,8 @@ def ship(
     ),
 ) -> None:
     """Decide SHIP / DON'T SHIP for a fine-tune (exit 0 = SHIP, 2 = DON'T)."""
+    if progress is not None and progress != "jsonl":
+        _fail("--progress must be jsonl", _EXIT_USAGE)
     soup_config = None
     from soup_cli.utils.ship_provenance import check_binding, validate_data_identity
 
