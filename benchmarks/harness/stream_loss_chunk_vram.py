@@ -378,13 +378,15 @@ def run_arm(base: str, seq: int, chunk: Optional[int], quantization: str, out: s
     """The child side of :func:`run_arm_process`: one arm, its result written to ``out``."""
     import torch
 
+    from soup_cli.utils.gpu import configure_cuda_alloc_hint
+
+    # As `soup train` does before anything starts CUDA (#2149); every arm streams.
+    configure_cuda_alloc_hint(stream_layers=True)
     device = trainer_device()
     out_path = pathlib.Path(out)
     arm = run_one(base, seq, chunk, quantization, device, out_path.parent)
     if device == "cuda":
         # After the arm, so that this process does not initialise CUDA before the setup does.
-        # A real `soup train` initialises it earlier still, in detect_device(), so in both
-        # the setup reports the allocator hint as not enabled and the rows stay comparable.
         props = torch.cuda.get_device_properties(0)
         device = f"{props.name} | {props.total_memory / 1e9:.3f} GB"
     doc = {"arm": dataclasses.asdict(arm), "device": device}

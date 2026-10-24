@@ -35,6 +35,19 @@ def _load_harness():
 harness = _load_harness()
 
 
+@pytest.fixture(autouse=True)
+def restore_alloc_conf(monkeypatch):
+    """An arm sets PYTORCH_CUDA_ALLOC_CONF for real on Linux; put it back after each test."""
+    import os
+
+    before = os.environ.get("PYTORCH_CUDA_ALLOC_CONF")
+    yield
+    if before is None:
+        os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
+    else:
+        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = before
+
+
 def _arm(**fields):
     values = dict(
         seq=1024,
@@ -329,3 +342,23 @@ def test_an_arm_process_reads_the_device_only_after_its_setup(monkeypatch, tmp_p
 
     assert order == [("arm", "cuda"), ("device", 0)]
     assert '"device": "Fake GPU | 6.000 GB"' in out.read_text(encoding="utf-8")
+
+
+def test_an_arm_process_sets_the_allocator_hint_as_soup_train_does(monkeypatch, tmp_path):
+    """``soup train`` sets PYTORCH_CUDA_ALLOC_CONF before CUDA starts (#2149); so must an arm."""
+    import os
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.delenv("PYTORCH_CUDA_ALLOC_CONF", raising=False)
+    seen = []
+
+    def fake_run_one(base, seq, chunk, quantization, device, work_dir, measure=True):
+        seen.append(os.environ.get("PYTORCH_CUDA_ALLOC_CONF"))
+        return _arm(seq=seq, chunk=chunk, realised=seq)
+
+    monkeypatch.setattr(harness, "trainer_device", lambda: "cpu")
+    monkeypatch.setattr(harness, "run_one", fake_run_one)
+    out = tmp_path / "arm.json"
+
+    assert harness.main(["--base", "m", "--arm", "512:off", "--arm-out", str(out)]) == 0
+    assert seen == ["expandable_segments:True"]
