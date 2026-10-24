@@ -3365,12 +3365,15 @@ class TrainingConfig(BaseModel):
         default=4, ge=1, le=20,
         description="Number of difficulty stages for curriculum learning",
     )
-    # Curriculum-Aware dynamic re-weighting (v0.48.0 Part A — BETA)
+    # Curriculum-Aware dynamic telemetry (v0.48.0 Part A — BETA, #808)
     curriculum_dynamic: bool = Field(
         default=False,
         description=(
-            "BETA: dynamically re-weight curriculum buckets every N steps via "
-            "online uncertainty estimation (per-sample loss + grad norm). "
+            "BETA: track dynamic curriculum bucket weights every N steps via "
+            "online uncertainty estimation (per-sample loss + grad norm) for "
+            "telemetry and curve inspection (`soup runs curriculum-curve`). "
+            "The weights are only written to curriculum_history.jsonl; they do "
+            "not change which samples a batch contains (#808). "
             "Requires curriculum=true. Multi-rank launches must wire an "
             "all_reduce hook on per-bucket stats (see "
             "utils.curriculum_dynamic.validate_distributed_curriculum)."
@@ -3379,24 +3382,24 @@ class TrainingConfig(BaseModel):
     curriculum_dynamic_recompute_steps: int = Field(
         default=50, ge=1, le=100_000,
         description=(
-            "Recompute curriculum bucket sampler weights every N global "
-            "training steps."
+            "Recompute curriculum bucket weights for telemetry tracking "
+            "every N global training steps (#808)."
         ),
     )
     curriculum_dynamic_floor: float = Field(
         default=0.05, gt=0.0, le=0.5,
         description=(
-            "Minimum normalised per-bucket weight after softmax. "
-            "Must be in (0.0, 1/curriculum_buckets]; the cross-validator "
-            "tightens this to the per-config ceiling. Prevents bucket "
-            "starvation."
+            "Minimum value a bucket's weight can take in the logged telemetry "
+            "weights after softmax. Must be in (0.0, 1/curriculum_buckets]; the "
+            "cross-validator tightens this to the per-config ceiling."
         ),
     )
     curriculum_dynamic_temperature: float = Field(
         default=1.0, gt=0.0, le=100.0,
         description=(
-            "Softmax temperature on the uncertainty signal. Higher = flatter "
-            "distribution; lower = concentrate on hardest buckets."
+            "Softmax temperature on the uncertainty signal when computing "
+            "logged bucket weights. Higher = flattens the logged distribution; "
+            "lower = sharpens the logged distribution."
         ),
     )
     # Loss watchdog — auto-stop on loss spikes
@@ -4207,12 +4210,12 @@ class TrainingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_curriculum_dynamic_requires_curriculum(self) -> "TrainingConfig":
-        """v0.48.0 Part A — dynamic re-weighting layers on the static
+        """v0.48.0 Part A — dynamic curriculum telemetry uses the static
         curriculum bucketer; it cannot run alone."""
         if self.curriculum_dynamic and not self.curriculum:
             raise ValueError(
                 "curriculum_dynamic requires curriculum=true "
-                "(dynamic re-weighting needs the static bucketer)."
+                "(dynamic curriculum telemetry needs the static bucketer)."
             )
         # Cross-check: floor must leave room above uniform/N.
         if self.curriculum_dynamic:
@@ -5908,7 +5911,7 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_curriculum_dynamic_supported(self) -> "SoupConfig":
-        """v0.48.0 Part A — Curriculum-Aware dynamic re-weighting.
+        """v0.48.0 Part A — Curriculum-Aware dynamic telemetry.
 
         BETA: v0.53.5 #115 widens the allowlist to every transformer-backend
         trainer (sft / pretrain / dpo / grpo / kto / orpo / simpo / ipo / bco /
