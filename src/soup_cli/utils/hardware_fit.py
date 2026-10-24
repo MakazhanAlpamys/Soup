@@ -1,11 +1,12 @@
-"""Hardware-fit calculator: static analytical predictor of peak VRAM.
+"""Hardware-fit calculator: the train pre-flight's view of the peak-VRAM estimate.
 
 v0.40.3 #64 added a live CUDA OOM probe; that's correct but slow (one
-real forward+backward per candidate). v0.64 adds a fast analytical
-predictor that takes (params, seq_len, batch_size, optimizer, quant,
-peft, gradient_checkpointing) and outputs a five-bucket VRAM breakdown.
-Used by ``decide_hardware_fit`` to refuse a training launch when the
-predicted peak (with ``VRAM_SAFETY_MARGIN=10%`` headroom) would not fit.
+real forward+backward per candidate). v0.64 added a fast analytical
+predictor; #2049 replaced its formulas with ``utils/vram_estimate.py``, the
+estimate ``soup profile``, the MCP ``profile`` tool and ``soup plan`` share,
+so this module keeps its public names and delegates. ``decide_hardware_fit``
+refuses a training launch when the predicted peak (with
+``VRAM_SAFETY_MARGIN=10%`` headroom) would not fit.
 
 The math is intentionally conservative — operators can supply
 ``--allow-oom-attempt`` to bypass the gate if they want to try anyway
@@ -20,15 +21,25 @@ Public surface:
 - ``estimate_peak_vram_gb(inp)`` -> ``VRAMBreakdown``.
 - ``decide_hardware_fit(inp, *, available_vram_gb)`` -> ``HardwareFitReport``.
 - ``resolve_peft_mode(cfg, quant=None)`` -> ``str``.
+- ``hardware_fit_input_from_config(cfg, ...)`` -> ``HardwareFitInput | None``.
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Optional, Union
 
-VRAM_SAFETY_MARGIN = 0.10  # 10% headroom
+from soup_cli.utils.model_shape import ModelShape
+from soup_cli.utils.vram_estimate import (
+    BYTES_PER_PARAM_BY_QUANT,
+    GB,
+    OPTIMIZER_BYTES_PER_PARAM,
+    VRAM_SAFETY_MARGIN,
+    RunSpec,
+    VramEstimate,
+    estimate_vram,
+)
 
 _MIN_SEQ_LEN = 64
 _MAX_SEQ_LEN = 1_048_576
@@ -74,7 +85,12 @@ def validate_batch_size(value: object) -> int:
 
 @dataclass(frozen=True)
 class HardwareFitInput:
-    """Inputs needed to predict peak VRAM."""
+    """Inputs needed to predict peak VRAM.
+
+    ``shape`` is the model's shape as ``model_shape.read_model_shape`` read it;
+    without one, the shape is guessed from ``params_b`` and the logits term is
+    not counted. ``lora_r`` and ``target_modules`` size the LoRA adapters.
+    """
 
     params_b: float
     seq_len: int
@@ -82,7 +98,14 @@ class HardwareFitInput:
     optimizer: str
     quant: str
     peft: str
-    gradient_checkpointing: bool
+    gradient_checkpointing: Union[bool, str]
+    shape: Optional[ModelShape] = None
+    lora_r: int = 64
+    target_modules: Any = "auto"
+    #: False for a task whose model has no LM head (``NO_LM_HEAD_TASKS``).
+    lm_head: bool = True
+    #: The fused-loss flags the run's trainer applies (``use_liger``, ``use_cut_ce``).
+    fused_loss: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if isinstance(self.params_b, bool):
@@ -120,24 +143,31 @@ class HardwareFitInput:
                 f"unknown peft {self.peft!r}; "
                 f"known: {', '.join(sorted(_VALID_PEFT))}"
             )
-        if not isinstance(self.gradient_checkpointing, bool):
-            raise TypeError("gradient_checkpointing must be bool")
+        if not isinstance(self.gradient_checkpointing, (bool, str)):
+            raise TypeError("gradient_checkpointing must be bool or a tier name")
+        if self.shape is not None and not isinstance(self.shape, ModelShape):
+            raise TypeError("shape must be ModelShape")
 
 
 @dataclass(frozen=True)
 class VRAMBreakdown:
-    """Per-class peak VRAM in GB."""
+    """Per-class peak VRAM in GB (1e9 bytes)."""
 
     weights_gb: float
     optimizer_gb: float
     gradients_gb: float
     activations_gb: float
     overhead_gb: float
+    adapters_gb: float = 0.0
+    logits_gb: float = 0.0
+    dequant_gb: float = 0.0
+    #: The full estimate behind these numbers (terms in bytes, shape, notes).
+    estimate: Optional[VramEstimate] = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         for fld in (
             "weights_gb", "optimizer_gb", "gradients_gb",
-            "activations_gb", "overhead_gb",
+            "activations_gb", "overhead_gb", "adapters_gb", "logits_gb", "dequant_gb",
         ):
             val = getattr(self, fld)
             if isinstance(val, bool):
@@ -157,6 +187,9 @@ class VRAMBreakdown:
             + self.gradients_gb
             + self.activations_gb
             + self.overhead_gb
+            + self.adapters_gb
+            + self.logits_gb
+            + self.dequant_gb
         )
 
 
@@ -190,34 +223,9 @@ class HardwareFitReport:
             raise TypeError("reason must be str")
 
 
-# Bytes-per-param multiplier by quant scheme. Approximate; the deep
-# truth lives in upstream BNB / GPTQ / AWQ docs.
-_BYTES_PER_PARAM_BY_QUANT = {
-    "none": 2.0,    # bf16/fp16
-    "4bit": 0.5,
-    "8bit": 1.0,
-    "fp8": 2.0,     # #1652: FineGrainedFP8Config(dequantize=True), so bf16 too
-    "gptq": 0.55,
-    "awq": 0.55,
-    "aqlm": 0.5,
-    "eetq": 1.0,
-    "mxfp4": 2.0,   # #1466: loaded with Mxfp4Config(dequantize=True), so bf16
-}
-
-# Optimiser-state bytes per trainable parameter. AdamW = 8 (m + v fp32),
-# 8-bit AdamW = 2, Adafactor = 4, SGD = 0 (momentum-less reference).
-_OPTIM_BYTES_PER_PARAM = {
-    "adamw_torch": 8.0,
-    "adamw_torch_fused": 8.0,
-    "adafactor": 4.0,
-    "sgd": 0.0,
-    "adamw_bnb_8bit": 2.0,
-    "paged_adamw_8bit": 2.0,
-    "lion_8bit": 2.0,
-    "lomo": 0.0,
-    "adalomo": 2.0,
-    "schedule_free_adamw": 8.0,
-}
+# Kept under their old names: autopilot reads the quant table (#1466).
+_BYTES_PER_PARAM_BY_QUANT = BYTES_PER_PARAM_BY_QUANT
+_OPTIM_BYTES_PER_PARAM = OPTIMIZER_BYTES_PER_PARAM
 
 
 def resolve_peft_mode(cfg: Any, quant: str | None = None) -> str:
@@ -254,76 +262,168 @@ def resolve_peft_mode(cfg: Any, quant: str | None = None) -> str:
     return "lora"
 
 
-def _trainable_param_fraction(peft: str) -> float:
-    """LoRA / DoRA / QLoRA train ~1% of parameters. Full = 100%."""
-    if peft == "full":
-        return 1.0
-    if peft in ("lora", "qlora", "dora"):
-        return 0.01
-    return 1.0  # defensive default; schema gate already rejects unknown
+# training.quantization -> the predictor's name for it. A value that is not here
+# (``hqq:*``) has no memory model, and the pre-flight says it skipped the run (#1652).
+CONFIG_QUANT_TO_FIT = {
+    "none": "none",
+    "4bit": "4bit",
+    "8bit": "8bit",
+    # Stay packed on the card.
+    "gptq": "gptq",
+    "awq": "awq",
+    "aqlm": "aqlm",
+    "eetq": "eetq",
+    # Dequantized on load, so priced (and gated) like "none" (#1631, #1652).
+    "mxfp4": "mxfp4",
+    "fp8": "fp8",
+}
+
+#: ``batch_size: auto`` resolves at train time; ``soup profile`` prices this instead.
+PROFILE_AUTO_BATCH = 4
+
+#: Tasks whose model has no vocabulary-sized output, so the estimate charges no
+#: logits: the classifier family and reward_model load
+#: ``AutoModelForSequenceClassification`` (``trainer/classifier.py``,
+#: ``trainer/reward_model.py``), embedding loads ``AutoModel`` (``trainer/embedding.py``).
+NO_LM_HEAD_TASKS: frozenset[str] = frozenset(
+    {"classifier", "reranker", "cross_encoder", "embedding", "reward_model"}
+)
+
+#: Tasks whose trainer installs the checkpointing tiers: ``trainer/sft.py``'s
+#: ``plan_gradient_checkpointing``, inherited by tts. Every other trainer hands any
+#: truthy ``gradient_checkpointing`` to HF as plain checkpointing, which is ``full``.
+CHECKPOINT_TIER_TASKS: frozenset[str] = frozenset({"sft", "tts"})
 
 
-def _activation_bytes(seq_len: int, batch_size: int, params_b: float) -> float:
-    """Per-batch activation memory.
+def checkpointing_for_task(
+    value: Any, *, task: str, gpu_memory_gb: Optional[float] = None
+) -> Union[bool, str]:
+    """The checkpointing the run's trainer will apply: ``False`` or a tier name.
 
-    Very approximate: scales with seq_len × batch_size × hidden_size.
-    We treat hidden_size as ~ 64 * sqrt(params_b * 1e9 / 1024) — close
-    enough for an order-of-magnitude estimate at the 1B-70B band.
-
-    Result is bounded by ``_MAX_ACTIVATIONS_BYTES`` (~1 EiB) so the
-    downstream ``VRAMBreakdown`` validator never sees a +Inf product
-    even at the schema max (seq=1M × batch=1024).
+    ``auto`` resolves on the card's memory in GiB, as ``trainer/sft.py`` reads it
+    (``gradient_ckpt.resolve_granularity``); with no card it is ``full``, as there.
     """
-    hidden = 64.0 * math.sqrt(max(params_b * 1e9 / 1024.0, 1.0))
-    raw = float(seq_len) * float(batch_size) * hidden * 4.0
-    # Defensive: clamp absurd products so the math stays finite.
-    if not math.isfinite(raw) or raw > _MAX_ACTIVATIONS_BYTES:
-        return _MAX_ACTIVATIONS_BYTES
-    return raw
+    if not value:
+        return False
+    if task not in CHECKPOINT_TIER_TASKS:
+        return "full"
+    from soup_cli.utils.gradient_ckpt import resolve_granularity
+
+    return resolve_granularity(value, gpu_memory_gb=gpu_memory_gb) or False
 
 
-_MAX_ACTIVATIONS_BYTES = 1e18  # 1 EB sanity cap; far above any real GPU
+def hardware_fit_input_from_config(
+    cfg: Any,
+    *,
+    allow_network: bool = True,
+    profile_defaults: bool = False,
+    gpu_memory_gb: Optional[float] = None,
+) -> Optional[HardwareFitInput]:
+    """The estimate's input for a ``SoupConfig``: the train pre-flight, ``soup profile``
+    and the MCP ``profile`` tool all build it here, so they price the same run (#2049).
+
+    Returns ``None`` when the run is not statically predictable (batch_size
+    ``"auto"``, a quantization with no memory model, out-of-range dims), in which
+    case the pre-flight skips rather than guess. ``profile_defaults`` is ``soup
+    profile``'s reading instead: ``auto`` is priced at batch 4 and a quantization
+    with no memory model at bf16, as ``soup profile`` always did. ``gpu_memory_gb``
+    is the card's memory in GiB, which ``gradient_checkpointing: auto`` resolves on.
+    """
+    from soup_cli.utils.model_shape import read_model_shape
+
+    tcfg = cfg.training
+    bs = getattr(tcfg, "batch_size", None)
+    if not isinstance(bs, int) or isinstance(bs, bool):
+        if not profile_defaults:
+            return None  # "auto" resolves later — can't predict yet
+        bs = PROFILE_AUTO_BATCH
+    seq_len = getattr(cfg.data, "max_length", None)
+    if not isinstance(seq_len, int) or isinstance(seq_len, bool):
+        return None
+    if profile_defaults:
+        seq_len = min(max(seq_len, _MIN_SEQ_LEN), _MAX_SEQ_LEN)
+    quant = CONFIG_QUANT_TO_FIT.get(str(getattr(tcfg, "quantization", "none") or "none"))
+    if quant is None:
+        if not profile_defaults:
+            return None
+        quant = "none"
+    shape = read_model_shape(getattr(cfg, "base", "") or "", allow_network=allow_network)
+    peft = resolve_peft_mode(cfg, quant=quant)
+    optimizer = str(getattr(tcfg, "optimizer", "adamw_torch") or "adamw_torch")
+    if optimizer not in _VALID_OPTIMIZERS:
+        optimizer = "adamw_torch"
+    lora = getattr(tcfg, "lora", None)
+    from soup_cli.config.schema import SFT_KERNEL_AWARE_TASKS
+
+    task = getattr(cfg, "task", "sft")
+    # Only the SFT-family trainer applies the fused losses (``trainer/sft.py``,
+    # inherited by tts); on any other task the flags change nothing.
+    fused_loss = (
+        tuple(flag for flag in ("use_cut_ce", "use_liger") if getattr(tcfg, flag, False))
+        if task in SFT_KERNEL_AWARE_TASKS
+        else ()
+    )
+    try:
+        return HardwareFitInput(
+            params_b=shape.params / GB,
+            seq_len=int(seq_len),
+            batch_size=int(bs),
+            optimizer=optimizer,
+            quant=quant,
+            peft=peft,
+            gradient_checkpointing=checkpointing_for_task(
+                getattr(tcfg, "gradient_checkpointing", False),
+                task=task,
+                gpu_memory_gb=gpu_memory_gb,
+            ),
+            shape=shape,
+            lora_r=int(getattr(lora, "r", 64) or 0),
+            target_modules=getattr(lora, "target_modules", "auto"),
+            lm_head=task not in NO_LM_HEAD_TASKS,
+            fused_loss=fused_loss,
+        )
+    except (ValueError, TypeError):
+        return None  # dims out of the predictor's supported range
 
 
 def estimate_peak_vram_gb(inp: HardwareFitInput) -> VRAMBreakdown:
-    """Static analytical VRAM predictor. Returns a per-class breakdown."""
+    """The shared VRAM estimate (``utils/vram_estimate.py``), per class in GB."""
     if not isinstance(inp, HardwareFitInput):
         raise TypeError(
             f"inp must be HardwareFitInput, got {type(inp).__name__}"
         )
+    from soup_cli.utils.model_shape import guessed_shape
 
-    params = float(inp.params_b) * 1e9  # absolute count
-    bytes_per = _BYTES_PER_PARAM_BY_QUANT.get(inp.quant, 2.0)
-    if inp.peft == "full" and inp.quant == "none":
-        # #339 — SFTTrainerWrapper._resolve_load_dtype now explicitly loads
-        # full fine-tuning's trainable base at fp32 (deliberate master-weight
-        # precision), so the "none" bucket's bf16-shaped 2.0 bytes/param no
-        # longer holds for this specific combination.
-        bytes_per = 4.0
-    weights_b = params * bytes_per
+    shape = inp.shape if inp.shape is not None else guessed_shape(float(inp.params_b))
+    est = estimate_vram(
+        shape,
+        RunSpec(
+            seq_len=inp.seq_len,
+            batch_size=inp.batch_size,
+            quant=inp.quant,
+            peft=inp.peft,
+            optimizer=inp.optimizer,
+            gradient_checkpointing=inp.gradient_checkpointing,
+            lora_r=inp.lora_r,
+            target_modules=inp.target_modules,
+            lm_head=inp.lm_head,
+            fused_loss=inp.fused_loss,
+        ),
+    )
+    return breakdown_from_estimate(est)
 
-    trainable_frac = _trainable_param_fraction(inp.peft)
-    trainable_params = params * trainable_frac
-    optim_b = trainable_params * _OPTIM_BYTES_PER_PARAM.get(inp.optimizer, 8.0)
-    # Gradients are fp32 of trainable params (4 bytes/param) under
-    # mixed-precision; under "none" quant we still keep fp32 grads.
-    gradients_b = trainable_params * 4.0
 
-    activations_b = _activation_bytes(inp.seq_len, inp.batch_size, inp.params_b)
-    if inp.gradient_checkpointing:
-        # Gradient checkpointing roughly halves activation memory.
-        activations_b *= 0.5
-
-    # Constant overhead: kernels / autograd graph / NCCL buffers / etc.
-    # Scales weakly with params.
-    overhead_b = 0.5e9 + 0.05 * weights_b
-
+def breakdown_from_estimate(est: VramEstimate) -> VRAMBreakdown:
     return VRAMBreakdown(
-        weights_gb=weights_b / 1e9,
-        optimizer_gb=optim_b / 1e9,
-        gradients_gb=gradients_b / 1e9,
-        activations_gb=activations_b / 1e9,
-        overhead_gb=overhead_b / 1e9,
+        weights_gb=est.gb("weights"),
+        optimizer_gb=est.gb("optimizer"),
+        gradients_gb=est.gb("gradients"),
+        activations_gb=est.gb("activations"),
+        overhead_gb=est.gb("overhead"),
+        adapters_gb=est.gb("adapters"),
+        logits_gb=est.gb("logits"),
+        dequant_gb=est.gb("dequant"),
+        estimate=est,
     )
 
 
@@ -385,8 +485,10 @@ __all__ = [
     "HardwareFitInput",
     "HardwareFitReport",
     "VRAMBreakdown",
+    "breakdown_from_estimate",
     "decide_hardware_fit",
     "estimate_peak_vram_gb",
+    "hardware_fit_input_from_config",
     "validate_batch_size",
     "validate_seq_len",
 ]

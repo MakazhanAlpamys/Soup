@@ -59,8 +59,10 @@ class TrainingPlan:
     dataset_sha: str
     estimated_cost_usd: float
     estimated_minutes: float
-    peak_vram_gb: float
+    #: ``None`` when the run could not be priced; ``peak_vram_reason`` says why (#2049).
+    peak_vram_gb: Optional[float]
     spot_price_usd_per_hour: float
+    peak_vram_reason: Optional[str] = None
 
     def __post_init__(self) -> None:
         _check_non_empty_str(self.base, "base", max_len=_MAX_BASE_LEN)
@@ -69,7 +71,10 @@ class TrainingPlan:
         _check_sha(self.dataset_sha, "dataset_sha")
         _check_non_negative_finite(self.estimated_cost_usd, "estimated_cost_usd")
         _check_non_negative_finite(self.estimated_minutes, "estimated_minutes")
-        _check_non_negative_finite(self.peak_vram_gb, "peak_vram_gb")
+        if self.peak_vram_gb is None:
+            _check_non_empty_str(self.peak_vram_reason, "peak_vram_reason", max_len=512)
+        else:
+            _check_non_negative_finite(self.peak_vram_gb, "peak_vram_gb")
         _check_non_negative_finite(self.spot_price_usd_per_hour, "spot_price_usd_per_hour")
 
 
@@ -216,7 +221,6 @@ def compute_dataset_sha(path: object) -> str:
 # being a pre-flight estimate. Live measurement is whatever the trainer
 # emits at finish time (v0.34 cost path).
 _DEFAULT_SPOT_PRICE = 0.30  # ~$/hr for a 24 GB consumer GPU
-_DEFAULT_PEAK_VRAM = 8.0
 
 
 def _to_float(value: Any, default: float) -> float:
@@ -243,6 +247,39 @@ def _estimate_runtime_minutes(config: Mapping[str, Any]) -> float:
     if batch_size > 0:
         base *= 4.0 / max(batch_size, 1.0)
     return max(0.5, base)
+
+
+def estimate_peak_vram(config: Mapping[str, Any]) -> Tuple[Optional[float], Optional[str]]:
+    """The train pre-flight's peak (GB, before its margin), or ``None`` and why.
+
+    #2049: the plan used to record a fixed 8.0 GB whatever the run. It now records
+    the shared estimate when the model's ``config.json`` can be read, and says why
+    it cannot price a run instead of printing a number that is not about it.
+    """
+    import yaml
+
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.utils.hardware_fit import (
+        estimate_peak_vram_gb,
+        hardware_fit_input_from_config,
+    )
+
+    try:
+        cfg = load_config_from_string(yaml.safe_dump(dict(config)))
+    except (ValueError, TypeError, yaml.YAMLError):
+        return None, "the config does not validate"
+    if getattr(cfg.training, "stream_layers", False):
+        return None, "layer streaming: the streaming planner sizes this run when it starts"
+    if getattr(cfg, "backend", None) == "mlx":
+        return None, "backend mlx: no CUDA estimate"
+    inp = hardware_fit_input_from_config(cfg)
+    if inp is None:
+        return None, (
+            "batch_size auto, a quantization with no memory model, or dims out of range"
+        )
+    if inp.shape is None or inp.shape.guessed:
+        return None, "could not read the model's config.json (local, cache or Hub)"
+    return round(estimate_peak_vram_gb(inp).total_gb, 3), None
 
 
 def _estimate_cost(minutes: float, spot_price: float) -> float:
@@ -288,6 +325,7 @@ def build_plan(config: Mapping[str, Any]) -> TrainingPlan:
 
     minutes = _estimate_runtime_minutes(config)
     cost = _estimate_cost(minutes, _DEFAULT_SPOT_PRICE)
+    peak_vram_gb, peak_vram_reason = estimate_peak_vram(config)
     return TrainingPlan(
         base=base,
         task=task,
@@ -295,13 +333,14 @@ def build_plan(config: Mapping[str, Any]) -> TrainingPlan:
         dataset_sha=dataset_sha,
         estimated_cost_usd=cost,
         estimated_minutes=minutes,
-        peak_vram_gb=_DEFAULT_PEAK_VRAM,
+        peak_vram_gb=peak_vram_gb,
         spot_price_usd_per_hour=_DEFAULT_SPOT_PRICE,
+        peak_vram_reason=peak_vram_reason,
     )
 
 
 def _plan_to_dict(plan: TrainingPlan) -> dict:
-    return {
+    out = {
         "base": plan.base,
         "task": plan.task,
         "config_sha": plan.config_sha,
@@ -311,6 +350,9 @@ def _plan_to_dict(plan: TrainingPlan) -> dict:
         "peak_vram_gb": plan.peak_vram_gb,
         "spot_price_usd_per_hour": plan.spot_price_usd_per_hour,
     }
+    if plan.peak_vram_gb is None:
+        out["peak_vram_reason"] = plan.peak_vram_reason
+    return out
 
 
 def _plan_from_dict(d: Mapping[str, Any]) -> TrainingPlan:
@@ -321,8 +363,10 @@ def _plan_from_dict(d: Mapping[str, Any]) -> TrainingPlan:
         dataset_sha=str(d["dataset_sha"]),
         estimated_cost_usd=float(d["estimated_cost_usd"]),
         estimated_minutes=float(d["estimated_minutes"]),
-        peak_vram_gb=float(d["peak_vram_gb"]),
+        # A state file written before #2049 always has a number here.
+        peak_vram_gb=None if d["peak_vram_gb"] is None else float(d["peak_vram_gb"]),
         spot_price_usd_per_hour=float(d["spot_price_usd_per_hour"]),
+        peak_vram_reason=d.get("peak_vram_reason"),
     )
 
 
