@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:a3fd67f4c14a8288329c0d98575f5cc89fcf228a302534e1a9befcca02b8ae09 -->
+<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -320,10 +320,6 @@ Soup は、[HuggingFace Hub](https://huggingface.co/models?pipeline_tag=text-gen
 テキスト生成モデルで動作します — `AutoModelForCausalLM` で読み込めるなら、設定を一切変えずに動きます。
 Llama 3.x/4、Qwen 2.5/3、Gemma 3、Mistral、Mixtral、DeepSeek R1/V3、Phi-4 をはじめ 100 以上のモデルが、
 既成のレシピとして用意されています（`soup recipes list`）。
-
-テキストの選好ペアには、`soup recipes use qwen3.5-2b-dpo` で Qwen3.5-2B 用の
-DPO 初期設定を書き出せます。継承される設定と検証の範囲については、
-[モデルガイド](docs/models.md)を参照してください。
 
 | VRAM | 最大モデル（QLoRA 4-bit） | 例 |
 |---|---|---|
