@@ -320,6 +320,7 @@ def export(
 
         merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
 
+    # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
         if is_adapter:
             _merge_adapter(
@@ -837,6 +838,7 @@ def _export_onnx(
 
     output_path = Path(output) if output else model_path.parent / f"{model_path.name}_onnx"
 
+    # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
         if is_adapter:
             _merge_adapter(str(model_path), base_model, str(merge_dir), trust_remote_code)
@@ -940,6 +942,7 @@ def _export_tensorrt(
 
     output_path = Path(output) if output else model_path.parent / f"{model_path.name}_trt"
 
+    # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
         if is_adapter:
             _merge_adapter(str(model_path), base_model, str(merge_dir), trust_remote_code)
@@ -1276,6 +1279,7 @@ def _export_bitnet_gguf(
             raise typer.Exit(2)
         merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
 
+    # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
         if merge_dir is not None:
             _merge_adapter(
@@ -1386,6 +1390,7 @@ def _export_gguf_advanced(
             raise typer.Exit(2)
         merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
 
+    # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
         if merge_dir is not None:
             _merge_adapter(
