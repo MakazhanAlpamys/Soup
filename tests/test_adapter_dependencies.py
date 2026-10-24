@@ -14,6 +14,7 @@ When required dependencies are absent:
 
 from __future__ import annotations
 
+import builtins
 import json
 import sys
 from pathlib import Path
@@ -81,15 +82,16 @@ def _hide_dependencies(monkeypatch: pytest.MonkeyPatch, hidden_module: str) -> N
         monkeypatch.setitem(sys.modules, "safetensors.numpy", None)
 
 
+@pytest.mark.parametrize("hidden_module", ["numpy", "both"])
 def test_adapters_check_missing_numpy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hidden_module: str,
 ):
     """adapters check exits 1 and names numpy when numpy is missing."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("FORCE_COLOR", "1")
     adapter_dir = _make_dummy_adapter(tmp_path / "test_adapter")
 
-    _hide_dependencies(monkeypatch, "numpy")
+    _hide_dependencies(monkeypatch, hidden_module)
 
     result = runner.invoke(soup_app, ["adapters", "check", str(adapter_dir)])
     clean_out = _clean(result.output)
@@ -117,8 +119,9 @@ def test_adapters_check_safetensors_missing_succeeds(
     assert clean_out.endswith("alive")
 
 
+@pytest.mark.parametrize("hidden_module", ["numpy", "both"])
 def test_adapters_diff_missing_numpy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hidden_module: str,
 ):
     """adapters diff exits 1 and names numpy when numpy is missing."""
     monkeypatch.chdir(tmp_path)
@@ -126,7 +129,7 @@ def test_adapters_diff_missing_numpy(
     adapter1 = _make_dummy_adapter(tmp_path / "adapter1")
     adapter2 = _make_dummy_adapter(tmp_path / "adapter2")
 
-    _hide_dependencies(monkeypatch, "numpy")
+    _hide_dependencies(monkeypatch, hidden_module)
 
     result = runner.invoke(
         soup_app, ["adapters", "diff", str(adapter1), str(adapter2)]
@@ -217,8 +220,9 @@ def test_adapters_arithmetic_missing_dependency(
     assert "Could not scan" not in clean_out
 
 
+@pytest.mark.parametrize("hidden_module", ["numpy", "both"])
 def test_direct_read_functions_missing_numpy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hidden_module: str,
 ):
     """Read-only functions raise RuntimeError when numpy is missing."""
     monkeypatch.chdir(tmp_path)
@@ -226,7 +230,7 @@ def test_direct_read_functions_missing_numpy(
     adapter2 = _make_dummy_adapter(tmp_path / "adapter2")
     weights_file = adapter1 / "adapter_model.safetensors"
 
-    _hide_dependencies(monkeypatch, "numpy")
+    _hide_dependencies(monkeypatch, hidden_module)
 
     with pytest.raises(RuntimeError) as exc_info:
         require_adapter_dependencies(READ_ADAPTER_DEPS)
@@ -355,8 +359,12 @@ def test_positive_control_with_dependencies_present(
     assert (tmp_path / "arithmetic_out" / "adapter_model.safetensors").is_file()
 
 
+@pytest.mark.parametrize(
+    "command, expected_exit", [("check", 1), ("diff", 2), ("merge", 2), ("arithmetic", 1),
+                               ("scan", 2)],
+)
 def test_corrupt_weights_reports_corrupt_when_dependencies_present(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: str, expected_exit: int,
 ):
     """A genuinely corrupt safetensors file reports 'Corrupt or unreadable'."""
     monkeypatch.chdir(tmp_path)
@@ -369,8 +377,44 @@ def test_corrupt_weights_reports_corrupt_when_dependencies_present(
     cfg = {"peft_type": "LORA", "r": 4}
     (adapter_dir / "adapter_config.json").write_text(json.dumps(cfg), encoding="utf-8")
 
-    result = runner.invoke(soup_app, ["adapters", "check", str(adapter_dir)])
+    good_adapter = _make_dummy_adapter(tmp_path / "valid_adapter")
+    args = ["adapters", command, str(adapter_dir)]
+    if command == "diff":
+        args.append(str(good_adapter))
+    elif command == "merge":
+        args.extend([str(good_adapter), "-o", "merged", "--allow-unscanned"])
+    elif command == "arithmetic":
+        args = ["adapters", command, "a + b", "--adapter", f"a={adapter_dir}",
+                "--adapter", f"b={good_adapter}", "-o", "merged", "--allow-unscanned"]
+
+    result = runner.invoke(soup_app, args)
     clean_out = _clean(result.output)
 
-    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert result.exit_code == expected_exit, (result.output, repr(result.exception))
     assert "Corrupt or unreadable safetensors weights" in clean_out
+    assert "packages required" not in clean_out
+
+
+def test_merge_reports_writer_import_failure_after_successful_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """The root package can import while its numpy writer is unavailable."""
+    monkeypatch.chdir(tmp_path)
+    adapter1 = _make_dummy_adapter(tmp_path / "adapter1")
+    adapter2 = _make_dummy_adapter(tmp_path / "adapter2")
+    original_import = builtins.__import__
+
+    def unavailable_writer(name, *args, **kwargs):
+        if name == "safetensors.numpy":
+            raise ModuleNotFoundError("synthetic unavailable safetensors numpy writer")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", unavailable_writer)
+    result = runner.invoke(soup_app, [
+        "adapters", "merge", str(adapter1), str(adapter2), "-o", "merged", "--allow-unscanned",
+    ])
+
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert WRITE_ADAPTER_DEPS_MSG in _clean(result.output)
+    assert "Corrupt or unreadable" not in _clean(result.output)
+    assert not (tmp_path / "merged").exists()

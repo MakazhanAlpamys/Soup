@@ -650,6 +650,12 @@ def merge(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
 
+    except RuntimeError as exc:
+        # The root package pre-flight cannot establish that the writer's
+        # submodule will import successfully when the output is saved.
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
     # v0.71.4 #172 — live canary verdict. With --canary, score the merged
     # adapter vs the first input and classify OK/MINOR/MAJOR; without it the
     # verdict stays UNKNOWN (advisory).

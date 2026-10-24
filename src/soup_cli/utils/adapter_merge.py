@@ -380,7 +380,7 @@ def write_merged_adapter(
     require_adapter_dependencies(WRITE_ADAPTER_DEPS)
     try:
         from safetensors.numpy import save_file
-    except (ImportError, ModuleNotFoundError) as exc:
+    except ImportError as exc:
         raise RuntimeError(WRITE_ADAPTER_DEPS_MSG) from exc
 
     out_path = Path(output_dir)
