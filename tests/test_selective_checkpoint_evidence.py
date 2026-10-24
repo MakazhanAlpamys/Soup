@@ -4,6 +4,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import math
 import shutil
 from pathlib import Path
 
@@ -92,7 +93,26 @@ def test_source_binding_accepts_checkout_newlines_but_rejects_changed_code(tmp_p
 def test_compact_record_reproduces_original_full_scientific_audit():
     evidence = Path(__file__).parents[1] / "benchmarks/results/issue2050-rtx3090-v1"
     expected = json.loads((evidence / "independent-audit.json").read_text())
-    assert _module().audit(evidence) == expected
+    actual = _module().audit(evidence)
+
+    def assert_same_record(left, right, path="audit"):
+        assert type(left) is type(right), path
+        if isinstance(left, dict):
+            assert left.keys() == right.keys(), path
+            for key in left:
+                assert_same_record(left[key], right[key], f"{path}.{key}")
+        elif isinstance(left, list):
+            assert len(left) == len(right), path
+            for index, (item, reference) in enumerate(zip(left, right)):
+                assert_same_record(item, reference, f"{path}[{index}]")
+        elif isinstance(left, float):
+            # Python 3.12 changed sum() rounding. The original audit was saved
+            # on 3.12; 3.11 differs only at floating-point roundoff scale.
+            assert math.isclose(left, right, rel_tol=1e-13, abs_tol=1e-11), path
+        else:
+            assert left == right, path
+
+    assert_same_record(actual, expected)
 
 
 @pytest.mark.parametrize("mutation", ["digest", "comparison", "saved_bytes", "timing_row"])
