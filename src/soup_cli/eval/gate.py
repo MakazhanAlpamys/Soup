@@ -146,9 +146,27 @@ def load_suite(path: str) -> EvalSuite:
         )
     if not suite_path.exists():
         raise FileNotFoundError(f"eval-gate suite not found: {path}")
-    data = load_yaml_file_limited(
-        suite_path, f"eval-gate suite '{path}'", max_bytes=MAX_CONFIG_BYTES
-    ) or {}
+    try:
+        import yaml
+
+        data = load_yaml_file_limited(
+            suite_path, f"eval-gate suite '{path}'", max_bytes=MAX_CONFIG_BYTES
+        )
+    except yaml.YAMLError as exc:
+        raise ValueError(
+            f"eval-gate suite '{path}' is not valid YAML: {exc}"
+        ) from exc
+    if not isinstance(data, Mapping):
+        raise ValueError(
+            f"eval-gate suite '{path}' must be a mapping with 'suite' and 'tasks', "
+            f"got a {type(data).__name__}"
+        )
+    for key in data:
+        if not isinstance(key, str):
+            raise ValueError(
+                f"eval-gate suite '{path}' has a non-string key {key!r}; "
+                "top-level keys must be strings"
+            )
     suite = EvalSuite(**data)
     _require_gate_tasks(suite)
     return suite

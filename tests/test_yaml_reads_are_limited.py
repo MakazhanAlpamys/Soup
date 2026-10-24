@@ -49,6 +49,7 @@ YAML_USERS = {
     "commands/spectrum.py": ("safe_dump",),
     "commands/sweep.py": ("YAMLError",),
     "config/loader.py": ("YAMLError",),
+    "eval/gate.py": ("YAMLError",),
     "migrate/common.py": ("dump",),
     "ui/app.py": ("dump",),
     "utils/adapter_branch.py": ("safe_dump",),
