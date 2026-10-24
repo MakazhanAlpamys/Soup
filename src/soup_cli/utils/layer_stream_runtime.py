@@ -2591,7 +2591,7 @@ def _build_streamed_large_layer_class():
             state = self.inner.state_dict(
                 destination=destination, prefix=prefix, keep_vars=keep_vars
             )
-            if self.weight_path is not None and self._weight_param_name != "weight":
+            if self.weight_path is not None and hasattr(self.inner, "base_layer"):
                 # PEFT obtains state_dict BEFORE deciding auto/True/False for
                 # save_embedding_layers. Only tuner-wrapped boundaries need
                 # independent CPU bytes; leave untargeted weights on meta and
