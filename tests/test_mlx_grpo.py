@@ -343,12 +343,14 @@ class TestRewardKwargs:
 # --------------------------------------------------------------------------
 
 #: (prompt length, completion length) per row: unequal lengths, one length-1.
-_ROWS = [(3, 3), (2, 4), (3, 1), (2, 2)]
-#: Advantages: positive, negative, zero, negative.
-_ADV = [1.3, -0.7, 0.0, -1.1]
-#: Ratio new/old per row: inside the trust region, above it, below it, above it.
-#: With A>0 a ratio of 1.5 clips high; with A<0 a ratio of 0.5 clips low.
-_RATIO = [1.1, 1.5, 0.5, 0.6]
+_ROWS = [(3, 3), (2, 4), (3, 1), (2, 2), (3, 2)]
+#: Advantages: positive, negative, zero, negative, positive.
+_ADV = [1.3, -0.7, 0.0, -1.1, 0.9]
+#: Ratio new/old per row: inside the trust region, above it, below it, below it,
+#: above it. Row 4 (A>0, 1.3 > 1.2) clips high and row 3 (A<0, 0.6 < 0.8) clips
+#: low; row 1 (A<0, 1.5) is above the region on the side that does not clip.
+#: 1.3 sits below 1 + 2 * epsilon, so a widened upper bound would not clip it.
+_RATIO = [1.1, 1.5, 0.5, 0.6, 1.3]
 
 
 def _fixture(seed=0, vocab=6):
@@ -462,20 +464,23 @@ class TestTheLossMatchesTheOracle:
             model, lambda m: _mlx_loss(m, tokens, mask, start, beta=0.0, old=old)[0]
         )(model)
         g = np.array(grads["logits"])
-        # Row 1 (A<0, ratio 1.5) is unclipped; rows 2 (A=0) and 3 (A<0, ratio 0.6 < 0.8,
-        # clipped low) give nothing, and row 0 (ratio 1.1) is inside the region.
+        # Row 1 (A<0, ratio 1.5) is unclipped; rows 2 (A=0), 3 (A<0, ratio 0.6 < 0.8,
+        # clipped low) and 4 (A>0, ratio 1.3 > 1.2, clipped high) give nothing, and
+        # row 0 (ratio 1.1) is inside the region.
         assert np.abs(g[0]).max() > 0 and np.abs(g[1]).max() > 0
         assert np.abs(g[2]).max() == 0 and np.abs(g[3]).max() == 0
+        assert np.abs(g[4]).max() == 0
         mx.eval(grads)
 
     def test_clip_metrics_count_each_side(self):
         tokens, mask, start, logits = _fixture()
         _, old, _ = _synthetic(logits, tokens, start)
         _, sums = _mlx_loss(_FixedLogits(logits), tokens, mask, start, beta=0.0, old=old)
-        # Row 3: A<0 and ratio 0.6 < 0.8 -> low; row 1: A<0, ratio 1.5 -> neither side.
+        # Row 3: A<0 and ratio 0.6 < 0.8 -> low; row 4: A>0 and ratio 1.3 > 1.2 -> high;
+        # row 1: A<0, ratio 1.5 -> neither side.
         assert sums["clip_low"].item() == _ROWS[3][1]
-        assert sums["clip_high"].item() == 0
-        assert sums["clip_region"].item() == _ROWS[3][1]
+        assert sums["clip_high"].item() == _ROWS[4][1]
+        assert sums["clip_region"].item() == _ROWS[3][1] + _ROWS[4][1]
         assert sums["tokens"].item() == sum(c for _, c in _ROWS)
 
     def test_beta_zero_needs_no_reference_and_beta_adds_the_k3_kl(self):
