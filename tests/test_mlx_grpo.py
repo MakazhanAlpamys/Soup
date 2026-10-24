@@ -1099,6 +1099,22 @@ class TestTraining:
         assert "sample" in meta["advantage_std"] and "LoRA scale 0" in meta["reference"]
         assert early and early[0]["task"] == "grpo" and early[0]["loss_type"] == "dapo"
 
+    def test_data_seed_is_recorded_as_configured_and_moves_nothing(self, tmp_path,
+                                                                   monkeypatch):
+        """The order follows training.seed, as TRL's RepeatSampler does; data_seed
+        is written as the user set it (None when unset), not as the seed."""
+        def run(path, **training):
+            wrapper = _wrapper(path, monkeypatch, train=_prompt_rows(2), seed=3, **training)
+            result = wrapper.train()
+            meta = json.loads((path / "output" / "adapter_config.json").read_text())
+            return result, meta
+
+        plain, meta = run(tmp_path / "a")
+        assert (meta["seed"], meta["data_seed"]) == (3, None)
+        seeded, meta = run(tmp_path / "b", data_seed=11)
+        assert (meta["seed"], meta["data_seed"]) == (3, 11)
+        assert seeded["losses"] == plain["losses"]
+
     def test_beta_zero_metadata_names_no_reference(self, tmp_path, monkeypatch):
         _wrapper(tmp_path, monkeypatch, train=_prompt_rows(1), grpo_beta=0.0).train()
         meta = json.loads((tmp_path / "output" / "adapter_config.json").read_text())

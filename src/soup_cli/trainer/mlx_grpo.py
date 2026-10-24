@@ -821,10 +821,14 @@ class MLXGRPOTrainerWrapper(MLXDPOTrainerWrapper):
             mx.save_safetensors(str(partial), dict(tree_flatten(self.model.trainable_parameters())))
             partial.replace(path)
 
+        # Recorded as configured: the prompt order follows training.seed alone, as
+        # TRL's RepeatSampler does on the transformers path, so data_seed moves nothing.
+        data_seed = None if tcfg.data_seed is None else int(tcfg.data_seed)
+
         def write_config() -> None:
             self._write_adapter_config(
                 output_dir, batch_size=step_size, iters=total_updates * accum, accum=accum,
-                optimizer_plan=optimizer_plan, seed=seed, data_seed=seed,
+                optimizer_plan=optimizer_plan, seed=seed, data_seed=data_seed,
             )
 
         self._skipped = 0
