@@ -769,6 +769,10 @@ Inspection runs without a PyTorch dependency, but requires `numpy`
 - **Incomplete LoRA pairs**: Flags orphaned or partially-saved projections missing either A or B.
 - **Leaked .inner. keys**: Flags legacy wrapper namespaces for adapters saved prior to the #1011 save-time guard.
 
+`soup adapters diff` and `soup adapters scan` also need only `numpy` to read weights.
+Writing with `soup adapters merge` or `soup adapters arithmetic` requires both `numpy`
+and `safetensors` (`pip install "soup-cli[train]"` or `pip install safetensors numpy`).
+
 ```bash
 soup adapters check path/to/adapter/
 # Machine-readable output

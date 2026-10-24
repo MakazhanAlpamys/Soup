@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import builtins
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -80,6 +81,27 @@ def _hide_dependencies(monkeypatch: pytest.MonkeyPatch, hidden_module: str) -> N
     if hidden_module in ("safetensors", "both"):
         monkeypatch.setitem(sys.modules, "safetensors", None)
         monkeypatch.setitem(sys.modules, "safetensors.numpy", None)
+
+
+def test_plain_install_reports_missing_numpy_before_cli_import() -> None:
+    """A fresh interpreter must reach the friendly refusal without numpy installed."""
+    probe = (
+        "import sys\n"
+        "sys.modules['numpy'] = None\n"
+        "from soup_cli.cli import app\n"
+        "from typer.testing import CliRunner\n"
+        "from rich.text import Text\n"
+        "result = CliRunner().invoke(app, ['adapters', 'check', 'missing_adapter'])\n"
+        "output = ' '.join(Text.from_ansi(result.output).plain.split())\n"
+        "assert result.exit_code == 1, (result.output, repr(result.exception))\n"
+        "assert 'numpy package required' in output, output\n"
+        "assert 'pip install numpy' in output, output\n"
+        "assert 'Corrupt or unreadable' not in output, output\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
 
 
 @pytest.mark.parametrize("hidden_module", ["numpy", "both"])
@@ -250,6 +272,19 @@ def test_direct_read_functions_missing_numpy(
 
     with pytest.raises(RuntimeError) as exc_info:
         compute_adapter_diff(str(adapter1), str(adapter2))
+    assert READ_ADAPTER_DEPS_MSG in str(exc_info.value)
+
+    # Dependency diagnostics take precedence over path/stat failures.
+    with pytest.raises(RuntimeError) as exc_info:
+        _load_safetensors_numpy(tmp_path / "missing.safetensors")
+    assert READ_ADAPTER_DEPS_MSG in str(exc_info.value)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        check_adapter(str(tmp_path / "missing"))
+    assert READ_ADAPTER_DEPS_MSG in str(exc_info.value)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        compute_adapter_diff("missing_a", "missing_b")
     assert READ_ADAPTER_DEPS_MSG in str(exc_info.value)
 
 

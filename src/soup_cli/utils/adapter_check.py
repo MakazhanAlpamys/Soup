@@ -22,7 +22,6 @@ from typing import Any, Optional, Tuple
 
 from soup_cli.utils.adapter_diff import (
     READ_ADAPTER_DEPS,
-    READ_ADAPTER_DEPS_MSG,
     _adapter_weights_path,
     _read_safetensors_numpy,
     require_adapter_dependencies,
@@ -122,8 +121,6 @@ def _load_safetensors_numpy(path: Path) -> dict[str, Any]:
         return _read_safetensors_numpy(path)
     except (ValueError, RuntimeError):
         raise
-    except ImportError as exc:
-        raise RuntimeError(READ_ADAPTER_DEPS_MSG) from exc
     except Exception as exc:
         raise ValueError(
             f"Corrupt or unreadable safetensors weights in {path.name}: {exc}"
