@@ -721,10 +721,40 @@ Auto-stop training when loss spikes above a threshold (like Axolotl's `loss_watc
 training:
   loss_watchdog: true           # Enable loss spike detection
   loss_watchdog_threshold: 3.0  # Stop if loss exceeds this value
-  loss_watchdog_patience: 5     # Consecutive steps above threshold before stopping
+  loss_watchdog_patience: 5     # Consecutive loss reports above threshold before stopping
 ```
 
-> **Backend Note:** Setting `loss_watchdog: true` is refused on `backend: mlx` at config validation (Soup does not implement the watchdog on the MLX callback, which has no stop control).
+The comparison is strictly `loss > loss_watchdog_threshold`; a report at or below
+the threshold resets patience. A missing/`None` loss neither advances nor resets it.
+
+**MLX text SFT:** reports occur every `logging_steps` completed optimizer updates
+(every `logging_steps × gradient_accumulation_steps` micro-batches), plus at the
+end of the budget. Each loss averages the micro-batches since the preceding
+report. On the triggering report, training stops immediately after its completed
+update, with no later update or partial accumulation group. Soup saves the current
+`adapters.safetensors` and loadable `adapter_config.json`, runs the final validation
+when `eval_steps` is configured, and releases the display and rewind recorder.
+This saves the last state, not a best-loss or rollback checkpoint; a high loss can
+already have affected its weights. No full optimizer-state resume is claimed.
+
+The returned summary and `adapter_config.json` record `training_outcome`
+(`stopped` or `completed`), `stop_reason` (`loss_watchdog` or `budget_completed`),
+`completed_updates` and `completed_iterations`. `total_steps` remains in MLX
+micro-batch units and counts only executed iterations. A controlled stop is a
+successful command after saving; the CLI says **Training Stopped**, while the
+tracker's `completed` status means the run finalized successfully. Consult the
+adapter metadata for the termination reason. Non-finite reported training loss
+raises an error immediately; save failures, other errors and keyboard interruption
+propagate rather than becoming successful watchdog stops.
+
+**Difference from Transformers:** its current watchdog applies the threshold
+comparison to the losses reported by Trainer, with no separate non-finite check
+in that callback. On MLX, a reported NaN, +Inf or -Inf is an immediate training
+error, regardless of patience. The Transformers callback is unchanged.
+
+With the watchdog disabled, existing MLX report cadence and behavior are unchanged.
+Other MLX tasks/modalities still refuse it, and MLX continues to refuse
+`loss_spike_recovery` because checkpoint recovery is a separate feature.
 
 ## Training Stability & Auto-Tuning
 
@@ -784,7 +814,8 @@ training:
   loss_spike_recovery_lr_decay: 0.5     # halve LR each recovery
 ```
 
-> **Backend Note:** Setting `loss_spike_recovery: true` is refused on `backend: mlx` at config validation (spike recovery is driven by the watchdog and the watchdog cannot fire on MLX).
+> **Backend Note:** Setting `loss_spike_recovery: true` is refused on `backend: mlx`
+> at config validation: MLX does not implement checkpoint rollback or recovery hints.
 
 ### Convergence Detector
 

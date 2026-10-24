@@ -677,6 +677,7 @@ PLAN_INPUT_FIELDS: tuple[str, ...] = (
     "data.retain_set",
     "training.reward_fn",
     "training.prm_reward",
+    "training.grpo_judge_rubric",
     "training.reward_model",
     "training.teacher_model",
     "training.minillm_pretrain_anchor_path",
@@ -695,6 +696,7 @@ NOT_PLAN_INPUT_FIELDS: Mapping[str, str] = {
         "resolve_chat_template); never opened as a file"
     ),
     "training.online_dpo_judge": "a judge URL, not a local path",
+    "training.grpo_judge": "a judge URL, not a local path",
     "training.preference_loss_weights": "a mapping of loss weights",
     "training.reward_hack_signals": "signal names",
     "eval.ship.general_suite": "read by soup ship, not soup train",

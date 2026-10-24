@@ -518,6 +518,10 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
         preserve_source_columns=task_preserves_source_columns(cfg.task),
     )
     console.print(f"[dim]Loaded {len(dataset['train'])} train samples[/]")
+    # #2047 -- the judge_rank cost guard, between the data load and the model load.
+    from soup_cli.trainer.grpo_judge import check_judge_rank_budget
+
+    check_judge_rank_budget(cfg, dataset)
 
     # Start tracking
     tracker = ExperimentTracker()

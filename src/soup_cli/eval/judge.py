@@ -467,8 +467,13 @@ class JudgeEvaluator:
         )
         return _parse_pairwise(self._call_llm(judge_prompt))
 
-    def _call_llm(self, prompt: str) -> str:
-        """Call the judge LLM. Uses OpenAI-compatible API for all providers."""
+    def _call_llm(self, prompt: str, max_tokens: int = 1024) -> str:
+        """Call the judge LLM. Uses OpenAI-compatible API for all providers.
+
+        ``max_tokens`` caps the reply; GRPO's ``judge_rank`` reward sets it from
+        ``training.grpo_judge_max_tokens`` (#2047). Every other caller keeps the
+        default, so its request is unchanged.
+        """
         if self.provider == "ollama":
             base = self.api_base or "http://localhost:11434"
             url = f"{base}/v1/chat/completions"
@@ -487,7 +492,7 @@ class JudgeEvaluator:
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.0,
-            "max_tokens": 1024,
+            "max_tokens": max_tokens,
         }
 
         try:

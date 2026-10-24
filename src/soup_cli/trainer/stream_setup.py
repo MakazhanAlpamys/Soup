@@ -1553,6 +1553,23 @@ class StreamingSetupMixin:
                 # not started yet, so release the runtime here.
                 self._close_stream_runtime()
                 raise
+        # training.stream_recompute -- before the probe, so that the probe
+        # measures the mode that will train. The default ('on') adds nothing to
+        # the setup: no attribute is read and nothing is called, so the shape
+        # and task arguments below are only evaluated for 'off' / 'auto'.
+        if getattr(tcfg, "stream_recompute", "on") != "on":
+            try:
+                self._configure_stream_recompute(
+                    model,
+                    tcfg,
+                    tier=tier,
+                    on_cuda=on_cuda,
+                    task=cfg.task,
+                    step_shape=self._stream_step_shape(cfg, tcfg, model_config),
+                )
+            except Exception:
+                self._close_stream_runtime()
+                raise
         if probe_plan is not None:
             self._run_stream_vram_probe(model, probe_plan)
         stats = runtime.stats()
@@ -1583,6 +1600,92 @@ class StreamingSetupMixin:
         if self._STREAM_REFILL_BEFORE_BACKWARD and n_large_keys > 1:
             return 2 * slot_bytes
         return slot_bytes
+
+    def _configure_stream_recompute(
+        self,
+        model,
+        tcfg,
+        *,
+        tier: str,
+        on_cuda: bool,
+        task: str,
+        step_shape: tuple = (0, 0, 0),
+    ) -> None:
+        """``training.stream_recompute``: 'on' leaves the checkpoint recompute;
+        'off' switches every streamed layer; 'auto' (RAM tier, CUDA) measures one
+        synthetic step at ``step_shape`` (rows, seq_len, vocab_size) and switches
+        the last layers that fit, all before training starts."""
+        from soup_cli.utils.layer_stream import STREAM_RECOMPUTE_HEADROOM, TIER_DISK
+
+        mode = getattr(tcfg, "stream_recompute", "on")
+        if mode == "on":
+            return
+        if task != "sft":
+            # The config refuses this first; repeated here so that no other
+            # caller of the setup can switch a loss with two grad-enabled
+            # forwards per backward.
+            raise ValueError(
+                f"training.stream_recompute={mode!r} supports task='sft' only; "
+                f"got task={task!r}."
+            )
+        if mode == "off":
+            from soup_cli.utils.layer_stream_runtime import set_stream_recompute
+
+            switched = set_stream_recompute(model, False)
+            console.print(
+                f"[cyan]training.stream_recompute='off':[/] {switched} streamed layers "
+                "keep their activations instead of recomputing them in the backward "
+                "(faster on the RAM tier, more VRAM; the formula pre-flight above does "
+                "not count them, training.stream_vram_probe measures them)"
+            )
+            if tier == TIER_DISK:
+                console.print(
+                    "[yellow]training.stream_recompute='off' on the disk tier:[/] a "
+                    "disk-tier step is usually read-bound, and skipping the recompute "
+                    "does not skip the backward read of each layer, so it is likely no "
+                    "faster and holds more VRAM; the recompute ('on') may be cheaper here."
+                )
+            return
+        if tier == TIER_DISK:
+            console.print(
+                "[cyan]training.stream_recompute='auto' keeps the recompute on the disk "
+                "tier:[/] a disk-tier step is read-bound, and skipping the recompute does "
+                "not skip the backward read of each layer."
+            )
+            return
+        if not on_cuda:
+            console.print(
+                "[cyan]training.stream_recompute='auto' keeps the recompute:[/] no CUDA "
+                "device to measure VRAM on."
+            )
+            return
+        from soup_cli.utils.layer_stream_runtime import plan_stream_recompute_auto
+
+        rows, seq_len, vocab_size = step_shape
+        console.print(
+            f"[cyan]training.stream_recompute='auto':[/] measuring one step at batch {rows} "
+            f"x seq {seq_len} to choose how many of the last layers keep their activations "
+            f"within {STREAM_RECOMPUTE_HEADROOM:.0%} of the card."
+        )
+        plan_stream_recompute_auto(
+            model,
+            rows=rows,
+            seq_len=seq_len,
+            vocab_size=vocab_size,
+            notify=console.print,
+            override_bytes=getattr(tcfg, "stream_vram_override", None),
+        )
+
+    def _stream_step_shape(self, cfg, tcfg, model_config) -> tuple:
+        """``(rows, seq_len, vocab_size)`` of the worst-case step: the shape
+        :meth:`_stream_budget_lines` budgets and the VRAM probe measures."""
+        shape_cfg = self._stream_shape_config(model_config)
+        batch = tcfg.batch_size if isinstance(tcfg.batch_size, int) else 1
+        return (
+            batch * self._STREAM_ROWS_PER_EXAMPLE,
+            int(cfg.data.max_length),
+            int(getattr(shape_cfg, "vocab_size", 0) or 0),
+        )
 
     def _attach_streamed_save_guard(self) -> None:
         """Check every ``checkpoint-*`` adapter a streamed run writes (#1011)."""
