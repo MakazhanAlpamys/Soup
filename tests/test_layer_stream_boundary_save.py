@@ -42,10 +42,12 @@ def _evaluation_logits(model: Any) -> Any:
     import torch
 
     training = model.training
+    device = next(parameter.device for parameter in model.parameters() if not parameter.is_meta)
     model.eval()
     try:
         with torch.no_grad():
-            return model(input_ids=torch.tensor([[1, 2, 3, 4]]), use_cache=False).logits.clone()
+            tokens = torch.tensor([[1, 2, 3, 4]], device=device)
+            return model(input_ids=tokens, use_cache=False).logits.clone()
     finally:
         model.train(training)
 
