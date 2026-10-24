@@ -1667,3 +1667,79 @@ class TestDenseCheck:
             wrapper._check_dense(wrapper.model)
         del wrapper.model["odd"]
         wrapper._check_dense(wrapper.model)
+
+
+# --------------------------------------------------------------------------
+# Second review of #1976: the loop's bookkeeping, pure where it can be
+# --------------------------------------------------------------------------
+
+
+class TestUpdateBookkeeping:
+    """The pieces of one update that need no MLX: micro-steps, the token
+    normaliser, the reported metrics, decoding and the written metadata."""
+
+    def test_micro_steps_cover_the_update_in_order(self):
+        from soup_cli.trainer.mlx_grpo import micro_slices, resolve_units
+
+        units = resolve_units(batch_size=4, accum=3, num_generations=4)
+        completions = list(range(units.completions_per_update))
+        assert [completions[part] for part in micro_slices(units)] == [
+            [0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11]]
+
+    def test_the_token_count_includes_each_eos(self):
+        from soup_cli.trainer.mlx_grpo import update_token_count
+
+        assert update_token_count([[5, EOS], [5, 6, 7], [EOS]]) == 6.0
+
+    def test_kl_and_clip_ratios_are_token_means_over_the_update(self):
+        from soup_cli.trainer.mlx_grpo import update_metrics
+
+        sums = {"tokens": 10.0, "kl": 2.0, "clip_low": 1.0, "clip_high": 2.0,
+                "clip_region": 3.0}
+        common = dict(loss=0.5, rewards=[1.0, 0.0, 0.5, 0.5], group=2, reward_name="format",
+                      completions=[[5, EOS], [5, 6, 7], [EOS], [5, 6, 7, 8]],
+                      terminated=[True, False, True, False], sums=sums, num_items=10.0,
+                      skipped=1)
+        metrics = update_metrics(beta=0.1, **common)
+        assert metrics["kl"] == pytest.approx(0.2)
+        assert (metrics["clip_ratio/low_mean"], metrics["clip_ratio/high_mean"],
+                metrics["clip_ratio/region_mean"]) == pytest.approx((0.1, 0.2, 0.3))
+        assert metrics["completions/clipped_ratio"] == 0.5
+        assert (metrics["completions/mean_length"], metrics["completions/min_length"],
+                metrics["completions/max_length"]) == (2.5, 1.0, 4.0)
+        assert metrics["frac_reward_zero_std"] == 0.5 and metrics["skipped_steps"] == 1
+        assert metrics["rewards/format/mean"] == metrics["reward"] == 0.5
+        assert "kl" not in update_metrics(beta=0.0, **common)
+
+    def test_zero_std_groups_use_torch_isclose_tolerance(self):
+        """TRL counts ``isclose(std, 0)``: |std| <= 1e-8, not exact zero."""
+        from soup_cli.trainer.mlx_grpo import reward_statistics
+
+        # Sample stds: 3.5e-9 (zero), 0 (zero), 3.5e-8 (not), float round-off (zero).
+        stats = reward_statistics([0.0, 5e-9, 1.0, 1.0, 0.0, 5e-8, 0.1 + 0.2, 0.3], 2)
+        assert stats["frac_reward_zero_std"] == pytest.approx(3 / 4)
+
+    def test_completions_are_decoded_without_special_tokens(self):
+        from soup_cli.trainer.mlx_grpo import MLXGRPOTrainerWrapper
+
+        texts = MLXGRPOTrainerWrapper._decode(DigitTokenizer(), [[_IDS["4"], EOS],
+                                                                 [BOS, _IDS["2"], PAD]])
+        assert texts == ["4", "2"]
+
+    @pytest.mark.parametrize("beta", [0.1, 0.0])
+    def test_objective_metadata(self, beta):
+        from soup_cli.trainer.mlx_grpo import (
+            MLXGRPOTrainerWrapper,
+            grpo_contract,
+            resolve_units,
+        )
+
+        wrapper = MLXGRPOTrainerWrapper(_config(grpo_beta=beta))
+        wrapper._units = resolve_units(batch_size=4, accum=2, num_generations=4)
+        wrapper._reward_name = "format"
+        meta = wrapper._objective_metadata()
+        contract = grpo_contract(beta=beta, num_generations=4, max_completion_length=64)
+        assert {k: meta[k] for k in contract} == contract
+        assert (meta["task"], meta["reward_fn"], meta["skipped_steps"]) == ("grpo", "format", 0)
+        assert (meta["prompts_per_update"], meta["completions_per_update"]) == (2, 8)
+        assert meta["reference"].startswith("none" if beta == 0.0 else "base model")
