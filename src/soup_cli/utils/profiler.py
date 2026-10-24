@@ -85,9 +85,9 @@ def normalize_gpu_key(name: str) -> str:
     ``"NVIDIA GeForce RTX 5070 Laptop GPU"`` and ``"rtx 5070 laptop"`` both
     become ``"rtx5070laptop"``; ``"RTX-4090"`` becomes ``"rtx4090"``. A size
     word moves to the end as a suffix: ``"NVIDIA GeForce RTX 3050 6GB Laptop
-    GPU"`` becomes ``"rtx3050laptop_6gb"``. A size the plain key already holds
-    resolves to the plain key, since only the smaller size of a two-size part has
-    a suffixed key: ``"rtx 3080 laptop 16gb"`` becomes ``"rtx3080laptop"``.
+    GPU"`` becomes ``"rtx3050laptop_6gb"``. A size whose suffixed key does not
+    exist but which the plain key holds resolves to the plain key: ``"rtx 3080
+    laptop 16gb"`` becomes ``"rtx3080laptop"``.
     """
     key = _GPU_NAME_NOISE.sub("", name.lower())
     size = _GPU_NAME_SIZE.search(key)
@@ -95,7 +95,7 @@ def normalize_gpu_key(name: str) -> str:
         return re.sub(r"[\s-]+", "", key)
     key = re.sub(r"[\s-]+", "", key[: size.start()] + " " + key[size.end() :])
     suffixed = f"{key}_{size.group(1)}gb"
-    if suffixed not in GPU_MEMORY and GPU_MEMORY.get(key) == int(size.group(1)):
+    if suffixed not in GPU_MEMORY and str(GPU_MEMORY.get(key)) == size.group(1):
         return key
     return suffixed
 
