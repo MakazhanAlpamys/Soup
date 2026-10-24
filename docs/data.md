@@ -1079,10 +1079,33 @@ too, since distill builds every row that way. On `task: sft` with
 `modality: vision` or `audio` it is accepted but not applied: those rows are
 built by the vision and audio preparers, which never read it (#1156).
 
-**`backend: mlx` ignores it:** MLX SFT builds its own mask and supervises every
-assistant turn, so the same config trains the last turn on transformers and every
-turn on MLX. `soup train` says so on its "MLX backend ignores:" line, and
-`soup doctor --config` reports it.
+**Native MLX text SFT:** `mask_history` selects the last actual assistant message,
+including consecutive assistant turns and a conversation ending in a tool turn.
+All earlier context remains in the input. The existing native response-only rule
+still excludes assistant headers and includes its end marker.
+
+Alternatively, set `train_on_responses_only: false` and
+`train_on_messages_with_train_field: true`. Each message's `train: true` selects
+its whole token span (header, content and end marker), even for user, system,
+developer or tool roles. `false` excludes it; missing/`null` uses the assistant-role
+default. A non-boolean non-null flag is refused. This uses the shared per-message
+label policy with verified actual token-prefix boundaries; it does not estimate
+spans from rendered string lengths or apply an approximate alignment fallback.
+
+Both selective modes require chat message rows and verifiable native token
+boundaries. History masking checks the selected final assistant span: a template
+may rewrite ignored earlier reasoning if that span's boundaries remain exact.
+Per-message masking verifies every message boundary. Unsupported template renders
+raise an actionable error. Rows with no
+selected causal target, including a selected turn fully truncated by
+`data.max_length`, are refused rather than training another turn. Each binary
+mask belongs to the original token position before the causal shift; padding has
+zero weight even when PAD=EOS. Batching/truncation retain this alignment. Saved
+adapter metadata records the effective selective flags. Existing assistant-only
+and full-sequence defaults are unchanged; no custom-template or train-on-EOT
+support is added here. Native evidence covers ordinary LoRA with dense and genuine
+4-bit text bases. Selective native masking on vision/audio is explicitly refused
+and reported by `soup doctor`; other task backends retain their existing scope.
 
 **Multimodal vision and audio ignore it:** For `modality: vision` and `modality: audio`,
 every text token is supervised. Soup's vision collator masks only padding and image
@@ -1372,6 +1395,35 @@ SFT and Pretrain trainers short-circuit at schema validation when
 `format: pre_tokenized` + `tokenized_path: ./tokenized_cache` is set, eliminating
 the per-epoch tokenization tax. Cache keys ensure resume safety; partial runs pick
 up from the last completed shard.
+
+**Native MLX text SFT** also consumes this cache with both
+`data.format: pre_tokenized` and `data.tokenized_path` set. Install its optional
+Arrow reader with `pip install 'soup-cli[mlx]' datasets`. The consumer uses the
+same fingerprint gate and legacy missing-metadata advisory as Transformers,
+without importing Torch, PEFT or TRL. Corrupt metadata, changed key inputs
+and incomplete shards fail without a raw-data fallback. The CLI retains the
+existing source-availability contract; a cache does not make an unavailable
+configured source valid.
+
+Native cached batches use the stored IDs and explicit target labels exactly:
+no template render, retokenization, added BOS/EOS or regenerated response mask.
+Labels may differ from input IDs; `-100` ignores a target. Padding labels remain
+ignored even when PAD=EOS, and the causal shift applies to labels and tokens
+together. Every row is checked for integer IDs/labels (bools/floats are refused),
+vocabulary bounds, matching lengths, right-padding attention masks and at least
+one retained causal target after truncation. A single bad train/validation row
+stops the run. The native sampler retains its existing whole-batch behaviour;
+loading preserves the cache's split/row identity. Saved metadata records cache
+consumption, and rewind records the same stored-label objective.
+
+The producer's masking policy is frozen in its labels; raw native and Transformers
+template heuristics can differ, so cache consumption does not rewrite one into
+the other. Native qualification covers ordinary text LoRA with dense and genuine
+4-bit bases. The existing native custom-template override refusal remains;
+consuming a cache does not enable arbitrary raw template overrides or other tasks.
+Keys bind configured names/paths/settings, not source-file contents, shipped
+model-template contents or model-weight hashes. Unchanged names do not prove
+unchanged data/model contents; only use legacy metadata-free caches you trust.
 
 Rows are rendered with `data.chat_template` when it is set, the same as live
 training. The `pre_tokenized` training config must name the same template, since
