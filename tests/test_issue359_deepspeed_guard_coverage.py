@@ -33,7 +33,7 @@ _GUARD_CALL = re.compile(r"attach_empty_param_group_guard\s*\(")
 #: DeepSpeed reachability: the wrapper takes a config it can be launched with.
 _DEEPSPEED_CAPABLE = re.compile(r"\bdeepspeed_config\b")
 # Unlike forwarding exemptions, these trainers reject DeepSpeed before setup.
-_DEEPSPEED_REFUSING = {"csm.py"}
+_DEEPSPEED_REFUSING = {"csm.py", "mlx_distill.py"}
 
 
 def _code_without_comments(text: str) -> str:
@@ -450,7 +450,7 @@ def test_deepspeed_refusing_exemption_is_earned():
     from soup_cli.config.schema import SoupConfig
     from soup_cli.trainer.csm import CSMTrainerWrapper
 
-    assert _DEEPSPEED_REFUSING == {"csm.py"}
+    assert _DEEPSPEED_REFUSING == {"csm.py", "mlx_distill.py"}
     config = SoupConfig(
         base="sesame/csm-1b", task="tts", modality="audio_out",
         data={"train": "speech.jsonl", "format": "audio"},
@@ -458,5 +458,16 @@ def test_deepspeed_refusing_exemption_is_earned():
     )
     wrapper = CSMTrainerWrapper(config, device="cpu", deepspeed_config="ds.json")
     with pytest.raises(ValueError, match="single-device"):
+        wrapper.setup({})
+    assert wrapper.model is None and wrapper.trainer is None
+
+    from soup_cli.trainer.mlx_distill import MLXDistillTrainerWrapper
+
+    native = SoupConfig(
+        base="local/student", task="distill", backend="mlx", data={"train": "text.jsonl"},
+        training={"teacher_model": "local/teacher", "quantization": "none"},
+    )
+    wrapper = MLXDistillTrainerWrapper(native, deepspeed_config="ds.json")
+    with pytest.raises(ValueError, match="distributed"):
         wrapper.setup({})
     assert wrapper.model is None and wrapper.trainer is None

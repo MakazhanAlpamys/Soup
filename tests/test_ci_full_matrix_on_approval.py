@@ -1143,6 +1143,7 @@ PR_AND_PUSH = frozenset({"pull_request", "push"})
 #: itself, and on any other event the workflow has (a manual run) it resolves the newest.
 PINNED_ON_PR_AND_PUSH = frozenset(
     {
+        ("mlx-distill.yml", "native-distillation"),
         ("recipe-validation.yml", "validate-recipes"),
         ("recipe-attach.yml", "verify"),
     }

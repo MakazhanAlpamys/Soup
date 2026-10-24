@@ -37,10 +37,17 @@ def test_text_distillation_still_loads(mode):
     assert cfg.modality == "text" and cfg.training.distill_mode == mode
 
 
-@pytest.mark.parametrize("backend", ["mlx", "unsloth"])
+@pytest.mark.parametrize("backend", ["unsloth"])
 def test_existing_backend_refusal_keeps_its_reason(backend):
     with pytest.raises(ValueError, match=f"not supported on backend={backend}"):
         SoupConfig.model_validate(_config("text", backend=backend))
+
+
+def test_native_mlx_text_loads_but_multimodal_still_refuses():
+    assert SoupConfig.model_validate(_config("text", backend="mlx")).task == "distill"
+    for modality in ("vision", "audio"):
+        with pytest.raises(ValueError, match="requires modality='text'"):
+            SoupConfig.model_validate(_config(modality, backend="mlx"))
 
 
 @pytest.mark.parametrize("modality", ["vision", "audio"])

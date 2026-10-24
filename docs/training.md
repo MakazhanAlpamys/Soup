@@ -662,12 +662,12 @@ training:
   lr: 5e-5
 ```
 
-Loss = student CE + (T**2) × KL(teacher_logits / T  ||  student_logits / T).
+Loss = 0.5 × student CE + 0.5 × (T**2) × KL(teacher_logits / T || student_logits / T).
 Teacher is loaded once, frozen via `requires_grad_(False)` + `.eval()`, and its
 inputs / logits are auto-bridged across CPU / CUDA devices.
 
-Distillation runs on `backend: transformers` only; `backend: mlx` and
-`backend: unsloth` are refused at config load.
+Transformers supports the modes below. MLX supports the native token-only slice
+[described here](#native-mlx-token-distillation); `backend: unsloth` is refused.
 Gradient accumulation uses the number of shifted, non-masked training targets across the complete
 optimizer window. Splitting the same rows into unequal-length microbatches therefore preserves the
 full-batch token mean instead of weighting every microbatch equally.
@@ -688,6 +688,66 @@ That measurement included finite-value guards removed here: without them it took
 hardware-specific measurements, not a benchmark of this revised implementation,
 which also avoids unused probability tensors. Two FP32 logits copies alone occupy
 about 7.8 GiB at B=4/S=2048/V=128256; budget for additional intermediates as well.
+
+### Native MLX Token Distillation
+
+Use `backend: mlx`, `task: distill`, `modality: text`, `training.teacher_model`
+and `training.quantization: none`. Both checkpoints must be unquantized native
+MLX causal text models. The student trains ordinary linear LoRA; its base and the
+teacher remain frozen. Actual quantized modules are refused even if the recipe
+says `none`. Teacher and student may have different widths/depths, but must have
+identical complete fast-tokenizer pipelines, token-ID mappings, added/special
+tokens, Python encoding settings (including `split_special_tokens`), effective
+templates/wrapper thinking defaults and output vocabulary dimensions. This slice
+supports the standard Hugging Face fast tokenizer and its standard MLX-LM wrapper;
+custom tokenizer implementations, encoding overrides and custom Python chat
+renderers are unverifiable and refused before an update. Budget unified memory
+for **both** full models.
+
+The FP32 objective is `0.5 * CE + 0.5 * T**2 * divergence`, reduced by active
+causal targets. `forward_kl`/`kl` means `KL(teacher || student)`, `reverse_kl`
+means `KL(student || teacher)`; `js` uses their equal mixture. Temperature
+(default 2, finite range 0.05–100) changes divergence, not supervised CE.
+Prompts and padding are excluded according to `train_on_responses_only`;
+plain text supervises all real causal targets, including real EOS when pad=EOS.
+Chat/prompt-completion response masks require the shipped prefix-stable template.
+A row with no target after truncation is refused by split and 1-based position.
+
+Each optimizer window divides summed gradients by **all** its active targets.
+Unequal microbatches, a final partial batch/window and validation splits smaller
+than a batch are included. Epoch boundaries flush the remainder. `eval_steps`
+counts optimizer updates; validation also runs at the final update, using the
+same CE/KD/total objective. Reports expose the three means and active counts.
+Only AdamW aliases `adamw`, `adamw_torch`, `adamw_hf` are qualified here, with
+`cosine`, `linear`, `constant`, `constant_with_warmup`, actual weight decay and
+global gradient clipping. Seed/data_seed control native initialization/order.
+
+`distill_chunk_size` bounds each divergence operation. `distill_checkpoint`
+uses native `mx.checkpoint` to recompute divergence intermediates in backward.
+A chunk loop alone does not bound all retained intermediates, and neither option
+removes full model/output-logit storage. Separately, boolean
+`gradient_checkpointing` recomputes the **whole student forward** through the
+native module checkpoint wrapper; it does not mutate shared layer classes or
+enable teacher checkpointing. These operations can cost extra compute and
+synchronization; they do not promise lower complete-process memory or latency.
+
+Nonfinite active teacher/student logits, CE/KD/total or student gradients abort
+before the offending optimizer update. This native policy differs from the
+Transformers AMP overflow recovery above. No final success receipt is written on
+failure. `distillation_run.json` distinguishes running, failed, interrupted and
+complete runs, including a failed warm start beside earlier recoverable files.
+Periodic numbered checkpoints and `--resume` restore **adapter weights only**;
+optimizer/schedule/order restart. Warm starts require exact tensor keys, shapes,
+dtypes and finite values. Final native adapters support MLX-LM reload/fusion;
+metadata records the effective objective, teacher/student references, tokenizer
+fingerprint, dtypes, runtime and optimizer settings without teacher weights.
+
+Sequence/generated-label KD, ULD, MiniLLM, quantization, full fine-tuning,
+vision/audio, distributed/offloaded execution, other adapter families, mask
+history/per-message flags, template overrides, and specialized training modifiers
+are refused by name. `rewind_log` is an SFT-only option and creates no KD recorder.
+Native numerical/lifecycle qualification does not establish knowledge transfer,
+downstream quality, CUDA parity in performance, or a general speedup.
 
 ### Chunking and Activation Checkpointing
 
@@ -2242,7 +2302,7 @@ training:
   distill_temperature: 2.0
 ```
 
-The cross-validator rejects `task='distill'` without `teacher_model`, and rejects `teacher_model` / `distill_*` fields when `task` is anything other than `distill`. It also refuses `task='distill'` on `backend: mlx` and `backend: unsloth` at config load; distillation runs on `backend: transformers` only. Both token-level and sequence-level distillation require `modality: text`; `vision` and `audio` are refused at config load because the distill trainer has no multimodal input path.
+The cross-validator rejects `task='distill'` without `teacher_model`, and rejects `teacher_model` / `distill_*` fields when `task` is anything other than `distill`. It refuses `backend: unsloth`; Transformers supports the modes above and MLX supports the [native token-only slice](#native-mlx-token-distillation). Both token-level and sequence-level distillation require `modality: text`; `vision` and `audio` are refused at config load because the distill trainer has no multimodal input path.
 
 
 ## EBFT + GDPO (BETA, v0.52.0)

@@ -1,0 +1,72 @@
+name: native MLX token distillation
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    paths:
+      - 'src/soup_cli/trainer/**'
+      - 'src/soup_cli/config/**'
+      - 'src/soup_cli/utils/distill.py'
+      - 'src/soup_cli/utils/mlx*.py'
+      - 'src/soup_cli/commands/train.py'
+      - 'tests/test_mlx_distill*.py'
+      - 'pyproject.toml'
+      - '.github/constraints/**'
+      - '.github/constraints/pinned-upstream.txt'
+      - '.github/workflows/mlx-distill.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  native-distillation:
+    # Native optional tests are absent from [dev]. Spend runner capacity at
+    # maintainer approval, following the existing full-CI/draft policy.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (!github.event.pull_request.draft &&
+       contains(github.event.pull_request.labels.*.name, 'ci:full') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'ci:full'))
+    runs-on: macos-14
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [floor, current]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install and verify the standalone native runtime
+        run: |
+          if [ '${{ matrix.stack }}' = floor ]; then
+            pip install -e '.[mlx]' pytest ${{ github.event_name == 'pull_request' && '-c .github/constraints/pinned-upstream.txt' || '' }} 'mlx==0.31.2' 'mlx-lm==0.31.3'
+          else
+            pip install -e '.[mlx]' pytest ${{ github.event_name == 'pull_request' && '-c .github/constraints/pinned-upstream.txt' || '' }}
+          fi
+          python -m pip check
+          python -c "import mlx.core, mlx_lm; import importlib.util; assert all(importlib.util.find_spec(n) is None for n in ('torch','trl','peft','accelerate','bitsandbytes','datasets'))"
+      - name: Run real offline native kernels and lifecycle without PyTorch
+        env:
+          HF_HUB_OFFLINE: '1'
+          HF_DATASETS_OFFLINE: '1'
+          PYTHONPATH: src
+        run: >-
+          pytest -o addopts= -q tests/test_mlx_distill.py tests/test_mlx_distill_compat.py
+          tests/test_mlx_distill_loss_native.py tests/test_mlx_distill_runtime_native.py
+      - name: Add the separate PyTorch numerical reference
+        if: matrix.stack == 'current'
+        run: pip install torch ${{ github.event_name == 'pull_request' && '-c .github/constraints/pinned-upstream.txt' || '' }}
+      - name: Compare actual backend values and gradients
+        if: matrix.stack == 'current'
+        env:
+          HF_HUB_OFFLINE: '1'
+          PYTHONPATH: src
+        run: pytest -o addopts= -q tests/test_mlx_distill_reference_native.py
