@@ -11,8 +11,6 @@ from dataclasses import dataclass
 from functools import wraps
 from typing import Any, Callable, Iterable, Iterator, TextIO, TypeVar, get_type_hints
 
-import typer
-
 _writer: ContextVar[TextIO | None] = ContextVar("ship_progress_writer", default=None)
 _current: ContextVar[_Group | None] = ContextVar("ship_progress_group", default=None)
 T = TypeVar("T")
@@ -122,6 +120,8 @@ def _exclusive_stderr() -> Iterator[TextIO]:
 
 def jsonl_command(function: Callable[..., Any]) -> Callable[..., Any]:
     """Enter before command validation; preserve Typer's public signature."""
+    import typer
+
     @wraps(function)
     def wrapped(*args: Any, **kwargs: Any) -> Any:
         if kwargs.get("progress") != "jsonl":

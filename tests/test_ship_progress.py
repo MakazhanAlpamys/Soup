@@ -17,7 +17,17 @@ from soup_cli.utils.ship_progress import group, session
 
 
 def events(stream: io.StringIO) -> list[dict]:
-    return [json.loads(line) for line in stream.getvalue().splitlines()]
+    emitted = [json.loads(line) for line in stream.getvalue().splitlines()]
+    assert_error_contract(emitted)
+    return emitted
+
+
+def assert_error_contract(emitted: list[dict]) -> None:
+    for event in emitted:
+        if event["event"] == "error":
+            assert event.get("error") == "execution_aborted"
+        else:
+            assert "error" not in event
 
 
 def capture_runner() -> CliRunner:
@@ -25,6 +35,15 @@ def capture_runner() -> CliRunner:
     separate = "mix_stderr" in inspect.signature(CliRunner).parameters
     options = {"mix_stderr": False} if separate else {}
     return CliRunner(**options)
+
+
+@pytest.mark.parametrize("module", ["custom", "gate_suites", "forgetting", "generation"])
+def test_pure_scorer_import_does_not_load_typer(module: str) -> None:
+    script = (f"import importlib, sys; importlib.import_module('soup_cli.eval.{module}'); "
+              "assert 'typer' not in sys.modules")
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True,
+                            encoding="utf-8", timeout=60)
+    assert result.returncode == 0, (result.stdout, result.stderr)
 
 
 @pytest.mark.parametrize("batched", [False, True])
@@ -157,7 +176,30 @@ def test_subprocess_abort_is_terminal_content_free_jsonl(tmp_path: Path, abort: 
     emitted = [json.loads(line) for line in result.stderr.splitlines()]
     assert [e["event"] for e in emitted if e["phase"] == "load"] == ["start", "error"]
     assert emitted[-1]["event"] == "error"
+    assert_error_contract(emitted)
     assert "SECRET" not in result.stderr and "/path" not in result.stderr
+
+
+def test_unexpected_exception_from_real_app_is_content_free_jsonl(tmp_path: Path) -> None:
+    harness = '''
+import sys
+import typer
+from soup_cli.commands import ship
+from soup_cli.cli import app
+def unexpected(*args, **kwargs):
+    raise RuntimeError("UNEXPECTED_SECRET /private/path")
+ship._validate_task_mode_flag = unexpected
+typer.main.get_command(app).main(args=["ship", "--progress", "jsonl"], prog_name="soup")
+'''
+    result = subprocess.run([sys.executable, "-c", harness], cwd=tmp_path,
+                            capture_output=True, encoding="utf-8", timeout=60)
+    assert result.returncode == 1, (result.stdout, result.stderr)
+    emitted = [json.loads(line) for line in result.stderr.splitlines()]
+    assert [(e["phase"], e["event"]) for e in emitted] == [
+        ("verdict", "start"), ("verdict", "error")]
+    assert_error_contract(emitted)
+    for forbidden in ("Traceback", "UNEXPECTED_SECRET", "/private/path", "RuntimeError"):
+        assert forbidden not in result.stderr
 
 
 def test_offline_has_only_unknown_count_verdict_events(tmp_path: Path) -> None:

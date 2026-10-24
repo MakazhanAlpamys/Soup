@@ -3,11 +3,6 @@
 from typing import Callable, Iterator, Optional
 
 
-def generate_outputs(gen: Callable[[str], str], prompts: list[str]) -> list[Optional[str]]:
-    """Materialize ordered outputs for callers that need a list."""
-    return list(iter_outputs(gen, prompts))
-
-
 def iter_outputs(gen: Callable[[str], str], prompts: list[str]) -> Iterator[Optional[str]]:
     """Return one output per prompt; ``None`` marks a failed generation.
 
