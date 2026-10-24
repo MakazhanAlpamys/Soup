@@ -875,13 +875,14 @@ rows. That table needs a CUDA card and is left for whoever has one. To produce i
 python benchmarks/harness/stream_loss_chunk_vram.py --base <id-or-path> --quantization 4bit
 ```
 
-The harness runs the setup `soup train` uses and one step per arm at batch 1 (`--seqs` and
-`--chunk` change the lengths and the chunk, 512,1024,2048 and 128 by default) and prints one
-row per length and arm: the pre-flight's prediction for that run, the free VRAM it compared
-against, and `torch.cuda.max_memory_allocated()` over the step. An arm that runs out of
-memory is a row, not a crash. It exits 1 when a row under-predicts, including an arm that ran
-out of memory inside the predicted fit. `--self-test` runs the same protocol on a tiny local
-Llama with no GPU and no download, and reads no peak.
+The harness runs the setup `soup train` uses and one step per arm at batch 1, each arm in a
+process of its own as each `soup train` is (`--seqs` and `--chunk` change the lengths and the
+chunk, 512,1024,2048 and 128 by default), and prints one row per length and arm: the
+pre-flight's prediction for that run, the free VRAM it compared against, and
+`torch.cuda.max_memory_allocated()` over the step. An arm that runs out of memory is a row,
+not a crash. It exits 1 when a row under-predicts, including an arm that ran out of memory
+inside the predicted fit. `--self-test` runs the same protocol on a tiny local Llama with no
+GPU and no download, and reads no peak.
 
 ### Batch size vs gradient accumulation
 
