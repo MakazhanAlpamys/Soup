@@ -26,7 +26,7 @@ from soup_cli.config.loader import load_config_from_string
 from soup_cli.config.schema import SoupConfig
 from tests.conftest import strip_ansi
 
-_MLX_TASKS = ["sft", "dpo", "orpo", "simpo", "kto"]
+_MLX_TASKS = ["sft", "dpo", "orpo", "simpo", "kto", "grpo"]
 _REMOVE_OR_SWITCH = "or use backend: transformers."
 
 _YAML = """
@@ -181,7 +181,7 @@ class TestOtherRefusalsKeepTheirOwnWords:
     """Each of these configs names a problem that "use backend: transformers" would not
     fix, or that has a more basic answer, so that refusal has to come first."""
 
-    @pytest.mark.parametrize("task", ["grpo", "ipo", "pretrain"])
+    @pytest.mark.parametrize("task", ["ipo", "pretrain"])
     def test_a_task_mlx_cannot_run_is_refused_for_that_first(self, task: str) -> None:
         with pytest.raises(ValidationError) as excinfo:
             _config(task, rank_pattern={"q_proj": 4})
@@ -260,7 +260,7 @@ class TestOtherEntryPoints:
         flat = " ".join(text.split())
         assert (
             "`training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused "
-            "on `backend: mlx` for SFT, DPO, ORPO, SimPO and KTO"
+            "on `backend: mlx` for SFT, DPO, ORPO, SimPO, KTO and GRPO"
         ) in flat
 
     def test_the_doctor_table_has_no_pattern_rows(self) -> None:
