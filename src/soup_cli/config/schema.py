@@ -5152,7 +5152,6 @@ _MLX_GRPO_UNAPPLIED: dict[str, str] = {
     "callback); zero-advantage groups train, as TRL's default does",
     "eval_steps": "MLX GRPO scores the validation split once, after training "
     "(val_reward), with no mid-run evaluation",
-    "use_lorafa": "LoRA-FA has no MLX implementation",
     "relora_steps": "ReLoRA restarts run on the transformers path only",
     "curriculum": "curriculum ordering runs on the transformers path only",
 }
