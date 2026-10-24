@@ -142,9 +142,9 @@ training:
     alpha: 32
 ```
 
-MLX backend supports SFT, DPO, ORPO, SimPO and KTO. Any other task with `backend: mlx` (`grpo`, `ipo`, `preference`, ...) is refused when the config is loaded, with an error naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for ready-made Apple Silicon configs.
+MLX backend supports SFT, DPO, ORPO, SimPO, KTO and GRPO. Any other task with `backend: mlx` (`ipo`, `preference`, ...) is refused when the config is loaded, with an error naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for ready-made Apple Silicon configs.
 
-`training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO, SimPO and KTO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
+`training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO, SimPO, KTO and GRPO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
 
 #### DPO on MLX
 
@@ -412,6 +412,140 @@ training:
   `data.chat_template` (as for MLX DPO and ORPO). The other settings MLX DPO
   does not apply are not applied here either.
 
+#### GRPO on MLX
+
+`task: grpo` with `backend: mlx` runs Soup's own loop: each optimizer update
+generates completions from the current policy, scores them with a built-in
+reward, and takes one policy-gradient step. This is the objective both backends
+train today: the effective `GRPOConfig` of Soup's transformers path on TRL
+0.29.1, whose defaults Soup does not override.
+
+Qualified on Qwen2.5-0.5B-Instruct in bf16 on an M4 Pro, on 400 synthetic
+arithmetic prompts (`a * b ± c`, gold in `\boxed{}`) with `reward_fn: accuracy`,
+`num_generations: 4`, batch 4 × accumulation 2, `grpo_beta: 0.1`: 200 updates
+took about 10 minutes and 6.0 GB, and greedy accuracy on 100 held-out prompts
+went from 0.04 to 0.99 as the model learned to work the product out before
+answering. That task is easy and fully verifiable; it shows the loop training,
+not reasoning quality in general.
+
+| setting | value |
+|---|---|
+| `loss_type` | `dapo`: per-token clipped surrogate, summed over every completion token of the update and divided by that token count (EOS included) |
+| `scale_rewards` | `group`: advantage = (reward - group mean) / (group sample std + 1e-4) |
+| `epsilon` | 0.2 on both sides |
+| `num_iterations` | 1, so the old policy is the current one detached and the ratio is exactly 1 |
+| `importance_sampling_level` | `token` |
+| `beta` | `training.grpo_beta` (default 0.1), TRL's k3 KL; `0` runs no reference forward |
+| sampling | temperature 1, top-p 1, top-k 0, no min-p, repetition penalty 1 |
+| `max_completion_length` | `data.max_length` |
+| `mask_truncated_completions` | false: completions with no EOS train on every token |
+
+Exposing `loss_type` (for example the original per-sequence `grpo` loss) is not
+a setting on either backend.
+
+```yaml
+base: Qwen/Qwen2.5-0.5B-Instruct
+task: grpo
+backend: mlx
+
+data:
+  train: ./math.jsonl        # chatml rows; the final assistant turn is the gold answer
+  format: chatml
+  max_length: 256            # = max_completion_length; keep it small
+
+training:
+  reward_fn: accuracy        # or format
+  num_generations: 4
+  # batch_size: auto (or anything below num_generations) is one group
+  batch_size: 4              # completions per micro-step, as in TRL
+  gradient_accumulation_steps: 2
+  grpo_beta: 0.1
+  lr: 1e-5
+  quantization: none
+  lora:
+    r: 16
+    alpha: 32
+```
+
+A row of `math.jsonl`:
+`{"messages": [{"role": "user", "content": "What is 2+3? End with '#### <number>'."}, {"role": "assistant", "content": "#### 5"}]}`.
+The loader does not auto-detect bare `{"prompt", "answer"}` rows; use `messages`
+(or Alpaca `instruction` / `output`).
+
+- **Units are TRL's.** `training.batch_size` counts completions per
+  micro-step. One update uses `batch_size x gradient_accumulation_steps`
+  completions, which is that number divided by `num_generations` prompts. The
+  product must be a multiple of `num_generations`. A batch smaller than one
+  group is raised to `num_generations`, as on the transformers path;
+  `batch_size: auto` is one group on MLX (`num_generations` completions). Prompts are shuffled each
+  epoch from `training.seed`. The trailing prompts that do not fill an update
+  are dropped, as TRL's sampler does, so there are `prompts // prompts per
+  update` updates per epoch. `data_seed` does not change the order on either
+  backend.
+- **Rollouts.** Completions are generated once per update from the policy at
+  that update. Generation runs in train mode, so LoRA dropout is active, as in
+  TRL. There is no gradient through generation. Each prompt's group is
+  prefilled once and sampled through mlx-lm's KV cache. A completion stops at
+  the tokenizer's `eos_token_id`, which it keeps, or at `data.max_length`
+  tokens. A prompt plus `data.max_length` longer than the model's context is
+  refused; the transformers path has no such check.
+- **Prompts and rewards.** Prompts are read as on the transformers path. A
+  `prompt` string is the user turn. With `messages`, a final assistant turn
+  becomes the gold `answer`. Alpaca `instruction` / `output` rows work too. The
+  chat template is applied with `add_generation_prompt`, including
+  `data.chat_template` and the transformers path's fallback template.
+  `accuracy` and `format` are called with TRL's arguments except
+  `trainer_state`, which the built-in rewards do not read. Each completion is
+  scored against its own row's gold, with every other column passed through.
+  A missing or unreadable gold, or too few prompts for one update, is refused
+  before the model loads. A reward that is not a finite number for each
+  completion stops the run.
+- **Reference.** With `grpo_beta > 0` the reference is the base model, as TRL
+  uses for a PEFT model. It is the policy with every LoRA scale set to 0, run
+  on the generated tokens before each update. No second copy is loaded.
+- **Watchdog.** A nonfinite loss or gradient skips the update, as Soup's GRPO
+  watchdog does on transformers. The weights and optimizer moments do not
+  change. The skip is printed and counted in the result and in
+  `adapter_config.json`. One difference: MLX has a single optimizer step that
+  drives both the schedule and Adam's bias correction, so a skipped update
+  also holds the learning-rate schedule. The transformers path still advances
+  its scheduler.
+- **Validation.** On `backend: mlx` the loader always holds out
+  `data.val_split` (default 0.1) of the rows, while transformers GRPO holds
+  rows out only when `training.eval_steps` is set. The run prints how many
+  prompts were held out at the start. Those prompts are not trained on; they
+  are scored once after training, `num_generations` completions each, at
+  temperature 1 in eval mode (LoRA dropout off), seeded from `training.seed`,
+  with no parameter change, and reported as `val_reward`. MLX GRPO refuses
+  `training.eval_steps`. Set `data.val_split: 0` to train on every row, as the
+  transformers path does without `eval_steps`.
+- **Reported per update:** loss, reward mean and sample std, per-reward mean
+  and std, the fraction of groups with zero reward std, completion mean, min
+  and max length, the truncated (no-EOS) fraction, KL (when `beta > 0`), clip
+  ratios and skipped updates. They are printed when there is no live panel and
+  returned in the run's `history`.
+- **Saved:** `adapters.safetensors` and `adapter_config.json`, loadable with
+  `mlx_lm.load(base, adapter_path=output)`. Both are written atomically, and the
+  metadata before the first update. The metadata records every setting in the
+  table above, the reward, the advantage epsilon and std, the reference and
+  generation mode, and the skipped-update count. `save_steps` counts updates.
+- **Cost.** Rollouts dominate: each update samples up to `data.max_length`
+  tokens for `num_generations` completions of every prompt. Keep
+  `data.max_length` small. With `grpo_beta > 0` each micro-step adds one
+  reference forward. Validation adds up to `num_generations x data.max_length`
+  sampled tokens per held-out prompt, one prompt after another.
+- **Refused at load:** `quantization: 8bit`, `training.lora.r: 0`, DoRA,
+  LoRA+, LoRA-FA, non-text `modality`, a `.py`, comma-ensemble or
+  `verifiable` reward, `prm_reward`, `rollout_backend` / `rollout_func`,
+  `grpo_variant` and the other stability fields, the reward-hack, echo-trap,
+  RL-checkpoint and curriculum settings, `eval_steps`, vLLM options and layer
+  streaming.
+- **Refused at launch or after the load:** `--deepspeed` / `--fsdp`, and
+  `--resume` / `--hf-resume`, because only the adapter is saved (#1977). A base
+  that loads quantized is refused right after the load. 4-bit bases come in a
+  follow-up. `quantization: 4bit` is Soup's default and, on MLX, only names a
+  pre-quantized base, so a dense base trains with it.
+
 #### DoRA on MLX
 
 For text SFT, set `training.lora.use_dora: true` to use MLX-LM's native
@@ -474,7 +608,7 @@ what ran is recoverable from the output directory.
 ### Transformers on MPS
 
 The regular `backend: transformers` path can run more than MLX's SFT, DPO, ORPO,
-SimPO and KTO surface. On a live MPS runtime that accepts bfloat16, Soup enables BF16 autocast
+SimPO, KTO and GRPO surface. On a live MPS runtime that accepts bfloat16, Soup enables BF16 autocast
 for the hardware-validated text trainers: SFT, DPO, GRPO/RLVR, reward modelling,
 and PRM.
 The decision comes from a live MPS allocation probe rather than a macOS version
