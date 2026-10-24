@@ -322,6 +322,70 @@ def test_public_save_load_and_strict_round_trip(
         fresh_runtime.close()
 
 
+@pytest.mark.parametrize("boundary", ["lm_head", "embed_tokens"])
+@pytest.mark.parametrize("placement", ["default", "explicit", "positional"])
+def test_public_reload_preserves_runtime_device_without_auto_redispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str, placement: str,
+) -> None:
+    """A CPU runtime must not be moved by PEFT's accelerator auto-selection.
+
+    Guard the two actual device selectors so this regression runs even on a
+    host without MPS. We still load real safetensors, dispatch the actual model
+    and compare adapter bytes and logits; explicit CPU placement is a control.
+    """
+    _requires_train_extra()
+    import peft.peft_model as peft_model
+    import torch
+
+    targets = ["q_proj", boundary]
+    model, runtime = _build_streamed(tmp_path / "source", tie=False,
+                                     target_modules=targets, seed=3)
+    try:
+        _perturb_lora(model, seed=17)
+        expected = _adapters(model)
+        logits = _evaluation_logits(model)
+        checkpoint = tmp_path / "adapter"
+        model.save_pretrained(checkpoint)
+    finally:
+        runtime.close()
+
+    fresh, fresh_runtime = _build_streamed(tmp_path / "fresh", tie=False,
+                                         target_modules=targets, seed=99)
+    dispatched = []
+    real_dispatch = peft_model.dispatch_model
+
+    def unexpected_auto_device(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("adapter reload must preserve the streaming runtime device")
+
+    def dispatch(model: Any, *args: Any, **kwargs: Any) -> Any:
+        dispatched.append(dict(kwargs["device_map"]))
+        return real_dispatch(model, *args, **kwargs)
+
+    monkeypatch.setattr(peft_model, "infer_device", unexpected_auto_device)
+    monkeypatch.setattr(peft_model, "infer_auto_device_map", unexpected_auto_device)
+    monkeypatch.setattr(peft_model, "dispatch_model", dispatch)
+    try:
+        _perturb_lora(fresh, seed=29)
+        if placement == "positional":
+            fresh.load_adapter(checkpoint, "default", True, "cpu", device_map={"": "cpu"})
+        else:
+            options = {} if placement == "default" else {
+                "torch_device": "cpu", "device_map": {"": "cpu"},
+            }
+            fresh.load_adapter(checkpoint, adapter_name="default", is_trainable=True, **options)
+        assert dispatched == [{"": "cpu"}]
+        assert fresh.hf_device_map == {"": "cpu"}
+        assert fresh_runtime.device == "cpu"
+        assert all(parameter.device.type == "cpu" for parameter in fresh.parameters()
+                   if not parameter.is_meta)
+        assert fresh.get_input_embeddings().weight.is_meta
+        assert fresh.get_output_embeddings().weight.is_meta
+        _assert_adapters(fresh, expected)
+        assert torch.equal(_evaluation_logits(fresh), logits)
+    finally:
+        fresh_runtime.close()
+
+
 @pytest.mark.parametrize("tier", ["ram", "disk"])
 def test_frozen_boundary_export_is_independent_and_conflicting_base_is_refused(
     tmp_path: Path, tier: str

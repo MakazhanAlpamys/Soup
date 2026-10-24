@@ -911,7 +911,11 @@ and the meta parameters remain unchanged, so this adds no persistent GPU base al
 PEFT obtains the state before deciding which embedding weights to save; even an
 adapter-only save therefore temporarily needs CPU memory for each adapted boundary matrix.
 Keep the run's matching shard cache available through saving and resume. Loading an
-included frozen boundary weight that differs from that cache is refused with a base/cache
+adapter through `load_adapter` defaults to the existing runtime's device and device
+map, so a CPU runtime stays on CPU even when another accelerator is available.
+PEFT placement overrides must stay consistent with the runtime's own buffers;
+automatic redistribution cannot relocate those buffers.
+Loading an included frozen boundary weight that differs from that cache is refused with a base/cache
 diagnostic rather than silently ignoring it. The lower-level streaming builder also
 refuses `modules_to_save` on these frozen boundaries; Soup does not expose that PEFT field.
 CPU tests with PEFT 0.20.0 and 0.21.0 cover exact default-adapter reloads and SFT/DPO

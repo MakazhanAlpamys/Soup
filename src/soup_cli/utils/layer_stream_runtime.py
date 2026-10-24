@@ -2699,12 +2699,14 @@ def _replace_module_references(root: Any, target: Any, replacement: Any) -> int:
 
 
 def _attach_streamed_boundary_adapter_bridge(model: Any) -> None:
-    """Let PEFT inject later adapters into the boundary's real tuner module.
+    """Let PEFT inject/load adapters without changing streaming placement.
 
     PEFT resolves a target through its parent attribute, which is our streamed
     wrapper rather than the canonical tuner yielded by named_modules(). TRL
     DPO uses add_adapter to make its reference. Expose the tuner only during
     injection and restore streaming even if PEFT raises partway through it.
+    PEFT's load_adapter otherwise re-plans CPU/disk models across available
+    accelerators, which cannot move this runtime's independently owned pools.
     This is scoped to this model, never a patch of PEFT's global classes.
     """
     if not hasattr(model, "peft_config"):
@@ -2712,6 +2714,21 @@ def _attach_streamed_boundary_adapter_bridge(model: Any) -> None:
     from types import MethodType
 
     add_adapter = type(model).add_adapter
+    load_adapter = type(model).load_adapter
+
+    def _load_adapter(
+        self: Any, model_id: Any, adapter_name: str, is_trainable: bool = False,
+        torch_device: Optional[str] = None, *args: Any, **kwargs: Any,
+    ) -> Any:
+        runtime_map = getattr(self, "hf_device_map", None)
+        if isinstance(runtime_map, dict) and "" in runtime_map:
+            if torch_device is None:
+                device = runtime_map[""]
+                torch_device = f"cuda:{device}" if isinstance(device, int) else str(device)
+            kwargs.setdefault("device_map", dict(runtime_map))
+        return load_adapter(
+            self, model_id, adapter_name, is_trainable, torch_device, *args, **kwargs
+        )
 
     def _add_adapter(self: Any, *args: Any, **kwargs: Any) -> Any:
         boundaries = {}
@@ -2748,6 +2765,7 @@ def _attach_streamed_boundary_adapter_bridge(model: Any) -> None:
                     parent._modules[name] = wrapper
 
     model.add_adapter = MethodType(_add_adapter, model)
+    model.load_adapter = MethodType(_load_adapter, model)
 
 
 def canonical_named_parameters(model: Any) -> Iterator[Tuple[str, Any]]:
