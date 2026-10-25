@@ -184,8 +184,9 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 171 ready-made recipes
+soup recipes list                             List all 172 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
+soup recipes show qwen3.5-0.8b-dpo           Print the tiny Qwen3.5 text-preference recipe
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
 soup recipes search "reasoning"              Search by keyword/task/size
 soup recipes verify                           Attach every shipped config on the meta device; exit 2 if one cannot (#1116)
@@ -386,6 +387,11 @@ soup version [--full] [--json]                Show version (--full: system info,
 soup --version                                Show version (prints the same text as soup version)
 soup --verbose <command>                      Full traceback on errors
 ```
+
+The `qwen3.5-0.8b-dpo` recipe trains the text decoder with preference rows
+containing `prompt`, `chosen` and `rejected` in `./data/preference_train.jsonl`.
+Its settings come from the existing Qwen3.5 DPO recipes and have not been tuned
+for the 0.8B model.
 
 ### Choosing the device for `soup infer`, `soup chat` and `soup diff`
 
