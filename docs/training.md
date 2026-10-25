@@ -784,7 +784,14 @@ training:
 `reasoning_effort` injects `<|reasoning_effort|>high<|/reasoning_effort|>` into
 the system turn (creating one if absent). `train_on_eot=True` makes the model
 learn when to stop generating by training on the trailing EOS token instead of
-masking it out. Both load only on `task: sft`, `tts` and `distill`.
+masking it out. Both load only on `task: sft`, `tts` and `distill`, and inside
+`task: sft` only where they are applied. The vision and audio setups,
+`data.format: raft` and `backend: mlx` apply neither, and
+`data.format: pre_tokenized` drops `reasoning_effort`, so setting a field on one
+of those paths fails at config load, naming the path and the fix. The text path
+is unaffected, including `backend: unsloth` and `training.stream_layers: true`,
+and `train_on_eot` keeps loading with `data.format: pre_tokenized`, where
+`soup data preprocess` bakes it into the cache's mask mode.
 
 
 ## EBFT / GDPO Loss Variants
@@ -2279,7 +2286,7 @@ the cross-entropy. See [EBFT / GDPO Loss Variants](#ebft--gdpo-loss-variants).
 
 ## gpt-oss `reasoning_effort` + `train_on_eot` (v0.52.0)
 
-`training.reasoning_effort: low | medium | high` injects a system-prefix token at training time for gpt-oss models; `training.train_on_eot: true` includes explicit EOT/EOS control tokens in the SFT loss (axolotl `train_on_eot`). Both are applied by the SFT formatter, which runs on `sft`, `tts` and `distill`, so those are the tasks they load on. Setting either on any other task (`pretrain`, DPO, GRPO, PPO, `classifier`, `reranker`, `cross_encoder`) fails at config load. Live formatter wiring in v0.52.1.
+`training.reasoning_effort: low | medium | high` injects a system-prefix token at training time for gpt-oss models; `training.train_on_eot: true` includes explicit EOT/EOS control tokens in the SFT loss (axolotl `train_on_eot`). Both are applied by the SFT formatter, which runs on `sft`, `tts` and `distill`, so those are the tasks they load on. Setting either on any other task (`pretrain`, DPO, GRPO, PPO, `classifier`, `reranker`, `cross_encoder`) fails at config load. Inside `task: sft` they are also gated on the path (#1698): `modality: vision` or `audio`, `data.format: raft` and `backend: mlx` apply neither, and `data.format: pre_tokenized` drops `reasoning_effort` because the cache is built without it, while `train_on_eot` keeps loading there since `soup data preprocess` keys the cache on it. Live formatter wiring in v0.52.1.
 
 
 ## MoLE — Per-Token Adapter Routing (`task='moe_lora_routing'`)
