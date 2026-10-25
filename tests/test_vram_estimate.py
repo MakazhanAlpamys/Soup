@@ -158,6 +158,15 @@ class TestActivations:
         # Selective is priced as no checkpointing, an upper bound.
         assert activations("selective") == activations(False)
 
+    def test_an_odd_layer_count_keeps_the_extra_half(self, qwen):
+        # 3 layers: medium keeps ceil(3 / 2) = 2 of them, where floor division
+        # would keep 1. One layer keeps 51,930,726.4 bytes and a boundary
+        # 1,835,008, so 2 kept layers, one boundary and the one being
+        # recomputed come to 3 x 51,930,726.4 + 1,835,008 = 157,627,187.2.
+        three = dataclasses.replace(qwen, num_layers=3)
+        medium = estimate_vram(three, _run(gradient_checkpointing="medium")).terms["activations"]
+        assert medium == 157_627_188
+
     @pytest.mark.parametrize(
         ("tier", "said"),
         [("medium", "Medium checkpointing"), ("selective", "Selective checkpointing")],
