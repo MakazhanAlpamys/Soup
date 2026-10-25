@@ -101,12 +101,17 @@ def test_memorization_skips_a_row_whose_suffix_has_no_tokens_and_counts_it(capsy
     assert "skipped_no_tokens=1 " in result.evidence, result.evidence
 
 
-def test_memorization_with_every_row_skipped_says_so() -> None:
+def test_memorization_with_every_row_skipped_is_not_run() -> None:
+    # Nothing was measured here: the only row's suffix is all stopwords, so no
+    # row is scanned and there is no echo rate to report. OK 1.00 would be
+    # indistinguishable from a probe that ran and found no echo (#1525).
     result = score_memorization(
         [STOPWORD_SUFFIX_ROW], lambda prefix: "it is a to", prefix_fraction=0.5
     )
-    assert result.verdict == "OK"
+    assert result.verdict == "NOT_RUN"
+    assert result.score == 0.0
     assert "scanned=0 " in result.evidence and "skipped_no_tokens=1 " in result.evidence
+    assert "prefix and a suffix" in result.evidence
 
 
 @pytest.mark.parametrize(
