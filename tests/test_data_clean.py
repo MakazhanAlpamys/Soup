@@ -8,7 +8,6 @@ import re
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.utils.data_clean import (
@@ -21,8 +20,9 @@ from soup_cli.utils.data_clean import (
     sanitize_text,
     strip_boilerplate,
 )
+from tests.conftest import make_cli_runner
 
-runner = CliRunner()
+runner = make_cli_runner()
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
@@ -626,7 +626,7 @@ def test_cli_clean_command_json_output(tmp_path: Path, monkeypatch: pytest.Monke
         ["data", "clean", str(dirty_file), "--dry-run", "--json"],
     )
     assert result.exit_code == 0
-    payload = json.loads(_strip_ansi(result.output))
+    payload = json.loads(_strip_ansi(result.stdout))
     assert payload["total_scanned"] == 3
     assert payload["output_rows"] == 2
     assert payload["total_dropped"] == 1

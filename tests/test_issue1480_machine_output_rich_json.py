@@ -31,11 +31,11 @@ from pathlib import Path
 
 import pytest
 from rich.console import Console
-from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests.conftest import make_cli_runner
 
-runner = CliRunner()
+runner = make_cli_runner()
 
 _SRC = Path(__file__).resolve().parent.parent / "src" / "soup_cli"
 
@@ -89,7 +89,7 @@ def test_version_json_full_is_one_line_at_any_width(monkeypatch):
     result = runner.invoke(app, ["version", "--json", "--full"])
 
     assert result.exit_code == 0, result.output
-    lines = [ln for ln in result.output.splitlines() if ln.strip()]
+    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
     assert len(lines) == 1, lines
     info = json.loads(lines[0])
     assert info["torch"] == _FAKE_LIBS["torch"]
@@ -126,7 +126,7 @@ def test_cost_json_keeps_bracketed_value(monkeypatch, tmp_path, markup):
     result = runner.invoke(app, ["cost", "--json", "--config", str(cfg)])
 
     assert result.exit_code == 0, result.output
-    results = json.loads(result.output)
+    results = json.loads(result.stdout)
     assert results[0]["gpu"] == gpu
 
 
@@ -136,6 +136,7 @@ def test_eval_against_json_only_keeps_bracketed_run_id(monkeypatch, tmp_path):
     The command closes over a ``console`` passed to ``register``, so there is no
     module attribute to pin to width 80; the runner is already a non-terminal.
     """
+
     class _FakeTracker:
         def get_metric_series(self, run_id, source_metric):
             return [0.50, 0.50, 0.50, 0.50]
@@ -158,7 +159,7 @@ def test_eval_against_json_only_keeps_bracketed_run_id(monkeypatch, tmp_path):
     )
 
     assert result.exit_code == 0, result.output
-    lines = [ln for ln in result.output.splitlines() if ln.strip()]
+    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
     assert len(lines) == 1, lines
     verdict = json.loads(lines[0])
     assert verdict["baseline_run_id"] == baseline

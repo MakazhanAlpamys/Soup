@@ -8,11 +8,10 @@ import json
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.mcp_server.registry import tool_profile
-from tests.conftest import strip_ansi
+from tests.conftest import make_cli_runner, strip_ansi
 
 
 def _plain(text: str) -> str:
@@ -132,10 +131,10 @@ class TestProfileFullFinetune:
         cfg_file = tmp_path / f"{name}.yaml"
         cfg_file.write_text(yaml_text, encoding="utf-8")
 
-        runner = CliRunner()
+        runner = make_cli_runner()
         result = runner.invoke(app, ["profile", "--config", str(cfg_file), "--json"])
         assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
+        data = json.loads(result.stdout)
 
         assert data.get("peft") == expected_peft
 
@@ -185,10 +184,10 @@ class TestProfileFullFinetune:
         cfg_file.write_text(yaml_text, encoding="utf-8")
 
         # Run CLI --json
-        runner = CliRunner()
+        runner = make_cli_runner()
         cli_res = runner.invoke(app, ["profile", "--config", "soup.yaml", "--json"])
         assert cli_res.exit_code == 0, cli_res.output
-        cli_data = json.loads(cli_res.output)
+        cli_data = json.loads(cli_res.stdout)
 
         # Run MCP tool_profile
         mcp_data = tool_profile({"config": "soup.yaml"})
@@ -202,7 +201,7 @@ class TestProfileFullFinetune:
         cfg_file = tmp_path / "lora_zero.yaml"
         cfg_file.write_text(CONFIG_LORA_ZERO, encoding="utf-8")
 
-        runner = CliRunner()
+        runner = make_cli_runner()
         result = runner.invoke(app, ["profile", "--config", str(cfg_file), "--gpu", "rtx4090"])
         assert result.exit_code == 0
         plain = _plain(result.output)
@@ -215,7 +214,7 @@ class TestProfileFullFinetune:
         cfg_file = tmp_path / "lora_control.yaml"
         cfg_file.write_text(CONFIG_LORA_CONTROL, encoding="utf-8")
 
-        runner = CliRunner()
+        runner = make_cli_runner()
         result = runner.invoke(app, ["profile", "--config", str(cfg_file), "--gpu", "rtx4090"])
         assert result.exit_code == 0
         plain = _plain(result.output)
@@ -228,7 +227,7 @@ class TestProfileFullFinetune:
     ) -> None:
         monkeypatch.chdir(tmp_path)
         (tmp_path / "soup.yaml").write_text(CONFIG_QLORA, encoding="utf-8")
-        result = CliRunner().invoke(app, ["profile", "--config", "soup.yaml", "--json"])
+        result = make_cli_runner().invoke(app, ["profile", "--config", "soup.yaml", "--json"])
         assert result.exit_code == 0, result.output
-        assert json.loads(result.output)["peft"] == "qlora"
+        assert json.loads(result.stdout)["peft"] == "qlora"
         assert tool_profile({"config": "soup.yaml"})["peft"] == "qlora"
