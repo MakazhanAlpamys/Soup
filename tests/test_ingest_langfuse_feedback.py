@@ -22,6 +22,7 @@ from soup_cli.utils.ingest_sources import parse_langfuse
         ({"score": 1, "rating": "down"}, "thumbs_up"),
         ({"rating": "down"}, "thumbs_down"),
         ({"score": None, "rating": "up"}, "thumbs_up"),
+        ({"score": "", "rating": "up"}, "none"),
         ({}, "none"),
     ],
 )
