@@ -33,3 +33,19 @@ def test_heterogeneous_pairs_stay_in_the_bootstrap():
 def test_missing_or_invalid_pairs_are_not_silently_dropped(values):
     with pytest.raises(ValueError, match='five finite'):
         _helper().summarize_pairs(values)
+
+
+def test_reallocation_uses_six_balanced_blocks_and_three_contrasts():
+    result = _helper().summarize_reallocation_blocks([2.1]*6)
+    assert result['passes_rule'] is True
+    assert result['n_blocks'] == 6
+    assert result['correction_family_contrasts'] == 3
+    assert result['adjusted_quantiles'] == [0.05/6, 1-0.05/6]
+    assert result['family_adjusted_ci'] == [2.1, 2.1]
+
+
+def test_reallocation_does_not_accept_a_small_effect_or_drop_a_block():
+    helper = _helper()
+    assert helper.summarize_reallocation_blocks([1.99]*6)['passes_rule'] is False
+    with pytest.raises(ValueError, match='six finite'):
+        helper.summarize_reallocation_blocks([3]*5)

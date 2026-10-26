@@ -54,6 +54,7 @@ def main(after_exactness: Any = None) -> int:
     parser.add_argument("--census", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--arm", choices=("auto", "qkvo"), required=True)
+    parser.add_argument("--allocation", choices=("native", "kminus1"), default="native")
     parser.add_argument("--reference", type=Path)
     parser.add_argument("--profile", action="store_true")
     args = parser.parse_args()
@@ -84,11 +85,20 @@ def main(after_exactness: Any = None) -> int:
     import torch
     from bitsandbytes.optim import PagedAdamW8bit
     from peft import LoraConfig, TaskType
-    from stream_projection_retention import install_subset, observe_auto_plan, projection_plan
+    from stream_projection_retention import (
+        install_subset,
+        observe_auto_plan,
+        projection_plan,
+        reallocated_projection_plan,
+    )
 
     import soup_cli
     from soup_cli.utils.layer_shard import read_shard_index
-    from soup_cli.utils.layer_stream_runtime import build_streamed_model, streamed_decoder_layers
+    from soup_cli.utils.layer_stream_runtime import (
+        build_streamed_model,
+        set_stream_recompute,
+        streamed_decoder_layers,
+    )
 
     root = os.path.normcase(os.path.realpath(Path(__file__).parents[2] / "src"))
     if os.path.commonpath([root, os.path.normcase(os.path.realpath(soup_cli.__file__))]) != root:
@@ -115,7 +125,8 @@ def main(after_exactness: Any = None) -> int:
         ), device="cuda", dtype="bfloat16", buffers=2, pin=True, seed=42,
         quant="nf4", double_quant=True, tier="ram",
     )
-    state = dict(status="running", arm=args.arm, shape=[1, seq], profile=args.profile,
+    state = dict(status="running", arm=args.arm, allocation=args.allocation,
+                 shape=[1, seq], profile=args.profile,
                  steps=[], admission=admission, optimizer_updates=0,
                  census_sha256=hashlib.sha256(args.census.read_bytes()).hexdigest(),
                  shard_index_sha256=index_hash, cap_bytes=cap)
@@ -144,6 +155,13 @@ def main(after_exactness: Any = None) -> int:
                 raise RuntimeError("native K changed after census")
         if plan != census["projections"]:
             raise RuntimeError("native residual projection plan changed after census")
+        if args.allocation == "kminus1":
+            plan = reallocated_projection_plan(layers, native, batch=1, seq=seq, element_bytes=2)
+            set_stream_recompute(model, False, retain=plan["effective_k"])
+        actual_retained = [layer.idx for layer in layers if not layer.recompute]
+        if actual_retained != plan["retained_indices"]:
+            raise RuntimeError("applied retention does not match the budgeted allocation")
+        state["effective_k"] = len(actual_retained)
         state["plan"] = plan
         retained = [(layer, layer.forward) for layer in layers if not layer.recompute]
         if args.arm == "qkvo":

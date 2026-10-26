@@ -37,6 +37,7 @@ def main() -> int:
         row = dict(status="warming", warmup_updates=10, measured_updates=50,
                    verified_initial_updates=2, initial_reference_sha256=state["reference_sha256"],
                    shape=state["shape"], arm=state["arm"], cap_bytes=cap,
+                   allocation=state["allocation"], effective_k=state["effective_k"],
                    native=state["native"], plan=state["plan"],
                    step_times_s=[], losses=[], clock="time.perf_counter",
                    optimizer="PagedAdamW8bit")

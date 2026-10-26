@@ -127,6 +127,44 @@ def projection_plan(
     return result
 
 
+def reallocated_projection_plan(
+    layers: list[Any], native: dict[str, Any], *, batch: int, seq: int, element_bytes: int,
+) -> dict[str, Any]:
+    """Separate K-1 hypothesis; preserve the native census and charge one release."""
+    from soup_cli.utils.layer_stream import retained_layer_charge
+
+    if not native.get("measured"):
+        raise ValueError("K-1 requires a measured native partial-retention plan")
+    original = projection_plan(layers, native, batch=batch, seq=seq, element_bytes=element_bytes)
+    k = native["k"]
+    if not 0 < k < len(layers):
+        raise ValueError("K-1 requires native partial retention")
+    effective = k - 1
+    indices = [layer.idx for layer in layers]
+    residual = native["budget_bytes"] - effective * native["full_layer_charge"]
+    if residual != original["residual_bytes"] + native["full_layer_charge"]:
+        raise ValueError("freed retained-layer charge is inconsistent")
+    result = dict(
+        native_k=k, effective_k=effective,
+        freed_full_layer_charge=native["full_layer_charge"],
+        retained_indices=indices[-effective:] if effective else [],
+        recomputed_indices=indices[:len(indices)-effective], selected_indices=[],
+        raw_bytes=0, charged_bytes=0, residual_bytes=residual, reason="no projection layer fits",
+    )
+    for layer in reversed(layers[:len(layers)-effective]):
+        raw = projection_bytes(layer, batch=batch, seq=seq, element_bytes=element_bytes)
+        charged = retained_layer_charge(raw, native["peak_reserved"], native["peak_allocated"])
+        if result["charged_bytes"] + charged > residual:
+            break
+        result["selected_indices"].append(layer.idx)
+        result["raw_bytes"] += raw
+        result["charged_bytes"] += charged
+    result["selected_indices"].reverse()
+    if result["selected_indices"]:
+        result["reason"] = "kminus1-planned"
+    return result
+
+
 def install_subset(model: Any, indices: list[int]) -> Any:
     from soup_cli.utils.layer_stream_runtime import streamed_decoder_layers
 
