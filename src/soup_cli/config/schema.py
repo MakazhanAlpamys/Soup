@@ -5140,19 +5140,18 @@ _MLX_GRPO_NOT_GENERATED_HERE = "MLX GRPO generates with its own mlx-lm loop"
 
 #: #1976 — GRPO settings the transformers path applies and the native MLX loop
 #: does not, with the reason the refusal gives. Each is refused at load when it
-#: differs from its default; a default never fails.
+#: differs from its default; a default never fails. Settings another validator
+#: already refuses for every non-default value on MLX GRPO (``prm_reward`` and
+#: ``prm_aggregate``, ``rollout_func``, ``vllm_sleep_mode``, ``grpo_delta``,
+#: ``relora_steps``, ``quantize_reward_model``) are not listed: an entry here
+#: could never fire for them.
 _MLX_GRPO_UNAPPLIED: dict[str, str] = {
     "rollout_backend": "multi-turn agent rollouts run on the transformers path only",
-    "rollout_func": "multi-turn agent rollouts run on the transformers path only",
-    "prm_aggregate": "process reward models (training.prm_reward) are not scored on MLX",
-    "vllm_sleep_mode": f"{_MLX_GRPO_NOT_GENERATED_HERE}, not vLLM",
     "async_grpo_prefetch": f"{_MLX_GRPO_NOT_GENERATED_HERE}, one rollout per update",
     "replay_buffer_size": "MLX GRPO trains each rollout once and keeps no replay buffer",
     "defer_rerolling": f"{_MLX_GRPO_NOT_GENERATED_HERE}, one rollout per update",
     "grpo_fp16": "the MLX loop has no fp16 GRPO mode",
-    "grpo_delta": "two-sided clipping is not part of the objective MLX trains",
     "ref_model_ema_alpha": "the MLX reference is the frozen base model",
-    "quantize_reward_model": "MLX GRPO scores with the built-in rewards only",
     # These four never reach TRL's GRPOConfig on the transformers path either:
     # Soup's GRPOStabilityCallback only records them (tis_threshold also logs a
     # warning past the threshold; monitoring/grpo_stability_callback.py). MLX
@@ -5168,7 +5167,6 @@ _MLX_GRPO_UNAPPLIED: dict[str, str] = {
     "callback); zero-advantage groups train, as TRL's default does",
     "eval_steps": "MLX GRPO scores the validation split once, after training "
     "(val_reward), with no mid-run evaluation",
-    "relora_steps": "ReLoRA restarts run on the transformers path only",
     "curriculum": "curriculum ordering runs on the transformers path only",
 }
 
@@ -5214,13 +5212,6 @@ def _refuse_mlx_grpo_scope(cfg: Any) -> None:
             "backend='mlx': MLX GRPO trains a dense (unquantized) base in this "
             "release. Set training.quantization: none and use an unquantized base, "
             "or use backend: transformers."
-        )
-    if tcfg.prm_reward is not None:
-        raise ValueError(
-            "training.prm_reward is not supported by task='grpo' on backend='mlx': "
-            "MLX GRPO scores completions with the built-in rewards "
-            f"({', '.join(sorted(MLX_GRPO_REWARDS))}) only. Remove "
-            "training.prm_reward, or use backend: transformers."
         )
     spec = str(tcfg.reward_fn or "")
     parts = [part.strip() for part in spec.split(",")]

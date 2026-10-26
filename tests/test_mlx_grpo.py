@@ -26,6 +26,14 @@ import textwrap
 import numpy as np
 import pytest
 
+from tests.conftest import strip_ansi
+
+
+def _plain(text):
+    """Console output without SGR escapes, whitespace collapsed: what a reader sees
+    under FORCE_COLOR=1 or a narrow COLUMNS, where rich colours and wraps it."""
+    return " ".join(strip_ansi(text).split())
+
 # --------------------------------------------------------------------------
 # A digit tokenizer with HF's surface. Ids: 0 pad, 1 BOS, 2 EOS, 3.. chars.
 # Small enough that a tiny random model's completions often state a number.
@@ -1392,6 +1400,12 @@ class TestData:
 # --------------------------------------------------------------------------
 
 
+#: One load-time cell per ``_MLX_GRPO_UNAPPLIED_PREFIXES`` entry, on a field the
+#: older gates do not refuse first.
+_PREFIX_CELLS = ["reward_hack_halt: true", "echo_trap_threshold: 0.7",
+                 "rl_checkpoint_keep_last: 2", "curriculum_buckets: 8"]
+
+
 class TestConfig:
     def test_grpo_on_mlx_loads_with_inactive_defaults_and_dispatches(self):
         from soup_cli.config.loader import load_config_from_string
@@ -1468,6 +1482,32 @@ output: ./output
         from soup_cli.config.schema import _MLX_GRPO_UNAPPLIED
 
         assert _MLX_GRPO_UNAPPLIED[key].startswith("the transformers path only")
+
+    @pytest.mark.parametrize("line", _PREFIX_CELLS)
+    def test_each_prefix_is_refused_with_its_reason(self, line):
+        from soup_cli.config.schema import _MLX_GRPO_UNAPPLIED_PREFIXES
+
+        key, value = line.split(": ", 1)
+        why = next(r for p, r in _MLX_GRPO_UNAPPLIED_PREFIXES.items() if key.startswith(p))
+        with pytest.raises(Exception) as info:
+            _config(**{key: value})
+        assert (f"training.{key} is not applied by task='grpo' on backend='mlx': {why}. "
+                f"Remove training.{key}, or use backend: transformers.") in _plain(
+                    str(info.value))
+
+    def test_every_prefix_has_a_cell_and_every_entry_names_a_field(self):
+        from soup_cli.config.schema import (
+            _MLX_GRPO_UNAPPLIED,
+            _MLX_GRPO_UNAPPLIED_PREFIXES,
+            TrainingConfig,
+        )
+
+        fields = set(TrainingConfig.model_fields)
+        assert set(_MLX_GRPO_UNAPPLIED) <= fields
+        for prefix in _MLX_GRPO_UNAPPLIED_PREFIXES:
+            assert any(name.startswith(prefix) for name in fields), prefix
+        assert {next(p for p in _MLX_GRPO_UNAPPLIED_PREFIXES if c.startswith(p))
+                for c in _PREFIX_CELLS} == set(_MLX_GRPO_UNAPPLIED_PREFIXES)
 
     def test_the_older_gates_are_unchanged_elsewhere(self):
         from soup_cli.config.loader import load_config_from_string
