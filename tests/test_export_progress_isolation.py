@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import strip_ansi
+
 
 @pytest.mark.parametrize("source", ["home", "environment"])
 def test_export_progress_ignores_external_llama_cpp(tmp_path: Path, source: str) -> None:
@@ -46,5 +48,6 @@ def test_export_progress_ignores_external_llama_cpp(tmp_path: Path, source: str)
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "1 passed" in result.stdout
+    output = strip_ansi(result.stdout)
+    assert "1 passed" in output
     assert converter.read_text(encoding="utf-8") == "# external converter must not be probed\n"
