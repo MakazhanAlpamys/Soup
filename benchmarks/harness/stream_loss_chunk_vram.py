@@ -33,7 +33,8 @@ the rewind log on (its default), the off arm first at each length. Each arm runs
 in a fresh process, as each ``soup train`` does: in one process only the first arm
 got the RAM tier and the rest fell back to the disk tier (#1693), since the tier is
 chosen from the free RAM left behind. This process never initialises CUDA, so no
-arm loses VRAM to a second context.
+arm loses VRAM to a second context. Each arm sets the allocator hint as ``soup train``
+does (``configure_cuda_alloc_hint``) before it reads the device.
 
 - "real peak" is ``torch.cuda.max_memory_allocated()`` over the step, after
   ``reset_peak_memory_stats()``.

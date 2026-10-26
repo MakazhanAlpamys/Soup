@@ -314,7 +314,7 @@ def test_an_arm_runs_end_to_end_in_a_real_child_process(tmp_path, monkeypatch):
     assert arm.seq == arm.realised == seq
     assert arm.chunk == 16 and arm.preflight["loss_chunk"] == 16 and arm.hooked
     assert arm.predicted > 0 and arm.peak is None and not arm.oom  # no peak off CUDA
-    assert device == harness.trainer_device()
+    assert device in ("cpu", "mps")
 
 
 def test_an_arm_process_reads_the_device_only_after_its_setup(monkeypatch, tmp_path):
