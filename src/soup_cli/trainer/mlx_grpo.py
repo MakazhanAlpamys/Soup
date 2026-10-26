@@ -538,7 +538,8 @@ class MLXGRPOTrainerWrapper(MLXDPOTrainerWrapper):
         from soup_cli.trainer.rewards import BUILTIN_REWARDS, validate_reward_funcs
 
         tcfg = self.config.training
-        name = str(tcfg.reward_fn)
+        # Stripped as the load check and the transformers path (load_reward_fns) strip it.
+        name = str(tcfg.reward_fn).strip()
         if name not in BUILTIN_REWARDS:
             raise ValueError(
                 f"MLX GRPO scores with the built-in rewards only ({', '.join(BUILTIN_REWARDS)}); "

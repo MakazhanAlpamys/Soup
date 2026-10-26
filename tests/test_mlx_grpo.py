@@ -1360,6 +1360,16 @@ class TestData:
         with pytest.raises(ValueError, match="must be divisible by num_generations"):
             wrapper.setup({"train": _prompt_rows(8)})
 
+    @pytest.mark.parametrize("spec, name", [("accuracy", "accuracy"),
+                                            ("' accuracy'", "accuracy"),
+                                            ("'accuracy '", "accuracy"),
+                                            ("format", "format")])
+    def test_the_reward_name_is_stripped_as_at_load(self, monkeypatch, spec, name):
+        """The load check strips reward_fn, and so does the transformers path."""
+        wrapper = _setup_wrapper(monkeypatch, reward_fn=spec)
+        wrapper._prepare({"train": _prompt_rows(4)})
+        assert wrapper._reward_name == name
+
     def test_batch_size_auto_is_one_group(self, monkeypatch):
         wrapper = _setup_wrapper(monkeypatch, batch_size="auto", gradient_accumulation_steps=1)
         wrapper._prepare({"train": _prompt_rows(2)})
