@@ -539,7 +539,7 @@ The loader does not auto-detect bare `{"prompt", "answer"}` rows; use `messages`
   reference forward. Validation adds up to `num_generations x data.max_length`
   sampled tokens per held-out prompt, one prompt after another.
 - **Refused at load:** `quantization: 8bit`, `training.lora.r: 0`, DoRA,
-  LoRA+, LoRA-FA, non-text `modality` and `vision_grpo`, a `.py`, comma-ensemble or
+  LoRA+, LoRA-FA, non-text `modality`, a `.py`, comma-ensemble or
   `verifiable` reward, `prm_reward`, `rollout_backend` / `rollout_func`,
   `grpo_variant` and the other stability fields, the reward-hack, echo-trap,
   RL-checkpoint and curriculum settings, `eval_steps`, vLLM options and layer

@@ -1348,7 +1348,6 @@ output: ./output
         ("eval_steps: 5", "training.eval_steps is not applied by task='grpo' on backend='mlx'"),
         ("echo_trap_enabled: true", "training.echo_trap_enabled is not applied"),
         ("rl_checkpoint_save_every_steps: 5", "rl_checkpoint_save_every_steps is not applied"),
-        ("quantize_ref_model: true", "quantize_ref_model is not applied"),
         ("curriculum: true", "training.curriculum is not applied"),
         ("grpo_variant: gspo", "grpo_variant is not supported on backend=mlx"),
         ("prm_reward: ./prm", "prm_reward requires backend='transformers'"),
@@ -1368,7 +1367,6 @@ output: ./output
         "tis_threshold: 2.0", "skip_zero_advantage: true", "off_policy_mask_threshold: 0.5",
         "grpo_fp16: true", "async_grpo_prefetch: true", "ref_model_ema_alpha: 0.9",
         "replay_buffer_size: 8", "defer_rerolling: true", "rollout_backend: openenv",
-        "long_context_grpo: true", "vision_grpo: true",
     ])
     def test_older_gates_defer_to_the_mlx_grpo_refusal_with_its_remedy(self, line):
         """The v0.50.0 gates used to answer first, with no remedy (review of #1976)."""
@@ -1379,6 +1377,18 @@ output: ./output
         assert f"training.{key} is not applied by task='grpo' on backend='mlx'" in message
         assert f"Remove training.{key}, or use backend: transformers." in message
         assert "v0.50.0" not in message
+
+    @pytest.mark.parametrize("key", ["long_context_grpo", "vision_grpo", "quantize_ref_model"])
+    def test_fields_read_by_nothing_get_the_staged_refusal(self, key):
+        """#808 refuses these on every backend as of v0.77, so MLX GRPO adds no
+        refusal of its own and they are not in _MLX_GRPO_UNAPPLIED."""
+        from soup_cli.config.schema import _MLX_GRPO_UNAPPLIED
+
+        with pytest.raises(Exception) as info:
+            _config(**{key: "true"})
+        message = " ".join(str(info.value).split())
+        assert f"training.{key} is accepted but read by nothing" in message
+        assert key not in _MLX_GRPO_UNAPPLIED
 
     @pytest.mark.parametrize("key", ["tis_threshold", "skip_zero_advantage",
                                      "off_policy_mask_threshold", "mask_truncated_completions"])
@@ -1412,9 +1422,9 @@ output: ./output
         with pytest.raises(Exception, match="reward_fn='verifiable' is not supported"):
             _config(reward_fn="verifiable", verifiable_domain="math")
 
-    @pytest.mark.parametrize("extra", ["", "  vision_grpo: true\n"])
+    @pytest.mark.parametrize("extra", [""])
     def test_vision_modality_is_refused(self, extra):
-        """With vision_grpo too: the MLX GRPO refusal, not the v0.50.0 gate's."""
+        """The MLX GRPO refusal, not the v0.50.0 gate's."""
         from soup_cli.config.loader import load_config_from_string
 
         text = _GRPO_YAML.replace("backend: mlx\n", "backend: mlx\nmodality: vision\n")

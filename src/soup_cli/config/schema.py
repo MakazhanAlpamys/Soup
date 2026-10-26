@@ -5151,10 +5151,7 @@ _MLX_GRPO_UNAPPLIED: dict[str, str] = {
     "defer_rerolling": f"{_MLX_GRPO_NOT_GENERATED_HERE}, one rollout per update",
     "grpo_fp16": "the MLX loop has no fp16 GRPO mode",
     "grpo_delta": "two-sided clipping is not part of the objective MLX trains",
-    "long_context_grpo": "long-context GRPO runs on the transformers path only",
-    "vision_grpo": "MLX GRPO trains on text prompts only",
     "ref_model_ema_alpha": "the MLX reference is the frozen base model",
-    "quantize_ref_model": "the MLX reference is the base model with the adapter off",
     "quantize_reward_model": "MLX GRPO scores with the built-in rewards only",
     # These four never reach TRL's GRPOConfig on the transformers path either:
     # Soup's GRPOStabilityCallback only records them (tis_threshold also logs a
@@ -6180,8 +6177,6 @@ class SoupConfig(BaseModel):
         """
         if not self.training.long_context_grpo:
             return self
-        if self.backend == "mlx" and self.task == "grpo":
-            return self  # #1976: _refuse_mlx_grpo_scope gives the MLX GRPO refusal
         from soup_cli.utils.grpo_long_context import (
             validate_long_context_grpo_compat,
         )
@@ -6224,8 +6219,6 @@ class SoupConfig(BaseModel):
         """v0.50.0 Part E — ``vision_grpo=True`` compat gate."""
         if not self.training.vision_grpo:
             return self
-        if self.backend == "mlx" and self.task == "grpo":
-            return self  # #1976: _refuse_mlx_grpo_scope gives the MLX GRPO refusal
         from soup_cli.utils.prm import validate_vision_grpo_compat
 
         try:
