@@ -736,6 +736,12 @@ adapter/task identities are refused. Store emitted evidence outside the adapter
 directory: the manifest covers its files. A changed input during a live emitted
 run is refused on the before/after comparison; this is not a filesystem snapshot.
 
+When `--require-provenance` refuses because the binding drifted, the error names
+only the changed inputs from a fixed label table (for example
+`adapter files, forgetting threshold`) and tells you to restore accidental edits
+or re-emit with `--emit-evidence`; it never prints values from the evidence file.
+
+
 The optional `--data-sha256 <64-lowercase-hex>` records an explicitly
 **caller-asserted training-data identity**, never proof of transformed examples
 consumed. Supply the same assertion when gating it. A simple local raw training

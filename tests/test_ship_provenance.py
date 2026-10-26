@@ -166,8 +166,18 @@ def test_emit_binds_actual_bytes_and_effective_policy(work):
     assert _gate("--forgetting-threshold", "0.2").exit_code == 0
 
 
-@pytest.mark.parametrize("changed", ["adapter", "task", "training", "threshold", "suite", "judge"])
-def test_strict_gate_refuses_input_and_policy_drift(work, changed):
+@pytest.mark.parametrize(
+    ("changed", "expected_label", "unexpected"),
+    [
+        ("adapter", "adapter files", ("task-eval file", "training source", "forgetting threshold", "general suites", "Soup version", "task mode", "judge model")),
+        ("task", "task-eval file", ("adapter files", "training source", "forgetting threshold", "general suites", "Soup version", "task mode", "judge model")),
+        ("training", "training source", ("adapter files", "task-eval file", "forgetting threshold", "general suites", "Soup version", "task mode", "judge model")),
+        ("threshold", "forgetting threshold", ("adapter files", "task-eval file", "training source", "general suites", "Soup version", "task mode", "judge model")),
+        ("suite", "general suites", ("adapter files", "task-eval file", "training source", "forgetting threshold", "Soup version", "task mode", "judge model")),
+        ("judge", "task mode, judge model", ("adapter files", "task-eval file", "training source", "forgetting threshold", "general suites", "Soup version")),
+    ],
+)
+def test_strict_gate_refuses_input_and_policy_drift(work, changed, expected_label, unexpected):
     _produce()
     extra = []
     if changed == "adapter":
@@ -184,7 +194,45 @@ def test_strict_gate_refuses_input_and_policy_drift(work, changed):
         }[changed]
     result = _gate(*extra)
     assert result.exit_code == 3, (result.output, result.exception)
-    assert "provenance" in strip_ansi(result.output).lower()
+    diagnostic = " ".join(strip_ansi(result.output).split())
+    assert expected_label in diagnostic
+    assert "changed since the evidence was emitted" in diagnostic
+    assert "--emit-evidence" in diagnostic
+    for label in unexpected:
+        assert label not in diagnostic
+
+
+def test_strict_gate_names_soup_version_drift(work):
+    payload = _produce()
+    payload["provenance"]["binding"]["suites"]["soup_version"] = "0.76.1"
+    (work / "bound.json").write_text(json.dumps(payload), encoding="utf-8")
+    result = _gate()
+    assert result.exit_code == 3
+    diagnostic = " ".join(strip_ansi(result.output).split())
+    assert "Soup version" in diagnostic
+    assert "adapter files" not in diagnostic
+
+
+def test_strict_gate_lists_two_changed_inputs_in_table_order(work):
+    _produce()
+    (work / "adapter" / "adapter_model.safetensors").write_bytes(b"other weights")
+    result = _gate("--forgetting-threshold", "0.2")
+    assert result.exit_code == 3
+    diagnostic = " ".join(strip_ansi(result.output).split())
+    assert "adapter files, forgetting threshold" in diagnostic
+    assert diagnostic.index("adapter files") < diagnostic.index("forgetting threshold")
+
+
+def test_strict_gate_hostile_scorer_revision_uses_label_only(work):
+    payload = _produce()
+    payload["provenance"]["binding"]["suites"]["scorer_revision"] = "\x1b[31mPRIVATE"
+    (work / "bound.json").write_text(json.dumps(payload), encoding="utf-8")
+    result = _gate()
+    assert result.exit_code == 3
+    diagnostic = " ".join(strip_ansi(result.output).split())
+    assert "scorer revision" in diagnostic
+    assert "PRIVATE" not in result.output
+    assert "\x1b" not in result.output
 
 
 def test_default_gate_preserves_recipe_only_semantics(work):
