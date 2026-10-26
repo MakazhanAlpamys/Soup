@@ -1,0 +1,110 @@
+{
+  "verified": true,
+  "processes": 10,
+  "optimizer_updates": 20,
+  "adapter_tensors_each": 256,
+  "exactness": "native repeat, candidate and both profiler runs match both complete native updates",
+  "timing_completed": false,
+  "summary": [
+    {
+      "sequence": 2048,
+      "tag": "auto",
+      "cache_bytes": 0,
+      "peak_reserved": 7182745600,
+      "attention_ops": null
+    },
+    {
+      "sequence": 2048,
+      "tag": "auto-repeat",
+      "cache_bytes": 0,
+      "peak_reserved": 7182745600,
+      "attention_ops": null
+    },
+    {
+      "sequence": 2048,
+      "tag": "qkvo",
+      "cache_bytes": 377487360,
+      "peak_reserved": 7291797504,
+      "attention_ops": null
+    },
+    {
+      "sequence": 2048,
+      "tag": "auto-profile",
+      "cache_bytes": 0,
+      "peak_reserved": 7182745600,
+      "attention_ops": {
+        "aten::scaled_dot_product_attention": 106,
+        "aten::_scaled_dot_product_efficient_attention": 106,
+        "aten::_scaled_dot_product_efficient_attention_backward": 64
+      }
+    },
+    {
+      "sequence": 2048,
+      "tag": "qkvo-profile",
+      "cache_bytes": 377487360,
+      "peak_reserved": 7291797504,
+      "attention_ops": {
+        "aten::scaled_dot_product_attention": 106,
+        "aten::_scaled_dot_product_efficient_attention": 142,
+        "aten::_scaled_dot_product_efficient_attention_backward": 64
+      }
+    },
+    {
+      "sequence": 4096,
+      "tag": "auto",
+      "cache_bytes": 0,
+      "peak_reserved": 6840909824,
+      "attention_ops": null
+    },
+    {
+      "sequence": 4096,
+      "tag": "auto-repeat",
+      "cache_bytes": 0,
+      "peak_reserved": 6840909824,
+      "attention_ops": null
+    },
+    {
+      "sequence": 4096,
+      "tag": "qkvo",
+      "cache_bytes": 671088640,
+      "peak_reserved": 8015314944,
+      "attention_ops": null
+    },
+    {
+      "sequence": 4096,
+      "tag": "auto-profile",
+      "cache_bytes": 0,
+      "peak_reserved": 6840909824,
+      "attention_ops": {
+        "aten::scaled_dot_product_attention": 122,
+        "aten::_scaled_dot_product_efficient_attention": 122,
+        "aten::_scaled_dot_product_efficient_attention_backward": 64
+      }
+    },
+    {
+      "sequence": 4096,
+      "tag": "qkvo-profile",
+      "cache_bytes": 671088640,
+      "peak_reserved": 8015314944,
+      "attention_ops": {
+        "aten::scaled_dot_product_attention": 122,
+        "aten::_scaled_dot_product_efficient_attention": 154,
+        "aten::_scaled_dot_product_efficient_attention_backward": 64
+      }
+    }
+  ],
+  "files_sha256": {
+    "freeze.json": "98b253fd3b2f04da63fb117bd20bc77744cbb4ad4c7d67d8ec688cebf787b29d",
+    "ledger.json": "a08ffb4864a0327ca071791243837d41a6a75866c96c1e4f72a203e9cc4a0fae",
+    "seq2048-auto-profile.json": "872bacc21def9b3066dae73f8111710214bdce8536616b1d0f0e17df889b3199",
+    "seq2048-auto-repeat.json": "7868cdb16212ee38fb0551f441dc68f10c671a5ee579406758ca89c9b3c74efc",
+    "seq2048-auto.json": "bb452c9025fa24a09240809f85023f37494d3ef5c09635a91047fc6a54d5dcaa",
+    "seq2048-qkvo-profile.json": "cd722a12a0ccc5f7111f84b3757461caec73503bbdba1d2c13c363dfbbc401ef",
+    "seq2048-qkvo.json": "d8d5e4b8247710e426a43c00d0f51e48e48a518b89bde11e9bad6cf0c77cb856",
+    "seq4096-auto-profile.json": "f209af2767828d46f8782c9af93ecfd68fb27555d3b34ac7313e61236285283a",
+    "seq4096-auto-repeat.json": "bf05d1ab6ca91968f0c432aba2915f72eb9505cce8c37cdcf8663d4c093a4fd7",
+    "seq4096-auto.json": "cefcca65f88bd25b46eb239609f15b65e4bf307790c922e43bfe81d858cfe0aa",
+    "seq4096-qkvo-profile.json": "c1e39b603f209957beb2ae0d54c93cbc5cd06159ef819296c4b54ab0ff729176",
+    "seq4096-qkvo.json": "3efe24504dd8fc3151fba4be18632e722e047025a3ebca9dd20358c914c6ea80"
+  }
+}

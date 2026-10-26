@@ -1,0 +1,142 @@
+[
+  {
+    "seq": 2048,
+    "pair": 1,
+    "arm": "auto",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "seq": 2048,
+    "pair": 1,
+    "arm": "qkvo",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "seq": 2048,
+    "pair": 2,
+    "arm": "qkvo",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "seq": 2048,
+    "pair": 2,
+    "arm": "auto",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "seq": 2048,
+    "pair": 3,
+    "arm": "auto",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "seq": 2048,
+    "pair": 3,
+    "arm": "qkvo",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "seq": 2048,
+    "pair": 4,
+    "arm": "qkvo",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "seq": 2048,
+    "pair": 4,
+    "arm": "auto",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "seq": 2048,
+    "pair": 5,
+    "arm": "auto",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "seq": 2048,
+    "pair": 5,
+    "arm": "qkvo",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "seq": 4096,
+    "pair": 1,
+    "arm": "auto",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "seq": 4096,
+    "pair": 1,
+    "arm": "qkvo",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "seq": 4096,
+    "pair": 2,
+    "arm": "qkvo",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "seq": 4096,
+    "pair": 2,
+    "arm": "auto",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "seq": 4096,
+    "pair": 3,
+    "arm": "auto",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "seq": 4096,
+    "pair": 3,
+    "arm": "qkvo",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "seq": 4096,
+    "pair": 4,
+    "arm": "qkvo",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "seq": 4096,
+    "pair": 4,
+    "arm": "auto",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "seq": 4096,
+    "pair": 5,
+    "arm": "auto",
+    "returncode": 0,
+    "guard_failure": null
+  },
+  {
+    "seq": 4096,
+    "pair": 5,
+    "arm": "qkvo",
+    "returncode": 0,
+    "guard_failure": null
+  }
+]

@@ -1,0 +1,94 @@
+{
+  "archive_sha256": "917be5001d1bf7d394534fa6e1190dab2f0a12348976bb61cccf209796993301",
+  "files_sha256": {
+    "controller-source.py": "466e00016af672d4768ae97692d98567bebd9ca1aa84b7d23232a16952160118",
+    "cpu-tests.log": "cd8fae00d8a7631a9b1433547daaa1aa26d51a8ceb45653d026b5d4cd19b1f70",
+    "freeze.json": "923a45a9729ea4121a556cfe02c7c3affe9fb8586f01dc2b58721abcadea298d",
+    "gate-legacy-normal-exactness.json": "1b9e9ad9e28075b44c6109a1b34cab98764094b288122701379d473297bf99b5",
+    "gate-legacy-normal-resources.jsonl": "9a02d37b1806b8f7662603b3a6835630c8ae97d52098d388338bccf3ab1bdba5",
+    "gate-legacy-normal.log": "0a14ba450b83244381b99815014d9237c145557537b122654e95999e6d340eae",
+    "gate-legacy-profile-exactness.json": "e722d54608942ed7e2bf9ef1ee849c9fdb1b562ed28918b6482f998051eeb162",
+    "gate-legacy-profile-resources.jsonl": "ee09492f67715110316685f737133c259094b97043a0dcb234018c45e18998f2",
+    "gate-legacy-profile.log": "3f66d7a4c11559910a19332310911509288607d69c6895c7ab4cd9d09c4a69b3",
+    "gate-legacy-repeat-exactness.json": "21723220534573d28d0c082c679403d3d921d194a88c2bcc2c33671fa11374e3",
+    "gate-legacy-repeat-resources.jsonl": "a1fa13d163c9a99826db09e48cfe83bc7232c7bfafa3642579e605de94f644d4",
+    "gate-legacy-repeat.log": "c7ee83e8e3cfe554adb05f5f6e7fbb4a739d7c96f64584487e93aefe770f4a1a",
+    "gate-native-normal-exactness.json": "46a6faf938c989bd874b7577a01735cd555f5182e8db78e49f7ac2fda0f55192",
+    "gate-native-normal-resources.jsonl": "3209244fb1b96a24a8741a8fe3ab72db881dd5ff39ff3b3483c8df2505bfbee5",
+    "gate-native-normal.log": "09d483ec43cd5bf1b67c6c2ce226a55dea478a0b0794db8e84a3d36e43dd31dc",
+    "gate-native-profile-exactness.json": "932000ac10e4eb30c6b59daf393e11833801aa86a0d9d6694b34d4d49517782a",
+    "gate-native-profile-resources.jsonl": "a3c6231888850f38fceed316e6eccac0d958a935779aca02cb4e6612f14e0bf5",
+    "gate-native-profile.log": "f05ad5af41ab1bad983689896e039bbe4813cc6b6735d27707b99059880b5ece",
+    "gate-native-repeat-exactness.json": "7716da493ebcfba7a836d7a41f891a854c2b2f07e8a9f04526eb9ada00141e7f",
+    "gate-native-repeat-resources.jsonl": "dc1808825ecd6219c41f687b35a197495b75eb0d93632bfa63e6bfbce5f50ec0",
+    "gate-native-repeat.log": "f1584d38a1af3ffe5fc99908b9957ba5bc853ad7d744f5be99e4e61758237020",
+    "gate-scoped-normal-resources.jsonl": "09b63ace38ae3c90fa1614f318ea46f4e221d6460d3e460e4a68bd6a6d7ac049",
+    "gate-scoped-normal.log": "fa9b1071abcac0c83035bca4f6319fcbadf0d303df42c0c0e0038ec4e4e98571",
+    "ledger.json": "9d32b356edfc5ad1ac6d7921b5002482df97cb394432a32d1c320fca8f299b91",
+    "material-preflight.json": "11204800075f8000cf064e4782198e19244b5e204601a51d58cf9c8bab4ffa79",
+    "protocol.md": "b686c19f793cdd8c7028938a55b1ca154ade99dd9c43371e609b38a288f4c959",
+    "source-hashes.json": "5adb6ff15a4b8b02e545d6418c0121d2d784ce4e1b87d2ce8876a29467b5b1a0",
+    "state.json": "b139a2313649af32681fb76b4ec8da711ea95db7c1a460b0a2624ae2f231cedd"
+  },
+  "ledger": [
+    {
+      "stage": "gate",
+      "case": "native",
+      "variant": "normal",
+      "tag": "gate-native-normal",
+      "returncode": 0,
+      "guard_failure": null
+    },
+    {
+      "stage": "gate",
+      "case": "native",
+      "variant": "repeat",
+      "tag": "gate-native-repeat",
+      "returncode": 0,
+      "guard_failure": null
+    },
+    {
+      "stage": "gate",
+      "case": "native",
+      "variant": "profile",
+      "tag": "gate-native-profile",
+      "returncode": 0,
+      "guard_failure": null
+    },
+    {
+      "stage": "gate",
+      "case": "legacy",
+      "variant": "normal",
+      "tag": "gate-legacy-normal",
+      "returncode": 0,
+      "guard_failure": null
+    },
+    {
+      "stage": "gate",
+      "case": "legacy",
+      "variant": "repeat",
+      "tag": "gate-legacy-repeat",
+      "returncode": 0,
+      "guard_failure": null
+    },
+    {
+      "stage": "gate",
+      "case": "legacy",
+      "variant": "profile",
+      "tag": "gate-legacy-profile",
+      "returncode": 0,
+      "guard_failure": null
+    },
+    {
+      "stage": "gate",
+      "case": "scoped",
+      "variant": "normal",
+      "tag": "gate-scoped-normal",
+      "returncode": 1,
+      "guard_failure": null
+    }
+  ],
+  "six_gates_reused_byte_exact": true,
+  "failed_gate_log": "Traceback (most recent call last):\r\n  File \"D:\\Soup-2162-v1\\source-scoped-v2\\benchmarks\\harness\\stream_projection_exactness.py\", line 250, in <module>\r\n    raise SystemExit(main())\r\n                     ~~~~^^\r\n  File \"D:\\Soup-2162-v1\\source-scoped-v2\\benchmarks\\harness\\stream_projection_exactness.py\", line 83, in main\r\n    admission = check_inventory(\r\n        inventory.stdout, inventory.stderr, inventory.returncode, args.gpu, cap,\r\n    )\r\n  File \"D:\\Soup-2162-v1\\source-scoped-v2\\benchmarks\\harness\\stream_projection_census.py\", line 38, in check_inventory\r\n    raise RuntimeError(\"selected GPU lacks idle memory/temperature headroom\")\r\nRuntimeError: selected GPU lacks idle memory/temperature headroom\r\n",
+  "freeze_sha256": "923a45a9729ea4121a556cfe02c7c3affe9fb8586f01dc2b58721abcadea298d"
+}
