@@ -1,0 +1,27 @@
+{
+  "focused": {
+    "passed": 115,
+    "failed": 0,
+    "description": "MLP, projection and evidence regression suites"
+  },
+  "frozen_cpu_preflight": {
+    "local_passed": 95,
+    "lab_passed": 95
+  },
+  "ruff": "repository-wide passed",
+  "source_bindings": 3654,
+  "restored_evidence_files": 281,
+  "broad": {
+    "passed": 2427,
+    "failed": 5,
+    "skipped": 18,
+    "deselected": 10,
+    "stop_after_failures": 5,
+    "error": "TypeError: Router.__init__() got an unexpected keyword argument 'on_startup'",
+    "same_failures_previously_reproduced_on_clean_base": "ddba6986b07d3fcecacdf2b8eb1133021c0c1d37",
+    "log_sha256": "dd6424e5e43a7194a64a3fb3aced2ebf9d274abd91e4ac3c2be1bdc1bbf5a83a",
+    "base_log_sha256": "984cc2c39d72148f41c70bdfd869220a3847faf7d9f07bd73514ff2a7713ff55"
+  },
+  "production_sources_changed": false,
+  "model_runs_repeated_for_submission": 0
+}
