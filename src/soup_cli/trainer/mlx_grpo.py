@@ -188,6 +188,19 @@ def plan_prompt_updates(*, n_prompts: int, prompts_per_update: int, epochs: int,
     return plan
 
 
+def write_atomically(path: Path, write: Callable[[str], None]) -> None:
+    """``write`` to ``<stem>.partial.safetensors``, then rename it over ``path``.
+
+    A failed write leaves neither a half-written ``path`` nor the partial file.
+    """
+    partial = path.with_name(path.stem + ".partial.safetensors")
+    try:
+        write(str(partial))
+        partial.replace(path)
+    finally:
+        partial.unlink(missing_ok=True)
+
+
 # --------------------------------------------------------------------------
 # Rewards and advantages
 # --------------------------------------------------------------------------
@@ -819,9 +832,8 @@ class MLXGRPOTrainerWrapper(MLXDPOTrainerWrapper):
         loss_and_grad = nn.value_and_grad(self.model, loss_fn)
 
         def save(path: Path) -> None:
-            partial = path.with_name(path.stem + ".partial.safetensors")
-            mx.save_safetensors(str(partial), dict(tree_flatten(self.model.trainable_parameters())))
-            partial.replace(path)
+            weights = dict(tree_flatten(self.model.trainable_parameters()))
+            write_atomically(path, lambda target: mx.save_safetensors(target, weights))
 
         # Recorded as configured: the prompt order follows training.seed alone, as
         # TRL's RepeatSampler does on the transformers path, so data_seed moves nothing.

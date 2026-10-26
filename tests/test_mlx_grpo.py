@@ -1793,6 +1793,42 @@ class TestHeldOutPrompts:
                 "group, 4 completions per micro-step") in buffer.getvalue()
 
 
+class TestSavingAndTheRunRecord:
+    def test_a_failed_write_leaves_no_partial_file(self, tmp_path):
+        from pathlib import Path
+
+        from soup_cli.trainer.mlx_grpo import write_atomically
+
+        target = tmp_path / "adapters.safetensors"
+
+        def fail(path):
+            Path(path).write_bytes(b"half")
+            raise OSError("disk full")
+
+        with pytest.raises(OSError, match="disk full"):
+            write_atomically(target, fail)
+        assert list(tmp_path.iterdir()) == []
+        write_atomically(target, lambda path: Path(path).write_bytes(b"whole"))
+        assert [p.name for p in tmp_path.iterdir()] == ["adapters.safetensors"]
+        assert target.read_bytes() == b"whole"
+
+    def test_a_failed_adapter_save_in_training_leaves_no_partial_file(self, tmp_path,
+                                                                       monkeypatch):
+        mx = pytest.importorskip("mlx.core")
+        wrapper = _wrapper(tmp_path, monkeypatch)
+        real = mx.save_safetensors
+
+        def fail(path, weights):
+            real(path, weights)
+            raise OSError("disk full")
+
+        monkeypatch.setattr(mx, "save_safetensors", fail)
+        with pytest.raises(OSError, match="disk full"):
+            wrapper.train()
+        assert not list((tmp_path / "output").glob("*.safetensors"))
+
+
+
 class TestAdapterCoverage:
     def _base_then_lora(self, model, keys):
         mx = pytest.importorskip("mlx.core")
