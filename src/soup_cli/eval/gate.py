@@ -149,6 +149,13 @@ def load_suite(path: str) -> EvalSuite:
     data = load_yaml_file_limited(
         suite_path, f"eval-gate suite '{path}'", max_bytes=MAX_CONFIG_BYTES
     ) or {}
+    if isinstance(data, dict):
+        for key in data:
+            if not isinstance(key, str):
+                raise ValueError(
+                    f"eval-gate suite '{path}' has a non-string key {key!r}; "
+                    "top-level keys must be strings"
+                )
     suite = EvalSuite(**data)
     _require_gate_tasks(suite)
     return suite
