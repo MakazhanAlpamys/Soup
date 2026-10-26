@@ -543,6 +543,70 @@ class TestUnpairedKlFallbackWithoutAnswerColumns:
         )
 
 
+class TestUnpairedRebuildPreservesAnExistingTerminalEos:
+    """An already-terminal EOS must survive the rebuild, not be doubled.
+
+    When the prompt overflows, ``cap_unpaired`` rebuilds the KTO/BCO completion
+    (and KTO's KL completion) from the untruncated ``answer_input_ids``. TRL
+    stores the answer *with* its stop token — a valid short completion is
+    ``[good, </s>]`` — and the original TRL path appends EOS only when it is
+    absent. Appending unconditionally trains the matched and KL targets on
+    ``[good, </s>, </s>]``, changing the target for inputs that already carry
+    their stop token. The oracle is the exact answer the row was built with.
+    """
+
+    def test_a_terminal_eos_is_kept_single_on_matched_and_kl_targets(self):
+        from datasets import Dataset
+
+        from soup_cli.trainer._trl_compat import (
+            DEFAULT_PROMPT_TRUNCATION_MODE,
+            enforce_preference_sequence_limit,
+        )
+
+        eos_id = 999
+        prompt = list(range(100, 116))  # 16 tokens, overflows the prompt cap
+        answer = [200, eos_id]  # a short, valid completion that already ends in EOS
+        max_prompt_length = 4
+        max_length = 8
+        # KTO batches run the KL rotation; pin a chunk so the branch is exercised.
+        kl_chunk_size = 2
+        dataset = Dataset.from_dict(
+            {
+                "prompt_input_ids": [prompt],
+                "prompt_attention_mask": [[1] * len(prompt)],
+                "answer_input_ids": [answer],
+                "answer_attention_mask": [[1] * len(answer)],
+                "completion_input_ids": [prompt + answer],
+                "completion_attention_mask": [[1] * (len(prompt) + len(answer))],
+                "completion_labels": [[_IGNORE_LABEL] * len(prompt) + answer],
+                "KL_prompt_input_ids": [prompt],
+                "KL_prompt_attention_mask": [[1] * len(prompt)],
+                "KL_completion_input_ids": [prompt + answer],
+                "KL_completion_attention_mask": [[1] * (len(prompt) + len(answer))],
+                "KL_completion_labels": [[_IGNORE_LABEL] * len(prompt) + answer],
+            }
+        )
+
+        capped = enforce_preference_sequence_limit(
+            dataset,
+            max_length=max_length,
+            max_prompt_length=max_prompt_length,
+            truncation_mode=DEFAULT_PROMPT_TRUNCATION_MODE,
+            # The production call from bco/ipo/kto/simpo caps only overflowing
+            # rows; this row overflows on the prompt, so the rebuild still runs.
+            only_when_overflow=True,
+            kl_chunk_size=kl_chunk_size,
+        )[0]
+
+        for prefix in ("completion", "KL_completion"):
+            ids = list(capped[f"{prefix}_input_ids"])
+            labels = list(capped[f"{prefix}_labels"])
+            unmasked = [tok for tok, label in zip(ids, labels) if label != _IGNORE_LABEL]
+            assert unmasked == answer, (prefix, unmasked, answer)
+            assert unmasked.count(eos_id) == 1, (prefix, "EOS was doubled", unmasked)
+            assert len(ids) <= max_length, (prefix, len(ids))
+
+
 #: 41 words: longer than max_length // 2, yet prompt + completion is 45 of 64 tokens.
 _FITTING_PROMPT = " ".join(["hi"] * 40 + ["world"])
 #: An over-long prompt whose end is visible, so the kept side of the cut can be asserted.

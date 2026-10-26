@@ -172,7 +172,7 @@ def _cap_combined_preference_sequence(
     attention_mask = list(row[f"{prefix}_attention_mask"])
     labels = list(row[f"{prefix}_labels"])
     prompt_size = next(
-        (index for index, label in enumerate(labels) if label != -100),
+        (index for index, label in enumerate(labels) if label != _IGNORE_INDEX),
         len(labels),
     )
     prompt_ids = _truncate_tokens(
@@ -206,13 +206,23 @@ def _rebuild_unpaired_sequence(
     """Build a capped KTO/BCO sequence while keeping EOS as the final token."""
     capped_prompt_ids = _truncate_tokens(list(prompt_ids), max_prompt_length, truncation_mode)
     capped_prompt_mask = _truncate_tokens(list(prompt_mask), max_prompt_length, truncation_mode)
-    answer_limit = max(0, max_length - len(capped_prompt_ids) - 1)
-    capped_answer_ids = list(answer_ids)[:answer_limit]
-    capped_answer_mask = list(answer_mask)[:answer_limit]
+    answer_ids = list(answer_ids)
+    answer_mask = list(answer_mask)
+    # TRL appends EOS to a completion only when it is absent, so an answer that
+    # already ends in its stop token (a valid short completion is ``[good, </s>]``)
+    # must keep the single one. Split the terminal EOS off the body before
+    # enforcing the budget and re-appending, or ``[good, </s>]`` trains on
+    # ``[good, </s>, </s>]`` on both the matched and KL targets.
+    has_terminal_eos = bool(answer_ids) and answer_ids[-1] == eos_id
+    body_ids = answer_ids[:-1] if has_terminal_eos else answer_ids
+    body_mask = answer_mask[:-1] if has_terminal_eos else answer_mask
+    body_limit = max(0, max_length - len(capped_prompt_ids) - 1)
+    capped_body_ids = body_ids[:body_limit]
+    capped_body_mask = body_mask[:body_limit]
     return {
-        "input_ids": capped_prompt_ids + capped_answer_ids + [eos_id],
-        "attention_mask": capped_prompt_mask + capped_answer_mask + [1],
-        "labels": [_IGNORE_INDEX] * len(capped_prompt_ids) + capped_answer_ids + [eos_id],
+        "input_ids": capped_prompt_ids + capped_body_ids + [eos_id],
+        "attention_mask": capped_prompt_mask + capped_body_mask + [1],
+        "labels": [_IGNORE_INDEX] * len(capped_prompt_ids) + capped_body_ids + [eos_id],
     }
 
 
