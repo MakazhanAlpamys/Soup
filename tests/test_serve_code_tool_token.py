@@ -79,14 +79,15 @@ def sandbox_calls(monkeypatch):
 
     def _fake_python(code, **_options):
         calls.append(("python", code))
-        return "ran\n"
+        return rewards.SandboxProcessResult(returncode=0, stdout="ran\n", stderr="")
 
     def _fake_bash(command, **_options):
         calls.append(("bash", command))
         return rewards.SandboxProcessResult(returncode=0, stdout="ran\n", stderr="")
 
     monkeypatch.setattr(rewards, "_get_isolation_strategy", lambda: "namespaces")
-    monkeypatch.setattr(rewards, "_run_code_sandbox", _fake_python)
+    monkeypatch.setattr(rewards, "_run_code_sandbox", lambda *a, **k: "ran\n")
+    monkeypatch.setattr(rewards, "_run_code_sandbox_process", _fake_python)
     monkeypatch.setattr(rewards, "_run_bash_sandbox", _fake_bash)
     return calls
 
@@ -100,6 +101,7 @@ class TestNoTokenConfigured:
         resp = client.post(path, json=body)
 
         assert resp.status_code == 401, (path, resp.text)
+        assert resp.headers.get("www-authenticate") == "Bearer"
         assert resp.json()["detail"] == TOKEN_REQUIRED
         assert sandbox_calls == []
 
@@ -110,6 +112,7 @@ class TestNoTokenConfigured:
         resp = client.post(path, json=body)
 
         assert resp.status_code == 401, (path, resp.text)
+        assert resp.headers.get("www-authenticate") == "Bearer"
         assert resp.json()["detail"] == TOKEN_REQUIRED
         assert sandbox_calls == []
 
@@ -122,6 +125,7 @@ class TestNoTokenConfigured:
         resp = client.post(path, json=body, headers=AUTH)
 
         assert resp.status_code == 401, (path, resp.text)
+        assert resp.headers.get("www-authenticate") == "Bearer"
         assert resp.json()["detail"] == TOKEN_REQUIRED
         assert sandbox_calls == []
 
@@ -137,6 +141,7 @@ class TestNoTokenConfigured:
         resp = client.post(path, json=body, headers=header)
 
         assert resp.status_code == 401, (path, resp.text)
+        assert resp.headers.get("www-authenticate") == "Bearer"
         assert resp.json()["detail"] == TOKEN_REQUIRED
         assert sandbox_calls == []
 

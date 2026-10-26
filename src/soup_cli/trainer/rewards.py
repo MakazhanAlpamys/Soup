@@ -489,6 +489,34 @@ def _run_sandboxed_subprocess(
         return SandboxProcessResult(proc.returncode, stdout, stderr)
 
 
+def _run_code_sandbox_process(
+    code: str, strict_namespaces: bool = False
+) -> SandboxProcessResult:
+    """Run code in a subprocess sandbox and return the complete SandboxProcessResult.
+
+    Used by ``soup serve``'s ``/v1/tools/python`` to report full process diagnostics
+    (stdout, stderr, exit_code, timed_out).
+    """
+    _show_code_exec_warning_once()
+
+    wrapped = SANDBOX_NETWORK_GUARD + "\n" + code
+
+    preexec: Callable[[], None] | None = None
+    if sys.platform != "win32":
+        preexec = (
+            partial(_apply_rlimit, strict_namespaces=True)
+            if strict_namespaces
+            else _apply_rlimit
+        )
+
+    argv: list[str] = [sys.executable, "-I", "-S", "-c", wrapped]
+
+    result = _run_sandboxed_subprocess(argv, preexec)
+    if strict_namespaces and result.launch_failed:
+        raise SandboxIsolationError(result.stderr)
+    return result
+
+
 def _run_code_sandbox(code: str, strict_namespaces: bool = False) -> "str | None":
     """Run code in a subprocess sandbox with timeout, rlimits, and output caps.
 
@@ -510,24 +538,13 @@ def _run_code_sandbox(code: str, strict_namespaces: bool = False) -> "str | None
 
     Returns stdout string or None on failure.
     """
-    _show_code_exec_warning_once()
-
-    wrapped = SANDBOX_NETWORK_GUARD + "\n" + code
-
-    preexec: Callable[[], None] | None = None
-    if sys.platform != "win32":
-        preexec = (
-            partial(_apply_rlimit, strict_namespaces=True)
-            if strict_namespaces
-            else _apply_rlimit
-        )
-
-    argv: list[str] = [sys.executable, "-I", "-S", "-c", wrapped]
-
-    result = _run_sandboxed_subprocess(argv, preexec)
-    if strict_namespaces and result.launch_failed:
-        raise SandboxIsolationError(result.stderr)
-    if result.returncode != 0 or result.timed_out or result.output_exceeded or result.launch_failed:
+    result = _run_code_sandbox_process(code, strict_namespaces=strict_namespaces)
+    if (
+        result.returncode != 0
+        or result.timed_out
+        or result.output_exceeded
+        or result.launch_failed
+    ):
         return None
     return result.stdout
 
