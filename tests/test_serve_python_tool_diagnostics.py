@@ -1,4 +1,4 @@
-"""Tests for issue #2194: /v1/tools/python diagnostics and 401 WWW-Authenticate header.
+"""Python tool process diagnostics and the 401 WWW-Authenticate header.
 
 Acceptance criteria:
 - Tests for a syntax error, a raised exception, a non-zero sys.exit, an output overflow
@@ -53,7 +53,7 @@ class TestPythonToolDiagnostics:
 
         def _fake_sandbox(code: str, strict_namespaces: bool = False) -> SandboxProcessResult:
             err = (
-                '  File "<string>", line 1\n'
+                '  File "<string>", line 7\n'
                 "    def foo(\n"
                 "           ^\n"
                 "SyntaxError: was never closed"
@@ -76,6 +76,51 @@ class TestPythonToolDiagnostics:
         assert data["exit_code"] == 1
         assert "SyntaxError" in data["stderr"]
         assert data["stdout"] == ""
+
+    @pytest.mark.parametrize(
+        ("returncode", "stdout", "stderr"),
+        [
+            pytest.param(-9, "before signal", "", id="signal-without-overflow"),
+            pytest.param(0, "success", "a diagnostic", id="successful-stderr"),
+        ],
+    )
+    def test_other_process_results_are_preserved(
+        self, monkeypatch, fake_isolation, returncode, stdout, stderr
+    ):
+        from soup_cli.trainer import rewards
+
+        result = SandboxProcessResult(returncode=returncode, stdout=stdout, stderr=stderr)
+        monkeypatch.setattr(rewards, "_run_code_sandbox_process", lambda *args, **kwargs: result)
+
+        response = _make_client().post(
+            "/v1/tools/python", json={"code": "unused"}, headers=AUTH
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json() == {
+            "exit_code": returncode,
+            "timed_out": False,
+            "stdout": stdout,
+            "stderr": stderr,
+        }
+
+    def test_failed_launch_returns_fixed_isolation_error_without_stderr(
+        self, monkeypatch, fake_isolation
+    ):
+        from soup_cli.trainer import rewards
+
+        result = SandboxProcessResult(
+            returncode=None, stdout="", stderr="private launch details", launch_failed=True
+        )
+        monkeypatch.setattr(rewards, "_run_code_sandbox_process", lambda *args, **kwargs: result)
+
+        response = _make_client().post(
+            "/v1/tools/python", json={"code": "unused"}, headers=AUTH
+        )
+
+        assert response.status_code == 501, response.text
+        assert response.json() == {"detail": "python sandbox requires OS-level isolation"}
+        assert "private launch details" not in response.text
 
     def test_raised_exception_returns_traceback_in_stderr(self, monkeypatch, fake_isolation):
         from soup_cli.trainer import rewards
@@ -136,7 +181,7 @@ class TestPythonToolDiagnostics:
 
         def _fake_sandbox(code: str, strict_namespaces: bool = False) -> SandboxProcessResult:
             return SandboxProcessResult(
-                returncode=1,
+                returncode=-9,
                 stdout="",
                 stderr="sandbox output exceeded limit",
                 output_exceeded=True,
@@ -159,14 +204,14 @@ class TestPythonToolDiagnostics:
         assert data["stderr"] == "sandbox output exceeded limit"
         assert data["stdout"] == ""
 
-    def test_real_timeout_reports_timed_out_flag(self, monkeypatch, fake_isolation):
+    def test_timeout_result_preserves_partial_diagnostics(self, monkeypatch, fake_isolation):
         from soup_cli.trainer import rewards
 
         def _fake_sandbox(code: str, strict_namespaces: bool = False) -> SandboxProcessResult:
             return SandboxProcessResult(
-                returncode=None,
-                stdout="",
-                stderr="",
+                returncode=-9,
+                stdout="partial output\n",
+                stderr="partial diagnostic\n",
                 timed_out=True,
             )
 
@@ -183,8 +228,8 @@ class TestPythonToolDiagnostics:
         data = resp.json()
         assert data["timed_out"] is True
         assert data["exit_code"] == 124
-        assert data["stdout"] == ""
-        assert data["stderr"] == ""
+        assert data["stdout"] == "partial output\n"
+        assert data["stderr"] == "partial diagnostic\n"
 
     def test_real_sandbox_returns_syntax_error_when_available(self):
         from soup_cli.trainer.rewards import _get_isolation_strategy
@@ -202,9 +247,19 @@ class TestPythonToolDiagnostics:
         assert data["timed_out"] is False
         assert data["exit_code"] != 0
         assert "SyntaxError" in data["stderr"]
+        assert "line 7" in data["stderr"]
 
 
 class TestWWWAuthenticateHeaderOn401:
+    def test_non_loopback_web_search_without_auth_sends_www_authenticate(self):
+        response = _make_client(host="0.0.0.0", auth_token=None).post(
+            "/v1/tools/web_search", json={"query": "unused"}
+        )
+
+        assert response.status_code == 401, response.text
+        assert response.json() == {"detail": "Authentication required on non-loopback host"}
+        assert response.headers.get("www-authenticate") == "Bearer"
+
     def test_missing_token_on_loopback_code_tools_sends_www_authenticate(self):
         client = _make_client(host="127.0.0.1", auth_token=None)
         resp = client.post("/v1/tools/python", json={"code": "print(1)"})

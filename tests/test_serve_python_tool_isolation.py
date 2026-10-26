@@ -63,6 +63,7 @@ def sandbox_calls(monkeypatch) -> list[str]:
     calls: list[str] = []
 
     def _fake_sandbox(code: str, strict_namespaces: bool = False) -> SandboxProcessResult:
+        assert strict_namespaces is True
         calls.append(code)
         return SandboxProcessResult(returncode=0, stdout="ran", stderr="")
 

@@ -1019,6 +1019,13 @@ Three POST routes are now available on `soup serve`:
   sending signals only to the run itself. Run
   `soup serve` in a container, a VM or under a dedicated unprivileged account for any
   caller you do not fully trust.
+  Returns the real stdout, stderr, exit code, and timeout state. A timeout returns
+  `timed_out: true` and `exit_code: 124`; an output overflow returns
+  `timed_out: false` and `exit_code: 1`. Other process failures retain their exit
+  code and report `timed_out: false`. The combined stdout/stderr cap is 10 KB.
+  Python line numbers include the six-line network-guard prefix: the caller's
+  first line is reported as line 7. Tool authentication failures return HTTP 401
+  with `WWW-Authenticate: Bearer`.
 - **`POST /v1/tools/web_search`** — searches the web and returns domain-filtered results
   as `[{url, title, snippet}]` with snippets sanitized (null bytes stripped).
   Deny-by-default via `WebSearchConfig.domain_allowlist`.
