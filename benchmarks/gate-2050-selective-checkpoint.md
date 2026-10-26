@@ -145,10 +145,12 @@ The 14 original gate/profile receipts were validated before folding them into on
 [source-blobs.json](results/issue2050-rtx3090-v1/source-blobs.json) pins all 11 frozen files by Git blob ID and records their original LF/CRLF form. Retrieve a blob with `git cat-file blob <id>` from the recorded commit; for an exact campaign replay, restore its recorded line endings and overlay the files onto the recorded base. The audit's optional `--tree` check verifies both the Git blob identity and the original frozen SHA256 after reconstructing those line endings. Retained JSON and text have logical digests that survive checkout newline conversion, so no binary source archive or special `.gitattributes` is needed.
 
 ```powershell
-# From this PR's checkout; reads evidence and source only, without a model load
+# From this PR's checkout; audits recorded evidence without a model load
 python benchmarks/harness/issue2050_audit.py `
   benchmarks/results/issue2050-rtx3090-v1 `
-  --tree . --output independent-audit.json
+  --output independent-audit.json
 ```
+
+To verify source too, add `--tree <original-source-directory>` with the files from commit `95a08a21544359ed81ffd0581fc80ce642cbd9e8`. The current checkout includes later tests and a benchmark installer guard that refuses any streamed layer with `recompute=False` before patching forwards. Those edits were not part of the measured campaign, so `--tree .` correctly rejects them. The frozen sources, evidence and decision rules remain unchanged.
 
 No #674 checkpoints or datasets were accessed, and no model weights are included in the evidence. AI-assisted implementation and measurement with OpenAI Codex.

@@ -31,7 +31,7 @@ def test_original_pair_runner_harness_remains_the_default(monkeypatch):
     assert captured[0].harness == "issue361_nf4_throughput.py"
 
 
-@pytest.mark.parametrize("selected", ["../../../outside.py", "../../other.py"])
+@pytest.mark.parametrize("selected", ["../../../outside.py", "../../other.py", "../README.md"])
 def test_pair_runner_refuses_harness_outside_its_directory(tmp_path, selected):
     module = _load("stream_ab_pairs")
     args = argparse.Namespace(tree=str(tmp_path), out=str(tmp_path), common="", harness=selected)

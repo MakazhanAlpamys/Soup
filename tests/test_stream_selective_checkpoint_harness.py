@@ -25,6 +25,18 @@ def test_mistral_activation_bytes_are_outputs_only(policy, width):
         assert helper.saved_projection_bytes(policy, 32, 4096, 1024, seq) == (32 * width * seq * 2)
 
 
+def test_projection_byte_predictor_refuses_unknown_policy():
+    helper = _harness()
+    with pytest.raises(ValueError, match="unknown policy"):
+        helper.saved_projection_bytes("all", 32, 4096, 1024, 512)
+
+
+def test_projection_byte_predictor_refuses_zero_sequence_length():
+    helper = _harness()
+    with pytest.raises(ValueError, match="positive"):
+        helper.saved_projection_bytes("qkv", 32, 4096, 1024, 0)
+
+
 def _fixture():
     from soup_cli.utils.layer_stream_runtime import StreamedDecoderLayer
 
@@ -163,6 +175,34 @@ def test_remove_restores_instance_forwards_and_invalid_scope_is_refused():
         helper.install(model, "all")
     with pytest.raises(ValueError, match="streamed"):
         helper.install(torch.nn.Linear(8, 8), "qkv")
+
+
+@pytest.mark.parametrize("policy", ["qkv", "qkvo"])
+def test_retained_layer_is_refused_before_any_forward_is_patched(policy):
+    helper = _harness()
+    model = _fixture()
+    for layer in model:
+        layer.recompute = True
+    model[-1].recompute = False
+    modules = []
+    model.apply(modules.append)
+    originals = [
+        (module, module.forward, "forward" in module.__dict__, module.__dict__.get("forward"))
+        for module in modules
+    ]
+
+    with pytest.raises(ValueError, match="recompute"):
+        helper.install(model, policy)
+
+    for module, forward, had_instance_forward, instance_forward in originals:
+        assert module.forward == forward
+        assert ("forward" in module.__dict__) == had_instance_forward
+        assert module.__dict__.get("forward") is instance_forward
+
+    model[-1].recompute = True
+    controller = helper.install(model, policy)
+    assert controller.layer_count == 3
+    controller.remove()
 
 
 def _mistral_weights(tmp_path):

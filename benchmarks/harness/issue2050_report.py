@@ -225,11 +225,18 @@ def render(evidence: Path, audit_path: Path, output: Path) -> None:
         "binary source archive or special `.gitattributes` is needed.",
         "",
         "```powershell",
-        "# From this PR's checkout; reads evidence and source only, without a model load",
+        "# From this PR's checkout; audits recorded evidence without a model load",
         "python benchmarks/harness/issue2050_audit.py `",
         "  benchmarks/results/issue2050-rtx3090-v1 `",
-        "  --tree . --output independent-audit.json",
+        "  --output independent-audit.json",
         "```",
+        "",
+        "To verify source too, add `--tree <original-source-directory>` with the files "
+        "from commit `95a08a21544359ed81ffd0581fc80ce642cbd9e8`. "
+        "The current checkout includes later tests and a benchmark installer guard "
+        "that refuses any streamed layer with `recompute=False` before patching forwards. "
+        "Those edits were not part of the measured campaign, so `--tree .` correctly "
+        "rejects them. The frozen sources, evidence and decision rules remain unchanged.",
         "",
         "No #674 checkpoints or datasets were accessed, and no model weights are "
         "included in the evidence. AI-assisted implementation and measurement with OpenAI Codex.",

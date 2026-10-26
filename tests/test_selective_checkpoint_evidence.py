@@ -108,7 +108,7 @@ def test_compact_record_reproduces_original_full_scientific_audit():
         elif isinstance(left, float):
             # Python 3.12 changed sum() rounding. The original audit was saved
             # on 3.12; 3.11 differs only at floating-point roundoff scale.
-            assert math.isclose(left, right, rel_tol=1e-13, abs_tol=1e-11), path
+            assert math.isclose(left, right, rel_tol=1e-13, abs_tol=1e-12), path
         else:
             assert left == right, path
 

@@ -4,6 +4,7 @@ This installs instance forwards on an already built streamed model. There is no
 Soup config field. Only the frozen base projection's matrix multiply result is
 saved: LoRA products, dequantized weights, MLP and attention remain recomputed.
 The ordinary non-reentrant checkpoint still owns the streaming slot lifetime.
+All streamed decoder layers must use recompute; retained layers are refused.
 """
 
 from __future__ import annotations
@@ -56,6 +57,10 @@ class SelectiveCheckpoint:
         )
         if not layers:
             raise ValueError("no streamed decoder layers found")
+        if not all(getattr(layer, "recompute", True) for layer in layers):
+            raise ValueError(
+                "selective checkpoint benchmark requires recompute=True on every layer"
+            )
         projections = []
         for layer in layers:
             attention = getattr(layer.inner, "self_attn", None)
