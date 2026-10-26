@@ -344,9 +344,6 @@ docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --
 docker compose up   # or build locally
 ```
 
-`latest` follows the highest stable `vX.Y.Z` release tag. Publishing an older release line
-updates its version tags without moving `latest` back.
-
 ## Requirements
 
 - Python 3.11, 3.12 or 3.13 (those are the versions CI tests; 3.14+ is not supported yet
