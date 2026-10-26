@@ -22,6 +22,20 @@ from rich.console import Console
 LABELS = ("sadness", "joy", "love", "anger", "fear", "surprise")
 PROMPT = "Classify the emotion as sadness, joy, love, anger, fear, or surprise.\nText: {}\nEmotion:"
 FILES = tuple(f"train_s{i}.jsonl" for i in range(5)) + ("task_eval.jsonl",)
+FROM_RECORD = (
+    "dair-ai/emotion dataset and exact-match metric scoring",
+    "five disjoint 3000-row subsets of the 16000-row train split",
+    "one fixed 300-row test sample, identical for every run",
+    "file names train_s0.jsonl and task_eval.jsonl",
+)
+NEW_CHOICES = (
+    "split config and caller-asserted revision",
+    "SHA-256 selection rule and explicit seed",
+    "exact-text deduplication, keeping the first label",
+    "excluding all test text from train",
+    "prompt template, label strings and row formats",
+    "file names train_s1.jsonl through train_s4.jsonl",
+)
 
 
 def _json(value: Any) -> bytes:
@@ -40,7 +54,7 @@ def _source(path: Path, expected: str) -> list[dict]:
     if _sha(data) != expected:
         raise ValueError("source hash mismatch")
     rows = []
-    for line in data.decode("utf-8").splitlines():
+    for line in data.splitlines():
         row = json.loads(line)
         if not isinstance(row, dict) or not isinstance(row.get("text"), str):
             raise ValueError("each source row needs text and an integer label")
@@ -87,6 +101,7 @@ def prepare(
         raise ValueError("need 15000 distinct train rows and 300 held-out rows")
     manifest: dict[str, Any] = {
         "schema_version": 1, "historical_bytes_recovered": False,
+        "from_record": list(FROM_RECORD), "new_choices": list(NEW_CHOICES),
         "protocol": "h100-step11-step19-reconstruction-v1", "seed": seed,
         "selection": "sha256(seed,split,index,row); exact-text dedup; exclude all test text",
         "source": {"dataset": "dair-ai/emotion", "config": "split", "revision": revision,
@@ -135,6 +150,9 @@ def verify(output: Path) -> dict:
     if (manifest.get("schema_version") != 1
             or manifest.get("historical_bytes_recovered") is not False):
         raise ValueError("unsupported reconstruction manifest")
+    if (manifest.get("from_record") != list(FROM_RECORD)
+            or manifest.get("new_choices") != list(NEW_CHOICES)):
+        raise ValueError("invalid reconstruction provenance")
     if set(manifest["files"]) != set(FILES):
         raise ValueError("incomplete file set")
     seen_ids: set[int] = set()
@@ -219,7 +237,10 @@ def main() -> int:
                 parser.error("provide train/test JSONL, both SHA-256 values, "
                              "revision, seed and output")
             prepare(**options)
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+    except (ValueError, FileExistsError) as exc:
+        console.print(f"Preparation failed: {exc}", markup=False, highlight=False)
+        return 1
+    except (OSError, KeyError, TypeError) as exc:
         console.print(f"Preparation failed: {type(exc).__name__}")
         return 1
     console.print("PASS: reconstruction data checks (no historical-quality claim)")

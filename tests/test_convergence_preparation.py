@@ -11,6 +11,21 @@ import pytest
 from benchmarks.harness.prep_convergence import LABELS, prepare, verify
 from soup_cli.eval.custom import load_eval_tasks
 
+FROM_RECORD = [
+    "dair-ai/emotion dataset and exact-match metric scoring",
+    "five disjoint 3000-row subsets of the 16000-row train split",
+    "one fixed 300-row test sample, identical for every run",
+    "file names train_s0.jsonl and task_eval.jsonl",
+]
+NEW_CHOICES = [
+    "split config and caller-asserted revision",
+    "SHA-256 selection rule and explicit seed",
+    "exact-text deduplication, keeping the first label",
+    "excluding all test text from train",
+    "prompt template, label strings and row formats",
+    "file names train_s1.jsonl through train_s4.jsonl",
+]
+
 
 @pytest.fixture
 def sources(tmp_path: Path) -> dict:
@@ -28,6 +43,8 @@ def test_complete_protocol_and_consumers(sources: dict, tmp_path: Path) -> None:
     output = tmp_path / "prepared"
     manifest = prepare(output=output, **sources)
     assert manifest["historical_bytes_recovered"] is False
+    assert manifest["from_record"] == FROM_RECORD
+    assert manifest["new_choices"] == NEW_CHOICES
     assert manifest["source"]["revision"] == sources["revision"]
     assert manifest["seed"] == 42
     assert manifest["source"]["train_sha256"] == sources["train_sha256"]
@@ -65,22 +82,35 @@ def test_deterministic_bytes_and_seed_changes_selection(sources: dict, tmp_path:
         tmp_path / "c/train_s0.jsonl").read_bytes()
 
 
-@pytest.mark.parametrize("field,value", [("revision", "main"), ("seed", True),
-                                        ("train_sha256", "0" * 64)])
+@pytest.mark.parametrize("field,value,message", [
+    ("revision", "main", "revision must be an immutable 40-character commit SHA"),
+    ("seed", True, "seed must be an explicit integer"),
+    ("train_sha256", "bad", "source SHA-256 must be lowercase hex"),
+    ("train_sha256", "0" * 64, "source hash mismatch"),
+    ("test_sha256", "0" * 64, "source hash mismatch"),
+])
 def test_refuses_unpinned_or_changed_source(
-    sources: dict, tmp_path: Path, field: str, value: object,
+    sources: dict, tmp_path: Path, field: str, value: object, message: str,
 ) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=message):
         prepare(output=tmp_path / "bad", **{**sources, field: value})
     assert not (tmp_path / "bad").exists()
 
 
-@pytest.mark.parametrize("row", [{"text": "x", "label": True}, {"text": "x", "label": 6},
-                                 {"text": "", "label": 1}, {"label": 1}])
-def test_invalid_rows_fail_before_publishing(sources: dict, tmp_path: Path, row: dict) -> None:
-    sources["train"].write_text(json.dumps(row) + "\n", encoding="utf-8")
+@pytest.mark.parametrize("row,message", [
+    ({"text": "x", "label": True}, "empty text or invalid emotion label"),
+    ({"text": "x", "label": 6}, "empty text or invalid emotion label"),
+    ({"text": "", "label": 1}, "empty text or invalid emotion label"),
+    ({"label": 1}, "each source row needs text"),
+])
+def test_invalid_rows_fail_before_publishing(
+    sources: dict, tmp_path: Path, row: dict, message: str,
+) -> None:
+    # Keep enough valid rows: a missing validation must not fail on row count instead.
+    with sources["train"].open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(row) + "\n")
     sources["train_sha256"] = hashlib.sha256(sources["train"].read_bytes()).hexdigest()
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=message):
         prepare(output=tmp_path / "bad", **sources)
     assert not (tmp_path / "bad").exists()
 
@@ -124,9 +154,18 @@ def test_empty_existing_directory_is_also_preserved(sources: dict, tmp_path: Pat
     assert output.is_dir() and list(output.iterdir()) == []
 
 
-@pytest.mark.parametrize("corruption", ["overlap", "heldout", "label", "roles", "count"])
+@pytest.mark.parametrize("corruption,message", [
+    ("overlap", "training subsets overlap"),
+    ("heldout", "invalid label or overlapping prompt"),
+    ("label", "invalid label or overlapping prompt"),
+    ("roles", "invalid training roles"),
+    ("count", "invalid row counts or identities"),
+    ("historical", "unsupported reconstruction manifest"),
+    ("index", "invalid row counts or identities"),
+    ("split", "invalid row counts or identities"),
+])
 def test_verifier_checks_semantics_even_with_updated_hash(
-    sources: dict, tmp_path: Path, corruption: str,
+    sources: dict, tmp_path: Path, corruption: str, message: str,
 ) -> None:
     output = tmp_path / "out"
     manifest = prepare(output=output, **sources)
@@ -142,20 +181,84 @@ def test_verifier_checks_semantics_even_with_updated_hash(
         rows[0]["messages"][1]["content"] = "invalid"
     elif corruption == "roles":
         rows[0]["messages"][0]["role"] = "assistant"
+    elif corruption == "historical":
+        manifest["historical_bytes_recovered"] = True
+    elif corruption == "index":
+        manifest["files"][filename]["source_rows"][0] = manifest["source_counts"]["train"]
+    elif corruption == "split":
+        manifest["files"][filename]["split"] = "test"
     else:
         rows.pop()
     data = "".join(json.dumps(row) + "\n" for row in rows).encode("utf-8")
     (output / filename).write_bytes(data)
     manifest["files"][filename]["sha256"] = hashlib.sha256(data).hexdigest()
     (output / "manifest.json").write_text(json.dumps(manifest))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=message):
         verify(output)
+
+
+@pytest.mark.parametrize("field", ["from_record", "new_choices"])
+@pytest.mark.parametrize("change", ["missing", "altered"])
+def test_verifier_requires_provenance_distinction(
+    sources: dict, tmp_path: Path, field: str, change: str,
+) -> None:
+    output = tmp_path / "out"
+    manifest = prepare(output=output, **sources)
+    if change == "missing":
+        manifest.pop(field, None)
+    else:
+        manifest[field] = ["all choices are historical"]
+    (output / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid reconstruction provenance"):
+        verify(output)
+
+
+def test_unicode_separators_inside_source_text_are_preserved(sources: dict, tmp_path: Path) -> None:
+    separator_text = "before\u2028middle\u0085after"
+    with sources["train"].open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({"text": separator_text, "label": 2}, ensure_ascii=False) + "\n")
+    sources["train_sha256"] = hashlib.sha256(sources["train"].read_bytes()).hexdigest()
+    manifest = prepare(output=tmp_path / "out", **sources)
+    selected = [name for name, entry in manifest["files"].items()
+                if entry["split"] == "train" and 15020 in entry["source_rows"]]
+    assert len(selected) == 1
+    rows = [json.loads(line) for line in (tmp_path / "out" / selected[0]).read_bytes().splitlines()]
+    matching = [row for row in rows if separator_text in row["messages"][0]["content"]]
+    assert len(matching) == 1
+    assert matching[0]["messages"][1]["content"] == "love"
 
 
 def test_cli_default_fails_and_self_test_runs() -> None:
     script = Path(__file__).parents[1] / "benchmarks/harness/prep_convergence.py"
-    default = subprocess.run([sys.executable, str(script)], capture_output=True, text=True)
-    assert default.returncode != 0
+    default = subprocess.run([sys.executable, str(script)], capture_output=True, text=True,
+                             timeout=60)
+    assert default.returncode == 2, default.stderr + default.stdout
+    assert "provide train/test JSONL" in default.stderr
     self_test = subprocess.run([sys.executable, str(script), "--self-test"],
-                               capture_output=True, text=True)
+                               capture_output=True, text=True, timeout=60)
     assert self_test.returncode == 0, self_test.stderr + self_test.stdout
+
+
+def test_cli_verification_failure_reports_reason(sources: dict, tmp_path: Path) -> None:
+    output = tmp_path / "out"
+    prepare(output=output, **sources)
+    (output / "train_s0.jsonl").write_bytes(b"tampered\n")
+    script = Path(__file__).parents[1] / "benchmarks/harness/prep_convergence.py"
+    result = subprocess.run([sys.executable, str(script), "--verify", str(output)],
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 1, result.stderr + result.stdout
+    assert "Preparation failed: output hash mismatch" in result.stdout
+
+
+def test_cli_existing_output_reports_reason(sources: dict, tmp_path: Path) -> None:
+    output = tmp_path / "[existing]"
+    output.mkdir()
+    script = Path(__file__).parents[1] / "benchmarks/harness/prep_convergence.py"
+    arguments = []
+    for key, value in sources.items():
+        arguments.extend(["--" + key.replace("_", "-"), str(value)])
+    result = subprocess.run([sys.executable, str(script), *arguments, "--output", str(output)],
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 1, result.stderr + result.stdout
+    assert "Preparation failed: output already exists" in result.stdout
+    assert list(output.iterdir()) == []
