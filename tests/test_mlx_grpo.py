@@ -588,6 +588,78 @@ class TestTheOracleIsTrl:
             )
 
 
+#: GRPOConfig fields mlx_grpo.py trains at TRL's default, so the transformers path
+#: must never pass them (review of #2182).
+_CONTRACT_FIELDS = frozenset({
+    "loss_type", "scale_rewards", "epsilon", "epsilon_high", "num_iterations",
+    "importance_sampling_level", "temperature", "top_p", "top_k", "min_p",
+    "repetition_penalty", "mask_truncated_completions", "delta",
+})
+
+
+class TestTheTrlContract:
+    """mlx_grpo.py's constants are TRL 0.29.1's ``GRPOConfig`` defaults, and Soup's
+    transformers path overrides none of them, as tests/test_mlx_kto.py pins KTO."""
+
+    def test_the_contract_is_grpoconfigs_defaults(self):
+        trl = pytest.importorskip("trl")
+        from soup_cli.trainer import mlx_grpo
+
+        fields = trl.GRPOConfig.__dataclass_fields__
+        assert fields["loss_type"].default == mlx_grpo.LOSS_TYPE == "dapo"
+        assert fields["scale_rewards"].default == mlx_grpo.SCALE_REWARDS == "group"
+        assert fields["epsilon"].default == mlx_grpo.EPSILON == 0.2
+        assert fields["epsilon_high"].default is None  # None means epsilon
+        assert mlx_grpo.EPSILON_HIGH == fields["epsilon"].default
+        assert fields["num_iterations"].default == mlx_grpo.NUM_ITERATIONS == 1
+        assert (fields["importance_sampling_level"].default
+                == mlx_grpo.IMPORTANCE_SAMPLING_LEVEL == "token")
+        assert fields["temperature"].default == mlx_grpo.TEMPERATURE == 1.0
+        assert fields["top_p"].default == mlx_grpo.TOP_P == 1.0
+        assert fields["top_k"].default == mlx_grpo.TOP_K == 0
+        assert fields["min_p"].default is None and mlx_grpo.MIN_P is None
+        assert fields["repetition_penalty"].default == mlx_grpo.REPETITION_PENALTY == 1.0
+        assert fields["mask_truncated_completions"].default is False
+        assert mlx_grpo.MASK_TRUNCATED_COMPLETIONS is False
+        assert fields["delta"].default is None  # no two-sided clipping by default
+        assert set(_CONTRACT_FIELDS) <= set(fields)
+
+    def test_the_recorded_contract_is_the_constants(self):
+        from soup_cli.trainer import mlx_grpo
+
+        contract = mlx_grpo.grpo_contract(beta=0.1, num_generations=4,
+                                          max_completion_length=64)
+        assert (contract["epsilon"], contract["epsilon_high"]) == (0.2, 0.2)
+        assert (contract["loss_type"], contract["scale_rewards"], contract["num_iterations"],
+                contract["importance_sampling_level"]) == ("dapo", "group", 1, "token")
+
+    def test_the_transformers_path_passes_none_of_them(self):
+        import ast
+        from pathlib import Path
+
+        import soup_cli.trainer.grpo as grpo
+
+        tree = ast.parse(Path(grpo.__file__).read_text(encoding="utf-8"))
+        passed: set = set()
+        built = 0
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if (isinstance(target, ast.Name) and target.id == "grpo_kwargs"
+                            and isinstance(node.value, ast.Dict)):
+                        built += 1
+                        passed |= {k.value for k in node.value.keys
+                                   if isinstance(k, ast.Constant)}
+                    elif (isinstance(target, ast.Subscript)
+                          and getattr(target.value, "id", "") == "grpo_kwargs"):
+                        passed.add(target.slice.value)
+            elif isinstance(node, ast.Call) and getattr(node.func, "id", "") == "GRPOConfig":
+                passed |= {kw.arg for kw in node.keywords if kw.arg}
+        assert built == 1
+        assert {"beta", "num_generations", "max_completion_length"} <= passed
+        assert not passed & _CONTRACT_FIELDS
+
+
 # --------------------------------------------------------------------------
 # A tiny random Llama
 # --------------------------------------------------------------------------
