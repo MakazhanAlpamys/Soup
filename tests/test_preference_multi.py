@@ -175,3 +175,56 @@ class TestMultiObjectiveDeferred:
         wrapper = PreferenceTrainerWrapper(cfg, device="cpu")
         with pytest.raises(ValueError, match="bco"):
             wrapper.setup({"train": [{"prompt": "p", "chosen": "c", "rejected": "r"}]})
+
+
+# ─── Docs / example contract (#2222) ─────────────────────────────────────────
+
+
+class TestPreferenceLossWeightsDocsAndExamples:
+    """Keep preference_loss_weights examples and docs aligned with setup-time
+    BCO refusal (loads at schema time; validate_weight_compat refuses later).
+    """
+
+    def test_schema_examples_pass_validate_weight_compat(self):
+        import ast
+        import inspect
+        import re
+
+        from soup_cli.config.schema import TrainingConfig
+        from soup_cli.utils.preference_combine import validate_weight_compat
+
+        field = TrainingConfig.model_fields["preference_loss_weights"]
+        description = field.description or ""
+        validator_src = inspect.getsource(
+            SoupConfig._validate_preference_loss_weights,
+        )
+        examples = []
+        pattern = re.compile(
+            r"\{\s*'(?:dpo|simpo|orpo|ipo|bco)'\s*:\s*[0-9.]+"
+            r"(?:\s*,\s*'(?:dpo|simpo|orpo|ipo|bco)'\s*:\s*[0-9.]+)+\s*\}"
+        )
+        for text in (description, validator_src):
+            for match in pattern.finditer(text):
+                examples.append(ast.literal_eval(match.group(0)))
+        assert examples, "expected at least one dict example in schema strings"
+        for weights in examples:
+            validate_weight_compat(weights)
+
+    def test_training_md_does_not_say_bco_rejected_at_config_load(self):
+        from pathlib import Path
+
+        text = (
+            Path(__file__).resolve().parents[1] / "docs" / "training.md"
+        ).read_text(encoding="utf-8")
+        # Fail if a sentence still ties bco blends to config-load rejection.
+        for line in text.splitlines():
+            lower = line.lower()
+            if "bco" not in lower:
+                continue
+            if "config load" in lower and (
+                "reject" in lower or "refuses" in lower or "refused" in lower
+            ):
+                raise AssertionError(
+                    "docs/training.md still ties a bco blend to config-load "
+                    f"rejection: {line!r}"
+                )
