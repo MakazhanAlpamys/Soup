@@ -39,6 +39,28 @@ def check_inventory(stdout: str, stderr: str, returncode: int, gpu: str, cap: in
     return dict(uuid=row[1], free_bytes=free, temperature=int(row[5]), power_limit=float(row[6]))
 
 
+def check_cap_binding(native: dict, messages: list[str], cap: int) -> dict:
+    """Require the planner's actual limiting cap, not just a requested override."""
+    if not native.get("measured"):
+        return {"verified": False, "reason": "native auto probe unavailable"}
+    reported = native.get("cap_bytes")
+    requested = native.get("budget_inputs", {}).get("override_bytes")
+    if (
+        native.get("cap_bound") != "override"
+        or type(reported) is not int or reported != cap
+        or type(requested) is not int or requested != cap
+    ):
+        raise RuntimeError("native training.stream_vram_override did not bind the requested cap")
+    named = any("training.stream_vram_override" in message for message in messages)
+    # Native zero-K refusals need not name the cap; preserve their original text.
+    if native["k"] > 0 and not named:
+        raise RuntimeError("native auto message does not name training.stream_vram_override")
+    return dict(
+        verified=True, field="training.stream_vram_override", bytes=cap,
+        native_message_names_override=named,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--weights", type=Path, required=True)
@@ -112,6 +134,9 @@ def main() -> int:
             model, rows=1, seq_len=args.seq, vocab_size=config["vocab_size"],
             override_bytes=cap, notify=messages.append,
         )
+        for message in messages:
+            console.print(message)
+        cap_binding = check_cap_binding(native, messages, cap)
         plan = projection_plan(
             streamed_decoder_layers(model), native, batch=1, seq=args.seq, element_bytes=2,
         )
@@ -119,6 +144,7 @@ def main() -> int:
             stage="untimed-native-census", written_utc=datetime.now(timezone.utc).isoformat(),
             shape=[1, args.seq], cap_bytes=cap, admission=admission,
             allocator_cap_bytes=cap,
+            cap_binding=cap_binding,
             native=native, projections=plan, messages=messages, optimizer_updates=0,
             attention_implementation=model.config._attn_implementation,
             kernel_profiled=False, deterministic_algorithms=True,
