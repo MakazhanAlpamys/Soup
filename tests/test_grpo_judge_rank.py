@@ -645,6 +645,37 @@ def test_more_than_one_process_is_refused(monkeypatch):
 # --- load-time refusals ------------------------------------------------------
 
 
+def test_one_judge_field_without_judge_rank_reads_in_the_singular():
+    """It read "training.grpo_judge only apply to ..." (v0.77.0 release smoke)."""
+    with pytest.raises(ValueError) as caught:
+        _config(reward_fn="accuracy", grpo_judge_max_calls=_DROP)
+    assert str(caught.value) == (
+        ": Value error, training.grpo_judge only applies to training.reward_fn judge_rank; "
+        "got reward_fn='accuracy'. Add judge_rank to reward_fn or remove it."
+    )
+
+
+def test_two_judge_fields_without_judge_rank_read_in_the_plural():
+    with pytest.raises(ValueError) as caught:
+        _config(reward_fn="accuracy")
+    assert str(caught.value) == (
+        ": Value error, training.grpo_judge, training.grpo_judge_max_calls only apply to "
+        "training.reward_fn judge_rank; got reward_fn='accuracy'. Add judge_rank to "
+        "reward_fn or remove them."
+    )
+
+
+def test_a_refused_judge_url_names_the_field_once():
+    """The URL refusal was prefixed with "grpo_judge: " under a location that
+    already names the field: "training -> grpo_judge: grpo_judge: judge_model ..."."""
+    with pytest.raises(ValueError) as caught:
+        _config(grpo_judge="http://judge.example.com/m")
+    assert str(caught.value) == (
+        "training -> grpo_judge: Value error, judge_model 'http://judge.example.com/m' "
+        "uses unsupported scheme"
+    )
+
+
 @pytest.mark.parametrize(
     ("overrides", "needle"),
     [

@@ -313,7 +313,7 @@ soup ab --input ab.jsonl --metric latency --effect-size 0.5
 soup ab --input ab.jsonl --metric judge_score --alpha 0.01 --effect-size 0.1
 ```
 
-`--alpha` is in (0, 1). `--beta` is retired (#1418): `--alpha` now sets the accept rule's level too, so there is no separate Type-II rate to set. For one release `soup ab` still takes `--beta`, prints that it no longer does anything and that a stricter `accept_h0` means a lower `--alpha`, and then runs exactly as without it; the release after refuses it. The `--alpha` + `--beta` < 1 check went with it.
+`--alpha` is in (0, 1). `--beta` is retired (#1418): `--alpha` now sets the accept rule's level too, so there is no separate Type-II rate to set. v0.76 still took `--beta` with a warning and ran exactly as without it; as of v0.77 `soup ab` refuses it with exit code `2` before reading any rows, saying that it no longer does anything and that a stricter `accept_h0` means a lower `--alpha`. Remove the flag. The `--alpha` + `--beta` < 1 check went with it.
 
 A `--effect-size` that is more than about 1.9e151 standard deviations of the rows that set the prior scale overflows the test statistic at the largest input `soup ab` accepts (1,000,000 rows per arm), so it is refused at every row count; `soup ab` exits `1` naming the flag and the standard deviation it measured, from the first run (before those rows are all in, it checks the rows so far). Because it is the ratio that overflows, a near-constant metric column reaches it at the default `--effect-size` too.
 
@@ -695,7 +695,7 @@ source can also be compared at verdict time; remote, mixed, replay, tokenized,
 streaming and directory sources stay unknown. When that source is unknown,
 strict verification requires the caller assertion. Neither this descriptor nor
 legacy `data_sha` relabels a verdict-time hash as training-time evidence. The
-startup producer tracked in #1764 is separate.
+training-time digest that `soup train` records at startup (#2024) is a separate record.
 
 The strict mode requires offline `--evidence`, `--config`, a local nonempty
 `--adapter` manifest and a readable task-eval file; it does not claim identity for

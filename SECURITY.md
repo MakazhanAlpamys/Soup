@@ -2,13 +2,16 @@
 
 ## Supported Versions
 
-Security fixes are shipped for the latest published release. We recommend always
-running the most recent version from PyPI (`pip install -U soup-cli`).
+Security fixes are shipped for the latest published release. 0.76.x, the last line
+that runs on Python 3.10 and exports AWQ / GPTQ, also receives security fixes only,
+until 0.78.0 is released. We recommend always running the most recent version from
+PyPI (`pip install -U soup-cli`).
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.76.x  | :white_check_mark: |
-| < 0.76  | :x:                |
+| Version | Supported                                     |
+| ------- | --------------------------------------------- |
+| 0.77.x  | :white_check_mark:                            |
+| 0.76.x  | :white_check_mark: security fixes only, until 0.78.0 |
+| < 0.76  | :x:                                           |
 
 ## Reporting a Vulnerability
 

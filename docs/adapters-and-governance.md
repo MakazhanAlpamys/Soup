@@ -316,7 +316,7 @@ soup registry promote llama31-chat-v1 --tag prod
 soup registry delete llama31-chat-v1 --yes
 ```
 
-**Training data:** `push --data <file>` stores the file's SHA-256 as the entry's `data_hash`, shown by `soup registry show`. It records the file registered as the training input, not proof of what the run trained on. The file must be under the current directory. Without `--data`, `register_from_run` copies a stored historical `training_data_sha256` without reopening today's path; legacy runs remain unknown. When both are present, the explicit file takes precedence for `data_hash`, while the separate historical `training_data_sha256` is retained. `entry_hash` binds the chosen data digest and any recorded base revision/source. Training-time hash capture itself remains #1764 part 2; reserving nullable storage does not claim the transformed examples consumed by training.
+**Training data:** `push --data <file>` stores the file's SHA-256 as the entry's `data_hash`, shown by `soup registry show`. It records the file registered as the training input, not proof of what the run trained on. The file must be under the current directory. Without `--data`, `register_from_run` copies a stored historical `training_data_sha256` without reopening today's path; legacy runs remain unknown. When both are present, the explicit file takes precedence for `data_hash`, while the separate historical `training_data_sha256` is retained. `entry_hash` binds the chosen data digest and any recorded base revision/source. `soup train` captures that digest at startup for a bounded, complete local text-training source (#2024); it identifies the source file's bytes, not the transformed examples consumed by training.
 
 **Base identity:** Registration copies the run's nullable base revision and its source;
 `soup registry show` exposes both. `hub_commit` identifies the commit passed to supported
@@ -773,12 +773,18 @@ recipe. Exit code 3 under `--strict` for CI gating.
 
 ## Pre-Flight Adapter Health Audit (`soup adapters check`)
 
-Pre-flight scan auditing single LoRA adapters for silent training failures (#1721):
+Pre-flight scan auditing single LoRA adapters for silent training failures (#1721).
+Inspection runs without a PyTorch dependency, but requires `numpy`
+(`pip install "soup-cli[train]"` or `pip install numpy`):
 - **Total and per-layer ||dW||_F**: Frobenius norm of LoRA parameter updates (dW = scaling * (B @ A), with alpha / r for standard LoRA and alpha / sqrt(r) for rsLoRA) with float64 accumulation via matrix trace contraction.
 - **Live fraction**: Proportion of adapter layers with active, non-zero updates.
 - **All-zero lora_B layers**: Flags un-trained or zero-initialized layers that failed to move during training.
 - **Incomplete LoRA pairs**: Flags orphaned or partially-saved projections missing either A or B.
 - **Leaked .inner. keys**: Flags legacy wrapper namespaces for adapters saved prior to the #1011 save-time guard.
+
+`soup adapters diff` and `soup adapters scan` also need only `numpy` to read weights.
+Writing with `soup adapters merge` or `soup adapters arithmetic` requires both `numpy`
+and `safetensors` (`pip install "soup-cli[train]"` or `pip install safetensors numpy`).
 
 ```bash
 soup adapters check path/to/adapter/

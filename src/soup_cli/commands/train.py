@@ -74,7 +74,7 @@ _UNWIRED_TRAINING_TUNABLES = (
     # checkpoint_eval_steps, checkpoint_eval_metric, checkpoint_eval_tasks,
     # checkpoint_keep_top, convergence_window, convergence_rel_tol) moved to
     # config/staged_fields.py (#808), and early_stop_patience moved in #761:
-    # the loader warns about them with the refusal date, so they are not listed here.
+    # the loader refuses them (config/staged_fields.py), so they are not listed here.
     "forgetting_threshold",
 )
 

@@ -1045,7 +1045,7 @@ data:
   add_new_tokens: ["<reasoning>", "</reasoning>"]
   new_special_tokens: ["<|tool_call|>"]
   mask_history: true              # train only on the LAST assistant turn
-  # Staged fields below warn in v0.76 and are refused as of v0.77 (#808):
+  # Staged fields below warned in v0.76; refused at load as of v0.77 (#808):
   # resize_vocab: true
   # split_thinking: true            # Qwen3-style <think> reasoning-block masking
   # image_min_pixels: 256

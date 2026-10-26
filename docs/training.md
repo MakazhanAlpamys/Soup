@@ -386,10 +386,11 @@ master weights (see [Process Reward Model](#process-reward-model-prm)):
 For these tasks an unset `quantization` resolves to `none`, so the stored config and the VRAM
 pre-flight describe the run that actually happens (#795).
 
-An explicit `4bit` or `8bit` (or `load_in_8bit: true`) **loads with a warning and resolves to
-`none`**, because every config Soup dumped while `4bit` was the default carries it literally.
-The warning names the task and the release that will refuse it; set `quantization: none` to
-silence it. A Quant Menu value (`gptq`, `awq`, ...) or a 4-bit-only setting such as
+An explicit `4bit` or `8bit` (or `load_in_8bit: true`) **is refused at config load as of
+v0.77**, naming the task: delete the line or set `quantization: none` (for `load_in_8bit: true`,
+delete that line and any `quantization` line). v0.76 loaded it with a warning and resolved it to
+`none` for one release, because every config Soup dumped while `4bit` was the default carries it
+literally (#795). A Quant Menu value (`gptq`, `awq`, ...) or a 4-bit-only setting such as
 `bnb_4bit_quant_storage` is refused at config load, naming the task. Every other task applies
 the field as documented in [Performance & Quantization](performance-and-quantization.md).
 
@@ -1317,7 +1318,7 @@ training:
   # vision_grpo: true                  # staged for VLM-RL; refused as of v0.77 — #808
 ```
 
-All flags shipped as schema gates in v0.50.0. `vllm_sleep_mode`, `openenv` rollout, and PRM training (`task: prm`) are live. Other rollout backends (`art`, `ruler`, `nemo_gym`) raise "not yet validated", while unconsumed staged flags (e.g. `long_context_grpo`, `vision_grpo`) warn in v0.76 and are refused as of v0.77 (#808).
+All flags shipped as schema gates in v0.50.0. `vllm_sleep_mode`, `openenv` rollout, and PRM training (`task: prm`) are live. Other rollout backends (`art`, `ruler`, `nemo_gym`) raise "not yet validated", while unconsumed staged flags (e.g. `long_context_grpo`, `vision_grpo`) warned in v0.76 and are refused at load as of v0.77 (#808).
 
 
 ## DPO Training
@@ -1993,7 +1994,7 @@ training:
   citation_style: bracket        # cite as [doc-1] inline
 ```
 
-`training.citation_recall_threshold` is validated but nothing gates a save or a run on it. Setting it warns in v0.76 and is refused as of v0.77 (#761).
+`training.citation_recall_threshold` is validated but nothing gates a save or a run on it. Setting it warned in v0.76; refused at load as of v0.77 (#761).
 
 ```jsonl
 # RAFT JSONL row shape

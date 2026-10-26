@@ -136,7 +136,7 @@ Usage: `soup ab [OPTIONS]`
 | `--input`, `-i` | text |  | yes | JSONL with {arm, &lt;metric>} per row. |
 | `--metric` | text |  | yes | Metric: latency \| judge_score \| retry_rate. |
 | `--alpha` | float | `0.05` |  | Error rate (0, 1) of both verdicts, kept for a test re-run after every new row, at any number of rows: with no difference the test ends in reject_h0, and with a true difference of --effect-size or more in accept_h0, each in at most this share of runs. |
-| `--beta` | float |  |  | Retired (#1418): ignored, with a warning. --alpha now bounds wrong accept_h0 verdicts too. |
+| `--beta` | float |  |  | Retired (#1418): refused with a usage error. --alpha now bounds wrong accept_h0 verdicts too. |
 | `--effect-size` | float | `0.1` |  | Minimum detectable difference in means. |
 | `--slack-url` | text |  |  | Optional Slack webhook URL — POSTed on a reject_h0 / accept_h0 decision (not on continue). SSRF-validated. |
 | `--discord-url` | text |  |  | Optional Discord webhook URL — POSTed on a reject_h0 / accept_h0 decision (not on continue). SSRF-validated. |
@@ -1695,7 +1695,7 @@ Usage: `soup deploy autopilot [OPTIONS]`
 | `--list`, `-l` | flag | off |  | List all known deploy profiles. |
 | `--measure` | flag | off |  | Run Quant-Lobotomy measurement on candidate quants. Requires --tasks. Results cached at \~/.soup/deploy_autopilot_cache.json (v0.53.1 #109). |
 | `--tasks` | text |  |  | JSONL eval tasks for --measure (one prompt + expected per line). |
-| `--measure-candidates` | text |  |  | Comma-separated quant candidates to measure (default: profile's primary quant). Example: 4bit,gptq,awq |
+| `--measure-candidates` | text |  |  | Comma-separated quant candidates to measure (default: profile's primary quant). Example: 4bit,8bit,fp8 |
 
 ### `soup deploy hf-space`
 

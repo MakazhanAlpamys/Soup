@@ -182,7 +182,7 @@ class MsprtConfig:
 
     metric: str
     alpha: float = 0.05  # bounds both wrong reject_h0 and wrong accept_h0 (#1418)
-    beta: float | None = None  # retired in #1418: ignored, with a warning
+    beta: float | None = None  # retired in #1418: a passed value is refused
     effect_size: float = 0.1  # Minimum detectable difference in means
 
     def __post_init__(self) -> None:
@@ -192,9 +192,10 @@ class MsprtConfig:
         object.__setattr__(self, "alpha", _require_unit_open(self.alpha, field="alpha"))
         # #1418 retired beta: accept_h0 now comes from a confidence sequence at
         # level alpha, so alpha bounds both wrong verdicts and there is no
-        # Type-II rate left to set. A beta that is passed is not used, and it
-        # says so rather than being dropped silently. #1339's alpha + beta < 1
-        # check guarded the old accept boundary and went with it.
+        # Type-II rate left to set. A beta that is passed is refused, saying
+        # why (``config/deprecation.py``; it warned and was ignored for one
+        # release first). #1339's alpha + beta < 1 check guarded the old accept
+        # boundary and went with it.
         if self.beta is not None:
             warn_deprecated_value(retired_beta_message())
         object.__setattr__(

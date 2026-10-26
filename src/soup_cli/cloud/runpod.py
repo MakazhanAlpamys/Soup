@@ -172,6 +172,9 @@ _CONTROLLER_ENV_NAMES: frozenset[str] = frozenset({
     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
     "http_proxy", "https_proxy", "all_proxy", "no_proxy",
     "TEMP", "TMP", "TMPDIR", "SYSTEMDRIVE", "WINDIR", "SSH_AUTH_SOCK",
+    # Windows program search: the extensions tried, and the setting that keeps
+    # the current directory out of it.
+    "PATHEXT", "NoDefaultCurrentDirectoryInExePath",
 })
 
 

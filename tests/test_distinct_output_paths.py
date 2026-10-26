@@ -55,6 +55,12 @@ def _flat(output: str) -> str:
     return " ".join(strip_ansi(output).split())
 
 
+def _plain(output: str) -> str:
+    """ANSI-stripped, whitespace-collapsed CLI output (the name the suite's ANSI
+    scanner recognises; the same as ``_flat``)."""
+    return _flat(output)
+
+
 # ---------------------------------------------------------------------------
 # The shared helper
 # ---------------------------------------------------------------------------
@@ -187,7 +193,11 @@ class TestIngestRefusesItsOwnInput:
         result = CliRunner().invoke(
             app, ["ingest", "--source", "langfuse", "--logs", "./traces.jsonl"]
         )
-        assert result.exit_code != 0, result.output
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert (
+            "--output 'traces.jsonl' is the same file as --logs 'traces.jsonl'; "
+            "choose a different --output"
+        ) in _plain(result.output)
         assert _read("traces.jsonl") == original
 
     def test_explicit_output_equal_to_logs_is_refused(self):
@@ -198,7 +208,10 @@ class TestIngestRefusesItsOwnInput:
             app,
             ["ingest", "--source", "langfuse", "--logs", "e.jsonl", "-o", "e.jsonl"],
         )
-        assert result.exit_code != 0, result.output
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert (
+            "--output 'e.jsonl' is the same file as --logs 'e.jsonl'; choose a different --output"
+        ) in _plain(result.output)
         assert _read("e.jsonl") == original
 
     def test_a_logs_directory_leaves_an_existing_output_untouched(self):
@@ -210,7 +223,10 @@ class TestIngestRefusesItsOwnInput:
         result = CliRunner().invoke(
             app, ["ingest", "--source", "langfuse", "--logs", "some_dir"]
         )
-        assert result.exit_code != 0
+        # A named refusal, not an uncaught FileNotFoundError.
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert isinstance(result.exception, SystemExit), repr(result.exception)
+        assert "--logs 'some_dir' is a directory, not an export file" in _plain(result.output)
         assert _read("traces.jsonl") == good
 
     def test_a_non_utf8_export_leaves_an_existing_output_untouched(self):
@@ -222,7 +238,10 @@ class TestIngestRefusesItsOwnInput:
         result = CliRunner().invoke(
             app, ["ingest", "--source", "langfuse", "--logs", "bad.jsonl"]
         )
-        assert result.exit_code != 0
+        # A named refusal, not an uncaught UnicodeDecodeError.
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert isinstance(result.exception, SystemExit), repr(result.exception)
+        assert "--logs 'bad.jsonl' is not valid UTF-8 (byte 0)" in _plain(result.output)
         assert _read("traces.jsonl") == good
         # The staging file of the atomic write must be cleaned up too.
         assert [n for n in os.listdir(".") if n.startswith(".soup.")] == []

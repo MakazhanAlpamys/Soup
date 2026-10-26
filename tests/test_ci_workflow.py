@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.utils.ci_workflow import render_soup_gate_workflow
+from tests.conftest import strip_ansi
 
 
 def _validation_args(body):
@@ -41,15 +42,26 @@ def test_rendered_gate_refuses_any_partial_drop(
     assert standalone.exit_code == 0, (standalone.output, repr(standalone.exception))
 
 
-@pytest.mark.parametrize("content", ["", "\n", '{"instruction":"hi","output":"ok"}\n42\n'])
-def test_rendered_gate_refuses_empty_or_skipped_rows(tmp_path, monkeypatch, content):
+@pytest.mark.parametrize(("content", "code", "message"), [
+    ("", 3, "Empty dataset - cannot detect format"),
+    ("\n", 3, "Empty dataset - cannot detect format"),
+    (
+        '{"instruction":"hi","output":"ok"}\n42\n',
+        2,
+        "Validation failed: valid fraction 0.500 is below --min-valid-fraction 1.000.",
+    ),
+], ids=["empty", "blank-line", "skipped-row"])
+def test_rendered_gate_refuses_empty_or_skipped_rows(
+    tmp_path, monkeypatch, content, code, message,
+):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "train.jsonl").write_text(content, encoding="utf-8")
     body = render_soup_gate_workflow(
         data_path="train.jsonl", suite_path="expectations.yaml", evidence_path="evidence.json",
     )
     result = CliRunner().invoke(app, _validation_args(body))
-    assert result.exit_code in (2, 3), (result.output, repr(result.exception))
+    assert result.exit_code == code, (result.output, repr(result.exception))
+    assert message in " ".join(strip_ansi(result.output).split()), result.output
 
 
 def test_ci_init_writes_strict_command_and_preserves_existing_workflow(tmp_path, monkeypatch):

@@ -728,12 +728,20 @@ the running Soup version, runs training over SSH and copies the configured relat
 output directory back before deleting the Pod. Choose a fresh local output path;
 existing outputs, symlink/junction paths and path components starting with `-` are
 refused before allocation and rechecked before copying. SCP separates options from
-its operands with `--`. Submission starts Python in isolated mode (`-I`) and passes
+its operands with `--` and writes into a new, empty directory created next to the
+output path for the copy; only the expected output directory, holding directories
+and regular files only, is then moved to the output path. Anything else stops the
+move and leaves that directory in place for inspection. A failed or timed-out copy
+removes that directory when nothing was written to it; otherwise the failure notice
+names it, with the partial copy inside. `ssh` and `scp` run by the
+absolute path found in an absolute `PATH` entry (the current directory and relative
+entries are not searched), with the controller's environment minus `RUNPOD_API_KEY`.
+Submission starts Python in isolated mode (`-I`) and passes
 only the RunPod token/key path, `PATH`, `HOME`, `USERPROFILE`, proxy settings
 (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` and their lowercase forms),
 temporary-directory settings (`TEMP`, `TMP`, `TMPDIR`), Windows settings
-(`SYSTEMROOT`, `SYSTEMDRIVE`, `WINDIR`) and `SSH_AUTH_SOCK` when
-present. Environment names are matched case-insensitively on Windows. The controller
+(`SYSTEMROOT`, `SYSTEMDRIVE`, `WINDIR`, `PATHEXT`, `NoDefaultCurrentDirectoryInExePath`)
+and `SSH_AUTH_SOCK` when present. Environment names are matched case-insensitively on Windows. The controller
 reconfigures stdout/stderr to replace characters the pipe encoding cannot represent,
 because isolated Python ignores `PYTHONIOENCODING` and `PYTHONUTF8`.
 SSH/SCP use `IdentitiesOnly=yes` with the selected key and a temporary per-run known-hosts
@@ -1233,8 +1241,8 @@ are left in place.
 The new nullable `runs.base_revision`, `runs.base_revision_source` and
 `runs.training_data_sha256` columns upgrade existing databases in place. Historical
 rows stay unknown; Soup never fills them from today's Hub state or dataset bytes.
-Training-data hash capture remains separate work (#1764 part 2); this change reserves
-its storage/transfer contract without hashing training inputs.
+`soup train` fills `runs.training_data_sha256` at startup for a bounded, complete local
+text-training source (#2024); every other input stays unknown.
 
 An unavailable/offline Hub metadata lookup preserves the existing load flow and
 records an unknown revision. A local `snapshots/<40-hex>` directory records

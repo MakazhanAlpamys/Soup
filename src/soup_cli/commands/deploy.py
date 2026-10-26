@@ -621,7 +621,7 @@ def autopilot(
         "--measure-candidates",
         help=(
             "Comma-separated quant candidates to measure (default: profile's "
-            "primary quant). Example: 4bit,gptq,awq"
+            "primary quant). Example: 4bit,8bit,fp8"
         ),
     ),
 ):

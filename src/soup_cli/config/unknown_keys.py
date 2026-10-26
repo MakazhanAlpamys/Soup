@@ -140,7 +140,12 @@ def _walk(
             return
         if not isinstance(key, str):
             continue
-        shown = key if len(key) <= _MAX_KEY_LEN else key[:_MAX_KEY_LEN] + "..."
+        # On one line, whitespace collapsed: the report prints one line per key,
+        # so a line break in a key would print a second line that reads as a
+        # report line of its own. Cut first, so a huge key costs no more work.
+        shown = " ".join(key[:_MAX_KEY_LEN].split())
+        if len(key) > _MAX_KEY_LEN:
+            shown += "..."
         path = f"{prefix}{shown}"
         if key not in declared:
             suggestions = tuple(

@@ -1012,6 +1012,13 @@ Three POST routes are now available on `soup serve`:
   network and PID namespaces for the run, and on macOS when `sandbox-exec` is on `PATH`.
   Anywhere else it answers HTTP 501 without running the code, including on Windows, on
   Linux with Python 3.11, and on a Linux host or container that refuses those namespaces.
+  This is not a filesystem sandbox: the code runs as the server's user, with the network
+  cut and a scrubbed environment, and can read and write every file that user can (SSH
+  keys, Hugging Face tokens, configs) and, on Linux, send signals to that user's processes.
+  On macOS the profile allows reading every file, writing in the temporary directories and
+  sending signals only to the run itself. Run
+  `soup serve` in a container, a VM or under a dedicated unprivileged account for any
+  caller you do not fully trust.
 - **`POST /v1/tools/web_search`** — searches the web and returns domain-filtered results
   as `[{url, title, snippet}]` with snippets sanitized (null bytes stripped).
   Deny-by-default via `WebSearchConfig.domain_allowlist`.
@@ -1021,8 +1028,11 @@ Three POST routes are now available on `soup serve`:
   Enforces the `--tool-auth-token` Bearer token on every bind,
   a 5-second wall-clock timeout, a minimal secret-scrubbed environment, and a combined
   10KB stdout/stderr streaming kill limit. Returns the real stdout, stderr, exit code,
-  and timeout state. This is not a filesystem sandbox: the child retains the server
-  process's read access to world-readable system files. The endpoint fails closed with
+  and timeout state. This is not a filesystem sandbox: as with `/v1/tools/python`, the
+  command runs as the server's user and can read and write every file that user can and,
+  on Linux, send signals to that user's processes (on macOS the same profile limits writes
+  to the temporary directories and signals to the run itself); only the network is cut.
+  The endpoint fails closed with
   HTTP 501 when strict OS isolation is unavailable (including on Windows or restricted
   Linux containers).
 
@@ -1043,6 +1053,12 @@ curl -X POST http://127.0.0.1:8000/v1/tools/python \
   -H "Content-Type: application/json" \
   -d '{"code": "print(1)"}'
 ```
+
+The token is the only thing between a caller and code execution as the server's user. Use
+a long random one, such as the one generated above
+(`python -c "import secrets; print(secrets.token_urlsafe(32))"`), and keep the server on
+loopback or behind a proxy that terminates TLS: the Bearer header is sent in clear text
+over plain HTTP.
 
 `/v1/tools/web_search`, `/v1/thumbs` and the adapter routes keep their rule: on a loopback
 bind they take a token only when the server has one.

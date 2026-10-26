@@ -93,56 +93,60 @@ yerine altyapıyla boğuşarak geçiriyor. Soup bunu çözer.
 
 ## Yenilikler
 
-**v0.76.0 — Soup'un kabul edip hiç uygulamadığı ayarlar artık yüklemeyi durduruyor.** Doğrulanan ve
-belgelenen, ancak yapılandırdığını iddia ettikleri yolda hiçbir şey tarafından okunmayan seçenekler artık
-yükleme sırasında reddediliyor; ayarın adını ve neyin değiştirileceğini belirtiyor. Geri kalanlar uyarı
-veriyor ve onları reddedecek sürümü belirtiyor. Daha önce yüklenen bir yapılandırma artık yüklenmeyebilir:
-önce `soup doctor --config soup.yaml` komutunu çalıştırın.
+**v0.77.0 — v0.76'nın uyardığı şeyler artık reddediliyor.** Hiçbir şeyin okumadığı 31 yapılandırma
+alanı ve kullanımdan kaldırılmış üç değer artık bir uyarıyla yüklenmiyor: yükleme, her ayar için o ayarı
+adlandıran ve neyin silineceğini söyleyen bir satırla duruyor. v0.76'da uyarılarla ya da sessizce yüklenen bir
+yapılandırma v0.77'de yüklenmeyebilir: önce `soup doctor --config soup.yaml` komutunu çalıştırın.
 
-- **Geriye dönük uyumsuz değişiklik: hiç etkili olmayan bir ayar yüklemede reddediliyor.** Bunların
-  arasında `training.quantization_aware: true` (nicelemeye duyarlı eğitimi hiç çalıştırmıyordu),
-  `training.use_longlora`, `training.ebft_variant`, `training.gdpo_variant`, hiçbir hazırlık adımının
-  okumadığı yerlerdeki `training.rope_scaling_type`, `freeze_layers` / `freeze_ratio` (transformers
-  arka ucunda metin `sft` / `tts` yolunun dışında), `auto_mixed_precision` (`sft` / `tts` dışında)
-  ve unsloth hazırlık adımı bulunmayan yedi görevde daha `backend: unsloth` var. Her mesaj alanın adını
-  ve neyin değiştirileceğini belirtiyor. `lr_groups`, `early_stop_patience`, `forgetting_eval_steps` ve
-  okunmayan diğer ayarlar artık yüklemede uyarı veriyor ve v0.77'den itibaren reddedilecek.
-- **Doğrulama kaybı artık değerlendiriliyor.** `data.val_split`, her çalıştırmada satırları eğitimin
-  dışında tutuyordu ve transformers arka ucundaki hiçbir trainer bunları değerlendirmiyordu. Artık bir
-  bölme alan her görev, onu her epoch sonunda ya da `training.eval_steps` ile her N adımda değerlendiriyor
-  ve doğrulama kaybını kaydediyor; çalıştırmalar yüzde birkaç daha uzun sürüyor.
-  **`grpo`, `ppo` ve `online_dpo` için geriye dönük uyumsuz:** varsayılan olarak artık satır ayırmıyorlar
-  (`data.val_split` bir notla yok sayılıyor), dolayısıyla her satır eğitime giriyor.
-- **Geriye dönük uyumsuz değişiklik: standart olmayan her `grpo_variant`, `grpo_beta` KL cezasını
-  uyguluyor.** `gspo`, `dapo`, `dr_grpo`, `bnpo`, `two_sided` ve `rft`, `grpo_beta` değerini doğrulayıp
-  atıyordu; bu yüzden mevcut varyant yapılandırmaları önceki çalıştırmaları yeniden üretmeyecek.
-  `grpo_beta: 0` artık KL'siz çalışıyor ve referans modelin ileri geçişini atlıyor.
-- **Katman akışı disk katmanını bir arka plan iş parçacığında, doğrudan G/Ç (direct I/O) ile okuyor ve
-  onu NVMe sürücülere şeritleyebiliyor.** RAM'den büyük, 36 GB'lık, 70B biçimli bir NF4 deposunda (tek
-  bir RTX 5070 Laptop 8 GB makinesi), soğuk bir adım eşzamanlı okumada 110.5 s iken 16.2-17.3 s'ye düştü;
-  `SOUP_LAYER_STREAM_STRIPE_DIRS` ile iki sürücüye yayıldığında ise 17.4 s'den 9.97 s'ye indi (sürekli yük
-  altında bir sonda ölçümü: iki tur, 1.28x ve 1.41x, resmî bir hüküm yok;
-  [kayıt](benchmarks/probe-rtx5070-two-drive-sustained.md)). RAM'e sığan bir depo RAM katmanında hâlâ daha
-  hızlı ve `stream_source: auto` onu seçiyor. İsteğe bağlıdır (`stream_layers: true`) ve hâlâ BETA;
-  kayıtlar: [doğrudan G/Ç](benchmarks/gate-974-disk-tier-direct-io.md),
-  [şeritleme](benchmarks/gate-two-drive-striping.md).
-- **Yeni komutlar ve seçenekler.** `soup adapters check`, bir LoRA adaptörünü sessiz arızalara karşı
-  tarar; `soup bench train`, sabit sayıda adım eğitir ve model eğitilmiyorsa çıkış kodu 1 ile biter
-  (transformers arka ucunda `task: sft` için geçerlidir; `soup bench` artık bir gruptur ve
-  `soup bench infer` eski çıkarım kıyaslamasıdır); `soup data clean`, girdi dosyasına dokunmadan bir veri
-  kümesini temizler ve onarır; `soup recipes verify`, meta aygıtında, hiçbir ağırlık indirmeden, gönderilen
-  her tarifin bir LoRA adaptörü bağlayabildiğini denetler; `soup rewind`, bir kayıp sıçramasının
-  arkasındaki veri kümesi satırlarını adlandırır. `soup infer`, isteğe bağlı `--batch-size` ve deneysel bir
-  `--cuda-graphs` kazandı (PyTorch 2.14 veya daha yeni; tek bir RTX 5070 Laptop'ta, sabitlenmemiş,
-  FP16'da Qwen2.5-1.5B ile, onunla yapılan en yavaş çalıştırma, onsuz yapılan en hızlı çalıştırmadan
-  kod çözmede 2.9x daha hızlıydı). `soup ab`, iki yönlü, varyansa karşı dayanıklı bir test çalıştırır;
-  `soup adapters sign --backend sigstore` ve `soup attest emit --sign sigstore` ise Sigstore anahtarsız
-  OIDC ile imzalar (`pip install "soup-cli[sigstore]"`).
-
-> v0.77'den itibaren yalnızca Python **3.11–3.13**. Python 3.10, 2026-10-01'de kullanım ömrünün
-> sonuna (end of life) ulaştı; 3.10 üzerinde pip v0.76'yı kurmaya devam eder. 3.14+ sürümlerinde
-> pip, üst sınırı olmayan son sürüm olan v0.72.4'e geri döner ve orada test edilmemiş PyTorch
-> wheel paketlerini seçer.
+- **Geriye dönük uyumsuz değişiklik: bekletilen (staged) alanlar ve kullanımdan kaldırılmış değerler
+  reddediliyor.** Alanlar arasında `training.lr_groups`, `early_stop_patience`, `forgetting_eval_steps`,
+  `checkpoint_eval_*`, `quantize_ref_model`, `long_context_grpo`, `vision_grpo`, `data.split_thinking`
+  ve `data.video_*` anahtarları var. `training.rl_checkpoint_include_ref_model` ve
+  `rl_checkpoint_include_rollout_buffer` v0.76.0'dan sonra bekletmeye alındı; bu yüzden hiçbir sürüm
+  önce onlar hakkında uyarmadı. Değerler: `data.remove_unused_columns: true`, hiç niceleme yapmayan bir
+  görevde `training.quantization: 4bit` / `8bit` (veya `load_in_8bit: true`) ve `soup ab --beta`.
+  v0.76'nın hiçbir şey söylemeden yok saydığı on beş ayar da artık reddediliyor; örneğin hiçbir
+  şeyin uygulamadığı yerlerde `use_mod` veya `neftune_alpha`, LoRA rank'ı ile `expand_layers`, Unsloth'ta
+  `8bit` veya görsel SFT ve MLX ya da Unsloth'ta `lora.rank_pattern`: CHANGELOG'daki yükseltme notlarına
+  bakın.
+- **Geriye dönük uyumsuz değişiklik: Python 3.11–3.13, AWQ ve GPTQ dışa aktarımı yok, iki `soup serve`
+  rotası için belirteç.** Python 3.10 artık desteklenmiyor (destek süresi 2026-10-01'de sona erdi);
+  3.10'da pip v0.76.x'i seçmeye devam ediyor. `soup export --format awq` / `gptq` ve
+  `soup quantize --to awq` / `gptq` kaldırıldı, çünkü her iki üst proje de arşivlenmiş durumda: `gguf`,
+  `onnx`, `tensorrt`, `bitnet` veya `tq1_0` kullanın ya da v0.76.x'te kalın. `/v1/tools/python` ve
+  `/v1/tools/bash`, sunucu `--tool-auth-token` (veya `SOUP_TOOL_AUTH_TOKEN`) ile başlatılmadıysa her
+  bağlamada 401 döndürüyor; `/v1/tools/python`, ana makinede işletim sistemi düzeyinde yalıtım yoksa
+  bash'in zaten yaptığı gibi 501 döndürüyor.
+- **DPO, ORPO, SimPO ve KTO, Apple Silicon üzerinde yerel olarak çalışıyor.** `backend: mlx` ile
+  `task: dpo`, `orpo`, `simpo` ve `kto`, Soup'un kendi MLX döngüsüyle TRL'nin hedefleri üzerinden
+  eğitiliyor (ORPO ve SimPO referans model olmadan). MLX metin SFT'si yerel DoRA,
+  `training.eval_steps`, `training.seed` ve kayıp bekçisini (loss watchdog) kazandı.
+  `lora.use_rslora` artık MLX ve Unsloth üzerinde uygulanıyor; bu yüzden oradaki bir rsLoRA
+  çalıştırması istediği ölçekte eğitiliyor ve sonuçları değişiyor.
+- **Katman akışı DeepSeek-V3 ailesinin MoE modellerine ulaştı.** Soup'un katman akışı (L2L'nin bir
+  uygulaması, Pudipeddi et al. 2020) artık `model_type: deepseek_v3` modelini, yerleşik ve akışlı model
+  arasında ileri ve geri geçişte eşlikle (parity) akıtıyor ve FP8 blok nicelemeli checkpoint'leri
+  parçalama (shard) sırasında nicelemeden çözüyor. Kimi-K2-Base ve -Instruct alan alan bir denetimden
+  geçerek kabul ediliyor (K2 biçimindeki küçük bir checkpoint CPU'da bit bit aynı sonuçla akıyor; K2'nin
+  kendisi üzerinde hiçbir şey eğitilmedi). `training.stream_expert_layout: per_expert` her seferinde
+  tek bir yönlendirilmiş uzmanı akıtıyor: tek bir RTX 5070 Laptop 8 GB üzerinde aynı Moonlight-16B
+  LoRA yapılandırması, birleşik (fused) düzendeki 3.1 GB'a karşı 1.0 GB GPU belleğiyle zirve yaptı
+  (bf16 uzmanlara karşı NF4 uzmanlar, farklı önbellek katmanları); adım süresi yaklaşık 2.7x
+  ([kayıt](benchmarks/probe-rtx5070-moonlight-16b.md)). `training.stream_recompute: off` / `auto`,
+  akışlı katmanların aktivasyonlarını yeniden hesaplamak yerine saklıyor ve gradyanlar bit bit aynı
+  kalıyor: aynı kartın RAM katmanında bir Mistral-7B NF4 adımı 512 token'da %22, 2048'de %8.5 daha hızlı
+  ([kayıt](benchmarks/gate-stream-recompute.md)). İsteğe bağlıdır (`stream_layers: true`), BETA.
+- **Doğrulanabilir köken (provenance).** `soup registry push --data <file>` eğitim dosyasının SHA-256
+  özetini kaydediyor ve `--idempotency-key` bir gönderimi yeniden denemeye güvenli hâle getiriyor;
+  transformers arka ucunda yerleşik, katman akışlı ve çoklu GPU çalıştırmaları, yükledikleri temel
+  modelin Hub commit'ini kaydediyor; `soup ship --require-provenance` kanıtı, damgalandığı adaptör,
+  görev ve kaynak baytları, paket (suite) sürümü ve karar politikasıyla karşılaştırıyor.
+- **Ayrıca yeni.** `soup --version`; `soup data ingest` içinde PDF ve DOCX için
+  `pip install "soup-cli[documents]"`; `soup merge --low-memory`; GRPO artık bir LLM hakemiyle
+  değerlendirme yapabiliyor (`training.reward_fn: judge_rank`); ve
+  [`docs/config-reference.md`](docs/config-reference.md) ile
+  [`docs/cli-reference.md`](docs/cli-reference.md) koddan üretiliyor; bu sayfalardan biri kodun
+  yaptığını artık söylemediğinde test paketi başarısız oluyor.
 
 Eski sürümlerin öne çıkanları [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) sayfasında.
 
