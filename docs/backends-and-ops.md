@@ -982,6 +982,10 @@ PyTorch reinstall hint based on the CUDA version reported by the driver. When
 the driver version cannot be mapped to a supported wheel, the hint remains
 actionable without constructing a `whl/None` URL.
 
+If `nvidia-smi` detects a card but `CUDA_VISIBLE_DEVICES=-1` hides it from
+PyTorch, `soup doctor` reports that setting and recommends unsetting it to use
+the GPU, without suggesting a PyTorch reinstall.
+
 
 ## Version Info
 

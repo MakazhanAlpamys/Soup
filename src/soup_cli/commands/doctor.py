@@ -802,6 +802,12 @@ def _detect_gpu_hw_without_torch_cuda() -> str:
     from rich.markup import escape as _markup_escape
 
     gpu_label = _markup_escape(raw_label)
+    if os.environ.get("CUDA_VISIBLE_DEVICES") == "-1":
+        return (
+            f"GPU hardware present ({gpu_label}) but CUDA_VISIBLE_DEVICES=-1 "
+            "hides it from torch. Unset CUDA_VISIBLE_DEVICES to use the GPU."
+        )
+
     try:
         from importlib.metadata import version as _pkgver
 
