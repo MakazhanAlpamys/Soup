@@ -386,10 +386,11 @@ master weights (see [Process Reward Model](#process-reward-model-prm)):
 For these tasks an unset `quantization` resolves to `none`, so the stored config and the VRAM
 pre-flight describe the run that actually happens (#795).
 
-An explicit `4bit` or `8bit` (or `load_in_8bit: true`) **loads with a warning and resolves to
-`none`**, because every config Soup dumped while `4bit` was the default carries it literally.
-The warning names the task and the release that will refuse it; set `quantization: none` to
-silence it. A Quant Menu value (`gptq`, `awq`, ...) or a 4-bit-only setting such as
+An explicit `4bit` or `8bit` (or `load_in_8bit: true`) **is refused at config load as of
+v0.77**, naming the task: delete the line or set `quantization: none` (for `load_in_8bit: true`,
+delete that line and any `quantization` line). v0.76 loaded it with a warning and resolved it to
+`none` for one release, because every config Soup dumped while `4bit` was the default carries it
+literally (#795). A Quant Menu value (`gptq`, `awq`, ...) or a 4-bit-only setting such as
 `bnb_4bit_quant_storage` is refused at config load, naming the task. Every other task applies
 the field as documented in [Performance & Quantization](performance-and-quantization.md).
 
@@ -1317,7 +1318,7 @@ training:
   # vision_grpo: true                  # staged for VLM-RL; refused as of v0.77 — #808
 ```
 
-All flags shipped as schema gates in v0.50.0. `vllm_sleep_mode`, `openenv` rollout, and PRM training (`task: prm`) are live. Other rollout backends (`art`, `ruler`, `nemo_gym`) raise "not yet validated", while unconsumed staged flags (e.g. `long_context_grpo`, `vision_grpo`) warn in v0.76 and are refused as of v0.77 (#808).
+All flags shipped as schema gates in v0.50.0. `vllm_sleep_mode`, `openenv` rollout, and PRM training (`task: prm`) are live. Other rollout backends (`art`, `ruler`, `nemo_gym`) raise "not yet validated", while unconsumed staged flags (e.g. `long_context_grpo`, `vision_grpo`) warned in v0.76 and are refused at load as of v0.77 (#808).
 
 
 ## DPO Training
@@ -1467,6 +1468,11 @@ unchanged, and the step still counts toward the step total and the LR schedule.
 The skipped-step count is logged at the end of the run (as a console warning
 when the fraction exceeds 5%) and persisted in `trainer_state.json` so
 `soup adapters audit` can see it.
+
+On Apple Silicon, `backend: mlx` trains GRPO natively with the same objective
+(TRL's `loss_type="dapo"` defaults) and the built-in rewards; see
+[GRPO on MLX](backends-and-ops.md#grpo-on-mlx) for the units, the rollout
+mode and what it refuses.
 
 **Built-in reward functions:**
 - `accuracy` — 1.0 when the completion's final answer matches the gold's, else 0.0 (no partial credit)
@@ -1988,7 +1994,7 @@ training:
   citation_style: bracket        # cite as [doc-1] inline
 ```
 
-`training.citation_recall_threshold` is validated but nothing gates a save or a run on it. Setting it warns in v0.76 and is refused as of v0.77 (#761).
+`training.citation_recall_threshold` is validated but nothing gates a save or a run on it. Setting it warned in v0.76; refused at load as of v0.77 (#761).
 
 ```jsonl
 # RAFT JSONL row shape
@@ -2062,14 +2068,21 @@ Both configs must write to different, non-nested output directories: `soup ra-di
 
 ## Curriculum-Aware Training (BETA)
 
-Layer dynamic re-weighting on top of the static `curriculum` bucketer. Every N steps the trainer aggregates per-sample loss + grad-norm into a per-bucket uncertainty signal, runs it through a softmax (temperature-controlled) with floor (water-filling so no bucket drops below `curriculum_dynamic_floor`), and re-weights the sampler. Empty buckets fall back to the median of populated buckets; degenerate inputs return uniform.
+Layer dynamic uncertainty telemetry on top of the static `curriculum` bucketer (#808).
+Every N steps the trainer aggregates per-sample loss + grad-norm into a per-bucket
+uncertainty signal, runs it through a softmax (temperature-controlled) with floor
+(water-filling so no bucket drops below `curriculum_dynamic_floor`), and logs the
+tracked bucket weights to `curriculum_history.jsonl` for curve inspection. The weights
+are only written to `curriculum_history.jsonl`; they do not change which samples a
+batch contains. Empty buckets fall back to the median of populated buckets;
+degenerate inputs return uniform.
 
 ```yaml
 training:
   curriculum: true                          # static bucketer (v0.23.0)
   curriculum_buckets: 4
   curriculum_metric: perplexity             # length (default) | loss | perplexity
-  curriculum_dynamic: true                  # NEW — dynamic re-weighting
+  curriculum_dynamic: true                  # dynamic uncertainty telemetry (#808)
   curriculum_dynamic_recompute_steps: 50    # refresh every 50 global steps
   curriculum_dynamic_floor: 0.05            # min weight per bucket
   curriculum_dynamic_temperature: 1.0       # softmax temp on uncertainty

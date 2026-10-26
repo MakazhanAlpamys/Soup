@@ -92,52 +92,55 @@ soup train
 
 ## ما الجديد
 
-**v0.76.0 — الإعدادات التي كان Soup يقبلها ولا يطبّقها أبدًا باتت توقف التحميل.** الخيارات التي كان يُتحقَّق
-من صحتها وتُوثَّق ولا يقرؤها شيء في المسار الذي تزعم أنها تضبطه، صارت تُرفَض عند التحميل، مع تسمية
-الإعداد وما ينبغي تغييره؛ أما البقية فتُصدر تحذيرًا وتسمّي الإصدار الذي سيرفضها. وقد يتوقف تحميل إعداد
-كان يُحمَّل من قبل: شغّل `soup doctor --config soup.yaml` أولًا.
+**v0.77.0 — ما حذّر منه v0.76 صار يُرفَض الآن.** لم تعد 31 حقلًا من حقول الإعداد لا يقرؤها شيء، ولا ثلاث
+قيم مُهمَلة (deprecated)، تُحمَّل مع تحذير: بل يتوقف التحميل بسطر لكل إعداد يسمّيه ويقول ما ينبغي حذفه.
+وقد يتوقف على v0.77 تحميلُ إعداد كان يُحمَّل على v0.76، مع تحذيرات أو بصمت: شغّل `soup doctor --config soup.yaml`
+أولًا.
 
-- **تغيير غير متوافق مع الإصدارات السابقة: يُرفَض عند التحميل أي إعداد لم يكن له أي أثر.** ومن ذلك
-  `training.quantization_aware: true` (فلم يكن يشغّل تدريبًا واعيًا بالتكميم قط)، و`training.use_longlora`،
-  و`training.ebft_variant`، و`training.gdpo_variant`، و`training.rope_scaling_type` حيث لا تقرؤه أي خطوة
-  تهيئة، و`freeze_layers` / `freeze_ratio` خارج مسار `sft` / `tts` النصي على الواجهة الخلفية transformers،
-  و`auto_mixed_precision` خارج `sft` / `tts`، و`backend: unsloth` في سبع مهام أخرى ليست لها خطوة تهيئة
-  لـ unsloth. وتسمّي كل رسالة الحقل وما ينبغي تغييره. أما `lr_groups` و`early_stop_patience`
-  و`forgetting_eval_steps` وغيرها من الإعدادات التي لا يقرؤها شيء فتُصدر تحذيرًا عند التحميل الآن، وستُرفَض
-  بدءًا من v0.77.
-- **صارت خسارة التحقق تُقيَّم الآن.** كان `data.val_split` يستبعد صفوفًا من التدريب في كل تشغيل، ولم يكن
-  أي مدرّب على الواجهة الخلفية transformers يقيّمها. أما الآن فكل مهمة تحصل على قسم للتحقق تقيّمه في نهاية
-  كل حقبة (epoch)، أو كل N خطوة عبر `training.eval_steps`، وتسجّل خسارة التحقق؛ وتستغرق التشغيلات
-  أطول ببضعة في المئة. **تغيير غير متوافق مع الإصدارات السابقة بالنسبة إلى `grpo` و`ppo` و`online_dpo`:**
-  فهي افتراضيًا لم تعد تستبعد صفوفًا (يُتجاهَل `data.val_split` مع ملاحظة)، ولذلك يُدرَّب النموذج على كل صف.
-- **تغيير غير متوافق مع الإصدارات السابقة: كل `grpo_variant` غير قياسي يطبّق عقوبة KL الخاصة بـ `grpo_beta`.**
-  كانت `gspo` و`dapo` و`dr_grpo` و`bnpo` و`two_sided` و`rft` تتحقق من `grpo_beta` ثم تُسقطه، ولذلك لن تعيد
-  إعدادات المتغيّرات الموجودة إنتاج التشغيلات السابقة. وصار `grpo_beta: 0` يعمل بلا KL ويتخطى التمريرة
-  الأمامية للنموذج المرجعي.
-- **يقرأ بثّ الطبقات طبقته القرصية على خيط في الخلفية، عبر الإدخال/الإخراج المباشر (direct I/O)، ويمكنه توزيعها
-  على عدة أقراص NVMe.** على مخزن NF4 بحجم 36 GB وبهيئة نموذج 70B أكبر من ذاكرة RAM (جهاز واحد بوحدة
-  RTX 5070 Laptop سعة 8 GB)، انخفضت الخطوة الباردة من 110.5 s مع القراءة المتزامنة إلى 16.2-17.3 s، ومن
-  17.4 s إلى 9.97 s عبر قرصين باستخدام `SOUP_LAYER_STREAM_STRIPE_DIRS` (مسبار تحت حمل متواصل: جولتان،
-  1.28x و1.41x، بلا حكم رسمي؛ [السجل](benchmarks/probe-rtx5070-two-drive-sustained.md)). أما المخزن الذي
-  يتسع في ذاكرة RAM فيظل أسرع على طبقة RAM، وهي ما يختاره `stream_source: auto`. وهو لا يُفعَّل إلا بطلب
-  صريح (`stream_layers: true`) ولا يزال BETA؛ والسجلات:
-  [الإدخال/الإخراج المباشر](benchmarks/gate-974-disk-tier-direct-io.md)،
-  [التوزيع على الأقراص](benchmarks/gate-two-drive-striping.md).
-- **أوامر وخيارات جديدة.** يفحص `soup adapters check` مهايئ LoRA بحثًا عن الإخفاق الصامت؛ ويدرّب
-  `soup bench train` عددًا ثابتًا من الخطوات ويخرج برمز 1 إذا لم يكن النموذج يتدرّب (ويغطي `task: sft`
-  على الواجهة الخلفية transformers؛ وصار `soup bench` مجموعة أوامر، و`soup bench infer` هو معيار
-  الاستدلال القديم)؛ ويطهّر `soup data clean` مجموعة بيانات ويصلحها دون المساس بملف الإدخال؛
-  ويتحقق `soup recipes verify` على جهاز meta، ودون تنزيل أي أوزان، من أن كل وصفة مشحونة تستطيع إرفاق
-  مهايئ LoRA؛ ويسمّي `soup rewind` صفوف مجموعة البيانات التي تقف وراء قفزة الخسارة. ويكتسب `soup infer`
-  الخيار الاختياري <span dir="ltr">`--batch-size`</span> والخيار التجريبي <span dir="ltr">`--cuda-graphs`</span>
-  (يتطلب PyTorch 2.14 أو أحدث؛ على جهاز RTX 5070 Laptop واحد، دون تثبيت، مع Qwen2.5-1.5B بدقة FP16،
-  كان أبطأ تشغيل مع هذا الخيار أسرع بمقدار 2.9x في فك الترميز من أسرع تشغيل بدونه). ويُجري `soup ab` اختبارًا
-  ثنائي الجانب متينًا إزاء التباين، ويوقّع `soup adapters sign --backend sigstore`
-  و`soup attest emit --sign sigstore` باستخدام Sigstore OIDC بلا مفاتيح
-  (<span dir="ltr">`pip install "soup-cli[sigstore]"`</span>).
-
-> Python **3.11–3.13** فقط. وعلى الإصدار 3.14 وما بعده كان pip يختار حزم PyTorch (wheels) غير مختبرة تنهار في
-> الامتداد الأصلي قبل أن يعمل Soup أصلًا.
+- **تغيير غير متوافق مع الإصدارات السابقة: تُرفَض الحقول المرحلية (staged) والقيم المُهمَلة.** ومن الحقول
+  `training.lr_groups` و`early_stop_patience` و`forgetting_eval_steps` و`checkpoint_eval_*`
+  و`quantize_ref_model` و`long_context_grpo` و`vision_grpo` و`data.split_thinking` ومفاتيح
+  `data.video_*`. وقد أُدرج `training.rl_checkpoint_include_ref_model`
+  و`rl_checkpoint_include_rollout_buffer` بعد v0.76.0، فلم يحذّر منهما أي إصدار قبل ذلك. أما القيم فهي:
+  `data.remove_unused_columns: true`، و`training.quantization: 4bit` / `8bit` (أو
+  `load_in_8bit: true`) في مهمة لا تُكمِّم النموذج أبدًا، و`soup ab --beta`.
+  وتُرفَض أيضًا خمسة عشر إعدادًا كان v0.76 يتجاهلها دون أي كلمة، مثل `use_mod` أو `neftune_alpha` حيث
+  لا يطبّقهما شيء، و`expand_layers` مع رتبة LoRA، و`8bit` أو SFT للرؤية على Unsloth، و`lora.rank_pattern`
+  على MLX أو Unsloth: راجع ملاحظات الترقية في CHANGELOG.
+- **تغيير غير متوافق مع الإصدارات السابقة: Python 3.11–3.13، ولا تصدير بصيغتي AWQ أو GPTQ، ورمز مصادقة
+  لمسارين في `soup serve`.** لم يعد Python 3.10 مدعومًا (انتهى عمر دعمه في 2026-10-01)؛ وعلى 3.10 يواصل
+  pip اختيار v0.76.x. وأُزيل `soup export --format awq` / `gptq` و`soup quantize --to awq` / `gptq`، لأن
+  كلا المشروعين الأصليين مؤرشف: استخدم `gguf` أو `onnx` أو `tensorrt` أو `bitnet` أو `tq1_0`، أو ابقَ على
+  v0.76.x. ويجيب `/v1/tools/python` و`/v1/tools/bash` بالرمز 401 ما لم يُشغَّل الخادم مع
+  <span dir="ltr">`--tool-auth-token`</span> (أو `SOUP_TOOL_AUTH_TOKEN`)، على أي عنوان ربط، ويجيب
+  `/v1/tools/python` بالرمز 501 حيث لا يوفّر المضيف عزلًا على مستوى نظام التشغيل، كما يفعل bash من قبل.
+- **يعمل DPO وORPO وSimPO وKTO أصليًا على Apple Silicon.** يتدرّب `task: dpo` و`orpo` و`simpo` و`kto` مع
+  `backend: mlx` عبر حلقة MLX الخاصة بـ Soup وفق أهداف TRL (ORPO وSimPO دون نموذج مرجعي). ويكتسب SFT
+  النصي على MLX دعم DoRA الأصلي و`training.eval_steps` و`training.seed` ومراقب الخسارة (loss watchdog).
+  وصار `lora.use_rslora` يُطبَّق على MLX وUnsloth، فيتدرّب تشغيل rsLoRA هناك بالمقياس الذي طلبه، وتتغيّر
+  نتائجه.
+- **بثّ الطبقات يصل إلى نماذج MoE من عائلة DeepSeek-V3.** صار بثّ الطبقات في Soup (وهو تطبيق لـ L2L،
+  Pudipeddi et al. 2020) يبثّ `model_type: deepseek_v3` مع تطابق بين النموذج المقيم والمبثوث في
+  التمريرتين الأمامية والخلفية، ويُزيل تكميم نقاط الحفظ (checkpoints) المكمَّمة بالكتل بصيغة FP8 وقت
+  التقسيم (shard). ويُقبَل Kimi-K2-Base و-Instruct بعد فحص حقلًا بحقل (تُبَثّ نقطة حفظ صغيرة بشكل K2
+  مطابقةً بتًّا ببت على CPU؛ ولم يُدرَّب أي شيء على K2 نفسه). ويبثّ
+  `training.stream_expert_layout: per_expert` خبيرًا موجَّهًا واحدًا في كل مرة: على جهاز
+  RTX 5070 Laptop واحد سعة 8 GB، بلغت ذروة ذاكرة GPU لتدريب LoRA على Moonlight-16B بالإعداد نفسه
+  مقدار 1.0 GB مقابل 3.1 GB في التخطيط المدمج (fused)، بخبراء NF4 مقابل bf16 وبطبقتَي تخزين مؤقت مختلفتين، بزمن خطوة أطول بنحو 2.7x
+  ([السجل](benchmarks/probe-rtx5070-moonlight-16b.md)). ويحتفظ `training.stream_recompute: off` /
+  `auto` بتنشيطات الطبقات المبثوثة بدل إعادة حسابها، مع تدرّجات مطابقة بتًّا ببت: على طبقة RAM في البطاقة
+  نفسها تصير خطوة Mistral-7B NF4 أسرع بنسبة 22% عند 512 رمزًا و8.5% عند 2048
+  ([السجل](benchmarks/gate-stream-recompute.md)). لا يُفعَّل إلا بطلب صريح (`stream_layers: true`)، BETA.
+- **مصدر (provenance) يمكنك التحقق منه.** يسجّل `soup registry push --data <file>` بصمة SHA-256 لملف
+  التدريب، ويجعل <span dir="ltr">`--idempotency-key`</span> إعادة محاولة الدفع آمنة؛ وعلى الواجهة الخلفية
+  transformers تسجّل التشغيلات المقيمة والمبثوثة الطبقات والمتعددة وحدات GPU الـ commit على Hub للنموذج
+  الأساسي الذي حمّلته؛ ويقارن `soup ship --require-provenance` الدليلَ بما خُتم به من بايتات المهايئ
+  والمهمة والمصدر، وإصدار الحزمة (suite)، وسياسة الحكم.
+- **وجديد أيضًا.** `soup --version`؛ و`pip install "soup-cli[documents]"` لملفات PDF وDOCX في
+  `soup data ingest`؛ و<span dir="ltr">`soup merge --low-memory`</span>؛ ويمكن لـ GRPO أن يقيّم بحَكَم من
+  نموذج لغوي كبير (`training.reward_fn: judge_rank`)؛ وصارت
+  [`docs/config-reference.md`](docs/config-reference.md) و[`docs/cli-reference.md`](docs/cli-reference.md)
+  تُولَّد من الشيفرة، وتفشل مجموعة الاختبارات حين تكفّ إحداهما عن ذكر ما تفعله الشيفرة فعلًا.
 
 تجد أبرز ما في الإصدارات الأقدم في صفحة [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 

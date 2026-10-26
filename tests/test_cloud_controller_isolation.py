@@ -359,6 +359,8 @@ namespace = {"__name__": "controller_under_test"}
 with open(stub, encoding="utf-8") as fh:
     source = fh.read()
 exec(compile(source, stub, "exec"), namespace)
+# ssh and scp count as installed wherever this runs.
+namespace["_find_tool"] = lambda name: "/usr/bin/" + name
 text = "remote said: \u2588 \u00e9 \u65e5"
 if stream == "stdout":
     def _fail(*args, **kwargs):

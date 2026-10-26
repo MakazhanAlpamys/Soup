@@ -382,13 +382,7 @@ KNOWN_UNCONSUMED = {
                             "which nothing in src/ calls; and that line reads "
                             "the decisions dict and WRITES the value into a "
                             "config, so it is not a read of the field either",
-    # -- declared, and an explicit value is IGNORED with a warning naming the
-    #    release that refuses it, so having no consumer is correct. Not refused
-    #    yet, because Soup's own writers put the old default into saved configs.
-    "data.remove_unused_columns": "#759 -- no trainer reads it; the trainers that set the "
-                                  "HF argument pass False so a custom collator still sees "
-                                  "the extra columns. The default is now False, and an "
-                                  "explicit true loads with a warning and is ignored",
+    # data.remove_unused_columns moved to REFUSED_AT_LOAD (v0.77 refuses `true`, #759).
     # training.packing_cross_doc_attn_mask moved to REFUSED_AT_LOAD (#1814).
     # -- staged for features that have not landed; grouped so they can be
     #    retired together rather than one at a time.
@@ -464,6 +458,13 @@ REFUSED_AT_LOAD = {
         "TrainingConfig._validate_cross_doc_attn_mask",
         "#1814 -- refused at config load: it never mapped to a valid TRL "
         "packing_strategy (documented in docs/performance-and-quantization.md)",
+    ),
+    "data.remove_unused_columns": (
+        "DataConfig._ignore_remove_unused_columns_true",
+        "#759 -- no trainer reads it; the trainers that set the HF argument pass False "
+        "so a custom collator still sees the extra columns. The default is False, and "
+        "an explicit true is refused at config load as of v0.77 (v0.76 ignored it with "
+        "a warning, because Soup's own writers had put the old default into configs)",
     ),
 }
 
@@ -756,8 +757,8 @@ def test_the_allowlist_size_is_pinned_exactly():
     half: it names WHICH entry went stale, where this one only says the count
     moved.
     """
-    assert len(KNOWN_UNCONSUMED) == 34, (
-        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 34. Going UP "
+    assert len(KNOWN_UNCONSUMED) == 33, (
+        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 33. Going UP "
         "means a field was allowlisted rather than wired; going DOWN means an "
         "entry was retired, which is the good direction -- lower this number "
         "in the same commit."
@@ -767,9 +768,9 @@ def test_the_allowlist_size_is_pinned_exactly():
 def test_the_named_categories_are_pinned_exactly():
     """The same two-way ratchet for the #1814 categories: an entry added to one of
     them is a reviewed decision, not a way around the KNOWN_UNCONSUMED pin."""
-    assert (len(REFUSED_AT_LOAD), len(VALIDATOR_ALIASES)) == (1, 3), (
+    assert (len(REFUSED_AT_LOAD), len(VALIDATOR_ALIASES)) == (2, 3), (
         f"REFUSED_AT_LOAD is {len(REFUSED_AT_LOAD)} and VALIDATOR_ALIASES is "
-        f"{len(VALIDATOR_ALIASES)}, pinned at 1 and 3; change the pin in the same commit."
+        f"{len(VALIDATOR_ALIASES)}, pinned at 2 and 3; change the pin in the same commit."
     )
     assert not (set(REFUSED_AT_LOAD) | set(VALIDATOR_ALIASES)) & set(KNOWN_UNCONSUMED)
     assert not set(REFUSED_AT_LOAD) & set(VALIDATOR_ALIASES)
@@ -799,6 +800,13 @@ class TestTheNamedCategoriesAreTrue:
     def test_packing_cross_doc_attn_mask_is_refused_by_name(self):
         with pytest.raises(ValueError, match="packing_cross_doc_attn_mask"):
             self._load("training:\n  packing_cross_doc_attn_mask: true\n")
+
+    def test_remove_unused_columns_true_is_refused_by_name(self):
+        # _BASE ends inside the data block, so the line lands under data:.
+        with pytest.raises(ValueError, match=r"data\.remove_unused_columns: true never had"):
+            self._load("  remove_unused_columns: true\n")
+        # Control: only true is refused; false (the default) loads.
+        assert self._load("  remove_unused_columns: false\n").data.remove_unused_columns is False
 
     def test_load_in_16bit_rewrites_quantization(self):
         cfg = self._load("training:\n  quantization: 4bit\n  load_in_16bit: true\n")

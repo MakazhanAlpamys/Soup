@@ -172,6 +172,13 @@ def sweep(
             _set_nested_param(probe, key, val)
         try:
             _reject_unknown_sweep_params(probe)
+            # Values differ between arms, so a staged field is looked for in
+            # every combination, not only the first (#808).
+            for combo in combinations:
+                arm = base_cfg.model_dump()
+                for key, val in combo.items():
+                    _set_nested_param(arm, key, val)
+                _reject_staged_sweep_params(arm)
         except ValueError as exc:
             console.print(f"[red]{exc}[/]")
             raise typer.Exit(1) from exc
@@ -475,6 +482,31 @@ def _reject_unknown_sweep_params(config_dict: dict) -> None:
         raise ValueError(f"sweep parameter does not match any config field: {detail}")
 
 
+def _reject_staged_sweep_params(config_dict: dict) -> None:
+    """Refuse a sweep whose parameter sets a staged field away from its default (#808).
+
+    ``soup train`` refuses such a field at load (``config/loader.py``), but a
+    ``--param`` value is applied after the load, to a ``model_dump()``, and would
+    otherwise reach ``SoupConfig(**config_dict)`` unchecked. Follows the loader's
+    ``STAGED_FIELD_SEVERITY``: under ``"warn"`` nothing is refused here either.
+    """
+    from soup_cli.config import loader
+    from soup_cli.config.staged_fields import (
+        STAGED_FIELD_REJECTION_VERSION,
+        find_staged_config_fields,
+    )
+
+    if loader.STAGED_FIELD_SEVERITY != "error":
+        return
+    staged = find_staged_config_fields(config_dict)
+    if staged:
+        paths = ", ".join(item.path for item in staged)
+        raise ValueError(
+            f"sweep parameter sets a field that is accepted but read by nothing: {paths}; "
+            f"refused as of v{STAGED_FIELD_REJECTION_VERSION}. Remove it from --param."
+        )
+
+
 def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dict:
     """Run a single training with modified parameters."""
     # Deep copy and modify config
@@ -489,6 +521,7 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
     # without the training stack. `sweep()` pre-checks the grid too; this stays
     # so a direct caller cannot bypass it.
     _reject_unknown_sweep_params(config_dict)
+    _reject_staged_sweep_params(config_dict)
 
     from soup_cli.config.schema import SoupConfig
     from soup_cli.data.loader import (

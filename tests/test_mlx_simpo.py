@@ -756,7 +756,7 @@ class TestConfig:
     def test_other_tasks_name_simpo_among_the_mlx_ones(self):
         from soup_cli.config.loader import load_config_from_string
 
-        with pytest.raises(Exception, match="only ships SFT, DPO, ORPO, SimPO and KTO"):
+        with pytest.raises(Exception, match="only ships SFT, DPO, ORPO, SimPO, KTO and GRPO"):
             load_config_from_string(_SIMPO_YAML.replace("task: simpo", "task: ipo"))
 
     def test_the_transformers_route_is_unchanged(self):

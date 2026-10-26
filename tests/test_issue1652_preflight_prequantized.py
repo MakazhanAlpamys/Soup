@@ -246,8 +246,10 @@ class TestTheGate:
 
 
 def test_a_packed_base_fits_where_the_same_base_unquantized_does_not(console):
-    # 24 GB: 11 GB of gptq weights fit, 40 GB of bf16 weights do not.
-    card = {"memory_total_bytes": int(24e9)}
+    # 40 GB: 11 GB of gptq weights fit, 40 GB of bf16 weights do not. Since #2049 the
+    # estimate also prices this 2048-token run's activations (about 19 GB without
+    # checkpointing), so the card is the 40 GB one, not a 24 GB one.
+    card = {"memory_total_bytes": int(40e9)}
     _hardware_fit_preflight(_cfg("gptq"), card, allow_oom_attempt=False)
     assert console.printed == []
     with pytest.raises(typer.Exit):

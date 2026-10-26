@@ -1,3 +1,3 @@
 """Soup CLI — Fine-tune and post-train LLMs in one command."""
 
-__version__ = "0.76.0"
+__version__ = "0.77.0"

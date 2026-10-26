@@ -512,7 +512,7 @@ jobs:
         # loss, gradient and training-loop tests ran on no job at all.
         # tests/test_ci_mlx_smoke_files.py fails when a tests/test_mlx_*.py that
         # needs the real library is neither listed here nor exempted there.
-        run: pytest -o addopts= -q tests/test_rewind_mlx.py tests/test_mlx_dora_native.py tests/test_mlx_dpo.py tests/test_mlx_orpo.py tests/test_mlx_eval_steps.py tests/test_mlx_simpo.py tests/test_mlx_sft_seed.py tests/test_mlx_kto.py
+        run: pytest -o addopts= -q tests/test_rewind_mlx.py tests/test_mlx_dora_native.py tests/test_mlx_dpo.py tests/test_mlx_orpo.py tests/test_mlx_eval_steps.py tests/test_mlx_simpo.py tests/test_mlx_sft_seed.py tests/test_mlx_kto.py tests/test_mlx_grpo.py
   torchao-contract:
     needs: plan
     # Not on a pull request, approval run included: it is not a required check.

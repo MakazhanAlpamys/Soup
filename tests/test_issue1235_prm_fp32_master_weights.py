@@ -566,12 +566,26 @@ class TestTheQuantizationMessages:
 
     _PRM = "base: org/model\ntask: prm\ndata: {train: x.jsonl}\n"
 
-    def test_the_warning_says_the_base_is_never_quantised(self, monkeypatch):
-        from rich.console import Console
-
-        from soup_cli.config import loader
+    def test_the_bnb_refusal_says_the_base_is_never_quantised(self):
+        """v0.77 refuses an explicit bitsandbytes value on these tasks (#795)."""
         from soup_cli.config.loader import load_config_from_string
 
+        with pytest.raises(ValueError) as exc:
+            load_config_from_string(self._PRM + "training: {quantization: 4bit}\n")
+        assert (
+            "training.quantization: 4bit has no effect on task='prm': its trainer never "
+            "quantises the base, so no run can honour it."
+        ) in str(exc.value)
+        assert "checkpoint precision" not in str(exc.value)
+
+    def test_the_warning_says_the_base_is_never_quantised(self, monkeypatch):
+        """The v0.76 warning, kept behind ``DEPRECATED_VALUE_SEVERITY = "warn"``."""
+        from rich.console import Console
+
+        from soup_cli.config import deprecation, loader
+        from soup_cli.config.loader import load_config_from_string
+
+        monkeypatch.setattr(deprecation, "DEPRECATED_VALUE_SEVERITY", "warn")
         buffer = io.StringIO()
         monkeypatch.setattr(
             loader, "console",

@@ -104,7 +104,12 @@ def plan_cmd(
     table.add_row("dataset_sha", escape(plan.dataset_sha[:16] + "..."))
     table.add_row("estimated_cost", f"${plan.estimated_cost_usd:.4f}")
     table.add_row("estimated_minutes", f"{plan.estimated_minutes:.1f}")
-    table.add_row("peak_vram_gb", f"{plan.peak_vram_gb:.1f}")
+    table.add_row(
+        "peak_vram_gb",
+        f"{plan.peak_vram_gb:.1f}"
+        if plan.peak_vram_gb is not None
+        else f"unknown: {escape(plan.peak_vram_reason or '')}",
+    )
     table.add_row("spot_price_usd_per_hour", f"${plan.spot_price_usd_per_hour:.2f}")
     console.print(table)
     console.print(

@@ -1336,7 +1336,10 @@ class TestTheSkeletonKeepsEveryLayerKind:
 class TestTheLoadersWarningsLeaveJsonStdoutAlone:
     def test_json_stdout_parses_when_the_loader_warns(self, tmp_path, monkeypatch):
         """The config loader prints a deprecated value (#759) or a staged field (#808)
-        as a warning on stdout. Under --json that line came before the document."""
+        as a warning on stdout. Under --json that line came before the document.
+
+        v0.77 refuses both, so the warning path is reached through the switch it
+        is kept behind, for the next value that gets a release of notice."""
         import inspect
         import json as _json
 
@@ -1344,8 +1347,10 @@ class TestTheLoadersWarningsLeaveJsonStdoutAlone:
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
+        from soup_cli.config import deprecation
         from tests.conftest import strip_ansi
 
+        monkeypatch.setattr(deprecation, "DEPRECATED_VALUE_SEVERITY", "warn")
         tiny = LlamaConfig(
             vocab_size=64, hidden_size=16, intermediate_size=32, num_hidden_layers=2,
             num_attention_heads=2, num_key_value_heads=2,

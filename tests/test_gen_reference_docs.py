@@ -407,6 +407,31 @@ def test_every_row_states_its_own_fields_default_and_bounds(config_page: str) ->
     assert required >= 1 and scalars >= 250 and bounds >= 100, (required, scalars, bounds)
 
 
+#: The sentence every staged key's row ends with (#808), as a reader sees it.
+_STAGED_NOTE = "Refused at load when set away from its default (v{version}, #808)."
+
+
+@pytest.mark.parametrize("source", ["rendered", "committed"])
+def test_every_staged_key_says_it_is_refused(config_page: str, source: str) -> None:
+    """A staged key passes the schema and is then refused by the loader (#808), so a
+    field description does not say so by itself. Every key ``STAGED_FIELDS`` lists
+    says it, and no other key does. The committed page is read too: the structure
+    check leaves the description column out, so only this test holds it there."""
+    from soup_cli.config.staged_fields import STAGED_FIELD_REJECTION_VERSION, STAGED_FIELDS
+
+    if source == "rendered":
+        page = config_page
+    else:
+        page = (_ROOT / gen.CONFIG_PAGE).read_text(encoding="utf-8")
+    note = _STAGED_NOTE.format(version=STAGED_FIELD_REJECTION_VERSION)
+    descriptions = {cells[0]: cells[4] for cells in _rows(page.splitlines()) if len(cells) == 5}
+    staged = sorted(f"`{section}.{name}`" for section, name in STAGED_FIELDS)
+
+    assert len(staged) >= 31, staged
+    assert [key for key in staged if not descriptions[key].endswith(note)] == []
+    assert sorted(key for key, text in descriptions.items() if note in text) == staged
+
+
 def test_a_field_added_to_the_schema_gets_a_full_row() -> None:
     from soup_cli.config.schema import SoupConfig
 

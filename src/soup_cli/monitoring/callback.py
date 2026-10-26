@@ -493,9 +493,10 @@ class _SoupTrainerCallback_body:  # noqa: N801
         Called once from ``on_train_begin`` with the trainer's model +
         tokenizer. Each piece is only initialised when a test has not already
         injected it, so unit tests that pre-set ``_gate_suite`` /
-        ``_gate_generate_fn`` still control the harness. Failures are logged and
-        leave the gate inert rather than crashing training setup — the CLI
-        (``soup train --gate``) already validated the suite path up front.
+        ``_gate_generate_fn`` still control the harness. Malformed YAML and
+        non-mapping roots abort setup as before; other loading failures are
+        logged and leave the gate inert. The CLI (``soup train --gate``)
+        already validated the suite path up front.
         """
         cfg = self.eval_gate_config
         if cfg is None or not getattr(cfg, "enabled", False):
@@ -506,10 +507,12 @@ class _SoupTrainerCallback_body:  # noqa: N801
             if not suite_path:
                 logger.warning("eval gate enabled but no suite configured")
                 return
-            try:
-                from soup_cli.eval.gate import load_suite
+            from soup_cli.eval.gate import MalformedSuiteError, load_suite
 
+            try:
                 self._gate_suite = load_suite(suite_path)
+            except MalformedSuiteError:
+                raise
             except (ValueError, FileNotFoundError, OSError) as exc:
                 logger.warning("eval gate: could not load suite %r: %s", suite_path, exc)
                 self._gate_suite = None
@@ -646,7 +649,11 @@ class _SoupTrainerCallback_body:  # noqa: N801
         # autopilot / cans policy). Caller's output_dir is already validated
         # by SoupConfig but args.output_dir from raw HF TrainingArguments is
         # not — defence-in-depth.
-        from soup_cli.utils.paths import is_under_cwd
+        from soup_cli.utils.paths import (
+            atomic_write_text,
+            enforce_under_cwd_and_no_symlink,
+            is_under_cwd,
+        )
         if not is_under_cwd(out_dir):
             logger.warning(
                 "spike_recovery hint skipped: output_dir %s is outside cwd",
@@ -656,6 +663,9 @@ class _SoupTrainerCallback_body:  # noqa: N801
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
             hint_path = out_dir / "spike_recovery.json"
+            # Validate the file as well as its directory, before reading prior
+            # attempts. A pre-placed link must not select another file.
+            enforce_under_cwd_and_no_symlink(str(hint_path), "spike_recovery hint")
             attempts = self._spike_recovery_attempts
             if hint_path.exists() and attempts == 0:
                 try:
@@ -674,14 +684,14 @@ class _SoupTrainerCallback_body:  # noqa: N801
                 except (json.JSONDecodeError, ValueError, TypeError, OverflowError, OSError):
                     pass
             recover = self._spike_strategy.should_recover(attempts)
-            hint_path.write_text(json.dumps({
+            atomic_write_text(json.dumps({
                 "attempts": attempts + 1,
                 "max_attempts": self._spike_strategy.max_attempts,
                 "loss_at_spike": float(loss),
                 "previous_lr": float(args.learning_rate),
                 "recommended_lr": float(new_lr),
                 "should_recover": recover,
-            }, indent=2), encoding="utf-8")
+            }, indent=2), str(hint_path), field="spike_recovery hint")
             self._spike_recovery_attempts = attempts + 1
             if recover:
                 console.print(
@@ -694,7 +704,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
                     f"(recommended_lr={new_lr:.2e}, should_recover=False, "
                     f"max attempts {self._spike_strategy.max_attempts} reached)"
                 )
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             logger.warning("Failed to write spike recovery hint: %s", exc)
 
     # ------------------------------------------------------------------

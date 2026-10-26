@@ -313,7 +313,7 @@ soup ab --input ab.jsonl --metric latency --effect-size 0.5
 soup ab --input ab.jsonl --metric judge_score --alpha 0.01 --effect-size 0.1
 ```
 
-`--alpha` is in (0, 1). `--beta` is retired (#1418): `--alpha` now sets the accept rule's level too, so there is no separate Type-II rate to set. For one release `soup ab` still takes `--beta`, prints that it no longer does anything and that a stricter `accept_h0` means a lower `--alpha`, and then runs exactly as without it; the release after refuses it. The `--alpha` + `--beta` < 1 check went with it.
+`--alpha` is in (0, 1). `--beta` is retired (#1418): `--alpha` now sets the accept rule's level too, so there is no separate Type-II rate to set. v0.76 still took `--beta` with a warning and ran exactly as without it; as of v0.77 `soup ab` refuses it with exit code `2` before reading any rows, saying that it no longer does anything and that a stricter `accept_h0` means a lower `--alpha`. Remove the flag. The `--alpha` + `--beta` < 1 check went with it.
 
 A `--effect-size` that is more than about 1.9e151 standard deviations of the rows that set the prior scale overflows the test statistic at the largest input `soup ab` accepts (1,000,000 rows per arm), so it is refused at every row count; `soup ab` exits `1` naming the flag and the standard deviation it measured, from the first run (before those rows are all in, it checks the rows so far). Because it is the ratio that overflows, a near-constant metric column reaches it at the default `--effect-size` too.
 
@@ -462,6 +462,54 @@ soup ship --base <m> --tuned ./out --task-eval tasks.jsonl \
 # Offline: decide from pre-computed scores, persist the verdict JSON
 soup ship --evidence evidence.json --output verdict.json
 ```
+
+### Opt-in progress
+
+Add `--progress jsonl` to follow a verdict without parsing console text:
+
+```bash
+soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
+  --progress jsonl
+```
+
+The ordinary verdict and status output stay on stdout. During command execution,
+stderr contains only JSONL; foreign warnings, logs and native dependency diagnostics
+are suppressed in this mode. Leave the flag unset for the existing diagnostics.
+Use your shell's stderr redirection to save the events to a file.
+Argument-parser errors before command execution (for example an unknown option)
+retain the ordinary CLI error format.
+
+Each event has `schema_version: 1`, `event` (`start`, `progress`, `end`, `error`),
+`phase` (`load`, `task_eval`, `suite_eval`, `verdict`), `side` (`base`, `tuned`, null),
+`suite` (suite name or null), `repeat` (one-based noise-floor repeat or null), and
+`done` / `total` (nonnegative integers or null). The group identity is
+`(phase, side, suite, repeat)`; counters start afresh for each group. `verdict`
+brackets the entire command, including validation and any nested live groups.
+
+Countable task and bundled-suite groups start at `done: 0`, `total: null` until
+the scorer resolves its items. Each `progress` follows actual item scoring,
+including a generation/predicate failure recorded as a failed item, and reports
+the now-known total. Scalar generation reports before the next item is generated;
+batch generation reports scored items after the batch returns. `end` includes
+the final count (zero for an empty item list). Metric and judge-score groups are
+per side; pairwise scoring reports one `tuned` comparison group, with the base
+reference implicit, and counts one completed swap-debiased pair per task.
+An unavailable judge or another escaping exception aborts the group and retains
+the existing runtime-error behavior; an incomplete item is not counted.
+
+Load and verdict counts are null. A skipped recorded baseline emits no scoring
+group. External lm-eval emits a start/end group per actual harness call, using
+the comma-joined requested suite names and null counts. Offline evidence emits
+only the verdict start/end; it never invents model loads or prompt progress.
+Noise-floor task/suite groups identify each repeat explicitly, independently of
+the ordinary verdict pass (`repeat: null`).
+
+`error` terminates an aborted group and contains only the fixed diagnostic
+`error: "execution_aborted"`; it never copies arbitrary exception text. A failed
+item alone is not an error event. Exit 2 (DON'T SHIP) is a completed verdict with
+`end`, while usage/runtime failures terminate the verdict with `error`. No clock
+or throughput field is promised. Suite names are the explicitly requested public
+benchmark identifiers; task text, responses, paths and credentials are not event fields.
 
 **`--evidence` shape** (no model load — the offline / CI path):
 
@@ -695,7 +743,7 @@ source can also be compared at verdict time; remote, mixed, replay, tokenized,
 streaming and directory sources stay unknown. When that source is unknown,
 strict verification requires the caller assertion. Neither this descriptor nor
 legacy `data_sha` relabels a verdict-time hash as training-time evidence. The
-startup producer tracked in #1764 is separate.
+training-time digest that `soup train` records at startup (#2024) is a separate record.
 
 The strict mode requires offline `--evidence`, `--config`, a local nonempty
 `--adapter` manifest and a readable task-eval file; it does not claim identity for

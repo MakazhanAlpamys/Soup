@@ -8,7 +8,6 @@ Validates the subcommand against a closed allowlist + builds the argv list
 from __future__ import annotations
 
 import os
-import shutil
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import List, Mapping, Optional
@@ -74,7 +73,9 @@ def resolve(
         raise ValueError(f"too many args (>{_MAX_ARGS})")
     cleaned = [_validate_arg(arg) for arg in arg_list]
     binary = _SUBCOMMAND_TO_BINARY[subcommand]
-    binary_path = shutil.which(binary, path=binary_search_path)
+    from soup_cli.utils.tool_paths import find_tool
+
+    binary_path = find_tool(binary, path=binary_search_path)
     if binary_path is None:
         raise FileNotFoundError(
             f"{binary} not found on PATH; install llama.cpp or set LLAMA_CPP_HOME"

@@ -7,19 +7,20 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
-from soup_cli.utils.gpu import model_size_from_name
 from soup_cli.utils.profiler import (
     ASSUMED_GPU_MEMORY_GB,
     GPU_MEMORY,
     estimate_speed,
-    estimate_total,
     normalize_gpu_key,
+    profile_from_config,
     recommend_batch_size,
     recommend_gpu,
 )
+from soup_cli.utils.vram_estimate import VRAM_SAFETY_MARGIN, fit_verdict
 
 console = Console()
 
@@ -49,37 +50,22 @@ def profile(
 
     cfg = load_config(config_path)
 
-    # Determine model size
-    model_params_b = model_size_from_name(cfg.base)
-
-    # Determine batch size (use 4 as default estimate for "auto")
-    batch_size = cfg.training.batch_size
-    if batch_size == "auto":
-        batch_size = 4
-    else:
-        batch_size = int(batch_size)
-
     # Resolve GPU memory
     gpu_memory_gb, gpu_memory_source = _resolve_gpu_memory(gpu)
 
-    # Resolve PEFT mode (#1423)
-    from soup_cli.utils.hardware_fit import resolve_peft_mode
-
-    peft = resolve_peft_mode(cfg)
-
-    # Compute profile
-    result = estimate_total(
-        model_name=cfg.base,
-        model_params_b=model_params_b,
-        quantization=cfg.training.quantization,
-        lora_r=cfg.training.lora.r,
-        lora_alpha=cfg.training.lora.alpha,
-        batch_size=batch_size,
-        seq_len=cfg.data.max_length,
-        optimizer=cfg.training.optimizer,
-        gradient_checkpointing=cfg.training.gradient_checkpointing,
-        peft=peft,
+    # The train pre-flight's estimate, from the model's own shape (#2049). An assumed
+    # card is not one to resolve `auto` checkpointing on, so it prices as full then.
+    result = profile_from_config(
+        cfg, gpu_memory_gb=None if gpu_memory_source == "assumed" else gpu_memory_gb
     )
+    if result is None:
+        console.print(
+            "[red]Cannot estimate this run:[/] batch_size, max_length or the model's "
+            "size (over 1,000B parameters) is outside the range the estimate supports."
+        )
+        raise typer.Exit(1)
+    model_params_b = result["model_params_b"]
+    batch_size = result["batch_size"]
 
     # Speed estimates
     tokens_per_sec = estimate_speed(
@@ -102,6 +88,9 @@ def profile(
     # "flag" (--gpu), "detected" (a device was found) or "assumed" (neither:
     # the number is a default, not a measurement).
     result["gpu_memory_source"] = gpu_memory_source
+    # "fits", "tight" (fits, but not with the train pre-flight's margin) or
+    # "does not fit". A card's GB are binary: an "rtx3060laptop" 6 is 6144 MiB.
+    result["fit"] = fit_verdict(result["total_memory_bytes"], gpu_memory_gb * 1024**3)
 
     if json_output:
         # Machine-readable JSON: raw stdout, not console.print — Rich folds
@@ -150,8 +139,10 @@ def _render_profile(result: dict, cfg, gpu_memory_gb: float, gpu_memory_source: 
     if result.get("peft") == "full":
         trainable_str = f"(trainable: {result['trainable_params']:,.0f}, full fine-tuning)"
     else:
+        targets = ", ".join(result.get("lora_targets", []))
         trainable_str = (
-            f"(trainable: {result['trainable_params']:,.0f} with LoRA r={cfg.training.lora.r})"
+            f"(trainable: {result['trainable_params']:,.0f} with LoRA r={cfg.training.lora.r}"
+            + (f" on {escape(targets)})" if targets else ")")
         )
 
     model_info = (
@@ -167,15 +158,25 @@ def _render_profile(result: dict, cfg, gpu_memory_gb: float, gpu_memory_source: 
     mem_table.add_column("Component", style="bold")
     mem_table.add_column("Memory", justify="right")
     mem_table.add_row("Model", f"~{result['model_memory_gb']:.1f} GB")
-    if result.get("peft") == "full":
-        mem_table.add_row("Gradients", f"~{result['gradients_memory_gb']:.1f} GB")
-    else:
+    if result.get("peft") != "full":
         mem_table.add_row("LoRA", f"~{result['lora_memory_gb']:.1f} GB")
+    # A LoRA run's adapter gradients are usually too small to show.
+    if result.get("peft") == "full" or result["gradients_memory_gb"] >= 0.05:
+        mem_table.add_row("Gradients", f"~{result['gradients_memory_gb']:.1f} GB")
     mem_table.add_row("Optimizer", f"~{result['optimizer_memory_gb']:.1f} GB")
     mem_table.add_row(
         f"Activations (bs={result['batch_size']}, seq={result['seq_len']})",
         f"~{result['activation_memory_gb']:.1f} GB",
     )
+    if result.get("vocab_size"):
+        mem_table.add_row(
+            f"Logits and loss (vocab {result['vocab_size']:,})",
+            f"~{result['logits_memory_gb']:.1f} GB",
+        )
+    else:
+        mem_table.add_row("Logits and loss", "not counted (vocabulary unknown)")
+    if result.get("dequant_memory_gb"):
+        mem_table.add_row("4-bit dequantization", f"~{result['dequant_memory_gb']:.1f} GB")
     mem_table.add_row("Overhead", f"~{result['overhead_gb']:.1f} GB")
     mem_table.add_row("-" * 20, "-" * 10)
     mem_table.add_row("[bold]Total[/]", f"[bold]~{result['total_memory_gb']:.1f} GB[/]")
@@ -189,17 +190,27 @@ def _render_profile(result: dict, cfg, gpu_memory_gb: float, gpu_memory_source: 
 
     # Recommendations
     recs = []
-    fits = result["total_memory_gb"] <= gpu_memory_gb
+    fit = result["fit"]
+    margin = f"{VRAM_SAFETY_MARGIN:.0%}"
     if gpu_memory_source == "assumed":
-        verdict = "would fit" if fits else "would NOT fit"
+        verdict = {
+            "fits": "would fit",
+            "tight": f"would be tight (not with the train pre-flight's {margin} margin)",
+        }.get(fit, "would NOT fit")
         recs.append(
             f"[yellow]?[/] No GPU detected: {verdict} in an assumed "
             f"{gpu_memory_gb:.0f} GB (need ~{result['total_memory_gb']:.0f} GB). "
             "Pass --gpu for a real verdict."
         )
-    elif fits:
+    elif fit == "fits":
         recs.append(
             f"[green]OK[/] Fits in {gpu_memory_gb:.0f} GB VRAM"
+        )
+    elif fit == "tight":
+        recs.append(
+            f"[yellow]~[/] Tight: fits in {gpu_memory_gb:.0f} GB VRAM, but not with "
+            f"the train pre-flight's {margin} margin "
+            f"(need ~{result['total_memory_gb']:.1f} GB)"
         )
     else:
         recs.append(
@@ -234,6 +245,8 @@ def _render_profile(result: dict, cfg, gpu_memory_gb: float, gpu_memory_source: 
     console.print()
     console.print("[bold]GPU Memory Estimate:[/]")
     console.print(mem_table)
+    for line in result.get("notes", []):
+        console.print(f"[dim]{escape(line)}[/]")
     console.print()
     console.print(Panel(speed_info, title="Speed Estimate"))
     console.print()

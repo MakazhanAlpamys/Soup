@@ -1,5 +1,6 @@
 """Load and validate soup.yaml configs."""
 
+import re
 import warnings
 from pathlib import Path
 
@@ -7,7 +8,7 @@ import yaml
 from pydantic import ValidationError
 from rich.console import Console
 
-from soup_cli.config.deprecation import SoupConfigDeprecationWarning
+from soup_cli.config.deprecation import SoupConfigDeprecationWarning, deadline_clause
 from soup_cli.config.schema import SoupConfig
 from soup_cli.config.staged_fields import find_staged_config_fields, format_staged_fields
 from soup_cli.config.unknown_keys import find_unknown_config_keys, format_unknown_keys
@@ -43,12 +44,15 @@ UNKNOWN_KEY_SEVERITY = "error"
 
 #: What to do about a declared config field that is read by nothing (#808).
 #:
-#: The decision was warn-then-forbid. Ships ``"warn"`` with a deadline named
-#: by :data:`~soup_cli.config.staged_fields.STAGED_FIELD_REJECTION_VERSION` -- by
-#: reference, not by number, because the warning stated that version in
-#: exactly one place -- and the release that reaches it flips this to
-#: ``"error"``.
-STAGED_FIELD_SEVERITY = "warn"
+#: The decision was warn-then-forbid. v0.76 shipped ``"warn"`` with a deadline
+#: named by :data:`~soup_cli.config.staged_fields.STAGED_FIELD_REJECTION_VERSION`
+#: -- by reference, not by number, because the warning stated that version in
+#: exactly one place -- and the 0.77.0 release, which reached it, flipped this to
+#: ``"error"`` in the same commit as ``DEPRECATED_VALUE_SEVERITY`` in
+#: ``config/deprecation.py``. ``tests/test_issue808_staged_config_fields.py`` and
+#: ``TestTheDeadline`` in ``tests/test_config_deprecation.py`` pin it to the
+#: declared ``__version__``.
+STAGED_FIELD_SEVERITY = "error"
 
 
 def _report_unknown_keys(raw: dict) -> "str | None":
@@ -98,6 +102,47 @@ def _report_staged_fields(
     return None
 
 
+def _names_a_field(err: dict, names: "tuple[str, ...]") -> bool:
+    """Whether a Pydantic error entry is about one of ``names``: one is a part of
+    its location, or its message names one as a whole word."""
+    if any(part in names for part in err["loc"]):
+        return True
+    return any(
+        re.search(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])", err["msg"])
+        for name in names
+    )
+
+
+def _staged_refusal_after_failed_build(
+    raw: dict, exc: ValidationError
+) -> "tuple[str, list] | None":
+    """The staged-field refusal for a config that did not build, and the build
+    errors that are left to report after it (#808).
+
+    Some staged fields have a cross-validator of their own: ``grace_codebook``
+    asks for ``grace_codebook_size`` and ``grace_codebook_dim``,
+    ``long_context_grpo`` for ``task: grpo``, ``video_fps`` for a video format.
+    Reported alone, that message is advice the next load refuses: the user adds
+    what it asks for, and the staged check then refuses all of it. So when the
+    build fails and the mapping sets a staged field, the staged refusal is
+    reported first, followed only by the build errors that name none of the
+    refused fields. The mapping is read without a built config (the
+    ``config=None`` path of :func:`find_staged_config_fields`), which can only
+    run here, on a load that has already failed.
+
+    Returns ``None`` (report the build errors as they are) under ``"warn"`` or
+    when no staged field is set.
+    """
+    if STAGED_FIELD_SEVERITY != "error":
+        return None
+    staged = find_staged_config_fields(raw)
+    if not staged:
+        return None
+    names = tuple(item.name for item in staged)
+    remaining = [err for err in exc.errors() if not _names_a_field(err, names)]
+    return format_staged_fields(staged, include_deadline=False), remaining
+
+
 #: Longest piece of text taken from the file that a refusal quotes.
 _MAX_DETAIL_CHARS = 200
 
@@ -106,6 +151,50 @@ def _refuse(message: str) -> None:
     """Print a one-line refusal and exit 1; the text may quote the file."""
     console.print(f"[red]{for_terminal(message)}[/]")
     raise SystemExit(1)
+
+
+def _print_refusal_lines(message: str) -> None:
+    """Print a multi-line refusal under ``Config validation error:``, indenting
+    every line, not only the first (one line per unknown key or staged field).
+    The text quotes key names from the file, so each line is made terminal-safe,
+    and printed with emoji codes off, so a key ``:warning:`` shows as written."""
+    for line in message.splitlines():
+        console.print(f"  [red]{for_terminal(line)}[/]", emoji=False)
+
+
+#: What Pydantic puts in front of the text of a ``ValueError`` raised in a validator.
+_PYDANTIC_VALUE_ERROR_PREFIX = "Value error, "
+
+
+def _print_validation_errors(errors: list) -> None:
+    """Print each entry of a ``ValidationError`` under ``Config validation error:``.
+
+    ``errors`` is ``ValidationError.errors()``, or the part of it that is left
+    after a staged-field refusal (:func:`_staged_refusal_after_failed_build`).
+
+    A field-level entry reads ``<loc>: <message>``. A model-level one (a
+    ``model_validator`` refusal) has an empty ``loc`` and is the message alone,
+    not ``: <message>``. Pydantic's ``Value error, `` prefix is dropped from both:
+    the text after it is Soup's own and already names the fix. Only the terminal
+    is changed; ``load_config_from_string`` keeps Pydantic's text in its
+    ``ValueError``, which API callers read. Both parts can quote config keys or
+    values from the file, so each goes through :func:`for_terminal`.
+
+    A deprecated-value refusal (#759) at field level is also the message alone:
+    its text is the v0.76 warning's, which had no location and so starts with
+    the field's dotted path, and ``<loc>: `` in front would name the field twice
+    (``data -> remove_unused_columns: data.remove_unused_columns: ...``).
+    """
+    for err in errors:
+        loc = " -> ".join(str(part) for part in err["loc"])
+        msg = err["msg"].removeprefix(_PYDANTIC_VALUE_ERROR_PREFIX)
+        dotted = ".".join(str(part) for part in err["loc"])
+        if loc and msg.startswith(f"{dotted}: ") and deadline_clause() in msg:
+            loc = ""
+        if loc:
+            console.print(f"  [red]{for_terminal(loc)}:[/] {for_terminal(msg)}", emoji=False)
+        else:
+            console.print(f"  {for_terminal(msg)}", emoji=False)
 
 
 def _clip(detail: str) -> str:
@@ -159,11 +248,13 @@ def _read_config_file(path: Path, *, raise_unreadable: bool = False) -> object:
 def _build_config(raw: dict) -> SoupConfig:
     """Construct ``SoupConfig``, printing each deprecated value once (#759).
 
-    Validators report a value that will be refused in a later release as a
-    :class:`SoupConfigDeprecationWarning`. Recorded here rather than left to the
-    ``warnings`` filters, which print a source line, may show a message once
-    per process rather than once per load, or hide it entirely. Any other
-    warning raised while building is passed on unchanged.
+    Under ``DEPRECATED_VALUE_SEVERITY = "warn"`` validators report a value that a
+    later release refuses as a :class:`SoupConfigDeprecationWarning`; under
+    ``"error"`` they raise instead, and nothing is printed. A warning is
+    recorded here rather than left to the ``warnings`` filters, which print a
+    source line, may show a message once per process rather than once per load,
+    or hide it entirely. Any other warning raised while building is passed on
+    unchanged.
     """
     try:
         with warnings.catch_warnings(record=True) as caught:
@@ -227,25 +318,26 @@ def load_config(
     unknown_error = _report_unknown_keys(raw)
     if unknown_error is not None:
         console.print("[red bold]Config validation error:[/]\n")
-        console.print(f"  [red]{for_terminal(unknown_error)}[/]")
+        _print_refusal_lines(unknown_error)
         raise SystemExit(1)
 
     try:
         config = _build_config(raw)
     except ValidationError as e:
         console.print("[red bold]Config validation error:[/]\n")
-        for err in e.errors():
-            loc = " -> ".join(str(part) for part in err["loc"])
-            # Both can quote config keys or values from the file.
-            console.print(f"  [red]{for_terminal(loc)}:[/] {for_terminal(err['msg'])}")
+        staged_first = _staged_refusal_after_failed_build(raw, e)
+        if staged_first is None:
+            _print_validation_errors(e.errors())
+        else:
+            staged_error, remaining = staged_first
+            _print_refusal_lines(staged_error)
+            _print_validation_errors(remaining)
         raise SystemExit(1)
 
     staged_error = _report_staged_fields(raw, config=config)
     if staged_error is not None:
         console.print("[red bold]Config validation error:[/]\n")
-        # One line per staged field: indent each, not only the first.
-        for line in staged_error.splitlines():
-            console.print(f"  [red]{for_terminal(line)}[/]")
+        _print_refusal_lines(staged_error)
         raise SystemExit(1)
 
     return config
@@ -280,11 +372,20 @@ def load_config_from_string(yaml_str: str, *, max_bytes: "int | None" = None) ->
     try:
         config = _build_config(raw)
     except ValidationError as exc:
+        staged_first = _staged_refusal_after_failed_build(raw, exc)
+        entries = exc.errors() if staged_first is None else staged_first[1]
         errors = []
-        for err in exc.errors():
+        for err in entries:
             loc = " -> ".join(str(part) for part in err["loc"])
             errors.append(f"{loc}: {err['msg']}")
-        raise ValueError("; ".join(errors))
+        if staged_first is None:
+            raise ValueError("; ".join(errors))
+        # The staged lines first, one per field as on a load that builds; the
+        # build errors that are left follow on one more line.
+        lines = [staged_first[0]]
+        if errors:
+            lines.append("; ".join(errors))
+        raise ValueError("\n".join(lines))
 
     staged_error = _report_staged_fields(raw, config=config)
     if staged_error is not None:

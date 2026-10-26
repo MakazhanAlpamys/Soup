@@ -719,14 +719,14 @@ def _torch_cuda_wheel_tag(driver: tuple[int, int] | None) -> str | None:
 
 
 def _nvidia_smi_executable() -> str | None:
-    """Absolute path to nvidia-smi, or None.
+    """Absolute path of nvidia-smi in an absolute PATH directory, or None.
 
-    Bare ``nvidia-smi`` is never handed to ``subprocess`` (CWE-427):
-    Windows ``CreateProcess`` searches the current directory before PATH.
+    nvidia-smi is run by this path, never by its bare name, so the current
+    directory is never searched for it.
     """
-    import shutil
+    from soup_cli.utils.tool_paths import find_tool
 
-    return shutil.which("nvidia-smi")
+    return find_tool("nvidia-smi")
 
 
 def _nvidia_smi_cuda_version() -> tuple[int, int] | None:
@@ -874,6 +874,8 @@ def _detect_dual_python_interpreters() -> str:
 
 
 _GB = 1024**3
+#: macOS ships sysctl at this fixed location.
+_MACOS_SYSCTL = "/usr/sbin/sysctl"
 
 
 def _get_ram_gb() -> str:
@@ -901,7 +903,7 @@ def _get_ram_gb() -> str:
             import subprocess
 
             res = subprocess.run(
-                ["sysctl", "-n", "hw.memsize"],
+                [_MACOS_SYSCTL, "-n", "hw.memsize"],
                 capture_output=True,
                 text=True,
                 timeout=5,

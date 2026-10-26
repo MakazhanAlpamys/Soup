@@ -981,6 +981,45 @@ class TestTheLoaderIsActuallyWiredUp:
         with pytest.raises(SystemExit):
             loader.load_config(path)
 
+    def test_the_file_refusal_indents_every_line(self, monkeypatch, tmp_path) -> None:
+        """One line per unknown key, each under the header's indent -- the defect the
+        staged-field refusal had (only the first line indented), checked as rendered."""
+        import io
+
+        from rich.console import Console
+
+        from soup_cli.config import loader
+
+        monkeypatch.setattr(loader, "UNKNOWN_KEY_SEVERITY", "error")
+        buffer = io.StringIO()
+        monkeypatch.setattr(
+            loader,
+            "console",
+            Console(file=buffer, width=500, force_terminal=False, color_system=None),
+        )
+        path = tmp_path / "soup.yaml"
+        path.write_text(
+            "base: test-model\n"
+            "data:\n"
+            "  train: ./data.jsonl\n"
+            "  formatt: alpaca\n"
+            "training:\n"
+            "  epochs: 1\n"
+            "  quantizaton: none\n"
+            "  zzqqxx_unrelated: 1\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(SystemExit) as excinfo:
+            loader.load_config(path)
+        assert excinfo.value.code == 1
+        lines = buffer.getvalue().splitlines()
+        assert lines[:2] == ["Config validation error:", ""], lines
+        body = lines[2:]
+        assert len(body) == 3, lines
+        assert all(line.startswith("  unknown config key '") for line in body), lines
+        for key in ("data.formatt", "training.quantizaton", "training.zzqqxx_unrelated"):
+            assert sum(f"'{key}'" in line for line in body) == 1, (key, lines)
+
     def test_a_clean_config_still_loads_under_error_severity(self, monkeypatch) -> None:
         """The control for the flip: refusing everything would pass the two above."""
         from soup_cli.config import loader
@@ -1132,6 +1171,91 @@ class TestTheReportIsSafeForTheTerminal:
         # Neutralised, not dropped: a "fix" that swallowed the key entirely
         # would satisfy every absence assertion above.
         assert "]0;owned" in out, "the stripped payload must still be visible as inert text"
+
+    #: Every line break ``str.splitlines`` honours that ``for_terminal`` would keep
+    #: or that the refusal printer splits on before sanitising. chr(), not escapes,
+    #: so the bytes in this file are what the test says.
+    _LINE_BREAKS = (chr(0x0A), chr(0x0D), chr(0x0B), chr(0x0C), chr(0x1E), chr(0x85), chr(0x2028))
+
+    @pytest.mark.parametrize("brk", _LINE_BREAKS, ids=lambda brk: f"U+{ord(brk):04X}")
+    def test_a_key_with_a_line_break_cannot_forge_a_report_line(
+        self, monkeypatch, tmp_path, brk
+    ) -> None:
+        """The refusal prints one line per unknown key. A key carrying a line break
+        printed as two, and the second could pose as a report line of its own
+        (release security review): the key is shown on one line, whitespace collapsed."""
+        import yaml
+
+        from soup_cli.config import loader
+
+        monkeypatch.setattr(loader, "UNKNOWN_KEY_SEVERITY", "error")
+        buffer = self._real_console(monkeypatch)
+        forged = f"zzqq{brk}  unknown config key 'training.ok' - refused.{brk}  tail"
+        raw = {"base": "test-model", "data": {"train": "./d.jsonl"}, "training": {forged: 1}}
+        path = tmp_path / "soup.yaml"
+        path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+        with pytest.raises(SystemExit):
+            loader.load_config(path)
+
+        lines = buffer.getvalue().splitlines()
+        assert lines == [
+            "Config validation error:",
+            "",
+            "  unknown config key 'training.zzqq unknown config key 'training.ok' - "
+            "refused. tail' - refused.",
+        ], lines
+
+    def test_the_finding_itself_carries_no_line_break(self) -> None:
+        """The same text reaches the Web UI and MCP as an error body, not only the
+        terminal, so the walk collapses it rather than the printer."""
+        key = "a" + chr(10) + "b" + chr(0x2028) + "c" + chr(9) + chr(9) + "d"
+        found = find_unknown_config_keys(
+            {"base": "m", "data": {"train": "t.jsonl"}, "training": {key: 1}}
+        )
+
+        assert [(u.path, u.key) for u in found] == [("training.a b c d", "a b c d")]
+
+    def test_an_emoji_code_in_a_key_prints_literally(self, monkeypatch, tmp_path) -> None:
+        """Rich turns ``:warning:`` into an emoji unless told not to; a key name is
+        text from the file and is shown as written."""
+        from soup_cli.config import loader
+
+        monkeypatch.setattr(loader, "UNKNOWN_KEY_SEVERITY", "error")
+        buffer = self._real_console(monkeypatch)
+        path = tmp_path / "soup.yaml"
+        path.write_text(
+            "base: test-model\ndata:\n  train: ./d.jsonl\ntraining:\n  ':warning:': 1\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(SystemExit):
+            loader.load_config(path)
+
+        out = buffer.getvalue()
+        assert "unknown config key 'training.:warning:' - refused." in out, out
+        assert chr(0x26A0) not in out, out
+
+    def test_an_emoji_code_in_a_validation_error_prints_literally(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """The schema-error branch quotes the file's keys in its location too."""
+        from soup_cli.config import loader
+
+        buffer = self._real_console(monkeypatch)
+        path = tmp_path / "soup.yaml"
+        path.write_text(
+            "base: test-model\ndata:\n  train: ./d.jsonl\ntraining:\n"
+            "  preference_loss_weights:\n    ':warning:': not-a-number\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(SystemExit):
+            loader.load_config(path)
+
+        out = buffer.getvalue()
+        assert ":warning:" in out, out
+        assert chr(0x26A0) not in out, out
 
     def test_the_shared_helper_does_both_halves(self) -> None:
         from soup_cli.utils.terminal import for_terminal

@@ -483,39 +483,36 @@ def _load_config_under_cwd(config: str) -> SoupConfig:
 
 def tool_profile(args: dict) -> dict:
     """`soup profile` — memory / speed / GPU estimate from a soup.yaml (no model load)."""
-    from soup_cli.utils.gpu import model_size_from_name
     from soup_cli.utils.profiler import (
         estimate_speed,
-        estimate_total,
+        profile_from_config,
         recommend_batch_size,
         recommend_gpu,
     )
+    from soup_cli.utils.vram_estimate import fit_verdict
 
     cfg = _load_config_under_cwd(_require_str(args, "config"))
     gpu = _opt_str(args, "gpu")
-
-    model_params_b = model_size_from_name(cfg.base)
-    batch_size = cfg.training.batch_size
-    batch_size = 4 if batch_size == "auto" else int(batch_size)
     gpu_memory_gb, gpu_memory_source = _resolve_gpu_memory_mcp(gpu)
 
-    from soup_cli.utils.hardware_fit import resolve_peft_mode
-
-    peft = resolve_peft_mode(cfg)
-
-    result = estimate_total(
-        model_name=cfg.base,
-        model_params_b=model_params_b,
-        quantization=cfg.training.quantization,
-        lora_r=cfg.training.lora.r,
-        lora_alpha=cfg.training.lora.alpha,
-        batch_size=batch_size,
-        seq_len=cfg.data.max_length,
-        optimizer=cfg.training.optimizer,
-        gradient_checkpointing=cfg.training.gradient_checkpointing,
-        peft=peft,
+    # The train pre-flight's estimate, from the model's own shape (#2049). An assumed
+    # card is not one to resolve `auto` checkpointing on, so it prices as full then.
+    # Offline: a read-only tool must not send requests, with the server's token, for a
+    # model id the client chose. A local directory and the local cache are still read.
+    result = profile_from_config(
+        cfg,
+        allow_network=False,
+        gpu_memory_gb=None if gpu_memory_source == "assumed" else gpu_memory_gb,
     )
-    tokens_per_sec = estimate_speed(model_params_b, cfg.training.quantization, batch_size)
+    if result is None:
+        raise McpToolError(
+            "batch_size, max_length or the model's size (over 1,000B parameters) is "
+            "outside the estimate's range"
+        )
+    batch_size = result["batch_size"]
+    tokens_per_sec = estimate_speed(
+        result["model_params_b"], cfg.training.quantization, batch_size
+    )
     result["tokens_per_sec"] = round(tokens_per_sec, 1)
     result["samples_per_sec"] = round(tokens_per_sec / max(cfg.data.max_length, 1), 2)
     result["recommended_batch_size"] = recommend_batch_size(
@@ -524,6 +521,7 @@ def tool_profile(args: dict) -> dict:
     result["compatible_gpus"] = recommend_gpu(result["total_memory_gb"])
     result["gpu_memory_gb"] = gpu_memory_gb
     result["gpu_memory_source"] = gpu_memory_source
+    result["fit"] = fit_verdict(result["total_memory_bytes"], gpu_memory_gb * 1024**3)
     return result
 
 

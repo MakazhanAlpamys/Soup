@@ -46,8 +46,8 @@ def ab(
     beta: Optional[float] = typer.Option(
         None, "--beta",
         help=(
-            "Retired (#1418): ignored, with a warning. --alpha now bounds wrong "
-            "accept_h0 verdicts too."
+            "Retired (#1418): refused with a usage error. --alpha now bounds "
+            "wrong accept_h0 verdicts too."
         ),
     ),
     effect_size: float = typer.Option(

@@ -41,6 +41,10 @@ console = Console()
 _DEFAULT_SINCE = "7d"
 
 
+class _LogsUnreadableError(Exception):
+    """The --logs export could not be read; the message names it and why."""
+
+
 def ingest(
     source: str = typer.Option(
         ...,
@@ -156,6 +160,9 @@ def ingest(
     if not logs_path.exists():
         console.print(f"[red]--logs not found: {escape(logs)}[/]")
         raise typer.Exit(1)
+    if logs_path.is_dir():
+        console.print(f"[red]--logs '{escape(logs)}' is a directory, not an export file[/]")
+        raise typer.Exit(1)
 
     output_path = Path(output) if output else Path("traces.jsonl")
     if not is_under_cwd(output_path):
@@ -188,13 +195,25 @@ def ingest(
 
     def _lines():
         nonlocal count
-        for record in ingest_traces(source=canonical, path=str(logs_path)):
-            count += 1
-            yield json.dumps(record.to_dict(), ensure_ascii=False) + "\n"
+        try:
+            for record in ingest_traces(source=canonical, path=str(logs_path)):
+                count += 1
+                yield json.dumps(record.to_dict(), ensure_ascii=False) + "\n"
+        except UnicodeDecodeError as exc:
+            raise _LogsUnreadableError(
+                f"--logs '{logs}' is not valid UTF-8 (byte {exc.start})"
+            ) from exc
+        except OSError as exc:
+            reason = exc.strerror or type(exc).__name__
+            raise _LogsUnreadableError(f"--logs '{logs}' cannot be read: {reason}") from exc
 
     # Streamed into a staging file; the target is replaced only after the export
     # has been read completely, so a failed read leaves an earlier output intact.
-    atomic_write_lines(_lines(), str(output_path), field="--output")
+    try:
+        atomic_write_lines(_lines(), str(output_path), field="--output")
+    except _LogsUnreadableError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
 
     console.print(
         f"[green]Wrote {count} traces from {escape(canonical)} -> "
