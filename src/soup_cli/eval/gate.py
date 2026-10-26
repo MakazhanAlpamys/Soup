@@ -124,6 +124,10 @@ class EvalSuite(BaseModel):
     tasks: list[GateTask] = Field(default_factory=list)
 
 
+class MalformedSuiteError(ValueError):
+    """Invalid YAML syntax or root shape that must still abort training setup."""
+
+
 def _require_gate_tasks(suite: EvalSuite) -> None:
     if not suite.tasks:
         raise ValueError(
@@ -152,14 +156,14 @@ def load_suite(path: str) -> EvalSuite:
             suite_path, f"eval-gate suite '{path}'", max_bytes=MAX_CONFIG_BYTES
         )
     except yaml.YAMLError as exc:
-        raise ValueError(
+        raise MalformedSuiteError(
             f"eval-gate suite '{path}' is not valid YAML: {exc}"
         ) from exc
     if raw is None:
         data: dict[str, object] = {}
     elif not isinstance(raw, Mapping):
         actual = type(raw).__name__
-        raise ValueError(
+        raise MalformedSuiteError(
             f"eval-gate suite '{path}' must be a mapping with 'suite' and 'tasks', "
             f"got a {actual}"
         )

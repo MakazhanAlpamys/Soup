@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable
+from unittest.mock import MagicMock
 
 import pydantic
 import pytest
@@ -51,18 +53,33 @@ INVALID_SUITES = [
     ),
     (
         "suite: [\n",
-        "is not valid YAML:",
+        "is not valid YAML: while parsing a flow node",
         "malformed-yaml",
     ),
     (
         "\t\n",
-        "is not valid YAML:",
+        "is not valid YAML: while scanning for the next token",
         "tab-only",
     ),
     (
         "suite: foo\n  tasks:\n - name: bar\n",
-        "is not valid YAML:",
+        "is not valid YAML: mapping values are not allowed here",
         "mis-indented",
+    ),
+    (
+        "---\na: 1\n---\nb: 2\n",
+        "is not valid YAML: expected a single document in the stream",
+        "two-documents",
+    ),
+    (
+        "a: !foo x\n",
+        "is not valid YAML: could not determine a constructor",
+        "unknown-tag",
+    ),
+    (
+        "a: \x00\n",
+        "is not valid YAML: unacceptable character",
+        "nul-byte",
     ),
 ]
 
@@ -106,6 +123,7 @@ def test_load_suite_invalid_yaml_raises_value_error(
     path = _write_suite_text(tmp_path, content)
     with pytest.raises(ValueError) as caught:
         gate.load_suite(str(path))
+    assert f"eval-gate suite '{path}'" in str(caught.value)
     assert expected_fragment in str(caught.value)
 
 
@@ -136,10 +154,67 @@ def test_cli_eval_gate_refuses_invalid_suite_with_usage_error(
     output = " ".join(strip_ansi(result.output).split())
     assert result.exit_code == 3, (result.output, repr(result.exception))
     assert "Cannot load suite:" in output
+    assert "gate.yaml'" in output
     assert expected_fragment in output
     assert "GATE PASSED" not in output
     assert "GATE FAILED" not in output
     assert factory_calls == []
+
+
+@pytest.mark.parametrize(
+    "content", ["suite: [\n", "- suite: bad-root\n  tasks: []\n"],
+    ids=["malformed-yaml", "list-root"],
+)
+def test_training_callback_does_not_silently_disable_a_malformed_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: str,
+) -> None:
+    """Malformed YAML and root shapes still abort setup for a configured gate."""
+    from soup_cli.config.schema import EvalGateConfig
+    from soup_cli.monitoring.callback import SoupTrainerCallback
+
+    monkeypatch.chdir(tmp_path)
+    path = _write_suite_text(tmp_path, content)
+    callback = SoupTrainerCallback(
+        MagicMock(),
+        eval_gate_config=EvalGateConfig(enabled=True, suite=str(path), on_regression="stop"),
+    )
+    state = SimpleNamespace(max_steps=1, global_step=0, epoch=0)
+    callback._build_gate_generate_fn = MagicMock()
+
+    with pytest.raises(gate.MalformedSuiteError) as caught:
+        callback.on_train_begin(
+            SimpleNamespace(), state, SimpleNamespace(), model=object(), tokenizer=object(),
+        )
+
+    assert f"eval-gate suite '{path}'" in str(caught.value)
+    assert callback._gate_suite is None
+    callback._build_gate_generate_fn.assert_not_called()
+
+
+def test_training_callback_empty_gate_still_warns_and_stays_inert(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Empty files retain the pre-existing warn-and-inert validation policy."""
+    from soup_cli.config.schema import EvalGateConfig
+    from soup_cli.monitoring.callback import SoupTrainerCallback
+
+    monkeypatch.chdir(tmp_path)
+    path = _write_suite_text(tmp_path, "")
+    callback = SoupTrainerCallback(
+        MagicMock(),
+        eval_gate_config=EvalGateConfig(enabled=True, suite=str(path), on_regression="stop"),
+    )
+    state = SimpleNamespace(max_steps=1, global_step=0, epoch=0)
+    callback._build_gate_generate_fn = MagicMock()
+
+    callback.on_train_begin(
+        SimpleNamespace(), state, SimpleNamespace(), model=object(), tokenizer=object(),
+    )
+
+    assert "eval gate: could not load suite" in caplog.text
+    assert "Field required" in caplog.text
+    assert callback._gate_suite is None
+    callback._build_gate_generate_fn.assert_not_called()
 
 
 def test_cli_control_missing_suite_name_exits_usage_error(
