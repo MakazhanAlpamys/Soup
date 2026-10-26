@@ -1494,6 +1494,29 @@ output: ./output
         printed = buffer.getvalue()
         assert "MLX backend ignores: GaLore" in printed and "chat_template" not in printed
 
+    def test_mlx_trainers_on_the_dpo_helpers_declare_what_those_read(self):
+        """Every MLX task whose declared modules include mlx_dpo.py also declares the
+        trainer modules mlx_dpo.py imports (KTO lost two when GRPO's row landed)."""
+        import ast
+        from pathlib import Path
+
+        from soup_cli.config.backend_support import TRAINER_MODULES
+        from soup_cli.trainer import mlx_dpo
+
+        tree = ast.parse(Path(mlx_dpo.__file__).read_text(encoding="utf-8"))
+        imported = {
+            node.module.replace(".", "/") + ".py" for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+            and node.module.startswith("soup_cli.trainer.")
+        }
+        assert {"soup_cli/trainer/_trl_compat.py", "soup_cli/trainer/loss_summary.py"} <= imported
+        users = {key: set(mods) for key, mods in TRAINER_MODULES.items()
+                 if "soup_cli/trainer/mlx_dpo.py" in mods}
+        assert {task for task, _, _ in users} == {"dpo", "simpo", "orpo", "kto", "grpo"}
+        missing = {key: sorted(imported - mods) for key, mods in users.items()
+                   if imported - mods}
+        assert missing == {}
+
     def test_cli_resume_is_refused_before_anything_loads(self, capsys):
         import typer
 

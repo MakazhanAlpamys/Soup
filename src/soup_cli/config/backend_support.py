@@ -295,6 +295,8 @@ TRAINER_MODULES: dict[tuple[str, str, str], tuple[str, ...]] = {
         "soup_cli/trainer/mlx_dpo.py",
         "soup_cli/trainer/mlx_sft.py",
         "soup_cli/trainer/mlx_optim.py",
+        "soup_cli/trainer/_trl_compat.py",
+        "soup_cli/trainer/loss_summary.py",
     ),
     ("grpo", "mlx", "text"): (
         "soup_cli/trainer/mlx_grpo.py",
