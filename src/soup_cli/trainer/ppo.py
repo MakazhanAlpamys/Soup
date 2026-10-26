@@ -27,6 +27,7 @@ from soup_cli.utils.gpu import (
     resolve_frozen_base_load_dtype,
 )
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -63,10 +64,12 @@ def _set_ppo_training_kwargs(
 
     if total_steps is not None:
         from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
 
         use_bf16, use_fp16 = bf16_fp16_flags(device)
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
         training_kwargs = {
-            "warmup_steps": int(total_steps * tcfg.warmup_ratio),
+            "warmup_steps": warmup_steps,
             "weight_decay": tcfg.weight_decay,
             "max_grad_norm": tcfg.max_grad_norm,
             "optim": tcfg.optimizer,
@@ -189,6 +192,11 @@ class PPOTrainerWrapper:
         # Import PPOTrainer/PPOConfig — trl >=0.28 moved to trl.experimental
         ppo_trainer_cls, ppo_config_cls, is_experimental = _import_ppo_classes()
 
+        from soup_cli.trainer._trl_compat import config_accepts
+
+        if self.deepspeed_config and not config_accepts(ppo_config_cls, "deepspeed"):
+            raise ValueError("task: ppo does not support --deepspeed on this trl version")
+
         # Enable Rich progress bar for HuggingFace downloads
         from soup_cli.trainer.sft import _enable_hf_transfer_progress
 
@@ -310,8 +318,19 @@ class PPOTrainerWrapper:
             total_steps=total_steps, device=self.device,
         )
 
+        from soup_cli.trainer._trl_compat import config_accepts
+
         if "cliprange" in ppo_params:
             ppo_kwargs["cliprange"] = tcfg.ppo_clip_ratio
+
+        if config_accepts(ppo_config_cls, "deepspeed"):
+            ppo_kwargs["deepspeed"] = self.deepspeed_config
+
+        if config_accepts(ppo_config_cls, "response_length"):
+            ppo_kwargs["response_length"] = cfg.data.max_length
+
+        if config_accepts(ppo_config_cls, "save_total_limit"):
+            ppo_kwargs["save_total_limit"] = 3
 
         # Optional params that may not exist in all trl versions
         if "log_with" in ppo_params:
@@ -617,6 +636,7 @@ class PPOTrainerWrapper:
             trust_remote_code=self._trust_remote_code,
             num_labels=1,
             device_map=resolve_device_map(self.device) if self.device != "cpu" else None,
+            **base_revision_kwargs(cfg.base),
         )
         reward_model.eval()
         return reward_model
@@ -659,6 +679,7 @@ class PPOTrainerWrapper:
             trust_remote_code=self._trust_remote_code,
             num_labels=1,
             device_map=resolve_device_map(self.device) if self.device != "cpu" else None,
+            **base_revision_kwargs(cfg.base),
         )
         return value_model
 
@@ -696,7 +717,8 @@ class PPOTrainerWrapper:
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -718,7 +740,10 @@ class PPOTrainerWrapper:
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
 
-        self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
 
         if tcfg.quantization in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
@@ -776,7 +801,13 @@ class PPOTrainerWrapper:
 
     def _setup_unsloth(self, cfg, tcfg):
         """Load model via unsloth FastLanguageModel (2-5x faster)."""
+        from soup_cli.utils import unsloth
         from soup_cli.utils.unsloth import load_model_and_tokenizer
+        # #797: resolve training.gradient_checkpointing for the Unsloth path
+        # (streaming layers already checkpoint every layer, so it stays off).
+        use_gradient_checkpointing = unsloth.resolve_unsloth_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=getattr(tcfg, "stream_layers", False)
+        )
 
         console.print(f"[dim]Loading model via [bold]unsloth[/]: {cfg.base}[/]")
         self.model, self.tokenizer = load_model_and_tokenizer(
@@ -787,6 +818,8 @@ class PPOTrainerWrapper:
             lora_alpha=tcfg.lora.alpha,
             lora_dropout=tcfg.lora.dropout,
             target_modules=tcfg.lora.target_modules,
+            use_rslora=tcfg.lora.use_rslora,
+            use_gradient_checkpointing=use_gradient_checkpointing,
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token

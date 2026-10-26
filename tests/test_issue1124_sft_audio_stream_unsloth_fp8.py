@@ -414,6 +414,13 @@ class TestBackendSupportRegistryUnsloth:
         data = {"train": "tests/fixtures/sample_train.jsonl"}
         if modality == "vision":
             data["format"] = "multimodal"
+            # #1186 now refuses the ignored backend even without precision knobs.
+            with pytest.raises(ValueError, match="requires modality='text'"):
+                SoupConfig(
+                    base="test/model", task="sft", backend="unsloth",
+                    modality=modality, data=data,
+                )
+            return
         cfg = SoupConfig(
             base="test/model", task="sft", backend="unsloth", modality=modality, data=data
         )

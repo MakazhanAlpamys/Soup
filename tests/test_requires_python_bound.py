@@ -1,8 +1,9 @@
 """`requires-python` must carry an UPPER bound, and it must match the CI matrix.
 
-`requires-python = ">=3.10"` with no ceiling tells pip that every future Python is
-supported. It is not: CI tests 3.10, 3.11 and 3.12 only. On 3.13+ pip happily
-resolves a torch wheel nobody here has ever run, and the failure is not a Soup
+`requires-python = ">=3.11"` with no ceiling tells pip that every future Python is
+supported. It is not: CI tests 3.11, 3.12 and 3.13 only (3.10 left and 3.13 joined
+with #1805). On 3.14+ pip happily resolves a torch wheel nobody here has ever run,
+and the failure is not a Soup
 error message — it is a loader crash inside `c10.dll` / `libc10.so` before any
 Soup code executes, so the user has nothing to act on.
 
@@ -13,8 +14,8 @@ exists to catch. Widening the matrix and widening the bound must happen together
 The matrix is read from the `plan` job's `RELEASE_MATRIX` literal: the support
 matrix, every cell, which pushes to `release/**` run. The `test` job's own matrix
 is whatever `plan` outputs -- FULL (the same minus Windows and macOS on 3.11), the
-four APPROVAL cells or a single QUICK cell -- which is a run-time choice, not the
-support statement.
+four APPROVAL cells or a single QUICK cell, neither of which runs 3.13 -- which is a
+run-time choice, not the support statement.
 """
 
 import json
@@ -93,7 +94,7 @@ class TestRequiresPythonHasAnUpperBound:
         )
 
     def test_the_ceiling_excludes_the_first_untested_python(self):
-        """`<3.13` when the newest tested is 3.12 — the exclusive bound is the
+        """`<3.14` when the newest tested is 3.13 — the exclusive bound is the
         next minor after the last one CI actually runs."""
         _, ceiling = _parse_bounds(_requires_python(PYPROJECT.read_text(encoding="utf-8")))
         newest_major, newest_minor = _ci_python_versions()[-1]

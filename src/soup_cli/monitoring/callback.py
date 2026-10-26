@@ -632,22 +632,25 @@ class _SoupTrainerCallback_body:  # noqa: N801
         Best-effort: errors are logged but never crash training.
         """
         import json
+        import math
         from pathlib import Path
 
         if self._spike_strategy is None:
             return
-        attempts = self._spike_recovery_attempts
         try:
             new_lr = self._spike_strategy.compute_new_lr(args.learning_rate)
         except ValueError:
             return
-        recover = self._spike_strategy.should_recover(attempts)
         out_dir = Path(self.output_dir or args.output_dir or ".")
         # Containment: never write outside cwd (matches v0.32.0 lr-finder /
         # autopilot / cans policy). Caller's output_dir is already validated
         # by SoupConfig but args.output_dir from raw HF TrainingArguments is
         # not — defence-in-depth.
-        from soup_cli.utils.paths import is_under_cwd
+        from soup_cli.utils.paths import (
+            atomic_write_text,
+            enforce_under_cwd_and_no_symlink,
+            is_under_cwd,
+        )
         if not is_under_cwd(out_dir):
             logger.warning(
                 "spike_recovery hint skipped: output_dir %s is outside cwd",
@@ -657,20 +660,48 @@ class _SoupTrainerCallback_body:  # noqa: N801
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
             hint_path = out_dir / "spike_recovery.json"
-            hint_path.write_text(json.dumps({
+            # Validate the file as well as its directory, before reading prior
+            # attempts. A pre-placed link must not select another file.
+            enforce_under_cwd_and_no_symlink(str(hint_path), "spike_recovery hint")
+            attempts = self._spike_recovery_attempts
+            if hint_path.exists() and attempts == 0:
+                try:
+                    data = json.loads(hint_path.read_text(encoding="utf-8"))
+                    if isinstance(data, dict) and "attempts" in data:
+                        raw = data["attempts"]
+                        if isinstance(raw, bool):
+                            pass
+                        elif isinstance(raw, float):
+                            if math.isfinite(raw):
+                                attempts = max(0, int(raw))
+                        elif isinstance(raw, int):
+                            attempts = max(0, raw)
+                        elif isinstance(raw, str):
+                            attempts = max(0, int(raw))
+                except (json.JSONDecodeError, ValueError, TypeError, OverflowError, OSError):
+                    pass
+            recover = self._spike_strategy.should_recover(attempts)
+            atomic_write_text(json.dumps({
                 "attempts": attempts + 1,
                 "max_attempts": self._spike_strategy.max_attempts,
                 "loss_at_spike": float(loss),
                 "previous_lr": float(args.learning_rate),
                 "recommended_lr": float(new_lr),
                 "should_recover": recover,
-            }, indent=2), encoding="utf-8")
+            }, indent=2), str(hint_path), field="spike_recovery hint")
             self._spike_recovery_attempts = attempts + 1
-            console.print(
-                f"[yellow]Spike recovery hint written:[/] {hint_path} "
-                f"(recommended_lr={new_lr:.2e}, should_recover={recover})"
-            )
-        except OSError as exc:
+            if recover:
+                console.print(
+                    f"[yellow]Spike recovery hint written:[/] {hint_path} "
+                    f"(recommended_lr={new_lr:.2e}, should_recover={recover})"
+                )
+            else:
+                console.print(
+                    f"[yellow]Spike recovery hint written:[/] {hint_path} "
+                    f"(recommended_lr={new_lr:.2e}, should_recover=False, "
+                    f"max attempts {self._spike_strategy.max_attempts} reached)"
+                )
+        except (OSError, ValueError) as exc:
             logger.warning("Failed to write spike recovery hint: %s", exc)
 
     # ------------------------------------------------------------------

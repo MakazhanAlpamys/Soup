@@ -17,6 +17,7 @@ import os
 import re
 import shlex
 import sys
+from contextlib import redirect_stdout
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
@@ -69,19 +70,29 @@ class ToolSpec:
     annotations: dict | None = None
 
 
-def _sanitize(obj: Any) -> Any:
+def sanitize(obj: Any) -> Any:
     """Recursively strip C0/ESC/DEL bytes from every string in ``obj``.
 
     Leaves non-string scalars (int/float/bool/None) untouched; recurses into
     dicts and lists. Applied to every handler result as defence-in-depth.
+
+    Public since #1761: ``server.py`` and out-of-process callers both need it, and the
+    same shape as #896, which moved the private ``_for_terminal`` copies onto
+    ``utils.terminal.for_terminal``.
     """
     if isinstance(obj, str):
         return strip_control(obj)
     if isinstance(obj, Mapping):
-        return {_sanitize(k): _sanitize(v) for k, v in obj.items()}
+        return {sanitize(k): sanitize(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
-        return [_sanitize(v) for v in obj]
+        return [sanitize(v) for v in obj]
     return obj
+
+
+#: Retained so an existing ``from ... import _sanitize`` keeps working. Nothing in
+#: ``src/soup_cli`` uses it; it exists only so a downstream import is not broken by the
+#: rename in #1761.
+_sanitize = sanitize
 
 
 def _read_text_under_cwd(path: str, field: str, *, max_bytes: int = _MAX_JSON_BYTES) -> str:
@@ -472,34 +483,36 @@ def _load_config_under_cwd(config: str) -> SoupConfig:
 
 def tool_profile(args: dict) -> dict:
     """`soup profile` — memory / speed / GPU estimate from a soup.yaml (no model load)."""
-    from soup_cli.utils.gpu import model_size_from_name
     from soup_cli.utils.profiler import (
         estimate_speed,
-        estimate_total,
+        profile_from_config,
         recommend_batch_size,
         recommend_gpu,
     )
+    from soup_cli.utils.vram_estimate import fit_verdict
 
     cfg = _load_config_under_cwd(_require_str(args, "config"))
     gpu = _opt_str(args, "gpu")
-
-    model_params_b = model_size_from_name(cfg.base)
-    batch_size = cfg.training.batch_size
-    batch_size = 4 if batch_size == "auto" else int(batch_size)
     gpu_memory_gb, gpu_memory_source = _resolve_gpu_memory_mcp(gpu)
 
-    result = estimate_total(
-        model_name=cfg.base,
-        model_params_b=model_params_b,
-        quantization=cfg.training.quantization,
-        lora_r=cfg.training.lora.r,
-        lora_alpha=cfg.training.lora.alpha,
-        batch_size=batch_size,
-        seq_len=cfg.data.max_length,
-        optimizer=cfg.training.optimizer,
-        gradient_checkpointing=cfg.training.gradient_checkpointing,
+    # The train pre-flight's estimate, from the model's own shape (#2049). An assumed
+    # card is not one to resolve `auto` checkpointing on, so it prices as full then.
+    # Offline: a read-only tool must not send requests, with the server's token, for a
+    # model id the client chose. A local directory and the local cache are still read.
+    result = profile_from_config(
+        cfg,
+        allow_network=False,
+        gpu_memory_gb=None if gpu_memory_source == "assumed" else gpu_memory_gb,
     )
-    tokens_per_sec = estimate_speed(model_params_b, cfg.training.quantization, batch_size)
+    if result is None:
+        raise McpToolError(
+            "batch_size, max_length or the model's size (over 1,000B parameters) is "
+            "outside the estimate's range"
+        )
+    batch_size = result["batch_size"]
+    tokens_per_sec = estimate_speed(
+        result["model_params_b"], cfg.training.quantization, batch_size
+    )
     result["tokens_per_sec"] = round(tokens_per_sec, 1)
     result["samples_per_sec"] = round(tokens_per_sec / max(cfg.data.max_length, 1), 2)
     result["recommended_batch_size"] = recommend_batch_size(
@@ -508,6 +521,7 @@ def tool_profile(args: dict) -> dict:
     result["compatible_gpus"] = recommend_gpu(result["total_memory_gb"])
     result["gpu_memory_gb"] = gpu_memory_gb
     result["gpu_memory_source"] = gpu_memory_source
+    result["fit"] = fit_verdict(result["total_memory_bytes"], gpu_memory_gb * 1024**3)
     return result
 
 
@@ -661,6 +675,7 @@ PLAN_INPUT_FIELDS: tuple[str, ...] = (
     "data.retain_set",
     "training.reward_fn",
     "training.prm_reward",
+    "training.grpo_judge_rubric",
     "training.reward_model",
     "training.teacher_model",
     "training.minillm_pretrain_anchor_path",
@@ -679,6 +694,7 @@ NOT_PLAN_INPUT_FIELDS: Mapping[str, str] = {
         "resolve_chat_template); never opened as a file"
     ),
     "training.online_dpo_judge": "a judge URL, not a local path",
+    "training.grpo_judge": "a judge URL, not a local path",
     "training.preference_loss_weights": "a mapping of loss weights",
     "training.reward_hack_signals": "signal names",
     "eval.ship.general_suite": "read by soup ship, not soup train",
@@ -1175,7 +1191,7 @@ def _mutating_specs(
                 "type": "object",
                 "properties": {
                     "model": {"type": "string", "description": "Adapter/model path or id."},
-                    "format": {"type": "string", "description": "gguf / onnx / awq / gptq / ..."},
+                    "format": {"type": "string", "description": "gguf / onnx / tensorrt / ..."},
                     "output": {"type": "string", "description": "Optional output path."},
                 },
                 "required": ["model", "format"],
@@ -1240,3 +1256,72 @@ def build_registry(
         allow_execute=allow_execute,
         execution=execution,
     )
+
+
+def call_tool(
+    name: str,
+    arguments: dict | None = None,
+    *,
+    allow_mutating: bool = False,
+    registry: list[ToolSpec] | None = None,
+) -> Any:
+    """Run one registry tool and return its sanitized result.
+
+    A helper for callers that run registry tools without speaking MCP (#1761): it
+    runs one tool and returns its sanitized result. The MCP server itself calls this,
+    so the two cannot drift: stray stdout goes to stderr for the duration of the
+    handler so it cannot corrupt a JSON-RPC channel, the result is passed through
+    :func:`sanitize`, and every failure arising from the lookup or the handler becomes
+    an :class:`McpToolError` whose message is already sanitized.
+
+    This is not a supported in-process Python API; it describes what the helper does
+    today.
+
+    A handler that raises :class:`McpToolError` is passed through with its message
+    sanitized; any other exception becomes ``internal error (<type>)``, which carries
+    neither a path nor a traceback. A ``name`` that is not hashable (a list, say) raises
+    ``TypeError`` from the lookup instead: that is a caller bug, not a tool failure, and
+    folding it into :class:`McpToolError` would hide it. Any other unknown name --
+    including an int or ``None`` -- is an ``unknown tool`` :class:`McpToolError`.
+
+    Returns the Python value, not the pretty-printed JSON text, so a caller does not have
+    to parse what it just called. Serialization stays the transport's business.
+
+    ``registry`` takes the tool table to run against, defaulting to
+    ``build_registry(allow_mutating=allow_mutating)``. Pass one explicitly when the table
+    needs settings ``call_tool`` cannot infer -- the execution tools are the case: build
+    it with ``build_registry(allow_mutating=True, allow_execute=True)`` and hand it in,
+    because a CLI flag like ``--allow-execute`` cannot help an in-process caller.
+
+    ``allow_mutating`` mirrors ``build_registry``'s own flag. It is a second gate rather
+    than a duplicate of it: a caller that built its table with ``allow_mutating=True``
+    still has to ask for mutating tools by name here, so one permissive table cannot be
+    used to run a mutating tool by accident.
+
+    Note for a threaded caller: the stdout guard is ``contextlib.redirect_stdout``, which
+    is process-wide. While a handler runs, prints from any other thread in the process go
+    to stderr as well. Serialize calls, or accept the extra stderr, if that matters.
+    """
+    specs = build_registry(allow_mutating=allow_mutating) if registry is None else registry
+    by_name = {spec.name: spec for spec in specs}
+    spec = by_name.get(name)
+    if spec is None:
+        raise McpToolError(f"unknown tool: {sanitize(name)}")
+    if spec.mutating and not allow_mutating:
+        raise McpToolError(
+            f"'{sanitize(name)}' can change state and is disabled; pass "
+            "allow_mutating=True to enable it."
+        )
+    try:
+        # Any core that prints (e.g. a Rich warning) must not corrupt the caller's
+        # stdout. Serialization stays inside the try in the server so a
+        # non-serializable result also becomes a sanitized error.
+        with redirect_stdout(sys.stderr):
+            result = spec.handler(arguments or {})
+        return sanitize(result)
+    except McpToolError as exc:
+        # sanitize the message too, so the C0/ESC guarantee is structural rather than a
+        # convention every handler has to remember.
+        raise McpToolError(sanitize(str(exc))) from None
+    except Exception as exc:  # never leak a stack trace or a path to the caller
+        raise McpToolError(f"internal error ({type(exc).__name__})") from None

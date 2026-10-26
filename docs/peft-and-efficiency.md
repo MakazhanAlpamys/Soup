@@ -186,7 +186,7 @@ training:
 
 **What happens at trainer start.** Soup deep-copies the last `expand_layers` decoder blocks, zero-inits each clone's residual projections (`mlp.down_proj` + `self_attn.o_proj`) so the appended block initially acts as identity, appends them to `model.model.layers`, and updates `config.num_hidden_layers`. `freeze_trainable_layers` must equal `expand_layers`: it freezes every parameter except the appended blocks, the canonical LLaMA Pro "train only new blocks" recipe. It does not select the top-N or bottom-N layers, and any other value, including `0` or a negative one, is refused at config load.
 
-**Scope.** Works on `task: sft` with `backend: transformers`, `modality: text`, `quantization: none` and `lora.r: 0`. A LoRA rank is refused together with `expand_layers` ([#1326](https://github.com/MakazhanAlpamys/Soup/issues/1326)): the expansion runs before `get_peft_model`, which freezes every non-adapter parameter again, appended blocks included, so only adapters on the original layers would train. `task: pretrain` has no `lora.r: 0` route: a rank is refused at config load, and `lora.r: 0` loads but then fails inside peft at trainer start ([#1813](https://github.com/MakazhanAlpamys/Soup/issues/1813)), so the recipe needs `task: sft`. Other tasks, backends and modalities, and a quantized base, are refused at config load. No other trainer applies the expansion, and the appended blocks are only supported on an unquantized base. Bounds: `expand_layers ∈ [1, 64]`. Over-expansion (more new blocks than the base has layers) silently clamps to the base layer count. Non-Llama-shaped architectures (e.g. Falcon's `dense_4h_to_h`) emit a `warnings.warn` because the residual zero-init heuristic only matches the standard `down_proj` / `o_proj` names — the appended blocks are still appended + trainable, but lose the identity-init guarantee.
+**Scope.** Works on `task: sft` with `backend: transformers`, `modality: text`, `quantization: none` and `lora.r: 0`. A LoRA rank is refused together with `expand_layers` ([#1326](https://github.com/MakazhanAlpamys/Soup/issues/1326)): the expansion runs before `get_peft_model`, which freezes every non-adapter parameter again, appended blocks included, so only adapters on the original layers would train. `task: pretrain` is refused at config load whatever the rank ([#1813](https://github.com/MakazhanAlpamys/Soup/issues/1813)): a rank would freeze the appended blocks again, and the pretrain trainer has no `lora.r: 0` branch, so the recipe needs `task: sft`. Other tasks, backends and modalities, and a quantized base, are refused at config load. No other trainer applies the expansion, and the appended blocks are only supported on an unquantized base. Bounds: `expand_layers ∈ [1, 64]`. Over-expansion (more new blocks than the base has layers) silently clamps to the base layer count. Non-Llama-shaped architectures (e.g. Falcon's `dense_4h_to_h`) emit a `warnings.warn` because the residual zero-init heuristic only matches the standard `down_proj` / `o_proj` names — the appended blocks are still appended + trainable, but lose the identity-init guarantee.
 
 
 ## Optimizer & PEFT Zoo
@@ -219,7 +219,7 @@ training:
 
 Catch-all friendly errors: typos in `optimizer:` are rejected at config-load with the v0.41.0 additions listed in the message; `load_in_8bit` mixed with `load_in_16bit` raises rather than picking one silently.
 
-**`lr_groups` is not applied.** The per-module learning rate it describes is parsed and validated (patterns must be compilable regexes) but no optimizer reads it, so every parameter trains at `lr`. Setting it warns in v0.76 and is refused as of v0.77 (#761).
+**`lr_groups` is not applied.** The per-module learning rate it describes is parsed and validated (patterns must be compilable regexes) but no optimizer reads it, so every parameter trains at `lr`. Setting it warned in v0.76; refused at load as of v0.77 (#761).
 
 PiSSA, OLoRA, LoftQ, and VeRA are applied through the shared PEFT constructor on
 the Transformers backend. Soup refuses these variants on MLX and Unsloth rather
@@ -239,7 +239,20 @@ an explicit target list always wins unchanged:
    `qwen3_5_text`. The MoE architectures Soup ships recipes for (`qwen3_moe`,
    `deepseek_v3`, `deepseek_v4`, `glm4_moe`, `glm_moe_dsa`, `granitemoehybrid`,
    `kimi_k2`/`kimi_k25`, `gpt_oss`, `minimax_m2`, `minimax_m3_vl`, `mistral3`) target
-   their attention projections; PEFT maps none of them (#1070). MiniMax-M3 uses a regex
+   their attention projections; PEFT maps none of them (#1070). On the DeepSeek-V3
+   multi-head latent attention bases `deepseek_v3` and `kimi_k2` the query
+   projections follow the checkpoint's `q_lora_rank`: an integer gives the model
+   `q_a_proj` and `q_b_proj`, while `q_lora_rank: null` (Moonlight-16B-A3B) gives it a
+   single `q_proj`, which is targeted instead. A `kimi_k25` base keeps the
+   `q_a_proj` / `q_b_proj` names even with `q_lora_rank: null`, so its `q_proj`
+   would get no adapter. No shipped Kimi K2.5 or K2.6 config sets `null`. The
+   reason is its vision tower, which has a `q_proj` of its own: the entry would have
+   to be a regex scoped to the language tower, and `moe_lora: true` adds its names
+   to a list of targets but discards a regex, so the key/value projections would
+   lose their adapter. The same holds for any other wrapper around a `deepseek_v3`
+   text config with `q_lora_rank: null` (Kimi-VL style): Soup has no row for the
+   wrapper, so its text tower keeps the `q_a_proj` / `q_b_proj` names and its
+   `q_proj` gets no adapter. MiniMax-M3 uses a regex
    scoped to its language tower, so a text fine-tune does not adapt the vision
    encoder. `mistral3` (the vision-language wrapper behind `mistral-medium-3-5-sft`,
    which therefore sets `modality: vision` so SFT loads the image-text class) uses the
@@ -377,10 +390,23 @@ deprecated in favour of the YAML registry.
 **Multi-trainer scope** — ReLoRA and the surgical patches are wired into every
 transformer-backend trainer: `sft`, `dpo`, `grpo`, `kto`, `orpo`, `simpo`, `ipo`,
 `ppo`, `reward_model`, `pretrain`, `embedding`, `bco`, plus the unified
-`task: preference` dispatcher. Schema cross-validator rejects MLX backend,
+`task: preference` dispatcher, though ReLoRA is refused for the tasks with a frozen
+reference (below). Schema cross-validator rejects MLX backend,
 quantization other than `none`, `stream_layers`, `lora.use_vera`, `lora.use_dora`,
 and `use_fsdp2_compile` (the callback is HF Trainer-specific and restart requires
 a writable float base).
+
+**ReLoRA is refused where the loss has a frozen reference**: `task: dpo`, `ipo`,
+`kto` and `bco`, `task: grpo` with `grpo_beta` above 0, and `task: preference`
+whose loss or blend names `dpo`, `ipo` or `bco`. trl reads that reference from the
+policy's own base weights (a `ref` adapter over them, or the model with its adapter
+disabled), and every restart merges the trained adapter into those weights. From
+the first restart on, the reference would be the policy as of that step instead of
+the model the run started from. Measured on a fixed batch with the tiny test
+model: the `dpo` reference does not move until the first restart and moves by 0.83
+at it. `sft`, `orpo`, `simpo`, `reward_model`, `pretrain`, `embedding`, `grpo` with
+`grpo_beta: 0` and a `simpo` / `orpo` preference run are not affected. `ppo` reads its
+reference the same way as `kto` and `bco` but has not been measured.
 
 
 ## DoRA (Weight-Decomposed LoRA)
@@ -396,9 +422,11 @@ training:
 ```
 
 Works with all training tasks on the transformers backend (see the note on
-quantized bases below). On `backend: unsloth` and `backend: mlx`, `use_dora: true`
-is refused when the config is loaded: neither backend builds a DoRA adapter, so
-it would silently train plain LoRA.
+quantized bases below). The MLX backend also supports DoRA for text SFT on dense
+linear targets with unquantized or pre-quantized 4-bit bases; see
+[DoRA on MLX](backends-and-ops.md#dora-on-mlx) for restrictions and native adapter
+loading/fusion. On `backend: unsloth`, `use_dora: true` remains refused at config
+load because that path does not build a DoRA adapter.
 
 > **Not on GPTQ / AWQ / AQLM / EETQ bases.** peft has no DoRA variant for those
 > layers and raises when the adapter is attached, so `use_dora: true` with
@@ -444,6 +472,50 @@ training:
 - **Compatibility:** Supported on the `transformers` backend for `sft`, `pretrain`, and `embedding` tasks. Mutually exclusive with `loraplus_lr_ratio` (which differentiates $A$ and $B$ rates), `use_galore`, `lora.use_vera` (VeRA trains scaling vectors, so `create_lorafa_optimizer` finds no $B$ matrices), non-AdamW optimizers, and the `mlx` backend. Requires explicit `lora.r` and `lora.alpha`. LoRA-FA has not been validated under `stream_layers: true` (layer streaming); combining them is not recommended.
 
 
+## Fast-LoRA kernels (`training.fast_lora`)
+
+Runs a LoRA's projections through Soup's own autograd functions instead of
+peft's modules: q/k/v with one shared input and one accumulated input gradient,
+gate/up/down around SwiGLU as one block, and every other adapted Linear (such as
+`o_proj`) as a single projection. The math is LoRA's; the kernels change the
+order of the work and what is kept for the backward pass.
+
+```yaml
+training:
+  fast_lora: true
+  lora:
+    dropout: 0          # required: Soup's default is 0.05
+    target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+```
+
+Setup prints how many modules each kernel took over, and refuses the run if the
+flag is on and none was. Off by default.
+
+- **Scope:** `task: sft` on the `transformers` backend, `modality: text`,
+  `quantization: none` or `4bit`, resident or with `stream_layers`. Refused, with
+  the reason: any other task, backend, modality or quantization; `lora.r: 0`;
+  `lora.use_dora`, `lora.use_vera`, `lora.target_parameters`; `lora.dropout`
+  other than 0 (peft gives every projection its own dropout, so q/k/v and
+  gate/up would no longer share one input); `training.use_liger`, which
+  replaces the MLP's forward too; `unfrozen_parameters` (Spectrum) and
+  `lisa_enabled`, which train the model's own weights and skip the LoRA setup;
+  and `quantization_aware: fp8`, whose converted projections the kernels would
+  read around. A model whose adapters the kernels cannot run (GPT-2's Conv1D
+  layout) is refused at setup, as if nothing had been patched.
+- **What is verified, on CPU:** float64 `gradcheck` of each kernel through the
+  switch; float32 forward and backward parity with peft's modules; the same
+  gradients with and without non-reentrant checkpointing; the base model's
+  output with the adapter disabled; fifty training steps whose losses stay
+  within 1e-3 of peft's; and a streamed model with more layers than
+  `stream_buffers`, whose LoRA gradients on every layer equal those without the
+  flag.
+- **Not verified:** bf16, fp16 and NF4 parity, and streaming on a GPU. Those
+  tests exist (`pytest -m gpu`) and need a CUDA card with bitsandbytes.
+- **No speedup is claimed.** Nothing here measures end-to-end throughput or
+  peak VRAM. Under gradient checkpointing, which layer streaming always uses, a
+  block's saved tensors exist only during its recompute, so any saving lowers a
+  per-layer transient, not the stored total.
+
 ## rsLoRA (Rank-Stabilized Scaling)
 
 Use rank-stabilized LoRA scaling for better performance at high ranks:
@@ -457,6 +529,11 @@ training:
 ```
 
 Works with all training tasks and backends. Recommended for LoRA rank ≥ 32.
+
+The scale is `alpha / sqrt(r)` instead of plain LoRA's `alpha / r` (2.0 instead of 0.25
+for the config above) on every backend: PEFT's `LoraConfig(use_rslora=True)` on
+`transformers`, the `scale` Soup hands mlx-lm (in `adapter_config.json` and at training
+time) on `mlx`, and `get_peft_model(..., use_rslora=True)` on `unsloth`.
 
 
 ## VeRA & OLoRA (Smaller-Footprint PEFT)
@@ -495,7 +572,7 @@ training:
   neftune_alpha: 5.0  # Noise intensity (0-50, typically 5-15)
 ```
 
-Works with SFT, DPO, KTO, ORPO, SimPO, and IPO tasks.
+Works with SFT, TTS, DPO, KTO, ORPO, SimPO, IPO, BCO, and preference tasks.
 
 
 ## Sample Packing
@@ -539,7 +616,22 @@ training:
   freeze_ratio: 0.75   # Freeze 75% of layers from the bottom
 ```
 
-Works with and without LoRA. When used with LoRA, LoRA is applied only to unfrozen layers.
+Works with and without LoRA. When used with LoRA, the adapter is attached only to the unfrozen
+layers, so a frozen layer stays frozen rather than training through a fresh adapter.
+
+`freeze_layers`/`freeze_ratio` cannot currently be combined with LoRA when
+`training.lora.target_modules` is a regex string (an explicit one, or an `auto`-resolved
+architecture table entry such as Mistral 3.5's), when `training.lora.target_parameters` is
+set (per-parameter LoRA, e.g. fused MoE experts), or with `training.lora.use_vera`. A
+`target_modules` list entry that only matches modules outside a numbered decoder layer (such as
+`embed_tokens`) and a freeze plan that freezes every layer refuse too. Each of these refuses when
+the model is built rather than silently drop the freeze plan (#1432). A top-level `lm_head` target
+is accepted and keeps its adapter.
+
+Known limitation: a `target_modules` entry spelled as a full module path, such as
+`model.layers.0.self_attn.q_proj`, keeps its adapter even when that layer is frozen, because peft
+accepts an exact module name before it reads `layers_to_transform`. Use module-name suffixes such
+as `q_proj` with `freeze_layers` / `freeze_ratio`.
 
 ## LISA — Layerwise Importance Sampling (v0.71.34)
 
@@ -644,10 +736,40 @@ Auto-stop training when loss spikes above a threshold (like Axolotl's `loss_watc
 training:
   loss_watchdog: true           # Enable loss spike detection
   loss_watchdog_threshold: 3.0  # Stop if loss exceeds this value
-  loss_watchdog_patience: 5     # Consecutive steps above threshold before stopping
+  loss_watchdog_patience: 5     # Consecutive loss reports above threshold before stopping
 ```
 
-> **Backend Note:** Setting `loss_watchdog: true` is refused on `backend: mlx` at config validation (Soup does not implement the watchdog on the MLX callback, which has no stop control).
+The comparison is strictly `loss > loss_watchdog_threshold`; a report at or below
+the threshold resets patience. A missing/`None` loss neither advances nor resets it.
+
+**MLX text SFT:** reports occur every `logging_steps` completed optimizer updates
+(every `logging_steps × gradient_accumulation_steps` micro-batches), plus at the
+end of the budget. Each loss averages the micro-batches since the preceding
+report. On the triggering report, training stops immediately after its completed
+update, with no later update or partial accumulation group. Soup saves the current
+`adapters.safetensors` and loadable `adapter_config.json`, runs the final validation
+when `eval_steps` is configured, and releases the display and rewind recorder.
+This saves the last state, not a best-loss or rollback checkpoint; a high loss can
+already have affected its weights. No full optimizer-state resume is claimed.
+
+The returned summary and `adapter_config.json` record `training_outcome`
+(`stopped` or `completed`), `stop_reason` (`loss_watchdog` or `budget_completed`),
+`completed_updates` and `completed_iterations`. `total_steps` remains in MLX
+micro-batch units and counts only executed iterations. A controlled stop is a
+successful command after saving; the CLI says **Training Stopped**, while the
+tracker's `completed` status means the run finalized successfully. Consult the
+adapter metadata for the termination reason. Non-finite reported training loss
+raises an error immediately; save failures, other errors and keyboard interruption
+propagate rather than becoming successful watchdog stops.
+
+**Difference from Transformers:** its current watchdog applies the threshold
+comparison to the losses reported by Trainer, with no separate non-finite check
+in that callback. On MLX, a reported NaN, +Inf or -Inf is an immediate training
+error, regardless of patience. The Transformers callback is unchanged.
+
+With the watchdog disabled, existing MLX report cadence and behavior are unchanged.
+Other MLX tasks/modalities still refuse it, and MLX continues to refuse
+`loss_spike_recovery` because checkpoint recovery is a separate feature.
 
 ## Training Stability & Auto-Tuning
 
@@ -697,7 +819,11 @@ config load because its evidence covers BF16, not FP16; see the
 
 ### Loss Spike Auto-Recovery
 
-Extends the watchdog: instead of stopping on a spike, writes `<output>/spike_recovery.json` with decayed LR and attempt count for re-launch. Capped at 3 attempts by default.
+Extends the watchdog: when the watchdog halts training on a loss spike, writes `<output>/spike_recovery.json` with decayed LR and attempt count for re-launch (e.g. `soup train --resume`). Capped at `loss_spike_recovery_max_attempts` (default 3); each launch hitting a spike evaluates prior completed attempts against the cap (`attempts < max_attempts`), writes the incremented count, and sets `should_recover: false` once the recovery budget is exhausted.
+
+The hint stays under the working directory and is replaced atomically. A symbolic-link
+target is refused with a warning; a failed replacement preserves the previous hint and
+does not consume an attempt. Replacing a hard-linked hint leaves its other links unchanged.
 
 ```yaml
 training:
@@ -707,7 +833,8 @@ training:
   loss_spike_recovery_lr_decay: 0.5     # halve LR each recovery
 ```
 
-> **Backend Note:** Setting `loss_spike_recovery: true` is refused on `backend: mlx` at config validation (spike recovery is driven by the watchdog and the watchdog cannot fire on MLX).
+> **Backend Note:** Setting `loss_spike_recovery: true` is refused on `backend: mlx`
+> at config validation: MLX does not implement checkpoint rollback or recovery hints.
 
 ### Convergence Detector
 
@@ -721,7 +848,7 @@ training:
 Computes `continue` / `early_stop` / `lower_lr` advice from the loss curve for
 callers that invoke the detector. `convergence_detection` is reported as not
 enforced by `soup train`; setting `convergence_window` or `convergence_rel_tol` away from their
-defaults emits a load-time warning in v0.76 and will be refused as of v0.77 (#808).
+defaults warned at load in v0.76 and is refused at load as of v0.77 (#808).
 
 ### VRAM Pressure Advisory
 
@@ -746,9 +873,10 @@ are not enforced during training in this build. `soup train` prints an advisory 
 when one is set away from its default, directing users to `--gate <suite.yaml>`.
 Their tuning knobs (`forgetting_eval_steps`, `forgetting_benchmark`, `forgetting_stop`,
 `checkpoint_eval_steps`, `checkpoint_eval_metric`, `checkpoint_eval_tasks`, `checkpoint_keep_top`,
-`convergence_window`, and `convergence_rel_tol`) emit a load-time warning in v0.76
-and are refused as of v0.77 per #808, alongside `early_stop_patience` (#761), so each
-is reported once with the refusal date.
+`convergence_window`, and `convergence_rel_tol`) warned at load in v0.76 and are
+refused at load as of v0.77 per #808, alongside `early_stop_patience` (#761): the
+refusal names each one set away from its default, one line per field, and says to
+delete the line.
 
 Use the live eval gate for regression detection and automatic stopping today:
 

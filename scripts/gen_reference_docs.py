@@ -548,11 +548,40 @@ def _yaml_key(name: str, info: FieldInfo) -> str:
     return name
 
 
+def staged_notes() -> dict[str, str]:
+    """The sentence the row of each key in ``STAGED_FIELDS`` ends with, by YAML path.
+
+    A staged field passes the schema and is refused by the loader
+    (``config/staged_fields.py``, #808), so its description does not say so by
+    itself. This page says it for every key that list names, read from the list,
+    so a field staged later gets the sentence without an edit here."""
+    from soup_cli.config.staged_fields import STAGED_FIELD_REJECTION_VERSION, STAGED_FIELDS
+
+    note = (
+        "Refused at load when set away from its default "
+        f"(v{STAGED_FIELD_REJECTION_VERSION}, #808)."
+    )
+    return {f"{section}.{name}": note for section, name in STAGED_FIELDS}
+
+
+def _with_sentence(description: str, sentence: str) -> str:
+    """``sentence`` after ``description``, which is first closed with a full stop."""
+    if description and not description.endswith((".", "!", "?", ":")):
+        description += "."
+    return f"{description} {sentence}".strip()
+
+
 def config_sections(
-    model: type[BaseModel], prefix: str = "", _stack: tuple[type[BaseModel], ...] = ()
+    model: type[BaseModel],
+    prefix: str = "",
+    _stack: tuple[type[BaseModel], ...] = (),
+    *,
+    notes: collections.abc.Mapping[str, str] | None = None,
 ) -> list[tuple[str, list[ConfigRow]]]:
     """``(YAML path, rows)`` per section: the model's own keys, then every nested model
-    depth-first in field order. A model already being rendered is not entered again."""
+    depth-first in field order. A model already being rendered is not entered again.
+    ``notes`` maps a YAML path to a sentence its row's description ends with."""
+    notes = notes or {}
     stack = (*_stack, model)
     rows: list[ConfigRow] = []
     nested: list[tuple[str, type[BaseModel]]] = []
@@ -568,9 +597,9 @@ def config_sections(
         description = escape_cell(strip_internal_phase(info.description or ""))
         links = ", ".join(f"[{_code(child)}](#{github_slug(child)})" for child, _ in children)
         if links:
-            if description and not description.endswith((".", "!", "?", ":")):
-                description += "."
-            description = f"{description} See {links}.".strip()
+            description = _with_sentence(description, f"See {links}.")
+        if path in notes:
+            description = _with_sentence(description, escape_cell(notes[path]))
         rows.append(
             ConfigRow(
                 key=path,
@@ -582,7 +611,7 @@ def config_sections(
         )
     sections = [(prefix, rows)]
     for child_path, sub in nested:
-        sections.extend(config_sections(sub, child_path, stack))
+        sections.extend(config_sections(sub, child_path, stack, notes=notes))
     return sections
 
 
@@ -594,7 +623,9 @@ def _load_config_model() -> type[BaseModel]:
 
 def render_config_reference(model: type[BaseModel] | None = None) -> str:
     """The text of ``docs/config-reference.md``."""
-    sections = config_sections(model if model is not None else _load_config_model())
+    sections = config_sections(
+        model if model is not None else _load_config_model(), notes=staged_notes()
+    )
     lines = [
         "# Config reference",
         "",
@@ -609,8 +640,10 @@ def render_config_reference(model: type[BaseModel] | None = None) -> str:
         "",
         "Every key `soup.yaml` accepts. A key that is not on this page **refuses the load** — see",
         "[Unknown config keys](backends-and-ops.md#unknown-config-keys) for the error and the",
-        "nearest-name hint. The guides linked from the [docs index](README.md) explain what the",
-        "settings do together; this page is the lookup table.",
+        "nearest-name hint. A key whose description ends \"Refused at load when set away from",
+        "its default\" is declared but read by nothing: leave it out, or at its default.",
+        "The guides linked from the [docs index](README.md) explain what the settings do",
+        "together; this page is the lookup table.",
         "",
         "How to read a table:",
         "",
@@ -679,7 +712,7 @@ def iter_commands(root: click.Command) -> list[CommandEntry]:
     def walk(command: click.Command, path: tuple[str, ...]) -> None:
         if path:
             entries.append(CommandEntry(path, command))
-        if isinstance(command, click.Group):
+        if _is_group(command):
             for name in sorted(command.commands):
                 sub = command.commands[name]
                 if not getattr(sub, "hidden", False):
@@ -705,26 +738,37 @@ def _range_words(param_type: Any) -> str:
     return ", ".join(parts)
 
 
+def _is_group(command: object) -> bool:
+    return isinstance(getattr(command, "commands", None), collections.abc.Mapping)
+
+
+def _is_option(parameter: object) -> bool:
+    return getattr(parameter, "param_type_name", None) == "option"
+
+
+def _is_argument(parameter: object) -> bool:
+    return getattr(parameter, "param_type_name", None) == "argument"
+
+
 def _click_type_name(param_type: click.ParamType) -> str:
-    if isinstance(param_type, click.Choice):
+    # These are parameter capabilities, shared by Click and Typer's own types.
+    # The script also accepts plain Click trees without importing Soup's CLI.
+    if hasattr(param_type, "choices"):
         values = [str(getattr(choice, "value", choice)) for choice in param_type.choices]
         return "one of " + ", ".join(_code(value) for value in values)
-    if isinstance(param_type, (click.IntRange, click.FloatRange)):
-        name = "integer" if isinstance(param_type, click.IntRange) else "float"
-        return ", ".join(part for part in (name, _range_words(param_type)) if part)
-    if isinstance(param_type, click.types.IntParamType):
-        return "integer"
-    if isinstance(param_type, click.types.FloatParamType):
-        return "float"
-    if isinstance(param_type, click.types.BoolParamType):
-        return "boolean"
-    if isinstance(param_type, click.Path):
-        return "path"
-    if isinstance(param_type, click.File):
-        return "file"
-    if isinstance(param_type, click.DateTime):
-        return "datetime"
-    return "text"
+    name = getattr(param_type, "name", "")
+    if name in ("integer range", "int range", "float range"):
+        kind = "float" if name == "float range" else "integer"
+        return ", ".join(part for part in (kind, _range_words(param_type)) if part)
+    return {
+        "integer": "integer",
+        "int": "integer",
+        "float": "float",
+        "boolean": "boolean",
+        "path": "path",
+        "filename": "file",
+        "datetime": "datetime",
+    }.get(name, "text")
 
 
 def format_click_type(param: click.Parameter) -> str:
@@ -766,7 +810,7 @@ def format_click_default(param: click.Parameter) -> str:
 
 
 def _param_name(param: click.Parameter) -> str:
-    if isinstance(param, click.Option):
+    if _is_option(param):
         names = ", ".join(_code(opt) for opt in param.opts)
         if param.secondary_opts:
             names += " / " + ", ".join(_code(opt) for opt in param.secondary_opts)
@@ -839,21 +883,21 @@ def _param_rows(command: click.Command) -> list[str]:
 def _usage(path: tuple[str, ...], command: click.Command) -> str:
     params = _visible_params(command)
     parts = ["soup", *path]
-    if any(isinstance(param, click.Option) for param in params):
+    if any(_is_option(param) for param in params):
         parts.append("[OPTIONS]")
-    if isinstance(command, click.Group):
+    if _is_group(command):
         # `<command>`, not Click's `COMMAND`: the docs guard that resolves every
         # documented invocation (#1465) reads a bare capitalised word as a subcommand.
         optional = bool(path) and command.invoke_without_command
         parts.append("[<command>] [ARGS]..." if optional else "<command> [ARGS]...")
     for param in params:
-        if isinstance(param, click.Argument):
+        if _is_argument(param):
             name = _argument_name(param)
             name = name if param.required else f"[{name}]"
             parts.append(f"{name}..." if param.nargs == -1 else name)
     passes_extra = (command.context_settings or {}).get("allow_extra_args")
-    variadic = any(isinstance(param, click.Argument) and param.nargs == -1 for param in params)
-    if passes_extra and not variadic and not isinstance(command, click.Group):
+    variadic = any(_is_argument(param) and param.nargs == -1 for param in params)
+    if passes_extra and not variadic and not _is_group(command):
         parts.append("[ARGS]...")
     return " ".join(parts)
 
@@ -870,7 +914,7 @@ def _command_section(entry: CommandEntry, anchors: dict[tuple[str, ...], str]) -
     if summary:
         blocks.append([summary])
     blocks.append([f"Usage: {_code(_usage(entry.path, command))}"])
-    if isinstance(command, click.Group):
+    if _is_group(command):
         subs = [
             f"- [{_code(name)}](#{anchors[(*entry.path, name)]})"
             for name in sorted(command.commands)
@@ -881,7 +925,7 @@ def _command_section(entry: CommandEntry, anchors: dict[tuple[str, ...], str]) -
     rows = _param_rows(command)
     if rows:
         blocks.append([*_table_head("Name", "Type", "Default", "Required", "Help"), *rows])
-    elif not isinstance(command, click.Group):
+    elif not _is_group(command):
         blocks.append(["Takes no options or arguments."])
     return [line for block in blocks for line in ("", *block)]
 

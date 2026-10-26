@@ -9,7 +9,6 @@ from __future__ import annotations
 import datetime as _dt
 
 import typer
-import yaml
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
@@ -22,6 +21,7 @@ from soup_cli.utils.terraform_plan import (
     build_plan,
     write_state,
 )
+from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_file_limited
 
 console = Console()
 
@@ -42,8 +42,7 @@ def _load_yaml_config(path: str) -> dict:
         st = os.lstat(path)
         if _stat.S_ISLNK(st.st_mode):
             raise ValueError("config path must not be a symlink")
-    with open(path, encoding="utf-8") as fh:
-        data = yaml.safe_load(fh)
+    data = load_yaml_file_limited(path, f"config {path!r}", max_bytes=MAX_CONFIG_BYTES)
     if not isinstance(data, dict):
         raise ValueError("config must parse to a dict")
     from soup_cli.config.unknown_keys import find_unknown_config_keys, format_unknown_keys
@@ -105,7 +104,12 @@ def plan_cmd(
     table.add_row("dataset_sha", escape(plan.dataset_sha[:16] + "..."))
     table.add_row("estimated_cost", f"${plan.estimated_cost_usd:.4f}")
     table.add_row("estimated_minutes", f"{plan.estimated_minutes:.1f}")
-    table.add_row("peak_vram_gb", f"{plan.peak_vram_gb:.1f}")
+    table.add_row(
+        "peak_vram_gb",
+        f"{plan.peak_vram_gb:.1f}"
+        if plan.peak_vram_gb is not None
+        else f"unknown: {escape(plan.peak_vram_reason or '')}",
+    )
     table.add_row("spot_price_usd_per_hour", f"${plan.spot_price_usd_per_hour:.2f}")
     console.print(table)
     console.print(

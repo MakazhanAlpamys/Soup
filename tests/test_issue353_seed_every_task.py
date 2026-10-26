@@ -513,8 +513,8 @@ _NOT_SEEDED = {
     "preference": "delegates to an inner wrapper, which _make_inner_cfg's "
                   "model_copy carries the seed into",
     "bitnet": "raises before it builds anything; hardware-gated path",
-    "mlx_sft": "MLX backend, which seeds nothing on any path yet",
-    "mlx_dpo": "MLX backend, which seeds nothing on any path yet",
+    "mlx_sft": "seeds mx.random and numpy in train(), where the adapter is "
+               "built (#1850; tests/test_mlx_sft_seed.py)",
     "mlx_grpo": "MLX backend, which seeds nothing on any path yet",
 }
 

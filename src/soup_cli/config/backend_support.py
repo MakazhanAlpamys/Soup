@@ -19,10 +19,10 @@ drift -- every entry must name a real field, and every dotted field name in
 the truth; it can only stop it rotting, which is the failure that produced #749.
 
 Scope today: ``task=sft`` on ``backend=mlx`` and on ``backend=unsloth`` (#1124;
-both apply to every modality), plus multimodal vision and audio on
-``backend=transformers`` (#1156). Other combinations report nothing rather
-than guessing, which is the honest default for a table that has not been
-reviewed for them.
+both apply to every modality), ``task=dpo``, ``task=orpo``, ``task=simpo`` and ``task=kto`` on
+``backend=mlx``, plus multimodal vision and audio on ``backend=transformers`` (#1156).
+Other combinations report nothing rather than guessing, which is the honest default for
+a table that has not been reviewed for them.
 """
 
 from __future__ import annotations
@@ -57,11 +57,6 @@ def _default_active(value: Any) -> bool:
     return bool(value)
 
 
-def _seed_active(value: Any) -> bool:
-    """0 is a valid random seed, so any non-None value is active."""
-    return value is not None
-
-
 @dataclass(frozen=True)
 class SupportEntry:
     """One declared gap: a field, what happens to it, and why."""
@@ -89,20 +84,6 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
     # max_grad_norm, warmup_ratio, weight_decay, optimizer, scheduler -- were
     # wired by #734 and #750 and are now honoured, so they are gone rather than
     # reclassified. The guard is what noticed; see the PR body.
-    SupportEntry(
-        "training.seed",
-        IGNORED,
-        "MLX seeds through mx.random, not this field",
-        trainer_reads=True,
-        active=_seed_active,
-    ),
-    SupportEntry(
-        "training.data_seed",
-        IGNORED,
-        "MLX seeds through mx.random, not this field",
-        trainer_reads=True,
-        active=_seed_active,
-    ),
     SupportEntry(
         "training.use_galore",
         IGNORED,
@@ -161,12 +142,6 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
         trainer_reads=True,
     ),
     SupportEntry(
-        "training.use_mod",
-        IGNORED,
-        "Mixture-of-Depths routing is wired on the transformers path, not MLX",
-        trainer_reads=True,
-    ),
-    SupportEntry(
         "training.moe_lora",
         IGNORED,
         "ScatterMoE LoRA targets expert layers on the transformers path; no MLX implementation",
@@ -219,9 +194,34 @@ _TRANSFORMERS_AUDIO_SFT: tuple[SupportEntry, ...] = (
 _UNSLOTH_SFT: tuple[SupportEntry, ...] = ()
 
 
+#: Fields MLX SFT warns about that have no meaning for DPO: SFT's
+#: response-masking switches (DPO supervises completions by design).
+_NOT_DPO_GAPS = frozenset({
+    "data.train_on_messages_with_train_field",
+    "data.mask_history",
+    "data.train_on_prompt",
+})
+
+_MLX_DPO: tuple[SupportEntry, ...] = tuple(
+    entry for entry in _MLX_SFT if entry.field not in _NOT_DPO_GAPS
+)
+
+#: MLX ORPO runs MLX DPO's loop with its own loss, so it ignores the same fields.
+_MLX_ORPO: tuple[SupportEntry, ...] = _MLX_DPO
+
+#: MLX SimPO is MLX ORPO's tokenization and MLX DPO's loop: the same fields.
+_MLX_SIMPO: tuple[SupportEntry, ...] = _MLX_ORPO
+
+#: MLX KTO runs MLX DPO's loop and reference precompute: the same fields.
+_MLX_KTO: tuple[SupportEntry, ...] = _MLX_DPO
+
 #: ``(task, backend, modality)`` -> the settings that combination does not honour.
 REGISTRY: dict[tuple[str, str, str], tuple[SupportEntry, ...]] = {
     ("sft", "mlx", "text"): _MLX_SFT,
+    ("dpo", "mlx", "text"): _MLX_DPO,
+    ("orpo", "mlx", "text"): _MLX_ORPO,
+    ("simpo", "mlx", "text"): _MLX_SIMPO,
+    ("kto", "mlx", "text"): _MLX_KTO,
     ("sft", "unsloth", "text"): _UNSLOTH_SFT,
     ("sft", "transformers", "vision"): _TRANSFORMERS_VISION_SFT,
     ("sft", "transformers", "audio"): _TRANSFORMERS_AUDIO_SFT,
@@ -249,6 +249,39 @@ TRAINER_MODULES: dict[tuple[str, str, str], tuple[str, ...]] = {
         "soup_cli/trainer/mlx_optim.py",
         "soup_cli/trainer/mlx_masking.py",
         "soup_cli/trainer/rewind_mlx.py",
+        "soup_cli/trainer/loss_summary.py",
+    ),
+    ("dpo", "mlx", "text"): (
+        "soup_cli/trainer/mlx_dpo.py",
+        "soup_cli/trainer/mlx_sft.py",
+        "soup_cli/trainer/mlx_optim.py",
+        "soup_cli/trainer/_trl_compat.py",
+        "soup_cli/trainer/loss_summary.py",
+    ),
+    ("simpo", "mlx", "text"): (
+        "soup_cli/trainer/mlx_simpo.py",
+        "soup_cli/trainer/mlx_orpo.py",
+        "soup_cli/trainer/mlx_dpo.py",
+        "soup_cli/trainer/mlx_sft.py",
+        "soup_cli/trainer/mlx_optim.py",
+        "soup_cli/trainer/_trl_compat.py",
+        "soup_cli/trainer/loss_summary.py",
+    ),
+    ("orpo", "mlx", "text"): (
+        "soup_cli/trainer/mlx_orpo.py",
+        "soup_cli/trainer/mlx_dpo.py",
+        "soup_cli/trainer/mlx_sft.py",
+        "soup_cli/trainer/mlx_optim.py",
+        "soup_cli/trainer/_trl_compat.py",
+        "soup_cli/trainer/loss_summary.py",
+    ),
+    ("kto", "mlx", "text"): (
+        "soup_cli/trainer/mlx_kto.py",
+        "soup_cli/trainer/mlx_orpo.py",
+        "soup_cli/trainer/mlx_dpo.py",
+        "soup_cli/trainer/mlx_sft.py",
+        "soup_cli/trainer/mlx_optim.py",
+        "soup_cli/trainer/_trl_compat.py",
         "soup_cli/trainer/loss_summary.py",
     ),
     # utils/unsloth.py handles the loader path. trainer/sft.py::_setup_unsloth is not listed
@@ -281,7 +314,7 @@ def check_config(cfg: "SoupConfig") -> list[SupportEntry]:
     at their schema default, which is the difference between a useful pre-flight
     check and a wall of 275 rows. ``entry.active`` then drops a field written in
     its off position (e.g. ``false``). A written schema default counts as
-    unwritten, including a default of ``true``; ``seed: 0`` still counts as set.
+    unwritten, including a default of ``true``.
     """
     backend = getattr(cfg, "backend", DEFAULT_BACKEND)
     modality = getattr(cfg, "modality", DEFAULT_MODALITY)

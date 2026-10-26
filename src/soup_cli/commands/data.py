@@ -13,7 +13,13 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from soup_cli.data.loader import _resolve_media_entries, load_raw_data
+from soup_cli.data.loader import (
+    SkippedRows,
+    SkipTally,
+    _resolve_media_entries,
+    load_raw_data,
+    non_object_row_issue,
+)
 from soup_cli.data.validator import validate_and_stats
 from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
 from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR, GateCommand
@@ -37,10 +43,10 @@ def inspect(
     """Inspect a dataset: show stats and sample rows."""
     file_path = Path(path)
     if not file_path.exists():
-        console.print(f"[red]File not found: {file_path}[/]")
+        console.print(f"[red]File not found: {for_terminal(file_path)}[/]")
         raise typer.Exit(1)
 
-    console.print(f"[dim]Inspecting {file_path}...[/]\n")
+    console.print(f"[dim]Inspecting {for_terminal(file_path)}...[/]\n")
     data = load_raw_data(file_path)
     result = validate_and_stats(data)
 
@@ -63,18 +69,15 @@ def inspect(
 
     # Print sample rows
     if rows > 0 and len(data) > 0:
-        # Escape dataset-derived cell content + column names: a stray '[/]' in
-        # ordinary data crashes Rich with MarkupError; a crafted '[link=...]'
-        # renders a phishing hyperlink. Mirrors `soup data review`.
-        from rich.markup import escape as _escape
+        # Sanitize dataset-derived cells and column names before Rich renders them.
 
         console.print(f"\n[bold]Sample rows ({min(rows, len(data))}):[/]")
         sample_table = Table(show_lines=True)
         for col in result["columns"][:5]:  # max 5 columns
-            sample_table.add_column(_escape(str(col)), max_width=60)
+            sample_table.add_column(for_terminal(col), max_width=60)
         for row in data[: min(rows, len(data))]:
             values = [
-                _escape(str(row.get(col, ""))[:60])
+                for_terminal(str(row.get(col, ""))[:60])
                 for col in result["columns"][:5]
             ]
             sample_table.add_row(*values)
@@ -112,7 +115,13 @@ def validate(
             )
             raise typer.Exit(EXIT_USAGE_ERROR)
 
-    data = load_raw_data(file_path)
+    load_issues = SkippedRows()
+    data = load_raw_data(file_path, issues=load_issues)
+    # #1887: every row the loader skipped (not an object, or not JSON) is an
+    # invalid row for the N/M line, for --min-valid-fraction and for the exit
+    # code. The statistics below still describe the retained objects.
+    skipped = load_issues.total
+    none_remain = f"no object rows remain: {skipped} row(s) skipped (listed above)"
 
     # Auto-detect format if not specified
     if fmt == "auto":
@@ -122,10 +131,22 @@ def validate(
             fmt = detect_format(data)
             console.print(f"[dim]Auto-detected format: {for_terminal(fmt)}[/]")
         except ValueError as exc:
-            console.print(f"[red]{for_terminal(str(exc))}[/]")
+            message = str(exc)
+            if not data and skipped:
+                message = f"{none_remain}; cannot detect a format. Pass --format to validate."
+            console.print(f"[red]{for_terminal(message)}[/]")
             raise typer.Exit(EXIT_USAGE_ERROR)
 
     result = validate_and_stats(data, expected_format=fmt)
+    if not data and skipped:
+        result["issues"] = [none_remain if i == "Dataset is empty" else i
+                            for i in result["issues"]]
+    # The loader keeps up to _MAX_REASON_SAMPLES messages per kind, so list them all
+    # and report the exact remainder.
+    load_issue_samples = list(load_issues)
+    if load_issues.total > len(load_issue_samples):
+        load_issue_samples.append(f"... and {load_issues.total - len(load_issue_samples)} more")
+    result["issues"] = load_issue_samples + result["issues"]
 
     if result["issues"]:
         console.print("[yellow]Issues found:[/]")
@@ -135,7 +156,7 @@ def validate(
         console.print("[bold green]Dataset is valid![/]")
 
     valid = result["valid_rows"]
-    total = result["total"]
+    total = result["total"] + skipped
     console.print(f"\n[green]{valid}/{total} rows valid for {for_terminal(fmt)} format[/]")
 
     if total > 0 and valid == 0:
@@ -728,7 +749,7 @@ def _show_vision_stats(data: list[dict], image_dir: Path | None = None) -> None:
         ext_str = ", ".join(
             f"{ext} ({count})" for ext, count in sorted(extensions.items())
         )
-        vision_table.add_row("Image formats", ext_str)
+        vision_table.add_row("Image formats", for_terminal(ext_str))
 
     console.print(vision_table)
 
@@ -2259,7 +2280,6 @@ def review_cmd(
     """Preview preference pairs for manual review."""
     import json as _json
 
-    from rich.markup import escape as _escape
     from rich.panel import Panel
 
     sample = max(1, min(int(sample), 100))
@@ -2269,8 +2289,9 @@ def review_cmd(
         raise typer.Exit(1)
 
     shown = 0
+    non_objects = SkipTally("lines skipped (JSON values that are not objects)")
     with path.open("r", encoding="utf-8") as fh:
-        for line in fh:
+        for line_number, line in enumerate(fh, start=1):
             if shown >= sample:
                 break
             line = line.strip()
@@ -2280,18 +2301,22 @@ def review_cmd(
                 entry = _json.loads(line)
             except _json.JSONDecodeError:
                 continue
+            if not isinstance(entry, dict):
+                non_objects.add(non_object_row_issue(entry, line_number))
+                continue
             prompt = str(entry.get("prompt", ""))
             chosen = str(entry.get("chosen", ""))
             rejected = str(entry.get("rejected", ""))
             console.print(Panel(
-                f"[bold cyan]Prompt:[/] {_escape(prompt[:400])}\n\n"
-                f"[green]Chosen:[/] {_escape(chosen[:400])}\n\n"
-                f"[red]Rejected:[/] {_escape(rejected[:400])}",
+                f"[bold cyan]Prompt:[/] {for_terminal(prompt[:400])}\n\n"
+                f"[green]Chosen:[/] {for_terminal(chosen[:400])}\n\n"
+                f"[red]Rejected:[/] {for_terminal(rejected[:400])}",
                 title=f"Pair {shown + 1}",
                 border_style="blue",
             ))
             shown += 1
 
+    non_objects.finish()
     if shown == 0:
         console.print("[yellow]No pairs found in file.[/]")
 
@@ -2910,10 +2935,13 @@ def ingest_document(
     """Ingest a document into JSONL with one row per page / heading.
 
     Lazy-imports the per-format extractor so missing optional deps don't
-    break the rest of `soup data --help`. Supported formats:
-    - .pdf  → pypdf
-    - .docx → python-docx
-    - .md   → markdown
+    break the rest of `soup data --help`.
+    Install PDF/DOCX readers with `pip install "soup-cli\\[documents]"`.
+
+    Supported formats:
+    - .pdf  → pypdf (documents extra)
+    - .docx → python-docx (documents extra)
+    - .md   → built-in heading splitter
     - .txt  → built-in
     """
     import stat
@@ -2993,7 +3021,7 @@ def ingest_document(
             from pypdf import PdfReader
         except ImportError:
             console.print(
-                "[red]pypdf not installed.[/] Run: pip install pypdf"
+                r'[red]pypdf not installed.[/] Run: pip install "soup-cli\[documents]"'
             )
             raise typer.Exit(1) from None
         reader = PdfReader(in_real)
@@ -3008,7 +3036,7 @@ def ingest_document(
             from docx import Document
         except ImportError:
             console.print(
-                "[red]python-docx not installed.[/] Run: pip install python-docx"
+                r'[red]python-docx not installed.[/] Run: pip install "soup-cli\[documents]"'
             )
             raise typer.Exit(1) from None
         doc = Document(in_real)
@@ -3518,7 +3546,10 @@ def best_of_n(
     from soup_cli.utils import best_of_n_artifact as bon_artifact
     from soup_cli.utils import best_of_n_checkpoint as bon_checkpoint
     from soup_cli.utils.magpie import make_magpie_generate_fn
-    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+    from soup_cli.utils.paths import (
+        enforce_under_cwd_and_no_symlink,
+        ensure_distinct_paths,
+    )
     from soup_cli.utils.trust_remote import (
         model_requires_trust_remote_code,
         resolve_trust_remote_code,
@@ -3590,6 +3621,23 @@ def best_of_n(
             if manifest_path:
                 enforce_under_cwd_and_no_symlink(manifest_path, "--manifest path")
                 paths.append(manifest_path)
+
+            ensure_distinct_paths(
+                [
+                    ("--candidate-artifact", candidate_artifact),
+                    ("--judgments", judgments),
+                ],
+                [
+                    (field, path)
+                    for field, path in (
+                        ("--output", output),
+                        ("--emit-pairs", emit_pairs),
+                        ("--manifest", manifest_path),
+                    )
+                    if path
+                ],
+            )
+
             if len({os.path.normcase(os.path.realpath(path)) for path in paths}) != len(paths):
                 raise ValueError("offline input and output paths must be distinct")
         except (FileNotFoundError, OSError, TypeError, ValueError) as exc:
@@ -3726,6 +3774,20 @@ def best_of_n(
                     "prompt source, candidate artifact, and checkpoint paths "
                     "must be distinct"
                 )
+        ensure_distinct_paths(
+            [("--prompts", prompts)],
+            [
+                (field, path)
+                for field, path in (
+                    ("--output", output),
+                    ("--emit-pairs", emit_pairs),
+                    ("--checkpoint", checkpoint_path),
+                    ("--manifest", manifest_path),
+                    ("--export-candidates", export_candidates),
+                )
+                if path
+            ],
+        )
     except (FileNotFoundError, TypeError, ValueError) as exc:
         console.print(f"[red]{_escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
@@ -4346,7 +4408,7 @@ def brain_rot_cmd(
     ``--max-major-fraction`` (default 25%), so CI pipelines can refuse
     training on excessive slop. ``--lang`` selects a per-language
     low-effort-token + clickbait-phrase bundle (closes #234); ``--lang auto``
-    routes through the optional ``langdetect`` package (``[data-pro]`` extras)
+    routes through the optional ``langdetect`` package (``\\[data-pro]`` extras)
     and falls back silently to English when detection is unavailable.
     """
     import math as _math

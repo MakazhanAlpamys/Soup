@@ -15,9 +15,9 @@ runtime half is carried by the model-backed smoke tests (``tests/test_grpo.py``,
 ``tests/test_issue300_online_dpo_train.py``): they import the real trl trainers
 in the environment pip resolved from this file.
 
-pyproject is parsed with regex rather than ``tomllib`` because ``tomllib`` is
-3.11+ and this repo supports 3.10 — the same convention as
-``tests/test_issue636_torch_floor.py``.
+pyproject is parsed with regex rather than ``tomllib``, the convention
+``tests/test_issue636_torch_floor.py`` set while the floor was 3.10, which has no
+``tomllib``.
 """
 
 from __future__ import annotations

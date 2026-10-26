@@ -54,8 +54,8 @@ class TestDoRAConfig:
         assert cfg.training.lora.r == 128
         assert cfg.training.lora.alpha == 32
 
-    @pytest.mark.parametrize("backend", ["unsloth", "mlx"])
-    def test_use_dora_is_refused_off_the_transformers_backend(self, backend: str):
+    @pytest.mark.parametrize("backend", ["unsloth"])
+    def test_use_dora_is_refused_on_unsloth(self, backend: str):
         from soup_cli.config.loader import load_config_from_string
 
         with pytest.raises(

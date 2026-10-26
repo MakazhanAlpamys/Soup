@@ -64,6 +64,15 @@ def merge(
             "--no-double-quant to disable. Ignored for the fp16 save format."
         ),
     ),
+    low_memory: bool = typer.Option(
+        False,
+        "--low-memory",
+        help=(
+            "Merge tensor by tensor straight from the base safetensors files "
+            "instead of loading the whole model into RAM. Needs the fp16 save "
+            "format and a plain LoRA adapter."
+        ),
+    ),
     hub: str = typer.Option(
         "hf",
         "--hub",
@@ -107,6 +116,10 @@ def merge(
         raise typer.Exit(2)
     adapter_path = Path(adapter)
 
+    if low_memory and save_format_canonical != "fp16":
+        console.print("[red]--low-memory only supports --save-format fp16[/]")
+        raise typer.Exit(2)
+
     # --- Validate adapter ---
     if not adapter_path.exists():
         console.print(f"[red]Adapter path not found: {adapter_path}[/]")
@@ -147,6 +160,11 @@ def merge(
             title="Merge Plan",
         )
     )
+
+    if low_memory:
+        _merge_low_memory(adapter_path, base, output_path, dtype, trust_remote_code)
+        _report_complete(output_path)
+        return
 
     # --- Merge ---
     try:
@@ -242,7 +260,77 @@ def merge(
         console.print(f"[red]Merge failed: {for_terminal(exc)}[/]")
         raise typer.Exit(1)
 
-    # Calculate output size
+    _report_complete(output_path)
+
+
+def _merge_low_memory(
+    adapter_path: Path,
+    base: str,
+    output_path: Path,
+    dtype: str,
+    trust_remote_code: bool,
+) -> None:
+    try:
+        from transformers import AutoTokenizer
+
+        from soup_cli.utils.lowmem_merge import LowMemoryMergeError, merge_low_memory
+        from soup_cli.utils.trust_remote import (
+            model_requires_trust_remote_code,
+            resolve_trust_remote_code,
+        )
+
+        trc = resolve_trust_remote_code(
+            base,
+            requested=trust_remote_code,
+            console=console,
+            requires_remote_code=model_requires_trust_remote_code(str(adapter_path)) or False,
+        )
+
+        if Path(base).is_dir():
+            base_dir = Path(base)
+        else:
+            from soup_cli.utils.hubs import snapshot_download
+
+            console.print(f"[dim]Fetching base weights: {for_terminal(base)}...[/]")
+            base_dir = Path(
+                snapshot_download(
+                    base,
+                    cache_dir=None,
+                    allow_patterns=["*.safetensors", "*.json"],
+                )
+            )
+
+        def save_tokenizer(staging: Path) -> None:
+            console.print("[dim]Saving tokenizer...[/]")
+            AutoTokenizer.from_pretrained(
+                str(adapter_path), trust_remote_code=trc
+            ).save_pretrained(str(staging))
+
+        merge_low_memory(
+            base_dir,
+            adapter_path,
+            output_path,
+            dtype,
+            progress=lambda message: console.print(f"[dim]{for_terminal(message)}[/]"),
+            finalize=save_tokenizer,
+            trust_remote_code=trc,
+        )
+    except LowMemoryMergeError as exc:
+        console.print(
+            f"[red]Low-memory merge not possible: {for_terminal(exc)}[/]\n"
+            "Run again without [bold]--low-memory[/]."
+        )
+        raise typer.Exit(1)
+    except ImportError as exc:
+        console.print(f"[red]Missing dependency: {exc}[/]")
+        console.print("Run: [bold]pip install torch transformers safetensors[/]")
+        raise typer.Exit(1)
+    except Exception as exc:
+        console.print(f"[red]Merge failed: {for_terminal(exc)}[/]")
+        raise typer.Exit(1)
+
+
+def _report_complete(output_path: Path) -> None:
     total_size = sum(f.stat().st_size for f in output_path.rglob("*") if f.is_file())
     size_str = _format_size(total_size)
 

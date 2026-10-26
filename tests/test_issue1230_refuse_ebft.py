@@ -419,16 +419,19 @@ def _shipped_config_texts() -> list[tuple[str, str]]:
 
 
 def test_every_shipped_recipe_template_and_example_still_loads():
+    from tests.recipe_contracts import load_shipped_config
+
     texts = _shipped_config_texts()
     assert len(texts) > 200, len(texts)
     refused = []
     for name, text in texts:
         try:
-            cfg = load_config_from_string(text)
+            cfg = load_shipped_config(name, text)
         except ValueError as exc:
             refused.append((name, str(exc)[:200]))
             continue
-        assert cfg.training.ebft_variant is None, name
+        if cfg is not None:
+            assert cfg.training.ebft_variant is None, name
     assert refused == []
 
 

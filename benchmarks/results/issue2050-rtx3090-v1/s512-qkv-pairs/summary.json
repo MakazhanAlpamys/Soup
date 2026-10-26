@@ -1,0 +1,16 @@
+{
+  "pairs": 5,
+  "reductions_pct": [
+    2.299,
+    2.126,
+    2.202,
+    2.915,
+    -34.197
+  ],
+  "median_pct": 2.202,
+  "ci95": [
+    -34.197,
+    2.915
+  ],
+  "verdict": "INCONCLUSIVE"
+}

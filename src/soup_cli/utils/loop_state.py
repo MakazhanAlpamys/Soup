@@ -71,6 +71,10 @@ class LoopState:
     iteration_count: int = 0
     created_at: str = ""
     updated_at: str = ""
+    # #1440 — local-RL SQLite that `soup serve --record-thumbs` writes; the
+    # pre-wired harvest reads its thumbs as preference pairs. None = not used.
+    # Last, so adding it shifted no existing positional field.
+    thumbs_db: Optional[str] = None
 
     def __post_init__(self) -> None:  # noqa: D401 — validator hook
         # Closed-allowlist enforcement + bool-as-int rejection mirror the
@@ -118,6 +122,8 @@ class LoopState:
             raise ValueError("pre_wired must be bool")
         if self.canary_active is not None:
             _require_str("canary_active", self.canary_active, allow_empty=False)
+        if self.thumbs_db is not None:
+            _require_str("thumbs_db", self.thumbs_db, allow_empty=False)
         if self.canary_rollout_id is not None:
             _require_str("canary_rollout_id", self.canary_rollout_id, allow_empty=False)
         if self.last_iteration_id is not None:
@@ -282,6 +288,7 @@ def init_state(
     monthly_budget_usd: Optional[float] = None,
     max_runs_per_day: Optional[int] = None,
     pre_wired: bool = False,
+    thumbs_db: Optional[str] = None,
     path: Optional[str] = None,
     force: bool = False,
 ) -> Tuple[LoopState, str]:
@@ -310,6 +317,7 @@ def init_state(
         baseline=baseline,
         status="stopped",
         pre_wired=pre_wired,
+        thumbs_db=thumbs_db,
         monthly_budget_usd=monthly_budget_usd,
         max_runs_per_day=max_runs_per_day,
         created_at=now,

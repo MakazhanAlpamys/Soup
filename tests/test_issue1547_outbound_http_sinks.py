@@ -55,11 +55,15 @@ from pathlib import Path
 import pytest
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "soup_cli"
+BOUNDED_HTTP_MODULE = "soup_cli.utils.http_response"
 
 # Inert members of the target HTTP libraries that do not initiate network traffic
 # or configure transport pipelines. Any attribute access or from-import not in
 # these sets is flagged as an outbound sink reference.
 INERT_NAMES: dict[str, frozenset[str]] = {
+    BOUNDED_HTTP_MODULE: frozenset({
+        "ResponseTooLargeError", "GENERATION_RESPONSE_LIMIT_BYTES", "JUDGE_RESPONSE_LIMIT_BYTES",
+    }),
     "httpx": frozenset({
         "Auth",
         "BasicAuth",
@@ -155,8 +159,16 @@ class DeclaredSink:
 # - gate: (caller_func, gate_func) where caller_func is AST-verified to call gate_func
 # - reason: explicit justification for exemptions (fixed host, loopback only, operator env)
 DECLARED_SINKS: dict[tuple[str, str], DeclaredSink] = {
+    ("cloud/_runpod_controller.py", "_request_json"): DeclaredSink(
+        calls=("urllib.request.build_opener",),
+        gate=None,
+        reason=(
+            "fixed host: _API_BASE is hardcoded to https://rest.runpod.io/v1; "
+            "the standalone controller refuses redirects and caps response reads"
+        ),
+    ),
     ("commands/generate.py", "_generate_openai"): DeclaredSink(
-        calls=("httpx.post",),
+        calls=("soup_cli.utils.http_response.post_capped",),
         gate=("_generate_openai", "refuse_private_ip_literal"),
         reason=(
             "validates api_base against LOOPBACK_HOSTS (HTTPS required for remote) "
@@ -164,7 +176,7 @@ DECLARED_SINKS: dict[tuple[str, str], DeclaredSink] = {
         ),
     ),
     ("commands/generate.py", "_generate_server"): DeclaredSink(
-        calls=("httpx.post",),
+        calls=("soup_cli.utils.http_response.post_capped",),
         gate=("_generate_server", "refuse_private_ip_literal"),
         reason=(
             "validates api_base against LOOPBACK_HOSTS (HTTPS required for remote) "
@@ -172,25 +184,17 @@ DECLARED_SINKS: dict[tuple[str, str], DeclaredSink] = {
         ),
     ),
     ("data/providers/anthropic.py", "generate_anthropic"): DeclaredSink(
-        calls=("httpx.post",),
+        calls=("soup_cli.utils.http_response.post_capped",),
         gate=None,
         reason="fixed host: ANTHROPIC_API_URL is hardcoded to https://api.anthropic.com/v1/messages",
     ),
-    ("data/providers/ollama.py", "detect_ollama"): DeclaredSink(
-        calls=("httpx.get", "httpx.get"),
-        gate=None,
-        reason=(
-            "loopback only: callers use default http://localhost:11434; "
-            "function accepts base_url parameter"
-        ),
-    ),
     ("data/providers/ollama.py", "generate_ollama"): DeclaredSink(
-        calls=("httpx.post",),
+        calls=("soup_cli.utils.http_response.post_capped",),
         gate=("generate_ollama", "validate_ollama_url"),
         reason="validate_ollama_url restricts base_url to localhost/127.0.0.1/::1",
     ),
     ("data/providers/vllm.py", "generate_vllm"): DeclaredSink(
-        calls=("httpx.post",),
+        calls=("soup_cli.utils.http_response.post_capped",),
         gate=("generate_vllm", "validate_vllm_url"),
         reason=(
             "validate_vllm_url requires HTTPS for remote and calls "
@@ -198,11 +202,40 @@ DECLARED_SINKS: dict[tuple[str, str], DeclaredSink] = {
         ),
     ),
     ("eval/judge.py", "_judge_request"): DeclaredSink(
-        calls=("httpx.post",),
+        calls=("soup_cli.utils.http_response.post_capped",),
         gate=("validate_judge_api_base", "refuse_private_ip_literal"),
         reason=(
             "JudgeEvaluator.__init__ enforces policy via validate_judge_api_base, "
             "which calls net_guard.refuse_private_ip_literal"
+        ),
+    ),
+    ("utils/magpie.py", "make_magpie_generate_fn._ollama_generate"): DeclaredSink(
+        calls=("soup_cli.utils.http_response.post_capped",),
+        gate=("make_magpie_generate_fn", "validate_ollama_url"),
+        reason="make_magpie_generate_fn enforces validate_ollama_url (loopback only)",
+    ),
+    ("utils/magpie.py", "make_magpie_generate_fn._vllm_generate"): DeclaredSink(
+        calls=("soup_cli.utils.http_response.post_capped",),
+        gate=("make_magpie_generate_fn", "validate_vllm_url"),
+        reason=(
+            "make_magpie_generate_fn enforces validate_vllm_url (calls "
+            "net_guard.refuse_private_ip_literal)"
+        ),
+    ),
+    ("utils/http_response.py", "post_capped"): DeclaredSink(
+        calls=("httpx.stream",),
+        gate=None,
+        reason=(
+            "operator environment: bounded POST transport; callers retain their existing "
+            "endpoint validators, fixed provider hosts and credential policies"
+        ),
+    ),
+    ("data/providers/ollama.py", "detect_ollama"): DeclaredSink(
+        calls=("httpx.get", "httpx.get"),
+        gate=None,
+        reason=(
+            "loopback only: callers use default http://localhost:11434; "
+            "function accepts base_url parameter"
         ),
     ),
     ("ui/app.py", "create_app.chat_send._stream_chat"): DeclaredSink(
@@ -247,19 +280,6 @@ DECLARED_SINKS: dict[tuple[str, str], DeclaredSink] = {
             "validate_webhook_url and restricts target to local/LAN via _endpoint_is_local"
         ),
     ),
-    ("utils/magpie.py", "make_magpie_generate_fn._ollama_generate"): DeclaredSink(
-        calls=("httpx.post",),
-        gate=("make_magpie_generate_fn", "validate_ollama_url"),
-        reason="make_magpie_generate_fn enforces validate_ollama_url (loopback only)",
-    ),
-    ("utils/magpie.py", "make_magpie_generate_fn._vllm_generate"): DeclaredSink(
-        calls=("httpx.post",),
-        gate=("make_magpie_generate_fn", "validate_vllm_url"),
-        reason=(
-            "make_magpie_generate_fn enforces validate_vllm_url (calls "
-            "net_guard.refuse_private_ip_literal)"
-        ),
-    ),
     ("utils/sglang.py", "generate_with_runtime"): DeclaredSink(
         calls=("httpx.post",),
         gate=None,
@@ -290,7 +310,7 @@ def _resolve_call_module(node: ast.AST) -> str | None:
             if node.func.attr == "import_module" and node.args:
                 arg = node.args[0]
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                    if arg.value in ("httpx", "requests", "urllib.request"):
+                    if arg.value in ("httpx", "requests", "urllib.request", BOUNDED_HTTP_MODULE):
                         return arg.value
                     if arg.value == "urllib":
                         return "urllib"
@@ -298,7 +318,7 @@ def _resolve_call_module(node: ast.AST) -> str | None:
             if node.func.id in ("import_module", "__import__") and node.args:
                 arg = node.args[0]
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                    if arg.value in ("httpx", "requests", "urllib.request"):
+                    if arg.value in ("httpx", "requests", "urllib.request", BOUNDED_HTTP_MODULE):
                         return arg.value
                     if arg.value == "urllib":
                         return "urllib"
@@ -316,9 +336,13 @@ class _ModuleCollector(ast.NodeVisitor):
         self.from_bindings: dict[str, tuple[str, str]] = {}
         self.star_imports: list[tuple[int, str]] = []
 
-    def visit_Import(self, node: ast.Import) -> None:
+    def visit_Import(self, node: ast.Import) -> None:  # noqa: N802 -- ast.NodeVisitor callback
         for alias in node.names:
-            if alias.name == "httpx" or alias.name.startswith("httpx."):
+            if alias.name == BOUNDED_HTTP_MODULE:
+                self.module_bindings[alias.asname or "soup_cli"] = (
+                    BOUNDED_HTTP_MODULE if alias.asname else "soup_cli"
+                )
+            elif alias.name == "httpx" or alias.name.startswith("httpx."):
                 if alias.asname:
                     self.module_bindings[alias.asname] = "httpx"
                 else:
@@ -339,13 +363,25 @@ class _ModuleCollector(ast.NodeVisitor):
                 self.module_bindings["urllib"] = "urllib"
         self.generic_visit(node)
 
-    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # noqa: N802 -- ast.NodeVisitor callback
         mod = node.module or ""
         root, _, sub = mod.partition(".")
         sub = sub.split(".")[0]
         if root in PASS_THROUGH and sub in INERT_NAMES[root] and sub not in PASS_THROUGH[root]:
             return
-        if mod == "httpx" or mod.startswith("httpx."):
+        if mod == BOUNDED_HTTP_MODULE:
+            for alias in node.names:
+                if alias.name == "*":
+                    self.star_imports.append((node.lineno, BOUNDED_HTTP_MODULE))
+                elif alias.name not in INERT_NAMES[BOUNDED_HTTP_MODULE]:
+                    self.from_bindings[alias.asname or alias.name] = (
+                        BOUNDED_HTTP_MODULE, alias.name,
+                    )
+        elif mod == "soup_cli.utils":
+            for alias in node.names:
+                if alias.name == "http_response":
+                    self.module_bindings[alias.asname or alias.name] = BOUNDED_HTTP_MODULE
+        elif mod == "httpx" or mod.startswith("httpx."):
             for alias in node.names:
                 if alias.name == "*":
                     self.star_imports.append((node.lineno, "httpx"))
@@ -376,7 +412,7 @@ class _ModuleCollector(ast.NodeVisitor):
                         self.from_bindings[target] = ("urllib.request", alias.name)
         self.generic_visit(node)
 
-    def visit_Assign(self, node: ast.Assign) -> None:
+    def visit_Assign(self, node: ast.Assign) -> None:  # noqa: N802 -- ast.NodeVisitor callback
         mod = _resolve_call_module(node.value)
         if mod:
             for target in node.targets:
@@ -401,7 +437,7 @@ class _SinkVisitor(ast.NodeVisitor):
     def _is_shadowed(self, name: str) -> bool:
         return any(name in shadowed for shadowed in self.shadowed_stack)
 
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802 -- ast.NodeVisitor callback
         # bases, keywords and decorators are evaluated in the enclosing scope
         for outer in [*node.decorator_list, *node.bases, *node.keywords]:
             self.visit(outer)
@@ -423,7 +459,7 @@ class _SinkVisitor(ast.NodeVisitor):
         self.shadowed_stack.pop()
         self.scope_stack.pop()
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802 -- ast.NodeVisitor callback
         for decorator in node.decorator_list:
             self.visit(decorator)
         for default in node.args.defaults + [d for d in node.args.kw_defaults if d is not None]:
@@ -433,7 +469,7 @@ class _SinkVisitor(ast.NodeVisitor):
             self.visit(stmt)
         self._exit_function()
 
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # noqa: N802 -- ast.NodeVisitor callback
         for decorator in node.decorator_list:
             self.visit(decorator)
         for default in node.args.defaults + [d for d in node.args.kw_defaults if d is not None]:
@@ -443,7 +479,7 @@ class _SinkVisitor(ast.NodeVisitor):
             self.visit(stmt)
         self._exit_function()
 
-    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:  # noqa: N802 -- ast.NodeVisitor callback
         self.visit(node.target)
         if node.value is not None:
             self.visit(node.value)
@@ -458,6 +494,10 @@ class _SinkVisitor(ast.NodeVisitor):
             parent = self._resolve_module(node.value)
             if parent == "urllib" and node.attr == "request":
                 return "urllib.request"
+            if parent in ("soup_cli", "soup_cli.utils"):
+                candidate = f"{parent}.{node.attr}"
+                if BOUNDED_HTTP_MODULE.startswith(candidate):
+                    return candidate
             if parent in ("httpx", "requests") and node.attr in PASS_THROUGH[parent]:
                 return parent
         call_mod = _resolve_call_module(node)
@@ -472,14 +512,14 @@ class _SinkVisitor(ast.NodeVisitor):
                 return mod, node.attr
         return None, None
 
-    def visit_Attribute(self, node: ast.Attribute) -> None:
+    def visit_Attribute(self, node: ast.Attribute) -> None:  # noqa: N802 -- ast.NodeVisitor callback
         mod, attr = self._resolve_attr(node)
-        if mod and mod != "urllib":
+        if mod and mod not in ("urllib", "soup_cli", "soup_cli.utils"):
             if attr not in INERT_NAMES.get(mod, frozenset()):
                 self.sinks.append((self._scope(), node.lineno, f"{mod}.{attr}"))
         self.generic_visit(node)
 
-    def visit_Name(self, node: ast.Name) -> None:
+    def visit_Name(self, node: ast.Name) -> None:  # noqa: N802 -- ast.NodeVisitor callback
         if not isinstance(node.ctx, ast.Load) or self._is_shadowed(node.id):
             return
         if node.id in self.b.from_bindings:
@@ -490,7 +530,7 @@ class _SinkVisitor(ast.NodeVisitor):
             self.sinks.append((self._scope(), node.lineno, f"{mod} (module object)"))
         self.generic_visit(node)
 
-    def visit_Call(self, node: ast.Call) -> None:
+    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802 -- ast.NodeVisitor callback
         is_getattr = (
             (isinstance(node.func, ast.Name) and node.func.id == "getattr")
             or (
@@ -1316,4 +1356,3 @@ def test_class_decorators_and_keywords_are_read_in_the_enclosing_scope() -> None
     assert decorated == [("<module>", 2, "httpx.post")]
     keyword = find_outbound_sinks("import httpx\nclass C(metaclass=httpx.Client):\n    pass\n")
     assert keyword == [("<module>", 2, "httpx.Client")]
-

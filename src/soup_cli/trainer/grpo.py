@@ -27,6 +27,7 @@ from soup_cli.utils.mixed_precision import (
     keep_trainable_dtype_on_resume,
     reload_root_adapter_on_resume,
 )
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -237,9 +238,15 @@ def _select_reward_fn(
     # v0.71.40 #311 — ``reward_fn`` may be comma-separated ("accuracy,format").
     # Return a single callable for one reward (back-compat) or a list for several
     # (TRL's reward_funcs=[...] + the rm_ensemble detector both accept the list).
+    # #2047 — ``judge_rank`` is built from this config, like the PRM reward above.
+    from soup_cli.trainer.grpo_judge import JUDGE_RANK_REWARD, build_judge_rank_reward
     from soup_cli.trainer.rewards import load_reward_fns
 
-    fns = load_reward_fns(tcfg.reward_fn, verifiable_domain=tcfg.verifiable_domain)
+    fns = load_reward_fns(
+        tcfg.reward_fn,
+        verifiable_domain=tcfg.verifiable_domain,
+        builders={JUDGE_RANK_REWARD: lambda: build_judge_rank_reward(tcfg)},
+    )
     return fns[0] if len(fns) == 1 else fns
 
 
@@ -350,6 +357,10 @@ class GRPOTrainerWrapper:
         # v0.71.30 — when tcfg.prm_reward is set, a trained Soup PRM replaces
         # the configured reward (process-supervision); otherwise load reward_fn.
         reward_fn = _select_reward_fn(tcfg, self.device, self._trust_remote_code)
+        # #2047 — the judge_rank reward's counters, read by its callback below.
+        from soup_cli.trainer.grpo_judge import judge_rank_state
+
+        self._judge_rank_state = judge_rank_state(reward_fn)
 
         # v0.71.11 #235/#240 — when the reward-hack or echo-trap detector is
         # enabled, wrap the reward function(s) with a capture shim so the
@@ -592,6 +603,12 @@ class GRPOTrainerWrapper:
             and tcfg.grpo_delta is not None
         ):
             self.trainer._soup_grpo_delta = float(tcfg.grpo_delta)
+        # #2047 — log judge_rank's failed / equal-score group rates under judge/
+        # and stop the run when too many training groups get no scores.
+        if self._judge_rank_state is not None:
+            from soup_cli.trainer.grpo_judge import attach_judge_rank_callback
+
+            attach_judge_rank_callback(self.trainer, self._judge_rank_state)
         # v0.53.11 #127 — wire the live stability callback.
         from soup_cli.utils.peft_wiring import attach_grpo_stability_callback
 
@@ -646,7 +663,8 @@ class GRPOTrainerWrapper:
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -671,7 +689,10 @@ class GRPOTrainerWrapper:
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
 
-        self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
         apply_vocab_expansion(
@@ -741,7 +762,13 @@ class GRPOTrainerWrapper:
 
     def _setup_unsloth(self, cfg, tcfg):
         """Load model via unsloth FastLanguageModel (2-5x faster)."""
+        from soup_cli.utils import unsloth
         from soup_cli.utils.unsloth import load_model_and_tokenizer
+        # #797: resolve training.gradient_checkpointing for the Unsloth path
+        # (streaming layers already checkpoint every layer, so it stays off).
+        use_gradient_checkpointing = unsloth.resolve_unsloth_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=getattr(tcfg, "stream_layers", False)
+        )
 
         console.print(f"[dim]Loading model via [bold]unsloth[/]: {cfg.base}[/]")
         self.model, self.tokenizer = load_model_and_tokenizer(
@@ -752,6 +779,8 @@ class GRPOTrainerWrapper:
             lora_alpha=tcfg.lora.alpha,
             lora_dropout=tcfg.lora.dropout,
             target_modules=tcfg.lora.target_modules,
+            use_rslora=tcfg.lora.use_rslora,
+            use_gradient_checkpointing=use_gradient_checkpointing,
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token

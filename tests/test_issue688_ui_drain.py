@@ -12,10 +12,10 @@ import sys
 import time
 
 import pytest
-from fastapi.testclient import TestClient
 
 import soup_cli.ui.app as ui_app_module
 from soup_cli.ui.app import TrainLogBuffer, _drain_stdout_worker, create_app, get_auth_token
+from tests.ui_helpers import ui_client
 
 
 def _auth_headers():
@@ -106,7 +106,7 @@ class TestSubprocessDrain:
             ui_app_module._train_log_buffer.append(f"log line {i}")
         ui_app_module._train_log_buffer.mark_done()
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
 
         # Reconnect with Last-Event-ID = 6 -> should receive lines 7, 8, 9
         response = client.get(
@@ -147,7 +147,7 @@ class TestSubprocessDrain:
             "soup_cli.ui.app._resolve_train_argv",
             return_value=[sys.executable, "-c", child_script],
         ):
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.post(
                 "/api/train/start",
                 json={"config_yaml": "base: test\ndata:\n  train: ./data.jsonl\n"},

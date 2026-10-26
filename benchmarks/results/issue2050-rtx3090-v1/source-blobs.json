@@ -1,0 +1,51 @@
+{
+  "commit": "95a08a21544359ed81ffd0581fc80ce642cbd9e8",
+  "files": {
+    "benchmarks/harness/issue2050_campaign.py": {
+      "git_blob": "09549e8bc9b0d568450f20f851b872c1ee95f705",
+      "frozen_newlines": "lf"
+    },
+    "benchmarks/harness/issue2050_selective_checkpoint.py": {
+      "git_blob": "d6fe06252663a27dc71fa1833a8d66bac4a4fc8e",
+      "frozen_newlines": "lf"
+    },
+    "benchmarks/harness/stream_selective_checkpoint.py": {
+      "git_blob": "3a49a058815896d06ce575a3f03fc8c2fcde9d3b",
+      "frozen_newlines": "lf"
+    },
+    "benchmarks/harness/stream_ab_pairs.py": {
+      "git_blob": "578b7a4ca7437a76490bd3ef07ff313e585ccfad",
+      "frozen_newlines": "crlf"
+    },
+    "benchmarks/harness/issue361_nf4_throughput.py": {
+      "git_blob": "bb29bb40c0d91ae87db642fb23a4f13c1b360e29",
+      "frozen_newlines": "crlf"
+    },
+    "benchmarks/harness/source_provenance.py": {
+      "git_blob": "168e486969a83b83a3b93e9692145e9aecf389dd",
+      "frozen_newlines": "crlf"
+    },
+    "benchmarks/protocol-2050-selective-checkpoint.md": {
+      "git_blob": "8e4da385d1c2611a04674272186d6e1d069bd2cf",
+      "frozen_newlines": "lf"
+    },
+    "tests/test_stream_selective_checkpoint_harness.py": {
+      "git_blob": "637fdf1c58c538de9d7acf99c947e925001efcad",
+      "frozen_newlines": "lf"
+    },
+    "src/soup_cli/utils/layer_stream_runtime.py": {
+      "git_blob": "cec24ec53b746538aa5670064e26466931eeb219",
+      "frozen_newlines": "crlf"
+    },
+    "src/soup_cli/utils/layer_stream.py": {
+      "git_blob": "e4ab77c36f82919fd0a619755e4635135d541a05",
+      "frozen_newlines": "crlf"
+    },
+    "src/soup_cli/utils/layer_shard.py": {
+      "git_blob": "9aa72a995814547ae50b78ca0bcc28aa12095e0f",
+      "frozen_newlines": "crlf"
+    }
+  },
+  "freeze_original_sha256": "87bf7c610868eae69d5c875a4572784074d404bff3c76316ef6d3778e8ce32b3",
+  "freeze_newlines": "crlf"
+}

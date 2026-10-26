@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:fa009c2fcc2c94ea06e25ea8620c2fbed9bfb8ac6611bf71a2669a06f7c50b46 -->
+<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <strong>中文</strong></p>
 
 <p align="center">
@@ -8,7 +8,7 @@
 <h1 align="center">Soup</h1>
 
 <p align="center">
-  <strong>一条命令完成 LLM 微调与后训练。无需 SSH，告别配置地狱。</strong>
+  <strong>一条命令完成 LLM 微调与后训练。无需 SSH，告别配置灾难。</strong>
 </p>
 
 <p align="center">
@@ -27,7 +27,7 @@
 <p align="center">
   <a href="https://pypi.org/project/soup-cli/"><img src="https://img.shields.io/pypi/v/soup-cli?color=blue" alt="PyPI"></a>
   <a href="https://pepy.tech/project/soup-cli"><img src="https://img.shields.io/pepy/dt/soup-cli?color=blue" alt="下载量"></a>
-  <img src="https://img.shields.io/badge/python-3.10--3.12-blue" alt="Python 3.10-3.12">
+  <img src="https://img.shields.io/badge/python-3.11--3.13-blue" alt="Python 3.11-3.13">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0 许可证">
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/MakazhanAlpamys/65fdc943f85f3b2c46ecddb415c2b779/raw/soup_tests.json" alt="测试"></a>
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://github.com/MakazhanAlpamys/Soup/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -62,11 +62,11 @@ soup train
 **在 4 GB 笔记本 GPU 上微调 8B 模型。** Layer streaming 让冻结的基座模型不占
 显存，按解码层逐层送入 GPU。在 RTX 3050 Laptop 4 GB 上实测：Llama-3.1-8B-Instruct +
 NF4 达到 **952 MHz 下 119.6 tok/s，峰值 3.32 GB**（修复前）——与常规常驻显存的运行逐位一致，并在 H100 上
-以同样的 3.32 GB 独立复现出 113.00 tok/s。（两个数字都测自 v0.72.2，早于 v0.73.0 那次
+以同样的 3.32 GB 独立复现出 113.00 tok/s。（两个数字都测于 v0.72.2，早于 v0.73.0 那次
 在 32B 上付出 −4.8% 代价的正确性修复。修复后的复测在另一台 RTX 3050 Laptop 4 GB
 上完成（@umran666，#1103），结果是 **1935–1957 MHz 下 208.6 tok/s，峰值 2.40 GB**。这相当于
-同场 GEMM 上限的 59%，而修复前是 68%：按单位时钟频率算大约慢 14%，所以表面上 1.74x 的提升来自
-时钟频率，而不是加速。large-layer streaming 也改变了两行之间的内存占用方式，因此连这个比例也不是
+同场 GEMM 上限的 59%，而修复前是 68%：按单位时钟频率折算大约慢 14%，所以表面上 1.74x 的提升来自
+时钟频率，而不是加速。large-layer streaming 也改变了两组数据之间的内存占用方式，因此连这个比例也不是
 同口径的对比——[完整记录](benchmarks/gate-v0.72.2-nf4.md)。）需显式开启
 （`stream_layers: true`），仍是 BETA——
 [工作原理](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724) ·
@@ -75,67 +75,67 @@ NF4 达到 **952 MHz 下 119.6 tok/s，峰值 3.32 GB**（修复前）——与�
 然后断言流式模型与常驻模型逐位一致）
 
 <p align="center">
-  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="在 4 GB 卡上对 Llama-3.1-8B 执行 soup train 的预检：3.60 GB 基座固定在内存中跨 32 层流转，配两个 113 MB 显存缓冲，实测峰值 3.32 GB、119.6 tok/s，停在 4 GB 线以内（修复前的一行，测自 v0.72.2，952 MHz；#331 修复后的一行见下方说明）"></a><br>
+  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="在 4 GB 卡上对 Llama-3.1-8B 执行 soup train 的预检：3.60 GB 基座固定在内存中跨 32 层流转，配两个 113 MB 显存缓冲，实测峰值 3.32 GB、119.6 tok/s，停在 4 GB 线以内（修复前的那组数据，测于 v0.72.2，952 MHz；#331 修复后的那组数据见下方说明）"></a><br>
   <sub>Llama-3.1-8B-Instruct + NF4、LoRA、batch 1、seq 512，RTX 3050 Laptop 4 GB——<b>峰值 3.32 GB，119.6 tok/s</b>，952 MHz（修复前，v0.72.2；#331 修复后：1935 MHz 下 208.6 tok/s，2.40 GB，不可直接比较，@umran666，#1103）。<a href="https://youtu.be/T1LCErE943E">完整视频（90 秒）</a></sub>
 </p>
 
 ## 为什么选择 Soup
 
-训练 LLM 至今仍然痛苦。即便是有经验的团队，也有 30-50% 的时间耗在和基础设施搏斗上，
+训练 LLM 至今仍然令人痛苦。即使是有经验的团队，也有 30-50% 的时间耗在和基础设施搏斗上，
 而不是改进模型。Soup 解决的就是这件事。
 
-- **零 SSH。** 再也不用 SSH 进一台坏掉的 GPU 机器。
-- **一份配置。** 一个简单的 YAML 文件就是全部所需。
-- **全部自动。** batch size、GPU 检测、量化——都替你处理。
-- **本地可跑。** 用自己的 GPU 跑 QLoRA，不需要云。
+- **零 SSH：** 再也不用 SSH 进一台坏掉的 GPU 机器。
+- **一份配置：** 一个简单的 YAML 文件就是全部所需。
+- **全部自动：** batch size、GPU 检测、量化，都替你处理。
+- **本地可跑：** 用自己的 GPU 跑 QLoRA，不需要云。
 
 ## 最新动态
 
-**v0.76.0——Soup 接受却从未应用的设置，现在会直接中止加载。**
-那些经过校验、写进文档，却没有被它们声称要配置的路径上的任何代码读取的选项，现在会在加载时被拒绝，
-并指出设置名以及该怎么改；其余的会发出警告，并指明将拒绝它们的版本。以前能加载的配置现在可能
-无法加载：请先运行 `soup doctor --config soup.yaml`。
+**v0.77.0——v0.76 警告过的内容，现在会被拒绝。** 31 个没有任何代码读取的配置字段，以及三个已弃用的
+取值，不再带着警告加载：加载会中止，每个设置一行，指出它的名字并说明该删除什么。在 v0.76 上带警告或静默
+加载的配置，在 v0.77 上可能无法加载：请先运行 `soup doctor --config soup.yaml`。
 
-- **破坏性变更：从未生效的设置在加载时被拒绝。** 其中包括
-  `training.quantization_aware: true`（它从未真正运行过量化感知训练）、`training.use_longlora`、
-  `training.ebft_variant`、`training.gdpo_variant`、没有任何初始化流程读取它时的
-  `training.rope_scaling_type`、`freeze_layers` / `freeze_ratio`（transformers 后端上
-  文本 `sft` / `tts` 路径之外）、`auto_mixed_precision`（`sft` / `tts` 之外），以及另外七个
-  没有 unsloth 初始化流程的任务上的 `backend: unsloth`。每条报错都会指出字段名以及该怎么改。
-  `lr_groups`、`early_stop_patience`、`forgetting_eval_steps` 及其他无人读取的旋钮，现在加载时发出警告，
-  从 v0.77 起被拒绝。
-- **验证集损失现在会被评估。** `data.val_split` 在每次运行中都会把部分行留出训练，但 transformers
-  后端上没有任何训练器去评估它们。现在，每个拿到划分的任务都会在每个 epoch 结束时评估，或通过
-  `training.eval_steps` 每 N 步评估一次，并记录验证集损失；运行时间会增加百分之几。
-  **对 `grpo`、`ppo` 和 `online_dpo` 是破坏性变更：** 默认不再留出行（`data.val_split`
-  会被忽略并给出提示），因此每一行都参与训练。
-- **破坏性变更：每个非标准的 `grpo_variant` 都会应用 `grpo_beta` KL 惩罚。** `gspo`、`dapo`、
-  `dr_grpo`、`bnpo`、`two_sided` 和 `rft` 以前会校验 `grpo_beta` 然后把它丢掉，因此已有的 variant
-  配置无法复现此前的运行结果。`grpo_beta: 0` 现在无 KL 运行，并跳过参考模型的前向传播。
-- **Layer streaming 在后台线程中通过直接 I/O 读取其磁盘层，并且可以跨 NVMe 驱动器做条带化。**
-  在一个比内存还大的 36 GB、70B 形态的 NF4 存储上（一台 RTX 5070 Laptop 8 GB 机器），冷启动的一步
-  从同步读取的 110.5 s 降到 16.2-17.3 s，而借助 `SOUP_LAYER_STREAM_STRIPE_DIRS` 跨两块驱动器后，
-  从 17.4 s 降到 9.97 s（持续负载探测：两轮，1.28x 和 1.41x，没有正式判定；
-  [记录](benchmarks/probe-rtx5070-two-drive-sustained.md)）。能装进内存的存储在内存层上仍然更快，
-  `stream_source: auto` 会选择它。需显式开启（`stream_layers: true`），仍是 BETA；
-  记录：[直接 I/O](benchmarks/gate-974-disk-tier-direct-io.md)、
-  [条带化](benchmarks/gate-two-drive-striping.md)。
-- **新命令和新选项。** `soup adapters check` 扫描 LoRA adapter 是否存在静默失效；
-  `soup bench train` 训练固定步数，若模型没有在训练则以退出码 1 退出
-  （它覆盖 transformers 后端上的 `task: sft`；`soup bench` 现在是一个命令组，`soup bench infer`
-  就是原来的推理基准测试）；`soup data clean` 清洗并修复数据集，且不会改动输入文件；
-  `soup recipes verify` 在 meta 设备上检查（不下载任何权重）每个随附配方都能挂载 LoRA adapter；
-  `soup rewind` 指出造成 loss 尖峰的数据集行。`soup infer` 新增需显式开启的 `--batch-size` 和实验性的
-  `--cuda-graphs`（需要 PyTorch 2.14 或更新版本；在一台 RTX 5070 Laptop 上，未固定，
-  Qwen2.5-1.5B 以 FP16 运行，开启它后最慢的一次运行，其解码速度也比不开启时最快的一次快 2.9x）。
-  `soup ab` 运行双侧、对方差稳健的检验，`soup adapters sign --backend sigstore` 和
-  `soup attest emit --sign sigstore` 使用 Sigstore 免密钥 OIDC 签名
-  （`pip install "soup-cli[sigstore]"`）。
-- **已弃用：** `soup export --format awq` 和 `--format gptq` 将在 v0.77 移除；这两个上游项目都已归档，
-  两个 extra 也都无法与 `[train]` 一起安装。
-
-> 仅支持 Python **3.10–3.12**。在 3.13+ 上，pip 过去会解析到未测试过的 PyTorch
-> wheel，在 Soup 运行之前就崩在原生扩展里。
+- **破坏性变更：暂存（staged）字段和已弃用的取值会被拒绝。** 其中的字段包括 `training.lr_groups`、
+  `early_stop_patience`、`forgetting_eval_steps`、`checkpoint_eval_*`、`quantize_ref_model`、
+  `long_context_grpo`、`vision_grpo`、`data.split_thinking` 和 `data.video_*` 系列键。
+  `training.rl_checkpoint_include_ref_model` 和 `rl_checkpoint_include_rollout_buffer` 是在 v0.76.0
+  之后才被暂存的，因此此前没有任何版本对它们发出过警告。取值包括：`data.remove_unused_columns: true`、
+  在从不量化的任务上设置 `training.quantization: 4bit` / `8bit`（或 `load_in_8bit: true`），以及
+  `soup ab --beta`。
+  v0.76 不声不响地忽略的十五个设置也会被拒绝，例如在没有任何代码应用它们的地方设置的 `use_mod` 或
+  `neftune_alpha`、带 LoRA 秩的 `expand_layers`、Unsloth 上的 `8bit` 或视觉 SFT，以及 MLX 或 Unsloth 上的
+  `lora.rank_pattern`：详见 CHANGELOG 中的升级说明。
+- **破坏性变更：Python 3.11–3.13，不再支持 AWQ 和 GPTQ 导出，`soup serve` 的两个路由需要令牌。** 不再
+  支持 Python 3.10（已于 2026-10-01 结束生命周期）；在 3.10 上，pip 会继续解析到 v0.76.x。
+  `soup export --format awq` / `gptq` 和 `soup quantize --to awq` / `gptq` 已被移除，因为两个上游项目
+  都已归档：请改用 `gguf`、`onnx`、`tensorrt`、`bitnet` 或 `tq1_0`，或继续使用 v0.76.x。除非服务器以
+  `--tool-auth-token`（或 `SOUP_TOOL_AUTH_TOKEN`）启动，否则 `/v1/tools/python` 和 `/v1/tools/bash`
+  在任何绑定地址上都返回 401；在主机不提供操作系统级隔离的环境中，`/v1/tools/python` 与 bash 一样返回
+  501。
+- **DPO、ORPO、SimPO 和 KTO 在 Apple Silicon 上原生运行。** 使用 `backend: mlx` 的 `task: dpo`、
+  `orpo`、`simpo` 和 `kto` 通过 Soup 自己的 MLX 训练循环、按 TRL 的目标函数训练（ORPO 和 SimPO 不需要
+  参考模型）。MLX 文本 SFT 新增原生 DoRA、`training.eval_steps`、`training.seed` 和损失看门狗（loss
+  watchdog）。`lora.use_rslora` 现在会在 MLX 和 Unsloth 上生效，因此那里的 rsLoRA 运行会按它所要求的
+  缩放训练，结果也会随之改变。
+- **Layer streaming 支持 DeepSeek-V3 系列 MoE。** Soup 的 layer streaming（L2L 的一种实现，
+  Pudipeddi et al. 2020）现在可以流式加载 `model_type: deepseek_v3`，常驻与流式在前向和反向上结果一致，
+  并在分片时把 FP8 分块量化的 checkpoint 反量化。Kimi-K2-Base 和 -Instruct 要先通过逐字段检查才会被接受
+  （一个 K2 形状的小 checkpoint 在 CPU 上逐位一致地流式运行；没有在 K2 本身上训练过任何东西）。
+  `training.stream_expert_layout: per_expert` 一次只流式加载一个被路由到的专家：在一台
+  RTX 5070 Laptop 8 GB 上，同一份 Moonlight-16B LoRA 配置的 GPU 显存峰值为 1.0 GB（NF4 专家），而 fused
+  布局为 3.1 GB（bf16 专家），两次运行的缓存层级也不同；每步耗时约为 2.7x（[记录](benchmarks/probe-rtx5070-moonlight-16b.md)）。
+  `training.stream_recompute: off` / `auto` 会保留流式层的激活而不重新计算，梯度逐位一致：在同一张卡的
+  RAM 层级上，Mistral-7B NF4 的一步在 512 个 token 时快 22%，在 2048 时快 8.5%
+  （[记录](benchmarks/gate-stream-recompute.md)）。需显式开启（`stream_layers: true`），BETA。
+- **可核验的来源（provenance）。** `soup registry push --data <file>` 记录训练文件的 SHA-256，
+  `--idempotency-key` 让推送可以安全重试；在 transformers 后端上，常驻、layer streaming 和多 GPU 运行都会
+  记录它们所加载基座模型的 Hub commit；`soup ship --require-provenance` 会把证据与它盖章时记录的
+  adapter、任务和源数据字节、评测套件版本以及判定策略进行比对。
+- **其他新内容。** `soup --version`；用于在 `soup data ingest` 中处理 PDF 和 DOCX 的
+  `pip install "soup-cli[documents]"`；`soup merge --low-memory`；GRPO 可以用 LLM 评审打分
+  （`training.reward_fn: judge_rank`）；[`docs/config-reference.md`](docs/config-reference.md) 和
+  [`docs/cli-reference.md`](docs/cli-reference.md) 由代码生成，任一页面不再如实陈述代码的行为时，测试套件
+  就会失败。
 
 更早的更新记录在 [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) 页面。
 
@@ -212,7 +212,7 @@ soup merge  --adapter ./output                              # 把 LoRA 合进基
 soup export --model ./output --format gguf --quant q4_k_m   # 导出 GGUF 给 Ollama / llama.cpp
 ```
 
-更多导出目标（ONNX、TensorRT、AWQ、GPTQ、BitNet）和部署选项在
+更多导出目标（ONNX、TensorRT、BitNet）和部署选项在
 [`docs/serving-and-export.md`](docs/serving-and-export.md)。
 
 ## Web UI
@@ -261,7 +261,7 @@ output: ./output
 
 > **自 v0.75 起，未知配置键会被拒绝。** 没有任何模型声明过的键——比如
 > `quantizaton` 这样的笔误，或只存在于更新版 Soup 的字段——以前会通过校验然后被
-> 丢弃，任务带着"设置没生效"的状态继续跑。v0.74 会在加载时报出来并提示你可能想写的
+> 丢弃，任务带着“设置没生效”的状态继续跑。v0.74 会在加载时报出来并提示你可能想写的
 > 字段；从 **v0.75** 起同样的配置直接加载失败，所以请修正或删掉这个键，别再指望它被
 > 忽略。见 [未知配置键](docs/backends-and-ops.md#unknown-config-keys)。
 
@@ -272,7 +272,7 @@ output: ./output
 | 指南 | 内容 |
 |---|---|
 | [训练任务与方法](docs/training.md) | SFT、DPO/GRPO/PPO/KTO/ORPO/SimPO/IPO/BCO、tool-calling、PRM、预训练、蒸馏、分类、视觉/音频/TTS、机器遗忘、RAFT/RA-DIT、训练循环加固检测器 |
-| [PEFT、长上下文与效率](docs/peft-and-efficiency.md) | DoRA、LoRA+、rsLoRA、VeRA、OLoRA、NEFTune、PiSSA、ReLoRA、optimizer 与 PEFT 全家桶、LLaMA Pro、GaLore、YaRN/LongLoRA、packing、课程学习、自动调参 |
+| [PEFT、长上下文与效率](docs/peft-and-efficiency.md) | DoRA、LoRA+、rsLoRA、VeRA、OLoRA、NEFTune、PiSSA、ReLoRA、optimizer 与 PEFT 工具集、LLaMA Pro、GaLore、YaRN/LongLoRA、packing、课程学习、自动调参 |
 | [性能与量化](docs/performance-and-quantization.md) | QAT、FP8、量化菜单（I + II）、KV-cache、NVFP4、保存格式、Cut Cross-Entropy、gradient checkpointing、kernel、activation offloading、layer streaming、多 GPU / DeepSpeed / FSDP |
 | [数据工程](docs/data.md) | 格式、对齐 Axolotl/LF 的数据管线、数据工具、合成生成与 forge、质量记分卡、trace 工具、远程数据集、混合、recipe DAG |
 | [评测与探针](docs/evaluation.md) | eval design/gate、eval-gated 训练、benchmark、NLG 指标、校准、Elo 竞技场、诊断、后训练 X-ray 探针、A/B、漂移、可调性、`soup advise` |
@@ -289,7 +289,7 @@ Alpaca、ShareGPT、ChatML、偏好对（DPO / ORPO / SimPO / IPO / KTO）、视
 ASR、纯文本、embedding、RAFT 等等——全部从 JSONL、JSON、CSV、Parquet 或 TXT 自动检测，
 所以多数情况下把 `data.train` 指向文件就行，其他什么都不用改。每种格式的 schema 和
 完整示例，加上数据管线（远程 URI、流式、分片、交错、词表扩展、文档导入），都在
-[`docs/data.md`](docs/data.md#data-formats)。
+[`docs/data.md`](docs/data.md#data-formats)，而 [Sesame CSM 原生音频训练](docs/training.md#native-sesame-csm) 则另有说明。
 
 ## 常用命令
 
@@ -339,7 +339,7 @@ docker compose up   # 或在本地构建
 
 ## 环境要求
 
-- Python 3.10、3.11 或 3.12（这是 CI 测试的版本；3.13+ 暂不支持，因为 PyTorch
+- Python 3.11、3.12 或 3.13（这是 CI 测试的版本；3.14+ 暂不支持，因为 PyTorch
   技术栈还没在那上面验证过）
 - 带 CUDA 的 GPU（推荐）、Apple Silicon（MPS）、或 CPU（实验性——非常慢）
 - 7B 模型跑 QLoRA 需要 8 GB+ 显存
@@ -443,8 +443,8 @@ v1 以来的任何实测数字也没有变。v3 做的是**撤回一个我们曾
   成立；复现结论以更弱的形式仍然成立——约束对两台机器是共同的，而不是 GPU 的算力。
 - **在完全不同硬件上的复现**（v2 新增）：RTX 3050 上 119.6 tok/s（952 MHz 下），对 H100 上
   113.00 的中位数，同为 3.32 GB 峰值。两者都早于 #331 修复，也是论文报告的数字。#331 修复后的
-  一行（@umran666，#1103）是 1935–1957 MHz 下 208.6 tok/s，峰值 2.40 GB，为同场 GEMM 上限的
-  59%，修复前为 68%：表面上 1.74x 的提升来自时钟频率，而不是加速；两行之间的内存占用方式也变了，
+  那组数据（@umran666，#1103）是 1935–1957 MHz 下 208.6 tok/s，峰值 2.40 GB，为同场 GEMM 上限的
+  59%，修复前为 68%：表面上 1.74x 的提升来自时钟频率，而不是加速；两组数据之间的内存占用方式也变了，
   因此连这个比例也不是同口径的对比
   （[完整记录](benchmarks/gate-v0.72.2-nf4.md)）。
 - **发现并修复了一个静默的错误梯度缺陷。** NF4 单层超过 ~165 MiB 时，前向仍然
@@ -478,4 +478,4 @@ v1 以来的任何实测数字也没有变。v3 做的是**撤回一个我们曾
 
 ## 许可证
 
-[Apache-2.0](LICENSE)。版权 © Soup 贡献者们。
+[Apache-2.0](LICENSE)。Copyright 2026 Makazhan Alpamys and the Soup contributors。如果你再分发 Soup 或其修改版本，许可证的第 4 条和第 6 条对你适用：每份副本都要保留 `LICENSE` 和 `NOTICE`，在你改动过的文件上注明改动，并且除说明作品来源之外不要使用 Soup 这一名称。

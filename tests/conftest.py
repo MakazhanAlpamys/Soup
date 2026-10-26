@@ -172,6 +172,33 @@ def _isolate_experiments_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.fixture(autouse=True)
+def _no_ambient_tool_auth_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start every test without ``SOUP_TOOL_AUTH_TOKEN`` from the developer's shell.
+
+    ``soup serve --tool-auth-token`` reads it, so an exported token would turn a test
+    of a refused bind, or of a route without a token, into one that passes the check.
+    A test that needs it sets it itself.
+    """
+    monkeypatch.delenv("SOUP_TOOL_AUTH_TOKEN", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_hub_model_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the VRAM estimate's model-shape reader off the Hugging Face cache and Hub.
+
+    ``model_shape.read_model_shape`` (#2049) reads ``config.json`` from a local
+    directory, then the Hugging Face cache, then the Hub. A test that names a Hub
+    model would otherwise get a different shape on a machine that has it cached, and
+    reach the network on one that does not. A local model directory is still read.
+    A test of the cache or Hub path patches these two functions back itself.
+    """
+    from soup_cli.utils import model_shape
+
+    monkeypatch.setattr(model_shape, "_hub_lookup", lambda repo, **_kw: (None, None))
+    monkeypatch.setattr(model_shape, "_hub_param_count", lambda repo, **_kw: None)
+
+
+@pytest.fixture(autouse=True)
 def _restore_working_directory():
     """Put the working directory back after every test.
 

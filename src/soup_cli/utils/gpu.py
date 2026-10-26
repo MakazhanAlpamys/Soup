@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import sys
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -27,13 +28,27 @@ def _params_from_local_safetensors(path: str) -> float | None:
     refuse to train a 135M model. The checkpoint knows its own size, so ask
     it instead of guessing.
     """
+    total = param_count_from_local_safetensors(path)
+    return (total / 1e9) if total else None
+
+
+def param_count_from_local_safetensors(path: str) -> int | None:
+    """Exact parameter count of a local checkpoint directory, read from the
+    safetensors headers alone, or None when there is nothing readable."""
+    from soup_cli.utils.checkpoint_files import checkpoint_files
+
     try:
         if not os.path.isdir(path):
             return None
+        # #1806: the checkpoint is what the index names (or model.safetensors /
+        # the model-*-of-* shards), never every *.safetensors: Mistral's repos
+        # keep a consolidated.safetensors copy beside the shards, which doubled
+        # the count here and everything sized from it.
+        selected = checkpoint_files(path)
         shards = [
-            entry.path
-            for entry in os.scandir(path)
-            if entry.is_file() and entry.name.endswith(".safetensors")
+            os.path.join(path, name)
+            for name in selected.weights
+            if os.path.isfile(os.path.join(path, name))
         ]
         if not shards:
             return None
@@ -61,7 +76,7 @@ def _params_from_local_safetensors(path: str) -> float | None:
                         return None
                     numel *= dim
                 total += numel
-        return (total / 1e9) if total else None
+        return total or None
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return None  # unreadable/crafted -> fall back to the name guess
 
@@ -212,6 +227,44 @@ def detect_device(backend: Optional[str] = None) -> tuple[str, str]:
         pass
 
     return "cpu", "CPU (no GPU detected)"
+
+
+def configure_cuda_alloc_hint(stream_layers: bool) -> None:
+    """Set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True for a streamed run (#2149).
+
+    The CUDA allocator reads the variable once, when the context is created, and
+    ``detect_device()`` creates it, so ``soup train`` calls this first. By the time
+    ``expandable_segments_status()`` runs, in the streamed setup, it is too late to
+    set it there. Linux only (WSL2 included): Windows ignores the hint and macOS has
+    no CUDA, so their environment is left as it is. A CPU-only Linux box gets it too,
+    harmlessly; checking for a card here would start CUDA, which is the bug. A value
+    the user exported is kept; an empty one counts as unset. No torch import: setting a
+    variable does not need it.
+    """
+    if stream_layers and sys.platform.startswith("linux"):
+        if not os.environ.get("PYTORCH_CUDA_ALLOC_CONF"):
+            os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+
+def configure_mps_async_load(device: Optional[str] = None) -> None:
+    """Set HF_DEACTIVATE_ASYNC_LOAD=1 by default when running on Apple Silicon MPS (#2076).
+
+    On Apple Silicon MPS hardware, Transformers' threaded weight loader can
+    crash with SIGABRT in _materialize_copy during model loading. Enforce
+    synchronous model loading by default while preserving any explicit user
+    environment setting.
+    """
+    if device is not None:
+        if str(device).startswith("mps"):
+            os.environ.setdefault("HF_DEACTIVATE_ASYNC_LOAD", "1")
+    else:
+        try:
+            import torch
+
+            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                os.environ.setdefault("HF_DEACTIVATE_ASYNC_LOAD", "1")
+        except (ImportError, AttributeError):
+            pass
 
 
 def resolve_quantization(

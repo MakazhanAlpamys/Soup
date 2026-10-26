@@ -26,7 +26,7 @@
 <p align="center">
   <a href="https://pypi.org/project/soup-cli/"><img src="https://img.shields.io/pypi/v/soup-cli?color=blue" alt="PyPI"></a>
   <a href="https://pepy.tech/project/soup-cli"><img src="https://img.shields.io/pepy/dt/soup-cli?color=blue" alt="Downloads"></a>
-  <img src="https://img.shields.io/badge/python-3.10--3.12-blue" alt="Python 3.10-3.12">
+  <img src="https://img.shields.io/badge/python-3.11--3.13-blue" alt="Python 3.11-3.13">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0 License">
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/MakazhanAlpamys/65fdc943f85f3b2c46ecddb415c2b779/raw/soup_tests.json" alt="Tests"></a>
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://github.com/MakazhanAlpamys/Soup/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -91,56 +91,55 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.76.0 — settings Soup accepted and never applied now stop the load.** Options that were
-validated and documented, and read by nothing on the path they claimed to configure, are now
-refused at load, naming the setting and what to change; the rest warn and name the release
-that will refuse them. A config that loaded before can stop loading: run
-`soup doctor --config soup.yaml` first.
+**v0.77.0 — what v0.76 warned about is now refused.** 31 config fields that nothing reads, and
+three deprecated values, no longer load with a warning: the load stops with one line per setting
+that names it and says what to delete. A config that loaded on v0.76, with warnings or
+silently, can stop loading on v0.77: run `soup doctor --config soup.yaml` first.
 
-- **Breaking: a setting that never took effect is refused at load.** Among them
-  `training.quantization_aware: true` (it never ran quantization-aware training),
-  `training.use_longlora`, `training.ebft_variant`, `training.gdpo_variant`,
-  `training.rope_scaling_type` where no setup reads it, `freeze_layers` / `freeze_ratio`
-  outside the text `sft` / `tts` path on the transformers backend, `auto_mixed_precision`
-  outside `sft` / `tts`, and `backend: unsloth` on seven further tasks that have no unsloth
-  setup. Each message names the field and what to change. `lr_groups`, `early_stop_patience`,
-  `forgetting_eval_steps` and other unread knobs warn at load now and are refused from v0.77.
-- **Validation loss is now evaluated.** `data.val_split` held rows out of training on every
-  run, and no trainer on the transformers backend evaluated them. Every task that gets a
-  split now evaluates it at the end of each epoch, or every N steps with `training.eval_steps`,
-  and records the val loss; runs take a few percent longer. **Breaking for `grpo`, `ppo` and
-  `online_dpo`:** by default they no longer hold rows out (`data.val_split` is ignored with
-  a note), so every row trains.
-- **Breaking: every non-standard `grpo_variant` applies the `grpo_beta` KL penalty.** `gspo`,
-  `dapo`, `dr_grpo`, `bnpo`, `two_sided` and `rft` validated `grpo_beta` and dropped it, so
-  existing variant configs will not reproduce prior runs. `grpo_beta: 0` now runs KL-free and
-  skips the reference forward pass.
-- **Layer streaming reads its disk tier on a background thread, through direct I/O, and can
-  stripe it across NVMe drives.** On a 36 GB 70B-shaped NF4 store larger than RAM (one RTX 5070
-  Laptop 8 GB box), a cold step went from 110.5 s on the synchronous read to 16.2-17.3 s, and
-  from 17.4 s to 9.97 s across two drives with `SOUP_LAYER_STREAM_STRIPE_DIRS` (a sustained-load
-  probe: two rounds, 1.28x and 1.41x, no formal verdict;
-  [record](benchmarks/probe-rtx5070-two-drive-sustained.md)). A store that fits RAM is still
-  faster on the RAM tier, which `stream_source: auto` picks. Opt-in (`stream_layers: true`) and
-  still BETA; records: [direct I/O](benchmarks/gate-974-disk-tier-direct-io.md),
-  [striping](benchmarks/gate-two-drive-striping.md).
-- **New commands and options.** `soup adapters check` scans a LoRA adapter for silent failure;
-  `soup bench train` trains a fixed number of steps and exits 1 when the model was not training
-  (it covers `task: sft` on the transformers backend; `soup bench` is now a group, and
-  `soup bench infer` is the old inference benchmark);
-  `soup data clean` sanitizes and repairs a dataset without touching the input file;
-  `soup recipes verify` checks on the meta device, with no weights downloaded, that every shipped
-  recipe can attach a LoRA adapter; `soup rewind` names the dataset rows behind a loss spike.
-  `soup infer` gains opt-in `--batch-size` and an experimental `--cuda-graphs` (PyTorch 2.14 or
-  newer; on one RTX 5070 Laptop, unpinned, Qwen2.5-1.5B in FP16, the slowest run with it decoded
-  2.9x faster than the fastest without). `soup ab` runs a two-sided, variance-robust test, and
-  `soup adapters sign --backend sigstore` and `soup attest emit --sign sigstore` sign with
-  Sigstore keyless OIDC (`pip install "soup-cli[sigstore]"`).
-- **Deprecated:** `soup export --format awq` and `--format gptq` will be removed in v0.77; both
-  upstream projects are archived and neither extra installs next to `[train]`.
-
-> Python **3.10–3.12** only. On 3.13+, pip used to resolve untested PyTorch wheels that
-> crash in the native extension before Soup runs at all.
+- **Breaking: staged fields and deprecated values are refused.** Among the fields:
+  `training.lr_groups`, `early_stop_patience`, `forgetting_eval_steps`, `checkpoint_eval_*`,
+  `quantize_ref_model`, `long_context_grpo`, `vision_grpo`, `data.split_thinking` and the
+  `data.video_*` keys. `training.rl_checkpoint_include_ref_model` and
+  `rl_checkpoint_include_rollout_buffer` were staged after v0.76.0, so no release warned about
+  them first. The values: `data.remove_unused_columns: true`, `training.quantization: 4bit` /
+  `8bit` (or `load_in_8bit: true`) on a task that never quantises, and `soup ab --beta`.
+  Fifteen settings v0.76 ignored without a word are refused too, such as `use_mod` or
+  `neftune_alpha` where nothing applies them, `expand_layers` with a LoRA rank, `8bit` or vision
+  SFT on Unsloth, and `lora.rank_pattern` on MLX or Unsloth: see the CHANGELOG upgrade notes.
+- **Breaking: Python 3.11–3.13, no AWQ or GPTQ export, a token for two `soup serve` routes.**
+  Python 3.10 is no longer supported (end of life 2026-10-01); on 3.10, pip keeps resolving
+  v0.76.x. `soup export --format awq` / `gptq` and `soup quantize --to awq` / `gptq` are removed,
+  because both upstream projects are archived: use `gguf`, `onnx`, `tensorrt`, `bitnet` or
+  `tq1_0`, or stay on v0.76.x. `/v1/tools/python` and `/v1/tools/bash` answer 401 unless the
+  server was started with `--tool-auth-token` (or `SOUP_TOOL_AUTH_TOKEN`), on every bind, and
+  `/v1/tools/python` answers 501 where the host has no OS-level isolation, as bash already did.
+- **DPO, ORPO, SimPO and KTO run natively on Apple Silicon.** `task: dpo`, `orpo`, `simpo` and
+  `kto` with `backend: mlx` train through Soup's own MLX loop on TRL's objectives (ORPO and SimPO
+  with no reference model). MLX text SFT gains native DoRA, `training.eval_steps`,
+  `training.seed` and the loss watchdog. `lora.use_rslora` is now applied on MLX and Unsloth, so
+  an rsLoRA run there trains at the scale it asked for, and its results change.
+- **Layer streaming reaches DeepSeek-V3-family MoE.** Soup's layer streaming (an implementation
+  of L2L, Pudipeddi et al. 2020) now streams `model_type: deepseek_v3` with resident-vs-streamed
+  parity forward and backward, and dequantises FP8 block-quantised checkpoints at shard time.
+  Kimi-K2-Base and -Instruct are admitted behind a field-by-field check (a tiny K2-shaped
+  checkpoint streams bit for bit on CPU; nothing has been trained on K2 itself).
+  `training.stream_expert_layout: per_expert` streams one routed expert at a time: on one RTX
+  5070 Laptop 8 GB, the same Moonlight-16B LoRA config peaked at 1.0 GB of GPU memory against
+  3.1 GB fused (NF4 experts against bf16, different cache tiers), at about 2.7x the step time
+  ([record](benchmarks/probe-rtx5070-moonlight-16b.md)). `training.stream_recompute: off` /
+  `auto` keeps streamed activations instead of recomputing them, with bit-identical gradients:
+  on the same card's RAM tier a Mistral-7B NF4 step is 22% faster at 512 tokens and 8.5% at 2048
+  ([record](benchmarks/gate-stream-recompute.md)). Opt-in (`stream_layers: true`), BETA.
+- **Provenance you can check.** `soup registry push --data <file>` records the training file's
+  SHA-256, and `--idempotency-key` makes a push safe to retry; on the transformers backend,
+  resident, layer-streamed and multi-GPU runs record the Hub commit of the base they loaded;
+  `soup ship --require-provenance` checks the evidence against the adapter, task and source
+  bytes, suite version and verdict policy it was stamped with.
+- **Also new.** `soup --version`; `pip install "soup-cli[documents]"` for PDF and DOCX in
+  `soup data ingest`; `soup merge --low-memory`; GRPO can score with an LLM judge
+  (`training.reward_fn: judge_rank`); and [`docs/config-reference.md`](docs/config-reference.md)
+  and [`docs/cli-reference.md`](docs/cli-reference.md) are generated from the code, and the test
+  suite fails when either stops stating what the code does.
 
 Older highlights live on the [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) page.
 
@@ -218,7 +217,7 @@ soup merge  --adapter ./output                              # merge LoRA into th
 soup export --model ./output --format gguf --quant q4_k_m   # GGUF for Ollama / llama.cpp
 ```
 
-More export targets (ONNX, TensorRT, AWQ, GPTQ, BitNet) and deployment options live in
+More export targets (ONNX, TensorRT, BitNet) and deployment options live in
 [`docs/serving-and-export.md`](docs/serving-and-export.md).
 
 ## Web UI
@@ -297,7 +296,7 @@ ASR, plaintext, embedding, RAFT and more — all auto-detected from JSONL, JSON,
 TXT, so in most cases you point `data.train` at a file and nothing else changes. Schemas with a
 worked example per format, plus the data pipeline (remote URIs, streaming, sharding,
 interleaving, vocab expansion, document ingestion), are in
-[`docs/data.md`](docs/data.md#data-formats).
+[`docs/data.md`](docs/data.md#data-formats), with [native Sesame CSM audio training](docs/training.md#native-sesame-csm) documented separately.
 
 ## Common Commands
 
@@ -347,7 +346,7 @@ docker compose up   # or build locally
 
 ## Requirements
 
-- Python 3.10, 3.11 or 3.12 (those are the versions CI tests; 3.13+ is not supported yet
+- Python 3.11, 3.12 or 3.13 (those are the versions CI tests; 3.14+ is not supported yet
   because the PyTorch stack has not been validated there)
 - GPU with CUDA (recommended), Apple Silicon (MPS), or CPU (experimental — very slow)
 - 8 GB+ VRAM for 7B models with QLoRA
@@ -497,4 +496,4 @@ were measured and then discarded.
 
 ## License
 
-[Apache-2.0](LICENSE). Copyright © the Soup contributors.
+[Apache-2.0](LICENSE). Copyright 2026 Makazhan Alpamys and the Soup contributors. If you redistribute Soup or a modified copy of it, sections 4 and 6 of the license apply to you: keep `LICENSE` and `NOTICE` with every copy, mark the files you changed, and do not use the Soup name beyond saying where the work comes from.

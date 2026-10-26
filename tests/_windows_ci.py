@@ -1,8 +1,10 @@
 """THE ``windows-latest`` illegal-instruction guard (#382). One definition.
 
-Imported by the test files whose real ``trainer.train()`` still crashes that
-fleet: today only the two NF4 tests in ``test_v07202.py``. It lives here rather
-than in that file because the guard has been needed in four files over time, and
+Imported by the test files whose native kernels still crash that fleet: the two
+NF4 ``trainer.train()`` tests in ``test_v07202.py``, the CPU bf16-autocast
+case of ``test_expert_stream.py`` and the bfloat16 cases of
+``test_stream_loss_chunk.py``. It lives here rather than in one of them
+because the guard has been needed in four files over time, and
 this repo has been bitten three times by a predicate that was copied instead of
 shared (#372, #392, #424). ``test_windows_ci_guard_is_not_
 duplicated`` fails if a second copy appears.
@@ -33,7 +35,14 @@ def _windows_ci() -> bool:
     instruction the bitsandbytes wheel emits, and those tests still use this skip.
     For the others it was the first CPU bf16/fp16 matmul in oneDNN or MKL (#1314),
     which the ``aten_half_matmuls`` fixture avoids, so they request the fixture
-    instead. Occurrences so far span py3.10, py3.11 and py3.12, so it tracks
+    instead. There are two exceptions. The first is the ``cpu-bf16-autocast`` case of
+    ``test_expert_stream.py::test_streamed_experts_backward_preserves_forward_autocast``
+    (run 40003126970, the crash frame is the eager module's bf16 forward): that
+    single case is skipped here, nothing else in the file. The bfloat16 cases of
+    ``test_stream_loss_chunk.py`` are the second (run 40014485149, the crash
+    frame is a bf16 ``Linear.forward`` with no autocast): those parametrisations
+    are skipped here, the float32 ones are not. Occurrences so far span
+    py3.10, py3.11 and py3.12, so it tracks
     the runner CPU rather than the interpreter; the control is that ``1715261``
     is the crashing tree ``7c9a931`` plus one line of markdown and came back
     green on the same pool.

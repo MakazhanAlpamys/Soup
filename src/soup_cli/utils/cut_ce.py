@@ -17,6 +17,8 @@ Incompatibilities:
 
 from __future__ import annotations
 
+from soup_cli.utils.run_provenance import base_revision_kwargs
+
 # Single source of truth for the advisory both trainer/sft.py and
 # utils/v028_features.py print when apply_cut_ce() returns False.
 NO_MATCHING_ARCHITECTURE_MESSAGE = "no matching architecture or cut_cross_entropy not installed"
@@ -52,7 +54,10 @@ def _detect_model_type(model_name: str) -> str:
     try:
         from transformers import AutoConfig
 
-        config = AutoConfig.from_pretrained(model_name, trust_remote_code=False)
+        config = AutoConfig.from_pretrained(
+            model_name, trust_remote_code=False,
+            **base_revision_kwargs(model_name),
+        )
     except Exception:  # noqa: BLE001 (detection is best-effort by design)
         return ""
     return str(getattr(config, "model_type", "") or "")

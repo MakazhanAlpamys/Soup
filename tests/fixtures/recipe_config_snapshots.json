@@ -105,6 +105,7 @@
     "training.eval_gate": null,
     "training.eval_steps": null,
     "training.expand_layers": null,
+    "training.fast_lora": false,
     "training.forgetting_benchmark": "mini_mmlu",
     "training.forgetting_detection": false,
     "training.forgetting_eval_steps": 100,
@@ -130,6 +131,11 @@
     "training.grpo_beta": 0.1,
     "training.grpo_delta": null,
     "training.grpo_fp16": false,
+    "training.grpo_judge": null,
+    "training.grpo_judge_max_calls": null,
+    "training.grpo_judge_max_failure_rate": null,
+    "training.grpo_judge_max_tokens": null,
+    "training.grpo_judge_rubric": null,
     "training.grpo_variant": null,
     "training.hub": "hf",
     "training.ipo_tau": 0.1,
@@ -266,10 +272,14 @@
     "training.skip_zero_advantage": false,
     "training.stream_buffers": 2,
     "training.stream_disk_kind": null,
+    "training.stream_expert_layout": "fused",
     "training.stream_layers": false,
+    "training.stream_loss_chunk": null,
+    "training.stream_nf4_scale_cache": false,
     "training.stream_ngram_source": "auto",
     "training.stream_pin": null,
     "training.stream_read_ahead": 2,
+    "training.stream_recompute": "on",
     "training.stream_source": "auto",
     "training.stream_vram_override": null,
     "training.stream_vram_probe": false,
@@ -366,6 +376,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 64,
       "training.lora.r": 32,
       "training.lr": 1e-05
@@ -377,6 +388,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -474,6 +486,7 @@
       "task": "grpo",
       "training.epochs": 1,
       "training.gradient_accumulation_steps": 16,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 64,
       "training.lora.r": 32,
       "training.lr": 5e-06,
@@ -729,6 +742,7 @@
       "task": "grpo",
       "training.batch_size": 4,
       "training.epochs": 1,
+      "training.gradient_checkpointing": true,
       "training.grpo_beta": 0.04,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
@@ -746,6 +760,7 @@
       "task": "grpo",
       "training.batch_size": 4,
       "training.epochs": 1,
+      "training.gradient_checkpointing": true,
       "training.grpo_beta": 0.04,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
@@ -763,6 +778,7 @@
       "task": "grpo",
       "training.batch_size": 4,
       "training.epochs": 1,
+      "training.gradient_checkpointing": true,
       "training.grpo_beta": 0.04,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
@@ -794,31 +810,10 @@
       "training.lr": 1e-05
     },
     "kimi-k2-sft": {
-      "base": "moonshotai/Kimi-K2-Base",
-      "data.format": "auto",
-      "data.max_length": 8192,
-      "data.train": "./data/train.jsonl",
-      "training.epochs": 2,
-      "training.lora.alpha": 32,
-      "training.lora.dropout": 0.0,
-      "training.lora.r": 16,
-      "training.lr": 0.0001,
-      "training.moe_lora": true
+      "$unavailable": "Resident Kimi K2 is unsupported on Transformers 5.x. Use the guarded training.stream_layers: true route (#2107), with --trust-remote-code for the tokenizer and pip install tiktoken. See docs/performance-and-quantization.md, Kimi K2: CPU-only parity on a tiny K2-like checkpoint; full K2/GPU training is unverified."
     },
     "kimi-k2-thinking-grpo": {
-      "base": "moonshotai/Kimi-K2-Thinking",
-      "data.format": "auto",
-      "data.max_length": 4096,
-      "data.train": "./data/reasoning_prompts.jsonl",
-      "task": "grpo",
-      "training.batch_size": 1,
-      "training.epochs": 1,
-      "training.gradient_accumulation_steps": 8,
-      "training.grpo_beta": 0.04,
-      "training.lora.alpha": 32,
-      "training.lora.r": 16,
-      "training.lr": 5e-06,
-      "training.verifiable_domain": "math"
+      "$unavailable": "Resident Kimi K2 is unsupported on Transformers 5.x. No supported route yet."
     },
     "kimi-k2.5-dpo": {
       "base": "moonshotai/Kimi-K2.5",
@@ -978,6 +973,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -987,6 +983,7 @@
       "data.format": "dpo",
       "data.train": "./data/preference_train.jsonl",
       "task": "ipo",
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -1133,6 +1130,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -1318,6 +1316,7 @@
       "data.train": "./data/prompts.jsonl",
       "task": "online_dpo",
       "training.epochs": 1,
+      "training.gradient_checkpointing": true,
       "training.lora.r": 8,
       "training.lr": 5e-05,
       "training.online_dpo_judge": "ollama://llama3.1",
@@ -1379,6 +1378,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -1394,21 +1394,6 @@
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
-    },
-    "pixtral-dpo": {
-      "base": "mistralai/Pixtral-12B-2409",
-      "data.format": "llava",
-      "data.image_dir": "./data/images",
-      "data.max_length": 4096,
-      "data.train": "./data/vision_preference_train.jsonl",
-      "modality": "vision",
-      "task": "dpo",
-      "training.batch_size": 1,
-      "training.gradient_accumulation_steps": 16,
-      "training.gradient_checkpointing": true,
-      "training.lora.alpha": 32,
-      "training.lora.r": 16,
-      "training.lr": 5e-06
     },
     "qvq-72b-sft": {
       "base": "Qwen/QVQ-72B-Preview",
@@ -1521,6 +1506,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -1544,6 +1530,7 @@
       "output": "./output_rm",
       "task": "reward_model",
       "training.epochs": 1,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -1673,6 +1660,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -1722,6 +1710,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -1758,6 +1747,16 @@
       "training.lora.r": 16,
       "training.lr": 1e-05
     },
+    "qwen3.5-2b-dpo": {
+      "base": "Qwen/Qwen3.5-2B",
+      "data.format": "dpo",
+      "data.max_length": 4096,
+      "data.train": "./data/preference_train.jsonl",
+      "task": "dpo",
+      "training.lora.alpha": 32,
+      "training.lora.r": 16,
+      "training.lr": 5e-06
+    },
     "qwen3.5-2b-grpo": {
       "base": "Qwen/Qwen3.5-2B",
       "data.format": "auto",
@@ -1765,6 +1764,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -1831,6 +1831,16 @@
       "training.lr": 5e-06,
       "training.moe_lora": true
     },
+    "qwen3.5-4b-dpo": {
+      "base": "Qwen/Qwen3.5-4B",
+      "data.format": "dpo",
+      "data.max_length": 4096,
+      "data.train": "./data/preference_train.jsonl",
+      "task": "dpo",
+      "training.lora.alpha": 32,
+      "training.lora.r": 16,
+      "training.lr": 5e-06
+    },
     "qwen3.5-4b-pretrain": {
       "base": "Qwen/Qwen3.5-4B-Base",
       "data.format": "plaintext",
@@ -1869,6 +1879,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -1900,6 +1911,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -2001,6 +2013,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -2012,6 +2025,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -2023,6 +2037,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05

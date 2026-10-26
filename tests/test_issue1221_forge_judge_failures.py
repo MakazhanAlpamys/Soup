@@ -12,13 +12,14 @@ from __future__ import annotations
 import json
 import re
 import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Iterator, List
 
 import pytest
 from typer.testing import CliRunner
 
+from tests._loopback_http import LoopbackHTTPServer
 from tests.conftest import strip_ansi
 
 _HEALTHY_ANSWER = "Customers receive refunds within five business days."
@@ -104,7 +105,7 @@ def stub_judge() -> Iterator[tuple[_StubJudge, str]]:
         def log_message(self, *_args) -> None:
             return
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = LoopbackHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
