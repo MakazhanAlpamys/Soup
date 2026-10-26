@@ -11,14 +11,26 @@ the escape hatch is the flag.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+import typer
 
 from soup_cli.cli import app
+from soup_cli.utils import launcher, topology
 from tests.cli_runner import CliRunner
 from tests.conftest import strip_ansi
+
+_DISTRIBUTED_ENV = (
+    "RANK",
+    "WORLD_SIZE",
+    "LOCAL_RANK",
+    "ACCELERATE_MIXED_PRECISION",
+    "ACCELERATE_USE_DEEPSPEED",
+    "ACCELERATE_USE_FSDP",
+)
 
 
 class _DatasetLoadReachedError(Exception):
@@ -139,4 +151,163 @@ def test_train_on_tty_answers_confirm_normally(
     assert "Cancelled." in output
     loader, builder = loading_spies
     loader.assert_not_called()
+    builder.assert_not_called()
+
+
+def _setup_multi_gpu_env(monkeypatch, gpu_count: int = 3) -> None:
+    for var in _DISTRIBUTED_ENV:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setattr(
+        topology,
+        "detect_topology",
+        lambda: {"gpu_count": gpu_count, "interconnect": "pcie"},
+    )
+    monkeypatch.setattr(topology, "resolve_num_gpus", lambda spec: int(spec))
+
+
+def test_train_gpus_on_tty_asks_confirm_once_and_passes_yes_to_ranks(
+    tmp_path: Path, monkeypatch, loading_spies,
+) -> None:
+    """#2239: `soup train --gpus N` without `--yes` asks the confirmation once
+    in the launching process and passes `--yes` in the re-exec argv so the
+    spawned ranks do not prompt again.
+    """
+    _setup_multi_gpu_env(monkeypatch, gpu_count=3)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("soup_cli.commands.train._stdin_isatty", lambda: True)
+    config = _write_config(tmp_path)
+
+    prompts: list[tuple[str, str]] = []
+    launched_argvs: list[list[str]] = []
+
+    def _record_confirm(text: str, **kwargs) -> bool:
+        prompts.append((os.environ.get("RANK", "launcher"), text))
+        return True
+
+    def _fake_run_launcher(argv: list[str]) -> int:
+        launched_argvs.append(list(argv))
+        train_args = argv[argv.index("train"):]
+        for rank in ("0", "1", "2"):
+            with monkeypatch.context() as rank_mp:
+                rank_mp.setenv("RANK", rank)
+                rank_mp.setenv("LOCAL_RANK", rank)
+                rank_mp.setenv("WORLD_SIZE", "3")
+                rank_res = CliRunner().invoke(app, train_args)
+                assert isinstance(rank_res.exception, _DatasetLoadReachedError), (
+                    _output(rank_res),
+                    repr(rank_res.exception),
+                )
+        return 0
+
+    monkeypatch.setattr(typer, "confirm", _record_confirm)
+    monkeypatch.setattr(launcher, "run_launcher", _fake_run_launcher)
+
+    result = CliRunner().invoke(
+        app, ["train", "--config", str(config), "--gpus", "3"],
+    )
+
+    assert result.exit_code == 0, (_output(result), repr(result.exception))
+    assert prompts == [("launcher", "Start training?")]
+    assert len(launched_argvs) == 1
+    assert "--yes" in launched_argvs[0]
+    loader, builder = loading_spies
+    assert loader.call_count == 3
+    builder.assert_not_called()
+
+
+def test_train_gpus_on_tty_declining_confirm_cancels_before_launcher(
+    tmp_path: Path, monkeypatch, loading_spies,
+) -> None:
+    _setup_multi_gpu_env(monkeypatch, gpu_count=4)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("soup_cli.commands.train._stdin_isatty", lambda: True)
+    config = _write_config(tmp_path)
+
+    prompts: list[str] = []
+    launched_argvs: list[list[str]] = []
+    monkeypatch.setattr(
+        typer, "confirm", lambda text, **kw: prompts.append(text) or False,
+    )
+    monkeypatch.setattr(
+        launcher, "run_launcher", lambda argv: launched_argvs.append(list(argv)) or 0,
+    )
+
+    result = CliRunner().invoke(
+        app, ["train", "--config", str(config), "--gpus", "4"],
+    )
+
+    output = _output(result)
+    assert result.exit_code == 0, (output, repr(result.exception))
+    assert prompts == ["Start training?"]
+    assert "Cancelled." in output
+    assert launched_argvs == []
+    loader, builder = loading_spies
+    loader.assert_not_called()
+    builder.assert_not_called()
+
+
+def test_train_gpus_without_tty_and_without_yes_exits_usage_error_before_launcher(
+    tmp_path: Path, monkeypatch, loading_spies,
+) -> None:
+    _setup_multi_gpu_env(monkeypatch, gpu_count=4)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("soup_cli.commands.train._stdin_isatty", lambda: False)
+    config = _write_config(tmp_path)
+
+    launched_argvs: list[list[str]] = []
+    monkeypatch.setattr(
+        launcher, "run_launcher", lambda argv: launched_argvs.append(list(argv)) or 0,
+    )
+
+    result = CliRunner().invoke(
+        app, ["train", "--config", str(config), "--gpus", "4"],
+    )
+
+    output = _output(result)
+    assert result.exit_code == 3, (output, repr(result.exception))
+    assert "stdin is not a TTY" in output
+    assert "--yes" in output
+    assert launched_argvs == []
+    loader, builder = loading_spies
+    loader.assert_not_called()
+    builder.assert_not_called()
+
+
+def test_train_gpus_with_yes_or_dry_run_skips_confirm(
+    tmp_path: Path, monkeypatch, loading_spies,
+) -> None:
+    _setup_multi_gpu_env(monkeypatch, gpu_count=4)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("soup_cli.commands.train._stdin_isatty", lambda: False)
+    config = _write_config(tmp_path)
+
+    prompts: list[str] = []
+    launched_argvs: list[list[str]] = []
+    monkeypatch.setattr(
+        typer, "confirm", lambda text, **kw: prompts.append(text) or True,
+    )
+    monkeypatch.setattr(
+        launcher, "run_launcher", lambda argv: launched_argvs.append(list(argv)) or 0,
+    )
+
+    yes_res = CliRunner().invoke(
+        app, ["train", "--config", str(config), "--gpus", "4", "--yes"],
+    )
+    assert yes_res.exit_code == 0, (_output(yes_res), repr(yes_res.exception))
+    assert prompts == []
+    assert len(launched_argvs) == 1
+    assert "--yes" in launched_argvs[0]
+
+    loader, builder = loading_spies
+    loader.side_effect = None
+    loader.return_value = {"train": [{"text": "sample"}]}
+
+    dry_res = CliRunner().invoke(
+        app, ["train", "--config", str(config), "--gpus", "4", "--dry-run"],
+    )
+    assert dry_res.exit_code == 0, (_output(dry_res), repr(dry_res.exception))
+    assert prompts == []
+    assert len(launched_argvs) == 1
+    loader.assert_called_once()
     builder.assert_not_called()
