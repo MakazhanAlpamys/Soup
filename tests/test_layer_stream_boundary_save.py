@@ -373,6 +373,7 @@ def test_public_reload_preserves_runtime_device_without_auto_redispatch(
                 "torch_device": "cpu", "device_map": {"": "cpu"},
             }
             fresh.load_adapter(checkpoint, adapter_name="default", is_trainable=True, **options)
+        assert fresh.training
         assert dispatched == [{"": "cpu"}]
         assert fresh.hf_device_map == {"": "cpu"}
         assert fresh_runtime.device == "cpu"
