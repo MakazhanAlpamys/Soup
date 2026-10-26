@@ -1,5 +1,6 @@
 """Narrowing dispatch must preserve cache mutation checks and every update."""
 from unittest.mock import patch
+from weakref import WeakKeyDictionary
 
 import pytest
 
@@ -7,7 +8,9 @@ from tests.test_stream_projection_retention import _helper, _mistral_stream
 
 
 @pytest.mark.parametrize("quant", ["none", "nf4"])
-def test_projection_scope_matches_native_and_layer_scope_with_fewer_dispatches(tmp_path, quant):
+def test_projection_scope_matches_native_and_layer_scope_with_fewer_dispatches(
+    tmp_path, quant, monkeypatch,
+):
     import torch
     import torch.utils.checkpoint as checkpoint
 
@@ -15,6 +18,16 @@ def test_projection_scope_matches_native_and_layer_scope_with_fewer_dispatches(t
 
     helper = _helper()
     results, dispatches = {}, {}
+    entered = WeakKeyDictionary()
+    original_enter = checkpoint._CachedTorchDispatchMode.__enter__
+
+    def enter_once(mode):
+        # Pin the 2.14 cursor-reset constraint even on older local PyTorch.
+        assert mode not in entered, "each selective replay mode must be entered once"
+        entered[mode] = True
+        return original_enter(mode)
+
+    monkeypatch.setattr(checkpoint._CachedTorchDispatchMode, "__enter__", enter_once)
     for mode in ("native", "layer", "projection"):
         model, runtime = _mistral_stream(tmp_path / mode, quant)
         controller = None

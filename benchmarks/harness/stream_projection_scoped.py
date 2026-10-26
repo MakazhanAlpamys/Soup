@@ -66,8 +66,10 @@ class ProjectionScopedCheckpoint(_legacy.SelectiveCheckpoint):
             return CheckpointPolicy.PREFER_RECOMPUTE
 
         @contextmanager
-        def bind(mode: Any, recomputing: bool) -> Any:
-            mode_token = self._mode.set(mode)
+        def bind(scope: Any, recomputing: bool) -> Any:
+            if recomputing:
+                scope["next"] = 0
+            mode_token = self._mode.set(scope)
             recompute_token = self._recomputing.set(recomputing)
             try:
                 yield
@@ -76,10 +78,14 @@ class ProjectionScopedCheckpoint(_legacy.SelectiveCheckpoint):
                 self._mode.reset(mode_token)
 
         def contexts() -> Any:
-            modes = create_selective_checkpoint_contexts(policy_fn)
             self._modes = [ref for ref in self._modes if ref() is not None]
+            scope = {"replay_modes": [], "next": 0}
+            return bind(scope, False), bind(scope, True)
+
+        def projection_context() -> Any:
+            modes = create_selective_checkpoint_contexts(policy_fn)
             self._modes.append(weakref.ref(modes[1]))
-            return bind(modes[0], False), bind(modes[1], True)
+            return modes
 
         def layer_forward(instance: Any, hidden_states: Any, *args: Any, **kwargs: Any) -> Any:
             from torch.utils.checkpoint import checkpoint
@@ -92,17 +98,28 @@ class ProjectionScopedCheckpoint(_legacy.SelectiveCheckpoint):
             return instance._body(hidden_states, *args, **kwargs)
 
         for projection in projections:
-            self._patch(projection, self._scoped_forward(projection.forward))
+            self._patch(projection, self._scoped_forward(projection.forward, projection_context))
         for layer in layers:
             self._patch(layer, layer_forward)
 
-    def _scoped_forward(self, original: Any) -> Any:
+    def _scoped_forward(self, original: Any, projection_context: Any) -> Any:
         def forward(instance: Any, *args: Any, **kwargs: Any) -> Any:
-            mode = self._mode.get()
-            if mode is None:
+            scope = self._mode.get()
+            if scope is None:
                 return original(*args, **kwargs)
             if self._recomputing.get():
                 self.counts["recompute_projection_calls"] += 1
+                index = scope["next"]
+                if index >= len(scope["replay_modes"]):
+                    raise RuntimeError("projection replay has no matching forward cache")
+                mode = scope["replay_modes"][index]
+                scope["next"] += 1
+            else:
+                # PyTorch 2.14 resets a replay mode's operation cursor on entry.
+                # Give each base call its own mode instead of re-entering one
+                # layer-wide mode for Q, K, V and O. Never modify that cursor.
+                mode, replay = projection_context()
+                scope["replay_modes"].append(replay)
             with mode:
                 return original(*args, **kwargs)
 
