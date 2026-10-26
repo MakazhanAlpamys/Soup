@@ -1613,7 +1613,7 @@ output: ./output
         cfg = load_config_from_string(text.replace("  quantization: none\n",
                                                    "  quantization: none\n  use_galore: true\n"))
         MLXGRPOTrainerWrapper(cfg)._check_unsupported()
-        printed = buffer.getvalue()
+        printed = _plain(buffer.getvalue())
         assert "MLX backend ignores: GaLore" in printed and "chat_template" not in printed
 
     def test_mlx_trainers_on_the_dpo_helpers_declare_what_those_read(self):
@@ -1761,7 +1761,7 @@ class TestHeldOutPrompts:
         buffer = StringIO()
         monkeypatch.setattr(mlx_grpo, "console", Console(file=buffer, width=400))
         _wrapper(tmp_path, monkeypatch, val=_prompt_rows(3, prefix="v")).train()
-        text = " ".join(buffer.getvalue().split())
+        text = _plain(buffer.getvalue())
         assert ("MLX GRPO: 3 prompt(s) are held out for validation (data.val_split=0.1; "
                 "on backend: mlx the loader always holds the split out)") in text
         assert ("Set data.val_split: 0 to train on every prompt, as transformers GRPO does "
@@ -1777,7 +1777,7 @@ class TestHeldOutPrompts:
         buffer = StringIO()
         monkeypatch.setattr(mlx_grpo, "console", Console(file=buffer, width=400))
         _wrapper(tmp_path, monkeypatch, train=_prompt_rows(1)).train()
-        assert "held out" not in buffer.getvalue()
+        assert "held out" not in _plain(buffer.getvalue())
 
     def test_batch_size_auto_names_the_group(self, monkeypatch):
         from io import StringIO
@@ -1790,7 +1790,7 @@ class TestHeldOutPrompts:
         monkeypatch.setattr(mlx_grpo, "console", Console(file=buffer, width=400))
         _setup_wrapper(monkeypatch, batch_size="auto")._prepare({"train": _prompt_rows(2)})
         assert ("training.batch_size auto (1 on MLX) is below num_generations=4; using one "
-                "group, 4 completions per micro-step") in buffer.getvalue()
+                "group, 4 completions per micro-step") in _plain(buffer.getvalue())
 
 
 class TestSavingAndTheRunRecord:
