@@ -172,7 +172,7 @@ class TestGuardsStillRefuse:
     def test_remote_http_still_refused(self):
         from soup_cli.eval.gate import _parse_judge_url
 
-        with pytest.raises(ValueError, match="unsupported scheme"):
+        with pytest.raises(ValueError, match="host that is not loopback"):
             _parse_judge_url("http://example.com/model")
 
     def test_prefix_bypass_still_refused(self):
