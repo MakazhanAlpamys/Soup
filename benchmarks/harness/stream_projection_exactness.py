@@ -46,7 +46,7 @@ def check_steps(reference: list, candidate: list) -> None:
         raise RuntimeError("full-model bit-exact gate failed")
 
 
-def main() -> int:
+def main(after_exactness: Any = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--weights", type=Path, required=True)
     parser.add_argument("--shards", type=Path, required=True)
@@ -57,6 +57,8 @@ def main() -> int:
     parser.add_argument("--reference", type=Path)
     parser.add_argument("--profile", action="store_true")
     args = parser.parse_args()
+    if after_exactness is not None and (not args.reference or args.profile):
+        raise ValueError("timing continuation requires a reference and no active profiler")
     if args.out.exists():
         raise FileExistsError("preserve the previous exactness attempt")
     census = json.loads(args.census.read_text())
@@ -199,6 +201,10 @@ def main() -> int:
                 raise RuntimeError("invalid exactness reference")
             check_steps(reference["steps"], state["steps"])
             state["reference_sha256"] = hashlib.sha256(args.reference.read_bytes()).hexdigest()
+        # The measurement driver continues these same states after two verified
+        # warm-up updates; ordinary gate runs never enter this branch.
+        if after_exactness is not None:
+            after_exactness(model, optimizer, ids, labels, state)
         state["status"] = "ok"
         console.print({key: state[key] for key in (
             "status", "arm", "shape", "optimizer_updates", "cache_bytes", "peak_reserved",
