@@ -55,6 +55,7 @@ def main(after_exactness: Any = None) -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--arm", choices=("auto", "qkvo"), required=True)
     parser.add_argument("--allocation", choices=("native", "kminus1"), default="native")
+    parser.add_argument("--cache-scope", choices=("layer", "projection"), default="layer")
     parser.add_argument("--reference", type=Path)
     parser.add_argument("--profile", action="store_true")
     args = parser.parse_args()
@@ -126,7 +127,7 @@ def main(after_exactness: Any = None) -> int:
         quant="nf4", double_quant=True, tier="ram",
     )
     state = dict(status="running", arm=args.arm, allocation=args.allocation,
-                 shape=[1, seq], profile=args.profile,
+                 cache_scope=args.cache_scope, shape=[1, seq], profile=args.profile,
                  steps=[], admission=admission, optimizer_updates=0,
                  census_sha256=hashlib.sha256(args.census.read_bytes()).hexdigest(),
                  shard_index_sha256=index_hash, cap_bytes=cap)
@@ -165,7 +166,9 @@ def main(after_exactness: Any = None) -> int:
         state["plan"] = plan
         retained = [(layer, layer.forward) for layer in layers if not layer.recompute]
         if args.arm == "qkvo":
-            controller = install_subset(model, plan["selected_indices"])
+            controller = install_subset(
+                model, plan["selected_indices"], cache_scope=args.cache_scope,
+            )
             if controller is None:
                 raise RuntimeError("no QKVO layers fit")
         if any(layer.forward != forward for layer, forward in retained):

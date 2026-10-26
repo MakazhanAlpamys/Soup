@@ -38,6 +38,7 @@ def main() -> int:
                    verified_initial_updates=2, initial_reference_sha256=state["reference_sha256"],
                    shape=state["shape"], arm=state["arm"], cap_bytes=cap,
                    allocation=state["allocation"], effective_k=state["effective_k"],
+                   cache_scope=state["cache_scope"],
                    native=state["native"], plan=state["plan"],
                    step_times_s=[], losses=[], clock="time.perf_counter",
                    optimizer="PagedAdamW8bit")

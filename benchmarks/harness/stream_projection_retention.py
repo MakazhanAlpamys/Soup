@@ -165,9 +165,11 @@ def reallocated_projection_plan(
     return result
 
 
-def install_subset(model: Any, indices: list[int]) -> Any:
+def install_subset(model: Any, indices: list[int], *, cache_scope: str = "layer") -> Any:
     from soup_cli.utils.layer_stream_runtime import streamed_decoder_layers
 
+    if cache_scope not in ("layer", "projection"):
+        raise ValueError("unknown selective cache scope")
     layers = streamed_decoder_layers(model)
     if any(type(index) is not int for index in indices) or len(indices) != len(set(indices)):
         raise ValueError("selected layer indices must be unique integers")
@@ -185,7 +187,9 @@ def install_subset(model: Any, indices: list[int]) -> Any:
             for layer in selected:
                 visitor(layer)
 
-    path = Path(__file__).with_name("stream_selective_checkpoint.py")
+    filename = ("stream_selective_checkpoint.py" if cache_scope == "layer"
+                else "stream_projection_scoped.py")
+    path = Path(__file__).with_name(filename)
     spec = importlib.util.spec_from_file_location("projection_subset_checkpoint", path)
     helper = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(helper)
