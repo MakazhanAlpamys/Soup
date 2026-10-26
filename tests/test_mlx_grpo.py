@@ -168,6 +168,12 @@ class TestUnits:
         assert a == b and a != c
         assert a[:6] != a[6:]
 
+    def test_exactly_one_update_of_prompts_trains(self):
+        from soup_cli.trainer.mlx_grpo import plan_prompt_updates
+
+        plan = plan_prompt_updates(n_prompts=3, prompts_per_update=3, epochs=2, seed=0)
+        assert len(plan) == 2 and all(sorted(chunk) == [0, 1, 2] for chunk in plan)
+
     def test_fewer_prompts_than_one_update_are_refused(self):
         from soup_cli.trainer.mlx_grpo import plan_prompt_updates
 
@@ -1445,7 +1451,9 @@ output: ./output
         ("echo_trap_enabled: true", "training.echo_trap_enabled is not applied"),
         ("rl_checkpoint_save_every_steps: 5", "rl_checkpoint_save_every_steps is not applied"),
         ("curriculum: true", "training.curriculum is not applied"),
-        ("grpo_variant: gspo", "grpo_variant is not supported on backend=mlx"),
+        ("grpo_variant: gspo", "grpo_variant is not supported on backend=mlx: MLX GRPO trains "
+         "TRL's default objective (loss_type='dapo') only. Remove training.grpo_variant, or "
+         "use backend: transformers."),
         ("prm_reward: ./prm", "prm_reward requires backend='transformers'"),
         ("vllm_sleep_mode: true", "vllm_sleep_mode requires backend"),
         ("use_lorafa: true", "use_lorafa requires backend='transformers'"),
@@ -1541,8 +1549,13 @@ output: ./output
                                               use_ring_attention=False)
 
     def test_reward_verifiable_is_refused(self):
-        with pytest.raises(Exception, match="reward_fn='verifiable' is not supported"):
+        with pytest.raises(Exception) as info:
             _config(reward_fn="verifiable", verifiable_domain="math")
+        message = _plain(str(info.value))
+        assert ("training.reward_fn='verifiable' is not supported by task='grpo' on "
+                "backend='mlx': MLX GRPO scores with the built-in 'accuracy' or 'format' "
+                "reward only. Use one of them, or backend: transformers.") in message
+        assert "does not load custom reward files" not in message
 
     @pytest.mark.parametrize("extra", [""])
     def test_vision_modality_is_refused(self, extra):
@@ -1992,13 +2005,13 @@ class TestUpdateBookkeeping:
                 "clip_region": 3.0}
         common = dict(loss=0.5, rewards=[1.0, 0.0, 0.5, 0.5], group=2, reward_name="format",
                       completions=[[5, EOS], [5, 6, 7], [EOS], [5, 6, 7, 8]],
-                      terminated=[True, False, True, False], sums=sums, num_items=10.0,
+                      terminated=[True, False, False, False], sums=sums, num_items=10.0,
                       skipped=1)
         metrics = update_metrics(beta=0.1, **common)
         assert metrics["kl"] == pytest.approx(0.2)
         assert (metrics["clip_ratio/low_mean"], metrics["clip_ratio/high_mean"],
                 metrics["clip_ratio/region_mean"]) == pytest.approx((0.1, 0.2, 0.3))
-        assert metrics["completions/clipped_ratio"] == 0.5
+        assert metrics["completions/clipped_ratio"] == 0.75  # completions without EOS
         assert (metrics["completions/mean_length"], metrics["completions/min_length"],
                 metrics["completions/max_length"]) == (2.5, 1.0, 4.0)
         assert metrics["frac_reward_zero_std"] == 0.5 and metrics["skipped_steps"] == 1
