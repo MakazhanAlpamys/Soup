@@ -70,10 +70,11 @@ MASK_TRUNCATED_COMPLETIONS = False
 
 #: The refusal behind ``--resume`` for this task on this backend.
 RESUME_REFUSAL = (
-    "--resume is not supported for task 'grpo' on backend 'mlx' yet (#1977): a "
-    "GRPO run's state is its adapter, optimizer moments, step count and prompt "
-    "order, and this backend saves only the adapter, so a restart would not "
-    "continue the same run. Start a fresh run, or use backend: transformers."
+    "--resume is not supported for task 'grpo' on backend 'mlx': resume is not "
+    "implemented for MLX GRPO. A GRPO run's state is its adapter, optimizer "
+    "moments, step count and prompt order, and this backend saves only the "
+    "adapter, so a restart would not continue the same run. Start a fresh run, "
+    "or use backend: transformers."
 )
 
 

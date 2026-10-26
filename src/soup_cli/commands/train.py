@@ -113,7 +113,7 @@ def _resume_refusal(cfg: "SoupConfig", flag: str) -> str | None:
     if cfg.task in UNSUPPORTED_RESUME_TASKS:
         return f"{flag} is not supported for task {cfg.task!r}"
     if cfg.task == "grpo" and cfg.backend == "mlx":
-        # #1977: the native MLX GRPO loop saves the adapter only. The message
+        # #1976: the native MLX GRPO loop saves the adapter only. The message
         # lives with the trainer (imported lazily: it pulls in mlx-free code only).
         from soup_cli.trainer.mlx_grpo import RESUME_REFUSAL
 

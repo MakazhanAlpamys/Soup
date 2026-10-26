@@ -545,9 +545,9 @@ The loader does not auto-detect bare `{"prompt", "answer"}` rows; use `messages`
   RL-checkpoint and curriculum settings, `eval_steps`, vLLM options and layer
   streaming.
 - **Refused at launch or after the load:** `--deepspeed` / `--fsdp`, and
-  `--resume` / `--hf-resume`, because only the adapter is saved (#1977). A base
-  that loads quantized is refused right after the load. 4-bit bases come in a
-  follow-up. `quantization: 4bit` is Soup's default and, on MLX, only names a
+  `--resume` / `--hf-resume`: only the adapter is saved, and resume is not
+  implemented for MLX GRPO. A base that loads quantized is refused right after
+  the load. 4-bit bases come in a follow-up. `quantization: 4bit` is Soup's default and, on MLX, only names a
   pre-quantized base, so a dense base trains with it.
 
 #### DoRA on MLX

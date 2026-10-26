@@ -85,13 +85,13 @@ def _forwards_resume(func: ast.FunctionDef) -> bool:
 
 #: Wrappers allowed to refuse ``--resume`` inside ``train()``: a task refused on
 #: one backend only. Keep this list explicit; a new entry needs a reason.
-_BODY_REFUSAL_ALLOWED = frozenset({"mlx_grpo.py"})  # #1977: MLX saves the adapter only
+_BODY_REFUSAL_ALLOWED = frozenset({"mlx_grpo.py"})  # #1976: MLX GRPO saves the adapter only
 
 
 def _refuses_resume(func: ast.FunctionDef) -> bool:
     """The body tests ``resume_from_checkpoint`` and raises: an explicit refusal.
 
-    For a task refused on one backend only (MLX GRPO, #1977), where
+    For a task refused on one backend only (MLX GRPO, #1976), where
     ``UNSUPPORTED_RESUME_TASKS`` would also refuse the other backend's resume.
     """
     for stmt in func.body:
@@ -109,7 +109,7 @@ def _refuses_resume(func: ast.FunctionDef) -> bool:
 
 
 def _handles_resume(file_name: str, func: ast.FunctionDef) -> bool:
-    """Forwards the checkpoint, or (MLX GRPO only, #1977) refuses it in its body."""
+    """Forwards the checkpoint, or (MLX GRPO only, #1976) refuses it in its body."""
     if _forwards_resume(func):
         return True
     return file_name in _BODY_REFUSAL_ALLOWED and _refuses_resume(func)

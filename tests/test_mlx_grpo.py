@@ -1228,7 +1228,7 @@ class TestTraining:
 
     def test_resume_is_refused(self, tmp_path, monkeypatch):
         wrapper = _wrapper(tmp_path, monkeypatch)
-        with pytest.raises(ValueError, match="#1977"):
+        with pytest.raises(ValueError, match="resume is not implemented for MLX GRPO"):
             wrapper.train(resume_from_checkpoint=str(tmp_path / "x.safetensors"))
 
     def test_a_quantized_base_is_refused(self, tmp_path, monkeypatch):
@@ -1646,7 +1646,30 @@ output: ./output
 
         with pytest.raises(typer.Exit):
             _resolve_resume_or_exit("auto", _config())
-        assert "#1977" in capsys.readouterr().out
+        assert ("--resume is not supported for task 'grpo' on backend 'mlx': resume is not "
+                "implemented for MLX GRPO.") in _plain(capsys.readouterr().out)
+
+    @pytest.mark.parametrize("args, flag", [
+        (["--resume", "auto"], "--resume"),
+        (["--hf-resume", "--push-as", "org/repo"], "--hf-resume"),
+    ])
+    def test_train_refuses_each_resume_flag(self, tmp_path, monkeypatch, args, flag):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.trainer.mlx_grpo import RESUME_REFUSAL
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "x.jsonl").write_text(
+            "".join(json.dumps(row) + "\n" for row in _prompt_rows(8)), encoding="utf-8")
+        (tmp_path / "soup.yaml").write_text(_GRPO_YAML, encoding="utf-8")
+        result = CliRunner().invoke(app, ["train", "--config", "soup.yaml", *args, "--yes"])
+        output = _plain(result.output)
+        assert result.exit_code == 1, output
+        assert (f"{flag} is not supported for task 'grpo' on backend 'mlx': resume is not "
+                "implemented for MLX GRPO.") in output
+        assert _plain(RESUME_REFUSAL.replace("--resume", flag, 1)) in output
+        assert "#1977" not in RESUME_REFUSAL
 
 
 # --------------------------------------------------------------------------
