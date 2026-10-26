@@ -516,7 +516,9 @@ The loader does not auto-detect bare `{"prompt", "answer"}` rows; use `messages`
   prompts were held out at the start. Those prompts are not trained on; they
   are scored once after training, `num_generations` completions each, at
   temperature 1 in eval mode (LoRA dropout off), seeded from `training.seed`,
-  with no parameter change, and reported as `val_reward`. MLX GRPO refuses
+  with no parameter change, and reported as `val_reward`: printed, returned
+  in the run's result and logged to the run's metrics at the last update's
+  step, on its own row with no training loss. MLX GRPO refuses
   `training.eval_steps`. Set `data.val_split: 0` to train on every row, as the
   transformers path does without `eval_steps`.
 - **Reported per update:** loss, reward mean and sample std, per-reward mean

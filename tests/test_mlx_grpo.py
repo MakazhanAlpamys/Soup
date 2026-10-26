@@ -1827,6 +1827,41 @@ class TestSavingAndTheRunRecord:
             wrapper.train()
         assert not list((tmp_path / "output").glob("*.safetensors"))
 
+    def test_the_val_reward_row(self):
+        from soup_cli.trainer.mlx_grpo import log_val_reward
+
+        rows: list = []
+
+        class Tracker:
+            def log_metrics(self, **row):
+                rows.append(row)
+
+        log_val_reward(Tracker(), "run-1", step=4, epoch=1.0, lr=0.01, val_reward=0.5)
+        log_val_reward(Tracker(), None, step=4, epoch=1.0, lr=0.01, val_reward=0.5)
+        log_val_reward(None, "run-1", step=4, epoch=1.0, lr=0.01, val_reward=0.5)
+        assert rows == [{"run_id": "run-1", "step": 4, "epoch": 1.0, "loss": None,
+                         "lr": 0.01, "val_reward": 0.5}]
+
+        class Broken:
+            def log_metrics(self, **row):
+                raise RuntimeError("db locked")
+
+        log_val_reward(Broken(), "run-1", step=4, epoch=1.0, lr=0.01, val_reward=0.5)
+
+    def test_training_logs_the_val_reward_to_the_tracker(self, tmp_path, monkeypatch):
+        rows: list = []
+
+        class Tracker:
+            def log_metrics(self, **row):
+                rows.append(row)
+
+        wrapper = _wrapper(tmp_path, monkeypatch, val=_prompt_rows(3, prefix="v"))
+        result = wrapper.train(tracker=Tracker(), run_id="run-1")
+        last = rows[-1]
+        assert (last["step"], last["loss"], last["val_reward"]) == (
+            result["total_steps"], None, result["val_reward"])
+        assert all(row.get("val_reward") is None for row in rows[:-1])
+        assert sum(row["loss"] is not None for row in rows) >= 1
 
 
 class TestAdapterCoverage:

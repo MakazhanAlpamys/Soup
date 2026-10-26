@@ -201,6 +201,22 @@ def write_atomically(path: Path, write: Callable[[str], None]) -> None:
         partial.unlink(missing_ok=True)
 
 
+def log_val_reward(tracker: Any, run_id: Optional[str], *, step: int, epoch: float,
+                   lr: float, val_reward: float) -> None:
+    """The held-out reward as the run's ``val_reward`` row, as transformers GRPO logs it.
+
+    Its own row at the last update's step, with no training loss: the update's
+    loss was logged on its own row already.
+    """
+    if tracker is None or not run_id:
+        return
+    try:
+        tracker.log_metrics(run_id=run_id, step=step, epoch=epoch, loss=None, lr=lr,
+                            val_reward=float(val_reward))
+    except Exception:  # noqa: BLE001 — telemetry must not kill a run
+        pass
+
+
 # --------------------------------------------------------------------------
 # Rewards and advantages
 # --------------------------------------------------------------------------
@@ -953,6 +969,9 @@ class MLXGRPOTrainerWrapper(MLXDPOTrainerWrapper):
         if val is not None:
             result.update(val)
             console.print(f"[dim]MLX GRPO: validation reward {val['val_reward']:.4f}[/]")
+            log_val_reward(tracker, run_id, step=total_updates,
+                           epoch=total_updates / per_epoch,
+                           lr=self._current_lr(optimizer, tcfg.lr), val_reward=val["val_reward"])
         if self._skipped:
             console.print(
                 f"[yellow]MLX GRPO: {self._skipped} of {total_updates} update(s) skipped on a "
