@@ -289,14 +289,21 @@ def test_a_meta_device_context_still_works_after_the_build(twin, tmp_path, quant
     import os
     import subprocess
     import sys
+    from pathlib import Path
 
     if quant == "nf4":
         pytest.importorskip("bitsandbytes")
     script = tmp_path / "check.py"
     script.write_text(_FRESH_PROCESS_CHECK, encoding="utf-8")
-    env = dict(os.environ, CUDA_VISIBLE_DEVICES="-1")
+    # The child imports this tree's soup_cli, not an installed copy.
+    src = Path(__file__).resolve().parents[1] / "src"
+    env = dict(os.environ, CUDA_VISIBLE_DEVICES="-1", PYTHONPATH=str(src))
     done = subprocess.run(
-        [sys.executable, str(script), twin, quant], capture_output=True, text=True, env=env
+        [sys.executable, str(script), twin, quant],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=300,
     )
 
     assert done.returncode == 0, done.stderr[-2000:]
