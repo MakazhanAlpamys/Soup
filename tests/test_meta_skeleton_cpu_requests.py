@@ -273,8 +273,10 @@ import sys
 
 import torch
 
+import soup_cli
 from soup_cli.utils.layer_stream_runtime import build_meta_skeleton
 
+print(soup_cli.__file__)
 build_meta_skeleton(sys.argv[1], dtype="bfloat16", quant=sys.argv[2])
 with torch.device("meta"):
     made = [torch.empty(2, 2), torch.zeros(2, 2), torch.ones(2, 2), torch.full((2, 2), 1.0)]
@@ -307,4 +309,8 @@ def test_a_meta_device_context_still_works_after_the_build(twin, tmp_path, quant
     )
 
     assert done.returncode == 0, done.stderr[-2000:]
-    assert done.stdout.split() == ["meta"] * 4
+    lines = done.stdout.splitlines()
+    assert os.path.commonpath(
+        [os.path.realpath(lines[0]), os.path.realpath(src)]
+    ) == os.path.realpath(src), lines[0]
+    assert lines[-1].split() == ["meta"] * 4
