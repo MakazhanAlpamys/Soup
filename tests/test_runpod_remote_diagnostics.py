@@ -7,10 +7,12 @@ import json
 import subprocess
 import sys
 import types
+import unicodedata
 from pathlib import Path
 
 import pytest
 
+from soup_cli.utils.terminal import strip_control
 from tests.test_runpod_cloud import FAKE_TOOL_DIR, _controller
 
 
@@ -66,7 +68,8 @@ def test_failed_run_prints_literal_sanitized_stderr_before_deleting(controller):
     tail = _tail(events)
     assert "pip failure" in tail
     assert "[bold]Fatal error[/bold]" in tail
-    assert not any(ord(char) < 0x20 and char != "\n" for char in tail)
+    assert not any(ord(char) < 0x20 and char not in "\t\n\r" for char in tail)
+    assert "\t" in tail
     assert not any(0x7F <= ord(char) <= 0x9F for char in tail)
     assert "\u202e" not in tail and "\u200b" not in tail
     tail_index = next(index for index, event in enumerate(events) if "stderr tail" in event[1])
@@ -94,6 +97,97 @@ def test_stderr_tail_caps_utf8_bytes_without_losing_the_last_error(controller):
     assert tail.endswith(marker)
     assert "discard-this-prefix" not in tail
     assert 49_900 <= len(tail.encode("utf-8")) <= 50_000
+
+
+def test_stderr_tail_uses_the_shared_terminal_character_policy(controller):
+    # Include every Unicode format character, C0/C1, and the line separators;
+    # a category-wide filter also strips legitimate characters the policy keeps.
+    chars = "".join(
+        chr(code)
+        for code in range(sys.maxunicode + 1)
+        if code < 0xA0 or unicodedata.category(chr(code)) in {"Cf", "Zl", "Zp"}
+    )
+    raw = "start" + chars + "\nArabic joiners: \u200c\u200d\tend"
+    rc, events, _ = _run_controller(controller, stderr=raw)
+    assert rc == 1
+    assert _tail(events) == "\n".join(strip_control(raw).splitlines()[-50:])
+
+
+def test_rendered_controller_carries_updates_to_the_shared_terminal_policy(monkeypatch):
+    from soup_cli.utils import terminal
+
+    monkeypatch.setitem(terminal._CONTROL_STRIP_TABLE, ord("\u2603"), None)
+    ns = _controller()
+    notices = []
+    ns["_notice"] = notices.append
+    ns["_print_remote_stderr_tail"]("before\u2603after")
+    assert notices == ["RunPod remote stderr tail (last 50 lines):\nbeforeafter"]
+
+
+@pytest.mark.parametrize(
+    ("url", "safe_url"),
+    [
+        (
+            "https://alice:private-password@packages.example/simple",
+            "https://<redacted>@packages.example/simple",
+        ),
+        (
+            "https://private-token@packages.example/simple",
+            "https://<redacted>@packages.example/simple",
+        ),
+        (
+            "HTTPS://alice:p%40ss%3Aword@packages.example:8443/simple",
+            "HTTPS://<redacted>@packages.example:8443/simple",
+        ),
+        (
+            "https://alice:p@ss@packages.example/simple",
+            "https://<redacted>@packages.example/simple",
+        ),
+        (
+            "https://alice:pass@[2001:db8::1]:8443/simple",
+            "https://<redacted>@[2001:db8::1]:8443/simple",
+        ),
+        ("https://packages.example/simple", "https://packages.example/simple"),
+        ("https://packages.example/files/a@b.whl", "https://packages.example/files/a@b.whl"),
+    ],
+    ids=[
+        "password",
+        "token-user",
+        "encoded-password",
+        "at-in-password",
+        "ipv6",
+        "public-url",
+        "at-in-path",
+    ],
+)
+def test_stderr_tail_redacts_url_credentials_before_deletion(controller, url, safe_url):
+    rc, events, _ = _run_controller(
+        controller, stderr=f"pip install failed: '{url}'\nRetry exhausted"
+    )
+    assert rc == 1
+    assert _tail(events) == f"pip install failed: '{safe_url}'\nRetry exhausted"
+    assert ("notice", "RunPod termination verified.") in events
+
+
+@pytest.mark.parametrize(
+    "secret",
+    ["hf_" + "a" * 25, "sk-" + "b" * 25, "api_key=" + "c" * 25, "Bearer " + "d" * 25],
+)
+def test_stderr_tail_redacts_common_token_shapes(controller, secret):
+    rc, events, _ = _run_controller(controller, stderr=f"Authentication failed: {secret}\nFatal")
+    assert rc == 1
+    assert _tail(events) == "Authentication failed: <redacted>\nFatal"
+
+
+def test_stderr_tail_redacts_before_byte_truncation_and_after_control_removal(controller):
+    raw = "https://user:" + "private-password" * 4_000 + "@packages.example/simple\nFatal"
+    raw += "\nhttps://user:private\x1b-password@packages.example/simple"
+    rc, events, _ = _run_controller(controller, stderr=raw)
+    assert rc == 1
+    tail = _tail(events)
+    assert "private" not in tail and "password" not in tail
+    assert tail.count("https://<redacted>@packages.example/simple") == 2
+    assert "Fatal" in tail
 
 
 @pytest.mark.parametrize("stderr", [None, ""])
@@ -152,10 +246,22 @@ def _remote_script() -> str:
     ("returncode", "log"),
     [
         (7, b"\n".join(f"line-{index:03}".encode() for index in range(100))),
-        (7, b"prefix-" + b"z" * 60_000 + b"FatalTrainingError"),
+        (7, b"prefix-" + b"z" * 60_000 + b"\nFatalTrainingError"),
+        (7, b"https://user:" + b"private-password" * 4_000 + b"@index.example/simple\nFatal"),
+        (7, b"z" * 49_994 + b"\nFatal"),
+        (7, b"discard\n" + b"z" * 49_994 + b"\nFatal"),
+        (7, b"z" * 60_000),
         (0, b"not a failed run"),
     ],
-    ids=["fifty-lines", "fifty-thousand-bytes", "success-control"],
+    ids=[
+        "fifty-lines",
+        "fifty-thousand-bytes",
+        "cut-credential",
+        "exact-byte-cap",
+        "complete-line-at-byte-cap",
+        "only-partial-line",
+        "success-control",
+    ],
 )
 def test_remote_script_emits_a_bounded_train_log_on_failure(tmp_path, returncode, log):
     script = _remote_script()
@@ -187,7 +293,11 @@ def test_remote_script_emits_a_bounded_train_log_on_failure(tmp_path, returncode
     stderr = completed.stderr
     assert stderr.startswith(b"pip output\n")
     tail = stderr.removeprefix(b"pip output\n")
-    expected = b"\n".join(log[-50_000:].splitlines()[-50:]) if returncode else b""
+    complete_tail = log[-50_000:]
+    if len(log) > 50_000 and log[-50_001:-50_000] != b"\n":
+        complete_tail = complete_tail.partition(b"\n")[2]
+    expected = b"\n".join(complete_tail.splitlines()[-50:]) if returncode else b""
     assert tail == expected
+    assert b"private-password" not in tail
     assert len(tail) <= 50_000
     assert len(tail.splitlines()) <= 50

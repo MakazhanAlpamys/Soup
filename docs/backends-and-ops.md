@@ -779,7 +779,11 @@ window remains unimplemented.
 
 When a remote command exits nonzero, the controller prints the last 50 lines of
 its stderr, capped at 50 KB, before deleting the Pod. Unsafe terminal controls are
-removed and Rich markup is displayed literally. This preserves pip diagnostics;
+removed using the same character policy as `utils/terminal.py` (TAB is kept),
+and Rich markup is displayed literally. URL user information and common token
+patterns are replaced with `<redacted>` before local truncation. If the remote
+byte limit cuts a log line, that partial line is omitted so a credential cannot
+lose its identifying prefix. This preserves pip diagnostics;
 when training itself fails, the remote script also sends the bounded tail of
 `train.log` to stderr. A timeout names the SSH readiness probe (30 seconds) or the
 remote training command (25 hours). The diagnostic tail does not preserve the Pod

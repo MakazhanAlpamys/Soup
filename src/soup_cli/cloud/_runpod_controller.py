@@ -17,7 +17,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import unicodedata
 import urllib.error
 import urllib.request
 import uuid
@@ -44,6 +43,15 @@ _POD_ID = re.compile(r"[a-zA-Z0-9_-]{1,64}")
 _MAX_RESPONSE = 1024 * 1024
 _LOG_TAIL_LINES = 50
 _LOG_TAIL_BYTES = 50_000
+# Bound scheme matching so long non-URL log lines do not cause quadratic work.
+_URL_CREDENTIALS = re.compile(r"(\b[a-z][a-z0-9+.-]{0,31}://)[^/\s?#]*@", re.IGNORECASE)
+# The same token shapes as utils/crash.py, without importing the installed CLI.
+_SECRET_PATTERNS = (
+    re.compile(r"hf_[A-Za-z0-9]{20,}"),
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),
+    re.compile(r"api[_-]?key[\"' :=]+[A-Za-z0-9_\-]{16,}", re.IGNORECASE),
+    re.compile(r"Bearer\s+[A-Za-z0-9_\-\.]{20,}"),
+)
 _IMAGE = "runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404"
 _BOOT = (
     "set -eu; if [ ! -x /usr/sbin/sshd ]; then apt-get update; "
@@ -155,19 +163,19 @@ def _tool_environment():
 
 
 def _print_remote_stderr_tail(output: str | None) -> None:
-    """Print a bounded failure tail as literal stderr, never as Rich markup."""
+    """Print a sanitized, redacted failure tail as literal stderr."""
     if not output:
         return
-    encoded = output.encode("utf-8", errors="replace")[-_LOG_TAIL_BYTES:]
+    # Strip controls before matching credentials, then redact before truncation:
+    # slicing a password first can remove the URL prefix that identifies it.
+    # render_runpod_stub serializes the canonical utils/terminal.py table.
+    safe = output.translate(globals()["_TERMINAL_STRIP_TABLE"])
+    safe = _URL_CREDENTIALS.sub(r"\1<redacted>@", safe)
+    for pattern in _SECRET_PATTERNS:
+        safe = pattern.sub("<redacted>", safe)
+    encoded = safe.encode("utf-8", errors="replace")[-_LOG_TAIL_BYTES:]
     lines = encoded.decode("utf-8", errors="ignore").splitlines()[-_LOG_TAIL_LINES:]
-    tail = "\n".join(
-        "".join(
-            char
-            for char in line
-            if unicodedata.category(char) not in {"Cc", "Cf"} or char in "\u200c\u200d"
-        )
-        for line in lines
-    )
+    tail = "\n".join(lines)
     if tail:
         _notice(f"RunPod remote stderr tail (last {_LOG_TAIL_LINES} lines):\n{tail}")
 
@@ -211,9 +219,12 @@ def _run_ssh_session(ip: str, port: int, private_key: str, known_hosts: pathlib.
         "if result.returncode:\n"
         "    with open('train.log', 'rb') as log:\n"
         "        log.seek(0, os.SEEK_END)\n"
-        f"        log.seek(max(0, log.tell() - {_LOG_TAIL_BYTES}))\n"
-        f"        tail = b'\\n'.join(log.read({_LOG_TAIL_BYTES})"
-        f".splitlines()[-{_LOG_TAIL_LINES}:])\n"
+        f"        log.seek(max(0, log.tell() - {_LOG_TAIL_BYTES + 1}))\n"
+        f"        tail = log.read({_LOG_TAIL_BYTES + 1})\n"
+        # Do not forward a partial first line with its credential prefix missing.
+        f"        if len(tail) > {_LOG_TAIL_BYTES}:\n"
+        "            tail = tail.partition(b'\\n')[2]\n"
+        f"        tail = b'\\n'.join(tail.splitlines()[-{_LOG_TAIL_LINES}:])\n"
         "    sys.stderr.buffer.write(tail)\n"
         "sys.exit(result.returncode)\n"
     )
