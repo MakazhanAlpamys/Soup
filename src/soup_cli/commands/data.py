@@ -3239,6 +3239,13 @@ def recipe(
             )
             raise typer.Exit(2)
 
+        # #2226: --output is a directory, but a path that names the recipe
+        # file itself is not a directory to write into — refuse it before
+        # the runner starts, instead of failing mid-run or clobbering it.
+        _refuse_output_over_input(
+            [("the recipe", path)], [("--output", output)], exit_code=2
+        )
+
         if provider is not None and offline:
             console.print("[red]--provider and --offline cannot be used together.[/]")
             raise typer.Exit(2)
@@ -4313,6 +4320,14 @@ def persona_mix(
     ``--output`` JSONL with ``{prompt, persona, style}`` rows. When
     ``--personas`` / ``--styles`` are omitted the bundled diversity set is used.
     """
+    # #2226: refuse an output that names an input before anything is read —
+    # otherwise the atomic write at the end replaces the prompts file.
+    _refuse_output_over_input(
+        [("--prompts", prompts)]
+        + ([("--personas", personas)] if personas else [])
+        + ([("--styles", styles)] if styles else []),
+        [("--output", output)],
+    )
     import os
     import tempfile
 

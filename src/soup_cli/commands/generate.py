@@ -171,6 +171,21 @@ def generate(
     ),
 ):
     """Generate synthetic training data using an LLM."""
+    # #2226: refuse an output that names a file this command reads before
+    # anything is loaded — the write at the end would otherwise replace the
+    # seed, dedup or context file and exit 0.
+    from soup_cli.utils.paths import ensure_distinct_paths
+
+    try:
+        ensure_distinct_paths(
+            ([("--seed", seed_file)] if seed_file else [])
+            + ([("--dedup-with", dedup_with)] if dedup_with else [])
+            + ([("--context", template_context)] if template_context else []),
+            [("--output", output)],
+        )
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1) from exc
     if fmt not in VALID_FORMATS:
         console.print(
             f"[red]Invalid format: {fmt}. Must be one of: {', '.join(VALID_FORMATS)}[/]"

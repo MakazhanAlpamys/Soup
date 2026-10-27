@@ -23,6 +23,8 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
+from soup_cli.utils.paths import ensure_distinct_paths
+
 console = Console()
 
 
@@ -158,6 +160,18 @@ def mix(
         )
         raise typer.Exit(code=2)
     raw = [p.strip() for p in datasets.split(",") if p.strip()]
+    # #2226: refuse a recipe output that names a dataset (or, in live mode,
+    # the base yaml) before the optimiser runs — the recipe write at the end
+    # would otherwise replace that input and exit 0.
+    try:
+        ensure_distinct_paths(
+            [("--datasets", p) for p in raw]
+            + ([("--base-yaml", base_yaml)] if live and base_yaml else []),
+            [("--output", output)],
+        )
+    except ValueError as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(code=2) from exc
     try:
         plan = build_optimization_plan(
             raw, budget=budget, num_probes=num_probes, seed=seed

@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
+from soup_cli.utils.paths import ensure_distinct_paths
 from soup_cli.utils.terminal import for_terminal
 
 console = Console()
@@ -107,6 +108,16 @@ def forge(
     )
     from soup_cli.utils.hubs import validate_hub_name
 
+    # #2226: the dataset and the provenance manifest are two writes; if they
+    # name the same file, the manifest replaces the dataset and exits 0.
+    try:
+        ensure_distinct_paths(
+            [("--provenance", provenance)], [("--output", output)]
+        )
+    except ValueError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
     try:
         hub_canonical = validate_hub_name(hub)
     except (TypeError, ValueError) as exc:
@@ -181,6 +192,19 @@ def forge(
         doc_paths = discover_documents(docs)
     except (TypeError, ValueError, FileNotFoundError) as exc:
         console.print(f"[red]Plan failed:[/] {escape(str(exc))}")
+        raise typer.Exit(1) from exc
+
+    # #2226: --docs names a directory, so the guard runs after discovery
+    # (which only lists paths) and before any document is read for synthesis
+    # or anything is written: an output or manifest that names a discovered
+    # document would otherwise replace that source file.
+    try:
+        ensure_distinct_paths(
+            [("--docs", p) for p in doc_paths],
+            [("--output", output), ("--provenance", provenance)],
+        )
+    except ValueError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(1) from exc
 
     judge_stats = ForgeJudgeStats()

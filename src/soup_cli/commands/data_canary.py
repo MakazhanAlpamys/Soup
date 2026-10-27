@@ -269,6 +269,14 @@ def check(
     """Check a model for memorization of the manifest's canaries."""
     if output is not None:
         _guard_under_cwd(output, "Output")
+        # #2226: the report is written at the end; if it names the manifest,
+        # the only record of the inserted secrets is replaced by the report.
+        try:
+            ensure_distinct_paths(
+                [("--manifest", manifest)], [("--output", output)]
+            )
+        except ValueError as exc:
+            _refuse(str(exc))
     try:
         canaries = load_manifest(manifest)
     except (ValueError, OSError) as exc:
