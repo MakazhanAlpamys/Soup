@@ -315,15 +315,15 @@ def _merge_low_memory(
             finalize=save_tokenizer,
             trust_remote_code=trc,
         )
+    except ImportError as exc:
+        console.print(f"[red]Missing dependency: {exc}[/]")
+        console.print("Run: [bold]pip install torch transformers safetensors[/]")
+        raise typer.Exit(1)
     except LowMemoryMergeError as exc:
         console.print(
             f"[red]Low-memory merge not possible: {for_terminal(exc)}[/]\n"
             "Run again without [bold]--low-memory[/]."
         )
-        raise typer.Exit(1)
-    except ImportError as exc:
-        console.print(f"[red]Missing dependency: {exc}[/]")
-        console.print("Run: [bold]pip install torch transformers safetensors[/]")
         raise typer.Exit(1)
     except Exception as exc:
         console.print(f"[red]Merge failed: {for_terminal(exc)}[/]")
