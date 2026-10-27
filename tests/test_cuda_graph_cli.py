@@ -548,7 +548,6 @@ def test_file_derived_text_in_the_refusal_is_terminal_safe(monkeypatch, tmp_path
         assert raw not in result.output
 
 
-
 def _adapter_env(monkeypatch, tmp_path, base_config):
     """A local LoRA adapter recording ``tmp_path/base``, whose config.json is ``base_config``."""
     adapter_dir = _infer_env(

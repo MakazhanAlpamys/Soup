@@ -1,6 +1,7 @@
 """Tests for CUDA graph pre-flight checks before loading torch or weights (#1817)."""
 
 import json
+import os
 import sys
 import types
 from unittest.mock import MagicMock
@@ -186,12 +187,12 @@ def test_run_bench_train_refuses_before_importing_torch():
     assert "TORCH False" in proc.stdout
 
 
-def _adapter(tmp_path, recorded_base, name="adapter"):
-    """A LoRA adapter directory whose config records ``recorded_base`` as its base."""
+def _adapter(tmp_path, recorded_base, name="adapter", peft_type="LORA"):
+    """An adapter directory whose config records ``recorded_base`` as its base."""
     adapter_dir = tmp_path / name
     adapter_dir.mkdir()
     (adapter_dir / "adapter_config.json").write_text(
-        json.dumps({"peft_type": "LORA", "base_model_name_or_path": recorded_base}),
+        json.dumps({"peft_type": peft_type, "base_model_name_or_path": recorded_base}),
         encoding="utf-8",
     )
     return adapter_dir
@@ -236,6 +237,23 @@ def test_an_explicit_base_wins_over_the_recorded_one(tmp_path, cuda_present):
         )
 
 
+def test_a_hub_id_as_explicit_base_still_wins(tmp_path, cuda_present):
+    recorded = _base(tmp_path, {"model_type": "gpt2"})
+    adapter_dir = _adapter(tmp_path, str(recorded))
+    cuda_graphs.check_cuda_graphs_preflight(
+        device="cuda", model_target=str(adapter_dir), base="Qwen/Qwen2.5-0.5B"
+    )
+
+
+def test_an_empty_explicit_base_leaves_the_recorded_one_inspected(tmp_path, cuda_present):
+    recorded = _base(tmp_path, {"model_type": "gpt2"})
+    adapter_dir = _adapter(tmp_path, str(recorded))
+    with pytest.raises(RuntimeError, match="stock Qwen2 and Llama"):
+        cuda_graphs.check_cuda_graphs_preflight(
+            device="cuda", model_target=str(adapter_dir), base=""
+        )
+
+
 def test_a_relative_recorded_base_counts_from_the_current_directory(
     tmp_path, cuda_present, monkeypatch
 ):
@@ -251,13 +269,41 @@ def test_a_relative_recorded_base_counts_from_the_current_directory(
 
 
 @pytest.mark.parametrize(
-    "recorded", ["Qwen/Qwen2.5-0.5B", "missing-dir", "", None, 7, ["base"], {"path": "base"}]
+    "recorded", ["Qwen/Qwen2.5-0.5B", "missing-dir", None, 7, ["base"], {"path": "base"}]
 )
 def test_a_recorded_base_that_is_no_local_directory_is_left_to_the_loader(
     tmp_path, cuda_present, monkeypatch, recorded
 ):
     monkeypatch.chdir(tmp_path)
     adapter_dir = _adapter(tmp_path, recorded)
+    cuda_graphs.check_cuda_graphs_preflight(device="cuda", model_target=str(adapter_dir))
+
+
+def test_an_empty_recorded_base_is_left_to_the_loader(tmp_path, cuda_present, monkeypatch):
+    # An empty string is unset, not the current directory: the unsupported
+    # config.json that sits there must not be read.
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": "gpt2"}), encoding="utf-8")
+    adapter_dir = _adapter(tmp_path, "")
+    monkeypatch.chdir(tmp_path)
+    cuda_graphs.check_cuda_graphs_preflight(device="cuda", model_target=str(adapter_dir))
+
+
+@pytest.mark.parametrize(
+    "error", [PermissionError(13, "denied"), OSError(36, "File name too long")]
+)
+def test_a_recorded_base_the_os_refuses_to_stat_is_left_to_the_loader(
+    tmp_path, cuda_present, monkeypatch, error
+):
+    recorded = tmp_path / "base"
+    adapter_dir = _adapter(tmp_path, str(recorded))
+    real_stat = os.stat
+
+    def refusing_stat(path, *args, **kwargs):
+        if str(path).startswith(str(recorded)):
+            raise error
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", refusing_stat)
     cuda_graphs.check_cuda_graphs_preflight(device="cuda", model_target=str(adapter_dir))
 
 
@@ -273,8 +319,10 @@ def test_an_unreadable_recorded_base_config_is_left_to_the_loader(
 
 
 def test_a_recorded_base_is_followed_one_level_only(tmp_path, cuda_present):
+    # The recorded base's own adapter config is not read (an IA3 adapter would
+    # be refused if it were), and the base it records is not followed.
     unsupported = _base(tmp_path, {"model_type": "gpt2"}, name="unsupported")
-    middle = _adapter(tmp_path, str(unsupported), name="middle")
+    middle = _adapter(tmp_path, str(unsupported), name="middle", peft_type="IA3")
     adapter_dir = _adapter(tmp_path, str(middle))
     cuda_graphs.check_cuda_graphs_preflight(device="cuda", model_target=str(adapter_dir))
 

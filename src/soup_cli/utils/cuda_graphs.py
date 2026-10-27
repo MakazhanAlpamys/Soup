@@ -96,9 +96,9 @@ def _read_json_object(path: Path) -> Optional[dict]:
 
     The loader reports such a file itself, with the message it always had.
     """
-    if not path.is_file():
-        return None
     try:
+        if not path.is_file():
+            return None
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
@@ -172,7 +172,7 @@ def check_cuda_graphs_preflight(
 
     recorded_base = _check_local_target(model_target)
     _check_local_target(base)
-    if not base and recorded_base is not None and Path(recorded_base).is_dir():
+    if not base and recorded_base is not None:
         _check_model_config(Path(recorded_base))
 
 
