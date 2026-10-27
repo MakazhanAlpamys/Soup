@@ -136,6 +136,8 @@ def test_version_full_json_with_stderr_warning_succeeds(monkeypatch):
             sys.stderr.write(
                 "W... triton not found; flop counting will not work for triton kernels\n"
             )
+            # Click 8.1 snapshots the separate stderr stream without flushing it.
+            sys.stderr.flush()
         return orig_import(name, *args, **kwargs)
 
     monkeypatch.setattr("builtins.__import__", import_hook)
