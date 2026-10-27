@@ -774,8 +774,16 @@ than retried, to avoid duplicate training. Keepalive probes run every 30 seconds
 with six missed probes allowed (roughly three minutes); the training command has
 a 25-hour timeout. Artifacts are copied only after a successful training command,
 with one SCP attempt capped at 15 minutes. A failed copy still terminates the Pod,
-so an incomplete download cannot be recovered from that Pod afterward. Remote log
-tail retrieval and a copy retry window are not implemented in this controller.
+so an incomplete download cannot be recovered from that Pod afterward. A copy retry
+window remains unimplemented.
+
+When a remote command exits nonzero, the controller prints the last 50 lines of
+its stderr, capped at 50 KB, before deleting the Pod. Unsafe terminal controls are
+removed and Rich markup is displayed literally. This preserves pip diagnostics;
+when training itself fails, the remote script also sends the bounded tail of
+`train.log` to stderr. A timeout names the SSH readiness probe (30 seconds) or the
+remote training command (25 hours). The diagnostic tail does not preserve the Pod
+or claim successful artifact retrieval.
 
 **Not yet live-validated.** Tests use local mocked API/SSH transports. The code
 PR does not include a paid run; provider execution, GPU behavior, retrieval and
