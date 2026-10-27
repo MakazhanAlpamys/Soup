@@ -1146,6 +1146,17 @@ data:
 
 ## Data Tools
 
+File outputs must be distinct from their inputs. `persona-mix` protects
+`--prompts`, `--personas` and `--styles`; `generate` protects `--seed`,
+`--dedup-with` and `--context`; and `canary check` protects `--manifest`.
+`mix --optimize` also protects every `--datasets` entry and the live
+`--base-yaml`, even with `--overwrite`. Forge's dataset and provenance outputs
+must not replace a source document or each other. Recipe execution protects
+the recipe and seed files from sampler, checkpoint and node-sidecar writes.
+These collisions exit 1 and name the paths; choose a separate output. A recipe
+can still read inputs inside its output directory when no written file aliases
+them. `mix --apply` only prints a recipe and does not write `--output`.
+
 ```bash
 # Inspect a dataset
 soup data inspect ./data/train.jsonl

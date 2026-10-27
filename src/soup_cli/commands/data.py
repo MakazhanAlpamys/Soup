@@ -3197,6 +3197,8 @@ def recipe(
 
     from soup_cli.utils.recipe_dag import load_recipe_yaml
 
+    if execute and output is not None:
+        _refuse_output_over_input([("the input", path)], [("--output", output)])
     try:
         dag = load_recipe_yaml(path)
     except FileNotFoundError as exc:
@@ -3231,13 +3233,22 @@ def recipe(
         # cwd-contained, and we never want the live runner to be the
         # first/only enforcement point.
         from soup_cli.utils.paths import is_under_cwd
-        from soup_cli.utils.recipe_run import run_recipe
+        from soup_cli.utils.recipe_run import _recipe_write_paths, run_recipe
 
         if not output or not is_under_cwd(output):
             console.print(
                 "[red]--output must be a non-empty path under the current directory[/]"
             )
             raise typer.Exit(2)
+
+        inputs = [("the input", path)] + [
+            (f"seed {node.name}.path", node.config["path"])
+            for node in dag.nodes
+            if node.kind == "seed" and isinstance(node.config.get("path"), str)
+        ]
+        _refuse_output_over_input(
+            inputs, [("--output", target) for target in _recipe_write_paths(dag, output)]
+        )
 
         if provider is not None and offline:
             console.print("[red]--provider and --offline cannot be used together.[/]")
@@ -4313,6 +4324,13 @@ def persona_mix(
     ``--output`` JSONL with ``{prompt, persona, style}`` rows. When
     ``--personas`` / ``--styles`` are omitted the bundled diversity set is used.
     """
+    inputs = [("--prompts", prompts)]
+    if personas:
+        inputs.append(("--personas", personas))
+    if styles:
+        inputs.append(("--styles", styles))
+    _refuse_output_over_input(inputs, [("--output", output)])
+
     import os
     import tempfile
 
