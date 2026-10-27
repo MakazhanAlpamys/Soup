@@ -1,7 +1,7 @@
-"""``soup bench train`` on a 4-bit (QLoRA) model, whose adapters TRL casts to bf16 (#2215).
+"""``soup bench train`` on a 4-bit or 8-bit model, whose adapters TRL casts to bf16 (#2215).
 
-TRL 0.29's ``SFTTrainer`` casts the trainable parameters of any 4-bit model to bf16,
-on every card. Two things in ``bench train`` broke on that:
+TRL 0.29's ``SFTTrainer`` casts the trainable parameters of any 4-bit or 8-bit model
+to bf16, on every card. Two things in ``bench train`` broke on that:
 
 * the fingerprint hashed ``tensor.numpy()``, and numpy has no bfloat16, so the run
   crashed before its first step with ``TypeError: Got unsupported ScalarType
@@ -173,13 +173,50 @@ class TestThroughARealTrainer:
         assert (fp16, bf16) == seen["flags"]
 
 
+class TestFlagsArePassedThrough:
+    def test_it_passes_the_trainers_own_flags_not_a_fixed_pair(self, tmp_path, monkeypatch):
+        """On a CPU runner both flags are False, so the test above cannot tell the
+        trainer's flags from a hardcoded pair. Give the trainer a non-default pair and
+        stop at the alignment, so nothing trains with the fake flags."""
+        import soup_cli.utils.mixed_precision as mixed_precision
+        from soup_cli.trainer.sft import SFTTrainerWrapper
+
+        _workdir(tmp_path, monkeypatch)
+        holder = {}
+        real_setup = SFTTrainerWrapper.setup
+
+        class AlignmentReachedError(Exception):
+            pass
+
+        def setup(self, *args, **kwargs):
+            out = real_setup(self, *args, **kwargs)
+            self.trainer.args.fp16, self.trainer.args.bf16 = True, False
+            holder["wrapper"] = self
+            return out
+
+        def spy(model, *, fp16, bf16):
+            holder["call"] = (model, fp16, bf16)
+            raise AlignmentReachedError
+
+        monkeypatch.setattr(SFTTrainerWrapper, "setup", setup)
+        monkeypatch.setattr(mixed_precision, "align_trainable_dtype_for_fp16", spy)
+        with pytest.raises(AlignmentReachedError):
+            _bench("cpu")
+        model, fp16, bf16 = holder["call"]
+        assert model is holder["wrapper"].trainer.model
+        assert (fp16, bf16) == (True, False)
+
+
 @pytest.mark.gpu
-class TestAFourBitModelOnCuda:
-    def test_on_an_fp16_card_the_run_trains_with_fp32_adapters(self, tmp_path, monkeypatch):
+@pytest.mark.parametrize("quantization", ["4bit", "8bit"])
+class TestAQuantizedModelOnCuda:
+    def test_on_an_fp16_card_the_run_trains_with_fp32_adapters(
+        self, tmp_path, monkeypatch, quantization
+    ):
         """A T4/V100 run: no bf16 hardware, so fp16 with a GradScaler. Forced here by
         reporting no bf16 support, which is the question Soup's precision choice asks."""
         pytest.importorskip("bitsandbytes")
-        _workdir(tmp_path, monkeypatch, quantization="4bit")
+        _workdir(tmp_path, monkeypatch, quantization=quantization)
         monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda *a, **k: False)
         seen = {}
 
@@ -192,10 +229,12 @@ class TestAFourBitModelOnCuda:
         assert seen["dtypes"] == {"torch.float32"}
         assert report["valid"] is True, report["failures"]
 
-    def test_with_the_cards_own_precision_the_run_is_valid(self, tmp_path, monkeypatch):
+    def test_with_the_cards_own_precision_the_run_is_valid(
+        self, tmp_path, monkeypatch, quantization
+    ):
         """On a bf16 card this is the fingerprint-over-bf16-adapters case; on an fp16
         card it is the case above without the forcing."""
         pytest.importorskip("bitsandbytes")
-        _workdir(tmp_path, monkeypatch, quantization="4bit")
+        _workdir(tmp_path, monkeypatch, quantization=quantization)
         report = _bench("cuda")
         assert report["valid"] is True, report["failures"]

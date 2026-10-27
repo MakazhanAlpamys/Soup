@@ -251,7 +251,7 @@ def run_bench_train(
 
         # `soup train` does this in SFTTrainerWrapper.train(), which bench does
         # not call: on an fp16 card it casts the bf16 adapters TRL leaves on a
-        # 4-bit model back to fp32, or the GradScaler cannot unscale their
+        # 4-bit or 8-bit model back to fp32, or the GradScaler cannot unscale their
         # gradients (#2215). Done before the first fingerprint, so what is
         # measured is what `soup train` trains.
         align_trainable_dtype_for_fp16(
