@@ -128,8 +128,10 @@ ZERO_STAGE_3_OFFLOAD = {
 #   all-gather comes back ``c10::Half`` and meets a ``c10::BFloat16``
 #   activation inside ``deepspeed/runtime/zero/linear.py``, which raises
 #   ``expected mat1 and mat2 to have the same dtype``. The resolver turns them
-#   off for a bf16 run and says so; hierarchical partitioning — the half of
-#   ZeRO++ that is dtype-agnostic — stays on.
+#   off for a bf16 run (or an ``"auto"`` one, which may resolve to bf16) and
+#   says so; an fp16 run, such as this preset on a T4 once its precision is
+#   matched (#2266), keeps them. Hierarchical partitioning — the half of ZeRO++
+#   that is dtype-agnostic — stays on.
 ZERO_PLUS_PLUS = {
     "bf16": {"enabled": True},
     "zero_optimization": {
@@ -225,20 +227,112 @@ def resolve_hpz_partition_size(world_size: int) -> int:
     return world
 
 
+#: The values ``precision`` may take in :func:`resolve_deepspeed_config`.
+PRECISIONS = ("bf16", "fp16", "auto")
+
+
+def trainer_precision(cfg: Any, device: str) -> str | None:
+    """The mixed precision the trainer will use for this run (#2266).
+
+    ``"bf16"`` or ``"fp16"`` when it is known before the trainer is built,
+    ``"auto"`` when the trainer picks it per model, ``None`` off CUDA (DeepSpeed
+    needs CUDA, so there is nothing to match). Every trainer takes its flags from
+    :func:`~soup_cli.utils.gpu.bf16_fp16_flags`, except GRPO under ``grpo_fp16``
+    (fp16 on any card) and the ``auto_mixed_precision`` tasks, which choose by
+    model name (``utils/mixed_precision.py``).
+    """
+    if not str(device).lower().startswith("cuda"):
+        return None
+    from soup_cli.config.schema import AMP_APPLYING_TASKS
+
+    tcfg = cfg.training
+    if cfg.task == "grpo" and getattr(tcfg, "grpo_fp16", False):
+        return "fp16"
+    if cfg.task in AMP_APPLYING_TASKS and getattr(tcfg, "auto_mixed_precision", False):
+        return "auto"
+    from soup_cli.utils.gpu import bf16_fp16_flags
+
+    bf16, fp16 = bf16_fp16_flags(device)
+    if bf16:
+        return "bf16"
+    if fp16:
+        return "fp16"
+    return None
+
+
+def _enabled(config: dict, key: str) -> Any:
+    """``True`` / ``False`` for a literal, ``"auto"``, or ``None`` when unset."""
+    section = config.get(key)
+    if not isinstance(section, dict) or "enabled" not in section:
+        return None
+    value = section["enabled"]
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered == "auto":
+            return "auto"
+        return lowered == "true"
+    return bool(value)
+
+
+def _match_precision(resolved: dict, precision: str) -> str | None:
+    """Make the file's ``bf16`` / ``fp16`` agree with the trainer's ``precision``.
+
+    accelerate refuses a DeepSpeed config that enables the dtype the trainer is
+    not using (``DeepSpeedPlugin.set_mixed_precision``), so a preset's
+    ``bf16: true`` stopped every fp16 run before its first step (#2266). Values
+    that already agree, ``"auto"`` included, are left alone. Returns the note to
+    print, or ``None`` when nothing changed.
+    """
+    changes = []
+    for key in ("bf16", "fp16"):
+        current = _enabled(resolved, key)
+        if precision == "auto":
+            target = "auto" if current is not None and current != "auto" else current
+        elif key == precision:
+            target = current if current in (True, "auto") else True
+        else:
+            target = False if current is True else current
+        if target != current:
+            resolved[key] = {**(resolved.get(key) or {}), "enabled": target}
+            shown = "unset" if current is None else json.dumps(current)
+            changes.append(f"{key} {shown} -> {json.dumps(target)}")
+    if not changes:
+        return None
+    why = (
+        "training.auto_mixed_precision picks the dtype per model, so the trainer "
+        "fills it in"
+        if precision == "auto"
+        else f"the trainer runs {precision} here"
+    )
+    return (
+        f"{', '.join(changes)}: {why}, and accelerate refuses a DeepSpeed config "
+        "that enables the other dtype (#2266)"
+    )
+
+
 def resolve_deepspeed_config(
-    config: dict, *, gpu_count: int | None = None
+    config: dict, *, gpu_count: int | None = None, precision: str | None = None
 ) -> tuple[dict, list[str]]:
     """Adapt a preset to the run it is about to be used for.
 
     Returns a *new* config plus human-readable notes describing every change,
     so the caller can print them rather than silently altering the run.
 
-    Only ZeRO++ carries run-dependent keys today; every other preset comes back
-    unchanged with no notes (#336).
+    ``precision`` is the trainer's (:func:`trainer_precision`). With it, the
+    file's ``bf16`` / ``fp16`` are made to agree (#2266); ``None`` leaves them as
+    they are. ZeRO++ also carries run-dependent keys (#336). Otherwise a config
+    comes back unchanged with no notes.
     """
+    if precision is not None and precision not in PRECISIONS:
+        raise ValueError(f"precision must be one of {PRECISIONS} or None, got {precision!r}")
     resolved = copy.deepcopy(config)
     zero: dict[str, Any] = resolved.get("zero_optimization") or {}
     notes: list[str] = []
+
+    if precision is not None:
+        note = _match_precision(resolved, precision)
+        if note:
+            notes.append(note)
 
     if "zero_hpz_partition_size" in zero:
         world = gpu_count if gpu_count is not None else resolve_world_size()
@@ -258,13 +352,19 @@ def resolve_deepspeed_config(
         if zero.get(key)
     ]
     if quant_keys:
-        bf16_on = bool((resolved.get("bf16") or {}).get("enabled"))
-        if bf16_on:
+        # Read after the precision is matched, so an fp16 run keeps the quantiser.
+        bf16 = _enabled(resolved, "bf16")
+        if bf16 is True or bf16 == "auto":
+            run = (
+                "this run is bf16"
+                if bf16 is True
+                else "this run's precision is `auto`, filled in by the trainer, so it may be bf16"
+            )
             for key in quant_keys:
                 zero[key] = False
             notes.append(
                 "zero_quantized_weights/zero_quantized_gradients disabled: DeepSpeed's "
-                "quantiser is the fp16 kernel and this run is bf16, so the dequantised "
+                f"quantiser is the fp16 kernel and {run}, so the dequantised "
                 "all-gather returns Half and meets a BFloat16 activation "
                 "(`expected mat1 and mat2 to have the same dtype`). Hierarchical "
                 "partitioning stays enabled."
@@ -275,13 +375,17 @@ def resolve_deepspeed_config(
     return resolved, notes
 
 
-def write_deepspeed_config(stage: str = "zero2", gpu_count: int | None = None) -> str:
+def write_deepspeed_config(
+    stage: str = "zero2", gpu_count: int | None = None, *, precision: str | None = None
+) -> str:
     """Write a DeepSpeed config to a temp file and return the path.
 
-    The preset is resolved against the actual run first (#336); any adjustment
-    is printed rather than applied silently.
+    The preset is resolved against the actual run first (#336, #2266); any
+    adjustment is printed rather than applied silently.
     """
-    config, notes = resolve_deepspeed_config(get_deepspeed_config(stage), gpu_count=gpu_count)
+    config, notes = resolve_deepspeed_config(
+        get_deepspeed_config(stage), gpu_count=gpu_count, precision=precision
+    )
     if notes:
         from rich.console import Console
         from rich.markup import escape
@@ -297,7 +401,9 @@ def write_deepspeed_config(stage: str = "zero2", gpu_count: int | None = None) -
     return tmp.name
 
 
-def resolve_user_deepspeed_file(path: str, *, gpu_count: int | None = None) -> str:
+def resolve_user_deepspeed_file(
+    path: str, *, gpu_count: int | None = None, precision: str | None = None
+) -> str:
     """Resolve a user-supplied ``--deepspeed my.json`` the way a preset is (#359).
 
     Returns the ORIGINAL path when nothing needed changing, so a hand-written
@@ -306,14 +412,16 @@ def resolve_user_deepspeed_file(path: str, *, gpu_count: int | None = None) -> s
     repaired config is written to a temp copy and that path is returned; the
     user's file on disk is never modified.
 
-    The decision this encodes: the two keys :func:`resolve_deepspeed_config`
+    The decision this encodes: the keys :func:`resolve_deepspeed_config`
     rewrites are not preferences, they are errors. DeepSpeed refuses a
-    ``zero_hpz_partition_size`` the world size is not divisible by, and its fp16
+    ``zero_hpz_partition_size`` the world size is not divisible by, its fp16
     quantiser against a ``bf16`` run raises ``expected mat1 and mat2 to have the
-    same dtype`` inside ``deepspeed/runtime/zero/linear.py``. The documented way
-    to customise ZeRO++ is to copy the preset JSON — which copies both defects —
-    so leaving a user file unresolved would hand the escape hatch a crash the
-    presets are already protected from. Every rewrite is printed.
+    same dtype`` inside ``deepspeed/runtime/zero/linear.py``, and accelerate
+    refuses a ``bf16`` / ``fp16`` that contradicts the trainer's ``precision``
+    (#2266). The documented way to customise ZeRO++ is to copy the preset JSON —
+    which copies every one of these — so leaving a user file unresolved would hand
+    the escape hatch a crash the presets are already protected from. Every
+    rewrite is printed.
 
     An unreadable or non-object JSON is passed straight through. DeepSpeed
     reports a malformed config better than a Soup traceback would, and refusing
@@ -327,7 +435,9 @@ def resolve_user_deepspeed_file(path: str, *, gpu_count: int | None = None) -> s
     if not isinstance(config, dict):
         return path
 
-    resolved, notes = resolve_deepspeed_config(config, gpu_count=gpu_count)
+    resolved, notes = resolve_deepspeed_config(
+        config, gpu_count=gpu_count, precision=precision
+    )
     if not notes:
         return path
 

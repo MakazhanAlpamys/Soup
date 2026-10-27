@@ -1395,21 +1395,24 @@ soup train --config soup.yaml --fsdp full_offload
 
 `zero3_offload` keeps `offload_optimizer: none`: offloading the optimizer makes DeepSpeed JIT-build its `cpu_adam` op, which requires a matching CUDA toolkit (`nvcc`) on the box. Copy the emitted JSON and flip it if you have one — or start from the bundled `soup fetch deepspeed_configs zero3-cpu-offload`, which is the optimizer-offloading variant and therefore needs that toolkit. Measured on one H100 with Llama-3.1-8B (bf16, LoRA r=8, 256 steps): 21.65 tok/s at a 38,135 MiB peak — see [benchmarks/gate-h100-validation.md](../benchmarks/gate-h100-validation.md), STEP 3, which also compares it against layer streaming on the same box, data and model.
 
+Before the config is written, its `bf16` / `fp16` are matched to the precision the trainer will use: bf16 on an Ampere or newer card, fp16 on a card without bf16 hardware (a T4 or V100) and under `grpo_fp16`, and `"auto"`, filled in by the trainer, under `auto_mixed_precision`. A change is printed. Every preset declares `bf16`, and until this was matched a trainer running fp16 stopped before its first step with "`--mixed_precision` arg cannot be set to `fp16` when `bf16` is set in the DeepSpeed config file" (#2266).
+
 ### `--deepspeed <file>` — your own JSON
 
 `--deepspeed` also takes a path to a JSON config instead of a preset name. That
 file is yours: it reaches DeepSpeed **byte-identical, by the same path**, unless
 it carries a key that is invalid for the run it is about to start.
 
-Two keys are rewritten, and both are errors rather than preferences (#359):
+These keys are rewritten, and all are errors rather than preferences (#359, #2266):
 
 | key | why it is repaired |
 |---|---|
+| `bf16` / `fp16` | accelerate refuses a config that enables the dtype the trainer is not using, so a `bf16: true` file stops an fp16 run (a T4, `grpo_fp16`) before its first step. A value that already agrees, `"auto"` included, is left alone (#2266) |
 | `zero_hpz_partition_size` | DeepSpeed refuses a value the world size is not divisible by, so the ZeRO++ preset's placeholder `8` is invalid on any box that is not a multiple of 8 |
-| `zero_quantized_weights` / `zero_quantized_gradients` | the fp16 CUDA quantiser against the `bf16` the same file enables makes the dequantised all-gather come back `c10::Half` and meet a `c10::BFloat16` activation, raising `expected mat1 and mat2 to have the same dtype` |
+| `zero_quantized_weights` / `zero_quantized_gradients` | the fp16 CUDA quantiser against a bf16 run makes the dequantised all-gather come back `c10::Half` and meet a `c10::BFloat16` activation, raising `expected mat1 and mat2 to have the same dtype`. They are turned off when the run is bf16 or `"auto"`, and kept for an fp16 run |
 
 The documented way to customise ZeRO++ is to copy the preset JSON — which copies
-both defects — so an unresolved user file would inherit a crash the presets are
+these defects — so an unresolved user file would inherit a crash the presets are
 already protected from. When a rewrite happens it is **printed**, the repaired
 config goes to a temp copy, and **your file on disk is never modified**. A
 config that uses none of those keys is not touched at all.
