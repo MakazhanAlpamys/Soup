@@ -426,6 +426,20 @@ def merge_low_memory(
             shutil.rmtree(staging, ignore_errors=True)
 
 
+def hub_download_patterns(trust_remote_code: bool) -> Tuple[List[str], List[str]]:
+    """``allow_patterns`` and ``ignore_patterns`` for fetching a Hub base to merge.
+
+    Built from the same suffixes :func:`_support_files` copies, so the files a
+    Hub base downloads and the files a local base copies cannot drift apart
+    (#2235). ``.py`` is fetched only when the user trusts remote code; an
+    untrusted model's code is not downloaded at all. ``consolidated*.safetensors``
+    is a second copy of the weights that the merge never reads.
+    """
+    suffixes = _COPIED_SUFFIXES + ((".py",) if trust_remote_code else ())
+    allow = ["*.safetensors"] + [f"*{suffix}" for suffix in suffixes]
+    return allow, ["consolidated*.safetensors"]
+
+
 def _support_files(base_dir: Path, roots: List[str], trust_remote_code: bool) -> List[Path]:
     suffixes = _COPIED_SUFFIXES + ((".py",) if trust_remote_code else ())
     found = []

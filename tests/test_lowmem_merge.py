@@ -192,6 +192,61 @@ def test_integer_tensors_keep_their_dtype(tmp_path):
         assert torch.equal(merged.get_tensor("extra.positions"), torch.arange(6))
 
 
+def _add_support_files(base: Path) -> None:
+    """Give the tiny base the files a real Hub repository with custom code has."""
+    (base / "modeling_my.py").write_text("class MyModel: ...\n", encoding="utf-8")
+    (base / "tokenizer.model").write_bytes(b"spm")
+    (base / "chat_template.jinja").write_text("{{ messages }}", encoding="utf-8")
+    (base / "vocab.txt").write_text("a\nb\n", encoding="utf-8")
+    first_shard = sorted(base.glob("*.safetensors"))[0]
+    shutil.copyfile(first_shard, base / "consolidated.safetensors")
+
+
+def _fake_hub_download(repo: Path, snapshot: Path):
+    """A ``snapshot_download`` stand-in that applies the patterns as the Hub does."""
+    from fnmatch import fnmatch
+
+    def download(repo_id, **kwargs):
+        allow = kwargs.get("allow_patterns") or ["*"]
+        ignore = kwargs.get("ignore_patterns") or []
+        snapshot.mkdir()
+        for entry in sorted(repo.iterdir()):
+            if not entry.is_file():
+                continue
+            if not any(fnmatch(entry.name, pattern) for pattern in allow):
+                continue
+            if any(fnmatch(entry.name, pattern) for pattern in ignore):
+                continue
+            shutil.copyfile(entry, snapshot / entry.name)
+        return str(snapshot)
+
+    return download
+
+
+def _support_names(output: Path) -> set:
+    return {
+        p.name
+        for p in output.iterdir()
+        if not p.name.endswith(".safetensors") and p.name != "tokenizer.json"
+    }
+
+
+@pytest.mark.parametrize("trust", [True, False])
+def test_download_patterns_cover_every_copied_suffix(trust):
+    """Adding a suffix to _COPIED_SUFFIXES cannot leave the Hub download behind."""
+    from fnmatch import fnmatch
+
+    from soup_cli.utils.lowmem_merge import _COPIED_SUFFIXES, hub_download_patterns
+
+    allow, ignore = hub_download_patterns(trust)
+    for suffix in _COPIED_SUFFIXES:
+        assert any(fnmatch(f"file{suffix}", pattern) for pattern in allow), suffix
+    assert any(fnmatch("model-00001-of-00002.safetensors", pattern) for pattern in allow)
+    assert any(fnmatch("modeling_my.py", pattern) for pattern in allow) is trust
+    assert any(fnmatch("consolidated.safetensors", pattern) for pattern in ignore)
+    assert not any(fnmatch("model.safetensors", pattern) for pattern in ignore)
+
+
 class _StubTokenizer:
     @staticmethod
     def from_pretrained(*_args, **_kwargs):
@@ -273,7 +328,78 @@ class TestCli:
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert fetched["repo_id"] == "org/tiny-llama"
-        assert fetched["allow_patterns"] == ["*.safetensors", "*.json"]
+        assert fetched["allow_patterns"] == [
+            "*.safetensors", "*.json", "*.model", "*.txt", "*.tiktoken", "*.jinja",
+        ]
+        assert fetched["ignore_patterns"] == ["consolidated*.safetensors"]
+        expected = _regular_merge(base, adapter, torch.float16)
+        actual = _read_all(base.parent / "merged_out")
+        assert all(torch.equal(actual[key], value) for key, value in expected.items())
+
+    @pytest.mark.parametrize("trust", [True, False], ids=["trusted", "untrusted"])
+    def test_hub_base_gets_the_support_files_a_local_base_gets(
+        self, checkpoints, monkeypatch, trust
+    ):
+        """#2235: the Hub download and the local copy select the same files."""
+        import transformers
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        base, adapter, _ = checkpoints
+        _add_support_files(base)
+        monkeypatch.setattr(transformers, "AutoTokenizer", _StubTokenizer)
+        monkeypatch.chdir(base.parent)
+        snapshot = base.parent / "snapshot"
+        monkeypatch.setattr(
+            "soup_cli.utils.hubs.snapshot_download", _fake_hub_download(base, snapshot)
+        )
+        flag = ["--trust-remote-code"] if trust else []
+
+        from_hub = CliRunner().invoke(
+            app,
+            ["merge", "--adapter", str(adapter), "--base", "org/tiny-llama",
+             "--output", "from_hub", "--low-memory", *flag],
+        )
+        from_local = CliRunner().invoke(
+            app,
+            ["merge", "--adapter", str(adapter), "--base", str(base),
+             "--output", "from_local", "--low-memory", *flag],
+        )
+
+        assert from_hub.exit_code == 0, (from_hub.output, repr(from_hub.exception))
+        assert from_local.exit_code == 0, (from_local.output, repr(from_local.exception))
+        hub_files = _support_names(base.parent / "from_hub")
+        assert hub_files == _support_names(base.parent / "from_local")
+        assert ("modeling_my.py" in hub_files) is trust
+        assert {"tokenizer.model", "chat_template.jinja", "vocab.txt"} <= hub_files
+        assert ("modeling_my.py" in {p.name for p in snapshot.iterdir()}) is trust
+
+    def test_consolidated_weights_are_not_downloaded(self, checkpoints, monkeypatch):
+        import transformers
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        base, adapter, _ = checkpoints
+        _add_support_files(base)
+        monkeypatch.setattr(transformers, "AutoTokenizer", _StubTokenizer)
+        monkeypatch.chdir(base.parent)
+        snapshot = base.parent / "snapshot"
+        monkeypatch.setattr(
+            "soup_cli.utils.hubs.snapshot_download", _fake_hub_download(base, snapshot)
+        )
+
+        result = CliRunner().invoke(
+            app,
+            ["merge", "--adapter", str(adapter), "--base", "org/tiny-llama",
+             "--output", "merged_out", "--low-memory"],
+        )
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        downloaded = {p.name for p in snapshot.iterdir()}
+        assert "consolidated.safetensors" not in downloaded
+        assert any(name.endswith(".safetensors") for name in downloaded)
         expected = _regular_merge(base, adapter, torch.float16)
         actual = _read_all(base.parent / "merged_out")
         assert all(torch.equal(actual[key], value) for key, value in expected.items())
