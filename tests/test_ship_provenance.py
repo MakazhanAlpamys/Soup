@@ -169,12 +169,30 @@ def test_emit_binds_actual_bytes_and_effective_policy(work):
 @pytest.mark.parametrize(
     ("changed", "expected_label", "unexpected"),
     [
-        ("adapter", "adapter files", ("task-eval file", "training source", "forgetting threshold", "general suites", "Soup version", "task mode", "judge model")),
-        ("task", "task-eval file", ("adapter files", "training source", "forgetting threshold", "general suites", "Soup version", "task mode", "judge model")),
-        ("training", "training source", ("adapter files", "task-eval file", "forgetting threshold", "general suites", "Soup version", "task mode", "judge model")),
-        ("threshold", "forgetting threshold", ("adapter files", "task-eval file", "training source", "general suites", "Soup version", "task mode", "judge model")),
-        ("suite", "general suites", ("adapter files", "task-eval file", "training source", "forgetting threshold", "Soup version", "task mode", "judge model")),
-        ("judge", "task mode, judge model", ("adapter files", "task-eval file", "training source", "forgetting threshold", "general suites", "Soup version")),
+        ("adapter", "adapter files", (
+            "task-eval file", "training source", "forgetting threshold",
+            "general suites", "Soup version", "task mode", "judge model",
+        )),
+        ("task", "task-eval file", (
+            "adapter files", "training source", "forgetting threshold",
+            "general suites", "Soup version", "task mode", "judge model",
+        )),
+        ("training", "training source", (
+            "adapter files", "task-eval file", "forgetting threshold",
+            "general suites", "Soup version", "task mode", "judge model",
+        )),
+        ("threshold", "forgetting threshold", (
+            "adapter files", "task-eval file", "training source",
+            "general suites", "Soup version", "task mode", "judge model",
+        )),
+        ("suite", "general suites", (
+            "adapter files", "task-eval file", "training source",
+            "forgetting threshold", "Soup version", "task mode", "judge model",
+        )),
+        ("judge", "task mode, judge model", (
+            "adapter files", "task-eval file", "training source",
+            "forgetting threshold", "general suites", "Soup version",
+        )),
     ],
 )
 def test_strict_gate_refuses_input_and_policy_drift(work, changed, expected_label, unexpected):
