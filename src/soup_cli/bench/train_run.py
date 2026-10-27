@@ -86,7 +86,7 @@ def _driver_version() -> Optional[str]:
 
     from soup_cli.utils.layer_stream import _resolve_tool
 
-    tool = _resolve_tool("nvidia-smi")  # absolute path only (CWE-427)
+    tool = _resolve_tool("nvidia-smi")  # absolute path, never the current directory
     value = _nvidia_smi(tool, "--query-gpu=driver_version") if tool else None
     return value if value and re.fullmatch(r"\d+(\.\d+)+", value) else None
 
@@ -128,7 +128,7 @@ class ClockSampler:
 
         self.interval = interval
         if read is None:
-            tool = _resolve_tool("nvidia-smi")  # absolute path only (CWE-427)
+            tool = _resolve_tool("nvidia-smi")  # absolute path, never the current directory
             if tool is not None:
                 def read():
                     return _nvidia_smi(tool, "--query-gpu=clocks.sm", gpu)

@@ -32,6 +32,15 @@ def _clean_help(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", text).replace("\n", " ")
 
 
+#: Where post_pr_comment finds gh in these tests: an absolute path, whatever the
+#: machine running them has installed.
+_GH = "/usr/local/bin/gh"
+
+
+def _find_gh(name, path=None):
+    return _GH if name == "gh" else None
+
+
 @pytest.fixture()
 def temp_registry(tmp_path, monkeypatch):
     """Isolated registry + branches dir under cwd, returns a push helper."""
@@ -1250,6 +1259,10 @@ class TestResolveGithubToken:
 
 
 class TestPostPrComment:
+    @pytest.fixture(autouse=True)
+    def _gh_on_path(self, monkeypatch):
+        monkeypatch.setattr("soup_cli.utils.tool_paths.find_tool", _find_gh)
+
     def test_happy_path_invokes_gh(self):
         from soup_cli.utils.adapter_pr import post_pr_comment
 
@@ -1270,7 +1283,7 @@ class TestPostPrComment:
         )
         assert url == "https://github.com/o/r/pull/1#issuecomment-9"
         argv = captured["argv"]
-        assert argv[0] == "gh"
+        assert argv[0] == _GH
         assert "api" in argv
         assert "repos/o/r/issues/1/comments" in argv
         assert "--method" in argv and "POST" in argv
@@ -1482,6 +1495,10 @@ class TestPackIterationSafely:
 
 
 class TestGhArgvAdjacency:
+    @pytest.fixture(autouse=True)
+    def _gh_on_path(self, monkeypatch):
+        monkeypatch.setattr("soup_cli.utils.tool_paths.find_tool", _find_gh)
+
     def test_method_and_input_flags_adjacent(self):
         from soup_cli.utils.adapter_pr import post_pr_comment
 
@@ -1503,11 +1520,15 @@ class TestGhArgvAdjacency:
         # `--method POST` and `--input -` must be value-adjacent.
         assert argv[argv.index("--method") + 1] == "POST"
         assert argv[argv.index("--input") + 1] == "-"
-        # No `shell=True` could ever apply — argv[0] is the bare binary.
-        assert argv[0] == "gh"
+        # No `shell=True` could ever apply — argv[0] is gh's absolute path.
+        assert argv[0] == _GH
 
 
 class TestPostPrCommentEnvAllowlist:
+    @pytest.fixture(autouse=True)
+    def _gh_on_path(self, monkeypatch):
+        monkeypatch.setattr("soup_cli.utils.tool_paths.find_tool", _find_gh)
+
     def test_secrets_not_leaked_to_child(self, monkeypatch):
         """When ``env`` is None, the gh child env is built from an allowlist
         so HF_TOKEN / OPENAI_API_KEY never reach the subprocess."""

@@ -315,6 +315,18 @@ def load_config(
             raw["training"] = training
         training.update(training_overrides)
 
+    return validate_config_mapping(raw)
+
+
+def validate_config_mapping(raw: dict) -> SoupConfig:
+    """Validate a config mapping already read from a file; the checks and
+    messages of :func:`load_config`, which ends here.
+
+    For a command that reads the file itself (``soup plan`` / ``soup apply``)
+    and must refuse what ``soup train`` refuses, with the same lines: an
+    unknown key, a staged field, a refused value or any other schema error
+    prints ``Config validation error:`` and its lines and exits 1.
+    """
     unknown_error = _report_unknown_keys(raw)
     if unknown_error is not None:
         console.print("[red bold]Config validation error:[/]\n")

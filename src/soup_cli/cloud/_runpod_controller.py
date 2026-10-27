@@ -31,6 +31,12 @@ _GPU_ID = globals().get("_GPU_ID", "")
 _CONFIG_B64 = globals().get("_CONFIG_B64", "")
 _OUTPUT = globals().get("_OUTPUT", "")
 _SOUP_VERSION = globals().get("_SOUP_VERSION", "")
+# ssh and scp are found and given their environment the way soup runs every
+# external program: render_runpod_stub puts the source of find_tool and
+# tool_environment (soup_cli/utils/tool_paths.py) ahead of this text.
+_find_tool = globals().get("find_tool")
+_environment_for_tools = globals().get("tool_environment")
+_MISSING_TOOLS = "OpenSSH ssh and scp must be installed and on PATH before RunPod submission."
 
 _API_BASE = "https://rest.runpod.io/v1"
 _POD_ID = re.compile(r"[a-zA-Z0-9_-]{1,64}")
@@ -132,45 +138,17 @@ def _wait_for_ssh(api_key, pod_id):
     raise _ControllerError("RunPod did not expose SSH within 15 minutes")
 
 
-def _find_tool(name):
-    """The absolute path of the program ``name`` found on PATH, or None.
-
-    Tools run by an absolute path found on PATH: absolute PATH entries are tried
-    in order, empty and relative entries are skipped, and on Windows each PATHEXT
-    extension is tried.
-    """
-    if os.name == "nt":
-        suffixes = [
-            ext for ext in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";") if ext
-        ]
-    else:
-        suffixes = [""]
-    for entry in os.environ.get("PATH", "").split(os.pathsep):
-        entry = entry.strip().strip('"')
-        if not entry or not os.path.isabs(entry):
-            continue
-        for suffix in suffixes:
-            candidate = os.path.join(entry, name + suffix)
-            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-                return os.path.abspath(candidate)
-    return None
-
-
 def _tool(name):
     path = _find_tool(name)
     if path is None:
-        raise _ControllerError("OpenSSH ssh and scp must be installed before RunPod submission.")
+        raise _ControllerError(_MISSING_TOOLS)
     return path
 
 
 def _tool_environment():
-    """The environment for ssh and scp: the controller's without RUNPOD_API_KEY, plus
-    NoDefaultCurrentDirectoryInExePath=1 on Windows. Tools run by an absolute path
-    found on PATH (see ``_find_tool``)."""
-    env = {name: value for name, value in os.environ.items() if name.upper() != "RUNPOD_API_KEY"}
-    if os.name == "nt":
-        env["NoDefaultCurrentDirectoryInExePath"] = "1"
-    return env
+    """The environment for ssh and scp: the controller's, without the RunPod API key,
+    which they do not use; on Windows the program search skips the current directory."""
+    return _environment_for_tools(drop=("RUNPOD_API_KEY",))
 
 
 def _train_and_copy(ip, port, private_key):
@@ -359,7 +337,7 @@ def main():
         _notice("Generate a RunPod plan with soup train --cloud runpod first.")
         return 2
     if not all(_find_tool(command) for command in ("ssh", "scp")):
-        _notice("OpenSSH ssh and scp must be installed before RunPod submission.")
+        _notice(_MISSING_TOOLS)
         return 2
     try:
         _local_destination()

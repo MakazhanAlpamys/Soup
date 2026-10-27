@@ -463,6 +463,54 @@ soup ship --base <m> --tuned ./out --task-eval tasks.jsonl \
 soup ship --evidence evidence.json --output verdict.json
 ```
 
+### Opt-in progress
+
+Add `--progress jsonl` to follow a verdict without parsing console text:
+
+```bash
+soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
+  --progress jsonl
+```
+
+The ordinary verdict and status output stay on stdout. During command execution,
+stderr contains only JSONL; foreign warnings, logs and native dependency diagnostics
+are suppressed in this mode. Leave the flag unset for the existing diagnostics.
+Use your shell's stderr redirection to save the events to a file.
+Argument-parser errors before command execution (for example an unknown option)
+retain the ordinary CLI error format.
+
+Each event has `schema_version: 1`, `event` (`start`, `progress`, `end`, `error`),
+`phase` (`load`, `task_eval`, `suite_eval`, `verdict`), `side` (`base`, `tuned`, null),
+`suite` (suite name or null), `repeat` (one-based noise-floor repeat or null), and
+`done` / `total` (nonnegative integers or null). The group identity is
+`(phase, side, suite, repeat)`; counters start afresh for each group. `verdict`
+brackets the entire command, including validation and any nested live groups.
+
+Countable task and bundled-suite groups start at `done: 0`, `total: null` until
+the scorer resolves its items. Each `progress` follows actual item scoring,
+including a generation/predicate failure recorded as a failed item, and reports
+the now-known total. Scalar generation reports before the next item is generated;
+batch generation reports scored items after the batch returns. `end` includes
+the final count (zero for an empty item list). Metric and judge-score groups are
+per side; pairwise scoring reports one `tuned` comparison group, with the base
+reference implicit, and counts one completed swap-debiased pair per task.
+An unavailable judge or another escaping exception aborts the group and retains
+the existing runtime-error behavior; an incomplete item is not counted.
+
+Load and verdict counts are null. A skipped recorded baseline emits no scoring
+group. External lm-eval emits a start/end group per actual harness call, using
+the comma-joined requested suite names and null counts. Offline evidence emits
+only the verdict start/end; it never invents model loads or prompt progress.
+Noise-floor task/suite groups identify each repeat explicitly, independently of
+the ordinary verdict pass (`repeat: null`).
+
+`error` terminates an aborted group and contains only the fixed diagnostic
+`error: "execution_aborted"`; it never copies arbitrary exception text. A failed
+item alone is not an error event. Exit 2 (DON'T SHIP) is a completed verdict with
+`end`, while usage/runtime failures terminate the verdict with `error`. No clock
+or throughput field is promised. Suite names are the explicitly requested public
+benchmark identifiers; task text, responses, paths and credentials are not event fields.
+
 **`--evidence` shape** (no model load — the offline / CI path):
 
 ```json

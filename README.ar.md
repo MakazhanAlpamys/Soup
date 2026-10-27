@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
+<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <strong>العربية</strong> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -104,7 +104,7 @@ soup train
   و`rl_checkpoint_include_rollout_buffer` بعد v0.76.0، فلم يحذّر منهما أي إصدار قبل ذلك. أما القيم فهي:
   `data.remove_unused_columns: true`، و`training.quantization: 4bit` / `8bit` (أو
   `load_in_8bit: true`) في مهمة لا تُكمِّم النموذج أبدًا، و`soup ab --beta`.
-  وتُرفَض أيضًا خمسة عشر إعدادًا كان v0.76 يتجاهلها دون أي كلمة، مثل `use_mod` أو `neftune_alpha` حيث
+  وتُرفَض أيضًا أربعة عشر إعدادًا كان v0.76 يتجاهلها دون أي كلمة، مثل `use_mod` أو `neftune_alpha` حيث
   لا يطبّقهما شيء، و`expand_layers` مع رتبة LoRA، و`8bit` أو SFT للرؤية على Unsloth، و`lora.rank_pattern`
   على MLX أو Unsloth: راجع ملاحظات الترقية في CHANGELOG.
 - **تغيير غير متوافق مع الإصدارات السابقة: Python 3.11–3.13، ولا تصدير بصيغتي AWQ أو GPTQ، ورمز مصادقة
@@ -345,7 +345,7 @@ soup doctor                           # افحص GPU / الاعتماديات / 
 
 ```bash
 docker pull ghcr.io/makazhanalpamys/soup:latest
-docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml
+docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml --yes
 docker compose up   # أو ابنِ الصورة محليًا
 ```
 

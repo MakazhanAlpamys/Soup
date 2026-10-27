@@ -409,29 +409,29 @@ def resolve_disk_kind(
     return DiskClassification(override)
 
 
-def _resolve_tool(name: str, *fallbacks: str) -> Optional[str]:
-    """Absolute path to a system tool, or None.
+def _resolve_tool(name: str, *fixed_paths: str) -> Optional[str]:
+    """Absolute path of a system tool, or None.
 
-    Bare names are deliberately never handed to ``subprocess``: on Windows
-    ``CreateProcess`` searches the CURRENT DIRECTORY before ``PATH``, so
-    ``["powershell", ...]`` run from a freshly-cloned project would execute an
-    attacker-planted ``powershell.exe`` sitting in that checkout (CWE-427). No
-    shell metacharacters required. POSIX ``execvp`` searches ``$PATH`` only, so
-    this matters most on Windows — but resolving everywhere costs nothing.
+    The first of ``fixed_paths`` (where the OS ships the tool) that exists wins;
+    otherwise the absolute PATH directories are searched
+    (:func:`soup_cli.utils.tool_paths.find_tool`), never the current directory.
+    The tool is then run by this path, never by its bare name.
     """
     import os
-    import shutil
 
-    found = shutil.which(name)
-    if found:
-        return found
-    for candidate in fallbacks:
-        if os.path.isfile(candidate):
+    from soup_cli.utils.tool_paths import find_tool
+
+    for candidate in fixed_paths:
+        if os.path.isabs(candidate) and os.path.isfile(candidate):
             return candidate
-    return None
+    return find_tool(name)
 
 
-_POWERSHELL_FALLBACK = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+# Where Windows and macOS ship the tools the disk probe runs.
+_WINDOWS_POWERSHELL = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+_MACOS_DISKUTIL = "/usr/sbin/diskutil"
+_MACOS_DF = "/bin/df"
+_MACOS_SYSTEM_PROFILER = "/usr/sbin/system_profiler"
 
 
 def _darwin_bsd_whole_disk(identifier: Any) -> Optional[str]:
@@ -500,7 +500,7 @@ def _darwin_disk_kind(path: str, diskutil: str) -> DiskClassification:
         # ``diskutil info`` accepts a device or an exact mount point, not an
         # arbitrary directory within that volume. Resolve the latter with the
         # POSIX ``df -P`` format, validate its device token, then retry.
-        df_tool = _resolve_tool("df", "/bin/df")
+        df_tool = _resolve_tool("df", _MACOS_DF)
         if df_tool is None:
             return DiskClassification("unknown")
         df_result = subprocess.run(
@@ -533,7 +533,7 @@ def _darwin_disk_kind(path: str, diskutil: str) -> DiskClassification:
 
     physical_stores = _darwin_apfs_physical_stores(disk_info)
     if physical_stores:
-        profiler = _resolve_tool("system_profiler", "/usr/sbin/system_profiler")
+        profiler = _resolve_tool("system_profiler", _MACOS_SYSTEM_PROFILER)
         if profiler is not None:
             profile_result = subprocess.run(
                 [
@@ -723,7 +723,7 @@ def _probe_disk_kind(path: str) -> DiskClassification:
             measured = _measure_seq_read_bytes_per_s(path)
             return DiskClassification(_classify_measured_read(measured), measured)
         if system == "Windows":
-            shell = _resolve_tool("powershell", _POWERSHELL_FALLBACK)
+            shell = _resolve_tool("powershell", _WINDOWS_POWERSHELL)
             if shell is None:
                 return DiskClassification("unknown")
             out = subprocess.run(
@@ -749,7 +749,7 @@ def _probe_disk_kind(path: str) -> DiskClassification:
                     return DiskClassification(candidate)
             return DiskClassification("unknown")
         if system == "Darwin":
-            tool = _resolve_tool("diskutil", "/usr/sbin/diskutil")
+            tool = _resolve_tool("diskutil", _MACOS_DISKUTIL)
             if tool is None:
                 return DiskClassification("unknown")
             return _darwin_disk_kind(path, tool)

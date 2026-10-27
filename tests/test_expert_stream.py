@@ -2,7 +2,9 @@
 
 The gate is bit-exactness against transformers' eager experts loop: the
 streamed module must equal the resident one forward AND backward, on the
-block alone and inside a streamed DeepSeek-V3 model.
+block alone and inside a streamed DeepSeek-V3 model. With ``two_reads`` it must
+also equal the default streamed path while the checkpoint's recompute reads no
+expert.
 """
 
 from __future__ import annotations
@@ -12,6 +14,9 @@ import pytest
 from tests._windows_ci import skip_on_windows_ci
 
 CUDA = pytest.mark.gpu(reason="NF4 dequantisation needs bitsandbytes on CUDA")
+#: ``StreamedExperts.two_reads``: off is the default node layout; on puts the routing
+#: multiply inside the expert's autograd node so a checkpoint recompute reads nothing.
+TWO_READS = pytest.mark.parametrize("two_reads", [False, True], ids=["default", "two-reads"])
 
 
 # --------------------------------------------------------------------------
@@ -52,7 +57,7 @@ def _olmoe_experts(seed):
     return module, 8, 2
 
 
-def _streamed_copy(tmp_path, module, n_experts):
+def _streamed_copy(tmp_path, module, n_experts, two_reads=False):
     from soup_cli.utils.expert_stream import (
         ExpertFetcher,
         ExpertShardReader,
@@ -70,7 +75,7 @@ def _streamed_copy(tmp_path, module, n_experts):
         path, count=info.count, shapes=info.shapes, quant_specs={}, dtype="float32"
     )
     streamed = streamed_experts_class()(
-        reader, ExpertFetcher(device="cpu", dtype="float32"), module.act_fn, 1
+        reader, ExpertFetcher(device="cpu", dtype="float32"), module.act_fn, 1, two_reads=two_reads
     )
     return streamed, reader
 
@@ -87,14 +92,15 @@ def _routing(n_tokens, n_experts, top_k, hidden, seed):
     return states, top_k_index, top_k_weights, grad_out
 
 
+@TWO_READS
 @pytest.mark.parametrize(
     "build", [_deepseek_v3_experts, _olmoe_experts], ids=["deepseek_v3", "olmoe"]
 )
-def test_streamed_experts_forward_equals_eager_bit_exactly(tmp_path, build):
+def test_streamed_experts_forward_equals_eager_bit_exactly(tmp_path, build, two_reads):
     import torch
 
     module, n_experts, top_k = build(5)
-    streamed, reader = _streamed_copy(tmp_path, module, n_experts)
+    streamed, reader = _streamed_copy(tmp_path, module, n_experts, two_reads)
     states, index, weights, _ = _routing(24, n_experts, top_k, 32, 9)
     with torch.no_grad():
         want = module(states, index, weights)
@@ -103,15 +109,16 @@ def test_streamed_experts_forward_equals_eager_bit_exactly(tmp_path, build):
     reader.close()
 
 
+@TWO_READS
 @pytest.mark.parametrize(
     "build", [_deepseek_v3_experts, _olmoe_experts], ids=["deepseek_v3", "olmoe"]
 )
-def test_streamed_experts_backward_equals_eager_bit_exactly(tmp_path, build):
+def test_streamed_experts_backward_equals_eager_bit_exactly(tmp_path, build, two_reads):
     """Input and routing-weight gradients, the two a frozen expert passes on."""
     import torch
 
     module, n_experts, top_k = build(5)
-    streamed, reader = _streamed_copy(tmp_path, module, n_experts)
+    streamed, reader = _streamed_copy(tmp_path, module, n_experts, two_reads)
     states, index, weights, grad_out = _routing(24, n_experts, top_k, 32, 9)
 
     module(states, index, weights).backward(grad_out)
@@ -126,11 +133,33 @@ def test_streamed_experts_backward_equals_eager_bit_exactly(tmp_path, build):
     reader.close()
 
 
+@TWO_READS
+def test_streamed_experts_routing_weight_gradient_when_the_input_needs_none(tmp_path, two_reads):
+    """Nothing upstream trains, so the expert input needs no gradient, while the routing
+    weight does: its gradient must be the weight's own, not the input's."""
+    import torch
+
+    module, n_experts, top_k = _deepseek_v3_experts(5)
+    streamed, reader = _streamed_copy(tmp_path, module, n_experts, two_reads)
+    states, index, weights, grad_out = _routing(24, n_experts, top_k, 32, 9)
+    states.requires_grad_(False)
+
+    module(states, index, weights).backward(grad_out)
+    want = weights.grad.clone()
+    weights.grad = None
+    streamed(states, index, weights).backward(grad_out)
+
+    assert float(want.abs().sum()) > 0.0
+    assert torch.equal(weights.grad, want), (weights.grad - want).abs().max().item()
+    reader.close()
+
+
 # The bf16 case runs a CPU bf16 matmul under autocast, and part of GitHub's windows-latest
 # fleet dies on it with 0xc000001d (illegal instruction) in the eager reference module's
 # forward; the crash kills the xdist worker and the cell later times out (#382, #1314).
 # Only that case is skipped, and only on a Windows CI runner: the fp32 control, a developer's
 # Windows box, ubuntu and macos all still run it.
+@TWO_READS
 @pytest.mark.parametrize(
     "autocast",
     [
@@ -138,12 +167,12 @@ def test_streamed_experts_backward_equals_eager_bit_exactly(tmp_path, build):
         pytest.param(True, id="cpu-bf16-autocast", marks=skip_on_windows_ci),
     ],
 )
-def test_streamed_experts_backward_preserves_forward_autocast(tmp_path, autocast):
+def test_streamed_experts_backward_preserves_forward_autocast(tmp_path, autocast, two_reads):
     """Recomputation must differentiate the forward precision after its AMP region exits."""
     import torch
 
     module, n_experts, top_k = _deepseek_v3_experts(5)
-    streamed, reader = _streamed_copy(tmp_path, module, n_experts)
+    streamed, reader = _streamed_copy(tmp_path, module, n_experts, two_reads)
     states, index, weights, grad_out = _routing(24, n_experts, top_k, 32, 9)
     try:
         with torch.autocast("cpu", dtype=torch.bfloat16, enabled=autocast):
@@ -165,12 +194,13 @@ def test_streamed_experts_backward_preserves_forward_autocast(tmp_path, autocast
         reader.close()
 
 
-def test_each_routed_expert_is_read_once_forward_and_once_backward(tmp_path):
+@TWO_READS
+def test_each_routed_expert_is_read_once_forward_and_once_backward(tmp_path, two_reads):
     """The cost the docstring states: an expert nobody routed to is never read."""
     import torch
 
     module, n_experts, _ = _deepseek_v3_experts(5)
-    streamed, reader = _streamed_copy(tmp_path, module, n_experts)
+    streamed, reader = _streamed_copy(tmp_path, module, n_experts, two_reads)
     states = torch.randn(6, 32, requires_grad=True)
     index = torch.tensor([[0, 3]] * 6)
     weights = torch.full((6, 2), 0.5, requires_grad=True)
@@ -196,7 +226,8 @@ def test_fetched_weights_are_owned_not_views_of_the_staging_buffer(tmp_path):
     reader.close()
 
 
-def test_expert_weights_are_released_after_each_expert(tmp_path):
+@TWO_READS
+def test_expert_weights_are_released_after_each_expert(tmp_path, two_reads):
     """The VRAM bound: nothing keeps a fetched expert alive once its MLP ran, not
     the autograd graph after forward, not anything after backward."""
     import gc
@@ -204,7 +235,7 @@ def test_expert_weights_are_released_after_each_expert(tmp_path):
 
 
     module, n_experts, top_k = _deepseek_v3_experts(5)
-    streamed, reader = _streamed_copy(tmp_path, module, n_experts)
+    streamed, reader = _streamed_copy(tmp_path, module, n_experts, two_reads)
     refs = []
     real_fetch = streamed.fetch
 
@@ -345,6 +376,47 @@ def test_install_refuses_mismatched_layers_and_expert_adapters(tmp_path):
     adapted.mlp.experts.lora_A = nn.Parameter(module.gate_up_proj.new_zeros(2, 2))
     with pytest.raises(ValueError, match="adapters on the routed experts"):
         install_expert_streaming([adapted], {0: reader}, fetcher)
+    reader.close()
+
+
+def test_two_read_install_refuses_a_moe_block_without_its_router(tmp_path):
+    """Two reads replay the router's decisions, so the router must be found."""
+    from soup_cli.utils.expert_stream import ExpertFetcher, install_expert_streaming
+
+    module, n_experts, _ = _deepseek_v3_experts(5)
+    _, reader = _streamed_copy(tmp_path, module, n_experts)
+    fetcher = ExpertFetcher(device="cpu", dtype="float32")
+    with pytest.raises(ValueError, match="no router module at `.gate`"):
+        install_expert_streaming([_holder(module)], {0: reader}, fetcher, two_reads=True)
+    reader.close()
+
+
+def test_two_read_install_refuses_a_decoder_that_saves_the_moe_output(tmp_path):
+    """The recompute's MoE output is zero. FlexOlmo normalises it before the residual add,
+    and that RMSNorm saves its input: a zero there would give wrong gradients silently.
+    OLMoE is refused as well: no test compares the real layer's gradients with the resident
+    model's. Only decoder graphs checked to consume the MoE output with views and additions
+    are admitted; the default three-read install still accepts both layers."""
+    from transformers import FlexOlmoConfig, OlmoeConfig
+    from transformers.models.flex_olmo.modeling_flex_olmo import FlexOlmoDecoderLayer
+    from transformers.models.olmoe.modeling_olmoe import OlmoeDecoderLayer
+
+    from soup_cli.utils.expert_stream import ExpertFetcher, install_expert_streaming
+
+    module, n_experts, _ = _olmoe_experts(5)
+    _, reader = _streamed_copy(tmp_path, module, n_experts)
+    fetcher = ExpertFetcher(device="cpu", dtype="float32")
+    shape = dict(
+        hidden_size=32, intermediate_size=16, num_experts=8, num_experts_per_tok=2,
+        num_attention_heads=4, num_key_value_heads=4,
+    )
+    for layer_cls, config in (
+        (FlexOlmoDecoderLayer, FlexOlmoConfig(**shape)),
+        (OlmoeDecoderLayer, OlmoeConfig(**shape)),
+    ):
+        with pytest.raises(ValueError, match=f"is a {layer_cls.__name__}:"):
+            install_expert_streaming([layer_cls(config, 0)], {0: reader}, fetcher, two_reads=True)
+        assert install_expert_streaming([layer_cls(config, 0)], {0: reader}, fetcher) == 1
     reader.close()
 
 
@@ -635,16 +707,16 @@ def _lora():
     )
 
 
-def _shard(tmp_path, weights, **kwargs):
+def _shard(tmp_path, weights, dtype="float32", **kwargs):
     from soup_cli.utils.layer_shard import shard_checkpoint
 
     return shard_checkpoint(
-        weights, str(tmp_path / "shards"), dtype="float32", arch="deepseek_v3",
+        weights, str(tmp_path / "shards"), dtype=dtype, arch="deepseek_v3",
         num_hidden_layers=3, **kwargs,
     )
 
 
-def _paired(tmp_path):
+def _paired(tmp_path, two_read_experts=False):
     import torch
     from peft import get_peft_model
 
@@ -655,6 +727,7 @@ def _paired(tmp_path):
     model, runtime = build_streamed_model(
         model_id=weights, shard_dir=str(tmp_path / "shards"), index=index,
         lora_config=_lora(), device="cpu", dtype="float32", buffers=2, pin=False, seed=3,
+        two_read_experts=two_read_experts,
     )
     ref = get_peft_model(resident, _lora())
     generator = torch.Generator().manual_seed(17)
@@ -708,18 +781,27 @@ def test_streamed_per_expert_forward_matches_resident_eager_bit_exactly(tmp_path
     assert all(reader._handle is None for reader in runtime.expert_readers)
 
 
-def test_streamed_per_expert_backward_matches_resident_lora_gradients(tmp_path):
+@pytest.mark.parametrize(
+    ("two_read_experts", "reads"), [(False, 3), (True, 2)], ids=["default", "two-reads"]
+)
+def test_streamed_per_expert_backward_matches_resident_lora_gradients(
+    tmp_path, two_read_experts, reads
+):
     import torch
 
     from soup_cli.utils.layer_stream_runtime import canonical_named_parameters
 
-    model, runtime, ref, ids, _ = _paired(tmp_path)
+    model, runtime, ref, ids, _ = _paired(tmp_path, two_read_experts)
     loss = model(input_ids=ids, labels=ids).loss
-    forward_reads = runtime.stats()["expert_fetches"]
+    forward_reads = [reader.fetches for reader in runtime.expert_readers]
     loss.backward()
-    # Under the checkpointed decoder layer a routed expert is read three times:
-    # forward, the checkpoint's recompute, and the expert's own backward.
-    assert runtime.stats()["expert_fetches"] == 3 * forward_reads > 0
+    # Per MoE layer, under the checkpointed decoder layer: the default path reads a
+    # routed expert three times (forward, the checkpoint's recompute, the expert's
+    # own backward); with two reads the recompute reads none.
+    assert len(forward_reads) == 2 and all(count > 0 for count in forward_reads)
+    assert [reader.fetches for reader in runtime.expert_readers] == [
+        reads * count for count in forward_reads
+    ]
     ref(input_ids=ids, labels=ids).loss.backward()
 
     def grads(net):
@@ -737,6 +819,332 @@ def test_streamed_per_expert_backward_matches_resident_lora_gradients(tmp_path):
     for name, gradient in streamed.items():
         assert torch.equal(gradient, resident[name]), name
     runtime.close()
+
+
+def _three_way(tmp_path, dtype):
+    """The resident eager model and two streamed copies of it, the default path
+    and two reads, holding equal adapters."""
+    import torch
+    from peft import get_peft_model
+    from transformers import DeepseekV3ForCausalLM
+
+    from soup_cli.utils.layer_stream_runtime import build_streamed_model
+
+    weights, _ = _tiny_deepseek_v3(tmp_path)
+    index = _shard(tmp_path, weights, dtype, expert_layout="per_expert")
+    streamed = []
+    for two_read_experts in (False, True):
+        model, runtime = build_streamed_model(
+            model_id=weights, shard_dir=str(tmp_path / "shards"), index=index,
+            lora_config=_lora(), device="cpu", dtype=dtype, buffers=2, pin=False, seed=3,
+            two_read_experts=two_read_experts,
+        )
+        generator = torch.Generator().manual_seed(17)
+        with torch.no_grad():
+            for name, parameter in model.named_parameters():
+                if "lora_B" in name:
+                    parameter.copy_(torch.randn(parameter.shape, generator=generator) * 0.02)
+        streamed.append((model.eval(), runtime))
+    resident = DeepseekV3ForCausalLM.from_pretrained(weights, dtype=getattr(torch, dtype))
+    resident.set_experts_implementation("eager")
+    ref = get_peft_model(resident, _lora()).eval()
+    adapters = [
+        {k.replace(".inner.", "."): v for k, v in model.state_dict().items() if "lora_" in k}
+        for model, _ in streamed
+    ]
+    dst = {k: v for k, v in ref.state_dict().items() if "lora_" in k}
+    assert adapters[0] and set(adapters[0]) == set(adapters[1]) == set(dst)
+    for key, value in adapters[0].items():
+        assert torch.equal(adapters[1][key], value), key
+        dst[key].copy_(value)
+    ids = torch.randint(0, 128, (2, 12), generator=torch.Generator().manual_seed(29))
+    return ref, streamed[0], streamed[1], ids
+
+
+def _step_capturing(net, ids, autocast=False):
+    """One forward + backward; every tensor the three-way parity compares.
+
+    Hooks capture the gradient at each decoder layer's input (dX) and at both
+    outputs of each MoE router that carry one: the routing weights, and the
+    logits. The router weight is frozen in training; here it is made to require
+    grad, as the CUDA gate does, to show the gradient reaches it. A streamed
+    router weight is a view of a pool slot, so each wrapper call substitutes a
+    private leaf copy of it instead; the forward call's leaf is the one autograd
+    accumulates into, the recompute's never receives a gradient.
+    """
+    import torch
+
+    from soup_cli.utils.layer_stream_runtime import canonical_named_parameters
+
+    captured = {}
+    expected_lora = {
+        name: parameter for name, parameter in canonical_named_parameters(net) if "lora_" in name
+    }
+    assert expected_lora and all(parameter.requires_grad for parameter in expected_lora.values())
+
+    def keep(key):
+        def hook(grad):
+            captured[key] = grad.detach().clone()
+
+        return hook
+
+    def on_input(idx):
+        def hook(_module, args):
+            if args[0].requires_grad:
+                args[0].register_hook(keep(("dX", idx)))
+
+        return hook
+
+    def on_router(idx):
+        # Also fires in a checkpoint recompute, whose tensors never receive a gradient.
+        def hook(_module, _args, output):
+            output[0].register_hook(keep(("router_logits", idx)))
+            output[1].register_hook(keep(("routing_weights", idx)))
+
+        return hook
+
+    def private_router_weight(real, leaves):
+        def substituted(buffers):
+            weights = dict(real(buffers))
+            leaf = weights["mlp.gate.weight"].detach().clone().requires_grad_(True)
+            leaves.append(leaf)
+            weights["mlp.gate.weight"] = leaf
+            return weights
+
+        return substituted
+
+    handles = []
+    router_leaves = {}
+    for idx, layer in enumerate(net.get_submodule("base_model.model.model.layers")):
+        handles.append(layer.register_forward_pre_hook(on_input(idx)))
+        inner = getattr(layer, "inner", None)
+        router = getattr((inner or layer).mlp, "gate", None)
+        if router is None:
+            continue
+        handles.append(router.register_forward_hook(on_router(idx)))
+        if inner is None:
+            router.weight.requires_grad_(True)
+            router_leaves[idx] = [router.weight]
+        else:
+            router_leaves[idx] = []
+            layer._substituted_weights = private_router_weight(
+                layer._substituted_weights, router_leaves[idx]
+            )
+    try:
+        with torch.autocast("cpu", dtype=torch.bfloat16, enabled=autocast):
+            out = net(input_ids=ids, labels=ids)
+        out.loss.backward()
+    finally:
+        for handle in handles:
+            handle.remove()
+    captured["logits"] = out.logits.detach()
+    captured["loss"] = out.loss.detach()
+    for idx, leaves in router_leaves.items():
+        grads = [leaf.grad for leaf in leaves if leaf.grad is not None]
+        assert len(grads) == 1, (idx, len(grads))
+        captured[("router_weight", idx)] = grads[0].clone()
+    for name, parameter in expected_lora.items():
+        assert parameter.grad is not None, f"missing expected adapter gradient: {name}"
+        captured[("grad", name)] = parameter.grad.detach().clone()
+    return captured
+
+
+@pytest.mark.parametrize(
+    "cell",
+    [
+        pytest.param("fp32", id="fp32"),
+        pytest.param("bf16", id="bf16", marks=skip_on_windows_ci),
+        pytest.param("bf16-autocast", id="bf16-autocast", marks=skip_on_windows_ci),
+    ],
+)
+def test_two_read_experts_equal_the_resident_model_and_the_default_path(tmp_path, cell):
+    """Logits, loss, dX, the router-output gradients, the router weight's gradient and
+    every LoRA gradient of the resident eager model, the default streamed path and two
+    reads, bit for bit. The bf16-autocast cell runs the forward under CPU autocast and
+    the backward outside."""
+    import torch
+
+    ref, (default, default_runtime), (two, two_runtime), ids = _three_way(
+        tmp_path, "bfloat16" if cell == "bf16" else "float32"
+    )
+    autocast = cell == "bf16-autocast"
+    try:
+        want = _step_capturing(ref, ids, autocast)
+        got_default = _step_capturing(default, ids, autocast)
+        got = _step_capturing(two, ids, autocast)
+    finally:
+        default_runtime.close()
+        two_runtime.close()
+    kinds = {key[0] for key in want if isinstance(key, tuple)}
+    assert kinds == {"dX", "router_logits", "routing_weights", "router_weight", "grad"}
+    for kind in ("routing_weights", "router_weight"):
+        assert {key for key in want if key[0] == kind} == {(kind, 1), (kind, 2)}
+        assert float(want[(kind, 1)].abs().sum()) > 0.0
+    assert set(got) == set(got_default) == set(want)
+    for key, value in want.items():
+        assert torch.equal(got_default[key], value), key
+        assert torch.equal(got[key], value), key
+
+
+def test_two_read_recompute_reuses_the_forward_routing_decisions(tmp_path):
+    """Between forward and backward every router's correction bias is negated and
+    scaled. It steers only WHICH experts are chosen, so a recompute that selected
+    again would change the gradients; one that reuses the forward's decisions
+    leaves them equal. A fresh forward under the new bias shows it does choose
+    other experts."""
+    import torch
+
+    from soup_cli.utils.layer_stream_runtime import canonical_named_parameters
+
+    model, runtime, _, ids, _ = _paired(tmp_path, two_read_experts=True)
+    layers = model.get_submodule("base_model.model.model.layers")
+    routers = [layer.inner.mlp.gate for layer in layers if hasattr(layer.inner.mlp, "gate")]
+    assert len(routers) == 2
+
+    def grads():
+        return {
+            name: parameter.grad.clone()
+            for name, parameter in canonical_named_parameters(model)
+            if parameter.grad is not None
+        }
+
+    def choices_of(step):
+        chosen = []
+        handles = [
+            router.register_forward_hook(
+                lambda _m, _a, out: chosen.append(out[2].sort(dim=-1).values)
+            )
+            for router in routers
+        ]
+        try:
+            return step(), chosen
+        finally:
+            for handle in handles:
+                handle.remove()
+
+    model(input_ids=ids, labels=ids).loss.backward()
+    want = grads()
+    model.zero_grad(set_to_none=True)
+
+    loss, before = choices_of(lambda: model(input_ids=ids, labels=ids).loss)
+    with torch.no_grad():
+        for router in routers:
+            router.e_score_correction_bias.mul_(-10.0)
+    loss.backward()
+    got = grads()
+    with torch.no_grad():
+        _, after = choices_of(lambda: model(input_ids=ids, labels=ids))
+    runtime.close()
+
+    assert len(before) == len(after) == 2
+    assert all(not torch.equal(old, new) for old, new in zip(before, after))
+    assert want and set(got) == set(want)
+    for name, gradient in want.items():
+        assert torch.equal(got[name], gradient), name
+
+
+@pytest.mark.parametrize("two_read_experts", [False, True], ids=["default", "two-reads"])
+def test_streamed_model_holds_one_expert_at_a_time(tmp_path, two_read_experts):
+    """The VRAM bound through the checkpointed decoder layer: when an expert is
+    fetched, no expert fetched before it is still alive (forward, checkpoint
+    recompute, backward), and none outlives the step."""
+    import weakref
+
+    model, runtime, _, ids, _ = _paired(tmp_path, two_read_experts)
+    alive_at_fetch = []
+    refs = []
+    for module in model.modules():
+        if type(module).__name__ != "StreamedExperts":
+            continue
+
+        def tracking(expert, real=module.fetch):
+            alive_at_fetch.append(sum(ref() is not None for ref in refs))
+            gate_up, down = real(expert)
+            refs.extend((weakref.ref(gate_up), weakref.ref(down)))
+            return gate_up, down
+
+        module.fetch = tracking
+    model(input_ids=ids, labels=ids).loss.backward()
+    runtime.close()
+    assert alive_at_fetch and max(alive_at_fetch) == 0
+    assert all(ref() is None for ref in refs)
+
+
+def test_two_read_replay_refuses_a_router_call_the_forward_did_not_make(tmp_path):
+    """The recompute hands each router call the decision recorded at its position; a
+    call that does not match it must fail loudly, never route with another's choice."""
+    import torch
+    from transformers import OlmoeConfig
+    from transformers.models.olmoe.modeling_olmoe import OlmoeTopKRouter
+
+    from soup_cli.utils.expert_stream import (
+        ExpertFetcher,
+        install_expert_streaming,
+        two_read_checkpoint_contexts,
+    )
+
+    module, n_experts, _ = _olmoe_experts(5)
+    _, reader = _streamed_copy(tmp_path, module, n_experts)
+    router = OlmoeTopKRouter(OlmoeConfig(hidden_size=32, num_experts=8, num_experts_per_tok=2))
+    holder = _holder(module, gate=router)
+    install_expert_streaming(
+        [holder], {0: reader}, ExpertFetcher(device="cpu", dtype="float32"), two_reads=True
+    )
+    forward, replay = two_read_checkpoint_contexts()
+    with forward:
+        holder.mlp.gate(torch.randn(6, 32))
+    with replay, pytest.raises(RuntimeError, match="which the forward did not take"):
+        holder.mlp.gate(torch.randn(7, 32))
+    reader.close()
+
+
+def test_two_read_replay_hands_out_owned_copies_of_the_recorded_decisions(tmp_path):
+    """A caller may edit a router's outputs in place (OLMoE-style routers divide the
+    top-k values in place). That must change neither what the record holds nor what
+    any later recompute receives."""
+    import torch
+    from transformers import OlmoeConfig
+    from transformers.models.olmoe.modeling_olmoe import OlmoeTopKRouter
+
+    from soup_cli.utils.expert_stream import (
+        ExpertFetcher,
+        install_expert_streaming,
+        two_read_checkpoint_contexts,
+    )
+
+    module, n_experts, _ = _olmoe_experts(5)
+    _, reader = _streamed_copy(tmp_path, module, n_experts)
+    router = OlmoeTopKRouter(OlmoeConfig(hidden_size=32, num_experts=8, num_experts_per_tok=2))
+    holder = _holder(module, gate=router)
+    install_expert_streaming(
+        [holder], {0: reader}, ExpertFetcher(device="cpu", dtype="float32"), two_reads=True
+    )
+    forward, replay = two_read_checkpoint_contexts()
+    hidden = torch.randn(6, 32)
+    with forward:
+        decided = holder.mlp.gate(hidden)
+    want = decided[2].clone()
+    decided[2].zero_()  # the forward's caller edits its result in place
+    for _ in range(2):  # two recomputes, as under retain_graph
+        with replay:
+            replayed = holder.mlp.gate(hidden)
+            assert torch.equal(replayed[2], want)
+            replayed[2].zero_()  # an edit of a replayed result must not reach the next one
+    reader.close()
+
+
+def test_two_read_experts_are_refused_on_a_fused_cache(tmp_path):
+    """Accepted and ignored would train with three reads while reporting two."""
+    from soup_cli.utils.layer_stream_runtime import build_streamed_model
+
+    weights, _ = _tiny_deepseek_v3(tmp_path)
+    index = _shard(tmp_path, weights)
+    with pytest.raises(ValueError, match="expert_layout='per_expert'"):
+        build_streamed_model(
+            model_id=weights, shard_dir=str(tmp_path / "shards"), index=index,
+            lora_config=_lora(), device="cpu", dtype="float32", buffers=2, pin=False,
+            two_read_experts=True,
+        )
 
 
 def test_layout_change_is_a_cache_miss_naming_the_layout(tmp_path):
@@ -788,16 +1196,21 @@ def test_install_refuses_a_model_whose_experts_disagree_with_the_file(tmp_path):
     reader.close()
 
 
-def _holder(experts):
+def _holder(experts, gate=None):
+    """A minimal decoder layer around one MoE block. It carries the class name of an
+    admitted two-read decoder, so router and replay checks are reached, not the
+    decoder-graph admission that ``test_two_read_install_refuses_a_decoder...`` covers."""
     import torch.nn as nn
 
-    class Layer(nn.Module):
+    class DeepseekV3DecoderLayer(nn.Module):
         def __init__(self):
             super().__init__()
             self.mlp = nn.Module()
             self.mlp.experts = experts
+            if gate is not None:
+                self.mlp.gate = gate
 
-    return Layer()
+    return DeepseekV3DecoderLayer()
 
 
 # --------------------------------------------------------------------------

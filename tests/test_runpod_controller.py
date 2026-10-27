@@ -159,9 +159,16 @@ def test_submit_keeps_one_controller_through_repeated_interrupts(tmp_path, monke
 def test_missing_ssh_or_existing_output_never_launches(credentials):
     ns = _controller()
     calls = []
+    notices = []
+    ns["_notice"] = notices.append
     ns["_request_json"] = lambda *a, **kw: calls.append((a, kw))
     ns["_find_tool"] = lambda command: None
     assert ns["main"]() == 2
+    assert notices == [
+        "OpenSSH ssh and scp must be installed and on PATH before RunPod submission."
+    ]
+    with pytest.raises(RuntimeError, match="installed and on PATH before RunPod submission"):
+        ns["_tool"]("ssh")
     ns["_find_tool"] = lambda command: FAKE_TOOL_DIR + command
     Path("out").mkdir()
     assert ns["main"]() == 2

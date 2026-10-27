@@ -10,6 +10,9 @@ from __future__ import annotations
 import platform
 from typing import Any, Optional
 
+#: macOS ships sysctl at this fixed location.
+_MACOS_SYSCTL = "/usr/sbin/sysctl"
+
 
 def detect_mlx() -> bool:
     """Return True if the ``mlx`` package is importable on this machine.
@@ -67,8 +70,8 @@ def get_chip_info() -> dict[str, str]:
 
     try:
         import subprocess  # noqa: S404 — used with list args only
-        result = subprocess.run(  # noqa: S603, S607
-            ["sysctl", "-n", "machdep.cpu.brand_string"],
+        result = subprocess.run(  # noqa: S603
+            [_MACOS_SYSCTL, "-n", "machdep.cpu.brand_string"],
             capture_output=True,
             text=True,
             timeout=2,
@@ -88,8 +91,8 @@ def get_unified_memory_bytes() -> Optional[int]:
         return None
     try:
         import subprocess  # noqa: S404
-        result = subprocess.run(  # noqa: S603, S607
-            ["sysctl", "-n", "hw.memsize"],
+        result = subprocess.run(  # noqa: S603
+            [_MACOS_SYSCTL, "-n", "hw.memsize"],
             capture_output=True,
             text=True,
             timeout=2,

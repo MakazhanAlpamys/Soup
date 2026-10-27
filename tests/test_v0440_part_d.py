@@ -555,50 +555,32 @@ def test_resolve_too_many_args():
         resolve("cli", ["x"] * 99)
 
 
-def test_resolve_invalid_arg():
+#: Where the llama.cpp binaries are looked up (absolute PATH directories only).
+_FIND_TOOL = "soup_cli.utils.tool_paths.find_tool"
+
+
+def test_resolve_invalid_arg(monkeypatch):
     # Args with newlines must be rejected even if the binary exists.
-    # We simulate by patching shutil.which to return a fake path.
-    import shutil
-
-    real_which = shutil.which
-
-    def fake_which(name, path=None):  # noqa: ARG001
-        return "/fake/llama-cli"
-
-    shutil.which = fake_which  # type: ignore[assignment]
-    try:
-        with pytest.raises(ValueError, match="control"):
-            resolve("cli", ["bad\narg"])
-        with pytest.raises(ValueError, match="exceeds"):
-            resolve("cli", ["x" * 2048])
-    finally:
-        shutil.which = real_which  # type: ignore[assignment]
+    # We simulate by patching the PATH lookup to return a fake path.
+    monkeypatch.setattr(_FIND_TOOL, lambda name, path=None: "/fake/llama-cli")
+    with pytest.raises(ValueError, match="control"):
+        resolve("cli", ["bad\narg"])
+    with pytest.raises(ValueError, match="exceeds"):
+        resolve("cli", ["x" * 2048])
 
 
-def test_resolve_missing_binary():
-    import shutil
-
-    real_which = shutil.which
-    shutil.which = lambda *_a, **_k: None  # type: ignore[assignment]
-    try:
-        with pytest.raises(FileNotFoundError):
-            resolve("cli", ["--help"])
-    finally:
-        shutil.which = real_which  # type: ignore[assignment]
+def test_resolve_missing_binary(monkeypatch):
+    monkeypatch.setattr(_FIND_TOOL, lambda name, path=None: None)
+    with pytest.raises(FileNotFoundError):
+        resolve("cli", ["--help"])
 
 
-def test_build_argv_includes_binary_then_args():
-    import shutil
-
-    real_which = shutil.which
-    shutil.which = lambda *_a, **_k: "/fake/llama-cli"  # type: ignore[assignment]
-    try:
-        invocation = resolve("cli", ["--help"])
-        argv = build_argv(invocation)
-        assert argv[0].endswith("llama-cli")
-        assert argv[1:] == ["--help"]
-    finally:
-        shutil.which = real_which  # type: ignore[assignment]
+def test_build_argv_includes_binary_then_args(monkeypatch):
+    monkeypatch.setattr(_FIND_TOOL, lambda name, path=None: "/fake/llama-cli")
+    invocation = resolve("cli", ["--help"])
+    argv = build_argv(invocation)
+    assert argv[0].endswith("llama-cli")
+    assert argv[1:] == ["--help"]
 
 
 def test_cli_llama_help_lists_subcommands(tmp_path, monkeypatch):

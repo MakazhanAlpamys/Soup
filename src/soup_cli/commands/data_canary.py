@@ -36,7 +36,7 @@ from soup_cli.utils.canary import (
     write_manifest,
 )
 from soup_cli.utils.live_eval import compute_pair_losses
-from soup_cli.utils.paths import atomic_write_text, is_under_cwd
+from soup_cli.utils.paths import atomic_write_text, ensure_distinct_paths, is_under_cwd
 from soup_cli.utils.terminal import for_terminal
 
 if TYPE_CHECKING:  # static types only — transformers stays a lazy import
@@ -168,6 +168,15 @@ def insert(
         raise typer.Exit(1)
     _guard_under_cwd(output, "Output")
     _guard_under_cwd(manifest, "Manifest")
+    # Neither write may land on the dataset, and the dataset write must not
+    # replace the manifest just written: either loss is unrecoverable (#2226).
+    try:
+        ensure_distinct_paths(
+            [("the input", path)], [("--output", output), ("--manifest", manifest)]
+        )
+        ensure_distinct_paths([("--output", output)], [("--manifest", manifest)])
+    except ValueError as exc:
+        _refuse(str(exc))
     suffix = Path(output).suffix.lower()
     if suffix not in _OUTPUT_SUFFIXES:
         _refuse(

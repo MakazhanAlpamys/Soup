@@ -58,13 +58,17 @@ def _client(**kwargs) -> TestClient:
 @pytest.fixture
 def sandbox_calls(monkeypatch) -> list[str]:
     """Replace the code sandbox with a recorder that returns fixed stdout."""
+    from soup_cli.trainer.rewards import SandboxProcessResult
+
     calls: list[str] = []
 
-    def _fake_sandbox(code: str, strict_namespaces: bool = False) -> str:
+    def _fake_sandbox(code: str, strict_namespaces: bool = False) -> SandboxProcessResult:
+        assert strict_namespaces is True
         calls.append(code)
-        return "ran"
+        return SandboxProcessResult(returncode=0, stdout="ran", stderr="")
 
-    monkeypatch.setattr("soup_cli.trainer.rewards._run_code_sandbox", _fake_sandbox)
+    monkeypatch.setattr("soup_cli.trainer.rewards._run_code_sandbox_process", _fake_sandbox)
+    monkeypatch.setattr("soup_cli.trainer.rewards._run_code_sandbox", lambda *a, **k: "ran")
     return calls
 
 

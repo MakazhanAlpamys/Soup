@@ -337,7 +337,8 @@ def _resolve_quantize_binary(llama_cpp_dir: str) -> Path:
     ]
     for candidate in candidates:
         if candidate.is_file():
-            return candidate
+            # Absolute, so the binary runs from this directory even when it is ".".
+            return Path(os.path.abspath(candidate))
     raise FileNotFoundError(
         f"llama-quantize binary not found under {llama_cpp_dir!r}. "
         "Build llama.cpp with cmake first."
@@ -359,7 +360,8 @@ def _resolve_imatrix_binary(llama_cpp_dir: str) -> Path:
     ]
     for candidate in candidates:
         if candidate.is_file():
-            return candidate
+            # Absolute, so the binary runs from this directory even when it is ".".
+            return Path(os.path.abspath(candidate))
     raise FileNotFoundError(
         f"llama-imatrix binary not found under {llama_cpp_dir!r}. "
         "Build llama.cpp tools with `cmake --build . --target llama-imatrix` "

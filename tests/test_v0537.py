@@ -1121,7 +1121,6 @@ class TestToolEndpointsLive:
 
     def test_bash_sandbox_raises_on_strict_namespace_failure(self, monkeypatch):
         import os
-        import shutil
         import subprocess
         import sys
 
@@ -1156,7 +1155,9 @@ class TestToolEndpointsLive:
             raise OSError("Mock prevents actual execution")
 
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
-        monkeypatch.setattr(shutil, "which", lambda x: "/bin/bash")
+        monkeypatch.setattr(
+            "soup_cli.utils.tool_paths.find_tool", lambda name, path=None: "/bin/bash"
+        )
 
         from soup_cli.trainer.rewards import _run_bash_sandbox
 

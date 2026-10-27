@@ -9,9 +9,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from soup_cli.eval.generation import generate_outputs
+from soup_cli.eval.generation import iter_outputs
 from soup_cli.utils.final_answer import answers_match, parse_completion, parse_reference
 from soup_cli.utils.safe_regex import check_config_regex
+from soup_cli.utils.ship_progress import track
 
 MAX_EVAL_TASKS = 10_000
 MAX_REGEX_PATTERN_LEN = 1_000
@@ -437,8 +438,8 @@ def run_eval(
         generate_fn = _create_default_generator(model_path)
 
     results: list[EvalResult] = []
-    outputs = generate_outputs(generate_fn, [task.prompt for task in tasks])
-    for task, output in zip(tasks, outputs):
+    outputs = iter_outputs(generate_fn, [task.prompt for task in tasks])
+    for task, output in track(zip(tasks, outputs), len(tasks)):
         result = (
             score_task(task, output) if output is not None
             else EvalResult(task=task, output="", score=0.0, matched=False)

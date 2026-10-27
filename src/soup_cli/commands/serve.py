@@ -1787,6 +1787,7 @@ def _create_app(
             raise HTTPException(
                 status_code=401,
                 detail="Authentication required on non-loopback host",
+                headers={"WWW-Authenticate": "Bearer"},
             )
         if not auth_token:
             return
@@ -1795,13 +1796,19 @@ def _create_app(
             authorization.encode("utf-8"), expected.encode("utf-8")
         ):
             raise HTTPException(
-                status_code=401, detail="Invalid or missing bearer token"
+                status_code=401,
+                detail="Invalid or missing bearer token",
+                headers={"WWW-Authenticate": "Bearer"},
             )
 
     def _check_code_tool_auth(authorization: Optional[str]) -> None:
         """The python and bash tool routes take a token on every bind, loopback included."""
         if not auth_token:
-            raise HTTPException(status_code=401, detail=_CODE_TOOL_TOKEN_REQUIRED)
+            raise HTTPException(
+                status_code=401,
+                detail=_CODE_TOOL_TOKEN_REQUIRED,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         _check_tool_auth(authorization)
 
     from collections.abc import AsyncIterator
@@ -2335,7 +2342,7 @@ def _create_app(
         from soup_cli.trainer.rewards import (
             SandboxIsolationError,
             _get_isolation_strategy,
-            _run_code_sandbox,
+            _run_code_sandbox_process,
         )
 
         # Same requirement as /v1/tools/bash: run only where the host
@@ -2345,17 +2352,27 @@ def _create_app(
         if _get_isolation_strategy() == "best-effort":
             raise HTTPException(status_code=501, detail=isolation_detail)
         try:
-            stdout = _run_code_sandbox(code, strict_namespaces=True)
+            result = _run_code_sandbox_process(code, strict_namespaces=True)
         except SandboxIsolationError:
             raise HTTPException(status_code=501, detail=isolation_detail)
         except Exception as exc:  # noqa: BLE001
             logger.debug("/v1/tools/python sandbox error: %s", exc)
             raise HTTPException(status_code=500, detail="Internal server error")
+        if result.launch_failed:
+            raise HTTPException(
+                status_code=501,
+                detail=isolation_detail,
+            )
+        exit_code = result.returncode if result.returncode is not None else 1
+        if result.timed_out:
+            exit_code = 124
+        elif result.output_exceeded:
+            exit_code = 1
         return {
-            "stdout": stdout if stdout is not None else "",
-            "stderr": "",
-            "exit_code": 0 if stdout is not None else 1,
-            "timed_out": stdout is None,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "exit_code": exit_code,
+            "timed_out": result.timed_out,
         }
 
     @app.post("/v1/tools/bash", dependencies=[Depends(_check_local_request)])

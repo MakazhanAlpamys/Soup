@@ -23,13 +23,32 @@ from soup_cli.data.loader import (
 from soup_cli.data.validator import validate_and_stats
 from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
 from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR, GateCommand
-from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.paths import ensure_distinct_paths, is_under_cwd
 from soup_cli.utils.semdedup import DedupReport, greedy_semdedup
 from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
 app = typer.Typer(no_args_is_help=True)
+
+
+def _refuse_output_over_input(
+    inputs: list[tuple[str, str]],
+    outputs: list[tuple[str, Optional[str]]],
+    *,
+    exit_code: int = 1,
+) -> None:
+    """Exit before anything is read when an output names an input file (#2226).
+
+    ``ensure_distinct_paths`` catches every spelling of the same file (``./x``,
+    ``sub/../x``, the absolute path, a case variant on Windows, a hard link, a
+    symlink), so the write can never replace the data the command reads.
+    """
+    try:
+        ensure_distinct_paths(inputs, [(name, path) for name, path in outputs if path])
+    except ValueError as exc:
+        console.print(f"[red]{for_terminal(exc)}[/]")
+        raise typer.Exit(exit_code) from exc
 
 
 @app.command()
@@ -195,6 +214,7 @@ def convert(
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
         raise typer.Exit(1)
+    _refuse_output_over_input([("the input", path)], [("--output", output)])
 
     if to not in CONVERTIBLE_FORMATS:
         console.print(
@@ -262,6 +282,9 @@ def merge(
     shuffle: bool = typer.Option(False, "--shuffle", help="Shuffle after merging"),
 ):
     """Merge multiple datasets into a single file."""
+    _refuse_output_over_input(
+        [("the input", file_str) for file_str in files], [("--output", output)]
+    )
     all_data: list[dict] = []
 
     for file_str in files:
@@ -382,6 +405,7 @@ def dedup(
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
         raise typer.Exit(1)
+    _refuse_output_over_input([("the input", path)], [("--output", output)])
 
     data = load_raw_data(file_path)
     if not data:
@@ -505,6 +529,7 @@ def filter_data(
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
         raise typer.Exit(1)
+    _refuse_output_over_input([("the input", path)], [("--output", output)])
 
     if perplexity is None and coherence is None and not score_only:
         console.print(
@@ -892,6 +917,7 @@ def sample_data(
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
         raise typer.Exit(1)
+    _refuse_output_over_input([("the input", path)], [("--output", output)])
 
     if num is None and pct is None:
         console.print("[red]Specify either --n (count) or --pct (percentage).[/]")
@@ -1742,6 +1768,11 @@ def augment_data(
         raise typer.Exit(1)
     input_resolved = Path(os.path.realpath(input_path))
 
+    # Before the --output symlink check, so a symlink to the input is reported
+    # as the input; the default --output (augmented.jsonl) can be the input too.
+    _refuse_output_over_input(
+        [("--input", input_path)], [("--output", output_path)], exit_code=2
+    )
     try:
         enforce_under_cwd_and_no_symlink(output_path, "--output")
     except (TypeError, ValueError) as exc:
@@ -2128,6 +2159,8 @@ def from_traces_cmd(
     if not _under_cwd(output_path):
         console.print(f"[red]--output '{output}' is outside cwd - refusing[/]")
         raise typer.Exit(1)
+    # The default --output (prefs.jsonl) is also a plausible --logs file.
+    _refuse_output_over_input([("--logs", logs)], [("--output", output)])
 
     console.print(Panel(
         "[yellow]Traces may contain sensitive user data.[/]\n"
@@ -4189,6 +4222,7 @@ def evolve(
         console.print("[red]--rounds must be in [1, 5][/]")
         raise typer.Exit(2)
 
+    _refuse_output_over_input([("--input", input_path)], [("--output", output)], exit_code=2)
     try:
         seeds = _evolve_load_prompts(input_path)
         if output:

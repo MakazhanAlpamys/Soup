@@ -17,7 +17,6 @@ import json
 import math
 import os
 import re
-import shutil as _shutil
 import subprocess
 import sys
 import tempfile
@@ -48,6 +47,9 @@ _CODE_EXEC_WARNING_SHOWN = False
 
 # Cached isolation strategy — recomputed on demand when tests reset to None
 _ISOLATION_STRATEGY_CACHE: "str | None" = None
+
+# macOS ships sandbox-exec at this fixed location; it is run from there only.
+_MACOS_SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 
 # macOS sandbox-exec profile: default-deny, allow narrow process needs, block
 # network and writes outside /tmp. Defence-in-depth on top of RLIMIT + socket
@@ -100,6 +102,8 @@ def _get_safe_sandbox_env() -> dict[str, str]:
         "SYSTEMDRIVE",
         "WINDIR",
         "PATHEXT",
+        # Keeps the current directory out of the Windows program search.
+        "NODEFAULTCURRENTDIRECTORYINEXEPATH",
         "COMSPEC",
         "TEMP",
         "TMP",
@@ -125,8 +129,8 @@ def _compute_isolation_strategy() -> str:
         will best-effort `unshare(CLONE_NEWUSER|CLONE_NEWNET|CLONE_NEWPID)` in
         the child preexec_fn. Falls back at runtime if unprivileged user
         namespaces are disabled (EPERM/ENOSYS).
-      - "sandbox-exec" : macOS with `sandbox-exec` binary on PATH — we wrap
-        argv with `sandbox-exec -p <profile>`.
+      - "sandbox-exec" : macOS with ``/usr/bin/sandbox-exec`` — we wrap argv
+        with `sandbox-exec -p <profile>`.
       - "best-effort" : everything else (Windows, restricted Linux). Existing
         RLIMIT + socket-patch + ephemeral-cwd guards still apply.
 
@@ -135,7 +139,11 @@ def _compute_isolation_strategy() -> str:
     """
     if sys.platform == "linux" and hasattr(os, "unshare"):
         return "namespaces"
-    if sys.platform == "darwin" and _shutil.which("sandbox-exec") is not None:
+    if (
+        sys.platform == "darwin"
+        and os.path.isfile(_MACOS_SANDBOX_EXEC)
+        and os.access(_MACOS_SANDBOX_EXEC, os.X_OK)
+    ):
         return "sandbox-exec"
     return "best-effort"
 
@@ -394,8 +402,7 @@ def _run_sandboxed_subprocess(
 ) -> SandboxProcessResult:
     """Execute a sandboxed subprocess under concurrency limit with streaming kill-on-overflow."""
     if _get_isolation_strategy() == "sandbox-exec" and sys.platform == "darwin":
-        sandbox_bin = _shutil.which("sandbox-exec") or "/usr/bin/sandbox-exec"
-        argv = [sandbox_bin, "-p", MACOS_SANDBOX_PROFILE, *argv]
+        argv = [_MACOS_SANDBOX_EXEC, "-p", MACOS_SANDBOX_PROFILE, *argv]
 
     if env is None:
         env = _get_safe_sandbox_env()
@@ -489,6 +496,34 @@ def _run_sandboxed_subprocess(
         return SandboxProcessResult(proc.returncode, stdout, stderr)
 
 
+def _run_code_sandbox_process(
+    code: str, strict_namespaces: bool = False
+) -> SandboxProcessResult:
+    """Run code in a subprocess sandbox and return the complete SandboxProcessResult.
+
+    Used by ``soup serve``'s ``/v1/tools/python`` to report full process diagnostics
+    (stdout, stderr, exit_code, timed_out).
+    """
+    _show_code_exec_warning_once()
+
+    wrapped = SANDBOX_NETWORK_GUARD + "\n" + code
+
+    preexec: Callable[[], None] | None = None
+    if sys.platform != "win32":
+        preexec = (
+            partial(_apply_rlimit, strict_namespaces=True)
+            if strict_namespaces
+            else _apply_rlimit
+        )
+
+    argv: list[str] = [sys.executable, "-I", "-S", "-c", wrapped]
+
+    result = _run_sandboxed_subprocess(argv, preexec)
+    if strict_namespaces and result.launch_failed:
+        raise SandboxIsolationError(result.stderr)
+    return result
+
+
 def _run_code_sandbox(code: str, strict_namespaces: bool = False) -> "str | None":
     """Run code in a subprocess sandbox with timeout, rlimits, and output caps.
 
@@ -510,24 +545,13 @@ def _run_code_sandbox(code: str, strict_namespaces: bool = False) -> "str | None
 
     Returns stdout string or None on failure.
     """
-    _show_code_exec_warning_once()
-
-    wrapped = SANDBOX_NETWORK_GUARD + "\n" + code
-
-    preexec: Callable[[], None] | None = None
-    if sys.platform != "win32":
-        preexec = (
-            partial(_apply_rlimit, strict_namespaces=True)
-            if strict_namespaces
-            else _apply_rlimit
-        )
-
-    argv: list[str] = [sys.executable, "-I", "-S", "-c", wrapped]
-
-    result = _run_sandboxed_subprocess(argv, preexec)
-    if strict_namespaces and result.launch_failed:
-        raise SandboxIsolationError(result.stderr)
-    if result.returncode != 0 or result.timed_out or result.output_exceeded or result.launch_failed:
+    result = _run_code_sandbox_process(code, strict_namespaces=strict_namespaces)
+    if (
+        result.returncode != 0
+        or result.timed_out
+        or result.output_exceeded
+        or result.launch_failed
+    ):
         return None
     return result.stdout
 
@@ -548,7 +572,10 @@ def _run_bash_sandbox(command: str) -> SandboxProcessResult:
     def preexec() -> None:
         _apply_rlimit(strict_namespaces=True)
 
-    bash_bin = _shutil.which("bash") or "/bin/bash"
+    from soup_cli.utils.tool_paths import find_tool
+
+    # bash from an absolute PATH directory, else the system one.
+    bash_bin = find_tool("bash") or "/bin/bash"
     argv: list[str] = [bash_bin, "-c", command]
 
     result = _run_sandboxed_subprocess(argv, preexec)

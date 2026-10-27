@@ -821,6 +821,10 @@ config load because its evidence covers BF16, not FP16; see the
 
 Extends the watchdog: when the watchdog halts training on a loss spike, writes `<output>/spike_recovery.json` with decayed LR and attempt count for re-launch (e.g. `soup train --resume`). Capped at `loss_spike_recovery_max_attempts` (default 3); each launch hitting a spike evaluates prior completed attempts against the cap (`attempts < max_attempts`), writes the incremented count, and sets `should_recover: false` once the recovery budget is exhausted.
 
+The hint stays under the working directory and is replaced atomically. A symbolic-link
+target is refused with a warning; a failed replacement preserves the previous hint and
+does not consume an attempt. Replacing a hard-linked hint leaves its other links unchanged.
+
 ```yaml
 training:
   loss_watchdog: true                   # required

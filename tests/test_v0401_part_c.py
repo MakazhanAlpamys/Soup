@@ -123,19 +123,22 @@ def test_pick_quickstart_model_high_vram_keeps_default():
 
 # --- N3: GPU diagnostic distinguishes CPU build from no GPU ----------------
 
+#: Where doctor looks nvidia-smi up (absolute PATH directories only).
+_FIND_TOOL = "soup_cli.utils.tool_paths.find_tool"
+
 
 def test_detect_gpu_hw_without_torch_cuda_no_nvidia_smi():
     import subprocess
 
     from soup_cli.commands.doctor import _detect_gpu_hw_without_torch_cuda
 
-    with patch("shutil.which", return_value=None):
+    with patch(_FIND_TOOL, return_value=None):
         assert _detect_gpu_hw_without_torch_cuda() == ""
 
     # nvidia-smi present but failing → empty advisory.
     completed = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="")
     with (
-        patch("shutil.which", return_value="/usr/bin/nvidia-smi"),
+        patch(_FIND_TOOL, return_value="/usr/bin/nvidia-smi"),
         patch("subprocess.run", return_value=completed),
     ):
         assert _detect_gpu_hw_without_torch_cuda() == ""
@@ -150,7 +153,7 @@ def test_detect_gpu_hw_returns_advisory_when_smi_succeeds():
         args=[], returncode=0, stdout="NVIDIA GeForce RTX 3050\n", stderr=""
     )
     with (
-        patch("shutil.which", return_value="/usr/bin/nvidia-smi"),
+        patch(_FIND_TOOL, return_value="/usr/bin/nvidia-smi"),
         patch("subprocess.run", return_value=completed),
         patch(
             "soup_cli.commands.doctor._nvidia_smi_cuda_version",
@@ -174,7 +177,7 @@ def test_detect_gpu_hw_uses_driver_cuda_wheel():
         args=[], returncode=0, stdout="NVIDIA GeForce RTX 5060 Ti\n", stderr=""
     )
     with (
-        patch("shutil.which", return_value="/usr/bin/nvidia-smi"),
+        patch(_FIND_TOOL, return_value="/usr/bin/nvidia-smi"),
         patch("subprocess.run", return_value=completed),
         patch(
             "soup_cli.commands.doctor._nvidia_smi_cuda_version",
@@ -203,7 +206,7 @@ def test_nvidia_smi_invoked_by_absolute_path():
     smi = "/usr/bin/nvidia-smi"
     failed = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="")
     with (
-        patch("shutil.which", return_value=smi),
+        patch(_FIND_TOOL, return_value=smi),
         patch("subprocess.run", return_value=failed) as run,
     ):
         _nvidia_smi_cuda_version()
@@ -212,7 +215,7 @@ def test_nvidia_smi_invoked_by_absolute_path():
     assert argv[0] != "nvidia-smi"
 
     with (
-        patch("shutil.which", return_value=smi),
+        patch(_FIND_TOOL, return_value=smi),
         patch("subprocess.run", return_value=failed) as run,
     ):
         _detect_gpu_hw_without_torch_cuda()

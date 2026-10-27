@@ -2387,6 +2387,7 @@ Usage: `soup infer [OPTIONS]`
 | `--model`, `-m` | text |  | yes | Path to model (LoRA adapter or full model) |
 | `--input`, `-i` | text |  | yes | Path to input JSONL file (each line: {"prompt": "..."}) |
 | `--output`, `-o` | text |  | yes | Path to output JSONL file for results |
+| `--backend` | text | `transformers` |  | Text backend: transformers or mlx |
 | `--base`, `-b` | text |  |  | Base model for LoRA adapter (auto-detected if not set) |
 | `--max-tokens` | integer, 1 to 16384 | `256` |  | Maximum tokens to generate per response (1-16384) |
 | `--temperature`, `-t` | float | `0.7` |  | Sampling temperature (0 = greedy) |
@@ -3459,6 +3460,7 @@ Usage: `soup ship [OPTIONS] [<command>] [ARGS]...`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
+| `--progress` | text |  |  | Opt-in JSONL progress on stderr (jsonl). |
 | `--base` | text |  |  | Base model id/path (the 'before'). |
 | `--tuned` | text |  |  | Tuned model id/path (a separate 'after' model). |
 | `--adapter` | text |  |  | LoRA adapter path (tuned = base + this adapter). |

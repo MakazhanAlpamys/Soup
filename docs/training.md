@@ -1469,6 +1469,11 @@ The skipped-step count is logged at the end of the run (as a console warning
 when the fraction exceeds 5%) and persisted in `trainer_state.json` so
 `soup adapters audit` can see it.
 
+On Apple Silicon, `backend: mlx` trains GRPO natively with the same objective
+(TRL's `loss_type="dapo"` defaults) and the built-in rewards; see
+[GRPO on MLX](backends-and-ops.md#grpo-on-mlx) for the units, the rollout
+mode and what it refuses.
+
 **Built-in reward functions:**
 - `accuracy` — 1.0 when the completion's final answer matches the gold's, else 0.0 (no partial credit)
 - `format` — checks for structured `<think>...</think>` reasoning blocks
@@ -2063,14 +2068,21 @@ Both configs must write to different, non-nested output directories: `soup ra-di
 
 ## Curriculum-Aware Training (BETA)
 
-Layer dynamic re-weighting on top of the static `curriculum` bucketer. Every N steps the trainer aggregates per-sample loss + grad-norm into a per-bucket uncertainty signal, runs it through a softmax (temperature-controlled) with floor (water-filling so no bucket drops below `curriculum_dynamic_floor`), and re-weights the sampler. Empty buckets fall back to the median of populated buckets; degenerate inputs return uniform.
+Layer dynamic uncertainty telemetry on top of the static `curriculum` bucketer (#808).
+Every N steps the trainer aggregates per-sample loss + grad-norm into a per-bucket
+uncertainty signal, runs it through a softmax (temperature-controlled) with floor
+(water-filling so no bucket drops below `curriculum_dynamic_floor`), and logs the
+tracked bucket weights to `curriculum_history.jsonl` for curve inspection. The weights
+are only written to `curriculum_history.jsonl`; they do not change which samples a
+batch contains. Empty buckets fall back to the median of populated buckets;
+degenerate inputs return uniform.
 
 ```yaml
 training:
   curriculum: true                          # static bucketer (v0.23.0)
   curriculum_buckets: 4
   curriculum_metric: perplexity             # length (default) | loss | perplexity
-  curriculum_dynamic: true                  # NEW — dynamic re-weighting
+  curriculum_dynamic: true                  # dynamic uncertainty telemetry (#808)
   curriculum_dynamic_recompute_steps: 50    # refresh every 50 global steps
   curriculum_dynamic_floor: 0.05            # min weight per bucket
   curriculum_dynamic_temperature: 1.0       # softmax temp on uncertainty

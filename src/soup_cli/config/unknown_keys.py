@@ -40,6 +40,7 @@ from dataclasses import dataclass
 
 import pydantic
 
+from soup_cli.config.aliases import CONFIG_ALIASES
 from soup_cli.config.schema import (
     ROOT_LEVEL_MISPLACED_KEYS,
     SoupConfig,
@@ -71,9 +72,10 @@ __all__ = [
 #: exists to avoid. One minor of notice: warn in 0.74, refuse in 0.75.
 UNKNOWN_KEY_REJECTION_VERSION = "0.75"
 
-#: difflib cutoff. 0.6 resolves every case reported in #627 on the first
-#: suggestion while leaving an unrelated key (``zzzzzzzz``) with none.
-_SUGGESTION_CUTOFF = 0.6
+#: difflib cutoff for declared fields. 0.65 resolves every case reported in #627
+#: and rejects false-positive near matches such as lerning_rate -> use_ring_attention
+#: (which has similarity 0.600) (#2099).
+_SUGGESTION_CUTOFF = 0.65
 
 #: Findings are capped, and so is the work: every unknown key costs a difflib
 #: pass over the ~240 declared field names, and a config string reaches this
@@ -99,6 +101,7 @@ class UnknownKey:
     path: str
     key: str
     suggestions: tuple[str, ...]
+    alias: str | None = None
 
 
 def _nested_models(model: type[pydantic.BaseModel], field: str) -> list[type]:
@@ -148,6 +151,47 @@ def _walk(
             shown += "..."
         path = f"{prefix}{shown}"
         if key not in declared:
+            # 1. Alias lookup (#2099): check exact alias table match or typo of an alias
+            # ahead of declared field difflib suggestions. Exact aliases take priority;
+            # fuzzy aliases must not hide a closer match to a declared field.
+            alias_target = None
+            if path in CONFIG_ALIASES:
+                alias_target = CONFIG_ALIASES[path]
+            else:
+                # Check fuzzy match against alias keys under the same prefix
+                prefix_aliases = [
+                    k[len(prefix):]
+                    for k in CONFIG_ALIASES
+                    if k.startswith(prefix) and "." not in k[len(prefix):]
+                ]
+                close_aliases = difflib.get_close_matches(
+                    key, prefix_aliases, n=1, cutoff=0.7
+                )
+                if close_aliases:
+                    closest_alias = close_aliases[0]
+                    closest_declared = difflib.get_close_matches(
+                        key, list(declared), n=1, cutoff=_SUGGESTION_CUTOFF
+                    )
+                    alias_score = difflib.SequenceMatcher(None, key, closest_alias).ratio()
+                    declared_score = (
+                        difflib.SequenceMatcher(None, key, closest_declared[0]).ratio()
+                        if closest_declared else 0.0
+                    )
+                    if alias_score > declared_score:
+                        alias_target = CONFIG_ALIASES[f"{prefix}{closest_alias}"]
+
+            if alias_target is not None:
+                short_field = alias_target.split(".")[-1]
+                found.append(
+                    UnknownKey(
+                        path=path,
+                        key=shown,
+                        suggestions=(short_field,),
+                        alias=alias_target,
+                    )
+                )
+                continue
+
             suggestions = tuple(
                 difflib.get_close_matches(
                     key, list(declared), n=_MAX_SUGGESTIONS, cutoff=_SUGGESTION_CUTOFF
@@ -227,7 +271,9 @@ def format_unknown_keys(
     overflow = len(unknown) > _MAX_REPORTED_UNKNOWN_KEYS
     lines = []
     for item in unknown[:_MAX_REPORTED_UNKNOWN_KEYS]:
-        if item.suggestions:
+        if item.alias:
+            lines.append(f"unknown config key '{item.path}' - use {item.alias}. {suffix}")
+        elif item.suggestions:
             # After the question mark the suffix starts a new sentence.
             hint = " or ".join(f"'{s}'" for s in item.suggestions)
             lines.append(f"unknown config key '{item.path}' - did you mean {hint}? {suffix}")

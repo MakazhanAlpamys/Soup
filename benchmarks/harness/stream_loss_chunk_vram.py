@@ -29,8 +29,12 @@ Protocol
 --------
 The real ``soup train`` setup (``SFTTrainerWrapper.setup``) and one training
 step per arm, batch 1, LoRA r=8 on ``q_proj`` / ``v_proj``, ``stream_buffers: 2``,
-the rewind log on (its default). Each arm is built from scratch in the same
-process, the off arm first at each length.
+the rewind log on (its default), the off arm first at each length. Each arm runs
+in a fresh process, as each ``soup train`` does: in one process only the first arm
+got the RAM tier and the rest fell back to the disk tier (#1693), since the tier is
+chosen from the free RAM left behind. This process never initialises CUDA, so no
+arm loses VRAM to a second context. Each arm sets the allocator hint as ``soup train``
+does (``configure_cuda_alloc_hint``) before it reads the device.
 
 - "real peak" is ``torch.cuda.max_memory_allocated()`` over the step, after
   ``reset_peak_memory_stats()``.
@@ -70,12 +74,14 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import dataclasses
 import gc
 import inspect
 import json
 import math
 import os
 import pathlib
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -329,25 +335,83 @@ def run_one(
     )
 
 
+def _arm_name(chunk: Optional[int]) -> str:
+    return "off" if chunk is None else str(chunk)
+
+
+def parse_arm(value: str) -> tuple[int, Optional[int]]:
+    """``--arm SEQ:CHUNK``, CHUNK an integer or ``off``."""
+    seq, _, chunk = value.partition(":")
+    try:
+        return int(seq), None if chunk == "off" else int(chunk)
+    except ValueError:
+        raise ValueError(f"--arm must be SEQ:CHUNK or SEQ:off; got {value!r}") from None
+
+
+def run_arm_process(
+    base: str, seq: int, chunk: Optional[int], quantization: str, work_dir: pathlib.Path
+) -> tuple[Arm, str]:
+    """Run one arm in a fresh interpreter; ``(arm, the device it ran on)``."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    result = work_dir / "arm.json"
+    argv = [
+        sys.executable,
+        str(pathlib.Path(__file__).resolve()),
+        "--base", base,
+        "--quantization", quantization,
+        "--arm", f"{seq}:{_arm_name(chunk)}",
+        "--arm-out", str(result),
+    ]  # fmt: skip
+    # The child writes to the same stdout; without this, a redirected run's header
+    # lines would land after the first arm's output.
+    sys.stdout.flush()
+    status = subprocess.run(argv, check=False).returncode
+    if status != 0 or not result.exists():
+        raise RuntimeError(
+            f"seq {seq}, chunk {_arm_name(chunk)}: the arm's process exited {status} "
+            "without a result; its output is above"
+        )
+    doc = json.loads(result.read_text(encoding="utf-8"))
+    return Arm(**doc["arm"]), doc["device"]
+
+
+def run_arm(base: str, seq: int, chunk: Optional[int], quantization: str, out: str) -> int:
+    """The child side of :func:`run_arm_process`: one arm, its result written to ``out``."""
+    import torch
+
+    from soup_cli.utils.gpu import configure_cuda_alloc_hint
+
+    # As `soup train` does before anything starts CUDA (#2149); every arm streams.
+    configure_cuda_alloc_hint(stream_layers=True)
+    device = trainer_device()
+    out_path = pathlib.Path(out)
+    arm = run_one(base, seq, chunk, quantization, device, out_path.parent)
+    if device == "cuda":
+        # After the arm, so that this process does not initialise CUDA before the setup does.
+        props = torch.cuda.get_device_properties(0)
+        device = f"{props.name} | {props.total_memory / 1e9:.3f} GB"
+    doc = {"arm": dataclasses.asdict(arm), "device": device}
+    out_path.write_text(json.dumps(doc), encoding="utf-8")
+    return EXIT_OK
+
+
 def sweep(base: str, seqs: list[int], chunk: int, quantization: str) -> int:
     import torch
 
     import soup_cli
 
     print(f"# soup_cli {soup_cli.__version__} from {soup_cli.__file__}")
-    print(
-        f"# torch {torch.__version__} (CUDA {torch.version.cuda}) | "
-        f"{torch.cuda.get_device_name(0)} | "
-        f"{torch.cuda.get_device_properties(0).total_memory / 1e9:.3f} GB"
-    )
+    print(f"# torch {torch.__version__} (CUDA {torch.version.cuda}) | one process per arm")
     print(f"# base {base} | quantization {quantization} | chunk {chunk}")
-    print(HEADER)
     arms = []
     with tempfile.TemporaryDirectory(prefix="stream_loss_chunk_vram_") as tmp:
         for seq in seqs:
             for arm_chunk in (None, chunk):
-                work_dir = pathlib.Path(tmp) / f"s{seq}-{arm_chunk or 'off'}"
-                arm = run_one(base, seq, arm_chunk, quantization, "cuda", work_dir)
+                work_dir = pathlib.Path(tmp) / f"s{seq}-{_arm_name(arm_chunk)}"
+                arm, device = run_arm_process(base, seq, arm_chunk, quantization, work_dir)
+                if not arms:
+                    print(f"# device {device}")
+                    print(HEADER)
                 print(table_row(arm), flush=True)
                 arms.append(arm)
     return exit_status(arms)
@@ -567,6 +631,9 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="run the protocol on a tiny local Llama, reading no peak (no GPU, no download)",
     )
+    # One arm, run by the sweep in a process of its own.
+    parser.add_argument("--arm", help=argparse.SUPPRESS)
+    parser.add_argument("--arm-out", help=argparse.SUPPRESS)
     return parser.parse_args(argv)
 
 
@@ -579,6 +646,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     if not args.base:
         print("ERROR: --base is required unless --self-test is used")
         return EXIT_USAGE
+    if args.arm is not None:
+        if args.arm_out is None:
+            print("ERROR: --arm needs --arm-out")
+            return EXIT_USAGE
+        try:
+            seq, chunk = parse_arm(args.arm)
+        except ValueError as exc:
+            print(f"ERROR: {exc}")
+            return EXIT_USAGE
+        return run_arm(args.base, seq, chunk, args.quantization, args.arm_out)
     if not MIN_STREAM_LOSS_CHUNK <= args.chunk <= MAX_STREAM_LOSS_CHUNK:
         print(
             f"ERROR: --chunk must be between {MIN_STREAM_LOSS_CHUNK} and "

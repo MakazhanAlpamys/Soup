@@ -13,7 +13,6 @@ import json
 import math
 import os
 import re
-import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -88,14 +87,16 @@ def preflight_docker(image: str) -> str:
     """Verify the Docker client, daemon, and official benchmark image."""
     _validate_image_name(image)
 
-    docker = shutil.which("docker")
+    from soup_cli.utils.tool_paths import find_tool
+
+    docker = find_tool("docker")
     if docker is None:
         raise AiderEvalError(
             "Docker CLI was not found. Install Docker, start it, and retry."
         )
 
     try:
-        daemon = subprocess.run(  # noqa: S603 -- trusted executable, fixed argv
+        daemon = subprocess.run(  # noqa: S603 -- absolute docker path, fixed argv
             [docker, "info", "--format", "{{.ServerVersion}}"],
             capture_output=True,
             text=True,
@@ -117,7 +118,7 @@ def preflight_docker(image: str) -> str:
         )
 
     try:
-        image_check = subprocess.run(  # noqa: S603 -- trusted executable, fixed argv
+        image_check = subprocess.run(  # noqa: S603 -- absolute docker path, fixed argv
             [docker, "image", "inspect", image],
             capture_output=True,
             text=True,
