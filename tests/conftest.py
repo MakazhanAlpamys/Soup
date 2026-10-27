@@ -316,7 +316,7 @@ training:
     r: 8
     alpha: 16
   quantization: 4bit
-output: {tmp_path / "output"}
+output: {tmp_path / 'output'}
 """,
         encoding="utf-8",
     )
@@ -329,7 +329,8 @@ def make_cli_runner(**extra_kwargs):
     On Click 8.1, CliRunner interleaves stderr into result.output unless created with
     mix_stderr=False. On Click 8.2+, mix_stderr was removed from CliRunner.__init__ and
     result.stdout is separated by default while result.output contains interleaved streams.
-    Inspecting the signature allows both versions to produce a clean result.stdout.
+    Inspect Typer's runner rather than Click's version because Typer can vendor Click.
+    The signature allows both versions to produce a clean result.stdout.
     """
     import inspect
 
@@ -339,9 +340,3 @@ def make_cli_runner(**extra_kwargs):
     if "mix_stderr" in inspect.signature(CliRunner).parameters and "mix_stderr" not in kwargs:
         kwargs["mix_stderr"] = False
     return CliRunner(**kwargs)
-
-
-@pytest.fixture
-def cli_runner():
-    """A pytest fixture providing a CliRunner with separate stderr (#1551)."""
-    return make_cli_runner()

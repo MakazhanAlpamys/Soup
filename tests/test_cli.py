@@ -48,7 +48,9 @@ def test_chat_missing_model():
 
 
 def test_push_missing_model():
-    result = runner.invoke(app, ["push", "--model", "nonexistent_path", "--repo", "user/model"])
+    result = runner.invoke(
+        app, ["push", "--model", "nonexistent_path", "--repo", "user/model"]
+    )
     assert result.exit_code == 1
 
 
@@ -56,7 +58,9 @@ def test_push_not_a_directory(tmp_path):
     # Create a file (not a directory)
     fake_file = tmp_path / "model.bin"
     fake_file.write_text("not a model")
-    result = runner.invoke(app, ["push", "--model", str(fake_file), "--repo", "user/model"])
+    result = runner.invoke(
+        app, ["push", "--model", str(fake_file), "--repo", "user/model"]
+    )
     assert result.exit_code == 1
 
 
@@ -64,7 +68,9 @@ def test_push_invalid_model_dir(tmp_path):
     # Create an empty directory (no adapter_config.json or config.json)
     model_dir = tmp_path / "empty_model"
     model_dir.mkdir()
-    result = runner.invoke(app, ["push", "--model", str(model_dir), "--repo", "user/model"])
+    result = runner.invoke(
+        app, ["push", "--model", str(model_dir), "--repo", "user/model"]
+    )
     assert result.exit_code == 1
 
 
@@ -103,27 +109,6 @@ def test_version_full_json():
     assert "platform" in data
 
 
-def test_version_json_fails_when_junk_on_stdout(monkeypatch):
-    """Pin that reading stdout as JSON still fails if stdout receives non-JSON junk (#1551)."""
-    import json
-
-    import pytest
-    import typer
-
-    orig_echo = typer.echo
-
-    def echo_with_junk(message=None, *args, **kwargs):
-        if not kwargs.get("err"):
-            orig_echo("NON_JSON_JUNK_ON_STDOUT")
-        return orig_echo(message, *args, **kwargs)
-
-    monkeypatch.setattr(typer, "echo", echo_with_junk)
-    result = runner.invoke(app, ["version", "--json"])
-    assert result.exit_code == 0
-    with pytest.raises(json.JSONDecodeError):
-        json.loads(result.stdout)
-
-
 def test_version_full_json_with_stderr_warning_succeeds(monkeypatch):
     """Simulate torch first-import stderr warning and verify stdout still parses cleanly (#1551)."""
     import json
@@ -146,3 +131,24 @@ def test_version_full_json_with_stderr_warning_succeeds(monkeypatch):
     assert "triton not found" in result.stderr
     data = json.loads(result.stdout)
     assert data["version"] == __version__
+
+
+def test_make_cli_runner_keeps_stderr_out_of_stdout_and_forwards_kwargs():
+    """Separate the streams on every Click and pass extra kwargs through (#1551)."""
+    import os
+
+    import typer
+
+    probe = typer.Typer()
+
+    @probe.command()
+    def emit():
+        typer.echo("to-stdout")
+        typer.echo("to-stderr", err=True)
+        typer.echo(os.environ.get("SOUP_RUNNER_PROBE", "unset"))
+
+    result = make_cli_runner(env={"SOUP_RUNNER_PROBE": "seen"}).invoke(probe, [])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert result.stdout == "to-stdout\nseen\n"
+    assert "to-stderr" in result.stderr
+    assert "to-stderr" not in result.stdout
