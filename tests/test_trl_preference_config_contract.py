@@ -823,3 +823,152 @@ def test_an_overlong_prompt_with_a_long_completion_fits_and_ends_in_eos(
             assert len(ids) <= _MAX_SEQUENCE_LENGTH, (task, index, prefix, len(ids))
             assert ids[-1] == eos_id, (task, index, prefix, "EOS cut off by the cap")
             assert len(trained) > 1, (task, index, prefix, "EOS-only completion")
+
+
+def _world_id(wrapper):
+    return wrapper.tokenizer("world", add_special_tokens=False)["input_ids"][0]
+
+
+@pytest.mark.parametrize("task", ("bco", "ipo", "kto", "simpo"))
+def test_overlong_validation_rows_are_capped_too(tmp_path, monkeypatch, task):
+    rows = _rows_with(task, "hi", " good answer")
+    val_rows = _rows_with(task, _OVERLONG_PROMPT_WITH_TAIL, " good answer", n=4)
+    wrapper = _setup_rows(tmp_path, monkeypatch, task, rows, val_rows=val_rows)
+    eval_dataset = wrapper.trainer.eval_dataset
+    assert eval_dataset is not None and len(eval_dataset) > 0
+    for row in eval_dataset:
+        if task == "ipo":
+            assert len(row["prompt_ids"]) + len(row["chosen_ids"]) <= _MAX_SEQUENCE_LENGTH
+            assert len(row["prompt_ids"]) + len(row["rejected_ids"]) <= _MAX_SEQUENCE_LENGTH
+        elif task == "simpo":
+            assert len(row["chosen_input_ids"]) <= _MAX_SEQUENCE_LENGTH
+            assert len(row["rejected_input_ids"]) <= _MAX_SEQUENCE_LENGTH
+        else:
+            assert len(row["completion_input_ids"]) <= _MAX_SEQUENCE_LENGTH
+            if task == "kto":
+                assert len(row["KL_completion_input_ids"]) <= _MAX_SEQUENCE_LENGTH
+
+
+@pytest.mark.parametrize(("size", "chunk"), ((8, 4), (10, 4), (7, 3), (5, 2), (9, 2), (3, 8)))
+def test_the_kl_rotation_stays_inside_its_chunk_and_handles_a_short_last_chunk(size, chunk):
+    from soup_cli.trainer._trl_compat import _rotated_answer_index
+
+    for index in range(size):
+        assert _rotated_answer_index(index, size, chunk) == _trl_kl_lender(index, size, chunk)
+
+
+def test_ipo_keeps_the_prompt_head_within_half_the_budget(tmp_path, monkeypatch):
+    rows = _rows_with("ipo", _OVERLONG_PROMPT_WITH_TAIL, " good answer")
+    wrapper = _setup_rows(tmp_path, monkeypatch, "ipo", rows)
+    world = _world_id(wrapper)
+    for row in wrapper.trainer.train_dataset:
+        assert len(row["prompt_ids"]) == _MAX_PROMPT_LENGTH
+        assert world not in list(row["prompt_ids"])  # keep_start drops the tail
+
+
+def test_simpo_keeps_the_prompt_tail_within_half_the_budget(tmp_path, monkeypatch):
+    rows = _rows_with("simpo", _OVERLONG_PROMPT_WITH_TAIL, " good answer")
+    wrapper = _setup_rows(tmp_path, monkeypatch, "simpo", rows)
+    world = _world_id(wrapper)
+    for row in wrapper.trainer.train_dataset:
+        assert len(row["prompt_input_ids"]) == _MAX_PROMPT_LENGTH
+        assert list(row["prompt_input_ids"])[-1] == world  # keep_end keeps the tail
+
+
+def test_the_kto_prompt_masks_stay_as_long_as_their_ids(tmp_path, monkeypatch):
+    rows = _rows_with("kto", _OVERLONG_PROMPT_WITH_TAIL, " good answer")
+    wrapper = _setup_rows(tmp_path, monkeypatch, "kto", rows)
+    for row in wrapper.trainer.train_dataset:
+        assert len(row["prompt_attention_mask"]) == len(row["prompt_input_ids"])
+        assert len(row["KL_prompt_attention_mask"]) == len(row["KL_prompt_input_ids"])
+
+
+def test_an_unpaired_row_that_exactly_fits_is_not_cut():
+    from datasets import Dataset
+
+    from soup_cli.trainer._trl_compat import enforce_preference_sequence_limit
+
+    eos_id = 999
+    prompt = list(range(100, 140))  # 40 tokens: longer than max_prompt_length 32
+    answer = list(range(200, 223))  # 23 tokens: 40 + 23 + EOS == 64 == max_length
+    dataset = Dataset.from_dict(
+        {
+            "prompt_input_ids": [prompt],
+            "prompt_attention_mask": [[1] * len(prompt)],
+            "answer_input_ids": [answer],
+            "answer_attention_mask": [[1] * len(answer)],
+            "completion_input_ids": [prompt + answer + [eos_id]],
+            "completion_attention_mask": [[1] * 64],
+            "completion_labels": [[_IGNORE_LABEL] * len(prompt) + answer + [eos_id]],
+        }
+    )
+    capped = enforce_preference_sequence_limit(
+        dataset,
+        max_length=64,
+        max_prompt_length=32,
+        truncation_mode="keep_end",
+        only_when_overflow=True,
+    )[0]
+    assert list(capped["completion_input_ids"]) == prompt + answer + [eos_id]
+
+
+def test_a_dpo_layout_row_that_exactly_fits_is_not_cut():
+    from datasets import Dataset
+
+    from soup_cli.trainer._trl_compat import enforce_preference_sequence_limit
+
+    prompt = list(range(100, 140))  # 40 tokens: longer than max_prompt_length 32
+    chosen = list(range(200, 224))  # 40 + 24 == 64 == max_length
+    dataset = Dataset.from_dict(
+        {"prompt_ids": [prompt], "chosen_ids": [chosen], "rejected_ids": [list(range(300, 310))]}
+    )
+    capped = enforce_preference_sequence_limit(
+        dataset,
+        max_length=64,
+        max_prompt_length=32,
+        truncation_mode="keep_start",
+        only_when_overflow=True,
+    )[0]
+    assert list(capped["prompt_ids"]) == prompt
+    assert list(capped["chosen_ids"]) == chosen
+
+
+@pytest.mark.parametrize("task", ("bco", "kto"))
+@pytest.mark.parametrize("prompt_kind", ("fits", "overlong"))
+def test_an_answer_that_already_ends_in_eos_keeps_exactly_one(
+    tmp_path, monkeypatch, task, prompt_kind
+):
+    prompt = "hi" if prompt_kind == "fits" else _OVERLONG_PROMPT_WITH_TAIL
+    rows = _rows_with(task, prompt, " good</s>")
+    wrapper = _setup_rows(tmp_path, monkeypatch, task, rows)
+    eos_id = wrapper.tokenizer.eos_token_id
+    prefixes = ["completion"] + (["KL_completion"] if task == "kto" else [])
+    for row in wrapper.trainer.train_dataset:
+        for prefix in prefixes:
+            ids = list(row[f"{prefix}_input_ids"])
+            labels = list(row[f"{prefix}_labels"])
+            trained = [tok for tok, lab in zip(ids, labels) if lab != _IGNORE_LABEL]
+            assert trained[-1] == eos_id, (task, prompt_kind, prefix, trained)
+            assert trained.count(eos_id) == 1, (task, prompt_kind, prefix, trained)
+
+
+@pytest.mark.parametrize("task", ("bco", "kto"))
+def test_a_prompt_that_consumes_the_budget_still_keeps_a_short_answer(
+    tmp_path, monkeypatch, task
+):
+    # The prompt alone is longer than ``max_length``, so TRL slices the short
+    # answer out of the completion. The conditional cap must still rebuild it
+    # (the sliced row overflows ``max_length``) rather than treat the row as
+    # fitting and skip it, which would train on an answer-less completion.
+    rows = _rows_with(task, _OVERLONG_PROMPT_WITH_TAIL, " good")
+    wrapper = _setup_rows(tmp_path, monkeypatch, task, rows)
+    eos_id = wrapper.tokenizer.eos_token_id
+    prefixes = ["completion"] + (["KL_completion"] if task == "kto" else [])
+    for row in wrapper.trainer.train_dataset:
+        for prefix in prefixes:
+            ids = list(row[f"{prefix}_input_ids"])
+            labels = list(row[f"{prefix}_labels"])
+            trained = [tok for tok, lab in zip(ids, labels) if lab != _IGNORE_LABEL]
+            assert len(ids) <= _MAX_SEQUENCE_LENGTH, (task, prefix, len(ids))
+            assert trained[-1] == eos_id, (task, prefix, trained)
+            assert [t for t in trained if t != eos_id], (task, prefix, "answer discarded", trained)
