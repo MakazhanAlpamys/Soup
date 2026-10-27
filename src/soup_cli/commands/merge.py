@@ -105,6 +105,8 @@ def merge(
                 raise ValueError("MLX merge supports dense --save-format fp16 only")
             if hub != "hf":
                 raise ValueError("MLX merge supports --hub hf only")
+            if low_memory:
+                raise ValueError("MLX merge does not support --low-memory; it loads the full model")
             if ctx is not None and ctx.get_parameter_source("double_quant") not in (
                 None, ParameterSource.DEFAULT,
             ):

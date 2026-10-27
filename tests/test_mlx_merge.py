@@ -39,6 +39,7 @@ def test_native_merge_rejects_peft_metadata_without_output(tmp_path, monkeypatch
     (['--double-quant'], 'double-quant'),
     (['--no-double-quant'], 'double-quant'),
     (['--dtype', 'int8'], 'dtype'),
+    (['--low-memory'], 'low-memory'),
 ])
 def test_native_merge_refuses_unsupported_controls_before_loading(
     tmp_path, monkeypatch, options, diagnostic,

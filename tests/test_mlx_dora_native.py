@@ -664,6 +664,10 @@ def test_native_merge_standalone_dense_checkpoint(
 
         from soup_cli.utils import mlx_generation
 
+        refused = runner.invoke(app, args + ['--low-memory', '--output', 'needs-streaming'])
+        assert refused.exit_code == 1 and '--low-memory' in refused.output
+        assert not Path('needs-streaming').exists()
+
         # The loaded model can contain untargeted quantized components too.
         for quantized_layer in (
             nn.QuantizedEmbedding(32, 64, group_size=32, bits=8),

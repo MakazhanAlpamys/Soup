@@ -100,7 +100,8 @@ Output must be new, contained under the current directory and disjoint from both
 inputs, including through symlinks. Writes are staged in its parent; failed or
 interrupted saves do not publish an incomplete checkpoint. Inputs remain unchanged.
 DoRA and other unqualified adapter variants, BNB save formats and explicit
-`--double-quant` controls, and non-HF hubs are refused on the native path.
+`--double-quant` controls, `--low-memory`, and non-HF hubs are refused on the native path.
+Native fusion loads the full model; it does not implement tensor-streaming merge.
 `--trust-remote-code` remains opt-in. This qualifies the bounded native lifecycle on
 tiny dense/4-bit text fixtures, not general model quality or GGUF conversion.
 
