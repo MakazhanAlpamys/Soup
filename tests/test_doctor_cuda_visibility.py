@@ -30,7 +30,22 @@ def cuda_hardware(monkeypatch: pytest.MonkeyPatch) -> Mock:
 
 @pytest.mark.parametrize("driver_version", [(13, 0), None], ids=["known-driver", "unknown-driver"])
 @pytest.mark.parametrize(
-    "visibility", ["-1", " -1", "-1 ", "-1,0", "-2", "99", "abc", "NoDevFiles", "", "０"]
+    "visibility",
+    [
+        "-1",
+        " -1",
+        "-1 ",
+        "-1,0",
+        "-2",
+        "99",
+        "abc",
+        "NoDevFiles",
+        "",
+        "gpu-unknown",
+        "mig-unknown",
+        # Windows CUDA can normalize fullwidth zero to ASCII; this keeps the non-ASCII case.
+        pytest.param("٠", id="arabic-indic-zero"),
+    ],
 )
 def test_hidden_cuda_gpu_reports_visibility_without_reinstall(
     monkeypatch: pytest.MonkeyPatch,
