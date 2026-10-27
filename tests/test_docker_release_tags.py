@@ -58,9 +58,16 @@ def test_latest_decision_uses_the_release_ref_before_registry_login() -> None:
 
 
 @pytest.fixture
-def tagged_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def isolated_git_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep ambient repository settings from redirecting the test's Git commands."""
+    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+
+@pytest.fixture
+def tagged_repo(tmp_path: Path, isolated_git_environment: None) -> Path:
     subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
     subprocess.run(
         [
@@ -134,7 +141,10 @@ def test_script_decides_from_real_git_tags(
     assert output.read_text(encoding="utf-8") == f"existing=preserved\nlatest={expected}\n"
 
 
-def test_failed_git_lookup_does_not_enable_latest(tmp_path: Path) -> None:
+def test_failed_git_lookup_does_not_enable_latest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_git_environment: None
+) -> None:
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
     output = tmp_path / "step-output"
     output.write_text("existing=preserved\n", encoding="utf-8")
     result = subprocess.run(
