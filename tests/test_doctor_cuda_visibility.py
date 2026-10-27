@@ -68,6 +68,29 @@ def test_hidden_cuda_gpu_reports_visibility_without_reinstall(
     cuda_hardware.assert_not_called()
 
 
+def test_hidden_cuda_gpu_skips_package_and_torch_probes(
+    monkeypatch: pytest.MonkeyPatch, cuda_hardware: Mock
+) -> None:
+    package_probe = Mock(side_effect=RuntimeError("package probe must not run"))
+    torch_cuda_probe = Mock(side_effect=RuntimeError("torch CUDA probe must not run"))
+
+    class TorchVersion:
+        @property
+        def cuda(self) -> str:
+            return torch_cuda_probe()
+
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "-1")
+    monkeypatch.setattr("importlib.metadata.version", package_probe)
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(version=TorchVersion()))
+
+    advisory = doctor._detect_gpu_hw_without_torch_cuda()
+
+    assert "Unset CUDA_VISIBLE_DEVICES to use the GPU" in advisory
+    package_probe.assert_not_called()
+    torch_cuda_probe.assert_not_called()
+    cuda_hardware.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "visibility",
     [None, "0", "0,-1", " 0 ", "GPU-unknown", "MIG-GPU-unknown/1/2"],
@@ -169,6 +192,8 @@ def test_hidden_visibility_value_is_safe_inside_rich_markup(
 def test_gpu_name_is_escaped_in_both_advisories(
     monkeypatch: pytest.MonkeyPatch, cuda_hardware: Mock, visibility: str | None
 ) -> None:
+    from rich.text import Text
+
     monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
     if visibility is not None:
         monkeypatch.setenv("CUDA_VISIBLE_DEVICES", visibility)
@@ -176,13 +201,17 @@ def test_gpu_name_is_escaped_in_both_advisories(
         subprocess,
         "run",
         lambda *args, **kwargs: subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="[red]Test\n", stderr=""
+            args=[], returncode=0, stdout="[red]Test\x1b[31m\x9b\u202e\n", stderr=""
         ),
     )
 
     advisory = doctor._detect_gpu_hw_without_torch_cuda()
 
-    assert r"\[red]Test" in advisory
+    assert r"\[red]Test[31m" in advisory
+    assert all(control not in advisory for control in ("\x1b", "\x9b", "\u202e"))
+    rendered = Text.from_markup(f"[dim]{advisory}[/]")
+    assert "GPU hardware present ([red]Test[31m)" in rendered.plain
+    assert all(str(span.style) == "dim" for span in rendered.spans)
 
 
 def test_oversized_invalid_index_does_not_crash_doctor(
