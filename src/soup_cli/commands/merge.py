@@ -270,10 +270,16 @@ def _merge_low_memory(
     dtype: str,
     trust_remote_code: bool,
 ) -> None:
+    # Bind the error class before the block below can fail: `except
+    # LowMemoryMergeError` is evaluated even when the `transformers` import
+    # raises, and an unbound name there turns the dependency hint into an
+    # UnboundLocalError (#2227). This module needs no torch to import.
+    from soup_cli.utils.lowmem_merge import LowMemoryMergeError
+
     try:
         from transformers import AutoTokenizer
 
-        from soup_cli.utils.lowmem_merge import LowMemoryMergeError, merge_low_memory
+        from soup_cli.utils.lowmem_merge import merge_low_memory
         from soup_cli.utils.trust_remote import (
             model_requires_trust_remote_code,
             resolve_trust_remote_code,
