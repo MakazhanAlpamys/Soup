@@ -410,3 +410,210 @@ def test_a_distinct_output_still_works(monkeypatch, command):
     assert os.path.isfile("result.jsonl"), _plain(result.output)
     for name, payload in before.items():
         assert _read_bytes(name) == payload, f"{name} was modified"
+
+
+# ---------------------------------------------------------------------------
+# #2226, remaining commands: persona-mix, mix, forge, generate, recipe,
+# canary check. gen-magpie has no file input on its command line (its --base
+# is a model identifier for the provider), so there is no file for --output
+# to name; it is documented in the pull request, not guarded here.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("spelling", ["same", "dot", "absolute"])
+def test_persona_mix_refuses_output_naming_prompts(tmp_path, spelling):
+    payload = _write_rows(
+        "p.jsonl",
+        [{"prompt": "Explain X"}, {"prompt": "Explain Y"}],
+    )
+    out = {
+        "same": "p.jsonl",
+        "dot": "./p.jsonl",
+        "absolute": str(tmp_path / "p.jsonl"),
+    }[spelling]
+    result = runner.invoke(
+        app,
+        ["data", "persona-mix", "--prompts", "p.jsonl", "--n", "2",
+         "--output", out],
+    )
+    assert isinstance(result.exception, SystemExit), result.output
+    assert result.exit_code == 1, result.output
+    assert _squeezed(_refusal("--output", out, "--prompts", "p.jsonl")) in (
+        _squeezed(result.output)
+    ), result.output
+    assert _read_bytes("p.jsonl") == payload
+
+
+def test_persona_mix_distinct_output_still_works(tmp_path):
+    _write_rows("p.jsonl", [{"prompt": "Explain X"}])
+    result = runner.invoke(
+        app,
+        ["data", "persona-mix", "--prompts", "p.jsonl", "--n", "2",
+         "--output", "out.jsonl"],
+    )
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert os.path.isfile("out.jsonl")
+    assert len(_read_bytes("out.jsonl").splitlines()) == 2
+
+
+def test_mix_refuses_output_naming_a_dataset():
+    payload = _write_rows("a.jsonl", _ALPACA)
+    _write_rows("b.jsonl", _ALPACA)
+    result = runner.invoke(
+        app,
+        ["data", "mix", "--optimize", "--datasets", "a.jsonl,b.jsonl",
+         "--output", "a.jsonl"],
+    )
+    assert isinstance(result.exception, SystemExit), result.output
+    assert result.exit_code == 2, result.output
+    assert _squeezed(
+        _refusal("--output", "a.jsonl", "--datasets", "a.jsonl")
+    ) in _squeezed(result.output), result.output
+    assert _read_bytes("a.jsonl") == payload
+
+
+def test_mix_refuses_output_naming_the_base_yaml():
+    _write_rows("a.jsonl", _ALPACA)
+    _write_rows("b.jsonl", _ALPACA)
+    base = "base.yaml"
+    with open(base, "wb") as fh:
+        fh.write(b"task: sft\n")
+    before = _read_bytes(base)
+    result = runner.invoke(
+        app,
+        ["data", "mix", "--optimize", "--datasets", "a.jsonl,b.jsonl",
+         "--live", "--base-yaml", base, "--output", base],
+    )
+    assert isinstance(result.exception, SystemExit), result.output
+    assert result.exit_code == 2, result.output
+    assert _squeezed(
+        _refusal("--output", base, "--base-yaml", base)
+    ) in _squeezed(result.output), result.output
+    assert _read_bytes(base) == before
+
+
+def test_mix_refuses_a_dataset_carrying_the_default_output_name():
+    payload = _write_rows("mix_recipe.yaml", _ALPACA)
+    _write_rows("b.jsonl", _ALPACA)
+    result = runner.invoke(
+        app,
+        ["data", "mix", "--optimize",
+         "--datasets", "mix_recipe.yaml,b.jsonl"],
+    )
+    assert isinstance(result.exception, SystemExit), result.output
+    assert result.exit_code == 2, result.output
+    assert _squeezed(
+        _refusal("--output", "mix_recipe.yaml", "--datasets",
+                 "mix_recipe.yaml")
+    ) in _squeezed(result.output), result.output
+    assert _read_bytes("mix_recipe.yaml") == payload
+
+
+def test_forge_refuses_output_naming_a_document(tmp_path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    doc = docs / "a.txt"
+    doc.write_text("Refunds take five days.\n", encoding="utf-8")
+    before = doc.read_bytes()
+    result = runner.invoke(
+        app,
+        ["data", "forge", "--docs", "docs", "--target-rows", "10",
+         "--output", "docs/a.txt"],
+    )
+    assert isinstance(result.exception, SystemExit), result.output
+    assert result.exit_code == 1, result.output
+    assert _squeezed(
+        _refusal("--output", "docs/a.txt", "--docs",
+                 os.path.realpath(str(doc)))
+    ) in _squeezed(result.output), result.output
+    assert doc.read_bytes() == before
+
+
+def test_forge_refuses_output_naming_its_provenance(tmp_path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "a.txt").write_text("Refunds take five days.\n",
+                                encoding="utf-8")
+    result = runner.invoke(
+        app,
+        ["data", "forge", "--docs", "docs", "--target-rows", "10",
+         "--output", "out.jsonl", "--provenance", "out.jsonl"],
+    )
+    assert isinstance(result.exception, SystemExit), result.output
+    assert result.exit_code == 1, result.output
+    assert _squeezed(
+        _refusal("--output", "out.jsonl", "--provenance", "out.jsonl")
+    ) in _squeezed(result.output), result.output
+    assert not os.path.exists("out.jsonl")
+
+
+@pytest.mark.parametrize(
+    ("flag", "name", "rows"),
+    [
+        ("--seed", "seed.jsonl", _SEEDS),
+        ("--dedup-with", "data.jsonl", _ALPACA),
+        ("--context", "ctx.txt", None),
+    ],
+)
+def test_generate_refuses_output_naming_an_input(flag, name, rows):
+    if rows is None:
+        with open(name, "wb") as fh:
+            fh.write(b"Some context document.\n")
+        before = _read_bytes(name)
+    else:
+        before = _write_rows(name, rows)
+    result = runner.invoke(
+        app,
+        ["data", "generate", "--prompt", "test", flag, name,
+         "--output", name, "--count", "1"],
+    )
+    assert isinstance(result.exception, SystemExit), result.output
+    assert result.exit_code == 1, result.output
+    assert _squeezed(
+        _refusal("--output", name, flag, name)
+    ) in _squeezed(result.output), result.output
+    assert _read_bytes(name) == before
+
+
+def test_recipe_refuses_output_naming_the_recipe_file(tmp_path):
+    prompts = tmp_path / "prompts.jsonl"
+    prompts.write_text('{"text": "keep"}\n', encoding="utf-8")
+    recipe = tmp_path / "recipe.yaml"
+    recipe.write_text(
+        "nodes:\n"
+        "  - {name: seed1, kind: seed, config: {path: prompts.jsonl}}\n"
+        "  - {name: provider1, kind: llm_text, "
+        "config: {prompt: 'GENERATE {text}'}}\n"
+        "  - {name: samp1, kind: sampler, config: {}}\n"
+        "edges: [[seed1, provider1], [provider1, samp1]]\n",
+        encoding="utf-8",
+    )
+    before = recipe.read_bytes()
+    result = runner.invoke(
+        app,
+        ["data", "recipe", str(recipe), "--execute",
+         "--output", str(recipe)],
+    )
+    assert isinstance(result.exception, SystemExit), result.output
+    assert result.exit_code == 2, result.output
+    assert _squeezed(
+        _refusal("--output", str(recipe), "the recipe", str(recipe))
+    ) in _squeezed(result.output), result.output
+    assert recipe.read_bytes() == before
+
+
+def test_canary_check_refuses_output_naming_the_manifest():
+    with open("m.json", "wb") as fh:
+        fh.write(b'{"canaries": []}\n')
+    before = _read_bytes("m.json")
+    result = runner.invoke(
+        app,
+        ["data", "canary", "check", "--manifest", "m.json",
+         "--base", "fake/model", "--output", "m.json"],
+    )
+    assert isinstance(result.exception, SystemExit), result.output
+    assert result.exit_code == 1, result.output
+    assert _squeezed(
+        _refusal("--output", "m.json", "--manifest", "m.json")
+    ) in _squeezed(result.output), result.output
+    assert _read_bytes("m.json") == before
