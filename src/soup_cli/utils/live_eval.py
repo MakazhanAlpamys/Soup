@@ -227,7 +227,7 @@ def load_model_and_tokenizer(
 
     Returns ``(model, tokenizer, device)``. ``model`` is ``.eval()``-ed and
     moved to the resolved device. Heavy imports are local. ``dtype`` (e.g.
-    ``"auto"``) is forwarded as ``torch_dtype`` so a caller can preserve the
+    ``"auto"``) is forwarded as ``dtype`` so a caller can preserve the
     checkpoint's native precision instead of upcasting to fp32 (``soup shrink``
     needs this so the shipped smaller model is not silently re-widened).
     ``quantization`` (``"4bit"`` / ``"8bit"`` / ``None``) judges the base the
@@ -260,7 +260,7 @@ def load_model_and_tokenizer(
         tokenizer.pad_token = tokenizer.eos_token
     model_kwargs = {"trust_remote_code": trust_remote_code, **revision_kwargs}
     if dtype is not None:
-        model_kwargs["torch_dtype"] = dtype
+        model_kwargs["dtype"] = dtype
     quant_config = _build_quantization_config(quantization)
     if quant_config is not None:
         # A quantized load is pinned to a device at from_pretrained time

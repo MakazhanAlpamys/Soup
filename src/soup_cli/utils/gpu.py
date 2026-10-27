@@ -149,7 +149,7 @@ def resolve_inference_device_map_and_dtype(
             ignored.
 
     Returns:
-        A ``(device_map, torch_dtype)`` pair to splat into
+        A ``(device_map, dtype)`` pair to splat into
         ``from_pretrained(**kwargs)``: ``{"": "cpu"}`` and ``float32`` for
         CPU/MLX, ``{"": device}`` (lower-cased) and ``float16`` for
         MPS or an explicitly indexed ``cuda:<n>``, ``"auto"`` and ``float16``
@@ -639,7 +639,7 @@ def bf16_fp16_flags(
 
 
 def resolve_frozen_base_load_dtype(device: str):
-    """``torch_dtype`` for ``from_pretrained`` when loading a frozen (LoRA) base.
+    """``dtype`` for ``from_pretrained`` when loading a frozen (LoRA) base.
 
     A frozen base never receives an optimizer step, so there is no reason to
     upcast it to the HF default of float32 on load: keep the checkpoint's own

@@ -3283,7 +3283,7 @@ def _skeleton_from_config(
         # Keep the model-construction spelling aligned with the load-site
         # compatibility guard in tests/test_transformers_floor_compat.py.
         model = AutoModelForCausalLM.from_config(
-            config, torch_dtype=torch_dtype, trust_remote_code=trust_remote_code
+            config, dtype=torch_dtype, trust_remote_code=trust_remote_code
         )
         if quant_config is not None:
             from transformers.integrations.bitsandbytes import replace_with_bnb_linear

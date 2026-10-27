@@ -486,7 +486,7 @@ def _merge_adapter(
         console.print("[dim]Base revision: unknown (legacy, local source or base override)[/]")
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
-        torch_dtype=torch.float16,
+        dtype=torch.float16,
         trust_remote_code=trc,
         device_map="cpu",
         **revision_kwargs,
