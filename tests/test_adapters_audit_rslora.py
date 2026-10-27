@@ -1,10 +1,4 @@
-"""#2228 — ``soup adapters audit`` reads an MLX rsLoRA scale back as alpha.
-
-mlx-lm writes ``scale = alpha / sqrt(rank)`` when ``lora.use_rslora`` is set
-and ``scale = alpha / rank`` otherwise. The audit rebuilt alpha as
-``scale * rank`` in both cases, so a correct rsLoRA run (rank 8, alpha 16)
-reported about 45.25 and DIVERGED.
-"""
+"""#2228. MLX rsLoRA scale audits back to the asked alpha."""
 
 from __future__ import annotations
 
@@ -16,13 +10,10 @@ from typer.testing import CliRunner
 
 pytestmark = pytest.mark.unit
 
-# Hand-checked: scale = alpha / sqrt(rank), then scale * rank is not alpha.
-# (8, 16) reconstructs as 45.254... under the old formula.
 _PAIRS = ((8, 16), (5, 5), (2, 7), (8, 100))
 
 
 def _writer_record(rank: int, alpha: int, *, use_rslora: bool) -> dict:
-    """The ``lora_parameters`` block ``build_mlx_adapter_config`` actually writes."""
     from types import SimpleNamespace
 
     from soup_cli.trainer.mlx_sft import build_mlx_adapter_config
@@ -101,14 +92,12 @@ def test_matching_plain_lora_alpha_agrees():
 
 
 def test_plain_record_against_rslora_config_diverges():
-    """A scale written as alpha/rank must not pass an rsLoRA config."""
     row = _alpha_row(8, 16, config_rslora=True, record_rslora=False)
     assert row.status == "diverged"
     assert row.ran != 16
 
 
 def test_rslora_record_against_plain_config_diverges():
-    """A scale written as alpha/sqrt(rank) must not pass a plain LoRA config."""
     row = _alpha_row(8, 16, config_rslora=False, record_rslora=True)
     assert row.status == "diverged"
     assert "45.25" in str(row.ran)
