@@ -207,9 +207,11 @@ def aider(
     from soup_cli.eval.aider_polyglot import (
         AiderEvalError,
         build_docker_command,
+        new_container_name,
         parse_aider_results,
         preflight_docker,
         prepare_output_dir,
+        remove_container,
         validate_exercises_dir,
         write_soup_result,
     )
@@ -230,6 +232,7 @@ def aider(
         corpus_dir = validate_exercises_dir(exercises_dir)
         corpus_outside_cwd = not is_under_cwd(corpus_dir)
         docker = preflight_docker(image)
+        container_name = new_container_name()
         command = build_docker_command(
             docker=docker,
             image=image,
@@ -239,6 +242,7 @@ def aider(
             threads=threads,
             num_tests=num_tests,
             allow_host_services=allow_host_services,
+            container_name=container_name,
         )
     except AiderEvalError as exc:
         if tracker is not None:
@@ -280,7 +284,19 @@ def aider(
         if tracker is not None:
             tracker.close()
         console.print(f"[red]Aider benchmark timed out after {timeout} seconds.[/]")
+        if not remove_container(docker, container_name):
+            console.print(
+                f"[yellow]Could not remove container {escape(container_name)}; "
+                f"remove it with: docker rm -f {escape(container_name)}[/]"
+            )
         raise typer.Exit(1) from exc
+    except KeyboardInterrupt:
+        if not remove_container(docker, container_name):
+            console.print(
+                f"[yellow]Could not remove container {escape(container_name)}; "
+                f"remove it with: docker rm -f {escape(container_name)}[/]"
+            )
+        raise
     except OSError as exc:
         if tracker is not None:
             tracker.close()
