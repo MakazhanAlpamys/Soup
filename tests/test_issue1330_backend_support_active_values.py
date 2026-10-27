@@ -130,6 +130,63 @@ def test_schema_refused_settings_have_no_doctor_rows():
     assert all(entry.status != REJECTED for entries in REGISTRY.values() for entry in entries)
 
 
+@pytest.mark.parametrize("task", ["sft", "dpo", "orpo", "simpo", "kto"])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("use_lorafa", True),
+        ("quantization_aware", True),
+        ("use_liger", True),
+        ("use_flash_attn", True),
+    ],
+)
+def test_every_mlx_support_row_is_reachable(task, field, value):
+    """A refused setting cannot remain in doctor's support registry."""
+    config = _config(task, "mlx", "text")
+    config["training"] = {field: value}
+    dotted = f"training.{field}"
+
+    if task == "sft" and field in {"use_liger", "use_flash_attn"}:
+        cfg = _load(config)
+        assert dotted in {entry.field for entry in check_config(cfg)}
+        assert dotted in {entry.field for entry in unsupported_for(task, "mlx", "text")}
+    else:
+        with pytest.raises(ValueError):
+            _load(config)
+        assert dotted not in {
+            entry.field for entry in unsupported_for(task, "mlx", "text")
+        }
+
+
+@pytest.mark.parametrize(
+    ("task", "expected_count"),
+    [("sft", 10), ("dpo", 5), ("orpo", 5), ("simpo", 5), ("kto", 5)],
+)
+def test_mlx_doctor_all_clear_counts_only_reachable_settings(
+    task, expected_count, tmp_path, capsys, monkeypatch
+):
+    from rich.console import Console
+
+    import soup_cli.commands.doctor as doctor_module
+    from soup_cli.commands.doctor import doctor
+
+    monkeypatch.setattr(doctor_module, "console", Console(width=200))
+    config_file = tmp_path / f"{task}.yaml"
+    config_file.write_text(
+        yaml.safe_dump(_config(task, "mlx", "text"), sort_keys=False),
+        encoding="utf-8",
+    )
+
+    doctor(nccl=False, disk=False, config=str(config_file))
+
+    output = strip_ansi(capsys.readouterr().out)
+    assert len(unsupported_for(task, "mlx", "text")) == expected_count
+    assert (
+        f"None of the {expected_count} setting(s) known to be unread "
+        f"on task={task} backend=mlx is switched on in this config."
+    ) in output
+
+
 @pytest.mark.parametrize("modality", ["vision", "audio"])
 @pytest.mark.parametrize("value", [True, False])
 def test_multimodal_response_mask_has_no_unreachable_doctor_row(modality, value):
