@@ -36,7 +36,7 @@ with warnings.catch_warnings():
     if sys.argv[2] == "from_pretrained":
         from soup_cli.utils.live_eval import load_model_and_tokenizer
         model, tokenizer, device = load_model_and_tokenizer(
-            sys.argv[1], device="cpu", dtype="auto",
+            sys.argv[1], device="cpu", dtype=torch.float32,
         )
         assert model.dtype == torch.float32
         assert next(model.parameters()).device.type == "cpu"

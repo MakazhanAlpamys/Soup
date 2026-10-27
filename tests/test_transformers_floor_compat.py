@@ -1,7 +1,7 @@
 """Transformers floor policy and model-load keyword compatibility.
 
 The declared floor is Transformers 5.16.1 for Qwen4-Exp; the dedicated CI cell
-also pins Torch 2.5.1 and TRL 0.29 so the normal newest-version matrix cannot
+also pins Torch 2.6.0 and TRL 0.29 so the normal newest-version matrix cannot
 hide a floor regression. Transformers model loaders use ``dtype=`` throughout
 the supported 5.x range; the historical ``torch_dtype=`` spelling is deprecated.
 
@@ -130,8 +130,101 @@ def _scope_nodes(scope: ast.AST):
         yield from _scope_nodes(child)
 
 
+def _local_bindings(nodes: list[ast.AST]) -> dict[str, list[ast.AST]]:
+    """Collect assignments in one lexical scope, including annotated dictionaries."""
+    bindings: dict[str, list[ast.AST]] = {}
+    for node in nodes:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    bindings.setdefault(target.id, []).append(node.value)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            if node.value is not None:
+                bindings.setdefault(node.target.id, []).append(node.value)
+    return bindings
+
+
+def _loader_aliases(bindings: dict[str, list[ast.AST]]) -> set[str]:
+    """Follow local aliases until no additional Transformers loaders are found."""
+    aliases: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for name, values in bindings.items():
+            if name in aliases:
+                continue
+            for value in values:
+                probe = ast.Call(
+                    func=ast.Attribute(value=value, attr="from_pretrained"),
+                    args=[],
+                    keywords=[],
+                )
+                if _is_dtype_guarded_model_load(probe, aliases):
+                    aliases.add(name)
+                    changed = True
+                    break
+    return aliases
+
+
+def _deprecated_kwargs_lines(
+    value: ast.AST,
+    bindings: dict[str, list[ast.AST]],
+    nodes: list[ast.AST],
+    seen: frozenset[str] = frozenset(),
+) -> set[int]:
+    """Return deprecated-key lines reachable through a local kwargs expression."""
+    lines: set[int] = set()
+    if isinstance(value, ast.Dict):
+        for key, item in zip(value.keys, value.values):
+            if isinstance(key, ast.Constant) and key.value == "torch_dtype":
+                lines.add(key.lineno)
+            elif key is None:
+                lines.update(_deprecated_kwargs_lines(item, bindings, nodes, seen))
+    elif isinstance(value, ast.Name) and value.id not in seen:
+        seen = seen | {value.id}
+        for bound in bindings.get(value.id, []):
+            lines.update(_deprecated_kwargs_lines(bound, bindings, nodes, seen))
+        for node in nodes:
+            if (
+                isinstance(node, ast.Subscript)
+                and isinstance(node.ctx, ast.Store)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == value.id
+                and isinstance(node.slice, ast.Constant)
+                and node.slice.value == "torch_dtype"
+            ):
+                lines.add(node.lineno)
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "update"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == value.id
+            ):
+                for item in node.args:
+                    lines.update(_deprecated_kwargs_lines(item, bindings, nodes, seen))
+                for kw in node.keywords:
+                    if kw.arg == "torch_dtype":
+                        lines.add(kw.lineno)
+                    elif kw.arg is None:
+                        lines.update(_deprecated_kwargs_lines(kw.value, bindings, nodes, seen))
+    elif isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
+        if value.func.id == "dict":
+            for kw in value.keywords:
+                if kw.arg == "torch_dtype":
+                    lines.add(kw.lineno)
+                elif kw.arg is None:
+                    lines.update(_deprecated_kwargs_lines(kw.value, bindings, nodes, seen))
+    return lines
+
+
 def find_deprecated_torch_dtype_kwargs(source: str, *, filename: str = "<string>") -> list[str]:
-    """Find direct and locally constructed deprecated model-load keyword arguments."""
+    """Find direct and locally constructed deprecated model-load keyword arguments.
+
+    This lexical guard does not follow dictionary union/augassign, setdefault, partials,
+    cross-scope/attribute/helper-returned dictionaries, pipeline calls or library config kwargs.
+    It covers the load forms currently in src, not arbitrary Python data flow.
+    """
     tree = ast.parse(source, filename=filename)
     hits: set[int] = set()
     scopes = [tree] + [
@@ -141,77 +234,8 @@ def find_deprecated_torch_dtype_kwargs(source: str, *, filename: str = "<string>
     ]
     for scope in scopes:
         nodes = list(_scope_nodes(scope))
-        bindings: dict[str, list[ast.AST]] = {}
-        for node in nodes:
-            if isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        bindings.setdefault(target.id, []).append(node.value)
-            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-                if node.value is not None:
-                    bindings.setdefault(node.target.id, []).append(node.value)
-
-        aliases: set[str] = set()
-        changed = True
-        while changed:
-            changed = False
-            for name, values in bindings.items():
-                if name in aliases:
-                    continue
-                for value in values:
-                    probe = ast.Call(
-                        func=ast.Attribute(value=value, attr="from_pretrained"),
-                        args=[],
-                        keywords=[],
-                    )
-                    if _is_dtype_guarded_model_load(probe, aliases):
-                        aliases.add(name)
-                        changed = True
-                        break
-
-        def inspect_kwargs(value: ast.AST, seen: frozenset[str] = frozenset()) -> None:
-            if isinstance(value, ast.Dict):
-                for key, item in zip(value.keys, value.values):
-                    if isinstance(key, ast.Constant) and key.value == "torch_dtype":
-                        hits.add(key.lineno)
-                    elif key is None:
-                        inspect_kwargs(item, seen)
-            elif isinstance(value, ast.Name) and value.id not in seen:
-                seen = seen | {value.id}
-                for bound in bindings.get(value.id, []):
-                    inspect_kwargs(bound, seen)
-                for node in nodes:
-                    if (
-                        isinstance(node, ast.Subscript)
-                        and isinstance(node.ctx, ast.Store)
-                        and isinstance(node.value, ast.Name)
-                        and node.value.id == value.id
-                        and isinstance(node.slice, ast.Constant)
-                        and node.slice.value == "torch_dtype"
-                    ):
-                        hits.add(node.lineno)
-                    elif (
-                        isinstance(node, ast.Call)
-                        and isinstance(node.func, ast.Attribute)
-                        and node.func.attr == "update"
-                        and isinstance(node.func.value, ast.Name)
-                        and node.func.value.id == value.id
-                    ):
-                        for item in node.args:
-                            inspect_kwargs(item, seen)
-                        for kw in node.keywords:
-                            if kw.arg == "torch_dtype":
-                                hits.add(kw.lineno)
-                            elif kw.arg is None:
-                                inspect_kwargs(kw.value, seen)
-            elif isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
-                if value.func.id == "dict":
-                    for kw in value.keywords:
-                        if kw.arg == "torch_dtype":
-                            hits.add(kw.lineno)
-                        elif kw.arg is None:
-                            inspect_kwargs(kw.value, seen)
-
+        bindings = _local_bindings(nodes)
+        aliases = _loader_aliases(bindings)
         for node in nodes:
             if not isinstance(node, ast.Call) or not _is_dtype_guarded_model_load(node, aliases):
                 continue
@@ -219,7 +243,7 @@ def find_deprecated_torch_dtype_kwargs(source: str, *, filename: str = "<string>
                 if kw.arg == "torch_dtype":
                     hits.add(node.lineno)
                 elif kw.arg is None:
-                    inspect_kwargs(kw.value)
+                    hits.update(_deprecated_kwargs_lines(kw.value, bindings, nodes))
     return [f"{filename}:{line}" for line in sorted(hits)]
 
 
@@ -374,6 +398,21 @@ class TestTransformersFloorDtypeGuard:
     def test_scanner_follows_local_load_dictionary(self, setup):
         source = setup + "\nAutoModel.from_pretrained('m', **kwargs)\n"
         assert find_deprecated_torch_dtype_kwargs(source, filename="kwargs.py")
+
+    def test_scanner_follows_an_annotated_load_dictionary(self):
+        source = (
+            "kwargs: dict = {'torch_dtype': 'auto'}\n"
+            "AutoModel.from_pretrained('m', **kwargs)\n"
+        )
+        assert find_deprecated_torch_dtype_kwargs(source) == ["<string>:1"]
+
+    def test_scanner_terminates_on_a_self_referencing_dictionary(self):
+        source = (
+            "kwargs = {'torch_dtype': 'auto'}\n"
+            "kwargs = {**kwargs, 'trust_remote_code': True}\n"
+            "AutoModel.from_pretrained('m', **kwargs)\n"
+        )
+        assert find_deprecated_torch_dtype_kwargs(source) == ["<string>:1"]
 
     def test_scanner_follows_a_selected_auto_model_loader(self):
         source = (
