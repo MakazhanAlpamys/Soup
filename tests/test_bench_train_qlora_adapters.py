@@ -207,6 +207,35 @@ class TestFlagsArePassedThrough:
         assert (fp16, bf16) == (True, False)
 
 
+class TestAlignmentOrder:
+    def test_it_aligns_before_the_before_train_hook_and_the_first_fingerprint(
+        self, tmp_path, monkeypatch
+    ):
+        """Only the GPU cases pinned the order, so a CPU runner would not notice the
+        alignment moving behind ``before_train`` or the nothing-to-train check. The
+        hook stops the run, so nothing trains."""
+        import soup_cli.utils.mixed_precision as mixed_precision
+
+        _workdir(tmp_path, monkeypatch)
+        order = []
+
+        class HookReachedError(Exception):
+            pass
+
+        def spy(model, *, fp16, bf16):
+            order.append("align")
+            return 0
+
+        def hook(wrapper):
+            order.append("before_train")
+            raise HookReachedError
+
+        monkeypatch.setattr(mixed_precision, "align_trainable_dtype_for_fp16", spy)
+        with pytest.raises(HookReachedError):
+            _bench("cpu", before_train=hook)
+        assert order == ["align", "before_train"]
+
+
 @pytest.mark.gpu
 @pytest.mark.parametrize("quantization", ["4bit", "8bit"])
 class TestAQuantizedModelOnCuda:
