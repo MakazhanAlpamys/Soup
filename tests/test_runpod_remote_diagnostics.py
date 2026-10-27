@@ -179,6 +179,23 @@ def test_stderr_tail_redacts_common_token_shapes(controller, secret):
     assert _tail(events) == "Authentication failed: <redacted>\nFatal"
 
 
+def test_controls_inside_a_token_are_removed_before_it_is_matched(controller):
+    token = "hf_" + "a" * 10 + "\x1b" + "a" * 15
+    url = "ht\x1btps://user:private-password@packages.example/simple"
+    rc, events, _ = _run_controller(controller, stderr=f"{token}\n{url}\nFatal")
+    assert rc == 1
+    assert _tail(events) == "<redacted>\nhttps://<redacted>@packages.example/simple\nFatal"
+
+
+def test_the_controller_redacts_the_same_token_shapes_as_the_crash_bundle(controller):
+    from soup_cli.utils import crash
+
+    ns, _ = controller
+    assert [(pattern.pattern, pattern.flags) for pattern in ns["_SECRET_PATTERNS"]] == [
+        (pattern.pattern, pattern.flags) for pattern in crash._SECRET_PATTERNS
+    ]
+
+
 def test_stderr_tail_redacts_before_byte_truncation_and_after_control_removal(controller):
     raw = "https://user:" + "private-password" * 4_000 + "@packages.example/simple\nFatal"
     raw += "\nhttps://user:private\x1b-password@packages.example/simple"
@@ -190,11 +207,15 @@ def test_stderr_tail_redacts_before_byte_truncation_and_after_control_removal(co
     assert "Fatal" in tail
 
 
-@pytest.mark.parametrize("stderr", [None, ""])
+@pytest.mark.parametrize("stderr", [None, "", "\x00\x1b\u200b"])
 def test_no_empty_tail_notice_is_added_to_a_failure(controller, stderr):
     rc, events, _ = _run_controller(controller, stderr=stderr)
     assert rc == 1
     assert not any("stderr tail" in value for _, value in events)
+    assert (
+        "notice",
+        "RunPod remote training failed; no successful artifact copy claimed",
+    ) in events
     assert ("notice", "RunPod termination verified.") in events
 
 
