@@ -143,6 +143,16 @@ appear in the order they were run, not in the order they would read best.
 9. **Turning pinning off costs 6.56x throughput** at 32B NF4, measured with
    correctness asserted in the same process. That is too expensive to be a
    silent automatic fallback.
+
+   > **CLARIFICATION 2026-10-27 — "asserted" in this item means checked and
+   > reported, not required to pass.** In STEP 8 the `pin=True` arm was timed
+   > while it was WRONG (8/256 gradients on all three repetitions) and the
+   > `pin=False` arm was exact (256/256). The 6.56x is the ratio of those two
+   > medians, 425.07 over 64.79 tok/s: a defective fast arm over a correct slow
+   > one. No number in this record changes. The same word is used at STEP 8 and
+   > in two later cost tables, where the shipped arm is likewise the WRONG one;
+   > [`harness/pincost.py`](harness/pincost.py) and the README index state it
+   > directly.
 10. **The defect is repaired, and the repair is cheap** (STEP 13–14). Dequantising
     inside the checkpointed region keeps the weight out of `MatMul4Bit` entirely.
     Gated on real 32B against a resident NF4 reference with the repair-disabled arm
