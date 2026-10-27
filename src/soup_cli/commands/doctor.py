@@ -774,6 +774,21 @@ def _detect_gpu_arch_mismatch_advisory() -> str:
     )
 
 
+def _cuda_visibility_hides_every_gpu(value: str | None, gpu_count: int) -> bool:
+    """CUDA exposes only the devices listed before the first invalid entry."""
+    if value is None:
+        return False
+    first = value.split(",", 1)[0].strip()
+    if first.startswith(("GPU-", "MIG-")):
+        return False  # UUID validation would require a separate nvidia-smi -L query.
+    if not (first.isascii() and first.isdigit()):
+        return True
+    try:
+        return int(first) >= gpu_count
+    except ValueError:
+        return True  # An oversized integer must not crash the diagnostic.
+
+
 def _detect_gpu_hw_without_torch_cuda() -> str:
     """v0.40.1 Part C / N3 — return advisory string if nvidia-smi succeeds
     but torch lacks CUDA (i.e. user installed the CPU-only wheel).
@@ -794,17 +809,19 @@ def _detect_gpu_hw_without_torch_cuda() -> str:
         return ""
     if completed.returncode != 0:
         return ""
-    gpu_name = (completed.stdout or "").strip().splitlines()[:1]
-    raw_label = gpu_name[0] if gpu_name else "GPU"
+    gpu_names = (completed.stdout or "").strip().splitlines()
+    raw_label = gpu_names[0] if gpu_names else "GPU"
     # v0.40.1 review fix — security: nvidia-smi output is embedded in a
-    # Rich-markup string at the call site; escape `[`/`]` so a GPU name like
-    # "NVIDIA Quadro [T4]" cannot break or inject markup.
-    from rich.markup import escape as _markup_escape
+    # Rich-markup string at the call site; strip controls and escape markup
+    # in both the card name and the visibility setting.
+    from soup_cli.utils.terminal import for_terminal
 
-    gpu_label = _markup_escape(raw_label)
-    if os.environ.get("CUDA_VISIBLE_DEVICES") == "-1":
+    gpu_label = for_terminal(raw_label)
+    visibility = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if _cuda_visibility_hides_every_gpu(visibility, len(gpu_names)):
         return (
-            f"GPU hardware present ({gpu_label}) but CUDA_VISIBLE_DEVICES=-1 "
+            f"GPU hardware present ({gpu_label}) but "
+            f"CUDA_VISIBLE_DEVICES={for_terminal(visibility)} "
             "hides it from torch. Unset CUDA_VISIBLE_DEVICES to use the GPU."
         )
 

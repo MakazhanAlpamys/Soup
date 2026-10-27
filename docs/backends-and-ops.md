@@ -982,9 +982,13 @@ PyTorch reinstall hint based on the CUDA version reported by the driver. When
 the driver version cannot be mapped to a supported wheel, the hint remains
 actionable without constructing a `whl/None` URL.
 
-If `nvidia-smi` detects a card but `CUDA_VISIBLE_DEVICES=-1` hides it from
-PyTorch, `soup doctor` reports that setting and recommends unsetting it to use
-the GPU, without suggesting a PyTorch reinstall.
+If `nvidia-smi` detects a card but `CUDA_VISIBLE_DEVICES=-1` or an invalid
+device list hides every card from PyTorch, `soup doctor` reports that setting
+and recommends unsetting it, without suggesting a PyTorch reinstall. This
+includes an empty value, a negative or out-of-range first index, and a word
+such as `NoDevFiles`. CUDA exposes the devices before the first invalid entry:
+`-1,0` hides every card, while `0,-1` leaves device 0 visible. GPU/MIG UUID
+selectors retain the existing diagnostic; their validity is not checked here.
 
 
 ## Version Info
