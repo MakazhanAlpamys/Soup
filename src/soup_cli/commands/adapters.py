@@ -1719,7 +1719,9 @@ def adapter_bisect(
         argv = shlex.split(cmd_str)
         resolved = _program_path(argv[0])
         if resolved is None:
-            console.print(f"[yellow]Eval failed for {escape(ckpt)}: {_not_on_path(argv[0])}[/]")
+            console.print(
+                f"[yellow]Eval failed for {for_terminal(ckpt)}: {_not_on_path(argv[0])}[/]"
+            )
             return False
         argv[0] = resolved
         try:
@@ -1728,8 +1730,8 @@ def adapter_bisect(
             )
         except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
             console.print(
-                f"[yellow]Eval failed for {escape(ckpt)}: "
-                f"{escape(str(exc))}[/]"
+                f"[yellow]Eval failed for {for_terminal(ckpt)}: "
+                f"{for_terminal(exc)}[/]"
             )
             return False
         return result.returncode == 0
@@ -1752,7 +1754,7 @@ def adapter_bisect(
         console.print(
             Panel(
                 f"Verdict:      [red]BROKEN_AT[/]\n"
-                f"First broken: [bold]{escape(result.first_broken or '?')}[/]\n"
+                f"First broken: [bold]{for_terminal(result.first_broken or '?')}[/]\n"
                 f"Probes:       {result.probes}",
                 title="Adapter bisect",
             )

@@ -24,10 +24,16 @@ import os
 import re
 import threading
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 #: A config.json larger than this is not a config.json.
 _MAX_CONFIG_BYTES = 4 * 1024 * 1024
+#: The largest hidden, intermediate, vocabulary, head or head-width figure a config.json
+#: may state, and the most layers. Real models are two orders of magnitude below both;
+#: a config past them is treated as unreadable.
+_MAX_DIM = 2**24
+_MAX_LAYERS = 2**16
+_MAX_EXPERTS = 2**16
 
 _OFFLINE_VALUES = frozenset({"1", "TRUE", "YES", "ON"})
 
@@ -75,6 +81,9 @@ class ModelShape:
     params_source: str
     #: "config.json" when the dims were read, "guessed" when derived from params.
     shape_source: str
+    #: A mixture-of-experts config (it names a count of experts). The estimate prices
+    #: such a model as a dense one, and says it is outside what it was fitted on.
+    moe: bool = False
 
     @property
     def guessed(self) -> bool:
@@ -95,7 +104,8 @@ def _read_json_file(path: str) -> Optional[dict]:
             return None
         with open(path, encoding="utf-8") as handle:
             data = json.load(handle)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
+        # Unreadable or malformed: no config.json.
         return None
     return data if isinstance(data, dict) else None
 
@@ -132,6 +142,16 @@ def _hub_lookup(repo: str, *, allow_network: bool) -> tuple[Optional[dict], Opti
     except Exception:  # noqa: BLE001 - gated, missing or offline: no config, and no echo
         return None, None
     return _read_json_file(path), os.path.dirname(path)
+
+
+def _config_cached(repo: str) -> bool:
+    """Whether the Hugging Face cache already holds ``repo``'s ``config.json``."""
+    try:
+        from huggingface_hub import try_to_load_from_cache
+
+        return isinstance(try_to_load_from_cache(repo, "config.json"), str)
+    except Exception:  # noqa: BLE001 - a malformed cache is the same as no cache
+        return False
 
 
 def _within_deadline(call: Any, seconds: float) -> Any:
@@ -205,12 +225,28 @@ def _text_config(config: dict) -> dict:
     return config
 
 
+_EXPERT_COUNT_KEYS = (
+    "num_local_experts", "n_routed_experts", "num_experts", "moe_num_experts",
+    "num_routed_experts",
+)
+
+
+def _is_moe(config: dict) -> bool:
+    """Whether a config.json describes a mixture-of-experts model."""
+    model_type = str(config.get("model_type") or "").lower()
+    if "moe" in model_type or "mixtral" in model_type:
+        return True
+    return any((_int_field(config, key) or 0) > 1 for key in _EXPERT_COUNT_KEYS)
+
+
 def params_from_config(config: dict) -> Optional[int]:
     """Parameter count of a decoder-only transformer, counted from its config.
 
     Embeddings (twice when untied), attention projections, a gated MLP and two
     norms per layer. Biases and rotary buffers are left out; the safetensors
-    count is preferred whenever it can be read.
+    count is preferred whenever it can be read. A mixture-of-experts config prices
+    every expert (and a shared one) in every layer: approximate, since some models
+    keep a few dense layers.
     """
     shape = _dims(config)
     if shape is None:
@@ -218,6 +254,15 @@ def params_from_config(config: dict) -> Optional[int]:
     hidden, inter, layers, heads, kv, head_dim, vocab, tied = shape
     attn = hidden * heads * head_dim * 2 + hidden * kv * head_dim * 2
     mlp = 3 * hidden * inter
+    experts = max((_int_field(config, key) or 0) for key in _EXPERT_COUNT_KEYS)
+    if experts > _MAX_EXPERTS:
+        return None
+    if experts > 1:
+        expert_inter = _int_field(config, "moe_intermediate_size") or inter
+        shared = _int_field(config, "n_shared_experts", "num_shared_experts") or 0
+        if expert_inter > _MAX_DIM or shared > _MAX_EXPERTS:
+            return None
+        mlp = 3 * hidden * expert_inter * (experts + shared)
     per_layer = attn + mlp + 2 * hidden
     embed = vocab * hidden * (1 if tied else 2)
     return layers * per_layer + embed + hidden
@@ -234,6 +279,10 @@ def _dims(config: dict) -> Optional[tuple[int, int, int, int, int, int, int, boo
     head_dim = _int_field(config, "head_dim") or max(1, hidden // heads)
     inter = _int_field(config, "intermediate_size", "n_inner", "ffn_dim") or 4 * hidden
     tied = config.get("tie_word_embeddings", False) is True
+    if layers > _MAX_LAYERS or any(
+        value > _MAX_DIM for value in (hidden, inter, heads, kv, head_dim, vocab)
+    ):
+        return None  # a figure no model has: treated as no config.json
     return hidden, inter, layers, heads, kv, head_dim, vocab, tied
 
 
@@ -278,6 +327,7 @@ def shape_from_config(
         model_type=str(text.get("model_type") or config.get("model_type") or ""),
         params_source=params_source,
         shape_source="config.json",
+        moe=_is_moe(text) or _is_moe(config),
     )
 
 
@@ -301,12 +351,28 @@ def guessed_shape(params_b: float, *, params_source: str = "name") -> ModelShape
     )
 
 
-def read_model_shape(base: str, *, allow_network: bool = True) -> ModelShape:
+def read_model_shape(
+    base: str,
+    *,
+    allow_network: bool = True,
+    on_hub_request: Optional[Callable[[], None]] = None,
+) -> ModelShape:
     """The shape of ``base`` (a local directory or a Hub id); never raises.
 
     ``allow_network=False`` keeps to the local directory and the cache.
+    ``on_hub_request`` is called once, just before the first request to the Hub, so a
+    command can say it is about to wait; it is not called when nothing will be sent
+    (a local directory, a cached snapshot with its weights, offline mode).
     """
     from soup_cli.utils.gpu import model_size_from_name, param_count_from_local_safetensors
+
+    announced = False
+
+    def reach_hub() -> None:
+        nonlocal announced
+        if on_hub_request is not None and not announced and allow_network and not hub_offline():
+            announced = True
+            on_hub_request()
 
     base = base or ""
     config: Optional[dict] = None
@@ -315,6 +381,8 @@ def read_model_shape(base: str, *, allow_network: bool = True) -> ModelShape:
         config = _read_json_file(os.path.join(base, "config.json"))
         snapshot = base
     elif _REPO_ID.fullmatch(base) and ".." not in base:
+        if on_hub_request is not None and not _config_cached(base):
+            reach_hub()
         config, snapshot = _hub_lookup(base, allow_network=allow_network)
 
     params: Optional[int] = None
@@ -323,6 +391,7 @@ def read_model_shape(base: str, *, allow_network: bool = True) -> ModelShape:
         params = param_count_from_local_safetensors(snapshot)
         params_source = "safetensors"
     if params is None and not os.path.isdir(base) and config is not None:
+        reach_hub()
         params = _hub_param_count(base, allow_network=allow_network)
         params_source = "hub safetensors metadata"
     if params is None:

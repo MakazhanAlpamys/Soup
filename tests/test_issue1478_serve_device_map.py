@@ -58,7 +58,7 @@ def test_loader_places_the_model_by_the_shared_rule(is_adapter, device, device_m
     assert load.call_count == 1
     kwargs = load.call_args.kwargs
     assert kwargs["device_map"] == device_map, kwargs
-    assert kwargs["torch_dtype"] == dtype, kwargs
+    assert kwargs["dtype"] == dtype, kwargs
 
 
 def test_no_device_behaves_as_the_helper_default():
@@ -66,7 +66,7 @@ def test_no_device_behaves_as_the_helper_default():
 
     device_map, dtype = resolve_inference_device_map_and_dtype(None)
     kwargs = _load(None).call_args.kwargs
-    assert (kwargs["device_map"], kwargs["torch_dtype"]) == (device_map, dtype)
+    assert (kwargs["device_map"], kwargs["dtype"]) == (device_map, dtype)
 
 
 @pytest.mark.parametrize(
@@ -79,7 +79,7 @@ def test_no_device_behaves_as_the_helper_default():
     ],
 )
 def test_explicit_kv_cache_type_still_sets_the_load_dtype(device, kv_cache_dtype, dtype):
-    assert _load(device, kv_cache_dtype=kv_cache_dtype).call_args.kwargs["torch_dtype"] == dtype
+    assert _load(device, kv_cache_dtype=kv_cache_dtype).call_args.kwargs["dtype"] == dtype
 
 
 def test_load_model_refuses_an_unknown_device_even_when_called_directly():
@@ -158,8 +158,8 @@ def test_the_draft_model_is_placed_like_the_main_model(device):
     ) as load:
         _load_draft_model("some-org/draft", device)
     draft = load.call_args.kwargs
-    assert (draft["device_map"], draft["torch_dtype"]) == (
-        main["device_map"], main["torch_dtype"],
+    assert (draft["device_map"], draft["dtype"]) == (
+        main["device_map"], main["dtype"],
     )
 
 

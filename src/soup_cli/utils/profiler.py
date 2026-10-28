@@ -248,18 +248,38 @@ def estimate_total(
         gradient_checkpointing=gradient_checkpointing,
         lora_r=int(lora_r),
     )
-    result = profile_result(estimate_peak_vram_gb(inp), model_name=model_name)
+    result = profile_result(
+        estimate_peak_vram_gb(inp),
+        model_name=model_name,
+        gradient_checkpointing=gradient_checkpointing,
+    )
     result["quantization"] = quantization
     result["peft"] = peft
     return result
 
 
-def profile_result(breakdown: Any, *, model_name: str) -> dict:
+def checkpointing_tier(value: Any) -> str:
+    """``off``, ``full``, ``medium`` or ``selective``: the checkpointing a run is priced with.
+
+    ``value`` is what the estimate was given: ``False`` or a tier name, or a config's
+    ``True`` / ``"auto"``, which price as ``full``.
+    """
+    if not value:
+        return "off"
+    return value if value in ("medium", "selective") else "full"
+
+
+def profile_result(
+    breakdown: Any, *, model_name: str, gradient_checkpointing: Any = None
+) -> dict:
     """``soup profile``'s result fields from a ``hardware_fit.VRAMBreakdown``.
 
     The old field names keep their meaning (``lora_memory_gb`` is the adapters);
     ``logits_memory_gb``, ``dequant_memory_gb``, the exact byte counts, the shape's
     source and the notes are new with #2049. GB is 1e9 bytes.
+    ``gradient_checkpointing`` is reported as the config wrote it (``True``, ``False``,
+    ``"auto"`` or a tier), as it always was; ``gradient_checkpointing_tier`` is the
+    tier the estimate priced, which ``auto`` and the task resolve.
     """
     est = breakdown.estimate
     shape, run = est.shape, est.run
@@ -285,7 +305,12 @@ def profile_result(breakdown: Any, *, model_name: str) -> dict:
         "memory_terms_bytes": dict(est.terms),
         "batch_size": run.batch_size,
         "seq_len": run.seq_len,
-        "gradient_checkpointing": run.gradient_checkpointing,
+        "gradient_checkpointing": (
+            run.gradient_checkpointing
+            if gradient_checkpointing is None
+            else gradient_checkpointing
+        ),
+        "gradient_checkpointing_tier": checkpointing_tier(run.gradient_checkpointing),
         "hidden_size": shape.hidden_size,
         "num_layers": shape.num_layers,
         "vocab_size": shape.vocab_size,
@@ -315,7 +340,11 @@ def profile_from_config(
     )
     if inp is None:
         return None
-    result = profile_result(estimate_peak_vram_gb(inp), model_name=cfg.base)
+    result = profile_result(
+        estimate_peak_vram_gb(inp),
+        model_name=cfg.base,
+        gradient_checkpointing=cfg.training.gradient_checkpointing,
+    )
     result["quantization"] = cfg.training.quantization
     return result
 

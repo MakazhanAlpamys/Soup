@@ -12,6 +12,8 @@ from rich.panel import Panel
 
 from soup_cli.utils.prompt_distill import (
     SUPPORTED_DISTILL_STRATEGIES,
+    NoTracePromptsError,
+    TraceRowStats,
     build_distill_prompt_plan,
     prepare_distill_dataset,
 )
@@ -81,6 +83,7 @@ def distill_prompt_cmd(
     from soup_cli.utils.data_forge import ForgeJudgeStats, ProviderCallError
 
     stats = ForgeJudgeStats()
+    trace_stats = TraceRowStats()
     try:
         n = prepare_distill_dataset(
             plan,
@@ -89,7 +92,13 @@ def distill_prompt_cmd(
             temperature=temperature,
             max_rows=max_rows,
             stats=stats,
+            trace_stats=trace_stats,
         )
+    except NoTracePromptsError as exc:
+        # #1854: the input is at fault — no provider call was made and the
+        # output path was left as it was.
+        console.print(f"[red]No prompts found in traces:[/] {escape(str(exc))}")
+        raise typer.Exit(3) from exc
     except ProviderCallError as exc:
         # #1274: every teacher/student call failed — fail loudly instead of
         # writing an empty dataset and reporting "done" (mirrors #1221).
@@ -115,10 +124,16 @@ def distill_prompt_cmd(
             f"{stats.calls} failed[/]\n"
         )
         title = "soup distill-prompt — done with provider failures"
+    skipped_note = ""
+    if trace_stats.skipped:
+        skipped_note = (
+            f" [yellow]({trace_stats.skipped} of {trace_stats.read} trace rows "
+            "skipped: no prompt found)[/]"
+        )
     console.print(
         Panel(
             f"{call_line}"
-            f"Rows:   [bold]{n}[/]\n"
+            f"Rows:   [bold]{n}[/]{skipped_note}\n"
             f"Output: [bold]{escape(plan.output_path)}[/]",
             title=title,
         )
