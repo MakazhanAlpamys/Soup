@@ -19,6 +19,8 @@ Public surface:
 - ``VRAMBreakdown`` frozen dataclass + ``total_gb`` property.
 - ``HardwareFitReport`` frozen dataclass.
 - ``estimate_peak_vram_gb(inp)`` -> ``VRAMBreakdown``.
+- ``unextrapolated_floor(cfg, inp, breakdown)`` -> what the run needs on the card whatever
+  its activations are (weights, CUDA context, trained-parameter state), and what that is.
 - ``decide_hardware_fit(inp, *, available_vram_gb)`` -> ``HardwareFitReport``.
 - ``resolve_peft_mode(cfg, quant=None)`` -> ``str``.
 - ``hardware_fit_input_from_config(cfg, ...)`` -> ``HardwareFitInput | None``.
@@ -28,13 +30,14 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 from soup_cli.utils.model_shape import ModelShape
 from soup_cli.utils.vram_estimate import (
     BYTES_PER_PARAM_BY_QUANT,
     GB,
     OPTIMIZER_BYTES_PER_PARAM,
+    OVERHEAD_FIXED_BYTES,
     VRAM_SAFETY_MARGIN,
     RunSpec,
     VramEstimate,
@@ -281,6 +284,129 @@ CONFIG_QUANT_TO_FIT = {
 #: ``batch_size: auto`` resolves at train time; ``soup profile`` prices this instead.
 PROFILE_AUTO_BATCH = 4
 
+#: What the estimate's coefficients were fitted on (``benchmarks/gate-2049-resident-vram.md``).
+CALIBRATED_RANGE = "dense models of 3B and below on one 6 GB card"
+#: The largest dense model counted as inside it: the measured rows stop at 3.2B
+#: (Llama-3.2-3B), so a "3B" model is in and the next size up (4B) is not.
+CALIBRATED_MAX_PARAMS_B = 3.5
+
+
+def outside_calibrated_range(
+    inp: HardwareFitInput, *, backend: Optional[str] = None
+) -> tuple[str, ...]:
+    """Why ``inp`` is outside the range the estimate was fitted on; empty when inside.
+
+    The pre-flight refuses a peak that does not fit only inside it. Outside it the same
+    numbers are an extrapolation (a larger model, a mixture-of-experts one, a checkpointing
+    tier or fused loss nobody measured, or a backend with its own loss and checkpointing),
+    so they are printed as a warning and the run continues, unless the run's floor
+    (:func:`unextrapolated_floor`) is already more than the card holds.
+    """
+    reasons = []
+    if inp.params_b > CALIBRATED_MAX_PARAMS_B:
+        reasons.append(f"{inp.params_b:.1f}B parameters")
+    if inp.shape is not None and inp.shape.moe:
+        reasons.append("a mixture-of-experts model")
+    if inp.gradient_checkpointing in ("medium", "selective"):
+        reasons.append(f"{inp.gradient_checkpointing} gradient checkpointing")
+    if inp.fused_loss:
+        noun = "flag" if len(inp.fused_loss) == 1 else "flags"
+        reasons.append(f"fused-loss {noun} {' and '.join(sorted(inp.fused_loss))}")
+    if backend == "unsloth":
+        reasons.append("backend unsloth")
+    return tuple(reasons)
+
+
+#: Optimizers that update each parameter inside the backward pass, so no full gradient
+#: is ever held (the estimate still charges one).
+_FUSED_BACKWARD_OPTIMIZERS = frozenset({"lomo", "adalomo"})
+
+#: Optimizers whose state ``OPTIMIZER_BYTES_PER_PARAM`` prices at what they hold: AdamW's
+#: two fp32 moments (schedule-free AdamW's ``z`` and second moment), 8 bytes a parameter,
+#: and 8-bit AdamW's two 8-bit moments, 2. The other figures there are more than the
+#: optimizer holds (Adafactor and ``adalomo`` factor their state, ``lion_8bit`` keeps one
+#: moment), so the floor does not charge them.
+_EXACT_STATE_OPTIMIZERS = frozenset(
+    {"adamw_torch", "adamw_torch_fused", "adamw_bnb_8bit", "schedule_free_adamw"}
+)
+
+#: Tasks whose trainer replaces ``training.optimizer`` with ``galore_adamw`` when
+#: ``use_galore`` is on: ``SFTTrainerWrapper.setup`` (``tts`` reaches it through
+#: ``super()``) and ``PretrainTrainerWrapper.setup``. Every other trainer ignores the
+#: field and keeps the configured optimizer. (``tts`` with ``tts_family: sesame_csm``
+#: builds its own trainer and refuses ``use_galore`` at setup.)
+GALORE_APPLYING_TASKS: frozenset[str] = frozenset({"sft", "tts", "pretrain"})
+
+
+def _trains_a_subset(tcfg: Any) -> bool:
+    """Whether a full fine-tune trains only some of the parameters (Spectrum, LISA, freezing)."""
+    return bool(
+        getattr(tcfg, "unfrozen_parameters", None)
+        or getattr(tcfg, "lisa_enabled", False)
+        or getattr(tcfg, "freeze_layers", None)
+        or getattr(tcfg, "freeze_ratio", None)
+        or getattr(tcfg, "expand_layers", None)
+    )
+
+
+def unextrapolated_floor(
+    cfg: Any, inp: HardwareFitInput, breakdown: VRAMBreakdown
+) -> tuple[float, tuple[str, ...]]:
+    """What the run needs on the card whatever its activations are, in GB, and its terms.
+
+    Only the estimate's terms that are a byte count per parameter times a parameter count,
+    or a constant: the weights, the CUDA context (the fixed 0.5 GB, not the ``overhead``
+    term, which adds 5% of every allocated byte, activations included) and, for the
+    parameters the run trains, their LoRA adapters, their gradients and, for the optimizers
+    in ``_EXACT_STATE_OPTIMIZERS``, their optimizer state. None of them uses a fitted
+    coefficient, so a run whose floor is more than the card holds fails outside the
+    calibrated range as surely as inside it. Activations, logits, the 4-bit dequantization
+    copy and the allocator slack never enter it.
+
+    The trained-parameter terms are left out wherever the estimate overstates them or has
+    no exact figure, so the floor never refuses a run that could fit:
+
+    - On a full fine-tune, Spectrum (``unfrozen_parameters``), LISA, ``freeze_layers`` /
+      ``freeze_ratio`` and ``expand_layers`` train a subset of the parameters, but
+      ``resolve_peft_mode`` prices every parameter as trainable: weights and context only.
+      (With LoRA they change nothing here: the adapters' terms are counted as usual.)
+    - ``lomo`` / ``adalomo`` keep no full gradient: no gradient term.
+    - The optimizer state is counted only for ``adamw_torch``, ``adamw_torch_fused``,
+      ``schedule_free_adamw`` and ``adamw_bnb_8bit``. Every other optimizer has no
+      optimizer term: Adafactor, ``lion_8bit`` and ``adalomo`` hold less than the
+      estimate's figure, a paged optimizer moves its state to host memory under pressure,
+      and one the estimate has no figure for is priced as AdamW.
+    - With ``use_galore`` on a task in ``GALORE_APPLYING_TASKS`` there is no optimizer
+      term either: the trainer swaps in ``galore_adamw``, which keeps low-rank state for
+      the attention and MLP projections and full AdamW state for the other parameters
+      (embeddings, output head, norms), a mix the estimate has no figure for. On any
+      other task ``use_galore`` changes nothing and the configured optimizer is counted.
+    """
+    floor = breakdown.weights_gb + OVERHEAD_FIXED_BYTES / GB
+    terms = ["weights", "CUDA context"]
+    tcfg = getattr(cfg, "training", None)
+    if inp.peft == "full" and _trains_a_subset(tcfg):
+        return floor, tuple(terms)
+    optimizer = str(getattr(tcfg, "optimizer", "adamw_torch") or "adamw_torch")
+    galore = bool(getattr(tcfg, "use_galore", False)) and (
+        getattr(cfg, "task", "sft") in GALORE_APPLYING_TASKS
+    )
+    charges = [
+        ("adapters", breakdown.adapters_gb, True),
+        ("gradients", breakdown.gradients_gb, optimizer not in _FUSED_BACKWARD_OPTIMIZERS),
+        (
+            "optimizer state",
+            breakdown.optimizer_gb,
+            optimizer in _EXACT_STATE_OPTIMIZERS and not galore,
+        ),
+    ]
+    for name, gigabytes, exact in charges:
+        if exact and gigabytes > 0:
+            floor += gigabytes
+            terms.append(name)
+    return floor, tuple(terms)
+
+
 #: Tasks whose model has no vocabulary-sized output, so the estimate charges no
 #: logits: the classifier family and reward_model load
 #: ``AutoModelForSequenceClassification`` (``trainer/classifier.py``,
@@ -318,6 +444,7 @@ def hardware_fit_input_from_config(
     allow_network: bool = True,
     profile_defaults: bool = False,
     gpu_memory_gb: Optional[float] = None,
+    on_hub_request: Optional[Callable[[], None]] = None,
 ) -> Optional[HardwareFitInput]:
     """The estimate's input for a ``SoupConfig``: the train pre-flight, ``soup profile``
     and the MCP ``profile`` tool all build it here, so they price the same run (#2049).
@@ -328,6 +455,7 @@ def hardware_fit_input_from_config(
     profile``'s reading instead: ``auto`` is priced at batch 4 and a quantization
     with no memory model at bf16, as ``soup profile`` always did. ``gpu_memory_gb``
     is the card's memory in GiB, which ``gradient_checkpointing: auto`` resolves on.
+    ``on_hub_request`` is called just before the first request to the Hub, if one is made.
     """
     from soup_cli.utils.model_shape import read_model_shape
 
@@ -347,7 +475,11 @@ def hardware_fit_input_from_config(
         if not profile_defaults:
             return None
         quant = "none"
-    shape = read_model_shape(getattr(cfg, "base", "") or "", allow_network=allow_network)
+    shape = read_model_shape(
+        getattr(cfg, "base", "") or "",
+        allow_network=allow_network,
+        on_hub_request=on_hub_request,
+    )
     peft = resolve_peft_mode(cfg, quant=quant)
     optimizer = str(getattr(tcfg, "optimizer", "adamw_torch") or "adamw_torch")
     if optimizer not in _VALID_OPTIMIZERS:
@@ -382,7 +514,7 @@ def hardware_fit_input_from_config(
             lm_head=task not in NO_LM_HEAD_TASKS,
             fused_loss=fused_loss,
         )
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, ArithmeticError):
         return None  # dims out of the predictor's supported range
 
 
@@ -489,6 +621,7 @@ __all__ = [
     "decide_hardware_fit",
     "estimate_peak_vram_gb",
     "hardware_fit_input_from_config",
+    "outside_calibrated_range",
     "validate_batch_size",
     "validate_seq_len",
 ]

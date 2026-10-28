@@ -74,7 +74,13 @@ def plan_cmd(
         raise typer.Exit(2) from exc
 
     try:
-        plan = build_plan(cfg)
+        plan = build_plan(
+            cfg,
+            on_hub_request=lambda: console.print(
+                "[dim]Reading the model's config.json from the Hub to size the run "
+                "(HF_HUB_OFFLINE=1 skips this)...[/]"
+            ),
+        )
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
@@ -157,7 +163,8 @@ def apply_cmd(
         raise typer.Exit(2) from exc
 
     try:
-        plan_now = build_plan(cfg)
+        # Drift compares hashes, never the estimate, so the model is not read (no Hub request).
+        plan_now = build_plan(cfg, estimate_vram=False)
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc

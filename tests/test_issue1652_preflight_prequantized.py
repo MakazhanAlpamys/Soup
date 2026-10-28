@@ -25,6 +25,7 @@ from rich.text import Text
 from soup_cli.commands import train as train_mod
 from soup_cli.commands.train import _build_hardware_fit_input, _hardware_fit_preflight
 from soup_cli.config.loader import load_config_from_string
+from soup_cli.utils import hardware_fit
 from soup_cli.utils.hardware_fit import (
     _BYTES_PER_PARAM_BY_QUANT,
     HardwareFitInput,
@@ -61,6 +62,17 @@ class _Console:
 
     def print(self, renderable):
         self.printed.append(renderable)
+
+
+@pytest.fixture(autouse=True)
+def inside_the_calibrated_range(monkeypatch):
+    """These tests are about how each quantization is priced and how the panel reads.
+
+    Their 20B base is outside the range the estimate was fitted on, where the gate
+    warns instead of refusing (``tests/test_hardware_fit_envelope.py``), so the range
+    check is told the run is inside it.
+    """
+    monkeypatch.setattr(hardware_fit, "outside_calibrated_range", lambda inp, **kwargs: ())
 
 
 @pytest.fixture

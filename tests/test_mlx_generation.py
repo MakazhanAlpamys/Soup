@@ -313,9 +313,9 @@ def test_default_backend_refuses_native_artifact_before_transformers(tmp_path):
     (["--asr-language", "fr"], "ASR options", 1),
     (["--asr-task", "translate"], "ASR options", 1),
     (["--audio-dir", "audio"], "ASR options", 1),
-    (["--task", "asr"], "--task text", 1),
-    (["--batch-size", "2"], "--batch-size 1", 1),
-    (["--cuda-graphs"], "no --cuda-graphs", 1),
+    (["--task", "asr"], "requires --task text", 1),
+    (["--batch-size", "2"], "requires --batch-size 1", 1),
+    (["--cuda-graphs"], "does not support --cuda-graphs", 1),
     (["--hub", "modelscope"], "--hub hf only", 1),
 ])
 def test_public_native_option_refusals_precede_loading(
@@ -533,3 +533,20 @@ assert not heavy.intersection(sys.modules), sorted(heavy.intersection(sys.module
     completed = subprocess.run([sys.executable, "-c", script], cwd=tmp_path, env=env,
                                text=True, capture_output=True, timeout=60)
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+@pytest.mark.parametrize("options, said, not_said", [
+    ({"task": "asr"}, "--task text", ("--batch-size", "--cuda-graphs")),
+    ({"batch_size": 2}, "--batch-size 1", ("--task", "--cuda-graphs")),
+    ({"cuda_graphs": True}, "--cuda-graphs", ("--task", "--batch-size")),
+])
+def test_native_option_refusal_names_only_the_option_that_failed(options, said, not_said):
+    from soup_cli.utils.mlx_generation import validate_native_options
+
+    valid = dict(temperature=0.7, max_tokens=10, device=None, hub="hf")
+    with pytest.raises(ValueError) as caught:
+        validate_native_options(**(valid | options))
+    message = str(caught.value)
+    assert said in message
+    for other in not_said:
+        assert other not in message
