@@ -32,7 +32,6 @@ _UNREADABLE_ROWS = [
     {"id": "t3", "messages": [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]},
 ]
 _PRIOR_OUTPUT = b'{"messages": [{"role": "user", "content": "kept from an earlier run"}]}\n'
-_PROMPT_KEYS = ("prompt", "input", "instruction", "question", "query", "messages")
 
 
 def _terminal_text(result) -> str:
@@ -92,9 +91,24 @@ def test_no_prompt_refuses_and_keeps_existing_output(
     assert output.read_bytes() == _PRIOR_OUTPUT
     assert provider_calls == []
     assert f"0 of {len(rows)} trace rows had a prompt" in text
-    for key in _PROMPT_KEYS:
-        assert key in text
+    assert "prompt / input / instruction / question / query" in text
+    assert "messages" in text
     assert "done" not in text
+
+
+def test_lines_without_a_json_object_are_not_rows(tmp_path, monkeypatch, provider_calls) -> None:
+    (tmp_path / "traces.jsonl").write_text('not json\n[1, 2]\n"text"\n', encoding="utf-8")
+    output = tmp_path / "distilled.jsonl"
+    output.write_bytes(_PRIOR_OUTPUT)
+
+    result = _run_distill(tmp_path, monkeypatch)
+    text = _terminal_text(result)
+
+    assert result.exit_code == 3, (text, repr(result.exception))
+    assert "0 of 0 trace rows had a prompt" in text
+    assert "only lines holding a JSON object count as rows" in text
+    assert output.read_bytes() == _PRIOR_OUTPUT
+    assert provider_calls == []
 
 
 @pytest.mark.parametrize("rows", [_UNREADABLE_ROWS, []], ids=["unreadable", "empty"])

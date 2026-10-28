@@ -299,9 +299,10 @@ def prepare_distill_dataset(
         # #1854: nothing to distil — refuse instead of replacing an existing
         # output with an empty file and reporting "done".
         raise NoTracePromptsError(
-            f"0 of {trace_stats.read} trace rows had a prompt; looked for a "
-            f"non-empty string under {' / '.join(_PROMPT_KEYS)}, or a user "
-            "turn with string content in messages"
+            f"0 of {trace_stats.read} trace rows had a prompt (only lines holding a "
+            "JSON object count as rows; blank lines, invalid JSON and other values are "
+            f"ignored); looked for a non-empty string under {' / '.join(_PROMPT_KEYS)}, "
+            "or a user turn with string content in messages"
         )
 
     teacher = teacher_fn
