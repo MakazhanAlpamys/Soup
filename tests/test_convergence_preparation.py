@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from benchmarks.harness import prep_convergence
 from benchmarks.harness.prep_convergence import LABELS, prepare, verify
 from soup_cli.eval.custom import load_eval_tasks
 
@@ -136,7 +137,7 @@ def test_tamper_and_overwrite_fail(sources: dict, tmp_path: Path) -> None:
     output = tmp_path / "out"
     prepare(output=output, **sources)
     before = (output / "manifest.json").read_bytes()
-    with pytest.raises(FileExistsError):
+    with pytest.raises(FileExistsError, match="^output already exists$"):
         prepare(output=output, **sources)
     assert before == (output / "manifest.json").read_bytes()
     path = output / "train_s2.jsonl"
@@ -149,9 +150,68 @@ def test_empty_existing_directory_is_also_preserved(sources: dict, tmp_path: Pat
     # POSIX rename can replace an empty directory; refusal must be explicit.
     output = tmp_path / "existing"
     output.mkdir()
-    with pytest.raises(FileExistsError):
+    with pytest.raises(FileExistsError, match="^output already exists$"):
         prepare(output=output, **sources)
     assert output.is_dir() and list(output.iterdir()) == []
+
+
+@pytest.mark.requires_symlink
+def test_dangling_output_symlink_is_refused_before_sources_are_read(
+    sources: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "missing"
+    output = tmp_path / "dangling"
+    output.symlink_to(target, target_is_directory=True)
+    assert output.is_symlink() and not output.exists()
+    link_target = output.readlink()
+
+    def unexpected_read(*_args: object) -> None:
+        raise AssertionError("sources read before output refusal")
+
+    monkeypatch.setattr(prep_convergence, "_source", unexpected_read)
+    with pytest.raises(FileExistsError, match="^output already exists$"):
+        prepare(output=output, **sources)
+    assert output.is_symlink() and output.readlink() == link_target
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("entrypoint", ["prepare", "verify"])
+def test_main_reports_error_markup_literally(
+    sources: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str], entrypoint: str,
+) -> None:
+    message = "[bold]x[/bold] [red]literal[/red]"
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise ValueError(message)
+
+    monkeypatch.setattr(prep_convergence, entrypoint, fail)
+    arguments = ["prep_convergence.py"]
+    if entrypoint == "verify":
+        arguments.extend(["--verify", str(tmp_path / "out")])
+    else:
+        for key, value in {**sources, "output": tmp_path / "out"}.items():
+            arguments.extend(["--" + key.replace("_", "-"), str(value)])
+    monkeypatch.setattr(sys, "argv", arguments)
+    assert prep_convergence.main() == 1
+    captured = capsys.readouterr()
+    assert captured.out == f"Preparation failed: {message}\n"
+    assert captured.err == ""
+
+
+@pytest.mark.parametrize("value", [[], None, "not an object", 17])
+def test_non_object_manifest_is_a_reported_validation_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str], value: object,
+) -> None:
+    (tmp_path / "manifest.json").write_text(json.dumps(value), encoding="utf-8")
+    with pytest.raises(ValueError, match="^unsupported reconstruction manifest$"):
+        verify(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["prep_convergence.py", "--verify", str(tmp_path)])
+    assert prep_convergence.main() == 1
+    captured = capsys.readouterr()
+    assert captured.out == "Preparation failed: unsupported reconstruction manifest\n"
+    assert captured.err == ""
 
 
 @pytest.mark.parametrize("corruption,message", [

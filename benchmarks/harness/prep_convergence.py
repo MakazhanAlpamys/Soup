@@ -5,6 +5,7 @@ Inputs are JSONL exports of dair-ai/emotion's split train/test columns text/labe
 Their explicitly supplied SHA-256 values bind the actual bytes; the revision is
 caller-asserted provenance, not authentication of their Hugging Face origin.
 No ML package, network access, training or model evaluation is needed.
+Source exports are read whole into memory without an input-size cap.
 """
 
 from __future__ import annotations
@@ -147,7 +148,7 @@ def verify(output: Path) -> dict:
     independently when transferring artifacts. Source origin is caller-asserted.
     """
     manifest = json.loads((output / "manifest.json").read_bytes())
-    if (manifest.get("schema_version") != 1
+    if (not isinstance(manifest, dict) or manifest.get("schema_version") != 1
             or manifest.get("historical_bytes_recovered") is not False):
         raise ValueError("unsupported reconstruction manifest")
     if (manifest.get("from_record") != list(FROM_RECORD)
