@@ -287,14 +287,16 @@ def aider(
         if not remove_container(docker, container_name):
             console.print(
                 f"[yellow]Could not remove container {escape(container_name)}; "
-                f"remove it with: docker rm -f {escape(container_name)}[/]"
+                f"remove it with: docker rm -f {escape(container_name)}[/]",
+                soft_wrap=True,
             )
         raise typer.Exit(1) from exc
     except KeyboardInterrupt:
         if not remove_container(docker, container_name):
             console.print(
                 f"[yellow]Could not remove container {escape(container_name)}; "
-                f"remove it with: docker rm -f {escape(container_name)}[/]"
+                f"remove it with: docker rm -f {escape(container_name)}[/]",
+                soft_wrap=True,
             )
         raise
     except OSError as exc:

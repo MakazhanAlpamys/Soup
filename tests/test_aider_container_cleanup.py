@@ -215,6 +215,8 @@ def test_timeout_names_and_removes_container(docker_spy: DockerSpy, tmp_path: Pa
 
 
 def test_rm_uses_same_executable_and_no_shell(docker_spy: DockerSpy) -> None:
+    from soup_cli.eval.aider_polyglot import DOCKER_REMOVE_TIMEOUT_SECONDS
+
     runner.invoke(
         app,
         [
@@ -252,6 +254,7 @@ def test_rm_uses_same_executable_and_no_shell(docker_spy: DockerSpy) -> None:
     rm_argv, rm_kwargs = rm_calls[0]
 
     assert rm_kwargs.get("shell") is False
+    assert rm_kwargs.get("timeout") == DOCKER_REMOVE_TIMEOUT_SECONDS
     assert rm_argv[0] == run_argv[0]
     assert rm_argv == [run_argv[0], "rm", "-f", container_name]
 
@@ -288,6 +291,9 @@ def test_failing_rm_emits_one_line_warning(
         f"docker rm -f {container_name}"
     )
     assert warning_msg in plain_output
+
+    lines = _ANSI_RE.sub("", result.output).splitlines()
+    assert any(f"remove it with: docker rm -f {container_name}" in line for line in lines)
 
     pos_timeout = plain_output.find("timed out after 60 seconds")
     pos_warn = plain_output.find(f"Could not remove container {container_name}")
@@ -396,6 +402,43 @@ def test_ctrl_c_removes_container_and_exits_130(
         len(entry) > 1 and entry[0] == "rm" and container_name in entry
         for entry in log_entries
     )
+
+
+def test_ctrl_c_failing_rm_emits_one_line_warning(
+    docker_spy: DockerSpy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_DOCKER_RM", "fail")
+    docker_spy.raise_ctrl_c = True
+    result = runner.invoke(
+        app,
+        [
+            "eval",
+            "aider",
+            "--model",
+            "openai/example",
+            "--output",
+            "results",
+            "--exercises-dir",
+            "polyglot",
+            "--timeout",
+            "60",
+        ],
+    )
+    assert result.exit_code == 130, (result.output, repr(result.exception))
+    plain_output = _plain(result.output)
+
+    match = re.search(r"Could not remove container (soup-aider-[0-9a-f]{12})", plain_output)
+    assert match is not None, "Warning with container name was not printed"
+    container_name = match.group(1)
+
+    warning_msg = (
+        f"Could not remove container {container_name}; remove it with: "
+        f"docker rm -f {container_name}"
+    )
+    assert warning_msg in plain_output
+
+    lines = _ANSI_RE.sub("", result.output).splitlines()
+    assert any(f"remove it with: docker rm -f {container_name}" in line for line in lines)
 
 
 def test_unit_container_name_and_command_validation(tmp_path: Path) -> None:
