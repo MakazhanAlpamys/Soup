@@ -483,6 +483,87 @@ def find_layer_unscoped_targets(model: Any, target_modules: Any) -> list[str]:
     return unscoped
 
 
+_LAYER_INDEX_NUM = re.compile(r"(?:^|\.)(?:layers|h)\.(\d+)(?:\.|$)")
+
+
+def expand_string_target_modules(model: Any, target_modules: str) -> list[str]:
+    """Expand a peft string ``target_modules`` into full module names.
+
+    Only the two shapes peft reads as a string are handled, and each is
+    expanded with peft's own rule so the adapter lands where the string
+    would have put it:
+
+    * ``all-linear`` (any casing): every ``nn.Linear`` and ``Conv1D`` module
+      except the output embedding's own module, which peft excludes.
+    * a regex: modules whose full name matches it. peft matches a regex with
+      ``re.fullmatch`` against the module path, and so does this.
+
+    Returns names in ``model.named_modules()`` order. An empty result means
+    the string reaches nothing in this model; the caller decides what to say.
+    """
+    modules = {name: module for name, module in model.named_modules() if name}
+    if target_modules.strip().lower() == "all-linear":
+        import torch
+
+        linear_types: tuple[type, ...] = (torch.nn.Linear,)
+        try:  # GPT-2 style models use Conv1D instead of nn.Linear
+            from transformers.pytorch_utils import Conv1D
+
+            linear_types = (torch.nn.Linear, Conv1D)
+        except Exception:  # pragma: no cover - transformers always ships it
+            pass
+        excluded: set[str] = set()
+        get_output = getattr(model, "get_output_embeddings", None)
+        if callable(get_output):
+            output = get_output()
+            if output is not None:
+                excluded = {name for name, module in modules.items()
+                            if module is output}
+        return [name for name, module in modules.items()
+                if isinstance(module, linear_types) and name not in excluded]
+
+    try:
+        pattern = re.compile(target_modules)
+    except re.error as exc:
+        raise ValueError(
+            f"training.lora.target_modules={target_modules!r} is not a valid "
+            f"regular expression: {exc}"
+        ) from exc
+    return [name for name in modules if pattern.fullmatch(name)]
+
+
+def restrict_target_modules_to_layers(
+    model: Any,
+    target_modules: Any,
+    cutoff: int,
+    total_layers: int,
+) -> list[str]:
+    """Keep only the targets that live in decoder layers ``>= cutoff``.
+
+    A freeze plan frees layers ``cutoff .. total_layers-1``. peft applies
+    ``layers_to_transform`` to a list ``target_modules`` but never to a
+    string, so a string target has to become an explicit list before it can
+    respect the plan (#2201). Names outside a numbered decoder layer
+    (``lm_head``, embeddings) are dropped: the plan cannot scope them, and
+    peft would not have scoped them for a list either.
+    """
+    if isinstance(target_modules, str):
+        candidates = expand_string_target_modules(model, target_modules)
+    elif isinstance(target_modules, (list, tuple, set)):
+        candidates = list(target_modules)
+    else:  # None, UnmappedTargets and friends: nothing to restrict
+        return []
+
+    kept: list[str] = []
+    for name in candidates:
+        match = _LAYER_INDEX_NUM.search(name)
+        if match is None:
+            continue
+        if cutoff <= int(match.group(1)) < total_layers:
+            kept.append(name)
+    return kept
+
+
 def resolve_lora_target_parameters(model: Any, configured: Any) -> Any:
     """Resolve opt-in raw-parameter LoRA targets for supported architectures.
 
