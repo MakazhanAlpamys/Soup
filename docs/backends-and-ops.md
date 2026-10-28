@@ -1813,6 +1813,20 @@ soup apply --config soup.yaml
 soup apply --config soup.yaml --dry-run
 ```
 
+For a MiniLLM distillation config that needs on-policy rollout, pass the same flag to
+both commands:
+
+```bash
+soup plan --config soup.yaml --minillm-on-policy
+soup apply --config soup.yaml --minillm-on-policy
+```
+
+The flag requires `training.minillm_enabled: true` on `task: distill` and overrides
+`training.minillm_on_policy` before config validation. It participates in the plan hash,
+so using a different flag value at apply time can cause drift. The suggested `soup train`
+command carries the flag when it was given. Apply records the reviewed plan and does not
+start training or rewrite the config.
+
 The state file is a thin JSON envelope; the actual training is still driven by `soup train`. The gate prevents the "wait, why did I spend another $0.50 on the wrong config" surprise.
 
 `peak_vram_gb` is the `soup train` pre-flight's own estimate for the run, before its 10% margin ([Hardware-Fit Calculator](#hardware-fit-calculator)). When the plan cannot price the run, it records `null` and says why in `peak_vram_reason`: the model's `config.json` could not be read, `batch_size: auto`, a quantization with no memory model, layer streaming (sized by the streaming planner when it starts) or `backend: mlx`. Until #2049 it recorded a fixed 8.0 GB for every run. A state file written before that still loads, and `peak_vram_gb` is not part of the drift check.

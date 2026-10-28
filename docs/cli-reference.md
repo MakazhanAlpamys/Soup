@@ -546,6 +546,7 @@ Usage: `soup apply [OPTIONS]`
 | `--config`, `-c` | text | `soup.yaml` |  | Path to soup.yaml. |
 | `--state` | text | `soup.tfstate` |  | Path to the state file written by `soup plan`. |
 | `--dry-run` | flag | off |  | Verify drift and exit without invoking training. |
+| `--minillm-on-policy` | flag | off |  | Use on-policy MiniLLM; requires training.minillm_enabled=true on task=distill. |
 
 ## `soup attest`
 
@@ -2859,6 +2860,7 @@ Usage: `soup plan [OPTIONS]`
 |---|---|---|---|---|
 | `--config`, `-c` | text | `soup.yaml` |  | Path to soup.yaml. |
 | `--state` | text | `soup.tfstate` |  | Path to write the state file (default: ./soup.tfstate). |
+| `--minillm-on-policy` | flag | off |  | Use on-policy MiniLLM; requires training.minillm_enabled=true on task=distill. |
 
 ## `soup plugins`
 

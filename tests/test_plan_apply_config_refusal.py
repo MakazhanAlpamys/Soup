@@ -8,9 +8,8 @@ command before ``soup train`` refused the same file. Both commands now run the l
 own validation, so they exit 1 with the lines ``soup train`` prints, write no plan and
 leave an existing state file as it was.
 
-A config that is valid only because of a ``soup train`` flag (``--minillm-on-policy`` with
-the default mix ratio 0, or with a rollout length) is refused too: ``plan`` and ``apply``
-take no such flag, so the refusal says what the YAML needs (``minillm_on_policy``).
+A config needing --minillm-on-policy is refused without the flag; plan and apply
+merge it before validation when it is given, just as train does.
 """
 
 from __future__ import annotations
@@ -54,7 +53,7 @@ _REFUSED = {
         "greater than 0",
         "sft",
     ),
-    # Both are valid under `soup train --minillm-on-policy`, a flag these commands lack.
+    # Both require --minillm-on-policy, and must still be refused without it.
     "valid only with the train flag, mix ratio 0": (
         {"teacher_model": _TEACHER, "minillm_enabled": True, "minillm_teacher_mix_ratio": 0.0},
         {},
@@ -213,3 +212,82 @@ def test_a_valid_config_still_plans_and_applies(workdir):
     assert applied.exit_code == 0, (applied.output, repr(applied.exception))
     assert f"Plan locked in {_STATE}." in _plain(applied.output)
     assert read_state(_STATE).applied is True
+    assert "Now run: soup train --config soup.yaml" in _plain(applied.output)
+    assert "--minillm-on-policy" not in _plain(applied.output)
+
+
+@pytest.mark.parametrize("case", _FLAG_ONLY)
+def test_on_policy_flag_is_merged_before_plan_and_apply_validate(workdir, case):
+    training, data, _names, _fix, task = _REFUSED[case]
+    document = _config(workdir, training=training, data=data, task=task)
+    _write(document)
+    original = Path("soup.yaml").read_bytes()
+    runner = CliRunner()
+    flag = ["--minillm-on-policy"]
+
+    planned = runner.invoke(app, ["plan", "--config", "soup.yaml", *flag])
+    assert planned.exit_code == 0, (planned.output, repr(planned.exception))
+    effective = {**document, "training": {**document["training"], "minillm_on_policy": True}}
+    assert read_state(_STATE).plan.config_sha == build_plan(effective).config_sha
+    assert read_state(_STATE).applied is False
+
+    checked = runner.invoke(app, ["apply", "--config", "soup.yaml", "--dry-run", *flag])
+    assert checked.exit_code == 0, (checked.output, repr(checked.exception))
+    assert read_state(_STATE).applied is False
+    applied = runner.invoke(app, ["apply", "--config", "soup.yaml", *flag])
+    assert applied.exit_code == 0, (applied.output, repr(applied.exception))
+    assert read_state(_STATE).applied is True
+    assert "Now run: soup train --config soup.yaml --minillm-on-policy" in _plain(applied.output)
+    assert "does not start training" in _plain(applied.output)
+    assert "v0.64.1" not in _plain(applied.output)
+    assert Path("soup.yaml").read_bytes() == original
+
+
+@pytest.mark.parametrize("command", [["plan"], ["apply"], ["apply", "--dry-run"]])
+@pytest.mark.parametrize("enabled", [False, None])
+def test_on_policy_flag_requires_minillm_enabled_with_train_s_message(workdir, command, enabled):
+    training = {} if enabled is None else {"minillm_enabled": enabled}
+    document = _config(workdir, training=training)
+    _write(document)
+    before = b"existing state stays intact"
+    Path(_STATE).write_bytes(before)
+
+    result = CliRunner().invoke(app, [*command, "--minillm-on-policy"])
+
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert _plain(result.output) == (
+        "--minillm-on-policy requires training.minillm_enabled=true (task='distill')"
+    )
+    assert Path(_STATE).read_bytes() == before
+
+
+@pytest.mark.parametrize("plan_flag", [False, True])
+def test_on_policy_flag_participates_in_drift_detection(workdir, plan_flag):
+    document = _config(
+        workdir, task="distill",
+        training={"teacher_model": _TEACHER, "minillm_enabled": True,
+                  "minillm_teacher_mix_ratio": 0.3},
+    )
+    _write(document)
+    runner = CliRunner()
+    planned = runner.invoke(app, ["plan", *(["--minillm-on-policy"] if plan_flag else [])])
+    assert planned.exit_code == 0, (planned.output, repr(planned.exception))
+    before = Path(_STATE).read_bytes()
+    result = runner.invoke(
+        app, ["apply", *(["--minillm-on-policy"] if not plan_flag else [])]
+    )
+    assert result.exit_code == 3, (result.output, repr(result.exception))
+    assert "config_sha" in _plain(result.output)
+    assert Path(_STATE).read_bytes() == before
+
+
+def test_on_policy_flag_does_not_hide_other_validation_errors(workdir):
+    document = _config(
+        workdir, task="distill",
+        training={"teacher_model": _TEACHER, "minillm_enabled": True, "lr": -1},
+    )
+    _write(document)
+    result = CliRunner().invoke(app, ["plan", "--minillm-on-policy"])
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "training -> lr" in _plain(result.output)
+    assert not Path(_STATE).exists()
