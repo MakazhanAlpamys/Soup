@@ -387,9 +387,11 @@ training:
 | `fp8` | — | Train LoRA on top of an FP8-released checkpoint. Loaded with `FineGrainedFP8Config(dequantize=True)`, so it trains in bf16: budget memory for the bf16 model, an estimated 2 bytes per parameter, not for the FP8 file. | transformers ≥ 5.17.0 |
 
 **VRAM pre-flight.** Before the model loads, `soup train` estimates the run's
-peak, weights included, and refuses a run that does not fit the card
-(`--allow-oom-attempt` launches it anyway; the terms are in [Hardware-Fit
-Calculator](backends-and-ops.md#hardware-fit-calculator)). The weights are priced
+peak, weights included, and refuses a run that does not fit the card when the
+run is inside the range the estimate was fitted on (dense models of 3B and below);
+outside it, it prints the figure as a warning and continues. `--allow-oom-attempt`
+launches a refused run anyway; the terms and the range are in [Hardware-Fit
+Calculator](backends-and-ops.md#hardware-fit-calculator). The weights are priced
 in bytes per parameter: `none` 2.0, `gptq` and `awq` 0.55, `aqlm` 0.5, `eetq` 1.0,
 and 2.0 for `mxfp4` and `fp8`, which are dequantized on load. Under `4bit` and
 `8bit` only the linear layers are quantized (0.53 and 1.02 bytes a parameter); the

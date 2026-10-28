@@ -69,10 +69,21 @@ def test_hardware_fit_preflight_gate_and_optout():
 
     cfg = load_config_from_string(_FIT_YAML)
 
-    # 4 GB can't hold a 7B model -> refuse (exit) by default.
+    # 4 GB can't hold a 7B model -> refuse (exit) by default. A 7B model is outside the
+    # range the estimate was fitted on, where a peak that does not fit only warns
+    # (tests/test_hardware_fit_envelope.py); its 14 GB of weights alone do not fit.
     with pytest.raises(typer.Exit):
         train_mod._hardware_fit_preflight(
             cfg, {"memory_total_bytes": int(4e9)}, allow_oom_attempt=False
+        )
+
+    # A 3B model is inside the range, where the gate refuses a peak that does not fit.
+    cfg_3b = load_config_from_string(
+        _FIT_YAML.replace("meta-llama/Llama-2-7b-hf", "Qwen/Qwen2.5-3B")
+    )
+    with pytest.raises(typer.Exit):
+        train_mod._hardware_fit_preflight(
+            cfg_3b, {"memory_total_bytes": int(4e9)}, allow_oom_attempt=False
         )
 
     # --allow-oom-attempt -> warn, don't refuse.

@@ -17,6 +17,9 @@ if TYPE_CHECKING:
 # KB — the weights themselves are never touched.
 _ST_HEADER_LEN_BYTES = 8
 _MAX_ST_HEADER_BYTES = 100 * 1024 * 1024  # sanity bound on a crafted file
+# More elements than any model has, in one tensor or in all of them: not a real header.
+_MAX_TENSOR_ELEMENTS = 2**40
+_MAX_TOTAL_PARAMS = 2**50
 
 
 def _params_from_local_safetensors(path: str) -> float | None:
@@ -75,10 +78,14 @@ def param_count_from_local_safetensors(path: str) -> int | None:
                     if not isinstance(dim, int) or dim < 0:
                         return None
                     numel *= dim
+                    if numel > _MAX_TENSOR_ELEMENTS:
+                        return None
                 total += numel
+                if total > _MAX_TOTAL_PARAMS:
+                    return None
         return total or None
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return None  # unreadable/crafted -> fall back to the name guess
+    except (OSError, ValueError, TypeError, json.JSONDecodeError, RecursionError):
+        return None  # unreadable or malformed -> fall back to the name guess
 
 
 def resolve_device_map(device: str):
