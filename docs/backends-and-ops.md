@@ -1836,6 +1836,10 @@ The model's shape comes from its `config.json` (a local directory, then the Hugg
 - A Hub id is parsed: e.g. `72B`, `8x7B` → `46.7` total, `17B-16E` → `109` total, with active-parameter markers (`-A22B`) ignored.
 - An id with no size token (e.g. `DeepSeek-V3`, `Kimi-K2`, `GLM-5`, `MiniMax-M2`) still falls back to `7B`, which under-predicts these models (they have 229B to 1T parameters). Point `base:` at a local download to have the checkpoint measured instead.
 
+`soup profile --model <id or directory>` asks the same question without a `soup.yaml`, for example `soup profile --model Qwen/Qwen2.5-7B-Instruct --gpu rtx5070 --seq 2048 --method qlora`. The run comes from `--seq` (default 2048), `--batch` (4), `--method` `lora`, `qlora` or `full` (`qlora`), `--lora-r` (64), `--optimizer` (`adamw_torch`) and `--gradient-checkpointing` `off`, `full`, `medium`, `selective` or `auto` (`off`): a `soup.yaml`'s defaults, with batch 4 for `auto` as `soup profile` prices it. It is the same estimate, so a `soup.yaml` describing the same run gets the same bytes. The shape is read as above and works offline once the model's `config.json` is cached. When no `config.json` can be read, it stops and says why (not cached while offline, not reachable on the Hub, gated, or not a directory or model id) instead of guessing the shape from the name. `--model` together with `--config` is refused, and so are the run flags without `--model`.
+
+On Apple Silicon, `soup profile` and the MCP `profile` tool check the fit against Metal's recommended working-set size (`max_recommended_working_set_size`, read through mlx), not the whole unified memory, and report `gpu_memory_source: "mlx working set"`. If mlx is missing or cannot read it, the memory is reported as assumed, and `--gpu` still overrides it. The terms were measured with PyTorch on CUDA; how close they come to an MLX run's peak is not measured, and the output says so. The `soup train` pre-flight still skips `backend: mlx`.
+
 ```python
 from soup_cli.utils.hardware_fit import HardwareFitInput, decide_hardware_fit
 
