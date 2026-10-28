@@ -388,11 +388,6 @@ soup --version                                Show version (prints the same text
 soup --verbose <command>                      Full traceback on errors
 ```
 
-The `qwen3.5-0.8b-dpo` recipe trains the text decoder with preference rows
-containing `prompt`, `chosen` and `rejected` in `./data/preference_train.jsonl`.
-Its settings come from the existing Qwen3.5 DPO recipes and have not been tuned
-for the 0.8B model.
-
 ### Choosing the device for `soup infer`, `soup chat` and `soup diff`
 
 `--device` decides where these commands load the model. Without it, the
