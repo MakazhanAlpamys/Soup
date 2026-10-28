@@ -145,6 +145,15 @@ def missing_stamps(root: pathlib.Path = ROOT) -> list[str]:
     return [path.name for path in translations(root) if stamp_of(path) is None]
 
 
+def stamp_count_problems(root: pathlib.Path = ROOT) -> list[str]:
+    problems = []
+    for path in translations(root):
+        count = len(_STAMP_RE.findall(path.read_text(encoding="utf-8")))
+        if count != 1:
+            problems.append(f"{path.name}: expected 1 sync stamp, found {count}")
+    return problems
+
+
 def stale_stamps(root: pathlib.Path = ROOT) -> list[str]:
     """Translations whose stamp is absent or names a different README.md."""
     expected = readme_sha256(root)
@@ -299,18 +308,26 @@ def banner_problems(root: pathlib.Path = ROOT) -> list[str]:
     problems: list[str] = []
     for name in readmes:
         head = (root / name).read_text(encoding="utf-8").split(_LOGO, 1)[0]
-        linked = set(_README_HREF_RE.findall(head))
+        banners = [
+            set(_README_HREF_RE.findall(line))
+            for line in head.splitlines()
+            if "🌍" in line or _README_HREF_RE.search(line)
+        ]
+        if len(banners) != 1:
+            problems.append(f"{name}: expected 1 language banner line, found {len(banners)}")
         expected = set(readmes) - {name}
-        if unlinked := sorted(expected - linked):
-            problems.append(f"{name}: banner does not link {unlinked}")
-        if extra := sorted(linked - expected):
-            problems.append(f"{name}: banner links {extra}, which is itself or does not exist")
+        for linked in banners or [set()]:
+            if unlinked := sorted(expected - linked):
+                problems.append(f"{name}: banner does not link {unlinked}")
+            if extra := sorted(linked - expected):
+                problems.append(f"{name}: banner links {extra}, which is itself or does not exist")
     return problems
 
 
 def all_problems(root: pathlib.Path = ROOT) -> list[str]:
     return (
         missing_stamps(root)
+        + stamp_count_problems(root)
         + stale_stamps(root)
         + structure_problems(root)
         + banner_problems(root)
@@ -336,6 +353,10 @@ class TestReadmeTranslationsAreSynced:
             + "\n  ".join(stale)
             + _ping()
         )
+
+    def test_every_translation_has_exactly_one_stamp(self):
+        problems = stamp_count_problems()
+        assert not problems, "Incorrect sync stamp count:\n  " + "\n  ".join(problems)
 
     def test_every_translation_mirrors_readme_structure(self):
         problems = structure_problems()
@@ -429,6 +450,33 @@ class TestTheRatchetCanActuallyFail:
         assert missing_stamps(tree) == ["README.tr.md"]
         [stale] = stale_stamps(tree)
         assert stale.startswith("README.tr.md: no stamp")
+
+    @pytest.mark.parametrize("duplicate_is_current", [False, True], ids=["stale", "current"])
+    def test_a_second_stamp_fails_even_if_the_first_is_current(self, tree, duplicate_is_current):
+        tr = tree / "README.tr.md"
+        duplicate = stamp_line(tree) if duplicate_is_current else (
+            "<!-- synced-from: README.md sha256:" + "0" * 64 + " -->"
+        )
+        tr.write_text(tr.read_text(encoding="utf-8") + "\n" + duplicate, encoding="utf-8")
+        assert any(
+            "README.tr.md" in problem and "2" in problem and "stamp" in problem
+            for problem in all_problems(tree)
+        )
+
+    @pytest.mark.parametrize("duplicate_kind", ["incomplete", "complete", "no-links"])
+    def test_a_second_banner_fails_even_if_the_first_is_complete(self, tree, duplicate_kind):
+        tr = tree / "README.tr.md"
+        original_banner = _TR.splitlines()[0]
+        duplicate = {
+            "incomplete": '<p>🌍 <a href="README.tr.md">Türkçe</a></p>',
+            "complete": original_banner,
+            "no-links": '<p>🌍 <strong>Türkçe</strong></p>',
+        }[duplicate_kind]
+        _edit(tr, original_banner, f"{original_banner}\n{duplicate}")
+        assert any(
+            "README.tr.md" in problem and "2" in problem and "banner" in problem
+            for problem in banner_problems(tree)
+        )
 
     def test_one_byte_in_readme_fails_and_names_both_hashes(self, tree):
         before = readme_sha256(tree)
