@@ -200,6 +200,14 @@ class TestTheControlsStillLoad:
         assert cfg.training.use_flash_attn is True
         assert cfg.training.use_liger is True
 
+    @pytest.mark.parametrize("path", ["raft", "pre_tokenized"])
+    def test_freezing_still_loads_where_the_resident_setup_runs(self, path):
+        _, data, _, _, _ = _PATHS[path]
+
+        cfg = load_config_from_string(_yaml(data=data, freeze_layers=2))
+
+        assert cfg.training.freeze_layers == 2
+
     def test_mlx_keeps_its_own_kernel_flag_warning(self):
         """MLX names both flags as ignored; a refusal here would be a second message."""
         cfg = load_config_from_string(
@@ -214,6 +222,14 @@ class TestTheControlsStillLoad:
 
         assert "mutually exclusive with use_liger" in str(info.value)
 
+    def test_streaming_leaves_the_kernel_flags_to_1692(self):
+        """#1692's validator raises first on a load, so call this one directly."""
+        cfg = load_config_from_string(_yaml(stream_layers=True, batch_size=1))
+        cfg.training.use_liger = True
+        cfg.training.use_flash_attn = True
+
+        assert cfg._validate_sft_path_is_read() is cfg
+
     @pytest.mark.parametrize("task", ["tts", "distill"])
     def test_the_other_formatter_tasks_keep_the_1587_behaviour(self, task):
         cfg = load_config_from_string(
@@ -221,6 +237,21 @@ class TestTheControlsStillLoad:
         )
 
         assert cfg.training.reasoning_effort == "high"
+
+    @pytest.mark.parametrize(
+        ("top", "data", "flags"),
+        [
+            ({"task": "distill"}, {"format": "raft"}, {"reasoning_effort": "high"}),
+            ({"task": "tts", "backend": "unsloth"}, {}, {"use_liger": True}),
+        ],
+    )
+    def test_the_path_gate_is_for_task_sft_only(self, top, data, flags):
+        """Checks the message, not a clean load, so it stays true if these tasks
+        get path gates of their own."""
+        try:
+            load_config_from_string(_yaml(top, data, **flags))
+        except ValueError as exc:
+            assert "not applied by task='sft'" not in str(exc), str(exc)
 
     def test_a_task_outside_sft_keeps_the_1587_message(self):
         message = _refusal(_yaml({"task": "dpo"}, reasoning_effort="high"))
