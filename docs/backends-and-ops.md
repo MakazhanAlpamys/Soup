@@ -1858,6 +1858,9 @@ That input carries no shape, so it is guessed from `params_b` and the logits ter
 
 Tab-completion for `soup` + every subcommand. The generated script is Click/Typer-backed so new commands are picked up automatically.
 
+Scripts use the installed Typer's completion protocol and response format. Regenerate
+an installed script after upgrading Soup or Typer.
+
 ```bash
 # Bash
 eval "$(soup completions bash)"        # current shell
