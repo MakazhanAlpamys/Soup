@@ -131,3 +131,17 @@ def test_init_unknown_template_is_literal_and_terminal_safe(
     assert "Available:" in text
     assert not any(char in text for char in ("\x1b", "\x07", "\x9b", "\u202e"))
     assert not Path("soup.yaml").exists()
+
+
+def test_init_strips_controls_only_from_displayed_output_path(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    output = Path("[bold]config\x9b\u202e.yaml")
+
+    result = runner.invoke(app, ["init", "--template", "chat", "--output", str(output)])
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert output.read_text(encoding="utf-8") == load_template("chat")
+    text = " ".join(strip_ansi(result.output).split())
+    assert "Config saved to [bold]config.yaml" in text
+    assert "soup train --config [bold]config.yaml" in text
+    assert "\x9b" not in text and "\u202e" not in text
