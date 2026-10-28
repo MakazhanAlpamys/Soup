@@ -1032,7 +1032,9 @@ Non-streaming requests return Anthropic-shaped envelopes. Streaming (`stream: tr
 returns Anthropic event-shape SSE with `message_start` → `content_block_delta` →
 `message_delta` + `message_stop` events. Validation errors return a generic
 `"Invalid request"` 400 body with details logged server-side at DEBUG. CORS restricted
-to loopback-only (`localhost` / `127.0.0.1`) on both backends.
+to loopback-only (`localhost` / `127.0.0.1`) on both backends, and on both a request whose
+`Origin` names another site is refused with 403 (see
+[Server-Side Tool Endpoints](#server-side-tool-endpoints)).
 
 
 ## N-gram Speculative Decoding
@@ -1066,9 +1068,9 @@ Three POST routes are now available on `soup serve`:
   `timed_out: true` and `exit_code: 124`; an output overflow returns
   `timed_out: false` and `exit_code: 1`. Other process failures retain their exit
   code and report `timed_out: false`. The combined stdout/stderr cap is 10 KB.
-  Python line numbers include the six-line network-guard prefix: the caller's
-  first line is reported as line 7. Tool authentication failures return HTTP 401
-  with `WWW-Authenticate: Bearer`.
+  The code is compiled under the file name `<code>`, so a traceback gives the caller's
+  own line numbers (`File "<code>", line 2` for an error on the second line). Tool
+  authentication failures return HTTP 401 with `WWW-Authenticate: Bearer`.
 - **`POST /v1/tools/web_search`** — searches the web and returns domain-filtered results
   as `[{url, title, snippet}]` with snippets sanitized (null bytes stripped).
   Deny-by-default via `WebSearchConfig.domain_allowlist`.
@@ -1085,6 +1087,11 @@ Three POST routes are now available on `soup serve`:
   The endpoint fails closed with
   HTTP 501 when strict OS isolation is unavailable (including on Windows or restricted
   Linux containers).
+
+When the sandbox cannot start, `/v1/tools/python` answers 501 with
+`python sandbox requires OS-level isolation` and `/v1/tools/bash` with
+`bash sandbox requires OS-level isolation`, whatever the cause; the cause is logged on the
+server at DEBUG level.
 
 **`/v1/tools/python` and `/v1/tools/bash` need `--tool-auth-token` on every bind.** A
 server started without it answers both routes with 401 on loopback too, as it already did
@@ -1110,6 +1117,12 @@ a long random one, such as the one generated above
 loopback or behind a proxy that terminates TLS: the Bearer header is sent in clear text
 over plain HTTP.
 
+The token must be 16 to 128 characters from `A-Z`, `a-z`, `0-9`, `_` and `-`, the rule
+`soup ui` and `soup mcp serve` apply to theirs. `soup serve` checks the value from the
+option or from `SOUP_TOOL_AUTH_TOKEN` first, on every bind, and exits with status 2 before
+loading the model when it does not match; the message names the rule, never the value. An
+empty value counts as no token.
+
 `/v1/tools/web_search`, `/v1/thumbs` and the adapter routes keep their rule: on a loopback
 bind they take a token only when the server has one.
 
@@ -1126,7 +1139,9 @@ another site is refused with 403, so a page the operator merely visits cannot dr
 generation on their server or enumerate the loaded adapters — CORS alone would only stop
 that page *reading* the reply, not sending the request. Requests that carry no `Origin` at
 all — curl, the OpenAI/Anthropic SDKs, a reverse proxy — are unaffected, and `Host` is not
-checked on these routes, so a proxy can still front them under its own hostname.
+checked on these routes, so a proxy can still front them under its own hostname. The
+`--backend vllm`, `sglang` and `mii` servers apply the same `Origin` check to their
+generation routes (`/v1/chat/completions`, and `/v1/messages` on vLLM).
 
 **What `--tool-auth-token` does not cover.** `soup serve` refuses a non-loopback `--host`
 without `--tool-auth-token`, but the token is checked on the tool routes, `/v1/thumbs` and
@@ -1136,5 +1151,6 @@ put a proxy that authenticates in front of the server if that is not intended. W
 `--backend vllm`, `sglang` or `mii` there are no tool or adapter routes, so no route checks
 the token. On a wildcard bind (`0.0.0.0`, `::`) there is no single name to compare `Host`
 against, so the routes that otherwise compare it check only that an `Origin` header, when
-sent, names the same host as `Host`. `soup serve` prints these points at startup whenever
-it binds beyond loopback.
+sent, names the same host as `Host`. Every route speaks plain HTTP: `soup serve` has no
+TLS, so terminate TLS in a proxy in front of a server other machines reach. `soup serve`
+prints these points at startup whenever it binds beyond loopback.

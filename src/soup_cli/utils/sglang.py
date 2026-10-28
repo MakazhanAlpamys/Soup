@@ -235,6 +235,7 @@ def create_sglang_app(
     max_tokens_default: int = 512,
     tokenizer=None,
     lora_name: Optional[str] = None,
+    host: str = "127.0.0.1",
 ):
     """Create a FastAPI app using SGLang runtime for inference.
 
@@ -252,6 +253,9 @@ def create_sglang_app(
             under. Every request, streaming or not, names it as ``lora_path``,
             since SGLang runs a request that names no adapter on the base
             weights (#1724). None for a full model.
+        host: The address ``soup serve`` binds. ``/v1/chat/completions``
+            refuses a request whose ``Origin`` names another site (403), as the
+            transformers app's generation routes do.
 
     Returns:
         FastAPI application.
@@ -260,11 +264,13 @@ def create_sglang_app(
     import time
     import uuid
 
-    from fastapi import FastAPI, HTTPException
+    from fastapi import Depends, FastAPI, HTTPException
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import StreamingResponse
     from pydantic import BaseModel as PydanticBaseModel
     from pydantic import Field
+
+    from soup_cli.utils.local_request_guard import browser_origin_dependency
 
     # THE single prompt builder shared with the transformers and vLLM backends
     # (#332), so the three cannot drift again. Was a hand-rolled third copy.
@@ -281,6 +287,9 @@ def create_sglang_app(
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
     )
+    # CORS stops a page on another site reading a reply, not sending the request;
+    # the generation route refuses such a request outright (Origin only).
+    origin_check = Depends(browser_origin_dependency(host))
 
     class ChatMessage(PydanticBaseModel):
         role: str
@@ -311,7 +320,7 @@ def create_sglang_app(
             ],
         }
 
-    @app.post("/v1/chat/completions")
+    @app.post("/v1/chat/completions", dependencies=[origin_check])
     async def chat_completions(request: ChatCompletionRequest):
         max_tokens = request.max_tokens or max_tokens_default
         request_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"

@@ -331,6 +331,7 @@ def create_vllm_app(
     max_tokens_default: int = 512,
     tokenizer=None,
     enable_dashboard: bool = False,
+    host: str = "127.0.0.1",
 ):
     """Create a FastAPI app using vLLM engine for inference.
 
@@ -346,6 +347,9 @@ def create_vllm_app(
         enable_dashboard: Recorded on ``app.state`` for introspection.
             ``/metrics`` is served either way, mirroring the transformers
             backend (#333 — the flag used to no-op entirely here).
+        host: The address ``soup serve`` binds. ``/v1/chat/completions`` and
+            ``/v1/messages`` refuse a request whose ``Origin`` names another
+            site (403), as the transformers app's generation routes do.
 
     Returns:
         FastAPI application.
@@ -355,13 +359,14 @@ def create_vllm_app(
     import time
     import uuid
 
-    from fastapi import FastAPI, HTTPException
+    from fastapi import Depends, FastAPI, HTTPException
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import StreamingResponse
     from pydantic import BaseModel as PydanticBaseModel
     from pydantic import Field
     from vllm import SamplingParams
 
+    from soup_cli.utils.local_request_guard import browser_origin_dependency
     from soup_cli.utils.metrics import ServerMetrics
 
     app = FastAPI(title="Soup Inference Server (vLLM)", version="1.0.0")
@@ -380,6 +385,10 @@ def create_vllm_app(
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
     )
+    # CORS stops a page on another site reading a reply, not sending the request;
+    # the generation routes refuse such a request outright (Origin only, no Host
+    # check, so a reverse proxy can front them under its own name).
+    origin_check = Depends(browser_origin_dependency(host))
 
     class ChatMessage(PydanticBaseModel):
         role: str
@@ -415,7 +424,7 @@ def create_vllm_app(
             ],
         }
 
-    @app.post("/v1/chat/completions")
+    @app.post("/v1/chat/completions", dependencies=[origin_check])
     async def chat_completions(request: ChatCompletionRequest):
         max_tokens = request.max_tokens or max_tokens_default
         request_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
@@ -589,7 +598,7 @@ def create_vllm_app(
     # Mirrors the v0.53.6 transformers-backend route. Reuses the v0.45.0
     # Part B converter + the existing chat_completions handler; streaming
     # emits the Anthropic event shape.
-    @app.post("/v1/messages")
+    @app.post("/v1/messages", dependencies=[origin_check])
     async def anthropic_messages(payload: dict):
         from soup_cli.utils.anthropic_messages import (
             from_anthropic,

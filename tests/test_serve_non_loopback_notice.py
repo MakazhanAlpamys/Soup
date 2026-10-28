@@ -41,6 +41,7 @@ OTHER_BACKENDS = ["vllm", "sglang", "mii"]
 TOKEN_SCOPE = "--tool-auth-token is checked on the tool, thumbs and adapter routes only"
 OPEN_ROUTES = "answer every client that can reach this port without a token"
 NO_HOST_CHECK = "the Host header is not compared"
+PLAIN_HTTP = "travel as plain HTTP (soup serve has no TLS): terminate TLS in a proxy in front"
 
 
 def _plain(text: str) -> str:
@@ -114,6 +115,16 @@ class TestNotices:
         assert OPEN_ROUTES in out
         assert TOKEN_SCOPE not in out
 
+    @pytest.mark.parametrize("backend", ["transformers", *OTHER_BACKENDS])
+    @pytest.mark.parametrize("host", NAMED + WILDCARD)
+    def test_every_non_loopback_bind_is_told_that_it_speaks_plain_http(self, host, backend):
+        out = _rendered(serve_cmd._non_loopback_notices(host, backend))
+
+        assert PLAIN_HTTP in out
+        # Only the transformers app checks a bearer token, so only its notice says the
+        # token travels the same way.
+        assert ("the bearer token included" in out) is (backend == "transformers")
+
     @pytest.mark.parametrize(
         "host",
         ["[bold]lan[/bold]", "[/]", "[red]x", "lan\x1b[31mred", "lan\x9b31m"],
@@ -143,6 +154,7 @@ class TestTheCommandPrintsThem:
         out = _plain(result.output)
         assert f"Note: bound to '{host}', not loopback" in out
         assert TOKEN_SCOPE in out
+        assert PLAIN_HTTP in out
         assert (NO_HOST_CHECK in out) is (host == "0.0.0.0")
         assert "s3cret-token-value" not in out
 
