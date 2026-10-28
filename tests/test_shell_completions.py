@@ -28,7 +28,11 @@ def completion_process(tmp_path, monkeypatch):
     monkeypatch.setenv("PYTHONDONTWRITEBYTECODE", "1")
     monkeypatch.setenv("SOUP_NO_AUDIT_LOG", "1")
     monkeypatch.setenv("SOUP_NO_TELEMETRY", "1")
-    monkeypatch.delenv("_SOUP_COMPLETE", raising=False)
+    for variable in (
+        "_SOUP_COMPLETE", "_TYPER_COMPLETE_ARGS", "_TYPER_COMPLETE_FISH_ACTION",
+        "COMP_WORDS", "COMP_CWORD",
+    ):
+        monkeypatch.delenv(variable, raising=False)
     return entrypoint
 
 
@@ -144,3 +148,33 @@ def test_sourced_zsh_script_passes_live_candidates_to_completion_widgets(
     assert result.stderr == ""
     assert f'"{expected}"' in result.stdout
     assert f'"{excluded}"' not in result.stdout
+
+
+@pytest.mark.skipif(os.name == "nt", reason="executes a POSIX shell entrypoint")
+@pytest.mark.parametrize(
+    ("words", "expected", "excluded"),
+    [("soup rec", "recipes", "version"), ("soup train --res", "--resume", "--config")],
+)
+def test_sourced_fish_script_returns_live_completion_values(
+    completion_process, tmp_path, words, expected, excluded
+):
+    fish = shutil.which("fish")
+    if fish is None:
+        pytest.skip("fish is not installed")
+    script_path = tmp_path / "completion.fish"
+    script_path.write_text(_script("fish"), encoding="utf-8")
+    result = subprocess.run(
+        [
+            fish, "--no-config", "-c",
+            'source "$argv[1]"; complete --do-complete "$argv[2]"',
+            str(script_path), words,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert result.stderr == ""
+    candidates = {line.split("\t", 1)[0] for line in result.stdout.splitlines()}
+    assert expected in candidates
+    assert excluded not in candidates
