@@ -1045,7 +1045,7 @@ soup eval quant-check --before X --after Y --tasks t.jsonl --allow-stub
 - `MINOR` — score drop 2–5% (investigate)
 - `MAJOR` — score drop ≥ 5% (do NOT ship, exits code 2)
 
-Paths are containment-checked, and `registry://` refs are resolved with an optional `kinds` filter so you never pick the wrong artifact. Standalone `.gguf` file paths are refused up front; pass directory paths containing safetensors/HuggingFace weights or `registry://` references.
+Paths are containment-checked, and `registry://` refs are resolved with an optional `kinds` filter so you never pick the wrong artifact. Standalone `.gguf` file paths are refused up front; pass directory paths containing safetensors/HuggingFace weights or `registry://` references. An unparseable or unreadable `--tasks` file is refused as a usage error (exit 3) with the task loader's message before any model is loaded.
 
 ### Custom Eval Format
 

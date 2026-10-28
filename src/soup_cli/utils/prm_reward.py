@@ -154,7 +154,7 @@ class PRMScorer:
         model = AutoModelForCausalLM.from_pretrained(
             self.prm_path,
             trust_remote_code=self.trust_remote_code,
-            torch_dtype=dtype,
+            dtype=dtype,
         )
         head_state = load_reward_head_weights(self.prm_path)
         hidden_size = model.config.hidden_size

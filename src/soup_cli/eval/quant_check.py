@@ -17,6 +17,8 @@ from soup_cli.utils.paths import is_under_cwd as _is_under_cwd
 if TYPE_CHECKING:
     from rich.table import Table
 
+    from soup_cli.eval.custom import EvalTask
+
 
 def classify_delta(delta: float, *, minor: float = 0.02, major: float = 0.05) -> str:
     """Return one of OK / MINOR / MAJOR based on absolute drop in score."""
@@ -54,13 +56,10 @@ class QuantCheckResult:
         return json.dumps(payload, indent=2)
 
 
-def _score_tasks(tasks_file: str, generate_fn: Callable[[str], str]) -> float:
-    """Load a JSONL task file and return the average score."""
-    from soup_cli.eval.custom import load_eval_tasks, score_task
+def _score_eval_tasks(tasks: "list[EvalTask]", generate_fn: Callable[[str], str]) -> float:
+    """Average score of an already-loaded task list through ``generate_fn``."""
+    from soup_cli.eval.custom import score_task
 
-    tasks = load_eval_tasks(tasks_file)
-    if not tasks:
-        return 0.0
     total = 0.0
     for task in tasks:
         output = generate_fn(task.prompt)
@@ -72,13 +71,31 @@ def run_quant_check(
     *,
     before_gen: Callable[[str], str],
     after_gen: Callable[[str], str],
-    tasks_file: str,
+    tasks_file: str = "",
     task_name: str = "default",
     stub: bool = False,
+    tasks: Optional["list[EvalTask]"] = None,
 ) -> QuantCheckResult:
-    """Run ``tasks_file`` through both models and return the row."""
-    before = _score_tasks(tasks_file, before_gen)
-    after = _score_tasks(tasks_file, after_gen)
+    """Score the same tasks through both models and return the row.
+
+    ``tasks`` (a list already loaded with :func:`soup_cli.eval.custom.load_eval_tasks`,
+    e.g. pre-parsed by the CLI so a bad file is refused before any model is
+    loaded) takes precedence; when it is ``None`` the file named by
+    ``tasks_file`` is loaded here, as before. Providing neither source, or
+    an empty task list, raises ``ValueError``: a check that scores zero
+    tasks would report before == after == 0.0 and measure nothing.
+    """
+    if tasks is None:
+        if not tasks_file:
+            raise ValueError("run_quant_check needs tasks or tasks_file")
+
+        from soup_cli.eval.custom import load_eval_tasks
+
+        tasks = load_eval_tasks(tasks_file)
+    if not tasks:
+        raise ValueError("No eval tasks to score")
+    before = _score_eval_tasks(tasks, before_gen)
+    after = _score_eval_tasks(tasks, after_gen)
     delta = after - before
     verdict = classify_delta(delta)
     return QuantCheckResult(
