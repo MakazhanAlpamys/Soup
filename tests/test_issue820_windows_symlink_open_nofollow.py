@@ -14,6 +14,7 @@ import errno
 import os
 import stat
 from pathlib import Path
+from types import SimpleNamespace
 from typing import List, Tuple
 
 import pytest
@@ -23,6 +24,14 @@ from soup_cli.utils.draft import _registry_lock, list_drafts
 from soup_cli.utils.paths import open_no_follow
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "soup_cli"
+
+
+def _windows_os(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    """Model Windows only inside paths; pytest and xdist keep their real OS."""
+    simulated = SimpleNamespace(**vars(os))
+    simulated.name = "nt"
+    monkeypatch.setattr("soup_cli.utils.paths.os", simulated)
+    return simulated
 
 
 # ===========================================================================
@@ -100,8 +109,8 @@ class TestOpenNoFollow:
             st_dev = 200
             st_file_attributes = fake_reparse
 
-        monkeypatch.setattr(os, "name", "nt")
-        monkeypatch.setattr(os, "lstat", lambda p: MockStatWithReparse())
+        simulated = _windows_os(monkeypatch)
+        simulated.lstat = lambda path: MockStatWithReparse()
 
         with pytest.raises(OSError) as exc_info:
             open_no_follow(real_file, os.O_RDONLY)
@@ -114,7 +123,7 @@ class TestOpenNoFollow:
         real_file = tmp_path / "swap_candidate.txt"
         real_file.write_text("content", encoding="utf-8")
 
-        monkeypatch.setattr(os, "name", "nt")
+        simulated = _windows_os(monkeypatch)
 
         class MockSwappedFstat:
             st_mode = stat.S_IFREG | 0o644
@@ -122,7 +131,7 @@ class TestOpenNoFollow:
             st_dev = 88888
 
         # fstat returns different ino/dev than lstat on existing file
-        monkeypatch.setattr(os, "fstat", lambda fd: MockSwappedFstat())
+        simulated.fstat = lambda fd: MockSwappedFstat()
 
         with pytest.raises(OSError) as exc_info:
             open_no_follow(real_file, os.O_RDONLY)
@@ -134,7 +143,7 @@ class TestOpenNoFollow:
     ) -> None:
         target = tmp_path / "new_target.txt"
 
-        monkeypatch.setattr(os, "name", "nt")
+        simulated = _windows_os(monkeypatch)
         calls = 0
 
         class MockStatSymlink:
@@ -152,7 +161,7 @@ class TestOpenNoFollow:
             # post_lst: someone swapped in a symlink right after open
             return MockStatSymlink()
 
-        monkeypatch.setattr(os, "lstat", fake_lstat)
+        simulated.lstat = fake_lstat
 
         with pytest.raises(OSError) as exc_info:
             open_no_follow(target, os.O_CREAT | os.O_WRONLY, 0o600)
