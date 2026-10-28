@@ -2,10 +2,13 @@
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.config.schema import TEMPLATES
+from soup_cli.templates import load_template
+from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
@@ -89,3 +92,42 @@ def test_templates_are_valid_yaml():
         assert "base" in data, f"Template '{name}' missing 'base' key"
         assert "data" in data, f"Template '{name}' missing 'data' key"
         assert "training" in data, f"Template '{name}' missing 'training' key"
+
+
+@pytest.mark.parametrize("name", ["soup.yaml", "[red]soup.yaml", "[/].yaml"])
+def test_init_reports_literal_output_path_after_writing(tmp_path, monkeypatch, name):
+    monkeypatch.chdir(tmp_path)
+    output = Path(name)
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    result = runner.invoke(app, ["init", "--template", "chat", "--output", name])
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert output.read_text(encoding="utf-8") == load_template("chat")
+    text = " ".join(strip_ansi(result.output).split())
+    assert f"Config saved to {output}" in text
+    assert f"soup train --config {output}" in text
+
+
+@pytest.mark.parametrize(
+    ("template", "visible"),
+    [
+        ("[red]missing", "[red]missing"),
+        ("[bold]missing", "[bold]missing"),
+        ("bad\x1b\x07\x9b\u202ename", "badname"),
+    ],
+)
+def test_init_unknown_template_is_literal_and_terminal_safe(
+    tmp_path, monkeypatch, template, visible
+):
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["init", "--template", template])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    text = strip_ansi(result.output)
+    assert f"Unknown template: {visible}" in text
+    assert "Available:" in text
+    assert not any(char in text for char in ("\x1b", "\x07", "\x9b", "\u202e"))
+    assert not Path("soup.yaml").exists()
