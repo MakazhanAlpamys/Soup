@@ -139,15 +139,27 @@ class TestProfileFullFinetune:
 
         assert data.get("peft") == expected_peft
 
+        # #2049: soup profile prices the train pre-flight's own estimate, so the
+        # totals are pinned to it rather than to a formula of their own.
+        from soup_cli.commands.train import _build_hardware_fit_input
+        from soup_cli.config.loader import load_config
+        from soup_cli.utils.hardware_fit import estimate_peak_vram_gb
+
+        preflight = estimate_peak_vram_gb(_build_hardware_fit_input(load_config(str(cfg_file))))
+        assert data["total_memory_bytes"] == preflight.estimate.total_bytes
+
         if is_full_ft:
+            # The whole model trains: fp32 gradients and AdamW state on all 8B.
             assert data["trainable_params"] == 8_000_000_000
-            assert data["optimizer_memory_gb"] > 0
-            assert data["gradients_memory_gb"] == 14.9
-            assert data["total_memory_gb"] == 62.28
+            assert data["gradients_memory_gb"] == 32.0
+            assert data["optimizer_memory_gb"] == 64.0
         else:
-            assert data["trainable_params"] == 29_360_128
-            assert data["total_memory_gb"] == 17.74
-            assert data["gradients_memory_gb"] == 0.0
+            # LoRA r=16 on peft's default q_proj / v_proj: 16 * (4096 + 4096) per
+            # module, two modules, 32 layers. Its gradients are the adapters' only.
+            assert data["trainable_params"] == 8_388_608
+            # 8,388,608 x 4 bytes of fp32 gradients and x 8 of AdamW state.
+            assert data["gradients_memory_gb"] == 0.03
+            assert data["optimizer_memory_gb"] == 0.07
 
     @pytest.mark.parametrize("name,yaml_text,expected_peft,is_full_ft", ALL_CONFIGS)
     def test_cli_and_preflight_peft_classification_agree(
@@ -207,7 +219,7 @@ class TestProfileFullFinetune:
         assert result.exit_code == 0
         plain = _plain(result.output)
         assert "full fine-tuning" in plain
-        assert "Gradients ~14.9 GB" in plain
+        assert "Gradients ~32.0 GB" in plain
         assert "Does NOT fit in 24 GB VRAM" in plain
         assert "Fits in 24 GB VRAM" not in plain
 

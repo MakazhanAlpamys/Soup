@@ -134,6 +134,10 @@ GUARDED_PARAMS: dict[str, dict[str, tuple[str, ...]]] = {
         "test_streamed_experts_backward_preserves_forward_autocast": (
             "cpu-bf16-autocast",
         ),
+        "test_two_read_experts_equal_the_resident_model_and_the_default_path": (
+            "bf16",
+            "bf16-autocast",
+        ),
     },
     "test_stream_loss_chunk.py": {
         "test_they_equal_the_full_logits_step_within_the_tolerance": ("bf16",),

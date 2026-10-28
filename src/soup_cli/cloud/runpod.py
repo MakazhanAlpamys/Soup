@@ -126,8 +126,11 @@ def render_runpod_stub(
         f"_GPU_ID = {_GPU_IDS[gpu]!r}\n_CONFIG_B64 = {encoded!r}\n"
         f"_OUTPUT = {str(output)!r}\n_SOUP_VERSION = {soup_version!r}\n"
     )
+    from soup_cli.utils.tool_paths import controller_source
+
     controller = Path(__file__).with_name("_runpod_controller.py").read_text(encoding="utf-8")
-    return constants + controller
+    # The PATH search and child environment the controller uses come first.
+    return constants + controller_source() + "\n\n" + controller
 
 
 def plan_runpod_run(

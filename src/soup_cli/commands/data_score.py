@@ -24,6 +24,23 @@ def _exit(msg: str, code: int = 1) -> None:
     raise typer.Exit(code)
 
 
+def _refuse_aliased_output(output: str, **inputs: Optional[str]) -> None:
+    """Exit 1, before anything is read or written, when --output is one of the inputs.
+
+    #2225: each default output name is also an ordinary input name, and the write
+    replaces --output after the whole input has been read.
+    """
+    from soup_cli.utils.paths import ensure_distinct_paths
+
+    try:
+        ensure_distinct_paths(
+            [(f"--{name.replace('_', '-')}", path) for name, path in inputs.items() if path],
+            [("--output", output)],
+        )
+    except ValueError as exc:
+        _exit(str(exc))
+
+
 def _check_text_rows(rows: List[Mapping[str, Any]], label: str) -> None:
     """Report unscanned rows before printing clean metrics or writing output."""
     from soup_cli.utils.data_score import extract_row_text
@@ -193,6 +210,7 @@ def decontaminate(
         load_jsonl_rows,
     )
 
+    _refuse_aliased_output(output, input=input, benchmark_file=benchmark_file)
     rows = _read_rows(input)
     bench_list: List[str] = []
     if benchmarks:
@@ -266,6 +284,7 @@ def toxicity(
     """Run an abuse-keyword heuristic (not a toxicity classifier)."""
     from soup_cli.utils.data_score import extract_row_text, score_abuse_keywords
 
+    _refuse_aliased_output(output, input=input)
     rows = _read_rows(input)
     out_rows = []
     for row in rows:
@@ -300,6 +319,7 @@ def langdetect(
     """Tag each row with a 2-letter language code (heuristic)."""
     from soup_cli.utils.data_score import detect_language, extract_row_text
 
+    _refuse_aliased_output(output, input=input)
     rows = _read_rows(input)
     out_rows = []
     for row in rows:
@@ -331,6 +351,7 @@ def pii(
     """Flag rows containing email / phone / SSN / credit-card patterns."""
     from soup_cli.utils.data_score import detect_pii, extract_row_text
 
+    _refuse_aliased_output(output, input=input)
     rows = _read_rows(input)
     out_rows = []
     for row in rows:
@@ -364,6 +385,7 @@ def educational(
     """Tag each row with an educational-value score [0, 1]."""
     from soup_cli.utils.data_score import extract_row_text, score_educational_value
 
+    _refuse_aliased_output(output, input=input)
     rows = _read_rows(input)
     out_rows = []
     for row in rows:

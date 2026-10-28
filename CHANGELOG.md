@@ -32,10 +32,13 @@ Before the first run of an existing config on 0.77.0, run `soup doctor --config 
   `training.relora_steps` where the loss has a frozen reference (#1891);
   `quantization: 8bit` with `backend: unsloth` (#1946); vision or audio distillation (#2014) and
   Unsloth vision or audio SFT (#2015); `training.stream_layers` with `use_cut_ce` (#2023);
-  vision row formats (`llava`, `sharegpt4v`) on preference tasks (#2064);
+  vision row formats (`llava`, `sharegpt4v`) on preference tasks (#2064); and
   `training.lora.rank_pattern` / `alpha_pattern` with `backend: mlx` (#1996) or `backend: unsloth`
-  (#2153); and KTO rows whose label is not a boolean, `true`/`false`-style string or -1, 0, 1
-  (#2126).
+  (#2153).
+- **A malformed KTO label drops its row.** A row whose label is not a boolean, a
+  `true`/`false`-style string or -1, 0, 1 is dropped with a warning instead of trained (v0.76
+  trained `null` as undesirable and `0.5` or `2` as desirable); a file with no row left is
+  refused, and `soup data validate --min-valid-fraction 1.0` exits 2 on any such row (#2126).
 - **A LoRA target on a streamed embedding or head is refused when the model is built.** Under
   `training.stream_layers`, v0.76 checked only the literal names `lm_head` and `embed_tokens` at
   load, so a regex or dotted spelling loaded (a regex then failed at its first save, or in peft
@@ -90,7 +93,8 @@ Before the first run of an existing config on 0.77.0, run `soup doctor --config 
   log-probs from the trainer's own forward pass and the reference log-probs from the trainer's
   `compute_ref_log_probs`; the `ipo` term divides each log-ratio by its response length, as trl's
   IPO loss does, so it is the loss `task: ipo` trains. The reference is run twice per step. A `dpo`
-  or `ipo` term under a `simpo` / `orpo` primary still stops at the first step, and the message now
+  or `ipo` term under a `simpo` / `orpo` primary trains too (see #1828 below); with full
+  fine-tuning (no LoRA adapter to switch off) it still stops at the first step, and the message
   says why (those trainers run no reference) and what to do (give `dpo` or `ipo` the largest
   weight). Try: `soup train --config soup.yaml` with `task: preference` and
   `training.preference_loss_weights: {dpo: 0.7, simpo: 0.3}`.
@@ -377,13 +381,16 @@ Before the first run of an existing config on 0.77.0, run `soup doctor --config 
   v0.76 gave one release of notice; v0.77.0 flips both switches (`STAGED_FIELD_SEVERITY` and
   `DEPRECATED_VALUE_SEVERITY`) to `"error"` in the release commit. A config that sets one of the
   items below no longer loads: `soup train` exits `1` with `Config validation error:` and one
-  indented line per refused setting, `soup doctor --config` exits `2` with the same lines, and
+  indented line per refused setting, `soup doctor --config` exits `2` with the same lines,
+  `soup recipes verify --config` and `soup ship --config` exit `3`, and
   `load_config_from_string` (API / UI) raises `ValueError` with the same refusals (a value refusal
-  keeps Pydantic's `Value error, ` prefix there). A config that sets both kinds gets both in one
-  report, the staged-field lines first. When a staged field's own check fails as well (for example
-  `grace_codebook: true` without a size and a dimension, `long_context_grpo: true` on `sft`, or
-  `video_fps` with a non-video format), only the staged line is shown, so no message asks for a
-  line that the next load refuses.
+  keeps Pydantic's `Value error, ` prefix there). `soup plan` and `soup apply` read the YAML
+  without building the config, so they write and accept a plan for a config that `soup train`
+  refuses; check it with `soup train --dry-run` or `soup doctor --config`. A config that sets
+  both kinds gets both in one report, the staged-field lines first. When a staged field's own
+  check fails as well (for example `grace_codebook: true` without a size and a dimension,
+  `long_context_grpo: true` on `sft`, or `video_fps` with a non-video format), only the staged
+  line is shown, so no message asks for a line that the next load refuses.
   Nothing else changes, and a config that leaves these items unset, or writes them at their
   defaults, loads as before.
 
@@ -862,7 +869,9 @@ Before the first run of an existing config on 0.77.0, run `soup doctor --config 
   sharded from such a source is not reused. A `quantization_config` that is not a mapping is
   refused as malformed, and one under `text_config` is read too. (#2103)
 
-- Run config check before environment summary in `soup doctor` so a refused or invalid config does not falsely print "All checks passed!" before terminating with exit 2 (#2100 by @Nari-Ab in #2106).
+- `soup doctor --config` checks the config before the `All checks passed!` line, so a refused,
+  missing or unreadable config no longer gets that line before doctor exits 2; the System, GPU,
+  Resources and Dependencies tables still print first (#2100 by @Nari-Ab in #2106).
 
 - `soup ui --public`, `--host 0.0.0.0` and `--host ::` now print and open a loopback URL
   (`http://127.0.0.1:<port>` or `http://[::1]:<port>`) instead of the bind address, which
@@ -888,10 +897,11 @@ Before the first run of an existing config on 0.77.0, run `soup doctor --config 
   the whole row would fit; a row whose prompt is at most `data.max_length // 2` tokens and which
   fits is unchanged.
 
-- Refuse malformed KTO labels instead of silently training nulls, floats or containers
-as desirable or undesirable rows. Accept booleans, the documented normalized
+- Drop KTO rows with a malformed label, with a warning, instead of silently training nulls,
+floats or containers as desirable or undesirable rows. Accept booleans, the documented normalized
 true/1/yes and false/0/no strings, and exactly the integers -1, 0 and 1. Validation
-and training report the offending label through the shared converter (#2119 by @kok-o in #2126).
+and training report the offending label through the shared converter; `soup train` warns with
+the first such row and its count and refuses only an empty result (#2119 by @kok-o in #2126).
 
 - **Resident Kimi K2 configs are refused at config load instead of failing after the
   model's remote code and weights start loading (#2104 by @kok-o in #2130).** The four

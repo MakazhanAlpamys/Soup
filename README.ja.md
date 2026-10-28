@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
+<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -104,7 +104,7 @@ v0.77 では読み込めなくなることがあります。まず `soup doctor 
   `rl_checkpoint_include_rollout_buffer` は v0.76.0 より後にステージされたため、事前に警告した
   リリースはありません。値は、`data.remove_unused_columns: true`、量子化を一切行わないタスクでの
   `training.quantization: 4bit` / `8bit`（または `load_in_8bit: true`）、そして `soup ab --beta` です。
-  v0.76 が何も言わずに無視していた十五個の設定も拒否されます。たとえば何も適用しない場所での `use_mod` や
+  v0.76 が何も言わずに無視していた十四個の設定も拒否されます。たとえば何も適用しない場所での `use_mod` や
   `neftune_alpha`、LoRA ランク付きの `expand_layers`、Unsloth での `8bit` やビジョン SFT、MLX または
   Unsloth での `lora.rank_pattern` です。CHANGELOG のアップグレードノートを参照してください。
 - **破壊的変更: Python 3.11–3.13、AWQ と GPTQ のエクスポートは廃止、`soup serve` の二つのルートに
@@ -343,7 +343,7 @@ CUDA や PyTorch をローカルにインストールせずに Soup を実行で
 
 ```bash
 docker pull ghcr.io/makazhanalpamys/soup:latest
-docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml
+docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml --yes
 docker compose up   # またはローカルでビルド
 ```
 

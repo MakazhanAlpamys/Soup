@@ -1469,6 +1469,11 @@ The skipped-step count is logged at the end of the run (as a console warning
 when the fraction exceeds 5%) and persisted in `trainer_state.json` so
 `soup adapters audit` can see it.
 
+On Apple Silicon, `backend: mlx` trains GRPO natively with the same objective
+(TRL's `loss_type="dapo"` defaults) and the built-in rewards; see
+[GRPO on MLX](backends-and-ops.md#grpo-on-mlx) for the units, the rollout
+mode and what it refuses.
+
 **Built-in reward functions:**
 - `accuracy` — 1.0 when the completion's final answer matches the gold's, else 0.0 (no partial credit)
 - `format` — checks for structured `<think>...</think>` reasoning blocks

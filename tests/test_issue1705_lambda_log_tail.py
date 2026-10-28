@@ -51,6 +51,9 @@ def _exec(
 ) -> tuple[int, list]:
     namespace: dict[str, object] = {"__name__": "controller"}
     exec(stub, namespace)
+    # ssh and scp are taken as found under their own names, so the fake replies can
+    # be keyed on argv[0]; tests/test_external_tool_paths.py covers the PATH search.
+    namespace["_find_tool"] = lambda name: name
 
     terminations: list[tuple] = []
     clock = {"now": 0.0}

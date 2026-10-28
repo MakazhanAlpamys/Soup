@@ -98,6 +98,11 @@ def test_default_conversion_success_stays_quiet(monkeypatch, tmp_path):
 
 @pytest.fixture
 def cli_inputs(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.delenv("LLAMA_CPP_PATH", raising=False)
     monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(tmp_path / "registry.db"))
     model = tmp_path / "model"
     model.mkdir()

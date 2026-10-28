@@ -75,12 +75,12 @@ def test_resolve_trainer_forwards_trainer_kwargs():
 
 
 def test_schema_rejects_mlx_for_non_sft_tasks():
-    """The schema gate (#270 prerequisite): mlx + grpo/ppo/ipo must not
-    reach the trainer dispatch with a silent fallthrough. (dpo has an MLX
-    trainer now; tests/test_mlx_dpo.py covers it.)"""
+    """The schema gate (#270 prerequisite): mlx + ppo/ipo must not reach the
+    trainer dispatch with a silent fallthrough. (dpo and grpo have MLX trainers
+    now; tests/test_mlx_dpo.py and tests/test_mlx_grpo.py cover them.)"""
     from soup_cli.config.loader import load_config_from_string
 
-    for task in ("grpo", "ppo", "ipo"):
+    for task in ("ppo", "ipo"):
         with pytest.raises(ValueError, match="MLX backend"):
             load_config_from_string(
                 "base: mlx-community/tiny\n"

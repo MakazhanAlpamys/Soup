@@ -661,8 +661,11 @@ def test_control_tensorrt_build_failure_cleans_up(tmp_path, monkeypatch):
     # Step 1 succeeds (checkpoint conversion), Step 2 fails (trtllm-build)
     mock_ckpt_res = mock.MagicMock(returncode=0)
     mock_build_res = mock.MagicMock(returncode=1, stderr="build failed")
+    fake_run = mock.MagicMock(side_effect=[mock_ckpt_res, mock_build_res])
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    # trtllm-build is looked up on PATH before it runs: answer with a stand-in path.
     monkeypatch.setattr(
-        subprocess, "run", mock.MagicMock(side_effect=[mock_ckpt_res, mock_build_res])
+        "soup_cli.utils.tool_paths.find_tool", lambda name, path=None: "/fake/" + name
     )
 
     runner = CliRunner()
@@ -670,4 +673,7 @@ def test_control_tensorrt_build_failure_cleans_up(tmp_path, monkeypatch):
     assert merges != []
     assert result.exit_code == 1, (result.output, repr(result.exception))
     assert "TensorRT engine build failed" in _plain(result.output)
+    assert [call.args[0][0] for call in fake_run.call_args_list] == [
+        sys.executable, "/fake/trtllm-build",
+    ]
     assert _leftovers(tmp_path) == []

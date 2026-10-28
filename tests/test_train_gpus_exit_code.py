@@ -160,6 +160,7 @@ class TestTheLauncherIsLookedUpOnPathOnly:
         monkeypatch.chdir(cwd)
         return first, second, cwd
 
+    @pytest.mark.skipif(os.name != "nt", reason="PATHEXT names Windows program files")
     @pytest.mark.parametrize("suffix", [".exe", ".cmd"])
     def test_a_pathext_suffix_is_tried_in_each_path_directory(self, dirs, suffix):
         _first, second, _cwd = dirs
@@ -170,6 +171,7 @@ class TestTheLauncherIsLookedUpOnPathOnly:
         assert found is not None
         assert os.path.samefile(found, second / f"soup-fake-launcher{suffix}")
 
+    @pytest.mark.skipif(os.name != "nt", reason="PATHEXT names Windows program files")
     def test_the_first_path_directory_wins(self, dirs):
         first, second, _cwd = dirs
         (first / "soup-fake-launcher.cmd").write_text("", encoding="utf-8")
@@ -197,6 +199,7 @@ class TestTheLauncherIsLookedUpOnPathOnly:
 
         assert launcher._find_on_path("soup-fake-launcher") is None
 
+    @pytest.mark.skipif(os.name != "nt", reason="PATHEXT names Windows program files")
     def test_a_name_that_already_has_a_suffix_is_used_as_it_is(self, dirs):
         first, _second, _cwd = dirs
         (first / "soup-fake-launcher.cmd").write_text("", encoding="utf-8")
@@ -220,13 +223,19 @@ class TestTheLauncherIsLookedUpOnPathOnly:
 class TestExec:
     def test_posix_replaces_the_process_with_the_launcher(self, monkeypatch):
         monkeypatch.setattr(launcher, "_IS_WINDOWS", False)
+        installed = "/usr/local/bin/accelerate"
+        monkeypatch.setattr(
+            "soup_cli.utils.tool_paths.find_tool",
+            lambda name, path=None: installed if name == "accelerate" else None,
+        )
         calls: list[tuple] = []
 
-        def _execvp(file, argv):
+        def _execv(file, argv):
             calls.append((file, list(argv)))
-            raise SystemExit(99)  # a real execvp never returns
+            raise SystemExit(99)  # a real exec never returns
 
-        monkeypatch.setattr(os, "execvp", _execvp)
+        monkeypatch.setattr(os, "execv", _execv)
+        monkeypatch.setattr(os, "execvp", lambda *a: pytest.fail("exec by absolute path"))
         monkeypatch.setattr(
             subprocess, "Popen", lambda *a, **k: pytest.fail("POSIX must exec, not spawn")
         )
@@ -234,7 +243,7 @@ class TestExec:
         with pytest.raises(SystemExit):
             launcher.run_launcher(["accelerate", "launch", "--num_processes", "2"])
 
-        assert calls == [("accelerate", ["accelerate", "launch", "--num_processes", "2"])]
+        assert calls == [(installed, ["accelerate", "launch", "--num_processes", "2"])]
 
     def test_the_switch_follows_the_platform(self):
         assert launcher._IS_WINDOWS is (os.name == "nt")

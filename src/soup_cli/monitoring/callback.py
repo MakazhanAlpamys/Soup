@@ -493,9 +493,10 @@ class _SoupTrainerCallback_body:  # noqa: N801
         Called once from ``on_train_begin`` with the trainer's model +
         tokenizer. Each piece is only initialised when a test has not already
         injected it, so unit tests that pre-set ``_gate_suite`` /
-        ``_gate_generate_fn`` still control the harness. Failures are logged and
-        leave the gate inert rather than crashing training setup — the CLI
-        (``soup train --gate``) already validated the suite path up front.
+        ``_gate_generate_fn`` still control the harness. Malformed YAML and
+        non-mapping roots abort setup as before; other loading failures are
+        logged and leave the gate inert. The CLI (``soup train --gate``)
+        already validated the suite path up front.
         """
         cfg = self.eval_gate_config
         if cfg is None or not getattr(cfg, "enabled", False):
@@ -506,10 +507,12 @@ class _SoupTrainerCallback_body:  # noqa: N801
             if not suite_path:
                 logger.warning("eval gate enabled but no suite configured")
                 return
-            try:
-                from soup_cli.eval.gate import load_suite
+            from soup_cli.eval.gate import MalformedSuiteError, load_suite
 
+            try:
                 self._gate_suite = load_suite(suite_path)
+            except MalformedSuiteError:
+                raise
             except (ValueError, FileNotFoundError, OSError) as exc:
                 logger.warning("eval gate: could not load suite %r: %s", suite_path, exc)
                 self._gate_suite = None

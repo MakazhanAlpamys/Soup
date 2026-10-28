@@ -30,7 +30,7 @@ from soup_cli.utils.exit_codes import (
     EXIT_GATE_FAILED,
     EXIT_USAGE_ERROR,
 )
-from soup_cli.utils.paths import atomic_write_text
+from soup_cli.utils.paths import atomic_write_text, ensure_distinct_paths
 from soup_cli.utils.terminal import for_terminal, strip_control
 from soup_cli.utils.trust_remote import model_requires_trust_remote_code, resolve_trust_remote_code
 
@@ -98,6 +98,21 @@ def _render_mask_previews(previews: Sequence[engine.MaskPreviewRow]) -> None:
 
 def _write_report_json(payload: dict, output: str) -> None:
     atomic_write_text(json.dumps(payload, indent=2), output, field="output")
+
+
+def _refuse_output_over_input(path: str, output: Optional[str], exit_code: int) -> None:
+    """Exit before the dataset is read when ``--output`` names it (#2226).
+
+    The report would replace the dataset it describes, under any spelling of
+    the same file (``./x``, the absolute path, a case variant on Windows, a link).
+    """
+    if not output:
+        return
+    try:
+        ensure_distinct_paths([("the input", path)], [("--output", output)])
+    except ValueError as exc:
+        console.print(f"[red]Error:[/] {for_terminal(exc)}")
+        raise typer.Exit(code=exit_code) from exc
 
 
 def _resolve_format(data: list, fmt: str) -> str:
@@ -180,6 +195,7 @@ def doctor(
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
         raise typer.Exit(code=1)
+    _refuse_output_over_input(path, output, exit_code=1)
 
     # Mirrors the soup.yaml schema rules (#1251): "data.mask_history
     # requires data.train_on_responses_only: true", and mask_history is
@@ -299,6 +315,7 @@ def lint(
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
         raise typer.Exit(code=EXIT_USAGE_ERROR)
+    _refuse_output_over_input(path, output, exit_code=EXIT_USAGE_ERROR)
 
     data = load_raw_data(file_path)
     if not data:

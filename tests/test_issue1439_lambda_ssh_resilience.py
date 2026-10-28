@@ -49,6 +49,9 @@ def _exec_controller(
 ) -> tuple[int, list]:
     namespace: dict[str, object] = {"__name__": "controller"}
     exec(stub, namespace)
+    # ssh and scp are taken as found under their own names, so the fake replies can
+    # be keyed on argv[0]; tests/test_external_tool_paths.py covers the PATH search.
+    namespace["_find_tool"] = lambda name: name
 
     terminations: list[tuple] = []
     clock = {"now": 0.0}
@@ -102,6 +105,8 @@ def _run_controller(tmp_path: Path, monkeypatch, ssh_reply, scp_reply=None):
     )
     ns: dict[str, object] = {"__name__": "controller"}
     exec(stub, ns)
+    # ssh and scp are taken as found under their own names (see _exec_controller).
+    ns["_find_tool"] = lambda name: name
     clock = {"now": 0.0}
     seen = {"ssh": 0, "scp": 0, "terminate": 0, "printed": []}
 
@@ -134,6 +139,29 @@ def _run_controller(tmp_path: Path, monkeypatch, ssh_reply, scp_reply=None):
     ns["print"] = lambda *a, **k: seen["printed"].append(" ".join(map(str, a)))
     rc = ns["main"]()
     return rc, seen, clock["now"]
+
+
+class TestLambdaCopyArguments:
+    def test_the_copy_names_its_source_and_destination_after_double_dash(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        stub, _ = _setup_controller_env(tmp_path, monkeypatch)
+        copies: list[list[str]] = []
+
+        def fake_run(argv, **kw):
+            if argv[0] == "scp":
+                copies.append(list(argv))
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            return subprocess.CompletedProcess(argv, 0, "0\n", "")
+
+        rc, _ = _exec_controller(stub, fake_run)
+
+        assert rc == 0
+        assert len(copies) == 1
+        assert copies[0][-4:] == [
+            "-r", "--", "ubuntu@192.0.2.1:/home/ubuntu/soup/out", str(Path("./out").parent)
+        ]
 
 
 class TestLambdaSshResilience:
@@ -429,6 +457,8 @@ def _rendered_poll_command(tmp_path: Path, monkeypatch) -> str:
     )
     ns = {"__name__": "controller"}
     exec(stub, ns)
+    # ssh and scp are taken as found under their own names (see _exec_controller).
+    ns["_find_tool"] = lambda name: name
 
     def fake_run(argv, **kw):
         if argv[0] == "ssh":

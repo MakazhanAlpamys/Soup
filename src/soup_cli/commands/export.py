@@ -664,9 +664,13 @@ def _find_llama_cpp(user_path: Optional[str] = None) -> Path:
     console.print("[yellow]llama.cpp not found. Cloning to ~/.soup/llama.cpp...[/]")
     console.print("[dim]This is a one-time setup for GGUF export.[/]")
 
+    from soup_cli.utils.tool_paths import require_tool
+
     try:
+        # A missing git raises FileNotFoundError, handled below.
+        git = require_tool("git", "Install git, or clone llama.cpp manually.")
         subprocess.run(
-            ["git", "clone", "--depth", "1", "--branch", LLAMA_CPP_TAG,
+            [git, "clone", "--depth", "1", "--branch", LLAMA_CPP_TAG,
              "https://github.com/ggerganov/llama.cpp.git", str(soup_llama)],
             check=True,
             capture_output=True,
@@ -793,12 +797,17 @@ def _find_quantize_binary(llama_dir: Path) -> Optional[Path]:
         candidates.append(llama_dir / "build" / config / "llama-quantize.exe")
     for candidate in candidates:
         if candidate.exists():
-            return candidate
+            import os
+
+            # Absolute, so the binary runs from llama_dir even when it is ".".
+            return Path(os.path.abspath(candidate))
 
     # Check if it's in PATH
-    which_result = shutil.which("llama-quantize")
-    if which_result:
-        return Path(which_result)
+    from soup_cli.utils.tool_paths import find_tool
+
+    on_path = find_tool("llama-quantize")
+    if on_path:
+        return Path(on_path)
 
     return None
 
@@ -987,10 +996,14 @@ def _export_tensorrt(
         engine_dir = output_path / "engine"
         engine_dir.mkdir(parents=True, exist_ok=True)
 
+        from soup_cli.utils.tool_paths import require_tool
+
         try:
+            # A missing trtllm-build raises FileNotFoundError, handled below.
+            trtllm_build = require_tool("trtllm-build", "Install tensorrt_llm.")
             result = subprocess.run(
                 [
-                    "trtllm-build",
+                    trtllm_build,
                     "--checkpoint_dir", str(ckpt_dir),
                     "--output_dir", str(engine_dir),
                     "--gemm_plugin", "float16",

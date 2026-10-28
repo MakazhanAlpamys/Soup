@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
+<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -105,7 +105,7 @@ yapılandırma v0.77'de yüklenmeyebilir: önce `soup doctor --config soup.yaml`
   `rl_checkpoint_include_rollout_buffer` v0.76.0'dan sonra bekletmeye alındı; bu yüzden hiçbir sürüm
   önce onlar hakkında uyarmadı. Değerler: `data.remove_unused_columns: true`, hiç niceleme yapmayan bir
   görevde `training.quantization: 4bit` / `8bit` (veya `load_in_8bit: true`) ve `soup ab --beta`.
-  v0.76'nın hiçbir şey söylemeden yok saydığı on beş ayar da artık reddediliyor; örneğin hiçbir
+  v0.76'nın hiçbir şey söylemeden yok saydığı on dört ayar da artık reddediliyor; örneğin hiçbir
   şeyin uygulamadığı yerlerde `use_mod` veya `neftune_alpha`, LoRA rank'ı ile `expand_layers`, Unsloth'ta
   `8bit` veya görsel SFT ve MLX ya da Unsloth'ta `lora.rank_pattern`: CHANGELOG'daki yükseltme notlarına
   bakın.
@@ -348,7 +348,7 @@ CUDA ya da PyTorch'u yerel olarak kurmadan Soup'u çalıştırın (imaj her sür
 
 ```bash
 docker pull ghcr.io/makazhanalpamys/soup:latest
-docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml
+docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml --yes
 docker compose up   # ya da yerel olarak derleyin
 ```
 

@@ -28,6 +28,13 @@ def _params_from_local_safetensors(path: str) -> float | None:
     refuse to train a 135M model. The checkpoint knows its own size, so ask
     it instead of guessing.
     """
+    total = param_count_from_local_safetensors(path)
+    return (total / 1e9) if total else None
+
+
+def param_count_from_local_safetensors(path: str) -> int | None:
+    """Exact parameter count of a local checkpoint directory, read from the
+    safetensors headers alone, or None when there is nothing readable."""
     from soup_cli.utils.checkpoint_files import checkpoint_files
 
     try:
@@ -69,7 +76,7 @@ def _params_from_local_safetensors(path: str) -> float | None:
                         return None
                     numel *= dim
                 total += numel
-        return (total / 1e9) if total else None
+        return total or None
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return None  # unreadable/crafted -> fall back to the name guess
 

@@ -375,6 +375,10 @@ soup ingest --source openai-stored --logs ./oai-stored-completions.jsonl
 
 With `--logs` the CLI never makes a network call — operators export from their SaaS dashboard or vendor API, then point `soup ingest` at the local file. Auth env vars (`LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` / `LANGSMITH_API_KEY` / `HELICONE_API_KEY` / `OPENPIPE_API_KEY` / `OPENAI_API_KEY` / `OTEL_EXPORTER_OTLP_HEADERS`) are advisory on that path — Soup surfaces which ones authenticate the source. A PII reminder fires on every ingest run (matches v0.26.0 Trace-to-Preference policy).
 
+In a `--logs` export, Langfuse feedback uses `score` when it is present and non-null, including `0`,
+`0.0` and `false` as negative feedback. Only a missing or null score falls back
+to `rating`. Negative scores remain available for preference-pair construction.
+
 **Conversation prompts.** `soup ingest` and the OpenAI/LangChain `soup data from-traces` parsers use the same rule for message lists: retain context through the last user turn and omit later messages. If no user or assistant turn precedes the last user, the prompt stays as that user's plain text, including system-plus-one-user requests. Only requests with an earlier user or assistant turn are rendered as compact JSON of `role`/`content` objects through the last user, preserving message boundaries and roles. System-only requests and last user turns without text are skipped. Content-part lists join text parts with newlines and discard non-text parts, including image URLs and base64 data. Bare lists and `{"messages": [...]}` envelopes are equivalent. LangChain message `type` values `human`, `ai` and `system` map to `user`, `assistant` and `system`; an explicit string `role` takes precedence. Blank-content turns are omitted from multi-turn JSON. Output message lists select the final assistant response and flatten its text parts. Plain string prompts and outputs remain unchanged. This changes grouping for multi-turn logs: regenerate trace exports and preference pairs rather than mixing the previous first-turn prompts with the new conversation prompts.
 
 ### Live pull from Langfuse (`--pull`, #204)

@@ -145,6 +145,15 @@ class TestTheOtherPathsThatDropThem:
 
         assert f"data.{field} is not applied on backend='mlx'" in message, message
 
+    @pytest.mark.parametrize("field", _FIELDS)
+    def test_mlx_grpo(self, field):
+        """The native GRPO loop (#1976) renders prompts with the base tokenizer as it
+        is; the refusal rests on grpo being in ``MLX_TASKS``."""
+        message = _refusal(_yaml("grpo", backend="mlx", field=field,
+                                 training={"quantization": "none"}))
+
+        assert f"data.{field} is not applied on backend='mlx'" in message, message
+
     def test_sft_layer_streaming(self):
         message = _refusal(_yaml(
             "sft",

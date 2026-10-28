@@ -81,3 +81,19 @@ class TestMlxChatTemplateRefusal:
             data={"train": "d.jsonl", "chat_template": "chatml"},
         )
         assert config.data.chat_template == "chatml"
+
+
+class TestMlxGrpoAppliesChatTemplate:
+    """#1976: MLX GRPO renders prompts with ``data.chat_template`` (and the
+    transformers path's fallback), so the MLX refusal leaves it out."""
+
+    @pytest.mark.parametrize("template", TEMPLATES)
+    def test_grpo_on_mlx_accepts_a_chat_template(self, template: str) -> None:
+        config = SoupConfig(
+            base="test/model",
+            task="grpo",
+            backend="mlx",
+            data={"train": "d.jsonl", "chat_template": template},
+            training={"epochs": 1, "quantization": "none"},
+        )
+        assert config.data.chat_template == template

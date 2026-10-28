@@ -297,3 +297,43 @@ def test_exception_text_is_not_parsed_as_markup(exc, verbose):
     assert "soup-cli[audio]" in output
     assert "\x1b" not in output
     assert "\x07" not in output
+
+
+# --- a refused CPU allocation (#2154) ---
+
+
+def _shown(exc: Exception) -> str:
+    buf = StringIO()
+    with patch("soup_cli.utils.errors.console", Console(file=buf, stderr=False, width=200)):
+        format_friendly_error(exc, verbose=False)
+    return " ".join(strip_ansi(buf.getvalue()).split())
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        # posix_memalign: Linux and macOS
+        "[enforce fail at alloc_cpu.cpp:121] err == 0. DefaultCPUAllocator: can't allocate "
+        "memory: you tried to allocate 22548578304 bytes. Error code 12 (Cannot allocate "
+        "memory)",
+        # Windows, Android and mimalloc builds
+        "DefaultCPUAllocator: not enough memory: you tried to allocate 22548578304 bytes. "
+        "Buy new RAM!",
+    ],
+    ids=["posix", "windows"],
+)
+def test_a_refused_cpu_allocation_says_what_to_do(message):
+    shown = _shown(RuntimeError(message))
+
+    assert "Error: The CPU allocator could not reserve memory for a tensor." in shown
+    assert (
+        "Free memory by closing other programs, add swap (Linux) or enlarge the page file "
+        "(Windows), or use a smaller model."
+    ) in shown
+
+
+def test_a_cuda_out_of_memory_message_keeps_the_gpu_entry():
+    shown = _shown(RuntimeError("CUDA out of memory. Tried to allocate 2.00 GiB"))
+
+    assert "GPU ran out of memory during training." in shown
+    assert "CPU allocator" not in shown

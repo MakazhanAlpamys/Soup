@@ -386,12 +386,16 @@ training:
 | `mxfp4` | 4 (stored) | Train LoRA on top of an MXFP4 pre-quantized checkpoint (for example GPT-OSS). Loaded with `Mxfp4Config(dequantize=True)`, so it trains in bf16: transformers does not train MXFP4 weights as loaded. Budget memory for the bf16 model, an estimated 2 bytes per parameter (roughly 42 GB for a 20B base). The `soup train` VRAM pre-flight checks an `mxfp4` run against that estimate, as it does a `quantization: none` run, and `--allow-oom-attempt` launches one it refuses. | — |
 | `fp8` | — | Train LoRA on top of an FP8-released checkpoint. Loaded with `FineGrainedFP8Config(dequantize=True)`, so it trains in bf16: budget memory for the bf16 model, an estimated 2 bytes per parameter, not for the FP8 file. | transformers ≥ 5.17.0 |
 
-**VRAM pre-flight.** Before the model loads, `soup train` prices the weights
-of the chosen format and refuses a run that does not fit the card
-(`--allow-oom-attempt` launches it anyway). The figures are estimates, in bytes
-per parameter: `4bit` 0.5, `8bit` 1.0, `none` 2.0, `gptq` and `awq` 0.55,
-`aqlm` 0.5, `eetq` 1.0, and 2.0 for `mxfp4` and `fp8`, which are dequantized on
-load. `hqq:*` has no figure yet, so the run starts and the pre-flight prints
+**VRAM pre-flight.** Before the model loads, `soup train` estimates the run's
+peak, weights included, and refuses a run that does not fit the card
+(`--allow-oom-attempt` launches it anyway; the terms are in [Hardware-Fit
+Calculator](backends-and-ops.md#hardware-fit-calculator)). The weights are priced
+in bytes per parameter: `none` 2.0, `gptq` and `awq` 0.55, `aqlm` 0.5, `eetq` 1.0,
+and 2.0 for `mxfp4` and `fp8`, which are dequantized on load. Under `4bit` and
+`8bit` only the linear layers are quantized (0.53 and 1.02 bytes a parameter); the
+embeddings, output head and norms are fp32 for training, so a small model with a
+large vocabulary costs more than a flat 0.5 or 1.0 suggests. Without the model's
+`config.json` the flat figures (0.5 and 1.0) are used. `hqq:*` has no figure yet, so the run starts and the pre-flight prints
 `Pre-flight skipped: no memory model for quantization: hqq:4bit` (with the
 format you set). No refusal there does not mean the run fits.
 
@@ -575,6 +579,37 @@ Not measured:
 - Parity with K2's own code: Soup never executes it. Read as text, it would not import under transformers 5.17: it imports `is_torch_fx_available`, which 5.17 does not define. That is an inference from reading the code, not an observed error. Its router asserts it is not training and its MoE block fails in training mode, so it is inference-only anyway; transformers' class is the training path. The guard was derived by reading it, and its numeric rows were checked against a hand transcription of its router and yarn.
 - Known numeric differences from K2's own code that remain: the MoE combine (K2 sums the weighted expert outputs in fp32 and rounds once; transformers rounds each weighted output to the model dtype before accumulating, which is bf16 rounding noise), eager versus sdpa attention, and the router bias kept as a float32 buffer rather than a Parameter (float32 in the checkpoint either way).
 - The checkpoint carries 61 stale `self_attn.rotary_emb.inv_freq` tensors. The sharder writes them into the layer files as stored, and nothing streams or reads them: K2's code keeps that buffer non-persistent, and transformers computes the rope from the config.
+
+**Experimental two-read replay (API only, off by default).**
+`build_streamed_model(..., two_read_experts=True)` keeps the decoder checkpoint but
+does not fetch routed experts during its replay. The original forward and the expert's
+own backward each fetch once. The router reuses the forward's top-k decisions while
+recomputing the differentiable scores, preserving the routing-weight contribution to
+the input gradient. No expert weights are retained between visits.
+
+This requires the `per_expert` layout and still refuses routed-expert adapters. There is
+no training-config switch or default change. It reaches only DeepSeek-V3-family bases:
+`per_expert` admits only `deepseek_v3`, and a direct
+`install_expert_streaming(..., two_reads=True)` call refuses every decoder class other
+than `DeepseekV3DecoderLayer`. A layer that
+`stream_recompute` switches off runs without the checkpoint and so without the replay:
+it reads each expert in the forward and the backward, as the default path does there.
+
+The replay runs the layer with the routed experts' output at zero, so the outputs of the
+decoder layer, its MoE block and its routed experts differ from the forward's there. A
+forward hook on one of those three modules, or a global forward hook, is therefore refused
+with a `RuntimeError` when the layer's forward or recompute starts, including a hook
+registered after `build_streamed_model` or between forward and backward. No hook is judged
+safe by what it does, and nothing falls back to three reads. Forward pre-hooks, and hooks
+on the router, attention, norms or the streamed layer wrapper, see the forward's values and
+are allowed. A patched or replaced `forward` inside a two-read layer is not detected: if it
+uses the MoE output's values in the backward, its gradients are wrong without an error.
+
+On CPU, against the resident eager model and the default path, losses, `dX`, the router
+gradients and every LoRA gradient are bit-identical with exactly two reads per expert visit,
+including gradient accumulation, two forwards before one backward, `retain_graph`, a
+no-grad forward and an exception mid-step. Hardware measurements are not part of this
+change and are discussed with its design (#2170).
 
 **`stream_nf4_scale_cache` (opt-in).** On the dequantise + `F.linear` path, a
 double-quantised NF4 weight expands its 8-bit block scales to fp32 on every visit,
@@ -875,13 +910,14 @@ rows. That table needs a CUDA card and is left for whoever has one. To produce i
 python benchmarks/harness/stream_loss_chunk_vram.py --base <id-or-path> --quantization 4bit
 ```
 
-The harness runs the setup `soup train` uses and one step per arm at batch 1 (`--seqs` and
-`--chunk` change the lengths and the chunk, 512,1024,2048 and 128 by default) and prints one
-row per length and arm: the pre-flight's prediction for that run, the free VRAM it compared
-against, and `torch.cuda.max_memory_allocated()` over the step. An arm that runs out of
-memory is a row, not a crash. It exits 1 when a row under-predicts, including an arm that ran
-out of memory inside the predicted fit. `--self-test` runs the same protocol on a tiny local
-Llama with no GPU and no download, and reads no peak.
+The harness runs the setup `soup train` uses and one step per arm at batch 1, each arm in a
+process of its own as each `soup train` is (`--seqs` and `--chunk` change the lengths and the
+chunk, 512,1024,2048 and 128 by default), and prints one row per length and arm: the
+pre-flight's prediction for that run, the free VRAM it compared against, and
+`torch.cuda.max_memory_allocated()` over the step. An arm that runs out of memory is a row,
+not a crash. It exits 1 when a row under-predicts, including an arm that ran out of memory
+inside the predicted fit. `--self-test` runs the same protocol on a tiny local Llama with no
+GPU and no download, and reads no peak.
 
 ### Batch size vs gradient accumulation
 
@@ -1312,7 +1348,7 @@ before the model loads, and the message lists the known names.
 
 Raw Jinja strings are validated: null bytes / >64KB / filesystem-touching directives (`{% include %}`, `{% import %}`, `{% from %}`, `{% macro %}`, `{% extends %}`) are rejected at config-load.
 
-`backend: mlx` also refuses `data.chat_template` at config-load — the MLX trainer renders the model's shipped template only, so the override would be silently dropped; `backend: transformers` applies it.
+`backend: mlx` also refuses `data.chat_template` at config-load — the MLX trainer renders the model's shipped template only, so the override would be silently dropped; `backend: transformers` applies it. The exception is `task: grpo`, whose MLX loop applies the override (and the transformers path's fallback template), so it is accepted there.
 
 ### OOM-probe auto batch size
 

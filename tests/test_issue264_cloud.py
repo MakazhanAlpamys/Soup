@@ -92,6 +92,8 @@ class TestRenderLambdaLabsStub:
         )
         namespace = {"__name__": "test"}
         exec(stub, namespace)
+        # ssh and scp count as installed wherever this runs.
+        namespace["_find_tool"] = lambda name: "/usr/bin/" + name
         requests = []
 
         def fake_request(api_key, path, *, method="GET", payload=None):

@@ -18,6 +18,14 @@ expert's input, so it fetches the expert again and recomputes the expert MLP
 on a local graph. Inside a checkpointed decoder layer that is three reads of
 every routed-to expert per step (forward, recompute, backward).
 
+``two_reads=True`` makes it two. The routing multiply moves inside the expert's
+autograd node, which then saves only the expert's input and routing weights. The
+decoder layer's checkpoint gets :func:`two_read_checkpoint_contexts`: during its
+recompute the MoE block's router hands back the forward's top-k decisions instead
+of selecting again, and each expert node saves its inputs without reading the
+expert. The backward reads each expert once and differentiates the same graph
+the eager loop does, so the numbers do not change.
+
 What it buys: the VRAM bound, nothing else. ``benchmarks/probe-moe-expert-coverage.md``
 measured that a training step routes to 96.7-100% of the experts of a layer, so
 an expert-streamed step reads at least the bytes a layer-streamed step reads.
@@ -25,7 +33,10 @@ an expert-streamed step reads at least the bytes a layer-streamed step reads.
 
 from __future__ import annotations
 
+import functools
 import os
+import threading
+import types
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
@@ -43,6 +54,10 @@ _MAX_EXPERTS = 4096
 #: from the header, so an unbounded header would size an unbounded allocation. A
 #: Kimi K2 expert is ~25 MB at NF4, ~88 MB at bf16.
 _MAX_EXPERT_BYTES = 2**30
+#: Per thread, the two-read checkpoint scopes entered and not yet left, innermost
+#: last. The forward enters one on the caller's thread, a recompute on the thread
+#: that runs the backward.
+_SCOPES = threading.local()
 
 
 def expert_key(expert: int, part: str) -> str:
@@ -465,6 +480,194 @@ class ExpertFetcher:
         return dense[0], dense[1]
 
 
+class _TwoReadRecord:
+    """What one checkpointed call of a decoder layer keeps for its recompute:
+    each top-k result its routers took in the forward, in call order."""
+
+    __slots__ = ("topk", "cursor")
+
+    def __init__(self) -> None:
+        #: ``(signature, (values, indices))`` per top-k call.
+        self.topk: list = []
+        self.cursor = 0
+
+
+class _TwoReadScope:
+    """Makes ``record`` the active scope: the forward's, or the recompute's."""
+
+    def __init__(
+        self, record: _TwoReadRecord, replay: bool, guard: Optional["_TwoReadHookGuard"] = None
+    ) -> None:
+        self.record = record
+        self.replay = replay
+        self.guard = guard
+
+    def __enter__(self) -> "_TwoReadScope":
+        if self.guard is not None:
+            # Before the layer runs, in the forward and again in every recompute, so a
+            # hook registered at any time is refused before it sees a recompute output.
+            self.guard()
+        if self.replay:
+            # Every recompute replays from the first decision.
+            self.record.cursor = 0
+        stack = getattr(_SCOPES, "stack", None)
+        if stack is None:
+            stack = _SCOPES.stack = []
+        stack.append(self)
+        return self
+
+    def __exit__(self, *exc: Any) -> bool:
+        _SCOPES.stack.pop()
+        return False
+
+
+def _active_scope() -> Optional[_TwoReadScope]:
+    stack = getattr(_SCOPES, "stack", None)
+    return stack[-1] if stack else None
+
+
+class _TwoReadHookGuard:
+    """Refuses a two-read checkpoint call while a forward hook would see a recompute output.
+
+    In the recompute the routed experts return zeros, so the outputs of the experts module,
+    of the MoE block holding it and of the decoder layer differ from the forward's; every
+    other module inside the layer (attention, norms, router, shared expert) sees the
+    forward's values. A forward hook on one of those three modules, or a global forward
+    hook, is refused; no hook is judged safe by what it does. Forward pre-hooks and hooks
+    on any other module are not checked, and neither is a patched or replaced ``forward``.
+    """
+
+    __slots__ = ("layer_idx", "watched")
+
+    def __init__(self, layer: Any) -> None:
+        cls = streamed_experts_class()
+        watched: Dict[int, Tuple[str, Any]] = {id(layer): ("the decoder layer", layer)}
+        layer_idx = None
+        for name, module in layer.named_modules():
+            if not (isinstance(module, cls) and module.two_reads):
+                continue
+            layer_idx = module.layer_idx
+            parent_name = name.rpartition(".")[0]
+            parent = layer.get_submodule(parent_name) if parent_name else layer
+            watched.setdefault(id(parent), (f"the MoE block `{parent_name}`", parent))
+            watched.setdefault(id(module), (f"the routed experts `{name}`", module))
+        self.layer_idx = layer_idx
+        self.watched = tuple(watched.values())
+
+    def __call__(self) -> None:
+        import torch.nn.modules.module as nn_module
+
+        where = None
+        hooks = getattr(nn_module, "_global_forward_hooks", None)
+        if hooks:
+            where = "a global forward hook (register_module_forward_hook), which runs on it,"
+        else:
+            for label, module in self.watched:
+                hooks = module._forward_hooks
+                if hooks:
+                    where = f"{label}, which has a forward hook,"
+                    break
+        if where is None:
+            return
+        hook = next(iter(hooks.values()))
+        name = getattr(hook, "__qualname__", type(hook).__name__)
+        raise RuntimeError(
+            f"two-read expert streaming refuses decoder layer {self.layer_idx}: {where} "
+            f"({name}). Its checkpoint recompute runs the routed experts at zero, so a "
+            f"forward hook on the decoder layer, its MoE block or its routed experts would "
+            f"see a different output there and could produce wrong gradients without an "
+            f"error. Remove the hook, move it to the router, the attention or the streamed "
+            f"layer wrapper, or build with two_read_experts=False."
+        )
+
+
+def two_read_checkpoint_contexts(
+    guard: Optional[_TwoReadHookGuard] = None,
+) -> Tuple[_TwoReadScope, _TwoReadScope]:
+    """``context_fn`` for ``torch.utils.checkpoint.checkpoint`` around a decoder
+    layer holding two-read experts: one fresh record, entered by the forward and
+    by every recompute of this call. :func:`checkpoint_context_fn` binds ``guard``."""
+    record = _TwoReadRecord()
+    return (_TwoReadScope(record, replay=False, guard=guard),
+            _TwoReadScope(record, replay=True, guard=guard))
+
+
+def checkpoint_context_fn(layer: Any) -> Optional[Any]:
+    """The ``context_fn`` a checkpointed ``layer`` needs: :func:`two_read_checkpoint_contexts`
+    with ``layer``'s hook guard when it holds two-read ``StreamedExperts``, else ``None``."""
+    cls = streamed_experts_class()
+    for module in layer.modules():
+        if isinstance(module, cls) and module.two_reads:
+            return functools.partial(two_read_checkpoint_contexts, _TwoReadHookGuard(layer))
+    return None
+
+
+def _build_topk_decisions_class():
+    import torch
+    from torch.utils._python_dispatch import TorchDispatchMode
+
+    topk = torch.ops.aten.topk.default
+
+    class TopkDecisions(TorchDispatchMode):
+        """Active for one router call. In the forward it keeps every top-k result;
+        in a recompute it hands them back in order and never selects. Below
+        autograd, so the recompute's top-k node still saves the indices the
+        checkpoint expects; every other op runs unchanged."""
+
+        def __init__(self, scope: _TwoReadScope) -> None:
+            super().__init__()
+            self.scope = scope
+
+        def __torch_dispatch__(self, func, _types, args=(), kwargs=None):
+            kwargs = kwargs or {}
+            if func is not topk:
+                return func(*args, **kwargs)
+            source = args[0]
+            signature = (
+                tuple(source.shape), source.dtype, source.device, tuple(args[1:]),
+                tuple(sorted(kwargs.items())),
+            )
+            record = self.scope.record
+            if not self.scope.replay:
+                out = func(*args, **kwargs)
+                # Owned copies: nothing the router's caller does to its outputs
+                # can change what the recompute receives.
+                record.topk.append((signature, tuple(tensor.clone() for tensor in out)))
+                return out
+            cursor = record.cursor
+            if cursor >= len(record.topk) or record.topk[cursor][0] != signature:
+                raise RuntimeError(
+                    f"two-read experts: the checkpoint recompute asked a router for top-k "
+                    f"#{cursor} {signature[:2]}, which the forward did not take "
+                    f"({len(record.topk)} recorded)"
+                )
+            record.cursor = cursor + 1
+            return tuple(tensor.clone() for tensor in record.topk[cursor][1])
+
+    return TopkDecisions
+
+
+_TOPK_DECISIONS_CLASS = None
+
+
+def _topk_decisions(scope: _TwoReadScope) -> Any:
+    global _TOPK_DECISIONS_CLASS
+    if _TOPK_DECISIONS_CLASS is None:
+        _TOPK_DECISIONS_CLASS = _build_topk_decisions_class()
+    return _TOPK_DECISIONS_CLASS(scope)
+
+
+def _routing_forward(self: Any, *args: Any, **kwargs: Any) -> Any:
+    """Forward of a two-read MoE block's router: under a two-read scope its top-k
+    decisions are kept (forward) or replayed (recompute); scoring always runs."""
+    forward = type(self).forward
+    scope = _active_scope()
+    if scope is None:
+        return forward(self, *args, **kwargs)
+    with _topk_decisions(scope):
+        return forward(self, *args, **kwargs)
+
+
 def _build_streamed_experts_class():
     import torch
     import torch.nn as nn
@@ -476,15 +679,18 @@ def _build_streamed_experts_class():
         current = act_fn(gate) * up
         return functional.linear(current, down)
 
+    def _autocast_state(device_type: str) -> Dict[str, Any]:
+        return {
+            "enabled": torch.is_autocast_enabled(device_type),
+            "dtype": torch.get_autocast_dtype(device_type),
+            "cache_enabled": torch.is_autocast_cache_enabled(),
+        }
+
     class _ExpertMLP(torch.autograd.Function):
         @staticmethod
         def forward(ctx, hidden, owner, expert):  # noqa: D401 - autograd API
             ctx.device_type = hidden.device.type
-            ctx.autocast_kwargs = {
-                "enabled": torch.is_autocast_enabled(ctx.device_type),
-                "dtype": torch.get_autocast_dtype(ctx.device_type),
-                "cache_enabled": torch.is_autocast_cache_enabled(),
-            }
+            ctx.autocast_kwargs = _autocast_state(ctx.device_type)
             gate_up, down = owner.fetch(expert)
             out = expert_mlp(hidden, gate_up, down, owner.act_fn)
             ctx.owner = owner
@@ -505,16 +711,56 @@ def _build_streamed_experts_class():
                 (grad_hidden,) = torch.autograd.grad(out, local, grad_out)
             return grad_hidden, None, None
 
+    class _WeightedExpert(torch.autograd.Function):
+        """``expert_mlp(hidden) * weights`` as one node. It saves only the expert's
+        input and routing weights, so a checkpoint recompute rebuilds what its
+        backward needs without reading the expert."""
+
+        @staticmethod
+        def forward(ctx, hidden, weights, owner, expert, replay):  # noqa: D401 - autograd API
+            ctx.device_type = hidden.device.type
+            ctx.autocast_kwargs = _autocast_state(ctx.device_type)
+            ctx.owner = owner
+            ctx.expert = expert
+            ctx.save_for_backward(hidden, weights)
+            if replay:
+                # Only the cast and index_add_ consume the product, and index_add_
+                # saves it for its shape alone: the backward never reads this zero.
+                return hidden.new_zeros(()).expand_as(hidden)
+            gate_up, down = owner.fetch(expert)
+            return expert_mlp(hidden, gate_up, down, owner.act_fn) * weights
+
+        @staticmethod
+        def backward(ctx, grad_out):
+            hidden, weights = ctx.saved_tensors
+            need_hidden, need_weights = ctx.needs_input_grad[0], ctx.needs_input_grad[1]
+            if not (need_hidden or need_weights):
+                return None, None, None, None, None
+            gate_up, down = ctx.owner.fetch(ctx.expert)
+            # The graph the eager loop differentiates, under the forward's autocast.
+            with torch.enable_grad(), torch.autocast(ctx.device_type, **ctx.autocast_kwargs):
+                local_hidden = hidden.detach().requires_grad_(need_hidden)
+                local_weights = weights.detach().requires_grad_(need_weights)
+                out = expert_mlp(local_hidden, gate_up, down, ctx.owner.act_fn) * local_weights
+                wanted = [
+                    tensor for tensor in (local_hidden, local_weights) if tensor.requires_grad
+                ]
+                grads = list(torch.autograd.grad(out, wanted, grad_out))
+            grad_hidden = grads.pop(0) if need_hidden else None
+            grad_weights = grads.pop(0) if need_weights else None
+            return grad_hidden, grad_weights, None, None, None
+
     class StreamedExperts(nn.Module):
         """Drop-in for a transformers experts module; fetches each expert on use."""
 
-        def __init__(self, reader, fetcher, act_fn, layer_idx):
+        def __init__(self, reader, fetcher, act_fn, layer_idx, two_reads=False):
             super().__init__()
             self.reader = reader
             self.fetcher = fetcher
             self.act_fn = act_fn
             self.layer_idx = layer_idx
             self.num_experts = reader.count
+            self.two_reads = bool(two_reads)
 
         def fetch(self, expert):
             return self.fetcher.fetch(self.reader, expert)
@@ -525,15 +771,23 @@ def _build_streamed_experts_class():
                 expert_mask = functional.one_hot(top_k_index, num_classes=self.num_experts)
                 expert_mask = expert_mask.permute(2, 1, 0)
                 expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
-
+            # Inside a two-read checkpoint recompute no expert is read.
+            scope = _active_scope() if self.two_reads else None
+            replay = scope is not None and scope.replay
             for expert_idx in expert_hit:
                 expert_idx = expert_idx[0]
                 if expert_idx == self.num_experts:
                     continue
                 top_k_pos, token_idx = torch.where(expert_mask[expert_idx])
                 current_state = hidden_states[token_idx]
-                current = _ExpertMLP.apply(current_state, self, int(expert_idx))
-                current = current * top_k_weights[token_idx, top_k_pos, None]
+                if self.two_reads:
+                    current = _WeightedExpert.apply(
+                        current_state, top_k_weights[token_idx, top_k_pos, None], self,
+                        int(expert_idx), replay,
+                    )
+                else:
+                    current = _ExpertMLP.apply(current_state, self, int(expert_idx))
+                    current = current * top_k_weights[token_idx, top_k_pos, None]
                 final_hidden_states.index_add_(0, token_idx, current.to(final_hidden_states.dtype))
             return final_hidden_states
 
@@ -569,17 +823,50 @@ def find_experts_module(layer: Any) -> Optional[Tuple[Any, str, Any]]:
     return None
 
 
+#: Decoder layers whose MoE output reaches only views and additions before the residual,
+#: none of which saves it for its values (transformers 5.19, read per class), and whose real
+#: layer has a gradient comparison with the resident model. A two-read recompute returns
+#: zeros there; any op that saved them would corrupt the gradients.
+TWO_READ_DECODERS = frozenset({"DeepseekV3DecoderLayer"})
+
+
 def install_expert_streaming(
     layers: Sequence[Any],
     readers: Mapping[int, ExpertShardReader],
     fetcher: ExpertFetcher,
+    *,
+    two_reads: bool = False,
 ) -> int:
     """Replace each MoE layer's experts module with a ``StreamedExperts``.
 
     Runs before the decoder-layer name maps are taken, so the fused expert
     parameters leave the layer and the layer pool never allocates them.
+    ``two_reads`` also routes the MoE block's router (``.gate``) through
+    :func:`_routing_forward`, whose decisions a two-read recompute replays.
+
+    Two-read contract. Each checkpointed layer call keeps its own record, so gradient
+    accumulation, several forwards before one backward, ``retain_graph`` backwards, no-grad
+    forwards and exceptions are handled as on the default path. In the recompute the
+    routed-experts output is zero (the MoE output is shared expert + 0).
+
+    Forward hooks: the checkpoint context from :func:`checkpoint_context_fn` refuses the
+    layer call with a ``RuntimeError`` while the decoder layer, its MoE block or its routed
+    experts carries a forward hook, or while a global forward hook is registered. It checks
+    when the layer's forward starts and again when its recompute starts, so a hook
+    registered after ``build_streamed_model`` (or between forward and backward) is refused
+    before its gradient is used. A refused call has not stepped the optimizer, so nothing
+    is updated from wrong gradients. Hooks on the router, attention, norms or the
+    ``StreamedDecoderLayer`` wrapper, and forward pre-hooks, see the forward's values and
+    are allowed. No hook is accepted on the strength of what it does, and there is no
+    fallback to three reads.
+
+    Patched ``forward``: not checked. A ``forward`` replaced on the decoder layer or on
+    any module inside it that uses the MoE output's values in the backward receives
+    wrong gradients without an error; do not patch a two-read layer.
     Returns the number of layers converted.
     """
+    import torch.nn as nn
+
     cls = streamed_experts_class()
     converted = 0
     for idx, layer in enumerate(layers):
@@ -615,6 +902,20 @@ def install_expert_streaming(
                 f"while the experts are streamed one at a time; target attention or the "
                 f"shared expert instead"
             )
-        setattr(parent, attr, cls(reader, fetcher, module.act_fn, idx))
+        router = getattr(parent, "gate", None) if two_reads else None
+        if two_reads and type(layer).__name__ not in TWO_READ_DECODERS:
+            raise ValueError(
+                f"decoder layer {idx} is a {type(layer).__name__}: two reads are admitted "
+                f"only where the MoE output is consumed by views and additions "
+                f"({', '.join(sorted(TWO_READ_DECODERS))})"
+            )
+        if two_reads and not isinstance(router, nn.Module):
+            raise ValueError(
+                f"decoder layer {idx}: two reads replay the router's top-k decisions, but "
+                f"the MoE block has no router module at `.gate`"
+            )
+        setattr(parent, attr, cls(reader, fetcher, module.act_fn, idx, two_reads=two_reads))
+        if router is not None:
+            router.forward = types.MethodType(_routing_forward, router)
         converted += 1
     return converted

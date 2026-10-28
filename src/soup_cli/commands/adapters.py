@@ -1684,10 +1684,44 @@ def adapter_bisect(
     import shlex
     import subprocess  # noqa: S404 — argv list mode, no shell
 
+    from soup_cli.utils.tool_paths import find_tool
+
+    try:
+        program = shlex.split(eval_command)[0]
+    except ValueError as exc:
+        console.print(f"[red]Invalid --eval-command: {for_terminal(exc)}[/]")
+        raise typer.Exit(2) from exc
+    # A bare program name runs from the absolute PATH directory it is found
+    # in; a program given with its path runs as given. The name is resolved
+    # for each probe, after `{ckpt}` is filled in, so a name the checkpoint id
+    # completes is found the same way; a fixed name is also checked up front.
+    def _program_path(name: str) -> Optional[str]:
+        if os.path.dirname(name):
+            return name
+        try:
+            return find_tool(name)
+        except ValueError:
+            return None
+
+    def _not_on_path(name: str) -> str:
+        return (
+            f"--eval-command program {for_terminal(repr(name))} was not found on PATH; "
+            "install it, put it on PATH, or give its path"
+        )
+
+    if "{ckpt}" not in program and _program_path(program) is None:
+        console.print(f"[red]{_not_on_path(program)}[/]")
+        raise typer.Exit(2)
+
     def _eval_fn(ckpt: str) -> bool:
         cmd_str = eval_command.replace("{ckpt}", shlex.quote(ckpt))
         # Safer: split via shlex and use argv mode (no shell interpolation).
         argv = shlex.split(cmd_str)
+        resolved = _program_path(argv[0])
+        if resolved is None:
+            console.print(f"[yellow]Eval failed for {escape(ckpt)}: {_not_on_path(argv[0])}[/]")
+            return False
+        argv[0] = resolved
         try:
             result = subprocess.run(  # noqa: S603
                 argv, capture_output=True, timeout=3600, check=False
