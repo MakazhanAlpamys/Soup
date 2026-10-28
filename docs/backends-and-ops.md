@@ -1835,6 +1835,11 @@ soup env check
 
 `soup-env.lock` captures Python + platform + CUDA + 15 ABI-sensitive packages (torch / transformers / peft / trl / accelerate / bitsandbytes / flash-attn / xformers / deepspeed / unsloth / vllm / sentencepiece / tokenizers / datasets / huggingface-hub). Wire `soup env check` into your CI to refuse silent ABI breakage.
 
+The `soup env` commands display lock metadata, package versions, drift descriptions
+and paths literally, with terminal control characters and bidi marks removed. This
+only affects terminal output: lock files and generated requirements keep their original
+contents.
+
 
 ## Hardware-Fit Calculator
 
