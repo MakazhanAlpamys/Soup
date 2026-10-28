@@ -12,6 +12,180 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.77.1] - 2026-10-27
+
+### Upgrade notes
+
+A valid `soup.yaml` that loads on 0.77.0 needs no change. Coming from 0.76.x or older, read the
+0.77.0 upgrade notes below first and run `soup doctor --config soup.yaml` before the first run of
+an existing config.
+
+- **A `soup data` command that wrote its result over its own input now fails** before it reads
+  anything. Eighteen commands refuse an output that names one of their inputs, under any spelling
+  and through a default output name; the entries under Fixed list them (#2245, #2261). For an
+  in-place edit, write to a new file and rename it. `soup data clean` already refused this.
+- **`soup plan` and `soup apply` refuse what `soup train` refuses** (exit 1, no plan written), so a
+  pipeline that planned a config with a staged field, a refused deprecated value or any other
+  schema error now stops at `soup plan` (#2242).
+- **External programs run by an absolute path found on `PATH`.** The current directory and empty
+  or relative `PATH` entries are not searched, and on Windows `soup` leaves the current directory
+  out of the program search for itself and the programs it starts. A tool found only there needs
+  its directory on `PATH` as an absolute path, or its own path (#2205, #2213).
+- **The VRAM pre-flight prices runs with the shared estimate.** Inside the range the estimate
+  was fitted on (dense models of 3B and below on one 6 GB card) it refuses some long-sequence,
+  large-vocabulary runs and some runs without gradient checkpointing that it let through, and
+  `--allow-oom-attempt` still launches them. Outside that range (a larger model, a
+  mixture-of-experts model, `medium` or `selective` checkpointing, `use_liger` or `use_cut_ce`,
+  `backend: unsloth`) a run that does not fit gets the estimate as a warning and starts, unless
+  its weights, the CUDA context and the LoRA adapters, gradients and optimizer state of the
+  parameters it trains alone are more than the card holds: that run is refused there too. The
+  optimizer state counts only for `adamw_torch`, `adamw_torch_fused`, `schedule_free_adamw` and
+  `adamw_bnb_8bit`, and not with `use_galore` on `sft`, `tts` or `pretrain`, whose trainers
+  replace the optimizer. Reading a Hub model's shape can reach the Hub unless
+  `HF_HUB_OFFLINE` or `TRANSFORMERS_OFFLINE` is set (#2146 by @abdulwaarith0).
+- **`/v1/tools/python` answers `timed_out: false` for a failure that is not a timeout**, with the
+  process output (#2204 by @Nari-Ab).
+
+### Added
+
+- **Native MLX inference** — `soup infer` accepts `--backend mlx` for local native text LoRA adapters and MLX base models. A shared loader resolves native base metadata, strictly validates adapter tensors and refuses unsupported controls/variants. Dense and genuine 4-bit update/save/fresh-process generation are covered without Torch or PEFT. (#2121 by @Amix29)
+
+- Add alias table and ranking for foreign parameter names (e.g. `learning_rate` -> `lr`, `num_train_epochs` -> `epochs`) in unknown config key reporting, and set the declared-field suggestion cutoff to 0.65 in every section (#2099 by @Nari-Ab in #2138).
+
+- **Two reads of a streamed routed expert per step instead of three (experimental, off by
+  default).** `build_streamed_model(..., two_read_experts=True)` keeps the decoder checkpoint
+  but no longer fetches routed experts during its replay: the forward and the expert's own
+  backward each read it once, and the router reuses the forward's top-k choice while its
+  scores stay differentiable. It needs the `per_expert` layout and reaches DeepSeek-V3-family
+  bases; there is no config field or default change. A forward hook on a two-read decoder
+  layer, its MoE block or its routed experts is refused with an error instead of receiving
+  the replay's different output. On CPU the losses and gradients equal the resident model's
+  bit for bit with two reads per expert visit. (#2158 by @Batyrkhantzy111)
+
+- Add opt-in `soup ship --progress jsonl` with versioned completion events, explicit noise-floor repeat groups, content-free abort diagnostics and an exclusive JSONL stderr channel; ordinary output stays unchanged. (#2171 by @kok-o)
+
+- **GRPO runs natively on Apple Silicon: `task: grpo` with `backend: mlx` (#1976 by @dryn85-max in
+  #2182).** It was refused at config load. Soup's own MLX loop now generates `num_generations`
+  completions per prompt from the current policy, scores them with the built-in `accuracy` or
+  `format` reward and takes one policy-gradient step per update. The objective is the one Soup's
+  transformers path trains on TRL 0.29.1 (`loss_type: dapo`, group-scaled rewards, `epsilon`
+  0.2, one iteration, token-level importance sampling, k3 KL against the base model with
+  `training.grpo_beta`), and every setting is recorded in `adapter_config.json`. Held-out prompts
+  are scored once after training as `val_reward`. A nonfinite loss or gradient skips the update.
+  Settings the native loop does not apply, `quantization: 8bit`, `lora.r: 0`, custom or ensemble
+  rewards and non-text modalities are refused at load; `--resume` is refused because only the
+  adapter is saved. Try: `soup train --config soup.yaml` with `task: grpo`, `backend: mlx` and
+  `reward_fn: accuracy`.
+
+### Changed
+
+- Clarify that training.curriculum_dynamic and its tuning fields track online uncertainty telemetry for curve inspection without modifying batch sample composition (Refs #808 by @Nari-Ab in #2142).
+
+- **One peak-VRAM estimate for `soup train`'s pre-flight, `soup profile`, the MCP `profile` tool and `soup plan` (#2049 by @abdulwaarith0 in #2146).** The pre-flight and `soup profile` priced the same run with two formulas in two units, and neither charged the logits and loss chain, which decides long, large-vocabulary runs. All four now use `utils/vram_estimate.py`, which reads the model's `config.json` and safetensors headers (never the weights) and prices weights, adapters, gradients, optimizer state, activations, logits, the 4-bit dequantization copy and overhead, calibrated on 39 measured runs (`benchmarks/gate-2049-resident-vram.md`). Inside the range the estimate was fitted on (dense models of 3B and below on one 6 GB card), the pre-flight now refuses some long-sequence, large-vocabulary runs and some runs without gradient checkpointing that it let through, and `--allow-oom-attempt` still launches them; outside it (a larger model, a mixture-of-experts model, `medium` or `selective` checkpointing, `use_liger` or `use_cut_ce`, `backend: unsloth`) a run that does not fit gets the estimate as a warning, with a footnote saying the estimate may overstate the peak, and starts, unless its weights, the CUDA context and the LoRA adapters, gradients and optimizer state of the parameters it trains alone are more than the card holds, which is refused there too (`--allow-oom-attempt` launches it); the optimizer state counts only for `adamw_torch`, `adamw_torch_fused`, `schedule_free_adamw` and `adamw_bnb_8bit`, and not with `use_galore` on `sft`, `tts` or `pretrain`, whose trainers replace the optimizer. Tasks without an LM head (`classifier`, `reranker`, `cross_encoder`, `embedding`, `reward_model`) are charged no logits; with `use_liger` or `use_cut_ce` the logits are still charged and the output says the fused loss may not build them. `gradient_checkpointing` is priced as the trainer applies it: `auto` resolves on the card as the `sft` trainer does, `selective` is priced as no checkpointing (an upper bound), and tasks other than `sft` and `tts` checkpoint fully. `soup profile`'s numbers change, and its JSON gains the exact bytes per term, the fit verdict and where the model's shape came from. `gradient_checkpointing` in that JSON (and in the MCP `profile` result) stays the config's own value (`true`, `false`, `"auto"` or a tier name), and the new `gradient_checkpointing_tier` (`off`, `full`, `medium` or `selective`) is the tier the estimate priced. Reading a Hub model's shape can now reach the Hub from the pre-flight, `soup profile` and `soup plan` (which prints a dim line before it does; `soup apply` compares hashes only and does not read the model), and writes its `config.json` into the Hugging Face cache, unless `HF_HUB_OFFLINE` or `TRANSFORMERS_OFFLINE` is set; the MCP `profile` tool reads only a local directory or the local cache. A Hub model with no readable `config.json` is priced from a shape guessed from its name. `soup plan` records `peak_vram_gb: null` with a `peak_vram_reason` when it cannot price the run, instead of a fixed 8.0 GB; a state file written before this still loads.
+
+- External programs that Soup starts (`nvidia-smi`, `sysctl`, the disk-probe tools, `git`, `ollama`,
+  the llama.cpp binaries, `trtllm-build`, `docker`, the Modal CLI, `gh`, `ssh` / `scp` in the RunPod
+  and Lambda controllers, the code-sandbox tools, `accelerate` for `soup train --gpus`, and the
+  `soup adapters bisect --eval-command` program) now run by the absolute path found in an absolute
+  `PATH` directory. Empty and relative `PATH` entries (`.`, `bin`, and on Windows `\bin` or `C:bin`)
+  are not searched, and neither is the current directory, so a program found only through such an
+  entry is no longer found: put its directory on `PATH` as an absolute path, or give the program's
+  path. On Windows a set but empty `PATHEXT` falls back to `.COM;.EXE;.BAT;.CMD`. `soup adapters
+  bisect` refuses with exit 2, before the first probe, an `--eval-command` program that is not on
+  `PATH`; when the checkpoint id fills in the program name, each probe resolves it the same way and
+  a name not on `PATH` counts as a failed probe. The macOS code sandbox runs `sandbox-exec` from
+  `/usr/bin/sandbox-exec` only. A llama.cpp checkout given as `--llama-cpp .` runs its binaries by
+  absolute path. `soup train --cloud lambda` now refuses an `output` with a part that starts with
+  `-`, as `--cloud runpod` already did, and its checkpoint copy passes `--` before the source; both
+  controllers stop before launching with "OpenSSH ssh and scp must be installed and on PATH".
+  (#2205)
+
+- On Windows a program that is only in the current directory is no longer started by bare name,
+  by `soup` or by the programs it starts (eval and reward scripts included), so that the program
+  that runs is the one on `PATH`: `soup` sets `NoDefaultCurrentDirectoryInExePath=1` for itself
+  when it is not set. A value already set is kept, and any non-empty value, `0` included, already
+  leaves the current directory out, so no setting brings the old search back: to run a program
+  from the current directory, give its path (`./tool.exe`, or an absolute path in quotes) or put
+  the directory on `PATH` as an absolute path. `soup adapters bisect --eval-command` is split with
+  POSIX shell rules, so a Windows path there takes forward slashes or quotes: `.\tool.exe` reaches
+  the program as `.tool.exe`. (#2213)
+
+- The VRAM pre-flight refuses a run that does not fit inside the range its estimate was fitted on (dense models of 3B and below on one 6 GB card), and outside it a run whose weights, CUDA context and trained-parameter state (gradients and optimizer) alone are more than the card holds (Llama-3.1-70B in 4-bit on a 24 GB card, or a 7B full fine-tune on 80 GB). Any other run outside it, such as the shipped `longcontext` template (an 8B model) on a 24 GB card, gets the estimate as a warning and starts; a refusal names `--allow-oom-attempt`. The `longcontext` template's header says what the pre-flight does and how to turn on `use_liger` (release fix)
+
+- `soup apply` no longer reads the model, since it compares hashes only, so it makes no request to the Hub; `soup plan` prints a dim line before the first request it sends (release fix)
+
+### Fixed
+
+- **Langfuse ingestion retains zero-valued negative feedback for `soup ingest --source langfuse --logs`.** Scores of `0`, `0.0` and `false` now reach the thumbs-down signal and preference-pair construction. Only a missing or null score falls back to `rating`; explicit scores retain precedence. (#1856 by @akkupratap323 in #1871)
+
+- In `soup eval gate`, normalize malformed YAML and non-mapping roots (including `[]`, `false`, `0`, and `""`) in suite loading to ValueError so the command exits with usage error 3 and a `Cannot load suite:` message that names the file, where malformed YAML and a list or scalar root exited 1 with a bare `Error: TypeError` / `ParserError` line (an empty root such as `[]` already exited 3 with a generic validation message), while `soup train --gate` exits with code 1 and training callbacks preserve their fatal failure policy for malformed suites (#1878 reported by @taljeon, fixed by @Nari-Ab in #1895).
+
+- Report missing dependencies accurately for adapter commands instead of reporting corrupt weights: read-only operations require numpy, while merge and arithmetic require numpy and safetensors (#2056 by @Nari-Ab in #2141).
+
+- **`soup profile --gpu` and the MCP `profile` tool know the RTX 30-series laptop GPUs (#2049 by @abdulwaarith0 in #2144).** `--gpu "rtx3060 laptop"` was "Unknown GPU", and the laptop 3060 has 6 GB, not the desktop card's 12. Each 30-series laptop part now has its own entry with the memory from NVIDIA's specification, and the names the NVIDIA driver reports resolve to it, including the size-named "RTX 3050 6GB Laptop GPU" and "RTX 3050 4GB Laptop GPU". A size written as a word ("A100 40GB") now reaches the matching `_<N>gb` entry, and a size the plain entry already holds reaches that entry ("A100 80GB", "rtx 3080 laptop 16gb").
+
+- **Building a streamed fused-expert MoE no longer asks the CPU for each full expert tensor
+  (#2154 by @ybai08 in #2157).** The layer-streaming skeleton is built on `meta`, but each MoE
+  layer first created its fused expert tensor on the CPU, `num_experts x 2 x
+  moe_intermediate_size x hidden_size` (15 GB for DeepSeek-V3, 22.5 GB for Kimi K2 in bf16),
+  before moving it to `meta`. The pages were never touched, but the commit was charged, and on
+  Linux with strict overcommit, on a small machine, or on Windows with too little page file,
+  the request was refused with `DefaultCPUAllocator: can't allocate memory` (Linux,
+  macOS) or `DefaultCPUAllocator: not enough memory` (Windows). Every CPU request of
+  1 MiB or more is now made on `meta` while the skeleton is built. If a model registers a
+  buffer that large, its skeleton is built the old way and the buffer is named in a warning.
+  A refused CPU allocation now gets a short message and a fix hint.
+
+- Streamed LoRA targets on an untied input embedding or output head now save with PEFT's
+  defaults and resume through Trainer or `load_adapter`, preserving every adapter tensor.
+  Adapter reloads keep the runtime's device and device map instead of automatically
+  redistributing a CPU runtime onto another accelerator.
+  Only boundaries with a LoRA target export independent CPU shard snapshots; untargeted
+  boundaries are not read and base parameters stay on meta. DPO's reference adapter can
+  attach through the streaming wrappers. Embedding adapter initialization and reference
+  copies follow PEFT's embedding parameter layout.
+  (#1048 item 1 by @kok-o in #2159, following the build-time guard in #2082 by @ybai08)
+
+- `soup export` now removes the temporary `.soup_merge_tmp_<adapter>/` directory when a later
+  step fails (llama.cpp not found, a failed clone or dependency install, or a merge that dies
+  while saving the model or tokenizer), for the gguf, onnx, tensorrt, bitnet and gguf-ud
+  paths, instead of leaving a multi-gigabyte directory next to the adapter (#1464 by @ShivanshShukla in #2164).
+
+- Spike recovery hints now refuse symbolic-link targets and use atomic replacement, preserving other hard links and the previous hint on write failure without consuming an attempt (Refs #808 by @Nari-Ab in #2169).
+
+- In `soup serve`, `/v1/tools/python` now returns `timed_out: true` and `exit_code: 124` with no output for a timeout, and `timed_out: false` with the process stdout and stderr for other process failures (with `exit_code: 1` for output overflow). Tool authentication failures carry `WWW-Authenticate: Bearer` on every HTTP 401 response (#2194 by @Nari-Ab in #2204).
+
+- **`soup plan` and `soup apply` refuse the configs `soup train` refuses.** They checked only for unknown keys, so a config with a staged field set (`training.early_stop_patience: 5`), a refused deprecated value (`data.remove_unused_columns: true`) or any other schema error got a plan (exit 0), and `soup apply` / `apply --dry-run` accepted it. Both commands now exit 1 with the `Config validation error:` lines `soup train` prints, write no plan and leave an existing state file unchanged. (#2242)
+
+- The README's Docker example passes `--yes`, which `soup train` needs since v0.77.0 when stdin is not a terminal; the four translations follow (#2229, #2244).
+
+- `soup data decontaminate`, `toxicity`, `langdetect`, `pii` and `educational` now refuse, before
+  reading or writing anything, an `--output` that is the same file as `--input` (or as
+  `--benchmark-file` for `decontaminate`), under any spelling: `./`, absolute, `sub/..`, a case
+  variant, a trailing space or dot or `::$DATA` on Windows, a junction or a hard link. They exit 1
+  with `--output '<path>' is the same file as --input '<path>'; choose a different --output`.
+  Before, their default output names (`clean.jsonl`, `toxicity.jsonl`, `langdetect.jsonl`,
+  `pii.jsonl`, `educational.jsonl`) replaced an input of the same name and the run exited 0. The
+  default names are unchanged. (#2225, #2245)
+
+- `soup data lint`, `doctor`, `topics`, `from-traces`, `canary insert`, `sample`, `dedup`, `filter`, `convert`, `merge`, `active-sample`, `augment` and `evolve` refuse an output that names one of their inputs, before anything is read, instead of writing over it and exiting 0. The input can be named by `-o` under any spelling (`./x`, `sub/../x`, the absolute path, a case variant on Windows, a hard link or a symlink) or by a default output name the input already has (`merged.jsonl`, `prefs.jsonl`, `active_samples.jsonl`, `augmented.jsonl`). The message names both paths, for example `--output './d.jsonl' is the same file as the input 'd.jsonl'; choose a different --output`. `canary insert` also refuses a `--manifest` that is the dataset or the `--output` (#2226, #2261).
+
+- An unknown config key says `use X` only for a known foreign name and one-edit typos of it. `per_device_eval_batch_size`, `per_gpu_eval_batch_size`, `eval_batch_size`, `warmup_steps`, `warmup_step` and `learning_rate_decay` are no longer sent to a different setting: the first five get a sentence saying Soup has no such setting, and the top level and `training:` answer alike (release fix)
+
+- `gradient_checkpointing` in `soup profile --json` and in the MCP `profile` result is the config's own value again, and the new `gradient_checkpointing_tier` (`off`, `full`, `medium` or `selective`) is the tier the estimate priced (release fix)
+
+- A malformed model `config.json`, or a figure no model has, is treated as an unreadable `config.json` by the VRAM pre-flight, `soup plan`, `soup profile` and the MCP `profile` tool (`soup profile` prices a guessed shape and says so; `soup plan` records that it could not price the run); a malformed `.safetensors` header is skipped and the parameter count comes from `config.json` (approximate); and a malformed native adapter `adapter_config.json` is refused by `soup infer --backend mlx` with a message naming the file (release fix)
+
+- A mixture-of-experts model known only by its cached `config.json` is priced with all its experts instead of as a dense model of a few billion parameters; the estimate's note says the count is approximate (release fix)
+
+- `soup export` removes the temporary `.soup_merge_tmp_<adapter>/` directory only when that export created it, and says it left one that was already there (release fix)
+
+- `soup profile` prints the LoRA target modules, and `soup adapters bisect` the checkpoint ids, with control characters and bidi marks removed (release fix)
+
+- `soup infer --backend mlx` names the option it refuses (`--task`, `--batch-size` or `--cuda-graphs`) instead of listing all three (release fix)
+
+- The test suite passes under pytest 9.2.0: a test of the Windows branch of `open_no_follow` faked `os.fstat` and `os.name` for the whole process, and pytest 9.2 reads its capture file through `os.fstat` before the fake is undone. The test now fakes Windows inside `soup_cli.utils.paths` only (#2286, reported by @abdulwaarith0; the test change comes from #2284 by @Nari-Ab)
+
 ## [0.77.0] - 2026-10-26
 
 ### Upgrade notes
@@ -7668,7 +7842,8 @@ what a fine-tune forgets and leaks.
   `SECURITY.md` (~220 KB). `SECURITY.md` is now a concise security policy; the
   detailed hardening notes remain in git history and the GitHub Releases notes.
 
-[Unreleased]: https://github.com/MakazhanAlpamys/Soup/compare/v0.77.0...HEAD
+[Unreleased]: https://github.com/MakazhanAlpamys/Soup/compare/v0.77.1...HEAD
+[0.77.1]: https://github.com/MakazhanAlpamys/Soup/compare/v0.77.0...v0.77.1
 [0.77.0]: https://github.com/MakazhanAlpamys/Soup/compare/v0.76.0...v0.77.0
 [0.76.1]: https://github.com/MakazhanAlpamys/Soup/compare/v0.76.0...v0.76.1
 [0.76.0]: https://github.com/MakazhanAlpamys/Soup/compare/v0.75.2...v0.76.0

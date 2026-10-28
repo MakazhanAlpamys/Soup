@@ -344,6 +344,11 @@ def estimate_vram(shape: ModelShape, run: RunSpec) -> VramEstimate:
         )
     elif shape.params_source == "config.json":
         notes.append("Parameter count from config.json (no safetensors headers were read).")
+        if shape.moe:
+            notes.append(
+                "This is a mixture-of-experts model: the count prices every expert in every "
+                "layer, so it is approximate."
+            )
     if run.gradient_checkpointing == "medium":
         notes.append(
             "Medium checkpointing (every other block) is priced from the per-layer costs "

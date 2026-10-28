@@ -40,7 +40,7 @@ import json
 import math
 import os
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Optional, Tuple
+from typing import Any, Callable, Mapping, Optional, Tuple
 
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
 
@@ -249,12 +249,15 @@ def _estimate_runtime_minutes(config: Mapping[str, Any]) -> float:
     return max(0.5, base)
 
 
-def estimate_peak_vram(config: Mapping[str, Any]) -> Tuple[Optional[float], Optional[str]]:
+def estimate_peak_vram(
+    config: Mapping[str, Any], *, on_hub_request: Optional[Callable[[], None]] = None
+) -> Tuple[Optional[float], Optional[str]]:
     """The train pre-flight's peak (GB, before its margin), or ``None`` and why.
 
     #2049: the plan used to record a fixed 8.0 GB whatever the run. It now records
     the shared estimate when the model's ``config.json`` can be read, and says why
     it cannot price a run instead of printing a number that is not about it.
+    ``on_hub_request`` is called just before the first request to the Hub, if one is made.
     """
     import yaml
 
@@ -272,7 +275,7 @@ def estimate_peak_vram(config: Mapping[str, Any]) -> Tuple[Optional[float], Opti
         return None, "layer streaming: the streaming planner sizes this run when it starts"
     if getattr(cfg, "backend", None) == "mlx":
         return None, "backend mlx: no CUDA estimate"
-    inp = hardware_fit_input_from_config(cfg)
+    inp = hardware_fit_input_from_config(cfg, on_hub_request=on_hub_request)
     if inp is None:
         return None, (
             "batch_size auto, a quantization with no memory model, or dims out of range"
@@ -286,8 +289,19 @@ def _estimate_cost(minutes: float, spot_price: float) -> float:
     return max(0.0, (minutes / 60.0) * spot_price)
 
 
-def build_plan(config: Mapping[str, Any]) -> TrainingPlan:
-    """Render a TrainingPlan from a soup-config-shaped dict."""
+def build_plan(
+    config: Mapping[str, Any],
+    *,
+    estimate_vram: bool = True,
+    on_hub_request: Optional[Callable[[], None]] = None,
+) -> TrainingPlan:
+    """Render a TrainingPlan from a soup-config-shaped dict.
+
+    ``estimate_vram=False`` leaves the peak-VRAM estimate out (``peak_vram_gb`` is
+    ``None`` with a reason): ``soup apply`` compares hashes only, and pricing the model
+    can mean requests to the Hub. ``on_hub_request`` is called just before the first
+    request the estimate makes to the Hub, if it makes one.
+    """
     if not isinstance(config, Mapping):
         raise TypeError(f"config must be a mapping, got {type(config).__name__}")
     base = config.get("base")
@@ -325,7 +339,12 @@ def build_plan(config: Mapping[str, Any]) -> TrainingPlan:
 
     minutes = _estimate_runtime_minutes(config)
     cost = _estimate_cost(minutes, _DEFAULT_SPOT_PRICE)
-    peak_vram_gb, peak_vram_reason = estimate_peak_vram(config)
+    if estimate_vram:
+        peak_vram_gb, peak_vram_reason = estimate_peak_vram(
+            config, on_hub_request=on_hub_request
+        )
+    else:
+        peak_vram_gb, peak_vram_reason = None, "not estimated: soup apply compares hashes only"
     return TrainingPlan(
         base=base,
         task=task,

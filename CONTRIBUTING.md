@@ -426,7 +426,6 @@ take it back.
 | @ybai08 | ReLoRA, preference training and layer streaming | `area:training` |
 | @taljeon | Eval gate | `area:eval` |
 | @akkupratap323 | Ingest and feedback sources | `area:ingest` |
-| @dryn85-max | The MLX backend (maintainer's exception: named ahead of the threshold, held from the first merge) | `area:mlx` |
 
 ## Making Changes
 
@@ -769,6 +768,12 @@ The project follows semantic versioning: `MAJOR.MINOR.PATCH`
 6. Tag: `git tag v0.X.0 && git push --tags`
 7. GitHub Actions verifies that no fragment was left behind, then publishes to PyPI
    on the `v*` tag (Trusted Publisher / OIDC)
+
+Docker version tags are published for every release, while `latest` follows the highest
+stable `vX.Y.Z` tag. Before tagging a maintenance-line Docker release, backport
+`.github/workflows/docker.yml` and `scripts/docker_release_tags.py` so it keeps the newer
+line's `latest` image. A manual dispatch uses the workflow at its selected ref;
+updating `main` does not change workflows on existing historical tags.
 
 ## Recognition
 
