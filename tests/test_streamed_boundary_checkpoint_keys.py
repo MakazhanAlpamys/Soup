@@ -1,8 +1,7 @@
 """Ambiguous boundary checkpoint keys must never silently pick one spelling.
 
-This pins #1048 item 3's existing load guard. The shared tiny-model builder
-bypasses the separate unsupported-boundary-save refusal on main; no save or
-item-1 serialization behavior is changed here.
+This pins #1048 item 3's load-side collision guard only. These tests make no
+claim about serialization or save/resume support; item 1 landed in #2159.
 """
 
 from __future__ import annotations
