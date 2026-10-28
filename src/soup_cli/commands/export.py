@@ -452,12 +452,18 @@ def _detect_base_model(adapter_config_path: Path) -> Optional[str]:
 
 
 def _merge_dir_for(model_path: Path) -> tuple[Path, bool]:
-    """The scratch directory next to an adapter, and whether this export will create it.
+    """Create a fresh scratch directory next to an adapter; this export always owns it.
 
-    A directory (or link) already there is not this export's: the cleanup leaves it alone.
+    A directory left by an earlier run is never reused and never removed: the merge
+    always writes into a new directory, which the cleanup then deletes.
     """
-    path = model_path.parent / f".soup_merge_tmp_{model_path.name}"
-    return path, not (path.exists() or path.is_symlink())
+    path = Path(
+        tempfile.mkdtemp(
+            prefix=f".soup_merge_tmp_{model_path.name}_",
+            dir=model_path.parent,
+        )
+    )
+    return path, True
 
 
 def _remove_merge_dir(merge_dir: Optional[Path], created: bool, *, announce: bool = True) -> None:
