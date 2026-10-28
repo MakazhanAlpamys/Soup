@@ -64,12 +64,17 @@ Per cell, from the processes' medians:
   the gap between the arms' medians is larger than the spread (max - min) inside
   either arm.
 - ``no measurable difference``: otherwise.
+- ``CRASHED``: a process exited non-zero, timed out, or left no result. Its row
+  says how, and the sweep goes on to the next cell.
 - ``VOID``: a process failed the agreement check or the path proof.
 - ``OOM``: a process ran out of memory.
 
-Exit 0 when no cell is VOID or OOM; 1 when a cell ran out of memory; 3 when a cell is
-void; 2 for bad arguments or no CUDA device. ``--self-test`` exits 0 when every
-check passes and 1 otherwise.
+The rule reads three ratios, so ``--processes`` below 3 is refused.
+
+Exit 0 when every cell has a verdict from its timings; otherwise the first that
+applies of 4 (a process crashed), 3 (a cell is void) and 1 (a cell ran out of memory).
+2 for bad arguments or no CUDA device. ``--self-test`` exits 0 when every check passes
+and 1 otherwise.
 """
 
 from __future__ import annotations
@@ -92,6 +97,8 @@ EXIT_OK = 0
 EXIT_OOM = 1
 EXIT_USAGE = 2
 EXIT_VOID = 3
+EXIT_CRASHED = 4
+MIN_PROCESSES = 3
 
 DTYPES = ("bf16", "nf4")
 TARGETS = {"qkv": ("q_proj", "k_proj", "v_proj"), "qv": ("q_proj", "v_proj")}
@@ -144,6 +151,7 @@ class ProcessResult:
     order: list = dataclasses.field(default_factory=list)
     void: Optional[str] = None
     oom: bool = False
+    crashed: Optional[str] = None
 
 
 def schedule(count: int) -> list[str]:
@@ -413,6 +421,8 @@ def measure(
 
 
 def cell_verdict(results: list[ProcessResult]) -> str:
+    if any(r.crashed for r in results):
+        return "CRASHED"
     if any(r.void for r in results):
         return "VOID"
     if any(r.oom for r in results):
@@ -430,6 +440,8 @@ def cell_verdict(results: list[ProcessResult]) -> str:
 
 
 def exit_status(verdicts: list[str]) -> int:
+    if "CRASHED" in verdicts:
+        return EXIT_CRASHED
     if "VOID" in verdicts:
         return EXIT_VOID
     if "OOM" in verdicts:
@@ -442,6 +454,8 @@ def _mb(value: Optional[int]) -> str:
 
 
 def process_row(index: int, r: ProcessResult) -> str:
+    if r.crashed:
+        return f"  {index}  CRASHED: {r.crashed}"
     if r.oom:
         return f"  {index}  OOM"
     if r.void and r.fast_ms is None:
@@ -472,7 +486,11 @@ def run_cell_process(
     work_dir: pathlib.Path,
     index: int,
 ) -> ProcessResult:
-    """One process of one cell in a fresh interpreter."""
+    """One process of one cell in a fresh interpreter.
+
+    A child that exits non-zero is a crash even when it left a result file; so is one
+    that runs past ``args.child_timeout`` seconds or exits 0 without a result.
+    """
     out = work_dir / f"{cell.encode().replace(':', '-')}-{index}.json"
     argv = [
         sys.executable, str(pathlib.Path(__file__).resolve()),
@@ -483,9 +501,15 @@ def run_cell_process(
         "--tolerance", str(args.tolerance),
     ]  # fmt: skip
     sys.stdout.flush()
-    status = subprocess.run(argv, check=False).returncode
-    if status != 0 or not out.exists():
-        raise RuntimeError(f"{cell.name}: process {index} exited {status} without a result")
+    timeout = getattr(args, "child_timeout", None)
+    try:
+        status = subprocess.run(argv, check=False, timeout=timeout).returncode
+    except subprocess.TimeoutExpired:
+        return ProcessResult(cell=cell.encode(), crashed=f"no result after {timeout:g} s")
+    if status != 0:
+        return ProcessResult(cell=cell.encode(), crashed=f"exit {status}")
+    if not out.exists():
+        return ProcessResult(cell=cell.encode(), crashed="exit 0 without a result")
     return ProcessResult(**json.loads(out.read_text(encoding="utf-8")))
 
 
@@ -615,6 +639,13 @@ def run_self_test() -> int:
         ("slower", [proc(11.0, 10.0), proc(11.1, 10.1), proc(11.2, 10.0)]),
         ("no measurable difference", [proc(9.0, 10.0), proc(10.5, 10.0), proc(9.5, 10.0)]),
         ("no measurable difference", [proc(9.9, 10.0), proc(9.0, 10.0), proc(9.95, 10.0)]),
+        # Gap 1.0 beats the spread 0.6, but the ratios sit on both sides of 1.00.
+        ("no measurable difference", [proc(9.0, 10.0), proc(9.0, 10.0), proc(9.6, 9.5)]),
+        # Every ratio above 1.00, but the gap 0.2 is inside the fast arm's spread 1.4.
+        ("no measurable difference", [proc(10.1, 10.0), proc(11.5, 10.0), proc(10.2, 10.0)]),
+        # Gap 1.0 beats the fast arm's spread 0.1 but not the plain arm's 1.3.
+        ("no measurable difference", [proc(9.0, 10.0), proc(9.1, 9.2), proc(9.0, 10.5)]),
+        ("CRASHED", [proc(9.0, 10.0), ProcessResult(cell="x", crashed="exit 1"), proc(9.0, 10.0)]),
         ("VOID", [proc(9.0, 10.0, void="path"), proc(9.0, 10.0), proc(9.0, 10.0)]),
         ("OOM", [proc(9.0, 10.0), ProcessResult(cell="x", oom=True), proc(9.0, 10.0)]),
     ]
@@ -624,15 +655,28 @@ def run_self_test() -> int:
         ("exit 0 with no void or OOM cell", exit_status(["faster", "slower"]) == EXIT_OK),
         ("exit 1 on an OOM cell", exit_status(["faster", "OOM"]) == EXIT_OOM),
         ("exit 3 on a void cell", exit_status(["OOM", "VOID"]) == EXIT_VOID),
+        ("exit 4 on a crashed cell", exit_status(["VOID", "CRASHED"]) == EXIT_CRASHED),
     ]
     # One cell through a child process, as the sweep runs it.
     with tempfile.TemporaryDirectory(prefix="fast_lora_qkv_bench_self_test_") as tmp:
-        args = argparse.Namespace(warmup=1, iters=2, tolerance=2e-2)
+        args = argparse.Namespace(warmup=1, iters=2, tolerance=2e-2, child_timeout=600.0)
         child = run_cell_process(cells[1], tiny, args, "cpu", pathlib.Path(tmp), 1)
         checks.append(
             (
                 "a cell runs in a child process",
                 child.void is None and child.plain_path_ok == 2 and child.fast_path_ok == 2,
+            )
+        )
+        # Negative control: a child that fails inside build (an unknown target set).
+        print("# the next traceback is the crashing child's, on purpose")
+        broken = run_cell_process(Cell(2, "bf16", "none"), tiny, args, "cpu", pathlib.Path(tmp), 2)
+        checks.append(
+            (
+                "a crashing child is a CRASHED row, not an exception",
+                broken.crashed is not None
+                and broken.crashed.startswith("exit ")
+                and broken.crashed != "exit 0"
+                and process_row(2, broken).split()[:2] == ["2", "CRASHED:"],
             )
         )
     failed = 0
@@ -677,7 +721,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--ranks", default="16,64", help="comma-separated LoRA ranks")
     parser.add_argument("--dtypes", default="bf16,nf4", help="bf16 and/or nf4")
     parser.add_argument("--targets", default="qkv,qv", help="qkv and/or qv (k base-only)")
-    parser.add_argument("--processes", type=int, default=3, help="processes per cell")
+    parser.add_argument("--processes", type=int, default=3, help="processes per cell (at least 3)")
     parser.add_argument("--warmup", type=int, default=20, help="warm-up iterations per arm")
     parser.add_argument("--iters", type=int, default=100, help="timed iterations per arm")
     parser.add_argument(
@@ -690,6 +734,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--q-out", type=int, default=4096)
     parser.add_argument("--kv-out", type=int, default=1024)
     parser.add_argument("--tokens", type=int, default=2048)
+    parser.add_argument(
+        "--child-timeout",
+        type=float,
+        default=1800.0,
+        help="seconds before a cell's process is stopped and reported as crashed",
+    )
     parser.add_argument(
         "--power-source",
         default="not stated",
@@ -740,6 +790,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         return EXIT_USAGE
     if not 0 < args.tolerance < 1:
         print("ERROR: --tolerance must be between 0 and 1")
+        return EXIT_USAGE
+    if args.processes < MIN_PROCESSES:
+        print(
+            f"ERROR: --processes must be at least {MIN_PROCESSES}: the verdict rule reads "
+            f"{MIN_PROCESSES} fast/plain ratios"
+        )
+        return EXIT_USAGE
+    if not args.child_timeout > 0:
+        print("ERROR: --child-timeout must be positive")
         return EXIT_USAGE
 
     import torch
