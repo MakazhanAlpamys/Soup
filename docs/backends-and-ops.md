@@ -1802,6 +1802,11 @@ entry points.
 
 A training run is a one-shot infrastructure-shaped operation: spot price, expected cost, base SHA, dataset SHA, peak VRAM. v0.64 borrows Terraform's plan-apply split so you can review the numbers before committing money.
 
+Both commands refuse unreadable inputs before creating or changing the state file.
+Malformed YAML reports the config path and line/column; invalid UTF-8 reports the
+byte offset; an OS read error names its cause. These refusals exit 2. A missing config
+keeps exit 1, and schema validation keeps its existing validation messages and exit code.
+
 ```bash
 # Render a pre-flight summary + write soup.tfstate
 soup plan --config soup.yaml
