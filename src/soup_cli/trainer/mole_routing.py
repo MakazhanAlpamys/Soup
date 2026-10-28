@@ -312,7 +312,7 @@ class MoleRoutingTrainerWrapper:
         base_model = AutoModelForCausalLM.from_pretrained(
             cfg.base,
             trust_remote_code=self._trust_remote_code,
-            torch_dtype=torch.bfloat16 if self.device == "cuda" else torch.float32,
+            dtype=torch.bfloat16 if self.device == "cuda" else torch.float32,
             **base_revision_kwargs(cfg.base),
         )
         hidden_size = base_model.config.hidden_size

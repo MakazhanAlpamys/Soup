@@ -17,6 +17,9 @@ if TYPE_CHECKING:
 # KB — the weights themselves are never touched.
 _ST_HEADER_LEN_BYTES = 8
 _MAX_ST_HEADER_BYTES = 100 * 1024 * 1024  # sanity bound on a crafted file
+# More elements than any model has, in one tensor or in all of them: not a real header.
+_MAX_TENSOR_ELEMENTS = 2**40
+_MAX_TOTAL_PARAMS = 2**50
 
 
 def _params_from_local_safetensors(path: str) -> float | None:
@@ -75,10 +78,14 @@ def param_count_from_local_safetensors(path: str) -> int | None:
                     if not isinstance(dim, int) or dim < 0:
                         return None
                     numel *= dim
+                    if numel > _MAX_TENSOR_ELEMENTS:
+                        return None
                 total += numel
+                if total > _MAX_TOTAL_PARAMS:
+                    return None
         return total or None
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return None  # unreadable/crafted -> fall back to the name guess
+    except (OSError, ValueError, TypeError, json.JSONDecodeError, RecursionError):
+        return None  # unreadable or malformed -> fall back to the name guess
 
 
 def resolve_device_map(device: str):
@@ -149,7 +156,7 @@ def resolve_inference_device_map_and_dtype(
             ignored.
 
     Returns:
-        A ``(device_map, torch_dtype)`` pair to splat into
+        A ``(device_map, dtype)`` pair to splat into
         ``from_pretrained(**kwargs)``: ``{"": "cpu"}`` and ``float32`` for
         CPU/MLX, ``{"": device}`` (lower-cased) and ``float16`` for
         MPS or an explicitly indexed ``cuda:<n>``, ``"auto"`` and ``float16``
@@ -639,7 +646,7 @@ def bf16_fp16_flags(
 
 
 def resolve_frozen_base_load_dtype(device: str):
-    """``torch_dtype`` for ``from_pretrained`` when loading a frozen (LoRA) base.
+    """``dtype`` for ``from_pretrained`` when loading a frozen (LoRA) base.
 
     A frozen base never receives an optimizer step, so there is no reason to
     upcast it to the HF default of float32 on load: keep the checkpoint's own

@@ -148,7 +148,7 @@ class TestEmbeddingLoraZero:
             mock_get_peft.assert_not_called()
 
             # Full fine-tuning must load at fp32 master weights (Blocking 2)
-            assert mock_auto_model.call_args[1]["torch_dtype"] == torch.float32
+            assert mock_auto_model.call_args[1]["dtype"] == torch.float32
 
             # The model is the original real PyTorch model (not a PeftModel)
             assert wrapper.model is real_model
@@ -172,7 +172,7 @@ class TestEmbeddingLoraZero:
         ):
             wrapper0 = EmbeddingTrainerWrapper(cfg_r0, device="cpu")
             wrapper0._setup_transformers(cfg_r0, cfg_r0.training)
-            assert mock_load.call_args[1]["torch_dtype"] == torch.float32
+            assert mock_load.call_args[1]["dtype"] == torch.float32
 
         # 2. LoRA (lora.r = 4) -> 'auto' (frozen base load dtype on CPU)
         cfg_r4 = SoupConfig(
@@ -192,7 +192,7 @@ class TestEmbeddingLoraZero:
         ):
             wrapper4 = EmbeddingTrainerWrapper(cfg_r4, device="cpu")
             wrapper4._setup_transformers(cfg_r4, cfg_r4.training)
-            assert mock_load.call_args[1]["torch_dtype"] == "auto"
+            assert mock_load.call_args[1]["dtype"] == "auto"
 
     def test_setup_computes_trainable_params_on_real_module_without_peft_helper(self, capsys):
         """Full fine-tuning prints 'Full fine-tuning' and computes params without PeftModel."""

@@ -23,14 +23,36 @@ def validate_native_options(
         raise ValueError("MLX selects its native device; omit --device")
     if hub != "hf":
         raise ValueError("MLX generation supports --hub hf only")
-    if task != "text" or batch_size != 1 or cuda_graphs:
-        raise ValueError("MLX generation requires --task text, --batch-size 1 and no --cuda-graphs")
+    if task != "text":
+        raise ValueError("MLX generation requires --task text")
+    if batch_size != 1:
+        raise ValueError("MLX generation requires --batch-size 1")
+    if cuda_graphs:
+        raise ValueError("MLX generation does not support --cuda-graphs")
 
 
 def _same_base(left: str, right: str) -> bool:
     if Path(left).exists() or Path(right).exists():
         return os.path.normcase(os.path.realpath(left)) == os.path.normcase(os.path.realpath(right))
     return left == right
+
+
+#: Bounds on native adapter metadata; a file past them is refused.
+_MAX_ADAPTER_CONFIG_BYTES = 4 * 1024 * 1024
+_MAX_ADAPTER_RANK = 4096
+_MAX_ADAPTER_LAYERS = 2**16
+_MAX_ADAPTER_KEYS = 1024
+_MAX_ADAPTER_KEY_LEN = 256
+
+
+def _finite(value: Any) -> bool:
+    """``value`` is an int or float that is finite (a huge int is not: it has no float)."""
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def read_native_adapter(path: Path, base: str | None = None) -> dict | None:
@@ -43,8 +65,10 @@ def read_native_adapter(path: Path, base: str | None = None) -> dict | None:
             raise ValueError("--base is only valid for a native MLX adapter")
         return None
     try:
+        if config_path.stat().st_size > _MAX_ADAPTER_CONFIG_BYTES:
+            raise ValueError("adapter_config.json is larger than 4 MiB")
         config = json.loads(config_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         raise ValueError("Invalid native MLX metadata in adapter_config.json") from exc
     if not isinstance(config, dict) or not isinstance(config.get("model"), str):
         raise ValueError("Expected native MLX metadata with a model identity, not a PEFT adapter")
@@ -61,13 +85,24 @@ def read_native_adapter(path: Path, base: str | None = None) -> dict | None:
     layers = config.get("num_layers")
     if type(rank) is not int or rank < 1 or type(layers) is not int or layers < 1:
         raise ValueError("Native MLX metadata rank and num_layers must be positive integers")
+    if rank > _MAX_ADAPTER_RANK:
+        raise ValueError(f"Native MLX metadata rank must be at most {_MAX_ADAPTER_RANK}")
+    if layers > _MAX_ADAPTER_LAYERS:
+        raise ValueError(f"Native MLX metadata num_layers must be at most {_MAX_ADAPTER_LAYERS}")
     for key in ("scale", "dropout"):
-        value = params.get(key)
-        if type(value) not in (int, float) or not math.isfinite(value):
+        if not _finite(params.get(key)):
             raise ValueError(f"Native MLX metadata {key} must be finite")
     if params["scale"] <= 0 or not 0 <= params["dropout"] < 1:
         raise ValueError("Native MLX metadata requires positive scale and dropout in [0, 1)")
     keys = params.get("keys")
+    if isinstance(keys, list) and (
+        len(keys) > _MAX_ADAPTER_KEYS
+        or any(isinstance(key, str) and len(key) > _MAX_ADAPTER_KEY_LEN for key in keys)
+    ):
+        raise ValueError(
+            f"Native MLX metadata keys must be at most {_MAX_ADAPTER_KEYS} names of "
+            f"{_MAX_ADAPTER_KEY_LEN} characters"
+        )
     if not isinstance(keys, list) or not keys or any(
         not isinstance(key, str) or not key or key == "auto" for key in keys
     ) or len(set(keys)) != len(keys):
@@ -83,7 +118,7 @@ def reject_native_adapter(model: str) -> None:
     if path.is_file():
         try:
             config = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             return
         if isinstance(config, dict) and ("model" in config or "lora_parameters" in config):
             raise ValueError("Native MLX adapter detected; select --backend mlx")

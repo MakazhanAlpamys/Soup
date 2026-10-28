@@ -353,7 +353,7 @@ Pick between the three "LoRA off" modes by how much you want to train:
 > `r: 0`; the same is true of the Spectrum and LISA full-FT paths.)
 
 **Load dtype** (#339, #471, #492): a frozen base — LoRA, or QLoRA — loads at
-the checkpoint's own dtype (`torch_dtype="auto"`) instead of always upcasting to fp32,
+the checkpoint's own dtype (`dtype="auto"`) instead of always upcasting to fp32,
 since the base never receives an optimizer step. Measured on an H100,
 Llama-3.1-8B, LoRA: 48,241 MiB peak -> 18,658 MiB, a 28.9 GB / 2.59x saving.
 On a pre-Ampere CUDA card (T4 / P100 / V100 / GTX 16xx / RTX 20xx), `"auto"`
