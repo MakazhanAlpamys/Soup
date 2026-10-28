@@ -1266,10 +1266,13 @@ or reward script included) is not looked for in the current directory either, as
 macOS. A value already set is kept, and Windows leaves the current directory out for any
 non-empty value, `0` included, so no setting brings the old search back: to run a program from
 the current directory, give its path (`./tool.exe`, or an absolute path in quotes) or put the
-directory on `PATH` as an absolute path. `soup adapters bisect --eval-command` is split with POSIX
-shell rules, in which a backslash is an escape: write a Windows path with forward slashes or in
-quotes (`./tool.exe`, `"C:\tools\tool.exe"`), because `.\tool.exe` reaches the program as
-`.tool.exe`.
+directory on `PATH` as an absolute path. `soup adapters bisect --eval-command` uses native command-line splitting:
+POSIX quoting on Linux/macOS and Windows quoting on Windows, preserving backslashes in
+`.\tool.bat` and `C:\tools\tool.bat`. Quote a program path containing spaces.
+The template is split once before checkpoint substitution; checkpoint text remains one
+argument even when it contains spaces or quotes. No shell interprets that text. A missing
+or unstartable program is an invocation error (exit 2), with no bisect verdict or result
+file; a program that starts and exits nonzero still means a failing checkpoint.
 
 
 ## Experiment Tracking

@@ -1619,6 +1619,24 @@ def adapter_pr(
     )
 
 
+def _split_bisect_eval_command(command: str, *, windows: Optional[bool] = None) -> list[str]:
+    """Split the template before substitution, preserving native path spelling."""
+    import shlex
+
+    if windows is None:
+        windows = os.name == "nt"
+    argv = shlex.split(command, posix=not windows)
+    if windows:
+        argv = [
+            word[1:-1] if len(word) >= 2 and word.startswith('"') and word.endswith('"')
+            else word
+            for word in argv
+        ]
+    if not argv or not argv[0]:
+        raise ValueError("--eval-command must name a program")
+    return argv
+
+
 @app.command(name="bisect")
 def adapter_bisect(
     history: list[str] = typer.Argument(
@@ -1632,7 +1650,7 @@ def adapter_bisect(
         ...,
         "--eval-command",
         help=(
-            "Shell command template; '{ckpt}' is replaced with each "
+            "Command template (no shell); '{ckpt}' is replaced with each "
             "checkpoint id. Exit code 0 means PASS, non-zero means FAIL. "
             "Example: 'soup eval custom --model {ckpt} --tasks tasks.jsonl'"
         ),
@@ -1681,22 +1699,25 @@ def adapter_bisect(
         return
 
     # Execute via subprocess; exit 0 means OK.
-    import shlex
+    import errno
     import subprocess  # noqa: S404 — argv list mode, no shell
 
     from soup_cli.utils.tool_paths import find_tool
 
     try:
-        program = shlex.split(eval_command)[0]
+        template = _split_bisect_eval_command(eval_command)
     except ValueError as exc:
         console.print(f"[red]Invalid --eval-command: {for_terminal(exc)}[/]")
         raise typer.Exit(2) from exc
-    # A bare program name runs from the absolute PATH directory it is found
-    # in; a program given with its path runs as given. The name is resolved
-    # for each probe, after `{ckpt}` is filled in, so a name the checkpoint id
-    # completes is found the same way; a fixed name is also checked up front.
+    program = template[0]
+    # Resolve fixed programs up front; only a program containing the checkpoint
+    # placeholder needs resolving for each probe.
     def _program_path(name: str) -> Optional[str]:
         if os.path.dirname(name):
+            if not os.path.isfile(name):
+                raise FileNotFoundError(errno.ENOENT, "not a regular file", name)
+            if not os.access(name, os.X_OK):
+                raise PermissionError(errno.EACCES, "not executable", name)
             return name
         try:
             return find_tool(name)
@@ -1709,31 +1730,43 @@ def adapter_bisect(
             "install it, put it on PATH, or give its path"
         )
 
-    if "{ckpt}" not in program and _program_path(program) is None:
-        console.print(f"[red]{_not_on_path(program)}[/]")
-        raise typer.Exit(2)
+    def _refuse_launch(name: str, exc: OSError) -> None:
+        console.print(
+            f"[red]--eval-command program {for_terminal(repr(name))} could not start: "
+            f"{for_terminal(exc)}[/]"
+        )
+        raise typer.Exit(2) from exc
+
+    fixed_program = None
+    if "{ckpt}" not in program:
+        try:
+            fixed_program = _program_path(program)
+        except OSError as exc:
+            _refuse_launch(program, exc)
+        if fixed_program is None:
+            console.print(f"[red]{_not_on_path(program)}[/]")
+            raise typer.Exit(2)
 
     def _eval_fn(ckpt: str) -> bool:
-        cmd_str = eval_command.replace("{ckpt}", shlex.quote(ckpt))
-        # Safer: split via shlex and use argv mode (no shell interpolation).
-        argv = shlex.split(cmd_str)
-        resolved = _program_path(argv[0])
-        if resolved is None:
-            console.print(
-                f"[yellow]Eval failed for {for_terminal(ckpt)}: {_not_on_path(argv[0])}[/]"
-            )
-            return False
-        argv[0] = resolved
+        # Each checkpoint stays in its existing argument, including spaces and quotes.
+        argv = [argument.replace("{ckpt}", ckpt) for argument in template]
         try:
+            resolved = fixed_program or _program_path(argv[0])
+            if resolved is None:
+                console.print(f"[red]{_not_on_path(argv[0])}[/]")
+                raise typer.Exit(2)
+            argv[0] = resolved
             result = subprocess.run(  # noqa: S603
                 argv, capture_output=True, timeout=3600, check=False
             )
-        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        except subprocess.TimeoutExpired as exc:
             console.print(
                 f"[yellow]Eval failed for {for_terminal(ckpt)}: "
                 f"{for_terminal(exc)}[/]"
             )
             return False
+        except OSError as exc:
+            _refuse_launch(argv[0], exc)
         return result.returncode == 0
 
     try:
