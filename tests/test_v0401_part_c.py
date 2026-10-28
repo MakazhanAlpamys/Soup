@@ -141,11 +141,12 @@ def test_detect_gpu_hw_without_torch_cuda_no_nvidia_smi():
         assert _detect_gpu_hw_without_torch_cuda() == ""
 
 
-def test_detect_gpu_hw_returns_advisory_when_smi_succeeds():
+def test_detect_gpu_hw_returns_advisory_when_smi_succeeds(monkeypatch):
     import subprocess
 
     from soup_cli.commands.doctor import _detect_gpu_hw_without_torch_cuda
 
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
     completed = subprocess.CompletedProcess(
         args=[], returncode=0, stdout="NVIDIA GeForce RTX 3050\n", stderr=""
     )
@@ -165,11 +166,12 @@ def test_detect_gpu_hw_returns_advisory_when_smi_succeeds():
     assert "could not be confirmed" in advisory
 
 
-def test_detect_gpu_hw_uses_driver_cuda_wheel():
+def test_detect_gpu_hw_uses_driver_cuda_wheel(monkeypatch):
     import subprocess
 
     from soup_cli.commands.doctor import _detect_gpu_hw_without_torch_cuda
 
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
     completed = subprocess.CompletedProcess(
         args=[], returncode=0, stdout="NVIDIA GeForce RTX 5060 Ti\n", stderr=""
     )
@@ -244,6 +246,7 @@ def test_detect_gpu_hw_distinguishes_cuda_build_from_cpu_build(monkeypatch):
 
     from soup_cli.commands.doctor import _detect_gpu_hw_without_torch_cuda
 
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
     fake_torch = types.SimpleNamespace(
         version=types.SimpleNamespace(cuda="13.0"),
     )
