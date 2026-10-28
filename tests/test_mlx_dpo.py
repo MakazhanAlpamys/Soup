@@ -896,6 +896,58 @@ class TestResume:
         # first loss is already below log 2 (it is exactly log 2 from scratch).
         assert result["losses"][0] < math.log(2) - 1e-3
 
+    @pytest.mark.parametrize("change, match", [
+        ({"task": "orpo"}, "MLX DPO: .* task='orpo', not 'dpo'"),
+        ({"task": "sft"}, "task='sft', not 'dpo'"),
+        ({"model": "other-base"}, "belongs to base"),
+        (None, "no adapter_config.json"),
+    ])
+    def test_mismatched_or_missing_metadata_is_refused(self, tmp_path, monkeypatch, change, match):
+        first = _seeded_wrapper(tmp_path / "a", monkeypatch, batch_size=2, epochs=3, seed=1)
+        first.train()
+        checkpoint = tmp_path / "a" / "output" / "adapters.safetensors"
+        meta = checkpoint.parent / "adapter_config.json"
+        if change is None:
+            meta.unlink()
+        else:
+            meta.write_text(json.dumps({**json.loads(meta.read_text()), **change}))
+        resumed = _seeded_wrapper(tmp_path / "b", monkeypatch, batch_size=2, seed=1)
+        with pytest.raises(ValueError, match=match):
+            resumed.train(resume_from_checkpoint=str(checkpoint))
+
+    @pytest.mark.parametrize("change, match", [
+        ({"task": "orpo"}, "MLX DPO: .* task='orpo', not 'dpo'"),
+        ({"task": "sft"}, "task='sft', not 'dpo'"),
+        ({"model": "some/other-base"}, "belongs to base 'some/other-base'"),
+        (None, "no adapter_config.json"),
+    ])
+    def test_metadata_is_checked_before_any_tensor_loads(self, tmp_path, monkeypatch,
+                                                         change, match):
+        """No MLX: the check runs on the wrapper alone, before MLX SFT's loader."""
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.mlx_dpo import MLXDPOTrainerWrapper
+        from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
+
+        loaded = []
+        monkeypatch.setattr(MLXSFTTrainerWrapper, "_load_checkpoint_weights",
+                            lambda self, path: loaded.append(path))
+        wrapper = MLXDPOTrainerWrapper(load_config_from_string(_MLX_DPO_YAML))
+        checkpoint = tmp_path / "adapters.safetensors"
+        checkpoint.write_bytes(b"")
+        meta = {"task": "dpo", "model": wrapper.config.base}
+        (tmp_path / "adapter_config.json").write_text(json.dumps(meta))
+
+        wrapper._load_checkpoint_weights(str(checkpoint))
+        assert loaded == [str(checkpoint)]
+
+        if change is None:
+            (tmp_path / "adapter_config.json").unlink()
+        else:
+            (tmp_path / "adapter_config.json").write_text(json.dumps({**meta, **change}))
+        with pytest.raises(ValueError, match=match):
+            wrapper._load_checkpoint_weights(str(checkpoint))
+        assert loaded == [str(checkpoint)]
+
 
 class TestGradientAccumulation:
     def test_two_micro_batches_of_one_equal_one_batch_of_two(self, tmp_path, monkeypatch):
