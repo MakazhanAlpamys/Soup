@@ -876,7 +876,14 @@ class TestInstantiateTrainerPlugins:
 # ----- #103 /v1/tools/{python,bash,web_search} live ---------------------
 
 
-def _create_test_app(host: str = "127.0.0.1", auth_token: str | None = None, **kwargs):
+# /v1/tools/python and /v1/tools/bash answer 401 without a token on every bind
+# (tests/test_serve_code_tool_token.py), so the apps below are built with one by
+# default and the live-route tests send it.
+_TOOL_TOKEN = "tool-test-token"
+_TOOL_AUTH = {"Authorization": f"Bearer {_TOOL_TOKEN}"}
+
+
+def _create_test_app(host: str = "127.0.0.1", auth_token: str | None = _TOOL_TOKEN, **kwargs):
     """Build a test FastAPI app via _create_app (lazy fastapi import)."""
     try:
         import fastapi  # noqa: F401
@@ -897,16 +904,35 @@ def _create_test_app(host: str = "127.0.0.1", auth_token: str | None = None, **k
     )
 
 
+def _allow_live_python_tool(monkeypatch) -> None:
+    """Let a live /v1/tools/python run proceed whatever this host's isolation.
+
+    The route answers 501 under the ``best-effort`` isolation strategy (Windows,
+    Linux without ``os.unshare``) and when the namespace ``unshare`` fails at run
+    time (a kernel or container that refuses unprivileged user namespaces).
+    These tests exercise the live sandbox run, not the isolation, so the
+    ``unshare`` the sandbox child calls is a no-op that succeeds.
+    """
+    import os
+
+    from soup_cli.trainer import rewards
+
+    if rewards._get_isolation_strategy() == "best-effort":
+        monkeypatch.setattr(rewards, "_get_isolation_strategy", lambda: "namespaces")
+    monkeypatch.setattr(os, "unshare", lambda *args, **kwargs: None, raising=False)
+
+
 class TestToolEndpointsLive:
     @pytest.fixture(autouse=True)
     def _require_fastapi(self):
         pytest.importorskip("fastapi")
         pytest.importorskip("httpx")
 
-    def test_python_tool_runs_simple_code(self):
+    def test_python_tool_runs_simple_code(self, monkeypatch):
         from fastapi.testclient import TestClient
+        _allow_live_python_tool(monkeypatch)
         app = _create_test_app()
-        client = TestClient(app, base_url="http://127.0.0.1")
+        client = TestClient(app, base_url="http://127.0.0.1", headers=_TOOL_AUTH)
         resp = client.post(
             "/v1/tools/python",
             json={"code": "print('hello')"},
@@ -921,14 +947,14 @@ class TestToolEndpointsLive:
     def test_python_tool_rejects_missing_code(self):
         from fastapi.testclient import TestClient
         app = _create_test_app()
-        client = TestClient(app, base_url="http://127.0.0.1")
+        client = TestClient(app, base_url="http://127.0.0.1", headers=_TOOL_AUTH)
         resp = client.post("/v1/tools/python", json={})
         assert resp.status_code == 400
 
     def test_python_tool_rejects_oversize_code(self):
         from fastapi.testclient import TestClient
         app = _create_test_app()
-        client = TestClient(app, base_url="http://127.0.0.1")
+        client = TestClient(app, base_url="http://127.0.0.1", headers=_TOOL_AUTH)
         oversize = "x" * (64 * 1024 + 1)
         resp = client.post("/v1/tools/python", json={"code": oversize})
         assert resp.status_code == 400
@@ -936,7 +962,7 @@ class TestToolEndpointsLive:
     def test_python_tool_non_dict_rejected(self):
         from fastapi.testclient import TestClient
         app = _create_test_app()
-        client = TestClient(app, base_url="http://127.0.0.1")
+        client = TestClient(app, base_url="http://127.0.0.1", headers=_TOOL_AUTH)
         # FastAPI body parsing accepts list as dict-typed param? It coerces.
         # Use empty code which is rejected as ValueError-equivalent.
         resp = client.post("/v1/tools/python", json={"code": ""})
@@ -950,7 +976,7 @@ class TestToolEndpointsLive:
         from soup_cli.trainer.rewards import SandboxProcessResult
 
         app = _create_test_app()
-        client = TestClient(app, base_url="http://127.0.0.1")
+        client = TestClient(app, base_url="http://127.0.0.1", headers=_TOOL_AUTH)
         monkeypatch.setattr(
             "soup_cli.trainer.rewards._get_isolation_strategy", lambda: "namespaces"
         )
@@ -971,14 +997,14 @@ class TestToolEndpointsLive:
     def test_bash_tool_rejects_missing_command(self):
         from fastapi.testclient import TestClient
         app = _create_test_app()
-        client = TestClient(app, base_url="http://127.0.0.1")
+        client = TestClient(app, base_url="http://127.0.0.1", headers=_TOOL_AUTH)
         resp = client.post("/v1/tools/bash", json={})
         assert resp.status_code == 400
 
     def test_bash_tool_rejects_oversize_command(self):
         from fastapi.testclient import TestClient
         app = _create_test_app()
-        client = TestClient(app, base_url="http://127.0.0.1")
+        client = TestClient(app, base_url="http://127.0.0.1", headers=_TOOL_AUTH)
         oversize = "x" * (64 * 1024 + 1)
         resp = client.post("/v1/tools/bash", json={"command": oversize})
         assert resp.status_code == 400
@@ -991,7 +1017,7 @@ class TestToolEndpointsLive:
         from soup_cli.trainer.rewards import SandboxProcessResult
 
         app = _create_test_app()
-        client = TestClient(app, base_url="http://127.0.0.1")
+        client = TestClient(app, base_url="http://127.0.0.1", headers=_TOOL_AUTH)
         monkeypatch.setattr(
             "soup_cli.trainer.rewards._get_isolation_strategy", lambda: "namespaces"
         )
@@ -1022,7 +1048,7 @@ class TestToolEndpointsLive:
     def test_bash_tool_windows_returns_501(self, monkeypatch):
         from fastapi.testclient import TestClient
         app = _create_test_app()
-        client = TestClient(app, base_url="http://127.0.0.1")
+        client = TestClient(app, base_url="http://127.0.0.1", headers=_TOOL_AUTH)
         monkeypatch.setattr(
             "soup_cli.trainer.rewards._get_isolation_strategy", lambda: "best-effort"
         )
@@ -1035,7 +1061,7 @@ class TestToolEndpointsLive:
 
     def test_bash_tool_auth_required_on_non_loopback_host(self):
         from fastapi.testclient import TestClient
-        app = _create_test_app(host="0.0.0.0")
+        app = _create_test_app(host="0.0.0.0", auth_token=None)
         client = TestClient(app, base_url="http://127.0.0.1")
         resp = client.post(
             "/v1/tools/bash",
@@ -1095,7 +1121,6 @@ class TestToolEndpointsLive:
 
     def test_bash_sandbox_raises_on_strict_namespace_failure(self, monkeypatch):
         import os
-        import shutil
         import subprocess
         import sys
 
@@ -1130,7 +1155,9 @@ class TestToolEndpointsLive:
             raise OSError("Mock prevents actual execution")
 
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
-        monkeypatch.setattr(shutil, "which", lambda x: "/bin/bash")
+        monkeypatch.setattr(
+            "soup_cli.utils.tool_paths.find_tool", lambda name, path=None: "/bin/bash"
+        )
 
         from soup_cli.trainer.rewards import _run_bash_sandbox
 
@@ -1207,7 +1234,7 @@ class TestToolEndpointsLive:
     def test_bash_tool_restricted_linux_fails_closed_501(self, monkeypatch):
         from fastapi.testclient import TestClient
         app = _create_test_app()
-        client = TestClient(app, base_url="http://127.0.0.1")
+        client = TestClient(app, base_url="http://127.0.0.1", headers=_TOOL_AUTH)
         monkeypatch.setattr(
             "soup_cli.trainer.rewards._get_isolation_strategy", lambda: "namespaces"
         )
@@ -1229,7 +1256,7 @@ class TestToolEndpointsLive:
 
         from fastapi.testclient import TestClient
         app = _create_test_app()
-        client = TestClient(app, base_url="http://127.0.0.1")
+        client = TestClient(app, base_url="http://127.0.0.1", headers=_TOOL_AUTH)
         monkeypatch.setattr(
             "soup_cli.trainer.rewards._get_isolation_strategy", lambda: "namespaces"
         )
@@ -1251,7 +1278,7 @@ class TestToolEndpointsLive:
     def test_web_search_default_deny_all(self):
         from fastapi.testclient import TestClient
         app = _create_test_app()
-        client = TestClient(app, base_url="http://127.0.0.1")
+        client = TestClient(app, base_url="http://127.0.0.1", headers=_TOOL_AUTH)
         resp = client.post(
             "/v1/tools/web_search",
             json={"query": "anything"},
@@ -1262,7 +1289,7 @@ class TestToolEndpointsLive:
     def test_web_search_rejects_oversize_query(self):
         from fastapi.testclient import TestClient
         app = _create_test_app()
-        client = TestClient(app, base_url="http://127.0.0.1")
+        client = TestClient(app, base_url="http://127.0.0.1", headers=_TOOL_AUTH)
         resp = client.post(
             "/v1/tools/web_search",
             json={"query": "x" * 2000},
@@ -1272,7 +1299,7 @@ class TestToolEndpointsLive:
     def test_web_search_rejects_bool_max_results(self):
         from fastapi.testclient import TestClient
         app = _create_test_app()
-        client = TestClient(app, base_url="http://127.0.0.1")
+        client = TestClient(app, base_url="http://127.0.0.1", headers=_TOOL_AUTH)
         resp = client.post(
             "/v1/tools/web_search",
             json={"query": "q", "max_results": True},
@@ -1318,11 +1345,12 @@ class TestToolEndpointsLive:
         assert any("example.com" in u for u in urls)
         assert all("other.com" not in u for u in urls)
 
-    def test_tools_no_longer_return_501(self):
+    def test_tools_no_longer_return_501(self, monkeypatch):
         """v0.53.7 #103 regression: 501-stubs are gone."""
         from fastapi.testclient import TestClient
+        _allow_live_python_tool(monkeypatch)
         app = _create_test_app()
-        client = TestClient(app, base_url="http://127.0.0.1")
+        client = TestClient(app, base_url="http://127.0.0.1", headers=_TOOL_AUTH)
         # Python: should return 200 with sandbox response.
         resp = client.post("/v1/tools/python", json={"code": "print(1)"})
         assert resp.status_code != 501
@@ -1879,12 +1907,14 @@ class TestReviewFixesSSEHeaders:
 class TestReviewFixesAuthToken:
     """v0.53.7 H-A: optional Bearer-token gate on tool endpoints."""
 
-    def test_python_tool_with_auth_token_requires_bearer(self):
+    def test_python_tool_with_auth_token_requires_bearer(self, monkeypatch):
         try:
             import fastapi  # noqa: F401
         except ImportError:
             pytest.skip("FastAPI not installed")
         from fastapi.testclient import TestClient
+
+        _allow_live_python_tool(monkeypatch)
 
         from soup_cli.commands.serve import _create_app
 
@@ -1915,24 +1945,31 @@ class TestReviewFixesAuthToken:
         )
         assert resp.status_code == 200
 
-    def test_auth_token_none_means_no_gate(self):
+    def test_auth_token_none_means_no_gate(self, monkeypatch):
         try:
             import fastapi  # noqa: F401
         except ImportError:
             pytest.skip("FastAPI not installed")
         from fastapi.testclient import TestClient
 
-        from soup_cli.commands.serve import _create_app
+        _allow_live_python_tool(monkeypatch)
 
+        from soup_cli.commands.serve import _create_app
+        from soup_cli.utils.server_tools import WebSearchConfig
+
+        # web_search keeps the opt-in gate on loopback; /v1/tools/python and
+        # /v1/tools/bash take a token on every bind (test_serve_code_tool_token.py).
         app = _create_app(
             model_obj=MagicMock(),
             tokenizer=MagicMock(),
             device="cpu",
             model_name="test-model",
             max_tokens_default=128,
+            web_search_config=WebSearchConfig(domain_allowlist=("example.com",)),
+            web_search_backend=lambda query, max_results, allowlist: [],
         )
         client = TestClient(app, base_url="http://127.0.0.1")
-        resp = client.post("/v1/tools/python", json={"code": "print(1)"})
+        resp = client.post("/v1/tools/web_search", json={"query": "q"})
         assert resp.status_code == 200
 
 

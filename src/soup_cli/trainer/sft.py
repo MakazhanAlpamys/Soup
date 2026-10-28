@@ -25,6 +25,7 @@ from soup_cli.utils.mixed_precision import (
     align_trainable_dtype_for_fp16,
     keep_trainable_dtype_on_resume,
 )
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 from soup_cli.utils.terminal import for_terminal
 
@@ -1108,6 +1109,18 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         # so two ``multipack: true`` runs against the same base class share
         # the same subclass.
         use_multipack = bool(getattr(tcfg, "multipack", False))
+        # #1693 -- with `stream_loss_chunk` the model returns no logits, which
+        # TRL's `compute_loss` reads for its metrics. The schema keeps the
+        # option to the two branches below that build `sft_cls`.
+        sft_cls = SFTTrainer
+        chunk_hook = getattr(self, "_stream_loss_chunk_hook", None)
+        if chunk_hook is not None:
+            from soup_cli.utils.stream_loss_chunk import (
+                HOOK_ATTR,
+                make_chunked_loss_trainer_class,
+            )
+
+            sft_cls = make_chunked_loss_trainer_class(SFTTrainer)
         if self._is_raft:
             # v0.71.10 #199 — RAFT uses a plain Trainer + weighted-CE loss
             # (answer-only mask via loss_weights; citation-span boost when
@@ -1211,7 +1224,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             and not use_audio
         ):
             self.trainer = self._build_rewind_trainer(
-                SFTTrainer,
+                sft_cls,
                 trainer_kwargs,
                 rows=dataset["train"],
                 output_dir=output_dir,
@@ -1219,7 +1232,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 grad_accum=int(tcfg.gradient_accumulation_steps),
             )
         else:
-            self.trainer = SFTTrainer(**trainer_kwargs)
+            self.trainer = sft_cls(**trainer_kwargs)
+        if chunk_hook is not None:
+            setattr(self.trainer, HOOK_ATTR, chunk_hook)
 
         # The recording trainer is the last branch above, so RAFT, multipack,
         # vision, audio and a pre-tokenised dataset all skip it -- silently,
@@ -1643,7 +1658,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -1684,7 +1700,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             from soup_cli.utils.long_context import apply_long_context_config
 
             model_config = AutoConfig.from_pretrained(
-                cfg.base, trust_remote_code=self._trust_remote_code
+                cfg.base, trust_remote_code=self._trust_remote_code,
+                **base_revision_kwargs(cfg.base),
             )
             rope_config = apply_long_context_config(
                 model_config,
@@ -1699,7 +1716,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             if rope_config:
                 model_kwargs["config"] = model_config
 
-        self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
         apply_vocab_expansion(
@@ -1735,8 +1755,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
 
         # Freeze training — freeze bottom layers before LoRA
+        # #1432: cutoff re-read below to scope the LoRA adapter to it too.
+        lora_layers_to_transform = None
         if tcfg.freeze_layers is not None or tcfg.freeze_ratio is not None:
-            from soup_cli.utils.freeze import freeze_model_layers
+            from soup_cli.utils.freeze import freeze_layer_cutoff, freeze_model_layers
 
             frozen = freeze_model_layers(
                 self.model,
@@ -1746,6 +1768,20 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             console.print(
                 f"[green]Freeze training:[/] {frozen} parameters frozen"
             )
+            plan = freeze_layer_cutoff(
+                self.model,
+                freeze_layers=tcfg.freeze_layers,
+                freeze_ratio=tcfg.freeze_ratio,
+            )
+            if plan is not None:
+                cutoff, total_layers = plan
+                # #1432: a zero cutoff freezes nothing, but peft still reads
+                # any layers_to_transform list as "restrict to these numbered
+                # layers only", which silently drops a target outside a
+                # numbered layer (embed_tokens) even though nothing was
+                # frozen. Leave it unset rather than pass a no-op range.
+                if cutoff:
+                    lora_layers_to_transform = list(range(cutoff, total_layers))
 
         # v0.53.4 #83 — LLaMA Pro block expansion. Run BEFORE LoRA so PEFT's
         # target-module matcher sees the new blocks. Centralised in
@@ -1855,20 +1891,98 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 self.model, tcfg, target_modules, console
             )
 
+            # #1432: an empty range means every layer is frozen, refuse
+            # rather than silently build an adapter matching nothing.
+            if lora_layers_to_transform is not None and not lora_layers_to_transform:
+                raise ValueError(
+                    "training.freeze_layers / training.freeze_ratio freezes "
+                    "every decoder layer, leaving no layer for the LoRA "
+                    "adapter to attach to. Reduce freeze_layers/freeze_ratio."
+                )
+
+            # #1432: peft only applies layers_to_transform when
+            # target_modules is a list, never a string (a regex or
+            # all-linear), so refuse rather than silently ship the same bug
+            # for that shape.
+            if lora_layers_to_transform is not None and isinstance(target_modules, str):
+                raise ValueError(
+                    "training.freeze_layers / training.freeze_ratio cannot "
+                    "currently be combined with a string "
+                    f"training.lora.target_modules ({target_modules!r}, a regex "
+                    "or all-linear): peft only restricts layers_to_transform "
+                    "when target_modules is a list of module-name suffixes. "
+                    "Give an explicit training.lora.target_modules list (the "
+                    "module names are in model.named_modules()) instead, or "
+                    "drop freeze_layers/freeze_ratio."
+                )
+
+            # #1432: peft only applies layers_to_transform to a list target
+            # that lives inside a numbered decoder layer, or to an exact
+            # module name (a top-level lm_head keeps its adapter). embed_tokens,
+            # or any other target outside the stack, silently gets no adapter
+            # otherwise. Refuse by name rather than drop it.
+            if lora_layers_to_transform is not None and isinstance(target_modules, list):
+                from soup_cli.utils.peft_wiring import find_layer_unscoped_targets
+
+                unscoped = find_layer_unscoped_targets(self.model, target_modules)
+                if unscoped:
+                    raise ValueError(
+                        "training.freeze_layers / training.freeze_ratio cannot "
+                        "currently be combined with training.lora.target_modules "
+                        f"naming {unscoped!r}: peft's layers_to_transform only "
+                        "restricts targets that live inside a numbered decoder "
+                        f"layer, so {unscoped!r} would silently get no LoRA "
+                        "adapter. Drop freeze_layers/freeze_ratio, or remove "
+                        f"{unscoped!r} from training.lora.target_modules."
+                    )
+
+            # #1432: target_parameters matching is a separate, layer-unaware
+            # peft path with no layers_to_transform check, same refusal.
+            if lora_layers_to_transform is not None and target_parameters:
+                raise ValueError(
+                    "training.freeze_layers / training.freeze_ratio cannot "
+                    "currently be combined with training.lora.target_parameters "
+                    "(per-parameter LoRA, e.g. fused MoE experts): peft's "
+                    "target_parameters matching does not apply "
+                    "layers_to_transform. Drop freeze_layers/freeze_ratio, or "
+                    "drop target_parameters and use training.lora.target_modules "
+                    "instead."
+                )
+
+            # #1432: VeRA is a separate peft tuner (build_peft_config_spec's
+            # own branch, not the LoraConfig path layers_to_transform is
+            # wired into below), so refuse rather than silently reproduce
+            # the same bug for it.
+            if lora_layers_to_transform is not None and getattr(tcfg.lora, "use_vera", False):
+                raise ValueError(
+                    "training.freeze_layers / training.freeze_ratio cannot "
+                    "currently be combined with training.lora.use_vera: the "
+                    "freeze plan is not wired into the VeRA config path. Drop "
+                    "freeze_layers/freeze_ratio, or drop use_vera and use "
+                    "ordinary LoRA instead."
+                )
+
             lora_config = build_lora_config(
                 tcfg.lora,
                 target_modules=target_modules,
                 target_parameters=target_parameters,
                 task_type=TaskType.CAUSAL_LM,
+                layers_to_transform=lora_layers_to_transform,
             )
             # v0.39.0 Part D / v0.40.6 #67 — surgical PEFT patches via shared helpers.
             from soup_cli.utils.peft_wiring import (
+                apply_fast_lora_patches,
                 apply_post_lora_patches,
                 apply_pre_lora_patches,
+                fast_lora_summary,
             )
             apply_pre_lora_patches(self.model, cfg.base)
             self.model = get_peft_model(self.model, lora_config)
             apply_post_lora_patches(self.model)
+            # #792 — after every other LoRA patch, so the kernels see the final modules.
+            fast_lora_counts = apply_fast_lora_patches(self.model, tcfg)
+            if fast_lora_counts is not None:
+                console.print(f"[green]{fast_lora_summary(fast_lora_counts)}[/]")
 
             # v0.71.12 #84 — Mixture-of-Depths selective-token routing. Applied
             # AFTER get_peft_model so the freshly-added routers are trainable.
@@ -1921,7 +2035,13 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def _setup_unsloth(self, cfg, tcfg):
         """Load model via unsloth FastLanguageModel (2-5x faster)."""
+        from soup_cli.utils import unsloth
         from soup_cli.utils.unsloth import load_model_and_tokenizer
+        # #797: resolve training.gradient_checkpointing for the Unsloth path
+        # (streaming layers already checkpoint every layer, so it stays off).
+        use_gradient_checkpointing = unsloth.resolve_unsloth_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=getattr(tcfg, "stream_layers", False)
+        )
 
         console.print(f"[dim]Loading model via [bold]unsloth[/]: {cfg.base}[/]")
         self.model, self.tokenizer = load_model_and_tokenizer(
@@ -1932,6 +2052,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             lora_alpha=tcfg.lora.alpha,
             lora_dropout=tcfg.lora.dropout,
             target_modules=tcfg.lora.target_modules,
+            use_rslora=tcfg.lora.use_rslora,
+            use_gradient_checkpointing=use_gradient_checkpointing,
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -1943,7 +2065,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
         console.print(f"[dim]Loading vision processor: {cfg.base}[/]")
         self.processor = AutoProcessor.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         # Idefics3/SmolVLM (and other) processors keep the text tokenizer nested
         # and don't forward pad_token/eos_token — mirror them onto the processor
@@ -1982,7 +2105,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
 
-        self.model = AutoModelForImageTextToText.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModelForImageTextToText.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
         apply_vocab_expansion(
@@ -2114,7 +2240,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         )
         console.print(f"[dim]Loading audio processor: {cfg.base}[/]")
         self.processor = AutoProcessor.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         self.tokenizer = self.processor  # SFTTrainer uses processing_class
 
@@ -2146,7 +2273,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
         # Use AutoModel for audio models — AutoModelForCausalLM doesn't handle
         # audio-language architectures (Qwen2-Audio, Whisper, etc.)
-        self.model = AutoModel.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModel.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
         apply_vocab_expansion(
@@ -2365,6 +2495,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         with self._training_context(
             offload_context(tcfg.activation_offloading, save_dir=offload_save_dir)
         ) as train_ctx:
+            # #1693: also when training raises.
+            train_ctx.callback(self._remove_stream_loss_chunk_hook)
             # LongLoRA S² shifted-sparse attention (v0.49.0 schema). The override
             # monkeypatches attention.forward for the duration of training and
             # was previously never installed (use_longlora validated but shipped

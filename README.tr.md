@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:a6789c2877515d5ac707160a55ab94cd84b390e2e31168b69d4f954a47c5562a -->
+<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -27,7 +27,7 @@
 <p align="center">
   <a href="https://pypi.org/project/soup-cli/"><img src="https://img.shields.io/pypi/v/soup-cli?color=blue" alt="PyPI"></a>
   <a href="https://pepy.tech/project/soup-cli"><img src="https://img.shields.io/pepy/dt/soup-cli?color=blue" alt="İndirmeler"></a>
-  <img src="https://img.shields.io/badge/python-3.10--3.12-blue" alt="Python 3.10-3.12">
+  <img src="https://img.shields.io/badge/python-3.11--3.13-blue" alt="Python 3.11-3.13">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0 Lisansı">
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/MakazhanAlpamys/65fdc943f85f3b2c46ecddb415c2b779/raw/soup_tests.json" alt="Testler"></a>
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://github.com/MakazhanAlpamys/Soup/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -61,12 +61,15 @@ soup train
 
 **4 GB dizüstü GPU'da 8B bir modele ince ayar yapın.** Katman akışı, dondurulmuş tabanı VRAM'in
 dışında tutar ve GPU'ya her seferinde bir kod çözücü katman besler. RTX 3050 Laptop 4 GB üzerinde
-ölçüldü: Llama-3.1-8B-Instruct + NF4 ile **119.6 tok/s, 3.32 GB tepe** — normal, belleğe tamamen
+ölçüldü: Llama-3.1-8B-Instruct + NF4 ile **952 MHz'de 119.6 tok/s, 3.32 GB tepe** (onarım öncesi) — normal, belleğe tamamen
 yerleşik bir çalıştırmayla bit düzeyinde özdeş ve bir H100 üzerinde aynı 3.32 GB'da 113.00 tok/s
 ile bağımsız olarak yeniden üretildi. (Her iki rakam da 32B'de %4.8 yavaşlamaya yol açan v0.73.0 sonuç-doğruluğu
-onarımından önce, v0.72.2'de ölçüldü; o zamandan beri hiçbiri 4 GB bir kartta yeniden
-çalıştırılmadı — yeniden ölçüm [#361](https://github.com/MakazhanAlpamys/Soup/issues/361)
-numaralı issue'da bekliyor.)
+onarımından önce, v0.72.2'de ölçüldü. Onarım sonrası çalıştırma, başka bir
+RTX 3050 Laptop 4 GB üzerinde (@umran666, #1103), **1935–1957 MHz'de 208.6 tok/s, 2.40 GB tepe**
+veriyor. Bu, aynı oturumda ölçülen GEMM tavanının %59'una denk geliyor; onarım öncesi satırda oran
+%68'di: birim saat frekansı başına yaklaşık %14 daha yavaş, yani ham 1.74x kazanç bir hızlanma değil,
+saat frekansı farkıdır. Büyük katman akışı da iki satır arasında bellek düzenini değiştirdi; bu yüzden
+bu oran bile bire bir karşılaştırma değildir — [kayıt](benchmarks/gate-v0.72.2-nf4.md).)
 İsteğe bağlıdır (`stream_layers: true`) ve hâlâ BETA —
 [nasıl çalışır](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724) ·
 [tüm ölçümler](benchmarks/) · [makale](https://doi.org/10.5281/zenodo.21771064) ·
@@ -74,8 +77,8 @@ numaralı issue'da bekliyor.)
 sınırlar, ardından akışlı bir modelin normal bir modelle bit düzeyinde özdeş olduğunu doğrular)
 
 <p align="center">
-  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="4 GB bir kartta Llama-3.1-8B için soup train ön kontrolü: 32 katman boyunca RAM'e sabitlenmiş 3.60 GB'lık bir taban deposu ve iki adet 113 MB VRAM tamponu, ardından 119.6 tok/s'de ölçülen 3.32 GB tepe; 4 GB çizgisinin altında kalıyor (v0.72.2'de ölçüldü, #331 onarımından önce; yeniden ölçüm #361 numaralı issue'da bekliyor)"></a><br>
-  <sub>Llama-3.1-8B-Instruct + NF4, LoRA, batch boyutu 1, dizi uzunluğu 512, RTX 3050 Laptop 4 GB üzerinde — <b>3.32 GB tepe, 119.6 tok/s</b> (v0.72.2'de ölçüldü, #331 onarımından önce; yeniden ölçüm #361 numaralı issue'da bekliyor). <a href="https://youtu.be/T1LCErE943E">Tam video (90 sn)</a></sub>
+  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="4 GB bir kartta Llama-3.1-8B için soup train ön kontrolü: 32 katman boyunca RAM'e sabitlenmiş 3.60 GB'lık bir taban deposu ve iki adet 113 MB VRAM tamponu, ardından 119.6 tok/s'de ölçülen 3.32 GB tepe; 4 GB çizgisinin altında kalıyor (onarım öncesi satır, v0.72.2'de 952 MHz'de ölçüldü; #331 sonrası satır aşağıdaki açıklamada)"></a><br>
+  <sub>Llama-3.1-8B-Instruct + NF4, LoRA, batch boyutu 1, dizi uzunluğu 512, RTX 3050 Laptop 4 GB üzerinde — <b>3.32 GB tepe, 119.6 tok/s</b>, 952 MHz'de (onarım öncesi, v0.72.2; #331 sonrası: 1935 MHz'de 208.6 tok/s, 2.40 GB, doğrudan karşılaştırılamaz, @umran666, #1103). <a href="https://youtu.be/T1LCErE943E">Tam video (90 sn)</a></sub>
 </p>
 
 ## Neden Soup?
@@ -90,42 +93,40 @@ yerine altyapıyla boğuşarak geçiriyor. Soup bunu çözer.
 
 ## Yenilikler
 
-**v0.75.0 — aynı `soup.yaml`, MLX'te transformers'takinden farklı bir tarif eğitiyordu,
-sessizce.** Altı eğitim seçeneği doğrulanıyor, belgeleniyor, kabul ediliyor — ve o arka uçta
-hiçbir şey tarafından okunmuyordu. **Bu sürümdeki 60 pull request'in tamamı bakımcı dışından
-geldi**, 22 kişiden.
+**v0.77.1 — bir yama: `soup data` girdisini koruyor, `soup plan` `soup train` ile aynı kararı veriyor
+ve GRPO Apple Silicon'da eğitiliyor.** v0.77.0'daki hiçbir şey geri alınmıyor. O sürüm, v0.76'nın
+uyardığı ya da yok saydığı ayarları reddediyor; bu yüzden v0.76'da yüklenen bir yapılandırma artık
+yüklenmeyebilir: 0.76.x'ten geliyorsanız önce `soup doctor --config soup.yaml` komutunu çalıştırın ve
+[v0.77.0 sürüm notlarını](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0) okuyun.
 
-- **Geriye dönük uyumsuz değişiklik: bilinmeyen bir yapılandırma anahtarı artık yüklemeyi reddediyor.**
-  v0.74 uyarı vermiş ve son tarih olarak bu sürümü açıklamıştı. `quantizaton` gibi bir yazım
-  hatası ya da yalnızca daha yeni bir Soup sürümünde bulunan bir anahtar eskiden yok sayılıyor ve
-  çalıştırma o ayar uygulanmadan devam ediyordu; artık CLI'da (çıkış kodu 1) ve API'de
-  (`ValueError`) reddediliyor ve muhtemelen kastettiğiniz alanı belirtiyor. Algılama adımı,
-  şemanın v0.40.1'den beri desteklediği kök düzeyindeki `lora:` yeniden eşlemesini uyguluyor;
-  yani bu yazım reddedilmiyor, kabul ediliyor. Bu yazımı kullanan iki `soup fetch examples`
-  dosyası standart `training.lora` biçimine taşındı. Tüm tarif ve şablonlar sorunsuz yükleniyor,
-  anahtar adları terminale ulaşmadan önce escape ediliyor ve tarama sınırlandırılmış durumda.
-- **MLX artık kabul ettiği yapılandırmayı gerçekten uyguluyor.** `train_on_responses_only`, `warmup_ratio` /
-  `scheduler` / `weight_decay` / `optimizer`, `max_grad_norm`, `gradient_accumulation_steps`
-  ve `gradient_checkpointing`, `backend: mlx` üzerinde tek tek doğrulanıp sonra düşürülüyordu.
-  32 optimizer adından yalnızca 8'inin MLX karşılığı var; diğer 24'ü sessizce AdamW'ye
-  dönüşmek yerine adıyla reddediliyor. MLX artık canlı panoyu, deney takipçisini ve `soup ui`'yi de
-  besliyor; `soup doctor --config` ise bir arka ucun okumadığı ayarları listeliyor.
-- **Doğrulama kaybı hiçbir yerde görünmüyordu.** Her arka uçta hesaplanıp atılıyordu: metrik sütunu
-  yok, olay alanı yok, panoda hiçbir şey yok. Artık kaydediliyor, canlı aktarılıyor ve gösteriliyor.
-- **Geriye dönük uyumsuz: `grpo_variant: gspo`, yayımlanmış dizi düzeyi amaç fonksiyonudur**
-  (arXiv:2507.18071); bir dolgu belirtecinin aynı sütunu paylaşan her satırın gradyanını da
-  kaydırdığı sütun merkezleme sezgisel yönteminin yerini alıyor. Mevcut gspo yapılandırmaları önceki
-  çalıştırmaları yeniden üretemeyecek.
-- **Web arayüzünün okuma uç noktaları ve SSE, kimlik doğrulama gerektiriyor**; sorgu
-  dizesindeki bir belirteç yerine kısa ömürlü, tek kullanımlık biletlerle. `--public` artık
-  `/docs` ve `/openapi.json`'ı yerel ağa sunmuyor; eğitim alt süreci de çıktısını kimse
-  okumadığında artık askıda kalmıyor.
-- **`torch>=2.6.0`**, v0.74.0'ın bilinen sınırlamasını kapatıyor: 2.5.1'de `trl>=0.29` içe
-  aktarılamıyordu ve hiçbir tercih trainer'ı çalışmıyordu. Ayrıca düzeltildi: `training.loraplus_lr_ratio`
-  onu ayarlayan her çalıştırmayı çökertiyordu ve `packing: true` TRL 0.29'da hata veriyordu.
-
-> Yalnızca Python **3.10–3.12**. 3.13+ sürümlerinde pip, Soup daha hiç çalışmadan yerel (native)
-> uzantıda çöken, test edilmemiş PyTorch wheel paketlerini seçiyordu.
+- **`soup data` komutları artık girdilerinin üzerine yazmıyor.** Bunlardan on sekizi (`dedup`,
+  `filter`, `convert`, `merge`, `sample`, `pii`, `toxicity` ve diğerleri), hangi yazımla verilirse
+  verilsin bir girdiyle aynı dosya olan bir `--output` değerini hiçbir şey okumadan önce reddediyor;
+  girdinin zaten taşıdığı varsayılan bir çıktı adı da reddediliyor. Bunun yerine yeni bir dosyaya yazın.
+- **`soup plan` ve `soup apply`, `soup train`'in reddettiği yapılandırmaları** aynı mesajla reddediyor
+  ve plan yazmıyor.
+- **GRPO, Apple Silicon'da yerel olarak eğitiliyor.** `backend: mlx` ile `task: grpo`, Soup'un kendi
+  MLX döngüsünü transformers yolunun eğittiği hedefle ve yerleşik `accuracy` ya da `format` ödülüyle
+  çalıştırıyor. `soup infer --backend mlx`, MLX taban modellerinden ve yerel metin LoRA
+  adaptörlerinden Torch olmadan üretim yapıyor.
+- **Tek bir tepe VRAM tahmini:** `soup train`'in ön kontrolü, `soup profile` ve `soup plan` aynı
+  tahmini kullanıyor; tahmin 39 ölçülmüş çalıştırmayla kalibre edildi
+  ([kayıt](benchmarks/gate-2049-resident-vram.md)). Tahminin kalibre edildiği aralıkta, yani yaklaşık
+  3.5B parametreye kadar yoğun modellerde, ön kontrol artık daha önce geçirdiği bazı uzun dizili, büyük
+  sözlüklü çalıştırmaları reddediyor; `--allow-oom-attempt` onları yine de başlatıyor. Bu aralığın
+  dışında (daha büyük ya da mixture-of-experts bir model, `medium` ya da `selective` checkpointing,
+  `use_liger` / `use_cut_ce`, `backend: unsloth`) sığmayan bir çalıştırma için tahmini bir uyarı olarak
+  yazdırıyor ve çalıştırmayı başlatıyor; ancak ağırlıklar, CUDA bağlamı ve eğitilen parametrelerin
+  gradyanları ile optimizer durumu kartın kapasitesini aşıyorsa (80 GB'ta 7B tam ince ayar, 24 GB'ta
+  4-bit Llama-3.1-70B) o çalıştırma orada da reddediliyor. LoRA çalıştırmaları ve parametrelerin bir
+  kısmını eğiten çalıştırmalar (Spectrum, LISA, dondurma) daha az terimle değerlendiriliyor;
+  `--allow-oom-attempt` reddedilen bir çalıştırmayı yine de başlatıyor.
+- **Harici programlar `PATH` üzerinde bulunan mutlak bir yolla başlatılıyor.** Geçerli dizin ve göreli
+  `PATH` girdileri artık aranmıyor: yalnızca orada bulunan bir aracın dizinini `PATH`'e ekleyin.
+- **Ayrıca yeni.** `soup ship --progress jsonl`; başka bir kütüphanenin adlandırdığı biçimde yazılmış
+  bilinmeyen yapılandırma anahtarları için Soup alanı öneriliyor (`learning_rate` için `lr`); ve
+  aşağıdaki Docker örneği, etkileşimsiz bir `soup train`'in v0.77.0'dan beri ihtiyaç duyduğu `--yes`
+  bayrağını geçiriyor.
 
 Eski sürümlerin öne çıkanları [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) sayfasında.
 
@@ -203,7 +204,7 @@ soup merge  --adapter ./output                              # LoRA'yı tabana bi
 soup export --model ./output --format gguf --quant q4_k_m   # Ollama / llama.cpp için GGUF
 ```
 
-Diğer dışa aktarma hedefleri (ONNX, TensorRT, AWQ, GPTQ, BitNet) ve dağıtım seçenekleri
+Diğer dışa aktarma hedefleri (ONNX, TensorRT, BitNet) ve dağıtım seçenekleri
 [`docs/serving-and-export.md`](docs/serving-and-export.md) içinde yer alır.
 
 ## Web Arayüzü
@@ -283,7 +284,7 @@ metin, gömme (embedding), RAFT ve daha fazlası — hepsi JSONL, JSON, CSV, Par
 otomatik algılanır; bu yüzden çoğu durumda `data.train`'i bir dosyaya yöneltirsiniz ve başka hiçbir
 şey değişmez. Her biçim için adım adım çözümlü bir örnekle şemalar ve veri ardışık düzeni (uzak URI'ler,
 akış, parçalama, iç içe geçirme, sözcük dağarcığı genişletme, belge içe aktarma)
-[`docs/data.md`](docs/data.md#data-formats) içinde.
+[`docs/data.md`](docs/data.md#data-formats) içinde; [yerel Sesame CSM ses eğitimi](docs/training.md#native-sesame-csm) ise ayrı belgelenmiştir.
 
 ## Yaygın Komutlar
 
@@ -327,14 +328,14 @@ CUDA ya da PyTorch'u yerel olarak kurmadan Soup'u çalıştırın (imaj her sür
 
 ```bash
 docker pull ghcr.io/makazhanalpamys/soup:latest
-docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml
+docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml --yes
 docker compose up   # ya da yerel olarak derleyin
 ```
 
 ## Gereksinimler
 
-- Python 3.10, 3.11 veya 3.12 (CI'ın test ettiği sürümler bunlar; PyTorch yığını orada henüz
-  doğrulanmadığı için 3.13+ şimdilik desteklenmiyor)
+- Python 3.11, 3.12 veya 3.13 (CI'ın test ettiği sürümler bunlar; PyTorch yığını orada henüz
+  doğrulanmadığı için 3.14+ şimdilik desteklenmiyor)
 - CUDA'lı GPU (önerilen), Apple Silicon (MPS) veya CPU (deneysel — çok yavaş)
 - QLoRA ile 7B modeller için 8 GB+ VRAM
 
@@ -441,9 +442,13 @@ bu aynı zamanda makalenin ne işe yaradığını anlatmanın en kısa yoludur:
   ([kayıt](benchmarks/probe-v0.73.0-what-bounds-streaming.md)). Her ölçüm geçerliliğini koruyor;
   yeniden üretim daha zayıf bir biçimde ayakta kalıyor — kısıt her iki makinede ortak ve GPU'nun
   hesaplama gücü değil.
-- **Özgününe hiç benzemeyen donanımda yeniden üretim** (v2'de eklendi): RTX 3050'de 119.6 tok/s'ye
-  karşı bir H100'de medyan 113.00, aynı 3.32 GB tepede. İkisi de #331 onarımından önce
-  ölçüldü; 4 GB yeniden ölçümü #361 numaralı issue'da bekliyor.
+- **Özgününe hiç benzemeyen donanımda yeniden üretim** (v2'de eklendi): RTX 3050'de (952 MHz'de)
+  119.6 tok/s'ye karşı bir H100'de medyan 113.00, aynı 3.32 GB tepede. İkisi de #331 onarımından
+  önce ölçüldü ve makalenin bildirdiği rakamlar bunlardır. #331 sonrası satır (@umran666, #1103),
+  1935–1957 MHz'de 208.6 tok/s ve 2.40 GB tepedir; aynı oturumda ölçülen GEMM tavanının %68'ine
+  karşı %59'u. Ham 1.74x kazanç bir hızlanma değil, saat frekansı farkıdır; satırlar arasında bellek
+  düzeni de değişti, bu yüzden bu oran bile bire bir karşılaştırma değildir
+  ([kayıt](benchmarks/gate-v0.72.2-nf4.md)).
 - **Sessiz bir yanlış gradyan kusuru, bulundu ve onarıldı.** Katman başına ~165 MiB'ın üzerindeki
   NF4'te ileri geçiş bit düzeyinde özdeş kaldı ve kayıp eğrisi sağlıklı göründü, ama gradyanlar
   yanlıştı. Neden, upstream kütüphanede adıyla belirtildi ve orada bildirildi; onarım, gerçek 32B
@@ -480,4 +485,4 @@ dahil.
 
 ## Lisans
 
-[Apache-2.0](LICENSE). Telif hakkı © Soup katkıda bulunanları.
+[Apache-2.0](LICENSE). Copyright 2026 Makazhan Alpamys and the Soup contributors. Soup'u veya değiştirilmiş bir kopyasını yeniden dağıtırsanız lisansın 4. ve 6. maddeleri sizin için geçerlidir: her kopyayla birlikte `LICENSE` ve `NOTICE` dosyalarını koruyun, değiştirdiğiniz dosyaları işaretleyin ve Soup adını eserin kaynağını belirtmenin ötesinde kullanmayın.

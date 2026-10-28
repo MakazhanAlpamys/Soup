@@ -5,6 +5,7 @@ import inspect
 import io
 import json
 import os
+import re
 import struct
 from types import SimpleNamespace
 
@@ -12,6 +13,7 @@ import pytest
 from rich.console import Console
 
 from soup_cli.trainer import stream_setup
+from soup_cli.utils import layer_shard
 from soup_cli.utils.async_disk_source import DEFAULT_STREAM_READ_AHEAD, MAX_STREAM_READ_AHEAD
 
 
@@ -55,6 +57,34 @@ class TestTheDepth:
     def test_the_clamp_holds_past_the_most_roots_the_setting_can_serve(self):
         """Seven roots reach the ceiling exactly, so only a bigger count shows the clamp."""
         assert _depth(DEFAULT_STREAM_READ_AHEAD, 9)[0] == MAX_STREAM_READ_AHEAD
+
+
+class TestTheReadyLineNamesDriveModes:
+    @staticmethod
+    def _stats(drive_count, direct_io_drives):
+        return {
+            "tier": "disk",
+            "pinned": False,
+            "pinned_bytes": 0,
+            "disk_bytes": 1_000_000_000,
+            "read_ahead": 3,
+            "store_bytes": 20_000_000,
+            "drive_count": drive_count,
+            "direct_io_drives": direct_io_drives,
+        }
+
+    def test_two_direct_drives_are_counted(self):
+        line = stream_setup._stream_source_line(self._stats(2, 2))
+        assert "2 NVMe volumes, direct I/O 2/2" in line
+
+    def test_a_mixed_pair_is_counted(self):
+        line = stream_setup._stream_source_line(self._stats(2, 1))
+        assert "2 NVMe volumes, direct I/O 1/2" in line
+
+    def test_one_drive_keeps_the_existing_wording(self):
+        line = stream_setup._stream_source_line(self._stats(1, 1))
+        assert "on an NVMe volume" in line
+        assert "direct I/O" not in line
 
 
 def test_every_depth_consumer_in_the_setup_reads_the_effective_value():
@@ -419,7 +449,7 @@ def _make_synthetic_untied_checkpoint(tmp_path, n_layers: int = 5) -> str:
     return str(weights)
 
 
-def _drive_setup(tmp_path, monkeypatch, *, striped):
+def _drive_setup(tmp_path, monkeypatch, *, striped, stream_source="ram"):
     """The real `_setup_streaming_transformers` on a tiny checkpoint, runtime boundary spied.
 
     Same harness as test_issue623 (simulated CUDA, ``build_streamed_model`` spied). Two temp
@@ -476,7 +506,7 @@ def _drive_setup(tmp_path, monkeypatch, *, striped):
         captured.update(kwargs)
         runtime = MagicMock()
         runtime.stats.return_value = {
-            "tier": "ram", "store_bytes": 1_000_000, "disk_bytes": 1_000_000,
+            "tier": stream_source, "store_bytes": 1_000_000, "disk_bytes": 1_000_000,
             "pinned": False, "read_ahead": kwargs.get("read_ahead"), "buffers": 2,
             "buffer_bytes": 4_000, "n_layers": 3,
         }
@@ -488,7 +518,7 @@ def _drive_setup(tmp_path, monkeypatch, *, striped):
         stream_setup, "console", Console(file=buffer, width=400, color_system=None)
     )
 
-    cfg = load_config_from_string(_cfg_yaml(weights, ""))
+    cfg = load_config_from_string(_cfg_yaml(weights, "", stream_source=stream_source))
     wrapper = SFTTrainerWrapper(cfg)
     wrapper.device = "cuda"
     wrapper._setup_streaming_transformers(cfg, cfg.training)
@@ -510,7 +540,7 @@ class TestTheSetupPathUsesTheRoots:
         assert captured["read_ahead_decision"].raised
         assert "Layer cache striped over" in said
         assert "layer-shard stripe 1" in said  # the second drive is charged on its own
-        assert f"training.stream_read_ahead {DEFAULT_STREAM_READ_AHEAD} -> 3" in said
+        assert f"training.stream_read_ahead {DEFAULT_STREAM_READ_AHEAD} -> 3" not in said
         stripe_folder = second_drive / os.listdir(second_drive)[0]
         assert any(name.startswith("layer_") for name in os.listdir(stripe_folder)), (
             "no layer file landed on the second drive"
@@ -518,6 +548,12 @@ class TestTheSetupPathUsesTheRoots:
         # #1612: exact shares charge root 0 more than root 1 (2 of 3 layers plus extras on root 0)
         assert len(preflight_calls) >= 1
         assert preflight_calls[0]["shard_write_bytes"] > preflight_calls[0]["stripe_writes"][0][1]
+
+    def test_disk_tier_announces_the_effective_stripe_depth(self, tmp_path, monkeypatch):
+        _captured, said, _second_drive, _preflight = _drive_setup(
+            tmp_path, monkeypatch, striped=True, stream_source="disk"
+        )
+        assert f"training.stream_read_ahead {DEFAULT_STREAM_READ_AHEAD} -> 3" in said
 
     def test_one_drive_is_left_exactly_as_it_was(self, tmp_path, monkeypatch):
         captured, said, _second_drive, _preflight = _drive_setup(
@@ -550,3 +586,223 @@ class TestTheSetupPathUsesTheRoots:
         assert calls, "the striped setup never asked for the exact shares"
         assert {"dtype", "quant", "double_quant", "arch"} <= set(calls[0])
         assert calls[0]["arch"] == "llama"
+
+
+# The tiny checkpoint ties its embeddings, so its cache has no large shard: a `large_*` file in
+# a cache folder is a stale one, and is left out of the oracle on purpose.
+_CACHE_FILE = re.compile(r"^(index\.json|extras\.safetensors|layer_\d+\.safetensors)$")
+
+
+def _cache_folders(tmp_path):
+    """Every folder a cache lives in: the primary one and each stripe folder."""
+    found = []
+    for top in (tmp_path / "cache", tmp_path / "second-drive"):
+        for folder, _dirs, names in os.walk(top):
+            if any(_CACHE_FILE.match(name) for name in names):
+                found.append(folder)
+    return found
+
+
+def _primary_folder(tmp_path):
+    """The one folder holding ``index.json``: the cache's primary folder."""
+    (folder,) = [f for f in _cache_folders(tmp_path) if "index.json" in os.listdir(f)]
+    return folder
+
+
+def _cache_files_bytes(tmp_path):
+    """The files the cache is made of, picked by name, so a stray file is never in the sum."""
+    return sum(
+        os.path.getsize(os.path.join(folder, name))
+        for folder in _cache_folders(tmp_path)
+        for name in os.listdir(folder)
+        if _CACHE_FILE.match(name)
+    )
+
+
+def _drop_strays(tmp_path):
+    """Junk a cache folder can hold: a half-written temp file, a note, a stale large shard."""
+    assert not any(n.startswith("large_") for f in _cache_folders(tmp_path) for n in os.listdir(f))
+    for folder in _cache_folders(tmp_path):
+        for name in (".soup.x.tmp", "notes.bin"):
+            with open(os.path.join(folder, name), "wb") as handle:
+                handle.write(b"x" * 100_000)
+        with open(os.path.join(folder, "large_embed.safetensors"), "wb") as handle:
+            handle.write(b"x" * 100_000)
+
+
+class TestAReusableCacheIsReportedAtItsRealSize:
+    @pytest.mark.parametrize("striped", [False, True])
+    def test_reusable_cache_reports_its_files_not_the_estimate(
+        self, tmp_path, monkeypatch, striped
+    ):
+        _drive_setup(tmp_path, monkeypatch, striped=striped)  # builds the cache
+        _drop_strays(tmp_path)
+        _captured, said, _second_drive, seen = _drive_setup(
+            tmp_path, monkeypatch, striped=striped
+        )
+        assert "(reusable)" in said
+        assert seen[-1]["shard_write_bytes"] == 0
+        assert all(share == 0 for _dir, share in seen[-1]["stripe_writes"])
+        assert seen[-1]["shard_bytes"] == _cache_files_bytes(tmp_path)
+
+    def test_a_measured_cache_is_not_called_approximate(self, tmp_path, monkeypatch):
+        """qwen4_exp's even-split fallback says "approximately"; a measured size is exact."""
+        _drive_setup(tmp_path, monkeypatch, striped=True)  # builds the cache
+        real = stream_setup.estimate_stripe_write_shares
+
+        def as_qwen4_exp(*args, **kwargs):
+            return real(*args, **{**kwargs, "arch": "qwen4_exp"})
+
+        monkeypatch.setattr(stream_setup, "estimate_stripe_write_shares", as_qwen4_exp)
+        assert real(None, total_bytes=0, n_roots=2, arch="qwen4_exp")[1] is True
+        _captured, said, _second_drive, seen = _drive_setup(tmp_path, monkeypatch, striped=True)
+        assert "(reusable)" in said
+        assert seen[-1]["shard_bytes"] == _cache_files_bytes(tmp_path)
+        assert seen[-1]["approximate"] is False
+        assert "approximately" not in said
+
+    def test_a_file_that_cannot_be_measured_keeps_the_estimate(self, tmp_path, monkeypatch):
+        captured, _said, _drive, seen = _drive_setup(tmp_path, monkeypatch, striped=False)
+        estimate = seen[-1]["shard_bytes"]  # the first run writes the cache: a plain estimate
+        index = captured["index"]
+        shard_dir = _primary_folder(tmp_path)
+        assert layer_shard.shard_cache_disk_bytes(shard_dir, index) is not None
+        monkeypatch.setattr(layer_shard, "shard_cache_disk_bytes", lambda *_a: None)
+        _captured, _said, _drive, seen = _drive_setup(tmp_path, monkeypatch, striped=False)
+        assert seen[-1]["shard_write_bytes"] == 0
+        assert seen[-1]["shard_bytes"] == estimate
+
+    def test_a_deleted_layer_file_is_not_measured(self, tmp_path, monkeypatch):
+        captured, _said, _drive, _preflight = _drive_setup(tmp_path, monkeypatch, striped=False)
+        index = captured["index"]
+        shard_dir = _primary_folder(tmp_path)
+        os.remove(layer_shard.layer_paths(shard_dir, index)[0])
+        assert layer_shard.shard_cache_disk_bytes(shard_dir, index) is None
+
+    def test_a_cache_file_lost_after_the_check_does_not_fail_the_preflight(
+        self, tmp_path, monkeypatch
+    ):
+        """The file goes between `inspect_shard_cache` and the sizing; the estimate stays."""
+        captured, _said, _drive, seen = _drive_setup(tmp_path, monkeypatch, striped=True)
+        estimate = seen[-1]["shard_bytes"]  # the first run writes the cache: a plain estimate
+        assert _cache_files_bytes(tmp_path) != estimate  # else the last assert proves nothing
+        primary = _primary_folder(tmp_path)
+        victim = layer_shard.layer_paths(primary, captured["index"])[1]  # on the second drive
+        assert os.path.exists(victim) and os.path.dirname(victim) != primary
+        real = layer_shard.inspect_shard_cache
+        lost = []
+
+        def inspect_then_lose_a_file(*args, **kwargs):
+            result = real(*args, **kwargs)
+            if not lost and result[0] is not None:
+                os.remove(victim)
+                lost.append(victim)
+            return result
+
+        monkeypatch.setattr(layer_shard, "inspect_shard_cache", inspect_then_lose_a_file)
+        _captured, _said, _drive, seen = _drive_setup(  # must not raise
+            tmp_path, monkeypatch, striped=True
+        )
+        assert lost == [victim]
+        assert seen[-1]["shard_write_bytes"] == 0
+        assert seen[-1]["shard_bytes"] == estimate
+
+    def test_an_untied_striped_cache_counts_its_vocabulary_shards(self, tmp_path):
+        """The tied fixture above has no `large_*` file; an untied checkpoint writes two."""
+        from tests.test_disk_tier_stripe_runtime import _tiny_llama
+
+        weights = _tiny_llama(tmp_path, tie=False)
+        stripe = tmp_path / "stripe"
+        stripe.mkdir()
+        cache = str(tmp_path / "cache" / "tiny")
+        index = layer_shard.shard_checkpoint(
+            weights, cache, dtype="float32", arch="llama", stripe_roots=(str(stripe),)
+        )
+        assert index.large_keys and index.layer_roots == (0, 1, 0)
+        folders = layer_shard.stripe_dirs(cache, index.stripe_roots)
+        files = [
+            os.path.join(folder, name)
+            for folder in folders
+            for name in os.listdir(folder)
+            if name != layer_shard.STRIPE_MARKER_NAME
+        ]
+        assert any(os.path.basename(path).startswith("large_") for path in files)
+        assert layer_shard.shard_cache_disk_bytes(cache, index) == sum(
+            os.path.getsize(path) for path in files
+        )
+
+
+class TestRefusalIsUnchanged:
+    """Reporting the real size must not move what the pre-flight refuses."""
+
+    @staticmethod
+    def _free(monkeypatch, free):
+        monkeypatch.setattr(stream_setup, "_disk_volume", lambda _path: (1, free))
+
+    @pytest.mark.parametrize("free", [1, 10_000_000_000])
+    def test_a_reusable_cache_needs_no_space(self, tmp_path, monkeypatch, free):
+        _drive_setup(tmp_path, monkeypatch, striped=False)
+        self._free(monkeypatch, free)
+        _captured, said, _drive, _preflight = _drive_setup(tmp_path, monkeypatch, striped=False)
+        assert "(reusable)" in said
+
+    @pytest.mark.parametrize("free, refused", [(1, True), (10_000_000_000, False)])
+    def test_a_missing_cache_is_refused_only_without_room(
+        self, tmp_path, monkeypatch, free, refused
+    ):
+        self._free(monkeypatch, free)
+        if refused:
+            with pytest.raises(ValueError, match="additional disk space"):
+                _drive_setup(tmp_path, monkeypatch, striped=False)
+        else:
+            _drive_setup(tmp_path, monkeypatch, striped=False)
+
+    @pytest.mark.parametrize("free, refused", [(1, True), (10_000_000_000, False)])
+    def test_a_materialization_is_refused_only_without_room(
+        self, tmp_path, monkeypatch, free, refused
+    ):
+        monkeypatch.setattr(stream_setup, "console", Console(file=io.StringIO()))
+        monkeypatch.setattr(stream_setup, "_disk_volume", lambda _path: (1, free))
+        args = dict(
+            source_bytes=1000,
+            materialized_copy_bytes=500,
+            materialize_bytes=500,
+            materialized_path=str(tmp_path / "weights"),
+            shard_bytes=300,  # the real size of a cache we keep
+            shard_write_bytes=0,
+            shard_path=str(tmp_path / "shards"),
+        )
+        if refused:
+            with pytest.raises(ValueError, match="additional disk space"):
+                stream_setup._render_stream_disk_preflight(**args)
+        else:
+            stream_setup._render_stream_disk_preflight(**args)
+
+    @pytest.mark.parametrize("copy_bytes, refused", [(2_000_000_000, True), (100_000_000, False)])
+    @pytest.mark.parametrize("cache_exists", [False, True])
+    def test_a_materialization_through_the_setup_is_refused_only_without_room(
+        self, tmp_path, monkeypatch, copy_bytes, refused, cache_exists
+    ):
+        """The copy is charged through the setup's own call, with or without a cache on disk."""
+        import dataclasses
+
+        import soup_cli.utils.spectrum_scan as spectrum_scan
+
+        if cache_exists:
+            _drive_setup(tmp_path, monkeypatch, striped=False)
+
+        def needs_a_copy(model, *, before_materialize=None):
+            plan = spectrum_scan.plan_model_weights(model)
+            plan = dataclasses.replace(
+                plan, materialize_bytes=copy_bytes, materialized_copy_bytes=copy_bytes
+            )
+            before_materialize(plan)
+            return plan.weights_dir
+
+        monkeypatch.setattr(spectrum_scan, "resolve_model_weights", needs_a_copy)
+        self._free(monkeypatch, 1_000_000_000)  # the tiny cache fits; the copy decides
+        if refused:
+            with pytest.raises(ValueError, match="materialized weight copy"):
+                _drive_setup(tmp_path, monkeypatch, striped=False)
+        else:
+            _drive_setup(tmp_path, monkeypatch, striped=False)

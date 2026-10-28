@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 import yaml
+from rich.console import Console
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
@@ -17,11 +18,27 @@ from soup_cli.config.loader import load_config_from_string
 from soup_cli.config.unknown_keys import NO_SUGGESTION_REMEDY
 from tests.conftest import strip_ansi
 
-_REWARD_ON_UNSLOTH = (
-    "config: backend='unsloth' is not applied by task='reward_model': that trainer has "
+_REWARD_ON_UNSLOTH_MESSAGE = (
+    "backend='unsloth' is not applied by task='reward_model': that trainer has "
     "no unsloth setup and would train on plain transformers. Use backend: transformers."
 )
+# The string loader labels a model-level error ``config``; the terminal prints the
+# message alone.
+_REWARD_ON_UNSLOTH = f"config: {_REWARD_ON_UNSLOTH_MESSAGE}"
 _ENV = {"COLUMNS": "400", "FORCE_COLOR": "1"}
+_CONSOLE_MODULES = (
+    "soup_cli.config.loader",
+    "soup_cli.commands.train",
+    "soup_cli.commands.doctor",
+)
+
+
+@pytest.fixture(autouse=True)
+def _wide_consoles(monkeypatch):
+    """The module-level consoles fix their width at import time (80 under CI's
+    xdist workers), so ``COLUMNS`` alone does not stop a long message wrapping."""
+    for module in _CONSOLE_MODULES:
+        monkeypatch.setattr(f"{module}.console", Console(width=400))
 
 
 def _yaml(backend="transformers", **training):
@@ -57,8 +74,8 @@ class TestCrossFieldValidatorLocation:
         result = CliRunner().invoke(app, [*command, str(path)], env=_ENV)
 
         assert result.exit_code != 0, result.output
-        lines = _lines(result.output)
-        assert _REWARD_ON_UNSLOTH in lines, result.output
+        lines = _lines(strip_ansi(result.output))
+        assert _REWARD_ON_UNSLOTH_MESSAGE in lines, result.output
         assert not any(line.startswith(":") for line in lines), result.output
         assert "Value error, " not in strip_ansi(result.output), result.output
 
@@ -84,6 +101,6 @@ class TestUnknownKeyRemedy:
         result = CliRunner().invoke(app, ["train", "--config", str(path)], env=_ENV)
 
         assert result.exit_code == 1, result.output
-        lines = _lines(result.output)
+        lines = _lines(strip_ansi(result.output))
         assert "unknown config key 'training.zzzzzzzzqq' - refused." in lines, result.output
         assert NO_SUGGESTION_REMEDY in lines, result.output

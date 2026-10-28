@@ -19,10 +19,10 @@ drift -- every entry must name a real field, and every dotted field name in
 the truth; it can only stop it rotting, which is the failure that produced #749.
 
 Scope today: ``task=sft`` on ``backend=mlx`` and on ``backend=unsloth`` (#1124;
-both apply to every modality), plus multimodal vision and audio on
-``backend=transformers`` (#1156). Other combinations report nothing rather
-than guessing, which is the honest default for a table that has not been
-reviewed for them.
+both apply to every modality), ``task=dpo``, ``task=orpo``, ``task=simpo``, ``task=kto``
+and ``task=grpo`` on ``backend=mlx``, plus multimodal vision and audio on
+``backend=transformers`` (#1156). Other combinations report nothing rather than guessing,
+which is the honest default for a table that has not been reviewed for them.
 """
 
 from __future__ import annotations
@@ -30,10 +30,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
-
-from soup_cli.utils.advanced_precision import (
-    UNSLOTH_PRECISION_INCOMPATIBLE_REASON,
-)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from soup_cli.config.schema import SoupConfig
@@ -46,8 +42,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 #: * ``honoured`` would mean enumerating 275 declared fields against every
 #:   reviewed pair -- a table nobody can review honestly, and the opposite of
 #:   this module's premise that a gap list is short enough to be checked;
-#: * ``rejected`` covers settings rejected at the schema boundary for a
-#:   backend (e.g. callback monitoring flags on backend=mlx, #1069).
+#: * ``rejected`` is retained for compatibility, but has no registry rows:
+#:   settings refused at config load cannot reach the doctor (#1330).
 IGNORED = "ignored"
 REJECTED = "rejected"
 STATUSES = frozenset({IGNORED, REJECTED})
@@ -59,11 +55,6 @@ DEFAULT_MODALITY = "text"
 def _default_active(value: Any) -> bool:
     """A setting is active when it is switched on (truthy)."""
     return bool(value)
-
-
-def _seed_active(value: Any) -> bool:
-    """0 is a valid random seed, so any non-None value is active."""
-    return value is not None
 
 
 @dataclass(frozen=True)
@@ -93,20 +84,6 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
     # max_grad_norm, warmup_ratio, weight_decay, optimizer, scheduler -- were
     # wired by #734 and #750 and are now honoured, so they are gone rather than
     # reclassified. The guard is what noticed; see the PR body.
-    SupportEntry(
-        "training.seed",
-        IGNORED,
-        "MLX seeds through mx.random, not this field",
-        trainer_reads=True,
-        active=_seed_active,
-    ),
-    SupportEntry(
-        "training.data_seed",
-        IGNORED,
-        "MLX seeds through mx.random, not this field",
-        trainer_reads=True,
-        active=_seed_active,
-    ),
     SupportEntry(
         "training.use_galore",
         IGNORED,
@@ -165,12 +142,6 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
         trainer_reads=True,
     ),
     SupportEntry(
-        "training.use_mod",
-        IGNORED,
-        "Mixture-of-Depths routing is wired on the transformers path, not MLX",
-        trainer_reads=True,
-    ),
-    SupportEntry(
         "training.moe_lora",
         IGNORED,
         "ScatterMoE LoRA targets expert layers on the transformers path; no MLX implementation",
@@ -190,24 +161,6 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
         "before resolve_trainer)",
         trainer_reads=True,
     ),
-    SupportEntry(
-        "training.loss_watchdog",
-        REJECTED,
-        "Soup does not implement the watchdog on the MLX callback, which has no stop control",
-        trainer_reads=True,
-    ),
-    SupportEntry(
-        "training.loss_spike_recovery",
-        REJECTED,
-        "spike recovery is driven by the watchdog and the watchdog cannot fire on MLX",
-        trainer_reads=True,
-    ),
-    SupportEntry(
-        "training.grad_accum_auto_tune",
-        REJECTED,
-        "there is no VRAM total to measure pressure against on unified memory",
-        trainer_reads=True,
-    ),
 )
 
 
@@ -215,14 +168,6 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
 # reads data.train_on_responses_only and data.mask_history in
 # data/sft_format.py and data/loss_mask.py, outside the declared trainer modules.
 _TRANSFORMERS_VISION_SFT: tuple[SupportEntry, ...] = (
-    SupportEntry(
-        "data.train_on_responses_only",
-        IGNORED,
-        "multimodal vision collator supervises all tokens; assistant-only masking "
-        "is not implemented for vision datasets",
-        issue=1156,
-        trainer_reads=False,
-    ),
     SupportEntry(
         "data.mask_history",
         IGNORED,
@@ -235,14 +180,6 @@ _TRANSFORMERS_VISION_SFT: tuple[SupportEntry, ...] = (
 
 _TRANSFORMERS_AUDIO_SFT: tuple[SupportEntry, ...] = (
     SupportEntry(
-        "data.train_on_responses_only",
-        IGNORED,
-        "audio training supervises all tokens; assistant-only masking "
-        "is not implemented for audio datasets",
-        issue=1156,
-        trainer_reads=False,
-    ),
-    SupportEntry(
         "data.mask_history",
         IGNORED,
         "audio training supervises all tokens; mask_history is applied "
@@ -253,33 +190,52 @@ _TRANSFORMERS_AUDIO_SFT: tuple[SupportEntry, ...] = (
 )
 
 
-_UNSLOTH_SFT: tuple[SupportEntry, ...] = (
-    SupportEntry(
-        "training.quantization_aware",
-        REJECTED,
-        f"QAT and FP8 training are not compatible with the unsloth backend "
-        f"({UNSLOTH_PRECISION_INCOMPATIBLE_REASON})",
-        issue=1124,
-    ),
-    SupportEntry(
-        "training.fp8_attention",
-        REJECTED,
-        f"fp8_attention is not supported on backend=unsloth "
-        f"({UNSLOTH_PRECISION_INCOMPATIBLE_REASON})",
-        issue=1124,
-    ),
-    SupportEntry(
-        "training.nvfp4",
-        REJECTED,
-        f"nvfp4 is not supported on backend=unsloth ({UNSLOTH_PRECISION_INCOMPATIBLE_REASON})",
-        issue=1124,
-    ),
+# Unsloth precision settings are refused at config load, not reported by doctor.
+_UNSLOTH_SFT: tuple[SupportEntry, ...] = ()
+
+
+#: Fields MLX SFT warns about that have no meaning for DPO: SFT's
+#: response-masking switches (DPO supervises completions by design).
+_NOT_DPO_GAPS = frozenset({
+    "data.train_on_messages_with_train_field",
+    "data.mask_history",
+    "data.train_on_prompt",
+})
+
+_MLX_DPO: tuple[SupportEntry, ...] = tuple(
+    entry for entry in _MLX_SFT if entry.field not in _NOT_DPO_GAPS
 )
 
+#: MLX ORPO runs MLX DPO's loop with its own loss, so it ignores the same fields.
+_MLX_ORPO: tuple[SupportEntry, ...] = _MLX_DPO
+
+#: MLX SimPO is MLX ORPO's tokenization and MLX DPO's loop: the same fields.
+_MLX_SIMPO: tuple[SupportEntry, ...] = _MLX_ORPO
+
+#: MLX KTO runs MLX DPO's loop and reference precompute: the same fields.
+_MLX_KTO: tuple[SupportEntry, ...] = _MLX_DPO
+
+#: MLX GRPO (#1976) prints MLX DPO's warning list, but only these of its rows can
+#: load with ``task: grpo``: LoRA-FA, FlashAttention, Liger, NEFTune and QAT are
+#: refused at config load for this task, and load-time refusals have no rows.
+_MLX_GRPO_FIELDS = frozenset({
+    "training.use_galore",
+    "training.use_ring_attention",
+    "training.moe_lora",
+    "training.use_fsdp2_compile",
+})
+_MLX_GRPO: tuple[SupportEntry, ...] = tuple(
+    entry for entry in _MLX_DPO if entry.field in _MLX_GRPO_FIELDS
+)
 
 #: ``(task, backend, modality)`` -> the settings that combination does not honour.
 REGISTRY: dict[tuple[str, str, str], tuple[SupportEntry, ...]] = {
     ("sft", "mlx", "text"): _MLX_SFT,
+    ("dpo", "mlx", "text"): _MLX_DPO,
+    ("orpo", "mlx", "text"): _MLX_ORPO,
+    ("simpo", "mlx", "text"): _MLX_SIMPO,
+    ("kto", "mlx", "text"): _MLX_KTO,
+    ("grpo", "mlx", "text"): _MLX_GRPO,
     ("sft", "unsloth", "text"): _UNSLOTH_SFT,
     ("sft", "transformers", "vision"): _TRANSFORMERS_VISION_SFT,
     ("sft", "transformers", "audio"): _TRANSFORMERS_AUDIO_SFT,
@@ -309,6 +265,49 @@ TRAINER_MODULES: dict[tuple[str, str, str], tuple[str, ...]] = {
         "soup_cli/trainer/rewind_mlx.py",
         "soup_cli/trainer/loss_summary.py",
     ),
+    ("dpo", "mlx", "text"): (
+        "soup_cli/trainer/mlx_dpo.py",
+        "soup_cli/trainer/mlx_sft.py",
+        "soup_cli/trainer/mlx_optim.py",
+        "soup_cli/trainer/_trl_compat.py",
+        "soup_cli/trainer/loss_summary.py",
+    ),
+    ("simpo", "mlx", "text"): (
+        "soup_cli/trainer/mlx_simpo.py",
+        "soup_cli/trainer/mlx_orpo.py",
+        "soup_cli/trainer/mlx_dpo.py",
+        "soup_cli/trainer/mlx_sft.py",
+        "soup_cli/trainer/mlx_optim.py",
+        "soup_cli/trainer/_trl_compat.py",
+        "soup_cli/trainer/loss_summary.py",
+    ),
+    ("orpo", "mlx", "text"): (
+        "soup_cli/trainer/mlx_orpo.py",
+        "soup_cli/trainer/mlx_dpo.py",
+        "soup_cli/trainer/mlx_sft.py",
+        "soup_cli/trainer/mlx_optim.py",
+        "soup_cli/trainer/_trl_compat.py",
+        "soup_cli/trainer/loss_summary.py",
+    ),
+    ("kto", "mlx", "text"): (
+        "soup_cli/trainer/mlx_kto.py",
+        "soup_cli/trainer/mlx_orpo.py",
+        "soup_cli/trainer/mlx_dpo.py",
+        "soup_cli/trainer/mlx_sft.py",
+        "soup_cli/trainer/mlx_optim.py",
+        "soup_cli/trainer/_trl_compat.py",
+        "soup_cli/trainer/loss_summary.py",
+    ),
+    ("grpo", "mlx", "text"): (
+        "soup_cli/trainer/mlx_grpo.py",
+        "soup_cli/trainer/mlx_dpo.py",
+        "soup_cli/trainer/mlx_sft.py",
+        "soup_cli/trainer/mlx_optim.py",
+        "soup_cli/trainer/grpo.py",
+        "soup_cli/trainer/rewards.py",
+        "soup_cli/trainer/_trl_compat.py",
+        "soup_cli/trainer/loss_summary.py",
+    ),
     # utils/unsloth.py handles the loader path. trainer/sft.py::_setup_unsloth is not listed
     # here because listing sft.py would cause the drift guard to inspect transformers-only
     # precision reads; an AST test in test_issue1124 guards _setup_unsloth instead.
@@ -334,11 +333,12 @@ def unsupported_for(
 def check_config(cfg: "SoupConfig") -> list[SupportEntry]:
     """The declared gaps that apply to the fields this config actually sets.
 
-    Only fields the user wrote and switched on are reported. Pydantic's
+    Only non-default fields the user wrote and switched on are reported. Pydantic's
     ``model_fields_set`` distinguishes the written fields from the ones sitting
     at their schema default, which is the difference between a useful pre-flight
     check and a wall of 275 rows. ``entry.active`` then drops a field written in
-    its off position (e.g. ``false``); ``seed: 0`` still counts as set.
+    its off position (e.g. ``false``). A written schema default counts as
+    unwritten, including a default of ``true``.
     """
     backend = getattr(cfg, "backend", DEFAULT_BACKEND)
     modality = getattr(cfg, "modality", DEFAULT_MODALITY)
@@ -352,7 +352,10 @@ def check_config(cfg: "SoupConfig") -> list[SupportEntry]:
         if section is None:
             continue
         for name in getattr(section, "model_fields_set", ()):
-            written[f"{namespace}.{name}"] = getattr(section, name)
+            value = getattr(section, name)
+            schema_field = type(section).model_fields[name]
+            if value != schema_field.get_default(call_default_factory=True):
+                written[f"{namespace}.{name}"] = value
 
     return [
         entry for entry in entries if entry.field in written and entry.active(written[entry.field])

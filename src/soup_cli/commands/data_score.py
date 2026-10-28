@@ -24,11 +24,43 @@ def _exit(msg: str, code: int = 1) -> None:
     raise typer.Exit(code)
 
 
+def _refuse_aliased_output(output: str, **inputs: Optional[str]) -> None:
+    """Exit 1, before anything is read or written, when --output is one of the inputs.
+
+    #2225: each default output name is also an ordinary input name, and the write
+    replaces --output after the whole input has been read.
+    """
+    from soup_cli.utils.paths import ensure_distinct_paths
+
+    try:
+        ensure_distinct_paths(
+            [(f"--{name.replace('_', '-')}", path) for name, path in inputs.items() if path],
+            [("--output", output)],
+        )
+    except ValueError as exc:
+        _exit(str(exc))
+
+
+def _check_text_rows(rows: List[Mapping[str, Any]], label: str) -> None:
+    """Report unscanned rows before printing clean metrics or writing output."""
+    from soup_cli.utils.data_score import extract_row_text
+
+    missing = sum(not extract_row_text(row).strip() for row in rows)
+    if not rows or missing == len(rows):
+        _exit(f"no extractable text in {len(rows)} {label} rows")
+    if missing:
+        console.print(
+            f"[yellow]Warning:[/] {missing} of {len(rows)} {label} rows have no extractable text"
+        )
+
+
 def _read_rows(path: str) -> List[Mapping[str, Any]]:
     from soup_cli.utils.data_score import load_jsonl_rows
 
     try:
-        return load_jsonl_rows(path)
+        rows = load_jsonl_rows(path)
+        _check_text_rows(rows, "input")
+        return rows
     except (TypeError, ValueError, FileNotFoundError) as exc:
         _exit(str(exc))
         raise  # unreachable; satisfies type checker
@@ -137,7 +169,9 @@ def score(
 
 
 def decontaminate(
-    input: str = typer.Option(..., "--input", "-i"),
+    input: str = typer.Option(
+        ..., "--input", "-i", help="Input JSONL file to decontaminate."
+    ),
     benchmarks: Optional[str] = typer.Option(
         None, "--benchmarks", "-b",
         help="Comma-separated benchmark names (label only; corpora not bundled).",
@@ -146,7 +180,7 @@ def decontaminate(
         None, "--benchmark-file",
         help=(
             "v0.53.7: operator-supplied benchmark JSONL (under cwd). Each "
-            "row's ``text``/``prompt``/``content`` field contributes to the "
+            "row's text, prompt, Alpaca, preference or conversation fields contribute to the "
             "n-gram contamination set. Compatible with --benchmarks (extends)."
         ),
     ),
@@ -154,8 +188,14 @@ def decontaminate(
         "clean.jsonl", "--output", "-o",
         help="Output JSONL of rows that survived decontamination.",
     ),
-    threshold: float = typer.Option(0.8, "--threshold", min=0.0, max=1.0),
-    n: int = typer.Option(8, "--n", min=1, max=32),
+    threshold: float = typer.Option(
+        0.8, "--threshold", min=0.0, max=1.0,
+        help="Minimum n-gram overlap ratio for removing a row.",
+    ),
+    n: int = typer.Option(
+        8, "--n", min=1, max=32,
+        help="N-gram size used for overlap detection.",
+    ),
 ):
     """Drop rows that overlap public benchmarks (n-gram heuristic).
 
@@ -170,6 +210,7 @@ def decontaminate(
         load_jsonl_rows,
     )
 
+    _refuse_aliased_output(output, input=input, benchmark_file=benchmark_file)
     rows = _read_rows(input)
     bench_list: List[str] = []
     if benchmarks:
@@ -192,6 +233,7 @@ def decontaminate(
             bench_rows = load_jsonl_rows(benchmark_file)
         except (TypeError, ValueError, FileNotFoundError) as exc:
             _exit(f"--benchmark-file: {exc}")
+        _check_text_rows(bench_rows, "benchmark")
         for row in bench_rows:
             try:
                 text = extract_row_text(row)
@@ -227,8 +269,13 @@ def decontaminate(
 
 
 def toxicity(
-    input: str = typer.Option(..., "--input", "-i"),
-    output: str = typer.Option("toxicity.jsonl", "--output", "-o"),
+    input: str = typer.Option(
+        ..., "--input", "-i", help="Input JSONL file to score."
+    ),
+    output: str = typer.Option(
+        "toxicity.jsonl", "--output", "-o",
+        help="Output JSONL file for rows meeting the threshold.",
+    ),
     threshold: float = typer.Option(
         0.05, "--threshold", min=0.0, max=1.0,
         help="Rows meeting the abuse-keyword threshold are kept.",
@@ -237,6 +284,7 @@ def toxicity(
     """Run an abuse-keyword heuristic (not a toxicity classifier)."""
     from soup_cli.utils.data_score import extract_row_text, score_abuse_keywords
 
+    _refuse_aliased_output(output, input=input)
     rows = _read_rows(input)
     out_rows = []
     for row in rows:
@@ -260,12 +308,18 @@ def toxicity(
 
 
 def langdetect(
-    input: str = typer.Option(..., "--input", "-i"),
-    output: str = typer.Option("langdetect.jsonl", "--output", "-o"),
+    input: str = typer.Option(
+        ..., "--input", "-i", help="Input JSONL file to tag."
+    ),
+    output: str = typer.Option(
+        "langdetect.jsonl", "--output", "-o",
+        help="Output JSONL file with language tags.",
+    ),
 ):
     """Tag each row with a 2-letter language code (heuristic)."""
     from soup_cli.utils.data_score import detect_language, extract_row_text
 
+    _refuse_aliased_output(output, input=input)
     rows = _read_rows(input)
     out_rows = []
     for row in rows:
@@ -286,12 +340,18 @@ def langdetect(
 
 
 def pii(
-    input: str = typer.Option(..., "--input", "-i"),
-    output: str = typer.Option("pii.jsonl", "--output", "-o"),
+    input: str = typer.Option(
+        ..., "--input", "-i", help="Input JSONL file to scan."
+    ),
+    output: str = typer.Option(
+        "pii.jsonl", "--output", "-o",
+        help="Output JSONL file containing rows with detected PII.",
+    ),
 ):
     """Flag rows containing email / phone / SSN / credit-card patterns."""
     from soup_cli.utils.data_score import detect_pii, extract_row_text
 
+    _refuse_aliased_output(output, input=input)
     rows = _read_rows(input)
     out_rows = []
     for row in rows:
@@ -314,12 +374,18 @@ def pii(
 
 
 def educational(
-    input: str = typer.Option(..., "--input", "-i"),
-    output: str = typer.Option("educational.jsonl", "--output", "-o"),
+    input: str = typer.Option(
+        ..., "--input", "-i", help="Input JSONL file to score."
+    ),
+    output: str = typer.Option(
+        "educational.jsonl", "--output", "-o",
+        help="Output JSONL file with educational-value scores.",
+    ),
 ):
     """Tag each row with an educational-value score [0, 1]."""
     from soup_cli.utils.data_score import extract_row_text, score_educational_value
 
+    _refuse_aliased_output(output, input=input)
     rows = _read_rows(input)
     out_rows = []
     for row in rows:

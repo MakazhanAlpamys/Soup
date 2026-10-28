@@ -152,9 +152,17 @@ class TestExclusionReasonsDescribeTheCode:
         assert "no trainer reads it" in dp.NOT_PREPROCESS_KEY_FIELDS["remove_unused_columns"]
 
     def test_remove_unused_columns_is_still_unconsumed(self):
-        from tests.test_issue748_config_fields_reach_a_consumer import KNOWN_UNCONSUMED
+        """Still read by nothing; since v0.77 #748 files it under REFUSED_AT_LOAD
+        (an explicit true is refused) rather than KNOWN_UNCONSUMED."""
+        from tests.test_issue748_config_fields_reach_a_consumer import (
+            GUARDED,
+            KNOWN_UNCONSUMED,
+            REFUSED_AT_LOAD,
+        )
 
-        assert "data.remove_unused_columns" in KNOWN_UNCONSUMED
+        assert "data.remove_unused_columns" in REFUSED_AT_LOAD
+        assert "data.remove_unused_columns" in GUARDED
+        assert "data.remove_unused_columns" not in KNOWN_UNCONSUMED
 
 
 class TestTheOldestGapStillWins:

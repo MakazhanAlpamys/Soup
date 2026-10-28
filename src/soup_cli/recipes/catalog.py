@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
+from soup_cli.utils.kimi import KIMI_K2_GUARDED_STREAM_REASON, KIMI_K2_NO_SUPPORTED_ROUTE_REASON
+
 
 @dataclass(frozen=True)
 class RecipeMeta:
@@ -14,6 +16,7 @@ class RecipeMeta:
     tags: Tuple[str, ...]
     description: str
     yaml_str: str
+    unavailable_reason: Optional[str] = None
 
 
 def list_recipes() -> List[RecipeMeta]:
@@ -48,7 +51,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (170 recipes)
+# Recipe catalog (171 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -134,6 +137,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -365,6 +369,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -600,6 +605,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -632,6 +638,7 @@ training:
     alpha: 64
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -667,6 +674,7 @@ training:
     alpha: 64
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy,format
@@ -845,6 +853,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
 
 output: ./output_rm
 """,
@@ -996,6 +1005,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -1085,6 +1095,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -1352,6 +1363,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   ipo_tau: 0.1
 
 output: ./output
@@ -1777,6 +1789,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -1809,6 +1822,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -1841,6 +1855,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -1972,6 +1987,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -2154,6 +2170,7 @@ training:
     alpha: 16
     target_modules: auto
   quantization: none
+  gradient_checkpointing: true
 
 output: ./output
 """,
@@ -2673,39 +2690,6 @@ training:
 output: ./output
 """,
     ),
-    "pixtral-dpo": RecipeMeta(
-        model="mistralai/Pixtral-12B-2409",
-        task="dpo",
-        size="12B",
-        tags=("mistral", "pixtral", "vision", "multimodal", "dpo", "alignment"),
-        description="Pixtral 12B DPO multimodal preference alignment",
-        yaml_str="""\
-base: mistralai/Pixtral-12B-2409
-task: dpo
-modality: vision
-
-data:
-  train: ./data/vision_preference_train.jsonl
-  format: llava
-  image_dir: ./data/images
-  max_length: 4096
-
-training:
-  epochs: 3
-  lr: 5e-6
-  batch_size: 1
-  gradient_accumulation_steps: 16
-  lora:
-    r: 16
-    alpha: 32
-    target_modules: auto
-  quantization: 4bit
-  dpo_beta: 0.1
-  gradient_checkpointing: true
-
-output: ./output
-""",
-    ),
     # ------------------------------------------------------------------
     # v0.51.0 Part A — Reasoning + agent (~5 model families)
     # ------------------------------------------------------------------
@@ -2828,7 +2812,8 @@ output: ./output
         task="sft",
         size="N/A",
         tags=("kimi", "moonshot", "moe", "long-context"),
-        description="Kimi K2 SFT (Moonshot MoE, long-context-aware)",
+        description="Kimi K2 SFT: resident unsupported; guarded streaming only (see recipes use).",
+        unavailable_reason=KIMI_K2_GUARDED_STREAM_REASON,
         yaml_str="""\
 base: moonshotai/Kimi-K2-Base
 task: sft
@@ -2858,7 +2843,8 @@ output: ./output
         task="grpo",
         size="N/A",
         tags=("kimi", "moonshot", "thinking", "grpo", "reasoning"),
-        description="Kimi K2 Thinking GRPO reasoning",
+        description="Kimi K2 Thinking GRPO: unsupported resident route; no supported route yet.",
+        unavailable_reason=KIMI_K2_NO_SUPPORTED_ROUTE_REASON,
         yaml_str="""\
 base: moonshotai/Kimi-K2-Thinking
 task: grpo
@@ -2878,6 +2864,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.04
   num_generations: 4
   reward_fn: accuracy
@@ -3694,6 +3681,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -3730,6 +3718,36 @@ training:
 output: ./output
 """,
     ),
+    "qwen3.5-2b-dpo": RecipeMeta(
+        model="Qwen/Qwen3.5-2B",
+        task="dpo",
+        size="2B",
+        tags=("qwen", "qwen3.5", "dpo", "alignment", "preference", "small", "edge"),
+        description="Qwen 3.5 2B text DPO alignment (Apache-2.0, small / edge)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-2B
+task: dpo
+modality: text
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 5e-6
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
+
+output: ./output
+""",
+    ),
     "qwen3.5-2b-grpo": RecipeMeta(
         model="Qwen/Qwen3.5-2B",
         task="grpo",
@@ -3756,6 +3774,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -3788,6 +3807,36 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "qwen3.5-4b-dpo": RecipeMeta(
+        model="Qwen/Qwen3.5-4B",
+        task="dpo",
+        size="4B",
+        tags=("qwen", "qwen3.5", "dpo", "alignment", "preference", "small"),
+        description="Qwen 3.5 4B text DPO alignment (Apache-2.0)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-4B
+task: dpo
+modality: text
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 5e-6
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
 
 output: ./output
 """,
@@ -3877,6 +3926,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -4216,6 +4266,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -4983,6 +5034,7 @@ training:
     r: 16
     alpha: 32
     target_modules: auto
+  gradient_checkpointing: true
   grpo_beta: 0.04
   num_generations: 4
   reward_fn: verifiable
@@ -5016,6 +5068,7 @@ training:
     r: 16
     alpha: 32
     target_modules: auto
+  gradient_checkpointing: true
   grpo_beta: 0.04
   num_generations: 4
   reward_fn: accuracy
@@ -5048,6 +5101,7 @@ training:
     r: 16
     alpha: 32
     target_modules: auto
+  gradient_checkpointing: true
   grpo_beta: 0.04
   num_generations: 4
   reward_fn: verifiable

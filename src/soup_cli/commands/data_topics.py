@@ -26,7 +26,8 @@ from rich.table import Table
 from soup_cli.data.loader import load_raw_data
 from soup_cli.utils._eval_text import row_text
 from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
-from soup_cli.utils.paths import atomic_write_text, is_under_cwd
+from soup_cli.utils.paths import atomic_write_text, ensure_distinct_paths, is_under_cwd
+from soup_cli.utils.terminal import for_terminal
 from soup_cli.utils.topics import build_topic_report, kmeans, resolve_k
 
 console = Console()
@@ -91,6 +92,13 @@ def topics(
             f"{escape(str(output))}[/]"
         )
         raise typer.Exit(1)
+    if output is not None:
+        # The report must never replace the dataset it describes (#2226).
+        try:
+            ensure_distinct_paths([("the input", path)], [("--output", output)])
+        except ValueError as exc:
+            console.print(f"[red]{for_terminal(exc)}[/]")
+            raise typer.Exit(1) from exc
 
     rows = load_raw_data(file_path)
     if not rows:

@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     import torch as _torch_typ
 
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.run_provenance import base_revision_kwargs
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -513,7 +514,8 @@ class DistillTrainerWrapper:
 
         console.print(f"[dim]Loading tokenizer (student/teacher shared): {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -524,6 +526,7 @@ class DistillTrainerWrapper:
             cfg.base,
             trust_remote_code=self._trust_remote_code,
             device_map=dev_map,
+            **base_revision_kwargs(cfg.base),
         )
 
         # LoRA on the student — bracket with v0.40.6 #67 surgical PEFT patches.
@@ -804,6 +807,7 @@ class DistillTrainerWrapper:
 
         batch_size = tcfg.batch_size if tcfg.batch_size != "auto" else 4
         # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
         from soup_cli.utils.warmup import resolve_trainer_warmup_steps
 
         warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
@@ -816,6 +820,9 @@ class DistillTrainerWrapper:
             gradient_accumulation_steps=tcfg.gradient_accumulation_steps,
             learning_rate=tcfg.lr,
             warmup_steps=warmup_steps,
+            gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
             weight_decay=tcfg.weight_decay,
             max_grad_norm=tcfg.max_grad_norm,
             optim=tcfg.optimizer,

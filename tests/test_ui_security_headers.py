@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.ui_helpers import ui_client
+
 pytest.importorskip("fastapi")
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -36,7 +38,7 @@ def _assert_plain_headers(resp):
 
 @pytest.fixture
 def client():
-    return TestClient(create_app())
+    return ui_client(create_app())
 
 
 @pytest.mark.parametrize("path", ["/", "/static/app.js", "/static/safe_html.js", "/api/system"])
@@ -100,7 +102,7 @@ def test_headers_on_body_size_rejection(client):
 def test_headers_on_event_stream():
     ui_mod._train_process = None
     ui_mod._train_log_buffer = None
-    client = TestClient(create_app())
+    client = ui_client(create_app())
     with client.stream(
         "GET", "/api/train/logs", headers={"Authorization": f"Bearer {get_auth_token()}"}
     ) as resp:

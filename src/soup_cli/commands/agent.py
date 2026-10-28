@@ -123,6 +123,7 @@ def train(
     ),
     examples_per_endpoint: int = typer.Option(
         4, "--examples-per-endpoint", "-n", min=1, max=32,
+        help="Number of synthetic examples to create per API endpoint.",
     ),
 ):
     """One-shot wrapper: synth + planned soup train invocation (printed)."""
@@ -275,7 +276,7 @@ def eval(
     tool_ok = 0
     args_ok = 0
     try:
-        with open(predictions, "r", encoding="utf-8") as fh:
+        with open(predictions, "r", encoding="utf-8-sig") as fh:
             for line in fh:
                 line = line.strip()
                 if not line:
@@ -345,7 +346,7 @@ def _eval_sandbox(predictions: str, tool_to_endpoint: dict, max_pred_lines: int)
     total = 0
     counts = {"ok": 0, "tool_error": 0, "timeout": 0, "arg_error": 0}
     try:
-        with open(predictions, "r", encoding="utf-8") as fh:
+        with open(predictions, "r", encoding="utf-8-sig") as fh:
             for line in fh:
                 line = line.strip()
                 if not line:

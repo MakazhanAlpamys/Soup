@@ -309,11 +309,12 @@ def serve(
     tool_auth_token: Optional[str] = typer.Option(
         None,
         "--tool-auth-token",
+        envvar="SOUP_TOOL_AUTH_TOKEN",
         help=(
-            "Require 'Authorization: Bearer <token>' on the code-exec tool "
-            "endpoints (/v1/tools/python, /v1/tools/web_search). Strongly "
-            "recommended whenever --host is not loopback, since those "
-            "endpoints run caller-supplied Python in a best-effort sandbox."
+            "Require 'Authorization: Bearer <token>' on the tool endpoints "
+            "(/v1/tools/python, /v1/tools/bash, /v1/tools/web_search). Without it, "
+            "/v1/tools/python and /v1/tools/bash answer 401 on every bind and a "
+            "non-loopback --host is refused."
         ),
     ),
 ):
@@ -1245,6 +1246,13 @@ _METRICS_BACKENDS = frozenset({"transformers", "vllm"})
 # The binds `soup serve` accepts without --tool-auth-token (the same three
 # spellings the refusal in serve() and _check_tool_auth compare against).
 _LOOPBACK_BINDS = frozenset({"127.0.0.1", "localhost", "::1"})
+# What /v1/tools/python and /v1/tools/bash answer, on any bind, when the server
+# was started without --tool-auth-token: the 401 detail names the fix.
+_CODE_TOOL_TOKEN_REQUIRED = (
+    "Authentication required: /v1/tools/python and /v1/tools/bash need a token on "
+    "every bind. Start soup serve with --tool-auth-token <secret> (or set "
+    "SOUP_TOOL_AUTH_TOKEN) and send 'Authorization: Bearer <secret>'."
+)
 
 
 def _non_loopback_notices(host: str, backend: str) -> list[str]:
@@ -1340,7 +1348,7 @@ def _serve_sglang(
             )
         )
     console.print("[dim]Initializing SGLang runtime...[/]")
-    runtime, runtime_model_name = create_sglang_runtime(
+    runtime, runtime_model_name, lora_name = create_sglang_runtime(
         model_path=str(model_path),
         base_model=base_model,
         is_adapter=is_adapter,
@@ -1387,6 +1395,9 @@ def _serve_sglang(
         model_name=str(model_path.name),
         max_tokens_default=max_tokens_default,
         tokenizer=tokenizer,
+        # The name the adapter was registered under; every request has to name
+        # it, or SGLang answers from the base model (#1724).
+        lora_name=lora_name,
     )
 
     return app
@@ -1722,11 +1733,13 @@ def _create_app(
     """Create the FastAPI application with OpenAI-compatible endpoints.
 
     Args:
-        auth_token: optional Bearer-token gate for the v0.53.7 tool
-            endpoints (``/v1/tools/python`` + ``/v1/tools/web_search``).
-            When ``None`` (default), endpoints inherit the server's
-            loopback-only CORS trust boundary. When set, callers must
-            supply ``Authorization: Bearer <token>``.
+        auth_token: Bearer token for the v0.53.7 tool endpoints
+            (``/v1/tools/python``, ``/v1/tools/bash`` and
+            ``/v1/tools/web_search``), ``/v1/thumbs`` and the adapter routes.
+            When set, callers must supply ``Authorization: Bearer <token>``.
+            When ``None`` (default), ``/v1/tools/python`` and ``/v1/tools/bash``
+            answer 401 on every bind; the other routes take no token on a
+            loopback bind and answer 401 on any other.
     """
     import secrets as _secrets
     import threading as _threading
@@ -1774,6 +1787,7 @@ def _create_app(
             raise HTTPException(
                 status_code=401,
                 detail="Authentication required on non-loopback host",
+                headers={"WWW-Authenticate": "Bearer"},
             )
         if not auth_token:
             return
@@ -1782,8 +1796,20 @@ def _create_app(
             authorization.encode("utf-8"), expected.encode("utf-8")
         ):
             raise HTTPException(
-                status_code=401, detail="Invalid or missing bearer token"
+                status_code=401,
+                detail="Invalid or missing bearer token",
+                headers={"WWW-Authenticate": "Bearer"},
             )
+
+    def _check_code_tool_auth(authorization: Optional[str]) -> None:
+        """The python and bash tool routes take a token on every bind, loopback included."""
+        if not auth_token:
+            raise HTTPException(
+                status_code=401,
+                detail=_CODE_TOOL_TOKEN_REQUIRED,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        _check_tool_auth(authorization)
 
     from collections.abc import AsyncIterator
     from contextlib import asynccontextmanager
@@ -1820,7 +1846,8 @@ def _create_app(
     # None of the three covers a non-browser client, which sends no Origin at
     # all and can name the bind address in Host — for those, on a non-loopback
     # bind, the bearer token checked by `_check_tool_auth` is the only thing
-    # protecting these routes.
+    # protecting these routes. The python and bash tool routes take that token
+    # on every bind, loopback included (`_check_code_tool_auth`).
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
@@ -2304,7 +2331,7 @@ def _create_app(
         payload: dict,
         authorization: Optional[str] = Header(default=None),
     ) -> dict:
-        _check_tool_auth(authorization)
+        _check_code_tool_auth(authorization)
         if not isinstance(payload, dict):
             raise HTTPException(status_code=400, detail="Invalid request")
         code = payload.get("code")
@@ -2312,18 +2339,40 @@ def _create_app(
             raise HTTPException(status_code=400, detail="Invalid request")
         if len(code) > tool_max_code_len:
             raise HTTPException(status_code=400, detail="Invalid request")
-        try:
-            from soup_cli.trainer.rewards import _run_code_sandbox
+        from soup_cli.trainer.rewards import (
+            SandboxIsolationError,
+            _get_isolation_strategy,
+            _run_code_sandbox_process,
+        )
 
-            stdout = _run_code_sandbox(code)
+        # Same requirement as /v1/tools/bash: run only where the host
+        # provides OS-level isolation (namespaces / sandbox-exec), and only
+        # when that isolation is actually set up for the run (strict).
+        isolation_detail = "python sandbox requires OS-level isolation"
+        if _get_isolation_strategy() == "best-effort":
+            raise HTTPException(status_code=501, detail=isolation_detail)
+        try:
+            result = _run_code_sandbox_process(code, strict_namespaces=True)
+        except SandboxIsolationError:
+            raise HTTPException(status_code=501, detail=isolation_detail)
         except Exception as exc:  # noqa: BLE001
             logger.debug("/v1/tools/python sandbox error: %s", exc)
             raise HTTPException(status_code=500, detail="Internal server error")
+        if result.launch_failed:
+            raise HTTPException(
+                status_code=501,
+                detail=isolation_detail,
+            )
+        exit_code = result.returncode if result.returncode is not None else 1
+        if result.timed_out:
+            exit_code = 124
+        elif result.output_exceeded:
+            exit_code = 1
         return {
-            "stdout": stdout if stdout is not None else "",
-            "stderr": "",
-            "exit_code": 0 if stdout is not None else 1,
-            "timed_out": stdout is None,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "exit_code": exit_code,
+            "timed_out": result.timed_out,
         }
 
     @app.post("/v1/tools/bash", dependencies=[Depends(_check_local_request)])
@@ -2331,7 +2380,7 @@ def _create_app(
         payload: dict,
         authorization: Optional[str] = Header(default=None),
     ) -> dict:
-        _check_tool_auth(authorization)
+        _check_code_tool_auth(authorization)
         if not isinstance(payload, dict):
             raise HTTPException(status_code=400, detail="Invalid request")
         command = payload.get("command")

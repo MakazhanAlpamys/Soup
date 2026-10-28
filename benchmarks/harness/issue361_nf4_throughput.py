@@ -154,6 +154,18 @@ def parse_args() -> argparse.Namespace:
         help="skip the same-session GEMM ceiling (not the published protocol)",
     )
     parser.add_argument(
+        "--nf4-scale-cache",
+        action="store_true",
+        help="build with training.stream_nf4_scale_cache on (#1892); not the published protocol",
+    )
+    parser.add_argument(
+        "--train-threads",
+        type=int,
+        default=None,
+        help="torch.set_num_threads(N) for the warm-up and measured steps only; "
+        "a measurement knob, not a Soup setting",
+    )
+    parser.add_argument(
         "--json",
         dest="json_path",
         metavar="PATH",
@@ -416,6 +428,7 @@ def main() -> int:  # noqa: C901 — a protocol is a sequence, not a branch tree
         tier="ram",
         quant=args.quant,
         weights_dir=weights_dir,
+        nf4_scale_cache=args.nf4_scale_cache,
     )
     build_secs = time.time() - t0
     assert runtime.source.pinned, "require_pin=True but the source is not pinned"
@@ -437,6 +450,8 @@ def main() -> int:  # noqa: C901 — a protocol is a sequence, not a branch tree
     labels = input_ids.clone()
 
     model.train()
+    if args.train_threads is not None:
+        torch.set_num_threads(args.train_threads)
     torch.cuda.synchronize()
     torch.cuda.reset_peak_memory_stats()
 
@@ -544,6 +559,10 @@ def main() -> int:  # noqa: C901 — a protocol is a sequence, not a branch tree
                 "targets": args.targets,
                 "pin_required": True,
                 "store_gb_pinned": round(store_gb, 3),
+                "nf4_scale_cache": args.nf4_scale_cache,
+                "nf4_scale_cache_bytes": runtime.stats()["nf4_scale_cache_bytes"],
+                "train_threads": args.train_threads,
+                "step_times_s": [round(t, 4) for t in step_times],
                 "param_split": {
                     "decoder": split["decoder"],
                     "embed": split["embed"],

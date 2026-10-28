@@ -76,13 +76,15 @@ class TestRecipeCatalog:
         assert results == []
 
     def test_all_recipes_valid_yaml(self):
-        """All recipes contain valid YAML that loads as SoupConfig."""
-        from soup_cli.config.loader import load_config_from_string
+        """Each recipe loads or refuses with its documented unavailability reason."""
         from soup_cli.recipes.catalog import RECIPES
+        from tests.recipe_contracts import load_catalog_config
 
         for name, recipe in RECIPES.items():
             try:
-                config = load_config_from_string(recipe.yaml_str)
+                config = load_catalog_config(recipe)
+                if config is None:
+                    continue
                 assert config.base is not None, f"Recipe {name} has no base model"
             except Exception as exc:
                 pytest.fail(f"Recipe '{name}' is invalid: {exc}")
@@ -109,6 +111,21 @@ class TestRecipeCatalog:
             assert recipe.task == yaml_task, (
                 f"Recipe '{name}' task mismatch: meta={recipe.task}, yaml={yaml_task}"
             )
+
+    def test_recipe_data_formats_suit_preference_tasks(self):
+        """The catalog must not offer vision row formats to preference trainers."""
+        import yaml
+
+        from soup_cli.recipes.catalog import RECIPES
+
+        preference_tasks = {"dpo", "ipo", "simpo", "orpo", "bco", "preference"}
+        vision_preference_formats = {"llava", "sharegpt4v"}
+        for name, recipe in RECIPES.items():
+            parsed = yaml.safe_load(recipe.yaml_str)
+            data_format = parsed.get("data", {}).get("format", "auto")
+            assert not (
+                recipe.task in preference_tasks and data_format in vision_preference_formats
+            ), f"Recipe {name} pairs preference task {recipe.task} with {data_format}"
 
     def test_recipe_models_match_yaml_base(self):
         """Recipe.model matches the base model in the YAML content."""
@@ -1811,6 +1828,9 @@ class TestV025NewRecipes:
         Issue #850 added 2 (deepseek-v4-pro-dpo, deepseek-v4-pro-grpo) -> 176.
         PR #1113 removes spark-tts -> 173.
         Issue #1145 removed 3 (mistral-large-3-sft, mistral-large-3-dpo, minimax-m3-dpo) -> 170.
+        Issue #1867 retires the unsupported vision-preference recipe -> 169.
+        Task-variant for #275 added 1 (qwen3.5-4b-dpo) -> 170.
+        Task-variant for #275 added 1 (qwen3.5-2b-dpo) -> 171.
         """
         from soup_cli.recipes.catalog import RECIPES
         from tests.recipe_count import EXPECTED_RECIPE_COUNT, recipe_count_hint

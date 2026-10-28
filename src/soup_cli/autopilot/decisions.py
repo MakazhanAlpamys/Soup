@@ -186,7 +186,7 @@ def detect_prequantized_format_from_path(model_dir: object) -> Optional[str]:
     if _stat.S_ISLNK(st.st_mode):
         return None
     try:
-        with open(config_path, encoding="utf-8") as fh:
+        with open(config_path, encoding="utf-8-sig") as fh:
             data = json.load(fh)
     except (OSError, ValueError, UnicodeDecodeError):
         return None

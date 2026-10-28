@@ -24,8 +24,8 @@ class TestExportFormats:
         assert "tensorrt" in SUPPORTED_FORMATS
 
     def test_format_count(self):
-        """v0.53.1 — 7 prior formats + torchao + gguf-ud = 9."""
-        assert len(SUPPORTED_FORMATS) == 9
+        """v0.77 — 9 prior formats - awq - gptq = 7."""
+        assert len(SUPPORTED_FORMATS) == 7
         assert "bitnet" in SUPPORTED_FORMATS
         assert "tq1_0" in SUPPORTED_FORMATS
         assert "torchao" in SUPPORTED_FORMATS
@@ -150,7 +150,9 @@ class TestTensorrtExportFunction:
             "tensorrt_llm": MagicMock(),
             "tensorrt_llm.commands": MagicMock(),
             "tensorrt_llm.commands.convert_checkpoint": MagicMock(),
-        }), mock_patch("subprocess.run", return_value=mock_result) as mock_run:
+        }), mock_patch("subprocess.run", return_value=mock_result) as mock_run, mock_patch(
+            "soup_cli.utils.tool_paths.find_tool", return_value="/fake/bin/trtllm-build"
+        ):
             import soup_cli.commands.export as export_mod
 
             export_mod._export_tensorrt(

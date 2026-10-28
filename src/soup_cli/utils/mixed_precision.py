@@ -10,6 +10,7 @@ both ``Qwen/Qwen2-7B-Instruct`` and ``alibaba/Qwen2.5-3B`` with one entry.
 
 from __future__ import annotations
 
+import os
 from typing import Literal
 
 # Compute capability thresholds.
@@ -182,3 +183,59 @@ def keep_trainable_dtype_on_resume(trainer) -> None:
                 param.data = param.data.to(dtype)
 
     trainer._load_from_checkpoint = _load_then_restore
+
+
+_ADAPTER_WEIGHT_FILES = ("adapter_model.safetensors", "adapter_model.bin")
+_FULL_WEIGHT_FILES = ("model.safetensors", "pytorch_model.bin")
+
+
+def _has_any(folder: str, names: tuple[str, ...]) -> bool:
+    return any(os.path.isfile(os.path.join(folder, name)) for name in names)
+
+
+def _resume_skipped_the_root_adapter(checkpoint: str, model) -> bool:
+    """Whether ``Trainer._load_from_checkpoint`` left the root adapter unread.
+
+    It reads the root adapter only when no subfolder of the checkpoint holds
+    adapter weights. PEFT saves the ``default`` adapter at the root and every
+    other adapter in a subfolder of its own name.
+    """
+    if "default" not in getattr(model, "peft_config", {}):
+        return False
+    if _has_any(checkpoint, _FULL_WEIGHT_FILES) or not _has_any(checkpoint, _ADAPTER_WEIGHT_FILES):
+        return False
+    return any(
+        _has_any(os.path.join(checkpoint, entry), _ADAPTER_WEIGHT_FILES)
+        for entry in os.listdir(checkpoint)
+    )
+
+
+def reload_root_adapter_on_resume(trainer) -> None:
+    """Load the trained adapter that a checkpoint resume leaves out (#1768).
+
+    TRL's DPO and GRPO trainers add a frozen ``ref`` adapter next to the trained
+    ``default`` one, so their checkpoints hold ``default`` at the root and ``ref``
+    in ``checkpoint-N/ref/``. On ``train(resume_from_checkpoint=...)``,
+    ``Trainer._load_from_checkpoint`` loads the subfolder adapters and, when there
+    is one, nothing else: ``default`` keeps the fresh weights it was built with
+    while the optimizer and the step counter are restored, and the run goes on
+    from a new adapter. Load the root into ``default`` right after that load.
+
+    A checkpoint with no adapter subfolder is loaded once, by the Trainer. Call
+    this before ``keep_trainable_dtype_on_resume`` so that the reload is cast
+    back with the rest.
+    """
+    original_load = trainer._load_from_checkpoint
+
+    def _load_then_root_adapter(resume_from_checkpoint, model=None):
+        original_load(resume_from_checkpoint, model)
+        target = model if model is not None else trainer.model
+        if not _resume_skipped_the_root_adapter(resume_from_checkpoint, target):
+            return
+        # The adapter exists, so this only reads the weights into it: which
+        # adapter is active and which parameters train stay as they were.
+        target.load_adapter(
+            resume_from_checkpoint, "default", is_trainable="default" in target.active_adapters
+        )
+
+    trainer._load_from_checkpoint = _load_then_root_adapter

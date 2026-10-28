@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-import click
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -26,6 +25,7 @@ from soup_cli.autopilot.decisions import (
 from soup_cli.autopilot.generate_config import build_soup_config, write_yaml
 from soup_cli.config.schema import SFT_KERNEL_AWARE_TASKS
 from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.typer_compat import MissingParameter
 
 console = Console()
 
@@ -70,7 +70,7 @@ def _stdin_isatty() -> bool:
     return sys.stdin.isatty()
 
 
-def _param_by_name(ctx: typer.Context, name: str) -> click.Parameter | None:
+def _param_by_name(ctx: typer.Context, name: str) -> object | None:
     """Find a Click Parameter on the command by its argument name."""
     for param in ctx.command.params:
         if param.name == name:
@@ -111,11 +111,11 @@ def autopilot_cmd(
     """Autopilot: give model+data+goal, Soup picks optimal hyperparameters."""
     if not _stdin_isatty():
         if model is None:
-            raise click.MissingParameter(ctx=ctx, param=_param_by_name(ctx, "model"))
+            raise MissingParameter(ctx=ctx, param=_param_by_name(ctx, "model"))
         if data is None:
-            raise click.MissingParameter(ctx=ctx, param=_param_by_name(ctx, "data"))
+            raise MissingParameter(ctx=ctx, param=_param_by_name(ctx, "data"))
         if goal is None:
-            raise click.MissingParameter(ctx=ctx, param=_param_by_name(ctx, "goal"))
+            raise MissingParameter(ctx=ctx, param=_param_by_name(ctx, "goal"))
 
     if model is None:
         model = Prompt.ask("Base model (HF model id)")

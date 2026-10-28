@@ -82,11 +82,16 @@ def summarize_trainable(model: Any) -> ParamSnapshot:
 
 
 def _digest(named_params) -> str:
+    import torch
+
     hasher = hashlib.sha256()
     for name, param in named_params:
         hasher.update(name.encode("utf-8"))
-        detached = param.detach()
-        hasher.update(detached.cpu().contiguous().numpy().tobytes())
+        # The raw bytes, viewed as uint8, not ``.numpy()`` of the tensor itself:
+        # numpy has no bfloat16, and TRL casts a 4-bit or 8-bit model's adapters to
+        # bf16 on every card (#2215). Every other dtype hashes the same bytes as before.
+        raw = param.detach().cpu().contiguous().reshape(-1).view(torch.uint8)
+        hasher.update(raw.numpy().tobytes())
     return hasher.hexdigest()
 
 

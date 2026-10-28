@@ -15,6 +15,7 @@ from typer.testing import CliRunner
 from soup_cli.cli import app
 from soup_cli.config.loader import load_config_from_string
 from soup_cli.recipes.catalog import RECIPES, get_recipe, search_recipes
+from tests.recipe_contracts import load_catalog_config
 
 runner = CliRunner()
 
@@ -266,12 +267,11 @@ class TestPartEDomain:
 
 
 # ---------------------------------------------------------------------------
-# Part F: Multimodal reasoning (2 new)
+# Part F: Multimodal reasoning (1 new)
 # ---------------------------------------------------------------------------
 
 PART_F_MM_REASONING = [
     ("llama3.2-vision-grpo", "grpo", "meta-llama/Llama-3.2-11B-Vision-Instruct"),
-    ("pixtral-dpo", "dpo", "mistralai/Pixtral-12B-2409"),
 ]
 
 # Single source of truth across the file — concatenated for catalog-wide
@@ -284,7 +284,7 @@ ALL_V031_RECIPES = (
 
 
 class TestPartFMultimodalReasoning:
-    """2 new multimodal alignment / reasoning recipes."""
+    """Multimodal reasoning recipe."""
 
     @pytest.mark.parametrize("name,task,model", PART_F_MM_REASONING)
     def test_recipe_registered(self, name: str, task: str, model: str) -> None:
@@ -320,7 +320,9 @@ class TestRecipeCatalog80:
     @pytest.mark.parametrize("name", sorted(RECIPES.keys()))
     def test_every_recipe_loads_as_soupconfig(self, name: str) -> None:
         recipe = RECIPES[name]
-        cfg = load_config_from_string(recipe.yaml_str)
+        cfg = load_catalog_config(recipe)
+        if cfg is None:
+            return
         assert cfg.base == recipe.model, (
             f"Recipe '{name}' base mismatch: meta={recipe.model}, yaml={cfg.base}"
         )
@@ -359,7 +361,9 @@ class TestRecipeCatalog80:
     def test_every_recipe_default_data_path_is_relative(self, name: str) -> None:
         """Default training data path must be a non-empty relative path."""
         recipe = RECIPES[name]
-        cfg = load_config_from_string(recipe.yaml_str)
+        cfg = load_catalog_config(recipe)
+        if cfg is None:
+            return
         train_path = cfg.data.train
         assert train_path, f"{name} has empty/missing data.train"
         # Paths starting with / on POSIX or with a Windows drive letter are absolute.
@@ -376,7 +380,9 @@ class TestRecipeCatalog80:
         no-op LoRA adapter at training time with no error: a silent failure
         mode the catalog must guard against.
         """
-        cfg = load_config_from_string(RECIPES[name].yaml_str)
+        cfg = load_catalog_config(RECIPES[name])
+        if cfg is None:
+            return
         modules = cfg.training.lora.target_modules
         if isinstance(modules, list):
             assert modules, f"{name} has empty lora.target_modules list"
@@ -389,7 +395,9 @@ class TestRecipeCatalog80:
     @pytest.mark.parametrize("name", sorted(RECIPES.keys()))
     def test_every_recipe_max_length_within_bounds(self, name: str) -> None:
         """max_length must be within the schema bounds [64, 1_048_576]."""
-        cfg = load_config_from_string(RECIPES[name].yaml_str)
+        cfg = load_catalog_config(RECIPES[name])
+        if cfg is None:
+            return
         assert 64 <= cfg.data.max_length <= 1_048_576, (
             f"{name} max_length={cfg.data.max_length} out of [64, 1M]"
         )
@@ -401,7 +409,9 @@ class TestRecipeCatalog80:
         self, name: str
     ) -> None:
         """GRPO recipes must wire reward_fn and num_generations — required for the trainer."""
-        cfg = load_config_from_string(RECIPES[name].yaml_str)
+        cfg = load_catalog_config(RECIPES[name])
+        if cfg is None:
+            return
         assert cfg.training.reward_fn is not None, (
             f"GRPO recipe '{name}' missing reward_fn"
         )

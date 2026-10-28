@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections import deque
 from pathlib import Path
 from typing import Optional
 
@@ -13,15 +14,15 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
-from soup_cli.config.deprecation import DEPRECATED_VALUE_REJECTION_VERSION
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.config.deprecation import EXPORT_FORMATS_REMOVED_IN
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
 SUPPORTED_FORMATS = (
-    "gguf", "onnx", "tensorrt", "awq", "gptq",
+    "gguf", "onnx", "tensorrt",
     # v0.52.0 Part D — BitNet 1.58-bit + TQ1_0 GGUF.
-    # Schema-only stubs in v0.52.0; live conversion lands in v0.52.1.
+    # Live llama.cpp conversion (v0.71.20 #134); needs a built llama.cpp toolchain.
     "bitnet", "tq1_0",
     # v0.53.1 #142 — TorchAO PTQ live wiring (Int4WeightOnly / Int8DynActInt4 /
     # Float8DynActFloat8 / NVFP4). Requires --quant-config <yaml>.
@@ -29,41 +30,10 @@ SUPPORTED_FORMATS = (
     # v0.53.1 #139 — UD/IQ/Apple-ARM GGUFs via llama.cpp imatrix.
     "gguf-ud",
 )
-# #338 — AWQ and GPTQ export are deprecated: both upstream projects are archived
-# and neither extra installs next to the train extra. The two formats still run
-# for one more release; the notice names the formats to move to. Maps the format
-# to the upstream project the notice names.
-DEPRECATED_FORMATS = {"awq": "AutoAWQ", "gptq": "AutoGPTQ"}
-REPLACEMENT_FORMATS = ("gguf", "onnx", "tensorrt", "bitnet", "tq1_0")
 GGUF_QUANT_TYPES = ("q4_0", "q4_k_m", "q5_k_m", "q8_0", "f16", "f32")
 LLAMA_CPP_DIR_NAME = "llama.cpp"
 # Pin to a known release tag for supply-chain safety
 LLAMA_CPP_TAG = "b5270"
-
-
-def deprecated_format_notice(fmt: str) -> Optional[str]:
-    """The deprecation line for an export format, or ``None`` when it stays.
-
-    Plain text with no console markup: ``soup export`` and ``soup quantize``
-    both print it behind a ``Deprecated:`` label.
-    """
-    upstream = DEPRECATED_FORMATS.get(fmt)
-    if upstream is None:
-        return None
-    replacements = ", ".join(REPLACEMENT_FORMATS[:-1]) + f" or {REPLACEMENT_FORMATS[-1]}"
-    return (
-        f"--format {fmt} is deprecated and will be removed in "
-        f"Soup v{DEPRECATED_VALUE_REJECTION_VERSION}: "
-        f"{upstream} is archived upstream and the {fmt} extra cannot be installed "
-        f"next to the train extra. Use --format {replacements} instead."
-    )
-
-
-def _warn_deprecated_format(fmt: str) -> None:
-    """Print the deprecation notice for ``fmt``, if it has one."""
-    notice = deprecated_format_notice(fmt)
-    if notice is not None:
-        console.print(f"[yellow]Deprecated:[/] {notice}")
 
 
 def export(
@@ -78,9 +48,8 @@ def export(
         "--format",
         "-f",
         help=(
-            "Export format: gguf, onnx, tensorrt, awq, gptq, bitnet, tq1_0 "
-            "(awq and gptq are deprecated and will be removed in "
-            f"Soup v{DEPRECATED_VALUE_REJECTION_VERSION})"
+            "Export format: gguf, onnx, tensorrt, bitnet, tq1_0, torchao, "
+            "gguf-ud (torchao needs --quant-config)"
         ),
     ),
     quant: str = typer.Option(
@@ -121,25 +90,10 @@ def export(
         "--deploy-name",
         help="Model name for deployment (used with --deploy)",
     ),
-    bits: int = typer.Option(
-        4,
-        "--bits",
-        help="Quantization bits for AWQ/GPTQ: 4 or 8",
-    ),
-    group_size: int = typer.Option(
-        128,
-        "--group-size",
-        help="Group size for AWQ/GPTQ quantization",
-    ),
     calibration_data: Optional[str] = typer.Option(
         None,
         "--calibration-data",
-        help="Path to calibration JSONL. Required for AWQ and GPTQ.",
-    ),
-    calibration_samples: int = typer.Option(
-        128,
-        "--calibration-samples",
-        help="Number of calibration samples for AWQ/GPTQ",
+        help="Path to calibration JSONL for imatrix GGUF export.",
     ),
     registry_id: Optional[str] = typer.Option(
         None,
@@ -179,8 +133,15 @@ def export(
             "hf (default) / modelscope / modelers (v0.53.10 #152)."
         ),
     ),
+    verbose: bool = typer.Option(
+        False, "--verbose", help="Stream GGUF converter and quantizer logs while they run.",
+    ),
+    no_install_deps: bool = typer.Option(
+        False, "--no-install-deps",
+        help="GGUF only: never invoke pip; refuse missing conversion dependencies before work.",
+    ),
 ):
-    """Export a model to GGUF, ONNX, TensorRT-LLM, AWQ, GPTQ, or TorchAO format."""
+    """Export a model to GGUF, ONNX, TensorRT-LLM, BitNet, or TorchAO format."""
     # v0.53.10 #152 — pre-fetch the base model from a non-HF hub. ``model``
     # is typically a local merged dir / adapter dir; only ``base`` is rewritten.
     if hub and hub != "hf":
@@ -198,16 +159,28 @@ def export(
     model_path = Path(model)
 
     # --- Validate ---
+    if fmt not in SUPPORTED_FORMATS:
+        removed_notice = ""
+        if fmt in ("awq", "gptq"):
+            removed_notice = (
+                f"\n[yellow]--format {fmt} was removed in v{EXPORT_FORMATS_REMOVED_IN}.[/]"
+            )
+        console.print(
+            f"[red]Unsupported format: {fmt}[/]{removed_notice}\n"
+            f"Supported: {', '.join(SUPPORTED_FORMATS)}"
+        )
+        raise typer.Exit(1)
+
     if not model_path.exists():
         console.print(f"[red]Model path not found: {model_path}[/]")
         raise typer.Exit(1)
 
-    if fmt not in SUPPORTED_FORMATS:
-        console.print(
-            f"[red]Unsupported format: {fmt}[/]\n"
-            f"Supported: {', '.join(SUPPORTED_FORMATS)}"
-        )
-        raise typer.Exit(1)
+    if (verbose or no_install_deps) and fmt != "gguf":
+        flags = [name for name, enabled in (
+            ("--verbose", verbose), ("--no-install-deps", no_install_deps),
+        ) if enabled]
+        console.print(f"[red]{' and '.join(flags)} require --format gguf.[/]")
+        raise typer.Exit(2)
 
     model_name = Path(model).name
 
@@ -242,32 +215,6 @@ def export(
         if output_path is not None:
             _maybe_attach_export(
                 artifact_path=str(output_path), kind="tensorrt",
-                explicit_id=registry_id, source_model=str(Path(model)),
-            )
-        return
-
-    # --- AWQ export path ---
-    if fmt == "awq":
-        output_path = _export_awq(
-            model_path, output, base, bits, group_size,
-            calibration_data, calibration_samples, trust_remote_code,
-        )
-        if output_path is not None:
-            _maybe_attach_export(
-                artifact_path=str(output_path), kind="awq",
-                explicit_id=registry_id, source_model=str(Path(model)),
-            )
-        return
-
-    # --- GPTQ export path ---
-    if fmt == "gptq":
-        output_path = _export_gptq(
-            model_path, output, base, bits, group_size,
-            calibration_data, calibration_samples, trust_remote_code,
-        )
-        if output_path is not None:
-            _maybe_attach_export(
-                artifact_path=str(output_path), kind="gptq",
                 explicit_id=registry_id, source_model=str(Path(model)),
             )
         return
@@ -333,7 +280,10 @@ def export(
         )
         raise typer.Exit(1)
 
-    # --- Resolve and create the destination before any merge/convert work ---
+    if not (model_path / "adapter_config.json").exists():
+        _check_gguf_capabilities(model_path, llama_cpp_path, probe_selected=not no_install_deps)
+
+    # --- Resolve the destination before any merge/convert work ---
     # #1445 — a missing output parent used to surface as FileNotFoundError
     # from mkdtemp AFTER an adapter was merged, and the cleanup then deleted
     # the merged model. Create the parent up front (what ``_run_convert``
@@ -342,14 +292,24 @@ def export(
         output_path = Path(output)
     else:
         output_path = Path(model).parent / f"{model_name}.{quant}.gguf"
+
+    # Managed environments must refuse missing deps before a merge or toolchain clone.
+    if no_install_deps:
+        console.print("[dim]GGUF: dependencies (managed environment)...[/]")
+        _install_convert_deps(install=False)
+        if not (model_path / "adapter_config.json").exists():
+            _check_gguf_capabilities(model_path, llama_cpp_path)
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # --- Check if LoRA adapter (needs merge first) ---
     adapter_config_path = model_path / "adapter_config.json"
     is_adapter = adapter_config_path.exists()
     merge_dir = None
+    merge_dir_created = False
 
     if is_adapter:
+        console.print("[dim]GGUF: merge adapter...[/]")
         console.print("[yellow]LoRA adapter detected - merging with base model first...[/]")
         base_model = base or _detect_base_model(adapter_config_path)
         if not base_model:
@@ -359,32 +319,41 @@ def export(
             )
             raise typer.Exit(1)
 
-        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
-        _merge_adapter(
-            str(model_path), base_model, str(merge_dir), trust_remote_code,
-        )
-        model_path = merge_dir
+        merge_dir, merge_dir_created = _merge_dir_for(model_path)
 
-    # --- Find llama.cpp ---
-    llama_dir = _find_llama_cpp(llama_cpp_path)
-    # #144 G2 — this used to run only after an auto-clone, so `--llama-cpp` and an
-    # already-present ~/.soup/llama.cpp died on `ModuleNotFoundError:
-    # sentencepiece`. Here it covers every branch, and returns immediately when
-    # the packages are already importable.
-    _install_convert_deps()
-
-    # --- Convert to GGUF ---
-    console.print(
-        Panel(
-            f"Model:  [bold]{model_path}[/]\n"
-            f"Format: [bold]{fmt}[/]\n"
-            f"Quant:  [bold]{quant}[/]\n"
-            f"Output: [bold]{output_path}[/]",
-            title="Export Plan",
-        )
-    )
-
+    # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
+        if is_adapter:
+            _merge_adapter(
+                str(model_path), base_model, str(merge_dir), trust_remote_code,
+            )
+            model_path = merge_dir
+            _check_gguf_capabilities(model_path, llama_cpp_path)
+
+        # --- Find llama.cpp ---
+        console.print("[dim]GGUF: toolchain lookup...[/]")
+        llama_dir = _find_llama_cpp(llama_cpp_path)
+        # #144 G2 — this used to run only after an auto-clone, so `--llama-cpp` and an
+        # already-present ~/.soup/llama.cpp died on `ModuleNotFoundError:
+        # sentencepiece`. Here it covers every branch, and returns immediately when
+        # the packages are already importable.
+        if not no_install_deps:
+            console.print("[dim]GGUF: conversion dependencies...[/]")
+            _install_convert_deps()
+        tool_options = {"verbose": True} if verbose else {}
+        convert_options = dict(tool_options)
+
+        # --- Convert to GGUF ---
+        console.print(
+            Panel(
+                f"Model:  [bold]{model_path}[/]\n"
+                f"Format: [bold]{fmt}[/]\n"
+                f"Quant:  [bold]{quant}[/]\n"
+                f"Output: [bold]{output_path}[/]",
+                title="Export Plan",
+            )
+        )
+
         # Step 1: Convert HF model to GGUF (f16)
         convert_script = llama_dir / "convert_hf_to_gguf.py"
         if not convert_script.exists():
@@ -394,11 +363,22 @@ def export(
             )
             raise typer.Exit(1)
 
+        from soup_cli.utils.gguf_mtp import needs_no_mtp
+
+        try:
+            if needs_no_mtp(model_path, convert_script):
+                convert_options["no_mtp"] = True
+        except ValueError as exc:
+            from soup_cli.utils.terminal import for_terminal
+
+            console.print(f"[red]{for_terminal(str(exc))}[/]")
+            raise typer.Exit(1) from exc
+
         if quant in ("f16", "f32"):
             # Direct conversion without quantization
             outtype = "f16" if quant == "f16" else "f32"
-            console.print(f"[dim]Converting to GGUF ({outtype})...[/]")
-            _run_convert(convert_script, model_path, output_path, outtype)
+            console.print(f"[dim]GGUF: convert — Converting to GGUF ({outtype})...[/]")
+            _run_convert(convert_script, model_path, output_path, outtype, **convert_options)
         else:
             # Convert to f16 first, then quantize.
             #
@@ -414,20 +394,18 @@ def export(
             )
             try:
                 f16_path = tmp_dir / f"{model_name}.f16.gguf"
-                console.print("[dim]Converting to GGUF (f16)...[/]")
-                _run_convert(convert_script, model_path, f16_path, "f16")
+                console.print("[dim]GGUF: convert — Converting to GGUF (f16)...[/]")
+                _run_convert(convert_script, model_path, f16_path, "f16", **convert_options)
 
                 # Quantize
-                console.print(f"[dim]Quantizing to {quant}...[/]")
-                _run_quantize(llama_dir, f16_path, output_path, quant)
+                console.print(f"[dim]GGUF: quantize — Quantizing to {quant}...[/]")
+                _run_quantize(llama_dir, f16_path, output_path, quant, **tool_options)
             finally:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
 
     finally:
         # Clean up temporary merge directory
-        if merge_dir and merge_dir.exists():
-            console.print("[dim]Cleaning up temporary merge files...[/]")
-            shutil.rmtree(merge_dir, ignore_errors=True)
+        _remove_merge_dir(merge_dir, merge_dir_created)
 
     if not output_path.exists():
         console.print("[red]Export failed - output file not created.[/]")
@@ -473,6 +451,29 @@ def _detect_base_model(adapter_config_path: Path) -> Optional[str]:
         return None
 
 
+def _merge_dir_for(model_path: Path) -> tuple[Path, bool]:
+    """The scratch directory next to an adapter, and whether this export will create it.
+
+    A directory (or link) already there is not this export's: the cleanup leaves it alone.
+    """
+    path = model_path.parent / f".soup_merge_tmp_{model_path.name}"
+    return path, not (path.exists() or path.is_symlink())
+
+
+def _remove_merge_dir(merge_dir: Optional[Path], created: bool, *, announce: bool = True) -> None:
+    """Remove the scratch merge directory if this export created it; never one that was there."""
+    if merge_dir is None or not merge_dir.exists():
+        return
+    if not created:
+        console.print(
+            f"[dim]Leaving {for_terminal(str(merge_dir))}: it existed before this export.[/]"
+        )
+        return
+    if announce:
+        console.print("[dim]Cleaning up temporary merge files...[/]")
+    shutil.rmtree(merge_dir, ignore_errors=True)
+
+
 def _merge_adapter(
     adapter_path: str,
     base_model: str,
@@ -498,11 +499,19 @@ def _merge_adapter(
     )
 
     console.print(f"[dim]Loading base model: {for_terminal(base_model)}...[/]")
+    from soup_cli.utils.run_provenance import recorded_base_kwargs
+
+    revision_kwargs = recorded_base_kwargs(adapter_path, base_model)
+    if revision_kwargs:
+        console.print(f"[dim]Base revision: {revision_kwargs['revision']} (recorded run)[/]")
+    else:
+        console.print("[dim]Base revision: unknown (legacy, local source or base override)[/]")
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
         torch_dtype=torch.float16,
         trust_remote_code=trc,
         device_map="cpu",
+        **revision_kwargs,
     )
 
     console.print(f"[dim]Loading LoRA adapter: {adapter_path}...[/]")
@@ -512,11 +521,17 @@ def _merge_adapter(
     model = model.merge_and_unload()
 
     out = Path(output_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    model.save_pretrained(str(out))
+    created = not out.exists()
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+        model.save_pretrained(str(out))
 
-    tokenizer = AutoTokenizer.from_pretrained(adapter_path, trust_remote_code=trc)
-    tokenizer.save_pretrained(str(out))
+        tokenizer = AutoTokenizer.from_pretrained(adapter_path, trust_remote_code=trc)
+        tokenizer.save_pretrained(str(out))
+    except BaseException:
+        if created and out.exists():
+            shutil.rmtree(out, ignore_errors=True)
+        raise
     console.print("[green]Adapter merged successfully.[/]")
 
 
@@ -530,17 +545,28 @@ def _merge_adapter(
 _CONVERT_EXTRA_DEPS = ("gguf", "sentencepiece", "protobuf")
 
 
-def _convert_deps_present() -> bool:
-    """Are the convert script's extra deps already importable?"""
+def _missing_convert_deps() -> list[str]:
+    """Name missing convert packages without importing the heavy training stack."""
     import importlib.util
 
-    for module in ("gguf", "sentencepiece"):
-        if importlib.util.find_spec(module) is None:
-            return False
-    return True
+    missing = []
+    for module, package in (("gguf", "gguf"), ("sentencepiece", "sentencepiece"),
+                            ("google.protobuf", "protobuf")):
+        try:
+            present = importlib.util.find_spec(module) is not None
+        except (ImportError, ValueError):
+            present = False
+        if not present:
+            missing.append(package)
+    return missing
 
 
-def _install_convert_deps() -> None:
+def _convert_deps_present() -> bool:
+    """Are the convert script's extra deps already importable?"""
+    return not _missing_convert_deps()
+
+
+def _install_convert_deps(*, install: bool = True) -> None:
     """Install the convert script's extra deps without disturbing torch.
 
     #144 G2 — this used to run ONLY after an auto-clone, so `--llama-cpp /path`
@@ -549,6 +575,15 @@ def _install_convert_deps() -> None:
     It is now called on every path, and returns immediately when the packages are
     already importable so an ordinary export does not shell out to pip.
     """
+    if not install:
+        missing = _missing_convert_deps()
+        if missing:
+            console.print(
+                "[red]--no-install-deps: missing GGUF conversion packages: "
+                f"{', '.join(missing)}.[/] Install them in the managed environment and retry."
+            )
+            raise typer.Exit(1)
+        return
     if _convert_deps_present():
         return
     try:
@@ -569,14 +604,8 @@ def _install_convert_deps() -> None:
         )
 
 
-def _find_llama_cpp(user_path: Optional[str] = None) -> Path:
-    """Find or clone llama.cpp directory.
-
-    Looking only. The convert-script dependencies are installed by the caller,
-    once, just before conversion (#144 G2) — a lookup that silently shells out to
-    pip is a surprise, and it made an existing test that mocks ``subprocess.run``
-    to detect clone attempts see a pip call instead.
-    """
+def _existing_llama_cpp(user_path: Optional[str] = None) -> Optional[Path]:
+    """Select an existing explicit, environment or cached checkout without cloning."""
     from soup_cli.utils.constants import SOUP_DIR
 
     # 1. User-specified path
@@ -605,14 +634,65 @@ def _find_llama_cpp(user_path: Optional[str] = None) -> Path:
     soup_llama = Path.home() / SOUP_DIR / LLAMA_CPP_DIR_NAME
     if soup_llama.exists() and (soup_llama / "convert_hf_to_gguf.py").exists():
         return soup_llama
+    return None
+
+
+def _check_gguf_capabilities(
+    model: Path, user_path: Optional[str], *, probe_selected: bool = True,
+) -> None:
+    from soup_cli.utils.gguf_capabilities import (
+        model_text_architecture,
+        pinned_text_architectures,
+        probe_text_architectures,
+    )
+
+    try:
+        architecture = model_text_architecture(model)
+        selected = _existing_llama_cpp(user_path)
+        if selected is None:
+            supported = pinned_text_architectures(LLAMA_CPP_TAG)
+            toolchain = f"default llama.cpp {LLAMA_CPP_TAG}"
+        else:
+            if not probe_selected:
+                return
+            supported = probe_text_architectures(selected / "convert_hf_to_gguf.py")
+            toolchain = f"selected converter {selected}"
+            if supported is None:
+                console.print(
+                    "[dim]GGUF: capability probe inconclusive; the selected converter "
+                    "will validate the architecture during conversion.[/]"
+                )
+                return
+        if architecture not in supported:
+            raise ValueError(
+                f"Architecture {architecture!r} is not supported for text conversion by "
+                f"{toolchain}. Select a compatible checkout with --llama-cpp <dir>."
+            )
+    except ValueError as exc:
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
+
+def _find_llama_cpp(user_path: Optional[str] = None) -> Path:
+    """Find or clone llama.cpp, without installing conversion dependencies (#144 G2)."""
+    from soup_cli.utils.constants import SOUP_DIR
+
+    selected = _existing_llama_cpp(user_path)
+    if selected is not None:
+        return selected
+    soup_llama = Path.home() / SOUP_DIR / LLAMA_CPP_DIR_NAME
 
     # 4. Auto-clone
     console.print("[yellow]llama.cpp not found. Cloning to ~/.soup/llama.cpp...[/]")
     console.print("[dim]This is a one-time setup for GGUF export.[/]")
 
+    from soup_cli.utils.tool_paths import require_tool
+
     try:
+        # A missing git raises FileNotFoundError, handled below.
+        git = require_tool("git", "Install git, or clone llama.cpp manually.")
         subprocess.run(
-            ["git", "clone", "--depth", "1", "--branch", LLAMA_CPP_TAG,
+            [git, "clone", "--depth", "1", "--branch", LLAMA_CPP_TAG,
              "https://github.com/ggerganov/llama.cpp.git", str(soup_llama)],
             check=True,
             capture_output=True,
@@ -636,7 +716,51 @@ def _find_llama_cpp(user_path: Optional[str] = None) -> Path:
         raise typer.Exit(1)
 
 
-def _run_convert(script: Path, model_dir: Path, output_path: Path, outtype: str):
+def _run_export_tool(cmd: list[str], label: str, *, verbose: bool) -> None:
+    """Keep quiet capture by default; stream merged output with a bounded error tail."""
+    if not verbose:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            console.print(f"[red]{label} failed:[/]")
+            console.print(strip_control(result.stderr), markup=False, highlight=False)
+            raise typer.Exit(1)
+        return
+
+    tail: deque[str] = deque(maxlen=100)
+    process = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        encoding="utf-8", errors="replace", bufsize=1,
+    )
+    try:
+        assert process.stdout is not None
+        for line in process.stdout:
+            text = strip_control(line.rstrip("\r\n"))
+            tail.append(text[-2000:])
+            console.print(text, markup=False, highlight=False)
+        returncode = process.wait()
+    except BaseException:
+        # A cancelled export or output failure must not leave the tool running.
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        raise
+    finally:
+        if process.stdout is not None:
+            process.stdout.close()
+    if returncode != 0:
+        console.print(f"[red]{label} failed (exit {returncode}):[/]")
+        console.print("\n".join(tail), markup=False, highlight=False)
+        raise typer.Exit(1)
+
+
+def _run_convert(
+    script: Path, model_dir: Path, output_path: Path, outtype: str, *, verbose: bool = False,
+    no_mtp: bool = False,
+) -> None:
     """Run llama.cpp convert_hf_to_gguf.py script."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -646,13 +770,14 @@ def _run_convert(script: Path, model_dir: Path, output_path: Path, outtype: str)
         "--outfile", str(output_path),
         "--outtype", outtype,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        console.print(f"[red]Conversion failed:[/]\n{result.stderr}")
-        raise typer.Exit(1)
+    if no_mtp:
+        cmd.append("--no-mtp")
+    _run_export_tool(cmd, "Conversion", verbose=verbose)
 
 
-def _run_quantize(llama_dir: Path, input_path: Path, output_path: Path, quant_type: str):
+def _run_quantize(
+    llama_dir: Path, input_path: Path, output_path: Path, quant_type: str, *, verbose: bool = False,
+) -> None:
     """Run llama-quantize (or llama.cpp/build/bin/llama-quantize)."""
     # Try to find the quantize binary
     quantize_bin = _find_quantize_binary(llama_dir)
@@ -666,10 +791,7 @@ def _run_quantize(llama_dir: Path, input_path: Path, output_path: Path, quant_ty
         raise typer.Exit(1)
 
     cmd = [str(quantize_bin), str(input_path), str(output_path), quant_type.upper()]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        console.print(f"[red]Quantization failed:[/]\n{result.stderr}")
-        raise typer.Exit(1)
+    _run_export_tool(cmd, "Quantization", verbose=verbose)
 
 
 # MSVC / Xcode are multi-config generators: they nest binaries under a
@@ -697,12 +819,17 @@ def _find_quantize_binary(llama_dir: Path) -> Optional[Path]:
         candidates.append(llama_dir / "build" / config / "llama-quantize.exe")
     for candidate in candidates:
         if candidate.exists():
-            return candidate
+            import os
+
+            # Absolute, so the binary runs from llama_dir even when it is ".".
+            return Path(os.path.abspath(candidate))
 
     # Check if it's in PATH
-    which_result = shutil.which("llama-quantize")
-    if which_result:
-        return Path(which_result)
+    from soup_cli.utils.tool_paths import find_tool
+
+    on_path = find_tool("llama-quantize")
+    if on_path:
+        return Path(on_path)
 
     return None
 
@@ -727,6 +854,7 @@ def _export_onnx(
     adapter_config_path = model_path / "adapter_config.json"
     is_adapter = adapter_config_path.exists()
     merge_dir = None
+    merge_dir_created = False
     source_path = model_path
 
     if is_adapter:
@@ -738,39 +866,41 @@ def _export_onnx(
                 "Please specify with [bold]--base[/] flag."
             )
             raise typer.Exit(1)
-        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
-        _merge_adapter(str(model_path), base_model, str(merge_dir), trust_remote_code)
-        source_path = merge_dir
+        merge_dir, merge_dir_created = _merge_dir_for(model_path)
 
     output_path = Path(output) if output else model_path.parent / f"{model_path.name}_onnx"
 
-    console.print(
-        Panel(
-            f"Model:  [bold]{source_path}[/]\n"
-            f"Format: [bold]ONNX[/]\n"
-            f"Output: [bold]{output_path}[/]",
-            title="Export Plan",
-        )
-    )
-
+    # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
+        if is_adapter:
+            _merge_adapter(str(model_path), base_model, str(merge_dir), trust_remote_code)
+            source_path = merge_dir
+
         console.print(
-            "[yellow]Warning: ONNX export may execute custom model code "
-            "if the model uses trust_remote_code.[/]"
+            Panel(
+                f"Model:  [bold]{source_path}[/]\n"
+                f"Format: [bold]ONNX[/]\n"
+                f"Output: [bold]{output_path}[/]",
+                title="Export Plan",
+            )
         )
-        console.print("[dim]Exporting to ONNX...[/]")
-        main_export(
-            model_name_or_path=str(source_path),
-            output=str(output_path),
-            task=task,
-        )
-    except Exception as exc:
-        console.print(f"[red]ONNX export failed:[/] {exc}")
-        raise typer.Exit(1)
+
+        try:
+            console.print(
+                "[yellow]Warning: ONNX export may execute custom model code "
+                "if the model uses trust_remote_code.[/]"
+            )
+            console.print("[dim]Exporting to ONNX...[/]")
+            main_export(
+                model_name_or_path=str(source_path),
+                output=str(output_path),
+                task=task,
+            )
+        except Exception as exc:
+            console.print(f"[red]ONNX export failed:[/] {exc}")
+            raise typer.Exit(1)
     finally:
-        if merge_dir and merge_dir.exists():
-            console.print("[dim]Cleaning up temporary merge files...[/]")
-            shutil.rmtree(merge_dir, ignore_errors=True)
+        _remove_merge_dir(merge_dir, merge_dir_created)
 
     console.print(
         Panel(
@@ -827,6 +957,7 @@ def _export_tensorrt(
     adapter_config_path = model_path / "adapter_config.json"
     is_adapter = adapter_config_path.exists()
     merge_dir = None
+    merge_dir_created = False
     source_path = model_path
 
     if is_adapter:
@@ -838,22 +969,24 @@ def _export_tensorrt(
                 "Please specify with [bold]--base[/] flag."
             )
             raise typer.Exit(1)
-        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
-        _merge_adapter(str(model_path), base_model, str(merge_dir), trust_remote_code)
-        source_path = merge_dir
+        merge_dir, merge_dir_created = _merge_dir_for(model_path)
 
     output_path = Path(output) if output else model_path.parent / f"{model_path.name}_trt"
 
-    console.print(
-        Panel(
-            f"Model:  [bold]{source_path}[/]\n"
-            f"Format: [bold]TensorRT-LLM[/]\n"
-            f"Output: [bold]{output_path}[/]",
-            title="Export Plan",
-        )
-    )
-
+    # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
+        if is_adapter:
+            _merge_adapter(str(model_path), base_model, str(merge_dir), trust_remote_code)
+            source_path = merge_dir
+
+        console.print(
+            Panel(
+                f"Model:  [bold]{source_path}[/]\n"
+                f"Format: [bold]TensorRT-LLM[/]\n"
+                f"Output: [bold]{output_path}[/]",
+                title="Export Plan",
+            )
+        )
         # Step 1: Convert HF model to TensorRT-LLM checkpoint
         console.print("[dim]Converting to TensorRT-LLM checkpoint...[/]")
         ckpt_dir = output_path / "checkpoint"
@@ -885,10 +1018,14 @@ def _export_tensorrt(
         engine_dir = output_path / "engine"
         engine_dir.mkdir(parents=True, exist_ok=True)
 
+        from soup_cli.utils.tool_paths import require_tool
+
         try:
+            # A missing trtllm-build raises FileNotFoundError, handled below.
+            trtllm_build = require_tool("trtllm-build", "Install tensorrt_llm.")
             result = subprocess.run(
                 [
-                    "trtllm-build",
+                    trtllm_build,
                     "--checkpoint_dir", str(ckpt_dir),
                     "--output_dir", str(engine_dir),
                     "--gemm_plugin", "float16",
@@ -910,9 +1047,7 @@ def _export_tensorrt(
             raise typer.Exit(1)
 
     finally:
-        if merge_dir and merge_dir.exists():
-            console.print("[dim]Cleaning up temporary merge files...[/]")
-            shutil.rmtree(merge_dir, ignore_errors=True)
+        _remove_merge_dir(merge_dir, merge_dir_created)
 
     console.print(
         Panel(
@@ -922,385 +1057,6 @@ def _export_tensorrt(
             f"  [bold]import tensorrt_llm[/]\n"
             f"  [bold]runner = tensorrt_llm.ModelRunner.from_dir('{engine_dir}')[/]",
             title="[bold green]TensorRT-LLM Export Complete![/]",
-        )
-    )
-    return output_path
-
-
-def _validate_output_path(output: Optional[str]) -> Optional[Path]:
-    """Validate output path stays under cwd (path traversal protection)."""
-    if output is None:
-        return None
-    # realpath + commonpath containment (is_under_cwd) — Path.resolve() +
-    # relative_to() breaks on Windows 8.3 short names.
-    from soup_cli.utils.paths import is_under_cwd
-
-    out_path = Path(output).resolve()
-    if not is_under_cwd(output):
-        console.print("[red]Output path must be under the current working directory.[/]")
-        raise typer.Exit(1)
-    return out_path
-
-
-def _validate_calibration_path(calibration_data: Optional[str]) -> Optional[Path]:
-    """Validate calibration data path stays under cwd."""
-    if calibration_data is None:
-        return None
-    from soup_cli.utils.paths import is_under_cwd
-
-    cal_path = Path(calibration_data).resolve()
-    if not is_under_cwd(calibration_data):
-        console.print("[red]Calibration data path must be under the current working directory.[/]")
-        raise typer.Exit(1)
-    if not cal_path.exists():
-        console.print(f"[red]Calibration data not found: {cal_path}[/]")
-        raise typer.Exit(1)
-    return cal_path
-
-
-class _CalibrationDataReadError(ValueError):
-    """A calibration JSONL could not be decoded or read safely."""
-
-
-def _load_calibration_texts(cal_path: Optional[Path], max_samples: int = 128) -> list:
-    """Load calibration texts from JSONL file."""
-    if cal_path is None:
-        return []
-    texts = []
-    try:
-        with open(cal_path, encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(row, dict):
-                    continue
-                # Support "text" field or concatenate all non-empty values.
-                if "text" in row:
-                    value = row["text"]
-                    text = "" if value is None else str(value)
-                else:
-                    text = " ".join(str(v) for v in row.values() if v)
-                if text.strip():
-                    texts.append(text)
-                if len(texts) >= max_samples:
-                    break
-    except UnicodeError as exc:
-        raise _CalibrationDataReadError(
-            f"Calibration data is not valid UTF-8: {cal_path}"
-        ) from exc
-    except OSError as exc:
-        raise _CalibrationDataReadError(
-            f"Could not read calibration data {cal_path}: {exc}"
-        ) from exc
-    return texts
-
-
-def _standardize_gptq_shard_name(output_path: Path, bits: int, group_size: int) -> None:
-    """auto_gptq's save_quantized names its shard gptq_model-<bits>bit-<group>g.safetensors,
-    a name AutoModelForCausalLM.from_pretrained does not look for; rename it to the
-    standard model.safetensors so the exported directory reloads."""
-    shard = output_path / f"gptq_model-{bits}bit-{group_size}g.safetensors"
-    standard = output_path / "model.safetensors"
-    if shard.exists() and not standard.exists():
-        shard.rename(standard)
-
-
-def _export_awq(
-    model_path: Path,
-    output: Optional[str],
-    base: Optional[str],
-    bits: int = 4,
-    group_size: int = 128,
-    calibration_data: Optional[str] = None,
-    calibration_samples: int = 128,
-    trust_remote_code: bool = False,
-) -> Optional[Path]:
-    """Export model to AWQ format via autoawq."""
-    # First, so it is there whatever stops the run (most stop at the extra).
-    _warn_deprecated_format("awq")
-    # Validate bits
-    valid_bits = {4, 8}
-    if bits not in valid_bits:
-        console.print(
-            f"[red]Invalid --bits {bits}. Must be one of: {sorted(valid_bits)}[/]"
-        )
-        raise typer.Exit(1)
-
-    # Validate output path (security: path traversal protection)
-    validated_output = _validate_output_path(output)
-
-    # Validate calibration path (security: path traversal protection)
-    cal_path = _validate_calibration_path(calibration_data)
-    if cal_path is None:
-        console.print(
-            "[red]AWQ export requires --calibration-data.[/]\n"
-            "AutoAWQ otherwise downloads its large default calibration dataset: "
-            "pass a calibration JSONL, e.g. [bold]--calibration-data path/to/data.jsonl[/]."
-        )
-        raise typer.Exit(1)
-    try:
-        calib_data = _load_calibration_texts(cal_path, max_samples=calibration_samples)
-    except _CalibrationDataReadError as exc:
-        console.print(f"[red]{exc}[/]")
-        raise typer.Exit(1) from exc
-    if not calib_data:
-        console.print(f"[red]No usable calibration samples found in {cal_path}.[/]")
-        raise typer.Exit(1)
-
-    try:
-        from awq import AutoAWQForCausalLM
-    except ImportError as exc:
-        if exc.name != "awq":
-            console.print(f"[red]autoawq import failed:[/] {exc}")
-            raise typer.Exit(1)
-        console.print(
-            "[red]autoawq not installed.[/]\n"
-            "Install with: [bold]pip install \"soup-cli\\[awq]\"[/]\n"
-            "Or directly: [bold]pip install autoawq[/]"
-        )
-        raise typer.Exit(1)
-
-    from transformers import AutoTokenizer
-
-    # Check if LoRA adapter — merge first
-    adapter_config_path = model_path / "adapter_config.json"
-    is_adapter = adapter_config_path.exists()
-    merge_dir = None
-    source_path = model_path
-
-    if is_adapter:
-        console.print("[yellow]LoRA adapter detected - merging with base model first...[/]")
-        base_model = base or _detect_base_model(adapter_config_path)
-        if not base_model:
-            console.print(
-                "[red]Cannot detect base model from adapter_config.json.[/]\n"
-                "Please specify with [bold]--base[/] flag."
-            )
-            raise typer.Exit(1)
-        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
-        _merge_adapter(str(model_path), base_model, str(merge_dir), trust_remote_code)
-        source_path = merge_dir
-
-    default_out = model_path.parent / f"{model_path.name}_awq"
-    output_path = validated_output if validated_output else default_out
-
-    console.print(
-        Panel(
-            f"Model:      [bold]{source_path}[/]\n"
-            f"Format:     [bold]AWQ[/]\n"
-            f"Bits:       [bold]{bits}[/]\n"
-            f"Group size: [bold]{group_size}[/]\n"
-            f"Output:     [bold]{output_path}[/]",
-            title="Export Plan",
-        )
-    )
-
-    try:
-        console.print(
-            Panel(
-                "[yellow]Warning:[/] Loading model with trust_remote_code=True.\n"
-                "This may execute custom code from the model directory.",
-                title="Security Notice",
-            )
-        )
-        console.print("[dim]Loading model for AWQ quantization...[/]")
-        model = AutoAWQForCausalLM.from_pretrained(str(source_path))
-        from soup_cli.utils.trust_remote import (
-            model_requires_trust_remote_code,
-            resolve_trust_remote_code,
-        )
-
-        requires_tok = model_requires_trust_remote_code(str(source_path)) or False
-        trc_tok = resolve_trust_remote_code(
-            str(source_path),
-            requested=trust_remote_code,
-            console=console,
-            requires_remote_code=requires_tok,
-        )
-        tokenizer = AutoTokenizer.from_pretrained(str(source_path), trust_remote_code=trc_tok)
-
-        quant_config = {"zero_point": True, "q_group_size": group_size, "w_bit": bits}
-
-        console.print(f"[dim]Quantizing to AWQ {bits}-bit (group_size={group_size})...[/]")
-        model.quantize(tokenizer, quant_config=quant_config, calib_data=calib_data)
-
-        console.print("[dim]Saving quantized model...[/]")
-        model.save_quantized(str(output_path))
-        tokenizer.save_pretrained(str(output_path))
-
-    except Exception as exc:
-        console.print(f"[red]AWQ export failed:[/] {exc}")
-        raise typer.Exit(1)
-    finally:
-        if merge_dir and merge_dir.exists():
-            console.print("[dim]Cleaning up temporary merge files...[/]")
-            shutil.rmtree(merge_dir, ignore_errors=True)
-
-    console.print(
-        Panel(
-            f"Output: [bold]{output_path}[/]\n"
-            f"Format: [bold]AWQ {bits}-bit[/]\n\n"
-            f"Use with vLLM:\n"
-            f"  [bold]from vllm import LLM[/]\n"
-            f"  [bold]llm = LLM(model='{output_path}', quantization='awq')[/]",
-            title="[bold green]AWQ Export Complete![/]",
-        )
-    )
-    return output_path
-
-
-def _export_gptq(
-    model_path: Path,
-    output: Optional[str],
-    base: Optional[str],
-    bits: int = 4,
-    group_size: int = 128,
-    calibration_data: Optional[str] = None,
-    calibration_samples: int = 128,
-    trust_remote_code: bool = False,
-) -> Optional[Path]:
-    """Export model to GPTQ format via auto-gptq."""
-    # First, so it is there whatever stops the run (most stop at the extra).
-    _warn_deprecated_format("gptq")
-    # Validate bits
-    valid_bits = {4, 8}
-    if bits not in valid_bits:
-        console.print(
-            f"[red]Invalid --bits {bits}. Must be one of: {sorted(valid_bits)}[/]"
-        )
-        raise typer.Exit(1)
-
-    # Validate output path (security: path traversal protection)
-    validated_output = _validate_output_path(output)
-
-    # Validate calibration path (security: path traversal protection)
-    cal_path = _validate_calibration_path(calibration_data)
-    if cal_path is None:
-        console.print(
-            "[red]GPTQ export requires --calibration-data.[/]\n"
-            "auto-gptq has no built-in calibration dataset: "
-            "pass a calibration JSONL, e.g. [bold]--calibration-data path/to/data.jsonl[/]."
-        )
-        raise typer.Exit(1)
-    try:
-        calib_texts = _load_calibration_texts(cal_path, max_samples=calibration_samples)
-    except _CalibrationDataReadError as exc:
-        console.print(f"[red]{exc}[/]")
-        raise typer.Exit(1) from exc
-    if not calib_texts:
-        console.print(f"[red]No usable calibration samples found in {cal_path}.[/]")
-        raise typer.Exit(1)
-
-    try:
-        from auto_gptq import AutoGPTQForCausalLM, BaseQuantizeConfig
-    except ImportError as exc:
-        if exc.name != "auto_gptq":
-            console.print(f"[red]auto-gptq import failed:[/] {exc}")
-            raise typer.Exit(1)
-        console.print(
-            "[red]auto-gptq not installed.[/]\n"
-            "Install with: [bold]pip install \"soup-cli\\[gptq]\"[/]\n"
-            "Or directly: [bold]pip install auto-gptq[/]"
-        )
-        raise typer.Exit(1)
-
-    from transformers import AutoTokenizer
-
-    # Check if LoRA adapter — merge first
-    adapter_config_path = model_path / "adapter_config.json"
-    is_adapter = adapter_config_path.exists()
-    merge_dir = None
-    source_path = model_path
-
-    if is_adapter:
-        console.print("[yellow]LoRA adapter detected - merging with base model first...[/]")
-        base_model = base or _detect_base_model(adapter_config_path)
-        if not base_model:
-            console.print(
-                "[red]Cannot detect base model from adapter_config.json.[/]\n"
-                "Please specify with [bold]--base[/] flag."
-            )
-            raise typer.Exit(1)
-        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
-        _merge_adapter(str(model_path), base_model, str(merge_dir), trust_remote_code)
-        source_path = merge_dir
-
-    default_out = model_path.parent / f"{model_path.name}_gptq"
-    output_path = validated_output if validated_output else default_out
-
-    console.print(
-        Panel(
-            f"Model:      [bold]{source_path}[/]\n"
-            f"Format:     [bold]GPTQ[/]\n"
-            f"Bits:       [bold]{bits}[/]\n"
-            f"Group size: [bold]{group_size}[/]\n"
-            f"Output:     [bold]{output_path}[/]",
-            title="Export Plan",
-        )
-    )
-
-    try:
-        console.print(
-            Panel(
-                "[yellow]Warning:[/] Loading model with trust_remote_code=True.\n"
-                "This may execute custom code from the model directory.",
-                title="Security Notice",
-            )
-        )
-        console.print("[dim]Loading model for GPTQ quantization...[/]")
-        quantize_config = BaseQuantizeConfig(
-            bits=bits,
-            group_size=group_size,
-            desc_act=False,
-        )
-        model = AutoGPTQForCausalLM.from_pretrained(
-            str(source_path), quantize_config=quantize_config
-        )
-        from soup_cli.utils.trust_remote import (
-            model_requires_trust_remote_code,
-            resolve_trust_remote_code,
-        )
-
-        requires_tok = model_requires_trust_remote_code(str(source_path)) or False
-        trc_tok = resolve_trust_remote_code(
-            str(source_path),
-            requested=trust_remote_code,
-            console=console,
-            requires_remote_code=requires_tok,
-        )
-        tokenizer = AutoTokenizer.from_pretrained(str(source_path), trust_remote_code=trc_tok)
-
-        calib_data = [tokenizer(t, return_tensors="pt") for t in calib_texts]
-
-        console.print(f"[dim]Quantizing to GPTQ {bits}-bit (group_size={group_size})...[/]")
-        model.quantize(calib_data)
-
-        console.print("[dim]Saving quantized model...[/]")
-        model.save_quantized(str(output_path))
-        tokenizer.save_pretrained(str(output_path))
-        _standardize_gptq_shard_name(output_path, bits, group_size)
-
-    except Exception as exc:
-        console.print(f"[red]GPTQ export failed:[/] {exc}")
-        raise typer.Exit(1)
-    finally:
-        if merge_dir and merge_dir.exists():
-            console.print("[dim]Cleaning up temporary merge files...[/]")
-            shutil.rmtree(merge_dir, ignore_errors=True)
-
-    console.print(
-        Panel(
-            f"Output: [bold]{output_path}[/]\n"
-            f"Format: [bold]GPTQ {bits}-bit[/]\n\n"
-            f"Use with vLLM:\n"
-            f"  [bold]from vllm import LLM[/]\n"
-            f"  [bold]llm = LLM(model='{output_path}', quantization='gptq')[/]",
-            title="[bold green]GPTQ Export Complete![/]",
         )
     )
     return output_path
@@ -1461,7 +1217,7 @@ def _export_torchao_cli(
     try:
         cfg_data = load_quant_config(quant_config)
     except (TypeError, ValueError, FileNotFoundError) as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
         raise typer.Exit(2)
 
     scheme_raw = cfg_data.get("scheme")
@@ -1548,42 +1304,46 @@ def _export_bitnet_gguf(
 
     adapter_config_path = model_path / "adapter_config.json"
     merge_dir = None
+    merge_dir_created = False
     if adapter_config_path.exists():
         console.print("[yellow]LoRA adapter detected — merging first...[/]")
         base_model = base or _detect_base_model(adapter_config_path)
         if not base_model:
             console.print("[red]Cannot detect base model. Pass --base.[/]")
             raise typer.Exit(2)
-        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
-        _merge_adapter(
-            str(model_path), base_model, str(merge_dir), trust_remote_code,
-        )
-        source_model_dir = merge_dir
-    else:
-        source_model_dir = model_path
+        merge_dir, merge_dir_created = _merge_dir_for(model_path)
 
-    llama_dir = _find_llama_cpp(llama_cpp_path)
-
-    console.print(Panel(
-        f"Model:   [bold]{source_model_dir}[/]\n"
-        f"Format:  [bold]{canonical}[/] (TQ1_0 ternary)\n"
-        f"Output:  [bold]{output_path}[/]",
-        title="BitNet GGUF Export",
-    ))
-
+    # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
-        export_bitnet_gguf(
-            model_dir=str(source_model_dir),
-            output_path=str(output_path),
-            export_format=canonical,
-            llama_cpp_dir=str(llama_dir),
-        )
-    except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        console.print(f"[red]BitNet GGUF export failed: {exc}[/]")
-        raise typer.Exit(1)
+        if merge_dir is not None:
+            _merge_adapter(
+                str(model_path), base_model, str(merge_dir), trust_remote_code,
+            )
+            source_model_dir = merge_dir
+        else:
+            source_model_dir = model_path
+
+        llama_dir = _find_llama_cpp(llama_cpp_path)
+
+        console.print(Panel(
+            f"Model:   [bold]{source_model_dir}[/]\n"
+            f"Format:  [bold]{canonical}[/] (TQ1_0 ternary)\n"
+            f"Output:  [bold]{output_path}[/]",
+            title="BitNet GGUF Export",
+        ))
+
+        try:
+            export_bitnet_gguf(
+                model_dir=str(source_model_dir),
+                output_path=str(output_path),
+                export_format=canonical,
+                llama_cpp_dir=str(llama_dir),
+            )
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            console.print(f"[red]BitNet GGUF export failed: {exc}[/]")
+            raise typer.Exit(1)
     finally:
-        if merge_dir and merge_dir.exists():
-            shutil.rmtree(merge_dir, ignore_errors=True)
+        _remove_merge_dir(merge_dir, merge_dir_created, announce=False)
 
     console.print(Panel(
         f"Output: [bold]{output_path}[/]\n"
@@ -1653,6 +1413,7 @@ def _export_gguf_advanced(
     # Pre-merge LoRA adapter if needed
     adapter_config_path = model_path / "adapter_config.json"
     merge_dir = None
+    merge_dir_created = False
     if adapter_config_path.exists():
         console.print("[yellow]LoRA adapter detected — merging first...[/]")
         base_model = base or _detect_base_model(adapter_config_path)
@@ -1661,38 +1422,41 @@ def _export_gguf_advanced(
                 "[red]Cannot detect base model. Pass --base.[/]"
             )
             raise typer.Exit(2)
-        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
-        _merge_adapter(
-            str(model_path), base_model, str(merge_dir), trust_remote_code,
-        )
-        source_model_dir = merge_dir
-    else:
-        source_model_dir = model_path
+        merge_dir, merge_dir_created = _merge_dir_for(model_path)
 
-    llama_dir = _find_llama_cpp(llama_cpp_path)
-
-    console.print(Panel(
-        f"Model:    [bold]{source_model_dir}[/]\n"
-        f"Flavour:  [bold]{gguf_flavour}[/]\n"
-        f"Calib:    [bold]{calibration_data or '(none — Apple/ARM)'}[/]\n"
-        f"Output:   [bold]{output_path}[/]",
-        title="Advanced GGUF Export",
-    ))
-
+    # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
-        export_advanced_gguf(
-            model_dir=str(source_model_dir),
-            output_path=str(output_path),
-            flavour=gguf_flavour,
-            calibration_data=calibration_data,
-            llama_cpp_dir=str(llama_dir),
-        )
-    except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        console.print(f"[red]Advanced GGUF export failed: {exc}[/]")
-        raise typer.Exit(1)
+        if merge_dir is not None:
+            _merge_adapter(
+                str(model_path), base_model, str(merge_dir), trust_remote_code,
+            )
+            source_model_dir = merge_dir
+        else:
+            source_model_dir = model_path
+
+        llama_dir = _find_llama_cpp(llama_cpp_path)
+
+        console.print(Panel(
+            f"Model:    [bold]{source_model_dir}[/]\n"
+            f"Flavour:  [bold]{gguf_flavour}[/]\n"
+            f"Calib:    [bold]{calibration_data or '(none — Apple/ARM)'}[/]\n"
+            f"Output:   [bold]{output_path}[/]",
+            title="Advanced GGUF Export",
+        ))
+
+        try:
+            export_advanced_gguf(
+                model_dir=str(source_model_dir),
+                output_path=str(output_path),
+                flavour=gguf_flavour,
+                calibration_data=calibration_data,
+                llama_cpp_dir=str(llama_dir),
+            )
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            console.print(f"[red]Advanced GGUF export failed: {exc}[/]")
+            raise typer.Exit(1)
     finally:
-        if merge_dir and merge_dir.exists():
-            shutil.rmtree(merge_dir, ignore_errors=True)
+        _remove_merge_dir(merge_dir, merge_dir_created, announce=False)
 
     console.print(Panel(
         f"Output: [bold]{output_path}[/]\n"

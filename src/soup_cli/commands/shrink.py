@@ -99,7 +99,7 @@ def _load_calib(path: str) -> list[str]:
         fd = os.open(path, flags)
     except OSError as exc:
         raise typer.BadParameter(f"calib path unreadable: {exc}") from exc
-    with os.fdopen(fd, "r", encoding="utf-8") as handle:
+    with os.fdopen(fd, "r", encoding="utf-8-sig") as handle:
         if os.fstat(handle.fileno()).st_size > _MAX_INPUT_BYTES:
             raise typer.BadParameter(
                 f"calib file exceeds {_MAX_INPUT_BYTES} bytes"

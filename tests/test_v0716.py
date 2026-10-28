@@ -754,9 +754,9 @@ class TestMakeMagpieGenerateFn:
             def json(self):
                 return {"response": "What is 2+2?"}
 
-        import httpx
+        from soup_cli.utils import http_response
 
-        monkeypatch.setattr(httpx, "post", lambda *a, **k: FakeResp())
+        monkeypatch.setattr(http_response, "post_capped", lambda *a, **k: FakeResp())
         gen = magpie.make_magpie_generate_fn("ollama", model="qwen2.5:0.5b")
         assert gen("<|im_start|>user\n") == "What is 2+2?"
 
@@ -770,9 +770,9 @@ class TestMakeMagpieGenerateFn:
             def json(self):
                 return {"choices": [{"text": "hello"}]}
 
-        import httpx
+        from soup_cli.utils import http_response
 
-        monkeypatch.setattr(httpx, "post", lambda *a, **k: FakeResp())
+        monkeypatch.setattr(http_response, "post_capped", lambda *a, **k: FakeResp())
         gen = magpie.make_magpie_generate_fn("vllm", model="m")
         assert gen("prefix") == "hello"
 
@@ -1573,9 +1573,9 @@ class TestMagpieReviewFixes:
             def json(self):
                 return {}
 
-        import httpx
+        from soup_cli.utils import http_response
 
-        monkeypatch.setattr(httpx, "post", lambda *a, **k: FakeResp())
+        monkeypatch.setattr(http_response, "post_capped", lambda *a, **k: FakeResp())
         gen = magpie.make_magpie_generate_fn("ollama", model="m")
         assert gen("prefix") == ""
 
@@ -1591,9 +1591,9 @@ class TestMagpieReviewFixes:
             def json(self):
                 return {}  # missing "response" key
 
-        import httpx
+        from soup_cli.utils import http_response
 
-        monkeypatch.setattr(httpx, "post", lambda *a, **k: FakeResp())
+        monkeypatch.setattr(http_response, "post_capped", lambda *a, **k: FakeResp())
         gen = magpie.make_magpie_generate_fn("ollama", model="m")
         assert gen("prefix") == ""
 

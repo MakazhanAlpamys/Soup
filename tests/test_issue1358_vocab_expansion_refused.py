@@ -134,6 +134,26 @@ class TestTheOtherPathsThatDropThem:
 
         assert "data.add_new_tokens is not applied on backend='mlx'" in message, message
 
+    @pytest.mark.parametrize("field", _FIELDS)
+    @pytest.mark.parametrize("task, fmt", [
+        ("dpo", "dpo"), ("orpo", "dpo"), ("simpo", "dpo"), ("kto", "kto"),
+    ])
+    def test_mlx_preference_loops(self, task, fmt, field):
+        """The native DPO, ORPO, SimPO and KTO loops tokenize with the base tokenizer
+        as it is; the refusal rests on each being in ``MLX_TASKS`` (review of #2073)."""
+        message = _refusal(_yaml(task, backend="mlx", field=field, data={"format": fmt}))
+
+        assert f"data.{field} is not applied on backend='mlx'" in message, message
+
+    @pytest.mark.parametrize("field", _FIELDS)
+    def test_mlx_grpo(self, field):
+        """The native GRPO loop (#1976) renders prompts with the base tokenizer as it
+        is; the refusal rests on grpo being in ``MLX_TASKS``."""
+        message = _refusal(_yaml("grpo", backend="mlx", field=field,
+                                 training={"quantization": "none"}))
+
+        assert f"data.{field} is not applied on backend='mlx'" in message, message
+
     def test_sft_layer_streaming(self):
         message = _refusal(_yaml(
             "sft",
@@ -224,16 +244,27 @@ class TestTheSplitMatchesTheTrainers:
 
 
 class TestSftVisionAndAudioOnUnsloth:
-    """SFT's setup() sends vision / audio to their transformers setups before it
-    reads the backend, and both of those call apply_vocab_expansion (review of
-    #1622); only the text path reaches _setup_unsloth. MLX stays refused: it
-    ignores modality."""
+    """#1186 refuses the ignored backend, including with vocabulary additions.
+
+    The supported transformers multimodal paths still apply those additions.
+    """
 
     @pytest.mark.parametrize("field", _FIELDS)
     @pytest.mark.parametrize(("modality", "fmt"), [("vision", "llava"), ("audio", "audio")])
-    def test_they_still_load(self, modality, fmt, field):
-        cfg = load_config_from_string(
+    def test_unsloth_is_refused_instead_of_falling_back(self, modality, fmt, field):
+        message = _refusal(
             _yaml("sft", backend="unsloth", field=field, modality=modality,
+                  data={"format": fmt})
+        )
+        assert "task='sft' with backend='unsloth' requires modality='text'" in message
+        assert f"got modality={modality!r}" in message
+        assert "Use backend: transformers" in message
+
+    @pytest.mark.parametrize("field", _FIELDS)
+    @pytest.mark.parametrize(("modality", "fmt"), [("vision", "llava"), ("audio", "audio")])
+    def test_transformers_still_loads_vocabulary_additions(self, modality, fmt, field):
+        cfg = load_config_from_string(
+            _yaml("sft", backend="transformers", field=field, modality=modality,
                   data={"format": fmt})
         )
 
@@ -265,8 +296,7 @@ class TestABackendTheTaskCannotRunOnIsNamedFirst:
 
     @pytest.mark.parametrize(("task", "backend", "expected"), [
         ("online_dpo", "unsloth", "task='online_dpo' requires backend='transformers'"),
-        ("dpo", "mlx", "MLX backend only ships SFT"),
-        ("kto", "mlx", "MLX backend only ships SFT"),
+        ("ipo", "mlx", "MLX backend only ships SFT"),
     ])
     def test_the_backend_refusal_comes_first(self, task, backend, expected):
         message = _refusal(_yaml(task, backend=backend))

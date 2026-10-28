@@ -1121,12 +1121,13 @@ class TestKtoBatchIsRefusedEarly:
         assert "KL term" in message and "gradient_accumulation_steps" in message
         assert "streaming" not in message
 
-    def test_mlx_kto_reports_the_backend_refusal_first(self):
+    def test_mlx_kto_keeps_the_same_floor(self):
+        """MLX KTO (#2000) builds TRL's KL rows, so batch 1 is refused there too."""
         import yaml
 
         from soup_cli.config.loader import load_config_from_string
 
-        with pytest.raises(ValueError, match="MLX backend only ships SFT"):
+        with pytest.raises(ValueError, match="task='kto' requires training.batch_size >= 2"):
             load_config_from_string(
                 yaml.safe_dump(
                     {

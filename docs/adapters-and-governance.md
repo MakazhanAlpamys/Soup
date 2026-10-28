@@ -88,7 +88,7 @@ soup adapters bisect \
 # Exits 3 on BROKEN_AT — pipe into `soup adapters blame` for attribution.
 ```
 
-CMA-ES is pure-Python (no `cma` dependency); the eval is operator-supplied via a closure so any scoring code works. PR rendering escapes Markdown table cells, so crafted metric names cannot inject table rows or links. The lockfile composes with v0.64 `soup env lock` — drift in any of `{base_model, base_model_sha, dataset_sha, env_hash, closure_sha}` exits 3 (`soup_version` and `created_at` are advisory-only). Bisect uses `shlex.split` + `shlex.quote(ckpt)` in argv-list mode (no `shell=True`), so checkpoint ids cannot inject shell metacharacters.
+CMA-ES is pure-Python (no `cma` dependency); the eval is operator-supplied via a closure so any scoring code works. PR rendering escapes Markdown table cells, so crafted metric names cannot inject table rows or links. The lockfile composes with v0.64 `soup env lock` — drift in any of `{base_model, base_model_sha, dataset_sha, env_hash, closure_sha}` exits 3 (`soup_version` and `created_at` are advisory-only). Bisect uses `shlex.split` + `shlex.quote(ckpt)` in argv-list mode (no `shell=True`), so checkpoint ids cannot inject shell metacharacters. The program, the first word of the command after `{ckpt}` is filled in, runs from the absolute `PATH` directory it is found in (empty and relative entries and the current directory are not searched) unless it is given with its path. A fixed program that is not on `PATH` is refused with exit 2 before the first probe; one that the checkpoint id names counts as a failed probe.
 
 VeRA / VB-LoRA bank storage (`soup_cli.utils.vector_bank`) supports live multi-tenant serving,
 and `task='moe_lora_routing'` trains the live sparse per-token MoLE gating kernel.
@@ -116,11 +116,32 @@ soup loop watch --poll-interval 300
 soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod --pre-wired
 soup loop watch --pre-wired --pack-cans --poll-interval 300
 
+# Learn from Soup's own serving (#1440): the pre-wired harvest also reads the
+# thumbs `soup serve --record-thumbs` captures through POST /v1/thumbs, pairing
+# the latest thumbs-up and thumbs-down answer per prompt. The database must
+# stay under cwd and exist as a thumbs database: start the serve first, or
+# `soup loop watch` refuses, naming the field.
+soup serve --model ./base --record-thumbs ./rl.db
+soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod \
+    --pre-wired --thumbs-db ./rl.db
+# or per run, overriding loop.yaml:
+SOUP_LOOP_THUMBS_DB=./rl.db soup loop watch --pre-wired
+
 # Unpack a recorded iteration's Soup Can for what-if analysis (v0.71.4)
 soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 
 # Background subprocess (writes PID, no shell)
 soup loop watch --detach
+
+# The deploy stage activates the adapter on SOUP_LOOP_SERVE_ENDPOINT. A server
+# started with --tool-auth-token requires that token on the adapter routes, so
+# give the loop the same one: --tool-auth-token, or SOUP_TOOL_AUTH_TOKEN to keep
+# it out of the shell history. A --detach child gets it through its environment
+# (so does the train stage's `soup train` child, which ignores it). soup serve has
+# no TLS and the loop refuses plain http off-loopback, so run the loop on the
+# serving box against loopback, or put a TLS-terminating proxy in front.
+soup serve --model base-model --adapters chat=./chat --host 0.0.0.0 --tool-auth-token "$TOKEN" &
+SOUP_LOOP_SERVE_ENDPOINT=http://127.0.0.1:8000 SOUP_TOOL_AUTH_TOKEN="$TOKEN" soup loop watch --detach
 
 # Start serve with the candidate loaded, then promote it at 5% traffic.
 soup serve --model ./base --adapters candidate=./candidate
@@ -269,6 +290,12 @@ Every fine-tune you ship should be reproducible. Soup's local registry (`~/.soup
 # Register a completed run
 soup registry push --run-id run_202611_abc123 --name llama31-chat --tag v1
 
+# Also record the training data file's SHA-256 as data_hash
+soup registry push --run-id run_202611_abc123 --name llama31-chat --tag v1 --data data/train.jsonl
+
+# Safe to retry: the same key and the same registration return the existing entry
+soup registry push --run-id run_202611_abc123 --name llama31-chat --tag v1 --idempotency-key job-42
+
 # List entries (filter by name, tag, base model, task)
 soup registry list
 soup registry list --name llama31-chat --tag prod
@@ -289,13 +316,24 @@ soup registry promote llama31-chat-v1 --tag prod
 soup registry delete llama31-chat-v1 --yes
 ```
 
+**Training data:** `push --data <file>` stores the file's SHA-256 as the entry's `data_hash`, shown by `soup registry show`. It records the file registered as the training input, not proof of what the run trained on. The file must be under the current directory. Without `--data`, `register_from_run` copies a stored historical `training_data_sha256` without reopening today's path; legacy runs remain unknown. When both are present, the explicit file takes precedence for `data_hash`, while the separate historical `training_data_sha256` is retained. `entry_hash` binds the chosen data digest and any recorded base revision/source. `soup train` captures that digest at startup for a bounded, complete local text-training source (#2024); it identifies the source file's bytes, not the transformed examples consumed by training.
+
+**Base identity:** Registration copies the run's nullable base revision and its source;
+`soup registry show` exposes both. `hub_commit` identifies the commit passed to supported
+base loaders, while `cache_path` only describes the local directory name and does not
+verify local contents. The original human-readable base ID and config hash retain their
+existing meaning. Registrations with no known revision/hash retain their legacy entry
+fingerprint. Retries also compare the recorded revision/source and historical data hash.
+
+**Retries:** `push --idempotency-key <key>` (or `RegistryStore.push(idempotency_key=...)`) makes a registration safe to repeat after a crash or a timeout. A later push with the same key writes nothing and returns the existing entry, provided it repeats that entry's name, base model, task, run, config and data hash and its tag is one of the entry's tags; anything else under the same key is refused with an error naming the entry. Notes are not compared. Two writers pushing the same key at once end up with one entry. A key is 1 to 128 characters from letters, digits, `.`, `_`, `:` and `-`; pushes without one behave as before. `RegistryStore.get_by_idempotency_key(key)` finds the entry. Deleting the entry frees its key.
+
 **Lineage DAG** — every entry can point to a parent (its ancestor run). Walk the DAG for any name with:
 
 ```bash
 soup history llama31-chat
 ```
 
-**Refs resolve flexibly** — you can use a registry ID, a name (latest), or `name:tag`. Ambiguous prefixes raise an error rather than silently picking the wrong entry. Registry files are stored with `600` perms on POSIX; override the path with `SOUP_REGISTRY_DB_PATH`.
+**Refs resolve flexibly** — you can use a registry ID, a unique ID prefix, or `name:tag`. A bare name is not a ref; `soup history <name>` lists every entry with that name. Pushing the same `name:tag` twice keeps both entries. A `name:tag` that matches more than one entry raises an error naming the candidates, and an ambiguous prefix raises one too, rather than silently picking an entry; use the full ID then. Registry files are stored with `600` perms on POSIX; override the path with `SOUP_REGISTRY_DB_PATH`.
 
 
 ## Adapter Management (git for LoRA)
@@ -499,6 +537,9 @@ entry can never outlive a discarded local bundle; browser OIDC is explicit opt-i
 Verification exits 3 on tamper or policy mismatch, and exits 1 when Sigstore
 verification itself is unavailable (for example TUF/network failure) so an
 operational outage is not reported as tampering. Usage/input errors exit 2.
+The statement and signature sidecar accept UTF-8 with or without a leading BOM.
+Verification still uses the same canonical JSON and preserves U+FEFF inside
+field values; a leading BOM does not bypass tamper or trusted-key checks.
 An explicit Sigstore signing request fails closed if OIDC/Fulcio/Rekor is
 unavailable; it is never silently downgraded to unsigned. A valid signature proves the signer
 *asserted* the statement; it does not re-verify the subject digest against an
@@ -532,7 +573,7 @@ so a malicious model name can't inject a forged heading into downstream renderer
 `--annex-xi`. `--energy-country <ISO3>` picks the grid for the CO₂ estimate (default `USA`;
 the kWh figure itself is country-independent). Add `--energy-out <path>` to persist the
 measurement as JSON for `soup bom emit --energy <path>` (the hand-off into an ML-BOM —
-see [Attaching energy + CO₂](#attaching-energy--co2---energy)). Requires `pip install
+see [Attaching energy + CO₂](#attaching-energy--co---energy)). Requires `pip install
 soup-cli[carbon]`; without it, `--track-energy` is a graceful no-op.
 
 
@@ -553,7 +594,12 @@ soup --no-audit-log version             # skip the audit line for this command
 PII redaction across **every** string field (`hf_*` / `sk-*` / `Bearer …` → `<redacted>`)
 via the v0.40.3 `_SECRET_RE` policy. POSIX `O_NOFOLLOW` + `0o600` perms, atomic-append,
 rotation at 100 MiB with symlink rejection at the backup path. The auto-instrumentation is
-best-effort — a broken audit log never crashes the CLI.
+best-effort — a broken audit log never crashes the CLI. Lines written by older versions get the
+same webhook URL masking as new ones, applied once the next time the log is written
+(`audit.jsonl.masked-v1` marks it done). A file it cannot replace is left as it is; the attempt
+is recorded in `audit.jsonl.masked-v1.tried` and the next one waits a day, so a log another
+process keeps open is not re-read by every command. Temp files an interrupted pass left beside
+the log are removed by the next pass once they are an hour old.
 
 
 ## Reproducibility Receipt (`soup train --repro-receipt`)
@@ -727,12 +773,18 @@ recipe. Exit code 3 under `--strict` for CI gating.
 
 ## Pre-Flight Adapter Health Audit (`soup adapters check`)
 
-Pre-flight scan auditing single LoRA adapters for silent training failures (#1721):
+Pre-flight scan auditing single LoRA adapters for silent training failures (#1721).
+Inspection runs without a PyTorch dependency, but requires `numpy`
+(`pip install "soup-cli[train]"` or `pip install numpy`):
 - **Total and per-layer ||dW||_F**: Frobenius norm of LoRA parameter updates (dW = scaling * (B @ A), with alpha / r for standard LoRA and alpha / sqrt(r) for rsLoRA) with float64 accumulation via matrix trace contraction.
 - **Live fraction**: Proportion of adapter layers with active, non-zero updates.
 - **All-zero lora_B layers**: Flags un-trained or zero-initialized layers that failed to move during training.
 - **Incomplete LoRA pairs**: Flags orphaned or partially-saved projections missing either A or B.
 - **Leaked .inner. keys**: Flags legacy wrapper namespaces for adapters saved prior to the #1011 save-time guard.
+
+`soup adapters diff` and `soup adapters scan` also need only `numpy` to read weights.
+Writing with `soup adapters merge` or `soup adapters arithmetic` requires both `numpy`
+and `safetensors` (`pip install "soup-cli[train]"` or `pip install safetensors numpy`).
 
 ```bash
 soup adapters check path/to/adapter/

@@ -10,7 +10,9 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Literal, Optional, Tuple
 
+from soup_cli.eval.generation import iter_outputs
 from soup_cli.utils.final_answer import iter_boxed_answers
+from soup_cli.utils.ship_progress import track
 
 MiniBenchmark = list[dict[str, str]]
 
@@ -43,6 +45,22 @@ _CUE_RE = re.compile(
 )
 # Parenthesised choice marker: "(B)" or "B)".
 _PAREN_RE = re.compile(r"(?<![A-Za-z0-9])\(?([A-Ja-j])\)(?![A-Za-z0-9])")
+# A lone uppercase letter wrapped in markdown emphasis, quotes or square
+# brackets: "**B**", "__B__", "*B*", "_B_", "`B`", "\"B\"", "'B'", "[B]".
+# Deliberate markup of a single letter is an explicit commitment like "(B)",
+# so it joins the last-wins tier — position decides against boxed/cue matches
+# the same way. Keeping the letter uppercase leaves prose such as "the word
+# 'a' is an article" untouched. (#1442)
+_WRAPPED_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:\*{1,2}|_{1,2}|[`\"'\[])\s*([A-J])\s*"
+    r"(?:\*{1,2}|_{1,2}|[`\"'\]])(?![A-Za-z0-9])"
+)
+# Standalone uppercase letter LEADING the output, followed by a line break
+# or " is" / " -" — the model led with its answer then explained itself
+# ("B is the correct answer.", "B\n\nBecause ..."). Restricted to the start
+# so a stray "B is" mid-prose cannot claim the slot, and kept uppercase so
+# the article "a" still cannot. (#1442)
+_LEADING_RE = re.compile(r"^([A-J])(?=\r?\n| is\b| -)")
 # LaTeX ``\boxed{C}`` — how a reasoning-tuned model states its final answer.
 # Read through ``utils.final_answer``'s shared scan instead of a local regex: the
 # box counts as an OPTION LETTER when the scan's normalised content is a single
@@ -101,20 +119,25 @@ def build_mcq_prompt(question: str, answer: str) -> str:
 def extract_mcq_letter(output: str) -> Optional[str]:
     """Pull the model's chosen MCQ option letter (A–J) from ``output``.
 
-    Three "explicit commitment" forms are considered together — a LaTeX
-    ``\\boxed{C}``, an ``answer/option/...`` cue, and a parenthesised
-    ``(B)``/``B)`` marker — and the LAST one to appear anywhere in the output
+    Four "explicit commitment" forms are considered together — a LaTeX
+    ``\\boxed{C}``, an ``answer/option/...`` cue, a parenthesised
+    ``(B)``/``B)`` marker, and a markdown/quote/bracket-wrapped lone letter
+    (``**B**``, ``[B]``) — and the LAST one to appear anywhere in the output
     wins. Position, not form, decides: a model that boxes a scratch answer and
     then self-corrects ("...\\boxed{A}... on reflection, the answer is (B)")
     chose B, while one that echoes the option list and then boxes its decision
     ("(A) x (B) y. Answer: \\boxed{A}") chose A. Ranking the boxed FORM above
     the others would get the first of those backwards.
 
-    Only if none of the three appears does the bare tier apply: a
-    clause-terminating uppercase letter, taking the FIRST match (a model
-    answering without a cue leads with the letter, e.g. "C. I think ..."). A
-    bare letter only counts when it terminates a clause, so a prose opener
-    ("A cat sat ...") is not read as choosing option A.
+    Only if none of the four appears (the wrapped-letter form counts as an
+    explicit commitment too — ``**B**``/``[B]``/``"B"`` and friends, #1442)
+    does the bare tier apply: a standalone uppercase letter leading the
+    output followed by a line break or ``is``/``-`` (``B is the correct
+    answer.``), else a clause-terminating uppercase letter, taking the FIRST
+    match (a model answering without a cue leads with the letter, e.g. "C.
+    I think ..."). A bare letter only counts when it terminates a clause or
+    leads the output, so a prose opener ("A cat sat ...") is not read as
+    choosing option A.
 
     Returns ``None`` when no option letter is present (e.g. a free-text answer
     like "Berlin", or a boxed VALUE like ``\\boxed{4}``).
@@ -127,12 +150,15 @@ def extract_mcq_letter(output: str) -> Optional[str]:
         letter = box.answer.upper()
         if len(letter) == 1 and letter in _MCQ_OPTIONS and (latest is None or box.end > latest[0]):
             latest = (box.end, letter)
-    for regex in (_CUE_RE, _PAREN_RE):
+    for regex in (_CUE_RE, _PAREN_RE, _WRAPPED_RE):
         for match in regex.finditer(output):
             if latest is None or match.end() > latest[0]:
                 latest = (match.end(), match.group(1))
     if latest is not None:
         return latest[1].upper()
+    leading = _LEADING_RE.match(output)
+    if leading is not None:
+        return leading.group(1)
     bare = _BARE_UPPER_RE.findall(output)
     if bare:
         return bare[0].upper()
@@ -194,11 +220,11 @@ MINI_MMLU: MiniBenchmark = [
      "answer": "C"},
     {"question": "Light travels faster than: (A) sound (B) nothing (C) radio waves",
      "answer": "A"},
-    {"question": "The square root of 81 is: (A) 8 (B) 9 (C) 18", "answer": "B"},
+    {"question": "The square root of 81 is: (A) 9 (B) 8 (C) 18", "answer": "A"},
     {"question": "Which gas do plants release during photosynthesis? "
                  "(A) oxygen (B) hydrogen (C) methane", "answer": "A"},
-    {"question": "The author of 'Romeo and Juliet' is: (A) Dickens (B) Shakespeare (C) Austen",
-     "answer": "B"},
+    {"question": "The author of 'Romeo and Juliet' is: (A) Dickens (B) Austen (C) Shakespeare",
+     "answer": "C"},
     {"question": "The freezing point of water in Fahrenheit is: (A) 0 (B) 32 (C) 100",
      "answer": "B"},
     {"question": "Which ocean is the largest? (A) Atlantic (B) Indian (C) Pacific",
@@ -219,6 +245,50 @@ MINI_MMLU: MiniBenchmark = [
     {"question": "The primary gas in Earth's atmosphere is: (A) oxygen (B) nitrogen (C) argon",
      "answer": "B"},
     {"question": "Sound cannot travel through a: (A) solid (B) liquid (C) vacuum", "answer": "C"},
+    # #1192 — the 26 rows above put a capable model at 1.000 (Qwen2.5-7B-Instruct,
+    # 26/26 in the #1111 tool-call discrimination record; Qwen2.5-1.5B-Instruct
+    # too). The rows below are 4-option, many with a common misconception as a
+    # distractor, selected from two 24-row candidate pools measured on two
+    # models. Two rows above had options swapped so no letter answers more
+    # than 30% of the suite.
+    {"question": "Which planet has the shortest day (fastest rotation)? (A) Mercury (B) Earth "
+                 "(C) Saturn (D) Jupiter",
+     "answer": "D"},
+    {"question": "The interior angles of a hexagon add up to: (A) 540 degrees (B) 900 degrees "
+                 "(C) 720 degrees (D) 1080 degrees",
+     "answer": "C"},
+    {"question": "Which country has the longest coastline? (A) Russia (B) Australia (C) Canada "
+                 "(D) Indonesia",
+     "answer": "C"},
+    {"question": "How many hearts does an octopus have? (A) 3 (B) 1 (C) 2 (D) 4",
+     "answer": "A"},
+    {"question": "Measured from base to peak, the tallest mountain on Earth is: (A) Mount "
+                 "Everest (B) Mauna Kea (C) K2 (D) Kilimanjaro",
+     "answer": "B"},
+    {"question": "In computing, a nibble is how many bits? (A) 4 (B) 2 (C) 8 (D) 16",
+     "answer": "A"},
+    {"question": "In which phase of mitosis do sister chromatids separate? (A) prophase (B) "
+                 "metaphase (C) telophase (D) anaphase",
+     "answer": "D"},
+    {"question": "Which planet has the highest average surface temperature? (A) Mercury (B) "
+                 "Venus (C) Mars (D) Jupiter",
+     "answer": "B"},
+    {"question": "Which element has the chemical symbol K? (A) krypton (B) calcium (C) "
+                 "phosphorus (D) potassium",
+     "answer": "D"},
+    {"question": "Which is the smallest of the world's five oceans? (A) the Southern (B) the "
+                 "Indian (C) the Atlantic (D) the Arctic",
+     "answer": "D"},
+    {"question": "The largest moon of Saturn is: (A) Ganymede (B) Europa (C) Titan (D) Callisto",
+     "answer": "C"},
+    {"question": "The hardest substance in the human body is: (A) tooth enamel (B) bone (C) "
+                 "cartilage (D) fingernail",
+     "answer": "A"},
+    {"question": "The Rock of Gibraltar is a territory of: (A) Spain (B) Morocco (C) Portugal "
+                 "(D) the United Kingdom",
+     "answer": "D"},
+    {"question": "The capital of Turkey is: (A) Istanbul (B) Izmir (C) Antalya (D) Ankara",
+     "answer": "D"},
 ]
 
 MINI_COMMON_SENSE: MiniBenchmark = [
@@ -450,11 +520,12 @@ class ForgettingDetector:
 
     def _evaluate(self) -> float:
         correct = 0
-        for item in self.benchmark:
-            output = self.generate_fn(
-                build_mcq_prompt(item["question"], item.get("answer", ""))
-            )
-            if not isinstance(output, str):
+        outputs = iter_outputs(self.generate_fn, [
+            build_mcq_prompt(item["question"], item.get("answer", ""))
+            for item in self.benchmark
+        ])
+        for item, output in track(zip(self.benchmark, outputs), len(self.benchmark)):
+            if output is None:
                 continue
             if score_answer(output, item["answer"]):
                 correct += 1

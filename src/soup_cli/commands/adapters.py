@@ -424,7 +424,19 @@ def merge(
         console.print("[red]Need at least 2 adapter paths to merge[/]")
         raise typer.Exit(2)
 
-    # cmaes argument validation runs FIRST (before any file I/O / scanning):
+    from soup_cli.utils.adapter_diff import (
+        WRITE_ADAPTER_DEPS,
+        require_adapter_dependencies,
+    )
+
+    try:
+        require_adapter_dependencies(WRITE_ADAPTER_DEPS)
+    except RuntimeError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
+    # Dependency pre-flight runs before heavy operations.
+    # cmaes argument validation runs next (before any file I/O / scanning):
     # a user who forgot --eval should get that error immediately, not a scan
     # error on their inputs. The cmaes *search* itself still runs after the
     # security gates below (v0.71.4 review — preserves the "reject missing
@@ -433,7 +445,7 @@ def merge(
         if eval_suite is None:
             console.print(
                 "[red]--strategy cmaes requires --eval <suite> "
-                "(path to a YAML/JSONL eval).[/]"
+                "(path to a .jsonl eval suite; the loader accepts .jsonl only).[/]"
             )
             raise typer.Exit(2)
         if canary is not None or strict_verdict:
@@ -638,6 +650,12 @@ def merge(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
 
+    except RuntimeError as exc:
+        # The root package pre-flight cannot establish that the writer's
+        # submodule will import successfully when the output is saved.
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
     # v0.71.4 #172 — live canary verdict. With --canary, score the merged
     # adapter vs the first input and classify OK/MINOR/MAJOR; without it the
     # verdict stays UNKNOWN (advisory).
@@ -792,6 +810,17 @@ def arithmetic(
 
     referenced = [t.name for t in terms]
     ref_paths = [mapping[n] for n in referenced]
+
+    from soup_cli.utils.adapter_diff import (
+        WRITE_ADAPTER_DEPS,
+        require_adapter_dependencies,
+    )
+
+    try:
+        require_adapter_dependencies(WRITE_ADAPTER_DEPS)
+    except RuntimeError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
 
     # 3. Backdoor-scan gate (mirrors `adapters merge`, #192). Refuse FAIL /
     #    un-scannable inputs unless --allow-unscanned; WARN is advisory.
@@ -1270,7 +1299,7 @@ def sign(
     hash. ``ed25519`` (v0.71.2 #185) adds a real detached signature over that
     root — pass ``--key <priv.pem>``, set ``SOUP_SIGNING_KEY``, or use
     ``--generate-key <out.pem>``. ``sigstore`` uses keyless OIDC plus the
-    Sigstore public-good Fulcio/Rekor service; install ``soup-cli[sigstore]`` and
+    Sigstore public-good Fulcio/Rekor service; install ``soup-cli\\[sigstore]`` and
     run in an ambient-OIDC environment (for example GitHub Actions). Browser
     OIDC is opt-in with --interactive-oidc.
     """
@@ -1655,18 +1684,54 @@ def adapter_bisect(
     import shlex
     import subprocess  # noqa: S404 — argv list mode, no shell
 
+    from soup_cli.utils.tool_paths import find_tool
+
+    try:
+        program = shlex.split(eval_command)[0]
+    except ValueError as exc:
+        console.print(f"[red]Invalid --eval-command: {for_terminal(exc)}[/]")
+        raise typer.Exit(2) from exc
+    # A bare program name runs from the absolute PATH directory it is found
+    # in; a program given with its path runs as given. The name is resolved
+    # for each probe, after `{ckpt}` is filled in, so a name the checkpoint id
+    # completes is found the same way; a fixed name is also checked up front.
+    def _program_path(name: str) -> Optional[str]:
+        if os.path.dirname(name):
+            return name
+        try:
+            return find_tool(name)
+        except ValueError:
+            return None
+
+    def _not_on_path(name: str) -> str:
+        return (
+            f"--eval-command program {for_terminal(repr(name))} was not found on PATH; "
+            "install it, put it on PATH, or give its path"
+        )
+
+    if "{ckpt}" not in program and _program_path(program) is None:
+        console.print(f"[red]{_not_on_path(program)}[/]")
+        raise typer.Exit(2)
+
     def _eval_fn(ckpt: str) -> bool:
         cmd_str = eval_command.replace("{ckpt}", shlex.quote(ckpt))
         # Safer: split via shlex and use argv mode (no shell interpolation).
         argv = shlex.split(cmd_str)
+        resolved = _program_path(argv[0])
+        if resolved is None:
+            console.print(
+                f"[yellow]Eval failed for {for_terminal(ckpt)}: {_not_on_path(argv[0])}[/]"
+            )
+            return False
+        argv[0] = resolved
         try:
             result = subprocess.run(  # noqa: S603
                 argv, capture_output=True, timeout=3600, check=False
             )
         except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
             console.print(
-                f"[yellow]Eval failed for {escape(ckpt)}: "
-                f"{escape(str(exc))}[/]"
+                f"[yellow]Eval failed for {for_terminal(ckpt)}: "
+                f"{for_terminal(exc)}[/]"
             )
             return False
         return result.returncode == 0
@@ -1689,7 +1754,7 @@ def adapter_bisect(
         console.print(
             Panel(
                 f"Verdict:      [red]BROKEN_AT[/]\n"
-                f"First broken: [bold]{escape(result.first_broken or '?')}[/]\n"
+                f"First broken: [bold]{for_terminal(result.first_broken or '?')}[/]\n"
                 f"Probes:       {result.probes}",
                 title="Adapter bisect",
             )
@@ -1800,6 +1865,7 @@ def audit(
     # The schema is the single source of defaults; the audit module stays pure.
     try:
         from soup_cli.config.loader import load_config_from_string
+        from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, read_text_limited
 
         # The loader reports unknown keys through its own module-level Console,
         # which writes to STDOUT -- so `--json` emitted four lines of warning
@@ -1807,12 +1873,20 @@ def audit(
         # A diagnostic about the config is not this command's output; stderr
         # is where it belongs, and it stays just as visible there.
         with contextlib.redirect_stdout(sys.stderr):
-            soup_config = load_config_from_string(config_path.read_text())
+            soup_config = load_config_from_string(
+                read_text_limited(
+                    config_path, f"Config file {config}", max_bytes=MAX_CONFIG_BYTES
+                )
+            )
     except yaml.YAMLError as exc:
-        console.print(f"[red]Could not parse {config}: {exc}[/]")
+        console.print(
+            f"[red]Could not parse {for_terminal(config)}: {for_terminal(str(exc))}[/]"
+        )
         raise typer.Exit(1) from exc
     except (SystemExit, Exception) as exc:  # schema rejection prints its own
-        console.print(f"[red]Could not load {config}: {exc}[/]")
+        console.print(
+            f"[red]Could not load {for_terminal(config)}: {for_terminal(str(exc))}[/]"
+        )
         raise typer.Exit(1) from exc
     cfg = soup_config.model_dump()
 
@@ -1941,4 +2015,3 @@ def check_cmd(
         raise typer.Exit(0)
     else:
         raise typer.Exit(2)
-

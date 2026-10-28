@@ -1,8 +1,11 @@
 """Detect config fields staged for features that have not landed (#808).
 
-Warn-then-refuse across two releases following the #627 pattern:
-While warning, each of the staged fields prints:
+Warn-then-refuse across two releases following the #627 pattern. While warning
+(v0.76, or ``STAGED_FIELD_SEVERITY = "warn"`` in ``config/loader.py``), each of
+the staged fields prints:
     <field> is accepted but read by nothing; v<STAGED_FIELD_REJECTION_VERSION> will refuse it
+Once refused (as of v0.77, the shipped setting), the load stops with one line per field:
+    <field> is accepted but read by nothing; refused as of v<...>. Delete the line.
 
 The rejection version is pinned to :data:`STAGED_FIELD_REJECTION_VERSION` ("0.77").
 """
@@ -44,7 +47,7 @@ class StagedField:
 #: ``checkpoint_intelligence``, ``early_stop_on_regression``,
 #: ``convergence_detection``) continue to be reported by ``soup train``'s
 #: live honesty guard. The tunables themselves (Group B) are staged here (#808),
-#: so non-default values warn at load with the v0.77 refusal deadline.
+#: so non-default values are refused at load as of v0.77 (they warned in v0.76).
 STAGED_FIELDS: dict[tuple[str, str], Any] = {
     ("training", "long_context_grpo"): False,
     ("training", "vision_grpo"): False,
@@ -66,6 +69,9 @@ STAGED_FIELDS: dict[tuple[str, str], Any] = {
     ("training", "checkpoint_keep_top"): 3,
     ("training", "convergence_window"): 50,
     ("training", "convergence_rel_tol"): 0.005,
+    # #808 item 2: accepted, but no save writes reference-model or rollout-buffer state.
+    ("training", "rl_checkpoint_include_ref_model"): False,
+    ("training", "rl_checkpoint_include_rollout_buffer"): False,
     ("data", "video_dir"): None,
     ("data", "video_fps"): None,
     ("data", "video_maxlen"): None,
@@ -135,6 +141,8 @@ def format_staged_fields(
     Per maintainer directive on #808:
     While warning, each staged field prints:
         <field> is accepted but read by nothing; v<STAGED_FIELD_REJECTION_VERSION> will refuse it
+    Once refused, each line also says what to do about it:
+        <field> is accepted but read by nothing; refused as of v<...>. Delete the line.
     """
     lines = []
     for item in staged:
@@ -146,6 +154,6 @@ def format_staged_fields(
         else:
             lines.append(
                 f"{item.path} is accepted but read by nothing; "
-                f"refused as of v{STAGED_FIELD_REJECTION_VERSION}"
+                f"refused as of v{STAGED_FIELD_REJECTION_VERSION}. Delete the line."
             )
     return "\n".join(lines)

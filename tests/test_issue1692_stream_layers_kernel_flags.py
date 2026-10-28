@@ -12,8 +12,9 @@ RESIDENT setup:
 
 A streamed run goes to ``_setup_streaming_transformers`` (the streamed branch of
 ``SFTTrainerWrapper.setup``), whose model is built by
-``AutoModelForCausalLM.from_config(...)`` in ``build_meta_skeleton``
-(``utils/layer_stream_runtime.py``) with no attention argument and no Liger patch.
+``AutoModelForCausalLM.from_config(...)`` in ``_skeleton_from_config``, called by
+``build_meta_skeleton`` (``utils/layer_stream_runtime.py``), with no attention argument
+and no Liger patch.
 ``_liger_applied`` is never set there, so ``use_liger_kernel`` misses
 ``TrainingArguments`` too.
 
@@ -23,8 +24,8 @@ the claim itself, so a reader moving is caught where it matters.
 
 These are the switches a user reaches for when a streamed run will not fit, so dropping
 them silently is the worst outcome: the refusal is the small step until each is wired
-and shown to engage on a streamed model. ``use_cut_ce`` has the same shape and is #1206,
-deliberately left loading here.
+and shown to engage on a streamed model. ``use_cut_ce`` is separately refused by
+#1206 after a real streamed-model probe.
 """
 
 from __future__ import annotations
@@ -163,9 +164,9 @@ class TestWhatMustKeepLoading:
     def test_the_switch_alone_on_a_resident_stream_free_config_loads(self, field: str) -> None:
         assert getattr(_cfg(**{field: True}).training, field) is True
 
-    def test_use_cut_ce_still_loads_under_streaming(self) -> None:
-        """SCOPE. #1206 owns `use_cut_ce`; this PR must not quietly widen into it."""
-        assert _cfg(stream_layers=True, use_cut_ce=True).training.use_cut_ce is True
+    def test_disabled_cut_ce_still_loads_under_streaming(self) -> None:
+        """A streamed run with CCE disabled still reaches its supported setup."""
+        assert _cfg(stream_layers=True, use_cut_ce=False).training.use_cut_ce is False
 
 
 class TestTheStreamedPreferencePathsAreAlreadyCovered:

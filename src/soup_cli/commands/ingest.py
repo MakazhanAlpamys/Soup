@@ -33,12 +33,16 @@ from soup_cli.utils.ingest_sources import (
     resolve_auth_env,
     validate_source_name,
 )
-from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.paths import atomic_write_lines, ensure_distinct_paths, is_under_cwd
 from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
 _DEFAULT_SINCE = "7d"
+
+
+class _LogsUnreadableError(Exception):
+    """The --logs export could not be read; the message names it and why."""
 
 
 def ingest(
@@ -156,6 +160,9 @@ def ingest(
     if not logs_path.exists():
         console.print(f"[red]--logs not found: {escape(logs)}[/]")
         raise typer.Exit(1)
+    if logs_path.is_dir():
+        console.print(f"[red]--logs '{escape(logs)}' is a directory, not an export file[/]")
+        raise typer.Exit(1)
 
     output_path = Path(output) if output else Path("traces.jsonl")
     if not is_under_cwd(output_path):
@@ -163,6 +170,17 @@ def ingest(
             f"[red]--output '{escape(str(output_path))}' is outside cwd — refusing[/]"
         )
         raise typer.Exit(1)
+
+    # Refuse before anything is opened for writing: the default --output
+    # (traces.jsonl) is also a plausible --logs, and the write would empty it.
+    try:
+        ensure_distinct_paths(
+            [("--logs", str(logs_path))],
+            [("--output", str(output_path))],
+        )
+    except ValueError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
 
     _print_pii_reminder(canonical)
 
@@ -174,10 +192,28 @@ def ingest(
         )
 
     count = 0
-    with open(output_path, "w", encoding="utf-8") as out_fh:
-        for record in ingest_traces(source=canonical, path=str(logs_path)):
-            out_fh.write(json.dumps(record.to_dict(), ensure_ascii=False) + "\n")
-            count += 1
+
+    def _lines():
+        nonlocal count
+        try:
+            for record in ingest_traces(source=canonical, path=str(logs_path)):
+                count += 1
+                yield json.dumps(record.to_dict(), ensure_ascii=False) + "\n"
+        except UnicodeDecodeError as exc:
+            raise _LogsUnreadableError(
+                f"--logs '{logs}' is not valid UTF-8 (byte {exc.start})"
+            ) from exc
+        except OSError as exc:
+            reason = exc.strerror or type(exc).__name__
+            raise _LogsUnreadableError(f"--logs '{logs}' cannot be read: {reason}") from exc
+
+    # Streamed into a staging file; the target is replaced only after the export
+    # has been read completely, so a failed read leaves an earlier output intact.
+    try:
+        atomic_write_lines(_lines(), str(output_path), field="--output")
+    except _LogsUnreadableError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
 
     console.print(
         f"[green]Wrote {count} traces from {escape(canonical)} -> "

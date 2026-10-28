@@ -1,5 +1,6 @@
 """FastAPI application for Soup Web UI."""
 
+import contextlib
 import ipaddress
 import json as json_mod
 import logging
@@ -167,14 +168,15 @@ class _SecurityHeadersMiddleware:
             return
 
         exempt = scope.get("path") in self._policy_exempt_paths
-        extra = tuple(
-            (name, value)
-            for name, value in self._headers
-            if not (exempt and name == b"content-security-policy")
-        )
 
         async def send_with_headers(message) -> None:
             if message.get("type") == "http.response.start":
+                exempt_policy = exempt and message.get("status") == 200
+                extra = tuple(
+                    (name, value)
+                    for name, value in self._headers
+                    if not (exempt_policy and name == b"content-security-policy")
+                )
                 existing = list(message.get("headers", ()))
                 present = {name.lower() for name, _ in existing}
                 added = [(n, v) for n, v in extra if n not in present]
@@ -182,6 +184,76 @@ class _SecurityHeadersMiddleware:
             await send(message)
 
         await self._app(scope, receive, send_with_headers)
+
+
+def _host_key(host: str) -> str:
+    """Normalize IP literals and case-insensitive hostnames for comparison."""
+    try:
+        return str(ipaddress.ip_address(host))
+    except ValueError:
+        return host.lower()
+
+
+def _host_header_allowed(value: str, allowed_hosts: frozenset[tuple[str, int]]) -> bool:
+    """Match a single HTTP Host header against the served host and port pairs."""
+    if not value:
+        return False
+    if value.startswith("["):
+        host, sep, rest = value[1:].partition("]")
+        if not sep:
+            return False
+        try:
+            ipaddress.IPv6Address(host)
+        except ValueError:
+            return False
+        if rest:
+            if not rest.startswith(":"):
+                return False
+            port_s = rest[1:]
+        else:
+            port_s = "80"
+    else:
+        host, sep, port_s = value.rpartition(":")
+        if not sep:
+            host, port_s = value, "80"
+        elif ":" in host:
+            return False
+    if not port_s.isascii() or not port_s.isdigit():
+        return False
+    # Strip leading zeroes before converting; an arbitrarily long port cannot
+    # overflow Python's integer-string conversion limit.
+    port_s = port_s.lstrip("0") or "0"
+    if len(port_s) > 5:
+        return False
+    return (_host_key(host), int(port_s)) in allowed_hosts
+
+
+class _HostAllowlistMiddleware:
+    """Validate loopback HTTP hosts before routes, auth and body reads."""
+
+    def __init__(self, app, allowed_hosts: frozenset[tuple[str, int]]) -> None:
+        self._app = app
+        self._allowed_hosts = allowed_hosts
+
+    async def __call__(self, scope, receive, send) -> None:
+        # The UI has no WebSocket routes; do not allow a future one to bypass
+        # this HTTP-only gate. Lifespan messages still pass through.
+        if scope.get("type") == "websocket":
+            await send({"type": "websocket.close", "code": 1008})
+            return
+        if scope.get("type") != "http":
+            await self._app(scope, receive, send)
+            return
+        hosts = [value for name, value in scope.get("headers", ()) if name.lower() == b"host"]
+        if len(hosts) != 1 or not _host_header_allowed(
+            hosts[0].decode("latin-1"), self._allowed_hosts
+        ):
+            from starlette.responses import JSONResponse
+
+            response = JSONResponse({"detail": "Host not allowed"}, status_code=403)
+            await response(scope, receive, send)
+            return
+        await self._app(scope, receive, send)
 
 
 class TrainRequest(PydanticBaseModel):
@@ -248,11 +320,42 @@ class TrainLogBuffer:
             return available, self._done
 
 
-def _drain_stdout_worker(proc: subprocess.Popen, log_buffer: TrainLogBuffer) -> None:
+def _remove_temp_config(path: Optional[str]) -> None:
+    if not path:
+        return
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        logger.debug("Could not remove temp config %s: %s", path, exc)
+
+
+def _wait_and_remove_temp_config(
+    proc: Optional[subprocess.Popen], config_path: Optional[str]
+) -> None:
+    if not config_path:
+        return
+    try:
+        wait_fn = getattr(proc, "wait", None)
+        if callable(wait_fn):
+            wait_fn()
+    except Exception as exc:
+        logger.debug("Waiting for process %s failed: %s", proc, exc)
+        return
+    _remove_temp_config(config_path)
+
+
+def _drain_stdout_worker(
+    proc: subprocess.Popen,
+    log_buffer: TrainLogBuffer,
+    config_path: Optional[str] = None,
+) -> None:
     """Continuously read stdout of proc until EOF and write to log_buffer."""
     stdout = getattr(proc, "stdout", None)
     if stdout is None:
         log_buffer.mark_done()
+        _wait_and_remove_temp_config(proc, config_path)
         return
 
     try:
@@ -275,6 +378,7 @@ def _drain_stdout_worker(proc: subprocess.Popen, log_buffer: TrainLogBuffer) -> 
         except Exception:
             pass
         log_buffer.mark_done()
+        _wait_and_remove_temp_config(proc, config_path)
 
 
 def _resolve_train_argv(config_path: str) -> list[str]:
@@ -451,8 +555,17 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             allow_headers=["Authorization", "Content-Type"],
         )
 
-    # Added last, so it is the outermost layer: a 413 from the size cap, a CORS
-    # preflight and every error response carry the content policy too.
+    # On loopback binds, validate the bound name and aliases before routes,
+    # authentication and body reads. Public binds keep the Bearer gate.
+    if _is_loopback(host):
+        allowed = frozenset(
+            (_host_key(name.strip("[]")), port)
+            for name in ("localhost", "127.0.0.1", "::1", host)
+        )
+        app.add_middleware(_HostAllowlistMiddleware, allowed_hosts=allowed)
+
+    # Added last, so refusals, body-size errors and CORS preflights carry the
+    # security headers as well as normal endpoint responses.
     app.add_middleware(
         _SecurityHeadersMiddleware,
         policy_exempt_paths=_POLICY_EXEMPT_PATHS if _docs_enabled else frozenset(),
@@ -746,20 +859,33 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             fd, config_path = tempfile.mkstemp(
                 prefix="soup_ui_config_", suffix=".yaml"
             )
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(req.config_yaml)
+            try:
+                try:
+                    fh = os.fdopen(fd, "w", encoding="utf-8")
+                except BaseException:
+                    with contextlib.suppress(OSError):
+                        # os.fdopen can occasionally close the descriptor itself before raising;
+                        # practically unreachable with the fixed "w"/utf-8 arguments here.
+                        os.close(fd)
+                    raise
+                with fh:
+                    fh.write(req.config_yaml)
+                proc = subprocess.Popen(
+                    _resolve_train_argv(config_path),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                )
+            except Exception:
+                _remove_temp_config(config_path)
+                raise
 
             _train_config_path = config_path
-            _train_process = subprocess.Popen(
-                _resolve_train_argv(config_path),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-            )
+            _train_process = proc
             global _train_log_buffer, _train_drain_thread
             _train_log_buffer = TrainLogBuffer(maxlen=10000)
             _train_drain_thread = threading.Thread(
                 target=_drain_stdout_worker,
-                args=(_train_process, _train_log_buffer),
+                args=(_train_process, _train_log_buffer, config_path),
                 daemon=True,
                 name="soup_train_drain",
             )

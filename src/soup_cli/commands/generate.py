@@ -58,7 +58,7 @@ def generate(
     api_key: Optional[str] = typer.Option(
         None,
         "--api-key",
-        help="[deprecated] Use OPENAI_API_KEY env var instead",
+        help="\\[deprecated] Use OPENAI_API_KEY env var instead",
         envvar="OPENAI_API_KEY",
     ),
     api_base: Optional[str] = typer.Option(
@@ -247,7 +247,7 @@ def generate(
         if not ctx_path.exists():
             console.print(f"[red]Context file not found: {ctx_path}[/]")
             raise typer.Exit(1)
-        context_text = ctx_path.read_text(encoding="utf-8")
+        context_text = ctx_path.read_text(encoding="utf-8-sig")
 
     # Generate
     console.print(f"[dim]Generating {count} examples using {provider}/{model_name}...[/]")
@@ -703,7 +703,7 @@ def _generate_openai(
         )
 
     try:
-        import httpx
+        import httpx  # noqa: F401 -- retain the optional-dependency diagnostic
     except ImportError:
         raise ImportError("httpx is required for OpenAI generation. Install: pip install httpx")
 
@@ -734,7 +734,9 @@ def _generate_openai(
     if generation_prompt is None:
         generation_prompt = _build_generation_prompt(prompt, count, fmt, seed_examples)
 
-    response = httpx.post(
+    from soup_cli.utils.http_response import GENERATION_RESPONSE_LIMIT_BYTES, post_capped
+
+    response = post_capped(
         f"{base_url}/chat/completions",
         headers={
             "Authorization": f"Bearer {resolved_key}",
@@ -749,11 +751,12 @@ def _generate_openai(
             "temperature": temperature,
             "max_tokens": 4096,
         },
+        max_bytes=GENERATION_RESPONSE_LIMIT_BYTES,
+        endpoint_label="OpenAI --api-base",
         timeout=120.0,
     )
 
     if response.status_code != 200:
-        logger.debug("API error response: %s", response.text)
         raise ValueError(
             f"API returned {response.status_code}. Check your API key and model name."
         )
@@ -852,7 +855,7 @@ def _generate_server(
     local inference server via its OpenAI-compatible /v1/chat/completions endpoint.
     """
     try:
-        import httpx
+        import httpx  # noqa: F401 -- retain the optional-dependency diagnostic
     except ImportError:
         raise ImportError("httpx is required for server generation. Install: pip install httpx")
 
@@ -892,7 +895,9 @@ def _generate_server(
     if generation_prompt is None:
         generation_prompt = _build_generation_prompt(prompt, count, fmt, seed_examples)
 
-    response = httpx.post(
+    from soup_cli.utils.http_response import GENERATION_RESPONSE_LIMIT_BYTES, post_capped
+
+    response = post_capped(
         f"{base_url}/chat/completions",
         headers={"Content-Type": "application/json"},
         json={
@@ -904,11 +909,12 @@ def _generate_server(
             "temperature": temperature,
             "max_tokens": 4096,
         },
+        max_bytes=GENERATION_RESPONSE_LIMIT_BYTES,
+        endpoint_label="server --api-base",
         timeout=300.0,
     )
 
     if response.status_code != 200:
-        logger.debug("Server error response: %s", response.text)
         raise ValueError(
             f"Server returned {response.status_code}. "
             "Check that the server is running and the model name is correct."

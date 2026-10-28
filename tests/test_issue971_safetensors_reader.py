@@ -91,11 +91,31 @@ class TestHeaderRefusesRatherThanGuesses:
     def test_an_unsupported_dtype_is_refused_by_name(self, tmp_path):
         path = tmp_path / "odd.safetensors"
         body = json.dumps(
-            {"w": {"dtype": "F8_E4M3", "shape": [2], "data_offsets": [0, 2]}}
+            {"w": {"dtype": "C64", "shape": [2], "data_offsets": [0, 16]}}
         ).encode()
-        path.write_bytes(struct.pack("<Q", len(body)) + body + b"\x00\x00")
-        with pytest.raises(ValueError, match="F8_E4M3"):
+        path.write_bytes(struct.pack("<Q", len(body)) + body + b"\x00" * 16)
+        with pytest.raises(ValueError, match="C64"):
             read_header(str(path))
+
+    def test_fp8_source_dtypes_are_read_at_one_byte(self, tmp_path):
+        """A source checkpoint's FP8 header is readable (the disk pre-flight sizes an
+        FP8 block source, or names the FP8 spelling it refuses); the bytes are checked."""
+        path = tmp_path / "fp8.safetensors"
+        body = json.dumps(
+            {
+                "w": {"dtype": "F8_E4M3", "shape": [2, 3], "data_offsets": [0, 6]},
+                "v": {"dtype": "F8_E5M2", "shape": [2], "data_offsets": [6, 8]},
+            }
+        ).encode()
+        path.write_bytes(struct.pack("<Q", len(body)) + body + b"\x00" * 8)
+        header = read_header(str(path))
+        assert (header["w"].dtype, header["w"].nbytes) == ("float8_e4m3fn", 6)
+        assert (header["v"].dtype, header["v"].nbytes) == ("float8_e5m2", 2)
+        short = tmp_path / "short.safetensors"
+        raw = path.read_bytes()
+        short.write_bytes(raw.replace(b'"data_offsets": [6, 8]', b'"data_offsets": [6, 7]'))
+        with pytest.raises(ValueError, match="holds 1"):
+            read_header(str(short))
 
     def test_offsets_outside_the_file_are_refused(self, tmp_path):
         path = tmp_path / "bad.safetensors"
