@@ -90,10 +90,27 @@ def _ppo_wrapper(wrapper):
 
 
 def test_a_4bit_step_runs_with_checkpointing_on(tmp_path, monkeypatch):
+    import torch
+
     _kbit_stand_in(monkeypatch)
     wrapper = _setup(tmp_path, monkeypatch, checkpointing=True, quantization="4bit")
     assert wrapper.model.is_gradient_checkpointing is True
     before = _checkpoint_kwargs(wrapper.model)
+    trainable = {
+        name: param.detach().clone()
+        for name, param in wrapper.model.named_parameters()
+        if param.requires_grad
+    }
+    assert trainable
+
+    checkpointed_while_generating = []
+    generate = wrapper.model.generate
+
+    def recording_generate(*args, **kwargs):
+        checkpointed_while_generating.append(wrapper.model.is_gradient_checkpointing)
+        return generate(*args, **kwargs)
+
+    monkeypatch.setattr(wrapper.model, "generate", recording_generate, raising=False)
 
     result = wrapper.train()
 
@@ -101,8 +118,17 @@ def test_a_4bit_step_runs_with_checkpointing_on(tmp_path, monkeypatch):
     losses = [e["loss/policy_avg"] for e in wrapper.trainer.state.log_history
               if "loss/policy_avg" in e]
     assert losses and all(math.isfinite(loss) for loss in losses), losses
+    # The rollout generates with checkpointing off, then it is back on with the same kwargs.
+    assert checkpointed_while_generating, "the policy never generated"
+    assert not any(checkpointed_while_generating), checkpointed_while_generating
     assert wrapper.model.is_gradient_checkpointing is True
     assert _checkpoint_kwargs(wrapper.model) == before
+    unchanged = [
+        name
+        for name, param in wrapper.model.named_parameters()
+        if name in trainable and torch.equal(param.detach(), trainable[name])
+    ]
+    assert not unchanged, unchanged
 
 
 def test_checkpointing_off_adds_nothing_to_the_wrapper(tmp_path, monkeypatch):
