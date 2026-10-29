@@ -496,17 +496,27 @@ def _run_sandboxed_subprocess(
         return SandboxProcessResult(proc.returncode, stdout, stderr)
 
 
-def _run_code_sandbox_process(
-    code: str, strict_namespaces: bool = False
-) -> SandboxProcessResult:
-    """Run code in a subprocess sandbox and return the complete SandboxProcessResult.
+# The program ``/v1/tools/python`` starts: the network guard, then the caller's
+# code, which arrives as the next argument and is compiled under the file name
+# ``<code>`` so a traceback gives the caller's own line numbers. As before, the
+# code runs in the child's ``__main__`` namespace, and ``pop`` leaves
+# ``sys.argv`` as ``['-c']``.
+_CODE_TOOL_PROGRAM = (
+    SANDBOX_NETWORK_GUARD
+    + "import sys\n"
+    + "exec(compile(sys.argv.pop(1), '<code>', 'exec'))\n"
+)
 
-    Used by ``soup serve``'s ``/v1/tools/python`` to report full process diagnostics
-    (stdout, stderr, exit_code, timed_out).
+
+def _run_python_sandboxed(
+    program_args: list[str], strict_namespaces: bool
+) -> SandboxProcessResult:
+    """Start ``python -I -S *program_args`` in the sandbox and return its result.
+
+    With ``strict_namespaces``, a child that could not start raises
+    :class:`SandboxIsolationError` instead of returning a ``launch_failed`` result.
     """
     _show_code_exec_warning_once()
-
-    wrapped = SANDBOX_NETWORK_GUARD + "\n" + code
 
     preexec: Callable[[], None] | None = None
     if sys.platform != "win32":
@@ -516,12 +526,24 @@ def _run_code_sandbox_process(
             else _apply_rlimit
         )
 
-    argv: list[str] = [sys.executable, "-I", "-S", "-c", wrapped]
+    argv: list[str] = [sys.executable, "-I", "-S", *program_args]
 
     result = _run_sandboxed_subprocess(argv, preexec)
     if strict_namespaces and result.launch_failed:
         raise SandboxIsolationError(result.stderr)
     return result
+
+
+def _run_code_sandbox_process(
+    code: str, strict_namespaces: bool = False
+) -> SandboxProcessResult:
+    """Run code in a subprocess sandbox and return the complete SandboxProcessResult.
+
+    Used by ``soup serve``'s ``/v1/tools/python`` to report full process diagnostics
+    (stdout, stderr, exit_code, timed_out). Tracebacks name the code ``<code>`` and
+    give its own line numbers.
+    """
+    return _run_python_sandboxed(["-c", _CODE_TOOL_PROGRAM, code], strict_namespaces)
 
 
 def _run_code_sandbox(code: str, strict_namespaces: bool = False) -> "str | None":
@@ -545,7 +567,9 @@ def _run_code_sandbox(code: str, strict_namespaces: bool = False) -> "str | None
 
     Returns stdout string or None on failure.
     """
-    result = _run_code_sandbox_process(code, strict_namespaces=strict_namespaces)
+    result = _run_python_sandboxed(
+        ["-c", SANDBOX_NETWORK_GUARD + "\n" + code], strict_namespaces
+    )
     if (
         result.returncode != 0
         or result.timed_out
