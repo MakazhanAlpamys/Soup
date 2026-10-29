@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import pytest
 
-from tests._windows_ci import skip_on_windows_ci
-
 torch = pytest.importorskip("torch")
 pytest.importorskip("transformers")
 
@@ -21,13 +19,11 @@ pytest.importorskip("transformers")
 _RTOL = 1e-5
 
 # The bfloat16 cases run a plain CPU bf16 matmul (``torch.nn.Linear.forward`` on the head,
-# in ``_full``), and part of GitHub's windows-latest fleet dies on it with 0xc000001d
-# (illegal instruction): the interpreter exits, the xdist worker is replaced and the cell
-# later times out (#382, #1314; run 40014485149, job 120622979972, the crash frame is the
-# head's forward inside _full). Only the bfloat16 cases carry the marker, and it skips them on
-# a Windows CI runner only: the float32 cases, a developer's Windows box, ubuntu and macos
-# run everything. Each parametrisation spells its two pytest.param out, with an id, so that
-# tests/test_issue382_windows_ci_guard_is_shared.py can read which ones carry the marker.
+# in ``_full``), and part of GitHub's windows-latest fleet died on it with 0xc000001d
+# (illegal instruction; #382, #1314; run 40014485149, job 120622979972, the crash frame is
+# the head's forward inside _full). Each test that lists bfloat16 requests aten_half_matmuls,
+# which keeps that matmul off oneDNN and MKL, so every case runs on every cell (#2307).
+# tests/test_issue382_windows_ci_guard_is_shared.py checks that each of them requests it.
 
 
 def _full(head, hidden, labels, **kwargs):
@@ -87,7 +83,7 @@ class TestTheLossAndItsGradient:
         "dtype",
         [
             pytest.param(torch.float32, id="fp32"),
-            pytest.param(torch.bfloat16, id="bf16", marks=skip_on_windows_ci),
+            pytest.param(torch.bfloat16, id="bf16"),
         ],
     )
     @pytest.mark.parametrize(
@@ -100,7 +96,9 @@ class TestTheLossAndItsGradient:
             (128, {"batch": 1, "seq": 513, "hidden_size": 64, "vocab": 4099}),
         ],
     )
-    def test_they_equal_the_full_logits_step_within_the_tolerance(self, dtype, chunk, shape):
+    def test_they_equal_the_full_logits_step_within_the_tolerance(
+        self, dtype, chunk, shape, aten_half_matmuls
+    ):
         (full_loss, full_grad), (loss, grad) = _both(dtype, chunk, **shape)
 
         assert loss.dtype == torch.float32 and loss.shape == ()
@@ -112,10 +110,10 @@ class TestTheLossAndItsGradient:
         "dtype",
         [
             pytest.param(torch.float32, id="fp32"),
-            pytest.param(torch.bfloat16, id="bf16", marks=skip_on_windows_ci),
+            pytest.param(torch.bfloat16, id="bf16"),
         ],
     )
-    def test_one_chunk_is_the_full_step_exactly(self, dtype):
+    def test_one_chunk_is_the_full_step_exactly(self, dtype, aten_half_matmuls):
         """With nothing to reorder, there is nothing to round differently."""
         (full_loss, full_grad), (loss, grad) = _both(dtype, 67)
 
@@ -279,10 +277,10 @@ class TestTheMetrics:
         "dtype",
         [
             pytest.param(torch.float32, id="fp32"),
-            pytest.param(torch.bfloat16, id="bf16", marks=skip_on_windows_ci),
+            pytest.param(torch.bfloat16, id="bf16"),
         ],
     )
-    def test_the_token_losses_give_the_rewind_logs_row_losses(self, dtype):
+    def test_the_token_losses_give_the_rewind_logs_row_losses(self, dtype, aten_half_matmuls):
         """``row_losses`` is what the rewind log computes from the logits: the
         mean token cross-entropy of each row, in the logits' own dtype."""
         from soup_cli.trainer.rewind_hf import row_losses
