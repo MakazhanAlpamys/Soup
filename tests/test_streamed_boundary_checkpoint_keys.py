@@ -16,6 +16,9 @@ from tests.test_issue1048_lora_head_save_resume import (
     _requires_train_extra,
 )
 
+# Both strict values cover the public API. PyTorch passes strict=True to each
+# module's loading hook in either case; this grid pins no strict-dependent branch.
+
 
 def _boundary_prefix(target: str) -> str:
     module = "model.embed_tokens" if target == "embed_tokens" else "lm_head"
@@ -67,6 +70,49 @@ def test_both_checkpoint_spellings_are_refused_before_boundary_load(
         assert repr(canonical) in str(error.value)
         assert repr(redirected) in str(error.value)
         assert "re-save the adapter" in str(error.value)
+        current = dict(model.named_parameters())
+        assert before
+        assert all(torch.equal(current[name], value) for name, value in before.items())
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("target", ["lm_head", "embed_tokens"])
+@pytest.mark.parametrize("spelling", ["canonical", "redirected"])
+@pytest.mark.parametrize("strict", [False, True])
+def test_frozen_boundary_base_must_match_the_streaming_shard(
+    tmp_path: Path, target: str, spelling: str, strict: bool,
+) -> None:
+    _requires_train_extra()
+    import torch
+
+    model, runtime = _build_streamed(
+        tmp_path, tie=False, target_modules=["q_proj", target], seed=3,
+    )
+    try:
+        _perturb_lora(model, seed=42)
+        state = {name: value.clone() for name, value in model.state_dict().items()}
+        prefix = _boundary_prefix(target)
+        base_key = prefix + "base_layer.weight"
+        assert base_key in state and not state[base_key].is_meta
+        state[base_key].add_(1)
+        if spelling == "redirected":
+            state = {
+                prefix + "inner." + name[len(prefix):] if name.startswith(prefix) else name: value
+                for name, value in state.items()
+            }
+        _perturb_lora(model, seed=99)
+        before = {
+            name: parameter.detach().clone()
+            for name, parameter in model.named_parameters()
+            if name.startswith(prefix) and not parameter.is_meta
+        }
+        with pytest.raises(ValueError, match="checkpoint frozen base for") as error:
+            model.load_state_dict(state, strict=strict)
+        message = str(error.value)
+        assert "differs from the streaming shard" in message
+        assert "resume with the original base checkpoint" in message
+        assert "matching shard cache" in message
         current = dict(model.named_parameters())
         assert before
         assert all(torch.equal(current[name], value) for name, value in before.items())
