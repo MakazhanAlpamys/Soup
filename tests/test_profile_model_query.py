@@ -463,3 +463,180 @@ def test_mcp_profile_reads_the_working_set_too(tmp_path, tiny, mac, monkeypatch)
     result = reg.tool_profile({"config": "soup.yaml"})
     assert result["gpu_memory_source"] == "mlx working set"
     assert result["gpu_memory_gb"] == _WORKING_SET / 1024**3
+
+
+# --- user text reaches the terminal without control bytes -------------------------
+
+# What `soup profile --model $'\x1b]0;x\x07...'` passes: an OSC window-title sequence.
+_OSC = "\x1b]0;t\x07"
+
+
+def _no_control_bytes(result) -> str:
+    """The output without Rich's own colour codes, asserted free of any other ESC/BEL."""
+    output = _ANSI.sub("", result.output)
+    assert "\x1b" not in output
+    assert "\x07" not in output
+    return output
+
+
+@pytest.mark.parametrize(
+    ("args", "shown"),
+    [
+        (("--model", _OSC + "acme"), "Cannot read ]0;tacme"),
+        (("--method", _OSC + "x"), "Unknown --method: ]0;tx"),
+        (("--optimizer", _OSC + "x"), "Unknown --optimizer: ]0;tx"),
+        (("--gradient-checkpointing", _OSC + "x"), "Unknown --gradient-checkpointing: ]0;tx"),
+        (("--gpu", _OSC + "x"), "Unknown GPU: ]0;tx"),
+    ],
+)
+def test_user_text_reaches_the_terminal_without_control_bytes(tiny, args, shown):
+    flags = ("--model", str(tiny), *args) if args[0] != "--model" else args
+    if "--gpu" not in flags:
+        flags = (*flags, "--gpu", "a100")
+    result = _profile(*flags)
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    _no_control_bytes(result)
+    assert shown in _plain(result)
+
+
+def test_missing_config_path_reaches_the_terminal_without_control_bytes():
+    result = _profile("--config", _OSC + "[bold]soup.yaml")
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    _no_control_bytes(result)
+    assert "Config file not found: ]0;t[bold]soup.yaml" in _plain(result)
+
+
+def test_model_line_shows_a_soup_yaml_base_as_text(tmp_path):
+    """`base` is not restricted by the schema; the panel's Model: line prints it."""
+    cfg = tmp_path / "soup.yaml"
+    cfg.write_text(
+        'base: "\\e]0;t\\a[bold]acme"\n'
+        "task: sft\n"
+        "data:\n  train: data.jsonl\n  max_length: 256\n"
+        "training:\n  batch_size: 1\n  quantization: 4bit\n",
+        encoding="utf-8",
+    )
+    result = _profile("--config", str(cfg), "--gpu", "a100")
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    _no_control_bytes(result)
+    assert "Model: ]0;t[bold]acme" in _plain(result)
+
+
+# --- a full fine-tune has no LoRA rank ----------------------------------------------
+
+
+def test_lora_r_with_a_full_fine_tune_is_refused(tiny):
+    result = _profile("--model", str(tiny), "--method", "full", "--lora-r", "8", "--gpu", "a100")
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "--lora-r only applies with --method lora or qlora" in _plain(result)
+    assert "total_memory_bytes" not in result.output
+
+
+def test_model_query_full_fine_tune_reports_no_lora_r(tiny):
+    result = _profile("--model", str(tiny), "--method", "full", "--gpu", "a100", "--json")
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    data = _json(result)
+    assert data["peft"] == "full"
+    assert data["lora_r"] is None
+
+
+@pytest.mark.parametrize(
+    "training_yaml",
+    [
+        "  lora:\n    r: 0\n",
+        '  unfrozen_parameters:\n    - "model.layers.0.*"\n',
+        "  lisa_enabled: true\n",
+    ],
+    ids=["lora_r_0", "spectrum", "lisa"],
+)
+def test_config_full_fine_tune_reports_no_lora_r(tmp_path, tiny, monkeypatch, training_yaml):
+    """Spectrum and LISA keep lora.r at its default, yet train no adapters."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "soup.yaml").write_text(
+        f"base: {tiny.as_posix()}\n"
+        "task: sft\n"
+        "data:\n  train: data.jsonl\n  max_length: 256\n"
+        "training:\n  batch_size: 1\n  quantization: none\n" + training_yaml,
+        encoding="utf-8",
+    )
+    result = _profile("--gpu", "a100", "--json")
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    data = _json(result)
+    assert data["peft"] == "full"
+    assert data["lora_r"] is None
+    mcp = reg.tool_profile({"config": "soup.yaml", "gpu": "a100"})
+    assert (mcp["peft"], mcp["lora_r"]) == ("full", None)
+
+
+def test_lora_run_still_reports_its_rank(tiny):
+    result = _profile("--model", str(tiny), "--method", "lora", "--lora-r", "8", "--json")
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert _json(result)["lora_r"] == 8
+
+
+# --- review round: paths no test reached --------------------------------------------
+
+
+def test_model_query_without_network_reads_only_the_cache(offline_cache, monkeypatch):
+    """``allow_network=False`` with the Hub reachable: the cache is read, nothing is
+    fetched, and a miss names the cache, not the Hub."""
+    import huggingface_hub
+
+    from soup_cli.utils import hf
+    from soup_cli.utils.profiler import ModelShapeUnavailableError, profile_from_model
+
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+    # The lookups swallow a failing request, so record them rather than raise.
+    requests: list[str] = []
+
+    def _recorded(name):
+        def call(*_args, **_kwargs):
+            requests.append(name)
+            raise OSError("no network in tests")
+
+        return call
+
+    for name in ("hf_hub_download", "get_hf_file_metadata"):
+        monkeypatch.setattr(huggingface_hub, name, _recorded(name))
+    monkeypatch.setattr(hf, "get_hf_api", _recorded("get_hf_api"))
+
+    _fake_hf_cache(offline_cache, "acme/tiny-llama")
+    result = profile_from_model("acme/tiny-llama", seq_len=256, allow_network=False)
+    assert result["shape_source"] == "config.json"
+    with pytest.raises(ModelShapeUnavailableError) as caught:
+        profile_from_model("acme/not-cached", allow_network=False)
+    assert str(caught.value) == "its config.json is not in the Hugging Face cache"
+    assert requests == []
+
+
+def test_auto_checkpointing_on_an_assumed_card_prices_full(tiny):
+    """No --gpu and no device: `auto` is not resolved on the assumed 24 GB."""
+    base = ("--model", str(tiny), "--gradient-checkpointing", "auto", "--json")
+    assumed = _json(_profile(*base))
+    assert assumed["gpu_memory_source"] == "assumed"
+    assert assumed["gradient_checkpointing_tier"] == "full"
+    # A real card of the same size resolves `auto` to a lighter tier.
+    measured = _json(_profile(*base, "--gpu", "rtx4090"))
+    assert measured["gpu_memory_source"] == "flag"
+    assert measured["gradient_checkpointing_tier"] != "full"
+
+
+def test_speed_fields_come_from_estimate_speed(tmp_path, tiny, monkeypatch):
+    """The quantization, batch and max_length the run uses, through both callers."""
+    from soup_cli.utils.profiler import estimate_speed
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "soup.yaml").write_text(
+        f"base: {tiny.as_posix()}\n"
+        "task: sft\n"
+        "data:\n  train: data.jsonl\n  max_length: 512\n"
+        "training:\n  batch_size: 3\n  quantization: 4bit\n",
+        encoding="utf-8",
+    )
+    result = _profile("--config", "soup.yaml", "--gpu", "a100", "--json")
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    for data in (_json(result), reg.tool_profile({"config": "soup.yaml", "gpu": "a100"})):
+        expected = estimate_speed(data["model_params_b"], "4bit", 3)
+        assert data["tokens_per_sec"] == round(expected, 1)
+        assert data["samples_per_sec"] == round(expected / 512, 2)
