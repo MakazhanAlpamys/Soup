@@ -64,8 +64,8 @@ def test_constructed_masked_exponential_has_finite_loss_and_nonfinite_gradient(p
     assert result["nonfinite_gradient_elements"] > 0
 
 
-def test_default_on_policy_ratio_is_one_and_has_finite_gradient(probe_results):
-    result = probe_results["default_on_policy_ratio"]
+def test_detached_logp_ratio_is_one_and_has_finite_gradient(probe_results):
+    result = probe_results["detached_logp_ratio"]
     assert result["ratio_all_one"] is True
     assert result["ratio_finite"] is True
     assert result["gradient_finite"] is True

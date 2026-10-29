@@ -102,8 +102,8 @@ def _constructed_masked_exponential() -> dict[str, bool | float | int]:
     }
 
 
-def _default_on_policy_ratio() -> dict[str, bool]:
-    """Exercise the old-log-probability detach used by default on-policy GRPO."""
+def _detached_logp_ratio() -> dict[str, bool]:
+    """Exercise a detached current-log-probability ratio control."""
     torch = _torch()
     policy_logps = torch.tensor(
         [[-12.0, -3.0]],
@@ -203,7 +203,7 @@ def run_probes() -> dict[str, Any]:
         "split_k_bound": _split_k_bound(),
         "dtype_ranges": _dtype_ranges(),
         "constructed_masked_exponential": _constructed_masked_exponential(),
-        "default_on_policy_ratio": _default_on_policy_ratio(),
+        "detached_logp_ratio": _detached_logp_ratio(),
         "boolean_selection": _boolean_selection(),
         "adamw_skip_semantics": _adamw_skip_semantics(),
         "nanmean_visibility": _nanmean_visibility(),
@@ -227,10 +227,10 @@ def assert_expected_results(results: dict[str, Any]) -> None:
     assert masked["gradient_finite"] is False
     assert masked["nonfinite_gradient_elements"] > 0
 
-    on_policy = results["default_on_policy_ratio"]
-    assert on_policy["ratio_all_one"] is True
-    assert on_policy["ratio_finite"] is True
-    assert on_policy["gradient_finite"] is True
+    detached_ratio = results["detached_logp_ratio"]
+    assert detached_ratio["ratio_all_one"] is True
+    assert detached_ratio["ratio_finite"] is True
+    assert detached_ratio["gradient_finite"] is True
 
     selection = results["boolean_selection"]
     assert selection["loss_finite"] is True
