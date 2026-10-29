@@ -58,7 +58,40 @@ class TestLiveEvalCore:
     def test_resolve_device_auto_returns_str(self) -> None:
         from soup_cli.utils import live_eval
 
-        assert live_eval.resolve_device(None) in {"cpu", "cuda"}
+        assert live_eval.resolve_device(None) in {"cpu", "cuda", "mps"}
+        assert live_eval.resolve_device("auto") in {"cpu", "cuda", "mps"}
+        assert live_eval.resolve_device("auto") == live_eval.resolve_device(None)
+
+    def test_resolve_device_auto_strips_and_case_insensitive(self) -> None:
+        from soup_cli.utils import live_eval
+
+        baseline = live_eval.resolve_device(None)
+        assert live_eval.resolve_device("auto") == baseline
+        assert live_eval.resolve_device("AUTO") == baseline
+        assert live_eval.resolve_device("  auto  ") == baseline
+
+    def test_resolve_device_accelerator_priority(self, monkeypatch) -> None:
+        import types
+
+        from soup_cli.utils import live_eval
+
+        # CUDA takes priority when available
+        monkeypatch.setattr("torch.cuda.is_available", lambda: True)
+        assert live_eval.resolve_device("auto") == "cuda"
+        assert live_eval.resolve_device(None) == "cuda"
+
+        # MPS is chosen when CUDA is unavailable and MPS is available
+        monkeypatch.setattr("torch.cuda.is_available", lambda: False)
+        fake_mps = types.SimpleNamespace(is_available=lambda: True)
+        monkeypatch.setattr("torch.backends", types.SimpleNamespace(mps=fake_mps))
+        assert live_eval.resolve_device("auto") == "mps"
+        assert live_eval.resolve_device(None) == "mps"
+
+        # Fallback to CPU when neither is available
+        fake_mps_no = types.SimpleNamespace(is_available=lambda: False)
+        monkeypatch.setattr("torch.backends", types.SimpleNamespace(mps=fake_mps_no))
+        assert live_eval.resolve_device("auto") == "cpu"
+        assert live_eval.resolve_device(None) == "cpu"
 
     def test_apply_prompt_template_no_template(self) -> None:
         from soup_cli.utils import live_eval
