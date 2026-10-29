@@ -342,7 +342,12 @@ def check_config(cfg: "SoupConfig") -> list[SupportEntry]:
     """
     backend = getattr(cfg, "backend", DEFAULT_BACKEND)
     modality = getattr(cfg, "modality", DEFAULT_MODALITY)
-    entries = unsupported_for(cfg.task, backend, modality)
+    task = cfg.task
+    if backend == "mlx":
+        from soup_cli.config.schema import resolve_mlx_task
+
+        task = resolve_mlx_task(task, cfg.training.preference_loss)
+    entries = unsupported_for(task, backend, modality)
     if not entries:
         return []
 
