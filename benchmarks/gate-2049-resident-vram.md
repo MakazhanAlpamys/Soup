@@ -151,7 +151,16 @@ checkpoint boundary at half its size.
    `optimizer_step` term is how far the step exceeds the pass. From 512 tokens the pass
    is the larger: rows 5 and 38, measured again for #2277, gave the same peaks to the
    byte. `adamw_torch_fused` at 64 x 1 peaked at 2.326 GB against an estimate of 2.233
-   (no step scratch), 0.95997, just under its band; it is not in the file.
+   (no step scratch), 0.95997, just under its band. The harness's result line:
+
+   ```json
+   {"row": {"base": "/home/abdulwaarith/.cache/huggingface/hub/models--HuggingFaceTB--SmolLM2-135M-Instruct/snapshots/12fd25f77366fa6b3b4b768ec3050bf629380bac", "quantization": "none", "lora_r": 0, "target_modules": "auto", "seq": 64, "batch": 1, "gradient_checkpointing": false, "optimizer": "adamw_torch_fused"}, "stack": {"torch": "2.14.0", "transformers": "5.17.0", "trl": "0.29.1", "peft": "0.20.0", "bitsandbytes": "0.50.2", "accelerate": "1.15.0", "cuda": "13.0", "device": "NVIDIA GeForce RTX 3060 Laptop GPU"}, "model": {"base": "/home/abdulwaarith/.cache/huggingface/hub/models--HuggingFaceTB--SmolLM2-135M-Instruct/snapshots/12fd25f77366fa6b3b4b768ec3050bf629380bac", "model_type": "llama", "hidden_size": 576, "intermediate_size": 1536, "num_hidden_layers": 30, "num_attention_heads": 9, "num_key_value_heads": 3, "vocab_size": 49152, "tie_word_embeddings": true, "torch_dtype": "bfloat16", "params": 134515008}, "free_before": 5366611968, "total": 6441926656, "realised": 64, "realised_batch": 1, "steps": 2, "before_step_allocated": 538078208, "loss": 0.5997804999351501, "peak_allocated": 2326005248, "peak_reserved": 2418016256, "oom": false, "void": false}
+   ```
+
+   It is not in the file, and the fused step stays at no scratch: its peak is the pass
+   plus about 93 MB nothing prices, the same order as the residual the `adamw_torch`
+   rows carry above 20 bytes a parameter, and a fused figure fitted on one row would be
+   the fixed constant this estimate does not take (decided on #2338).
 7. **The gate records named in #2049 do not calibrate the resident total.**
    `gate-v0.73.1-measured-vram-fit.md` and `gate-395-second-stack-vram.md` are streamed
    runs (`stream_buffers: 2`), which the resident pre-flight skips.
