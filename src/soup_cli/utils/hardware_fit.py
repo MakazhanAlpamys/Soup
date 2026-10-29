@@ -107,6 +107,9 @@ class HardwareFitInput:
     target_modules: Any = "auto"
     #: False for a task whose model has no LM head (``NO_LM_HEAD_TASKS``).
     lm_head: bool = True
+    #: False for a task that builds the logits but no loss over them
+    #: (``LOGITS_ONLY_TASKS``).
+    logits_loss: bool = True
     #: The fused-loss flags the run's trainer applies (``use_liger``, ``use_cut_ce``).
     fused_loss: tuple[str, ...] = ()
 
@@ -415,6 +418,11 @@ NO_LM_HEAD_TASKS: frozenset[str] = frozenset(
     {"classifier", "reranker", "cross_encoder", "embedding", "reward_model"}
 )
 
+#: Tasks whose step builds the logits but no loss over them, so the estimate charges
+#: the logits tensor alone: prm runs the causal-LM forward without labels and takes
+#: its loss from ``reward_head`` (``trainer/prm.py``).
+LOGITS_ONLY_TASKS: frozenset[str] = frozenset({"prm"})
+
 #: Tasks whose trainer installs the checkpointing tiers: ``trainer/sft.py``'s
 #: ``plan_gradient_checkpointing``, inherited by tts. Every other trainer hands any
 #: truthy ``gradient_checkpointing`` to HF as plain checkpointing, which is ``full``.
@@ -512,6 +520,7 @@ def hardware_fit_input_from_config(
             lora_r=int(getattr(lora, "r", 64) or 0),
             target_modules=getattr(lora, "target_modules", "auto"),
             lm_head=task not in NO_LM_HEAD_TASKS,
+            logits_loss=task not in LOGITS_ONLY_TASKS,
             fused_loss=fused_loss,
         )
     except (ValueError, TypeError, ArithmeticError):
@@ -539,6 +548,7 @@ def estimate_peak_vram_gb(inp: HardwareFitInput) -> VRAMBreakdown:
             lora_r=inp.lora_r,
             target_modules=inp.target_modules,
             lm_head=inp.lm_head,
+            logits_loss=inp.logits_loss,
             fused_loss=inp.fused_loss,
         ),
     )

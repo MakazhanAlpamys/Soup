@@ -18,7 +18,8 @@ Every term is in bytes; GB in the output is 1e9 bytes. The terms:
   checkpointing, one boundary tensor per layer plus one layer recomputed.
 - ``logits``: the output head's logits and the loss chain over them, at the streaming
   planner's measured loss arithmetic (``layer_stream.LOGITS_LOSS_BYTES_PER_ELEMENT``).
-  Checkpointing does not reduce it.
+  A PRM step builds the logits and no loss over them, so it is charged the logits
+  tensor alone (``LOGITS_TENSOR_BYTES_PER_ELEMENT``). Checkpointing does not reduce it.
 - ``dequant``: under 4-bit loading, the bf16 copy of the largest weight a matmul
   dequantizes.
 - ``overhead``: the CUDA context and allocator slack, which ``max_memory_allocated``
@@ -122,6 +123,9 @@ BOUNDARY_BYTES = {"lora": 2.0, "nf4": 2.0, "int8": 2.0, "full": 2.0}
 #: Under 4-bit and 8-bit loading the output head is fp32 (``KBIT_UNQUANTIZED_BYTES``),
 #: so its logits cost 4 bytes an element, not 2.
 KBIT_LOGITS_EXTRA_BYTES = 2
+#: The logits tensor alone, in half precision under autocast: what a step that builds
+#: no loss over the logits (``RunSpec.logits_loss`` false, a PRM step) is charged.
+LOGITS_TENSOR_BYTES_PER_ELEMENT = 2
 #: Config flags whose fused loss can avoid building the full logits.
 FUSED_LOSS_FLAGS = frozenset({"use_liger", "use_cut_ce"})
 
@@ -173,6 +177,9 @@ class RunSpec:
     #: False for a model with no vocabulary-sized output (a classification or
     #: embedding head): it builds no logits over the vocabulary.
     lm_head: bool = True
+    #: False for a step that builds the logits but no loss over them (a PRM step,
+    #: whose loss comes from a reward head): only the logits tensor is charged.
+    logits_loss: bool = True
     #: The fused-loss flags set on a run whose trainer applies them
     #: (``use_liger``, ``use_cut_ce``). The logits term is still charged, since
     #: whether the patch lands is only known at train time, and a note says so.
@@ -181,6 +188,10 @@ class RunSpec:
     def __post_init__(self) -> None:
         if not isinstance(self.lm_head, bool):
             raise TypeError(f"lm_head must be bool, got {type(self.lm_head).__name__}")
+        if not isinstance(self.logits_loss, bool):
+            raise TypeError(
+                f"logits_loss must be bool, got {type(self.logits_loss).__name__}"
+            )
         if not set(self.fused_loss) <= FUSED_LOSS_FLAGS:
             raise ValueError(f"unknown fused_loss {self.fused_loss!r}")
         for name in ("seq_len", "batch_size", "lora_r"):
@@ -295,13 +306,16 @@ def logits_bytes(shape: ModelShape, run: RunSpec) -> int:
     (``layer_stream.LOGITS_LOSS_BYTES_PER_ELEMENT``). The resident rows fit 11.6
     bytes an element, so they do not carry the extra retained copy #327 measured on
     the streaming path (``LOGITS_RETENTION_BYTES_PER_ELEMENT``), and it is not charged.
+    A step with no loss over the logits (``run.logits_loss`` false: a PRM step) is
+    charged the logits tensor alone, ``LOGITS_TENSOR_BYTES_PER_ELEMENT``.
+    Under 4-bit and 8-bit loading either charge adds ``KBIT_LOGITS_EXTRA_BYTES``.
     A model without an LM head builds no logits over the vocabulary.
     """
     if shape.vocab_size is None or not run.lm_head:
         return 0
     from soup_cli.utils.layer_stream import LOGITS_LOSS_BYTES_PER_ELEMENT
 
-    per = LOGITS_LOSS_BYTES_PER_ELEMENT
+    per = LOGITS_LOSS_BYTES_PER_ELEMENT if run.logits_loss else LOGITS_TENSOR_BYTES_PER_ELEMENT
     if activation_mode(run) in ("nf4", "int8"):
         per += KBIT_LOGITS_EXTRA_BYTES
     return math.ceil(shape.vocab_size * run.seq_len * run.batch_size * per)
