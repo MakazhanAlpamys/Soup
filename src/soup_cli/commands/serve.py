@@ -314,11 +314,16 @@ def serve(
             "Require 'Authorization: Bearer <token>' on the tool endpoints "
             "(/v1/tools/python, /v1/tools/bash, /v1/tools/web_search). Without it, "
             "/v1/tools/python and /v1/tools/bash answer 401 on every bind and a "
-            "non-loopback --host is refused."
+            "non-loopback --host is refused. 16-128 characters of A-Z, a-z, 0-9, "
+            "'_' and '-', as secrets.token_urlsafe(32) makes."
         ),
     ),
 ):
     """Start a local inference server with OpenAI-compatible API."""
+    # The token rule `soup ui` and `soup mcp serve` apply, checked before anything
+    # else on every bind. An empty value is no token: the bind check below says so.
+    if tool_auth_token:
+        _require_token_rule(tool_auth_token)
     # Security: the server exposes code-exec tool endpoints (/v1/tools/python, /v1/tools/bash).
     # Binding a non-loopback host without a tool auth token exposes unauthenticated code execution.
     if host not in {"127.0.0.1", "localhost", "::1"} and not tool_auth_token:
@@ -606,7 +611,7 @@ def serve(
             console.print("[green]Chat template:[/] applying the model's own template.")
 
         mii_app = build_mii_app(
-            mii_pipeline, model_name=mii_model_name, tokenizer=mii_tokenizer,
+            mii_pipeline, model_name=mii_model_name, tokenizer=mii_tokenizer, host=host,
         )
 
         import uvicorn
@@ -819,6 +824,7 @@ def serve(
             trust_remote_code=resolved_trust,
             max_model_len=max_model_len,
             enable_dashboard=dashboard,
+            host=host,
         )
     elif backend == "sglang":
         app = _serve_sglang(
@@ -829,6 +835,7 @@ def serve(
             tensor_parallel=tensor_parallel,
             gpu_memory_utilization=gpu_memory_utilization,
             trust_remote_code=resolved_trust,
+            host=host,
         )
     else:
         # Transformers backend (original). ``resolved_trust`` was computed
@@ -1156,8 +1163,12 @@ def _serve_vllm(
     trust_remote_code: bool = False,
     max_model_len: Optional[int] = None,
     enable_dashboard: bool = False,
+    host: str = "127.0.0.1",
 ):
-    """Set up vLLM engine and create FastAPI app."""
+    """Set up vLLM engine and create FastAPI app.
+
+    ``host`` is the address the server binds; the app checks ``Origin`` against it.
+    """
     from soup_cli.utils.vllm import create_vllm_app, create_vllm_engine
 
     console.print("[dim]Initializing vLLM engine...[/]")
@@ -1209,6 +1220,7 @@ def _serve_vllm(
         max_tokens_default=max_tokens_default,
         tokenizer=tokenizer,
         enable_dashboard=enable_dashboard,
+        host=host,
     )
 
     return app
@@ -1253,6 +1265,46 @@ _CODE_TOOL_TOKEN_REQUIRED = (
     "every bind. Start soup serve with --tool-auth-token <secret> (or set "
     "SOUP_TOOL_AUTH_TOKEN) and send 'Authorization: Bearer <secret>'."
 )
+# What /v1/tools/python and /v1/tools/bash answer (501) when their sandbox is not
+# available or cannot start, whatever the cause; the cause goes to the debug log.
+_PYTHON_SANDBOX_UNAVAILABLE = "python sandbox requires OS-level isolation"
+_BASH_SANDBOX_UNAVAILABLE = "bash sandbox requires OS-level isolation"
+# Appended to every non-loopback notice: the server has no TLS of its own.
+_PLAIN_HTTP_NOTE = (
+    "travel as plain HTTP (soup serve has no TLS): terminate TLS in a proxy in front."
+)
+
+
+def _require_token_rule(token: str) -> None:
+    """Exit 2 unless ``token`` follows the rule ``soup ui`` and ``soup mcp serve`` apply.
+
+    The rule is ``utils.qr_url.validate_token``. The message names the option, the
+    environment variable and the rule; it never repeats the value.
+    """
+    from soup_cli.utils.qr_url import validate_token
+
+    try:
+        validate_token(token)
+    except ValueError as exc:
+        console.print(
+            "[red]Error:[/] --tool-auth-token (or SOUP_TOOL_AUTH_TOKEN): "
+            f"{for_terminal(exc)}. Generate one with: "
+            'python -c "import secrets; print(secrets.token_urlsafe(32))"'
+        )
+        raise typer.Exit(code=2) from exc
+
+
+def _code_tool_exit_code(result: Any) -> int:
+    """The ``exit_code`` both code-tool routes report for a finished sandbox run.
+
+    124 for a timeout, 1 for an output overflow or a missing return code,
+    otherwise the process's own code. A timeout wins over an overflow.
+    """
+    if result.timed_out:
+        return 124
+    if result.output_exceeded or result.returncode is None:
+        return 1
+    return result.returncode
 
 
 def _non_loopback_notices(host: str, backend: str) -> list[str]:
@@ -1267,6 +1319,8 @@ def _non_loopback_notices(host: str, backend: str) -> list[str]:
       with a bound name either, which is the second line.
     * vLLM / SGLang / MII: their apps have no such routes and are never handed
       the token, so no route checks it.
+
+    Either way the first line ends by saying that the server speaks plain HTTP.
 
     The host is user input printed before anything validates it, so it goes
     through ``for_terminal``.
@@ -1283,13 +1337,14 @@ def _non_loopback_notices(host: str, backend: str) -> list[str]:
             "adapter routes, so no route checks --tool-auth-token: every route "
             "(generation included) will answer every client that can reach this port "
             "without a token. Put a proxy that authenticates in front if that is not "
-            "intended."
+            f"intended. Requests {_PLAIN_HTTP_NOTE}"
         ]
     notices = [
         f"{where}. --tool-auth-token is checked on the tool, thumbs and adapter routes "
         "only: /v1/chat/completions, /v1/messages, /v1/models, /health and /metrics "
         "answer every client that can reach this port without a token. Put a proxy "
-        "that authenticates in front if that is not intended."
+        "that authenticates in front if that is not intended. Requests, the bearer "
+        f"token included, {_PLAIN_HTTP_NOTE}"
     ]
     if is_wildcard_bind(host):
         notices.append(
@@ -1320,8 +1375,12 @@ def _serve_sglang(
     tensor_parallel: int,
     gpu_memory_utilization: float,
     trust_remote_code: bool = False,
+    host: str = "127.0.0.1",
 ):
-    """Set up SGLang runtime and create FastAPI app."""
+    """Set up SGLang runtime and create FastAPI app.
+
+    ``host`` is the address the server binds; the app checks ``Origin`` against it.
+    """
     from soup_cli.utils.sglang import create_sglang_app, create_sglang_runtime
 
     if trust_remote_code:
@@ -1398,6 +1457,7 @@ def _serve_sglang(
         # The name the adapter was registered under; every request has to name
         # it, or SGLang answers from the base model (#1724).
         lora_name=lora_name,
+        host=host,
     )
 
     return app
@@ -1752,7 +1812,7 @@ def _create_app(
     from pydantic import Field
 
     from soup_cli.utils.local_request_guard import (
-        check_browser_origin,
+        browser_origin_dependency,
         check_local_request,
     )
 
@@ -1765,21 +1825,11 @@ def _create_app(
             status_code, detail = refusal
             raise HTTPException(status_code=status_code, detail=detail)
 
-    def _check_browser_origin(request: Request) -> None:
-        """Refuse a cross-site BROWSER request to a generation / adapter-listing route.
-
-        CORS stops such a page reading the response, not sending the request:
-        a ``text/plain`` body is a simple request, so it is never preflighted,
-        and Starlette parses it as JSON anyway. Origin only — these routes are
-        the ones a reverse proxy fronts under its own hostname, so a Host check
-        would refuse every proxied deployment for no added protection.
-        """
-        refusal = check_browser_origin(
-            host, request.headers.get("host"), request.headers.get("origin")
-        )
-        if refusal is not None:
-            status_code, detail = refusal
-            raise HTTPException(status_code=status_code, detail=detail)
+    # Origin-only check on the generation routes and the adapter listing: a request
+    # whose Origin names another site gets 403. Host is not checked, so a reverse
+    # proxy can front these routes under its own hostname. The vLLM, SGLang and MII
+    # apps use the same dependency on their generation routes.
+    _check_browser_origin = browser_origin_dependency(host)
 
     def _check_tool_auth(authorization: Optional[str]) -> None:
         """v0.53.7 H-A: gate tool endpoints when host is exposed or auth_token is set."""
@@ -2326,6 +2376,22 @@ def _create_app(
     tool_max_query_len = 1024
     tool_max_results = 16
 
+    def _code_tool_reply(result, unavailable: str) -> dict:
+        """The reply of both code-tool routes for a result their sandbox returned.
+
+        A result whose child never started is answered like a sandbox that could
+        not start (501, the route's fixed sentence), never as a run. The strict
+        sandbox functions raise instead of returning one; this keeps that so.
+        """
+        if result.launch_failed:
+            raise HTTPException(status_code=501, detail=unavailable)
+        return {
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "exit_code": _code_tool_exit_code(result),
+            "timed_out": result.timed_out,
+        }
+
     @app.post("/v1/tools/python", dependencies=[Depends(_check_local_request)])
     def tool_python(
         payload: dict,
@@ -2348,32 +2414,17 @@ def _create_app(
         # Same requirement as /v1/tools/bash: run only where the host
         # provides OS-level isolation (namespaces / sandbox-exec), and only
         # when that isolation is actually set up for the run (strict).
-        isolation_detail = "python sandbox requires OS-level isolation"
         if _get_isolation_strategy() == "best-effort":
-            raise HTTPException(status_code=501, detail=isolation_detail)
+            raise HTTPException(status_code=501, detail=_PYTHON_SANDBOX_UNAVAILABLE)
         try:
             result = _run_code_sandbox_process(code, strict_namespaces=True)
-        except SandboxIsolationError:
-            raise HTTPException(status_code=501, detail=isolation_detail)
+        except SandboxIsolationError as exc:
+            logger.debug("/v1/tools/python sandbox could not start: %r", exc)
+            raise HTTPException(status_code=501, detail=_PYTHON_SANDBOX_UNAVAILABLE)
         except Exception as exc:  # noqa: BLE001
             logger.debug("/v1/tools/python sandbox error: %s", exc)
             raise HTTPException(status_code=500, detail="Internal server error")
-        if result.launch_failed:
-            raise HTTPException(
-                status_code=501,
-                detail=isolation_detail,
-            )
-        exit_code = result.returncode if result.returncode is not None else 1
-        if result.timed_out:
-            exit_code = 124
-        elif result.output_exceeded:
-            exit_code = 1
-        return {
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-            "exit_code": exit_code,
-            "timed_out": result.timed_out,
-        }
+        return _code_tool_reply(result, _PYTHON_SANDBOX_UNAVAILABLE)
 
     @app.post("/v1/tools/bash", dependencies=[Depends(_check_local_request)])
     def tool_bash(
@@ -2388,42 +2439,21 @@ def _create_app(
             raise HTTPException(status_code=400, detail="Invalid request")
         if len(command) > tool_max_code_len:
             raise HTTPException(status_code=400, detail="Invalid request")
+        from soup_cli.trainer.rewards import _get_isolation_strategy, _run_bash_sandbox
+
+        if _get_isolation_strategy() == "best-effort":
+            raise HTTPException(status_code=501, detail=_BASH_SANDBOX_UNAVAILABLE)
         try:
-            from soup_cli.trainer.rewards import _get_isolation_strategy, _run_bash_sandbox
-
-            if _get_isolation_strategy() == "best-effort":
-                raise HTTPException(
-                    status_code=501,
-                    detail="bash sandbox requires OS-level isolation",
-                )
-
             result = _run_bash_sandbox(command)
         except (NotImplementedError, PermissionError, subprocess.SubprocessError) as exc:
-            raise HTTPException(
-                status_code=501,
-                detail=str(exc),
-            )
-        except HTTPException:
-            raise
+            # The sandbox could not start. Its message (an errno string, a path)
+            # stays in the server's log; the caller gets the fixed sentence.
+            logger.debug("/v1/tools/bash sandbox could not start: %r", exc)
+            raise HTTPException(status_code=501, detail=_BASH_SANDBOX_UNAVAILABLE)
         except Exception as exc:  # noqa: BLE001
             logger.debug("/v1/tools/bash sandbox error: %s", exc)
             raise HTTPException(status_code=500, detail="Internal server error")
-        if result.launch_failed:
-            raise HTTPException(
-                status_code=501,
-                detail="bash sandbox failed to initialize OS-level isolation",
-            )
-        exit_code = result.returncode if result.returncode is not None else 1
-        if result.timed_out:
-            exit_code = 124
-        elif result.output_exceeded:
-            exit_code = 1
-        return {
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-            "exit_code": exit_code,
-            "timed_out": result.timed_out,
-        }
+        return _code_tool_reply(result, _BASH_SANDBOX_UNAVAILABLE)
 
     @app.post("/v1/tools/web_search", dependencies=[Depends(_check_local_request)])
     def tool_web_search(

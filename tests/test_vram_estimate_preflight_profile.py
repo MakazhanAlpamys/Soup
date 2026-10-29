@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.commands import train as train_mod
@@ -23,7 +22,7 @@ from soup_cli.utils import hardware_fit, model_shape
 from soup_cli.utils.layer_stream import LOGITS_LOSS_BYTES_PER_ELEMENT
 from soup_cli.utils.vram_estimate import VRAM_SAFETY_MARGIN
 from tests._tiny_checkpoint import TINY_LLAMA, write_tiny_model
-from tests.conftest import strip_ansi
+from tests.conftest import make_cli_runner, strip_ansi
 
 _ANY_CARD = {"memory_total_bytes": 10**15}
 
@@ -72,9 +71,9 @@ def _preflight_report(cfg, card=_ANY_CARD):
 def _three_ways(tmp_path: Path, text: str) -> tuple[int, int, int, object]:
     (tmp_path / "soup.yaml").write_text(text, encoding="utf-8")
     report = _preflight_report(load_config_from_string(text))
-    result = CliRunner().invoke(app, ["profile", "--config", "soup.yaml", "--json"])
+    result = make_cli_runner().invoke(app, ["profile", "--config", "soup.yaml", "--json"])
     assert result.exit_code == 0, result.output
-    profile = json.loads(result.output)["total_memory_bytes"]
+    profile = json.loads(result.stdout)["total_memory_bytes"]
     mcp = tool_profile({"config": "soup.yaml"})["total_memory_bytes"]
     return report.breakdown.estimate.total_bytes, profile, mcp, report
 
@@ -288,9 +287,9 @@ def _profile_bytes(workdir, value, *gpu) -> int:
         _tier_yaml(str(workdir / "tiny"), "sft", value), encoding="utf-8"
     )
     args = ["profile", "--config", "soup.yaml", "--json", *(("--gpu", gpu[0]) if gpu else ())]
-    result = CliRunner().invoke(app, args)
+    result = make_cli_runner().invoke(app, args)
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    return json.loads(result.output)["total_memory_bytes"]
+    return json.loads(result.stdout)["total_memory_bytes"]
 
 
 @pytest.mark.parametrize(("gpu", "tier"), [("t4", True), ("a100", "medium"), ("h200", "selective")])
@@ -342,10 +341,10 @@ def test_the_fit_verdict_on_a_detected_card(workdir, monkeypatch, factor, fit, l
     monkeypatch.setattr("soup_cli.utils.gpu.get_gpu_info", lambda: {"memory_total_bytes": card})
 
     assert tool_profile({"config": "soup.yaml"})["fit"] == fit
-    as_json = CliRunner().invoke(app, ["profile", "--config", "soup.yaml", "--json"])
+    as_json = make_cli_runner().invoke(app, ["profile", "--config", "soup.yaml", "--json"])
     assert as_json.exit_code == 0, (as_json.output, repr(as_json.exception))
-    assert json.loads(as_json.output)["fit"] == fit
-    rendered = CliRunner().invoke(app, ["profile", "--config", "soup.yaml"])
+    assert json.loads(as_json.stdout)["fit"] == fit
+    rendered = make_cli_runner().invoke(app, ["profile", "--config", "soup.yaml"])
     assert rendered.exit_code == 0, (rendered.output, repr(rendered.exception))
     assert line in " ".join(strip_ansi(rendered.output).split())
 
@@ -384,7 +383,7 @@ def test_a_model_over_1000b_parameters_is_named_as_the_reason(workdir, monkeypat
     (workdir / "soup.yaml").write_text(
         _yaml("someone/huge", _RUNS["lora bf16"]), encoding="utf-8"
     )
-    result = CliRunner().invoke(app, ["profile", "--config", "soup.yaml"])
+    result = make_cli_runner().invoke(app, ["profile", "--config", "soup.yaml"])
     assert result.exit_code == 1, (result.output, repr(result.exception))
     assert "size (over 1,000B parameters)" in " ".join(strip_ansi(result.output).split())
     with pytest.raises(Exception, match=r"over 1,000B parameters"):
@@ -418,9 +417,9 @@ def test_the_mcp_tool_never_reaches_the_hub(workdir, monkeypatch):
     assert any("No config.json could be read" in note for note in mcp["notes"])
 
     asked.clear()
-    result = CliRunner().invoke(app, ["profile", "--config", "soup.yaml", "--json"])
+    result = make_cli_runner().invoke(app, ["profile", "--config", "soup.yaml", "--json"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert json.loads(result.output)["shape_source"] == "config.json"
+    assert json.loads(result.stdout)["shape_source"] == "config.json"
     assert ("config", True) in asked
 
 
