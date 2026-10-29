@@ -1825,12 +1825,9 @@ def _create_app(
             status_code, detail = refusal
             raise HTTPException(status_code=status_code, detail=detail)
 
-    # Refuse a cross-site BROWSER request to a generation / adapter-listing route.
-    # CORS stops such a page reading the response, not sending the request: a
-    # ``text/plain`` body is a simple request, so it is never preflighted, and
-    # Starlette parses it as JSON anyway. Origin only — these routes are the ones
-    # a reverse proxy fronts under its own hostname, so a Host check would refuse
-    # every proxied deployment for no added protection. The vLLM, SGLang and MII
+    # Origin-only check on the generation routes and the adapter listing: a request
+    # whose Origin names another site gets 403. Host is not checked, so a reverse
+    # proxy can front these routes under its own hostname. The vLLM, SGLang and MII
     # apps use the same dependency on their generation routes.
     _check_browser_origin = browser_origin_dependency(host)
 

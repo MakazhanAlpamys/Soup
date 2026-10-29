@@ -287,8 +287,8 @@ def create_sglang_app(
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
     )
-    # CORS stops a page on another site reading a reply, not sending the request;
-    # the generation route refuses such a request outright (Origin only).
+    # Origin-only check on the generation route; Host is not checked so a proxy
+    # can front it.
     origin_check = Depends(browser_origin_dependency(host))
 
     class ChatMessage(PydanticBaseModel):

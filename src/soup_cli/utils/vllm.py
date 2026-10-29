@@ -385,9 +385,8 @@ def create_vllm_app(
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
     )
-    # CORS stops a page on another site reading a reply, not sending the request;
-    # the generation routes refuse such a request outright (Origin only, no Host
-    # check, so a reverse proxy can front them under its own name).
+    # Origin-only check on the generation routes; Host is not checked so a proxy
+    # can front them.
     origin_check = Depends(browser_origin_dependency(host))
 
     class ChatMessage(PydanticBaseModel):

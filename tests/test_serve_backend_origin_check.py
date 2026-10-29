@@ -8,7 +8,7 @@ same rule, ``utils.local_request_guard.check_browser_origin`` against the addres
 * vLLM: ``/v1/chat/completions`` and ``/v1/messages``;
 * SGLang and MII: ``/v1/chat/completions``.
 
-A request with no ``Origin`` (curl, the OpenAI and Anthropic SDKs, a reverse proxy) is
+A request with no ``Origin`` (curl, an SDK, a reverse proxy) is
 served as before, and so is one whose ``Origin`` names the bound server. ``Host`` is not
 checked, so a proxy can front these routes under its own name. A refused request never
 reaches the engine. ``/health`` and ``/v1/models`` are unchanged.

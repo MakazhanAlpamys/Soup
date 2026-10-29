@@ -7,11 +7,11 @@
   isolation``. The text of the start-up error (a path, an errno string) stays in the
   server's debug log and is not sent to the caller.
 * ``/v1/tools/python`` compiles the caller's code under the file name ``<code>``, so a
-  traceback gives the caller's own line numbers. The code-execution reward and the recipe
+  traceback gives the caller's own line numbers. ``code_exec_reward`` and the recipe
   ``code`` node keep running their text as before.
 
-The sandbox is faked or bypassed here, so these run on every OS. The live runs inside the
-Linux namespaces are in ``tests/test_serve_code_tool_namespaces.py``.
+The sandbox is faked, or replaced by a plain subprocess, so these run on every OS. The
+live runs inside the Linux namespaces are in ``tests/test_serve_code_tool_namespaces.py``.
 """
 
 from __future__ import annotations
@@ -79,6 +79,11 @@ class TestExitCode:
         [
             (SandboxProcessResult(None, "", "", timed_out=True), 124, True),
             (SandboxProcessResult(0, "", "", timed_out=True), 124, True),
+            (
+                SandboxProcessResult(None, "", "over", timed_out=True, output_exceeded=True),
+                124,
+                True,
+            ),
             (SandboxProcessResult(0, "", "over", output_exceeded=True), 1, False),
             (SandboxProcessResult(-9, "", "over", output_exceeded=True), 1, False),
             (SandboxProcessResult(None, "", ""), 1, False),
@@ -88,6 +93,7 @@ class TestExitCode:
         ids=[
             "timeout",
             "timeout-wins-over-a-code",
+            "timeout-wins-over-an-overflow",
             "overflow",
             "overflow-wins-over-a-code",
             "no-code",
@@ -258,7 +264,7 @@ class TestPythonLineNumbers:
         assert rewards.SANDBOX_NETWORK_GUARD in argv[4]
 
     def test_the_reward_sandbox_keeps_its_program(self, unsandboxed):
-        """The code-execution reward and the recipe node run the guard and the code as one text."""
+        """``code_exec_reward`` and the recipe node run the guard and the code as one text."""
         assert rewards._run_code_sandbox("print(1)") == "1"
 
         (argv,) = unsandboxed

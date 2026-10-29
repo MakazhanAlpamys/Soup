@@ -1153,4 +1153,4 @@ the token. On a wildcard bind (`0.0.0.0`, `::`) there is no single name to compa
 against, so the routes that otherwise compare it check only that an `Origin` header, when
 sent, names the same host as `Host`. Every route speaks plain HTTP: `soup serve` has no
 TLS, so terminate TLS in a proxy in front of a server other machines reach. `soup serve`
-prints these points at startup whenever it binds beyond loopback.
+prints these notes at startup whenever it binds beyond loopback.
