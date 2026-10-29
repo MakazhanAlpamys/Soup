@@ -796,8 +796,6 @@ class PPOTrainerWrapper:
                 tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
             ):
                 self.model.gradient_checkpointing_enable()
-                if hasattr(self.model, "enable_input_require_grads"):
-                    self.model.enable_input_require_grads()
 
         # QAT — insert fake quantization ops after LoRA. The "fp8" variant
         # is FP8 training (handled by apply_v028_speed_memory), not int8 QAT.

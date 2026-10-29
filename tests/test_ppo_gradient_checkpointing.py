@@ -44,7 +44,8 @@ def test_checkpointing_false_leaves_the_policy_without_it(tmp_path, monkeypatch)
     assert model.is_gradient_checkpointing is False
 
 
-def test_a_4bit_run_is_switched_on_by_kbit_prep_alone(tmp_path, monkeypatch):
+@pytest.mark.parametrize("quantization", ["4bit", "8bit"])
+def test_a_kbit_run_is_switched_on_by_kbit_prep_alone(tmp_path, monkeypatch, quantization):
     """kbit prep keeps doing it, with its own kwargs; the new site stays out."""
     import peft
     from transformers import PreTrainedModel
@@ -70,7 +71,7 @@ def test_a_4bit_run_is_switched_on_by_kbit_prep_alone(tmp_path, monkeypatch):
 
     monkeypatch.setattr(PreTrainedModel, "gradient_checkpointing_enable", spy_enable)
     monkeypatch.setattr(peft, "prepare_model_for_kbit_training", recording_prep)
-    model = _policy(tmp_path, monkeypatch, checkpointing=True, quantization="4bit")
+    model = _policy(tmp_path, monkeypatch, checkpointing=True, quantization=quantization)
 
     assert prep_kwargs.get("use_gradient_checkpointing") is True
     assert enables == [("kbit prep", {"gradient_checkpointing_kwargs": {}})]
