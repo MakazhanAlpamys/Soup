@@ -1,4 +1,4 @@
-"""Offline native harness oracles; the MLX evaluation CI job installs this stack."""
+"""Offline native harness oracles; local qualification needs MLX and the eval extra."""
 
 import math
 from contextlib import closing
