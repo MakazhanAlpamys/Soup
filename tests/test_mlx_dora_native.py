@@ -568,7 +568,9 @@ runner = CliRunner()
 result = runner.invoke(app, ['chat', '--backend', 'mlx', '--model', 'adapter',
                             '--temperature', '0', '--max-tokens', '4'], input='alpha\n/quit\n')
 assert result.exit_code == 0, (result.output, repr(result.exception))
-assert f'Assistant: {expected}' in result.output and 'Goodbye' in result.output
+from rich.text import Text
+plain = Text.from_ansi(result.output).plain
+assert f'Assistant: {expected}' in plain and 'Goodbye' in plain
 Path('chat-evidence.json').write_text(json.dumps({'adapter': expected, 'base': control,
                                                'tokens_generated': count}))
 weights = mx.load('adapter/adapters.safetensors')

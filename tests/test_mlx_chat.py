@@ -6,6 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
@@ -30,7 +31,8 @@ def test_native_chat_keeps_history_clear_system_and_quit(tmp_path, monkeypatch):
          {'role': 'user', 'content': 'two'}],
         [{'role': 'system', 'content': 'guide'}, {'role': 'user', 'content': 'three'}],
     ]
-    assert 'Assistant: answer-3' in result.output and 'Goodbye' in result.output
+    plain = strip_ansi(result.output)
+    assert 'Assistant: answer-3' in plain and 'Goodbye' in plain
 
 
 @pytest.mark.parametrize('interruption', [KeyboardInterrupt, EOFError])
