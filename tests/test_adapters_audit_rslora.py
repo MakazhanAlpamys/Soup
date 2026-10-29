@@ -1,8 +1,10 @@
-"""#2228. MLX rsLoRA scale audits back to the asked alpha."""
+"""#2228 / #2255. MLX rsLoRA scale audits back to the asked alpha."""
 
 from __future__ import annotations
 
 import json
+import math
+import re
 
 import pytest
 import yaml
@@ -114,6 +116,42 @@ def test_peft_lora_alpha_is_not_rescaled_when_rslora_is_set():
     assert row.ran == 16
 
 
+def test_negative_rank_under_rslora_yields_verdict_without_exception():
+    """Malformed rank must not raise out of soup adapters audit (#2255)."""
+    from soup_cli.utils.adapter_audit import audit_adapter
+
+    config = _config(8, 16, use_rslora=True)
+    record = _writer_record(8, 16, use_rslora=True)
+    record["lora_parameters"] = {
+        **record["lora_parameters"],
+        "rank": -4,
+        "scale": 5.656854249,
+    }
+    result = audit_adapter(config, record)
+    row = next(item for item in result.rows if item.setting == "lora.alpha")
+    assert row.status in {"unknown", "diverged"}, f"status={row.status!r} ran={row.ran!r}"
+    assert row.ran is None or row.ran != 16
+
+
+def test_near_miss_rslora_scale_still_diverges():
+    """Pin _RSLO_ALPHA_DECIMALS: scale 5.7 on rank 8 is ~16.12, not 16 (#2255)."""
+    from soup_cli.utils.adapter_audit import _RSLO_ALPHA_DECIMALS, audit_adapter
+
+    config = _config(8, 16, use_rslora=True)
+    record = _writer_record(8, 16, use_rslora=True)
+    record["lora_parameters"] = {
+        **record["lora_parameters"],
+        "rank": 8,
+        "scale": 5.7,
+    }
+    result = audit_adapter(config, record)
+    row = next(item for item in result.rows if item.setting == "lora.alpha")
+    expected = round(5.7 * math.sqrt(8), _RSLO_ALPHA_DECIMALS)
+    assert row.status == "diverged", f"ran={row.ran!r}"
+    assert row.ran == expected
+    assert row.ran != 16
+
+
 def test_cli_matching_rslora_exits_zero_without_false_alpha(tmp_path, monkeypatch):
     from rich.console import Console
 
@@ -132,3 +170,9 @@ def test_cli_matching_rslora_exits_zero_without_false_alpha(tmp_path, monkeypatc
     )
     assert result.exit_code == 0, result.output
     assert "45.25" not in result.output
+    # Assert the alpha row itself: asked 16, ran rebuilt to 16.0, marked ok.
+    assert "lora.alpha" in result.output
+    assert re.search(
+        r"lora\.alpha\s+│\s*16\s+│\s*16(?:\.0)?\s+│\s*ok",
+        result.output,
+    ), result.output

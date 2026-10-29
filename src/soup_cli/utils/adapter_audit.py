@@ -354,6 +354,12 @@ def _ran_alpha(record: Dict[str, Any], *, use_rslora: bool = False) -> Optional[
         # no readable alpha, which is `unknown`, never agreement.
         return None
     if use_rslora:
+        # rank <= 0 is unusable for rsLoRA: math.sqrt raises ValueError on a
+        # negative, and a non-positive rank is never a trained rsLoRA shape.
+        # Unreadable values stay `unknown` (via None), never an exception out
+        # of `soup adapters audit` (#2255 review).
+        if rank <= 0:
+            return None
         return round(scale * math.sqrt(rank), _RSLO_ALPHA_DECIMALS)
     return scale * rank
 
