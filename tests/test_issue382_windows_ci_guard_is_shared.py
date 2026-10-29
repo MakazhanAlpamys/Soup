@@ -8,11 +8,12 @@ original guard did not cover. Copying the predicate would have been the third
 time this repo shipped a duplicated source of truth (#372, #392, #424), so it
 moved to ``tests/_windows_ci.py`` and both call sites import it.
 
-These tests exist so a future copy fails loudly instead of drifting. Three files
+These tests exist so a future copy fails loudly instead of drifting. Four files
 carry the guard now: the two NF4 tests in ``test_v07202.py``, whose crash is
 the bitsandbytes wheel, the ``cpu-bf16-autocast`` case (that case only) of
-``test_expert_stream.py``, and the bfloat16 cases (those only) of
-``test_stream_loss_chunk.py``. The others traced to CPU bf16/fp16 matmuls (#1314) and
+``test_expert_stream.py``, the bfloat16 cases (those only) of
+``test_stream_loss_chunk.py`` and the bf16-adapter training run of
+``test_bench_train_qlora_adapters.py``. The others traced to CPU bf16/fp16 matmuls (#1314) and
 request ``aten_half_matmuls`` instead (#1359). The sets are named here, in
 :data:`GUARDED_TESTS`, :data:`GUARDED_PARAMS` and :data:`FIXTURE_TESTS`, so a
 deleted decorator or a dropped fixture fails here too.
@@ -36,8 +37,14 @@ _HOME = _TESTS_DIR / "_windows_ci.py"
 #: (v07202, a real ``trainer.train()``), the CPU bf16-autocast case of
 #: test_expert_stream and the CPU bfloat16 cases of test_stream_loss_chunk. v05311,
 #: test_rewind_hf and test_rewind_wiring dropped it in #1359, once #1314 traced their
-#: crash to CPU half-precision matmuls.
-KNOWN_CALL_SITES = ("test_v07202.py", "test_expert_stream.py", "test_stream_loss_chunk.py")
+#: crash to CPU half-precision matmuls. test_bench_train_qlora_adapters: run 40761798582,
+#: a bf16 LoRA ``Linear.forward`` in a real CPU training step.
+KNOWN_CALL_SITES = (
+    "test_v07202.py",
+    "test_expert_stream.py",
+    "test_stream_loss_chunk.py",
+    "test_bench_train_qlora_adapters.py",
+)
 
 
 class TestThereIsExactlyOneDefinition:
@@ -122,6 +129,7 @@ GUARDED_TESTS: dict[str, tuple[str, ...]] = {
         "test_one_nf4_training_step_actually_runs",
         "test_the_saved_adapter_is_canonical",
     ),
+    "test_bench_train_qlora_adapters.py": ("test_a_run_with_bf16_adapters_is_measured_and_valid",),
 }
 
 #: Tests that skip ONE parametrisation, not the whole test: file -> test -> the
