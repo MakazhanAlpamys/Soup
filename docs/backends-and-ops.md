@@ -1062,7 +1062,8 @@ must match. Checksums detect damage, not authenticity: use trusted checkpoints.
 The initial contract is single-process/device text SFT, ordinary linear LoRA,
 `quantization: none` or genuine `4bit`, and AdamW's declared aliases
 `adamw_torch`, `adamw_hf`, `adamw_torch_fused`. DoRA, rsLoRA, VeRA, LoRA-FA/+, rank
-patterns, other initialization methods/tasks/optimizers are refused for full-state
+patterns, the loss watchdog (its patience history is not saved), and other
+initialization methods/tasks/optimizers are refused for full-state
 mode; their existing fresh/weights-only behavior is unchanged. Rewind recording
 is disabled in this mode because recording across resumes is not qualified.
 

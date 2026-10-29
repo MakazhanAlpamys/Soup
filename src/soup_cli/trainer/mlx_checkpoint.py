@@ -38,6 +38,11 @@ def validate_config(cfg):
         raise ValueError("mlx_full_state requires MLX text SFT")
     if tcfg.optimizer not in {"adamw_torch", "adamw_hf", "adamw_torch_fused"}:
         raise ValueError("mlx_full_state requires a declared AdamW alias")
+    if tcfg.loss_watchdog:
+        raise ValueError(
+            "mlx_full_state does not restore loss_watchdog history; "
+            "disable training.loss_watchdog for full-state continuation"
+        )
     if (
         lora.r < 1
         or lora.use_dora

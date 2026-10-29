@@ -28,6 +28,7 @@ def test_full_state_is_explicitly_enabled():
         ({"optimizer": "sgd"}, "AdamW"),
         ({"lora": {"use_dora": True}}, "ordinary linear LoRA"),
         ({"lora": {"use_rslora": True}}, "ordinary linear LoRA"),
+        ({"loss_watchdog": True}, "mlx_full_state.*loss_watchdog history"),
     ],
 )
 def test_exact_full_state_scope_and_adjacent_fresh_controls(change, diagnostic):
@@ -39,6 +40,14 @@ def test_exact_full_state_scope_and_adjacent_fresh_controls(change, diagnostic):
 def test_full_state_requires_native_sft():
     with pytest.raises(ValueError, match="MLX text SFT"):
         SoupConfig(base="b", data={"train": "d"}, training={"mlx_full_state": True})
+
+
+def test_implicit_full_state_resume_checks_watchdog_scope():
+    from soup_cli.trainer.mlx_checkpoint import validate_config
+
+    cfg = config(mlx_full_state=False, loss_watchdog=True)
+    with pytest.raises(ValueError, match="mlx_full_state.*loss_watchdog history"):
+        validate_config(cfg)
 
 
 def test_full_state_auto_prefers_numeric_committed_bundle(tmp_path):
