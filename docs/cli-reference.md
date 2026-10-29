@@ -3015,9 +3015,16 @@ Usage: `soup profile [OPTIONS]`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
-| `--config`, `-c` | text | `soup.yaml` |  | Path to soup.yaml config file |
+| `--config`, `-c` | text |  |  | Path to soup.yaml config file (default soup.yaml) |
 | `--gpu`, `-g` | text |  |  | Target GPU for recommendations (e.g., rtx3090, rtx4090, a100, h100). Auto-detects if not set. |
 | `--json` | flag | off |  | Output as JSON for scripting |
+| `--model`, `-m` | text |  |  | A Hugging Face model id or a local model directory, priced without a soup.yaml from its config.json (works offline once cached). |
+| `--seq` | integer, 64 to 1048576 |  |  | With --model: sequence length (default 2048) |
+| `--batch` | integer, 1 to 1024 |  |  | With --model: batch size (default 4) |
+| `--method` | text |  |  | With --model: lora, qlora (default) or full |
+| `--lora-r` | integer, 1 to 4096 |  |  | With --model: LoRA rank (default 64) |
+| `--optimizer` | text |  |  | With --model: optimizer (default adamw_torch) |
+| `--gradient-checkpointing` | text |  |  | With --model: off (default), full, medium, selective or auto |
 
 ## `soup prune-prompt`
 

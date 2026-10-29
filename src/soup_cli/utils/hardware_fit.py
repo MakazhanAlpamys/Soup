@@ -19,8 +19,9 @@ Public surface:
 - ``VRAMBreakdown`` frozen dataclass + ``total_gb`` property.
 - ``HardwareFitReport`` frozen dataclass.
 - ``estimate_peak_vram_gb(inp)`` -> ``VRAMBreakdown``.
-- ``unextrapolated_floor(cfg, inp, breakdown)`` -> what the run needs on the card whatever
-  its activations are (weights, CUDA context, trained-parameter state), and what that is.
+- ``unextrapolated_floor(cfg, inp, breakdown, *, sharding=None, num_processes=1)`` -> what
+  the run needs on one card whatever its activations are (weights, CUDA context,
+  trained-parameter state), and what that is; per card for a sharded run (#2300).
 - ``decide_hardware_fit(inp, *, available_vram_gb)`` -> ``HardwareFitReport``.
 - ``resolve_peft_mode(cfg, quant=None)`` -> ``str``.
 - ``hardware_fit_input_from_config(cfg, ...)`` -> ``HardwareFitInput | None``.
@@ -342,6 +343,17 @@ _EXACT_STATE_OPTIMIZERS = frozenset(
 GALORE_APPLYING_TASKS: frozenset[str] = frozenset({"sft", "tts", "pretrain"})
 
 
+#: Sharding modes that split the parameters across the processes: each card holds a share of
+#: the weights and of the adapters (#2300). ``--fsdp full_offload`` is priced as
+#: ``full_shard``: offloading moves state off the card, so this only overstates the floor.
+SHARDS_PARAMETERS: frozenset[str] = frozenset({"full_shard", "full_offload", "zero3"})
+#: Sharding modes that split the gradients and the optimizer state (#2300). DeepSpeed's
+#: offload presets are read by their stage, so they are priced as the stage without offload.
+SHARDS_TRAINING_STATE: frozenset[str] = frozenset(
+    {"shard_grad", "full_shard", "full_offload", "zero2", "zero3"}
+)
+
+
 def _trains_a_subset(tcfg: Any) -> bool:
     """Whether a full fine-tune trains only some of the parameters (Spectrum, LISA, freezing)."""
     return bool(
@@ -354,7 +366,12 @@ def _trains_a_subset(tcfg: Any) -> bool:
 
 
 def unextrapolated_floor(
-    cfg: Any, inp: HardwareFitInput, breakdown: VRAMBreakdown
+    cfg: Any,
+    inp: HardwareFitInput,
+    breakdown: VRAMBreakdown,
+    *,
+    sharding: Optional[str] = None,
+    num_processes: int = 1,
 ) -> tuple[float, tuple[str, ...]]:
     """What the run needs on the card whatever its activations are, in GB, and its terms.
 
@@ -385,8 +402,17 @@ def unextrapolated_floor(
       the attention and MLP projections and full AdamW state for the other parameters
       (embeddings, output head, norms), a mix the estimate has no figure for. On any
       other task ``use_galore`` changes nothing and the configured optimizer is counted.
+
+    For a run sharded across ``num_processes`` processes (#2300) the floor is per card: a
+    mode in ``SHARDS_PARAMETERS`` divides the weights and the adapters by the process
+    count, and one in ``SHARDS_TRAINING_STATE`` divides the gradients and the optimizer
+    state. The CUDA context is per card and never divided. Any other ``sharding``, or one
+    process, prices the run as one unsharded card.
     """
-    floor = breakdown.weights_gb + OVERHEAD_FIXED_BYTES / GB
+    processes = max(int(num_processes or 1), 1)
+    param_share = processes if sharding in SHARDS_PARAMETERS else 1
+    state_share = processes if sharding in SHARDS_TRAINING_STATE else 1
+    floor = breakdown.weights_gb / param_share + OVERHEAD_FIXED_BYTES / GB
     terms = ["weights", "CUDA context"]
     tcfg = getattr(cfg, "training", None)
     if inp.peft == "full" and _trains_a_subset(tcfg):
@@ -396,11 +422,15 @@ def unextrapolated_floor(
         getattr(cfg, "task", "sft") in GALORE_APPLYING_TASKS
     )
     charges = [
-        ("adapters", breakdown.adapters_gb, True),
-        ("gradients", breakdown.gradients_gb, optimizer not in _FUSED_BACKWARD_OPTIMIZERS),
+        ("adapters", breakdown.adapters_gb / param_share, True),
+        (
+            "gradients",
+            breakdown.gradients_gb / state_share,
+            optimizer not in _FUSED_BACKWARD_OPTIMIZERS,
+        ),
         (
             "optimizer state",
-            breakdown.optimizer_gb,
+            breakdown.optimizer_gb / state_share,
             optimizer in _EXACT_STATE_OPTIMIZERS and not galore,
         ),
     ]
