@@ -9,7 +9,10 @@ from typer.testing import CliRunner
 from soup_cli.cli import app
 
 
-@pytest.mark.parametrize("corruption", [None, "minimal", "disjoint", "metric"])
+@pytest.mark.parametrize(
+    "corruption",
+    [None, "minimal", "disjoint", "metric", "null-arguments", "null-resps", "null-filtered_resps"],
+)
 def test_sample_evidence_guard_without_optional_backends(corruption):
     from soup_cli.eval.mlx_benchmark import _validate_sample_evidence
 
@@ -30,6 +33,8 @@ def test_sample_evidence_guard_without_optional_backends(corruption):
                 row["doc_id"] += 10
     elif corruption == "metric":
         del samples[0]["acc"]
+    elif corruption and corruption.startswith("null-"):
+        samples[0][corruption.removeprefix("null-")] = [None]
     if corruption is None:
         original = deepcopy(samples)
         _validate_sample_evidence("hellaswag", samples, {"none", "second"}, 2, "acc")
@@ -37,6 +42,40 @@ def test_sample_evidence_guard_without_optional_backends(corruption):
     else:
         with pytest.raises(ValueError, match="sample.*evidence"):
             _validate_sample_evidence("hellaswag", samples, {"none", "second"}, 2, "acc")
+
+
+@pytest.mark.parametrize("field", [None, "arguments", "resps", "filtered_resps"])
+def test_generation_evidence_accepts_empty_text_but_refuses_null_payload(field):
+    from soup_cli.eval.mlx_benchmark import _validate_sample_evidence
+
+    samples = [{
+        "doc_id": 0, "filter": "none", "doc": {"question": "A"}, "target": "B",
+        "arguments": [["A", {}]], "resps": [[""]], "filtered_resps": [""],
+        "metrics": ["exact_match"], "exact_match": 0.0,
+        "doc_hash": "doc", "prompt_hash": "prompt", "target_hash": "target",
+    }]
+    if field is None:
+        original = deepcopy(samples)
+        _validate_sample_evidence("gsm8k", samples, {"none"}, 1, "exact_match")
+        assert samples == original
+    else:
+        samples[0][field] = [None]
+        with pytest.raises(ValueError, match="sample.*evidence"):
+            _validate_sample_evidence("gsm8k", samples, {"none"}, 1, "exact_match")
+
+
+@pytest.mark.parametrize("value", [[float("nan"), True], [0.0, 1], [True, False]])
+def test_likelihood_payload_refuses_nonfinite_or_wrong_typed_components(value):
+    from soup_cli.eval.mlx_benchmark import _validate_sample_evidence
+
+    samples = [{
+        "doc_id": 0, "filter": "none", "doc": {"question": "A"}, "target": 0,
+        "arguments": [["A", "B"]], "resps": [[value]], "filtered_resps": [value],
+        "metrics": ["acc"], "acc": 1.0,
+        "doc_hash": "doc", "prompt_hash": "prompt", "target_hash": "target",
+    }]
+    with pytest.raises(ValueError, match="sample.*evidence"):
+        _validate_sample_evidence("hellaswag", samples, {"none"}, 1, "acc")
 
 
 @pytest.fixture

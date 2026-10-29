@@ -224,6 +224,38 @@ def make_native_harness(
     return NativeHarness()
 
 
+def _valid_sample_payload(sample: dict, *, generation: bool) -> bool:
+    """Check the two qualified request/response shapes, including valid empty generations."""
+    def valid_response(value: Any) -> bool:
+        if generation:
+            return isinstance(value, str)
+        return (
+            isinstance(value, (list, tuple))
+            and len(value) == 2
+            and isinstance(value[0], (int, float))
+            and not isinstance(value[0], bool)
+            and math.isfinite(value[0])
+            and type(value[1]) is bool
+        )
+
+    return (
+        all(
+            isinstance(request, (list, tuple))
+            and len(request) == 2
+            and isinstance(request[0], str)
+            and isinstance(request[1], dict if generation else str)
+            for request in sample["arguments"]
+        )
+        and all(
+            isinstance(group, (list, tuple))
+            and bool(group)
+            and all(valid_response(response) for response in group)
+            for group in sample["resps"]
+        )
+        and all(valid_response(response) for response in sample["filtered_resps"])
+    )
+
+
 def _validate_sample_evidence(
     name: str, samples: list[dict], filters: set[str], count: int, metric: str,
 ) -> None:
@@ -255,6 +287,7 @@ def _validate_sample_evidence(
                    or not math.isfinite(sample[metric_name]) for metric_name in metric_names)
             or len(sample["arguments"]) != len(sample["resps"])
             or len(sample["resps"]) != len(sample["filtered_resps"])
+            or not _valid_sample_payload(sample, generation=metric == "exact_match")
         ):
             raise ValueError(f"Native benchmark {name} has invalid sample measurement evidence")
         sample_identity = tuple(sample[field] for field in hash_fields)

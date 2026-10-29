@@ -330,7 +330,7 @@ def test_harness_failure_never_saves_partial_success(
 @pytest.mark.parametrize(
     "corruption",
     [None, "minimal", "arguments", "resps", "filtered_resps", "metric", "nan", "boolean",
-     "disjoint", "identity"],
+     "disjoint", "identity", "null-arguments", "null-resps", "null-filtered_resps"],
 )
 def test_sample_evidence_is_complete_and_matches_documents_across_filters(
     fixed_model, offline_catalog, tmp_path, monkeypatch, corruption,
@@ -376,6 +376,9 @@ def test_sample_evidence_is_complete_and_matches_documents_across_filters(
                     row["doc_id"] += 10
         elif corruption == "identity":
             next(row for row in samples if row["filter"] == "second")["doc_hash"] = "other"
+        elif corruption and corruption.startswith("null-"):
+            field = corruption.removeprefix("null-")
+            samples[0][field] = [None] * len(samples[0][field])
         return result
 
     monkeypatch.setattr(lm_eval, "simple_evaluate", measured_then_corrupted)
