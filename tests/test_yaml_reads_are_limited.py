@@ -48,6 +48,7 @@ YAML_USERS = {
     "commands/ship.py": ("YAMLError",),
     "commands/spectrum.py": ("safe_dump",),
     "commands/sweep.py": ("YAMLError",),
+    "commands/train.py": ("safe_dump",),
     "config/loader.py": ("YAMLError",),
     "eval/gate.py": ("YAMLError",),
     "migrate/common.py": ("dump",),

@@ -131,6 +131,7 @@ def render_lambda_stub(
     gpu: str,
     output_dir: str,
     soup_version: str,
+    local_train_inputs=(),
 ) -> str:
     """Render a local Lambda lifecycle controller with secret-free user data."""
     if not isinstance(config_yaml, str):
@@ -151,11 +152,35 @@ def render_lambda_stub(
             f"soup_version must match {_VERSION_RE.pattern} "
             f"and be <= {_MAX_VERSION_LEN} chars"
         )
+    input_manifest = [
+        {
+            "local_path": item.local_path,
+            "remote_path": item.remote_path,
+            "size_bytes": item.size_bytes,
+            "mtime_ns": item.mtime_ns,
+            "device": item.device,
+            "inode": item.inode,
+        }
+        for item in local_train_inputs
+    ]
 
     from soup_cli.utils.tool_paths import controller_source
 
     cfg_b64 = base64.b64encode(encoded).decode("ascii")
     pip_spec = f"soup-cli[train]=={soup_version}"
+    input_wait = ""
+    if local_train_inputs:
+        input_wait = (
+            "input_deadline=$((SECONDS + 1200))\n"
+            "while [ ! -f /home/ubuntu/soup/inputs-ready ]; do\n"
+            "  if [ \"$SECONDS\" -ge \"$input_deadline\" ]; then\n"
+            "    echo 'Timed out waiting for local training inputs' >&2\n"
+            "    exit 1\n"
+            "  fi\n"
+            "  sleep 2\n"
+            "done\n"
+        )
+
     user_data = (
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
@@ -173,6 +198,8 @@ def render_lambda_stub(
         f"python3 -m pip install {pip_spec!r}\n"
         "cd /home/ubuntu/soup\n"
         f"printf '%s' {cfg_b64!r} | base64 -d > soup.yaml\n"
+        f"{input_wait}"
+        "soup train --config soup.yaml --yes\n"
         "soup train --config soup.yaml --yes 2>&1 | tee /home/ubuntu/soup/train.log\n"
     )
 
@@ -185,6 +212,7 @@ def render_lambda_stub(
         "import re",
         "import subprocess",
         "import sys",
+        "import stat",
         "import time",
         "import urllib.error",
         "import urllib.request",
@@ -218,6 +246,7 @@ def render_lambda_stub(
         f"_INSTANCE_TYPE = {lambda_gpu!r}",
         f"_USER_DATA = {user_data!r}",
         f"_LOCAL_OUTPUT = {output_dir!r}",
+        f"_LOCAL_TRAIN_INPUTS = {input_manifest!r}",
         f"_REMOTE_OUTPUT = {remote_output!r}",
         '_API_BASE = "https://cloud.lambdalabs.com/api/v1"',
         '_REGION_RE = re.compile(r"^[a-z0-9-]{1,64}$")',
@@ -324,6 +353,62 @@ def render_lambda_stub(
         "        clean_exc = _strip_control(str(exc))[:200]",
         "        print(f'Could not fetch remote log tail: {clean_exc}')",
         "",
+        "def _upload_local_train_inputs(ip, common):",
+        "    if not _LOCAL_TRAIN_INPUTS:",
+        "        return",
+        "    deadline = time.monotonic() + _SCP_RETRY_WINDOW",
+        "    def run_with_retry(command, label):",
+        "        backoff = 1",
+        "        while True:",
+        "            try:",
+        "                result = subprocess.run(",
+        "                    command, check=False, capture_output=True,",
+        "                    text=True, timeout=60,",
+        "                )",
+        "            except (OSError, subprocess.TimeoutExpired) as exc:",
+        "                result = None",
+        "                detail = str(exc)",
+        "            else:",
+        "                detail = result.stderr.strip()",
+        "                if result.returncode == 0:",
+        "                    return",
+        "            if time.monotonic() >= deadline:",
+        "                raise RuntimeError(f'{label} failed: {detail}')",
+        "            time.sleep(min(backoff, 15))",
+        "            backoff = min(backoff * 2, 15)",
+        "    run_with_retry(",
+        "        ['ssh', *common, f'ubuntu@{ip}',",
+        "         'mkdir -p /home/ubuntu/soup/inputs && rm -f /home/ubuntu/soup/inputs-ready'],",
+        "        'preparing remote input directory',",
+        "    )",
+        "    for item in _LOCAL_TRAIN_INPUTS:",
+        "        source = item['local_path']",
+        "        try:",
+        "            info = os.lstat(source)",
+        "        except OSError as exc:",
+        "            raise RuntimeError(",
+        "                f'local training input is unavailable: {source}: {exc}'",
+        "            ) from exc",
+        "        if (",
+        "            not stat.S_ISREG(info.st_mode)",
+        "            or info.st_size != item['size_bytes']",
+        "            or info.st_mtime_ns != item['mtime_ns']",
+        "            or info.st_dev != item['device']",
+        "            or info.st_ino != item['inode']",
+        "        ):",
+        "            raise RuntimeError(f'local training input changed after planning: {source}')",
+        "        remote = item['remote_path']",
+        "        if not re.fullmatch(r'inputs/train-\\d+(?:\\.[a-z0-9]+)?', remote):",
+        "            raise RuntimeError(f'invalid generated remote input path: {remote!r}')",
+        "        run_with_retry(",
+        "            ['scp', *common, source, f'ubuntu@{ip}:/home/ubuntu/soup/{remote}'],",
+        "            f'uploading local training input {remote}',",
+        "        )",
+        "    run_with_retry(",
+        "        ['ssh', *common, f'ubuntu@{ip}', 'touch /home/ubuntu/soup/inputs-ready'],",
+        "        'marking local training inputs ready',",
+        "    )",
+        "",
         "def _train_and_copy(ip, private_key):",
         "    common = [",
         "        '-i', private_key, '-o', 'BatchMode=yes',",
@@ -331,12 +416,13 @@ def render_lambda_stub(
         "        '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ConnectTimeout=15',",
         "        '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=6',",
         "    ]",
+        "    _upload_local_train_inputs(ip, common)",
         "    poll_cmd = (",
-        '        \'case "$(cloud-init status 2>/dev/null)" in \'',
+        "        'case \"$(cloud-init status 2>/dev/null)\" in '",
         '        \'*running*|*"not started"*|*"not run"*) echo RUNNING ;; \'',
-        '        \'*) if [ -s /home/ubuntu/soup.exit ]; then cat /home/ubuntu/soup.exit; \'',
-        '        \'else echo MISSING; fi ;; \'',
-        '        \'esac\'',
+        "        '*) if [ -s /home/ubuntu/soup.exit ]; then cat /home/ubuntu/soup.exit; '",
+        "        'else echo MISSING; fi ;; '",
+        "        'esac'",
         "    )",
         "    ssh, scp = _tool('ssh'), _tool('scp')",
         "    env = _tool_environment()",
@@ -479,13 +565,22 @@ def plan_lambda_run(
     output_dir: str,
     soup_version: str,
     stub_path: str = "soup_lambda_app.py",
+    config_yaml: str | None = None,
+    local_train_inputs=(),
 ) -> CloudPlan:
-    """Build a Lambda controller plan from a cwd-contained config."""
+    """Build a Lambda controller plan from a cwd-contained config.
+
+    ``config_yaml`` is the text to embed. The caller passes the *effective*
+    config (the loaded object with every CLI override applied), not the file's
+    text, so the remote run trains what the local run said it would (#1430).
+    Reading ``config_path`` remains the fallback for a direct caller.
+    """
     from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
     enforce_under_cwd_and_no_symlink(config_path, "--config")
-    with open(config_path, encoding="utf-8") as fh:
-        config_yaml = fh.read(_MAX_LAMBDA_CONFIG_BYTES + 1)
+    if config_yaml is None:
+        with open(config_path, encoding="utf-8") as fh:
+            config_yaml = fh.read(_MAX_LAMBDA_CONFIG_BYTES + 1)
     if len(config_yaml.encode("utf-8")) > _MAX_LAMBDA_CONFIG_BYTES:
         raise ValueError(f"config exceeds {_MAX_LAMBDA_CONFIG_BYTES} bytes")
     gpu_key = validate_gpu(gpu)
@@ -501,6 +596,7 @@ def plan_lambda_run(
         gpu=gpu_key,
         output_dir=output_dir,
         soup_version=soup_version,
+        local_train_inputs=local_train_inputs,
     )
     return CloudPlan(
         cloud="lambda",
@@ -509,6 +605,7 @@ def plan_lambda_run(
         stub_path=stub_path,
         stub_text=stub_text,
         run_command=f"python -I {stub_path}",
+        local_train_inputs=tuple(local_train_inputs),
     )
 
 
@@ -557,8 +654,9 @@ def submit_lambda_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:
     """Run the local lifecycle controller after validating its credentials."""
     if not isinstance(plan, CloudPlan):
         raise TypeError(f"plan must be a CloudPlan, got {type(plan).__name__}")
-    if _LAMBDA_SUBMIT_OVERRIDE is not None:
-        return _LAMBDA_SUBMIT_OVERRIDE(plan)
+    override = _LAMBDA_SUBMIT_OVERRIDE
+    if override is not None:
+        return override(plan)
     environ = env if env is not None else os.environ
     missing = [
         name
