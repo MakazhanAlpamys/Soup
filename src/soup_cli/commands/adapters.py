@@ -1715,7 +1715,11 @@ def adapter_bisect(
     def _program_path(name: str) -> Optional[str]:
         if os.path.dirname(name):
             if not os.path.isfile(name):
-                raise FileNotFoundError(errno.ENOENT, "not a regular file", name)
+                if (os.name == "nt" and not os.path.splitext(name)[1]
+                        and os.path.isfile(name + ".exe")):
+                    name += ".exe"
+                else:
+                    raise FileNotFoundError(errno.ENOENT, "not a regular file", name)
             if not os.access(name, os.X_OK):
                 raise PermissionError(errno.EACCES, "not executable", name)
             return name

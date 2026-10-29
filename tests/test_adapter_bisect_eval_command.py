@@ -79,6 +79,56 @@ def test_windows_cli_passes_the_written_path_and_checkpoint_as_argv(
     assert json.loads(Path("bisect.json").read_text())["verdict"] == "ALL_OK"
 
 
+@pytest.mark.parametrize(
+    "program",
+    [r"C:\Python312\python", r".\.venv\Scripts\python", r"C:\Python env\python",
+     r".\{ckpt}\python"],
+)
+def test_windows_extensionless_program_resolves_the_exe(workdir, monkeypatch, program):
+    ids = ("ckpt-1", "ckpt-2")
+    executables = {program.replace("{ckpt}", ckpt) + ".exe" for ckpt in ids}
+    simulated = SimpleNamespace(**vars(os))
+    simulated.name = "nt"
+    simulated.path = SimpleNamespace(**vars(ntpath))
+    simulated.path.isfile = lambda path: path in executables
+    accessed = []
+    simulated.access = lambda path, mode: accessed.append((path, mode)) or True
+    monkeypatch.setattr(adapters, "os", simulated)
+    calls = []
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda argv, **kwargs: calls.append(argv) or SimpleNamespace(returncode=0),
+    )
+    written_program = f'"{program}"' if " " in program else program
+
+    result = _invoke(f"{written_program} {{ckpt}}", *ids)
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert calls == [[program.replace("{ckpt}", ckpt) + ".exe", ckpt] for ckpt in ids]
+    assert accessed and all(path in executables and mode == os.X_OK for path, mode in accessed)
+    assert json.loads(Path("bisect.json").read_text())["verdict"] == "ALL_OK"
+
+
+@pytest.mark.parametrize(("windows", "program"), [(False, "./python"), (True, "./python.cmd")])
+def test_exe_fallback_is_only_for_extensionless_windows_paths(
+    workdir, monkeypatch, windows, program
+):
+    simulated = SimpleNamespace(**vars(os))
+    simulated.name = "nt" if windows else "posix"
+    simulated.path = SimpleNamespace(**vars(ntpath if windows else os.path))
+    simulated.path.isfile = lambda path: path == program + ".exe"
+    simulated.access = lambda path, mode: True
+    monkeypatch.setattr(adapters, "os", simulated)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("probe started"))
+
+    result = _invoke(f"{program} {{ckpt}}")
+
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    assert "could not start" in _plain(result)
+    assert "Verdict:" not in _plain(result)
+    assert not Path("bisect.json").exists()
+
+
 @pytest.mark.parametrize("existing_output", [False, True])
 def test_missing_explicit_program_refuses_before_any_probe(
     workdir, monkeypatch, existing_output
