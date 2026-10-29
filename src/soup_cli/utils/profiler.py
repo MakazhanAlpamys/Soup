@@ -299,6 +299,7 @@ def profile_result(
         "activation_memory_gb": round(breakdown.activations_gb, 2),
         "logits_memory_gb": round(breakdown.logits_gb, 2),
         "dequant_memory_gb": round(breakdown.dequant_gb, 2),
+        "optimizer_step_memory_gb": round(breakdown.optimizer_step_gb, 2),
         "overhead_gb": round(breakdown.overhead_gb, 2),
         "total_memory_gb": round(breakdown.total_gb, 2),
         "total_memory_bytes": est.total_bytes,
