@@ -59,7 +59,11 @@ def _plain(text: str) -> str:
 
 
 class TestValidateToken:
-    @pytest.mark.parametrize("token", VALID)
+    # Stable ids: VALID holds a freshly generated token, and xdist workers must collect
+    # the same test ids.
+    @pytest.mark.parametrize(
+        "token", VALID, ids=["16-letters", "128-letters", "mixed-set", "token-urlsafe-32"]
+    )
     def test_a_token_inside_the_rule_is_returned(self, token):
         assert validate_token(token) == token
 
