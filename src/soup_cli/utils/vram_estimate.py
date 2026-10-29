@@ -91,6 +91,15 @@ OPTIMIZER_BYTES_PER_PARAM: dict[str, float] = {
     "schedule_free_adamw": 8.0,
 }
 
+#: Memory the optimizer step allocates on top of its state, per trainable parameter
+#: (#2277). torch's AdamW without ``fused=True`` takes the foreach path on CUDA, and
+#: its ``_foreach_sqrt`` holds one fp32 copy of ``exp_avg_sq``: 4 bytes, measured on
+#: SmolLM2-135M full fine-tuning. The others are 0 until one is measured. A slight
+#: upper bound, since torch updates one parameter group at a time.
+OPTIMIZER_STEP_SCRATCH_BYTES_PER_PARAM: dict[str, float] = {
+    "adamw_torch": 4.0,
+}
+
 # --- activations ---------------------------------------------------------------
 
 #: What the backward pass keeps per token per layer, in bf16 values:
@@ -145,6 +154,7 @@ TERM_NAMES = (
     "activations",
     "logits",
     "dequant",
+    "optimizer_step",
     "overhead",
 )
 
@@ -334,6 +344,20 @@ def estimate_vram(shape: ModelShape, run: RunSpec) -> VramEstimate:
         "logits": logits_bytes(shape, run),
         "dequant": dequant_bytes(shape, run),
     }
+    # The peak is the larger of two phases (#2277). The forward/backward pass holds
+    # every term above. The optimizer step holds the parameters, their gradients, the
+    # optimizer state and the step's scratch, after the activations, logits and
+    # dequantized copy are freed. `optimizer_step` is how far the step exceeds the
+    # pass, so the total stays a sum of terms.
+    forward_backward = sum(terms.values())
+    step = (
+        terms["weights"]
+        + terms["adapters"]
+        + terms["gradients"]
+        + terms["optimizer"]
+        + math.ceil(trainable * OPTIMIZER_STEP_SCRATCH_BYTES_PER_PARAM.get(run.optimizer, 0.0))
+    )
+    terms["optimizer_step"] = max(step - forward_backward, 0)
     allocated = sum(terms.values())
     terms["overhead"] = math.ceil(OVERHEAD_FIXED_BYTES + OVERHEAD_SLACK * allocated)
     notes = []
@@ -359,6 +383,12 @@ def estimate_vram(shape: ModelShape, run: RunSpec) -> VramEstimate:
             "Selective checkpointing (attention only) is priced as no checkpointing, an "
             "upper bound; the tier is not measured."
         )
+    if terms["optimizer_step"]:
+        notes.append(
+            "The optimizer step, not the forward and backward pass, sets this peak: "
+            "the update holds the optimizer state and its scratch after the "
+            "activations are freed."
+        )
     if run.fused_loss and terms["logits"]:
         flags = " and ".join(f"training.{flag}" for flag in sorted(run.fused_loss))
         notes.append(
@@ -383,6 +413,7 @@ __all__ = [
     "BYTES_PER_PARAM_BY_QUANT",
     "GB",
     "OPTIMIZER_BYTES_PER_PARAM",
+    "OPTIMIZER_STEP_SCRATCH_BYTES_PER_PARAM",
     "TERM_NAMES",
     "VRAM_SAFETY_MARGIN",
     "RunSpec",
