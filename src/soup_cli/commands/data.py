@@ -4251,11 +4251,11 @@ def evolve(
         raise typer.Exit(2)
 
     _refuse_output_over_input([("--input", input_path)], [("--output", output)], exit_code=2)
-    stats = ForgeJudgeStats()
     try:
         seeds = _evolve_load_prompts(input_path)
         if output:
             enforce_under_cwd_and_no_symlink(output, "--output path")
+        stats = ForgeJudgeStats()
         generate_fn = make_magpie_generate_fn(
             provider,
             model=model,
