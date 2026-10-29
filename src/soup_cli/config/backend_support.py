@@ -342,7 +342,7 @@ def check_config(cfg: "SoupConfig") -> list[SupportEntry]:
     """
     backend = getattr(cfg, "backend", DEFAULT_BACKEND)
     modality = getattr(cfg, "modality", DEFAULT_MODALITY)
-    task = cfg.task
+    task: str = cfg.task
     if backend == "mlx":
         from soup_cli.config.schema import resolve_mlx_task
 
