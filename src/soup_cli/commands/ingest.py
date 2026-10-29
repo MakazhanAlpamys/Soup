@@ -25,6 +25,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
+from soup_cli.commands._common import refuse_output_over_input
 from soup_cli.commands._webhook_cli import emit_webhooks, validate_webhook_flags
 from soup_cli.utils import ingest_sources as _ingest_sources
 from soup_cli.utils.ingest_sources import (
@@ -33,7 +34,7 @@ from soup_cli.utils.ingest_sources import (
     resolve_auth_env,
     validate_source_name,
 )
-from soup_cli.utils.paths import atomic_write_lines, ensure_distinct_paths, is_under_cwd
+from soup_cli.utils.paths import atomic_write_lines, is_under_cwd
 from soup_cli.utils.terminal import for_terminal
 
 console = Console()
@@ -173,14 +174,11 @@ def ingest(
 
     # Refuse before anything is opened for writing: the default --output
     # (traces.jsonl) is also a plausible --logs, and the write would empty it.
-    try:
-        ensure_distinct_paths(
-            [("--logs", str(logs_path))],
-            [("--output", str(output_path))],
-        )
-    except ValueError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
-        raise typer.Exit(1) from exc
+    refuse_output_over_input(
+        [('--logs', str(logs_path))],
+        [('--output', str(output_path))],
+        console=console,
+    )
 
     _print_pii_reminder(canonical)
 

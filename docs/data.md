@@ -1146,6 +1146,14 @@ data:
 
 ## Data Tools
 
+Data commands refuse an output that names an input before reading or writing
+the data. This includes alternate spellings (`./x`, absolute paths and Windows
+case variants) and links to the same file. Refusals name both paths and say
+which output to change, using the same terminal-safe message across commands.
+Existing exit codes are preserved: `augment` and `evolve` use 2, `lint` uses 3,
+and the other file-collision checks use 1. Optional report outputs are checked
+only when provided.
+
 File outputs must be distinct from their inputs. `persona-mix` protects
 `--prompts`, `--personas` and `--styles`; `generate` protects `--seed`,
 `--dedup-with` and `--context`; and `canary check` protects `--manifest`.

@@ -95,6 +95,7 @@ def forge(
     Anthropic reads ``ANTHROPIC_API_KEY`` from env, vLLM is
     scheme-allowlist + loopback validated.
     """
+    from soup_cli.commands._common import refuse_output_over_input
     from soup_cli.utils.data_forge import (
         JUDGE_PROVIDERS,
         ForgeJudgeStats,
@@ -106,19 +107,24 @@ def forge(
         write_provenance,
     )
     from soup_cli.utils.hubs import validate_hub_name
-    from soup_cli.utils.paths import ensure_distinct_paths
 
     # Discover names without reading document contents or contacting a teacher.
     try:
         doc_paths = discover_documents(docs)
-        ensure_distinct_paths(
-            [("--docs", docs)] + [("--docs", path) for path in doc_paths],
-            [("--output", output), ("--provenance", provenance)],
-        )
-        ensure_distinct_paths([("--output", output)], [("--provenance", provenance)])
     except (TypeError, ValueError, FileNotFoundError) as exc:
         console.print(f"[red]Plan failed:[/] {escape(str(exc))}")
         raise typer.Exit(1) from exc
+
+    refuse_output_over_input(
+        [('--docs', docs)] + [('--docs', path) for path in doc_paths],
+        [('--output', output), ('--provenance', provenance)],
+        console=console,
+    )
+    refuse_output_over_input(
+        [('--output', output)],
+        [('--provenance', provenance)],
+        console=console,
+    )
 
     try:
         hub_canonical = validate_hub_name(hub)

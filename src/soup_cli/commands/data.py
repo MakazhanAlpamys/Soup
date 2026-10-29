@@ -13,6 +13,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from soup_cli.commands._common import refuse_output_over_input
 from soup_cli.data.loader import (
     SkippedRows,
     SkipTally,
@@ -30,25 +31,6 @@ from soup_cli.utils.terminal import for_terminal
 console = Console()
 
 app = typer.Typer(no_args_is_help=True)
-
-
-def _refuse_output_over_input(
-    inputs: list[tuple[str, str]],
-    outputs: list[tuple[str, Optional[str]]],
-    *,
-    exit_code: int = 1,
-) -> None:
-    """Exit before anything is read when an output names an input file (#2226).
-
-    ``ensure_distinct_paths`` catches every spelling of the same file (``./x``,
-    ``sub/../x``, the absolute path, a case variant on Windows, a hard link, a
-    symlink), so the write can never replace the data the command reads.
-    """
-    try:
-        ensure_distinct_paths(inputs, [(name, path) for name, path in outputs if path])
-    except ValueError as exc:
-        console.print(f"[red]{for_terminal(exc)}[/]")
-        raise typer.Exit(exit_code) from exc
 
 
 @app.command()
@@ -214,7 +196,7 @@ def convert(
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
         raise typer.Exit(1)
-    _refuse_output_over_input([("the input", path)], [("--output", output)])
+    refuse_output_over_input([("the input", path)], [("--output", output)], console=console)
 
     if to not in CONVERTIBLE_FORMATS:
         console.print(
@@ -282,8 +264,10 @@ def merge(
     shuffle: bool = typer.Option(False, "--shuffle", help="Shuffle after merging"),
 ):
     """Merge multiple datasets into a single file."""
-    _refuse_output_over_input(
-        [("the input", file_str) for file_str in files], [("--output", output)]
+    refuse_output_over_input(
+        [('the input', file_str) for file_str in files],
+        [('--output', output)],
+        console=console,
     )
     all_data: list[dict] = []
 
@@ -405,7 +389,7 @@ def dedup(
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
         raise typer.Exit(1)
-    _refuse_output_over_input([("the input", path)], [("--output", output)])
+    refuse_output_over_input([("the input", path)], [("--output", output)], console=console)
 
     data = load_raw_data(file_path)
     if not data:
@@ -529,7 +513,7 @@ def filter_data(
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
         raise typer.Exit(1)
-    _refuse_output_over_input([("the input", path)], [("--output", output)])
+    refuse_output_over_input([("the input", path)], [("--output", output)], console=console)
 
     if perplexity is None and coherence is None and not score_only:
         console.print(
@@ -917,7 +901,7 @@ def sample_data(
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
         raise typer.Exit(1)
-    _refuse_output_over_input([("the input", path)], [("--output", output)])
+    refuse_output_over_input([("the input", path)], [("--output", output)], console=console)
 
     if num is None and pct is None:
         console.print("[red]Specify either --n (count) or --pct (percentage).[/]")
@@ -1770,8 +1754,11 @@ def augment_data(
 
     # Before the --output symlink check, so a symlink to the input is reported
     # as the input; the default --output (augmented.jsonl) can be the input too.
-    _refuse_output_over_input(
-        [("--input", input_path)], [("--output", output_path)], exit_code=2
+    refuse_output_over_input(
+        [('--input', input_path)],
+        [('--output', output_path)],
+        exit_code=2,
+        console=console,
     )
     try:
         enforce_under_cwd_and_no_symlink(output_path, "--output")
@@ -2160,7 +2147,7 @@ def from_traces_cmd(
         console.print(f"[red]--output '{output}' is outside cwd - refusing[/]")
         raise typer.Exit(1)
     # The default --output (prefs.jsonl) is also a plausible --logs file.
-    _refuse_output_over_input([("--logs", logs)], [("--output", output)])
+    refuse_output_over_input([("--logs", logs)], [("--output", output)], console=console)
 
     console.print(Panel(
         "[yellow]Traces may contain sensitive user data.[/]\n"
@@ -3198,7 +3185,7 @@ def recipe(
     from soup_cli.utils.recipe_dag import load_recipe_yaml
 
     if execute and output is not None:
-        _refuse_output_over_input([("the input", path)], [("--output", output)])
+        refuse_output_over_input([("the input", path)], [("--output", output)], console=console)
     try:
         dag = load_recipe_yaml(path)
     except FileNotFoundError as exc:
@@ -3246,8 +3233,10 @@ def recipe(
             for node in dag.nodes
             if node.kind == "seed" and isinstance(node.config.get("path"), str)
         ]
-        _refuse_output_over_input(
-            inputs, [("--output", target) for target in _recipe_write_paths(dag, output)]
+        refuse_output_over_input(
+            inputs,
+            [('--output', target) for target in _recipe_write_paths(dag, output)],
+            console=console,
         )
 
         if provider is not None and offline:
@@ -3592,7 +3581,6 @@ def best_of_n(
     from soup_cli.utils.magpie import make_magpie_generate_fn
     from soup_cli.utils.paths import (
         enforce_under_cwd_and_no_symlink,
-        ensure_distinct_paths,
     )
     from soup_cli.utils.trust_remote import (
         model_requires_trust_remote_code,
@@ -4233,7 +4221,12 @@ def evolve(
         console.print("[red]--rounds must be in [1, 5][/]")
         raise typer.Exit(2)
 
-    _refuse_output_over_input([("--input", input_path)], [("--output", output)], exit_code=2)
+    refuse_output_over_input(
+        [('--input', input_path)],
+        [('--output', output)],
+        exit_code=2,
+        console=console,
+    )
     try:
         seeds = _evolve_load_prompts(input_path)
         if output:
@@ -4329,7 +4322,7 @@ def persona_mix(
         inputs.append(("--personas", personas))
     if styles:
         inputs.append(("--styles", styles))
-    _refuse_output_over_input(inputs, [("--output", output)])
+    refuse_output_over_input(inputs, [("--output", output)], console=console)
 
     import os
     import tempfile
