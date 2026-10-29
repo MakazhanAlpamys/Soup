@@ -728,6 +728,7 @@ def test_a_merge_that_fails_early_leaves_a_directory_it_did_not_create(
     assert result.exit_code == 1, (result.output, repr(result.exception))
     assert "merge failed before writing" in str(result.exception)
     assert marker.read_text(encoding="utf-8") == "not created by this export"
+    assert sorted(p.name for p in existing.iterdir()) == ["keep-me.txt"]
     assert existing.is_dir()
     assert _leftovers(tmp_path) == [existing]
 
@@ -751,6 +752,7 @@ def test_a_later_failure_also_leaves_a_directory_it_did_not_create(
     assert Path(merges[0]).name.startswith(".soup_merge_tmp_adapter_")
     assert result.exit_code == 1, (result.output, repr(result.exception))
     assert marker.read_text(encoding="utf-8") == "not created by this export"
+    assert sorted(p.name for p in existing.iterdir()) == ["keep-me.txt"]
     assert existing.is_dir()
     assert _leftovers(tmp_path) == [existing]
 
@@ -774,6 +776,7 @@ def test_a_preexisting_directory_is_never_written_to(tmp_path, monkeypatch):
     assert Path(merges[0]).name.startswith(".soup_merge_tmp_adapter_")
     assert result.exit_code == 1, (result.output, repr(result.exception))
     assert marker.read_text(encoding="utf-8") == "not created by this export"
+    assert sorted(p.name for p in existing.iterdir()) == ["keep-me.txt"]
     assert existing.is_dir()
     assert _leftovers(tmp_path) == [existing]
 
@@ -815,8 +818,34 @@ def test_a_successful_export_leaves_a_preexisting_directory_alone(tmp_path, monk
     assert merges != []
     assert merges[0] != str(existing)
     assert marker.read_text(encoding="utf-8") == "not created by this export"
+    assert sorted(p.name for p in existing.iterdir()) == ["keep-me.txt"]
     assert existing.is_dir()
     assert _leftovers(tmp_path) == [existing]
+
+
+def test_two_exports_of_the_same_adapter_use_different_merge_directories(
+    tmp_path, monkeypatch
+):
+    adapter = _adapter_dir(tmp_path)
+    merges: list[str] = []
+    monkeypatch.setattr(export_mod, "_merge_adapter", _make_fake_merge(merges))
+
+    for _ in range(2):
+        result = CliRunner().invoke(
+            app,
+            [
+                "export", "--model", str(adapter), "--format", "gguf", "--quant", "q4_0",
+                "--llama-cpp", str(tmp_path / "missing"),
+            ],
+        )
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+
+    assert len(merges) == 2
+    assert merges[0] != merges[1]
+    assert all(
+        Path(path).name.startswith(".soup_merge_tmp_adapter_") for path in merges
+    )
+    assert _leftovers(tmp_path) == []
 
 
 @pytest.mark.parametrize(("fmt", "extra_args"), _FORMATS)
