@@ -106,12 +106,20 @@ def plan_cmd(
     table.add_row("dataset_sha", escape(plan.dataset_sha[:16] + "..."))
     table.add_row("estimated_cost", f"${plan.estimated_cost_usd:.4f}")
     table.add_row("estimated_minutes", f"{plan.estimated_minutes:.1f}")
-    table.add_row(
-        "peak_vram_gb",
+    peak = (
         f"{plan.peak_vram_gb:.1f}"
         if plan.peak_vram_gb is not None
-        else f"unknown: {escape(plan.peak_vram_reason or '')}",
+        else f"unknown: {escape(plan.peak_vram_reason or '')}"
     )
+    training = cfg.get("training")
+    offloading = training.get("activation_offloading") if isinstance(training, dict) else None
+    if plan.peak_vram_gb is not None and offloading:
+        # #2327: the figure charges every saved tensor as resident.
+        peak += (
+            f"\n[dim]training.activation_offloading: {escape(str(offloading))} is not "
+            "modelled; activations are charged as resident[/]"
+        )
+    table.add_row("peak_vram_gb", peak)
     table.add_row("spot_price_usd_per_hour", f"${plan.spot_price_usd_per_hour:.2f}")
     console.print(table)
     console.print(

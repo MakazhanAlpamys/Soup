@@ -1816,6 +1816,7 @@ class StreamingSetupMixin:
             calibrated_logits_bytes_per_element,
             decide_stream_fit,
             dtype_bytes,
+            estimate_activation_bytes,
             estimate_logits_bytes,
             estimate_stream_peak_vram,
             forecast_stream_throughput,
@@ -1923,6 +1924,19 @@ class StreamingSetupMixin:
                 f"  logits       calibrated {calibrated:.3f} B/element on this stack, "
                 f"above the shipped {LOGITS_BYTES_PER_ELEMENT:.0f}: budget raised to match"
             )
+        # #2327: the activation term above is charged as resident whatever the mode.
+        offloading = getattr(tcfg, "activation_offloading", None)
+        if offloading is not None:
+            from soup_cli.utils.vram_estimate import activation_offloading_note
+
+            activations = estimate_activation_bytes(
+                hidden_size=hidden,
+                intermediate_size=inter,
+                n_layers=index.n_layers,
+                seq_len=seq_len,
+                batch_size=rows,
+            )
+            lines.append(f"  activations  {activation_offloading_note(offloading, activations)}")
 
         if not on_cuda:
             # Nothing to measure against: the probe reads CUDA peak counters.

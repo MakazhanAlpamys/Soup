@@ -109,6 +109,9 @@ class HardwareFitInput:
     lm_head: bool = True
     #: The fused-loss flags the run's trainer applies (``use_liger``, ``use_cut_ce``).
     fused_loss: tuple[str, ...] = ()
+    #: ``training.activation_offloading`` (``cpu``, ``disk`` or ``None``); not modelled,
+    #: so the estimate only says so.
+    activation_offloading: Optional[str] = None
 
     def __post_init__(self) -> None:
         if isinstance(self.params_b, bool):
@@ -513,6 +516,7 @@ def hardware_fit_input_from_config(
             target_modules=getattr(lora, "target_modules", "auto"),
             lm_head=task not in NO_LM_HEAD_TASKS,
             fused_loss=fused_loss,
+            activation_offloading=getattr(tcfg, "activation_offloading", None),
         )
     except (ValueError, TypeError, ArithmeticError):
         return None  # dims out of the predictor's supported range
@@ -540,6 +544,7 @@ def estimate_peak_vram_gb(inp: HardwareFitInput) -> VRAMBreakdown:
             target_modules=inp.target_modules,
             lm_head=inp.lm_head,
             fused_loss=inp.fused_loss,
+            activation_offloading=inp.activation_offloading,
         ),
     )
     return breakdown_from_estimate(est)

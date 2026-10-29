@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 from soup_cli.utils.model_shape import ModelShape, lora_param_count, lora_targets, module_dims
 
@@ -125,6 +125,10 @@ KBIT_LOGITS_EXTRA_BYTES = 2
 #: Config flags whose fused loss can avoid building the full logits.
 FUSED_LOSS_FLAGS = frozenset({"use_liger", "use_cut_ce"})
 
+#: ``training.activation_offloading``'s modes. The estimate does not model what they move
+#: off the card: the activation term is charged as resident, and a note says so (#2327).
+ACTIVATION_OFFLOADING_MODES = frozenset({"cpu", "disk"})
+
 # --- 4-bit dequantization --------------------------------------------------------
 
 #: bf16 copies of the largest dequantized weight live at once under 4-bit loading.
@@ -177,12 +181,21 @@ class RunSpec:
     #: (``use_liger``, ``use_cut_ce``). The logits term is still charged, since
     #: whether the patch lands is only known at train time, and a note says so.
     fused_loss: tuple[str, ...] = ()
+    #: ``training.activation_offloading`` (``cpu``, ``disk`` or ``None``). The
+    #: activation term is still charged as if every saved tensor stayed on the card,
+    #: since what offloading moves off it is not measured, and a note says so.
+    activation_offloading: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.lm_head, bool):
             raise TypeError(f"lm_head must be bool, got {type(self.lm_head).__name__}")
         if not set(self.fused_loss) <= FUSED_LOSS_FLAGS:
             raise ValueError(f"unknown fused_loss {self.fused_loss!r}")
+        if self.activation_offloading is not None and not (
+            isinstance(self.activation_offloading, str)
+            and self.activation_offloading in ACTIVATION_OFFLOADING_MODES
+        ):
+            raise ValueError(f"unknown activation_offloading {self.activation_offloading!r}")
         for name in ("seq_len", "batch_size", "lora_r"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
@@ -367,7 +380,22 @@ def estimate_vram(shape: ModelShape, run: RunSpec) -> VramEstimate:
             f"so the logits term ({terms['logits'] / GB:.1f} GB) overstates the peak. "
             "The fused path is not measured."
         )
+    if run.activation_offloading is not None:
+        notes.append(activation_offloading_note(run.activation_offloading, terms["activations"]))
     return VramEstimate(terms=terms, shape=shape, run=run, notes=tuple(notes))
+
+
+def activation_offloading_note(mode: str, activation_bytes: int) -> str:
+    """What the estimate says when ``training.activation_offloading`` is set.
+
+    The resident estimate and the streaming plan panel both print it, with their own
+    activation term.
+    """
+    return (
+        f"training.activation_offloading: {mode} is set: the activation term "
+        f"({activation_bytes / GB:.2f} GB) is charged as if every saved tensor stayed on "
+        "the card; what offloading moves off it is not modelled."
+    )
 
 
 def fit_verdict(total_bytes: float, available_bytes: float) -> str:
@@ -380,6 +408,7 @@ def fit_verdict(total_bytes: float, available_bytes: float) -> str:
 
 
 __all__ = [
+    "ACTIVATION_OFFLOADING_MODES",
     "BYTES_PER_PARAM_BY_QUANT",
     "GB",
     "OPTIMIZER_BYTES_PER_PARAM",
@@ -387,6 +416,7 @@ __all__ = [
     "VRAM_SAFETY_MARGIN",
     "RunSpec",
     "VramEstimate",
+    "activation_offloading_note",
     "estimate_vram",
     "fit_verdict",
 ]
