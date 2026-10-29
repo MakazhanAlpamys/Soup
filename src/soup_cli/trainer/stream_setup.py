@@ -1817,6 +1817,7 @@ class StreamingSetupMixin:
             decide_stream_fit,
             dtype_bytes,
             estimate_logits_bytes,
+            estimate_recompute_bytes,
             estimate_stream_peak_vram,
             forecast_stream_throughput,
             nf4_scale_cache_bytes,
@@ -1873,6 +1874,35 @@ class StreamingSetupMixin:
             # synthetic batch, which is one of the fields that could not be read.
             return (), None
 
+        # #1693 -- the last layer's backward. `getattr` as above: a config without a
+        # head count is charged as full multi-head attention, and without a LoRA
+        # target list or dropout as four targets (as _estimate_adapter_params) with
+        # a mask.
+        heads = int(getattr(shape_cfg, "num_attention_heads", 0) or 0) or 1
+        kv_heads = int(getattr(shape_cfg, "num_key_value_heads", 0) or 0) or heads
+        head_dim = int(getattr(shape_cfg, "head_dim", 0) or 0) or hidden // heads
+        lora = getattr(tcfg, "lora", None)
+        targets = target_modules
+        if targets is None:
+            targets = getattr(lora, "target_modules", None)
+        # Whether an NF4 linear takes the dequantise + linear arm that keeps its dense
+        # weight is bitsandbytes' per-card, per-shape choice at run time
+        # (_can_use_checkpoint_visible_nf4_gemm): charge it for every NF4 layer.
+        dense_elements = sum(
+            math.prod(spec.shape)
+            for spec in (getattr(index, "quant_specs", None) or {}).values()
+        )
+        recompute_bytes = estimate_recompute_bytes(
+            hidden_size=hidden,
+            intermediate_size=inter,
+            kv_size=kv_heads * head_dim,
+            n_heads=heads,
+            seq_len=seq_len,
+            batch_size=rows,
+            lora_targets=len(targets) if isinstance(targets, (list, tuple)) else 4,
+            lora_dropout=getattr(lora, "dropout", 1.0),
+            dense_layer_elements=dense_elements,
+        )
         # calibrated_logits_bytes_per_element() is floored at LOGITS_BYTES_PER_ELEMENT,
         # so forwarding it here can only raise the budget, never lower it (issue #348).
         calibrated = calibrated_logits_bytes_per_element()
@@ -1893,6 +1923,7 @@ class StreamingSetupMixin:
             large_layer_bytes=large_layer_bytes,
             persistent_bytes=scale_cache_bytes + expert_bytes,
             loss_chunk=loss_chunk,
+            recompute_bytes=recompute_bytes,
         )
         logits = estimate_logits_bytes(
             vocab_size=vocab,

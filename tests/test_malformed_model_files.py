@@ -28,7 +28,7 @@ from soup_cli.utils.gpu import param_count_from_local_safetensors
 from soup_cli.utils.mlx_generation import read_native_adapter, reject_native_adapter
 from soup_cli.utils.model_shape import read_model_shape
 from tests._tiny_checkpoint import TINY_LLAMA, write_safetensors, write_tiny_model
-from tests.conftest import strip_ansi
+from tests.conftest import make_cli_runner, strip_ansi
 
 SIZE = 200_000
 BEYOND = 10**400
@@ -231,9 +231,9 @@ class TestEveryEntryPoint:
             assert result.exit_code == 0, (result.output, repr(result.exception))
 
     def test_soup_profile_prices_a_guessed_shape_and_names_the_file(self, malformed_model):
-        result = CliRunner().invoke(app, ["profile", "--config", "soup.yaml", "--json"])
+        result = make_cli_runner().invoke(app, ["profile", "--config", "soup.yaml", "--json"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        profile = json.loads(result.output)
+        profile = json.loads(result.stdout)
         assert profile["shape_source"] == "guessed"
         assert any("config.json" in note for note in profile["notes"])
 

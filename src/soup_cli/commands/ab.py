@@ -18,8 +18,9 @@ from soup_cli.utils.ab_test import (
     HIGHER_IS_BETTER,
     PRIOR_SCALE_ROWS,
     MsprtConfig,
+    msprt_step,
+    read_msprt_rows,
     retired_beta_message,
-    run_msprt,
     validate_metric_name,
 )
 
@@ -105,7 +106,8 @@ def ab(
         raise typer.Exit(2) from exc
 
     try:
-        verdict = run_msprt(input_path, config=cfg)
+        rows = read_msprt_rows(input_path, config=cfg)
+        verdict = msprt_step(cfg, control=rows.control, treatment=rows.treatment)
     except FileNotFoundError:
         console.print(f"[red]Input not found: {escape(input_path)}[/]")
         raise typer.Exit(1) from None
@@ -209,6 +211,11 @@ def ab(
                 border_style="cyan",
             )
         )
+        # #1818 - rows the reader could not use are not rows to collect more of.
+        # Name them, so "control has 0" is not read as an empty file.
+        skipped_note = rows.skipped_note()
+        if skipped_note:
+            console.print(f"[yellow]{escape(skipped_note)}[/]")
     else:
         console.print(
             Panel(
