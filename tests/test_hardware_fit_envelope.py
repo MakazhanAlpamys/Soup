@@ -698,3 +698,29 @@ class TestTheLongcontextTemplate:
         assert "warning" in text
         assert "use_liger" in text
         assert "soup-cli[liger]" in text
+
+
+#: HuggingFaceTB/SmolLM2-135M-Instruct: big enough that the optimizer step rounds above 0.0 GB.
+_SMOLLM2_135M = {
+    "model_type": "llama",
+    "hidden_size": 576,
+    "intermediate_size": 1536,
+    "num_hidden_layers": 30,
+    "num_attention_heads": 9,
+    "num_key_value_heads": 3,
+    "vocab_size": 49152,
+    "tie_word_embeddings": True,
+}
+_SMOLLM2_135M_PARAMS = 134_515_008
+
+
+def test_the_preflight_names_the_optimizer_step(shape_of, screen):
+    """#2277: a short full fine-tune with adamw_torch is priced at its step."""
+    shape_of(_SMOLLM2_135M, _SMOLLM2_135M_PARAMS)
+    cfg = yaml.safe_load(_yaml(quantization="none", batch_size=1))
+    cfg["data"]["max_length"] = 64
+    cfg["training"].update(
+        lora={"r": 0}, optimizer="adamw_torch", gradient_checkpointing=False
+    )
+    _run(yaml.safe_dump(cfg), card={"memory_total_bytes": int(2e9)}, allow_oom_attempt=True)
+    assert "| optimizer step 0.5 |" in screen()
