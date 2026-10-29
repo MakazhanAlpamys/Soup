@@ -12,7 +12,7 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
-## [0.77.1] - 2026-10-27
+## [0.77.1] - 2026-10-28
 
 ### Upgrade notes
 

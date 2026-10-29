@@ -1,11 +1,10 @@
 """Tests for CLI commands."""
 
-from typer.testing import CliRunner
-
 from soup_cli import __version__
 from soup_cli.cli import app
+from tests.conftest import make_cli_runner
 
-runner = CliRunner()
+runner = make_cli_runner()
 
 
 def test_version():
@@ -89,9 +88,10 @@ def test_help_shows_all_commands():
 def test_version_json():
     import json
     import platform
+
     result = runner.invoke(app, ["version", "--json"])
     assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["version"] == __version__
     assert data["python"] == platform.python_version()
     assert data["platform"] == platform.system().lower()
@@ -100,9 +100,55 @@ def test_version_json():
 def test_version_full_json():
     import json
     import platform
+
     result = runner.invoke(app, ["version", "--full", "--json"])
     assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["version"] == __version__
     assert data["python"] == platform.python_version()
     assert "platform" in data
+
+
+def test_version_full_json_with_stderr_warning_succeeds(monkeypatch):
+    """Simulate torch first-import stderr warning and verify stdout still parses cleanly (#1551)."""
+    import json
+    import sys
+
+    orig_import = __import__
+
+    def import_hook(name, *args, **kwargs):
+        if name == "torch":
+            sys.stderr.write(
+                "W... triton not found; flop counting will not work for triton kernels\n"
+            )
+            # Click 8.1 snapshots the separate stderr stream without flushing it.
+            sys.stderr.flush()
+        return orig_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", import_hook)
+    result = runner.invoke(app, ["version", "--full", "--json"])
+    assert result.exit_code == 0
+    assert "triton not found" in result.stderr
+    data = json.loads(result.stdout)
+    assert data["version"] == __version__
+
+
+def test_make_cli_runner_keeps_stderr_out_of_stdout_and_forwards_kwargs():
+    """Separate the streams on every Click and pass extra kwargs through (#1551)."""
+    import os
+
+    import typer
+
+    probe = typer.Typer()
+
+    @probe.command()
+    def emit():
+        typer.echo("to-stdout")
+        typer.echo("to-stderr", err=True)
+        typer.echo(os.environ.get("SOUP_RUNNER_PROBE", "unset"))
+
+    result = make_cli_runner(env={"SOUP_RUNNER_PROBE": "seen"}).invoke(probe, [])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert result.stdout == "to-stdout\nseen\n"
+    assert "to-stderr" in result.stderr
+    assert "to-stderr" not in result.stdout
