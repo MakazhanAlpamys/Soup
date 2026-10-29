@@ -38,6 +38,24 @@ SMOLLM2_135M = {
 }
 PARAMS = 134_515_008
 
+#: HuggingFaceTB/SmolLM2-360M-Instruct, the T4 run on #2277.
+SMOLLM2_360M = {
+    "model_type": "llama",
+    "hidden_size": 960,
+    "intermediate_size": 2560,
+    "num_hidden_layers": 32,
+    "num_attention_heads": 15,
+    "num_key_value_heads": 5,
+    "vocab_size": 49152,
+    "tie_word_embeddings": True,
+}
+PARAMS_360M = 361_821_120
+#: ``max_memory_allocated`` of that run, on a Tesla T4 (fp16, batch 1, about 40 tokens):
+#: https://github.com/MakazhanAlpamys/Soup/issues/2277#issuecomment-6473839093
+MEASURED_360M_T4 = 7_297_180_672
+#: The full fine-tuning band of tests/test_vram_estimate_calibration.py.
+FULL_FT_BAND = (0.96, 1.15)
+
 
 @pytest.fixture
 def smol():
@@ -139,3 +157,13 @@ def test_profile_reports_the_term(smol):
     breakdown = breakdown_from_estimate(estimate_vram(smol, _full(64)))
     result = profile_result(breakdown, model_name="HuggingFaceTB/SmolLM2-135M-Instruct")
     assert result["optimizer_step_memory_gb"] == round(breakdown.optimizer_step_gb, 2) > 0
+
+
+def test_the_360m_t4_run_is_inside_the_full_fine_tuning_band():
+    """A different card, size and precision from the 135M rows the scratch was fitted on."""
+    shape = shape_from_config(SMOLLM2_360M, params=PARAMS_360M, params_source="safetensors")
+    est = estimate_vram(shape, _full(64))
+    assert est.terms["optimizer_step"] > 0
+    assert _allocated(est) == 20 * PARAMS_360M
+    low, high = FULL_FT_BAND
+    assert low <= _allocated(est) / MEASURED_360M_T4 <= high
