@@ -1,6 +1,7 @@
 """soup export — convert a model to GGUF format for Ollama / llama.cpp."""
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -452,18 +453,17 @@ def _detect_base_model(adapter_config_path: Path) -> Optional[str]:
 
 
 def _merge_dir_for(model_path: Path) -> tuple[Path, bool]:
-    """Create a fresh scratch directory next to an adapter; this export always owns it.
+    """Return a scratch path next to an adapter that is unique to this export.
 
-    A directory left by an earlier run is never reused and never removed: the merge
-    always writes into a new directory, which the cleanup then deletes.
+    The path is not created here — the merge creates it as it writes. A directory
+    left by an earlier run is never reused and never removed: this export always
+    writes into a new path, which the cleanup then deletes.
     """
-    path = Path(
-        tempfile.mkdtemp(
-            prefix=f".soup_merge_tmp_{model_path.name}_",
-            dir=model_path.parent,
-        )
-    )
-    return path, True
+    prefix = f".soup_merge_tmp_{model_path.name}_"
+    while True:
+        path = model_path.parent / f"{prefix}{os.urandom(4).hex()}"
+        if not path.exists() and not path.is_symlink():
+            return path, True
 
 
 def _remove_merge_dir(merge_dir: Optional[Path], created: bool, *, announce: bool = True) -> None:
