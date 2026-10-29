@@ -42,6 +42,17 @@ def _run(**kw) -> RunSpec:
 
 
 class TestLogits:
+    @pytest.mark.parametrize("quant", ("4bit", "8bit"))
+    def test_kbit_logits_charge_extra_bytes(self, qwen, quant):
+        quantized_run = _run(quant=quant, seq_len=2048, batch_size=2)
+        reference_run = dataclasses.replace(quantized_run, quant="none")
+        elements = qwen.vocab_size * quantized_run.seq_len * quantized_run.batch_size
+
+        quantized = estimate_vram(qwen, quantized_run).terms["logits"]
+        reference = estimate_vram(qwen, reference_run).terms["logits"]
+        # k-bit heads retain fp32 logits (4 bytes), not fp16/bf16 (2 bytes).
+        assert quantized - reference == 2 * elements
+
     def test_it_grows_with_vocab_seq_and_batch(self, qwen):
         base = estimate_vram(qwen, _run()).terms["logits"]
         assert estimate_vram(qwen, _run(seq_len=2048)).terms["logits"] == pytest.approx(2 * base)
