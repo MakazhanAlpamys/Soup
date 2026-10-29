@@ -1,8 +1,9 @@
 """#2332: a PRM step is charged its logits tensor, not the cross-entropy chain.
 
 ``trainer/prm.py`` runs the causal-LM forward without labels and takes its loss from
-``reward_head``, so the step builds the logits (half precision under autocast) and no
-loss over them. Every other task with an LM head keeps the logits-and-loss charge.
+``reward_head``, so the step builds the logits (a half-precision output and the fp32
+copy Accelerate's ``convert_outputs_to_fp32`` makes of it) and no loss over them.
+Every other task with an LM head keeps the logits-and-loss charge.
 """
 
 from __future__ import annotations
@@ -66,9 +67,9 @@ def test_prm_is_the_one_logits_only_task():
     assert not hardware_fit.LOGITS_ONLY_TASKS & hardware_fit.NO_LM_HEAD_TASKS
 
 
-def test_the_logits_tensor_is_two_bytes_an_element():
-    # Half precision under autocast: the forward's output, with nothing built on it.
-    assert vram_estimate.LOGITS_TENSOR_BYTES_PER_ELEMENT == 2
+def test_the_logits_are_six_bytes_an_element():
+    # The half-precision output (2) and Accelerate's fp32 copy of it (4), both live.
+    assert vram_estimate.LOGITS_TENSOR_BYTES_PER_ELEMENT == 6
 
 
 @pytest.mark.parametrize(
@@ -84,7 +85,7 @@ def test_the_config_carries_logits_loss(workdir, task, logits_loss):
 
 def test_prm_is_charged_the_logits_tensor_only(workdir):
     logits = _terms(_input(workdir, "prm"))["logits"]
-    assert logits == _ELEMENTS * 2
+    assert logits == _ELEMENTS * 6
     assert logits == _ELEMENTS * vram_estimate.LOGITS_TENSOR_BYTES_PER_ELEMENT
 
 
@@ -92,7 +93,7 @@ def _shape(workdir: Path):
     return read_model_shape(str(workdir / "tiny"), allow_network=False)
 
 
-def test_the_logits_tensor_is_four_bytes_under_4bit(workdir):
+def test_the_logits_are_eight_bytes_under_4bit(workdir):
     # The k-bit output head is fp32 (KBIT_LOGITS_EXTRA_BYTES). A prm config never
     # trains 4-bit (its trainer never quantises the base), so this is the estimate's
     # own arithmetic for a direct caller.
@@ -100,7 +101,7 @@ def test_the_logits_tensor_is_four_bytes_under_4bit(workdir):
         seq_len=_SEQ, batch_size=_BATCH, quant="4bit", peft="qlora", logits_loss=False
     )
     logits = vram_estimate.logits_bytes(_shape(workdir), run)
-    assert logits == _ELEMENTS * 4
+    assert logits == _ELEMENTS * 8
     assert logits == _ELEMENTS * (
         vram_estimate.LOGITS_TENSOR_BYTES_PER_ELEMENT + vram_estimate.KBIT_LOGITS_EXTRA_BYTES
     )

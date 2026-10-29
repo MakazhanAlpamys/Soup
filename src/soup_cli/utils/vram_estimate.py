@@ -19,7 +19,8 @@ Every term is in bytes; GB in the output is 1e9 bytes. The terms:
 - ``logits``: the output head's logits and the loss chain over them, at the streaming
   planner's measured loss arithmetic (``layer_stream.LOGITS_LOSS_BYTES_PER_ELEMENT``).
   A PRM step builds the logits and no loss over them, so it is charged the logits
-  tensor alone (``LOGITS_TENSOR_BYTES_PER_ELEMENT``). Checkpointing does not reduce it.
+  alone, the half-precision output and its fp32 copy
+  (``LOGITS_TENSOR_BYTES_PER_ELEMENT``). Checkpointing does not reduce it.
 - ``dequant``: under 4-bit loading, the bf16 copy of the largest weight a matmul
   dequantizes.
 - ``overhead``: the CUDA context and allocator slack, which ``max_memory_allocated``
@@ -123,9 +124,11 @@ BOUNDARY_BYTES = {"lora": 2.0, "nf4": 2.0, "int8": 2.0, "full": 2.0}
 #: Under 4-bit and 8-bit loading the output head is fp32 (``KBIT_UNQUANTIZED_BYTES``),
 #: so its logits cost 4 bytes an element, not 2.
 KBIT_LOGITS_EXTRA_BYTES = 2
-#: The logits tensor alone, in half precision under autocast: what a step that builds
-#: no loss over the logits (``RunSpec.logits_loss`` false, a PRM step) is charged.
-LOGITS_TENSOR_BYTES_PER_ELEMENT = 2
+#: The logits a step that builds no loss over them holds at the end of its forward:
+#: the half-precision output autocast builds (2 bytes an element) and the fp32 copy
+#: Accelerate's ``convert_outputs_to_fp32`` makes of it (4), both live at once. What a
+#: PRM step (``RunSpec.logits_loss`` false) is charged.
+LOGITS_TENSOR_BYTES_PER_ELEMENT = 6
 #: Config flags whose fused loss can avoid building the full logits.
 FUSED_LOSS_FLAGS = frozenset({"use_liger", "use_cut_ce"})
 
@@ -307,7 +310,8 @@ def logits_bytes(shape: ModelShape, run: RunSpec) -> int:
     bytes an element, so they do not carry the extra retained copy #327 measured on
     the streaming path (``LOGITS_RETENTION_BYTES_PER_ELEMENT``), and it is not charged.
     A step with no loss over the logits (``run.logits_loss`` false: a PRM step) is
-    charged the logits tensor alone, ``LOGITS_TENSOR_BYTES_PER_ELEMENT``.
+    charged the logits alone, ``LOGITS_TENSOR_BYTES_PER_ELEMENT``: the half-precision
+    output and the fp32 copy Accelerate makes of it.
     Under 4-bit and 8-bit loading either charge adds ``KBIT_LOGITS_EXTRA_BYTES``.
     A model without an LM head builds no logits over the vocabulary.
     """
