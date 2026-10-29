@@ -332,7 +332,9 @@ def profile_result(
         "total_memory_gb": round(breakdown.total_gb, 2),
         "total_memory_bytes": est.total_bytes,
         "memory_terms_bytes": dict(est.terms),
-        "lora_r": run.lora_r,
+        # A full fine-tune has no adapters, so no rank (Spectrum and LISA too, whose
+        # lora.r keeps its default).
+        "lora_r": None if run.peft == "full" else run.lora_r,
         "batch_size": run.batch_size,
         "seq_len": run.seq_len,
         "gradient_checkpointing": (
