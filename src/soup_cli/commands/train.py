@@ -439,6 +439,7 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
             ("adapters", b.adapters_gb),
             ("logits", b.logits_gb),
             ("dequant", b.dequant_gb),
+            ("optimizer step", b.optimizer_step_gb),
         )
         if value >= 0.05
     )
