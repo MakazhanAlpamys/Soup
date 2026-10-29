@@ -190,8 +190,8 @@ _NOT_DPO_GAPS = frozenset({
 })
 
 # These settings are refused at config load for preference tasks, so they can
-# never reach doctor. LoRA-FA and QAT are included for completeness even though
-# their MLX refusal also removes them from the SFT table above.
+# never reach doctor. LoRA-FA and QAT currently filter no SFT rows; keeping them
+# here ensures a future SFT row cannot accidentally leak into preference tables.
 _MLX_PREFERENCE_REFUSED = frozenset({
     "training.use_lorafa",
     "training.quantization_aware",
