@@ -107,9 +107,9 @@ def _write(config: dict) -> None:
     Path("soup.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
 
 
-def _train_refusal() -> str:
+def _train_refusal(*options: str) -> str:
     """What ``soup train`` prints for ``soup.yaml``, from the refusal header on."""
-    result = CliRunner().invoke(app, ["train", "--config", "soup.yaml", "--dry-run"])
+    result = CliRunner().invoke(app, ["train", "--config", "soup.yaml", "--dry-run", *options])
     assert result.exit_code == 1, (result.output, repr(result.exception))
     out = _plain(result.output)
     assert _HEADER in out, out
@@ -244,21 +244,26 @@ def test_on_policy_flag_is_merged_before_plan_and_apply_validate(workdir, case):
 
 
 @pytest.mark.parametrize("command", [["plan"], ["apply"], ["apply", "--dry-run"]])
-@pytest.mark.parametrize("enabled", [False, None])
-def test_on_policy_flag_requires_minillm_enabled_with_train_s_message(workdir, command, enabled):
-    training = {} if enabled is None else {"minillm_enabled": enabled}
-    document = _config(workdir, training=training)
+@pytest.mark.parametrize("case", ["disabled", "absent", "null-training"])
+def test_on_policy_flag_requires_minillm_enabled_with_train_s_message(workdir, command, case):
+    training = {"teacher_model": _TEACHER}
+    if case == "disabled":
+        training["minillm_enabled"] = False
+    document = _config(workdir, training=training, task="distill")
+    if case == "null-training":
+        document["training"] = None
     _write(document)
+    original = Path("soup.yaml").read_bytes()
+    expected = _train_refusal("--minillm-on-policy")
     before = b"existing state stays intact"
     Path(_STATE).write_bytes(before)
 
     result = CliRunner().invoke(app, [*command, "--minillm-on-policy"])
 
     assert result.exit_code == 1, (result.output, repr(result.exception))
-    assert _plain(result.output) == (
-        "--minillm-on-policy requires training.minillm_enabled=true (task='distill')"
-    )
+    assert _plain(result.output) == expected
     assert Path(_STATE).read_bytes() == before
+    assert Path("soup.yaml").read_bytes() == original
 
 
 @pytest.mark.parametrize("plan_flag", [False, True])

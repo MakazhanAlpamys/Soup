@@ -50,15 +50,10 @@ def _load_yaml_config(path: str, *, minillm_on_policy: bool = False) -> dict:
     from soup_cli.config.loader import validate_config_mapping
 
     if minillm_on_policy:
-        training = data.get("training", {})
-        if isinstance(training, dict):
-            if training.get("minillm_enabled", False) is False:
-                console.print(
-                    "[red]--minillm-on-policy requires "
-                    "training.minillm_enabled=true (task='distill')[/]"
-                )
-                raise typer.Exit(1)
-            data = {**data, "training": {**training, "minillm_on_policy": True}}
+        training = data.get("training")
+        if not isinstance(training, dict):
+            training = {}
+        data = {**data, "training": {**training, "minillm_on_policy": True}}
     validate_config_mapping(data)
     return data
 
@@ -150,7 +145,7 @@ def apply_cmd(
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
-        help="Verify drift and exit without invoking training.",
+        help="Verify drift and exit without marking the plan as applied.",
     ),
     minillm_on_policy: bool = typer.Option(
         False, "--minillm-on-policy",

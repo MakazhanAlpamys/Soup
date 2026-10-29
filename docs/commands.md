@@ -318,7 +318,7 @@ soup drift-alarm ... --slack-url <https> | --discord-url <https>  Optional SSRF-
 soup tunability --list                                   List built-in candidate-base catalogue
 soup tunability --dataset <jsonl> [--candidates a,b,c]   Probe candidate bases + Pareto frontier report
 soup tunability --dataset <jsonl> --live [--device cpu]  LIVE per-candidate LoRA probe (loads each repo)
-soup plan --config soup.yaml [--minillm-on-policy]         Pre-flight summary + write soup.tfstate
+soup plan --config soup.yaml [--minillm-on-policy]               Pre-flight summary + write soup.tfstate
 soup apply --config soup.yaml [--dry-run] [--minillm-on-policy]  Record reviewed plan; refuses on drift (exit 3)
 soup env lock | status | check                           Hermetic env lockfile + ABI drift + declared-bound violation detection (exit 3)
 soup env fix [--format uv-pip|requirements] [--output req.txt]  Render a reproducible install plan from soup-env.lock (print-only)
