@@ -1467,6 +1467,8 @@ Tools that explain *why* a run misbehaved instead of dumping a stack trace.
 Heuristic explainer — reads the most recent (or named) run and surfaces
 plain-English diagnoses with concrete next steps.
 
+The summary keeps recorded zero losses and step counts; `-` means the value was not recorded.
+
 ```bash
 soup why                 # most recent run
 soup why run_2026_abc    # specific run id (or prefix)

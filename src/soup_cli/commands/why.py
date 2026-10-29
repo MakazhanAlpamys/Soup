@@ -54,11 +54,15 @@ def why(
 
     findings = diagnose(metrics, config)
 
+    total_steps = target.get("total_steps")
+    initial_loss = target.get("initial_loss")
+    final_loss = target.get("final_loss")
     header = (
         f"Run: [bold]{escape(target['run_id'])}[/]\n"
         f"Status: {target.get('status') or '-'} | "
-        f"Steps: {target.get('total_steps') or '-'} | "
-        f"Loss: {target.get('initial_loss') or '-'} → {target.get('final_loss') or '-'}"
+        f"Steps: {total_steps if total_steps is not None else '-'} | "
+        f"Loss: {initial_loss if initial_loss is not None else '-'} → "
+        f"{final_loss if final_loss is not None else '-'}"
     )
     console.print(Panel(header, title="soup why"))
 
