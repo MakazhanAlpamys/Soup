@@ -164,6 +164,8 @@ class VRAMBreakdown:
     adapters_gb: float = 0.0
     logits_gb: float = 0.0
     dequant_gb: float = 0.0
+    #: How far the optimizer step's peak exceeds the forward/backward pass (#2277).
+    optimizer_step_gb: float = 0.0
     #: The full estimate behind these numbers (terms in bytes, shape, notes).
     estimate: Optional[VramEstimate] = field(default=None, compare=False, repr=False)
 
@@ -171,6 +173,7 @@ class VRAMBreakdown:
         for fld in (
             "weights_gb", "optimizer_gb", "gradients_gb",
             "activations_gb", "overhead_gb", "adapters_gb", "logits_gb", "dequant_gb",
+            "optimizer_step_gb",
         ):
             val = getattr(self, fld)
             if isinstance(val, bool):
@@ -193,6 +196,7 @@ class VRAMBreakdown:
             + self.adapters_gb
             + self.logits_gb
             + self.dequant_gb
+            + self.optimizer_step_gb
         )
 
 
@@ -555,6 +559,7 @@ def breakdown_from_estimate(est: VramEstimate) -> VRAMBreakdown:
         adapters_gb=est.gb("adapters"),
         logits_gb=est.gb("logits"),
         dequant_gb=est.gb("dequant"),
+        optimizer_step_gb=est.gb("optimizer_step"),
         estimate=est,
     )
 
