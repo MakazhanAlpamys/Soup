@@ -155,10 +155,10 @@ def offline_catalog(monkeypatch):
                 "temperature": 0,
                 "max_gen_toks": 3,
             }
-            if filters:
-                config["filter_list"] = filters
         else:
             config["doc_to_choice"] = "choices"
+        if filters:
+            config["filter_list"] = filters
         return ConfigurableTask(config=config)
 
     manager = lm_eval.tasks.TaskManager
@@ -325,6 +325,81 @@ def test_harness_failure_never_saves_partial_success(
     assert "Results saved" not in result.output
     with closing(ExperimentTracker()) as tracker:
         assert tracker.get_eval_results() == []
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [None, "minimal", "arguments", "resps", "filtered_resps", "metric", "nan", "boolean",
+     "disjoint", "identity"],
+)
+def test_sample_evidence_is_complete_and_matches_documents_across_filters(
+    fixed_model, offline_catalog, tmp_path, monkeypatch, corruption,
+):
+    import json
+
+    import lm_eval
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+    from soup_cli.experiment.tracker import ExperimentTracker
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "evidence.db"))
+    catalog, configure = offline_catalog
+    catalog["hellaswag"] = configure(
+        "hellaswag",
+        [{"prompt": "A", "choices": ["B", "C"], "label": 0},
+         {"prompt": "A", "choices": ["C", "B"], "label": 1}],
+        filters=[{"name": name, "filter": [{"function": "take_first"}]}
+                 for name in ("none", "second")],
+    )
+    real = lm_eval.simple_evaluate
+
+    def measured_then_corrupted(*args, **kwargs):
+        result = real(*args, **kwargs)
+        samples = result["samples"]["hellaswag"]
+        if corruption == "minimal":
+            result["samples"]["hellaswag"] = [
+                {"doc_id": row["doc_id"], "filter": row["filter"]} for row in samples
+            ]
+        elif corruption in {"arguments", "resps", "filtered_resps"}:
+            samples[0][corruption] = []
+        elif corruption == "metric":
+            del samples[0]["acc"]
+        elif corruption == "nan":
+            samples[0]["acc"] = float("nan")
+        elif corruption == "boolean":
+            samples[0]["acc"] = True
+        elif corruption == "disjoint":
+            for row in samples:
+                if row["filter"] == "second":
+                    row["doc_id"] += 10
+        elif corruption == "identity":
+            next(row for row in samples if row["filter"] == "second")["doc_hash"] = "other"
+        return result
+
+    monkeypatch.setattr(lm_eval, "simple_evaluate", measured_then_corrupted)
+    result = CliRunner().invoke(
+        app,
+        ["eval", "benchmark", "--backend", "mlx", "--model", "offline-model",
+         "--benchmarks", "hellaswag", "--limit", "2", "--max-length", "6",
+         "--max-tokens", "2"],
+    )
+    with closing(ExperimentTracker()) as tracker:
+        persisted = tracker.get_eval_results()
+    if corruption is None:
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert len(persisted) == 1 and persisted[0]["score"] == 1.0
+        samples = json.loads(persisted[0]["details_json"])["samples"]
+        assert {(row["filter"], row["doc_id"]) for row in samples} == {
+            (name, doc) for name in ("none", "second") for doc in (0, 1)
+        }
+        assert all(row["acc"] == 1.0 and row["resps"] for row in samples)
+    else:
+        assert result.exit_code == 1
+        assert "sample" in result.output and "evidence" in result.output
+        assert "Results saved" not in result.output
+        assert persisted == []
 
 
 @pytest.mark.parametrize("quantized", [False, True])

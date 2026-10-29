@@ -1306,7 +1306,9 @@ runtime and harness versions, exact task configs/versions, selected metrics,
 per-sample requests/responses, effective sample counts, filters/few-shot settings,
 seed, limits, scored-token counts, generation truncation, elapsed time and process
 MLX peak memory. Every requested task must produce finite measured scores and
-complete sample evidence before anything is saved. Missing dependencies, corrupt
+complete sample evidence before anything is saved. Each filter must cover the same
+documents, with matching identity hashes and populated requests, responses and
+finite per-sample measurements. Missing dependencies, corrupt
 artifacts, runtime errors and incomplete results exit without a successful result.
 The peak is process-wide, so use a fresh process for comparable resource readings.
 Limited samples and token caps do not establish a full-suite score or model-quality

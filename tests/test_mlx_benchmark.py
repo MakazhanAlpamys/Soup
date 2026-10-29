@@ -1,11 +1,42 @@
 """Public native benchmark dispatch, refusal and persistent evidence contracts."""
 
 import json
+from copy import deepcopy
 
 import pytest
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+
+
+@pytest.mark.parametrize("corruption", [None, "minimal", "disjoint", "metric"])
+def test_sample_evidence_guard_without_optional_backends(corruption):
+    from soup_cli.eval.mlx_benchmark import _validate_sample_evidence
+
+    samples = [
+        {
+            "doc_id": doc, "filter": name, "doc": {"question": "A"}, "target": 0,
+            "arguments": [["A", "B"]], "resps": [[[-0.1, True]]],
+            "filtered_resps": [[-0.1, True]], "metrics": ["acc"], "acc": 1.0,
+            "doc_hash": f"doc-{doc}", "prompt_hash": f"prompt-{doc}", "target_hash": "target",
+        }
+        for name in ("none", "second") for doc in (0, 1)
+    ]
+    if corruption == "minimal":
+        samples = [{"doc_id": row["doc_id"], "filter": row["filter"]} for row in samples]
+    elif corruption == "disjoint":
+        for row in samples:
+            if row["filter"] == "second":
+                row["doc_id"] += 10
+    elif corruption == "metric":
+        del samples[0]["acc"]
+    if corruption is None:
+        original = deepcopy(samples)
+        _validate_sample_evidence("hellaswag", samples, {"none", "second"}, 2, "acc")
+        assert samples == original
+    else:
+        with pytest.raises(ValueError, match="sample.*evidence"):
+            _validate_sample_evidence("hellaswag", samples, {"none", "second"}, 2, "acc")
 
 
 @pytest.fixture

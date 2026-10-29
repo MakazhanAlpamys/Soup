@@ -224,6 +224,58 @@ def make_native_harness(
     return NativeHarness()
 
 
+def _validate_sample_evidence(
+    name: str, samples: list[dict], filters: set[str], count: int, metric: str,
+) -> None:
+    """Require actual requests, responses and matching documents in every filter."""
+    by_filter = {key: [] for key in filters}
+    identities = {}
+    hash_fields = ("doc_hash", "prompt_hash", "target_hash")
+    required_fields = {"doc", "target", "arguments", "resps", "filtered_resps", "metrics"}
+    for sample in samples:
+        if (
+            not isinstance(sample, dict)
+            or sample.get("filter") not in by_filter
+            or type(sample.get("doc_id")) is not int
+            or sample["doc_id"] < 0
+            or not required_fields.issubset(sample)
+            or not isinstance(sample["doc"], dict)
+            or any(not isinstance(sample.get(field), str) or not sample[field]
+                   for field in hash_fields)
+            or any(not isinstance(sample[field], list) or not sample[field]
+                   for field in ("arguments", "resps", "filtered_resps", "metrics"))
+        ):
+            raise ValueError(f"Native benchmark {name} has invalid sample/filter evidence")
+        metric_names = sample["metrics"]
+        if (
+            metric not in metric_names
+            or any(not isinstance(metric_name, str)
+                   or not isinstance(sample.get(metric_name), (int, float))
+                   or isinstance(sample[metric_name], bool)
+                   or not math.isfinite(sample[metric_name]) for metric_name in metric_names)
+            or len(sample["arguments"]) != len(sample["resps"])
+            or len(sample["resps"]) != len(sample["filtered_resps"])
+        ):
+            raise ValueError(f"Native benchmark {name} has invalid sample measurement evidence")
+        sample_identity = tuple(sample[field] for field in hash_fields)
+        doc_id = sample["doc_id"]
+        if doc_id in identities and identities[doc_id] != sample_identity:
+            raise ValueError(
+                f"Native benchmark {name} has inconsistent sample document evidence"
+            )
+        identities[doc_id] = sample_identity
+        by_filter[sample["filter"]].append(doc_id)
+    if len({frozenset(ids) for ids in by_filter.values()}) != 1:
+        raise ValueError(f"Native benchmark {name} has disjoint sample/filter evidence")
+    complete_filters = all(
+        len(ids) == count
+        and len(set(ids)) == count
+        for ids in by_filter.values()
+    )
+    if not complete_filters:
+        raise ValueError(f"Native benchmark {name} has incomplete sample measurement evidence")
+
+
 def run_native_benchmark(
     model_path: str,
     tasks: list[str],
@@ -304,17 +356,6 @@ def run_native_benchmark(
         samples = results.get("samples", {}).get(name, [])
         config = results.get("configs", {}).get(name, {})
         expected_filters = {item["name"] for item in (config.get("filter_list") or [])} or {"none"}
-        by_filter = {key: [] for key in expected_filters}
-        for sample in samples:
-            if not isinstance(sample, dict) or sample.get("filter") not in by_filter:
-                raise ValueError(f"Native benchmark {name} has invalid sample/filter evidence")
-            by_filter[sample["filter"]].append(sample.get("doc_id"))
-        complete_filters = all(
-            len(ids) == count
-            and len(set(ids)) == count
-            and all(type(doc_id) is int and doc_id >= 0 for doc_id in ids)
-            for ids in by_filter.values()
-        )
         if (
             measured is None
             or measured[0] not in {"acc", "acc_norm", "exact_match", "em"}
@@ -322,13 +363,13 @@ def run_native_benchmark(
             or type(count) is not int
             or count < 1
             or count > limit
-            or not complete_filters
             or name not in results.get("versions", {})
             or name not in results.get("configs", {})
         ):
             raise ValueError(
                 f"Native benchmark {name} has missing/empty/nonfinite measurement evidence"
             )
+        _validate_sample_evidence(name, samples, expected_filters, count, key.split(",")[0])
     results["_soup_metrics"] = {
         name: (key.split(",")[0], float(results["results"][name][key]))
         for name, key in selected_metrics.items()
