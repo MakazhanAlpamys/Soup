@@ -12,8 +12,11 @@ runner = make_cli_runner()
 
 @pytest.mark.parametrize("json_mode", [True, False])
 @pytest.mark.parametrize("failure", ["missing", "empty", "invalid_yaml", "schema", "gpu"])
-def test_cost_refusal_streams(tmp_path, failure, json_mode):
-    path = tmp_path / "config.yaml"
+@pytest.mark.parametrize("width", [40, 80])
+def test_cost_refusal_streams(tmp_path, monkeypatch, failure, json_mode, width):
+    monkeypatch.setenv("COLUMNS", str(width))
+    # Rich can fold even the basename when the CI temp path reaches the margin.
+    path = tmp_path / ("config." + "x" * 80 + ".yaml")
     if failure == "empty":
         path.write_text("", encoding="utf-8")
     elif failure == "invalid_yaml":
@@ -33,7 +36,8 @@ def test_cost_refusal_streams(tmp_path, failure, json_mode):
 
     assert result.exit_code == 1
     diagnostic = result.stderr if json_mode else result.stdout
-    assert strip_ansi(diagnostic).strip()
+    plain = " ".join(strip_ansi(diagnostic).split())
+    assert plain
     if json_mode:
         assert result.stdout == ""
     else:
@@ -41,11 +45,13 @@ def test_cost_refusal_streams(tmp_path, failure, json_mode):
     expected = {
         "missing": "Config file not found:",
         "empty": "Config file is empty",
-        "invalid_yaml": "config.yaml",
+        "invalid_yaml": "is not valid YAML:",
         "schema": "batch_size",
         "gpu": "No matching GPUs found for:",
     }
-    assert expected[failure] in strip_ansi(diagnostic)
+    assert expected[failure] in plain
+    if failure in ("missing", "invalid_yaml"):
+        assert path.name in "".join(plain.split())
 
 
 def test_cost_success_keeps_a_json_document_on_stdout(tmp_path):
