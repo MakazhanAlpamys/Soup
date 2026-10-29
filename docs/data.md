@@ -80,6 +80,11 @@ against your own data, and check what got dropped.
 `--threshold` means Jaccard for MinHash and cosine for `--semantic`. They are
 different scales; a value tuned for one is not meaningful for the other.
 
+With either backend, an explicit `--field` must occur in at least one loaded
+row. A field absent from every row is refused before backend work or output
+writes, preserving any existing output. Present-but-empty values and fields
+missing from only some rows keep their existing deduplication behavior.
+
 ## Dataset Sanitization & Repair (`soup data clean`)
 
 `soup data clean` applies deterministic hygiene rules to repair corrupted, malformed, or noisy fine-tuning datasets without ever modifying the input file in place:
