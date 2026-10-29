@@ -803,7 +803,7 @@ def _generate_local(
         model_name,
         trust_remote_code=trc,
         device_map="auto",
-        torch_dtype=torch.float16,
+        dtype=torch.float16,
     )
     model.eval()
 
