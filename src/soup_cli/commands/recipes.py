@@ -10,7 +10,7 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR, GateCommand
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 #: Diagnostics for ``verify``. They go to stderr so that ``--json`` leaves stdout
@@ -47,7 +47,7 @@ def show(
 
     recipe = get_recipe(name)
     if recipe is None:
-        console.print(f"[red]Recipe not found: {name}[/]")
+        console.print(f"[red]Recipe not found: {for_terminal(name)}[/]", emoji=False)
         # v0.40.1 Part E / M3 — fuzzy-match suggestion (mirrors Typer's
         # built-in "Did you mean" for unknown CLI flags).
         suggestions = _suggest_recipes(name)
@@ -60,7 +60,7 @@ def show(
 
     console.print(Panel(
         Syntax(recipe.yaml_str, "yaml", theme="monokai"),
-        title=f"[bold green]{name}[/] -- {recipe.description}",
+        title=f"[bold green]{for_terminal(name)}[/] -- {recipe.description}",
     ))
 
 
@@ -85,7 +85,7 @@ def use(
 
     recipe = get_recipe(name)
     if recipe is None:
-        console.print(f"[red]Recipe not found: {name}[/]")
+        console.print(f"[red]Recipe not found: {for_terminal(name)}[/]", emoji=False)
         raise typer.Exit(1)
 
     if recipe.unavailable_reason:
@@ -97,18 +97,21 @@ def use(
     try:
         output_path = validate_output_path(Path(output))
     except ValueError as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(1)
 
     if output_path.exists() and not yes:
-        confirm = typer.confirm(f"File '{output}' already exists. Overwrite?")
+        confirm = typer.confirm(f"File '{strip_control(output)}' already exists. Overwrite?")
         if not confirm:
             console.print("[yellow]Aborted.[/]")
             raise typer.Exit(0)
 
     output_path.write_text(recipe.yaml_str, encoding="utf-8")
-    console.print(f"[green]\u2713[/] Recipe [bold]{name}[/] written to [bold]{output}[/]")
-    console.print(f"[dim]Next: soup train --config {output}[/]")
+    console.print(
+        f"[green]\u2713[/] Recipe [bold]{for_terminal(name)}[/] "
+        f"written to [bold]{for_terminal(output)}[/]", emoji=False,
+    )
+    console.print(f"[dim]Next: soup train --config {for_terminal(output)}[/]", emoji=False)
 
 
 @app.command()
