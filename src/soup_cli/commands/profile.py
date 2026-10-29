@@ -80,13 +80,20 @@ def profile(
         if config is not None:
             console.print("[red]--model and --config cannot be used together.[/]")
             raise typer.Exit(1)
+        method = _choice("--method", method, "qlora", MODEL_QUERY_METHODS)
+        if method == "full" and lora_r is not None:
+            console.print(
+                "[red]--lora-r only applies with --method lora or qlora;[/] a full "
+                "fine-tune trains no adapters."
+            )
+            raise typer.Exit(1)
         _profile_model(
             model,
             gpu=gpu,
             json_output=json_output,
             seq=2048 if seq is None else seq,
             batch=4 if batch is None else batch,
-            method=_choice("--method", method, "qlora", MODEL_QUERY_METHODS),
+            method=method,
             lora_r=64 if lora_r is None else lora_r,
             optimizer=_choice("--optimizer", optimizer, "adamw_torch", _optimizers()),
             gradient_checkpointing=_choice(
@@ -116,7 +123,7 @@ def profile(
     config = config or _DEFAULT_CONFIG
     config_path = Path(config)
     if not config_path.exists():
-        console.print(f"[red]Config file not found:[/] {config}")
+        console.print(f"[red]Config file not found:[/] {for_terminal(config)}")
         raise typer.Exit(1)
 
     cfg = load_config(config_path)
@@ -156,7 +163,7 @@ def _choice(flag: str, value: Optional[str], default: str, valid) -> str:
         return default
     if value not in valid:
         console.print(
-            f"[red]Unknown {flag}:[/] {escape(value)}\n"
+            f"[red]Unknown {flag}:[/] {for_terminal(value)}\n"
             f"[dim]Valid options: {', '.join(sorted(valid))}[/]"
         )
         raise typer.Exit(1)
@@ -190,7 +197,7 @@ def _profile_model(
         )
     except ModelShapeUnavailableError as exc:
         console.print(
-            f"[red]Cannot read {escape(model)}:[/] {exc}. Nothing was estimated: "
+            f"[red]Cannot read {for_terminal(model)}:[/] {exc}. Nothing was estimated: "
             "--model needs the model's own config.json, not a size guessed from its name."
         )
         raise typer.Exit(1) from None
@@ -230,7 +237,7 @@ def _resolve_gpu_memory(gpu: str | None) -> tuple[float, str]:
         if gpu_key not in GPU_MEMORY:
             valid = ", ".join(sorted(GPU_MEMORY.keys()))
             console.print(
-                f"[red]Unknown GPU:[/] {gpu}\n"
+                f"[red]Unknown GPU:[/] {for_terminal(gpu)}\n"
                 f"[dim]Valid options: {valid}[/]"
             )
             raise typer.Exit(1)
@@ -252,7 +259,7 @@ def _render_profile(result: dict, gpu_memory_gb: float, gpu_memory_source: str) 
         )
 
     model_info = (
-        f"Model:     [bold]{escape(result['model_name'])}[/]\n"
+        f"Model:     [bold]{for_terminal(result['model_name'])}[/]\n"
         f"Params:    [bold]{result['model_params_b']:.1f}B[/] {trainable_str}\n"
         f"Quantization: [bold]{result['quantization']}[/]"
     )
