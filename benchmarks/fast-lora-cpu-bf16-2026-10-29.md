@@ -43,6 +43,9 @@ for seed 4's **up-projection LoRA B gradient**. The unchanged criterion is
 The initial three instrumented 2.14.1 sweeps and their instrumented repeats agree
 on the verdict. Raw per-seed, per-tensor errors and fixture fingerprints are retained
 in [the JSON record](records/fast-lora-cpu-bf16-20261029.json).
+The published recorder reproduces all 72 rows and fixture hashes exactly.
+Uninstrumented seed-4 controls also fail on 2.8.0 in all three modes and pass
+on 2.14.1 in the native mode; the failed controls retain pytest exit status 1.
 
 The issue's original torch 2.8.0+cu128 report gives approximately 6.5988e-4 fast
 and 2.0565e-4 PEFT (3.2x). This host's CPU build reproduces the seed and bound
