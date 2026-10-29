@@ -673,13 +673,7 @@ def test_cli_clean_json_keeps_the_unknown_format_warning_on_stderr(
         encoding="utf-8",
     )
 
-    # Ask this runner: Typer may use a vendored implementation whose API is
-    # independent of the installed standalone Click version.
-    import inspect
-
-    supports_separate_stderr = "mix_stderr" in inspect.signature(CliRunner).parameters
-    kwargs = {"mix_stderr": False} if supports_separate_stderr else {}
-    separate_runner = CliRunner(**kwargs)
+    separate_runner = make_cli_runner()
     result = separate_runner.invoke(
         app, ["data", "clean", str(source), "--dry-run", "--json"]
     )
