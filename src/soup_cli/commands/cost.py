@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -17,6 +19,7 @@ from soup_cli.utils.profiler import (
 )
 
 console = Console()
+err_console = Console(stderr=True)
 
 # GPU pricing and speed multipliers (relative to A100).
 # Pricing last updated: 2026-04. Actual rates change frequently --
@@ -103,12 +106,16 @@ def cost(
     """Estimate training cost in USD across cloud providers."""
     from soup_cli.config.loader import load_config
 
+    diagnostic_console = err_console if json_output else console
     config_path = Path(config)
     if not config_path.exists():
-        console.print(f"[red]Config file not found:[/] {config}")
+        diagnostic_console.print(f"[red]Config file not found:[/] {config}")
         raise typer.Exit(1)
 
-    cfg = load_config(config_path)
+    # The loader reports refusals and advisories on stdout. Keep those out of
+    # the document stream when --json is requested, including on exit 1.
+    with contextlib.redirect_stdout(sys.stderr if json_output else sys.stdout):
+        cfg = load_config(config_path)
     model_params_b = model_size_from_name(cfg.base)
 
     batch_size = cfg.training.batch_size
@@ -158,7 +165,7 @@ def cost(
         })
 
     if not results:
-        console.print(f"[red]No matching GPUs found for:[/] {gpu}")
+        diagnostic_console.print(f"[red]No matching GPUs found for:[/] {gpu}")
         raise typer.Exit(1)
 
     if json_output:

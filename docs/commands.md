@@ -166,6 +166,7 @@ soup profile --config soup.yaml --json       Machine-readable output
 soup profile --model Qwen/Qwen2.5-7B-Instruct --gpu rtx5070 --method qlora  Will a model fit, without a soup.yaml
 soup cost --config soup.yaml                 Estimate training cost in USD across providers
 soup cost --config soup.yaml --gpu H100      Estimate training cost for specific GPU
+soup cost --config soup.yaml --json          Cost JSON on stdout; diagnostics on stderr
 soup adapters list ./output/                 Scan for LoRA adapters
 soup adapters info ./output/checkpoint-500/  Show adapter metadata
 soup adapters compare adapter1/ adapter2/    Compare two adapters
