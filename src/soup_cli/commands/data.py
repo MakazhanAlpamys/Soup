@@ -412,7 +412,7 @@ def dedup(
         console.print("[red]Dataset is empty.[/]")
         raise typer.Exit(1)
 
-    if field is not None and not any(field in row for row in data):
+    if field and not any(field in row for row in data):
         console.print(
             f"--field {field!r} is absent from every row; "
             "choose a field present in the dataset.",

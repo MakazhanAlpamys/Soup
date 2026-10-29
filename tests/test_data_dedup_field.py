@@ -20,7 +20,10 @@ def _write_rows(path: Path, rows: list[dict]) -> bytes:
 
 @pytest.mark.parametrize("semantic", [False, True], ids=["minhash", "semantic"])
 @pytest.mark.parametrize("existing", [False, True], ids=["new-output", "existing-output"])
-@pytest.mark.parametrize("field", ["text", "[bold]missing[/bold]"])
+@pytest.mark.parametrize("field", [
+    "text", "[bold]missing[/bold]",
+    "this missing field has enough words to wrap the diagnostic",
+])
 def test_absent_field_refuses_before_backend_or_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, semantic: bool, existing: bool, field: str,
 ) -> None:
@@ -44,7 +47,7 @@ def test_absent_field_refuses_before_backend_or_output(
         args.append("--semantic")
     result = make_cli_runner().invoke(app, args)
     assert result.exit_code == 1, (result.output, repr(result.exception))
-    printed = strip_ansi(result.output)
+    printed = " ".join(strip_ansi(result.output).split())
     assert f"--field {field!r}" in printed
     assert "absent from every row" in printed
     assert called == []
@@ -71,23 +74,25 @@ def test_absent_field_preserves_output_without_backend_doubles(
         app, ["data", "dedup", "rows.jsonl", "--field", "text", "-o", "result.jsonl"],
     )
     assert result.exit_code == 1, (result.output, repr(result.exception))
-    assert "absent from every row" in strip_ansi(result.output)
+    printed = " ".join(strip_ansi(result.output).split())
+    assert "absent from every row" in printed
     assert source.read_bytes() == original
     assert output.read_bytes() == sentinel if existing else not output.exists()
 
 
 @pytest.mark.parametrize("count", [2, 20])
-@pytest.mark.parametrize("explicit", [False, True], ids=["default-fields", "selected-field"])
+@pytest.mark.parametrize("field", [None, "output", ""],
+                         ids=["default-fields", "selected-field", "empty-field"])
 def test_distinct_rows_survive_real_minhash(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, count: int, explicit: bool,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, count: int, field: str | None,
 ) -> None:
     pytest.importorskip("datasketch")
     monkeypatch.chdir(tmp_path)
     rows = [{"output": " ".join(f"row{i}word{j}" for j in range(4))} for i in range(count)]
     original = _write_rows(tmp_path / "rows.jsonl", rows)
     args = ["data", "dedup", "rows.jsonl", "-o", "result.jsonl"]
-    if explicit:
-        args.extend(["--field", "output"])
+    if field is not None:
+        args.extend(["--field", field])
     result = make_cli_runner().invoke(app, args)
     assert result.exit_code == 0, (result.output, repr(result.exception))
     loaded = [json.loads(line) for line in (tmp_path / "result.jsonl").read_text().splitlines()]
@@ -114,12 +119,13 @@ def test_present_empty_and_partially_missing_keep_the_existing_minhash_policy(
     assert loaded == expected
 
 
+@pytest.mark.parametrize("field", ["output", ""], ids=["selected-field", "empty-field"])
 @pytest.mark.parametrize("rows", [
     [{"output": ""}, {"output": ""}],
     [{"output": "one two three"}, {"other": "four five six"}],
 ])
 def test_present_empty_and_partially_missing_reach_semantic_dispatch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rows: list[dict],
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rows: list[dict], field: str,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     _write_rows(tmp_path / "rows.jsonl", rows)
@@ -130,7 +136,7 @@ def test_present_empty_and_partially_missing_reach_semantic_dispatch(
 
     monkeypatch.setattr(command, "_semantic_dedup", record)
     result = make_cli_runner().invoke(
-        app, ["data", "dedup", "rows.jsonl", "--field", "output", "--semantic"],
+        app, ["data", "dedup", "rows.jsonl", "--field", field, "--semantic"],
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert seen == [(rows, "output")]
+    assert seen == [(rows, field)]
