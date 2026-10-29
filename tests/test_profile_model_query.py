@@ -640,3 +640,27 @@ def test_speed_fields_come_from_estimate_speed(tmp_path, tiny, monkeypatch):
         expected = estimate_speed(data["model_params_b"], "4bit", 3)
         assert data["tokens_per_sec"] == round(expected, 1)
         assert data["samples_per_sec"] == round(expected / 512, 2)
+
+
+#: HuggingFaceTB/SmolLM2-135M-Instruct: big enough that the optimizer step rounds above 0.0 GB.
+SMOLLM2_135M = {
+    "model_type": "llama",
+    "hidden_size": 576,
+    "intermediate_size": 1536,
+    "num_hidden_layers": 30,
+    "num_attention_heads": 9,
+    "num_key_value_heads": 3,
+    "vocab_size": 49152,
+    "tie_word_embeddings": True,
+}
+
+
+def test_the_table_shows_the_optimizer_step(monkeypatch):
+    """#2277: a short full fine-tune with adamw_torch is priced at its step."""
+    monkeypatch.setattr(model_shape, "_hub_lookup", lambda repo, **_kw: (dict(SMOLLM2_135M), None))
+    monkeypatch.setattr(model_shape, "_hub_param_count", lambda repo, **_kw: 134_515_008)
+    query = ["--model", "HuggingFaceTB/SmolLM2-135M-Instruct", "--gpu", "rtx3060laptop"]
+    query += ["--method", "full", "--seq", "64", "--batch", "1"]
+    result = _profile(*query)
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "Optimizer step (over the pass) ~0.5 GB" in _plain(result)
