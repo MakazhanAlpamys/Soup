@@ -1144,6 +1144,15 @@ data:
 ```
 
 
+`soup data evolve` and `soup data gen-magpie` report failed Ollama/vLLM calls,
+including transport errors, non-200 replies, malformed or empty completions and
+responses over the byte limit. If no rows survive and any provider call failed,
+they exit 1, name the provider, endpoint and first error, and leave an existing
+output untouched (or create no file). If usable rows survive, they write those
+rows, exit 0 and warn with the failed/total call counts. A reachable provider
+whose successful replies are all filtered out still writes an empty file,
+exits 0 and prints the existing zero-row warning. `--plan-only` makes no requests.
+
 ## Data Tools
 
 File outputs must be distinct from their inputs. `persona-mix` protects

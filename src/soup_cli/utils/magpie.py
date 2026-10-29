@@ -19,7 +19,10 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Callable, List, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, List, Mapping, Optional, Sequence
+
+if TYPE_CHECKING:
+    from soup_cli.utils.data_forge import ForgeJudgeStats
 
 _LOG = logging.getLogger("soup.magpie")
 
@@ -293,6 +296,7 @@ def make_magpie_generate_fn(
     temperature: float = 1.0,
     timeout_seconds: float = 120.0,
     max_tokens: int = 512,
+    stats: Optional[ForgeJudgeStats] = None,
 ) -> GenerateFn:
     """Build a ``generate(prompt) -> str`` RAW-completion callable.
 
@@ -307,6 +311,8 @@ def make_magpie_generate_fn(
 
     SSRF carry-overs: Ollama / vLLM URLs are validated loopback-only unless an
     operator explicitly overrides ``base_url`` (still scheme-validated).
+    ``stats`` records calls and unusable provider replies without changing the
+    callable's empty-string fallback used by other sampling commands.
     """
     canonical = validate_magpie_provider(provider)
     if not isinstance(model, str) or not model or "\x00" in model:
@@ -343,6 +349,19 @@ def make_magpie_generate_fn(
 
     from soup_cli.utils.http_response import ResponseTooLargeError, post_capped
 
+    def failed(detail: str) -> str:
+        if stats is not None:
+            stats.record_failure(detail)
+        _LOG.debug("%s magpie: %s", canonical, detail)
+        return ""
+
+    def checked_text(text: object) -> str:
+        if not isinstance(text, str):
+            return failed("response text must be a string")
+        if not text.strip():
+            return failed("empty response text")
+        return text
+
     if canonical == "ollama":
         from soup_cli.data.providers.ollama import validate_ollama_url
 
@@ -353,6 +372,8 @@ def make_magpie_generate_fn(
         def _ollama_generate(prompt: str) -> str:
             if not isinstance(prompt, str):
                 return ""
+            if stats is not None:
+                stats.calls += 1
             try:
                 resp = post_capped(
                     api_url,
@@ -372,20 +393,16 @@ def make_magpie_generate_fn(
                     timeout=timeout_seconds,
                 )
             except ResponseTooLargeError:
-                _LOG.debug("ollama magpie response exceeds byte limit; dropping sample")
-                return ""
+                return failed("response exceeds byte limit")
             except Exception as exc:  # noqa: BLE001 — httpx error variety
-                _LOG.debug("ollama magpie HTTP error: %s", exc)
-                return ""
+                return failed(f"{type(exc).__name__}: {exc}")
             if resp.status_code != 200:
-                _LOG.debug("ollama magpie status=%d", resp.status_code)
-                return ""
+                return failed(f"HTTP {resp.status_code}")
             try:
                 text = resp.json()["response"]
             except (KeyError, IndexError, TypeError, ValueError) as exc:
-                _LOG.debug("ollama magpie parse error: %s", exc)
-                return ""
-            return text if isinstance(text, str) else ""
+                return failed(f"invalid JSON response: {type(exc).__name__}: {exc}")
+            return checked_text(text)
 
         return _ollama_generate
 
@@ -399,6 +416,8 @@ def make_magpie_generate_fn(
     def _vllm_generate(prompt: str) -> str:
         if not isinstance(prompt, str):
             return ""
+        if stats is not None:
+            stats.calls += 1
         try:
             resp = post_capped(
                 api_url,
@@ -414,20 +433,16 @@ def make_magpie_generate_fn(
                 timeout=timeout_seconds,
             )
         except ResponseTooLargeError:
-            _LOG.debug("vllm magpie response exceeds byte limit; dropping sample")
-            return ""
+            return failed("response exceeds byte limit")
         except Exception as exc:  # noqa: BLE001
-            _LOG.debug("vllm magpie HTTP error: %s", exc)
-            return ""
+            return failed(f"{type(exc).__name__}: {exc}")
         if resp.status_code != 200:
-            _LOG.debug("vllm magpie status=%d", resp.status_code)
-            return ""
+            return failed(f"HTTP {resp.status_code}")
         try:
             text = resp.json()["choices"][0]["text"]
         except (KeyError, IndexError, TypeError, ValueError) as exc:
-            _LOG.debug("vllm magpie parse error: %s", exc)
-            return ""
-        return text if isinstance(text, str) else ""
+            return failed(f"invalid JSON response: {type(exc).__name__}: {exc}")
+        return checked_text(text)
 
     return _vllm_generate
 
@@ -435,6 +450,23 @@ def make_magpie_generate_fn(
 # -----------------------------------------------------------------------------
 # Result + live runner (v0.71.6 #232)
 # -----------------------------------------------------------------------------
+
+
+class MagpieProviderError(RuntimeError):
+    """No rows survived a run with failed provider calls; no output was written."""
+
+
+def magpie_failure_summary(
+    stats: ForgeJudgeStats, provider: str, base_url: Optional[str]
+) -> str:
+    """Describe failed calls using the shared credential-free endpoint label."""
+    from soup_cli.utils.recipe_run import _provider_endpoint_label
+
+    endpoint = _provider_endpoint_label(provider, base_url)
+    return (
+        f"{stats.failures} of {stats.calls} provider calls failed for "
+        f"--provider {provider} ({endpoint}); first error: {stats.first_error}"
+    )
 
 
 @dataclass(frozen=True)
@@ -488,6 +520,7 @@ def run_magpie(
     timeout_seconds: float = 120.0,
     max_attempts: Optional[int] = None,
     dedup: bool = True,
+    stats: Optional[ForgeJudgeStats] = None,
 ) -> MagpieResult:
     """Execute the Magpie generation loop (v0.71.6 #232).
 
@@ -504,6 +537,11 @@ def run_magpie(
         raise TypeError("config must be a MagpieConfig")
     target = _check_magpie_output(output_path)
 
+    if stats is None:
+        from soup_cli.utils.data_forge import ForgeJudgeStats
+
+        stats = ForgeJudgeStats()
+
     if generate_fn is None:
         generate_fn = make_magpie_generate_fn(
             config.provider,
@@ -512,6 +550,7 @@ def run_magpie(
             temperature=temperature,
             timeout_seconds=timeout_seconds,
             max_tokens=max_tokens,
+            stats=stats,
         )
     if not callable(generate_fn):
         raise TypeError("generate_fn must be callable")
@@ -570,6 +609,10 @@ def run_magpie(
             }
         )
 
+    if not rows and stats.failures:
+        raise MagpieProviderError(
+            "No usable rows produced: " + magpie_failure_summary(stats, config.provider, base_url)
+        )
     written = _atomic_write_jsonl(target, rows)
     return MagpieResult(
         rows_kept=len(rows),
