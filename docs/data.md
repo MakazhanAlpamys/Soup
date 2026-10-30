@@ -1136,6 +1136,11 @@ soup data ingest README.md
 soup data ingest notes.docx
 ```
 
+`data ingest` refuses an `--output` that names the source document, including
+alternate path spellings and hard links, before detecting or reading its format.
+It exits 1, names both paths and leaves the source bytes unchanged; choose a
+different output file.
+
 **Custom prompt strategies (schema only — runtime invocation in v0.42.1):**
 
 ```yaml

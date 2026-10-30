@@ -2995,6 +2995,8 @@ def ingest_document(
         console.print("[red]--output must stay under cwd[/]")
         raise typer.Exit(1)
 
+    refuse_output_over_input([("the input", file)], [("--output", output)], console=console)
+
     try:
         kind = detect_ingest_format(file)
     except ValueError as exc:
