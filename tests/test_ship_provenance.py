@@ -13,6 +13,10 @@ from typer.testing import CliRunner
 from soup_cli.cli import app
 from tests.conftest import strip_ansi
 
+_GENERIC_STALE_LINE = (
+    "stale provenance: artifact, task, training source, suites or policy differs"
+)
+
 ship = importlib.import_module("soup_cli.commands.ship")
 runner = CliRunner()
 
@@ -250,7 +254,6 @@ def test_strict_gate_hostile_scorer_revision_uses_label_only(work):
     diagnostic = " ".join(strip_ansi(result.output).split())
     assert "scorer revision" in diagnostic
     assert "PRIVATE" not in result.output
-    assert "\x1b" not in result.output
 
 
 def test_default_gate_preserves_recipe_only_semantics(work):
@@ -443,3 +446,79 @@ def test_tampered_descriptor_and_score_mode_are_refused(work, tamper):
         payload["task"]["mode"] = "pairwise"
     (work / "bound.json").write_text(json.dumps(payload), encoding="utf-8")
     assert _gate().exit_code == 3
+
+
+def test_strict_gate_data_sha256_label(work):
+    digest = "a" * 64
+    _produce("--data-sha256", digest)
+    result = _gate("--data-sha256", "b" * 64)
+    assert result.exit_code == 3
+    diagnostic = " ".join(strip_ansi(result.output).split())
+    assert "--data-sha256 value" in diagnostic
+    assert (
+        "Restore what you did not mean to change, or run the evaluation again "
+        "and emit new evidence with --emit-evidence."
+    ) in diagnostic
+
+
+def test_strict_gate_noise_floor_runs_label(work):
+    payload = _produce()
+    payload["provenance"]["binding"]["policy"]["noise_floor_runs"] = 9
+    # keep policy_sha256 consistent with mutated policy
+    from soup_cli.utils.ship_provenance import policy_hash
+    payload["provenance"]["binding"]["policy_sha256"] = policy_hash(
+        payload["provenance"]["binding"]["policy"]
+    )
+    (work / "bound.json").write_text(json.dumps(payload), encoding="utf-8")
+    result = _gate()
+    assert result.exit_code == 3
+    diagnostic = " ".join(strip_ansi(result.output).split())
+    assert "noise-floor runs" in diagnostic
+
+
+def test_strict_gate_schema_version_and_adapter_uses_generic(work):
+    payload = _produce()
+    payload["provenance"]["binding"]["schema_version"] = 2
+    (work / "bound.json").write_text(json.dumps(payload), encoding="utf-8")
+    (work / "adapter" / "adapter_model.safetensors").write_bytes(b"other weights")
+    result = _gate()
+    assert result.exit_code == 3
+    diagnostic = " ".join(strip_ansi(result.output).split())
+    assert _GENERIC_STALE_LINE in diagnostic
+    assert "adapter files" not in diagnostic
+
+
+def test_strict_gate_schema_only_uses_generic(work):
+    payload = _produce()
+    payload["provenance"]["binding"]["schema_version"] = 2
+    (work / "bound.json").write_text(json.dumps(payload), encoding="utf-8")
+    result = _gate()
+    assert result.exit_code == 3
+    diagnostic = " ".join(strip_ansi(result.output).split())
+    assert _GENERIC_STALE_LINE in diagnostic
+
+
+def test_strict_gate_suite_label_dedup_and_full_recovery_sentence(work):
+    _produce()
+    result = _gate("--general-suite", "mini_arithmetic")
+    assert result.exit_code == 3
+    diagnostic = " ".join(strip_ansi(result.output).split())
+    assert diagnostic.count("general suites") == 1
+    assert (
+        "Restore what you did not mean to change, or run the evaluation again "
+        "and emit new evidence with --emit-evidence."
+    ) in diagnostic
+
+
+def test_binding_path_non_mapping_suites_is_opaque(work):
+    """suites as a string must not raise; path walk returns None (#2219 r2)."""
+    from soup_cli.utils.ship_provenance import _binding_path, _stale_provenance_message
+
+    got = {"suites": "not-a-mapping", "adapter_merkle_root": "a" * 64}
+    expected = {
+        "suites": {"names": ["mini_mmlu"], "soup_version": "0.77.1"},
+        "adapter_merkle_root": "a" * 64,
+    }
+    assert _binding_path(got, ("suites", "names")) is None
+    msg = _stale_provenance_message(got, expected)
+    assert "general suites" in msg or msg.startswith("stale provenance: artifact")

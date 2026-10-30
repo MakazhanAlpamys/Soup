@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -95,6 +96,23 @@ def _binding_path(block: dict[str, Any], path: tuple[str, ...]) -> Any:
     return cur
 
 
+def _cleared_of_drift_fields(block: dict[str, Any]) -> dict[str, Any]:
+    """Drop every table-covered leaf so leftover inequality is off-table."""
+    out = copy.deepcopy(block)
+    for path, _label in _DRIFT_FIELDS:
+        parent: Any = out
+        for key in path[:-1]:
+            if not isinstance(parent, dict) or key not in parent:
+                break
+            parent = parent[key]
+        else:
+            if isinstance(parent, dict):
+                parent.pop(path[-1], None)
+    # policy_sha256 tracks the policy block; table rows already name policy drift.
+    out.pop("policy_sha256", None)
+    return out
+
+
 def _stale_provenance_message(got: dict[str, Any], expected: dict[str, Any]) -> str:
     labels: list[str] = []
     seen: set[str] = set()
@@ -103,6 +121,10 @@ def _stale_provenance_message(got: dict[str, Any], expected: dict[str, Any]) -> 
             if label not in seen:
                 labels.append(label)
                 seen.add(label)
+    # Off-table drift (e.g. schema_version) must not be hidden behind a partial
+    # label list; after the adapter is restored the user would still be stuck.
+    if _cleared_of_drift_fields(got) != _cleared_of_drift_fields(expected):
+        return _GENERIC_STALE
     if not labels:
         return _GENERIC_STALE
     return (
@@ -111,7 +133,6 @@ def _stale_provenance_message(got: dict[str, Any], expected: dict[str, Any]) -> 
         + ". "
         + _STALE_NEXT
     )
-
 
 
 def check_binding(payload: dict[str, Any], expected: dict[str, Any]) -> None:

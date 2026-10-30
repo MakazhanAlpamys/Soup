@@ -738,9 +738,15 @@ run is refused on the before/after comparison; this is not a filesystem snapshot
 
 When `--require-provenance` refuses because the binding drifted, the error names
 only the changed inputs from a fixed label table (for example
-`adapter files, forgetting threshold`) and tells you to restore accidental edits
-or re-emit with `--emit-evidence`; it never prints values from the evidence file.
+`adapter files, forgetting threshold`) and never prints values from the evidence
+file. A typical message looks like:
 
+```text
+stale provenance: changed since the evidence was emitted: adapter files, forgetting threshold. Restore what you did not mean to change, or run the evaluation again and emit new evidence with --emit-evidence.
+```
+
+Differences outside that table (for example `schema_version`) use the generic
+line instead of a partial label list.
 
 The optional `--data-sha256 <64-lowercase-hex>` records an explicitly
 **caller-asserted training-data identity**, never proof of transformed examples
