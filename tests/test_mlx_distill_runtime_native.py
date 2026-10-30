@@ -17,6 +17,7 @@ from transformers import PreTrainedTokenizerFast  # noqa: E402
 
 from soup_cli.config.schema import SoupConfig  # noqa: E402
 from soup_cli.trainer.mlx_distill_data import build_examples, collate  # noqa: E402
+from tests.conftest import strip_ansi  # noqa: E402
 
 
 def checkpoint(path, *, width=32, layers=2, quantized=False):
@@ -373,15 +374,16 @@ def test_real_offline_cli_train_evaluate_reload_and_auto_warm_start(pair, tmp_pa
     path.write_text(cfg.model_dump_json())
     outcome = CliRunner().invoke(app, ["train", "--config", str(path), "--yes"])
     assert outcome.exit_code == 0, (outcome.output, repr(outcome.exception))
-    assert "KD update" in outcome.output and "CE=" in outcome.output
-    assert "Step:" in outcome.output
+    output = " ".join(strip_ansi(outcome.output).split())
+    assert "KD update" in output and "CE=" in output
+    assert "Step:" in output
     restored, _ = load(str(pair[0]), adapter_path=cfg.output)
     assert mx.all(mx.isfinite(restored(mx.array([[5, 6, 7]])))).item()
     receipt = json.loads((tmp_path / "out" / "distillation_run.json").read_text())
     assert receipt["status"] == "complete" and receipt["optimizer_updates"] > 0
     resumed = CliRunner().invoke(app, ["train", "--config", str(path), "--yes", "--resume", "auto"])
     assert resumed.exit_code == 0, (resumed.output, repr(resumed.exception))
-    assert "weights-only warm start" in resumed.output
+    assert "weights-only warm start" in " ".join(strip_ansi(resumed.output).split())
 
 
 @pytest.mark.parametrize("failure", ["teacher-load", "tokenizer", "empty-train", "empty-val"])
