@@ -266,3 +266,50 @@ def test_python_random_state_refusals_and_advanced_control(corruption):
         state[2] = float(corruption)
     with pytest.raises(ValueError, match="Python random state"):
         _python_state(state)
+
+
+def test_full_state_hub_base_refused_before_dependency_or_model_loading(tmp_path, monkeypatch):
+    from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
+
+    seen = []
+    monkeypatch.setattr(MLXSFTTrainerWrapper, '_require_mlx', lambda self: seen.append('backend'))
+    from soup_cli.utils import mlx
+
+    def load(*args, **kwargs):
+        seen.append('model')
+        return object(), object()
+
+    monkeypatch.setattr(mlx, 'load_mlx_model', load)
+    cfg = config()
+    cfg.base = 'owner/base'
+    with pytest.raises(ValueError, match='require a local pinned base snapshot'):
+        MLXSFTTrainerWrapper(cfg).setup({'train': [{'text': 'alpha beta'}]})
+    assert seen == []
+    local = tmp_path / 'pinned-base'
+    local.mkdir()
+    cfg.base = str(local)
+    MLXSFTTrainerWrapper(cfg).setup({'train': [{'text': 'alpha beta'}]})
+    assert seen == ['backend', 'model']
+    seen.clear()
+    cfg.base = 'owner/base'
+    cfg.training.mlx_full_state = False
+    MLXSFTTrainerWrapper(cfg).setup({'train': [{'text': 'alpha beta'}]})
+    assert seen == ['backend', 'model']
+
+
+
+def test_missing_full_state_bundle_diagnostic(tmp_path):
+    from soup_cli.trainer.mlx_checkpoint import read_bundle
+
+    with pytest.raises(ValueError, match='not found'):
+        read_bundle(tmp_path / 'mlx-state-7')
+
+
+@pytest.mark.requires_symlink
+def test_dangling_full_state_bundle_is_still_a_refused_symlink(tmp_path):
+    from soup_cli.trainer.mlx_checkpoint import read_bundle
+
+    path = tmp_path / 'mlx-state-7'
+    path.symlink_to(tmp_path / 'missing', target_is_directory=True)
+    with pytest.raises(ValueError, match='symlinks are refused'):
+        read_bundle(path)

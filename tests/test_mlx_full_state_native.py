@@ -28,10 +28,14 @@ from tests.test_mlx_dora_native import _checkpoint  # noqa: E402
     ],
 )
 def test_fresh_process_exact_continuation(
-    tmp_path, quantized, accumulation, scheduler, checkpoint, masked, mid_window, cut
+    tmp_path, quantized, accumulation, scheduler, checkpoint, masked, mid_window, cut, monkeypatch
 ):
     import mlx.core as mx
 
+    monkeypatch.chdir(tmp_path)
+    shadow = tmp_path / 'src' / 'soup_cli'
+    shadow.mkdir(parents=True)
+    (shadow / '__init__.py').write_text("raise RuntimeError('unrelated cwd checkout imported')")
     base = _checkpoint(tmp_path / "base", quantized)
     rows = {
         "train": [
@@ -110,7 +114,10 @@ def test_fresh_process_exact_continuation(
             cmd += ["--stop", str(stop)]
         if stop_micro:
             cmd += ["--stop-micro", str(stop_micro)]
-        env = {**os.environ, "PYTHONPATH": str(Path.cwd() / "src"), "HF_HUB_OFFLINE": "1"}
+        env = {
+            **os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+            "HF_HUB_OFFLINE": "1",
+        }
         completed = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=90)
         assert completed.returncode == 0, completed.stdout + completed.stderr
         return json.loads(result.read_text())
@@ -268,7 +275,10 @@ def test_public_cli_auto_explicit_and_finished_resume(tmp_path):
             capture_output=True,
             text=True,
             timeout=90,
-            env={**os.environ, "PYTHONPATH": str(Path.cwd() / "src"), "HF_HUB_OFFLINE": "1"},
+            env={
+                **os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+                "HF_HUB_OFFLINE": "1",
+            },
         )
         assert completed.returncode == 0, completed.stdout + completed.stderr
         return json.loads(result.read_text())

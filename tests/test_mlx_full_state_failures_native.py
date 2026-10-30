@@ -293,3 +293,20 @@ def test_interrupted_write_keeps_last_committed_bundle(saved, monkeypatch, stage
     assert not list(Path(cfg.output).glob(".mlx-state-*"))
     session.save(2)
     assert read_bundle(bundle)["update"] == 2
+
+
+def test_fresh_run_refuses_existing_full_state_without_resume(saved, monkeypatch, tmp_path):
+    cfg, _, _ = saved
+    before = {str(p): _hash(p) for p in Path(cfg.output).rglob('*') if p.is_file()}
+    wrapper = MLXSFTTrainerWrapper(cfg)
+    wrapper.setup(_rows())
+    with pytest.raises(ValueError, match='Existing MLX full-state checkpoints: use --resume auto'):
+        wrapper.train()
+    assert before == {str(p): _hash(p) for p in Path(cfg.output).rglob('*') if p.is_file()}
+    fresh = cfg.model_copy(deep=True)
+    fresh.output = str(tmp_path / 'fresh-control')
+    control = MLXSFTTrainerWrapper(fresh)
+    control.setup(_rows())
+    result = control.train()
+    assert result['completed_updates'] == 4
+    assert read_bundle(Path(fresh.output) / 'mlx-state-4')['update'] == 4

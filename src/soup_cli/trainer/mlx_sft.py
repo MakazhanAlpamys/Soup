@@ -514,6 +514,10 @@ class MLXSFTTrainerWrapper:
 
     def setup(self, dataset: dict) -> None:
         """Load MLX model, configure LoRA, prepare dataset."""
+        if self.config.training.mlx_full_state:
+            from soup_cli.trainer.mlx_checkpoint import require_local_base
+
+            require_local_base(self.config)
         self._require_mlx()
         self._check_unsupported()
         self._check_train_split_size(dataset)

@@ -1038,6 +1038,8 @@ Interruption during accumulation replays work after the last committed checkpoin
 pending gradients are not saved. Resume performs only the remaining original
 budget, preserving warmup/decay; a completed checkpoint performs zero updates.
 Each bundle is written in a temporary directory and published by an atomic rename.
+This protects against process interruption; it is not a power-loss durability
+guarantee, because directories are not fsynced.
 Failed writes retain the preceding committed bundle. Keep enough disk space for
 both the previous checkpoint and the next complete bundle; there is no automatic
 full-state checkpoint pruning.
@@ -1046,6 +1048,11 @@ Exact continuation requires the same pinned runtime and device. The manifest
 binds Python/OS/device and MLX, mlx-lm, NumPy, Transformers and tokenizer versions,
 actual local model/tokenizer/template file hashes, processed train/validation
 contents, resolved adapter/configuration and original optimization budget.
+Constructing this contract hashes every base `.json`, `.safetensors`, `.model`
+and `.jinja` file, plus `merges.txt` and `vocab.txt`, so startup I/O grows with the
+base size. One M4 Max measurement on Nemotron Nano 4B BF16 hashed 8 files
+(7,964,422,970 bytes) in 3.08 seconds. The filesystem cache was uncontrolled;
+this is a local observation, not a cold-cache or general performance guarantee.
 Different data (even the same row count), model, rank/targets, schedule, budget or
 runtime is refused before checkpoint weights are applied. Restore the original
 recipe/environment or use fresh output for a new optimization run. Output path,
