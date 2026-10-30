@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -31,6 +32,8 @@ def test_mcp_serve_help_describes_the_execution_gate(monkeypatch):
 
     assert "never execute in this version" not in out
     assert "future MCP tools" not in out
+    assert "v1 never executes" not in out
+    assert "unless --allow-execute is also given" in out
     assert "train_execute" in out
     assert "export_execute" in out
     assert "Refused with --transport sse or http" in out
@@ -76,9 +79,11 @@ def test_train_gpu_help_lists_every_provider_gpu(monkeypatch):
     assert "Default a100" in out
     assert "A type another provider lists is refused with exit 2" in out
 
-    for provider in (modal, lambda_labs, runpod):
-        for gpu in provider.SUPPORTED_GPUS:
-            assert gpu in out
+    for label, provider in (("modal", modal), ("lambda", lambda_labs), ("runpod", runpod)):
+        match = re.search(rf"\b{label}: ([^.]+)\.", out)
+        assert match, f"no '{label}:' list in soup train --help"
+        listed = {name.strip() for name in match.group(1).split(",")}
+        assert listed == set(provider.SUPPORTED_GPUS), (label, listed)
 
 
 def test_kv_cache_type_description_matches_actual_runtime():
