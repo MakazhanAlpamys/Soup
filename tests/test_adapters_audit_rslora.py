@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import re
 
 import pytest
@@ -117,7 +116,7 @@ def test_peft_lora_alpha_is_not_rescaled_when_rslora_is_set():
 
 
 def test_negative_rank_under_rslora_yields_verdict_without_exception():
-    """Malformed rank must not raise out of soup adapters audit (#2255)."""
+    """Malformed rank must not raise; pin unknown + ran is None (#2255 r2)."""
     from soup_cli.utils.adapter_audit import audit_adapter
 
     config = _config(8, 16, use_rslora=True)
@@ -129,13 +128,30 @@ def test_negative_rank_under_rslora_yields_verdict_without_exception():
     }
     result = audit_adapter(config, record)
     row = next(item for item in result.rows if item.setting == "lora.alpha")
-    assert row.status in {"unknown", "diverged"}, f"status={row.status!r} ran={row.ran!r}"
-    assert row.ran is None or row.ran != 16
+    assert row.status == "unknown", f"status={row.status!r} ran={row.ran!r}"
+    assert row.ran is None
+
+
+def test_zero_rank_under_rslora_is_unknown_not_crash():
+    """rank <= 0 guard: rank 0 must stay unknown (not only rank < 0) (#2255 r2)."""
+    from soup_cli.utils.adapter_audit import audit_adapter
+
+    config = _config(8, 16, use_rslora=True)
+    record = _writer_record(8, 16, use_rslora=True)
+    record["lora_parameters"] = {
+        **record["lora_parameters"],
+        "rank": 0,
+        "scale": 5.656854249,
+    }
+    result = audit_adapter(config, record)
+    row = next(item for item in result.rows if item.setting == "lora.alpha")
+    assert row.status == "unknown", f"status={row.status!r} ran={row.ran!r}"
+    assert row.ran is None
 
 
 def test_near_miss_rslora_scale_still_diverges():
-    """Pin _RSLO_ALPHA_DECIMALS: scale 5.7 on rank 8 is ~16.12, not 16 (#2255)."""
-    from soup_cli.utils.adapter_audit import _RSLO_ALPHA_DECIMALS, audit_adapter
+    """Pin decimals with a literal: scale 5.7 on rank 8 is ~16.12, not 16 (#2255)."""
+    from soup_cli.utils.adapter_audit import audit_adapter
 
     config = _config(8, 16, use_rslora=True)
     record = _writer_record(8, 16, use_rslora=True)
@@ -146,7 +162,27 @@ def test_near_miss_rslora_scale_still_diverges():
     }
     result = audit_adapter(config, record)
     row = next(item for item in result.rows if item.setting == "lora.alpha")
-    expected = round(5.7 * math.sqrt(8), _RSLO_ALPHA_DECIMALS)
+    # Literal expectation so mutating _RSLO_ALPHA_DECIMALS to 3 cannot retarget.
+    expected = 16.122034611
+    assert row.status == "diverged", f"ran={row.ran!r}"
+    assert row.ran == expected
+    assert row.ran != 16
+
+
+def test_nine_decimal_near_miss_rslora_scale_diverges():
+    """Only nine decimals separate scale 5.657 * sqrt(8) (~16.0004) from 16 (#2255 r2)."""
+    from soup_cli.utils.adapter_audit import audit_adapter
+
+    config = _config(8, 16, use_rslora=True)
+    record = _writer_record(8, 16, use_rslora=True)
+    record["lora_parameters"] = {
+        **record["lora_parameters"],
+        "rank": 8,
+        "scale": 5.657,
+    }
+    result = audit_adapter(config, record)
+    row = next(item for item in result.rows if item.setting == "lora.alpha")
+    expected = 16.000412245
     assert row.status == "diverged", f"ran={row.ran!r}"
     assert row.ran == expected
     assert row.ran != 16
