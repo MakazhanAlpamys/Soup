@@ -296,17 +296,13 @@ def test_markup_ratchet_flags_bare_user_text_only():
     assert not markup_offenders('msg = f"[red]{\', \'.join(VALID_FORMATS)}[/]"')
 
 
-def _flat(output: str) -> str:
-    return " ".join(output.split())
-
-
 def test_stats_table_title_renders_markup_in_file_name(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     name = "a[red]b.jsonl"
     (tmp_path / name).write_text('{"instruction": "a", "output": "b"}\n', encoding="utf-8")
     result = runner.invoke(app, ["data", "stats", name])
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert "Extended Stats: a[red]b.jsonl" in _flat(_plain(result.output))
+    assert "Extended Stats: a[red]b.jsonl" in " ".join(_plain(result.output).split())
 
 
 def test_search_table_title_renders_markup_in_query(monkeypatch):
@@ -316,7 +312,7 @@ def test_search_table_title_renders_markup_in_query(monkeypatch):
     monkeypatch.setattr("soup_cli.commands.data.list_datasets", lambda **_kw: [hit])
     result = runner.invoke(app, ["data", "search", "x[red]y"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert "HuggingFace Datasets: 'x[red]y'" in _flat(_plain(result.output))
+    assert "HuggingFace Datasets: 'x[red]y'" in " ".join(_plain(result.output).split())
 
 
 @pytest.mark.parametrize(
