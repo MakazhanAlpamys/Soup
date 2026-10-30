@@ -849,6 +849,36 @@ def test_two_exports_of_the_same_adapter_use_different_merge_directories(
 
 
 @pytest.mark.parametrize(("fmt", "extra_args"), _FORMATS)
+def test_the_merge_directory_exists_empty_next_to_the_adapter_before_the_merge(
+    tmp_path, monkeypatch, fmt, extra_args
+):
+    adapter = _adapter_dir(tmp_path)
+    _stub_optional_modules(monkeypatch)
+    seen: list[tuple[Path, bool, list[str]]] = []
+
+    def recording_merge(adapter_path, base_model, output_dir, trust_remote_code=False):
+        out = Path(output_dir)
+        contents = sorted(p.name for p in out.iterdir()) if out.is_dir() else []
+        seen.append((out, out.is_dir(), contents))
+        raise RuntimeError("stop after recording")
+
+    monkeypatch.setattr(export_mod, "_merge_adapter", recording_merge)
+
+    result = CliRunner().invoke(
+        app, ["export", "--model", str(adapter), "--format", fmt, *extra_args]
+    )
+
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert len(seen) == 1
+    out, existed, contents = seen[0]
+    assert existed
+    assert contents == []
+    assert out.name.startswith(".soup_merge_tmp_adapter_")
+    assert out.parent.resolve() == adapter.parent.resolve()
+    assert _leftovers(tmp_path) == []
+
+
+@pytest.mark.parametrize(("fmt", "extra_args"), _FORMATS)
 def test_a_directory_the_export_created_is_still_removed(tmp_path, monkeypatch, fmt, extra_args):
     adapter = _adapter_dir(tmp_path)
     _stub_optional_modules(monkeypatch)
