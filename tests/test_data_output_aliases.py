@@ -356,6 +356,11 @@ _CASES = (
         ) for option in ("output", "provenance")
     ),
     Case(
+        "ingest", "notes.txt", _SEEDS,
+        lambda inp, out: ["data", "ingest", inp, "--output", out],
+        "the input", 1, ("builtins.open",),
+    ),
+    Case(
         "recipe", "recipe.jsonl", _RECIPE,
         lambda inp, out: ["data", "recipe", inp, "--execute", "-o", out],
         "the input", 1, ("soup_cli.utils.recipe_dag.load_recipe_yaml",),

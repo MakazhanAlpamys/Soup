@@ -3010,6 +3010,7 @@ def ingest_document(
     if not Path(in_real).is_file():
         console.print(f"[red]File not found:[/] {file}")
         raise typer.Exit(1)
+    _refuse_output_over_input([("the input", file)], [("--output", output)])
 
     out_real = os.path.realpath(output)
     if not is_under_cwd(out_real):
