@@ -568,9 +568,9 @@ runner = CliRunner()
 result = runner.invoke(app, ['chat', '--backend', 'mlx', '--model', 'adapter',
                             '--temperature', '0', '--max-tokens', '4'], input='alpha\n/quit\n')
 assert result.exit_code == 0, (result.output, repr(result.exception))
-from rich.text import Text
-plain = Text.from_ansi(result.output).plain
-assert f'Assistant: {expected}' in plain and 'Goodbye' in plain
+from tests.conftest import strip_ansi
+plain = ' '.join(strip_ansi(result.output).split())
+assert ' '.join(f'Assistant: {expected}'.split()) in plain and 'Goodbye' in plain
 Path('chat-evidence.json').write_text(json.dumps({'adapter': expected, 'base': control,
                                                'tokens_generated': count}))
 weights = mx.load('adapter/adapters.safetensors')
@@ -585,12 +585,14 @@ for mutation in ('missing', 'extra', 'shape', 'nonfinite', 'integer'):
     mx.save_safetensors('adapter/adapters.safetensors', changed)
     failed = runner.invoke(app, ['chat', '--backend', 'mlx', '--model', 'adapter'])
     diagnostic = 'finite floating' if mutation in ('nonfinite', 'integer') else 'keys/shapes'
-    assert failed.exit_code == 1 and diagnostic in failed.output
-    assert 'Model loaded' not in failed.output
+    plain = ' '.join(strip_ansi(failed.output).split())
+    assert failed.exit_code == 1 and diagnostic in plain
+    assert 'Model loaded' not in plain
 mx.save_safetensors('adapter/adapters.safetensors', weights)
 '''
     env = dict(os.environ, HF_HUB_OFFLINE='1')
-    env['PYTHONPATH'] = str(__import__('pathlib').Path(__file__).parents[1] / 'src')
+    root = __import__('pathlib').Path(__file__).parents[1]
+    env['PYTHONPATH'] = os.pathsep.join((str(root / 'src'), str(root)))
     result = subprocess.run([sys.executable, '-c', script], cwd=tmp_path, env=env,
                             capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stdout + result.stderr

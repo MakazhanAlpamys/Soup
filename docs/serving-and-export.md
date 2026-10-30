@@ -317,7 +317,9 @@ soup chat --backend mlx --model ./mlx-adapter --temperature 0
 soup chat --backend mlx --model ./mlx-base
 ```
 
-Chat preserves conversation history, `/quit`, `/clear`, `/system` and cancellation.
+Chat preserves conversation history, `/quit`, `/clear` and `/system`.
+Ctrl-C or end-of-input during native generation ends the session with `Goodbye!`;
+its in-memory conversation history is discarded.
 Native adapters passed to the default chat backend are refused with a backend hint.
 
 Inference uses a shared MLX loader and generation implementation. Native Soup
