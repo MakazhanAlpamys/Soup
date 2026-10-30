@@ -59,6 +59,15 @@ def validate_config(cfg):
         raise ValueError("mlx_full_state supports dense or genuine 4bit bases")
 
 
+
+def require_local_base(cfg):
+    """Reject unpinned identities before loading a full-state training base."""
+    base = Path(cfg.base)
+    if not base.is_dir():
+        raise ValueError("MLX full-state checkpoints require a local pinned base snapshot")
+    return base
+
+
 def is_bundle(path):
     path = Path(path)
     return bool(_BUNDLE.fullmatch(path.name)) or (
@@ -116,6 +125,8 @@ def read_bundle(path, *, staged=False):
     directory = Path(path)
     if directory.name.startswith(".mlx-state-") and not staged:
         raise ValueError("Uncommitted MLX staging directory is not a checkpoint")
+    if not directory.is_symlink() and not directory.exists():
+        raise ValueError(f"MLX checkpoint not found: {directory}")
     if directory.is_symlink() or not directory.is_dir():
         raise ValueError("Invalid MLX checkpoint directory (symlinks are refused)")
     manifest = _json(_member(directory, "manifest.json"))
@@ -387,9 +398,7 @@ class FullStateSession:
         validate_config(cfg)
         if mx.distributed.init().size() != 1:
             raise ValueError("MLX full-state continuation requires one device/process")
-        base = Path(cfg.base)
-        if not base.is_dir():
-            raise ValueError("MLX full-state checkpoints require a local pinned base snapshot")
+        base = require_local_base(cfg)
         self.cfg, self.model, self.optimizer, self.args = cfg, model, optimizer, args
         self.iterate_base, self.dataset, self.metadata = iterate, train_dataset, metadata
         self.accum, self.total = args.grad_accumulation_steps, plan.total_updates
