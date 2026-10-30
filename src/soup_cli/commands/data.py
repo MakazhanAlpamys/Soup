@@ -576,10 +576,12 @@ def filter_data(
                 texts, model_name=perplexity_model,
             )
         except ImportError:
+            # Refuse before writing: a silently skipped filter looks like success.
             console.print(
-                "[yellow]torch/transformers not available for perplexity scoring. "
-                "Skipping perplexity.[/]"
+                "[red]Perplexity scoring needs PyTorch + transformers.[/]\n"
+                "Install with: [bold]pip install \"soup-cli\\[train]\"[/]"
             )
+            raise typer.Exit(1)
 
     if score_only:
         # Add scores to each row and write output

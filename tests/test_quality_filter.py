@@ -307,3 +307,55 @@ class TestFilterCommand:
                 scored = [json.loads(line) for line in f if line.strip()]
             assert len(scored) == 2
             assert "_coherence_score" in scored[0]
+
+
+class TestFilterMissingPerplexityDeps:
+    """#2360: a requested perplexity score must not be silently skipped."""
+
+    def _write(self, tmp_path):
+        import json
+
+        data_file = tmp_path / "rows.jsonl"
+        rows = [
+            {"text": "This is a complete sentence with clear meaning."},
+            {"text": "xxxx xxxx xxxx xxxx"},
+        ]
+        data_file.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        return data_file
+
+    def _invoke(self, args):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        with mock_patch.dict("sys.modules", {"torch": None, "transformers": None}):
+            return CliRunner().invoke(app, ["data", "filter", *args])
+
+    def test_perplexity_refuses_and_keeps_existing_output(self, tmp_path):
+        data_file = self._write(tmp_path)
+        output_file = tmp_path / "filtered.jsonl"
+        output_file.write_text("previous\n")
+        result = self._invoke([
+            str(data_file), "--field", "text", "--perplexity", "5",
+            "--output", str(output_file),
+        ])
+        assert result.exit_code == 1
+        assert "PyTorch + transformers" in result.output
+        assert 'pip install "soup-cli[train]"' in result.output
+        assert output_file.read_text() == "previous\n"
+
+    def test_score_only_refuses_without_creating_output(self, tmp_path):
+        data_file = self._write(tmp_path)
+        output_file = tmp_path / "scored.jsonl"
+        result = self._invoke([str(data_file), "--score-only", "--output", str(output_file)])
+        assert result.exit_code == 1
+        assert not output_file.exists()
+
+    def test_coherence_only_still_works(self, tmp_path):
+        data_file = self._write(tmp_path)
+        output_file = tmp_path / "filtered.jsonl"
+        result = self._invoke([
+            str(data_file), "--coherence", "0.3", "--output", str(output_file),
+        ])
+        assert result.exit_code == 0
+        assert output_file.exists()

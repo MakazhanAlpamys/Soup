@@ -1187,6 +1187,7 @@ soup data dedup ./data/train.jsonl --threshold 0.8
 soup data stats ./data/train.jsonl
 
 # Filter by quality (perplexity + coherence scoring)
+# --perplexity and --score-only need: pip install "soup-cli[train]"
 soup data filter ./data/train.jsonl --coherence 0.3
 soup data filter ./data/train.jsonl --perplexity 500 --coherence 0.3
 soup data filter ./data/train.jsonl --score-only  # add scores without filtering
