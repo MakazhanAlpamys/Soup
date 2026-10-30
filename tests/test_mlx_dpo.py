@@ -896,45 +896,46 @@ class TestResume:
         # first loss is already below log 2 (it is exactly log 2 from scratch).
         assert result["losses"][0] < math.log(2) - 1e-3
 
-    @pytest.mark.parametrize("change, match", [
-        ({"task": "orpo"}, "MLX DPO: .* task='orpo', not 'dpo'"),
-        ({"task": "sft"}, "task='sft', not 'dpo'"),
-        ({"model": "other-base"}, "belongs to base"),
-        (None, "no adapter_config.json"),
+    @pytest.mark.parametrize("module, cls, task, data_format", [
+        ("mlx_dpo", "MLXDPOTrainerWrapper", "dpo", "dpo"),
+        ("mlx_orpo", "MLXORPOTrainerWrapper", "orpo", "dpo"),
+        ("mlx_simpo", "MLXSimPOTrainerWrapper", "simpo", "dpo"),
+        ("mlx_kto", "MLXKTOTrainerWrapper", "kto", "kto"),
     ])
-    def test_mismatched_or_missing_metadata_is_refused(self, tmp_path, monkeypatch, change, match):
-        first = _seeded_wrapper(tmp_path / "a", monkeypatch, batch_size=2, epochs=3, seed=1)
-        first.train()
-        checkpoint = tmp_path / "a" / "output" / "adapters.safetensors"
-        meta = checkpoint.parent / "adapter_config.json"
-        if change is None:
-            meta.unlink()
-        else:
-            meta.write_text(json.dumps({**json.loads(meta.read_text()), **change}))
-        resumed = _seeded_wrapper(tmp_path / "b", monkeypatch, batch_size=2, seed=1)
-        with pytest.raises(ValueError, match=match):
-            resumed.train(resume_from_checkpoint=str(checkpoint))
-
     @pytest.mark.parametrize("change, match", [
-        ({"task": "orpo"}, "MLX DPO: .* task='orpo', not 'dpo'"),
-        ({"task": "sft"}, "task='sft', not 'dpo'"),
+        ("other task", "MLX .*: .* task='{other}', not '{task}'"),
+        ({"task": "sft"}, "task='sft', not '{task}'"),
+        ("no task", "task=None, not '{task}'"),
         ({"model": "some/other-base"}, "belongs to base 'some/other-base'"),
         (None, "no adapter_config.json"),
     ])
     def test_metadata_is_checked_before_any_tensor_loads(self, tmp_path, monkeypatch,
+                                                         module, cls, task, data_format,
                                                          change, match):
-        """No MLX: the check runs on the wrapper alone, before MLX SFT's loader."""
+        """No MLX: the check runs on the wrapper alone, before MLX SFT's loader.
+
+        ORPO, SimPO and KTO inherit the check from the DPO wrapper, so each is
+        run with its own ``task``. "no task" is the shape of a real MLX SFT
+        adapter, whose ``adapter_config.json`` has no ``task`` key.
+        """
+        import importlib
+
         from soup_cli.config.loader import load_config_from_string
-        from soup_cli.trainer.mlx_dpo import MLXDPOTrainerWrapper
         from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
+
+        wrapper_cls = getattr(importlib.import_module(f"soup_cli.trainer.{module}"), cls)
+        other = "orpo" if task == "dpo" else "dpo"
+        match = match.format(task=task, other=other)
 
         loaded = []
         monkeypatch.setattr(MLXSFTTrainerWrapper, "_load_checkpoint_weights",
                             lambda self, path: loaded.append(path))
-        wrapper = MLXDPOTrainerWrapper(load_config_from_string(_MLX_DPO_YAML))
+        text = _MLX_DPO_YAML.replace("task: dpo", f"task: {task}").replace(
+            "format: dpo", f"format: {data_format}")
+        wrapper = wrapper_cls(load_config_from_string(text))
         checkpoint = tmp_path / "adapters.safetensors"
         checkpoint.write_bytes(b"")
-        meta = {"task": "dpo", "model": wrapper.config.base}
+        meta = {"task": task, "model": wrapper.config.base}
         (tmp_path / "adapter_config.json").write_text(json.dumps(meta))
 
         wrapper._load_checkpoint_weights(str(checkpoint))
@@ -942,6 +943,12 @@ class TestResume:
 
         if change is None:
             (tmp_path / "adapter_config.json").unlink()
+        elif change == "no task":
+            (tmp_path / "adapter_config.json").write_text(
+                json.dumps({"model": wrapper.config.base}))
+        elif change == "other task":
+            (tmp_path / "adapter_config.json").write_text(
+                json.dumps({**meta, "task": other}))
         else:
             (tmp_path / "adapter_config.json").write_text(json.dumps({**meta, **change}))
         with pytest.raises(ValueError, match=match):
