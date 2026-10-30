@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 from soup_cli.utils.model_shape import ModelShape, lora_param_count, lora_targets, module_dims
 
@@ -93,6 +93,15 @@ OPTIMIZER_BYTES_PER_PARAM: dict[str, float] = {
     "lomo": 0.0,
     "adalomo": 2.0,
     "schedule_free_adamw": 8.0,
+}
+
+#: Memory the optimizer step allocates on top of its state, per trainable parameter
+#: (#2277). torch's AdamW without ``fused=True`` takes the foreach path on CUDA, and
+#: its ``_foreach_sqrt`` holds one fp32 copy of ``exp_avg_sq``: 4 bytes, measured on
+#: SmolLM2-135M full fine-tuning. The others are 0 until one is measured. A slight
+#: upper bound, since torch updates one parameter group at a time.
+OPTIMIZER_STEP_SCRATCH_BYTES_PER_PARAM: dict[str, float] = {
+    "adamw_torch": 4.0,
 }
 
 # --- activations ---------------------------------------------------------------
@@ -151,6 +160,10 @@ FULL_LOGITS_MODEL_TYPES = frozenset(
 #: Config flags whose fused loss can avoid building the full logits.
 FUSED_LOSS_FLAGS = frozenset({"use_liger", "use_cut_ce"})
 
+#: ``training.activation_offloading``'s modes. The estimate does not model what they move
+#: off the card: the activation term is charged as resident, and a note says so (#2327).
+ACTIVATION_OFFLOADING_MODES = frozenset({"cpu", "disk"})
+
 # --- 4-bit dequantization --------------------------------------------------------
 
 #: bf16 copies of the largest dequantized weight live at once under 4-bit loading.
@@ -171,6 +184,7 @@ TERM_NAMES = (
     "activations",
     "logits",
     "dequant",
+    "optimizer_step",
     "overhead",
 )
 
@@ -207,6 +221,10 @@ class RunSpec:
     #: (``use_liger``, ``use_cut_ce``). The logits term is still charged, since
     #: whether the patch lands is only known at train time, and a note says so.
     fused_loss: tuple[str, ...] = ()
+    #: ``training.activation_offloading`` (``cpu``, ``disk`` or ``None``). The
+    #: activation term is still charged as if every saved tensor stayed on the card,
+    #: since what offloading moves off it is not measured, and a note says so.
+    activation_offloading: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.lm_head, bool):
@@ -217,6 +235,11 @@ class RunSpec:
             )
         if not set(self.fused_loss) <= FUSED_LOSS_FLAGS:
             raise ValueError(f"unknown fused_loss {self.fused_loss!r}")
+        if self.activation_offloading is not None and not (
+            isinstance(self.activation_offloading, str)
+            and self.activation_offloading in ACTIVATION_OFFLOADING_MODES
+        ):
+            raise ValueError(f"unknown activation_offloading {self.activation_offloading!r}")
         for name in ("seq_len", "batch_size", "lora_r"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
@@ -392,6 +415,20 @@ def estimate_vram(shape: ModelShape, run: RunSpec) -> VramEstimate:
         "logits": logits_bytes(shape, run),
         "dequant": dequant_bytes(shape, run),
     }
+    # The peak is the larger of two phases (#2277). The forward/backward pass holds
+    # every term above. The optimizer step holds the parameters, their gradients, the
+    # optimizer state and the step's scratch, after the activations, logits and
+    # dequantized copy are freed. `optimizer_step` is how far the step exceeds the
+    # pass, so the total stays a sum of terms.
+    forward_backward = sum(terms.values())
+    step = (
+        terms["weights"]
+        + terms["adapters"]
+        + terms["gradients"]
+        + terms["optimizer"]
+        + math.ceil(trainable * OPTIMIZER_STEP_SCRATCH_BYTES_PER_PARAM.get(run.optimizer, 0.0))
+    )
+    terms["optimizer_step"] = max(step - forward_backward, 0)
     allocated = sum(terms.values())
     terms["overhead"] = math.ceil(OVERHEAD_FIXED_BYTES + OVERHEAD_SLACK * allocated)
     notes = []
@@ -417,6 +454,12 @@ def estimate_vram(shape: ModelShape, run: RunSpec) -> VramEstimate:
             "Selective checkpointing (attention only) is priced as no checkpointing, an "
             "upper bound; the tier is not measured."
         )
+    if terms["optimizer_step"]:
+        notes.append(
+            "The optimizer step, not the forward and backward pass, sets this peak: "
+            "the update holds the optimizer state and its scratch after the "
+            "activations are freed."
+        )
     if run.fused_loss and terms["logits"]:
         flags = " and ".join(f"training.{flag}" for flag in sorted(run.fused_loss))
         notes.append(
@@ -425,7 +468,22 @@ def estimate_vram(shape: ModelShape, run: RunSpec) -> VramEstimate:
             f"so the logits term ({terms['logits'] / GB:.1f} GB) overstates the peak. "
             "The fused path is not measured."
         )
+    if run.activation_offloading is not None:
+        notes.append(activation_offloading_note(run.activation_offloading, terms["activations"]))
     return VramEstimate(terms=terms, shape=shape, run=run, notes=tuple(notes))
+
+
+def activation_offloading_note(mode: str, activation_bytes: int) -> str:
+    """What the estimate says when ``training.activation_offloading`` is set.
+
+    The resident estimate and the streaming plan panel both print it, with their own
+    activation term.
+    """
+    return (
+        f"training.activation_offloading: {mode} is set: the activation term "
+        f"({activation_bytes / GB:.2f} GB) is charged as if every saved tensor stayed on "
+        "the card; what offloading moves off it is not modelled."
+    )
 
 
 def fit_verdict(total_bytes: float, available_bytes: float) -> str:
@@ -438,13 +496,16 @@ def fit_verdict(total_bytes: float, available_bytes: float) -> str:
 
 
 __all__ = [
+    "ACTIVATION_OFFLOADING_MODES",
     "BYTES_PER_PARAM_BY_QUANT",
     "GB",
     "OPTIMIZER_BYTES_PER_PARAM",
+    "OPTIMIZER_STEP_SCRATCH_BYTES_PER_PARAM",
     "TERM_NAMES",
     "VRAM_SAFETY_MARGIN",
     "RunSpec",
     "VramEstimate",
+    "activation_offloading_note",
     "estimate_vram",
     "fit_verdict",
 ]
