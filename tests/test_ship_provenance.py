@@ -498,6 +498,33 @@ def test_strict_gate_schema_only_uses_generic(work):
     assert _GENERIC_STALE_LINE in diagnostic
 
 
+def test_strict_gate_missing_null_key_uses_generic(work):
+    payload = _produce()
+    del payload["provenance"]["binding"]["training_data"]  # null without --data-sha256
+    (work / "bound.json").write_text(json.dumps(payload), encoding="utf-8")
+    result = _gate()
+    assert result.exit_code == 3, (result.output, result.exception)
+    diagnostic = " ".join(strip_ansi(result.output).split())
+    assert _GENERIC_STALE_LINE in diagnostic
+    assert "emitted: ." not in diagnostic
+
+
+def test_strict_gate_hostile_off_table_key_stays_opaque(work):
+    """Off-table hostile key reaches _cleared_of_drift_fields without echoing (#2219)."""
+    payload = _produce()
+    evil = "EVILKEY"
+    payload["provenance"]["binding"][evil] = "[31mPRIVATE"
+    (work / "bound.json").write_text(json.dumps(payload), encoding="utf-8")
+    result = _gate()
+    assert result.exit_code == 3, (result.output, result.exception)
+    plain = strip_ansi(result.output)
+    diagnostic = " ".join(plain.split())
+    assert _GENERIC_STALE_LINE in diagnostic
+    assert "PRIVATE" not in result.output
+    assert "EVIL" not in result.output
+    assert "" not in plain
+
+
 def test_strict_gate_suite_label_dedup_and_full_recovery_sentence(work):
     _produce()
     result = _gate("--general-suite", "mini_arithmetic")
@@ -512,7 +539,11 @@ def test_strict_gate_suite_label_dedup_and_full_recovery_sentence(work):
 
 def test_binding_path_non_mapping_suites_is_opaque(work):
     """suites as a string must not raise; path walk returns None (#2219 r2)."""
-    from soup_cli.utils.ship_provenance import _binding_path, _stale_provenance_message
+    from soup_cli.utils.ship_provenance import (
+        _GENERIC_STALE,
+        _binding_path,
+        _stale_provenance_message,
+    )
 
     got = {"suites": "not-a-mapping", "adapter_merkle_root": "a" * 64}
     expected = {
@@ -521,4 +552,4 @@ def test_binding_path_non_mapping_suites_is_opaque(work):
     }
     assert _binding_path(got, ("suites", "names")) is None
     msg = _stale_provenance_message(got, expected)
-    assert "general suites" in msg or msg.startswith("stale provenance: artifact")
+    assert msg == _GENERIC_STALE
