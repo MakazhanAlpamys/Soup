@@ -20,6 +20,7 @@ NO top-level torch: this module is imported by five trainer modules.
 """
 
 import contextlib
+import logging
 import math
 import os
 import shutil
@@ -35,6 +36,7 @@ from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.stripe_roots import ReadAheadDecision, effective_read_ahead
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 
 #: How far over the predicted budget `training.stream_vram_probe` may still
@@ -796,6 +798,7 @@ class StreamingSetupMixin:
     _stream_runtime = None
     # #1693 -- the head-and-loss hook of a run with `stream_loss_chunk` set.
     _stream_loss_chunk_hook = None
+    _closed_stream_runtime = None
 
     #: ``trust_remote_code`` for the streamed MODEL (config, meta skeleton,
     #: install): always False. Every entry of ``SUPPORTED_STREAM_ARCHS`` passed
@@ -1713,8 +1716,17 @@ class StreamingSetupMixin:
     def _close_stream_runtime(self) -> None:
         """Release the streaming weight source, if this run had one."""
         runtime = getattr(self, "_stream_runtime", None)
-        if runtime is not None:
+        if runtime is None or runtime is getattr(self, "_closed_stream_runtime", None):
+            return
+        self._closed_stream_runtime = runtime
+        try:
             runtime.close()
+        except Exception as close_exc:
+            logger.warning(
+                "Failed to close streaming runtime: %s",
+                close_exc,
+                exc_info=True,
+            )
 
     def _remove_stream_loss_chunk_hook(self) -> None:
         """Take the chunked head and loss off the model when training ends (#1693).
