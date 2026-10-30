@@ -294,3 +294,46 @@ def test_markup_ratchet_flags_bare_user_text_only():
     assert not markup_offenders('msg = f"[green]{len(data)} rows[/]"')
     assert not markup_offenders('msg = f"[red]{valid / total:.3f}[/]"')
     assert not markup_offenders('msg = f"[red]{\', \'.join(VALID_FORMATS)}[/]"')
+
+
+def _flat(output: str) -> str:
+    return " ".join(_plain(output).split())
+
+
+def test_stats_table_title_renders_markup_in_file_name(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    name = "a[red]b.jsonl"
+    (tmp_path / name).write_text('{"instruction": "a", "output": "b"}\n', encoding="utf-8")
+    result = runner.invoke(app, ["data", "stats", name])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "Extended Stats: a[red]b.jsonl" in _flat(result.output)
+
+
+def test_search_table_title_renders_markup_in_query(monkeypatch):
+    from types import SimpleNamespace
+
+    hit = SimpleNamespace(id="org/ds", downloads=1, likes=1, tags=[])
+    monkeypatch.setattr("soup_cli.commands.data.list_datasets", lambda **_kw: [hit])
+    result = runner.invoke(app, ["data", "search", "x[red]y"])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "HuggingFace Datasets: 'x[red]y'" in _flat(result.output)
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["data", "review", "x\x1b]0;t\x07y"],
+        ["data", "validate", "x\x1b]0;t\x07y"],
+        ["data", "ingest", "x\x1b]0;t\x07y"],
+        ["data", "from-traces", "--logs", "x\x1b]0;t\x07y", "--format", "openai"],
+    ],
+    ids=["review", "validate", "ingest", "from-traces"],
+)
+def test_missing_path_strips_control_bytes(tmp_path, monkeypatch, argv):
+    # ``escape`` leaves ESC / BEL in; only ``for_terminal`` strips them.
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, argv)
+    assert result.exit_code != 0
+    text = _plain(result.output)
+    assert "\x1b" not in text, (argv, repr(text))
+    assert "\x07" not in text, (argv, repr(text))
