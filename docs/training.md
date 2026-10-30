@@ -1025,7 +1025,7 @@ Where they come from depends on which trainer is built:
 | `simpo` + `orpo` | Trains. The CPO (SimPO) and ORPO trainers both return their per-sequence log-probs (`concatenated_forward`). |
 | `dpo` or `ipo` has the largest weight, with any of `dpo`, `ipo`, `simpo`, `orpo` beside it | Trains. Both build trl's `DPOTrainer`: the policy log-probs are taken from the logits of its own forward pass, the reference log-probs from its `compute_ref_log_probs`. |
 | `simpo` or `orpo` has the largest weight, and the blend names `dpo` or `ipo` | Trains. The CPO / ORPO trainers run no reference, so the blend runs one: the same forward once more, without gradients and with the LoRA adapter switched off. Refused with `init_strategy: pissa` / `olora` / `loftq` or `relora_steps`, where that is not the starting model ("Which reference" below). |
-| `bco` mixed with anything | Loads, then refused at the start of trainer setup, after the data has loaded and before the model does (`validate_weight_compat`): BCO reads `prompt+completion+label` rows and the paired losses read `prompt+chosen+rejected`. Run BCO as its own `task: bco` stage. |
+| `bco` mixed with anything | Loads, then refused at the start of trainer setup, after the data has loaded and before the model does (`validate_weight_compat`): BCO takes the same rows as DPO, but its trainer splits each one into unpaired completion and label rows, which the paired losses cannot read. Run BCO as its own `task: bco` stage. |
 
 **What a term is.** In a blend, `simpo` and `orpo` are their *preference terms
 only* — the margin / odds-ratio objective — without the likelihood (NLL) term

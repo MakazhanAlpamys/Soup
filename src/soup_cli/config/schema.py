@@ -1482,7 +1482,8 @@ class TrainingConfig(BaseModel):
             "task='preference'; mutually exclusive with preference_loss (the "
             "scalar form). Capped at 5 components (the supported set). "
             "A blend that contains bco is refused when the trainer is set up, "
-            "because bco reads different rows."
+            "because the bco trainer splits each row into unpaired completion "
+            "and label rows."
         ),
     )
     # GRPO-specific
