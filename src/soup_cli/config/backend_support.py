@@ -218,11 +218,20 @@ _MLX_SELECTIVE_NON_TEXT = tuple(
 )
 
 
+# Multimodal schema guards already refuse these settings before doctor can run.
+_MLX_NON_TEXT_SFT = tuple(
+    entry for entry in _MLX_SFT
+    if entry.field not in {
+        "training.use_flash_attn", "training.use_liger", "training.moe_lora",
+    }
+) + _MLX_SELECTIVE_NON_TEXT
+
+
 #: ``(task, backend, modality)`` -> the settings that combination does not honour.
 REGISTRY: dict[tuple[str, str, str], tuple[SupportEntry, ...]] = {
     ("sft", "mlx", "text"): _MLX_SFT,
-    ("sft", "mlx", "vision"): _MLX_SFT + _MLX_SELECTIVE_NON_TEXT,
-    ("sft", "mlx", "audio"): _MLX_SFT + _MLX_SELECTIVE_NON_TEXT,
+    ("sft", "mlx", "vision"): _MLX_NON_TEXT_SFT,
+    ("sft", "mlx", "audio"): _MLX_NON_TEXT_SFT,
     ("dpo", "mlx", "text"): _MLX_DPO,
     ("orpo", "mlx", "text"): _MLX_ORPO,
     ("simpo", "mlx", "text"): _MLX_SIMPO,

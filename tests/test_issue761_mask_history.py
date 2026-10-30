@@ -401,11 +401,7 @@ class TestMlxDoesNotReadIt:
         return "\n".join(printed)
 
     def test_the_run_does_not_warn_for_supported_mask_history(self, monkeypatch):
-        """The registry entry fixes ``soup doctor``; it does not fix ``soup train``,
-        which would still have trained every turn in silence -- the #683 shape.
-        So the MLX trainer names it in its "MLX backend ignores:" line, which is
-        also what makes the entry's ``trainer_reads=True`` true (the #755 drift
-        guard refuses an entry claiming a read the trainer does not make)."""
+        """Supported text-SFT history masking must not appear in the ignored warning."""
         out = self._mlx_warning(
             monkeypatch, train_on_responses_only=True, mask_history=True
         )
