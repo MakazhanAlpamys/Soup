@@ -786,6 +786,17 @@ class PPOTrainerWrapper:
         self.model = get_peft_model(self.model, lora_config)
         apply_post_lora_patches(self.model)
 
+        # #2197: TRL's PPO loop has no Trainer.train(), so nothing else switches
+        # checkpointing on for the policy. 4bit/8bit already got it from
+        # prepare_model_for_kbit_training above, with its own kwargs.
+        if tcfg.quantization not in ("4bit", "8bit"):
+            from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+            if should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ):
+                self.model.gradient_checkpointing_enable()
+
         # QAT — insert fake quantization ops after LoRA. The "fp8" variant
         # is FP8 training (handled by apply_v028_speed_memory), not int8 QAT.
         # PPO has its own forward loop, so use_cut_ce will degrade gracefully.

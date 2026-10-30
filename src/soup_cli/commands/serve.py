@@ -312,7 +312,9 @@ def serve(
         envvar="SOUP_TOOL_AUTH_TOKEN",
         help=(
             "Require 'Authorization: Bearer <token>' on the tool endpoints "
-            "(/v1/tools/python, /v1/tools/bash, /v1/tools/web_search). Without it, "
+            "(/v1/tools/python, /v1/tools/bash, /v1/tools/web_search), and on "
+            "/v1/thumbs and the adapter routes (/v1/adapters, "
+            "/v1/adapters/activate/<name>, /v1/adapters/deactivate). Without it, "
             "/v1/tools/python and /v1/tools/bash answer 401 on every bind and a "
             "non-loopback --host is refused. 16-128 characters of A-Z, a-z, 0-9, "
             "'_' and '-', as secrets.token_urlsafe(32) makes."
