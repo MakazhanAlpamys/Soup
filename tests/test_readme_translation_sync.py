@@ -10,6 +10,7 @@ Four locks, each answering a different question:
 1. **Stamp present.** Every ``README.<lang>.md`` carries
    ``<!-- synced-from: README.md sha256:<hex> -->``. An absent stamp fails; it is
    not a pass, or deleting the line would be the loophole.
+   A second stamp also fails, even if both stamps are current.
 2. **Stamp current.** The hex equals ``sha256(README.md)`` over LF-normalised
    bytes. A Windows checkout with ``core.autocrlf=true`` sees CRLF and a different
    raw hash; one stamp has to satisfy all nine CI cells, so line endings are not
@@ -46,6 +47,7 @@ Four locks, each answering a different question:
 4. **The banner links exactly the READMEs that exist.** The language banner above
    the logo in every README links every other README and nothing else, so a new
    language cannot land unlinked and no banner can point at a missing file.
+   A second banner line also fails, even if both lines link every expected README.
 
 Files are found with ``glob("README.*.md")``, never a hand-written list: a
 ``README.de.md`` added without a stamp must fail, not be skipped. Every translation
@@ -458,10 +460,7 @@ class TestTheRatchetCanActuallyFail:
             "<!-- synced-from: README.md sha256:" + "0" * 64 + " -->"
         )
         tr.write_text(tr.read_text(encoding="utf-8") + "\n" + duplicate, encoding="utf-8")
-        assert any(
-            "README.tr.md" in problem and "2" in problem and "stamp" in problem
-            for problem in all_problems(tree)
-        )
+        assert "README.tr.md: expected 1 sync stamp, found 2" in all_problems(tree)
 
     @pytest.mark.parametrize("duplicate_kind", ["incomplete", "complete", "no-links"])
     def test_a_second_banner_fails_even_if_the_first_is_complete(self, tree, duplicate_kind):
@@ -473,10 +472,7 @@ class TestTheRatchetCanActuallyFail:
             "no-links": '<p>🌍 <strong>Türkçe</strong></p>',
         }[duplicate_kind]
         _edit(tr, original_banner, f"{original_banner}\n{duplicate}")
-        assert any(
-            "README.tr.md" in problem and "2" in problem and "banner" in problem
-            for problem in banner_problems(tree)
-        )
+        assert "README.tr.md: expected 1 language banner line, found 2" in banner_problems(tree)
 
     def test_one_byte_in_readme_fails_and_names_both_hashes(self, tree):
         before = readme_sha256(tree)
