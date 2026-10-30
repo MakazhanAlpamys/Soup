@@ -11,6 +11,32 @@ from tests.conftest import strip_ansi
 runner = CliRunner()
 
 
+def test_local_base_path_keeps_local_inputs_and_resolves_hub_offline(tmp_path, monkeypatch):
+    import huggingface_hub
+
+    from soup_cli.utils.mlx_merge import _local_base_path
+
+    calls = []
+    cached = tmp_path / 'cached'
+    cached.mkdir()
+
+    def snapshot(repo_id, **kwargs):
+        calls.append((repo_id, kwargs))
+        return str(cached)
+
+    monkeypatch.setattr(huggingface_hub, 'snapshot_download', snapshot)
+    assert _local_base_path(str(tmp_path)) == tmp_path
+    assert calls == []
+    assert _local_base_path('owner/base') == cached
+    assert calls == [('owner/base', {
+        'local_files_only': True,
+        'allow_patterns': [
+            '*.json', 'model*.safetensors', '*.py', 'tokenizer.model',
+            '*.tiktoken', 'tiktoken.model', '*.txt', '*.jsonl', '*.jinja',
+        ],
+    })]
+
+
 def _plain(text):
     return " ".join(strip_ansi(text).split())
 

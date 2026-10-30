@@ -761,15 +761,58 @@ def fusion_inputs(tmp_path, monkeypatch):
     return base, adapter
 
 
-def test_native_merge_hub_base_uses_cached_snapshot(fusion_inputs, tmp_path, monkeypatch):
-    import mlx_lm
+@pytest.fixture
+def partial_hub_cache(fusion_inputs, tmp_path, monkeypatch):
+    """A real offline snapshot whose cached tree lists unrequested repository files."""
+    import hashlib
+    import shutil
+    import socket
+
+    from huggingface_hub import constants
+
+    base, adapter = fusion_inputs
+    cache = tmp_path / 'hub-cache'
+    repository = cache / 'models--owner--base'
+    commit = 'a' * 40
+    snapshot = repository / 'snapshots' / commit
+    snapshot.mkdir(parents=True)
+    (repository / 'refs').mkdir()
+    (repository / 'refs/main').write_text(commit)
+    (base / 'custom_model.py').write_text('# Copied support module.\n')
+    (base / 'generation_config.json').write_text('{"max_new_tokens":4}')
+    entries = {}
+    for source in base.iterdir():
+        shutil.copyfile(source, snapshot / source.name)
+        entries[source.name] = {
+            'size': source.stat().st_size,
+            'blob_id': hashlib.sha1(source.read_bytes()).hexdigest(),
+        }
+    for missing in ('README.md', '.gitattributes'):
+        entries[missing] = {'size': 1, 'blob_id': 'b' * 40}
+    (repository / 'trees').mkdir()
+    (repository / 'trees' / f'{commit}.json').write_text(json.dumps({
+        'format_version': 1, 'files': entries,
+    }))
+    monkeypatch.setattr(constants, 'HF_HUB_CACHE', str(cache))
+    monkeypatch.setattr(constants, 'HF_HUB_OFFLINE', True)
+
+    def no_network(*args, **kwargs):
+        raise AssertionError('Cached fusion must not open a network connection')
+
+    monkeypatch.setattr(socket.socket, 'connect', no_network)
+    return base, adapter, snapshot, repository
+
+
+def test_native_merge_hub_base_uses_cached_snapshot(partial_hub_cache, tmp_path, monkeypatch):
+    import hashlib
+
     import mlx_lm.utils as utils
     from typer.testing import CliRunner
 
     from soup_cli.cli import app
     from soup_cli.utils.mlx_generation import load_native_model
 
-    base, adapter = fusion_inputs
+    base, adapter, snapshot, repository = partial_hub_cache
     expected, _ = load_native_model(str(adapter))
     tokens = mx.array([[5, 6, 7]])
     logits = expected(tokens)
@@ -778,20 +821,8 @@ def test_native_merge_hub_base_uses_cached_snapshot(fusion_inputs, tmp_path, mon
     config = json.loads(metadata.read_text())
     config['model'] = 'owner/base'
     metadata.write_text(json.dumps(config))
-    (base / 'custom_model.py').write_text('# Copied support module.\n')
-    (base / 'generation_config.json').write_text('{"max_new_tokens":4}')
-    original_load = mlx_lm.load
     original_card = utils.create_model_card
-    resolutions, cards = [], []
-
-    def load_cached(identifier, *args, **kwargs):
-        assert identifier == 'owner/base'
-        return original_load(str(base), *args, **kwargs)
-
-    def resolve(identifier):
-        assert identifier == 'owner/base'
-        resolutions.append(identifier)
-        return base
+    cards = []
 
     def offline_card(destination, hf_repo=None):
         cards.append(hf_repo)
@@ -799,28 +830,58 @@ def test_native_merge_hub_base_uses_cached_snapshot(fusion_inputs, tmp_path, mon
             raise RuntimeError('Unexpected Hub README fetch')
         return original_card(destination, hf_repo)
 
-    monkeypatch.setattr(mlx_lm, 'load', load_cached)
-    monkeypatch.setattr(utils, 'hf_repo_to_path', resolve)
     monkeypatch.setattr(utils, 'create_model_card', offline_card)
+    # The real Hub loader can read the patterned snapshot before fusion.
+    cached, _ = load_native_model(str(adapter))
+    assert mx.allclose(cached(tokens), logits, atol=1e-5, rtol=1e-5).item()
+    before = {
+        path: hashlib.sha256(path.read_bytes()).hexdigest()
+        for directory in (repository, adapter) for path in directory.rglob('*') if path.is_file()
+    }
     args = ['merge', '--backend', 'mlx', '--adapter', str(adapter), '--dtype', 'float32']
-    overlap = CliRunner().invoke(app, args + ['--output', str(base / 'fused')])
-    assert overlap.exit_code == 1
-    assert 'overlap' in ' '.join(strip_ansi(overlap.output).split())
-    assert not (base / 'fused').exists()
     result = CliRunner().invoke(app, args + ['--output', 'fused-hub'])
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert resolutions and cards == [None]
+    assert cards == [None]
+    overlap = CliRunner().invoke(app, args + ['--output', str(snapshot / 'fused')])
+    assert overlap.exit_code == 1
+    assert 'overlap' in ' '.join(strip_ansi(overlap.output).split())
+    assert not (snapshot / 'fused').exists()
+    assert all(hashlib.sha256(path.read_bytes()).hexdigest() == digest
+               for path, digest in before.items())
     destination = tmp_path / 'fused-hub'
     for name in ('custom_model.py', 'generation_config.json'):
         assert (destination / name).read_bytes() == (base / name).read_bytes()
     assert (destination / 'README.md').is_file()
     # The published checkpoint also loads without a Hub lookup or either input.
-    monkeypatch.setattr(mlx_lm, 'load', original_load)
     base.rename(tmp_path / 'hidden-base')
     adapter.rename(tmp_path / 'hidden-adapter')
+    repository.rename(tmp_path / 'hidden-cache')
     actual, _ = load_native_model(str(destination))
     assert mx.allclose(actual(tokens), logits, atol=1e-5, rtol=1e-5).item()
     assert not list(tmp_path.glob('.soup_mlx_merge_*'))
+
+
+def test_native_merge_partial_cache_keeps_required_file_checks(partial_hub_cache):
+    # Older Hub releases have no tree-completeness check; the end-to-end case above
+    # still exercises real snapshot resolution there, without this newer error oracle.
+    hub = pytest.importorskip('huggingface_hub', minversion='1.30')
+    from huggingface_hub.errors import IncompleteSnapshotError
+
+    from soup_cli.utils.mlx_merge import _local_base_path
+
+    _, _, snapshot, _ = partial_hub_cache
+    with pytest.raises(IncompleteSnapshotError, match='README.md'):
+        hub.snapshot_download('owner/base', local_files_only=True)
+    assert _local_base_path('owner/base') == snapshot
+    required = snapshot / 'config.json'
+    contents = required.read_bytes()
+    required.unlink()
+    try:
+        with pytest.raises(IncompleteSnapshotError, match='config.json'):
+            _local_base_path('owner/base')
+    finally:
+        required.write_bytes(contents)
+    assert _local_base_path('owner/base') == snapshot
 
 
 def test_native_merge_requires_linear_lora(fusion_inputs, tmp_path, monkeypatch):

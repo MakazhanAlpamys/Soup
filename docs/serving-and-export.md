@@ -96,8 +96,10 @@ untargeted embeddings. `--dtype` chooses float16 (default), bfloat16 or float32;
 requantization. The saved weights, model configuration and
 tokenizer reload without the original base/adapter directories; quantization metadata
 and live adapter tensors are removed, while tied-weight configuration is preserved.
-Saving uses the local base snapshot already loaded, including for a Hub identifier;
-it does not fetch a Hub README. MLX-LM copies the base's top-level `*.py` files and
+Saving uses the local base snapshot already loaded, including for a Hub identifier,
+with the same file filters as the model loader; uncached README or repository
+metadata files are not required, including with MLX-LM 0.31.3. It does not fetch a
+Hub README. MLX-LM copies the base's top-level `*.py` files and
 `generation_config.json` when present and generates a local README. An `auto_map`
 entry still requires explicit `--trust-remote-code` when loading the result.
 

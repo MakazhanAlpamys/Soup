@@ -7,6 +7,21 @@ import tempfile
 from pathlib import Path
 
 
+def _local_base_path(model: str) -> Path:
+    """Resolve the files already cached by MLX-LM's model loader, without network I/O."""
+    path = Path(model)
+    if path.exists():
+        return path
+    from huggingface_hub import snapshot_download
+
+    # Match MLX-LM's load filters on both the minimum and current supported stacks.
+    # An unfiltered lookup also requires uncached repository files such as README.md.
+    return Path(snapshot_download(model, local_files_only=True, allow_patterns=[
+        '*.json', 'model*.safetensors', '*.py', 'tokenizer.model',
+        '*.tiktoken', 'tiktoken.model', '*.txt', '*.jsonl', '*.jinja',
+    ]))
+
+
 def _validate_destination(output: Path, adapter: Path, base: str) -> None:
     from soup_cli.utils.paths import is_under, is_under_cwd
 
@@ -40,7 +55,7 @@ def merge_native_adapter(
         from mlx.utils import tree_flatten, tree_unflatten
         from mlx_lm.models.switch_layers import QuantizedSwitchLinear
         from mlx_lm.tuner.lora import LoRALinear
-        from mlx_lm.utils import dequantize_model, hf_repo_to_path, save
+        from mlx_lm.utils import dequantize_model, save
     except ImportError as exc:
         raise ImportError(
             "Native MLX merge requires soup-cli[mlx]; install it on Apple Silicon."
@@ -51,9 +66,7 @@ def merge_native_adapter(
     )
     # Loading has already populated the cache for a Hub identity. Pass the local
     # snapshot to save(), which otherwise downloads a README via ModelCard.load.
-    base_path = Path(metadata["model"])
-    if not base_path.exists():
-        base_path = hf_repo_to_path(metadata["model"])
+    base_path = _local_base_path(metadata["model"])
     _validate_destination(destination, Path(adapter), str(base_path))
     quantized_types = (nn.QuantizedLinear, nn.QuantizedEmbedding, QuantizedSwitchLinear)
     quantized = [
