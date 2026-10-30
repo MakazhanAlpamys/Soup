@@ -4,9 +4,8 @@ Imported by the one test file whose native kernel still crashes that fleet: the
 two NF4 ``trainer.train()`` tests in ``test_v07202.py``, whose crash is an
 instruction the bitsandbytes wheel emits. Those are the only tests it skips. It
 lives here rather than in that file because the guard has been needed in several
-files over time, and
-this repo has been bitten three times by a predicate that was copied instead of
-shared (#372, #392, #424). ``test_windows_ci_guard_is_not_
+files over time, and this repo has been bitten three times by a predicate that
+was copied instead of shared (#372, #392, #424). ``test_windows_ci_guard_is_not_
 duplicated`` fails if a second copy appears.
 
 Before reaching for the skip, look at the crash frame. When it is a CPU bf16 or
@@ -41,11 +40,9 @@ def _windows_ci() -> bool:
     run of ``test_bench_train_qlora_adapters.py`` (run 40761798582) and the real
     training runs of ``test_issue1219_classifier_data_loader.py`` and
     ``test_issue1220_resume_prm_moe.py``, which all carried this skip until #2307.
-    Occurrences so far span
-    py3.10, py3.11 and py3.12, so it tracks
-    the runner CPU rather than the interpreter; the control is that ``1715261``
-    is the crashing tree ``7c9a931`` plus one line of markdown and came back
-    green on the same pool.
+    Occurrences so far span py3.10, py3.11 and py3.12, so it tracks the runner CPU
+    rather than the interpreter; the control is that ``1715261`` is the crashing
+    tree ``7c9a931`` plus one line of markdown and came back green on the same pool.
 
     Skipping it is not hiding a failure. The crash kills the process, so the
     cell reports NOTHING about the ~17,000 tests it had not reached — one test
