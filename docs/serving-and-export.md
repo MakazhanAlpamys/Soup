@@ -92,9 +92,14 @@ keys/shapes before applying tensors. `--base`, if supplied, must match that iden
 Fusion uses MLX-LM's linear LoRA fusion and dequantizes the whole model, including
 untargeted embeddings. `--dtype` chooses float16 (default), bfloat16 or float32;
 `--save-format fp16` names the standard dense format, independently of this dtype.
-There is no automatic requantization. The saved weights, model configuration and
+`--dequantize` is a no-op for an already dense base. There is no automatic
+requantization. The saved weights, model configuration and
 tokenizer reload without the original base/adapter directories; quantization metadata
 and live adapter tensors are removed, while tied-weight configuration is preserved.
+Saving uses the local base snapshot already loaded, including for a Hub identifier;
+it does not fetch a Hub README. MLX-LM copies the base's top-level `*.py` files and
+`generation_config.json` when present and generates a local README. An `auto_map`
+entry still requires explicit `--trust-remote-code` when loading the result.
 
 Output must be new, contained under the current directory and disjoint from both
 inputs, including through symlinks. Writes are staged in its parent; failed or
@@ -103,7 +108,7 @@ DoRA and other unqualified adapter variants, BNB save formats and explicit
 `--double-quant` controls, `--low-memory`, and non-HF hubs are refused on the native path.
 Native fusion loads the full model; it does not implement tensor-streaming merge.
 `--trust-remote-code` remains opt-in. This qualifies the bounded native lifecycle on
-tiny dense/4-bit text fixtures, not general model quality or GGUF conversion.
+tiny dense/affine 4-bit text fixtures, not general model quality or GGUF conversion.
 
 
 ## Export to GGUF

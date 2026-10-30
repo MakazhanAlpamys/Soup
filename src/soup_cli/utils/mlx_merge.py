@@ -34,16 +34,27 @@ def merge_native_adapter(
     destination = Path(output)
     _validate_destination(destination, Path(adapter), metadata["model"])
 
-    import mlx.core as mx
-    import mlx.nn as nn
-    from mlx.utils import tree_flatten, tree_unflatten
-    from mlx_lm.models.switch_layers import QuantizedSwitchLinear
-    from mlx_lm.tuner.lora import LoRALinear
-    from mlx_lm.utils import dequantize_model, save
+    try:
+        import mlx.core as mx
+        import mlx.nn as nn
+        from mlx.utils import tree_flatten, tree_unflatten
+        from mlx_lm.models.switch_layers import QuantizedSwitchLinear
+        from mlx_lm.tuner.lora import LoRALinear
+        from mlx_lm.utils import dequantize_model, hf_repo_to_path, save
+    except ImportError as exc:
+        raise ImportError(
+            "Native MLX merge requires soup-cli[mlx]; install it on Apple Silicon."
+        ) from exc
 
     model, tokenizer, config = load_native_model(
         adapter, base, trust_remote_code=trust_remote_code, return_config=True,
     )
+    # Loading has already populated the cache for a Hub identity. Pass the local
+    # snapshot to save(), which otherwise downloads a README via ModelCard.load.
+    base_path = Path(metadata["model"])
+    if not base_path.exists():
+        base_path = hf_repo_to_path(metadata["model"])
+    _validate_destination(destination, Path(adapter), str(base_path))
     quantized_types = (nn.QuantizedLinear, nn.QuantizedEmbedding, QuantizedSwitchLinear)
     quantized = [
         module for _, module in model.named_modules()
@@ -75,11 +86,11 @@ def merge_native_adapter(
     config["torch_dtype"] = dtype
     config["dtype"] = dtype
 
-    _validate_destination(destination, Path(adapter), metadata["model"])
+    _validate_destination(destination, Path(adapter), str(base_path))
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".soup_mlx_merge_", dir=destination.parent) as root:
         staged = Path(root) / "model"
-        save(staged, metadata["model"], model, tokenizer, config, donate_model=False)
-        _validate_destination(destination, Path(adapter), metadata["model"])
+        save(staged, base_path, model, tokenizer, config, donate_model=False)
+        _validate_destination(destination, Path(adapter), str(base_path))
         os.rename(staged, destination)
     return destination

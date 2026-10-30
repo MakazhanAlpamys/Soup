@@ -22,6 +22,7 @@ from transformers import PreTrainedTokenizerFast  # noqa: E402
 
 from soup_cli.config.schema import SoupConfig  # noqa: E402
 from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper  # noqa: E402
+from tests.conftest import strip_ansi  # noqa: E402
 
 
 def _checkpoint(path, quantized=False, *, layers=1, tied=False):
@@ -655,7 +656,8 @@ def test_native_merge_standalone_dense_checkpoint(
     runner = CliRunner()
     if quantized:
         refused = runner.invoke(app, args + ['--output', 'needs-opt-in'])
-        assert refused.exit_code == 1 and '--dequantize' in refused.output
+        assert refused.exit_code == 1
+        assert '--dequantize' in ' '.join(strip_ansi(refused.output).split())
         assert not Path('needs-opt-in').exists()
         args += ['--dequantize']
     if not quantized and dtype == 'float32':
@@ -665,7 +667,8 @@ def test_native_merge_standalone_dense_checkpoint(
         from soup_cli.utils import mlx_generation
 
         refused = runner.invoke(app, args + ['--low-memory', '--output', 'needs-streaming'])
-        assert refused.exit_code == 1 and '--low-memory' in refused.output
+        assert refused.exit_code == 1
+        assert '--low-memory' in ' '.join(strip_ansi(refused.output).split())
         assert not Path('needs-streaming').exists()
 
         # The loaded model can contain untargeted quantized components too.
@@ -683,7 +686,8 @@ def test_native_merge_standalone_dense_checkpoint(
                 refused = runner.invoke(app, args + [
                     '--dequantize', '--output', 'unsupported-eight-bit',
                 ])
-            assert refused.exit_code == 1 and '4-bit bases only' in refused.output
+            assert refused.exit_code == 1
+            assert '4-bit bases only' in ' '.join(strip_ansi(refused.output).split())
             assert not Path('unsupported-eight-bit').exists()
 
         for error in (OSError, KeyboardInterrupt):
@@ -744,3 +748,120 @@ Path('fusion-evidence.json').write_text(json.dumps({'response': row, 'tolerance'
     reloaded = subprocess.run([sys.executable, '-c', script, str(tolerance)], cwd=tmp_path,
                               env=env, capture_output=True, text=True, timeout=120)
     assert reloaded.returncode == 0, reloaded.stdout + reloaded.stderr
+
+
+@pytest.fixture
+def fusion_inputs(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    base = _checkpoint(tmp_path / 'base')
+    adapter = tmp_path / 'adapter'
+    wrapper = MLXSFTTrainerWrapper(_config(base, adapter, dora=False, targets=['lm_head']))
+    wrapper.setup(_rows())
+    wrapper.train()
+    return base, adapter
+
+
+def test_native_merge_hub_base_uses_cached_snapshot(fusion_inputs, tmp_path, monkeypatch):
+    import mlx_lm
+    import mlx_lm.utils as utils
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+    from soup_cli.utils.mlx_generation import load_native_model
+
+    base, adapter = fusion_inputs
+    expected, _ = load_native_model(str(adapter))
+    tokens = mx.array([[5, 6, 7]])
+    logits = expected(tokens)
+    mx.eval(logits)
+    metadata = adapter / 'adapter_config.json'
+    config = json.loads(metadata.read_text())
+    config['model'] = 'owner/base'
+    metadata.write_text(json.dumps(config))
+    (base / 'custom_model.py').write_text('# Copied support module.\n')
+    (base / 'generation_config.json').write_text('{"max_new_tokens":4}')
+    original_load = mlx_lm.load
+    original_card = utils.create_model_card
+    resolutions, cards = [], []
+
+    def load_cached(identifier, *args, **kwargs):
+        assert identifier == 'owner/base'
+        return original_load(str(base), *args, **kwargs)
+
+    def resolve(identifier):
+        assert identifier == 'owner/base'
+        resolutions.append(identifier)
+        return base
+
+    def offline_card(destination, hf_repo=None):
+        cards.append(hf_repo)
+        if hf_repo is not None:
+            raise RuntimeError('Unexpected Hub README fetch')
+        return original_card(destination, hf_repo)
+
+    monkeypatch.setattr(mlx_lm, 'load', load_cached)
+    monkeypatch.setattr(utils, 'hf_repo_to_path', resolve)
+    monkeypatch.setattr(utils, 'create_model_card', offline_card)
+    args = ['merge', '--backend', 'mlx', '--adapter', str(adapter), '--dtype', 'float32']
+    overlap = CliRunner().invoke(app, args + ['--output', str(base / 'fused')])
+    assert overlap.exit_code == 1
+    assert 'overlap' in ' '.join(strip_ansi(overlap.output).split())
+    assert not (base / 'fused').exists()
+    result = CliRunner().invoke(app, args + ['--output', 'fused-hub'])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert resolutions and cards == [None]
+    destination = tmp_path / 'fused-hub'
+    for name in ('custom_model.py', 'generation_config.json'):
+        assert (destination / name).read_bytes() == (base / name).read_bytes()
+    assert (destination / 'README.md').is_file()
+    # The published checkpoint also loads without a Hub lookup or either input.
+    monkeypatch.setattr(mlx_lm, 'load', original_load)
+    base.rename(tmp_path / 'hidden-base')
+    adapter.rename(tmp_path / 'hidden-adapter')
+    actual, _ = load_native_model(str(destination))
+    assert mx.allclose(actual(tokens), logits, atol=1e-5, rtol=1e-5).item()
+    assert not list(tmp_path.glob('.soup_mlx_merge_*'))
+
+
+def test_native_merge_requires_linear_lora(fusion_inputs, tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+    from soup_cli.utils import mlx_generation
+
+    base, adapter = fusion_inputs
+    args = ['merge', '--backend', 'mlx', '--adapter', str(adapter), '--dtype', 'float32']
+    with monkeypatch.context() as patch:
+        patch.setattr(mlx_generation, 'load_native_model', lambda *a, **k: load(
+            str(base), return_config=True,
+        ))
+        result = CliRunner().invoke(app, args + ['--output', 'without-lora'])
+    assert result.exit_code == 1
+    assert 'no supported linear LoRA' in ' '.join(strip_ansi(result.output).split())
+    assert not (tmp_path / 'without-lora').exists()
+    control = CliRunner().invoke(app, args + ['--output', 'with-lora'])
+    assert control.exit_code == 0, control.output
+
+
+def test_native_merge_rejects_dtype_overflow(fusion_inputs, tmp_path):
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+
+    base, adapter = fusion_inputs
+    weights = mx.load(str(base / 'model.safetensors'))
+    weights['lm_head.weight'] = mx.full(weights['lm_head.weight'].shape, 1e6, dtype=mx.float32)
+    mx.save_safetensors(str(base / 'model.safetensors'), weights)
+    before = (base / 'model.safetensors').read_bytes()
+    args = ['merge', '--backend', 'mlx', '--adapter', str(adapter)]
+    result = CliRunner().invoke(app, args + ['--dtype', 'float16', '--output', 'overflow'])
+    assert result.exit_code == 1
+    assert 'nonfinite weights at the requested dtype' in ' '.join(strip_ansi(result.output).split())
+    assert not (tmp_path / 'overflow').exists()
+    assert not list(tmp_path.glob('.soup_mlx_merge_*'))
+    control = CliRunner().invoke(app, args + ['--dtype', 'float32', '--output', 'finite'])
+    assert control.exit_code == 0, control.output
+    saved = mx.load(str(tmp_path / 'finite/model.safetensors'))['lm_head.weight']
+    assert bool(mx.all(mx.isfinite(saved)).item())
+    assert float(mx.max(saved).item()) > 65504
+    assert (base / 'model.safetensors').read_bytes() == before
