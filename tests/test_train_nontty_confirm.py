@@ -311,3 +311,38 @@ def test_train_gpus_with_yes_or_dry_run_skips_confirm(
     assert len(launched_argvs) == 1
     loader.assert_called_once()
     builder.assert_not_called()
+
+
+@pytest.mark.parametrize("tty", [False, True])
+def test_train_gpus_no_reexec_without_yes_prints_the_command_without_asking(
+    tmp_path: Path, monkeypatch, loading_spies, tty,
+) -> None:
+    """`--no-reexec` only prints the launch command, so the launching process
+    must not ask, must not refuse on a non-TTY stdin, and launches nothing."""
+    _setup_multi_gpu_env(monkeypatch, gpu_count=4)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("soup_cli.commands.train._stdin_isatty", lambda: tty)
+    config = _write_config(tmp_path)
+
+    prompts: list[str] = []
+    launched_argvs: list[list[str]] = []
+    monkeypatch.setattr(
+        typer, "confirm", lambda text, **kw: prompts.append(text) or True,
+    )
+    monkeypatch.setattr(
+        launcher, "run_launcher", lambda argv: launched_argvs.append(list(argv)) or 0,
+    )
+
+    result = CliRunner().invoke(
+        app, ["train", "--config", str(config), "--gpus", "4", "--no-reexec"],
+    )
+
+    output = _output(result)
+    assert result.exit_code == 1, (output, repr(result.exception))
+    assert "Multi-GPU launch required" in output
+    assert "stdin is not a TTY" not in output
+    assert prompts == []
+    assert launched_argvs == []
+    loader, builder = loading_spies
+    loader.assert_not_called()
+    builder.assert_not_called()
