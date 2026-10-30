@@ -37,7 +37,6 @@ from soup_cli.trainer.classifier import (
     ClassifierTrainerWrapper,
     validate_classification_dataset,
 )
-from tests._windows_ci import skip_on_windows_ci
 from tests.conftest import strip_ansi
 
 
@@ -446,9 +445,8 @@ class TestDatasetVariantsLoading:
 class TestDocumentedExampleTraining:
     """End-to-end training of the documented classifier example."""
 
-    @skip_on_windows_ci
     def test_documented_classifier_example_trains_and_records_labels(
-        self, tmp_path: Path
+        self, tmp_path: Path, aten_half_matmuls
     ) -> None:
         labels = ["ham", "spam", "promo"]
         data_path = tmp_path / "labelled.jsonl"

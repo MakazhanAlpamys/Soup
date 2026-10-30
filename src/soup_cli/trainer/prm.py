@@ -292,7 +292,7 @@ class PRMTrainerWrapper:
             # RMSNorm weight at 1.0 never moves), cannot go through the fp16
             # GradScaler on pre-Ampere cards, and makes the Metal optimizer abort
             # on MPS (#564).
-            torch_dtype=resolve_base_load_dtype(self.device, full_finetune=True),
+            dtype=resolve_base_load_dtype(self.device, full_finetune=True),
             **base_revision_kwargs(cfg.base),
         )
         hidden_size = base_model.config.hidden_size

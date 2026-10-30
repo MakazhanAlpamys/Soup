@@ -33,7 +33,10 @@ def _extract_content_parts(content: Any) -> List[str]:
 
 
 def _extract_tool_calls_text(tool_calls: Any) -> List[str]:
-    """Extract function call arguments and names from tool_calls list."""
+    """Extract call arguments (strings, or dict/list values as JSON) from tool_calls.
+
+    Call names are not extracted.
+    """
     import json
 
     parts: List[str] = []

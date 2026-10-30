@@ -113,13 +113,13 @@ def test_actual_sft_loads_pin_tokenizer_model_and_config(tmp_path, monkeypatch, 
         # AutoTokenizer also reads the redirected local model's config internally.
         return original_config(model_id, **kwargs)
 
-    def model(model_id, *, trust_remote_code, device_map, torch_dtype, config, revision):
+    def model(model_id, *, trust_remote_code, device_map, dtype, config, revision):
         assert model_id == BASE
         assert revision == REVISION
         calls.append("model")
         return original_model(
             local, trust_remote_code=trust_remote_code, device_map=device_map,
-            torch_dtype=torch_dtype, config=config,
+            dtype=dtype, config=config,
         )
 
     monkeypatch.setattr(AutoTokenizer, "from_pretrained", tokenizer)

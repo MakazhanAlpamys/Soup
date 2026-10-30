@@ -163,8 +163,10 @@ soup train --config soup.yaml --tracker mlflow  MLflow / SwanLab / Trackio integ
 soup profile --config soup.yaml              Estimate memory/speed before training
 soup profile --config soup.yaml --gpu a100   Estimate for specific GPU
 soup profile --config soup.yaml --json       Machine-readable output
+soup profile --model Qwen/Qwen2.5-7B-Instruct --gpu rtx5070 --method qlora  Will a model fit, without a soup.yaml
 soup cost --config soup.yaml                 Estimate training cost in USD across providers
 soup cost --config soup.yaml --gpu H100      Estimate training cost for specific GPU
+soup cost --config soup.yaml --json          Cost JSON on stdout; diagnostics on stderr
 soup adapters list ./output/                 Scan for LoRA adapters
 soup adapters info ./output/checkpoint-500/  Show adapter metadata
 soup adapters compare adapter1/ adapter2/    Compare two adapters
@@ -184,8 +186,9 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 171 ready-made recipes
+soup recipes list                             List all 172 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
+soup recipes show qwen3.5-0.8b-dpo           Print the tiny Qwen3.5 text-preference recipe
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
 soup recipes search "reasoning"              Search by keyword/task/size
 soup recipes verify                           Attach every shipped config on the meta device; exit 2 if one cannot (#1116)
@@ -311,15 +314,15 @@ soup ingest --source langfuse --pull [--since 7d --max-pages 100 --allow-private
 soup prune-prompt --input <jsonl> --output <jsonl> --min-frequency 0.95  Detect + strip shared system-prompt prefix
 soup prune-prompt ... --tokenizer <id-or-path>  Tokenizer-aware prefix detection (decodes remaining ids, boundary-safe)
 soup data active-sample --input <jsonl> --output <jsonl> --budget N  Top-N uncertain prod traces for human review
-soup ab --input <jsonl> --metric latency|judge_score|retry_rate  Two-sided mSPRT sequential A/B (decision: continue / reject_h0 / accept_h0; a reject_h0 reports direction better / worse; valid when re-run after every new row; the first 5 rows per arm set the --effect-size scale)
+soup ab --input <jsonl> --metric latency|judge_score|retry_rate  Two-sided sequential A/B harness on latency / judge_score / retry_rate (Bayes factor with a confidence-sequence accept rule; decision: continue / reject_h0 / accept_h0; a reject_h0 reports direction better / worse; valid when re-run after every new row; the first 5 rows per arm set the --effect-size scale) (v0.63.0)
 soup ingest|prune-prompt|ab|data active-sample ... --slack-url <https> | --discord-url <https>  Shared SSRF-validated webhook on completion
 soup drift-alarm --reference <jsonl> --live <jsonl> --threshold 0.2  Rolling-KL drift alarm (exit 3 on drift)
 soup drift-alarm ... --slack-url <https> | --discord-url <https>  Optional SSRF-validated webhook on drift detected
 soup tunability --list                                   List built-in candidate-base catalogue
 soup tunability --dataset <jsonl> [--candidates a,b,c]   Probe candidate bases + Pareto frontier report
 soup tunability --dataset <jsonl> --live [--device cpu]  LIVE per-candidate LoRA probe (loads each repo)
-soup plan --config soup.yaml                             Pre-flight summary + write soup.tfstate
-soup apply --config soup.yaml [--dry-run]                Lock-and-execute; refuses on drift (exit 3)
+soup plan --config soup.yaml [--minillm-on-policy]               Pre-flight summary + write soup.tfstate
+soup apply --config soup.yaml [--dry-run] [--minillm-on-policy]  Record reviewed plan; refuses on drift (exit 3)
 soup env lock | status | check                           Hermetic env lockfile + ABI drift + declared-bound violation detection (exit 3)
 soup env fix [--format uv-pip|requirements] [--output req.txt]  Render a reproducible install plan from soup-env.lock (print-only)
 soup completions bash | zsh | fish                       Shell completion script (sourceable via eval)
@@ -347,7 +350,7 @@ soup lock write --base-sha <h> --dataset-sha <h> --env-lock soup-env.lock  Auto-
 soup lock show [PATH]                        Print tracked lock file
 soup lock check [PATH] --base-sha <h> --dataset-sha <h> --env-hash <h> --base-model <m>  Refuse with exit 2 on drift, 3 on usage/missing lock
 soup compile <program.py> --eval <suite> [--optimizer mipro|gepa|textgrad|copro|bootstrap_fewshot] [--plan-only]  DSPy / GEPA / TextGrad prompt-program compiler — live (v0.71.13; pip install "soup-cli[compile]")
-soup distill-prompt --traces <jsonl> --teacher <m> --student <m> --strategy sft|preference|kl [--provider ollama|anthropic|vllm] [--base-url <url>] [--temperature F] [--max-rows N]  Distill prompt-heavy traces via a live teacher (v0.71.13); a teacher/student call that fails or returns nothing drops that trace, and the command exits 1 without writing the file when nothing is left
+soup distill-prompt --traces <jsonl> --teacher <m> --student <m> --strategy sft|preference|kl [--provider ollama|anthropic|vllm] [--base-url <url>] [--temperature F] [--max-rows N]  Distill prompt-heavy traces via a live teacher (v0.71.13); a teacher/student call that fails or returns nothing drops that trace, and the command exits 1 without writing the file when nothing is left; when no trace row has a prompt it exits 3 before any provider call and leaves an existing output untouched, and the done panel counts rows skipped for want of a prompt
 soup compile-tools <spec.json|yaml> --eval <jsonl> [--optimizer textgrad|gepa] [--task-lm <m>] [--reflection-lm <m>] [--engine <name>] [--plan-only]  TextGrad / GEPA tool-schema optimiser — live (v0.71.13; pip install "soup-cli[compile]")
 soup apple-adapter <source-dir> --direction hf-to-mlx|mlx-to-hf|hf-to-apple|mlx-to-apple --output <dir> [--sign] [--plan-only]  PEFT LoRA <-> mlx-lm adapter conversion — live (v0.71.21; *-to-apple upstream-gated exit 3)
 soup local-rl init --db <path>                Create personal-LLM flywheel SQLite schema (v0.68.0)

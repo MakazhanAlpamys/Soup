@@ -14,6 +14,7 @@ from typer.testing import CliRunner
 from soup_cli.eval.custom import EvalTask, run_eval
 from soup_cli.eval.gate_suites import DEFAULT_GENERAL_SUITE, score_bundled_suite
 from soup_cli.utils.ship_progress import group, session
+from tests.conftest import strip_ansi
 
 
 def events(stream: io.StringIO) -> list[dict]:
@@ -28,6 +29,10 @@ def assert_error_contract(emitted: list[dict]) -> None:
             assert event.get("error") == "execution_aborted"
         else:
             assert "error" not in event
+
+
+def plain(text: str) -> str:
+    return " ".join(strip_ansi(text).split())
 
 
 def capture_runner() -> CliRunner:
@@ -109,6 +114,19 @@ def test_empty_and_aborted_groups_and_context_restoration() -> None:
     with group("load", side="base"):
         pass
     assert before == stream.getvalue()
+
+
+def test_stream_is_ascii_escaped_for_a_non_ascii_suite_name() -> None:
+    suite = "espa\u00f1ol_\u65e5\u672c\u8a9e_\U0001f600"
+    stream = io.StringIO()
+    with session(stream), group("suite_eval", side="tuned", suite=suite, countable=True):
+        pass
+    raw = stream.getvalue()
+    # A consumer on a non-UTF-8 pipe must be able to read every byte as ASCII.
+    assert raw.isascii(), raw
+    for escaped in ("espa\\u00f1ol", "\\u65e5\\u672c\\u8a9e", "\\ud83d\\ude00"):
+        assert escaped in raw, (escaped, raw)
+    assert [e["suite"] for e in events(stream)] == [suite, suite]
 
 
 HARNESS = '''
@@ -286,8 +304,11 @@ def test_inprocess_runner_exit_and_stderr_restored(tmp_path: Path, monkeypatch) 
     result = capture_runner().invoke(app, ["--evidence", "evidence.json", "--progress", "jsonl"])
     assert result.exit_code == 2, result.output
     assert json.loads(result.stderr.splitlines()[-1])["event"] == "end"
-    bad = capture_runner().invoke(app, ["--progress", "typo"])
-    assert bad.exit_code == 3
+    # Otherwise-valid arguments: without them `soup ship` exits 3 for the missing input too.
+    bad = capture_runner().invoke(app, ["--evidence", "evidence.json", "--progress", "typo"])
+    assert bad.exit_code == 3, (bad.output, repr(bad.exception))
+    assert "--progress must be jsonl" in plain(bad.output), bad.output
+    assert "schema_version" not in bad.stderr
 
 
 @pytest.mark.parametrize("mode", ["judge_score", "pairwise"])

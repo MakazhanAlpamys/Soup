@@ -406,7 +406,7 @@ class OnlineDPOTrainerWrapper:
         dev_map = resolve_device_map(self.device)
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
-            "torch_dtype": resolve_frozen_base_load_dtype(self.device),
+            "dtype": resolve_frozen_base_load_dtype(self.device),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -460,6 +460,18 @@ class OnlineDPOTrainerWrapper:
         from soup_cli.utils.peft_wiring import apply_pre_lora_patches
 
         apply_pre_lora_patches(self.model, cfg.base)
+
+        # #2365: trl switches checkpointing off and on around each generation, and
+        # each enable adds an input-grad hook that is never removed. Keep only the
+        # latest. TRL applies the LoRA config later and keeps this model as the base.
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+        if should_enable_hf_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+        ):
+            from soup_cli.utils.gradient_ckpt import keep_one_input_grad_hook
+
+            keep_one_input_grad_hook(self.model)
 
     @staticmethod
     def _judge_kwargs(evaluator, has_judges: bool) -> dict:

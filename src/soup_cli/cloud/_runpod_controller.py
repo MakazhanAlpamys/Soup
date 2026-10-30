@@ -41,6 +41,17 @@ _MISSING_TOOLS = "OpenSSH ssh and scp must be installed and on PATH before RunPo
 _API_BASE = "https://rest.runpod.io/v1"
 _POD_ID = re.compile(r"[a-zA-Z0-9_-]{1,64}")
 _MAX_RESPONSE = 1024 * 1024
+_LOG_TAIL_LINES = 50
+_LOG_TAIL_BYTES = 50_000
+# Bound scheme matching so long non-URL log lines do not cause quadratic work.
+_URL_CREDENTIALS = re.compile(r"(\b[a-z][a-z0-9+.-]{0,31}://)[^/\s?#]*@", re.IGNORECASE)
+# The same token shapes as utils/crash.py, without importing the installed CLI.
+_SECRET_PATTERNS = (
+    re.compile(r"hf_[A-Za-z0-9]{20,}"),
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),
+    re.compile(r"api[_-]?key[\"' :=]+[A-Za-z0-9_\-]{16,}", re.IGNORECASE),
+    re.compile(r"Bearer\s+[A-Za-z0-9_\-\.]{20,}"),
+)
 _IMAGE = "runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404"
 _BOOT = (
     "set -eu; if [ ! -x /usr/sbin/sshd ]; then apt-get update; "
@@ -151,6 +162,24 @@ def _tool_environment():
     return _environment_for_tools(drop=("RUNPOD_API_KEY",))
 
 
+def _print_remote_stderr_tail(output: str | None) -> None:
+    """Print a sanitized, redacted failure tail as literal stderr."""
+    if not output:
+        return
+    # Strip controls before matching credentials, then redact before truncation:
+    # slicing a password first can remove the URL prefix that identifies it.
+    # render_runpod_stub serializes the canonical utils/terminal.py table.
+    safe = output.translate(globals()["_TERMINAL_STRIP_TABLE"])
+    safe = _URL_CREDENTIALS.sub(r"\1<redacted>@", safe)
+    for pattern in _SECRET_PATTERNS:
+        safe = pattern.sub("<redacted>", safe)
+    encoded = safe.encode("utf-8", errors="replace")[-_LOG_TAIL_BYTES:]
+    lines = encoded.decode("utf-8", errors="ignore").splitlines()[-_LOG_TAIL_LINES:]
+    tail = "\n".join(lines)
+    if tail:
+        _notice(f"RunPod remote stderr tail (last {_LOG_TAIL_LINES} lines):\n{tail}")
+
+
 def _train_and_copy(ip, port, private_key):
     with tempfile.TemporaryDirectory(prefix="soup-runpod-ssh-") as directory:
         known_hosts = pathlib.Path(directory) / "known_hosts"
@@ -187,6 +216,16 @@ def _run_ssh_session(ip: str, port: int, private_key: str, known_hosts: pathlib.
         "with open('train.log', 'w') as log:\n"
         "    result = subprocess.run(['soup', 'train', '--config', 'soup.yaml', '--yes'], "
         "stdout=log, stderr=subprocess.STDOUT)\n"
+        "if result.returncode:\n"
+        "    with open('train.log', 'rb') as log:\n"
+        "        log.seek(0, os.SEEK_END)\n"
+        f"        log.seek(max(0, log.tell() - {_LOG_TAIL_BYTES + 1}))\n"
+        f"        tail = log.read({_LOG_TAIL_BYTES + 1})\n"
+        # Do not forward a partial first line with its credential prefix missing.
+        f"        if len(tail) > {_LOG_TAIL_BYTES}:\n"
+        "            tail = tail.partition(b'\\n')[2]\n"
+        f"        tail = b'\\n'.join(tail.splitlines()[-{_LOG_TAIL_LINES}:])\n"
+        "    sys.stderr.buffer.write(tail)\n"
         "sys.exit(result.returncode)\n"
     )
     ssh, scp = _tool("ssh"), _tool("scp")
@@ -195,24 +234,37 @@ def _run_ssh_session(ip: str, port: int, private_key: str, known_hosts: pathlib.
     # never the training command: reconnecting must not start training twice.
     deadline = time.monotonic() + 300
     while True:
-        ready = subprocess.run(
-            [ssh, *common, "-p", str(port), f"root@{ip}", "true"],
-            capture_output=True, timeout=30, env=env,
-        )
+        try:
+            ready = subprocess.run(
+                [ssh, *common, "-p", str(port), f"root@{ip}", "true"],
+                capture_output=True,
+                timeout=30,
+                env=env,
+            )
+        except subprocess.TimeoutExpired:
+            raise _ControllerError(
+                "RunPod SSH readiness probe timed out after 30 seconds"
+            ) from None
         if ready.returncode == 0:
             break
         if time.monotonic() >= deadline:
             raise _ControllerError("RunPod SSH did not become ready within five minutes")
         time.sleep(5)
-    result = subprocess.run(
-        [ssh, *common, "-p", str(port), f"root@{ip}", "python3 -"],
-        input=script,
-        text=True,
-        capture_output=True,
-        timeout=25 * 3600,
-        env=env,
-    )
+    try:
+        result = subprocess.run(
+            [ssh, *common, "-p", str(port), f"root@{ip}", "python3 -"],
+            input=script,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=25 * 3600,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        raise _ControllerError("RunPod remote training command timed out after 25 hours") from None
     if result.returncode != 0:
+        _print_remote_stderr_tail(result.stderr)
         raise _ControllerError("RunPod remote training failed; no successful artifact copy claimed")
     target = _local_destination()
     target.parent.mkdir(parents=True, exist_ok=True)

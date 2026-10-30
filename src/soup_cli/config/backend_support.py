@@ -91,13 +91,6 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
         trainer_reads=True,
     ),
     SupportEntry(
-        "training.use_lorafa",
-        IGNORED,
-        "LoRA-FA has no MLX implementation",
-        issue=725,
-        trainer_reads=True,
-    ),
-    SupportEntry(
         "training.use_ring_attention",
         IGNORED,
         "Ring Attention has no MLX path",
@@ -145,12 +138,6 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
         "training.moe_lora",
         IGNORED,
         "ScatterMoE LoRA targets expert layers on the transformers path; no MLX implementation",
-        trainer_reads=True,
-    ),
-    SupportEntry(
-        "training.quantization_aware",
-        IGNORED,
-        "QAT/FP8 prepare runs on the transformers path, not MLX",
         trainer_reads=True,
     ),
     SupportEntry(
@@ -202,8 +189,20 @@ _NOT_DPO_GAPS = frozenset({
     "data.train_on_prompt",
 })
 
+# These settings are refused at config load for preference tasks, so they can
+# never reach doctor. LoRA-FA and QAT currently filter no SFT rows; keeping them
+# here ensures a future SFT row cannot accidentally leak into preference tables.
+_MLX_PREFERENCE_REFUSED = frozenset({
+    "training.use_lorafa",
+    "training.quantization_aware",
+    "training.use_flash_attn",
+    "training.use_liger",
+})
+
 _MLX_DPO: tuple[SupportEntry, ...] = tuple(
-    entry for entry in _MLX_SFT if entry.field not in _NOT_DPO_GAPS
+    entry
+    for entry in _MLX_SFT
+    if entry.field not in _NOT_DPO_GAPS | _MLX_PREFERENCE_REFUSED
 )
 
 #: MLX ORPO runs MLX DPO's loop with its own loss, so it ignores the same fields.
