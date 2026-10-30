@@ -532,6 +532,9 @@ def run_magpie(
 
     ``generate_fn`` is injectable for tests + advanced callers; when ``None`` it
     is built from ``config.provider`` via :func:`make_magpie_generate_fn`.
+
+    Raises :class:`MagpieProviderError` when no row survives and at least one
+    provider call failed. In that case, ``output_path`` is not written.
     """
     if not isinstance(config, MagpieConfig):
         raise TypeError("config must be a MagpieConfig")
@@ -626,6 +629,7 @@ def run_magpie(
 __all__ = [
     "GenerateFn",
     "MagpieConfig",
+    "MagpieProviderError",
     "MagpieResult",
     "SUPPORTED_MAGPIE_PROVIDERS",
     "build_magpie_config",
@@ -633,6 +637,7 @@ __all__ = [
     "harvest_instruction",
     "harvest_response",
     "magpie_assistant_opener",
+    "magpie_failure_summary",
     "magpie_prefix_for",
     "make_magpie_generate_fn",
     "run_magpie",

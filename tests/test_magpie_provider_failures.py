@@ -71,7 +71,10 @@ def test_failed_calls_preserve_output(
     assert f"--provider {provider}" in text
     assert ENDPOINT in text
     assert "first error:" in text and diagnostic.lower() in text.lower()
-    assert output.read_bytes() == SENTINEL if existing else not output.exists()
+    if existing:
+        assert output.read_bytes() == SENTINEL
+    else:
+        assert not output.exists()
 
 
 @pytest.mark.parametrize("command", ["evolve", "gen-magpie"])
