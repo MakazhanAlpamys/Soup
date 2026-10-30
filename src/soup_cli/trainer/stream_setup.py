@@ -1957,6 +1957,7 @@ class StreamingSetupMixin:
             )
         # #2327: the activation term above is charged as resident whatever the mode.
         offloading = getattr(tcfg, "activation_offloading", None)
+        offloading_note = None
         if offloading is not None:
             from soup_cli.utils.vram_estimate import activation_offloading_note
 
@@ -1967,7 +1968,8 @@ class StreamingSetupMixin:
                 seq_len=seq_len,
                 batch_size=rows,
             )
-            lines.append(f"  activations  {activation_offloading_note(offloading, activations)}")
+            offloading_note = activation_offloading_note(offloading, activations)
+            lines.append(f"  activations  {offloading_note}")
 
         if not on_cuda:
             # Nothing to measure against: the probe reads CUDA peak counters.
@@ -1989,8 +1991,9 @@ class StreamingSetupMixin:
         )
         fit = decide_stream_fit(predicted_bytes=predicted, available_bytes=available)
         if not fit.fits:
+            reason = fit.reason if offloading_note is None else f"{fit.reason} {offloading_note}"
             if not tcfg.stream_vram_probe:
-                raise ValueError(fit.reason)
+                raise ValueError(reason)
             if predicted > available * _PROBE_DEFERRAL_CEILING:
                 # The probe exists to settle a DISAGREEMENT, and the largest
                 # disagreement ever measured is 21% (formula 0.787x the real peak
@@ -2000,7 +2003,7 @@ class StreamingSetupMixin:
                 # allocation attempt at that shape — driven by a soup.yaml whose
                 # author need not be whoever runs it.
                 raise ValueError(
-                    f"{fit.reason} training.stream_vram_probe cannot overrule a "
+                    f"{reason} training.stream_vram_probe cannot overrule a "
                     f"prediction this far over budget "
                     f"({predicted / available:.1f}x): the probe corrects a "
                     f"margin, not an order of magnitude."

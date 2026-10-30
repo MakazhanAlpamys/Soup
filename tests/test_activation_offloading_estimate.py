@@ -270,6 +270,15 @@ def test_the_pre_flight_decision_is_the_one_without_the_mode(workdir, monkeypatc
     assert not any("offload" in reason for reason in outcomes["cpu"][2])
 
 
+@pytest.mark.parametrize("mode", SET_MODES)
+def test_the_refusal_panel_carries_the_note(workdir, screen, mode):
+    kwargs = {"base": "./small", "max_length": 2048}
+    assert _run(_cfg(mode, **kwargs), 6) == 1  # inside the range, does not fit: refused
+    text = _plain(screen.getvalue())
+    assert "Hardware-fit gate" in text
+    assert _note(mode, _estimate(mode, **kwargs).gb("activations")) in text
+
+
 # --- the layer-streaming plan panel --------------------------------------------------
 
 
@@ -297,6 +306,7 @@ class _TrainConfig:
     batch_size = 4
     stream_buffers = 2
     stream_vram_probe = False
+    stream_vram_override = None
     stream_nf4_scale_cache = False
     lora = _Lora()
 
@@ -340,6 +350,49 @@ def test_the_streaming_panel_carries_one_line_with_the_same_wording(mode):
 
 def test_the_streaming_panel_says_nothing_without_the_mode():
     assert not any("activation_offloading" in line for line in _stream_lines(None))
+
+
+def _streamed_refusal(monkeypatch, mode) -> str:
+    import torch
+
+    from soup_cli.trainer.stream_setup import StreamingSetupMixin
+
+    # 1 GB free: the step is refused before anything is measured.
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda *_a, **_k: (int(1 * GB), 0))
+    monkeypatch.setattr(
+        "soup_cli.utils.layer_stream_runtime.measure_gemm_tflops", lambda *_a, **_k: None
+    )
+    mixin = StreamingSetupMixin()
+    mixin.device = "cuda"
+    with pytest.raises(ValueError) as exc:
+        mixin._stream_budget_lines(
+            _Config(),
+            _TrainConfig(mode),
+            model_config=_ModelConfig(),
+            layer_bytes=1000,
+            embed_bytes=0,
+            index=_Index(),
+            on_cuda=True,
+        )
+    return " ".join(str(exc.value).split())
+
+
+@pytest.mark.parametrize("mode", SET_MODES)
+def test_a_streamed_refusal_carries_the_note(monkeypatch, mode):
+    from soup_cli.utils.layer_stream import estimate_activation_bytes
+
+    activations = estimate_activation_bytes(
+        hidden_size=4096, intermediate_size=14336, n_layers=32, seq_len=4096, batch_size=4
+    )
+    message = _streamed_refusal(monkeypatch, mode)
+    assert "predicted to need" in message
+    assert message.endswith(_note(mode, activations / GB))
+
+
+def test_a_streamed_refusal_without_the_mode_says_nothing_about_it(monkeypatch):
+    message = _streamed_refusal(monkeypatch, None)
+    assert "predicted to need" in message
+    assert "activation_offloading" not in message
 
 
 # --- soup plan -----------------------------------------------------------------------------
