@@ -175,6 +175,21 @@ def test_ppo_4bit_hook_count_stays_flat_and_the_hook_still_works(tmp_path, monke
     assert not _unchanged(wrapper.model, trainable)
 
 
+def test_ppo_unquantized_hook_count_stays_flat_and_the_hook_still_works(tmp_path, monkeypatch):
+    """`quantization: none`, which #2340 switches checkpointing on for."""
+    wrapper = _ppo(tmp_path, monkeypatch, checkpointing=True)
+    assert wrapper.model.is_gradient_checkpointing is True
+    trainable = _trainable(wrapper.model)
+    assert trainable
+
+    _, counts = _run_ppo(wrapper)
+
+    assert counts[-1] == counts[0], counts
+    assert _embedding_output_requires_grad(wrapper.model) is True
+    assert _held_hook_is_registered(wrapper.model) is True
+    assert not _unchanged(wrapper.model, trainable)
+
+
 def test_ppo_checkpointing_off_changes_nothing(tmp_path, monkeypatch):
     calls = _record_helper_calls(monkeypatch)
     wrapper = _ppo(tmp_path, monkeypatch, checkpointing=False)
