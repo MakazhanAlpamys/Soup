@@ -389,6 +389,20 @@ def test_a_streamed_refusal_carries_the_note(monkeypatch, mode):
     assert message.endswith(_note(mode, activations / GB))
 
 
+@pytest.mark.parametrize("mode", SET_MODES)
+def test_a_probe_ceiling_refusal_carries_the_note(monkeypatch, mode):
+    from soup_cli.utils.layer_stream import estimate_activation_bytes
+
+    # About 8.8 GB predicted with 1 GB free is past the 4x ceiling: the probe cannot defer it.
+    monkeypatch.setattr(_TrainConfig, "stream_vram_probe", True)
+    activations = estimate_activation_bytes(
+        hidden_size=4096, intermediate_size=14336, n_layers=32, seq_len=4096, batch_size=4
+    )
+    message = _streamed_refusal(monkeypatch, mode)
+    assert "cannot overrule a prediction this far over budget" in message
+    assert _note(mode, activations / GB) in message
+
+
 def test_a_streamed_refusal_without_the_mode_says_nothing_about_it(monkeypatch):
     message = _streamed_refusal(monkeypatch, None)
     assert "predicted to need" in message
