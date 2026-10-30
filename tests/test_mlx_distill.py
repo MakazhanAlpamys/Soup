@@ -4,6 +4,7 @@ import pytest
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.trainer.mlx_routing import resolve_trainer
+from tests.conftest import strip_ansi
 
 
 def recipe(**training):
@@ -82,7 +83,8 @@ def test_public_offline_dry_run_with_real_data_does_not_require_mlx(tmp_path, mo
     path.write_text(cfg.model_dump_json())
     outcome = CliRunner().invoke(app, ["train", "--config", str(path), "--dry-run"])
     assert outcome.exit_code == 0, (outcome.output, repr(outcome.exception))
-    assert "Config valid" in outcome.output
+    output = " ".join(strip_ansi(outcome.output).split())
+    assert "Config valid" in output
 
 
 @pytest.mark.parametrize("option", ["deepspeed_config", "fsdp_config", "trust_remote_code"])
