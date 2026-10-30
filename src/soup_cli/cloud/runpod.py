@@ -122,9 +122,13 @@ def render_runpod_stub(
         raise ValueError("soup_version must be a safe package version")
     _validate_config(config_yaml)
     encoded = base64.b64encode(config_yaml.encode("utf-8")).decode("ascii")
+    from soup_cli.utils.terminal import _CONTROL_STRIP_TABLE
+
     constants = (
         f"_GPU_ID = {_GPU_IDS[gpu]!r}\n_CONFIG_B64 = {encoded!r}\n"
         f"_OUTPUT = {str(output)!r}\n_SOUP_VERSION = {soup_version!r}\n"
+        # The standalone script carries data from the one canonical sanitizer.
+        f"_TERMINAL_STRIP_TABLE = {_CONTROL_STRIP_TABLE!r}\n"
     )
     from soup_cli.utils.tool_paths import controller_source
 

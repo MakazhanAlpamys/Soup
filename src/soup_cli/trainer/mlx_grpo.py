@@ -180,7 +180,7 @@ def plan_prompt_updates(*, n_prompts: int, prompts_per_update: int, epochs: int,
             "gradient_accumulation_steps, or add rows."
         )
     rng = random.Random(seed)
-    plan = []
+    plan: list[list[int]] = []
     for _ in range(max(1, int(epochs))):
         order = list(range(n_prompts))
         rng.shuffle(order)
@@ -253,7 +253,7 @@ def group_advantages(rewards: list, group: int, eps: float = ADVANTAGE_EPSILON) 
     root. No statistic crosses a group boundary.
     """
     values = _checked_rewards(rewards, group)
-    out = []
+    out: list[float] = []
     for start in range(0, len(values), group):
         chunk = values[start : start + group]
         mean = statistics.fmean(chunk)
@@ -688,6 +688,7 @@ class MLXGRPOTrainerWrapper(MLXDPOTrainerWrapper):
             )
             return None
         tokens = mx.array([list(sample) + [int(sample[-1])]])
+        assert self.model is not None
         self.model.eval()
         full = completion_token_logps(self.model, tokens, 0)
         chunked = completion_token_logps(self.model, tokens, 0, head_split=split)
@@ -705,6 +706,7 @@ class MLXGRPOTrainerWrapper(MLXDPOTrainerWrapper):
         """Base-model log-probs of the generated tokens: the adapter switched off."""
         import mlx.core as mx
 
+        assert self.model is not None
         was_training = bool(getattr(self.model, "training", True))
         self.model.eval()
         try:
@@ -988,6 +990,7 @@ class MLXGRPOTrainerWrapper(MLXDPOTrainerWrapper):
         import mlx.core as mx
 
         group = self._units.num_generations
+        assert self.model is not None
         was_training = bool(getattr(self.model, "training", True))
         self.model.eval()
         mx.random.seed(seed)

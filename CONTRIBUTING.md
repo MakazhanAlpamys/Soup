@@ -124,7 +124,7 @@ src/soup_cli/
   eval/               - Eval platform (custom tasks, LLM judge, human eval, leaderboard)
   bench/              - Benchmark instruments behind `soup bench train` (collector, train_report, train_run) (#836)
   migrate/            - Config migration (LLaMA-Factory, Axolotl, Unsloth)
-  recipes/            - Ready-made configs for popular models (171 recipes)
+  recipes/            - Ready-made configs for popular models (172 recipes)
   autopilot/          - Zero-config decision engine (v0.25.0)
   registry/           - Model Registry (hashing, store, diff, attach) (v0.26.0 + v0.33.0)
   cans/               - Shareable .can artifact format + run/publish orchestrator (v0.26.0 + v0.33.0)
@@ -426,7 +426,6 @@ take it back.
 | @ybai08 | ReLoRA, preference training and layer streaming | `area:training` |
 | @taljeon | Eval gate | `area:eval` |
 | @akkupratap323 | Ingest and feedback sources | `area:ingest` |
-| @dryn85-max | The MLX backend (maintainer's exception: named ahead of the threshold, held from the first merge) | `area:mlx` |
 
 ## Making Changes
 
@@ -769,6 +768,12 @@ The project follows semantic versioning: `MAJOR.MINOR.PATCH`
 6. Tag: `git tag v0.X.0 && git push --tags`
 7. GitHub Actions verifies that no fragment was left behind, then publishes to PyPI
    on the `v*` tag (Trusted Publisher / OIDC)
+
+Docker version tags are published for every release, while `latest` follows the highest
+stable `vX.Y.Z` tag. Before tagging a maintenance-line Docker release, backport
+`.github/workflows/docker.yml` and `scripts/docker_release_tags.py` so it keeps the newer
+line's `latest` image. A manual dispatch uses the workflow at its selected ref;
+updating `main` does not change workflows on existing historical tags.
 
 ## Recognition
 

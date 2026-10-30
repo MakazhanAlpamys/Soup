@@ -195,6 +195,7 @@ def test_produced_digest_survives_copy_and_registry_override(tmp_path):
     tracker = ExperimentTracker(tmp_path / "runs.db")
     try:
         run_id = tracker.start_run(config.model_dump(), "cpu", "CPU", {})
+        tracker.finish_run(run_id, 2.0, 0.5, 100, 60.0, str(tmp_path / "out"))
         tracker.record_training_data_hash(run_id, digest)
         metadata = BaseRevision(config.base).metadata(run_id)
         metadata["training_data_sha256"] = tracker.get_run(run_id)["training_data_sha256"]

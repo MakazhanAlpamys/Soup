@@ -527,6 +527,8 @@ class PPOTrainerWrapper:
             self._dataset_in_constructor = True
             self.trainer = ppo_trainer_cls(**trainer_kwargs)
 
+        _forward_policy_checkpointing(self.trainer)
+
         # #1675 - trl.experimental's PPOTrainer subclasses transformers.Trainer
         # but never runs Trainer.__init__, and its save_model / _save_checkpoint
         # delegate to Trainer's. An attribute Trainer.__init__ assigns and those
@@ -735,7 +737,7 @@ class PPOTrainerWrapper:
         dev_map = resolve_device_map(self.device)
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
-            "torch_dtype": resolve_frozen_base_load_dtype(self.device),
+            "dtype": resolve_frozen_base_load_dtype(self.device),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -783,6 +785,17 @@ class PPOTrainerWrapper:
         apply_pre_lora_patches(self.model, cfg.base)
         self.model = get_peft_model(self.model, lora_config)
         apply_post_lora_patches(self.model)
+
+        # #2197: TRL's PPO loop has no Trainer.train(), so nothing else switches
+        # checkpointing on for the policy. 4bit/8bit already got it from
+        # prepare_model_for_kbit_training above, with its own kwargs.
+        if tcfg.quantization not in ("4bit", "8bit"):
+            from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+            if should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ):
+                self.model.gradient_checkpointing_enable()
 
         # QAT — insert fake quantization ops after LoRA. The "fp8" variant
         # is FP8 training (handled by apply_v028_speed_memory), not int8 QAT.
@@ -1088,6 +1101,46 @@ def _check_one_rollout_batch(rows: int, batch_size: int, grad_accum: int) -> Non
             f"gradient_accumulation_steps={grad_accum}{per_process} = {needed}. "
             f"Add prompts, or lower batch_size / gradient_accumulation_steps."
         )
+
+
+def _forward_policy_checkpointing(trainer) -> None:
+    """#2311: every rollout calls ``gradient_checkpointing_disable`` / ``_enable``
+    on trl's ``PolicyAndValueWrapper``, which copies ``is_gradient_checkpointing``
+    from the policy but has neither method. Give this trainer's wrapper instance
+    both, forwarding to the policy, when it is checkpointed and lacks them. trl
+    re-enables with no arguments, which transformers resets to
+    ``{"use_reentrant": False}``, so the kwargs the layers' checkpoint partial
+    carries are kept at disable and put back at enable."""
+    import functools
+
+    accelerator = getattr(trainer, "accelerator", None)
+    if accelerator is None or getattr(trainer, "model", None) is None:
+        return
+    model = accelerator.unwrap_model(trainer.model)
+    policy = getattr(model, "policy", None)
+    if (
+        policy is None
+        or not getattr(model, "is_gradient_checkpointing", False)
+        or hasattr(model, "gradient_checkpointing_disable")
+    ):
+        return
+    saved: dict = {}
+
+    def gradient_checkpointing_disable() -> None:
+        for module in policy.modules():
+            func = getattr(module, "_gradient_checkpointing_func", None)
+            if getattr(module, "gradient_checkpointing", False) and isinstance(
+                func, functools.partial
+            ):
+                saved["kwargs"] = dict(func.keywords)
+                break
+        policy.gradient_checkpointing_disable()
+
+    def gradient_checkpointing_enable() -> None:
+        policy.gradient_checkpointing_enable(gradient_checkpointing_kwargs=saved.get("kwargs"))
+
+    model.gradient_checkpointing_disable = gradient_checkpointing_disable
+    model.gradient_checkpointing_enable = gradient_checkpointing_enable
 
 
 def _import_ppo_classes():

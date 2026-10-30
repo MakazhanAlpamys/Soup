@@ -521,6 +521,16 @@ def _unusable_reason(reply: str) -> str:
     return f"the reply is not a usable ranking: {caught.value}"
 
 
+def test_cut_preserves_a_reason_at_the_limit():
+    reason = "x" * 200
+    assert gj._cut(reason) == reason
+
+
+def test_cut_truncates_a_reason_above_the_limit():
+    reason = "x" * 200 + "y"
+    assert gj._cut(reason) == "x" * 200 + "..."
+
+
 def test_a_long_reason_is_cut_in_the_logged_warning(monkeypatch, caplog):
     reward = _reward(monkeypatch, FakeJudge(default=_many_keys))
     prompts, completions = _groups(1)

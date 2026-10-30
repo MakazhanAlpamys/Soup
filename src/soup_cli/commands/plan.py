@@ -26,7 +26,7 @@ from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_file_limited
 console = Console()
 
 
-def _load_yaml_config(path: str) -> dict:
+def _load_yaml_config(path: str, *, minillm_on_policy: bool = False) -> dict:
     import os
     import stat as _stat
 
@@ -45,15 +45,16 @@ def _load_yaml_config(path: str) -> dict:
     data = load_yaml_file_limited(path, f"config {path!r}", max_bytes=MAX_CONFIG_BYTES)
     if not isinstance(data, dict):
         raise ValueError("config must parse to a dict")
-    from soup_cli.config.unknown_keys import find_unknown_config_keys, format_unknown_keys
-    from soup_cli.utils.terminal import for_terminal
+    # The loader's own checks, so the plan refuses what `soup train` refuses,
+    # with the same lines (exit 1). The plan is still built from ``data``.
+    from soup_cli.config.loader import validate_config_mapping
 
-    unknown = find_unknown_config_keys(data)
-    if unknown:
-        message = format_unknown_keys(unknown, include_deadline=False)
-        console.print("[red bold]Config validation error:[/]\n")
-        console.print(f"  [red]{for_terminal(message)}[/]")
-        raise SystemExit(1)
+    if minillm_on_policy:
+        training = data.get("training")
+        if not isinstance(training, dict):
+            training = {}
+        data = {**data, "training": {**training, "minillm_on_policy": True}}
+    validate_config_mapping(data)
     return data
 
 
@@ -66,10 +67,14 @@ def plan_cmd(
         "--state",
         help="Path to write the state file (default: ./soup.tfstate).",
     ),
+    minillm_on_policy: bool = typer.Option(
+        False, "--minillm-on-policy",
+        help="Use on-policy MiniLLM; requires training.minillm_enabled=true on task=distill.",
+    ),
 ) -> None:
     """Render a pre-flight training plan + write ``soup.tfstate``."""
     try:
-        cfg = _load_yaml_config(config)
+        cfg = _load_yaml_config(config, minillm_on_policy=minillm_on_policy)
     except FileNotFoundError:
         console.print(f"[red]Config not found: {escape(config)}[/]")
         raise typer.Exit(1) from None
@@ -78,7 +83,13 @@ def plan_cmd(
         raise typer.Exit(2) from exc
 
     try:
-        plan = build_plan(cfg)
+        plan = build_plan(
+            cfg,
+            on_hub_request=lambda: console.print(
+                "[dim]Reading the model's config.json from the Hub to size the run "
+                "(HF_HUB_OFFLINE=1 skips this)...[/]"
+            ),
+        )
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
@@ -115,7 +126,7 @@ def plan_cmd(
     console.print(
         Panel(
             f"[green]Plan written to {escape(state_file)}.[/]\n"
-            "Review the numbers, then run `soup apply` to execute.",
+            "Review the numbers, then run `soup apply` to record the plan.",
             title="plan",
             border_style="green",
         )
@@ -134,14 +145,18 @@ def apply_cmd(
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
-        help="Verify drift and exit without invoking training.",
+        help="Verify drift and exit without marking the plan as applied.",
+    ),
+    minillm_on_policy: bool = typer.Option(
+        False, "--minillm-on-policy",
+        help="Use on-policy MiniLLM; requires training.minillm_enabled=true on task=distill.",
     ),
 ) -> None:
-    """Execute the planned training run, refusing on drift (v0.64.0)."""
+    """Record the reviewed training plan, refusing on drift (v0.64.0)."""
     from soup_cli.utils.terraform_plan import build_plan, detect_drift, read_state
 
     try:
-        cfg = _load_yaml_config(config)
+        cfg = _load_yaml_config(config, minillm_on_policy=minillm_on_policy)
     except FileNotFoundError:
         console.print(f"[red]Config not found: {escape(config)}[/]")
         raise typer.Exit(1) from None
@@ -161,7 +176,8 @@ def apply_cmd(
         raise typer.Exit(2) from exc
 
     try:
-        plan_now = build_plan(cfg)
+        # Drift compares hashes, never the estimate, so the model is not read (no Hub request).
+        plan_now = build_plan(cfg, estimate_vram=False)
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
@@ -191,8 +207,7 @@ def apply_cmd(
         )
         return
 
-    # Mark state applied; the actual `soup train` invocation is left to
-    # the operator. Future v0.64.1 may inline a subprocess call.
+    # Mark state applied; the operator starts the actual training run.
     new_state = TrainingState(
         plan=state.plan,
         applied=True,
@@ -205,11 +220,12 @@ def apply_cmd(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
 
+    train_flag = " --minillm-on-policy" if minillm_on_policy else ""
     console.print(
         Panel(
             f"[green]Plan locked in {escape(state_file)}.[/]\n"
-            f"Now run: [bold]soup train --config {escape(config)}[/]\n"
-            "(The live `apply -> train` subprocess handoff lands in v0.64.1.)",
+            f"Now run: [bold]soup train --config {escape(config)}{train_flag}[/]\n"
+            "This records the plan; it does not start training.",
             title="apply",
             border_style="green",
         )

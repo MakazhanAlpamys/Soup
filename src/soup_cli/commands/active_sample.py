@@ -11,6 +11,8 @@ from rich.panel import Panel
 
 from soup_cli.commands._webhook_cli import emit_webhooks, validate_webhook_flags
 from soup_cli.utils.active_sampler import sample_uncertain_rows, validate_budget
+from soup_cli.utils.paths import ensure_distinct_paths
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -37,6 +39,13 @@ def active_sample(
     ),
 ) -> None:
     """Surface the most uncertain prod traces for human review."""
+    # The default --output (active_samples.jsonl) can be the --input too (#2226).
+    try:
+        ensure_distinct_paths([("--input", input_path)], [("--output", output)])
+    except ValueError as exc:
+        console.print(f"[red]{for_terminal(exc)}[/]")
+        raise typer.Exit(1) from exc
+
     try:
         validate_budget(budget)
     except (TypeError, ValueError) as exc:

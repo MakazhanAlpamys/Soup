@@ -816,6 +816,11 @@ class RegistryStore:
         run = tracker.get_run(run_id)
         if run is None:
             raise ValueError(f"run not found: {run_id}")
+        status = run.get("status")
+        if status != "completed":
+            raise ValueError(
+                f"run {run_id} has status {status!r}; only a completed run can be registered"
+            )
 
         import json as _json
 

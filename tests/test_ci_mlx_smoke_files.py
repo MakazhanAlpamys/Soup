@@ -1,4 +1,4 @@
-"""Every `tests/test_mlx_*.py` that needs the real MLX library runs in the `mlx-smoke` job.
+"""Every `tests/test_*.py` that needs the real MLX library runs in the `mlx-smoke` job.
 
 `mlx` is not in `[dev]`, so the 3x3 test matrix cannot import it and every test that
 `importorskip`s `mlx.core` / `mlx_lm` skips there. `mlx-smoke` (macOS, `.[mlx]` and `pytest`
@@ -6,12 +6,16 @@ only) is the one job that can execute them, and it runs an explicit list of file
 test file that nobody adds to that list therefore runs on no job at all, and the suite stays
 green whatever its tests would say. That is how the DPO, ORPO and eval-steps files (#1846,
 #2073, #2074) went unexecuted: their loss, gradient and training-loop tests skip wherever MLX
-is absent, and the list named only the flight-recorder and DoRA files.
+is absent, and the list named only the flight-recorder and DoRA files. The same gap hid
+`test_issue683_mlx_response_masking.py`, `test_issue686_mlx_optimizer_schedule.py`,
+`test_rewind_wiring.py`, and the upstream tripwire in `test_issue23_mlx_val_loss_producer.py`,
+because the scan only looked at `test_mlx_*.py` (#2308).
 
-The contract pinned here: a `tests/test_mlx_*.py` that gates a test on the real library with
+The contract pinned here: a test file under `tests/` that gates a test on the real library with
 `pytest.importorskip("mlx...")` is listed in a `pytest` step of the `mlx-smoke` job, or sits in
-`EXEMPT` with the reason it is not. A listed file that no longer exists, and an exemption that
-no longer applies, fail too, so neither list can rot.
+`EXEMPT` with the reason it is not. A listed file that no longer exists, an exemption that no
+longer applies, and a `||` or `continue-on-error` that could hide a failure all fail too, so
+neither list can rot and the job cannot be made green by masking a red test.
 """
 
 from __future__ import annotations
@@ -31,9 +35,9 @@ CI = ROOT / ".github" / "workflows" / "ci.yml"
 TESTS = ROOT / "tests"
 JOB = "mlx-smoke"
 
-#: Files named `tests/test_mlx_*.py` that need the real library and are deliberately not run by
-#: the job, with the reason. Adding an entry is a decision a reviewer should see, so it carries
-#: a sentence, not a flag.
+#: Test files under `tests/` that need the real library and are deliberately not run by the
+#: job, with the reason. Adding an entry is a decision a reviewer should see, so it carries a
+#: sentence, not a flag.
 EXEMPT: dict[str, str] = {
     "test_mlx_max_grad_norm.py": (
         "three of its tests read the installed mlx-lm / mlx surface (TrainingArgs has no clipping "
@@ -41,6 +45,12 @@ EXEMPT: dict[str, str] = {
         "mlx and mlx-lm are not in .github/constraints/pinned-upstream.txt, so listing the file "
         "would turn a required job red for every pull request the day mlx-lm adds such a field. "
         "Where those three should run is a separate decision."
+    ),
+    "test_issue23_mlx_val_loss_producer.py": (
+        "its `test_upstream_still_sends_the_keys_this_reads` test reads the installed mlx-lm "
+        "source for the key names it sends as a tripwire for an upstream release; like the "
+        "max-grad-norm file, listing it would turn the job red when mlx-lm changes, and that "
+        "test does not exercise Soup code."
     ),
 }
 
@@ -69,8 +79,43 @@ def _needs_real_mlx(source: str) -> bool:
     return False
 
 
+def _job(workflow_text: str, job: str = JOB) -> dict[str, Any]:
+    return yaml.safe_load(workflow_text)["jobs"][job]
+
+
 def _steps(workflow_text: str, job: str = JOB) -> list[dict[str, Any]]:
-    return yaml.safe_load(workflow_text)["jobs"][job]["steps"]
+    return _job(workflow_text, job)["steps"]
+
+
+def _reject_failure_masks(
+    steps: list[dict[str, Any]], *, job: dict[str, Any] | None = None
+) -> None:
+    """Refuse a step, job, or shell line that would let a failing job report green.
+
+    GitHub accepts an expression for ``continue-on-error``, so only an absent
+    key or the boolean ``false`` is safe; every other value could evaluate true.
+    """
+    if (
+        job is not None
+        and "continue-on-error" in job
+        and job["continue-on-error"] is not False
+    ):
+        raise ValueError(
+            f"the `{JOB}` job has continue-on-error set to "
+            f"{job['continue-on-error']!r}; a failing test must fail the job"
+        )
+    for step in steps:
+        if "continue-on-error" in step and step["continue-on-error"] is not False:
+            raise ValueError(
+                f"the `{JOB}` job has a step with continue-on-error set to "
+                f"{step['continue-on-error']!r}; a failing test must fail the job"
+            )
+        for line in str(step.get("run", "")).splitlines():
+            if "||" in line:
+                raise ValueError(
+                    f"the `{JOB}` job has a shell line with `||`, which can mask a failing "
+                    f"test: {line.strip()!r}"
+                )
 
 
 def _pytest_commands(steps: list[dict[str, Any]]) -> list[list[str]]:
@@ -93,14 +138,14 @@ def _listed_files(workflow_text: str) -> set[str]:
     return listed
 
 
-def _mlx_test_files() -> list[Path]:
-    return sorted(TESTS.glob("test_mlx_*.py"))
+def _test_files() -> list[Path]:
+    return sorted(TESTS.glob("test_*.py"))
 
 
 def _needing_the_real_library() -> list[str]:
     return [
         path.name
-        for path in _mlx_test_files()
+        for path in _test_files()
         if _needs_real_mlx(path.read_text(encoding="utf-8"))
     ]
 
@@ -134,13 +179,78 @@ class TestEveryRealMlxTestFileRunsInTheJob:
         for words in commands:
             assert "addopts=" in words, words
 
+    def test_no_step_masks_a_failure(self) -> None:
+        workflow = CI.read_text(encoding="utf-8")
+        _reject_failure_masks(_steps(workflow), job=_job(workflow))
+
+
+class TestFailureMasksAreRefused:
+    """A green job must mean the tests passed, not that a failure was swallowed."""
+
+    @staticmethod
+    def _real_steps() -> list[dict[str, Any]]:
+        return _steps(CI.read_text(encoding="utf-8"))
+
+    def test_appending_or_true_to_the_real_job_is_refused(self) -> None:
+        steps = self._real_steps()
+        index = next(
+            i for i, step in enumerate(steps)
+            if any(
+                line.strip().startswith("pytest")
+                for line in str(step.get("run", "")).splitlines()
+            )
+        )
+        mutated = [dict(step) for step in steps]
+        mutated[index]["run"] = str(mutated[index].get("run", "")).rstrip() + " || true"
+        with pytest.raises(ValueError, match="shell line with"):
+            _reject_failure_masks(mutated)
+
+    def test_continue_on_error_is_refused(self) -> None:
+        steps = self._real_steps()
+        mutated = [dict(step) for step in steps]
+        mutated[0]["continue-on-error"] = True
+        with pytest.raises(ValueError, match="continue-on-error"):
+            _reject_failure_masks(mutated)
+
+    def test_the_string_true_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="continue-on-error"):
+            _reject_failure_masks(
+                [{"continue-on-error": "true", "run": "pytest -q tests/test_a.py"}]
+            )
+
+    def test_an_expression_that_could_be_true_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="continue-on-error"):
+            _reject_failure_masks(
+                [
+                    {
+                        "continue-on-error": "${{ github.event_name == 'push' }}",
+                        "run": "pytest -q tests/test_a.py",
+                    }
+                ]
+            )
+
+    def test_the_boolean_false_is_accepted(self) -> None:
+        _reject_failure_masks(
+            [{"continue-on-error": False, "run": "pytest -q tests/test_a.py"}]
+        )
+
+    def test_job_level_expression_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="continue-on-error"):
+            _reject_failure_masks(
+                [{"run": "pytest -q tests/test_a.py"}],
+                job={"continue-on-error": "${{ true }}"},
+            )
+
+    def test_a_clean_job_is_accepted(self) -> None:
+        _reject_failure_masks([{"run": "pytest -o addopts= -q tests/test_a.py"}])
+
 
 class TestEveryExemptionIsStillTrueAndExplained:
     @pytest.mark.parametrize("name", sorted(EXEMPT))
     def test_the_file_exists_needs_the_library_and_is_not_listed(self, name: str) -> None:
         path = TESTS / name
         assert path.is_file(), f"{name} is exempted but no longer exists: drop the entry"
-        assert name.startswith("test_mlx_"), name
+        assert name.startswith("test_") and name.endswith(".py"), name
         assert _needs_real_mlx(path.read_text(encoding="utf-8")), (
             f"{name} no longer gates a test on the real MLX library: drop the entry"
         )
@@ -161,6 +271,15 @@ class TestTheScanIsNotVacuous:
         assert {
             "test_mlx_dpo.py", "test_mlx_orpo.py", "test_mlx_eval_steps.py",
             "test_mlx_dora_native.py",
+        } <= found, sorted(found)
+
+    def test_it_finds_the_four_files_the_issue_named(self) -> None:
+        found = set(_needing_the_real_library())
+        assert {
+            "test_issue683_mlx_response_masking.py",
+            "test_issue686_mlx_optimizer_schedule.py",
+            "test_rewind_wiring.py",
+            "test_issue23_mlx_val_loss_producer.py",
         } <= found, sorted(found)
 
     def test_it_ignores_a_file_that_only_fakes_mlx(self) -> None:
@@ -237,4 +356,7 @@ jobs:
         assert {
             "test_rewind_mlx.py", "test_mlx_dora_native.py", "test_mlx_dpo.py",
             "test_mlx_orpo.py", "test_mlx_eval_steps.py",
+            "test_issue683_mlx_response_masking.py",
+            "test_issue686_mlx_optimizer_schedule.py",
+            "test_rewind_wiring.py",
         } <= listed, sorted(listed)

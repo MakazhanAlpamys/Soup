@@ -247,7 +247,7 @@ class RewardModelTrainerWrapper:
             "trust_remote_code": self._trust_remote_code,
             "device_map": dev_map,
             "num_labels": 1,
-            "torch_dtype": resolve_frozen_base_load_dtype(self.device),
+            "dtype": resolve_frozen_base_load_dtype(self.device),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj

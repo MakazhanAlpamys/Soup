@@ -18,7 +18,9 @@ Every term is in bytes; GB in the output is 1e9 bytes. The terms:
   checkpointing, one boundary tensor per layer plus one layer recomputed.
 - ``logits``: the output head's logits and the loss chain over them, at the streaming
   planner's measured loss arithmetic (``layer_stream.LOGITS_LOSS_BYTES_PER_ELEMENT``).
-  Checkpointing does not reduce it.
+  A PRM step builds the logits and no loss over them, so it is charged the logits
+  alone, the half-precision output and its fp32 copy
+  (``LOGITS_TENSOR_BYTES_PER_ELEMENT``). Checkpointing does not reduce it.
 - ``dequant``: under 4-bit loading, the bf16 copy of the largest weight a matmul
   dequantizes.
 - ``overhead``: the CUDA context and allocator slack, which ``max_memory_allocated``
@@ -91,6 +93,15 @@ OPTIMIZER_BYTES_PER_PARAM: dict[str, float] = {
     "schedule_free_adamw": 8.0,
 }
 
+#: Memory the optimizer step allocates on top of its state, per trainable parameter
+#: (#2277). torch's AdamW without ``fused=True`` takes the foreach path on CUDA, and
+#: its ``_foreach_sqrt`` holds one fp32 copy of ``exp_avg_sq``: 4 bytes, measured on
+#: SmolLM2-135M full fine-tuning. The others are 0 until one is measured. A slight
+#: upper bound, since torch updates one parameter group at a time.
+OPTIMIZER_STEP_SCRATCH_BYTES_PER_PARAM: dict[str, float] = {
+    "adamw_torch": 4.0,
+}
+
 # --- activations ---------------------------------------------------------------
 
 #: What the backward pass keeps per token per layer, in bf16 values:
@@ -122,6 +133,11 @@ BOUNDARY_BYTES = {"lora": 2.0, "nf4": 2.0, "int8": 2.0, "full": 2.0}
 #: Under 4-bit and 8-bit loading the output head is fp32 (``KBIT_UNQUANTIZED_BYTES``),
 #: so its logits cost 4 bytes an element, not 2.
 KBIT_LOGITS_EXTRA_BYTES = 2
+#: The logits a step that builds no loss over them holds at the end of its forward:
+#: the half-precision output autocast builds (2 bytes an element) and the fp32 copy
+#: Accelerate's ``convert_outputs_to_fp32`` makes of it (4), both live at once. What a
+#: PRM step (``RunSpec.logits_loss`` false) is charged.
+LOGITS_TENSOR_BYTES_PER_ELEMENT = 6
 #: Config flags whose fused loss can avoid building the full logits.
 FUSED_LOSS_FLAGS = frozenset({"use_liger", "use_cut_ce"})
 
@@ -145,6 +161,7 @@ TERM_NAMES = (
     "activations",
     "logits",
     "dequant",
+    "optimizer_step",
     "overhead",
 )
 
@@ -173,6 +190,9 @@ class RunSpec:
     #: False for a model with no vocabulary-sized output (a classification or
     #: embedding head): it builds no logits over the vocabulary.
     lm_head: bool = True
+    #: False for a step that builds the logits but no loss over them (a PRM step,
+    #: whose loss comes from a reward head): only the logits tensor is charged.
+    logits_loss: bool = True
     #: The fused-loss flags set on a run whose trainer applies them
     #: (``use_liger``, ``use_cut_ce``). The logits term is still charged, since
     #: whether the patch lands is only known at train time, and a note says so.
@@ -181,6 +201,10 @@ class RunSpec:
     def __post_init__(self) -> None:
         if not isinstance(self.lm_head, bool):
             raise TypeError(f"lm_head must be bool, got {type(self.lm_head).__name__}")
+        if not isinstance(self.logits_loss, bool):
+            raise TypeError(
+                f"logits_loss must be bool, got {type(self.logits_loss).__name__}"
+            )
         if not set(self.fused_loss) <= FUSED_LOSS_FLAGS:
             raise ValueError(f"unknown fused_loss {self.fused_loss!r}")
         for name in ("seq_len", "batch_size", "lora_r"):
@@ -295,13 +319,17 @@ def logits_bytes(shape: ModelShape, run: RunSpec) -> int:
     (``layer_stream.LOGITS_LOSS_BYTES_PER_ELEMENT``). The resident rows fit 11.6
     bytes an element, so they do not carry the extra retained copy #327 measured on
     the streaming path (``LOGITS_RETENTION_BYTES_PER_ELEMENT``), and it is not charged.
+    A step with no loss over the logits (``run.logits_loss`` false: a PRM step) is
+    charged the logits alone, ``LOGITS_TENSOR_BYTES_PER_ELEMENT``: the half-precision
+    output and the fp32 copy Accelerate makes of it.
+    Under 4-bit and 8-bit loading either charge adds ``KBIT_LOGITS_EXTRA_BYTES``.
     A model without an LM head builds no logits over the vocabulary.
     """
     if shape.vocab_size is None or not run.lm_head:
         return 0
     from soup_cli.utils.layer_stream import LOGITS_LOSS_BYTES_PER_ELEMENT
 
-    per = LOGITS_LOSS_BYTES_PER_ELEMENT
+    per = LOGITS_LOSS_BYTES_PER_ELEMENT if run.logits_loss else LOGITS_TENSOR_BYTES_PER_ELEMENT
     if activation_mode(run) in ("nf4", "int8"):
         per += KBIT_LOGITS_EXTRA_BYTES
     return math.ceil(shape.vocab_size * run.seq_len * run.batch_size * per)
@@ -334,6 +362,20 @@ def estimate_vram(shape: ModelShape, run: RunSpec) -> VramEstimate:
         "logits": logits_bytes(shape, run),
         "dequant": dequant_bytes(shape, run),
     }
+    # The peak is the larger of two phases (#2277). The forward/backward pass holds
+    # every term above. The optimizer step holds the parameters, their gradients, the
+    # optimizer state and the step's scratch, after the activations, logits and
+    # dequantized copy are freed. `optimizer_step` is how far the step exceeds the
+    # pass, so the total stays a sum of terms.
+    forward_backward = sum(terms.values())
+    step = (
+        terms["weights"]
+        + terms["adapters"]
+        + terms["gradients"]
+        + terms["optimizer"]
+        + math.ceil(trainable * OPTIMIZER_STEP_SCRATCH_BYTES_PER_PARAM.get(run.optimizer, 0.0))
+    )
+    terms["optimizer_step"] = max(step - forward_backward, 0)
     allocated = sum(terms.values())
     terms["overhead"] = math.ceil(OVERHEAD_FIXED_BYTES + OVERHEAD_SLACK * allocated)
     notes = []
@@ -344,6 +386,11 @@ def estimate_vram(shape: ModelShape, run: RunSpec) -> VramEstimate:
         )
     elif shape.params_source == "config.json":
         notes.append("Parameter count from config.json (no safetensors headers were read).")
+        if shape.moe:
+            notes.append(
+                "This is a mixture-of-experts model: the count prices every expert in every "
+                "layer, so it is approximate."
+            )
     if run.gradient_checkpointing == "medium":
         notes.append(
             "Medium checkpointing (every other block) is priced from the per-layer costs "
@@ -353,6 +400,12 @@ def estimate_vram(shape: ModelShape, run: RunSpec) -> VramEstimate:
         notes.append(
             "Selective checkpointing (attention only) is priced as no checkpointing, an "
             "upper bound; the tier is not measured."
+        )
+    if terms["optimizer_step"]:
+        notes.append(
+            "The optimizer step, not the forward and backward pass, sets this peak: "
+            "the update holds the optimizer state and its scratch after the "
+            "activations are freed."
         )
     if run.fused_loss and terms["logits"]:
         flags = " and ".join(f"training.{flag}" for flag in sorted(run.fused_loss))
@@ -378,6 +431,7 @@ __all__ = [
     "BYTES_PER_PARAM_BY_QUANT",
     "GB",
     "OPTIMIZER_BYTES_PER_PARAM",
+    "OPTIMIZER_STEP_SCRATCH_BYTES_PER_PARAM",
     "TERM_NAMES",
     "VRAM_SAFETY_MARGIN",
     "RunSpec",

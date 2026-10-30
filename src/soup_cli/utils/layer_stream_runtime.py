@@ -1592,7 +1592,7 @@ def _build_streamed_layer_class():
     import torch
     import torch.nn as nn
     from torch.func import functional_call
-    from torch.utils.checkpoint import checkpoint
+    from torch.utils.checkpoint import checkpoint, noop_context_fn
 
     class StreamedDecoderLayer(nn.Module):
         def __init__(
@@ -1606,6 +1606,7 @@ def _build_streamed_layer_class():
             quant_specs=None,
             codes=None,
             scale_cache=None,
+            checkpoint_context_fn=None,
         ):
             super().__init__()
             self.inner = inner
@@ -1634,6 +1635,9 @@ def _build_streamed_layer_class():
             # training.stream_nf4_scale_cache — an NF4ScaleCache owned by the
             # runtime, or None.
             self.scale_cache = scale_cache
+            # Two-read experts (``expert_stream.two_read_checkpoint_contexts``): the
+            # recompute replays the routers' decisions and reads no expert.
+            self.checkpoint_context_fn = checkpoint_context_fn or noop_context_fn
             # #841 — each wrapper returns to the same pool slot on every visit.
             # Cache the tensor/Params4bit substitution views for that slot rather
             # than reconstructing Python wrappers and QuantState objects on every
@@ -1866,7 +1870,10 @@ def _build_streamed_layer_class():
             if self.use_checkpoint and torch.is_grad_enabled():
                 if not self.recompute:
                     return self._body_retained(hidden_states, *args, **kwargs)
-                return checkpoint(self._body, hidden_states, *args, use_reentrant=False, **kwargs)
+                return checkpoint(
+                    self._body, hidden_states, *args, use_reentrant=False,
+                    context_fn=self.checkpoint_context_fn, **kwargs,
+                )
             return self._body(hidden_states, *args, **kwargs)
 
         def _pool_ptrs(self) -> frozenset:
@@ -2732,7 +2739,7 @@ def _attach_streamed_boundary_adapter_bridge(model: Any) -> None:
         )
 
     def _add_adapter(self: Any, *args: Any, **kwargs: Any) -> Any:
-        boundaries = {}
+        boundaries: Dict[int, Tuple[Any, List[Tuple[Any, str]]]] = {}
         for getter in (self.get_input_embeddings, self.get_output_embeddings):
             wrapper = getter()
             if isinstance(wrapper, _streamed_large_layer_class()):
@@ -3283,7 +3290,7 @@ def _skeleton_from_config(
         # Keep the model-construction spelling aligned with the load-site
         # compatibility guard in tests/test_transformers_floor_compat.py.
         model = AutoModelForCausalLM.from_config(
-            config, torch_dtype=torch_dtype, trust_remote_code=trust_remote_code
+            config, dtype=torch_dtype, trust_remote_code=trust_remote_code
         )
         if quant_config is not None:
             from transformers.integrations.bitsandbytes import replace_with_bnb_linear
@@ -3843,11 +3850,14 @@ def _install_expert_streaming(
     *,
     device: str,
     codes: Optional[Mapping[str, Any]],
+    two_reads: bool = False,
 ) -> Tuple[Any, ...]:
     """Swap each MoE layer's experts module for a ``StreamedExperts``.
 
     Only for a cache sharded with ``expert_layout="per_expert"``; returns the
-    experts-file readers (closed by ``StreamRuntime.close``).
+    experts-file readers (closed by ``StreamRuntime.close``). ``two_reads`` on
+    any other cache is refused: accepted, it would read three times while the
+    caller believes two.
     """
     from soup_cli.utils.expert_stream import (
         EXPERT_LAYOUT_PER_EXPERT,
@@ -3858,6 +3868,11 @@ def _install_expert_streaming(
     from soup_cli.utils.layer_shard import expert_paths
 
     if getattr(index, "expert_layout", "") != EXPERT_LAYOUT_PER_EXPERT:
+        if two_reads:
+            raise ValueError(
+                "two_read_experts needs a cache sharded with expert_layout='per_expert'; "
+                f"this one is {getattr(index, 'expert_layout', '') or 'fused'!r}"
+            )
         return ()
     readers: Dict[int, Any] = {}
     try:
@@ -3870,7 +3885,7 @@ def _install_expert_streaming(
                 dtype=index.dtype,
             )
         fetcher = ExpertFetcher(device=device, dtype=index.dtype, codes=codes)
-        install_expert_streaming(layers, readers, fetcher)
+        install_expert_streaming(layers, readers, fetcher, two_reads=two_reads)
     except BaseException:
         for reader in readers.values():
             reader.close()
@@ -3894,6 +3909,7 @@ def install_streaming(
     refill_before_backward: bool = False,
     read_ahead_decision: Any = None,
     nf4_scale_cache: bool = False,
+    two_read_experts: bool = False,
 ) -> StreamRuntime:
     """Wrap every decoder layer and wire the buffer pool + prefetch scheduler.
 
@@ -3907,6 +3923,11 @@ def install_streaming(
     ``read_ahead_decision`` (a ``stripe_roots.ReadAheadDecision``, R4) says how
     ``read_ahead`` came about, so the page-lock messages advise a depth that is
     not raised straight back up on a striped cache.
+
+    ``two_read_experts`` (``expert_layout="per_expert"`` caches only): each MoE
+    layer's checkpoint recompute replays its routers' top-k decisions and reads no
+    expert, so a step reads every routed-to expert twice instead of three times
+    (``expert_stream.two_read_checkpoint_contexts``).
     """
     import torch
 
@@ -3970,8 +3991,13 @@ def install_streaming(
     # Before the name maps: the fused expert parameters leave the layer here,
     # so the layer pool never allocates them.
     expert_readers = _install_expert_streaming(
-        layers, shard_dir, index, device=str(device), codes=codes
+        layers, shard_dir, index, device=str(device), codes=codes, two_reads=two_read_experts
     )
+    context_fns = [None] * n_layers
+    if two_read_experts:
+        from soup_cli.utils.expert_stream import checkpoint_context_fn
+
+        context_fns = [checkpoint_context_fn(layer) for layer in layers]
     layer_name_maps = [_layer_name_map(layer) for layer in layers]
     if not any(layer_name_maps):
         raise RuntimeError(
@@ -4089,6 +4115,7 @@ def install_streaming(
             quant_specs=quant_specs,
             codes=codes,
             scale_cache=scale_cache,
+            checkpoint_context_fn=context_fns[idx],
         )
 
     if large_pool is not None:
@@ -4570,11 +4597,13 @@ def build_streamed_model(
     refill_before_backward: bool = False,
     read_ahead_decision: Any = None,
     nf4_scale_cache: bool = False,
+    two_read_experts: bool = False,
 ) -> Tuple[Any, StreamRuntime]:
     """Meta skeleton -> extras -> LoRA -> streaming. No resident base load.
 
     ``read_ahead_decision`` (R4) is the setup's ``ReadAheadDecision`` for ``read_ahead``,
-    handed to ``install_streaming`` for its page-lock advice.
+    handed to ``install_streaming`` for its page-lock advice. ``two_read_experts`` is
+    ``install_streaming``'s: an API switch, no config field.
     """
     from peft import get_peft_model
 
@@ -4624,6 +4653,7 @@ def build_streamed_model(
             refill_before_backward=refill_before_backward,
             read_ahead_decision=read_ahead_decision,
             nf4_scale_cache=nf4_scale_cache,
+            two_read_experts=two_read_experts,
         )
     except BaseException:
         for external in external_sources:

@@ -251,4 +251,5 @@ class TestRunSpec:
 def test_the_tiny_fixture_prices_every_term():
     shape = shape_from_config(TINY_LLAMA, params=10_000, params_source="safetensors")
     est = estimate_vram(shape, _run(quant="4bit", peft="qlora"))
-    assert all(value > 0 for value in est.terms.values())
+    # The optimizer step exceeds the pass only on a full fine-tune (#2277).
+    assert all(value > 0 for term, value in est.terms.items() if term != "optimizer_step")
