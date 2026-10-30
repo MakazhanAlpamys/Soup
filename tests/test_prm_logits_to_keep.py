@@ -130,6 +130,25 @@ def test_loss_and_every_gradient_match_the_full_logits_step():
     assert not unequal, unequal
 
 
+class _Wrapper(torch.nn.Module):
+    """Like DDP: the forward takes everything through *args / **kwargs."""
+
+    def __init__(self, inner):
+        super().__init__()
+        self.inner = inner
+
+    def forward(self, *args, **kwargs):
+        return self.inner(*args, **kwargs)
+
+
+def test_the_check_reads_the_unwrapped_model_not_the_wrapper():
+    model = _tiny_llama()
+    shapes = _logits_shapes(model)
+    loss = _compute_loss()(SimpleNamespace(model=model), _Wrapper(model), _batch())
+    assert torch.isfinite(loss)
+    assert shapes == [(2, 1, _VOCAB)]
+
+
 def test_the_signature_is_checked_once_per_trainer(monkeypatch):
     import soup_cli.utils.prm as prm_utils
 
