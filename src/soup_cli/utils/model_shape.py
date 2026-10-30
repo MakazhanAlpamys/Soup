@@ -84,6 +84,12 @@ class ModelShape:
     #: A mixture-of-experts config (it names a count of experts). The estimate prices
     #: such a model as a dense one, and says it is outside what it was fitted on.
     moe: bool = False
+    #: The outer config's own ``model_type`` when ``model_type`` is a nested text
+    #: config's, else the same; the estimate checks both (#2368).
+    config_model_type: str = ""
+    #: The config.json names an ``auto_map``: the model's code ships with its weights
+    #: (``trust_remote_code``), so its forward's parameters are unknown here (#2368).
+    remote_code: bool = False
 
     @property
     def guessed(self) -> bool:
@@ -328,6 +334,8 @@ def shape_from_config(
         params_source=params_source,
         shape_source="config.json",
         moe=_is_moe(text) or _is_moe(config),
+        config_model_type=str(config.get("model_type") or ""),
+        remote_code="auto_map" in config,
     )
 
 

@@ -450,7 +450,9 @@ NO_LM_HEAD_TASKS: frozenset[str] = frozenset(
 
 #: Tasks whose step builds the logits but no loss over them, so the estimate charges
 #: the logits tensor alone: prm runs the causal-LM forward without labels and takes
-#: its loss from ``reward_head`` (``trainer/prm.py``).
+#: its loss from ``reward_head`` (``trainer/prm.py``), with ``logits_to_keep=1``
+#: where the forward takes it, so on one position (#2368,
+#: ``vram_estimate.logits_positions``).
 LOGITS_ONLY_TASKS: frozenset[str] = frozenset({"prm"})
 
 #: Tasks whose trainer installs the checkpointing tiers: ``trainer/sft.py``'s
