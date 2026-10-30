@@ -863,10 +863,10 @@ the hidden states, and drops its logits before the next chunk starts. The logits
 pre-flight charges becomes `vocab × min(seq, chunk) × batch`. By the pre-flight's own
 arithmetic (the shipped 14 bytes per element, the 128 256-token vocabulary above, batch 1)
 that is an estimated 0.23 GB at a chunk of 128 whatever `data.max_length` is, against
-0.92 GB at 512 tokens, 1.84 GB at 1024 and 3.68 GB at 2048 unchunked. These are estimates,
-not measurements: no run with the option has been measured on a GPU (see the end of this
-section). The option takes an explicit number of tokens from 16 to 8192; there is no default
-and no `true`, and unset is off.
+0.92 GB at 512 tokens, 1.84 GB at 1024 and 3.68 GB at 2048 unchunked. These are estimates
+of the logits term alone; the measured peaks are at the end of this section. The option
+takes an explicit number of tokens from 16 to 8192; there is no default and no `true`, and
+unset is off.
 
 **What it costs.** Two `[batch, seq, hidden]` tensors in the stream dtype, which the
 pre-flight adds to its estimate: the gradient on the hidden states, filled chunk by chunk in
@@ -899,6 +899,27 @@ unchunked steps and 2 are charged for a retained copy of the logits whose cause 
 identified (#327); whether a chunked step still pays those 2 is not known. The hook is on the model before `stream_vram_probe` runs, so with
 `stream_vram_probe: true` the step that decides the fit is the chunked one.
 
+**Where a chunked step peaks.** Not in the loss. A CUDA memory snapshot of one chunked
+Llama-3.1-8B NF4 step at 1024 tokens puts the peak in the backward of the last decoder layer,
+at the end of its checkpoint recompute, after the chunked loss buffers are freed. On the
+dequantise + linear path bitsandbytes takes there, all seven of that layer's weights are live
+as dense bf16 copies (436 MB on this model), beside the earlier layers' saved hidden states
+and the layer's recomputed activations. So on top of the resident terms and the checkpoint
+boundaries, the pre-flight charges the larger of two phases:
+
+- the loss phase: the transient activations, the logits and the chunk terms above;
+- the recompute phase (`estimate_recompute_bytes`): one layer's NF4 weights in the stream
+  dtype (nothing for a bf16 base), plus `8H + e(3H + 2KV) + 4·heads + t(1 + e)H + 6eI` bytes
+  per token, where `H` is the hidden size, `I` the intermediate size, `KV` the key/value
+  width, `e` the stream dtype's bytes and `t` the number of LoRA targets. The `1` is a dropout
+  mask and is not charged at `lora.dropout: 0`. These are the terms of the MLP backward, the
+  larger per token of the layer's two peaks, so the charge holds at any length.
+
+Every NF4 layer is charged its dense weights: bitsandbytes chooses between that path and its
+fused 4-bit GEMM per card and per matmul shape at run time, and on the fused path fewer are
+live. At the lengths below the loss phase stays the larger on an unchunked step, so those
+predictions do not move; a short NF4 run can rise.
+
 **Refused.** At config load, as listed under "Rejected at config load" below: without
 `stream_layers`, for a task other than `sft`, with `data.format: raft`, and beside
 `use_cut_ce`. When the model is built, with the reason: a trainable output head, a model
@@ -906,9 +927,33 @@ without one, and a model that changes its logits after the head: Gemma 2's
 `final_logit_softcapping` is read from its config, and any other such model is caught at its
 first labelled forward.
 
-**Not measured yet.** #1693 asks for peak VRAM at 512, 1024 and 2048 tokens with and without
-the option, on one model and stack, and for a pre-flight that does not under-predict on those
-rows. That table needs a CUDA card and is left for whoever has one. To produce it:
+**Measured on one card.** Llama-3.1-8B NF4, batch 1, LoRA r=8 on `q_proj` / `v_proj`, on an
+RTX 3060 Laptop (6 GB, WSL2; torch 2.14.0, transformers 5.17.0, peft 0.20.0, bitsandbytes
+0.50.2), two passes with the same rows (#1693). Peak VRAM in GB, predicted before and after
+the recompute phase:
+
+| seq | chunk | real peak | predicted before | predicted now | now / real |
+|---|---|---|---|---|---|
+| 512 | off | 2.222 | 2.448 | 2.448 | 1.102 |
+| 512 | 128 | 1.985 | 1.767 | 2.059 | 1.037 |
+| 1024 | off | 3.153 | 3.539 | 3.539 | 1.122 |
+| 1024 | 128 | 2.231 | 1.947 | 2.325 | 1.042 |
+| 2048 | off | 5.015 | 5.722 | 5.722 | 1.141 |
+| 2048 | 128 | 2.722 | 2.308 | 2.858 | 1.050 |
+
+The chunked rows keep 1.037 to 1.050 of headroom, with no margin of their own. That rests on
+one card and one stack, and on separate q/k/v/o and gate/up/down projections. The per-token
+terms do not cover fused `gate_up` projections, MoE layers or LoRA on MLP modules. Not
+settled yet:
+
+- bitsandbytes' dispatch between its two paths, and its small fp32 absmax temporary;
+- FlashAttention-2 with native GQA;
+- whether autocast applies to the LoRA inputs;
+- lengths above about 2,870 tokens, where the MLP backward takes over as the layer's peak,
+  untested on a card;
+- an unexplained constant of about 11 MB on the unchunked rows.
+
+To measure another model, card or stack:
 
 ```bash
 python benchmarks/harness/stream_loss_chunk_vram.py --base <id-or-path> --quantization 4bit
@@ -1522,12 +1567,15 @@ Config validation ships in v0.27.0; live execution ships in v0.27.1. See
 Optimize training throughput and extend context windows:
 
 `use_liger` and `use_flash_attn` are read only by the SFT-family trainer
-(`task: sft` or `task: tts`); setting either on any other task is rejected
-at config load. Liger is reported as enabled only when the model's
-`config.model_type` is in liger's own kernel table; for a type it has no kernels
-for (`gpt_neox`, `phi`, `gpt2`, ...) the run prints "no matching architecture
-found" and trains without it, instead of announcing kernels that were never
-applied (#1811).
+(`task: sft` or `task: tts`) and, inside `task: sft`, only by the resident text
+setup (#1698): `modality: vision` or `audio` and `backend: unsloth` are refused
+at config load, `backend: mlx` warns that it ignores both, and
+`training.stream_layers: true` is refused with its own message (#1692). Setting
+either on any other task is rejected at config load. Liger is reported as
+enabled only when the model's `config.model_type` is in liger's own kernel
+table; for a type it has no kernels for (`gpt_neox`, `phi`, `gpt2`, ...) the run
+prints "no matching architecture found" and trains without it, instead of
+announcing kernels that were never applied (#1811).
 
 ```yaml
 # soup.yaml — performance options

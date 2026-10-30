@@ -1041,9 +1041,23 @@ class TestToolEndpointsLive:
         if _get_isolation_strategy() != "namespaces":
             pytest.skip("namespaces not available")
 
-        cmd = "curl -s --connect-timeout 1 http://169.254.169.254/ || echo 'BLOCKED'"
-        result = _run_bash_sandbox(cmd)
-        assert "BLOCKED" in result.stdout or result.returncode != 0
+        import shutil
+
+        if shutil.which("curl") is None:
+            pytest.skip("curl is not installed")
+        # One command, so bash runs curl in its own process.
+        cmd = "curl -s --connect-timeout 1 http://169.254.169.254/"
+        try:
+            result = _run_bash_sandbox(cmd)
+        except PermissionError as exc:
+            # The command never ran: this host refuses the namespaces.
+            pytest.skip(f"the sandbox namespaces cannot be created here: {exc}")
+        # The run must have started and finished, and curl must have failed to
+        # connect (exit 7): a timeout or a launch failure is no evidence that the
+        # network is cut. tests/test_serve_code_tool_namespaces.py checks the
+        # interfaces the child sees.
+        assert result.timed_out is False, result
+        assert result.returncode == 7, result
 
     def test_bash_tool_windows_returns_501(self, monkeypatch):
         from fastapi.testclient import TestClient
@@ -1249,7 +1263,9 @@ class TestToolEndpointsLive:
             json={"command": "echo hello"},
         )
         assert resp.status_code == 501
-        assert "Operation not permitted" in resp.json()["detail"]
+        # The fixed sentence; the start-up error itself stays in the server's log.
+        assert resp.json() == {"detail": "bash sandbox requires OS-level isolation"}
+        assert "Operation not permitted" not in resp.text
 
     def test_bash_tool_subprocess_error_maps_to_501(self, monkeypatch):
         import subprocess
@@ -1273,7 +1289,8 @@ class TestToolEndpointsLive:
             json={"command": "echo hello"},
         )
         assert resp.status_code == 501
-        assert "preexec_fn" in resp.json()["detail"]
+        assert resp.json() == {"detail": "bash sandbox requires OS-level isolation"}
+        assert "preexec_fn" not in resp.text
 
     def test_web_search_default_deny_all(self):
         from fastapi.testclient import TestClient

@@ -527,6 +527,8 @@ class PPOTrainerWrapper:
             self._dataset_in_constructor = True
             self.trainer = ppo_trainer_cls(**trainer_kwargs)
 
+        _forward_policy_checkpointing(self.trainer)
+
         # #1675 - trl.experimental's PPOTrainer subclasses transformers.Trainer
         # but never runs Trainer.__init__, and its save_model / _save_checkpoint
         # delegate to Trainer's. An attribute Trainer.__init__ assigns and those
@@ -1088,6 +1090,46 @@ def _check_one_rollout_batch(rows: int, batch_size: int, grad_accum: int) -> Non
             f"gradient_accumulation_steps={grad_accum}{per_process} = {needed}. "
             f"Add prompts, or lower batch_size / gradient_accumulation_steps."
         )
+
+
+def _forward_policy_checkpointing(trainer) -> None:
+    """#2311: every rollout calls ``gradient_checkpointing_disable`` / ``_enable``
+    on trl's ``PolicyAndValueWrapper``, which copies ``is_gradient_checkpointing``
+    from the policy but has neither method. Give this trainer's wrapper instance
+    both, forwarding to the policy, when it is checkpointed and lacks them. trl
+    re-enables with no arguments, which transformers resets to
+    ``{"use_reentrant": False}``, so the kwargs the layers' checkpoint partial
+    carries are kept at disable and put back at enable."""
+    import functools
+
+    accelerator = getattr(trainer, "accelerator", None)
+    if accelerator is None or getattr(trainer, "model", None) is None:
+        return
+    model = accelerator.unwrap_model(trainer.model)
+    policy = getattr(model, "policy", None)
+    if (
+        policy is None
+        or not getattr(model, "is_gradient_checkpointing", False)
+        or hasattr(model, "gradient_checkpointing_disable")
+    ):
+        return
+    saved: dict = {}
+
+    def gradient_checkpointing_disable() -> None:
+        for module in policy.modules():
+            func = getattr(module, "_gradient_checkpointing_func", None)
+            if getattr(module, "gradient_checkpointing", False) and isinstance(
+                func, functools.partial
+            ):
+                saved["kwargs"] = dict(func.keywords)
+                break
+        policy.gradient_checkpointing_disable()
+
+    def gradient_checkpointing_enable() -> None:
+        policy.gradient_checkpointing_enable(gradient_checkpointing_kwargs=saved.get("kwargs"))
+
+    model.gradient_checkpointing_disable = gradient_checkpointing_disable
+    model.gradient_checkpointing_enable = gradient_checkpointing_enable
 
 
 def _import_ppo_classes():

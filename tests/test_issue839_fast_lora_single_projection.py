@@ -29,6 +29,11 @@ Asserted on CPU (no CUDA needed):
   contract); patching is counted, idempotent and reversible.
 - A 4-layer tiny Llama with 2 stream buffers: the patched streamed model's loss
   and all 16 adapter grads match the resident twin (#331 shape).
+- A 4-layer NF4 ``o_proj`` streamed model with 2 buffers, compared against a
+  second unpatched streamed twin: loss and every layer's ``o_proj`` adapter
+  grads match at ``rtol=1e-4, atol=1e-5``. The kernel must read
+  ``ctx.saved_tensors`` once; a second read raises ``CheckpointError`` under the
+  streamed unpack hook, and this test keeps that contract pinned.
 - Saved-for-backward bytes are not worse than peft's graph at the unit shapes
   (measured equal; the assertion is ``<=``).
 - The kernel's own grad_fn is asserted on CPU across bias, rank, and dtypes
@@ -42,11 +47,16 @@ Marked ``gpu`` (the protocol for a CUDA run; skipped in CI):
   ``lora.bnb.Linear4bit``. The tolerance is loose on purpose: the fused-vs-dequant
   divergence #776 pins is part of whatever delta is measured there, and the honest
   magnitude needs a card.
-- A micro-benchmark at the Llama-3.1-8B ``o_proj`` shape. Report, do not
-  assert.
+- A 4-layer NF4 streamed ``o_proj`` model with 2 buffers, compared against a
+  resident NF4 twin: loss and every layer's ``o_proj`` adapter grads, not only
+  the last buffer's.
+- A micro-benchmark at the Llama-3.1-8B ``o_proj`` shape (4096 -> 4096,
+  ``N=2048``, ``r`` in {16, 64}), bf16 dense and NF4: median forward+backward
+  and ``torch.cuda.max_memory_allocated``, with the card, driver and versions
+  printed as the report header. Report, do not assert speed.
 
-The gpu-marked tests need a card. Everything CPU above ran green on macOS with
-torch 2.14.0 / peft 0.21.0 / Python 3.12 (the versions CI installs).
+The gpu-marked tests need a card. Everything CPU above is CI-visible; the NF4
+streamed checkpoint test skips when bitsandbytes is not installed.
 """
 
 from __future__ import annotations
@@ -69,21 +79,147 @@ def _spy(real_forward, calls, *args, **kwargs):
     return real_forward(*args, **kwargs)
 
 
-def _randomise_lora_b(module):
+def _randomise_lora_b(module, std=0.5):
     """Give ``lora_B`` a non-zero weight so the LoRA term is actually exercised.
 
     peft initialises ``lora_B`` to zeros, which makes ``h @ B^T`` vanish: every
     comparison then holds trivially, ``dA`` is compared zero against zero, and a
     kernel that drops the dropout, ``disable_adapters``, ``merged`` or DoRA guard
     still passes. Randomising B is what makes those tests mean anything.
+
+    The NF4 streamed tests use ``std=0.02``: the tiny NF4 model has no reason to
+    carry an adapter as large as the unit-shape fp32 fixtures.
     """
     import torch
 
     with torch.no_grad():
         for _name, param in module.named_parameters():
             if "lora_B" in _name:
-                torch.nn.init.normal_(param, std=0.5)
+                torch.nn.init.normal_(param, std=std)
     return module
+
+
+def _tiny_llama_config(n_layers=4, hidden_size=64):
+    """A CPU-sized Llama. Hidden 64 is load-bearing for CPU NF4; see test_v07202."""
+    from transformers import LlamaConfig
+
+    return LlamaConfig(
+        vocab_size=64,
+        hidden_size=hidden_size,
+        intermediate_size=64,
+        num_hidden_layers=n_layers,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        tie_word_embeddings=False,
+        max_position_embeddings=128,
+    )
+
+
+def _oproj_lora(r=4, alpha=8):
+    from peft import LoraConfig, TaskType
+
+    return LoraConfig(
+        r=r,
+        lora_alpha=alpha,
+        lora_dropout=0.0,
+        bias="none",
+        target_modules=["o_proj"],
+        task_type=TaskType.CAUSAL_LM,
+    )
+
+
+def _nf4_streamed_oproj(tmp_path, *, device, dtype, n_layers=4, buffers=2):
+    """A tiny Llama sharded as NF4 on ``device`` with ``o_proj`` adapters only.
+
+    Four layers against two buffers is the #331 shape: the streamed checkpoint
+    must survive more layers than the pools hold. ``quant_device`` is pinned to
+    ``device`` because CPU and CUDA quantisation differ in nested statistics,
+    which is unrelated to the kernel.
+    """
+    import torch
+    from safetensors.torch import save_file
+    from transformers import LlamaForCausalLM
+
+    from soup_cli.utils.layer_shard import QUANT_NF4, shard_checkpoint
+    from soup_cli.utils.layer_stream_runtime import (
+        build_meta_skeleton,
+        build_streamed_model,
+        quantised_layer_suffixes,
+    )
+
+    config = _tiny_llama_config(n_layers)
+    weights = tmp_path / "model"
+    weights.mkdir(parents=True, exist_ok=True)
+    torch.manual_seed(7)
+    save_file(
+        {
+            name: tensor.contiguous()
+            for name, tensor in LlamaForCausalLM(config).state_dict().items()
+        },
+        str(weights / "model.safetensors"),
+    )
+    config.save_pretrained(str(weights))
+
+    probe = build_meta_skeleton(str(weights), dtype=dtype, quant=QUANT_NF4)
+    suffixes = quantised_layer_suffixes(probe)
+    del probe
+    shards = str(tmp_path / "shards")
+    index = shard_checkpoint(
+        str(weights),
+        shards,
+        dtype=dtype,
+        arch="llama",
+        quant=QUANT_NF4,
+        quant_suffixes=suffixes,
+        quant_device=device,
+    )
+    lora_config = _oproj_lora()
+    model, _runtime = build_streamed_model(
+        model_id=str(weights),
+        shard_dir=shards,
+        index=index,
+        lora_config=lora_config,
+        device=device,
+        dtype=dtype,
+        buffers=buffers,
+        pin=False,
+        seed=3,
+        quant=QUANT_NF4,
+    )
+    return model, weights, lora_config
+
+
+def _sync_adapters(dst, src):
+    """Copy every LoRA tensor from ``src`` into ``dst``; return the match count.
+
+    Names are normalised for peft's ``.inner.`` wrapper so the streamed and
+    resident twins can be compared parameter-for-parameter.
+    """
+    import torch
+
+    source = {
+        name.replace(".inner.", "."): tensor.detach().clone()
+        for name, tensor in src.state_dict().items()
+        if "lora_" in name
+    }
+    copied = 0
+    with torch.no_grad():
+        for name, tensor in dst.state_dict().items():
+            if "lora_" not in name:
+                continue
+            match = source.get(name.replace(".inner.", "."))
+            if match is not None:
+                tensor.copy_(match.to(tensor.device, tensor.dtype))
+                copied += 1
+    return copied
+
+
+def _oproj_grads(module):
+    grads = {}
+    for name, param in module.named_parameters():
+        if "lora_" in name and ".o_proj." in name and param.grad is not None:
+            grads[name.replace(".inner.", ".")] = param.grad.detach().clone()
+    return grads
 
 
 def _make_adapted_linear(in_f=8, out_f=6, r=2, alpha=4, bias=True, dropout=0.0, dora=False):
@@ -1171,7 +1307,10 @@ class TestStreamedModel:
         weights = tmp_path / "model"
         weights.mkdir(parents=True, exist_ok=True)
         save_file(
-            {k: v.contiguous() for k, v in LlamaForCausalLM(config).state_dict().items()},
+            {
+                name: tensor.contiguous()
+                for name, tensor in LlamaForCausalLM(config).state_dict().items()
+            },
             str(weights / "model.safetensors"),
         )
         config.save_pretrained(str(weights))
@@ -1251,6 +1390,85 @@ class TestStreamedModel:
         assert matched == 16
 
 
+class TestNf4StreamedOProjCheckpoint:
+    """A streamed NF4 checkpoint must not unpack ``ctx.saved_tensors`` twice.
+
+    Four layers against two buffers makes the streamed runtime recompute through
+    ``torch.utils.checkpoint``. A second ``ctx.saved_tensors`` read there raises
+    ``CheckpointError``; the NF4 branch used to consume a second read for the
+    quant state. The kernel now reads once, and this CPU test keeps that
+    contract pinned without a card. It also compares the loss and all eight
+    ``o_proj`` adapter grads against a second streamed model running peft's own
+    backward, so a wrong path through the NF4 backward cannot pass by producing
+    finite, non-zero grads.
+    """
+
+    def test_every_layer_receives_a_gradient(self, tmp_path):
+        _requires_train_extra()
+        for mod in ("transformers", "safetensors", "bitsandbytes"):
+            pytest.importorskip(mod, reason=f"{mod} is only in the [train] extra")
+        import torch
+
+        from soup_cli.utils.fast_lora import patch_fast_lora_single_projection
+        from soup_cli.utils.layer_stream_runtime import decoder_owner
+
+        model, _weights, _lora = _nf4_streamed_oproj(
+            tmp_path / "fast", device="cpu", dtype="float32"
+        )
+        reference, _ref_weights, _ref_lora = _nf4_streamed_oproj(
+            tmp_path / "reference", device="cpu", dtype="float32"
+        )
+        _randomise_lora_b(model, std=0.02)
+        assert _sync_adapters(reference, model) == 8
+        assert patch_fast_lora_single_projection(model) == 4
+        layers = decoder_owner(model).layers
+        assert len(layers) == 4
+        assert [layer.self_attn.o_proj.forward.__func__.__name__ for layer in layers] == [
+            "_fast_lora_single_forward"
+        ] * 4
+        assert all(
+            layer.self_attn.o_proj.forward.__func__.__name__ != "_fast_lora_single_forward"
+            for layer in decoder_owner(reference).layers
+        ), "the reference must stay unpatched"
+
+        torch.manual_seed(11)
+        input_ids = torch.randint(0, 64, (1, 8))
+        labels = torch.randint(0, 64, (1, 8))
+        model.train()
+        reference.train()
+        loss = model(input_ids=input_ids, labels=labels).loss
+        assert torch.isfinite(loss)
+        loss.backward()
+        reference_loss = reference(input_ids=input_ids, labels=labels).loss
+        assert torch.isfinite(reference_loss)
+        reference_loss.backward()
+
+        torch.testing.assert_close(loss, reference_loss, rtol=1e-4, atol=1e-5)
+
+        grads = _oproj_grads(model)
+        reference_grads = _oproj_grads(reference)
+        assert len(grads) == 8
+        assert len(reference_grads) == 8
+        for layer in range(4):
+            for ab in ("lora_A", "lora_B"):
+                suffix = f"layers.{layer}.self_attn.o_proj.{ab}.default.weight"
+                streamed_match = [grad for name, grad in grads.items() if name.endswith(suffix)]
+                reference_match = [
+                    grad for name, grad in reference_grads.items() if name.endswith(suffix)
+                ]
+                assert len(streamed_match) == 1, (layer, ab, sorted(grads))
+                assert len(reference_match) == 1, (layer, ab, sorted(reference_grads))
+                assert torch.isfinite(streamed_match[0]).all(), (layer, ab)
+                assert streamed_match[0].abs().max().item() > 0, (layer, ab)
+                torch.testing.assert_close(
+                    streamed_match[0],
+                    reference_match[0],
+                    rtol=1e-4,
+                    atol=1e-5,
+                    msg=f"layer {layer} {ab}",
+                )
+
+
 @pytest.mark.gpu
 class TestNf4Parity:
     """NF4: parity against unpatched ``lora.bnb.Linear4bit``. Needs a card."""
@@ -1319,26 +1537,169 @@ class TestNf4Parity:
 
 
 @pytest.mark.gpu
-class TestMicroBenchmark:
-    """Llama-3.1-8B ``o_proj`` shape: report, do not assert (tracker #792)."""
+class TestNf4StreamedOProjParity:
+    """NF4 streaming on the card: every layer's ``o_proj`` adapter, not the last."""
 
-    def _time_fwd_bwd(self, layer, x, iters=5):
+    def test_streamed_nf4_matches_resident_on_every_layer(self, tmp_path):
+        _requires_train_extra()
+        for mod in ("transformers", "safetensors", "bitsandbytes", "accelerate"):
+            pytest.importorskip(mod, reason=f"{mod} is only in the [train] extra")
+        import torch
+        from peft import get_peft_model
+        from transformers import AutoModelForCausalLM
+
+        from soup_cli.utils.fast_lora import patch_fast_lora_single_projection
+        from soup_cli.utils.layer_stream_runtime import build_nf4_config, decoder_owner
+
+        model, weights, lora_config = _nf4_streamed_oproj(
+            tmp_path, device="cuda", dtype="bfloat16"
+        )
+        _randomise_lora_b(model, std=0.02)
+
+        resident = AutoModelForCausalLM.from_pretrained(
+            str(weights),
+            quantization_config=build_nf4_config("bfloat16"),
+            dtype=torch.bfloat16,
+            device_map={"": "cuda"},
+        )
+        resident.config.use_cache = False
+        for param in resident.parameters():
+            param.requires_grad = False
+        resident = get_peft_model(resident, lora_config)
+        assert _sync_adapters(resident, model) == 8
+
+        assert patch_fast_lora_single_projection(model) == 4
+        layers = decoder_owner(model).layers
+        assert len(layers) == 4
+        assert [layer.self_attn.o_proj.forward.__func__.__name__ for layer in layers] == [
+            "_fast_lora_single_forward"
+        ] * 4
+
+        torch.manual_seed(11)
+        input_ids = torch.randint(0, 64, (1, 8), device="cuda")
+        labels = torch.randint(0, 64, (1, 8), device="cuda")
+        model.train()
+        resident.train()
+        streamed_loss = model(input_ids=input_ids, labels=labels).loss
+        streamed_loss.backward()
+        resident_loss = resident(input_ids=input_ids, labels=labels).loss
+        resident_loss.backward()
+
+        assert torch.isfinite(streamed_loss)
+        # Loose for the same reason as TestNf4Parity: fused-vs-dequant (#776)
+        # is part of the delta, so this compares delivery, not bit layout.
+        torch.testing.assert_close(streamed_loss, resident_loss, rtol=1e-2, atol=1e-2)
+
+        streamed_grads = _oproj_grads(model)
+        resident_grads = _oproj_grads(resident)
+        assert len(streamed_grads) == 8
+        assert len(resident_grads) == 8
+        for layer in range(4):
+            for ab in ("lora_A", "lora_B"):
+                suffix = f"layers.{layer}.self_attn.o_proj.{ab}.default.weight"
+                streamed_match = [
+                    grad for name, grad in streamed_grads.items() if name.endswith(suffix)
+                ]
+                resident_match = [
+                    grad for name, grad in resident_grads.items() if name.endswith(suffix)
+                ]
+                assert len(streamed_match) == 1, (layer, ab, sorted(streamed_grads))
+                assert len(resident_match) == 1, (layer, ab, sorted(resident_grads))
+                assert torch.isfinite(streamed_match[0]).all(), (layer, ab)
+                assert streamed_match[0].abs().max().item() > 0, (layer, ab)
+                max_abs = (streamed_match[0] - resident_match[0]).abs().max().item()
+                print(f"#839 streamed NF4 layer {layer} {ab}: max abs diff {max_abs:.3e}")
+                # The largest measured difference on the sm_75 card is 8.7e-4.
+                # atol=2e-3 leaves ~2.3x headroom over that reading while still
+                # rejecting a 10% dX error, which moves the downstream layer
+                # gradients by more than this bound.
+                torch.testing.assert_close(
+                    streamed_match[0],
+                    resident_match[0],
+                    rtol=1e-2,
+                    atol=2e-3,
+                    msg=f"layer {layer} {ab}",
+                )
+
+
+@pytest.mark.gpu
+class TestMicroBenchmark:
+    """Llama-3.1-8B ``o_proj`` shape: report, do not assert speed (tracker #792)."""
+
+    @staticmethod
+    def _smi(fields):
+        import shutil
+        import subprocess
+
+        tool = shutil.which("nvidia-smi")
+        if tool is None:
+            return "unavailable"
+        try:
+            proc = subprocess.run(
+                [tool, f"--query-gpu={fields}", "--format=csv,noheader"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return "unavailable"
+        if proc.returncode != 0 or not proc.stdout.strip():
+            return "unavailable"
+        return proc.stdout.strip()
+
+    def _environment_header(self):
+        import bitsandbytes as bnb
+        import peft
+        import torch
+
+        props = torch.cuda.get_device_properties(0)
+        print(
+            f"#839 bench env: {props.name} sm_{props.major}{props.minor} "
+            f"driver={self._smi('driver_version')} "
+            f"sm_clock_before={self._smi('clocks.sm')} "
+            f"sm_clock_max={self._smi('clocks.max.sm')} "
+            f"torch={torch.__version__} cuda={torch.version.cuda} "
+            f"peft={peft.__version__} bitsandbytes={bnb.__version__}"
+        )
+
+    def _measure(self, model, x, iters=5):
+        import statistics
+
         import torch
 
         def step():
-            out = layer(x)
+            model.zero_grad(set_to_none=True)
+            x.grad = None
+            out = model.linear(x)
             out.sum().backward()
+            return out
 
-        step()
+        for _ in range(5):
+            out = step()
         torch.cuda.synchronize()
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
-        start.record()
+        # Drop the warmup graph and its grads: the baseline is the persistent
+        # model plus input, not the last warmup step. Otherwise the first arm
+        # carries a live graph into ``base`` and the two arms are not comparable.
+        model.zero_grad(set_to_none=True)
+        x.grad = None
+        del out
+        torch.cuda.synchronize()
+        base = torch.cuda.memory_allocated()
+        torch.cuda.reset_peak_memory_stats()
+        times = []
         for _ in range(iters):
-            step()
-        end.record()
-        torch.cuda.synchronize()
-        return start.elapsed_time(end) / iters
+            out = None  # drop the previous step's graph before timing the next
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
+            out = step()
+            end.record()
+            torch.cuda.synchronize()
+            times.append(start.elapsed_time(end))
+        peak = torch.cuda.max_memory_allocated()
+        assert torch.isfinite(out).all()
+        return statistics.median(times), peak, base
 
     def test_report_only(self):
         _requires_train_extra()
@@ -1355,30 +1716,59 @@ class TestMicroBenchmark:
                 super().__init__()
                 self.linear = layer
 
-        config = LoraConfig(
-            r=16, lora_alpha=32, lora_dropout=0.0, bias="none", target_modules=["linear"]
-        )
-        x = torch.randn(1, 4096, 4096, device="cuda", dtype=torch.bfloat16)
+        # Isolate the readings from whatever the previous GPU test left alive.
+        import gc
 
-        dense = _Wrapper(nn.Linear(4096, 4096, bias=False, dtype=torch.bfloat16)).to("cuda")
-        inject_adapter_in_model(config, dense)
-        plain_ms = self._time_fwd_bwd(dense.linear, x)
-        assert patch_fast_lora_single_projection(dense) == 1
-        fast_ms = self._time_fwd_bwd(dense.linear, x)
-        assert torch.isfinite(dense.linear(x)).all()
-        print(f"#839 o_proj bf16 dense: peft={plain_ms:.2f}ms fast={fast_ms:.2f}ms")
+        gc.collect()
+        torch.cuda.empty_cache()
 
-        nf4 = _Wrapper(
-            bnb.nn.Linear4bit(
-                4096, 4096, bias=False, compute_dtype=torch.bfloat16, quant_type="nf4"
-            )
-        ).to("cuda")
-        inject_adapter_in_model(config, nf4)
-        nf4_plain_ms = self._time_fwd_bwd(nf4.linear, x)
-        assert patch_fast_lora_single_projection(nf4) == 1
-        nf4_fast_ms = self._time_fwd_bwd(nf4.linear, x)
-        assert torch.isfinite(nf4.linear(x)).all()
-        print(f"#839 o_proj bf16 nf4: peft={nf4_plain_ms:.2f}ms fast={nf4_fast_ms:.2f}ms")
+        # N=2048 follows the issue; x requires grad, as o_proj's input does in
+        # a real network, so the dX GEMM is part of the backward being timed.
+        x = torch.randn(1, 2048, 4096, device="cuda", dtype=torch.bfloat16, requires_grad=True)
+        self._environment_header()
+
+        for rank in (16, 64):
+            for kind in ("dense", "nf4"):
+                if kind == "dense":
+                    layer = nn.Linear(4096, 4096, bias=False, dtype=torch.bfloat16)
+                else:
+                    layer = bnb.nn.Linear4bit(
+                        4096,
+                        4096,
+                        bias=False,
+                        compute_dtype=torch.bfloat16,
+                        quant_type="nf4",
+                    )
+                model = _Wrapper(layer).to("cuda")
+                inject_adapter_in_model(
+                    LoraConfig(
+                        r=rank,
+                        lora_alpha=2 * rank,
+                        lora_dropout=0.0,
+                        bias="none",
+                        target_modules=["linear"],
+                    ),
+                    model,
+                )
+                plain_ms, plain_peak, plain_base = self._measure(model, x)
+                assert patch_fast_lora_single_projection(model) == 1
+                fast_ms, fast_peak, fast_base = self._measure(model, x)
+                print(
+                    f"#839 o_proj bf16 {kind} r={rank}: "
+                    f"peft median={plain_ms:.2f}ms "
+                    f"peak={plain_peak / 2**20:.0f}MiB "
+                    f"(base {plain_base / 2**20:.0f}MiB, "
+                    f"step {(plain_peak - plain_base) / 2**20:.0f}MiB); "
+                    f"fast median={fast_ms:.2f}ms "
+                    f"peak={fast_peak / 2**20:.0f}MiB "
+                    f"(base {fast_base / 2**20:.0f}MiB, "
+                    f"step {(fast_peak - fast_base) / 2**20:.0f}MiB)"
+                )
+                del model
+                gc.collect()
+                torch.cuda.empty_cache()
+
+        print(f"#839 bench env after: sm_clock={self._smi('clocks.sm')}")
 
 
 class TestTheFastPathIsActuallyTaken:

@@ -163,6 +163,7 @@ soup train --config soup.yaml --tracker mlflow  MLflow / SwanLab / Trackio integ
 soup profile --config soup.yaml              Estimate memory/speed before training
 soup profile --config soup.yaml --gpu a100   Estimate for specific GPU
 soup profile --config soup.yaml --json       Machine-readable output
+soup profile --model Qwen/Qwen2.5-7B-Instruct --gpu rtx5070 --method qlora  Will a model fit, without a soup.yaml
 soup cost --config soup.yaml                 Estimate training cost in USD across providers
 soup cost --config soup.yaml --gpu H100      Estimate training cost for specific GPU
 soup adapters list ./output/                 Scan for LoRA adapters
@@ -184,8 +185,9 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 171 ready-made recipes
+soup recipes list                             List all 172 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
+soup recipes show qwen3.5-0.8b-dpo           Print the tiny Qwen3.5 text-preference recipe
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
 soup recipes search "reasoning"              Search by keyword/task/size
 soup recipes verify                           Attach every shipped config on the meta device; exit 2 if one cannot (#1116)
@@ -318,8 +320,8 @@ soup drift-alarm ... --slack-url <https> | --discord-url <https>  Optional SSRF-
 soup tunability --list                                   List built-in candidate-base catalogue
 soup tunability --dataset <jsonl> [--candidates a,b,c]   Probe candidate bases + Pareto frontier report
 soup tunability --dataset <jsonl> --live [--device cpu]  LIVE per-candidate LoRA probe (loads each repo)
-soup plan --config soup.yaml                             Pre-flight summary + write soup.tfstate
-soup apply --config soup.yaml [--dry-run]                Lock-and-execute; refuses on drift (exit 3)
+soup plan --config soup.yaml [--minillm-on-policy]               Pre-flight summary + write soup.tfstate
+soup apply --config soup.yaml [--dry-run] [--minillm-on-policy]  Record reviewed plan; refuses on drift (exit 3)
 soup env lock | status | check                           Hermetic env lockfile + ABI drift + declared-bound violation detection (exit 3)
 soup env fix [--format uv-pip|requirements] [--output req.txt]  Render a reproducible install plan from soup-env.lock (print-only)
 soup completions bash | zsh | fish                       Shell completion script (sourceable via eval)

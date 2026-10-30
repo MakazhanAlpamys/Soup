@@ -75,6 +75,35 @@ GPU_MEMORY: dict[str, int] = {
 # no --gpu and no device is detected. Always reported as assumed, not measured.
 ASSUMED_GPU_MEMORY_GB = 24.0
 
+#: ``gpu_memory_source`` when the memory is Metal's recommended working set (#2049).
+MLX_WORKING_SET_SOURCE = "mlx working set"
+
+
+def detected_gpu_memory() -> tuple[float, str]:
+    """The card's memory in GiB and its source, with no ``--gpu``.
+
+    On Apple Silicon that is Metal's recommended working set (``"mlx working
+    set"``), never the total unified memory; elsewhere the CUDA device
+    (``"detected"``). Neither: ``ASSUMED_GPU_MEMORY_GB``, ``"assumed"``.
+    """
+    from soup_cli.utils import mlx
+
+    if mlx.is_apple_silicon():
+        working_set = mlx.get_mlx_working_set_bytes()
+        if working_set:
+            return working_set / 1024**3, MLX_WORKING_SET_SOURCE
+        return ASSUMED_GPU_MEMORY_GB, "assumed"
+    try:
+        from soup_cli.utils.gpu import get_gpu_info
+
+        mem_bytes = get_gpu_info().get("memory_total_bytes", 0)
+        if mem_bytes > 0:
+            return mem_bytes / (1024**3), "detected"
+    except (ImportError, RuntimeError, OSError):
+        pass
+    return ASSUMED_GPU_MEMORY_GB, "assumed"
+
+
 _GPU_NAME_NOISE = re.compile(r"\b(nvidia|geforce|tesla|gpu)\b")
 # A memory size written as its own word, which the table spells as a suffix.
 _GPU_NAME_SIZE = re.compile(r"[\s-](\d+)\s*gb\b")
@@ -303,6 +332,9 @@ def profile_result(
         "total_memory_gb": round(breakdown.total_gb, 2),
         "total_memory_bytes": est.total_bytes,
         "memory_terms_bytes": dict(est.terms),
+        # A full fine-tune has no adapters, so no rank (Spectrum and LISA too, whose
+        # lora.r keeps its default).
+        "lora_r": None if run.peft == "full" else run.lora_r,
         "batch_size": run.batch_size,
         "seq_len": run.seq_len,
         "gradient_checkpointing": (
@@ -346,6 +378,138 @@ def profile_from_config(
         gradient_checkpointing=cfg.training.gradient_checkpointing,
     )
     result["quantization"] = cfg.training.quantization
+    return result
+
+
+#: ``soup profile --model``'s methods: (quantization as soup.yaml names it, peft mode).
+MODEL_QUERY_METHODS: dict[str, tuple[str, str]] = {
+    "lora": ("none", "lora"),
+    "qlora": ("4bit", "qlora"),
+    "full": ("none", "full"),
+}
+
+#: ``--gradient-checkpointing`` values, as soup.yaml's ``gradient_checkpointing``.
+MODEL_QUERY_CHECKPOINTING: dict[str, Any] = {
+    "off": False,
+    "full": True,
+    "medium": "medium",
+    "selective": "selective",
+    "auto": "auto",
+}
+
+
+class ModelShapeUnavailableError(ValueError):
+    """``--model``'s config.json could not be read, so nothing is estimated."""
+
+
+def _unreadable_reason(model: str, *, allow_network: bool) -> str:
+    import os
+
+    from soup_cli.utils.model_shape import _REPO_ID, hub_offline
+
+    if os.path.isdir(model):
+        return "there is no readable config.json in that directory"
+    if not _REPO_ID.fullmatch(model) or ".." in model:
+        return "it is not a local model directory or a Hugging Face model id"
+    if hub_offline():
+        return (
+            "its config.json is not in the Hugging Face cache, and HF_HUB_OFFLINE "
+            "or TRANSFORMERS_OFFLINE is set"
+        )
+    if not allow_network:
+        return "its config.json is not in the Hugging Face cache"
+    return (
+        "its config.json is not in the Hugging Face cache and could not be fetched "
+        "from the Hub (no network, a gated or private repo, or no such model)"
+    )
+
+
+def profile_from_model(
+    model: str,
+    *,
+    method: str = "qlora",
+    seq_len: int = 2048,
+    batch_size: int = 4,
+    lora_r: int = 64,
+    optimizer: str = "adamw_torch",
+    gradient_checkpointing: str = "off",
+    allow_network: bool = True,
+    gpu_memory_gb: Optional[float] = None,
+) -> dict:
+    """The memory profile of a model id or directory, with no soup.yaml (#2049).
+
+    The same estimate as :func:`profile_from_config` for the same run. The shape must
+    come from the model's own config.json (a local directory, the Hugging Face cache,
+    then the Hub unless offline); a shape guessed from the name is not an answer to
+    "will it fit", so that raises :class:`ModelShapeUnavailableError`. Out-of-range
+    numbers raise ``ValueError``.
+    """
+    from soup_cli.utils.hardware_fit import (
+        HardwareFitInput,
+        checkpointing_for_task,
+        estimate_peak_vram_gb,
+        validate_batch_size,
+        validate_seq_len,
+    )
+    from soup_cli.utils.model_shape import read_model_shape
+
+    quant, peft = MODEL_QUERY_METHODS[method]
+    shape = read_model_shape(model, allow_network=allow_network)
+    if shape.guessed:
+        raise ModelShapeUnavailableError(_unreadable_reason(model, allow_network=allow_network))
+    inp = HardwareFitInput(
+        params_b=shape.params / 1e9,
+        seq_len=validate_seq_len(seq_len),
+        batch_size=validate_batch_size(batch_size),
+        optimizer=optimizer,
+        quant=quant,
+        peft=peft,
+        gradient_checkpointing=checkpointing_for_task(
+            MODEL_QUERY_CHECKPOINTING[gradient_checkpointing],
+            task="sft",
+            gpu_memory_gb=gpu_memory_gb,
+        ),
+        shape=shape,
+        lora_r=lora_r,
+    )
+    result = profile_result(estimate_peak_vram_gb(inp), model_name=model)
+    result["quantization"] = quant
+    return result
+
+
+def finish_profile(
+    result: dict, *, seq_len: int, gpu_memory_gb: float, gpu_memory_source: str
+) -> dict:
+    """Add the speed, the recommendations and the fit to an estimate's ``result``.
+
+    Shared by ``soup profile`` (``--config`` and ``--model``) and the MCP tool.
+    ``gpu_memory_gb`` is the card's GiB.
+    """
+    from soup_cli.utils.vram_estimate import fit_verdict
+
+    tokens_per_sec = estimate_speed(
+        result["model_params_b"], result["quantization"], result["batch_size"]
+    )
+    result["tokens_per_sec"] = round(tokens_per_sec, 1)
+    result["samples_per_sec"] = round(tokens_per_sec / max(seq_len, 1), 2)
+    result["recommended_batch_size"] = recommend_batch_size(
+        result["total_memory_gb"], gpu_memory_gb
+    )
+    result["compatible_gpus"] = recommend_gpu(result["total_memory_gb"])
+    result["gpu_memory_gb"] = gpu_memory_gb
+    # "flag" (--gpu), "detected" (a CUDA device), "mlx working set" (Apple Silicon)
+    # or "assumed" (none of them: a default, not a measurement).
+    result["gpu_memory_source"] = gpu_memory_source
+    # "fits", "tight" (fits, but not with the train pre-flight's margin) or
+    # "does not fit". A card's GB are binary: an "rtx3060laptop" 6 is 6144 MiB.
+    result["fit"] = fit_verdict(result["total_memory_bytes"], gpu_memory_gb * 1024**3)
+    if gpu_memory_source == MLX_WORKING_SET_SOURCE:
+        result["notes"].append(
+            f"Apple Silicon: the fit is against Metal's recommended working-set size "
+            f"({gpu_memory_gb:.1f} GB), not the whole unified memory. The estimate's "
+            "terms were measured with PyTorch on CUDA and are not measured on Apple "
+            "hardware."
+        )
     return result
 
 
