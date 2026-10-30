@@ -849,7 +849,7 @@ class TestLoadedMole:
         )
         gate.gate.weight.data.zero_()
         loaded = LoadedMole(model, _Tok(), gate, ["task_0", "task_1"])
-        text, p_tok, c_tok = loaded.generate_text(
+        text, p_tok, c_tok, _ = loaded.generate_text(
             [{"role": "user", "content": "hi"}], max_tokens=3, temperature=0.0
         )
         assert text == "out"
