@@ -766,7 +766,7 @@ def arithmetic(
     )
     from soup_cli.utils.adapter_diff import load_adapter_weights
     from soup_cli.utils.adapter_merge import write_merged_adapter
-    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, ensure_distinct_paths
 
     # 1. Parse the --adapter name=path map.
     name_re = re.compile(r"^[A-Za-z0-9_.\-]+$")
@@ -880,9 +880,12 @@ def arithmetic(
             "base models (results may be meaningless).[/]"
         )
 
-    # 5. Output containment.
+    # 5. Output containment; refuse writing over a referenced adapter (#2358).
     try:
         enforce_under_cwd_and_no_symlink(output, "output")
+        ensure_distinct_paths(
+            [(f"adapter {n}", mapping[n]) for n in referenced], [("--output", output)]
+        )
     except (ValueError, OSError) as exc:
         console.print(f"[red]Output path refused: {escape(str(exc))}[/]")
         raise typer.Exit(1) from exc
