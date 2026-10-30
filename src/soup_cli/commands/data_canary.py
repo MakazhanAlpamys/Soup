@@ -172,8 +172,8 @@ def insert(
     # Neither write may land on the dataset, and the dataset write must not
     # replace the manifest just written: either loss is unrecoverable (#2226).
     refuse_output_over_input(
-        [('the input', path)],
-        [('--output', output), ('--manifest', manifest)],
+        [("the input", path)],
+        [("--output", output), ("--manifest", manifest)],
         console=console,
     )
     refuse_output_over_input([("--output", output)], [("--manifest", manifest)], console=console)
@@ -270,8 +270,8 @@ def check(
     if output is not None:
         _guard_under_cwd(output, "Output")
         refuse_output_over_input(
-            [('--manifest', manifest)],
-            [('--output', output)],
+            [("--manifest", manifest)],
+            [("--output", output)],
             console=console,
         )
     try:

@@ -16,8 +16,8 @@ def _plain(text):
     return " ".join(strip_ansi(text).split())
 
 
-@pytest.mark.parametrize("case", [c for c in _CASES if c.command != "recipe"],
-                         ids=lambda c: c.command)
+@pytest.mark.parametrize("case", [case for case in _CASES if case.command != "recipe"],
+                         ids=lambda case: case.command)
 def test_commands_share_the_same_refusal_message(case, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     before = _setup(case)

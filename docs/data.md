@@ -1146,24 +1146,20 @@ data:
 
 ## Data Tools
 
-Data commands refuse an output that names an input before reading or writing
-the data. This includes alternate spellings (`./x`, absolute paths and Windows
-case variants) and links to the same file. Refusals name both paths and say
-which output to change, using the same terminal-safe message across commands.
-Existing exit codes are preserved: `augment` and `evolve` use 2, `lint` uses 3,
-and the other file-collision checks use 1. Optional report outputs are checked
-only when provided.
-
-File outputs must be distinct from their inputs. `persona-mix` protects
+Data commands refuse a file output that aliases an input before reading or
+writing the data, including alternate spellings (`./x`, `sub/../x`, absolute
+paths and Windows case variants), hard links and symlinks to the same file.
+The same terminal-safe message names both paths and says which output to change.
+`augment` and `evolve` exit 2, `lint` exits 3, and every other command exits 1.
+Optional report outputs are checked only when provided. `persona-mix` protects
 `--prompts`, `--personas` and `--styles`; `generate` protects `--seed`,
 `--dedup-with` and `--context`; and `canary check` protects `--manifest`.
 `mix --optimize` also protects every `--datasets` entry and the live
 `--base-yaml`, even with `--overwrite`. Forge's dataset and provenance outputs
 must not replace a source document or each other. Recipe execution protects
 the recipe and seed files from sampler, checkpoint and node-sidecar writes.
-These collisions exit 1 and name the paths; choose a separate output. A recipe
-can still read inputs inside its output directory when no written file aliases
-them. `mix --apply` only prints a recipe and does not write `--output`.
+A recipe can still read inputs inside its output directory when no written file
+aliases them. `mix --apply` only prints a recipe and does not write `--output`.
 
 ```bash
 # Inspect a dataset

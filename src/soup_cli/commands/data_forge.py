@@ -116,13 +116,13 @@ def forge(
         raise typer.Exit(1) from exc
 
     refuse_output_over_input(
-        [('--docs', docs)] + [('--docs', path) for path in doc_paths],
-        [('--output', output), ('--provenance', provenance)],
+        [("--docs", docs)] + [("--docs", path) for path in doc_paths],
+        [("--output", output), ("--provenance", provenance)],
         console=console,
     )
     refuse_output_over_input(
-        [('--output', output)],
-        [('--provenance', provenance)],
+        [("--output", output)],
+        [("--provenance", provenance)],
         console=console,
     )
 

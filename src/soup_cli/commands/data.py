@@ -265,8 +265,8 @@ def merge(
 ):
     """Merge multiple datasets into a single file."""
     refuse_output_over_input(
-        [('the input', file_str) for file_str in files],
-        [('--output', output)],
+        [("the input", file_str) for file_str in files],
+        [("--output", output)],
         console=console,
     )
     all_data: list[dict] = []
@@ -1755,8 +1755,8 @@ def augment_data(
     # Before the --output symlink check, so a symlink to the input is reported
     # as the input; the default --output (augmented.jsonl) can be the input too.
     refuse_output_over_input(
-        [('--input', input_path)],
-        [('--output', output_path)],
+        [("--input", input_path)],
+        [("--output", output_path)],
         exit_code=2,
         console=console,
     )
@@ -3235,7 +3235,7 @@ def recipe(
         ]
         refuse_output_over_input(
             inputs,
-            [('--output', target) for target in _recipe_write_paths(dag, output)],
+            [("--output", target) for target in _recipe_write_paths(dag, output)],
             console=console,
         )
 
@@ -4222,8 +4222,8 @@ def evolve(
         raise typer.Exit(2)
 
     refuse_output_over_input(
-        [('--input', input_path)],
-        [('--output', output)],
+        [("--input", input_path)],
+        [("--output", output)],
         exit_code=2,
         console=console,
     )

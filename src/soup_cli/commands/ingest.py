@@ -175,8 +175,8 @@ def ingest(
     # Refuse before anything is opened for writing: the default --output
     # (traces.jsonl) is also a plausible --logs, and the write would empty it.
     refuse_output_over_input(
-        [('--logs', str(logs_path))],
-        [('--output', str(output_path))],
+        [("--logs", str(logs_path))],
+        [("--output", str(output_path))],
         console=console,
     )
 

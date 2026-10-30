@@ -196,8 +196,8 @@ def decontaminate(
     )
 
     refuse_output_over_input(
-        [('--input', input), ('--benchmark-file', benchmark_file)],
-        [('--output', output)],
+        [("--input", input), ("--benchmark-file", benchmark_file)],
+        [("--output", output)],
         console=console,
     )
     rows = _read_rows(input)

@@ -182,8 +182,8 @@ def doctor(
         console.print(f"[red]File not found: {file_path}[/]")
         raise typer.Exit(code=1)
     refuse_output_over_input(
-        [('the input', path)],
-        [('--output', output)],
+        [("the input", path)],
+        [("--output", output)],
         exit_code=1,
         console=console,
     )
@@ -307,8 +307,8 @@ def lint(
         console.print(f"[red]File not found: {file_path}[/]")
         raise typer.Exit(code=EXIT_USAGE_ERROR)
     refuse_output_over_input(
-        [('the input', path)],
-        [('--output', output)],
+        [("the input", path)],
+        [("--output", output)],
         exit_code=EXIT_USAGE_ERROR,
         console=console,
     )
