@@ -77,6 +77,71 @@ def needs_reference_model(weights: Mapping[str, float]) -> bool:
     return bool(set(weights) & REF_MODEL_LOSSES)
 
 
+def primary_loss(weights: Mapping[str, float]) -> str:
+    """The loss whose trl trainer is built: the largest weight, and on a tie the
+    first key."""
+    return max(weights, key=weights.get)
+
+
+def validate_adapter_off_reference(weights: Mapping[str, float], training: Any) -> None:
+    """Refuse a ``dpo`` / ``ipo`` term whose reference would not be the model
+    the policy started from (#1425).
+
+    Under a ``simpo`` / ``orpo`` primary the reference is the model with the
+    LoRA adapter switched off. That is the starting model only while the base
+    weights stay as they were loaded. PiSSA, OLoRA and LoftQ move part of every
+    targeted weight into the adapter when it is created and leave a residual in
+    the base, and a ReLoRA restart merges the adapter into the base; adapter-off
+    is then another model, and the term would train against it without an
+    error. A ``dpo`` / ``ipo`` primary is not affected by the init: trl's
+    ``DPOTrainer`` keeps a frozen copy of the adapter as its reference.
+    """
+    primary = primary_loss(weights)
+    if primary not in REF_FREE_LOSSES or not needs_reference_model(weights):
+        return
+    lora = getattr(training, "lora", None)
+    init = getattr(lora, "init_strategy", "random")
+    relora_steps = getattr(training, "relora_steps", None)
+    other_primary = (
+        "Give dpo or ipo the largest weight (trl's DPOTrainer keeps a frozen "
+        "copy of the adapter as its reference)"
+    )
+    if getattr(lora, "use_olora", False):
+        # The schema sets init_strategy='olora' beside it and refuses any
+        # other value, so the way out is the flag, not the init.
+        why = (
+            "training.lora.use_olora=True (the same as init_strategy='olora') "
+            "rewrites the base weights when the adapter is created"
+        )
+        fix = (
+            f"{other_primary}, or set training.lora.use_olora to false and leave "
+            "training.lora.init_strategy unset."
+        )
+    elif init != "random":
+        why = (
+            f"training.lora.init_strategy={init!r} rewrites the base weights when "
+            "the adapter is created"
+        )
+        fix = f"{other_primary}, or set training.lora.init_strategy to 'random'."
+    elif relora_steps is not None:
+        why = (
+            f"training.relora_steps={relora_steps} merges the adapter into the base "
+            "weights at every restart"
+        )
+        fix = "Remove training.relora_steps, or remove the dpo / ipo term from the blend."
+    else:
+        return
+    terms = ", ".join(sorted(set(weights) & REF_MODEL_LOSSES))
+    article = "an" if primary[0] in "aeiou" else "a"
+    raise ValueError(
+        f"preference_loss_weights: cannot compute {terms} under {article} {primary} primary "
+        f"with this adapter. dpo and ipo compare the policy with the model it "
+        f"started from. The {primary} trainer keeps no copy of that model, so the "
+        f"blend reads it by switching the LoRA adapter off, and {why}: with the "
+        f"adapter off the model is no longer the one that was loaded. {fix}"
+    )
+
+
 def _sigmoid(x):
     import torch
 
@@ -439,10 +504,11 @@ def attach_weighted_preference_combine(
             ):
                 # The policy log-probs are there; only the reference is not.
                 reason = (
-                    "dpo and ipo compare the policy with a frozen reference, and "
-                    "the primary trainer of this blend (the loss with the largest "
-                    "weight) runs none. Give dpo or ipo the largest weight, or "
-                    "remove"
+                    "dpo and ipo compare the policy with a frozen reference. The "
+                    "primary trainer of this blend (the loss with the largest "
+                    "weight) runs none, and the model has no LoRA adapter to "
+                    "switch off to make one. Give dpo or ipo the largest weight, "
+                    "or remove"
                 )
             else:
                 reason = (
@@ -467,7 +533,7 @@ def attach_weighted_preference_combine(
     return True
 
 
-def attach_policy_logp_capture(trainer: object) -> bool:
+def attach_policy_logp_capture(trainer: object, reference: bool = False) -> bool:
     """Record the policy log-probs trl already computes (#1425).
 
     trl 0.29's CPO (the SimPO path) and ORPO trainers compute per-sequence
@@ -490,6 +556,13 @@ def attach_policy_logp_capture(trainer: object) -> bool:
     wrapper using ``sigmoid`` or ``hinge`` would return sums and this would
     double-count the lengths.
 
+    ``reference=True`` is for a blend that also names ``dpo`` or ``ipo``. The
+    CPO and ORPO trainers have no frozen reference, so the capture makes one:
+    the same ``concatenated_forward`` once more, without gradients and with
+    the LoRA adapter switched off, which is the base model the adapter started
+    from. With full fine-tuning there is no adapter to switch off, nothing is
+    recorded, and the blend refuses.
+
     Returns True when the capture is in place.
     """
     if not hasattr(trainer, "concatenated_forward"):
@@ -508,11 +581,44 @@ def attach_policy_logp_capture(trainer: object) -> bool:
             # through to the blend's refusal rather than raise out of a forward.
             return out
         _record_policy_logps(trainer, batch, chosen_logps, rejected_logps)
+        if reference:
+            _record_adapter_free_reference(trainer, original, model, batch, args, kwargs)
         return out
 
     capturing._soup_logp_capture = True
     trainer.concatenated_forward = capturing
     return True
+
+
+def _record_adapter_free_reference(trainer, forward, model, batch, args, kwargs) -> None:
+    """Add reference log-probs to the capture: ``forward`` with the adapter off.
+
+    PEFT's ``disable_adapter()`` turns ``requires_grad`` off on every adapter
+    weight and, on the way out, on for all of the active adapter's, whatever
+    they were. The flags are put back as they were found, so a weight the run
+    froze on purpose stays frozen.
+    """
+    import torch
+
+    accelerator = getattr(trainer, "accelerator", None)
+    peft_model = accelerator.unwrap_model(model) if accelerator is not None else model
+    if not hasattr(peft_model, "disable_adapter"):
+        return
+    flags = [(param, param.requires_grad) for param in peft_model.parameters()]
+    try:
+        with torch.no_grad(), peft_model.disable_adapter():
+            out = forward(model, batch, *args, **kwargs)
+    finally:
+        for param, flag in flags:
+            param.requires_grad_(flag)
+    stored = trainer._soup_policy_logps
+    ref_chosen, ref_rejected = out[0], out[1]
+    if stored["chosen_lens"] is not None:
+        # trl averaged these too; back to sums, like the policy's.
+        ref_chosen = ref_chosen * stored["chosen_lens"].to(ref_chosen.dtype)
+        ref_rejected = ref_rejected * stored["rejected_lens"].to(ref_rejected.dtype)
+    stored["ref_chosen_logps"] = ref_chosen
+    stored["ref_rejected_logps"] = ref_rejected
 
 
 def attach_reference_logp_capture(trainer: object) -> bool:

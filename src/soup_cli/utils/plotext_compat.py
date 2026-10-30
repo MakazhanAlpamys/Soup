@@ -10,7 +10,9 @@ from rich.text import Text
 def _v6_figure(plotext: Any) -> Any | None:
     """Return plotext 6's figure object, or ``None`` for the 5.x API."""
     figure = getattr(plotext, "figure", None)
-    return figure if figure is not None and not callable(figure) else None
+    # 5.2.2 also exposes a non-callable figure, but it lacks the 6.x API. Probe
+    # the method we are about to call rather than assuming non-callable means v6.
+    return figure if not callable(figure) and callable(getattr(figure, "clear", None)) else None
 
 
 def render_histogram(

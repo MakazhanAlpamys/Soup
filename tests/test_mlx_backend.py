@@ -38,6 +38,8 @@ class TestMLXDetection:
         fake_mlx = types.ModuleType("mlx")
         fake_mlx.__version__ = "0.20.0"
         fake_core = types.ModuleType("mlx.core")
+        # #1850: MLX SFT's train() seeds mx.random before attaching LoRA.
+        fake_core.random = types.SimpleNamespace(seed=lambda _seed: None)
         fake_core.metal = types.SimpleNamespace(is_available=lambda: True)
         fake_mlx.core = fake_core
         monkeypatch.setitem(sys.modules, "mlx", fake_mlx)
@@ -70,6 +72,8 @@ class TestMLXDetection:
 
         fake_mlx = types.ModuleType("mlx")  # no __version__ on the top-level pkg
         fake_core = types.ModuleType("mlx.core")
+        # #1850: MLX SFT's train() seeds mx.random before attaching LoRA.
+        fake_core.random = types.SimpleNamespace(seed=lambda _seed: None)
         fake_core.__version__ = "0.32.2"
         fake_mlx.core = fake_core
         monkeypatch.setitem(sys.modules, "mlx", fake_mlx)
@@ -91,6 +95,8 @@ class TestMLXDetection:
 
         fake_mlx = types.ModuleType("mlx")
         fake_core = types.ModuleType("mlx.core")
+        # #1850: MLX SFT's train() seeds mx.random before attaching LoRA.
+        fake_core.random = types.SimpleNamespace(seed=lambda _seed: None)
         fake_core.metal = types.SimpleNamespace(is_available=lambda: True)
         fake_mlx.core = fake_core
         monkeypatch.setitem(sys.modules, "mlx", fake_mlx)
@@ -282,8 +288,8 @@ class TestMLXRecipes:
         assert cfg.base == "mlx-community/gemma-3-4b-it-4bit"
         assert cfg.backend == "mlx"
 
-    def test_mlx_dpo_config_rejected_at_load(self):
-        """backend=mlx + task=dpo is rejected by the SoupConfig validator."""
+    def test_mlx_dpo_config_loads(self):
+        """backend=mlx + task=dpo has a trainer (trainer/mlx_dpo.py) and loads."""
         from soup_cli.config.loader import load_config_from_string
 
         yaml_str = """
@@ -298,10 +304,11 @@ training:
   lr: 1e-6
 output: ./output
 """
-        with pytest.raises(ValueError, match="MLX backend only ships SFT"):
-            load_config_from_string(yaml_str)
+        cfg = load_config_from_string(yaml_str)
+        assert (cfg.task, cfg.backend) == ("dpo", "mlx")
 
-    def test_mlx_grpo_config_rejected_at_load(self):
+    def test_mlx_grpo_config_loads(self):
+        """#1976: GRPO has a native MLX trainer (tests/test_mlx_grpo.py)."""
         from soup_cli.config.loader import load_config_from_string
 
         yaml_str = """
@@ -316,8 +323,8 @@ training:
   lr: 1e-6
 output: ./output
 """
-        with pytest.raises(ValueError, match="MLX backend only ships SFT"):
-            load_config_from_string(yaml_str)
+        cfg = load_config_from_string(yaml_str)
+        assert (cfg.task, cfg.backend) == ("grpo", "mlx")
 
 
 class TestMlxRecipeRepoIds:
@@ -370,6 +377,8 @@ class TestMLXDoctor:
         fake_mlx = types.ModuleType("mlx")
         fake_mlx.__spec__ = ModuleSpec("mlx", loader=None)
         fake_core = types.ModuleType("mlx.core")
+        # #1850: MLX SFT's train() seeds mx.random before attaching LoRA.
+        fake_core.random = types.SimpleNamespace(seed=lambda _seed: None)
         fake_core.__spec__ = ModuleSpec("mlx.core", loader=None)
         fake_core.__version__ = "0.32.2"
         fake_core.metal = types.SimpleNamespace(is_available=lambda: True)

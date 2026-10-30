@@ -85,12 +85,13 @@ class TestOneEntry:
             validate_stripe_root(stripe + char, primary_root=primary)
 
     @pytest.mark.skipif(os.name != "nt", reason="Windows drive-relative spelling")
-    def test_a_path_without_a_drive_is_refused_on_windows(self, layout):
+    @pytest.mark.parametrize("separator", ["\\", "/"], ids=["backslash", "slash"])
+    def test_a_path_without_a_drive_is_refused_on_windows(self, layout, separator):
         """Security LOW-6: os.path.isabs on a path that starts with a separator but names no
-        drive is True on 3.10-3.12, and the recorded root would then depend on the drive of
-        the current directory."""
+        drive is True on 3.10-3.12 (False on 3.13), and the recorded root would then depend on
+        the drive of the current directory. Same message on every version."""
         primary, stripe = layout
-        no_drive = os.path.splitdrive(os.path.realpath(stripe))[1]
+        no_drive = os.path.splitdrive(os.path.realpath(stripe))[1].replace("\\", separator)
         with pytest.raises(StripeRootError, match="must name a drive letter or a UNC share"):
             validate_stripe_root(no_drive, primary_root=primary)
 

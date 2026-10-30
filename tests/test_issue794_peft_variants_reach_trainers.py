@@ -203,21 +203,42 @@ def test_moe_lora_routing_refuses_unconsumed_peft_variants(lora: dict) -> None:
         )
 
 
-def test_distill_explicit_4bit_resolves_before_loftq_validation() -> None:
+_DISTILL_4BIT_LOFTQ = {
+    "base": "tiny-local-llama",
+    "task": "distill",
+    "data": {"train": "train.jsonl"},
+    "training": {
+        "teacher_model": "tiny-local-teacher",
+        "quantization": "4bit",
+        "lora": {"init_strategy": "loftq"},
+    },
+}
+
+
+def test_distill_explicit_4bit_is_refused_before_loftq_validation() -> None:
+    """As of v0.77 the #795 resolver refuses the explicit 4bit; it still runs first,
+    so the refusal is about the quantization line, not about loftq."""
+    from soup_cli.config.schema import SoupConfig
+
+    with pytest.raises(ValidationError) as excinfo:
+        SoupConfig(**_DISTILL_4BIT_LOFTQ)
+    errors = excinfo.value.errors()
+    assert len(errors) == 1, errors
+    assert errors[0]["msg"].startswith(
+        "Value error, training.quantization: 4bit has no effect on task='distill'"
+    ), errors
+    assert "loftq" not in errors[0]["msg"]
+
+
+def test_distill_explicit_4bit_resolves_before_loftq_validation(monkeypatch) -> None:
+    """The v0.76 setting, kept behind ``DEPRECATED_VALUE_SEVERITY = "warn"``."""
+    from soup_cli.config import deprecation
     from soup_cli.config.deprecation import SoupConfigDeprecationWarning
     from soup_cli.config.schema import SoupConfig
 
+    monkeypatch.setattr(deprecation, "DEPRECATED_VALUE_SEVERITY", "warn")
     with pytest.warns(SoupConfigDeprecationWarning, match="task='distill'"):
-        config = SoupConfig(
-            base="tiny-local-llama",
-            task="distill",
-            data={"train": "train.jsonl"},
-            training={
-                "teacher_model": "tiny-local-teacher",
-                "quantization": "4bit",
-                "lora": {"init_strategy": "loftq"},
-            },
-        )
+        config = SoupConfig(**_DISTILL_4BIT_LOFTQ)
 
     assert config.training.quantization == "none"
     assert config.training.lora.init_strategy == "loftq"

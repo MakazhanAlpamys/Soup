@@ -213,6 +213,17 @@ class UnlearnTrainerWrapper:
         self.model = get_peft_model(self.model, lora_cfg)
         self.model.train()
 
+        # This loop has no Trainer, so nothing else switches checkpointing on.
+        # Do what Trainer.train() does for the other wrappers (#797): every
+        # enabled tier is full checkpointing, with Transformers' default
+        # (non-reentrant) kwargs, and HF enables input grads for the frozen base.
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+        if should_enable_hf_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+        ):
+            self.model.gradient_checkpointing_enable()
+
         # NPO + RMU need a frozen reference copy of the base.
         if method in ("npo", "rmu"):
             ref, _, _ = load_model_and_tokenizer(
@@ -451,7 +462,11 @@ class UnlearnTrainerWrapper:
         retain_ce = self._retain_ce(tokenize_pair, dev)
 
         beta = _DEFAULT_BETA
-        alpha = float(self.config.training.unlearn_alpha or 1.0)
+        alpha = (
+            1.0
+            if self.config.training.unlearn_alpha is None
+            else float(self.config.training.unlearn_alpha)
+        )
         out = self.model(input_ids=input_ids)
         policy_logps = sequence_logprob(out.logits, labels)
         if method == "npo":
@@ -552,7 +567,11 @@ class UnlearnTrainerWrapper:
         if retain_acts is None or retain_frozen is None:
             # No retain set: pure forget steering.
             return torch.mean((forget_acts - control_vec) ** 2)
-        alpha = float(self.config.training.unlearn_alpha or 1.0)
+        alpha = (
+            1.0
+            if self.config.training.unlearn_alpha is None
+            else float(self.config.training.unlearn_alpha)
+        )
         return rmu_loss(
             forget_acts, control_vec, retain_acts, retain_frozen, alpha=alpha,
         )

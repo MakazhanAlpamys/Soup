@@ -158,6 +158,16 @@ def mix(
         )
         raise typer.Exit(code=2)
     raw = [p.strip() for p in datasets.split(",") if p.strip()]
+    from soup_cli.utils.paths import ensure_distinct_paths
+
+    inputs = [("--datasets", path) for path in raw]
+    if live and base_yaml:
+        inputs.append(("--base-yaml", base_yaml))
+    try:
+        ensure_distinct_paths(inputs, [("--output", output)])
+    except ValueError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
     try:
         plan = build_optimization_plan(
             raw, budget=budget, num_probes=num_probes, seed=seed

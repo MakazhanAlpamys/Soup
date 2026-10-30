@@ -287,25 +287,36 @@ def _softmax(logits: Sequence[float]) -> Tuple[float, ...]:
 def _eval_safely(
     eval_fn: Callable[[Tuple[float, ...]], float],
     weights: Tuple[float, ...],
+    failures: Optional[list[str]] = None,
 ) -> float:
     """Call ``eval_fn`` with sentinel-low score on exception.
 
     Failure isolation mirrors v0.40.3 #33 / v0.48 / v0.53.7 #106 policy:
-    one bad eval must not crash the whole run.
+    one bad eval must not crash the whole run. When ``failures`` is given, the
+    reason each failed evaluation was dropped is appended to it, so the caller
+    can tell a search in which EVERY evaluation failed from one that converged
+    (#1808): the sentinel alone cannot, since a flat sentinel history reads as
+    a plateau.
     """
+
+    def _failed(reason: str) -> float:
+        if failures is not None:
+            failures.append(reason)
+        return _FAILED_EVAL_SENTINEL
+
     try:
         score = eval_fn(weights)
     except (KeyboardInterrupt, SystemExit):
         raise
-    except Exception:  # noqa: BLE001 — eval_fn surface is operator-controlled
-        return _FAILED_EVAL_SENTINEL
+    except Exception as exc:  # noqa: BLE001 — eval_fn surface is operator-controlled
+        return _failed(f"{type(exc).__name__}: {exc}")
     if isinstance(score, bool):
-        return _FAILED_EVAL_SENTINEL
+        return _failed(f"score was a bool ({score!r}), not a number")
     if not isinstance(score, (int, float)):
-        return _FAILED_EVAL_SENTINEL
+        return _failed(f"score was {type(score).__name__}, not a number")
     s = float(score)
     if not math.isfinite(s):
-        return _FAILED_EVAL_SENTINEL
+        return _failed(f"score {s!r} is not finite")
     return s
 
 
@@ -359,6 +370,7 @@ def run_cmaes_merge(
     evaluations = 0
     converged = False
     plateau_run = 0
+    failures: list[str] = []
 
     for gen in range(plan.max_generations):
         if (time.monotonic() - start) >= plan.budget_seconds:
@@ -374,7 +386,7 @@ def run_cmaes_merge(
             # span the full simplex.
             logits = sample + [0.0]
             weights = _softmax(logits)
-            score = _eval_safely(eval_fn, weights)
+            score = _eval_safely(eval_fn, weights, failures)
             evaluations += 1
             candidates.append((sample, weights, score))
             if score > best_score:
@@ -400,10 +412,14 @@ def run_cmaes_merge(
             # Clamp to a sensible floor; CMA-ES typically blends with prior
             # but for ≤16-adapter case the simple rank-mu update converges.
             new_sigma.append(max(math.sqrt(var), 1e-4))
-        # Plateau detection
+        # Plateau detection. A generation in which every candidate failed has a
+        # sentinel "best"; a run of those is a flat history, not a plateau
+        # (#1808), so it neither extends nor counts as convergence.
         gen_best = candidates[0][2]
         history.append(gen_best)
-        if len(history) >= 2:
+        if gen_best <= _FAILED_EVAL_SENTINEL:
+            plateau_run = 0
+        elif len(history) >= 2:
             delta = abs(history[-1] - history[-2])
             if delta < convergence_tol:
                 plateau_run += 1
@@ -416,6 +432,18 @@ def run_cmaes_merge(
         sigma = new_sigma
 
     wall_clock = time.monotonic() - start
+    if evaluations > 0 and len(failures) == evaluations:
+        # #1808: every evaluation failed. Before this the sentinel scores read
+        # as a converged search and the caller wrote a merge with the first
+        # random sample's weights. Nothing was measured, so nothing can be
+        # merged on the strength of it.
+        first = failures[0]
+        raise RuntimeError(
+            f"every evaluation failed: {evaluations} evaluation(s) over "
+            f"{generations_run} generation(s), none returned a finite score. "
+            f"First failure: {first}. No merge is written; fix the eval suite or the "
+            f"scorer and run again."
+        )
     if best_score == -math.inf:
         # Defensive — should not happen because we always sample at least once
         best_score = 0.0

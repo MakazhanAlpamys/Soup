@@ -32,6 +32,15 @@
 # `security-extended` (more results, more false positives), add
 #     queries: security-extended
 # to the `with:` of the init step. Triage the default suite's alerts first.
+#
+# WHAT IT SCANS. The package, the scripts and the benchmarks; `tests/` is left
+# out (`paths-ignore` below). The first scan (2026-10-13) returned 12 alerts,
+# 11 of them under `tests/`: assertions on expected URL constants
+# (`"huggingface.co" in url`) read as incomplete sanitizers, and a deliberately
+# pathological pattern that a guard test feeds to the guard read as a ReDoS.
+# Test code never meets untrusted input, so those alerts cost a triage and
+# protect nothing. Widen the scope again only together with a triage of what
+# it adds.
 name: CodeQL
 
 on:
@@ -53,10 +62,10 @@ jobs:
   analyze:
     name: analyze (python)
     runs-on: ubuntu-latest
-    # An upper bound chosen before the first run, not a measurement. After the
-    # first successful run, set it to about twice its duration (the method in
-    # the "Bound every job explicitly" block of ci.yml).
-    timeout-minutes: 45
+    # About three times the first run: 3 min 13 s on 2026-10-13 (run
+    # 38414920987, `build-mode: none`, 43 rules), the method in the "Bound every
+    # job explicitly" block of ci.yml. Raise it only after a longer measured run.
+    timeout-minutes: 10
     permissions:
       contents: read
       # Upload the results to code scanning.
@@ -75,6 +84,10 @@ jobs:
         with:
           languages: python
           build-mode: none
+          # Inline configuration; see "WHAT IT SCANS" above.
+          config: |
+            paths-ignore:
+              - tests
       - name: Analyze
         uses: github/codeql-action/analyze@v4
         with:

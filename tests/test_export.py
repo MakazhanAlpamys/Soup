@@ -1,6 +1,7 @@
 """Tests for soup export command."""
 
 import json
+import re
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -53,7 +54,7 @@ def test_detect_base_model_bad_json(tmp_path: Path):
 
 def test_find_quantize_binary_not_found(tmp_path: Path, monkeypatch):
     """Should return None if no quantize binary exists."""
-    monkeypatch.setattr("soup_cli.commands.export.shutil.which", lambda _name: None)
+    monkeypatch.setattr("soup_cli.utils.tool_paths.find_tool", lambda _name, path=None: None)
     assert _find_quantize_binary(tmp_path) is None
 
 
@@ -70,8 +71,8 @@ def test_find_quantize_binary_on_path(tmp_path: Path, monkeypatch):
     """Should retain production discovery of a globally installed binary."""
     global_binary = tmp_path.parent / "global-bin" / "llama-quantize"
     monkeypatch.setattr(
-        "soup_cli.commands.export.shutil.which",
-        lambda name: str(global_binary) if name == "llama-quantize" else None,
+        "soup_cli.utils.tool_paths.find_tool",
+        lambda name, path=None: str(global_binary) if name == "llama-quantize" else None,
     )
 
     assert _find_quantize_binary(tmp_path) == global_binary
@@ -132,3 +133,27 @@ def test_export_help():
     assert result.exit_code == 0
     assert "gguf" in result.output.lower()
     assert "quant" in result.output.lower()
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    """Help text with Rich colour removed and line wraps collapsed to one space."""
+    return " ".join(_ANSI_RE.sub("", text).split())
+
+
+def test_export_help_names_every_supported_format():
+    """The --format help lists every accepted format (torchao and gguf-ud were missing)."""
+    result = runner.invoke(app, ["export", "--help"])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    out = _plain(result.output)
+    formats_line = out.split("Export format:", 1)
+    assert len(formats_line) == 2, out
+    # Only the --format sentence: it ends at the deprecation note's closing bracket,
+    # before the next option's help (which also says "torchao").
+    listed = formats_line[1].split(")", 1)[0]
+    for fmt in SUPPORTED_FORMATS:
+        assert re.search(rf"(?<![\w-]){re.escape(fmt)}(?![\w-])", listed), (
+            f"--format help does not list {fmt!r}: {listed[:200]}"
+        )

@@ -2,9 +2,9 @@
 
 Computes Forget Quality + Model Utility + PrivLeak metrics from
 operator-supplied evidence JSON and emits an :class:`UnlearnReport`.
-Live model-driven evaluation lands in v0.61.1; this release writes a
-neutral OK report when no evidence is supplied so the schema + output
-shape are usable today.
+Scores come from the evidence file given with ``--evidence``; there is no
+model-driven evaluation. With no evidence it writes a neutral OK report,
+so the schema + output shape are usable.
 """
 
 from __future__ import annotations

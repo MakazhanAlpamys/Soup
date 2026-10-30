@@ -302,10 +302,13 @@ class TestCatalogCount:
         assert len(list_recipes()) == len(RECIPES)
 
     def test_all_recipes_parse(self) -> None:
-        # Defence-in-depth — the whole catalog must still parse after the additions.
+        from tests.recipe_contracts import load_catalog_config
+
+        # Every row loads or refuses with its explicitly documented reason.
         for name, meta in RECIPES.items():
-            cfg = load_config_from_string(meta.yaml_str)
-            assert cfg.base, name
+            cfg = load_catalog_config(meta)
+            if cfg is not None:
+                assert cfg.base, name
 
     def test_all_recipes_yaml_base_matches_model(self) -> None:
         # Catalog-wide integrity invariant — the inline ``base:`` must equal

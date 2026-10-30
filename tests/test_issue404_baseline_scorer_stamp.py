@@ -7,9 +7,9 @@ import json
 
 import pytest
 import yaml
-from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests.cli_runner import CliRunner
 
 runner = CliRunner()
 
@@ -307,10 +307,14 @@ class TestWriteBaselineCli:
         self, tmp_path, monkeypatch
     ):
         monkeypatch.chdir(tmp_path)
-        self._write_suite(tmp_path, tasks=[])  # no scored tasks
+        self._write_suite(tmp_path)
+
+        def unavailable(_prompt: str) -> str:
+            raise ValueError("synthetic inference failure")
+
         monkeypatch.setattr(
             "soup_cli.eval.quant_check.make_model_generator",
-            lambda _model: (lambda _prompt: ""),
+            lambda _model: unavailable,
         )
         result = runner.invoke(
             app,

@@ -8,7 +8,8 @@ completion.
 
 The test compares the time at N with the time at 8N instead of checking an absolute time, so it
 holds on any machine and fails fast: a linear scan grows about 8x, the quadratic one grew
-61-66x, and at N = 1,000 the quadratic scan failed each case in 10-13 s. The absolute 2 s
+61-66x, and at N = 1,000 the quadratic scan failed each case in 10-13 s (before the reference
+was calibrated up; ``tests/_growth_timing.py``). The absolute 2 s
 bound on 20,000 spaces is in ``TestAdversarialInputsStayLinear`` of
 ``test_issue1226_reward_gold_parsing.py``.
 
@@ -18,13 +19,13 @@ clauses continue a list.
 
 from __future__ import annotations
 
-import time
 from decimal import Decimal
 
 import pytest
 
 from soup_cli.trainer.rewards import accuracy_reward, math_verify_reward
 from soup_cli.utils.final_answer import parse_completion
+from tests._growth_timing import assert_grows_linearly, linux_only
 
 
 def _msg(text: str) -> list[list[dict]]:
@@ -57,39 +58,19 @@ WHITESPACE_RUNS = {
     "glued-because": lambda k: "The answer is 42 " + "x-because " * k + "x",
 }
 
-_SCALE_N = 1_000
-# A linear scan takes about 8x as long on 8x the input: 6.5-7.4x measured, the fixed cost of a
-# call pulling it below 8. The quadratic scan took 61-66x. The limit leaves 3x of slack over
-# linear, and every time is a best of several runs, so a stall on a busy runner would have to
-# hit every run of the larger input to fail the test.
-_SCALE_LIMIT = 24.0
+_SCALE_N = 100  # the starting size; the helper doubles it until the run is long enough to time
 
 
-def _best_time(text: str, repeats: int) -> float:
-    best = float("inf")
-    for _ in range(repeats):
-        start = time.perf_counter()
-        parse_completion(text)
-        best = min(best, time.perf_counter() - start)
-    return best
-
-
+@linux_only
 class TestTheClauseScannerIsLinear:
     @pytest.mark.parametrize("build", list(WHITESPACE_RUNS.values()), ids=list(WHITESPACE_RUNS))
     def test_time_grows_linearly_with_a_whitespace_run(self, build):
-        small, large = build(_SCALE_N), build(8 * _SCALE_N)
         # The clause ends at the comma or semicolon, so the answer is 42 at every size.
-        assert parse_completion(large).number == Decimal(42)
-        t_small = max(_best_time(small, repeats=5), 1e-7)
-        t_large = float("inf")
-        for _ in range(5):  # stop as soon as the larger input is shown to be fast enough
-            t_large = min(t_large, _best_time(large, repeats=1))
-            if t_large <= _SCALE_LIMIT * t_small:
-                break
-        assert t_large <= _SCALE_LIMIT * t_small, (
-            f"8x the whitespace took {t_large / t_small:.0f}x as long "
-            f"({t_small * 1e3:.2f} ms -> {t_large * 1e3:.2f} ms)"
-        )
+        assert parse_completion(build(8_000)).number == Decimal(42)
+        # A linear scan takes about 8x as long on 8x the input (6.5-7.4x measured, the fixed
+        # cost of a call pulling it below 8); the quadratic scan took 61-66x. The helper's 32x
+        # limit leaves 4x of slack over linear, on a reference long enough to time.
+        assert_grows_linearly(parse_completion, build, _SCALE_N)
 
 
 # After ", " or "; " a number continues the list in every spelling the look-ahead accepts: a

@@ -10,6 +10,9 @@ from __future__ import annotations
 import platform
 from typing import Any, Optional
 
+#: macOS ships sysctl at this fixed location.
+_MACOS_SYSCTL = "/usr/sbin/sysctl"
+
 
 def detect_mlx() -> bool:
     """Return True if the ``mlx`` package is importable on this machine.
@@ -67,8 +70,8 @@ def get_chip_info() -> dict[str, str]:
 
     try:
         import subprocess  # noqa: S404 — used with list args only
-        result = subprocess.run(  # noqa: S603, S607
-            ["sysctl", "-n", "machdep.cpu.brand_string"],
+        result = subprocess.run(  # noqa: S603
+            [_MACOS_SYSCTL, "-n", "machdep.cpu.brand_string"],
             capture_output=True,
             text=True,
             timeout=2,
@@ -88,8 +91,8 @@ def get_unified_memory_bytes() -> Optional[int]:
         return None
     try:
         import subprocess  # noqa: S404
-        result = subprocess.run(  # noqa: S603, S607
-            ["sysctl", "-n", "hw.memsize"],
+        result = subprocess.run(  # noqa: S603
+            [_MACOS_SYSCTL, "-n", "hw.memsize"],
             capture_output=True,
             text=True,
             timeout=2,
@@ -100,6 +103,27 @@ def get_unified_memory_bytes() -> Optional[int]:
     except (OSError, ValueError, subprocess.SubprocessError):
         return None
     return None
+
+
+def get_mlx_working_set_bytes() -> Optional[int]:
+    """Metal's recommended working-set size in bytes, or None if it cannot be read.
+
+    The most the GPU should hold at once on Apple Silicon, below the total unified
+    memory; ``soup profile`` checks a run's fit against it (#2049). Newer mlx has
+    ``mlx.core.device_info``; older releases only ``mlx.core.metal.device_info``.
+    """
+    if not is_apple_silicon() or not detect_mlx():
+        return None
+    try:
+        import mlx.core as mx
+
+        reader = getattr(mx, "device_info", None) or mx.metal.device_info
+        value = reader().get("max_recommended_working_set_size")
+    except Exception:  # noqa: BLE001 - no Metal device, or an mlx without the call
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
 
 
 def get_mlx_info() -> dict[str, Any]:

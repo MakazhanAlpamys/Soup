@@ -4,8 +4,8 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import click
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
@@ -28,6 +28,16 @@ runner = CliRunner()
 
 # Patch targets — lazy imports in deploy.py resolve to soup_cli.utils.ollama
 _OLLAMA = "soup_cli.utils.ollama"
+
+
+@pytest.fixture(autouse=True)
+def _ollama_is_installed(monkeypatch):
+    """The ollama CLI counts as installed, whether or not this machine has it: the
+    tests below fake its replies through ``subprocess.run``."""
+    monkeypatch.setattr(
+        "soup_cli.utils.tool_paths.find_tool",
+        lambda name, path=None: "/usr/local/bin/ollama" if name == "ollama" else None,
+    )
 
 
 # ─── validate_model_name ───
@@ -746,7 +756,7 @@ def test_export_deploy_unsupported_target():
     """_auto_deploy_ollama rejects non-ollama targets."""
     from soup_cli.commands.export import _auto_deploy_ollama
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)):
+    with pytest.raises((SystemExit, typer.Exit)):
         _auto_deploy_ollama(Path("m.gguf"), "model", "kubernetes", None)
 
 
@@ -755,7 +765,7 @@ def test_export_deploy_ollama_not_found(mock_detect):
     """_auto_deploy_ollama exits if Ollama not installed."""
     from soup_cli.commands.export import _auto_deploy_ollama
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)):
+    with pytest.raises((SystemExit, typer.Exit)):
         _auto_deploy_ollama(Path("m.gguf"), "model", "ollama", None)
 
 
@@ -775,7 +785,7 @@ def test_export_deploy_ollama_create_fails(mock_detect_fn, mock_deploy_fn):
     """_auto_deploy_ollama exits on deploy failure."""
     from soup_cli.commands.export import _auto_deploy_ollama
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)):
+    with pytest.raises((SystemExit, typer.Exit)):
         _auto_deploy_ollama(Path("m.gguf"), "model", "ollama", "soup-model")
 
 
@@ -783,5 +793,5 @@ def test_export_deploy_invalid_name():
     """_auto_deploy_ollama rejects invalid model name."""
     from soup_cli.commands.export import _auto_deploy_ollama
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)):
+    with pytest.raises((SystemExit, typer.Exit)):
         _auto_deploy_ollama(Path("m.gguf"), "model", "ollama", "bad/name")

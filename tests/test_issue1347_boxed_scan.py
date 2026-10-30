@@ -14,27 +14,32 @@ letter. Neither owns a regex any more.
 
 from __future__ import annotations
 
-import time
-
 from soup_cli.utils.final_answer import BoxedAnswer, iter_boxed_answers, parse_completion
+from tests._growth_timing import assert_grows_linearly, linux_only
 
-# Long enough that the scan's own cost dominates the interpreter's.
-_GROWTH_INPUT = 20_000
-# An absolute ceiling only a scan that is not linear can reach. The growth ratio next to it
-# is what pins linearity; this catches a scan that is slow at every size. It was 3.0, and a
-# linear scan measured 3.01 on a four-core runner with coverage on and every core busy with
-# another test file, so it leaves ten times that.
-_CEILING_SECONDS = 30.0
+# The size the growth checks start from. ``tests/_growth_timing.py`` doubles it until one scan
+# lasts long enough to time, then compares it with a scan of 8x the input. It replaced a
+# 20,000-box input timed once per size and an absolute 30 s ceiling (3.0 s had flaked): the
+# ceiling cannot trip when the reference is calibrated, and the ratio is what pins linearity.
+# The start is small on purpose: a super-linear scan then costs about 64x the calibrated
+# reference to catch, not 64x a large start.
+_GROWTH_INPUT = 100
 
 
-def _best_seconds(text: str, repeats: int = 3) -> float:
-    """The fastest of ``repeats`` full scans, to keep a loaded runner out of the way."""
-    best = float("inf")
-    for _ in range(repeats):
-        started = time.perf_counter()
-        sum(1 for _ in iter_boxed_answers(text))
-        best = min(best, time.perf_counter() - started)
-    return best
+def _scan(text: str) -> int:
+    return sum(1 for _ in iter_boxed_answers(text))
+
+
+def _unclosed(count: int) -> str:
+    return r"\boxed{" * count
+
+
+def _closed(count: int) -> str:
+    return r"\boxed{B} " * count
+
+
+def _nested(depth: int) -> str:
+    return r"\boxed{" * depth + "B" + "}" * depth
 
 
 class TestIssue1347TheScanReadsEveryClosedBox:
@@ -70,44 +75,29 @@ class TestIssue1347TheScanReadsEveryClosedBox:
             assert parsed is not None and parsed.text == box.answer
 
 
+@linux_only
 class TestIssue1347TheScanGrowsLinearly:
     def test_unclosed_boxes_cost_linear_time(self):
-        """A run of ``\boxed{`` that never closes is the scan's worst case: every brace is
+        """A run of ``\\boxed{`` that never closes is the scan's worst case: every brace is
         walked and nothing is yielded. Quadratic growth would be ~64x for 8x the input, so
         the bound sits far above the ~8x a linear scan measures."""
-        small = r"\boxed{" * _GROWTH_INPUT
-        large = r"\boxed{" * (_GROWTH_INPUT * 8)
+        assert _scan(_unclosed(8 * _GROWTH_INPUT)) == 0
 
-        assert sum(1 for _ in iter_boxed_answers(small)) == 0
-
-        small_seconds = _best_seconds(small)
-        large_seconds = _best_seconds(large)
-        assert large_seconds < small_seconds * 20, (small_seconds, large_seconds)
-        assert large_seconds < _CEILING_SECONDS, large_seconds
+        assert_grows_linearly(_scan, _unclosed, _GROWTH_INPUT)
 
     def test_closed_boxes_cost_linear_time_too(self):
-        small = r"\boxed{B} " * _GROWTH_INPUT
-        large = r"\boxed{B} " * (_GROWTH_INPUT * 8)
+        assert _scan(_closed(8 * _GROWTH_INPUT)) == _GROWTH_INPUT * 8
 
-        assert sum(1 for _ in iter_boxed_answers(large)) == _GROWTH_INPUT * 8
-
-        small_seconds = _best_seconds(small)
-        large_seconds = _best_seconds(large)
-        assert large_seconds < small_seconds * 20, (small_seconds, large_seconds)
-        assert large_seconds < _CEILING_SECONDS, large_seconds
+        assert_grows_linearly(_scan, _closed, _GROWTH_INPUT)
 
 
 class TestIssue1347NestedBoxes:
+    @linux_only
     def test_nested_closed_boxes_cost_linear_time(self):
         """Every box closes and holds the next, so the boxes' contents overlap. Skipping the
         boxes that hold a box is what keeps this linear: normalising them all would be quadratic
         in the nesting depth."""
-        small = r"\boxed{" * 1_000 + "B" + "}" * 1_000
-        large = r"\boxed{" * 8_000 + "B" + "}" * 8_000
-
-        small_seconds = _best_seconds(small)
-        large_seconds = _best_seconds(large)
-        assert large_seconds < small_seconds * 20, (small_seconds, large_seconds)
+        assert_grows_linearly(_scan, _nested, 100)
 
     def test_a_box_inside_a_box_reads_the_inner_answer(self):
         parsed = parse_completion(r"\boxed{\boxed{42}}")

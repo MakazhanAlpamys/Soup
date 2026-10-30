@@ -2,7 +2,7 @@
 
 import math
 import re
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Callable, Dict, List, Literal, NamedTuple, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -15,9 +15,11 @@ from soup_cli.utils.config_bounds import (
     DEFAULT_STREAM_READ_AHEAD,
     MAX_NOISE_FLOOR_RUNS,
     MAX_STREAM_BUFFERS,
+    MAX_STREAM_LOSS_CHUNK,
     MAX_STREAM_READ_AHEAD,
     MIN_NOISE_FLOOR_RUNS,
     MIN_STREAM_BUFFERS,
+    MIN_STREAM_LOSS_CHUNK,
     MIN_STREAM_READ_AHEAD,
 )
 from soup_cli.utils.config_bounds import (
@@ -676,8 +678,9 @@ class DataConfig(BaseModel):
         description=(
             "HF Trainer remove_unused_columns. No trainer reads this field; the "
             "trainers that set it pass False so a custom collator can still see "
-            "the extra columns. An explicit `true` loads with a warning and is "
-            "ignored, and a later release refuses it. (v0.42.0 Part E; #759)"
+            "the extra columns. An explicit `true` is refused at config load "
+            "(it warned for one release first); delete the line. "
+            "(v0.42.0 Part E; #759)"
         ),
     )
     prompt_strategy: Optional[str] = Field(
@@ -1007,15 +1010,17 @@ class DataConfig(BaseModel):
     @field_validator("remove_unused_columns", mode="after")
     @classmethod
     def _ignore_remove_unused_columns_true(cls, value: bool) -> bool:
-        """``true`` never took effect: warn, and load it as ``false`` (#759).
+        """``true`` never took effect: refuse it (#759).
 
         No trainer reads this field; the trainers that set the HF argument pass
         ``False`` so a custom collator still receives the columns the model's
         ``forward()`` does not name. The declared default used to say ``True``,
         so ``soup autopilot`` wrote ``remove_unused_columns: true`` into every
-        config it generated. Refusing that would break files Soup wrote itself,
-        so for one release an explicit ``true`` loads, is ignored, and says so.
-        The release that refuses it is named once, in ``config/deprecation.py``.
+        config it generated. Refusing that at once would have broken files Soup
+        wrote itself, so for one release an explicit ``true`` loaded, was
+        ignored, and said so. The release that refuses it is named once, in
+        ``config/deprecation.py``; under ``DEPRECATED_VALUE_SEVERITY = "warn"``
+        the old behaviour (warn, load ``false``) returns.
         """
         if value:
             from soup_cli.config.deprecation import warn_deprecated_value
@@ -1023,7 +1028,12 @@ class DataConfig(BaseModel):
             warn_deprecated_value(
                 "data.remove_unused_columns: true has no effect and is ignored "
                 "(no trainer reads it; the trainers that set it pass false). "
-                "Delete the line."
+                "Delete the line.",
+                refusal=(
+                    "data.remove_unused_columns: true never had an effect "
+                    "(no trainer reads it; the trainers that set it pass false). "
+                    "Delete the line."
+                ),
             )
         return False
 
@@ -1142,7 +1152,15 @@ class TrainingConfig(BaseModel):
             "static on CPU). Default 'auto' (v0.36.0)."
         ),
     )
-    gradient_accumulation_steps: int = Field(default=4, ge=1)
+    gradient_accumulation_steps: int = Field(
+        default=4,
+        ge=1,
+        description=(
+            "Number of micro-batches whose gradients are summed before each optimizer "
+            "update. Effective batch size per device is batch_size * "
+            "gradient_accumulation_steps (times the number of GPUs)."
+        ),
+    )
     # #341 — the general training seed. Before this there was none:
     # `TrainingArguments` took HF's defaults on every run, so two runs of the
     # same config differed only by GPU nondeterminism and "run it again with a
@@ -1187,10 +1205,32 @@ class TrainingConfig(BaseModel):
             )
         return v
 
-    warmup_ratio: float = Field(default=0.03, ge=0.0, le=0.5)
-    weight_decay: float = Field(default=0.01, ge=0.0)
-    max_grad_norm: float = Field(default=1.0, gt=0)
-    lora: LoraConfig = Field(default_factory=LoraConfig)
+    warmup_ratio: float = Field(
+        default=0.03,
+        ge=0.0,
+        le=0.5,
+        description=(
+            "Fraction of total training optimizer steps used for linear learning "
+            "rate warmup. Resolved over real optimizer steps."
+        ),
+    )
+    weight_decay: float = Field(
+        default=0.01,
+        ge=0.0,
+        description=(
+            "Weight decay factor (decoupled, AdamW-style) applied to weights "
+            "during optimization; 0 disables it."
+        ),
+    )
+    max_grad_norm: float = Field(
+        default=1.0,
+        gt=0,
+        description="Maximum gradient norm for gradient clipping.",
+    )
+    lora: LoraConfig = Field(
+        default_factory=LoraConfig,
+        description="LoRA (Low-Rank Adaptation) adapter architecture and target modules.",
+    )
     quantization: Literal[
         "4bit",
         "8bit",
@@ -1220,7 +1260,11 @@ class TrainingConfig(BaseModel):
             "aqlm (extreme 2-bit), eetq (8-bit fast), "
             "mxfp4 (MXFP4 pre-quantized base, dequantized on load), "
             "fp8 (load FP8 checkpoint with dequantize-on-load), "
-            "bitnet_1.58 (reserved until BitNet trainer routing is available)."
+            "bitnet_1.58 (reserved until BitNet trainer routing is available). "
+            "A task whose trainer never quantises the base (distill, classifier, "
+            "reranker, cross_encoder, prm, moe_lora_routing, unlearn, asr) resolves "
+            "an unset value to none, and an explicit value other than none, 4bit "
+            "and 8bit included, is refused at load (#795)."
         ),
     )
     gptq_disable_exllama: bool = Field(
@@ -1275,8 +1319,8 @@ class TrainingConfig(BaseModel):
         default=None,
         description=(
             "Staged, not applied: a per-module LR override (list of {pattern, lr} "
-            "entries or a {pattern: lr} dict, capped at 32) that no optimizer reads; "
-            "setting it warns at load, then is refused (#761). (v0.41.0)"
+            "entries or a {pattern: lr} dict, capped at 32) that no optimizer reads, "
+            "so setting it is refused at load (#761). (v0.41.0)"
         ),
     )
     # v0.41.0 Part C — LLaMA Pro block expansion.
@@ -1304,9 +1348,13 @@ class TrainingConfig(BaseModel):
         default=False,
         description=(
             "Enable Mixture-of-Depths selective-token routing (arXiv:2404.02258). "
-            "Live in v0.71.12 #84 for SFT + Pretrain on Llama / Qwen / Mistral; "
-            "each decoder layer gets a router that passes only the top-k tokens "
-            "(k = floor(seq_len * mod_capacity_factor)) through the block."
+            "Each decoder layer gets a router that passes only the top-k tokens "
+            "(k = floor(seq_len * mod_capacity_factor)) through the block. Applied "
+            "on the resident transformers LoRA path for sft and tts (not vision, "
+            "audio, layer streaming, LISA, Spectrum, lora.r=0, unsloth, or mlx) "
+            "and on transformers pretrain including LISA; refused at config load "
+            "anywhere else (#1752). Unsupported architectures warn and skip. "
+            "(v0.71.12 #84)"
         ),
     )
     mod_capacity_factor: float = Field(
@@ -1322,7 +1370,9 @@ class TrainingConfig(BaseModel):
         description=(
             "Friendly alias for quantization='8bit' / 'none'. When True, "
             "rewrites quantization to '8bit' if currently 'none'/'4bit'. "
-            "Conflicts with load_in_16bit. (v0.41.0)"
+            "Conflicts with load_in_16bit. On a task whose trainer never "
+            "quantises the base (see quantization), true is refused at load "
+            "(#795). (v0.41.0)"
         ),
     )
     load_in_16bit: Optional[bool] = Field(
@@ -1461,9 +1511,11 @@ class TrainingConfig(BaseModel):
     reward_fn: Optional[str] = Field(
         default="accuracy",
         description=(
-            "Reward function: 'accuracy', 'format', 'verifiable', a path to a "
-            "custom .py file, or a comma-separated ensemble of the above "
-            "(e.g. 'accuracy,format') — the comma form is GRPO-only (v0.71.40)."
+            "Reward function: 'accuracy', 'format', 'verifiable', 'judge_rank' "
+            "(GRPO only, an LLM judge ranks each prompt's completions; see "
+            "grpo_judge, #2047), a path to a custom .py file, or a comma-separated "
+            "ensemble of the above (e.g. 'accuracy,format') — the comma form is "
+            "GRPO-only (v0.71.40)."
         ),
     )
     @field_validator("reward_fn", mode="before")
@@ -1542,6 +1594,117 @@ class TrainingConfig(BaseModel):
             raise ValueError("prm_reward must not contain null bytes")
         if len(value) > 512:
             raise ValueError("prm_reward must be <= 512 chars")
+        return value
+
+    # #2047 — GRPO ``reward_fn: judge_rank``: one LLM-judge call ranks each
+    # prompt's completions together. Every field is None by default and refused
+    # without judge_rank (SoupConfig._validate_grpo_judge_rank).
+    grpo_judge: Optional[str] = Field(
+        default=None,
+        description=(
+            "Judge URL for reward_fn judge_rank (ollama://model | "
+            "https://host/model | http://localhost:port/model), the form "
+            "online_dpo_judge takes. Required with judge_rank (#2047)."
+        ),
+    )
+    grpo_judge_rubric: Optional[str] = Field(
+        default=None,
+        description=(
+            "Rubric YAML for judge_rank, under the working directory. Only each "
+            "criterion's name and description are used: a ranking scores from 0 "
+            "to 1, so weights and scale are ignored. Unset = Soup's default "
+            "criteria (helpfulness, accuracy, safety)."
+        ),
+    )
+    grpo_judge_max_tokens: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=32768,
+        description="Judge reply budget per judge_rank call. Unset = 1024.",
+    )
+    grpo_judge_max_calls: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Cost guard for judge_rank: the run is refused before the model loads "
+            "when it could make more judge calls than this ((train rows x epochs + "
+            "held-out rows x evaluations) x 2 for the retry). Required with "
+            "judge_rank; no default."
+        ),
+    )
+    grpo_judge_max_failure_rate: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "judge_rank stops the run when more than this share of its training "
+            "groups got no scores (checked from the 20th group). Unset = 0.2."
+        ),
+    )
+
+    @field_validator("grpo_judge", mode="before")
+    @classmethod
+    def _validate_grpo_judge_field(cls, value: Any) -> Optional[str]:
+        """#2047 — the judge URL is parsed and checked at load, not after the download.
+
+        ``_parse_judge_url`` refuses an unsupported scheme or a missing model id,
+        and ``validate_judge_api_base`` the http-to-a-remote-host and private-IP
+        cases, the same checks ``JudgeEvaluator`` runs when it is built.
+        """
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, str):
+            raise ValueError(
+                f"grpo_judge must be a string URL, got {type(value).__name__}"
+            )
+        if not value.strip():
+            raise ValueError("grpo_judge must be a non-empty string")
+        if "\x00" in value:
+            raise ValueError("grpo_judge must not contain null bytes")
+        if len(value) > 512:
+            raise ValueError("grpo_judge must be <= 512 chars")
+        from soup_cli.eval.gate import _parse_judge_url
+        from soup_cli.eval.judge import validate_judge_api_base
+
+        # Their ValueError is reported as it is: Pydantic's location already
+        # names training.grpo_judge, so a "grpo_judge: " prefix named it twice.
+        _provider, _model, api_base = _parse_judge_url(value)
+        validate_judge_api_base(api_base)
+        return value
+
+    @field_validator("grpo_judge_rubric", mode="before")
+    @classmethod
+    def _validate_grpo_judge_rubric_field(cls, value: Any) -> Optional[str]:
+        """#2047 — a rubric path stays under the working directory (realpath + commonpath)."""
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, str):
+            raise ValueError(
+                f"grpo_judge_rubric must be a string path, got {type(value).__name__}"
+            )
+        if not value.strip():
+            raise ValueError("grpo_judge_rubric must be a non-empty string")
+        if "\x00" in value:
+            raise ValueError("grpo_judge_rubric must not contain null bytes")
+        if len(value) > 4096:
+            raise ValueError("grpo_judge_rubric must be <= 4096 chars")
+        from soup_cli.utils.paths import is_under_cwd
+
+        if not is_under_cwd(value):
+            raise ValueError(
+                f"grpo_judge_rubric {value!r} is not under the working directory"
+            )
+        return value
+
+    @field_validator(
+        "grpo_judge_max_tokens", "grpo_judge_max_calls", "grpo_judge_max_failure_rate",
+        mode="before",
+    )
+    @classmethod
+    def _validate_grpo_judge_numbers(cls, value: Any, info: Any) -> Any:
+        """#2047 — a boolean is not a count or a rate (NaN is refused by the bounds)."""
+        if isinstance(value, bool):
+            raise ValueError(f"{info.field_name} must not be a boolean")
         return value
 
     # v0.71.31 — Online DPO (task='online_dpo'): on-policy generation judged by
@@ -1821,10 +1984,9 @@ class TrainingConfig(BaseModel):
     ]] = Field(
         default=None,
         description=(
-            "TTS model family — required when task='tts'. Runnable choices are "
-            "orpheus, llasa, spark, and oute. sesame_csm is retained only so "
-            "legacy configs receive an explicit refusal until Soup has a native "
-            "CSM multimodal trainer."
+            "TTS model family — required when task='tts'. "
+            "orpheus, llasa, spark and oute use codec-string SFT; sesame_csm uses "
+            "a native multimodal trainer with raw audio and 32 parallel Mimi codebooks."
         ),
     )
     tts_emotion: Optional[str] = Field(
@@ -1996,7 +2158,7 @@ class TrainingConfig(BaseModel):
         default=None,
         description=(
             "gpt-oss train-time reasoning effort level. Injected as a prompt "
-            "prefix by the SFT-family data formatter."
+            "prefix by the SFT data formatter; task sft, tts or distill only."
         ),
     )
     train_on_eot: bool = Field(
@@ -2004,17 +2166,19 @@ class TrainingConfig(BaseModel):
         description=(
             "Include explicit EOT / EOS control tokens in the SFT loss "
             "(axolotl ``train_on_eot``). Default False matches HF Trainer "
-            "convention. (v0.52.0)"
+            "convention. Applied by the SFT data formatter; task sft, tts or "
+            "distill only. (v0.52.0)"
         ),
     )
     # ---- v0.53.0 Quant Menu II — UD GGUFs + KV cache + NVFP4 ---------------
-    # Part C — KV cache types (serve-side hint, captured here for round-trip).
+    # Part C — KV cache types (recorded for round-trip; serve uses its own flag).
     kv_cache_type: Optional[Literal["q8_0", "bf16", "f16", "fp8"]] = Field(
         default=None,
         description=(
             "KV-cache element type for inference (q8_0 / bf16 / f16 / fp8). "
-            "Applied by soup serve on the transformers backend; backend and "
-            "hardware compatibility are validated before model loading."
+            "Recorded in soup.yaml only: neither soup train nor soup serve reads "
+            "this key (fp8 is refused with backend: mlx). To apply a type, pass "
+            "soup serve --kv-cache-type <type> (transformers backend)."
         ),
     )
     # Part D — Train-time advanced precision.
@@ -2159,16 +2323,17 @@ class TrainingConfig(BaseModel):
     rl_checkpoint_include_ref_model: bool = Field(
         default=False,
         description=(
-            "Include the frozen reference model state in the RL "
-            "checkpoint. Default False (ref model is reconstructable "
-            "from cfg.base). (v0.70.0)"
+            "Not saved yet (#808): the RL checkpoint holds no reference "
+            "model state whatever this says, and its manifest reports "
+            "has_ref_model: false. (v0.70.0)"
         ),
     )
     rl_checkpoint_include_rollout_buffer: bool = Field(
         default=False,
         description=(
-            "Include the rollout / replay buffer in the RL checkpoint "
-            "so resumed runs don't lose collected experience. (v0.70.0)"
+            "Not saved yet (#808): the RL checkpoint holds no rollout or "
+            "replay buffer whatever this says, and its manifest reports "
+            "has_rollout_buffer: false. (v0.70.0)"
         ),
     )
 
@@ -3024,6 +3189,18 @@ class TrainingConfig(BaseModel):
         default=False,
         description="Enable Liger Kernel fused operations (20-60% memory savings, 20-40% speedup)",
     )
+    # #792 — the Fast-LoRA kernels (utils/fast_lora*.py) behind one switch
+    fast_lora: bool = Field(
+        default=False,
+        description=(
+            "Run LoRA's q/k/v, MLP and other projections through Soup's "
+            "hand-written Fast-LoRA autograd functions instead of peft's "
+            "modules. Same math; no speedup is claimed. task='sft' on the "
+            "transformers backend with text, quantization none or 4bit, and "
+            "lora.dropout 0; refused beside use_liger, DoRA, VeRA, "
+            "target_parameters, Spectrum, LISA and FP8 training."
+        ),
+    )
     # Performance — FlashAttention
     use_flash_attn: bool = Field(
         default=False,
@@ -3197,12 +3374,15 @@ class TrainingConfig(BaseModel):
         default=4, ge=1, le=20,
         description="Number of difficulty stages for curriculum learning",
     )
-    # Curriculum-Aware dynamic re-weighting (v0.48.0 Part A — BETA)
+    # Curriculum-Aware dynamic telemetry (v0.48.0 Part A — BETA, #808)
     curriculum_dynamic: bool = Field(
         default=False,
         description=(
-            "BETA: dynamically re-weight curriculum buckets every N steps via "
-            "online uncertainty estimation (per-sample loss + grad norm). "
+            "BETA: track dynamic curriculum bucket weights every N steps via "
+            "online uncertainty estimation (per-sample loss + grad norm) for "
+            "telemetry and curve inspection (`soup runs curriculum-curve`). "
+            "The weights are only written to curriculum_history.jsonl; they do "
+            "not change which samples a batch contains (#808). "
             "Requires curriculum=true. Multi-rank launches must wire an "
             "all_reduce hook on per-bucket stats (see "
             "utils.curriculum_dynamic.validate_distributed_curriculum)."
@@ -3211,24 +3391,24 @@ class TrainingConfig(BaseModel):
     curriculum_dynamic_recompute_steps: int = Field(
         default=50, ge=1, le=100_000,
         description=(
-            "Recompute curriculum bucket sampler weights every N global "
-            "training steps."
+            "Recompute curriculum bucket weights for telemetry tracking "
+            "every N global training steps (#808)."
         ),
     )
     curriculum_dynamic_floor: float = Field(
         default=0.05, gt=0.0, le=0.5,
         description=(
-            "Minimum normalised per-bucket weight after softmax. "
-            "Must be in (0.0, 1/curriculum_buckets]; the cross-validator "
-            "tightens this to the per-config ceiling. Prevents bucket "
-            "starvation."
+            "Minimum value a bucket's weight can take in the logged telemetry "
+            "weights after softmax. Must be in (0.0, 1/curriculum_buckets]; the "
+            "cross-validator tightens this to the per-config ceiling."
         ),
     )
     curriculum_dynamic_temperature: float = Field(
         default=1.0, gt=0.0, le=100.0,
         description=(
-            "Softmax temperature on the uncertainty signal. Higher = flatter "
-            "distribution; lower = concentrate on hardest buckets."
+            "Softmax temperature on the uncertainty signal when computing "
+            "logged bucket weights. Higher = flattens the logged distribution; "
+            "lower = sharpens the logged distribution."
         ),
     )
     # Loss watchdog — auto-stop on loss spikes
@@ -3263,7 +3443,7 @@ class TrainingConfig(BaseModel):
         default=False,
         description=(
             "On watchdog trigger: write <output>/spike_recovery.json with "
-            "decayed LR and attempt count for re-launch (instead of bare stop). "
+            "decayed LR and attempt count for re-launch (tracks attempts and caps recovery). "
             "Requires loss_watchdog=true."
         ),
     )
@@ -3656,6 +3836,114 @@ class TrainingConfig(BaseModel):
             "until it is measured across shapes."
         ),
     )
+    stream_nf4_scale_cache: bool = Field(
+        default=False,
+        description=(
+            "Keep each streamed NF4 weight's expanded fp32 block scales on the "
+            "compute device after its first use. A double-quantised weight stores "
+            "its scales as 8-bit codes plus a nested scale and offset, and "
+            "bitsandbytes' dequantise + linear path expands them on every visit "
+            "(forward and checkpoint recompute): two extra kernels and a "
+            "temporary per projection. The base is frozen, so the expansion is "
+            "done once per (layer, weight) and reused; results are bit-identical. "
+            "Costs 4 bytes per 64-element block of VRAM for the whole run (416 "
+            "MiB on Mistral-7B), which the pre-flight charges up front. "
+            "bitsandbytes' fused 4-bit GEMM path expands the scales inside its "
+            "kernel and is left unchanged. Needs quantization='4bit' with "
+            "double quantization (the default). Off by default."
+        ),
+    )
+    stream_recompute: Literal["on", "off", "auto"] = Field(
+        default="on",
+        description=(
+            "Whether a streamed decoder layer runs its forward a second time in "
+            "the backward. 'on' (the default) is the shipped checkpoint recompute: "
+            "activations are dropped after the forward and recomputed. 'off': "
+            "every streamed layer keeps its activations instead (the backward "
+            "still re-reads each layer's weights): a faster step where the step "
+            "is compute-bound (the RAM tier), at the cost of every layer's "
+            "activations in VRAM, which the formula pre-flight does not count "
+            "(stream_vram_probe measures it). 'auto': before training, one "
+            "synthetic forward+backward at the configured batch_size x "
+            "data.max_length measures one layer's retained bytes and the step's "
+            "reserved peak; the LAST K layers keep their activations and the rest "
+            "recompute, K = (the smallest of 85% of the card, free + reserved "
+            "VRAM and stream_vram_override) minus that peak, divided by the "
+            "layer's bytes times the step's reserved/allocated ratio. Costs one "
+            "step at setup; RAM tier and CUDA only, otherwise the recompute is "
+            "kept. Gradients are the recompute's: measured bit-identical under "
+            "deterministic algorithms. task='sft' only for 'off' and 'auto', and "
+            "refused beside activation_offloading. YAML reads an unquoted on/off "
+            "(and true/false, yes/no) as a boolean; true is taken as 'on' and "
+            "false as 'off'."
+        ),
+    )
+
+    @field_validator("stream_recompute", mode="before")
+    @classmethod
+    def _validate_stream_recompute_mode(cls, v: Any) -> Any:
+        """YAML 1.1 reads an unquoted ``on``/``off`` (and yes/no/true/false) as a
+        bool. Here the bool agrees with the mode (``stream_recompute: off`` = no
+        recompute), so it is mapped back; an int, including 0/1, is refused."""
+        if v is True:
+            return "on"
+        if v is False:
+            return "off"
+        if not isinstance(v, str):
+            raise ValueError(
+                "training.stream_recompute must be one of 'on', 'off', 'auto'; "
+                f"got {type(v).__name__} {v!r}"
+            )
+        return v
+
+    stream_expert_layout: Literal["fused", "per_expert"] = Field(
+        default="fused",
+        description=(
+            "How a MoE base's routed experts are streamed. 'fused' (the default) "
+            "keeps each MoE layer's experts inside its layer file, so the largest "
+            "layer bounds the card. 'per_expert' writes them to their own file, one "
+            "pair of matrices per expert (NF4 per matrix under quantization='4bit'), "
+            "and reads an expert only when the router picks it, again in the "
+            "backward: the decoder-layer buffers hold the dense part alone, so the "
+            "VRAM bound no longer grows with the expert count. Each routed expert "
+            "is read about three times per step from the cache volume, so expect "
+            "slower steps (an NVMe volume is recommended). Under quantization='4bit' "
+            "the routed experts are NF4 here but stay at the stream dtype with "
+            "'fused', so the two layouts train against numerically different "
+            "bases. Admitted for DeepSeek-V3-family bases (model_type "
+            "deepseek_v3); adapters on the routed experts (moe_lora) are refused "
+            "with it."
+        ),
+    )
+
+    stream_loss_chunk: Optional[int] = Field(
+        default=None,
+        ge=MIN_STREAM_LOSS_CHUNK,
+        le=MAX_STREAM_LOSS_CHUNK,
+        description=(
+            "Tokens per chunk for the output head and the loss under layer "
+            "streaming (#1693). Unset, the head builds the full [batch, seq, "
+            "vocab] logits and the loss works on all of them, which is what "
+            "caps the context length on a small card. Set, each chunk runs the "
+            "head, takes its cross-entropy and the gradient on its hidden "
+            "states, and drops its logits, so the logits term is vocab x chunk "
+            "x batch whatever data.max_length is. It costs one more [batch, "
+            "seq, hidden] tensor and a loop over the head. It gives up "
+            "outputs.logits on a labelled forward, and equality to the last "
+            "bit with an unchunked step: the per-token terms are the same, the "
+            "order of the final sum is not. task='sft' only; refused beside "
+            "use_cut_ce."
+        ),
+    )
+
+    @field_validator("stream_loss_chunk", mode="before")
+    @classmethod
+    def _validate_stream_loss_chunk_int(cls, v: Any) -> Any:
+        """Reject bool-as-int (bool subclasses int), mirrors stream_buffers."""
+        if isinstance(v, bool):
+            raise ValueError("training.stream_loss_chunk must be an int (tokens), not bool")
+        return v
+
     stream_disk_kind: Optional[Literal["nvme", "ssd", "hdd"]] = Field(
         default=None,
         description=(
@@ -3931,12 +4219,12 @@ class TrainingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_curriculum_dynamic_requires_curriculum(self) -> "TrainingConfig":
-        """v0.48.0 Part A — dynamic re-weighting layers on the static
+        """v0.48.0 Part A — dynamic curriculum telemetry uses the static
         curriculum bucketer; it cannot run alone."""
         if self.curriculum_dynamic and not self.curriculum:
             raise ValueError(
                 "curriculum_dynamic requires curriculum=true "
-                "(dynamic re-weighting needs the static bucketer)."
+                "(dynamic curriculum telemetry needs the static bucketer)."
             )
         # Cross-check: floor must leave room above uniform/N.
         if self.curriculum_dynamic:
@@ -4410,8 +4698,8 @@ class TrainingConfig(BaseModel):
         default=None,
         description=(
             "Staged, not applied: a citation-recall threshold in [0.0, 1.0] that "
-            "nothing gates a save or a run on; setting it warns at load, then is "
-            "refused (#761). (v0.62.0 Part D)"
+            "nothing gates a save or a run on, so setting it is refused at load "
+            "(#761). (v0.62.0 Part D)"
         ),
     )
 
@@ -4797,6 +5085,128 @@ SFT_KERNEL_AWARE_TASKS: frozenset[str] = frozenset({"sft", "tts"})
 AMP_APPLYING_TASKS: frozenset[str] = frozenset({"sft", "tts"})
 
 
+# #806: tasks whose trainers build rows with ``data.sft_format.build_format_row``
+# (sft's text path, inherited by tts, and distill), the only reader of
+# ``training.reasoning_effort``.
+REASONING_EFFORT_AWARE_TASKS: frozenset[str] = frozenset({"sft", "tts", "distill"})
+# #806: ``training.train_on_eot`` has the same reader. pretrain passes it to the
+# pre-tokenized cache too, but a pretrain row is ``labels = input_ids`` whatever
+# the mask mode, so there it changed only the cache key.
+TRAIN_ON_EOT_AWARE_TASKS: frozenset[str] = REASONING_EFFORT_AWARE_TASKS
+
+
+# #1698: ``task: sft`` is several code paths, and four settings that load on the
+# task are read by only some of them (the within-``sft`` half of #806).
+# ``SFTTrainerWrapper.setup`` loads the model through one of five methods
+# (``trainer/sft.py:758-767``) and builds the dataset through one of six
+# branches (``:877-899``); ``backend: mlx`` never reaches either, its trainer is
+# ``trainer/mlx_sft.py``. This is the one table of which path reads which field:
+# :meth:`SoupConfig._validate_sft_path_is_read` and
+# :meth:`SoupConfig._validate_freeze_is_applied` both read it, so the dispatch is
+# written down once. The text path with ``backend: transformers`` is the default
+# (no row) and reads every field.
+class SftPath(NamedTuple):
+    """One branch of the sft dispatch: what selects it, and what it reads."""
+
+    key: str
+    #: named in a refusal, as the dispatch names it
+    setting: str
+    #: what takes the run off this path
+    change: str
+    #: why this path does not read the fields it drops
+    reason: str
+    #: the fields this path applies
+    reads: frozenset[str]
+    #: whether a config takes this path
+    taken: Callable[["SoupConfig"], bool]
+    #: fields it ignores but already warns about, so they are not refused here
+    warned: frozenset[str] = frozenset()
+    #: fields another validator refuses on this path (#1692 for streaming)
+    refused_elsewhere: frozenset[str] = frozenset()
+
+
+#: The four fields this table refuses; ``freeze_layers`` / ``freeze_ratio`` are
+#: in the same ``reads`` sets for :meth:`SoupConfig._validate_freeze_is_applied`.
+SFT_PATH_FIELDS: tuple[str, ...] = (
+    "reasoning_effort",
+    "train_on_eot",
+    "use_flash_attn",
+    "use_liger",
+)
+
+_KERNEL_FIELDS = frozenset({"use_flash_attn", "use_liger"})
+_FORMATTER_FIELDS = frozenset({"reasoning_effort", "train_on_eot"})
+_FREEZE_FIELDS = frozenset({"freeze_layers", "freeze_ratio"})
+
+#: In the order ``resolve_trainer`` and ``SFTTrainerWrapper.setup`` check them,
+#: the dataset branches last because the model is loaded first.
+SFT_PATHS: tuple[SftPath, ...] = (
+    SftPath(
+        "mlx",
+        "backend='mlx'",
+        "backend: transformers",
+        "the MLX trainer has its own loop, with no SFT formatter",
+        frozenset(),
+        lambda cfg: cfg.backend == "mlx",
+        warned=_KERNEL_FIELDS,
+    ),
+    SftPath(
+        "vision",
+        "modality='vision'",
+        "modality: text",
+        "the vision setup builds its own dataset and model, running neither the "
+        "SFT formatter nor the resident kernel setup",
+        frozenset(),
+        lambda cfg: cfg.modality == "vision",
+    ),
+    SftPath(
+        "audio",
+        "modality='audio'",
+        "modality: text",
+        "the audio setup builds its own dataset and model, running neither the "
+        "SFT formatter nor the resident kernel setup",
+        frozenset(),
+        lambda cfg: cfg.modality == "audio",
+    ),
+    SftPath(
+        "stream",
+        "training.stream_layers=true",
+        "stream_layers: false",
+        "a streamed model is built by from_config with no attention argument and "
+        "no Liger patch",
+        _FORMATTER_FIELDS,
+        lambda cfg: bool(cfg.training.stream_layers),
+        refused_elsewhere=_KERNEL_FIELDS,
+    ),
+    SftPath(
+        "unsloth",
+        "backend='unsloth'",
+        "backend: transformers",
+        "the unsloth setup loads its own model, with no Liger patch and no "
+        "attn_implementation",
+        _FORMATTER_FIELDS,
+        lambda cfg: cfg.backend == "unsloth",
+    ),
+    SftPath(
+        "pre_tokenized",
+        "data.format='pre_tokenized'",
+        "data.format: chatml",
+        "rows are read from the pre-tokenised cache, which the SFT formatter does "
+        "not build",
+        frozenset({"train_on_eot"}) | _KERNEL_FIELDS | _FREEZE_FIELDS,
+        lambda cfg: cfg.data.format == "pre_tokenized",
+    ),
+    SftPath(
+        "raft",
+        "data.format='raft'",
+        "data.format: chatml",
+        "RAFT rows are tokenised by the RAFT builder, not by the SFT formatter",
+        _KERNEL_FIELDS | _FREEZE_FIELDS,
+        lambda cfg: cfg.data.format == "raft",
+    ),
+)
+
+
 # #795: trainers that load the base unquantised and never read
 # ``training.quantization``.
 _QUANTIZATION_UNHONOURED_TASKS = frozenset({
@@ -4822,6 +5232,166 @@ UNSLOTH_SETUP_TASKS: frozenset[str] = frozenset({
     "pretrain", "embedding", "tts",
 })
 
+
+def _unsloth_flag_clause(training: "TrainingConfig") -> str:
+    """The part of "Use backend: transformers" that a refused backend adds when
+    ``unsloth_bnb_4bit`` is set: without it, the switched config meets a second
+    refusal (that flag requires unsloth). Shared by #1357's refusal and by
+    :func:`_refused_backend_clause`, which #795's names when it fires first."""
+    if training.unsloth_bnb_4bit:
+        return " and remove training.unsloth_bnb_4bit, which only unsloth reads"
+    return ""
+
+
+#: The tasks with a trainer on ``backend: mlx``: SFT through mlx-lm's tuner;
+#: DPO, ORPO, SimPO, KTO and GRPO through Soup's own loops (``trainer/mlx_dpo.py``,
+#: ``trainer/mlx_orpo.py``, ``trainer/mlx_grpo.py``). Validators that defer
+#: to :meth:`SoupConfig._validate_mlx_task_support` read this, not ``"sft"``.
+MLX_TASKS: frozenset[str] = frozenset({"sft", "dpo", "orpo", "simpo", "kto", "grpo"})
+
+#: #1976 — the built-in rewards the native MLX GRPO loop scores with.
+MLX_GRPO_REWARDS: frozenset[str] = frozenset({"accuracy", "format"})
+
+_MLX_GRPO_NOT_GENERATED_HERE = "MLX GRPO generates with its own mlx-lm loop"
+
+#: #1976 — GRPO settings the transformers path applies and the native MLX loop
+#: does not, with the reason the refusal gives. Each is refused at load when it
+#: differs from its default; a default never fails. Settings another validator
+#: already refuses for every non-default value on MLX GRPO (``prm_reward`` and
+#: ``prm_aggregate``, ``rollout_func``, ``vllm_sleep_mode``, ``grpo_delta``,
+#: ``relora_steps``, ``quantize_reward_model``) are not listed: an entry here
+#: could never fire for them.
+_MLX_GRPO_UNAPPLIED: dict[str, str] = {
+    "rollout_backend": "multi-turn agent rollouts run on the transformers path only",
+    "async_grpo_prefetch": f"{_MLX_GRPO_NOT_GENERATED_HERE}, one rollout per update",
+    "replay_buffer_size": "MLX GRPO trains each rollout once and keeps no replay buffer",
+    "defer_rerolling": f"{_MLX_GRPO_NOT_GENERATED_HERE}, one rollout per update",
+    "grpo_fp16": "the MLX loop has no fp16 GRPO mode",
+    "ref_model_ema_alpha": "the MLX reference is the frozen base model",
+    # These four never reach TRL's GRPOConfig on the transformers path either:
+    # Soup's GRPOStabilityCallback only records them (tis_threshold also logs a
+    # warning past the threshold; monitoring/grpo_stability_callback.py). MLX
+    # has no such callback, so they are refused rather than silently dropped.
+    "tis_threshold": "the transformers path only logs it (its stability callback warns "
+    "past the threshold); MLX GRPO generates on-policy and applies no importance "
+    "correction",
+    "off_policy_mask_threshold": "the transformers path only records it (its stability "
+    "callback); MLX GRPO applies no off-policy mask",
+    "mask_truncated_completions": "the transformers path only records it (its stability "
+    "callback); truncated completions train, as TRL's default does",
+    "skip_zero_advantage": "the transformers path only records it (its stability "
+    "callback); zero-advantage groups train, as TRL's default does",
+    "eval_steps": "MLX GRPO scores the validation split once, after training "
+    "(val_reward), with no mid-run evaluation",
+    "curriculum": "curriculum ordering runs on the transformers path only",
+}
+
+#: Field-name prefixes refused the same way: every reward-hack / echo-trap
+#: controller, mid-run RL checkpoint and curriculum setting.
+_MLX_GRPO_UNAPPLIED_PREFIXES: dict[str, str] = {
+    "reward_hack_": "the reward-hack controllers observe the transformers GRPO trainer only",
+    "echo_trap_": "the echo-trap detector observes the transformers GRPO trainer only",
+    "rl_checkpoint_": "mid-run RL checkpoints are written by the transformers GRPO trainer "
+    "only (MLX GRPO saves adapters every training.save_steps updates)",
+    "curriculum_": "curriculum ordering runs on the transformers path only",
+}
+
+
+def _refuse_mlx_grpo_scope(cfg: Any) -> None:
+    """#1976 — what ``task: grpo`` on ``backend: mlx`` trains, refused at load.
+
+    The native loop (``trainer/mlx_grpo.py``) trains a LoRA adapter on a dense
+    text base with one of the built-in rewards. Everything else is refused here,
+    before the model loads, with the setting's name and a remedy.
+    """
+    tcfg = cfg.training
+    if cfg.modality != "text":
+        raise ValueError(
+            f"modality='{cfg.modality}' is not supported by task='grpo' on "
+            "backend='mlx': MLX GRPO trains on text prompts only. Use "
+            "backend=transformers, or modality: text."
+        )
+    if int(tcfg.lora.r) < 1:
+        raise ValueError(
+            "training.lora.r must be at least 1 for task='grpo' on backend='mlx': "
+            "MLX GRPO trains a LoRA adapter and its KL reference is the base with "
+            "the adapter switched off; full fine-tuning is not implemented on "
+            "backend='mlx'."
+        )
+    # '4bit' is the schema default and, on MLX, only names a pre-quantized base
+    # (load_mlx_model does not quantize), so it cannot be refused here without
+    # failing every default config; the trainer refuses a base that loads
+    # quantized instead, right after the load. '8bit' is refused outright.
+    if tcfg.quantization == "8bit":
+        raise ValueError(
+            "training.quantization='8bit' is not supported by task='grpo' on "
+            "backend='mlx': MLX GRPO trains a dense (unquantized) base in this "
+            "release. Set training.quantization: none and use an unquantized base, "
+            "or use backend: transformers."
+        )
+    spec = str(tcfg.reward_fn or "")
+    parts = [part.strip() for part in spec.split(",")]
+    if len(parts) > 1:
+        raise ValueError(
+            f"training.reward_fn={spec!r} is a reward ensemble, which MLX GRPO does "
+            "not score: set one built-in reward "
+            f"({' or '.join(repr(n) for n in sorted(MLX_GRPO_REWARDS))}), or use "
+            "backend: transformers."
+        )
+    if parts[0] == "verifiable":
+        raise ValueError(
+            "training.reward_fn='verifiable' is not supported by task='grpo' on "
+            "backend='mlx': MLX GRPO scores with the built-in "
+            f"{' or '.join(repr(n) for n in sorted(MLX_GRPO_REWARDS))} reward only. "
+            "Use one of them, or backend: transformers."
+        )
+    if parts[0] not in MLX_GRPO_REWARDS:
+        raise ValueError(
+            f"training.reward_fn={spec!r} is not supported by task='grpo' on "
+            "backend='mlx': MLX GRPO does not load custom reward files; it scores "
+            f"with the built-in {' or '.join(repr(n) for n in sorted(MLX_GRPO_REWARDS))} "
+            "reward only. Use one of them, or backend: transformers."
+        )
+    fields = type(tcfg).model_fields
+    for name, info in fields.items():
+        why = _MLX_GRPO_UNAPPLIED.get(name)
+        if why is None:
+            why = next(
+                (reason for prefix, reason in _MLX_GRPO_UNAPPLIED_PREFIXES.items()
+                 if name.startswith(prefix)),
+                None,
+            )
+        if why is None:
+            continue
+        value = getattr(tcfg, name)
+        if value == info.get_default(call_default_factory=True):
+            continue
+        raise ValueError(
+            f"training.{name} is not applied by task='grpo' on backend='mlx': {why}. "
+            f"Remove training.{name}, or use backend: transformers."
+        )
+
+
+def _refused_backend_clause(backend: str, task: str, training: "TrainingConfig") -> str:
+    """The backend's fix, for a refusal that fires before the backend's own.
+
+    ``backend: unsloth`` on a task with no unsloth setup is refused by
+    ``_validate_unsloth_has_a_setup`` (#1357), and ``backend: mlx`` on a task with
+    no MLX trainer by ``_validate_mlx_task_support``; both run after #795's
+    quantization refusal. That refusal names this sentence too, so the config
+    edited the way it says loads, instead of meeting the second refusal. Empty
+    when the backend has a trainer for the task."""
+    if backend == "unsloth" and task not in UNSLOTH_SETUP_TASKS:
+        reason = (
+            f"backend='unsloth' is not applied by task={task!r}: that trainer has "
+            "no unsloth setup."
+        )
+    elif backend == "mlx" and task not in MLX_TASKS:
+        reason = f"task={task!r} has no trainer on backend='mlx'."
+    else:
+        return ""
+    return f"Also, {reason} Use backend: transformers{_unsloth_flag_clause(training)}."
+
 #: #1497 — the tasks whose trainer reads ``training.freeze_layers`` /
 #: ``training.freeze_ratio``: ``SFTTrainerWrapper._setup_transformers``, which
 #: ``tts`` inherits. Every other trainer ignores both, so they are refused there.
@@ -4835,6 +5405,23 @@ FREEZE_APPLYING_TASKS: frozenset[str] = frozenset({"sft", "tts"})
 #: the model with the checkpoint's own RoPE, so the field is refused there, and
 #: within these tasks on every path that does not reach those two methods.
 ROPE_SCALING_APPLYING_TASKS: frozenset[str] = frozenset({"sft", "tts", "pretrain"})
+
+#: #1752 — the tasks whose trainer installs a Mixture-of-Depths router. The
+#: call sits in the LoRA arm of ``SFTTrainerWrapper._setup_transformers``
+#: (``tts`` reaches it through ``super()``) and in
+#: ``PretrainTrainerWrapper._setup_transformers`` after the LISA/LoRA split,
+#: so pretrain LISA is included. Every other task is refused. Within sft and
+#: tts, vision, audio, layer streaming, unsloth, MLX, LISA, Spectrum and
+#: ``lora.r == 0`` never reach that arm and are refused too. Pretrain branches
+#: on the backend only, so those SFT gates are not applied to it.
+MOD_APPLYING_TASKS: frozenset[str] = frozenset({"sft", "tts", "pretrain"})
+
+#: #1820 — the tasks whose trainer reads ``training.neftune_alpha`` and passes
+#: it as ``neftune_noise_alpha`` to ``TrainingArguments``.  Every other task
+#: ignores the field, so it is refused there at config load.
+NEFTUNE_APPLYING_TASKS: frozenset[str] = frozenset({
+    "sft", "tts", "dpo", "ipo", "kto", "orpo", "simpo", "bco", "preference",
+})
 
 #: The bitsandbytes values: ``4bit`` was the default, so every config Soup dumped
 #: for these tasks carries one of them literally (#795 review).
@@ -4891,6 +5478,36 @@ def _data_may_carry_its_own_validation_split(data: "DataConfig") -> bool:
     return any(_classify_data_train_entry(entry) == "hub" for entry in entries)
 
 
+def _unapplied_lora_patterns_message(
+    lora: "LoraConfig", backend: str, how: str
+) -> Optional[str]:
+    """#1996, #2153 - the refusal text for ``lora.rank_pattern`` /
+    ``lora.alpha_pattern`` on a backend that builds every adapter from one scalar
+    ``lora.r`` and ``lora.alpha``, or ``None`` when neither field is set.
+
+    ``how`` is the clause that says why the backend drops them ("the MLX trainer
+    builds every adapter from"). The text names only the fields the config set; an
+    empty ``{}`` sets nothing (``peft_wiring`` reads ``if rank_pattern:``), so it
+    is not named and does not refuse. One builder serves the MLX and unsloth
+    validators so the two messages cannot drift; each validator stays separate so
+    the day one backend honours the patterns only that validator is deleted.
+    """
+    set_fields = [
+        f"training.lora.{name}"
+        for name in ("rank_pattern", "alpha_pattern")
+        if getattr(lora, name)
+    ]
+    if not set_fields:
+        return None
+    names = " and ".join(set_fields)
+    verb = "are" if len(set_fields) > 1 else "is"
+    return (
+        f"{names} {verb} not applied by backend: {backend} — {how} one scalar "
+        "training.lora.r and training.lora.alpha, so per-module ranks and alphas "
+        f"would be dropped. Remove {names}, or use backend: transformers."
+    )
+
+
 class SoupConfig(BaseModel):
     """Root config for soup.yaml."""
 
@@ -4935,8 +5552,13 @@ class SoupConfig(BaseModel):
             "CUDA), or mlx (Apple Silicon M1-M4)"
         ),
     )
-    data: DataConfig
-    training: TrainingConfig = Field(default_factory=TrainingConfig)
+    data: DataConfig = Field(
+        description="Dataset source, format, tokenization, and preprocessing settings."
+    )
+    training: TrainingConfig = Field(
+        default_factory=TrainingConfig,
+        description="Training hyperparameters, optimizer, scheduler, and hardware settings.",
+    )
     output: str = Field(default="./output", description="Output directory for trained model")
     experiment_name: Optional[str] = Field(default=None, description="Experiment name for tracking")
     eval: Optional[EvalConfig] = Field(
@@ -4971,13 +5593,18 @@ class SoupConfig(BaseModel):
         resolved ``none`` and reloads.
 
         An explicit bitsandbytes value (``4bit``, ``8bit``, or ``load_in_8bit:
-        true``, which rewrites the field to ``8bit``) loads with a warning and
-        resolves to ``none``, rather than being refused. Every config Soup dumped
-        while ``4bit`` was the default carries it literally -- stored run configs,
-        ``train --replay`` -- and refusing those would break files Soup wrote
-        itself. The release that refuses it is named in ``config/deprecation.py``.
+        true``, which rewrites the field to ``8bit``) is refused, naming the task
+        and the line to delete. Every config Soup dumped while ``4bit`` was the
+        default carries it literally -- stored run configs, ``train --replay`` --
+        so for one release it loaded with a warning and resolved to ``none``
+        instead; the release that refuses it is named in ``config/deprecation.py``,
+        and under ``DEPRECATED_VALUE_SEVERITY = "warn"`` that behaviour returns.
+        On ``backend: unsloth`` or ``backend: mlx`` without a trainer for the task,
+        the refusal also names the backend's fix, after its deadline clause, which
+        ``_validate_unsloth_has_a_setup`` (#1357) or ``_validate_mlx_task_support``
+        would otherwise give only after this one, so a config fixed once loads.
         A quant-menu value (``gptq``, ``awq``, ...) was never a default Soup wrote,
-        so it is still refused.
+        so it was refused from the start.
 
         Runs before every other ``SoupConfig`` validator so the ones that read
         ``quantization`` see the resolved value. In particular it must stay before
@@ -5000,11 +5627,30 @@ class SoupConfig(BaseModel):
             if tcfg.quantization in _BNB_QUANTIZATION_VALUES:
                 from soup_cli.config.deprecation import warn_deprecated_value
 
+                if tcfg.load_in_8bit is True:
+                    # The alias rewrites ``quantization`` to ``8bit`` whatever the
+                    # line says, so "set quantization: none" would be refused again.
+                    fix = (
+                        "Delete training.load_in_8bit: true, which sets quantization "
+                        "to 8bit, and any training.quantization line."
+                    )
+                else:
+                    fix = "Delete the line or set quantization: none."
                 warn_deprecated_value(
                     f"training.quantization: {tcfg.quantization} has no effect on "
                     f"task={self.task!r} and is ignored: its trainer never quantises "
                     "the base, so the run trains unquantised. Set "
-                    "quantization: none."
+                    "quantization: none.",
+                    refusal=(
+                        f"training.quantization: {tcfg.quantization} has no effect on "
+                        f"task={self.task!r}: its trainer never quantises the base, so "
+                        f"no run can honour it. {fix}"
+                    ),
+                    # A backend that has no trainer for this task is refused later
+                    # (#1357, the MLX task check), and that refusal has no deadline:
+                    # name its fix after this one's deadline clause, so this one
+                    # refusal is the whole way out rather than the first of two.
+                    after_deadline=_refused_backend_clause(self.backend, self.task, tcfg),
                 )
                 tcfg.quantization = "none"
                 return self
@@ -5017,25 +5663,44 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_expand_layers_scope(self) -> "SoupConfig":
-        """#1325 - ``training.expand_layers`` (LLaMA Pro) is wired only in the
-        transformers text SFT/pretrain ``_setup_transformers`` paths. Every
-        other task/backend/modality accepts the fields and then silently
-        trains the unexpanded model, so refuse at load with the actual
-        task/backend/modality in the message."""
+        """#1325 - ``training.expand_layers`` (LLaMA Pro) trains the appended
+        blocks only in the transformers text SFT ``_setup_transformers`` path
+        (with ``lora.r: 0``, #1326). Every other task/backend/modality accepts
+        the fields and then silently trains the unexpanded model, so refuse at
+        load with the actual task/backend/modality in the message.
+
+        #1813 - ``task: pretrain`` on transformers text runs the expansion too,
+        but has no route that trains the new blocks: a LoRA rank freezes them
+        again (#1326) and its trainer has no ``lora.r: 0`` branch. It is refused
+        here, whatever the rank, and only there does the message name the sft
+        recipe: the unsloth pretrain path never expands, and mlx or another
+        modality has no such recipe."""
         tcfg = self.training
         if tcfg.expand_layers is None:
             return self
         if not (
-            self.task in {"sft", "pretrain"}
+            self.task == "sft"
             and self.backend == "transformers"
             and self.modality == "text"
         ):
+            fix = "Remove expand_layers and freeze_trainable_layers."
+            if (
+                self.task == "pretrain"
+                and self.backend == "transformers"
+                and self.modality == "text"
+            ):
+                fix = (
+                    "The pretrain trainer runs the expansion, but a LoRA rank "
+                    "freezes the appended blocks again and it has no lora.r: 0 "
+                    "branch to train them. Use task: sft with lora.r: 0 and "
+                    "quantization: none, or remove expand_layers and "
+                    "freeze_trainable_layers."
+                )
             raise ValueError(
-                "training.expand_layers (LLaMA Pro) is only wired for task "
-                "sft/pretrain on backend transformers with modality text; got "
-                f"task={self.task!r}, backend={self.backend!r}, "
-                f"modality={self.modality!r}. Remove expand_layers and "
-                "freeze_trainable_layers."
+                "training.expand_layers (LLaMA Pro) only trains the appended "
+                "blocks on task sft with backend transformers and modality "
+                f"text; got task={self.task!r}, backend={self.backend!r}, "
+                f"modality={self.modality!r}. {fix}"
             )
         return self
 
@@ -5071,7 +5736,8 @@ class SoupConfig(BaseModel):
         identity (their zero-initialised ``o_proj``/``down_proj`` are frozen), so
         only the original layers learn. Route 1 of the ruling: refuse the
         combination; ``lora.r: 0`` trains the new blocks directly, and is
-        available on ``task: sft`` only.
+        available on ``task: sft`` only. Only ``task: sft`` reaches this check:
+        ``_validate_expand_layers_scope`` refuses every other task first (#1813).
         """
         tcfg = self.training
         if tcfg.expand_layers is None or tcfg.lora.r == 0:
@@ -5086,23 +5752,14 @@ class SoupConfig(BaseModel):
             # their own validators. Let that message speak: lora.r: 0 would not
             # make such a config load.
             return self
-        fields = (
+        raise ValueError(
             f"training.expand_layers: {tcfg.expand_layers} with "
             f"training.freeze_trainable_layers: {tcfg.freeze_trainable_layers} "
             f"(LLaMA Pro) cannot be combined with LoRA (training.lora.r: "
             f"{tcfg.lora.r}). get_peft_model runs after the block expansion and "
             "freezes the appended blocks again, so only adapters on the original "
-            "layers would train. "
-        )
-        if self.task == "pretrain":
-            raise ValueError(
-                fields + "Training only the new blocks needs lora.r: 0, which "
-                "task: pretrain does not support, so this recipe needs task: sft "
-                "with lora.r: 0 and quantization: none."
-            )
-        raise ValueError(
-            fields + "To train only the new blocks, set lora.r: 0 with "
-            "quantization: none."
+            "layers would train. To train only the new blocks, set lora.r: 0 "
+            "with quantization: none."
         )
 
     @model_validator(mode="after")
@@ -5229,7 +5886,7 @@ class SoupConfig(BaseModel):
             return self
         if self.backend == "unsloth" and self.task not in UNSLOTH_SETUP_TASKS:
             return self  # that task's own backend refusal names the real problem
-        if self.backend == "mlx" and self.task != "sft":
+        if self.backend == "mlx" and self.task not in MLX_TASKS:
             return self  # _validate_mlx_task_support refuses the task itself
         why = {
             "unsloth": "its setup loads the model and attaches LoRA in one call, with "
@@ -5326,6 +5983,23 @@ class SoupConfig(BaseModel):
             # mlx refuses Quant Menu formats in the quant-menu task validator below.
             if self.backend == "mlx" and is_quant_menu_format(self.training.quantization):
                 return self
+            if self.backend == "mlx" and variant == "dora":
+                if lcfg.use_rslora or lcfg.rank_pattern or lcfg.alpha_pattern:
+                    raise ValueError(
+                        "MLX DoRA does not support lora.use_rslora, rank_pattern "
+                        "or alpha_pattern; use scalar lora.r and lora.alpha."
+                    )
+                if (
+                    self.task == "sft"
+                    and self.modality == "text"
+                    and self.training.quantization in ("none", "4bit")
+                ):
+                    return self
+                raise ValueError(
+                    "MLX DoRA requires task='sft', modality='text' and "
+                    "quantization='none' or '4bit'. Use backend='transformers' "
+                    "for other supported DoRA training paths."
+                )
             raise ValueError(
                 f"training.lora variant {variant!r} requires backend='transformers'; "
                 f"backend={self.backend!r} has its own adapter constructor and cannot "
@@ -5372,7 +6046,7 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_chat_template_supported_tasks(self) -> "SoupConfig":
-        """Reject chat-template overrides on trainers that never render chat."""
+        """Reject overrides on tasks or backends that never apply them."""
         unsupported = {
             "pretrain",
             "embedding",
@@ -5394,6 +6068,15 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 "data.chat_template is not used by "
                 f"task={self.task!r}; remove it or choose a conversational training task"
+            )
+        # MLX SFT and preference trainers render the model's shipped template only.
+        # MLX GRPO applies the override, as the transformers path does (#1976).
+        if (self.data.chat_template is not None and self.backend == "mlx"
+                and self.task != "grpo"):
+            raise ValueError(
+                "data.chat_template is not applied by backend: mlx — the MLX "
+                "trainer renders the model's shipped template only. Remove "
+                "data.chat_template, or use backend: transformers."
             )
         return self
 
@@ -5515,7 +6198,7 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_curriculum_dynamic_supported(self) -> "SoupConfig":
-        """v0.48.0 Part A — Curriculum-Aware dynamic re-weighting.
+        """v0.48.0 Part A — Curriculum-Aware dynamic telemetry.
 
         BETA: v0.53.5 #115 widens the allowlist to every transformer-backend
         trainer (sft / pretrain / dpo / grpo / kto / orpo / simpo / ipo / bco /
@@ -5584,8 +6267,9 @@ class SoupConfig(BaseModel):
             )
         if self.backend == "mlx":
             raise ValueError(
-                "grpo_variant is not supported on backend=mlx in v0.50.0 "
-                "(MLX GRPO is scaffolded; new RL objectives transformers-only)"
+                "grpo_variant is not supported on backend=mlx: MLX GRPO trains "
+                "TRL's default objective (loss_type='dapo') only. Remove "
+                "training.grpo_variant, or use backend: transformers."
             )
         return self
 
@@ -5689,10 +6373,9 @@ class SoupConfig(BaseModel):
                 f"got task={self.task!r}"
             )
         if self.backend == "mlx":
-            raise ValueError(
-                f"GRPO stability fields {active} are not supported on "
-                "backend=mlx in v0.50.0"
-            )
+            # #1976: task='grpo' here, and _refuse_mlx_grpo_scope names each
+            # field with the reason and a remedy.
+            return self
         return self
 
     @model_validator(mode="after")
@@ -5764,17 +6447,12 @@ class SoupConfig(BaseModel):
             if tcfg.tts_family is None:
                 raise ValueError(
                     "task='tts' requires a runnable training.tts_family in "
-                    "(orpheus, llasa, spark, oute); sesame_csm is currently refused"
+                    "(orpheus, llasa, sesame_csm, spark, oute)"
                 )
             if tcfg.tts_family == "sesame_csm":
-                raise ValueError(
-                    "training.tts_family='sesame_csm' is not supported by Soup yet: "
-                    "CSM trains text plus 32 Mimi codebooks as parallel multimodal "
-                    "frames, so neither raw data.format='audio' nor pre-encoded "
-                    "data.format='chatml' is a valid text-SFT substitute. Use the "
-                    "model's native CSM/AutoProcessor training path until Soup has "
-                    "a dedicated CSM trainer."
-                )
+                from soup_cli.utils.csm import validate_csm_config
+
+                validate_csm_config(self)
             if self.data.format == "audio" and tcfg.tts_family in {"spark", "oute"}:
                 from soup_cli.utils.tts_codec import incompatible_live_codec_error
 
@@ -5903,6 +6581,13 @@ class SoupConfig(BaseModel):
             except ValueError as exc:
                 raise ValueError(str(exc)) from exc
 
+            if self.modality != "text":
+                raise ValueError(
+                    "task='distill' requires modality='text': the distill trainer "
+                    "loads a text-only student and teacher and does not process "
+                    f"vision or audio inputs; got modality={self.modality!r}."
+                )
+
             chunk_offenders = [
                 name
                 for name, val in (
@@ -6006,35 +6691,105 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_reasoning_effort_task_gate(self) -> "SoupConfig":
-        """v0.52.0 Part G (code-review fix) — surface the silent-no-op
-        footgun when ``reasoning_effort`` / ``train_on_eot`` is set on a
-        task they cannot influence.
+        """Refuse ``reasoning_effort`` / ``train_on_eot`` on a task that never reads them.
 
-        Mirrors v0.50.0 ``_validate_grpo_stability_task_gate`` policy.
-        ``reasoning_effort`` only makes sense on SFT-family training
-        (sft / pretrain / distill / classifier-family) because the SFT
-        formatter injects it as a system-prefix token. The other
-        tasks (DPO / GRPO / KTO / ORPO / SimPO / IPO / BCO / preference /
-        PPO / reward_model / embedding / prm / tts) do not consume it.
-
-        ``train_on_eot`` is an SFT loss-mask flag; setting it on
-        DPO/GRPO/etc. is a silent no-op.
+        Both are applied by ``data.sft_format.build_format_row``, whose trainer
+        callers are sft (its text path, inherited by tts's
+        ``TTSTrainerWrapper.setup``) and distill (#806). pretrain, classifier,
+        reranker and cross_encoder never call it, so the flags loaded there and
+        changed nothing. pretrain also passes ``train_on_eot`` to the
+        ``soup data preprocess`` cache key (#1054), but its rows are
+        ``labels = input_ids`` either way, so the flag is refused there too.
         """
         tcfg = self.training
-        sft_family_tasks = {
-            "sft", "pretrain", "distill",
-            "classifier", "reranker", "cross_encoder",
-        }
-        if tcfg.reasoning_effort is not None and self.task not in sft_family_tasks:
+        if (
+            tcfg.reasoning_effort is not None
+            and self.task not in REASONING_EFFORT_AWARE_TASKS
+        ):
             raise ValueError(
                 f"training.reasoning_effort={tcfg.reasoning_effort!r} requires "
-                f"task in {sorted(sft_family_tasks)}; got task={self.task!r}"
+                f"task in {sorted(REASONING_EFFORT_AWARE_TASKS)}; got task={self.task!r}. "
+                "Only those tasks build their rows with the SFT formatter that "
+                "injects it, so elsewhere it would be ignored. Use task: sft, "
+                "tts or distill, or remove training.reasoning_effort."
             )
-        if tcfg.train_on_eot and self.task not in sft_family_tasks:
+        if tcfg.train_on_eot and self.task not in TRAIN_ON_EOT_AWARE_TASKS:
             raise ValueError(
                 f"training.train_on_eot=true requires task in "
-                f"{sorted(sft_family_tasks)}; got task={self.task!r}"
+                f"{sorted(TRAIN_ON_EOT_AWARE_TASKS)}; got task={self.task!r}. "
+                "Only those tasks build their rows with the SFT formatter that "
+                "applies the loss mask, so elsewhere it would be ignored. Use "
+                "task: sft, tts or distill, or remove training.train_on_eot."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_fast_lora_supported(self) -> "SoupConfig":
+        """#792 — the first slice of ``training.fast_lora``. The kernels patch
+        peft's LoRA modules on a text model trained by the SFT wrapper; every
+        other setting is refused with its reason rather than left unpatched."""
+        tcfg = self.training
+        if not tcfg.fast_lora:
+            return self
+        lora = tcfg.lora
+        reason = None
+        if self.backend != "transformers":
+            reason = (
+                f"needs backend='transformers'; got backend={self.backend!r}. The "
+                f"kernels replace peft's LoRA modules, which that backend does not use."
+            )
+        elif self.modality != "text":
+            reason = f"supports modality='text' only; got modality={self.modality!r}."
+        elif self.task != "sft":
+            reason = (
+                f"supports task='sft' only; got task={self.task!r}. Other trainers "
+                f"are not tested with the kernels yet."
+            )
+        elif lora.r == 0:
+            reason = "needs a LoRA; lora.r=0 trains the full model, with no LoRA to patch."
+        elif tcfg.unfrozen_parameters or tcfg.lisa_enabled:
+            name = "unfrozen_parameters" if tcfg.unfrozen_parameters else "lisa_enabled"
+            reason = (
+                f"cannot be combined with training.{name}: that mode trains the "
+                f"model's own weights and skips the LoRA setup the kernels hook into."
+            )
+        elif tcfg.quantization_aware == "fp8":
+            # (QuEST needs lora.r=0, refused above.)
+            reason = (
+                "cannot be combined with training.quantization_aware='fp8': FP8 "
+                "training converts the projections, and the kernels read their "
+                "weights directly, around the conversion."
+            )
+        elif lora.use_dora or lora.use_vera:
+            name = "use_dora" if lora.use_dora else "use_vera"
+            reason = (
+                f"cannot be combined with lora.{name}: the kernels compute plain "
+                f"LoRA, not that adapter's update."
+            )
+        elif lora.target_parameters:
+            reason = (
+                "cannot be combined with lora.target_parameters: those adapters "
+                "wrap parameters, not the Linear modules the kernels patch."
+            )
+        elif tcfg.quantization not in ("none", "4bit"):
+            reason = (
+                f"supports quantization 'none' or '4bit'; got "
+                f"quantization={tcfg.quantization!r}."
+            )
+        elif lora.dropout != 0:
+            reason = (
+                f"needs lora.dropout: 0; got {lora.dropout} (Soup's default is 0.05). "
+                f"peft gives every projection its own dropout, so q/k/v and gate/up "
+                f"would no longer share the one input the kernels read."
+            )
+        elif tcfg.use_liger:
+            reason = (
+                "cannot be combined with training.use_liger: Liger already replaces "
+                "the MLP's forward, and fast_lora would replace it again. Keep one "
+                "of them."
+            )
+        if reason is not None:
+            raise ValueError(f"training.fast_lora {reason}")
         return self
 
     @model_validator(mode="after")
@@ -6080,6 +6835,30 @@ class SoupConfig(BaseModel):
                 f"picks bf16/fp16 from the model and GPU ('tts' trains through "
                 f"the SFT trainer), so this run would train at the trainer's "
                 f"default precision. Use task='sft', or remove the key."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_neftune_alpha_task_gate(self) -> "SoupConfig":
+        """#1820: refuse ``neftune_alpha`` on tasks whose trainer never reads it.
+
+        ``training.neftune_alpha`` is forwarded to
+        ``TrainingArguments.neftune_noise_alpha`` by the SFT-family wrappers
+        (``sft.py``, inherited by ``tts.py``) and by the preference-style
+        wrappers (``dpo.py``, ``ipo.py``, ``kto.py``, ``orpo.py``,
+        ``simpo.py``, ``bco.py``).  The ``preference`` dispatcher delegates to
+        one of those, so it also applies.  Every other task silently drops the
+        field — refuse it at load time so the user sees the mismatch instead of
+        training without NEFTune noise and wondering why.
+        """
+        tcfg = self.training
+        if tcfg.neftune_alpha is not None and self.task not in NEFTUNE_APPLYING_TASKS:
+            raise ValueError(
+                f"training.neftune_alpha={tcfg.neftune_alpha!r} is set, but "
+                f"task={self.task!r} never applies it (any value, including 0.0, "
+                f"is refused). Only tasks in {sorted(NEFTUNE_APPLYING_TASKS)} forward "
+                f"it to ``TrainingArguments.neftune_noise_alpha``. Remove "
+                f"training.neftune_alpha, or use one of those tasks."
             )
         return self
 
@@ -6393,9 +7172,32 @@ class SoupConfig(BaseModel):
         do pass the rank straight to peft keep their existing behaviour
         (peft's "`r` should be a positive integer value") rather than gaining
         a new refusal this issue never measured.
+
+        #1813 measured ``task: pretrain``: its trainer has no ``r == 0`` branch,
+        so the rank reaches ``get_peft_model`` (transformers) or unsloth's
+        ``get_peft_model`` and setup fails. It is refused here. LISA is exempt:
+        its pretrain path attaches no adapter and never reads the rank, so
+        ``lisa_enabled`` with ``lora.r: 0`` trains today. Streaming and MLX
+        refuse pretrain in their own validators, so their message wins.
         """
         tcfg = self.training
-        if tcfg.lora.r != 0 or self.task not in ("sft", "embedding"):
+        if tcfg.lora.r != 0:
+            return self
+        if (
+            self.task == "pretrain"
+            and not tcfg.lisa_enabled
+            and not tcfg.stream_layers
+            and self.backend != "mlx"
+        ):
+            raise ValueError(
+                "training.lora.r=0 (full fine-tuning) is not supported with "
+                "task='pretrain': its trainer always attaches a LoRA adapter, so "
+                "a rank of 0 fails inside peft (or unsloth) when training starts. "
+                "Use lora.r >= 1, lisa_enabled: true (LISA trains whole layers "
+                "without an adapter), or task: sft with lora.r: 0 for full "
+                "fine-tuning."
+            )
+        if self.task not in ("sft", "embedding"):
             return self
         if tcfg.stream_layers:
             # Streaming has its own, more specific refusal (the decoder lives
@@ -6525,8 +7327,9 @@ class SoupConfig(BaseModel):
         I/O on a real base. The same refusal now applies to every
         ``task='kto'`` config, resident or streamed, before anything loads.
         """
-        if self.backend == "mlx":
+        if self.backend == "mlx" and self.task not in MLX_TASKS:
             return self  # _validate_mlx_task_support gives the more basic answer
+        # MLX KTO (#2000) builds TRL's KL rows and keeps the same floor.
         tcfg = self.training
         if (
             self.task == "kto"
@@ -6553,26 +7356,55 @@ class SoupConfig(BaseModel):
         tcfg = self.training
         if not tcfg.stream_layers:
             # Footgun: a non-default stream_* while streaming is off almost
-            # certainly means the user forgot stream_layers=true.
-            if (
-                tcfg.stream_source != "auto"
-                or tcfg.stream_ngram_source != "auto"
-                or tcfg.stream_buffers != 2
-                or tcfg.stream_read_ahead != DEFAULT_STREAM_READ_AHEAD
-                or tcfg.stream_vram_override is not None
-                or tcfg.stream_vram_probe
-                or tcfg.stream_disk_kind is not None
-                or tcfg.stream_pin is not None
-            ):
+            # certainly means the user forgot stream_layers=true. Only the
+            # fields the config sets are named, not all twelve.
+            set_fields = [
+                name
+                for name, is_set in (
+                    ("stream_source", tcfg.stream_source != "auto"),
+                    ("stream_ngram_source", tcfg.stream_ngram_source != "auto"),
+                    ("stream_buffers", tcfg.stream_buffers != 2),
+                    ("stream_read_ahead", tcfg.stream_read_ahead != DEFAULT_STREAM_READ_AHEAD),
+                    ("stream_vram_override", tcfg.stream_vram_override is not None),
+                    ("stream_vram_probe", bool(tcfg.stream_vram_probe)),
+                    ("stream_nf4_scale_cache", bool(tcfg.stream_nf4_scale_cache)),
+                    ("stream_recompute", tcfg.stream_recompute != "on"),
+                    ("stream_expert_layout", tcfg.stream_expert_layout != "fused"),
+                    ("stream_disk_kind", tcfg.stream_disk_kind is not None),
+                    ("stream_pin", tcfg.stream_pin is not None),
+                    ("stream_loss_chunk", tcfg.stream_loss_chunk is not None),
+                )
+                if is_set
+            ]
+            if set_fields:
+                named = " / ".join(f"training.{name}" for name in set_fields)
                 raise ValueError(
-                    "training.stream_source / training.stream_ngram_source / "
-                    "training.stream_buffers / training.stream_read_ahead / "
-                    "training.stream_vram_override / training.stream_vram_probe "
-                    "/ training.stream_disk_kind / training.stream_pin set but "
-                    "stream_layers is false; set stream_layers=true to stream the "
-                    "base layer-by-layer."
+                    f"{named} set but stream_layers is false; set "
+                    "stream_layers=true to stream the base layer-by-layer."
                 )
             return self
+        if tcfg.stream_nf4_scale_cache and (
+            tcfg.quantization != "4bit" or not tcfg.double_quant_on
+        ):
+            # The cache holds the EXPANDED nested scales. Without 4-bit there is
+            # no NF4 weight, and without double quantisation the stored scales
+            # are already fp32, so the setting would reach nothing.
+            raise ValueError(
+                "training.stream_nf4_scale_cache needs quantization='4bit' with "
+                "double quantization (training.bnb_4bit_use_double_quant unset or "
+                f"true); got quantization={tcfg.quantization!r}, "
+                f"bnb_4bit_use_double_quant={tcfg.bnb_4bit_use_double_quant!r}. "
+                "Without them there are no nested NF4 scales to cache."
+            )
+        if tcfg.stream_expert_layout == "per_expert" and tcfg.moe_lora:
+            # Each routed expert is fetched, used and dropped one at a time; an
+            # adapter on it would have nowhere to live between the visits.
+            raise ValueError(
+                "training.stream_expert_layout='per_expert' streams the routed "
+                "experts one at a time and cannot train adapters on them; unset "
+                "training.moe_lora (adapt attention or the shared expert instead) "
+                "or use stream_expert_layout='fused'."
+            )
         # #971 — `stream_source: 'ram'` INSISTS on the RAM tier: 'ram' insists,
         # 'disk' forces, 'auto' falls back (trainer/stream_setup.py). The
         # read-ahead reader belongs to the NVMe disk tier, so a non-default
@@ -6628,6 +7460,57 @@ class SoupConfig(BaseModel):
                 f"offered for them yet. Use the predicted budget, or "
                 f"training.stream_vram_override if you have measured this "
                 f"configuration yourself."
+            )
+        if tcfg.stream_loss_chunk is not None and self.task != "sft":
+            # #1693 — the chunked step rebuilds `ForCausalLMLoss`, the sft loss.
+            raise ValueError(
+                f"training.stream_loss_chunk supports task='sft' only; got "
+                f"task={self.task!r}. It computes the causal-LM cross-entropy "
+                f"chunk by chunk; a preference loss reduces the logits to "
+                f"per-token log-probs of chosen and rejected instead, and that "
+                f"reduction is not chunked. Remove training.stream_loss_chunk."
+            )
+        if tcfg.stream_recompute != "on" and self.task != "sft":
+            # Only the SFT step is measured. A loss with two grad-enabled
+            # forwards before one backward would unpack a layer's saved pool
+            # tensors after its slot was refilled, which the owner check
+            # refuses mid-step rather than training on stale weights.
+            raise ValueError(
+                f"training.stream_recompute={tcfg.stream_recompute!r} supports "
+                f"task='sft' only; got task={self.task!r}. Keeping activations "
+                f"instead of the checkpoint recompute is measured on the SFT step "
+                f"only; a loss that runs more than one grad-enabled forward per "
+                f"backward is not supported yet. Remove training.stream_recompute "
+                f"or set it to 'on'."
+            )
+        if tcfg.stream_recompute != "on" and tcfg.activation_offloading is not None:
+            # A retained layer saves its activations through its own
+            # saved_tensors_hooks, the innermost ones, so the offloading hooks
+            # never see them: they would stay on the card, silently.
+            raise ValueError(
+                f"training.stream_recompute={tcfg.stream_recompute!r} cannot be "
+                f"combined with training.activation_offloading="
+                f"{tcfg.activation_offloading!r}: a streamed layer that keeps its "
+                f"activations saves them through its own hooks, so they would stay "
+                f"in VRAM and never be offloaded. Set stream_recompute to 'on' or "
+                f"unset activation_offloading."
+            )
+        if tcfg.stream_loss_chunk is not None and self.data.format == "raft":
+            raise ValueError(
+                "training.stream_loss_chunk cannot be combined with data.format="
+                "'raft': the RAFT loss weights every token and is computed from "
+                "the full logits, which a chunked step does not return. Remove "
+                "training.stream_loss_chunk."
+            )
+        if tcfg.stream_loss_chunk is not None and tcfg.use_cut_ce:
+            # #1693 — two mechanisms over the same loss. Checked before the
+            # refusal of use_cut_ce under streaming (#2023), so that the
+            # message names both fields.
+            raise ValueError(
+                "training.stream_loss_chunk and training.use_cut_ce cannot be "
+                "combined: each replaces how the loss over the logits is "
+                "computed. Keep stream_loss_chunk and set use_cut_ce=false; "
+                "streaming refuses use_cut_ce on its own."
             )
         if self.backend != "transformers":
             raise ValueError(
@@ -6703,26 +7586,10 @@ class SoupConfig(BaseModel):
                 "VeRA's shared projections are built from the materialised "
                 "base weights, which streaming keeps on the meta device."
             )
-        # #1012 follow-up: the forward pass for a LoRA target on the streamed
-        # large-layer boundary modules (lm_head / embed_tokens) is correct
-        # (#1019), and a save -> load_adapter round trip now preserves the
-        # adapter's tensors (#1048), but save_pretrained() still raises
-        # trying to copy a meta tensor. Refuse by name at parse time rather
-        # than let a run train for hours and die at its first save_steps.
-        target_modules = tcfg.lora.target_modules
-        named_targets = (
-            {target_modules} if isinstance(target_modules, str) else set(target_modules)
-        )
-        head_targets = sorted(named_targets & {"lm_head", "embed_tokens"})
-        if head_targets:
-            raise ValueError(
-                "training.stream_layers does not yet support a LoRA target on "
-                f"{', '.join(head_targets)}: the forward pass is correct, but "
-                "saving or resuming an adapter that targets the streamed "
-                "head/embedding boundary is not supported yet. Drop "
-                f"{', '.join(head_targets)} from training.lora.target_modules, "
-                "or train without stream_layers."
-            )
+        # A LoRA target on the streamed embedding or head (#1012) is refused by
+        # build_streamed_model() after get_peft_model() (#1048): whether the
+        # checkpoint streams them (untied) and which modules a target_modules
+        # spelling matches are not known here.
         if tcfg.moe_expert_quant is not None:
             raise ValueError(
                 "training.stream_layers is incompatible with "
@@ -6737,6 +7604,13 @@ class SoupConfig(BaseModel):
                 f"(got {tcfg.lora.init_strategy!r}): PiSSA/OLoRA/LoftQ "
                 f"initialise the adapter from an SVD of the base weight, which "
                 f"is on the meta device under streaming."
+            )
+        if tcfg.use_cut_ce:
+            raise ValueError(
+                "training.stream_layers cannot be combined with training.use_cut_ce: "
+                "the streamed setup never installs the resident Cut Cross-Entropy patch. "
+                "Set use_cut_ce=false to stream with the conservative logits budget, "
+                "or disable stream_layers to use resident CCE."
             )
         conflicts = []
         if tcfg.unfrozen_parameters:
@@ -6765,14 +7639,14 @@ class SoupConfig(BaseModel):
         # `attn_implementation`. A streamed run goes to
         # `_setup_streaming_transformers` (the streamed branch of
         # `SFTTrainerWrapper.setup`), and its model is built by
-        # `AutoModelForCausalLM.from_config(...)` in `build_meta_skeleton`
-        # (`utils/layer_stream_runtime.py`) with NO attention argument and no Liger
-        # patch, so neither switch reaches the backend. `_liger_applied` is never
-        # set there either, so `use_liger_kernel` misses `TrainingArguments` as
-        # well. These are the switches a user reaches for when a streamed run will
-        # not fit, so silently dropping them is the worst outcome: refuse until
-        # each is wired and shown to engage on a streamed model. (`use_cut_ce` has
-        # the same shape and is #1206.)
+        # `AutoModelForCausalLM.from_config(...)` in `_skeleton_from_config`, called by
+        # `build_meta_skeleton` (`utils/layer_stream_runtime.py`), with NO attention
+        # argument and no Liger patch, so neither switch reaches the backend.
+        # `_liger_applied` is never set there either, so `use_liger_kernel` misses
+        # `TrainingArguments` as well. These are the switches a user reaches for when
+        # a streamed run will not fit, so silently dropping them is the worst outcome:
+        # refuse until each is wired and shown to engage on a streamed model.
+        # CCE is refused separately above (#1206).
         if tcfg.use_liger:
             conflicts.append("use_liger")
         if tcfg.use_flash_attn:
@@ -6826,9 +7700,7 @@ class SoupConfig(BaseModel):
                 f"rollout_backend requires task='grpo'; got task={self.task!r}"
             )
         if self.backend == "mlx":
-            raise ValueError(
-                "rollout_backend is not supported on backend=mlx in v0.50.0"
-            )
+            return self  # #1976: _refuse_mlx_grpo_scope gives the MLX GRPO refusal
         if (
             self.training.rollout_backend == "openenv"
             and self.training.rollout_func is None
@@ -6888,6 +7760,18 @@ class SoupConfig(BaseModel):
                 f"task={self.task!r} with modality='vision' requires backend='transformers': "
                 "the unsloth DPO setup loads FastLanguageModel and does not read modality, so "
                 "a vision-language checkpoint cannot be trained there; got backend='unsloth'"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_vision_preference_format(self) -> "SoupConfig":
+        """Refuse vision row formats for preference tasks until they have a row path."""
+        preference_tasks = {"dpo", "ipo", "simpo", "orpo", "bco", "preference"}
+        vision_preference_formats = {"llava", "sharegpt4v"}
+        if self.task in preference_tasks and self.data.format in vision_preference_formats:
+            raise ValueError(
+                f"task={self.task!r} with data.format={self.data.format!r} has no "
+                "vision-preference row path; use a text preference format instead."
             )
         return self
 
@@ -6953,6 +7837,72 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 f"a comma-separated training.reward_fn (an ensemble, {rf!r}) is "
                 f"only supported for task='grpo'; got task={self.task!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_grpo_judge_rank(self) -> "SoupConfig":
+        """#2047 — ``reward_fn: judge_rank`` and its ``grpo_judge*`` fields.
+
+        ``judge_rank`` is built from this config in ``trainer/grpo.py`` (the PPO
+        and ``soup reward`` loaders refuse it), so it needs ``task='grpo'`` off
+        MLX, a text modality (the judge never sees an image), a judge URL and a
+        call budget. ``prm_reward`` replaces
+        ``reward_fn``, so the judge would never run; a ``rollout_backend``
+        replaces the prompts after the cost guard has counted them. Any
+        ``grpo_judge*`` field without ``judge_rank`` would be read by nothing.
+        """
+        from soup_cli.trainer.grpo_judge import GRPO_JUDGE_FIELDS, uses_judge_rank
+
+        t = self.training
+        if not uses_judge_rank(t.reward_fn):
+            set_fields = [name for name in GRPO_JUDGE_FIELDS if getattr(t, name) is not None]
+            if set_fields:
+                named = ", ".join(f"training.{name}" for name in set_fields)
+                verb, pronoun = ("applies", "it") if len(set_fields) == 1 else ("apply", "them")
+                raise ValueError(
+                    f"{named} only {verb} to training.reward_fn judge_rank; got "
+                    f"reward_fn={t.reward_fn!r}. Add judge_rank to reward_fn or remove {pronoun}."
+                )
+            return self
+        if self.task != "grpo":
+            raise ValueError(
+                "training.reward_fn judge_rank needs task='grpo' (it ranks each "
+                f"prompt's group of completions); got task={self.task!r}"
+            )
+        if self.backend == "mlx":
+            raise ValueError(
+                "training.reward_fn judge_rank is not supported on backend='mlx'; "
+                "use backend='transformers'"
+            )
+        if self.modality == "vision":
+            raise ValueError(
+                "training.reward_fn judge_rank is not supported with modality='vision' "
+                "(including training.vision_grpo): the judge is sent only the text of the "
+                "conversation and the completions, never the images, so it would rank them "
+                "on the text alone. Use a rule-based reward, or modality: text."
+            )
+        if t.prm_reward is not None:
+            raise ValueError(
+                "training.prm_reward replaces training.reward_fn, so judge_rank would "
+                "never run; remove training.prm_reward or judge_rank"
+            )
+        if t.rollout_backend is not None:
+            raise ValueError(
+                "training.rollout_backend replaces the dataset prompts after the "
+                "judge_rank cost guard has counted them; remove training.rollout_backend "
+                "or judge_rank"
+            )
+        if t.grpo_judge is None:
+            raise ValueError(
+                "training.reward_fn judge_rank needs training.grpo_judge, the judge URL "
+                "(ollama://model, https://host/model or http://localhost:port/model)"
+            )
+        if t.grpo_judge_max_calls is None:
+            raise ValueError(
+                "training.reward_fn judge_rank needs training.grpo_judge_max_calls, the "
+                "most judge calls the run may make: (train rows x epochs + held-out rows "
+                "x evaluations) x 2 for the retry. It has no default."
             )
         return self
 
@@ -7367,7 +8317,45 @@ class SoupConfig(BaseModel):
                 "relora_steps is incompatible with training.use_fsdp2_compile=True: "
                 "compiled FSDP2 wraps parameters and prevents in-place base merges."
             )
+        reference = self._task_with_a_frozen_reference()
+        if reference is not None:
+            setting, terms = reference
+            # #1835 -- measured: trl's reference on a fixed batch is unchanged
+            # until the first restart and moves by 0.83 (dpo) at it.
+            way_out = "Remove training.relora_steps."
+            if terms:
+                way_out = (
+                    f"Remove training.relora_steps, or remove {terms} from "
+                    "training.preference_loss_weights."
+                )
+            raise ValueError(
+                f"training.relora_steps cannot be used here ({setting}): the loss "
+                "compares the policy with a frozen reference, which trl builds on "
+                "the policy's own base weights (a `ref` adapter, or the model with "
+                "its adapter disabled). Every ReLoRA restart merges the trained "
+                "adapter into those weights, so from the first restart on the "
+                f"reference would be the policy as of that step. {way_out}"
+            )
         return self
+
+    def _task_with_a_frozen_reference(self) -> Optional[tuple[str, str]]:
+        """``(the setting as a message names it, the blend's terms to drop or
+        "")`` when this config's loss has a frozen reference on the policy's
+        base weights; else ``None`` (#1835)."""
+        tcfg = self.training
+        if self.task in ("dpo", "ipo", "kto", "bco"):
+            return f"task={self.task!r}", ""
+        if self.task == "grpo" and tcfg.grpo_beta > 0:
+            # With `grpo_beta: 0` trl adds no `ref` adapter and reads none.
+            return f"task='grpo', grpo_beta={tcfg.grpo_beta}", ""
+        if self.task == "preference":
+            if tcfg.preference_loss_weights:
+                terms = ", ".join(sorted(set(tcfg.preference_loss_weights) & {"dpo", "ipo", "bco"}))
+                if terms:
+                    return f"task='preference', preference_loss_weights with {terms}", terms
+            elif tcfg.preference_loss in ("dpo", "ipo", "bco"):
+                return f"task='preference', preference_loss={tcfg.preference_loss!r}", ""
+        return None
 
     @model_validator(mode="after")
     def _validate_quant_menu_supported_tasks(self) -> "SoupConfig":
@@ -7392,6 +8380,24 @@ class SoupConfig(BaseModel):
                 f"quantization={quant!r} is not supported on the mlx backend "
                 "(no equivalent kernels). Use backend='transformers' or "
                 "switch to quantization in {'4bit', '8bit', 'none'}."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_unsloth_8bit(self) -> "SoupConfig":
+        """#1811 — ``quantization: 8bit`` on ``backend: unsloth`` loaded in 16-bit.
+
+        ``utils/unsloth.py`` passes ``load_in_4bit`` and nothing else, and the
+        declared floor (``unsloth>=2024.8``) has no ``load_in_8bit`` to pass, so
+        ``8bit`` loaded exactly like ``none`` with no word. Refuse it, naming the
+        two values the Unsloth path applies.
+        """
+        if self.backend == "unsloth" and self.training.quantization == "8bit":
+            raise ValueError(
+                "training.quantization: 8bit is not applied on backend: unsloth "
+                "(Soup's Unsloth loader passes load_in_4bit only, so 8bit loaded the model "
+                "in 16-bit). Use quantization: 4bit or none with backend: unsloth, or "
+                "backend: transformers for 8-bit."
             )
         return self
 
@@ -7736,10 +8742,8 @@ class SoupConfig(BaseModel):
         * ``citation_faithful=True`` requires ``data.format='raft'`` (the
           RAFT row carries the doc references; other formats can't supply
           ground-truth citation IDs).
-        * ``citation_faithful=True`` requires ``task in {sft, pretrain}``
-          (the span-mask runtime only makes sense for the SFT family;
-          mirrors v0.52.0 distill / classifier
-          task-gate policy — review M3 fix).
+        * ``citation_faithful=True`` requires ``task='sft'``: only its
+          RAFT route applies the citation span weights.
         * ``citation_style`` set without ``citation_faithful=True`` is a
           silent-no-op footgun — rejected (mirrors v0.61.0 unlearn_alpha /
           v0.62.0 Part B ra_dit_retriever_model policy).
@@ -7768,12 +8772,11 @@ class SoupConfig(BaseModel):
                     "Citation-faithful FT pairs with the v0.62.0 Part A "
                     "RAFT data format (which carries the doc references)."
                 )
-            if self.task not in ("sft", "pretrain"):
+            if self.task != "sft":
                 raise ValueError(
                     "training.citation_faithful=true requires "
-                    f"task in {{sft, pretrain}}; got task={self.task!r}. "
-                    "Citation-faithful FT is an SFT-family feature: its "
-                    "span-mask runtime runs in the SFT trainer."
+                    f"task='sft'; got task={self.task!r}. "
+                    "Use task: sft with data.format: raft to apply citation span weights."
                 )
         return self
 
@@ -7870,21 +8873,61 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_mlx_task_support(self) -> "SoupConfig":
-        """MLX backend only supports sft, dpo, and grpo tasks (v0.25.0).
+        """MLX backend supports sft, dpo, orpo, simpo, kto and grpo.
 
-        DPO and GRPO wrappers are scaffolding in v0.25.0 — they raise
-        NotImplementedError at ``train()`` time because upstream mlx-lm has
-        not yet shipped DPO/GRPO training helpers. Users who pick them will
-        instead see this friendly error at config-load time.
+        SFT runs through mlx-lm's tuner; DPO, ORPO, SimPO, KTO and GRPO through
+        Soup's own loops in ``trainer/mlx_dpo.py`` / ``trainer/mlx_orpo.py`` /
+        ``trainer/mlx_simpo.py`` / ``trainer/mlx_kto.py`` / ``trainer/mlx_grpo.py``.
+        Every other task is refused here rather than at ``train()`` time.
         """
         if self.backend != "mlx":
             return self
-        if self.task == "sft":
+        if self.task == "grpo":
+            _refuse_mlx_grpo_scope(self)
             return self
+        if self.task in ("dpo", "orpo", "simpo", "kto"):
+            # The native preference loops tokenize text and chat rows only and
+            # train a LoRA adapter. DPO's and KTO's reference log-probs come
+            # from the policy before training, which is the base model only
+            # because a LoRA adapter's B starts at zero; ORPO and SimPO train
+            # LoRA only (no full fine-tune on MLX yet).
+            name = {"dpo": "DPO", "orpo": "ORPO", "simpo": "SimPO", "kto": "KTO"}[self.task]
+            if self.modality != "text":
+                raise ValueError(
+                    f"modality='{self.modality}' is not supported by task='{self.task}' "
+                    f"on backend='mlx': MLX {name} trains on text and chat rows only. "
+                    "Use backend=transformers, or modality: text."
+                )
+            if int(self.training.lora.r) < 1:
+                why = (
+                    "the reference model is the untrained LoRA policy, which needs "
+                    "a LoRA adapter to exist"
+                    if self.task in ("dpo", "kto")
+                    else f"MLX {name} trains a LoRA adapter; full fine-tuning is not "
+                    "implemented on backend='mlx'"
+                )
+                raise ValueError(
+                    f"training.lora.r must be at least 1 for task='{self.task}' on "
+                    f"backend='mlx': {why}."
+                )
+            if self.task in ("orpo", "simpo", "kto") and self.training.quantization == "8bit":
+                raise ValueError(
+                    f"training.quantization='8bit' is not supported by task='{self.task}' "
+                    "on backend='mlx': use quantization: none, or a pre-quantized "
+                    "mlx-community 4-bit base with quantization: 4bit."
+                )
+            return self
+        if self.task in MLX_TASKS:
+            return self
+        hint = ""
+        native = {"dpo", "orpo", "simpo"}
+        if self.task == "preference" and self.training.preference_loss in native:
+            hint = f" Use task: {self.training.preference_loss} for the native MLX trainer."
         raise ValueError(
-            f"MLX backend only ships SFT in v0.25.0; task='{self.task}' "
-            "is not yet implemented (upstream mlx-lm does not expose a "
-            f"training helper). Use backend=transformers for task={self.task}."
+            f"MLX backend only ships SFT, DPO, ORPO, SimPO, KTO and GRPO; "
+            f"task='{self.task}' has "
+            "no trainer on backend='mlx'."
+            + (hint or f" Use backend=transformers for task={self.task}.")
         )
 
     @model_validator(mode="after")
@@ -7911,6 +8954,68 @@ class SoupConfig(BaseModel):
                 "learning rate for every LoRA tensor). Remove "
                 "training.loraplus_lr_ratio, or use backend: transformers."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_mlx_lora_patterns(self) -> "SoupConfig":
+        """#1996 - ``lora.rank_pattern`` / ``alpha_pattern`` are not applied on
+        ``backend: mlx``. Stop-gap: delete this validator (and
+        ``tests/test_mlx_lora_pattern_refusal.py``) when the MLX trainer honours them.
+
+        SFT, DPO, ORPO, SimPO, KTO and GRPO all build the adapter in
+        ``MLXSFTTrainerWrapper._apply_lora`` from one scalar ``lora.r`` and
+        ``lora.alpha``, so a config that set a pattern trained a uniform-rank adapter
+        without a word. Not part of
+        :meth:`_validate_peft_variant_backend_and_quantization`, which returns early
+        for plain LoRA; defined after :meth:`_validate_mlx_task_support` (and the
+        ``lora.r=0`` check) on purpose, so a task MLX cannot run, or a config with no
+        adapter at all, is refused for that reason first and "use backend:
+        transformers" below leads to a config that loads for the pattern. It is not
+        unconditional: an MLX-only setting such as ``training.optimizer: muon`` or
+        ``adamw_hf`` is refused on transformers for its own reason. MLX DoRA already
+        refuses both fields in its own words, earlier. An empty ``{}`` sets nothing
+        (``peft_wiring`` reads ``if rank_pattern:``) and still loads.
+        """
+        if self.backend != "mlx":
+            return self
+        message = _unapplied_lora_patterns_message(
+            self.training.lora, "mlx", "the MLX trainer builds every adapter from"
+        )
+        if message is not None:
+            raise ValueError(message)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_unsloth_lora_patterns(self) -> "SoupConfig":
+        """#2153 - ``lora.rank_pattern`` / ``alpha_pattern`` are not applied on
+        ``backend: unsloth``. Stop-gap: delete this validator (and
+        ``tests/test_unsloth_lora_pattern_refusal.py``) when the unsloth loader honours
+        them; it is independent of :meth:`_validate_mlx_lora_patterns`.
+
+        Every ``_setup_unsloth`` goes through ``utils/unsloth.py:load_model_and_tokenizer``,
+        which hands ``FastLanguageModel.get_peft_model`` one scalar ``r`` and
+        ``lora_alpha`` and has no pattern parameter, so a config that set one trained a
+        uniform-rank adapter without a word. The refusal is limited to the configs it
+        is the right answer for. A task outside :data:`UNSLOTH_SETUP_TASKS` is skipped:
+        it has no unsloth setup, and :meth:`_validate_unsloth_has_a_setup` (last in the
+        class, so ``distill``, ``asr`` and ``online_dpo`` keep their own earlier
+        refusals) says so in the words that fix it. SFT with a non-text modality is
+        skipped too: it loads through transformers, which applies the patterns, and
+        :meth:`_validate_unsloth_sft_modality` (defined later) names the real problem.
+        ``lora.r=0`` is refused for unsloth earlier still. An empty ``{}`` sets nothing
+        and still loads.
+        """
+        if self.backend != "unsloth":
+            return self
+        if self.task not in UNSLOTH_SETUP_TASKS:
+            return self
+        if self.task == "sft" and self.modality != "text":
+            return self
+        message = _unapplied_lora_patterns_message(
+            self.training.lora, "unsloth", "the unsloth loader attaches every adapter from"
+        )
+        if message is not None:
+            raise ValueError(message)
         return self
 
     @model_validator(mode="after")
@@ -8167,10 +9272,9 @@ class SoupConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_callback_monitoring_task_compat(self) -> "SoupConfig":
         """#802, #1069 — prm, moe_lora_routing, and unlearn attach no
-        SoupTrainerCallback, and on backend=mlx the callback has no stop control,
-        no checkpoint-rollback path, and no VRAM budget, so reject loss_watchdog,
-        loss_spike_recovery, and grad_accum_auto_tune when set to True on these
-        tasks or on backend=mlx.
+        SoupTrainerCallback. MLX text SFT implements its own watchdog (#1989),
+        but other native tasks do not; MLX has no checkpoint-recovery path or
+        VRAM budget for grad_accum_auto_tune.
         """
         unsupported = ("prm", "moe_lora_routing", "unlearn")
         if self.task in unsupported:
@@ -8195,14 +9299,14 @@ class SoupConfig(BaseModel):
             if getattr(tcfg, "loss_spike_recovery", False):
                 raise ValueError(
                     f"training.loss_spike_recovery is not supported for backend={self.backend!r} "
-                    "because spike recovery is driven by the watchdog and the watchdog "
-                    "cannot fire on MLX"
+                    "because MLX does not implement checkpoint rollback or recovery hints"
                 )
-            if getattr(tcfg, "loss_watchdog", False):
+            if getattr(tcfg, "loss_watchdog", False) and (
+                self.task != "sft" or self.modality != "text"
+            ):
                 raise ValueError(
                     f"training.loss_watchdog is not supported for backend={self.backend!r} "
-                    "because Soup does not implement the watchdog on the MLX callback, "
-                    "which has no stop control"
+                    "because the native watchdog supports only MLX text SFT"
                 )
             if getattr(tcfg, "grad_accum_auto_tune", False):
                 raise ValueError(
@@ -8215,8 +9319,8 @@ class SoupConfig(BaseModel):
     def _validate_eval_steps_compat(self) -> "SoupConfig":
         """#1223 — refuse a ``training.eval_steps`` nothing would read.
 
-        mlx-lm runs its own validation loop over the split (#739), and three
-        tasks have no evaluation pass at all. Separately, a split of 0 on a
+        On MLX only SFT honours it (#1990, in completed optimizer updates);
+        three tasks have no evaluation pass at all. Separately, a split of 0 on a
         source that cannot carry its own validation split leaves no rows to
         evaluate. A source that CAN carry one (an HF-hub dataset, a
         pre-tokenized cache) is let through: whether it does is only known at
@@ -8226,11 +9330,13 @@ class SoupConfig(BaseModel):
 
         if self.training.eval_steps is None:
             return self
-        if self.backend == "mlx":
+        if self.backend == "mlx" and self.task != "sft":
+            # #1990 honours it for MLX SFT. The native preference loops evaluate
+            # once per epoch and do not read it yet.
             raise ValueError(
-                f"training.eval_steps is not supported for backend={self.backend!r} "
-                "because mlx-lm evaluates the validation split on its own cadence "
-                "(#1223)"
+                f"training.eval_steps is not supported for task={self.task!r} on "
+                "backend='mlx': only task='sft' honours it there (#1990); the MLX "
+                "preference loop evaluates once per epoch"
             )
         reason = EVAL_STEPS_UNSUPPORTED_TASKS.get(self.task)
         if reason is not None:
@@ -8261,7 +9367,9 @@ class SoupConfig(BaseModel):
         trainer and the vision, audio, streaming and unsloth setups never do, and
         each of them always attaches an adapter, so those runs trained every
         layer too. Each setting that sends the run there is named, in the order
-        ``resolve_trainer`` and ``SFTTrainerWrapper.setup`` check them."""
+        ``resolve_trainer`` and ``SFTTrainerWrapper.setup`` check them; the rows
+        come from :data:`SFT_PATHS`, the one table of the dispatch, which #1698's
+        validator reads too."""
         tcfg = self.training
         fields = [
             f"training.{name}"
@@ -8278,15 +9386,11 @@ class SoupConfig(BaseModel):
                 "(and 'tts', which trains through the SFT trainer) freezes layers, so "
                 f"this run would train every layer. Use task: sft, or remove {keys}."
             )
-        off_path = []
-        if self.backend == "mlx":
-            off_path.append(("backend='mlx'", "backend: transformers"))
-        if self.modality in ("vision", "audio"):
-            off_path.append((f"modality={self.modality!r}", "modality: text"))
-        if tcfg.stream_layers:
-            off_path.append(("training.stream_layers=true", "stream_layers: false"))
-        if self.backend == "unsloth":
-            off_path.append(("backend='unsloth'", "backend: transformers"))
+        off_path = [
+            (path.setting, path.change)
+            for path in SFT_PATHS
+            if path.taken(self) and not path.reads & _FREEZE_FIELDS
+        ]
         if not off_path:
             return self
         settings = " and ".join(setting for setting, _ in off_path)
@@ -8296,6 +9400,55 @@ class SoupConfig(BaseModel):
             "layers are frozen only on the text path with backend: transformers and "
             "no layer streaming, so this run would train every layer. "
             f"Use {changes}, or remove {keys}."
+        )
+
+    @model_validator(mode="after")
+    def _validate_sft_path_is_read(self) -> "SoupConfig":
+        """#1698: inside ``task: sft``, four settings that load on the task are
+        read by only some of its paths.
+
+        ``reasoning_effort`` and ``train_on_eot`` are applied by
+        ``data.sft_format.build_format_row``, which only the last dataset branch
+        calls; ``use_flash_attn`` and ``use_liger`` are read by
+        ``SFTTrainerWrapper._setup_transformers``, which is only the last model
+        branch. The vision and audio setups, RAFT, a pre-tokenised cache, the MLX
+        trainer and unsloth all loaded the fields and applied none of them. The
+        task gates (#983, #1587) already stop every task that never reads them;
+        this stops the paths within ``sft`` that do not, from the same table
+        :meth:`_validate_freeze_is_applied` uses. Streaming is left out for the
+        kernel flags, which #1692 refuses with its own message."""
+        if self.task != "sft":
+            return self
+        taken = [path for path in SFT_PATHS if path.taken(self)]
+        if not taken:
+            return self
+        unread: Dict[tuple[str, ...], List[str]] = {}
+        for name in SFT_PATH_FIELDS:
+            value = getattr(self.training, name)
+            if value is None or value is False:
+                continue
+            offenders = tuple(
+                path.setting
+                for path in taken
+                if name not in path.reads
+                and name not in path.warned
+                and name not in path.refused_elsewhere
+            )
+            if offenders:
+                unread.setdefault(offenders, []).append(name)
+        if not unread:
+            return self
+        settings, names = next(iter(unread.items()))
+        rows = {path.setting: path for path in taken}
+        fields = " and ".join(f"training.{name}" for name in names)
+        verb = "is" if len(names) == 1 else "are"
+        keys = {1: "the key", 2: "both keys"}.get(len(names), f"the {len(names)} keys")
+        changes = " and ".join(rows[setting].change for setting in settings)
+        reasons = " and ".join(rows[setting].reason for setting in settings)
+        raise ValueError(
+            f"{fields} {verb} not applied by task='sft' with "
+            f"{' and '.join(settings)}: {reasons}, so this run would ignore "
+            f"{'it' if len(names) == 1 else 'them'}. Use {changes}, or remove {keys}."
         )
 
     @model_validator(mode="after")
@@ -8353,6 +9506,100 @@ class SoupConfig(BaseModel):
         )
 
     @model_validator(mode="after")
+    def _validate_use_mod_is_applied(self) -> "SoupConfig":
+        """#1752 — ``use_mod`` loaded on every task, but a router is installed
+        only by the LoRA arm of ``SFTTrainerWrapper._setup_transformers`` (which
+        ``tts`` reaches through ``super()``) and by
+        ``PretrainTrainerWrapper._setup_transformers`` after its LISA/LoRA
+        split. Everywhere else the run trained without the router that was
+        requested. Placed with the freeze / RoPE route checks, before the
+        #1357 backend refusal, which stays last. Combinations an earlier
+        validator already rejects keep that error."""
+        tcfg = self.training
+        if not tcfg.use_mod:
+            return self
+        if self.task not in MOD_APPLYING_TASKS:
+            raise ValueError(
+                f"training.use_mod is not applied by task={self.task!r}: only "
+                "task='sft', 'tts' and 'pretrain' install a Mixture-of-Depths "
+                "router, so this run would train without one. Use one of those "
+                "tasks, or set use_mod: false."
+            )
+        off_path = []
+        # PretrainTrainerWrapper.setup branches on the backend only and applies
+        # MoD after the LISA/LoRA split, so LISA is included and SFT's modality,
+        # streaming and parameter-selection gates are not. sft and tts share
+        # SFTTrainerWrapper.setup, which reaches the call only on the resident
+        # LoRA arm. Settings are named in the order resolve_trainer and that
+        # setup check them, then the LoRA-arm chain inside _setup_transformers.
+        if self.task == "pretrain":
+            if self.backend == "unsloth":
+                off_path.append(("backend='unsloth'", "backend: transformers"))
+            where = "on backend: transformers, including a LISA run"
+        else:
+            if self.backend == "mlx":
+                off_path.append(("backend='mlx'", "backend: transformers"))
+            if self.modality in ("vision", "audio"):
+                off_path.append((f"modality={self.modality!r}", "modality: text"))
+            if tcfg.stream_layers:
+                off_path.append(("training.stream_layers=true", "stream_layers: false"))
+            if self.backend == "unsloth":
+                off_path.append(("backend='unsloth'", "backend: transformers"))
+            if tcfg.unfrozen_parameters:
+                off_path.append(("training.unfrozen_parameters", "unfrozen_parameters: null"))
+            if tcfg.lisa_enabled:
+                off_path.append(("training.lisa_enabled=true", "lisa_enabled: false"))
+            if tcfg.lora.r == 0:
+                off_path.append(("training.lora.r=0", "lora.r >= 1"))
+            where = (
+                "on the resident text LoRA path with backend: transformers, "
+                "no layer streaming, lora.r >= 1, and neither LISA nor Spectrum"
+                if self.task == "sft"
+                else (
+                    "on the transformers LoRA path tts reaches through the SFT "
+                    "trainer (lora.r >= 1, not unsloth)"
+                )
+            )
+        if not off_path:
+            return self
+        settings = " and ".join(setting for setting, _ in off_path)
+        changes = " and ".join(change for _, change in off_path)
+        raise ValueError(
+            f"training.use_mod is not applied by task={self.task!r} with {settings}: "
+            f"a Mixture-of-Depths router is installed only {where}, so this run "
+            "would train without one. "
+            f"Use {changes}, or set use_mod: false."
+        )
+
+    @model_validator(mode="after")
+    def _reject_resident_kimi_k2(self) -> "SoupConfig":
+        """K2 remote code cannot import or train on the supported 5.x stack."""
+        from soup_cli.utils.kimi import resident_kimi_k2_refusal
+
+        reason = resident_kimi_k2_refusal(
+            self.base, backend=self.backend, hub=self.training.hub,
+            stream_layers=self.training.stream_layers,
+        )
+        if reason is not None:
+            raise ValueError(
+                f"{reason} base={self.base}. Its remote code uses removed APIs "
+                "and an inference-only MoE training path. Choose a compatible base."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_unsloth_sft_modality(self) -> "SoupConfig":
+        """#1186: multimodal SFT setup does not use the requested Unsloth backend."""
+        if self.task == "sft" and self.backend == "unsloth" and self.modality != "text":
+            raise ValueError(
+                "task='sft' with backend='unsloth' requires modality='text': "
+                "the vision and audio setup paths load through transformers and "
+                f"do not use Unsloth; got modality={self.modality!r}. "
+                "Use backend: transformers for multimodal SFT."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_unsloth_has_a_setup(self) -> "SoupConfig":
         """#1357 — ``backend: unsloth`` on a task outside
         :data:`UNSLOTH_SETUP_TASKS` was accepted and never applied: that trainer
@@ -8361,15 +9608,10 @@ class SoupConfig(BaseModel):
         own, earlier refusals."""
         if self.backend != "unsloth" or self.task in UNSLOTH_SETUP_TASKS:
             return self
-        also = (
-            " and remove training.unsloth_bnb_4bit, which only unsloth reads"
-            if self.training.unsloth_bnb_4bit
-            else ""
-        )
         raise ValueError(
             f"backend='unsloth' is not applied by task={self.task!r}: that trainer has "
             "no unsloth setup and would train on plain transformers. Use backend: "
-            f"transformers{also}."
+            f"transformers{_unsloth_flag_clause(self.training)}."
         )
 
 
@@ -8454,6 +9696,7 @@ training:
     alpha: 16
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -8466,7 +9709,7 @@ output: ./output
 base: meta-llama/Llama-3.2-11B-Vision-Instruct
 task: sft
 modality: vision
-# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
+backend: transformers  # The vision SFT path does not use Unsloth.
 
 data:
   train: ./data/vision_train.jsonl
@@ -8600,6 +9843,7 @@ training:
     alpha: 16
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   bco_beta: 0.1
 
 output: ./output
@@ -8661,6 +9905,7 @@ training:
     alpha: 16
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   ipo_tau: 0.1
 
 output: ./output
@@ -8735,6 +9980,13 @@ output: ./output
 #
 # Uses RoPE scaling + gradient checkpointing + FlashAttention for 128k tokens.
 # Optionally enable Liger Kernel for additional memory savings.
+#
+# The VRAM pre-flight prices the full logits over a 128k-token sequence, which is far
+# more than one card holds. This model is outside the range that estimate was fitted
+# on, so it prints that figure as a warning and launches anyway, unless its weights and
+# training state (adapters, gradients, optimizer) alone do not fit the card.
+# To avoid building the full logits, uncomment use_liger below (pip install
+# "soup-cli[liger]"); the pre-flight still warns, as it cannot know the fused loss applies.
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: sft
@@ -8811,7 +10063,7 @@ output: ./output_embedding
 base: Qwen/Qwen2-Audio-7B-Instruct
 task: sft
 modality: audio
-# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
+backend: transformers  # The audio SFT path does not use Unsloth.
 
 data:
   train: ./data/audio_train.jsonl

@@ -262,6 +262,12 @@ def _fake_model_and_tokenizer():
     return model, tokenizer
 
 
+# /v1/tools/python and /v1/tools/bash answer 401 without a token on every bind
+# (tests/test_serve_code_tool_token.py), so the app is built with one.
+_TOOL_TOKEN = "tool-test-token"
+_TOOL_AUTH = {"Authorization": f"Bearer {_TOOL_TOKEN}"}
+
+
 def _build_app(**overrides):
     pytest.importorskip("fastapi")
     from soup_cli.commands.serve import _create_app
@@ -273,6 +279,7 @@ def _build_app(**overrides):
         device="cpu",
         model_name="test-model",
         max_tokens_default=64,
+        auth_token=_TOOL_TOKEN,
     )
     kwargs.update(overrides)
     return _create_app(**kwargs)
@@ -486,20 +493,31 @@ def test_ngram_kwarg_skipped_when_draft_model_set():
     "path",
     ["/v1/tools/python", "/v1/tools/web_search"],
 )
-def test_tool_endpoint_returns_501(path: str):
+def test_tool_endpoint_returns_501(path: str, monkeypatch):
     """v0.53.7: python + web_search are live; the 501 stub is gone.
 
     Per-endpoint live coverage lives in ``test_v0537.py``. The ``bash``
     endpoint was reverted to 501 by the v0.53.7 review (C1) — its 501
     surface is asserted in ``test_v0537.py::TestReviewFixesC1BashStub``.
+    The python route answers 501 where the host has no OS-level isolation
+    or the namespace ``unshare`` fails at run time
+    (``tests/test_serve_python_tool_isolation.py``), so this test runs it
+    under an isolating strategy whose ``unshare`` is a no-op that succeeds.
     """
+    import os
+
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
+    from soup_cli.trainer import rewards
+
+    if rewards._get_isolation_strategy() == "best-effort":
+        monkeypatch.setattr(rewards, "_get_isolation_strategy", lambda: "namespaces")
+    monkeypatch.setattr(os, "unshare", lambda *args, **kwargs: None, raising=False)
     app = _build_app()
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = TestClient(app, base_url="http://127.0.0.1", headers=_TOOL_AUTH)
     response = client.post(path, json={"code": "print(1)"})
-    assert response.status_code != 501
+    assert response.status_code not in (401, 501), response.text
 
 
 # ----------------------------------------------------------------------

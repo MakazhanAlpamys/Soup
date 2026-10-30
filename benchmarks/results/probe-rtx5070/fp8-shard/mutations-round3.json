@@ -1,0 +1,92 @@
+[
+ {
+  "id": "M09",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "bool block accepted",
+  "returncode": 1,
+  "summary": "1 failed, 156 passed in 19.56s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_unsupported_fp8_config_is_refused_naming_the_format[block-bool]"
+  ],
+  "restored": true,
+  "seconds": 26.4
+ },
+ {
+  "id": "M10",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "zero block accepted",
+  "returncode": 1,
+  "summary": "1 failed, 156 passed in 15.95s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_unsupported_fp8_config_is_refused_naming_the_format[block-zero]"
+  ],
+  "restored": true,
+  "seconds": 22.3
+ },
+ {
+  "id": "M11",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "float block accepted",
+  "returncode": 1,
+  "summary": "1 failed, 156 passed in 18.63s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_unsupported_fp8_config_is_refused_naming_the_format[block-float]"
+  ],
+  "restored": true,
+  "seconds": 25.1
+ },
+ {
+  "id": "M12",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "one-int block accepted",
+  "returncode": 1,
+  "summary": "1 failed, 156 passed in 18.65s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_unsupported_fp8_config_is_refused_naming_the_format[block-one-int]"
+  ],
+  "restored": true,
+  "seconds": 25.3
+ },
+ {
+  "id": "R01",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "RecursionError not caught",
+  "returncode": 1,
+  "summary": "1 failed, 156 passed in 16.42s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_a_config_too_deep_to_parse_is_not_read"
+  ],
+  "restored": true,
+  "seconds": 25.3
+ },
+ {
+  "id": "R02",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "no upper bound on weight_block_size",
+  "returncode": 1,
+  "summary": "6 failed, 151 passed in 18.63s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_weight_block_size_is_refused_past_its_range[rows-over]",
+   "tests/test_fp8_block_streaming.py::test_weight_block_size_is_refused_past_its_range[cols-over]",
+   "tests/test_fp8_block_streaming.py::test_weight_block_size_is_refused_past_its_range[rows-2^63]",
+   "tests/test_fp8_block_streaming.py::test_weight_block_size_is_refused_past_its_range[both-2^63]",
+   "tests/test_fp8_block_streaming.py::test_weight_block_size_is_refused_past_its_range[both-2^80]",
+   "tests/test_fp8_block_streaming.py::test_an_out_of_range_block_is_refused_alike_by_plan_estimator_sharder_and_setup"
+  ],
+  "restored": true,
+  "seconds": 25.1
+ },
+ {
+  "id": "R03",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "upper bound off by one",
+  "returncode": 1,
+  "summary": "2 failed, 155 passed in 16.05s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_weight_block_size_is_refused_past_its_range[at-cap]",
+   "tests/test_fp8_block_streaming.py::test_an_fp8_source_with_a_huge_block_size_shards_exactly"
+  ],
+  "restored": true,
+  "seconds": 22.5
+ }
+]

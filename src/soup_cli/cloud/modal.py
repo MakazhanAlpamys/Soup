@@ -329,10 +329,19 @@ def submit_modal_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:
         raise RuntimeError(
             "Modal SDK not installed. Run `pip install \"soup-cli[modal]\"`."
         ) from exc
+    from soup_cli.utils.tool_paths import find_tool
+
+    modal_cli = find_tool("modal")
+    if modal_cli is None:
+        raise RuntimeError(
+            "Modal CLI `modal` was not found on PATH. Install it with "
+            "`pip install \"soup-cli[modal]\"`, make sure its scripts directory "
+            "is on PATH, then re-run with --cloud-submit."
+        )
     import subprocess
 
     proc = subprocess.run(  # noqa: S603 — argv list, no shell
-        ["modal", "run", plan.stub_path],
+        [modal_cli, "run", plan.stub_path],
         check=False,
     )
     return proc.returncode

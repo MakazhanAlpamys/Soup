@@ -89,7 +89,7 @@ def benchmark(
     """Evaluate on standard benchmarks (wraps lm-evaluation-harness)."""
     model_path = Path(model)
     if not model_path.exists():
-        console.print(f"[red]Model path not found: {model_path}[/]")
+        console.print(f"[red]Model path not found: {for_terminal(model_path)}[/]")
         raise typer.Exit(1)
 
     # Both the user-supplied path and the adapter's declared base model are
@@ -207,9 +207,11 @@ def aider(
     from soup_cli.eval.aider_polyglot import (
         AiderEvalError,
         build_docker_command,
+        new_container_name,
         parse_aider_results,
         preflight_docker,
         prepare_output_dir,
+        remove_container,
         validate_exercises_dir,
         write_soup_result,
     )
@@ -230,6 +232,7 @@ def aider(
         corpus_dir = validate_exercises_dir(exercises_dir)
         corpus_outside_cwd = not is_under_cwd(corpus_dir)
         docker = preflight_docker(image)
+        container_name = new_container_name()
         command = build_docker_command(
             docker=docker,
             image=image,
@@ -239,6 +242,7 @@ def aider(
             threads=threads,
             num_tests=num_tests,
             allow_host_services=allow_host_services,
+            container_name=container_name,
         )
     except AiderEvalError as exc:
         if tracker is not None:
@@ -280,7 +284,21 @@ def aider(
         if tracker is not None:
             tracker.close()
         console.print(f"[red]Aider benchmark timed out after {timeout} seconds.[/]")
+        if not remove_container(docker, container_name):
+            console.print(
+                f"[yellow]Could not remove container {escape(container_name)}; "
+                f"remove it with: docker rm -f {escape(container_name)}[/]",
+                soft_wrap=True,
+            )
         raise typer.Exit(1) from exc
+    except KeyboardInterrupt:
+        if not remove_container(docker, container_name):
+            console.print(
+                f"[yellow]Could not remove container {escape(container_name)}; "
+                f"remove it with: docker rm -f {escape(container_name)}[/]",
+                soft_wrap=True,
+            )
+        raise
     except OSError as exc:
         if tracker is not None:
             tracker.close()
@@ -371,7 +389,7 @@ def custom(
     model_path = Path(model)
 
     if not model_path.exists():
-        console.print(f"[red]Model path not found: {model_path}[/]")
+        console.print(f"[red]Model path not found: {for_terminal(model_path)}[/]")
         raise typer.Exit(1)
 
     # Load and validate tasks
@@ -382,7 +400,7 @@ def custom(
         raise typer.Exit(1)
 
     console.print(
-        f"[dim]Loaded {len(eval_tasks)} eval tasks from {tasks_path}[/]"
+        f"[dim]Loaded {len(eval_tasks)} eval tasks from {for_terminal(tasks_path)}[/]"
     )
 
     # Run evaluation with progress
@@ -551,7 +569,8 @@ def judge(
         try:
             rubric_data = load_rubric(Path(rubric))
         except (FileNotFoundError, ValueError) as exc:
-            console.print(f"[red]{exc}[/]")
+            # The message quotes the path it was given.
+            console.print(f"[red]{for_terminal(str(exc))}[/]")
             raise typer.Exit(1)
 
     console.print(
@@ -729,6 +748,10 @@ def auto(
         border_style="blue",
     ))
 
+    # #1808: a leg that could not run used to be swallowed, and "Auto-eval
+    # complete." exited 0 even when it was the only leg. Count what ran.
+    legs_ran = 0
+
     # Run standard benchmarks if specified
     if bench_list:
         console.print("\n[bold]Standard Benchmarks[/]")
@@ -748,6 +771,8 @@ def auto(
             # benchmark failure aborted the whole auto-eval instead of falling
             # through to the custom eval below.
             console.print("[yellow]Benchmark eval skipped (see above).[/]")
+        else:
+            legs_ran += 1
 
     # Run custom eval if specified
     if tasks_file:
@@ -766,8 +791,20 @@ def auto(
                 output=None,
                 trust_remote_code=trust_remote_code,
             )
-        except SystemExit:
+        except (typer.Exit, SystemExit):
+            # The same pair as the benchmark leg (#1808): custom() also fails
+            # with typer.Exit, which `except SystemExit` alone never caught, so
+            # the exit code depended on which leg had failed.
             console.print("[yellow]Custom eval skipped (see above).[/]")
+        else:
+            legs_ran += 1
+
+    if legs_ran == 0:
+        console.print(
+            "\n[red]Auto-eval failed: nothing was evaluated.[/] Every leg was skipped "
+            "(see above); fix the cause and run again."
+        )
+        raise typer.Exit(1)
 
     console.print("\n[green]Auto-eval complete.[/]")
 
@@ -946,14 +983,14 @@ def human(
     # Verify models exist
     for mpath in [model_a, model_b]:
         if not Path(mpath).exists():
-            console.print(f"[red]Model not found: {mpath}[/]")
+            console.print(f"[red]Model not found: {for_terminal(mpath)}[/]")
             raise typer.Exit(1)
 
     console.print(Panel(
         f"[bold]Human Evaluation[/]\n"
         f"Prompts: {len(prompts)}\n"
-        f"Model A: {model_a}\n"
-        f"Model B: {model_b}",
+        f"Model A: {for_terminal(model_a)}\n"
+        f"Model B: {for_terminal(model_b)}",
         title="A/B Comparison",
         border_style="blue",
     ))
@@ -1007,7 +1044,7 @@ def human(
 
     # Save results
     save_results(results, Path(output))
-    console.print(f"\n[green]Results saved to {output}[/]")
+    console.print(f"\n[green]Results saved to {for_terminal(output)}[/]")
 
 
 # ─── Helper functions ───
@@ -1215,8 +1252,8 @@ def _short_model_name(path: str) -> str:
     """Shorten model path for display."""
     parts = Path(path).parts
     if len(parts) > 2:
-        return "/".join(parts[-2:])
-    return path
+        return for_terminal("/".join(parts[-2:]))
+    return for_terminal(path)
 
 
 # ─── soup eval gate (v0.26.0 Part B) ───
@@ -1270,7 +1307,7 @@ def gate_cmd(
     try:
         eval_suite = load_suite(suite)
     except (FileNotFoundError, ValueError) as exc:
-        console.print(f"[red]Cannot load suite:[/] {exc}")
+        console.print(f"[red]Cannot load suite:[/] {for_terminal(str(exc))}")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     try:
@@ -1379,8 +1416,14 @@ def quant_check_cmd(
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
-    resolved_before = resolve_model_ref(before)
-    resolved_after = resolve_model_ref(after)
+    resolved: dict[str, Optional[str]] = {}
+    for label, ref in (("--before", before), ("--after", after)):
+        try:
+            resolved[label] = resolve_model_ref(ref)
+        except ValueError as exc:  # AmbiguousRefError: a registry prefix or name:tag with twins
+            console.print(f"[red]Cannot resolve {label}:[/] {for_terminal(str(exc))}")
+            raise typer.Exit(EXIT_USAGE_ERROR) from exc
+    resolved_before, resolved_after = resolved["--before"], resolved["--after"]
     if resolved_before is None:
         console.print(f"[red]Cannot resolve --before: {before}[/]")
         raise typer.Exit(EXIT_USAGE_ERROR)
@@ -1420,6 +1463,23 @@ def quant_check_cmd(
     if not after_path.exists():
         console.print(f"[red]--after not found: {resolved_after}[/]")
         raise typer.Exit(EXIT_USAGE_ERROR)
+
+    # Pre-parse --tasks before any model is loaded (#2053): an unparseable
+    # tasks file is a usage error (exit 3) with the loader's message, not a
+    # late ValueError after both models have already been loaded. The parsed
+    # list is handed to run_quant_check so the file is read once, not once
+    # per model. OSError (FileNotFoundError, IsADirectoryError,
+    # PermissionError, ...) and ValueError (bad JSON / schema, decoding)
+    # both mark a file the user wrote as unusable.
+    from soup_cli.eval.custom import load_eval_tasks
+
+    try:
+        pre_tasks = load_eval_tasks(tasks)
+    except (OSError, ValueError) as exc:
+        console.print(
+            f"[red]Cannot load --tasks: {for_terminal(str(exc))}[/]"
+        )
+        raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     # Live model scoring: build transformers-backed generators per side.
     # Deterministic stubs are used only if --allow-stub is explicitly passed.
@@ -1462,7 +1522,7 @@ def quant_check_cmd(
     result = run_quant_check(
         before_gen=before_gen,
         after_gen=after_gen,
-        tasks_file=tasks,
+        tasks=pre_tasks,
         stub=is_stub,
     )
     rendered = render(result, fmt=fmt)

@@ -15,6 +15,7 @@ from soup_cli.registry.diff import config_diff, eval_delta
 from soup_cli.registry.store import (
     AmbiguousRefError,
     RegistryStore,
+    validate_idempotency_key,
     validate_name,
     validate_tag,
 )
@@ -42,19 +43,54 @@ def _require_entry(store: RegistryStore, ref: str) -> dict:
     return entry
 
 
+def _data_file(path: str) -> str:
+    """The ``--data`` file, refused before any database is opened."""
+    from pathlib import Path
+
+    from soup_cli.utils.paths import is_under_cwd
+
+    file_path = Path(path)
+    if not file_path.exists():
+        _fail(f"--data file not found: {path}")
+    if not file_path.is_file():
+        _fail(f"--data is not a file: {path}")
+    if not is_under_cwd(file_path):
+        _fail(f"--data must be under the current working directory: {path}")
+    return str(file_path)
+
+
 @app.command("push")
 def push_cmd(
     run_id: str = typer.Option(..., "--run-id", help="Training run id to register"),
     name: str = typer.Option(..., "--name", "-n", help="Registry entry name"),
     tag: str = typer.Option("v1", "--tag", "-t", help="Tag (e.g. v1, prod-2024)"),
     notes: str = typer.Option("", "--notes", help="Free-form notes"),
+    data: Optional[str] = typer.Option(
+        None, "--data",
+        help=(
+            "Training data file to record: its SHA-256 is stored as data_hash. "
+            "This is the file registered as the training input, not proof of "
+            "what the run trained on. Must be a file under the current directory."
+        ),
+    ),
+    idempotency_key: Optional[str] = typer.Option(
+        None, "--idempotency-key",
+        help=(
+            "Make a retry safe: a later push with the same key and the same run, name, "
+            "tag and data returns the existing entry instead of a new one; anything "
+            "different is refused. 1-128 characters from letters, digits, '.', '_', ':', '-'."
+        ),
+    ),
 ) -> None:
     """Register a completed training run as a registry entry."""
     try:
         validate_name(name)
         validate_tag(tag)
+        if idempotency_key is not None:
+            validate_idempotency_key(idempotency_key)
     except ValueError as exc:
         _fail(f"Invalid input: {exc}")
+    data_path = _data_file(data) if data is not None else None
 
     from soup_cli.experiment.tracker import ExperimentTracker
 
@@ -63,15 +99,21 @@ def push_cmd(
         if tracker.get_run(run_id) is None:
             _fail(f"Run not found: {run_id}")
         with RegistryStore() as store:
+            earlier = (
+                store.get_by_idempotency_key(idempotency_key)
+                if idempotency_key is not None else None
+            )
             try:
                 entry_id = store.register_from_run(
                     tracker, run_id, name=name, tag=tag,
-                    notes=notes or None,
+                    notes=notes or None, data_path=data_path,
+                    idempotency_key=idempotency_key,
                 )
             except ValueError as exc:
                 _fail(str(exc))
+        verb = "Already registered" if earlier and earlier["id"] == entry_id else "Registered"
         console.print(Panel(
-            f"Registered [cyan]{escape(name)}[/]:[magenta]{escape(tag)}[/]\n"
+            f"{verb} [cyan]{escape(name)}[/]:[magenta]{escape(tag)}[/]\n"
             f"Entry ID: [bold]{escape(entry_id)}[/]",
             title="Registry", border_style="green",
         ))
@@ -147,9 +189,13 @@ def show_cmd(
             ("name", entry["name"]),
             ("tags", ", ".join(entry.get("tags", []))),
             ("base_model", entry["base_model"]),
+            ("base_revision", entry.get("base_revision") or "unknown"),
+            ("base_revision_source", entry.get("base_revision_source") or "unknown"),
+            ("training_data_sha256", entry.get("training_data_sha256") or "unknown"),
             ("task", entry["task"]),
             ("run_id", entry.get("run_id") or "-"),
             ("entry_hash", entry.get("entry_hash", "")[:16] + "..."),
+            ("data_hash", (entry["data_hash"][:16] + "...") if entry.get("data_hash") else "-"),
             ("created_at", entry["created_at"]),
             ("notes", entry.get("notes") or ""),
         ]

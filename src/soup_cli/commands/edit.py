@@ -101,7 +101,7 @@ def _load_cov_corpus(path: str) -> list[str]:
             f"--cov-corpus file too large (> {_MAX_COV_CORPUS_BYTES} bytes)"
         )
     rows: list[str] = []
-    with os.fdopen(fd, encoding="utf-8") as fh:
+    with os.fdopen(fd, encoding="utf-8-sig") as fh:
         for i, line in enumerate(fh):
             if i >= _MAX_COV_CORPUS_LINES:
                 break

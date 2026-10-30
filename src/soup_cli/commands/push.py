@@ -43,7 +43,7 @@ def push(
         "--token",
         "-t",
         help=(
-            "Upload token. For --hub hf: [deprecated] use HF_TOKEN or cached login. "
+            "Upload token. For --hub hf: \\[deprecated] use HF_TOKEN or cached login. "
             "For other hubs: that hub's token (or MODELSCOPE_API_TOKEN / MODELERS_TOKEN)."
         ),
         envvar="HF_TOKEN",
@@ -145,13 +145,12 @@ def push(
     hf_token: Optional[str] = None
     hf_endpoint: Optional[str] = None
     if hub_canonical != "hf":
-        import click
-
         from soup_cli.utils.hubs import hub_token_env_var, resolve_hub_token
+        from soup_cli.utils.typer_compat import ParameterSource
 
         # --token also reads HF_TOKEN via envvar; only a value typed on the
         # command line is meant for this hub.
-        typed = ctx.get_parameter_source("token") == click.core.ParameterSource.COMMANDLINE
+        typed = ctx.get_parameter_source("token") == ParameterSource.COMMANDLINE
         hub_token = resolve_hub_token(hub_canonical, token if typed else None)
         if not hub_token:
             env_var = hub_token_env_var(hub_canonical)
@@ -380,12 +379,17 @@ def _load_training_config(model_path: Path) -> dict:
             import yaml
         except ImportError:
             return {}
+        from soup_cli.utils.yaml_limits import (
+            MAX_CONFIG_BYTES,
+            YamlLimitError,
+            load_yaml_file_limited,
+        )
+
         try:
-            with open(path, encoding="utf-8") as fh:
-                data = yaml.safe_load(fh)
+            data = load_yaml_file_limited(path, name, max_bytes=MAX_CONFIG_BYTES)
             if isinstance(data, dict):
                 return data
-        except (yaml.YAMLError, OSError):
+        except (yaml.YAMLError, YamlLimitError, OSError):
             continue
     return {}
 

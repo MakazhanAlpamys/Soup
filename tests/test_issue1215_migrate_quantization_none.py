@@ -246,7 +246,8 @@ class TestLlamaFactoryQuantizationAndFullFinetuning:
         assert any("oft" in w for w in res["_warnings"])
         loaded = load_config_from_string(config_to_yaml(res))
         assert loaded.training.quantization == "none"
-        assert loaded.training.lora.r == 64
+        # LLaMA-Factory's own default rank (#1807), not Soup's 64.
+        assert loaded.training.lora.r == 8
 
 
 class TestUnslothQuantizationAndFullFinetuning:

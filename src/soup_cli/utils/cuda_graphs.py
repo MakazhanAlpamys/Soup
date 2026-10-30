@@ -11,12 +11,16 @@ from __future__ import annotations
 
 import functools
 import inspect
+import json
+import os
 import re
+import sys
 import threading
 from importlib import import_module
 from itertools import chain
+from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Optional
 
 _BACKEND_NAME = "soup_cudagraphs"
 _REGISTRATION_LOCK = threading.Lock()
@@ -54,6 +58,122 @@ def _cuda_device_key(device: Any) -> str:
     if not value.startswith("cuda:"):
         raise RuntimeError("CUDA graphs require every model tensor on a single CUDA device")
     return value
+
+
+def _is_cuda_available_light() -> bool:
+    """Lightweight check for CUDA availability without importing torch.
+
+    A driver-less ROCm setup reports False.
+    """
+    if "torch" in sys.modules:
+        import torch
+
+        return bool(torch.cuda.is_available())
+    if sys.platform == "darwin":
+        return False
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if visible is not None and visible.strip() in ("", "-1"):
+        return False
+    try:
+        import ctypes
+
+        if sys.platform == "win32":
+            lib = ctypes.CDLL("nvcuda.dll")
+        else:
+            lib = ctypes.CDLL("libcuda.so.1")
+        if lib.cuInit(0) != 0:
+            return False
+        count = ctypes.c_int()
+        if lib.cuDeviceGetCount(ctypes.byref(count)) != 0:
+            return False
+        return count.value > 0
+    except (OSError, AttributeError):
+        return False
+
+
+def _read_json_object(path: Path) -> Optional[dict]:
+    """The file as a JSON object, or None when it is missing, unreadable or not an object.
+
+    The loader reports such a file itself, with the message it always had.
+    """
+    try:
+        if not path.is_file():
+            return None
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _check_adapter_config(target_path: Path) -> Optional[str]:
+    """Refuse a non-LoRA or DoRA adapter; return the base its config records, when a string."""
+    adapter_cfg = _read_json_object(target_path / "adapter_config.json")
+    if adapter_cfg is None:
+        return None
+    peft_type = adapter_cfg.get("peft_type")
+    if peft_type and peft_type != "LORA":
+        raise RuntimeError(f"CUDA graph decoding supports LoRA adapters only, not {peft_type}")
+    if adapter_cfg.get("use_dora") is True:
+        raise RuntimeError("CUDA graph decoding does not support DoRA adapters")
+    recorded_base = adapter_cfg.get("base_model_name_or_path")
+    return recorded_base if isinstance(recorded_base, str) and recorded_base else None
+
+
+def _check_model_config(target_path: Path) -> None:
+    """Refuse a ``config.json`` that is not a stock Qwen2/Llama model, or is quantized."""
+    cfg_data = _read_json_object(target_path / "config.json")
+    if cfg_data is None:
+        return
+    model_type = cfg_data.get("model_type")
+    if model_type and model_type not in ("qwen2", "llama"):
+        raise RuntimeError("CUDA graph decoding supports stock Qwen2 and Llama causal models")
+    if cfg_data.get("quantization_config") is not None:
+        raise RuntimeError("CUDA graph decoding currently requires an unquantized model")
+
+
+def _check_local_target(target: Optional[str]) -> Optional[str]:
+    """Inspect a local model or adapter directory; return the base an adapter records.
+
+    Anything that is not a local directory is left to the loader.
+    """
+    if not target:
+        return None
+    target_path = Path(target)
+    if not target_path.is_dir():
+        return None
+    recorded_base = _check_adapter_config(target_path)
+    _check_model_config(target_path)
+    return recorded_base
+
+
+def check_cuda_graphs_preflight(
+    device: Optional[str] = None,
+    model_target: Optional[str] = None,
+    base: Optional[str] = None,
+) -> None:
+    """Pre-flight checks for CUDA graphs before loading model weights or torch.
+
+    ``model_target`` and ``base`` are inspected when they name local directories.
+    A local adapter given without ``base`` also has the base its
+    ``adapter_config.json`` records inspected, read the way the loader reads it:
+    the string as-is (a relative path counts from the current directory), and
+    only when it names a local directory. That base's ``config.json`` is checked;
+    its own adapter config is not read, so nothing is followed further. A
+    missing, malformed or non-string value, or a Hub id, is left to the loader.
+    """
+    if device is not None:
+        normalized = str(device).strip().lower()
+        if not (normalized == "cuda" or normalized.startswith("cuda:")):
+            raise RuntimeError("CUDA graphs require every model tensor on a single CUDA device")
+    else:
+        if not _is_cuda_available_light():
+            raise RuntimeError("CUDA graphs require every model tensor on a single CUDA device")
+
+    recorded_base = _check_local_target(model_target)
+    _check_local_target(base)
+    if not base and recorded_base is not None:
+        _check_model_config(Path(recorded_base))
 
 
 def _has_offload_hook(hook: Any) -> bool:

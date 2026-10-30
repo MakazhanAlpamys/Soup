@@ -1,0 +1,2 @@
+{"at":"before","utc":"2026-10-23T15:02:57.7293933Z","mem":{"AvailableBytes":15609724928,"CommittedBytes":28849553408,"PagesInputPersec":201357154},"ac":2,"gpu":"0 MiB, 45, 7 MHz"}
+{"at":"after","utc":"2026-10-23T15:20:45.8633218Z","mem":{"AvailableBytes":15271714816,"CommittedBytes":29247221760,"PagesInputPersec":201845843},"ac":2,"gpu":"0 MiB, 46, 0 MHz"}

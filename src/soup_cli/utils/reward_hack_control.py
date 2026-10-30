@@ -339,6 +339,12 @@ def shape_reward_fn(
             return rewards
 
     _shaped.__name__ = getattr(inner, "__name__", "reward")
+    # A reward that may score ``None`` (#2047) still may once shaped: the shim
+    # passes a ``None`` through unchanged, so the declaration travels with it.
+    from soup_cli.trainer.rewards import REWARD_MAY_RETURN_NONE
+
+    if getattr(inner, REWARD_MAY_RETURN_NONE, False) is True:
+        setattr(_shaped, REWARD_MAY_RETURN_NONE, True)
     return _shaped
 
 

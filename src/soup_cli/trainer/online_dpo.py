@@ -57,6 +57,7 @@ from soup_cli.utils.gpu import (
     resolve_frozen_base_load_dtype,
 )
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -202,13 +203,17 @@ class OnlineDPOTrainerWrapper:
           last user turn (interleaved assistant turns are KEPT so multi-turn
           context and user/assistant alternation are preserved); the trailing
           assistant turn is dropped because the model generates it on-policy.
+        - ``{"prompt": [...]}`` (a conversational preference row, #1849) ->
+          read the same way as ``messages``.
         """
         out = []
         for row in rows:
-            if isinstance(row.get("prompt"), str):
-                out.append({"prompt": [{"role": "user", "content": row["prompt"]}]})
-            elif isinstance(row.get("messages"), list):
-                msgs = row["messages"]
+            prompt = row.get("prompt")
+            if isinstance(prompt, str):
+                out.append({"prompt": [{"role": "user", "content": prompt}]})
+                continue
+            msgs = prompt if isinstance(prompt, list) else row.get("messages")
+            if isinstance(msgs, list):
                 last_user = -1
                 for idx, msg in enumerate(msgs):
                     if isinstance(msg, dict) and msg.get("role") == "user":
@@ -269,8 +274,8 @@ class OnlineDPOTrainerWrapper:
         prompt_rows = self._to_prompt_rows(dataset["train"])
         if not prompt_rows:
             raise ValueError(
-                "online_dpo: no usable prompts (rows need a 'prompt' string or "
-                "'messages' with a user/system turn)"
+                "online_dpo: no usable prompts (rows need a 'prompt' string, or a "
+                "'prompt' message list or 'messages' with a user turn)"
             )
         train_ds = Dataset.from_list(prompt_rows)
 
@@ -377,7 +382,8 @@ class OnlineDPOTrainerWrapper:
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -400,12 +406,15 @@ class OnlineDPOTrainerWrapper:
         dev_map = resolve_device_map(self.device)
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
-            "torch_dtype": resolve_frozen_base_load_dtype(self.device),
+            "dtype": resolve_frozen_base_load_dtype(self.device),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
 
-        self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
 
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 

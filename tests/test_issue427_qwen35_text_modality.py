@@ -10,10 +10,13 @@ from soup_cli.recipes.catalog import RECIPES
 
 EXPECTED_QWEN35_TEXT_RECIPES = {
     "qwen3.5-0.8b-sft",
+    "qwen3.5-0.8b-dpo",
     "qwen3.5-0.8b-grpo",
     "qwen3.5-2b-sft",
+    "qwen3.5-2b-dpo",
     "qwen3.5-2b-grpo",
     "qwen3.5-4b-sft",
+    "qwen3.5-4b-dpo",
     "qwen3.5-4b-pretrain",
     "qwen3.5-9b-sft",
     "qwen3.5-9b-grpo",

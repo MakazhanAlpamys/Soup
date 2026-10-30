@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:fa009c2fcc2c94ea06e25ea8620c2fbed9bfb8ac6611bf71a2669a06f7c50b46 -->
+<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <strong>العربية</strong> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -27,7 +27,7 @@
 <p align="center">
   <a href="https://pypi.org/project/soup-cli/"><img src="https://img.shields.io/pypi/v/soup-cli?color=blue" alt="PyPI"></a>
   <a href="https://pepy.tech/project/soup-cli"><img src="https://img.shields.io/pepy/dt/soup-cli?color=blue" alt="التنزيلات"></a>
-  <img src="https://img.shields.io/badge/python-3.10--3.12-blue" alt="Python 3.10-3.12">
+  <img src="https://img.shields.io/badge/python-3.11--3.13-blue" alt="Python 3.11-3.13">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="ترخيص Apache-2.0">
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/MakazhanAlpamys/65fdc943f85f3b2c46ecddb415c2b779/raw/soup_tests.json" alt="الاختبارات"></a>
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://github.com/MakazhanAlpamys/Soup/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -92,55 +92,36 @@ soup train
 
 ## ما الجديد
 
-**v0.76.0 — الإعدادات التي كان Soup يقبلها ولا يطبّقها أبدًا باتت توقف التحميل.** الخيارات التي كان يُتحقَّق
-من صحتها وتُوثَّق ولا يقرؤها شيء في المسار الذي تزعم أنها تضبطه، صارت تُرفَض عند التحميل، مع تسمية
-الإعداد وما ينبغي تغييره؛ أما البقية فتُصدر تحذيرًا وتسمّي الإصدار الذي سيرفضها. وقد يتوقف تحميل إعداد
-كان يُحمَّل من قبل: شغّل `soup doctor --config soup.yaml` أولًا.
+**v0.77.1 — إصدار تصحيحي: `soup data` يحافظ على مدخلاته، و`soup plan` يتفق مع `soup train`، وGRPO
+يتدرّب على Apple Silicon.** لا يتراجع هذا الإصدار عن أي شيء في v0.77.0. ذلك الإصدار يرفض الإعدادات التي حذّر منها
+v0.76 أو تجاهلها، لذا قد يتوقف تحميل إعداد كان يُحمَّل على v0.76: إن كنت قادمًا من 0.76.x فشغّل
+`soup doctor --config soup.yaml` أولًا واقرأ
+[ملاحظات إصدار v0.77.0](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0).
 
-- **تغيير غير متوافق مع الإصدارات السابقة: يُرفَض عند التحميل أي إعداد لم يكن له أي أثر.** ومن ذلك
-  `training.quantization_aware: true` (فلم يكن يشغّل تدريبًا واعيًا بالتكميم قط)، و`training.use_longlora`،
-  و`training.ebft_variant`، و`training.gdpo_variant`، و`training.rope_scaling_type` حيث لا تقرؤه أي خطوة
-  تهيئة، و`freeze_layers` / `freeze_ratio` خارج مسار `sft` / `tts` النصي على الواجهة الخلفية transformers،
-  و`auto_mixed_precision` خارج `sft` / `tts`، و`backend: unsloth` في سبع مهام أخرى ليست لها خطوة تهيئة
-  لـ unsloth. وتسمّي كل رسالة الحقل وما ينبغي تغييره. أما `lr_groups` و`early_stop_patience`
-  و`forgetting_eval_steps` وغيرها من الإعدادات التي لا يقرؤها شيء فتُصدر تحذيرًا عند التحميل الآن، وستُرفَض
-  بدءًا من v0.77.
-- **صارت خسارة التحقق تُقيَّم الآن.** كان `data.val_split` يستبعد صفوفًا من التدريب في كل تشغيل، ولم يكن
-  أي مدرّب على الواجهة الخلفية transformers يقيّمها. أما الآن فكل مهمة تحصل على قسم للتحقق تقيّمه في نهاية
-  كل حقبة (epoch)، أو كل N خطوة عبر `training.eval_steps`، وتسجّل خسارة التحقق؛ وتستغرق التشغيلات
-  أطول ببضعة في المئة. **تغيير غير متوافق مع الإصدارات السابقة بالنسبة إلى `grpo` و`ppo` و`online_dpo`:**
-  فهي افتراضيًا لم تعد تستبعد صفوفًا (يُتجاهَل `data.val_split` مع ملاحظة)، ولذلك يُدرَّب النموذج على كل صف.
-- **تغيير غير متوافق مع الإصدارات السابقة: كل `grpo_variant` غير قياسي يطبّق عقوبة KL الخاصة بـ `grpo_beta`.**
-  كانت `gspo` و`dapo` و`dr_grpo` و`bnpo` و`two_sided` و`rft` تتحقق من `grpo_beta` ثم تُسقطه، ولذلك لن تعيد
-  إعدادات المتغيّرات الموجودة إنتاج التشغيلات السابقة. وصار `grpo_beta: 0` يعمل بلا KL ويتخطى التمريرة
-  الأمامية للنموذج المرجعي.
-- **يقرأ بثّ الطبقات طبقته القرصية على خيط في الخلفية، عبر الإدخال/الإخراج المباشر (direct I/O)، ويمكنه توزيعها
-  على عدة أقراص NVMe.** على مخزن NF4 بحجم 36 GB وبهيئة نموذج 70B أكبر من ذاكرة RAM (جهاز واحد بوحدة
-  RTX 5070 Laptop سعة 8 GB)، انخفضت الخطوة الباردة من 110.5 s مع القراءة المتزامنة إلى 16.2-17.3 s، ومن
-  17.4 s إلى 9.97 s عبر قرصين باستخدام `SOUP_LAYER_STREAM_STRIPE_DIRS` (مسبار تحت حمل متواصل: جولتان،
-  1.28x و1.41x، بلا حكم رسمي؛ [السجل](benchmarks/probe-rtx5070-two-drive-sustained.md)). أما المخزن الذي
-  يتسع في ذاكرة RAM فيظل أسرع على طبقة RAM، وهي ما يختاره `stream_source: auto`. وهو لا يُفعَّل إلا بطلب
-  صريح (`stream_layers: true`) ولا يزال BETA؛ والسجلات:
-  [الإدخال/الإخراج المباشر](benchmarks/gate-974-disk-tier-direct-io.md)،
-  [التوزيع على الأقراص](benchmarks/gate-two-drive-striping.md).
-- **أوامر وخيارات جديدة.** يفحص `soup adapters check` مهايئ LoRA بحثًا عن الإخفاق الصامت؛ ويدرّب
-  `soup bench train` عددًا ثابتًا من الخطوات ويخرج برمز 1 إذا لم يكن النموذج يتدرّب (ويغطي `task: sft`
-  على الواجهة الخلفية transformers؛ وصار `soup bench` مجموعة أوامر، و`soup bench infer` هو معيار
-  الاستدلال القديم)؛ ويطهّر `soup data clean` مجموعة بيانات ويصلحها دون المساس بملف الإدخال؛
-  ويتحقق `soup recipes verify` على جهاز meta، ودون تنزيل أي أوزان، من أن كل وصفة مشحونة تستطيع إرفاق
-  مهايئ LoRA؛ ويسمّي `soup rewind` صفوف مجموعة البيانات التي تقف وراء قفزة الخسارة. ويكتسب `soup infer`
-  الخيار الاختياري <span dir="ltr">`--batch-size`</span> والخيار التجريبي <span dir="ltr">`--cuda-graphs`</span>
-  (يتطلب PyTorch 2.14 أو أحدث؛ على جهاز RTX 5070 Laptop واحد، دون تثبيت، مع Qwen2.5-1.5B بدقة FP16،
-  كان أبطأ تشغيل مع هذا الخيار أسرع بمقدار 2.9x في فك الترميز من أسرع تشغيل بدونه). ويُجري `soup ab` اختبارًا
-  ثنائي الجانب متينًا إزاء التباين، ويوقّع `soup adapters sign --backend sigstore`
-  و`soup attest emit --sign sigstore` باستخدام Sigstore OIDC بلا مفاتيح
-  (<span dir="ltr">`pip install "soup-cli[sigstore]"`</span>).
-- **قيد الإيقاف التدريجي (Deprecated):** سيُزال `soup export --format awq` و<span dir="ltr">`--format gptq`</span>
-  في v0.77؛ فكلا المشروعين الأصليين مؤرشف ولا يُثبَّت أي من الملحقين (extras) إلى جانب
-  <span dir="ltr">`[train]`</span>.
-
-> Python **3.10–3.12** فقط. وعلى الإصدار 3.13 وما بعده كان pip يختار حزم PyTorch (wheels) غير مختبرة تنهار في
-> الامتداد الأصلي قبل أن يعمل Soup أصلًا.
+- **لم تعد أوامر `soup data` تكتب فوق مدخلاتها.** ثمانية عشر منها (`dedup` و`filter` و`convert`
+  و`merge` و`sample` و`pii` و`toxicity` وغيرها) ترفض، قبل أن تقرأ أي شيء، قيمةَ `--output` تشير إلى
+  الملف نفسه الذي هو أحد المدخلات، بأي كتابة جاءت، ويُرفَض أيضًا اسم إخراج افتراضي يحمله المُدخل أصلًا.
+  اكتب إلى ملف جديد بدلًا من ذلك.
+- **يرفض `soup plan` و`soup apply` الإعدادات التي يرفضها `soup train`** بالرسالة نفسها، ولا يكتبان
+  خطة.
+- **يتدرّب GRPO أصليًا على Apple Silicon.** يشغّل `task: grpo` مع `backend: mlx` حلقة MLX الخاصة
+  بـ Soup على الهدف نفسه الذي يدرّبه مسار transformers، مع المكافأة المدمجة `accuracy` أو `format`.
+  ويولّد `soup infer --backend mlx` من نماذج MLX الأساسية ومحوّلات LoRA النصية الأصلية دون Torch.
+- **تقدير واحد لذروة VRAM:** يستخدم الفحص المسبق في `soup train` و`soup profile` و`soup plan` التقدير
+  نفسه، وهو معايَر على 39 تشغيلًا مقيسًا ([السجل](benchmarks/gate-2049-resident-vram.md)). وفي النطاق
+  الذي عويِر عليه، أي النماذج الكثيفة حتى نحو 3.5B معامل، صار الفحص المسبق يرفض بعض التشغيلات طويلة
+  التسلسل كبيرة المفردات التي كان يمرّرها، وما زال `--allow-oom-attempt` يطلقها. أما خارج هذا النطاق
+  (نموذج أكبر أو نموذج mixture-of-experts، أو نقاط حفظ `medium` أو `selective`، أو
+  `use_liger` / `use_cut_ce`، أو `backend: unsloth`) فيطبع التقدير تحذيرًا للتشغيل الذي لا يتسع له
+  ويبدأه، إلا إذا كانت الأوزان وسياق CUDA والتدرّجات وحالة المُحسِّن للمعاملات التي يدرّبها أكبر مما
+  تتسع له البطاقة (ضبط دقيق كامل لنموذج 7B على 80 GB، أو Llama-3.1-70B بدقة 4-bit على 24 GB): فعندئذ
+  يُرفَض التشغيل هناك أيضًا. وتُقيَّم تشغيلات LoRA والتشغيلات التي تدرّب جزءًا من المعاملات (Spectrum
+  وLISA والتجميد) على حدود أقل، وما زال `--allow-oom-attempt` يطلق التشغيل المرفوض.
+- **تُشغَّل البرامج الخارجية بمسار مطلق موجود على `PATH`.** لم يعد يُبحث في المجلد الحالي ولا في
+  مدخلات `PATH` النسبية: أضف إلى `PATH` مجلد أي أداة لا توجد إلا هناك.
+- **وجديد أيضًا.** `soup ship --progress jsonl`؛ ومفاتيح الإعداد المجهولة المكتوبة بالطريقة التي
+  تسمّيها بها مكتبة أخرى صارت تقترح حقل Soup المقابل (`learning_rate` يقترح `lr`)؛ ومثال Docker أدناه
+  يمرّر `--yes`، الذي يحتاجه `soup train` غير التفاعلي منذ v0.77.0.
 
 تجد أبرز ما في الإصدارات الأقدم في صفحة [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
@@ -216,7 +197,7 @@ soup merge  --adapter ./output                              # ادمج LoRA في
 soup export --model ./output --format gguf --quant q4_k_m   # GGUF لـ Ollama / llama.cpp
 ```
 
-وتوجد أهداف تصدير أخرى (ONNX وTensorRT وAWQ وGPTQ وBitNet) وخيارات النشر في
+وتوجد أهداف تصدير أخرى (ONNX وTensorRT وBitNet) وخيارات النشر في
 [`docs/serving-and-export.md`](docs/serving-and-export.md).
 
 ## واجهة الويب
@@ -297,7 +278,7 @@ Alpaca وShareGPT وChatML وأزواج التفضيلات (DPO / ORPO / SimPO /
 العادي والتضمين (embedding) وRAFT وغيرها — كلها تُكتشف تلقائيًا من JSONL أو JSON أو CSV أو Parquet أو TXT،
 ولذلك تكتفي في معظم الحالات بتوجيه `data.train` إلى ملف دون أن يتغير شيء آخر. وتوجد المخططات مع مثال
 عملي لكل صيغة، إضافةً إلى خط أنابيب البيانات (معرّفات URI البعيدة، والبثّ، والتقسيم إلى شظايا (sharding)، والدمج المتناوب (interleaving)، وتوسيع
-المفردات، واستيعاب المستندات)، في [`docs/data.md`](docs/data.md#data-formats).
+المفردات، واستيعاب المستندات)، في [`docs/data.md`](docs/data.md#data-formats)، مع توثيق [تدريب الصوت الأصلي لـ Sesame CSM](docs/training.md#native-sesame-csm) بشكل منفصل.
 
 ## الأوامر الشائعة
 
@@ -345,13 +326,13 @@ soup doctor                           # افحص GPU / الاعتماديات / 
 
 ```bash
 docker pull ghcr.io/makazhanalpamys/soup:latest
-docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml
+docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml --yes
 docker compose up   # أو ابنِ الصورة محليًا
 ```
 
 ## المتطلبات
 
-- Python 3.10 أو 3.11 أو 3.12 (هذه هي الإصدارات التي يختبرها CI؛ أما 3.13 وما بعده فغير مدعوم بعد لأن
+- Python 3.11 أو 3.12 أو 3.13 (هذه هي الإصدارات التي يختبرها CI؛ أما 3.14 وما بعده فغير مدعوم بعد لأن
   حزمة PyTorch لم يُتحقَّق منها هناك)
 - GPU يدعم CUDA (موصى به) أو Apple Silicon (MPS) أو CPU (تجريبي — بطيء جدًا)
 - 8 GB فأكثر من VRAM للنماذج بحجم 7B مع QLoRA
@@ -488,4 +469,4 @@ Soup مرخَّص بـ Apache-2.0 ومجاني — وسيبقى كذلك. يُب
 
 ## الترخيص
 
-[Apache-2.0](LICENSE). حقوق النشر © مساهمو Soup.
+[Apache-2.0](LICENSE). Copyright 2026 Makazhan Alpamys and the Soup contributors. إذا أعدتَ توزيع Soup أو نسخة معدَّلة منه، فإن البندين 4 و6 من الترخيص ينطبقان عليك: احتفظ بالملفين `LICENSE` و`NOTICE` مع كل نسخة، وضع علامة على الملفات التي غيّرتها، ولا تستخدم اسم Soup إلا لبيان مصدر العمل.

@@ -338,9 +338,10 @@ class TestTheFlagsNoTrainerReadsAreRefused:
 class TestShippedConfigs:
     def test_every_recipe_still_loads(self):
         from soup_cli.recipes.catalog import RECIPES
+        from tests.recipe_contracts import load_catalog_config
 
         for name, recipe in RECIPES.items():
-            load_config_from_string(recipe.yaml_str), name
+            load_catalog_config(recipe), name
 
     def test_the_moe_recipes_are_the_ones_this_issue_names(self):
         """17: 9 dpo + 8 grpo (including deepseek-v4-pro-dpo and deepseek-v4-pro-grpo)."""

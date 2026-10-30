@@ -871,7 +871,11 @@ class TestOnlySftReadsModality:
 
         from soup_cli.config.loader import load_config_from_string
 
-        fmt = {"text": "alpaca", "vision": "llava", "audio": "audio"}[modality]
+        fmt = {
+            "text": "alpaca",
+            "vision": "dpo" if task == "dpo" else "llava",
+            "audio": "audio",
+        }[modality]
         fmt = {"asr": "asr", "classifier": "auto", "reranker": "auto",
                "cross_encoder": "auto"}.get(task, fmt)
         raw = {
@@ -1201,8 +1205,6 @@ class TestTheAdvisoryGoesToStderr:
         stdout a document."""
         import json as _json
 
-        from typer.testing import CliRunner
-
         from soup_cli.cli import app
         from tests.test_issue1122_glm4_granite_moe_targets import _granite_config
 
@@ -1216,12 +1218,9 @@ class TestTheAdvisoryGoesToStderr:
             "training:\n  lora:\n    r: 8\n    target_modules: auto\n",
             encoding="utf-8",
         )
-        # Click < 8.2 mixes stderr into stdout unless told not to; 8.2 removed the
-        # parameter and always keeps them apart (cf. test_issue762's note).
-        import importlib.metadata as _md
+        from tests.conftest import make_cli_runner
 
-        click_version = tuple(int(x) for x in _md.version("click").split(".")[:2])
-        runner = CliRunner(mix_stderr=False) if click_version < (8, 2) else CliRunner()
+        runner = make_cli_runner()
         result = runner.invoke(app, ["recipes", "verify", "--config", str(path), "--json"])
 
         rows = _json.loads(result.stdout)
@@ -1331,16 +1330,19 @@ class TestTheSkeletonKeepsEveryLayerKind:
 class TestTheLoadersWarningsLeaveJsonStdoutAlone:
     def test_json_stdout_parses_when_the_loader_warns(self, tmp_path, monkeypatch):
         """The config loader prints a deprecated value (#759) or a staged field (#808)
-        as a warning on stdout. Under --json that line came before the document."""
-        import importlib.metadata as _md
+        as a warning on stdout. Under --json that line came before the document.
+
+        v0.77 refuses both, so the warning path is reached through the switch it
+        is kept behind, for the next value that gets a release of notice."""
         import json as _json
 
         from transformers import LlamaConfig
-        from typer.testing import CliRunner
 
         from soup_cli.cli import app
+        from soup_cli.config import deprecation
         from tests.conftest import strip_ansi
 
+        monkeypatch.setattr(deprecation, "DEPRECATED_VALUE_SEVERITY", "warn")
         tiny = LlamaConfig(
             vocab_size=64, hidden_size=16, intermediate_size=32, num_hidden_layers=2,
             num_attention_heads=2, num_key_value_heads=2,
@@ -1354,8 +1356,9 @@ class TestTheLoadersWarningsLeaveJsonStdoutAlone:
             "training:\n  lora:\n    r: 8\n    target_modules: [q_proj, v_proj]\n",
             encoding="utf-8",
         )
-        click_version = tuple(int(x) for x in _md.version("click").split(".")[:2])
-        runner = CliRunner(mix_stderr=False) if click_version < (8, 2) else CliRunner()
+        from tests.conftest import make_cli_runner
+
+        runner = make_cli_runner()
         result = runner.invoke(app, ["recipes", "verify", "--config", str(path), "--json"])
 
         assert result.exit_code == 0, (result.output, result.exception)

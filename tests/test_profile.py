@@ -3,11 +3,11 @@
 import json
 
 import pytest
-from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests.conftest import make_cli_runner
 
-runner = CliRunner()
+runner = make_cli_runner()
 
 
 # --- Memory estimation tests ---
@@ -409,7 +409,7 @@ class TestProfileCLI:
         )
         result = runner.invoke(app, ["profile", "--config", str(config_file), "--json"])
         assert result.exit_code == 0
-        data = json.loads(result.output)
+        data = json.loads(result.stdout)
         assert "total_memory_gb" in data
         assert "model_memory_gb" in data
 

@@ -9,7 +9,6 @@ from __future__ import annotations
 import math
 import os
 import plistlib
-import shutil
 import subprocess  # noqa: S404 — list-args invocation only
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -112,7 +111,9 @@ def parse_nvidia_smi_csv(text: str) -> List[GpuSample]:
 def query_nvidia_smi() -> Tuple[bool, List[GpuSample]]:
     """Invoke nvidia-smi and return (ok, samples). ok=False when smi is missing
     or returns a non-zero exit. Never raises."""
-    smi_path = shutil.which("nvidia-smi")
+    from soup_cli.utils.tool_paths import find_tool
+
+    smi_path = find_tool("nvidia-smi")
     if smi_path is None:
         return False, []
     argv = [

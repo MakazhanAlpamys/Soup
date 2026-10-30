@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 from soup_cli import __version__
 from soup_cli.eval.results import newest_eval_rows
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
+from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_file_limited
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +124,24 @@ class EvalSuite(BaseModel):
     tasks: list[GateTask] = Field(default_factory=list)
 
 
+class MalformedSuiteError(ValueError):
+    """Invalid YAML syntax or root shape that must still abort training setup."""
+
+
+def _require_gate_tasks(suite: EvalSuite) -> None:
+    if not suite.tasks:
+        raise ValueError(
+            f"eval-gate suite {suite.suite!r} field 'tasks' must contain at least one task"
+        )
+    names: set[str] = set()
+    for task in suite.tasks:
+        if task.name in names:
+            raise ValueError(
+                f"eval-gate suite {suite.suite!r} repeats task name {task.name!r}"
+            )
+        names.add(task.name)
+
+
 def load_suite(path: str) -> EvalSuite:
     """Load and validate an eval suite from disk."""
     suite_path = Path(path)
@@ -132,8 +151,27 @@ def load_suite(path: str) -> EvalSuite:
         )
     if not suite_path.exists():
         raise FileNotFoundError(f"eval-gate suite not found: {path}")
-    data = yaml.safe_load(suite_path.read_text(encoding="utf-8")) or {}
-    return EvalSuite(**data)
+    try:
+        raw = load_yaml_file_limited(
+            suite_path, f"eval-gate suite '{path}'", max_bytes=MAX_CONFIG_BYTES
+        )
+    except yaml.YAMLError as exc:
+        raise MalformedSuiteError(
+            f"eval-gate suite '{path}' is not valid YAML: {exc}"
+        ) from exc
+    if raw is None:
+        data: dict[str, object] = {}
+    elif not isinstance(raw, Mapping):
+        actual = type(raw).__name__
+        raise MalformedSuiteError(
+            f"eval-gate suite '{path}' must be a mapping with 'suite' and 'tasks', "
+            f"got a {actual}"
+        )
+    else:
+        data = dict(raw)
+    suite = EvalSuite(**data)
+    _require_gate_tasks(suite)
+    return suite
 
 
 def current_baseline_stamp() -> dict[str, object]:
@@ -144,6 +182,21 @@ def current_baseline_stamp() -> dict[str, object]:
         _STAMP_SOUP_VERSION: str(__version__),
         _STAMP_SCORER_REVISION: int(BUNDLED_SCORER_REVISION),
     }
+
+
+def _finite_score(value: object, *, name: str, context: str) -> float:
+    """Convert and validate that a score is a finite float (#1865)."""
+    try:
+        fval = float(value)  # type: ignore[arg-type]
+    except OverflowError as exc:
+        raise ValueError(
+            f"{context}: score for {name!r} is out of range (must be finite)"
+        ) from exc
+    if not math.isfinite(fval):
+        raise ValueError(
+            f"{context}: score for {name!r} must be finite"
+        )
+    return fval
 
 
 def stamp_baseline_scores(scores: Mapping[str, float]) -> dict[str, object]:
@@ -165,12 +218,7 @@ def stamp_baseline_scores(scores: Mapping[str, float]) -> dict[str, object]:
                 f"baseline score for {name!r} must be a number, "
                 f"got {type(value).__name__}"
             )
-        fval = float(value)
-        if not math.isfinite(fval):
-            raise ValueError(
-                f"baseline score for {name!r} must be finite, got {value}"
-            )
-        clean[name] = fval
+        clean[name] = _finite_score(value, name=name, context="baseline score")
     return {
         _BASELINE_SCORES_KEY: clean,
         _BASELINE_PROVENANCE_KEY: current_baseline_stamp(),
@@ -210,12 +258,7 @@ def _coerce_score_map(raw: Mapping[object, object], *, context: str) -> dict[str
                 f"{context}: score for {name!r} must be a number, "
                 f"got {type(value).__name__}"
             )
-        fval = float(value)
-        if not math.isfinite(fval):
-            raise ValueError(
-                f"{context}: score for {name!r} must be finite, got {value}"
-            )
-        out[name] = fval
+        out[name] = _finite_score(value, name=name, context=context)
     return out
 
 
@@ -511,7 +554,7 @@ def _run_judge_task(
             })
 
     if not items:
-        return 0.0
+        raise ValueError(f"No judge prompts found in {task.prompts} for task '{task.name}'")
 
     results = evaluator.evaluate_batch(items)
     # Normalise to [0, 1] using the judge's ACTUAL rubric scale (DEFAULT_RUBRIC
@@ -603,10 +646,12 @@ def run_gate(
                 f"baseline score for {base_name!r} must be a number, "
                 f"got {type(base_val).__name__}"
             )
-        if not math.isfinite(base_val):
-            raise ValueError(
-                f"baseline score for {base_name!r} must be finite, got {base_val}"
-            )
+        _finite_score(
+            base_val,
+            name=str(base_name),
+            context="baseline score",
+        )
+    _require_gate_tasks(suite)
     task_results: list[GateTaskResult] = []
     any_regressed = False
     any_failed_threshold = False

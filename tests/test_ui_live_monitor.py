@@ -5,6 +5,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.ui_helpers import ui_client
+
 
 def _auth_headers():
     """Return auth headers with the current UI token."""
@@ -30,10 +32,7 @@ class TestTrainLogsSSE:
 
     def test_logs_returns_event_stream(self):
         """SSE endpoint should return text/event-stream content type."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         import soup_cli.ui.app as ui_mod
         from soup_cli.ui.app import create_app
@@ -49,7 +48,7 @@ class TestTrainLogsSSE:
         buf.mark_done()
         ui_mod._train_log_buffer = buf
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         try:
             with client.stream(
                 "GET", "/api/train/logs", headers=_auth_headers()
@@ -68,17 +67,14 @@ class TestTrainLogsSSE:
 
     def test_logs_no_training_returns_done(self):
         """When no training is running, SSE should emit done event."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         import soup_cli.ui.app as ui_mod
         from soup_cli.ui.app import create_app
 
         ui_mod._train_process = None
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         with client.stream(
             "GET", "/api/train/logs", headers=_auth_headers()
         ) as resp:
@@ -91,10 +87,7 @@ class TestTrainLogsSSE:
 
     def test_logs_last_event_id_reconnection(self):
         """Last-Event-ID header should skip earlier lines."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         import soup_cli.ui.app as ui_mod
         from soup_cli.ui.app import create_app
@@ -106,7 +99,7 @@ class TestTrainLogsSSE:
         buf.mark_done()
         ui_mod._train_log_buffer = buf
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         try:
             with client.stream(
                 "GET",
@@ -124,17 +117,14 @@ class TestTrainLogsSSE:
             ui_mod._train_log_buffer = None
     def test_logs_no_auth_required(self):
         """SSE log endpoint requires auth (401 without token, 200 with one)."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         import soup_cli.ui.app as ui_mod
         from soup_cli.ui.app import create_app
 
         ui_mod._train_process = None
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         with client.stream("GET", "/api/train/logs") as resp:
             assert resp.status_code == 401
         with client.stream(
@@ -161,10 +151,7 @@ class TestLiveMetricsSSE:
 
     def test_metrics_live_returns_event_stream(self, tmp_path):
         """SSE metrics endpoint should return text/event-stream content type."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         import soup_cli.ui.app as ui_mod
         from soup_cli.ui.app import create_app
@@ -176,7 +163,7 @@ class TestLiveMetricsSSE:
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             with client.stream(
                 "GET", "/api/train/metrics/live", headers=_auth_headers()
             ) as resp:
@@ -187,10 +174,7 @@ class TestLiveMetricsSSE:
 
     def test_metrics_live_emits_new_rows(self, tmp_path):
         """SSE should emit metric rows as they appear in the DB."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         import soup_cli.ui.app as ui_mod
         from soup_cli.ui.app import create_app
@@ -216,7 +200,7 @@ class TestLiveMetricsSSE:
         ui_mod._train_process = mock_proc
 
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             with client.stream(
                 "GET",
                 f"/api/train/metrics/live?run_id={run_id}",
@@ -234,10 +218,7 @@ class TestLiveMetricsSSE:
 
     def test_metrics_live_no_auth_required(self, tmp_path):
         """SSE metrics endpoint requires auth (401 without token, 200 with one)."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         import soup_cli.ui.app as ui_mod
         from soup_cli.ui.app import create_app
@@ -248,7 +229,7 @@ class TestLiveMetricsSSE:
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             with client.stream("GET", "/api/train/metrics/live") as resp:
                 assert resp.status_code == 401
             with client.stream(
@@ -260,10 +241,7 @@ class TestLiveMetricsSSE:
 
     def test_metrics_live_done_when_no_training(self, tmp_path):
         """Should emit done event when no training is running."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         import soup_cli.ui.app as ui_mod
         from soup_cli.ui.app import create_app
@@ -272,7 +250,7 @@ class TestLiveMetricsSSE:
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             with client.stream(
                 "GET", "/api/train/metrics/live", headers=_auth_headers()
             ) as resp:
@@ -303,17 +281,14 @@ class TestTrainProgress:
 
     def test_progress_not_running(self):
         """Should return running=false when no training."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         import soup_cli.ui.app as ui_mod
         from soup_cli.ui.app import create_app
 
         ui_mod._train_process = None
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.get("/api/train/progress", headers=_auth_headers())
         assert response.status_code == 200
         data = response.json()
@@ -321,10 +296,7 @@ class TestTrainProgress:
 
     def test_progress_running_with_metrics(self, tmp_path):
         """Should return progress when training is running."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         import soup_cli.ui.app as ui_mod
         from soup_cli.ui.app import create_app
@@ -349,7 +321,7 @@ class TestTrainProgress:
         ui_mod._train_process = mock_proc
 
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.get(
                 f"/api/train/progress?run_id={run_id}", headers=_auth_headers()
             )
@@ -362,10 +334,7 @@ class TestTrainProgress:
 
     def test_progress_returns_correct_fields(self, tmp_path):
         """Progress response should contain all required fields."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         import soup_cli.ui.app as ui_mod
         from soup_cli.ui.app import create_app
@@ -390,7 +359,7 @@ class TestTrainProgress:
         ui_mod._train_process = mock_proc
 
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.get(
                 f"/api/train/progress?run_id={run_id}", headers=_auth_headers()
             )
@@ -402,17 +371,14 @@ class TestTrainProgress:
 
     def test_progress_no_auth_required(self):
         """Progress endpoint requires auth (401 without token, 200 with one)."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         import soup_cli.ui.app as ui_mod
         from soup_cli.ui.app import create_app
 
         ui_mod._train_process = None
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         assert client.get("/api/train/progress").status_code == 401
         assert (
             client.get("/api/train/progress", headers=_auth_headers()).status_code
@@ -425,10 +391,7 @@ class TestSSEGracefulClose:
 
     def test_logs_closes_when_training_stops(self):
         """Log SSE should require auth and end when training process finishes."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         import soup_cli.ui.app as ui_mod
         from soup_cli.ui.app import create_app
@@ -438,7 +401,7 @@ class TestSSEGracefulClose:
         mock_proc.poll.side_effect = [None, 0]
         ui_mod._train_process = mock_proc
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         with client.stream("GET", "/api/train/logs") as resp:
             assert resp.status_code == 401
 
@@ -460,17 +423,14 @@ class TestSSEGracefulClose:
         """SSE should include heartbeat comments to keep connection alive."""
         # This is a design test — heartbeats are sent as SSE comments (:heartbeat)
         # Testing that the generator yields at least one event
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         import soup_cli.ui.app as ui_mod
         from soup_cli.ui.app import create_app
 
         ui_mod._train_process = None
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         with client.stream(
             "GET", "/api/train/logs", headers=_auth_headers()
         ) as resp:

@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:fa009c2fcc2c94ea06e25ea8620c2fbed9bfb8ac6611bf71a2669a06f7c50b46 -->
+<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -27,7 +27,7 @@
 <p align="center">
   <a href="https://pypi.org/project/soup-cli/"><img src="https://img.shields.io/pypi/v/soup-cli?color=blue" alt="PyPI"></a>
   <a href="https://pepy.tech/project/soup-cli"><img src="https://img.shields.io/pepy/dt/soup-cli?color=blue" alt="ダウンロード数"></a>
-  <img src="https://img.shields.io/badge/python-3.10--3.12-blue" alt="Python 3.10-3.12">
+  <img src="https://img.shields.io/badge/python-3.11--3.13-blue" alt="Python 3.11-3.13">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0 ライセンス">
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/MakazhanAlpamys/65fdc943f85f3b2c46ecddb415c2b779/raw/soup_tests.json" alt="テスト"></a>
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://github.com/MakazhanAlpamys/Soup/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -92,54 +92,39 @@ LLM の学習は、今でも骨の折れる作業です。経験豊富なチー�
 
 ## 新着情報
 
-**v0.76.0 — Soup が受け入れながら一度も適用していなかった設定は、読み込みを止めるようになりました。**
-検証され、文書化されていながら、設定対象と称する経路のどこからも読み取られていなかったオプションは、
-読み込み時に拒否され、設定名と変更すべき内容が示されます。それ以外は警告を出し、拒否することになる
-リリースを明示します。以前は読み込めた設定が読み込めなくなることがあります。まず
-`soup doctor --config soup.yaml` を実行してください。
+**v0.77.1 — パッチリリース：`soup data` が入力を守り、`soup plan` が `soup train` と同じ判断をし、
+GRPO が Apple Silicon で学習できるようになりました。** v0.77.0 で入ったものは何も取り消されていません。v0.77.0 は
+v0.76 が警告した設定や無視した設定を拒否するため、v0.76 で読み込めた設定が読み込めなくなることがあります。
+0.76.x から移行する場合は、まず `soup doctor --config soup.yaml` を実行し、
+[v0.77.0 のリリースノート](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0)を読んでください。
 
-- **破壊的変更: 一度も効果のなかった設定は、読み込み時に拒否されます。** 対象には、
-  `training.quantization_aware: true`（量子化対応学習は実際には一度も実行されていませんでした）、
-  `training.use_longlora`、`training.ebft_variant`、`training.gdpo_variant`、どのセットアップも読み取らない
-  場合の `training.rope_scaling_type`、`freeze_layers` / `freeze_ratio`（transformers バックエンドの
-  テキスト `sft` / `tts` 経路以外）、`auto_mixed_precision`（`sft` / `tts` 以外）、そして unsloth の
-  セットアップを持たないさらに七つのタスクでの `backend: unsloth` が含まれます。各メッセージは、該当する
-  フィールドと変更すべき内容を示します。`lr_groups`、`early_stop_patience`、`forgetting_eval_steps` など、
-  読み取られない他のつまみは、今は読み込み時に警告を出し、v0.77 から拒否されます。
-- **検証損失が評価されるようになりました。** `data.val_split` はすべての実行で行を学習から除外していましたが、
-  transformers バックエンドのどのトレーナーもそれらを評価していませんでした。今は、分割を受け取るすべての
-  タスクが、各エポックの終わりに、または `training.eval_steps` を指定した場合は N ステップごとにそれを評価し、
-  検証損失を記録します。実行時間は数パーセント長くなります。**`grpo`、`ppo`、`online_dpo` では破壊的変更です。**
-  既定では行を取り分けなくなり（`data.val_split` は注記付きで無視されます）、すべての行が学習に使われます。
-- **破壊的変更: 標準でないすべての `grpo_variant` が `grpo_beta` の KL ペナルティを適用します。**
-  `gspo`、`dapo`、`dr_grpo`、`bnpo`、`two_sided`、`rft` は `grpo_beta` を検証しながら捨てていたため、
-  既存のバリアント設定は以前の実行を再現できません。`grpo_beta: 0` は KL なしで動作し、参照モデルの
-  フォワードパスを省略するようになりました。
-- **レイヤーストリーミングは、ディスク階層をバックグラウンドスレッドでダイレクト I/O により読み込み、
-  NVMe ドライブにまたがってストライプ化できます。** RAM より大きい 36 GB の 70B 相当の NF4 ストア
-  （RTX 5070 Laptop 8 GB 搭載の一台）で、コールドステップは同期読み込みの 110.5 s から 16.2-17.3 s に短縮され、
-  `SOUP_LAYER_STREAM_STRIPE_DIRS` による 二台のドライブへの分散では 17.4 s から 9.97 s になりました
-  （持続負荷プローブ: 二ラウンド、1.28x と 1.41x、正式な判定なし。
-  [記録](benchmarks/probe-rtx5070-two-drive-sustained.md)）。RAM に収まるストアは、引き続き RAM 階層のほうが
-  高速で、`stream_source: auto` はそちらを選びます。オプトイン方式（`stream_layers: true`）で、まだ BETA です。
-  記録: [ダイレクト I/O](benchmarks/gate-974-disk-tier-direct-io.md)、
-  [ストライピング](benchmarks/gate-two-drive-striping.md)。
-- **新しいコマンドとオプション。** `soup adapters check` は LoRA アダプターをスキャンして、サイレントな失敗を検出します。
-  `soup bench train` は決まったステップ数だけ学習し、モデルが学習していなかった場合は終了コード 1 で終了します
-  （transformers バックエンドの `task: sft` が対象です。`soup bench` はグループになり、`soup bench infer` が
-  従来の推論ベンチマークです）。`soup data clean` は、入力ファイルに触れずにデータセットをサニタイズして
-  修復します。`soup recipes verify` は、重みをダウンロードせずに meta デバイス上で、同梱のすべてのレシピが
-  LoRA アダプターを取り付けられることを確認します。`soup rewind` は、損失スパイクの原因となったデータセットの
-  行を特定します。`soup infer` には、オプトインの `--batch-size` と実験的な `--cuda-graphs` が加わりました
-  （PyTorch 2.14 以降が必要。RTX 5070 Laptop 一台、ピン留めなし、FP16 の Qwen2.5-1.5B で、これを使った最も遅い実行でも、
-  使わなかった最も速い実行より 2.9x 速くデコードできました）。`soup ab` は、分散に頑健な両側検定を実行します。
-  `soup adapters sign --backend sigstore` と `soup attest emit --sign sigstore` は、Sigstore のキーレス OIDC で
-  署名します（`pip install "soup-cli[sigstore]"`）。
-- **非推奨:** `soup export --format awq` と `--format gptq` は v0.77 で削除されます。どちらの
-  上流プロジェクトもアーカイブ済みで、どちらの extra も `[train]` と一緒にはインストールできません。
-
-> Python は **3.10–3.12** のみ対応です。3.13 以降では、pip がテストされていない PyTorch の wheel を解決し、
-> Soup が動き出す前にネイティブ拡張の中でクラッシュしていました。
+- **`soup data` のコマンドが入力を上書きしなくなりました。** そのうち十八個（`dedup`、`filter`、
+  `convert`、`merge`、`sample`、`pii`、`toxicity` など）は、どのような書き方であっても入力と同じファイルを
+  指す `--output` を、何も読み込む前に拒否します。入力がすでに使っている既定の出力名も拒否されます。
+  代わりに新しいファイルへ書き出してください。
+- **`soup plan` と `soup apply` は、`soup train` が拒否する設定を**同じメッセージで拒否し、プランを
+  書き込みません。
+- **GRPO が Apple Silicon でネイティブに学習できます。** `backend: mlx` の `task: grpo` は、
+  transformers 経路が学習するのと同じ目的関数で Soup 独自の MLX ループを実行し、組み込みの `accuracy`
+  または `format` 報酬を使います。`soup infer --backend mlx` は、MLX のベースモデルとネイティブの
+  テキスト LoRA アダプターから Torch なしで生成します。
+- **ピーク VRAM の推定がひとつになりました。** `soup train` の事前チェック、`soup profile`、`soup plan` が
+  同じ推定を使い、39 回の実測で較正されています（[記録](benchmarks/gate-2049-resident-vram.md)）。
+  推定が較正された範囲、つまり約 3.5B パラメータまでの dense モデルでは、事前チェックはこれまで通していた
+  長いシーケンス・大きな語彙の実行の一部を拒否するようになりました。`--allow-oom-attempt` を付ければ
+  引き続き起動できます。その範囲外（より大きなモデルや mixture-of-experts モデル、`medium` または
+  `selective` のチェックポイント、`use_liger` / `use_cut_ce`、`backend: unsloth`）では、収まらない実行に
+  ついて推定を警告として表示し、実行を開始します。ただし、重み、CUDA コンテキスト、学習するパラメータの
+  勾配とオプティマイザ状態だけでカードの容量を超える実行（80 GB での 7B のフルファインチューニング、
+  24 GB での 4-bit の Llama-3.1-70B）は、範囲外でも拒否されます。LoRA の実行や一部のパラメータだけを
+  学習する実行（Spectrum、LISA、凍結）は、より少ない項目で判定されます。`--allow-oom-attempt` を
+  付ければ、拒否された実行も起動できます。
+- **外部プログラムは `PATH` 上で見つかった絶対パスで起動されます。** カレントディレクトリと相対的な
+  `PATH` エントリは検索されなくなりました。そこにしかないツールは、そのディレクトリを `PATH` に
+  加えてください。
+- **その他の新機能。** `soup ship --progress jsonl`、他のライブラリの名前で書かれた未知の設定キーに
+  対応する Soup のフィールドの提案（`learning_rate` には `lr`）、そして下の Docker の例が、v0.77.0 以降の
+  非対話的な `soup train` に必要な `--yes` を渡すようになりました。
 
 過去のハイライトは [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) ページにあります。
 
@@ -217,7 +202,7 @@ soup merge  --adapter ./output                              # LoRA をベース�
 soup export --model ./output --format gguf --quant q4_k_m   # Ollama / llama.cpp 向けの GGUF
 ```
 
-その他のエクスポート先（ONNX、TensorRT、AWQ、GPTQ、BitNet）とデプロイのオプションは、
+その他のエクスポート先（ONNX、TensorRT、BitNet）とデプロイのオプションは、
 [`docs/serving-and-export.md`](docs/serving-and-export.md) にあります。
 
 ## Web UI
@@ -295,7 +280,7 @@ Alpaca、ShareGPT、ChatML、選好ペア（DPO / ORPO / SimPO / IPO / KTO）、
 埋め込み、RAFT など — すべて JSONL、JSON、CSV、Parquet、TXT から自動検出されるため、ほとんどの場合は
 `data.train` をファイルに向けるだけで、他は何も変わりません。各形式の実例つきスキーマと、データパイプライン
 （リモート URI、ストリーミング、シャーディング、インターリーブ、語彙拡張、ドキュメント取り込み）は、
-[`docs/data.md`](docs/data.md#data-formats) にあります。
+[`docs/data.md`](docs/data.md#data-formats) にあり、[Sesame CSM のネイティブ音声学習](docs/training.md#native-sesame-csm)は別途説明されています。
 
 ## よく使うコマンド
 
@@ -339,14 +324,14 @@ CUDA や PyTorch をローカルにインストールせずに Soup を実行で
 
 ```bash
 docker pull ghcr.io/makazhanalpamys/soup:latest
-docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml
+docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml --yes
 docker compose up   # またはローカルでビルド
 ```
 
 ## 動作要件
 
-- Python 3.10、3.11、または 3.12（CI がテストしているバージョンです。PyTorch スタックがまだ検証されて
-  いないため、3.13 以降は未サポートです）
+- Python 3.11、3.12、または 3.13（CI がテストしているバージョンです。PyTorch スタックがまだ検証されて
+  いないため、3.14 以降は未サポートです）
 - CUDA 対応 GPU（推奨）、Apple Silicon（MPS）、または CPU（実験的 — 非常に遅い）
 - QLoRA で 7B モデルを扱うには 8 GB 以上の VRAM
 
@@ -489,4 +474,4 @@ Soup に関するあらゆる件の正しい連絡先です。**makazanalpamys@g
 
 ## ライセンス
 
-[Apache-2.0](LICENSE)。Copyright © Soup コントリビューター。
+[Apache-2.0](LICENSE)。Copyright 2026 Makazhan Alpamys and the Soup contributors。Soup またはその改変コピーを再配布する場合は、ライセンスの第4条と第6条が適用されます。コピーごとに `LICENSE` と `NOTICE` を保持し、変更したファイルにその旨を明記し、作品の出所を述べる範囲を超えて Soup の名称を使用しないでください。

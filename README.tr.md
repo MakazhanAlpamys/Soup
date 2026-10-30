@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:fa009c2fcc2c94ea06e25ea8620c2fbed9bfb8ac6611bf71a2669a06f7c50b46 -->
+<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -27,7 +27,7 @@
 <p align="center">
   <a href="https://pypi.org/project/soup-cli/"><img src="https://img.shields.io/pypi/v/soup-cli?color=blue" alt="PyPI"></a>
   <a href="https://pepy.tech/project/soup-cli"><img src="https://img.shields.io/pepy/dt/soup-cli?color=blue" alt="İndirmeler"></a>
-  <img src="https://img.shields.io/badge/python-3.10--3.12-blue" alt="Python 3.10-3.12">
+  <img src="https://img.shields.io/badge/python-3.11--3.13-blue" alt="Python 3.11-3.13">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0 Lisansı">
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/MakazhanAlpamys/65fdc943f85f3b2c46ecddb415c2b779/raw/soup_tests.json" alt="Testler"></a>
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://github.com/MakazhanAlpamys/Soup/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -93,56 +93,40 @@ yerine altyapıyla boğuşarak geçiriyor. Soup bunu çözer.
 
 ## Yenilikler
 
-**v0.76.0 — Soup'un kabul edip hiç uygulamadığı ayarlar artık yüklemeyi durduruyor.** Doğrulanan ve
-belgelenen, ancak yapılandırdığını iddia ettikleri yolda hiçbir şey tarafından okunmayan seçenekler artık
-yükleme sırasında reddediliyor; ayarın adını ve neyin değiştirileceğini belirtiyor. Geri kalanlar uyarı
-veriyor ve onları reddedecek sürümü belirtiyor. Daha önce yüklenen bir yapılandırma artık yüklenmeyebilir:
-önce `soup doctor --config soup.yaml` komutunu çalıştırın.
+**v0.77.1 — bir yama: `soup data` girdisini koruyor, `soup plan` `soup train` ile aynı kararı veriyor
+ve GRPO Apple Silicon'da eğitiliyor.** v0.77.0'daki hiçbir şey geri alınmıyor. O sürüm, v0.76'nın
+uyardığı ya da yok saydığı ayarları reddediyor; bu yüzden v0.76'da yüklenen bir yapılandırma artık
+yüklenmeyebilir: 0.76.x'ten geliyorsanız önce `soup doctor --config soup.yaml` komutunu çalıştırın ve
+[v0.77.0 sürüm notlarını](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0) okuyun.
 
-- **Geriye dönük uyumsuz değişiklik: hiç etkili olmayan bir ayar yüklemede reddediliyor.** Bunların
-  arasında `training.quantization_aware: true` (nicelemeye duyarlı eğitimi hiç çalıştırmıyordu),
-  `training.use_longlora`, `training.ebft_variant`, `training.gdpo_variant`, hiçbir hazırlık adımının
-  okumadığı yerlerdeki `training.rope_scaling_type`, `freeze_layers` / `freeze_ratio` (transformers
-  arka ucunda metin `sft` / `tts` yolunun dışında), `auto_mixed_precision` (`sft` / `tts` dışında)
-  ve unsloth hazırlık adımı bulunmayan yedi görevde daha `backend: unsloth` var. Her mesaj alanın adını
-  ve neyin değiştirileceğini belirtiyor. `lr_groups`, `early_stop_patience`, `forgetting_eval_steps` ve
-  okunmayan diğer ayarlar artık yüklemede uyarı veriyor ve v0.77'den itibaren reddedilecek.
-- **Doğrulama kaybı artık değerlendiriliyor.** `data.val_split`, her çalıştırmada satırları eğitimin
-  dışında tutuyordu ve transformers arka ucundaki hiçbir trainer bunları değerlendirmiyordu. Artık bir
-  bölme alan her görev, onu her epoch sonunda ya da `training.eval_steps` ile her N adımda değerlendiriyor
-  ve doğrulama kaybını kaydediyor; çalıştırmalar yüzde birkaç daha uzun sürüyor.
-  **`grpo`, `ppo` ve `online_dpo` için geriye dönük uyumsuz:** varsayılan olarak artık satır ayırmıyorlar
-  (`data.val_split` bir notla yok sayılıyor), dolayısıyla her satır eğitime giriyor.
-- **Geriye dönük uyumsuz değişiklik: standart olmayan her `grpo_variant`, `grpo_beta` KL cezasını
-  uyguluyor.** `gspo`, `dapo`, `dr_grpo`, `bnpo`, `two_sided` ve `rft`, `grpo_beta` değerini doğrulayıp
-  atıyordu; bu yüzden mevcut varyant yapılandırmaları önceki çalıştırmaları yeniden üretmeyecek.
-  `grpo_beta: 0` artık KL'siz çalışıyor ve referans modelin ileri geçişini atlıyor.
-- **Katman akışı disk katmanını bir arka plan iş parçacığında, doğrudan G/Ç (direct I/O) ile okuyor ve
-  onu NVMe sürücülere şeritleyebiliyor.** RAM'den büyük, 36 GB'lık, 70B biçimli bir NF4 deposunda (tek
-  bir RTX 5070 Laptop 8 GB makinesi), soğuk bir adım eşzamanlı okumada 110.5 s iken 16.2-17.3 s'ye düştü;
-  `SOUP_LAYER_STREAM_STRIPE_DIRS` ile iki sürücüye yayıldığında ise 17.4 s'den 9.97 s'ye indi (sürekli yük
-  altında bir sonda ölçümü: iki tur, 1.28x ve 1.41x, resmî bir hüküm yok;
-  [kayıt](benchmarks/probe-rtx5070-two-drive-sustained.md)). RAM'e sığan bir depo RAM katmanında hâlâ daha
-  hızlı ve `stream_source: auto` onu seçiyor. İsteğe bağlıdır (`stream_layers: true`) ve hâlâ BETA;
-  kayıtlar: [doğrudan G/Ç](benchmarks/gate-974-disk-tier-direct-io.md),
-  [şeritleme](benchmarks/gate-two-drive-striping.md).
-- **Yeni komutlar ve seçenekler.** `soup adapters check`, bir LoRA adaptörünü sessiz arızalara karşı
-  tarar; `soup bench train`, sabit sayıda adım eğitir ve model eğitilmiyorsa çıkış kodu 1 ile biter
-  (transformers arka ucunda `task: sft` için geçerlidir; `soup bench` artık bir gruptur ve
-  `soup bench infer` eski çıkarım kıyaslamasıdır); `soup data clean`, girdi dosyasına dokunmadan bir veri
-  kümesini temizler ve onarır; `soup recipes verify`, meta aygıtında, hiçbir ağırlık indirmeden, gönderilen
-  her tarifin bir LoRA adaptörü bağlayabildiğini denetler; `soup rewind`, bir kayıp sıçramasının
-  arkasındaki veri kümesi satırlarını adlandırır. `soup infer`, isteğe bağlı `--batch-size` ve deneysel bir
-  `--cuda-graphs` kazandı (PyTorch 2.14 veya daha yeni; tek bir RTX 5070 Laptop'ta, sabitlenmemiş,
-  FP16'da Qwen2.5-1.5B ile, onunla yapılan en yavaş çalıştırma, onsuz yapılan en hızlı çalıştırmadan
-  kod çözmede 2.9x daha hızlıydı). `soup ab`, iki yönlü, varyansa karşı dayanıklı bir test çalıştırır;
-  `soup adapters sign --backend sigstore` ve `soup attest emit --sign sigstore` ise Sigstore anahtarsız
-  OIDC ile imzalar (`pip install "soup-cli[sigstore]"`).
-- **Kullanımdan kaldırıldı:** `soup export --format awq` ve `--format gptq` v0.77'de kaldırılacak; her
-  iki üst proje de arşivlenmiş durumda ve ekstralardan hiçbiri `[train]` ile yan yana kurulamıyor.
-
-> Yalnızca Python **3.10–3.12**. 3.13+ sürümlerinde pip, Soup daha hiç çalışmadan yerel (native)
-> uzantıda çöken, test edilmemiş PyTorch wheel paketlerini seçiyordu.
+- **`soup data` komutları artık girdilerinin üzerine yazmıyor.** Bunlardan on sekizi (`dedup`,
+  `filter`, `convert`, `merge`, `sample`, `pii`, `toxicity` ve diğerleri), hangi yazımla verilirse
+  verilsin bir girdiyle aynı dosya olan bir `--output` değerini hiçbir şey okumadan önce reddediyor;
+  girdinin zaten taşıdığı varsayılan bir çıktı adı da reddediliyor. Bunun yerine yeni bir dosyaya yazın.
+- **`soup plan` ve `soup apply`, `soup train`'in reddettiği yapılandırmaları** aynı mesajla reddediyor
+  ve plan yazmıyor.
+- **GRPO, Apple Silicon'da yerel olarak eğitiliyor.** `backend: mlx` ile `task: grpo`, Soup'un kendi
+  MLX döngüsünü transformers yolunun eğittiği hedefle ve yerleşik `accuracy` ya da `format` ödülüyle
+  çalıştırıyor. `soup infer --backend mlx`, MLX taban modellerinden ve yerel metin LoRA
+  adaptörlerinden Torch olmadan üretim yapıyor.
+- **Tek bir tepe VRAM tahmini:** `soup train`'in ön kontrolü, `soup profile` ve `soup plan` aynı
+  tahmini kullanıyor; tahmin 39 ölçülmüş çalıştırmayla kalibre edildi
+  ([kayıt](benchmarks/gate-2049-resident-vram.md)). Tahminin kalibre edildiği aralıkta, yani yaklaşık
+  3.5B parametreye kadar yoğun modellerde, ön kontrol artık daha önce geçirdiği bazı uzun dizili, büyük
+  sözlüklü çalıştırmaları reddediyor; `--allow-oom-attempt` onları yine de başlatıyor. Bu aralığın
+  dışında (daha büyük ya da mixture-of-experts bir model, `medium` ya da `selective` checkpointing,
+  `use_liger` / `use_cut_ce`, `backend: unsloth`) sığmayan bir çalıştırma için tahmini bir uyarı olarak
+  yazdırıyor ve çalıştırmayı başlatıyor; ancak ağırlıklar, CUDA bağlamı ve eğitilen parametrelerin
+  gradyanları ile optimizer durumu kartın kapasitesini aşıyorsa (80 GB'ta 7B tam ince ayar, 24 GB'ta
+  4-bit Llama-3.1-70B) o çalıştırma orada da reddediliyor. LoRA çalıştırmaları ve parametrelerin bir
+  kısmını eğiten çalıştırmalar (Spectrum, LISA, dondurma) daha az terimle değerlendiriliyor;
+  `--allow-oom-attempt` reddedilen bir çalıştırmayı yine de başlatıyor.
+- **Harici programlar `PATH` üzerinde bulunan mutlak bir yolla başlatılıyor.** Geçerli dizin ve göreli
+  `PATH` girdileri artık aranmıyor: yalnızca orada bulunan bir aracın dizinini `PATH`'e ekleyin.
+- **Ayrıca yeni.** `soup ship --progress jsonl`; başka bir kütüphanenin adlandırdığı biçimde yazılmış
+  bilinmeyen yapılandırma anahtarları için Soup alanı öneriliyor (`learning_rate` için `lr`); ve
+  aşağıdaki Docker örneği, etkileşimsiz bir `soup train`'in v0.77.0'dan beri ihtiyaç duyduğu `--yes`
+  bayrağını geçiriyor.
 
 Eski sürümlerin öne çıkanları [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) sayfasında.
 
@@ -220,7 +204,7 @@ soup merge  --adapter ./output                              # LoRA'yı tabana bi
 soup export --model ./output --format gguf --quant q4_k_m   # Ollama / llama.cpp için GGUF
 ```
 
-Diğer dışa aktarma hedefleri (ONNX, TensorRT, AWQ, GPTQ, BitNet) ve dağıtım seçenekleri
+Diğer dışa aktarma hedefleri (ONNX, TensorRT, BitNet) ve dağıtım seçenekleri
 [`docs/serving-and-export.md`](docs/serving-and-export.md) içinde yer alır.
 
 ## Web Arayüzü
@@ -300,7 +284,7 @@ metin, gömme (embedding), RAFT ve daha fazlası — hepsi JSONL, JSON, CSV, Par
 otomatik algılanır; bu yüzden çoğu durumda `data.train`'i bir dosyaya yöneltirsiniz ve başka hiçbir
 şey değişmez. Her biçim için adım adım çözümlü bir örnekle şemalar ve veri ardışık düzeni (uzak URI'ler,
 akış, parçalama, iç içe geçirme, sözcük dağarcığı genişletme, belge içe aktarma)
-[`docs/data.md`](docs/data.md#data-formats) içinde.
+[`docs/data.md`](docs/data.md#data-formats) içinde; [yerel Sesame CSM ses eğitimi](docs/training.md#native-sesame-csm) ise ayrı belgelenmiştir.
 
 ## Yaygın Komutlar
 
@@ -344,14 +328,14 @@ CUDA ya da PyTorch'u yerel olarak kurmadan Soup'u çalıştırın (imaj her sür
 
 ```bash
 docker pull ghcr.io/makazhanalpamys/soup:latest
-docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml
+docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml --yes
 docker compose up   # ya da yerel olarak derleyin
 ```
 
 ## Gereksinimler
 
-- Python 3.10, 3.11 veya 3.12 (CI'ın test ettiği sürümler bunlar; PyTorch yığını orada henüz
-  doğrulanmadığı için 3.13+ şimdilik desteklenmiyor)
+- Python 3.11, 3.12 veya 3.13 (CI'ın test ettiği sürümler bunlar; PyTorch yığını orada henüz
+  doğrulanmadığı için 3.14+ şimdilik desteklenmiyor)
 - CUDA'lı GPU (önerilen), Apple Silicon (MPS) veya CPU (deneysel — çok yavaş)
 - QLoRA ile 7B modeller için 8 GB+ VRAM
 
@@ -501,4 +485,4 @@ dahil.
 
 ## Lisans
 
-[Apache-2.0](LICENSE). Telif hakkı © Soup katkıda bulunanları.
+[Apache-2.0](LICENSE). Copyright 2026 Makazhan Alpamys and the Soup contributors. Soup'u veya değiştirilmiş bir kopyasını yeniden dağıtırsanız lisansın 4. ve 6. maddeleri sizin için geçerlidir: her kopyayla birlikte `LICENSE` ve `NOTICE` dosyalarını koruyun, değiştirdiğiniz dosyaları işaretleyin ve Soup adını eserin kaynağını belirtmenin ötesinde kullanmayın.

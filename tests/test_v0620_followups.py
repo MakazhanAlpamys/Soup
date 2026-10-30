@@ -2,7 +2,7 @@
 
 Closes coverage gaps surfaced by the TDD review:
 
-* H1 — citation_faithful + non-SFT-family task gate.
+* H1 — citation_faithful + non-SFT task gate.
 * H2 — RAFT _MAX_RAFT_FIELD_LEN per-field oversize boundary.
 * H3 — RAFT null-byte rejection on golden_doc / answer / distractors.
 * H5 — `soup steer train --plan-only` deferred-marker stripping regression guard.
@@ -52,7 +52,7 @@ output: ./output
         with pytest.raises(Exception, match="sft|pretrain"):
             load_config_from_string(yaml_text)
 
-    def test_citation_faithful_on_pretrain_accepted(self):
+    def test_citation_faithful_on_pretrain_rejected(self):
         from soup_cli.config.loader import load_config_from_string
 
         yaml_text = """\
@@ -71,8 +71,8 @@ training:
 
 output: ./output
 """
-        cfg = load_config_from_string(yaml_text)
-        assert cfg.training.citation_faithful is True
+        with pytest.raises(ValueError, match="task='sft'"):
+            load_config_from_string(yaml_text)
 
     def test_citation_faithful_on_dpo_rejected(self):
         from soup_cli.config.loader import load_config_from_string

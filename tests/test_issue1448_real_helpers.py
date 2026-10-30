@@ -35,31 +35,6 @@ def _module(name, **attrs):
     return module
 
 
-def _quantizer(module_name, cls_name, saved_name):
-    class _Model:
-        def quantize(self, *args, **kwargs):
-            return None
-
-        def save_quantized(self, path):
-            _write(Path(path) / saved_name, 3000)
-
-    return {
-        module_name: _module(
-            module_name,
-            BaseQuantizeConfig=lambda **kwargs: None,
-            **{cls_name: types.SimpleNamespace(from_pretrained=lambda *a, **k: _Model())},
-        )
-    }
-
-
-def _gptq_modules():
-    return _quantizer("auto_gptq", "AutoGPTQForCausalLM", "gptq_model-4bit-128g.safetensors")
-
-
-def _awq_modules():
-    return _quantizer("awq", "AutoAWQForCausalLM", "model.safetensors")
-
-
 def _onnx_modules():
     def main_export(model_name_or_path, output, task):
         _write(Path(output) / "model.onnx", 100)
@@ -77,10 +52,18 @@ def _tensorrt_modules():
     return {name: _module(name) for name in names}
 
 
+#: Where the export finds trtllm-build; no other external program is found.
+_TRTLLM_BUILD = "/fake-bin/trtllm-build"
+
+
+def _find_tool(name, path=None):
+    return _TRTLLM_BUILD if name == "trtllm-build" else None
+
+
 def _fake_run(argv, **_kwargs):
     # convert_checkpoint fills <out>/checkpoint, trtllm-build fills <out>/engine
     out = Path(argv[argv.index("--output_dir") + 1])
-    _write(out / ("rank0.engine" if argv[0] == "trtllm-build" else "rank0.safetensors"), 4000)
+    _write(out / ("rank0.engine" if argv[0] == _TRTLLM_BUILD else "rank0.safetensors"), 4000)
     return subprocess.CompletedProcess(argv, 0, "", "")
 
 
@@ -106,10 +89,6 @@ CASES = {
              [("onnx", "model.onnx"), ("onnx", "model.onnx_data")]),
     "tensorrt": ([], _tensorrt_modules,
                  [("tensorrt", "rank0.engine")]),
-    "awq": (["--calibration-data", "calib.jsonl"], _awq_modules,
-            [("awq", "model.safetensors")]),
-    "gptq": (["--calibration-data", "calib.jsonl"], _gptq_modules,
-             [("gptq", "model.safetensors")]),
     "torchao": (["--quant-config", "q.yaml"], dict,
                 [("torchao", "pytorch_model.bin")]),
     "gguf-ud": (["--gguf-flavour", "Q4_0_4_4"], dict, [("gguf", "out.gguf")]),
@@ -148,6 +127,7 @@ def test_every_format_attaches_what_its_helper_returned(tmp_path, monkeypatch, f
          patch("soup_cli.utils.save_formats.export_torchao", _torchao), \
          patch("soup_cli.utils.gguf_quant.export_advanced_gguf", _gguf), \
          patch("soup_cli.utils.bitnet.export_bitnet_gguf", _gguf), \
+         patch("soup_cli.utils.tool_paths.find_tool", _find_tool), \
          patch("soup_cli.commands.export._find_llama_cpp", return_value=Path("llama")):
         output = "out.gguf" if fmt in ("gguf-ud", "bitnet", "tq1_0") else f"out_{fmt}"
         result = runner.invoke(

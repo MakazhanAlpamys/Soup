@@ -43,7 +43,7 @@ def _load_attestation_files(paths: Optional[List[str]]) -> list[dict]:
                 raise ValueError(
                     f"attestation file too large (> {_MAX_ATTESTATION_BYTES} bytes)"
                 )
-            with open(real, encoding="utf-8") as fh:
+            with open(real, encoding="utf-8-sig") as fh:
                 stmt = json.load(fh)
             statements.append(validate_attestation_statement(stmt))
         except (OSError, ValueError, json.JSONDecodeError) as exc:

@@ -13,7 +13,7 @@ import json
 import math
 import os
 import re
-import shutil
+import secrets
 import stat
 import subprocess
 from pathlib import Path
@@ -32,6 +32,7 @@ MAX_RESULT_FILES = 1_000
 MAX_RESULT_FILE_BYTES = 1 * 1024 * 1024
 MAX_RESULT_TOTAL_BYTES = 32 * 1024 * 1024
 DOCKER_PREFLIGHT_TIMEOUT_SECONDS = 10
+DOCKER_REMOVE_TIMEOUT_SECONDS = 30
 
 # Docker's ``--env NAME`` form inherits the value without putting the secret in
 # argv.  Keep this list deliberately narrow and aligned with common Aider
@@ -56,10 +57,28 @@ _COUNT_FIELDS = (
     "num_exhausted_context_windows",
 )
 _DOCKER_IMAGE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/@:+-]*")
+_DOCKER_CONTAINER_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
 
 class AiderEvalError(ValueError):
     """An actionable, user-facing Aider evaluation failure."""
+
+
+def new_container_name() -> str:
+    """Generate a random Docker container name for an Aider evaluation run."""
+    return f"soup-aider-{secrets.token_hex(6)}"
+
+
+def _validate_container_name(name: str) -> None:
+    """Reject values Docker could parse as options instead of a container name."""
+    if (
+        not isinstance(name, str)
+        or not name
+        or _DOCKER_CONTAINER_NAME_RE.fullmatch(name) is None
+    ):
+        raise AiderEvalError(
+            "Docker container name must be valid and cannot begin with '-'"
+        )
 
 
 def _validate_image_name(image: str) -> None:
@@ -88,14 +107,16 @@ def preflight_docker(image: str) -> str:
     """Verify the Docker client, daemon, and official benchmark image."""
     _validate_image_name(image)
 
-    docker = shutil.which("docker")
+    from soup_cli.utils.tool_paths import find_tool
+
+    docker = find_tool("docker")
     if docker is None:
         raise AiderEvalError(
             "Docker CLI was not found. Install Docker, start it, and retry."
         )
 
     try:
-        daemon = subprocess.run(  # noqa: S603 -- trusted executable, fixed argv
+        daemon = subprocess.run(  # noqa: S603 -- absolute docker path, fixed argv
             [docker, "info", "--format", "{{.ServerVersion}}"],
             capture_output=True,
             text=True,
@@ -117,7 +138,7 @@ def preflight_docker(image: str) -> str:
         )
 
     try:
-        image_check = subprocess.run(  # noqa: S603 -- trusted executable, fixed argv
+        image_check = subprocess.run(  # noqa: S603 -- absolute docker path, fixed argv
             [docker, "image", "inspect", image],
             capture_output=True,
             text=True,
@@ -188,6 +209,22 @@ def _mount(source: Path, target: str, *, readonly: bool = False) -> str:
     return value
 
 
+def remove_container(docker: str, name: str) -> bool:
+    """Force-remove a Docker container by name without letting exceptions escape."""
+    try:
+        process = subprocess.run(  # noqa: S603 -- fixed argv, no shell
+            [docker, "rm", "-f", name],
+            capture_output=True,
+            text=True,
+            timeout=DOCKER_REMOVE_TIMEOUT_SECONDS,
+            check=False,
+            shell=False,
+        )
+        return process.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
 def build_docker_command(
     *,
     docker: str,
@@ -198,6 +235,7 @@ def build_docker_command(
     threads: int,
     num_tests: int,
     allow_host_services: bool = False,
+    container_name: str | None = None,
 ) -> list[str]:
     """Build the fixed-argv invocation of Aider's upstream benchmark harness."""
     _validate_image_name(image)
@@ -212,9 +250,16 @@ def build_docker_command(
         docker,
         "run",
         "--rm",
-        "--memory=12g",
-        "--memory-swap=12g",
     ]
+    if container_name is not None:
+        _validate_container_name(container_name)
+        command.append(f"--name={container_name}")
+    command.extend(
+        [
+            "--memory=12g",
+            "--memory-swap=12g",
+        ]
+    )
     if allow_host_services:
         command.append("--add-host=host.docker.internal:host-gateway")
     command.extend(

@@ -23,7 +23,7 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 | **Qwen 2.5** | Qwen2.5-7B-Instruct, Qwen2.5-Coder-32B-Instruct, Qwen2.5-Math-7B-Instruct | 0.5B–72B | Code, math |
 | **DeepSeek** | DeepSeek-R1-Distill-Llama-8B, DeepSeek-V3-0324, DeepSeek-V4-Flash/Pro | 1.5B–1.6T | Reasoning (GRPO), code, MoE |
 | **GLM** | GLM-4.6, GLM-5, GLM-5.1 | 357B-754B | Chinese + English, MoE |
-| **Kimi** | Kimi-K2, Kimi-K2.5, Kimi-K2.6 | ~1T (MoE) | Long-context agentic, MoE |
+| **Kimi** | Kimi-K2.5, Kimi-K2.6 | ~1T (MoE) | Long-context agentic, MoE |
 | **MiniMax** | MiniMax-M2, MiniMax-M3 | 230B–428B | Agentic, MoE (community license) |
 | **Phi-4** | Phi-4-14B, Phi-4-mini-reasoning | 3.8B–14B | Compact reasoning |
 | **Mistral** | Mistral-7B-Instruct-v0.3, Mistral-Small-24B | 7B–24B | Fast, efficient |
@@ -36,16 +36,51 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 
 **Mistral-Large-3 is not shipped as a recipe.** `mistralai` publishes it in Mistral's native layout (`params.json` + `consolidated-*.safetensors`), with no `config.json`, which `AutoConfig` cannot read, and no flag changes that. A Hugging Face-format conversion exists on the Hub as `FriendliAI/Mistral-Large-3-675B-Instruct-2512-BF16`; it is a third party's re-upload, so Soup does not point a recipe at it (#1145).
 
+**Resident Kimi K2 is refused on the supported Transformers 5.x stack.**
+The known Hugging Face Base, Instruct, Instruct-0905 and Thinking IDs load remote
+code using removed APIs, including `is_torch_fx_available`, and an inference-only
+MoE training path. `trust_remote_code` does not repair that incompatibility.
+This is a behaviour change: these resident configurations previously passed validation
+and failed later at model loading; now config validation stops before model loading.
+For Base and Instruct only, use the guarded `training.stream_layers: true` route
+added by [#2107](https://github.com/MakazhanAlpamys/Soup/pull/2107). It requires
+`--trust-remote-code` for the tokenizer and `pip install tiktoken`; see
+[streaming guide, Kimi K2 paragraph](performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724)
+for the guard and prerequisites. Its evidence is CPU-only parity on a tiny
+K2-like checkpoint; full K2 weights, training and GPU execution remain unverified.
+Thinking and Instruct-0905 have no supported route yet. This refusal does not
+qualify local copies, other hubs or Unsloth as working routes. K2.5/K2.6 use
+native `kimi_k25` registration and are outside this boundary.
+
+`kimi-k2-sft` and `kimi-k2-thinking-grpo` remain discoverable with an unsupported
+resident-route description. `soup recipes show` preserves their YAML for inspection;
+`soup recipes use` exits 3 (`EXIT_USAGE_ERROR`) with the per-recipe unavailability
+reason and writes no config.
+Catalog snapshots explicitly record this refusal rather than a usable config.
+This implements #2104's diagnostic option; native resident parity and full K2
+weight validation remain separate work.
+
 Qwen3.5, Qwen3.6, and Qwen3.8 checkpoints advertise a multimodal conditional-generation
 architecture on the Hub, but Soup's catalog recipes are deliberately text-only.
 Their explicit `modality: text` selects `AutoModelForCausalLM`, which instantiates the
 language decoder without the visual tower. This is appropriate for text-only SFT,
-pre-training, and GRPO data; it is not a full multimodal fine-tune. The Transformers
+pre-training, DPO and GRPO data; it is not a full multimodal fine-tune. The Transformers
 backend requires Transformers 5.16.1 or newer, which also supplies the
 `qwen4_exp` text decoder used by Qwen3.8-Flash-Next (#571). On Torch runtimes
 whose `scatter` operator still requires `int64` indices, Soup widens only the
 QSA indexer's local index tensors before LoRA injection; Torch and the upstream
 Transformers class remain unchanged.
+
+`soup recipes use qwen3.5-2b-dpo` and `soup recipes use qwen3.5-4b-dpo` select
+the 2B and 4B language decoders for text preference pairs (`prompt`, `chosen`,
+`rejected`). Both inherit the shipped
+Qwen3.5-9B DPO settings: `lr: 5e-6`, three epochs, LoRA rank 16 / alpha 32,
+4-bit quantization and a 4096-token limit. These are inherited starting values,
+not measured 2B or 4B tuning recommendations. The model's visual tower is excluded;
+image preference data is not supported by these recipes. The 2B config's native
+text architecture and LoRA attachment have been checked on the meta device, with
+a tiny random decoder's forward/backward pass checked on CPU. This does not
+establish full-checkpoint 2B training quality, NF4 execution, or GPU memory use.
 
 With `training.stream_layers: true`, the Qwen4-Exp text decoder is admitted by
 its own parity-tested path. Its very large frozen PLE N-gram table is excluded
@@ -102,11 +137,13 @@ Rows are `{"audio": <path>, "text": <transcript>}` with `data.format: asr`. See
 
 ## Optional Extras
 
-> **Python 3.10, 3.11 or 3.12.** Since v0.73.0 the package declares
-> `requires-python = ">=3.10,<3.13"`. Those are exactly the versions CI tests. Without the
-> upper bound, pip on 3.13+ resolved PyTorch wheels nobody had validated, and the failure was
-> not a Soup error message — it was a loader crash inside `c10.dll` / `libc10.so` before any
-> Soup code ran. If you are on 3.13+, create a 3.12 environment; support widens when CI does.
+> **Python 3.11, 3.12 or 3.13.** Since v0.77 the package declares
+> `requires-python = ">=3.11,<3.14"` (v0.73.0 to v0.76: `">=3.10,<3.13"`). Those are exactly
+> the versions CI tests. Python 3.10 reached end of life on 2026-10-01; on it, pip keeps
+> installing v0.76. Without the upper bound, pip on an untested Python resolved PyTorch wheels
+> nobody had validated, and the failure was not a Soup error message — it was a loader crash
+> inside `c10.dll` / `libc10.so` before any Soup code ran. If you are on 3.14+, create a 3.13
+> environment; support widens when CI does.
 
 ### Quoting the extra
 
@@ -142,7 +179,7 @@ spelling is unchanged. See [the README's install section](../README.md#1-install
 | `fast` | `pip install "soup-cli[fast]"` | Unsloth backend (2-5x faster, lower VRAM) |
 | `vision` | `pip install "soup-cli[vision]"` | Vision / multimodal fine-tuning (Pillow) |
 | `audio` | `pip install "soup-cli[audio]"` | Audio / speech fine-tuning (librosa, soundfile) |
-| `mlx` | `pip install "soup-cli[mlx]"` | Standalone Apple Silicon SFT backend for local data; `[train]` is not required |
+| `mlx` | `pip install "soup-cli[mlx]"` | Standalone Apple Silicon SFT, DPO, ORPO, SimPO, KTO and GRPO backend for local data; `[train]` is not required |
 | `qat` | `pip install "soup-cli[qat]"` | torchao: FP8 training (`quantization_aware: fp8`), FP8 attention, NVFP4, the `ao_adamw_*` optimizers and `soup export --format torchao` |
 | `serve` | `pip install "soup-cli[serve]"` | Inference server (FastAPI + uvicorn) |
 | `serve-fast` | `pip install "soup-cli[serve-fast]"` | vLLM inference backend (2-4x throughput) |
@@ -152,16 +189,14 @@ spelling is unchanged. See [the README's install section](../README.md#1-install
 | `eval` | `pip install "soup-cli[eval]"` | Benchmark evaluation (lm-evaluation-harness) |
 | `aider` | `pip install "soup-cli[aider]"` | Aider CLI; Polyglot evaluation also needs Aider's source-built Docker image |
 | `data` | `pip install "soup-cli[data]"` | Deduplication (MinHash via datasketch) |
+| `documents` | `pip install "soup-cli[documents]"` | PDF / DOCX ingestion (pypdf, python-docx); Markdown and TXT need no extra |
 | `data-pro` | `pip install "soup-cli[data-pro]"` | Language detection + PII (langdetect, presidio) |
 | `deepspeed` | `pip install "soup-cli[deepspeed]"` | Multi-GPU training (DeepSpeed ZeRO) |
 | `liger` | `pip install "soup-cli[liger]"` | Liger Kernel fused ops |
 | `ring-attn` | `pip install "soup-cli[ring-attn]"` | Ring FlashAttention (sequence parallelism) |
 | `onnx` / `tensorrt` | `pip install "soup-cli[onnx]"` | ONNX / TensorRT-LLM export |
-| `awq` / `gptq` | `pip install "soup-cli[awq]"` | AWQ / GPTQ quantized export; not installable alongside `[train]` (see below) |
 | `trackers` | `pip install "soup-cli[trackers]"` | MLflow / SwanLab / Trackio logging |
 | `remote` | `pip install "soup-cli[remote]"` | Remote datasets (s3 / gs / az / oci) |
 | `dev` | `pip install "soup-cli[dev]"` | Tests + lint + types (pytest, ruff, mypy, pre-commit) |
-
-**`[awq]` and `[gptq]` cannot be installed alongside `[train]`.** AWQ export was measured working only with `transformers` 4.52.4 or older, while `[train]` requires `transformers>=5.16.1`; `auto-gptq` publishes no Python 3.12 wheel; and both upstream projects (AutoAWQ and AutoGPTQ) are archived. Run AWQ or GPTQ export from a separate environment. Both export formats are deprecated and will be removed in Soup v0.77 ([#338](https://github.com/MakazhanAlpamys/Soup/issues/338)); until then `soup export --format awq` and `--format gptq` start with a notice that names the formats to move to (`gguf`, `onnx`, `tensorrt`, `bitnet`, `tq1_0`).
 
 The complete, authoritative extras list is in [`pyproject.toml`](../pyproject.toml).
