@@ -896,14 +896,37 @@ class TestResume:
         # first loss is already below log 2 (it is exactly log 2 from scratch).
         assert result["losses"][0] < math.log(2) - 1e-3
 
-    @pytest.mark.parametrize("module, cls, task, data_format", [
-        ("mlx_dpo", "MLXDPOTrainerWrapper", "dpo", "dpo"),
-        ("mlx_orpo", "MLXORPOTrainerWrapper", "orpo", "dpo"),
-        ("mlx_simpo", "MLXSimPOTrainerWrapper", "simpo", "dpo"),
-        ("mlx_kto", "MLXKTOTrainerWrapper", "kto", "kto"),
+    @pytest.mark.parametrize("change, match", [
+        ({"task": "orpo"}, "MLX DPO: .* task='orpo', not 'dpo'"),
+        ({"task": "sft"}, "task='sft', not 'dpo'"),
+        ("no task", "task=None, not 'dpo'"),
+        ({"model": "other-base"}, "belongs to base"),
+        (None, "no adapter_config.json"),
+    ])
+    def test_mismatched_or_missing_metadata_is_refused(self, tmp_path, monkeypatch, change, match):
+        first = _seeded_wrapper(tmp_path / "a", monkeypatch, batch_size=2, epochs=3, seed=1)
+        first.train()
+        checkpoint = tmp_path / "a" / "output" / "adapters.safetensors"
+        meta = checkpoint.parent / "adapter_config.json"
+        if change is None:
+            meta.unlink()
+        elif change == "no task":
+            meta.write_text(json.dumps(
+                {k: v for k, v in json.loads(meta.read_text()).items() if k != "task"}))
+        else:
+            meta.write_text(json.dumps({**json.loads(meta.read_text()), **change}))
+        resumed = _seeded_wrapper(tmp_path / "b", monkeypatch, batch_size=2, seed=1)
+        with pytest.raises(ValueError, match=match):
+            resumed.train(resume_from_checkpoint=str(checkpoint))
+
+    @pytest.mark.parametrize("module, cls, task, data_format, name", [
+        ("mlx_dpo", "MLXDPOTrainerWrapper", "dpo", "dpo", "DPO"),
+        ("mlx_orpo", "MLXORPOTrainerWrapper", "orpo", "dpo", "ORPO"),
+        ("mlx_simpo", "MLXSimPOTrainerWrapper", "simpo", "dpo", "SimPO"),
+        ("mlx_kto", "MLXKTOTrainerWrapper", "kto", "kto", "KTO"),
     ])
     @pytest.mark.parametrize("change, match", [
-        ("other task", "MLX .*: .* task='{other}', not '{task}'"),
+        ("other task", "MLX {name}: .* task='{other}', not '{task}'"),
         ({"task": "sft"}, "task='sft', not '{task}'"),
         ("no task", "task=None, not '{task}'"),
         ({"model": "some/other-base"}, "belongs to base 'some/other-base'"),
@@ -911,7 +934,7 @@ class TestResume:
     ])
     def test_metadata_is_checked_before_any_tensor_loads(self, tmp_path, monkeypatch,
                                                          module, cls, task, data_format,
-                                                         change, match):
+                                                         name, change, match):
         """No MLX: the check runs on the wrapper alone, before MLX SFT's loader.
 
         ORPO, SimPO and KTO inherit the check from the DPO wrapper, so each is
@@ -925,7 +948,7 @@ class TestResume:
 
         wrapper_cls = getattr(importlib.import_module(f"soup_cli.trainer.{module}"), cls)
         other = "orpo" if task == "dpo" else "dpo"
-        match = match.format(task=task, other=other)
+        match = match.format(task=task, other=other, name=name)
 
         loaded = []
         monkeypatch.setattr(MLXSFTTrainerWrapper, "_load_checkpoint_weights",
