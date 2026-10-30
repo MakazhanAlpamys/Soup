@@ -17,6 +17,8 @@ criterion change is proposed by this measurement record.
 - Soup source: `bba95299d305025e20890b113642d2f0695cc59f`.
 - Kernel Git blob: `ff40fc7032205101b29945e920be8db613a821dd`.
 - Test Git blob: `d2a7e8a93abf8fc8497e2f7c99cb197705ec3c40`.
+- The recorded source SHA-256 values hash Windows CRLF checkout bytes; LF
+  checkouts have different SHA-256 values for the same portable Git blob IDs.
 - CPU: AMD Ryzen 7 7840HS with Radeon 780M Graphics, 8 cores / 16 logical CPUs.
 - Windows; Python 3.12.15; PEFT 0.21.2; transformers 5.19.0.
 - Separate torch 2.8.0+cpu and 2.14.1+cpu environments; one intra-op thread
@@ -43,7 +45,11 @@ for seed 4's **up-projection LoRA B gradient**. The unchanged criterion is
 The initial three instrumented 2.14.1 sweeps and their instrumented repeats agree
 on the verdict. Raw per-seed, per-tensor errors and fixture fingerprints are retained
 in [the JSON record](records/fast-lora-cpu-bf16-20261029.json).
+The JSON keeps each seed row on one line, retaining all values in 79 lines.
 The published recorder reproduces all 72 rows and fixture hashes exactly.
+The committed record combines six separate recorder captures. The top-level
+CPU/source metadata and each run's `mode` and `failing_seeds` were added during
+assembly; the recorder itself writes only the run header and seed rows.
 Uninstrumented seed-4 controls also fail on 2.8.0 in all three modes and pass
 on 2.14.1 in the native mode; the failed controls retain pytest exit status 1.
 
