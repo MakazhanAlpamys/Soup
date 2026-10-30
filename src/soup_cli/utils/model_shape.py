@@ -26,6 +26,8 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+from soup_cli.utils.unsloth import UNSLOTH_LORA_TARGETS
+
 #: A config.json larger than this is not a config.json.
 _MAX_CONFIG_BYTES = 4 * 1024 * 1024
 #: The largest hidden, intermediate, vocabulary, head or head-width figure a config.json
@@ -421,12 +423,16 @@ _PEFT_DEFAULT_TARGETS: dict[str, tuple[str, ...]] = {
     "phi3": ("qkv_proj",),
 }
 
-_ALL_LINEAR = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
+_ALL_LINEAR = UNSLOTH_LORA_TARGETS
 
 
-def lora_targets(target_modules: Any, model_type: str) -> tuple[str, ...]:
+def lora_targets(
+    target_modules: Any, model_type: str, *, backend: str = "transformers"
+) -> tuple[str, ...]:
     """The module names LoRA adapts, as the estimate counts them."""
     if target_modules is None or target_modules == "auto":
+        if backend == "unsloth":
+            return UNSLOTH_LORA_TARGETS
         return _PEFT_DEFAULT_TARGETS.get(model_type, ("q_proj", "v_proj"))
     if target_modules == "all-linear":
         return _ALL_LINEAR
@@ -460,12 +466,14 @@ def module_dims(shape: ModelShape, name: str) -> tuple[int, int]:
     return dims.get(name, (hidden, hidden))
 
 
-def lora_param_count(shape: ModelShape, *, r: int, target_modules: Any) -> int:
+def lora_param_count(
+    shape: ModelShape, *, r: int, target_modules: Any, backend: str = "transformers"
+) -> int:
     """Trainable LoRA parameters: r * (in + out) per adapted module per layer."""
     if r <= 0:
         return 0
     per_layer = 0
-    for name in lora_targets(target_modules, shape.model_type):
+    for name in lora_targets(target_modules, shape.model_type, backend=backend):
         fan_in, fan_out = module_dims(shape, name)
         per_layer += r * (fan_in + fan_out)
     return per_layer * shape.num_layers

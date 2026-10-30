@@ -113,6 +113,8 @@ class HardwareFitInput:
     logits_loss: bool = True
     #: The fused-loss flags the run's trainer applies (``use_liger``, ``use_cut_ce``).
     fused_loss: tuple[str, ...] = ()
+    #: The loader whose default LoRA targets and weight dtypes are being estimated.
+    backend: str = "transformers"
 
     def __post_init__(self) -> None:
         if isinstance(self.params_b, bool):
@@ -552,6 +554,7 @@ def hardware_fit_input_from_config(
             lm_head=task not in NO_LM_HEAD_TASKS,
             logits_loss=task not in LOGITS_ONLY_TASKS,
             fused_loss=fused_loss,
+            backend=getattr(cfg, "backend", "transformers"),
         )
     except (ValueError, TypeError, ArithmeticError):
         return None  # dims out of the predictor's supported range
@@ -580,6 +583,7 @@ def estimate_peak_vram_gb(inp: HardwareFitInput) -> VRAMBreakdown:
             lm_head=inp.lm_head,
             logits_loss=inp.logits_loss,
             fused_loss=inp.fused_loss,
+            backend=inp.backend,
         ),
     )
     return breakdown_from_estimate(est)
