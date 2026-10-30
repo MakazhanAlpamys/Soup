@@ -1689,7 +1689,11 @@ def _generate_response(
     """Generate a response from the model."""
     import torch
 
-    from soup_cli.utils.vllm import encode_chat_prompt
+    from soup_cli.utils.vllm import (
+        encode_chat_prompt,
+        generation_eos_ids,
+        token_finish_reason,
+    )
 
     # Apply chat template. #332 — THE shared builder; the vLLM backend calls
     # the same function so the two backends cannot drift apart again. #781 —
@@ -1760,8 +1764,12 @@ def _generate_response(
 
     prompt_tokens = input_ids.shape[1]
     completion_tokens = len(new_tokens)
+    # #2361 — read from the raw ids: decoding above drops the end token.
+    finish_reason = token_finish_reason(
+        new_tokens, max_tokens, generation_eos_ids(model, tokenizer)
+    )
 
-    return response, prompt_tokens, completion_tokens
+    return response, prompt_tokens, completion_tokens, finish_reason
 
 
 def _create_app(
@@ -2194,6 +2202,7 @@ def _create_app(
                             response_text,
                             prompt_tokens,
                             completion_tokens,
+                            finish_reason,
                         ) = _mole_runtime.generate_text(
                             messages,
                             max_tokens=max_tokens,
@@ -2212,6 +2221,7 @@ def _create_app(
                                 response_text,
                                 prompt_tokens,
                                 completion_tokens,
+                                finish_reason,
                             ) = _generate_response(
                                 model_obj, tokenizer, messages,
                                 max_tokens=max_tokens,
@@ -2272,7 +2282,7 @@ def _create_app(
                                 "role": "assistant",
                                 "content": response_text,
                             },
-                            "finish_reason": "stop",
+                            "finish_reason": finish_reason,
                         }
                     ],
                     "usage": {
@@ -2339,6 +2349,14 @@ def _create_app(
         out_model = openai_payload.get("model", model_name)
         in_tokens = int(usage.get("prompt_tokens", 0) or 0)
         out_tokens = int(usage.get("completion_tokens", 0) or 0)
+        # #2361 — a run cut off at max_tokens is ``max_tokens``, not a turn end.
+        finish_reason = None
+        if isinstance(chat_response, dict):
+            try:
+                finish_reason = chat_response["choices"][0]["finish_reason"]
+            except (KeyError, IndexError, TypeError):
+                finish_reason = None
+        stop_reason = "max_tokens" if finish_reason == "length" else "end_turn"
 
         if wants_stream:
             # v0.53.7 #102 streaming live — emit Anthropic event-shape SSE.
@@ -2349,6 +2367,7 @@ def _create_app(
                     text=text,
                     input_tokens=in_tokens,
                     output_tokens=out_tokens,
+                    stop_reason=stop_reason,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -2363,7 +2382,7 @@ def _create_app(
             "role": "assistant",
             "model": out_model,
             "content": [{"type": "text", "text": text}],
-            "stop_reason": "end_turn",
+            "stop_reason": stop_reason,
             "usage": {
                 "input_tokens": in_tokens,
                 "output_tokens": out_tokens,
@@ -2599,6 +2618,7 @@ def _stream_anthropic_messages(
     text: str,
     input_tokens: int,
     output_tokens: int,
+    stop_reason: str = "end_turn",
 ) -> "Generator[str, None, None]":
     """v0.53.7 #102 — yield Anthropic event-shape SSE frames.
 
@@ -2654,7 +2674,7 @@ def _stream_anthropic_messages(
         "message_delta",
         {
             "type": "message_delta",
-            "delta": {"stop_reason": "end_turn"},
+            "delta": {"stop_reason": stop_reason},
             "usage": {"output_tokens": int(output_tokens)},
         },
     )
@@ -2695,7 +2715,9 @@ def _stream_response(
             # v0.71.17 #259 — MoLE blends per-token via a custom decode loop;
             # generate the full text then simulate streaming (same shape as the
             # transformers path, which also generates-then-streams).
-            response_text, _, completion_tokens_for_log = mole_runtime.generate_text(
+            (
+                response_text, _, completion_tokens_for_log, finish_reason,
+            ) = mole_runtime.generate_text(
                 messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
@@ -2708,7 +2730,9 @@ def _stream_response(
                 model, adapter_lock, adapter_names,
                 requested_adapter, active_adapter,
             ):
-                response_text, _, completion_tokens_for_log = _generate_response(
+                (
+                    response_text, _, completion_tokens_for_log, finish_reason,
+                ) = _generate_response(
                     model, tokenizer, messages,
                     max_tokens=max_tokens,
                     temperature=temperature,
@@ -2767,7 +2791,7 @@ def _stream_response(
             {
                 "index": 0,
                 "delta": {},
-                "finish_reason": "stop",
+                "finish_reason": finish_reason,
             }
         ],
     }
