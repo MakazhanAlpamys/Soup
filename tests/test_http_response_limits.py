@@ -280,17 +280,27 @@ def test_magpie_drops_oversized_sample_and_respects_attempt_bound(
     monkeypatch.setattr(httpx, "stream", stream)
     monkeypatch.setattr(httpx, "post", lambda *a, **kw: pytest.fail("uncapped httpx.post"))
     config = magpie.MagpieConfig("Qwen/Qwen2.5-7B-Instruct", provider, 1, False)
+    output = tmp_path / "rows.jsonl"
+    if oversized_stage == "all":
+        output.write_bytes(b"original output\n")
     with caplog.at_level(logging.DEBUG):
-        result = magpie.run_magpie(config, output_path="rows.jsonl", max_attempts=2)
-    assert result.attempts == 2
-    assert result.rows_kept == (0 if oversized_stage == "all" else 1)
+        if oversized_stage == "all":
+            with pytest.raises(magpie.MagpieProviderError, match="2 of 2 provider calls failed"):
+                magpie.run_magpie(config, output_path="rows.jsonl", max_attempts=2)
+        else:
+            result = magpie.run_magpie(config, output_path="rows.jsonl", max_attempts=2)
+            assert result.attempts == 2
+            assert result.rows_kept == 1
     assert len(calls) == len(bodies)
     assert all(body.closed for body in bodies)
     assert "secret-body" not in caplog.text
-    rows = [json.loads(line) for line in (tmp_path / "rows.jsonl").read_text().splitlines()]
-    assert rows == ([] if oversized_stage == "all" else [{"messages": [
-        {"role": "user", "content": "q2"}, {"role": "assistant", "content": "a2"},
-    ]}])
+    if oversized_stage == "all":
+        assert output.read_bytes() == b"original output\n"
+    else:
+        rows = [json.loads(line) for line in output.read_text().splitlines()]
+        assert rows == [{"messages": [
+            {"role": "user", "content": "q2"}, {"role": "assistant", "content": "a2"},
+        ]}]
 
 
 @pytest.mark.parametrize("target", TARGETS)

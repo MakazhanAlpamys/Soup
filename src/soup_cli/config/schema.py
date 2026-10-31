@@ -5249,6 +5249,14 @@ def _unsloth_flag_clause(training: "TrainingConfig") -> str:
 #: to :meth:`SoupConfig._validate_mlx_task_support` read this, not ``"sft"``.
 MLX_TASKS: frozenset[str] = frozenset({"sft", "dpo", "orpo", "simpo", "kto", "grpo"})
 
+
+def resolve_mlx_task(task: str, preference_loss: str | None = None) -> str:
+    """Resolve a scalar preference alias without changing the user's config."""
+    if task == "preference" and preference_loss in {"dpo", "orpo", "simpo"}:
+        return preference_loss
+    return task
+
+
 #: #1976 — the built-in rewards the native MLX GRPO loop scores with.
 MLX_GRPO_REWARDS: frozenset[str] = frozenset({"accuracy", "format"})
 
@@ -5388,7 +5396,7 @@ def _refused_backend_clause(backend: str, task: str, training: "TrainingConfig")
             f"backend='unsloth' is not applied by task={task!r}: that trainer has "
             "no unsloth setup."
         )
-    elif backend == "mlx" and task not in MLX_TASKS:
+    elif backend == "mlx" and resolve_mlx_task(task, training.preference_loss) not in MLX_TASKS:
         reason = f"task={task!r} has no trainer on backend='mlx'."
     else:
         return ""
@@ -5888,7 +5896,8 @@ class SoupConfig(BaseModel):
             return self
         if self.backend == "unsloth" and self.task not in UNSLOTH_SETUP_TASKS:
             return self  # that task's own backend refusal names the real problem
-        if self.backend == "mlx" and self.task not in MLX_TASKS:
+        if (self.backend == "mlx"
+                and resolve_mlx_task(self.task, self.training.preference_loss) not in MLX_TASKS):
             return self  # _validate_mlx_task_support refuses the task itself
         why = {
             "unsloth": "its setup loads the model and attaches LoRA in one call, with "
@@ -7329,7 +7338,8 @@ class SoupConfig(BaseModel):
         I/O on a real base. The same refusal now applies to every
         ``task='kto'`` config, resident or streamed, before anything loads.
         """
-        if self.backend == "mlx" and self.task not in MLX_TASKS:
+        if (self.backend == "mlx"
+                and resolve_mlx_task(self.task, self.training.preference_loss) not in MLX_TASKS):
             return self  # _validate_mlx_task_support gives the more basic answer
         # MLX KTO (#2000) builds TRL's KL rows and keeps the same floor.
         tcfg = self.training
@@ -8880,23 +8890,28 @@ class SoupConfig(BaseModel):
         SFT runs through mlx-lm's tuner; DPO, ORPO, SimPO, KTO and GRPO through
         Soup's own loops in ``trainer/mlx_dpo.py`` / ``trainer/mlx_orpo.py`` /
         ``trainer/mlx_simpo.py`` / ``trainer/mlx_kto.py`` / ``trainer/mlx_grpo.py``.
+        Scalar preference aliases share their native task's scope restrictions.
         Every other task is refused here rather than at ``train()`` time.
         """
         if self.backend != "mlx":
             return self
-        if self.task == "grpo":
+        task = resolve_mlx_task(self.task, self.training.preference_loss)
+        task_label = f"task={self.task!r}"
+        if self.task == "preference":
+            task_label += f" with preference_loss={self.training.preference_loss!r}"
+        if task == "grpo":
             _refuse_mlx_grpo_scope(self)
             return self
-        if self.task in ("dpo", "orpo", "simpo", "kto"):
+        if task in ("dpo", "orpo", "simpo", "kto"):
             # The native preference loops tokenize text and chat rows only and
             # train a LoRA adapter. DPO's and KTO's reference log-probs come
             # from the policy before training, which is the base model only
             # because a LoRA adapter's B starts at zero; ORPO and SimPO train
             # LoRA only (no full fine-tune on MLX yet).
-            name = {"dpo": "DPO", "orpo": "ORPO", "simpo": "SimPO", "kto": "KTO"}[self.task]
+            name = {"dpo": "DPO", "orpo": "ORPO", "simpo": "SimPO", "kto": "KTO"}[task]
             if self.modality != "text":
                 raise ValueError(
-                    f"modality='{self.modality}' is not supported by task='{self.task}' "
+                    f"modality='{self.modality}' is not supported by {task_label} "
                     f"on backend='mlx': MLX {name} trains on text and chat rows only. "
                     "Use backend=transformers, or modality: text."
                 )
@@ -8904,32 +8919,28 @@ class SoupConfig(BaseModel):
                 why = (
                     "the reference model is the untrained LoRA policy, which needs "
                     "a LoRA adapter to exist"
-                    if self.task in ("dpo", "kto")
+                    if task in ("dpo", "kto")
                     else f"MLX {name} trains a LoRA adapter; full fine-tuning is not "
                     "implemented on backend='mlx'"
                 )
                 raise ValueError(
-                    f"training.lora.r must be at least 1 for task='{self.task}' on "
+                    f"training.lora.r must be at least 1 for {task_label} on "
                     f"backend='mlx': {why}."
                 )
-            if self.task in ("orpo", "simpo", "kto") and self.training.quantization == "8bit":
+            if task in ("orpo", "simpo", "kto") and self.training.quantization == "8bit":
                 raise ValueError(
-                    f"training.quantization='8bit' is not supported by task='{self.task}' "
+                    f"training.quantization='8bit' is not supported by {task_label} "
                     "on backend='mlx': use quantization: none, or a pre-quantized "
                     "mlx-community 4-bit base with quantization: 4bit."
                 )
             return self
-        if self.task in MLX_TASKS:
+        if task in MLX_TASKS:
             return self
-        hint = ""
-        native = {"dpo", "orpo", "simpo"}
-        if self.task == "preference" and self.training.preference_loss in native:
-            hint = f" Use task: {self.training.preference_loss} for the native MLX trainer."
         raise ValueError(
             f"MLX backend only ships SFT, DPO, ORPO, SimPO, KTO and GRPO; "
             f"task='{self.task}' has "
             "no trainer on backend='mlx'."
-            + (hint or f" Use backend=transformers for task={self.task}.")
+            f" Use backend=transformers for task={self.task}."
         )
 
     @model_validator(mode="after")

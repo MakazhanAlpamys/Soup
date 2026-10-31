@@ -26,6 +26,8 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+from soup_cli.utils.unsloth import UNSLOTH_LORA_TARGETS
+
 #: A config.json larger than this is not a config.json.
 _MAX_CONFIG_BYTES = 4 * 1024 * 1024
 #: The largest hidden, intermediate, vocabulary, head or head-width figure a config.json
@@ -84,6 +86,12 @@ class ModelShape:
     #: A mixture-of-experts config (it names a count of experts). The estimate prices
     #: such a model as a dense one, and says it is outside what it was fitted on.
     moe: bool = False
+    #: The outer config's own ``model_type`` when ``model_type`` is a nested text
+    #: config's, else the same; the estimate checks both (#2368).
+    config_model_type: str = ""
+    #: The config.json names an ``auto_map``: the model's code ships with its weights
+    #: (``trust_remote_code``), so its forward's parameters are unknown here (#2368).
+    remote_code: bool = False
 
     @property
     def guessed(self) -> bool:
@@ -328,6 +336,8 @@ def shape_from_config(
         params_source=params_source,
         shape_source="config.json",
         moe=_is_moe(text) or _is_moe(config),
+        config_model_type=str(config.get("model_type") or ""),
+        remote_code="auto_map" in config,
     )
 
 
@@ -421,12 +431,16 @@ _PEFT_DEFAULT_TARGETS: dict[str, tuple[str, ...]] = {
     "phi3": ("qkv_proj",),
 }
 
-_ALL_LINEAR = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
+_ALL_LINEAR = UNSLOTH_LORA_TARGETS
 
 
-def lora_targets(target_modules: Any, model_type: str) -> tuple[str, ...]:
+def lora_targets(
+    target_modules: Any, model_type: str, *, backend: str = "transformers"
+) -> tuple[str, ...]:
     """The module names LoRA adapts, as the estimate counts them."""
     if target_modules is None or target_modules == "auto":
+        if backend == "unsloth":
+            return UNSLOTH_LORA_TARGETS
         return _PEFT_DEFAULT_TARGETS.get(model_type, ("q_proj", "v_proj"))
     if target_modules == "all-linear":
         return _ALL_LINEAR
@@ -460,12 +474,14 @@ def module_dims(shape: ModelShape, name: str) -> tuple[int, int]:
     return dims.get(name, (hidden, hidden))
 
 
-def lora_param_count(shape: ModelShape, *, r: int, target_modules: Any) -> int:
+def lora_param_count(
+    shape: ModelShape, *, r: int, target_modules: Any, backend: str = "transformers"
+) -> int:
     """Trainable LoRA parameters: r * (in + out) per adapted module per layer."""
     if r <= 0:
         return 0
     per_layer = 0
-    for name in lora_targets(target_modules, shape.model_type):
+    for name in lora_targets(target_modules, shape.model_type, backend=backend):
         fan_in, fan_out = module_dims(shape, name)
         per_layer += r * (fan_in + fan_out)
     return per_layer * shape.num_layers

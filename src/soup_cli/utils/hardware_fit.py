@@ -116,6 +116,8 @@ class HardwareFitInput:
     #: ``training.activation_offloading`` (``cpu``, ``disk`` or ``None``); not modelled,
     #: so the estimate only says so.
     activation_offloading: Optional[str] = None
+    #: The loader whose default LoRA targets and weight dtypes are being estimated.
+    backend: str = "transformers"
 
     def __post_init__(self) -> None:
         if isinstance(self.params_b, bool):
@@ -457,7 +459,9 @@ NO_LM_HEAD_TASKS: frozenset[str] = frozenset(
 
 #: Tasks whose step builds the logits but no loss over them, so the estimate charges
 #: the logits tensor alone: prm runs the causal-LM forward without labels and takes
-#: its loss from ``reward_head`` (``trainer/prm.py``).
+#: its loss from ``reward_head`` (``trainer/prm.py``), with ``logits_to_keep=1``
+#: where the forward takes it, so on one position (#2368,
+#: ``vram_estimate.logits_positions``).
 LOGITS_ONLY_TASKS: frozenset[str] = frozenset({"prm"})
 
 #: Tasks whose trainer installs the checkpointing tiers: ``trainer/sft.py``'s
@@ -559,6 +563,7 @@ def hardware_fit_input_from_config(
             lm_head=task not in NO_LM_HEAD_TASKS,
             logits_loss=task not in LOGITS_ONLY_TASKS,
             fused_loss=fused_loss,
+            backend=getattr(cfg, "backend", "transformers"),
             activation_offloading=getattr(tcfg, "activation_offloading", None),
         )
     except (ValueError, TypeError, ArithmeticError):
@@ -588,6 +593,7 @@ def estimate_peak_vram_gb(inp: HardwareFitInput) -> VRAMBreakdown:
             lm_head=inp.lm_head,
             logits_loss=inp.logits_loss,
             fused_loss=inp.fused_loss,
+            backend=inp.backend,
             activation_offloading=inp.activation_offloading,
         ),
     )
