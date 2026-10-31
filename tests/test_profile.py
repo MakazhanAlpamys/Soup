@@ -230,8 +230,14 @@ class TestProfileCLI:
         result = runner.invoke(app, ["profile", "--config", str(config_file), "--json"])
         assert result.exit_code == 0
         data = json.loads(result.stdout)
-        assert "total_memory_gb" in data
-        assert "model_memory_gb" in data
+        for key in (
+            "model_memory_gb",
+            "lora_memory_gb",
+            "optimizer_memory_gb",
+            "activation_memory_gb",
+            "total_memory_gb",
+        ):
+            assert key in data, key
 
     def test_profile_with_gpu_flag(self, tmp_path):
         """soup profile --gpu a100 uses specified GPU memory."""
