@@ -4,7 +4,14 @@ import math
 import re
 from typing import Any, Callable, Dict, List, Literal, NamedTuple, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    ValidationInfo,
+    ValidatorFunctionWrapHandler,
+    field_validator,
+    model_validator,
+)
 
 # Stream-buffer, read-ahead and noise-floor bounds come from a dependency-free
 # leaf that layer_stream, async_disk_source and ship_verdict re-export, so the
@@ -2658,12 +2665,12 @@ class TrainingConfig(BaseModel):
         mode="before",
     )
     @classmethod
-    def _validate_reward_hack_bool_fields(cls, v):
+    def _validate_reward_hack_bool_fields(cls, v, info: ValidationInfo):
         """v0.71.26 — bool guard so YAML ``yes`` / ``1`` cannot silently coerce."""
         if v is None or isinstance(v, bool):
             return v
         raise TypeError(
-            f"reward-hack bool flag must be bool, got {type(v).__name__}"
+            f"{info.field_name} must be bool, got {type(v).__name__}"
         )
 
     @field_validator(
@@ -2737,14 +2744,14 @@ class TrainingConfig(BaseModel):
         mode="before",
     )
     @classmethod
-    def _validate_echo_trap_bool_fields(cls, v):
+    def _validate_echo_trap_bool_fields(cls, v, info: ValidationInfo):
         """v0.70.0 Part F — bool guards for echo-trap toggles."""
         if v is None:
             return v
         if isinstance(v, bool):
             return v
         raise TypeError(
-            f"v0.70.0 echo-trap flag must be bool, got {type(v).__name__}"
+            f"{info.field_name} must be bool, got {type(v).__name__}"
         )
 
     @field_validator(
@@ -2754,14 +2761,14 @@ class TrainingConfig(BaseModel):
         mode="before",
     )
     @classmethod
-    def _validate_rl_checkpoint_bool_fields(cls, v):
+    def _validate_rl_checkpoint_bool_fields(cls, v, info: ValidationInfo):
         """v0.70.0 Part D — bool guards for RL-checkpoint toggles."""
         if v is None:
             return v
         if isinstance(v, bool):
             return v
         raise TypeError(
-            f"v0.70.0 RL-checkpoint flag must be bool, got {type(v).__name__}"
+            f"{info.field_name} must be bool, got {type(v).__name__}"
         )
 
     @field_validator(
@@ -2771,14 +2778,14 @@ class TrainingConfig(BaseModel):
         mode="before",
     )
     @classmethod
-    def _validate_minillm_bool_fields(cls, v):
+    def _validate_minillm_bool_fields(cls, v, info: ValidationInfo):
         """v0.70.0 Part C — bool guards for MiniLLM toggles."""
         if v is None:
             return v
         if isinstance(v, bool):
             return v
         raise TypeError(
-            f"v0.70.0 MiniLLM flag must be bool, got {type(v).__name__}"
+            f"{info.field_name} must be bool, got {type(v).__name__}"
         )
 
     @field_validator("minillm_pretrain_anchor_path")
@@ -2815,7 +2822,7 @@ class TrainingConfig(BaseModel):
         mode="before",
     )
     @classmethod
-    def _validate_v053_bool_fields(cls, v):
+    def _validate_v053_bool_fields(cls, v, info: ValidationInfo):
         """v0.53.0 — explicit bool guard so YAML ``yes`` / ``1`` integers
         cannot silently coerce. Matches project bool-before-int policy.
 
@@ -2828,7 +2835,7 @@ class TrainingConfig(BaseModel):
         if isinstance(v, bool):
             return v
         raise TypeError(
-            f"v0.53.0 flag must be bool, got {type(v).__name__}"
+            f"{info.field_name} must be bool, got {type(v).__name__}"
         )
 
     @field_validator("kv_cache_type", mode="before")
@@ -4768,6 +4775,25 @@ class TrainingConfig(BaseModel):
         from soup_cli.utils.grace_codebook import validate_grace_codebook_dim
 
         return validate_grace_codebook_dim(v)
+
+    # Keep this the last validator of TrainingConfig. Pydantic runs ``before``
+    # and ``wrap`` validators in reverse order of definition, so a wrap
+    # validator defined last wraps every other validator of the field.
+    @field_validator("*", mode="wrap")
+    @classmethod
+    def _type_error_as_value_error(
+        cls, v: Any, handler: ValidatorFunctionWrapHandler
+    ) -> Any:
+        """#2366 — Pydantic does not turn a ``TypeError`` raised in a validator
+        into a ``ValidationError``, so a wrong-typed value escaped
+        ``SoupConfig(...)`` without the field's location. Re-raise it as a
+        ``ValueError`` with the same text; the shared helpers keep raising
+        ``TypeError`` for their other callers.
+        """
+        try:
+            return handler(v)
+        except TypeError as exc:
+            raise ValueError(str(exc)) from exc
 
 
 class ShipConfig(BaseModel):
