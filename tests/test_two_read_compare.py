@@ -169,6 +169,49 @@ def test_one_quantity_mismatch_fails_at_that_index(cmp, tmp_path, key, value):
     assert report["timing"] is not None
 
 
+@pytest.mark.parametrize("name", RUNS)
+def test_a_loss_mismatch_in_any_run_fails(cmp, tmp_path, name):
+    """Every run's loss is compared, not only the one the table above perturbs."""
+    quad = _quad()
+    _mutate_step(quad, name, 1, "loss", math.nextafter(1.25 + 1 / 3, 10.0))
+    code, report = _run(cmp, tmp_path, quad)
+    assert (code, report["verdict"]) == (1, "FAIL")
+    assert [(f["index"], f["quantity"]) for f in report["failures"]] == [(1, "loss")]
+
+
+@pytest.mark.parametrize("name", RUNS)
+@pytest.mark.parametrize("quantity", ["expert_fetches", "expert_bytes_read",
+                                      "h2d_bytes.experts"])
+def test_the_3_to_2_rule_checks_every_run_and_expert_quantity(cmp, tmp_path, quantity, name):
+    """One more read in any one run breaks 3:2 for that quantity alone; each of A1, A2, B1
+    and B2 is a side of two of the four A:B pairs, so dropping any run from the pairs
+    leaves its break unseen."""
+    quad = _quad()
+    entry = quad[name][1]["steps"][1]
+    _mutate_step(quad, name, 1, quantity, _get_dotted(entry, quantity) + 1)
+    code, report = _run(cmp, tmp_path, quad)
+    assert (code, report["verdict"]) == (1, "FAIL")
+    assert [(f["index"], f["quantity"]) for f in report["failures"]] == [(1, quantity)]
+    assert "3:2 violated" in report["failures"][0]["reason"]
+
+
+@pytest.mark.parametrize("quantity", ["h2d_bytes.dense", "h2d_bytes.large"])
+def test_dense_and_large_bytes_must_be_equal(cmp, tmp_path, quantity):
+    quad = _quad()
+    entry = quad["A1"][1]["steps"][2]
+    _mutate_step(quad, "A1", 2, quantity, _get_dotted(entry, quantity) + 1)
+    code, report = _run(cmp, tmp_path, quad)
+    assert (code, report["verdict"]) == (1, "FAIL")
+    assert [(f["index"], f["quantity"]) for f in report["failures"]] == [(2, quantity)]
+    assert report["failures"][0]["reason"] == "differs across runs"
+
+
+def _get_dotted(entry, key):
+    for part in key.split("."):
+        entry = entry[part]
+    return entry
+
+
 def test_zero_fetch_count_fails_even_when_3_to_2_holds(cmp, tmp_path):
     quad = _quad()
     for name in RUNS:
@@ -420,3 +463,76 @@ def test_step0_label_requires_every_run_to_have_dropped_caches(cmp, tmp_path, mi
     assert report["timing"]["step0"]["label"] == label
     assert report["timing"]["step0"]["index"] == 0
     assert all(row["index"] >= 1 for row in report["timing"]["later"])
+
+
+def test_two_reads_slower_is_reported_never_judged(cmp, tmp_path):
+    """Timing never changes the verdict, also when two reads are slower: index 1 just over
+    1 in both pairs, index 2 slower in B1/A1 only."""
+    quad = _quad({"A1": [3.0, 2.0, 2.0], "B1": [2.5, 2.01, 2.5],
+                  "B2": [2.5, 2.01, 1.5], "A2": [3.0, 2.0, 2.0]})
+    code, report = _run(cmp, tmp_path, quad)
+    assert (code, report["verdict"], report["failures"]) == (0, "PASS", [])
+    assert [row["class"] for row in report["timing"]["later"]] == \
+        ["two-read slower", "inconclusive"]
+
+
+def test_different_step_counts_refuse(cmp, tmp_path):
+    quad = _quad()
+    quad["B2"][1]["steps"].pop()
+    code, report = _run(cmp, tmp_path, quad)
+    _refused_with(code, report, "step counts differ: A1=3, B1=3, B2=2, A2=3")
+    assert report["failures"] == []
+
+
+@pytest.mark.parametrize("host_path", ["/workspace/out/", "/workspace/out/.",
+                                       "D:\\runs\\..", ""],
+                         ids=["trailing-slash", "dot", "dot-dot", "empty"])
+def test_step_dir_refuses_a_path_with_no_file_name(cmp, tmp_path, host_path):
+    """In ``--step-dir`` mode only the base name is used; ``.``, ``..`` or nothing would
+    name the directory itself or its parent."""
+    paths, published = _moved(tmp_path, _quad(), lambda name: host_path)
+    code = cmp.main(["--runs", *(str(paths[n]) for n in RUNS), "--out", str(tmp_path / "c.json"),
+                     "--step-dir", str(published)])
+    report = json.loads((tmp_path / "c.json").read_text(encoding="utf-8"))
+    needle = ("names no step JSON" if host_path == ""
+              else f"A1: expect_json.path {host_path!r} has no file name")
+    _refused_with(code, report, needle)
+
+
+@pytest.mark.parametrize("key, where", [
+    ("loss", "A1 step 1: loss <integer beyond 2**63> is not a finite number"),
+    ("expert_fetches", "A1 step 1: expert_fetches <integer beyond 2**63> is not an integer"),
+])
+def test_an_integer_too_large_for_a_float_refuses_and_writes_out(cmp, tmp_path, key, where):
+    """JSON integers have no size limit; ``float()`` of 10**400 raises OverflowError and
+    ``str()`` of 4,301 digits raises ValueError. Either must end in a REFUSED report."""
+    quad = _quad()
+    _mutate_step(quad, "A1", 1, key, 9 * 10**4299)
+    code, report = _run(cmp, tmp_path, quad)
+    _refused_with(code, report, where)
+
+
+def test_a_huge_seconds_value_is_reported_as_unusable(cmp, tmp_path):
+    quad = _quad()
+    _mutate_step(quad, "B1", 1, "seconds", 10**400)
+    for name in RUNS:
+        for index in range(3):
+            _mutate_step(quad, name, index, "ssd_read_bytes", 9 * 10**4299)
+    code, report = _run(cmp, tmp_path, quad)
+    assert (code, report["verdict"]) == (0, "PASS")
+    assert report["timing"]["later"][0]["seconds"]["B1"] is None
+    assert report["per_run"]["A1"]["ssd_read_bytes"] is None
+
+
+@pytest.mark.parametrize("peak", ["[/bad]", "\x1b[2J", [1, 2], 10**400])
+def test_a_supervisor_memory_peak_that_is_not_a_number_is_not_printed(cmp, tmp_path, capsys,
+                                                                      peak):
+    """The record's ``memory_peak_bytes`` is untrusted text on its way to a Rich table: a
+    markup tag raised after the report was written and lost the exit code."""
+    quad = _quad()
+    quad["A1"][0]["memory_peak_bytes"] = peak
+    code, report = _run(cmp, tmp_path, quad)
+    assert (code, report["verdict"]) == (0, "PASS")
+    assert report["per_run"]["A1"]["supervisor_memory_peak_bytes"] is None
+    assert report["per_run"]["B1"]["supervisor_memory_peak_bytes"] == 5000
+    assert "\x1b[2J" not in capsys.readouterr().out

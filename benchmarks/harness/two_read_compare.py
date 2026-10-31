@@ -28,7 +28,8 @@ Verdicts and exit codes (``--out`` is written atomically in every case):
   implementation / initial trainable and input-id digests / leaf cgroup read-back /
   series parent path, step counts, complete gradient digests, a finite loss at every
   step: ``float.hex`` gives one string for NaN and for each infinity, so equal non-finite
-  losses would otherwise compare equal). With
+  losses would otherwise compare equal; an integer at or beyond 2**63 counts as no
+  number). With
   ``--memory-max`` / ``--swap-max`` every record's leaf ``cgroup.readback`` and series
   parent ``series.readback`` must show those values; a record without ``series`` (a run
   with no limit on the series parent) refuses, since the leaf limit alone does not count
@@ -39,7 +40,9 @@ Verdicts and exit codes (``--out`` is written atomically in every case):
   large H2D bytes differ among the four, or an A expert quantity times 2 differs from a B
   one times 3 (or is zero) for ``expert_fetches``, ``expert_bytes_read``,
   ``h2d_bytes.experts``. Every failing index and quantity is listed.
-* ``PASS`` (0): otherwise. Timing is reported and never changes the verdict.
+* ``PASS`` (0): otherwise. Timing is reported and never changes the verdict. A reported
+  value that is not a usable number (seconds, a peak, the supervisor's memory peak) is
+  shown as ``-``, never refused.
 
     python benchmarks/harness/two_read_compare.py \\
         --runs A1.run.json B1.run.json B2.run.json A2.run.json --out compare.json \\
@@ -90,12 +93,28 @@ def _get(data: Any, dotted: str, default: Any = _MISSING) -> Any:
     return data
 
 
+#: Larger than any counter a run writes (bytes, fetches, steps). JSON allows integers of any
+#: size; one beyond this counts as a non-number (refused, or ignored where only reported), so
+#: ``float()`` and ``str()`` of these values and of their sums cannot raise.
+_INT_LIMIT = 2**63
+
+
 def _is_int(value: Any) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
+    return (isinstance(value, int) and not isinstance(value, bool)
+            and -_INT_LIMIT < value < _INT_LIMIT)
 
 
 def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return isinstance(value, float) or _is_int(value)
+
+
+def _shown(value: Any) -> str:
+    """``repr`` of a step value for a refusal, cut to 60 characters: a JSON integer can have
+    thousands of digits, and ``repr`` of one past 4,300 digits raises."""
+    if isinstance(value, int) and not isinstance(value, bool) and not _is_int(value):
+        return "<integer beyond 2**63>"
+    text = repr(value)
+    return text if len(text) <= 60 else text[:57] + "..."
 
 
 def _utc() -> str:
@@ -225,16 +244,17 @@ def _per_run_checks(run: Dict[str, Any], refusals: List[str]) -> None:
             refusals.append(f"{where}: not an object")
             continue
         if entry.get("grads_complete") is not True:
-            refusals.append(f"{where}: grads_complete {entry.get('grads_complete')!r}")
+            refusals.append(f"{where}: grads_complete {_shown(entry.get('grads_complete'))}")
         digest = entry.get("lora_grads_sha256")
         if not isinstance(digest, str) or not _HEX64.fullmatch(digest):
-            refusals.append(f"{where}: lora_grads_sha256 {digest!r} is not a 64-hex digest")
+            refusals.append(f"{where}: lora_grads_sha256 {_shown(digest)} is not a 64-hex digest")
         loss = entry.get("loss")
         if not _is_number(loss) or not math.isfinite(loss):
-            refusals.append(f"{where}: loss {loss!r} is not a finite number")
+            refusals.append(f"{where}: loss {_shown(loss)} is not a finite number")
         for key in EXPERT_QUANTITIES + EQUAL_QUANTITIES:
             if not _is_int(_get(entry, key, None)):
-                refusals.append(f"{where}: {key} {_get(entry, key, None)!r} is not an integer")
+                refusals.append(f"{where}: {key} {_shown(_get(entry, key, None))} "
+                                f"is not an integer")
 
 
 def _args_view(step: Dict[str, Any]) -> Any:
@@ -432,6 +452,8 @@ def per_run_for(runs: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     columns = {}
     for name in RUNS:
         entries = runs[name]["step"]["steps"]
+        # Untrusted record text would reach a Rich table cell; only a number is kept.
+        supervisor_peak = runs[name]["record"].get("memory_peak_bytes")
         columns[name] = {
             "expert_bytes_read": _total(entries, "expert_bytes_read"),
             "ssd_read_bytes": _total(entries, "ssd_read_bytes"),
@@ -441,7 +463,8 @@ def per_run_for(runs: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
             "expert_read_seconds": _total(entries, "expert_read_seconds"),
             "nvml_peak_process_bytes_max": _peak(entries, "nvml_peak_process_bytes"),
             "cgroup_memory_peak_bytes_max": _peak(entries, "cgroup_memory_peak_bytes"),
-            "supervisor_memory_peak_bytes": runs[name]["record"].get("memory_peak_bytes"),
+            "supervisor_memory_peak_bytes": (
+                supervisor_peak if _is_number(supervisor_peak) else None),
         }
     return columns
 
