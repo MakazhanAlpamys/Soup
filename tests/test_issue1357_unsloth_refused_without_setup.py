@@ -268,8 +268,8 @@ class TestAsOfV077:
         assert cfg.backend == "transformers"
 
 
-#: Every task that never quantises the base: none of them has a trainer on MLX.
-_UNQUANTISED_WITHOUT_MLX = (*_ALSO_UNQUANTISED, "distill", "asr")
+#: Unquantised tasks without an MLX trainer. Native token distillation now has one.
+_UNQUANTISED_WITHOUT_MLX = (*_ALSO_UNQUANTISED, "asr")
 
 
 class TestOnMlxTheFirstRefusalIsTheWholeWayOut:
@@ -302,10 +302,12 @@ class TestOnMlxTheFirstRefusalIsTheWholeWayOut:
         assert cfg.backend == "transformers"
         assert cfg.training.quantization == "none"
 
-    @pytest.mark.parametrize("task", ["sft", "dpo", "orpo"])
+    @pytest.mark.parametrize("task", ["sft", "dpo", "orpo", "distill"])
     def test_a_task_with_an_mlx_trainer_gets_no_backend_clause(self, task):
-        """Control: these quantise, so #795 never refuses them; the clause itself is
-        only for a task MLX has no trainer for."""
+        """The backend clause is only for tasks without a native trainer.
+
+        Distillation resolves its unset quantization default to none.
+        """
         from soup_cli.config.schema import _refused_backend_clause
 
         cfg = load_config_from_string(_yaml(task, "mlx"))

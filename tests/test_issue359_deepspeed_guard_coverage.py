@@ -37,6 +37,7 @@ _DEEPSPEED_REFUSING = {
     "csm.py",
     # #1976: names deepspeed_config only to refuse it in __init__ (one MLX process).
     "mlx_grpo.py",
+    "mlx_distill.py",
 }
 
 
@@ -454,7 +455,7 @@ def test_deepspeed_refusing_exemption_is_earned():
     from soup_cli.config.schema import SoupConfig
     from soup_cli.trainer.csm import CSMTrainerWrapper
 
-    assert _DEEPSPEED_REFUSING == {"csm.py", "mlx_grpo.py"}
+    assert _DEEPSPEED_REFUSING == {"csm.py", "mlx_grpo.py", "mlx_distill.py"}
     config = SoupConfig(
         base="sesame/csm-1b", task="tts", modality="audio_out",
         data={"train": "speech.jsonl", "format": "audio"},
@@ -477,3 +478,17 @@ def test_mlx_grpo_deepspeed_refusal_is_earned():
     )
     with pytest.raises(ValueError, match="--deepspeed is not supported"):
         MLXGRPOTrainerWrapper(config, device="mps", deepspeed_config="ds.json")
+
+
+def test_mlx_distill_deepspeed_refusal_is_earned():
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.trainer.mlx_distill import MLXDistillTrainerWrapper
+
+    cfg = SoupConfig(
+        base="local/student", task="distill", backend="mlx", data={"train": "text.jsonl"},
+        training={"teacher_model": "local/teacher", "quantization": "none"},
+    )
+    wrapper = MLXDistillTrainerWrapper(cfg, deepspeed_config="ds.json")
+    with pytest.raises(ValueError, match="distributed"):
+        wrapper.setup({})
+    assert wrapper.model is None and wrapper.trainer is None

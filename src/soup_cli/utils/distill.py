@@ -209,7 +209,6 @@ def validate_distill_compat(
 
     Rejects:
     - non-distill task.
-    - ``backend == 'mlx'`` (no MLX teacher-load path yet).
     - ``backend == 'unsloth'`` (the trainer never reads the backend).
     - missing teacher_model — distillation is meaningless without one.
     """
@@ -222,10 +221,6 @@ def validate_distill_compat(
         raise ValueError(
             f"validate_distill_compat called with task={task!r} "
             "(expected 'distill')"
-        )
-    if backend == "mlx":
-        raise ValueError(
-            "task='distill' is not supported on backend=mlx in v0.52.0"
         )
     if backend == "unsloth":
         raise ValueError(

@@ -499,7 +499,7 @@ class TestEveryTaskIsAccountedFor:
         assert not stale, f"{sorted(stale)} are listed here but not in the schema"
 
 
-#: Trainer modules that define a `setup()` and legitimately do not seed in it,
+#: Trainer modules that legitimately do not call the Transformers seed helper,
 #: each with the reason. Everything else with a `setup()` must seed, and
 #: `_MODULES` is derived rather than written out: the first version of this
 #: guard WAS a hand-written tuple, and it shipped eighteen names long against
@@ -516,6 +516,9 @@ _NOT_SEEDED = {
     "mlx_sft": "seeds mx.random and numpy in train(), where the adapter is "
                "built (#1850; tests/test_mlx_sft_seed.py)",
     "mlx_grpo": "MLX backend, which seeds nothing on any path yet",
+    "mlx_distill": "Native mx.random.seed before model construction and a NumPy data sampler; "
+                   "no TrainingArguments. Real initialization/order tests and native CI in "
+                   "test_mlx_distill_runtime_native.py cover this separate RNG contract",
 }
 
 
