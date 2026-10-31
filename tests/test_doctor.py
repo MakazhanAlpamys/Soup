@@ -1172,3 +1172,121 @@ def test_doctor_load_error_exception_exits_2(monkeypatch):
     assert "Config could not be loaded: disk read failed" in out
     assert "All checks passed!" not in out
 
+
+# --- #2237: soup doctor --disk probes layer cache root instead of "." ---
+
+
+def test_doctor_disk_probes_configured_cache_dir_and_shows_path(tmp_path, monkeypatch):
+    """With SOUP_LAYER_STREAM_CACHE_DIR set, --disk probes that folder and displays it (#2237)."""
+    import os
+    from types import SimpleNamespace
+
+    from rich.console import Console
+
+    _mock_clean_doctor_env(monkeypatch)
+    monkeypatch.setattr("soup_cli.commands.doctor.console", Console(width=400))
+    cache_dir = tmp_path / "layer_cache_vol"
+    cache_dir.mkdir()
+    expected_root = os.path.realpath(str(cache_dir))
+    monkeypatch.setenv("SOUP_LAYER_STREAM_CACHE_DIR", str(cache_dir))
+
+    usage_paths: list[str] = []
+    probe_paths: list[str] = []
+
+    def _fake_disk_usage(path):
+        usage_paths.append(str(path))
+        return SimpleNamespace(total=500 * 1024**3, used=100 * 1024**3, free=400 * 1024**3)
+
+    def _fake_detect_disk_kind(path="."):
+        probe_paths.append(str(path))
+        return "nvme"
+
+    monkeypatch.setattr("shutil.disk_usage", _fake_disk_usage)
+    monkeypatch.setattr("soup_cli.utils.layer_stream.detect_disk_kind", _fake_detect_disk_kind)
+
+    result = runner.invoke(app, ["doctor", "--disk"])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert usage_paths == [expected_root]
+    assert probe_paths == [expected_root]
+
+    plain = _plain(result.output)
+    assert f"NVMe (cache: {expected_root})" in plain
+
+
+def test_doctor_disk_probes_default_cache_root_when_env_unset(tmp_path, monkeypatch):
+    """With SOUP_LAYER_STREAM_CACHE_DIR unset, --disk probes the default cache root (#2237)."""
+    from types import SimpleNamespace
+
+    from rich.console import Console
+
+    from soup_cli.utils.layer_shard import default_layer_stream_cache_dir
+
+    _mock_clean_doctor_env(monkeypatch)
+    monkeypatch.setattr("soup_cli.commands.doctor.console", Console(width=400))
+    monkeypatch.delenv("SOUP_LAYER_STREAM_CACHE_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+
+    default_root = default_layer_stream_cache_dir()
+    usage_paths: list[str] = []
+    probe_paths: list[str] = []
+
+    def _fake_disk_usage(path):
+        usage_paths.append(str(path))
+        return SimpleNamespace(total=500 * 1024**3, used=100 * 1024**3, free=400 * 1024**3)
+
+    def _fake_detect_disk_kind(path="."):
+        probe_paths.append(str(path))
+        return "ssd"
+
+    monkeypatch.setattr("shutil.disk_usage", _fake_disk_usage)
+    monkeypatch.setattr("soup_cli.utils.layer_stream.detect_disk_kind", _fake_detect_disk_kind)
+
+    result = runner.invoke(app, ["doctor", "--disk"])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert usage_paths == [str(tmp_path)]
+    assert probe_paths == [str(tmp_path)]
+
+    plain = _plain(result.output)
+    assert f"SATA SSD (cache: {default_root})" in plain
+
+
+def test_doctor_disk_does_not_create_missing_cache_root(tmp_path, monkeypatch):
+    """A missing cache root is not created by doctor; nearest parent is probed (#2237)."""
+    import os
+    from types import SimpleNamespace
+
+    from rich.console import Console
+
+    _mock_clean_doctor_env(monkeypatch)
+    monkeypatch.setattr("soup_cli.commands.doctor.console", Console(width=400))
+    missing_cache = tmp_path / "not_created_yet" / "layer-stream"
+    expected_root = os.path.realpath(str(missing_cache))
+    expected_parent = os.path.realpath(str(tmp_path))
+    monkeypatch.setenv("SOUP_LAYER_STREAM_CACHE_DIR", str(missing_cache))
+
+    usage_paths: list[str] = []
+    probe_paths: list[str] = []
+
+    def _fake_disk_usage(path):
+        usage_paths.append(str(path))
+        return SimpleNamespace(total=500 * 1024**3, used=100 * 1024**3, free=400 * 1024**3)
+
+    def _fake_detect_disk_kind(path="."):
+        probe_paths.append(str(path))
+        return "nvme"
+
+    monkeypatch.setattr("shutil.disk_usage", _fake_disk_usage)
+    monkeypatch.setattr("soup_cli.utils.layer_stream.detect_disk_kind", _fake_detect_disk_kind)
+
+    result = runner.invoke(app, ["doctor", "--disk"])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert not missing_cache.exists()
+    assert not missing_cache.parent.exists()
+    assert usage_paths == [expected_parent]
+    assert probe_paths == [expected_parent]
+
+    plain = _plain(result.output)
+    assert f"NVMe (cache: {expected_root})" in plain
+
+

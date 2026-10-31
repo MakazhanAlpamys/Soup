@@ -1802,7 +1802,7 @@ Usage: `soup doctor [OPTIONS]`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `--nccl` | flag | off |  | Measure NCCL bandwidth and check against reference table. |
-| `--disk` | flag | off |  | Detect the disk media type (NVMe / SSD / HDD). Layer streaming's disk overflow tier needs NVMe. Off by default: the probe costs \~9 s on Windows, and on Linux it WRITES a \~64 MiB scratch file (.soup-diskprobe-\*, git-ignored) into the current directory to measure sequential read throughput. |
+| `--disk` | flag | off |  | Detect the disk media type (NVMe / SSD / HDD). Layer streaming's disk overflow tier needs NVMe. Off by default: the probe costs \~9 s on Windows, and on Linux it WRITES a \~64 MiB scratch file (.soup-diskprobe-\*, git-ignored) into the layer cache folder (SOUP_LAYER_STREAM_CACHE_DIR or \~/.soup/layer-stream) to measure sequential read throughput. |
 | `--config`, `-c` | text |  |  | Also check a soup.yaml: report which of the settings it actually sets are not read on its task and backend (#755). |
 
 ## `soup draft`
