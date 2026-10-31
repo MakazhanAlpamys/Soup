@@ -1159,6 +1159,9 @@ Listed by first contribution. PR numbers link the work.
 - **Baktiyar Ablaikhan** ([@sronters](https://github.com/sronters))
   - First contribution. Setting `KBIT_LOGITS_EXTRA_BYTES`, the 2 extra bytes per logit element a 4-bit or 8-bit run is charged for its fp32 output head, to 0 left `tests/test_vram_estimate.py` green. They added a test for both quantizations that compares the run with the same run at 16 bits and writes the expected 2 bytes as a literal, so a change to the constant fails it; 10 of 10 one-at-a-time changes to the logits charge are caught ([#2304](https://github.com/MakazhanAlpamys/Soup/issues/2304), [#2351](https://github.com/MakazhanAlpamys/Soup/pull/2351))
 
+- **Mayuri** ([@mayuriphad](https://github.com/mayuriphad))
+  - First contribution. On the MLX backend, `soup train --resume` for DPO took any adapter whose tensor names matched as a warm start, so one trained for ORPO or SFT, or on another base model, was accepted, while ORPO, SimPO and KTO already refused it. They moved ORPO's check up into the DPO wrapper, so all four objectives share one check that runs before any tensor loads, removed KTO's copy with its messages unchanged, and stated in the docs and the changelog that a DPO run can no longer resume from an MLX SFT adapter. The tests run the check for all four wrappers without MLX, with five metadata changes each and each wrapper's own name pinned, and resume a real MLX DPO run from edited metadata on Apple Silicon; with `main`'s trainer files the five DPO cases fail, and six one-at-a-time changes to the check are caught without MLX ([#2232](https://github.com/MakazhanAlpamys/Soup/issues/2232), [#2321](https://github.com/MakazhanAlpamys/Soup/pull/2321))
+
 ---
 
 Want to join this list? See [CONTRIBUTING.md](CONTRIBUTING.md) — good first issues are
