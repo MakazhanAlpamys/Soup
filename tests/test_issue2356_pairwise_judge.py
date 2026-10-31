@@ -9,8 +9,6 @@ Verifies that `_parse_pairwise`:
 
 from __future__ import annotations
 
-import pytest
-
 from soup_cli.eval.judge import _parse_pairwise, pairwise_compare
 
 
@@ -119,7 +117,8 @@ class TestPairwiseCompareRegression:
                     return 1  # B wins
                 return -1  # Tie
         judge = _LongerWins()
-        # A is longer -> first says 0 (A wins), second (swapped) says 1 (B wins) -> but B is now the longer one -> agreement
+        # A is longer -> first says 0 (A wins), second (swapped) says
+        # 1 (B wins) -> but B is now the longer one -> agreement
         result = pairwise_compare("p", "longer", "short", judge, swap=True)
         assert result == 0  # longer (A) wins
 
@@ -138,9 +137,10 @@ class TestRegressionCase:
         class _BaseWins:
             def compare_pair(self, prompt, resp_a, resp_b):
                 return 0  # Always first response
-        judge = _BaseWins()
+        _BaseWins()
         # With swap=True, first call (base, tuned) -> 0 (base wins)
         # Second call (tuned, base) -> 0 (tuned wins)
         # Disagreement -> -1 (tie), not a tuned win
         result = pairwise_compare("p", "base_resp", "tuned_resp", _BaseWins(), swap=True)
         assert result == -1  # Disagreement, not a tuned win
+
