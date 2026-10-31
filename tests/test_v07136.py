@@ -256,6 +256,65 @@ class TestEmbedTexts:
         with pytest.raises(ValueError, match="cannot verify pooling"):
             embed.embed_texts(["hello"], model_id="org/unverified-encoder")
 
+    def test_embed_texts_default_device_resolves_to_valid_backend(self, monkeypatch):
+        """Regression for #2279: default device='auto' resolves compute target."""
+        import sys
+        import types
+
+        from soup_cli.utils import embed, live_eval
+
+        monkeypatch.setattr(embed, "resolve_pooling", lambda mid: "mean")
+
+        recorded_devices = []
+
+        class DummyModel:
+            def to(self, dev):
+                recorded_devices.append(dev)
+                return self
+
+            def eval(self):
+                return self
+
+            def __call__(self, **kwargs):
+                return types.SimpleNamespace(last_hidden_state=None)
+
+        class DummyTokenizer:
+            def __call__(self, *args, **kwargs):
+                class BatchEnc(dict):
+                    def to(self, dev):
+                        return {
+                            "input_ids": None,
+                            "attention_mask": None,
+                        }
+
+                return BatchEnc()
+
+        fake_tf = types.ModuleType("transformers")
+        fake_tok_cls = types.SimpleNamespace(
+            from_pretrained=lambda *a, **k: DummyTokenizer()
+        )
+        fake_model_cls = types.SimpleNamespace(
+            from_pretrained=lambda *a, **k: DummyModel()
+        )
+        fake_tf.AutoTokenizer = fake_tok_cls
+        fake_tf.AutoModel = fake_model_cls
+        monkeypatch.setitem(sys.modules, "transformers", fake_tf)
+
+        monkeypatch.setattr(
+            embed,
+            "_mean_pool",
+            lambda *a, **k: types.SimpleNamespace(
+                float=lambda: types.SimpleNamespace(
+                    cpu=lambda: types.SimpleNamespace(numpy=lambda: [[0.0]])
+                )
+            ),
+        )
+
+        embed.embed_texts(["hello world"])
+        assert len(recorded_devices) >= 1
+        assert "auto" not in recorded_devices
+        assert recorded_devices[0] == live_eval.resolve_device(None)
+
 
 class TestGreedySemdedup:
     def _vecs(self, rows):
