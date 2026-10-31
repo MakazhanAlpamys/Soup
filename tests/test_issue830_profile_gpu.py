@@ -14,13 +14,13 @@ import re
 
 import pytest
 from rich.console import Console
-from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.mcp_server import registry as reg
 from soup_cli.utils.profiler import GPU_MEMORY, normalize_gpu_key
+from tests.conftest import make_cli_runner
 
-runner = CliRunner()
+runner = make_cli_runner()
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -51,7 +51,7 @@ _NEW_IN_ISSUE_830 = {
 
 def _json(result) -> dict:
     # Rich highlights JSON when colour is forced (FORCE_COLOR=1), so strip it.
-    return json.loads(_ANSI.sub("", result.output))
+    return json.loads(_ANSI.sub("", result.stdout))
 
 
 _CONFIG = (
@@ -107,6 +107,8 @@ def test_json_says_the_gpu_memory_was_assumed(config_file, no_gpu):
 
 
 def test_a_detected_gpu_is_still_a_real_verdict(config_file, monkeypatch):
+    # A CUDA card: on Apple Silicon (the macOS runners) the limit is Metal's working set.
+    monkeypatch.setattr("soup_cli.utils.mlx.is_apple_silicon", lambda: False)
     monkeypatch.setattr(
         "soup_cli.utils.gpu.get_gpu_info",
         lambda: {"memory_total_bytes": 8 * 1024**3, "memory_total": "8 GB", "gpu_count": 1},

@@ -160,6 +160,9 @@ def render_lambda_stub(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         "mkdir -p /home/ubuntu/soup\n"
+        # #2234 - the log exists before the first step that can fail, so a failed
+        # install is visible in the tail the controller fetches on a non-zero exit.
+        ": > /home/ubuntu/soup/train.log\n"
         "finish() {\n"
         "  rc=$?\n"
         "  printf '%s\\n' \"$rc\" > /home/ubuntu/soup.exit\n"
@@ -168,12 +171,12 @@ def render_lambda_stub(
         "  exit \"$rc\"\n"
         "}\n"
         "trap finish EXIT\n"
-        "apt-get update\n"
-        "apt-get install -y python3-pip\n"
-        f"python3 -m pip install {pip_spec!r}\n"
+        "apt-get update 2>&1 | tee -a /home/ubuntu/soup/train.log\n"
+        "apt-get install -y python3-pip 2>&1 | tee -a /home/ubuntu/soup/train.log\n"
+        f"python3 -m pip install {pip_spec!r} 2>&1 | tee -a /home/ubuntu/soup/train.log\n"
         "cd /home/ubuntu/soup\n"
         f"printf '%s' {cfg_b64!r} | base64 -d > soup.yaml\n"
-        "soup train --config soup.yaml --yes 2>&1 | tee /home/ubuntu/soup/train.log\n"
+        "soup train --config soup.yaml --yes 2>&1 | tee -a /home/ubuntu/soup/train.log\n"
     )
 
     lines = [

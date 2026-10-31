@@ -4,11 +4,19 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 
 import pytest
 from typer.testing import CliRunner
 
+from tests.conftest import strip_ansi
+
 runner = CliRunner()
+
+
+def _plain(text: str) -> str:
+    """Strip ANSI codes and collapse whitespace: Rich wraps at 80 columns."""
+    return re.sub(r"\s+", " ", strip_ansi(text)).strip()
 
 
 def test_module_imports():
@@ -327,3 +335,117 @@ def test_cli_ab_outside_cwd_rejected(tmp_path, monkeypatch):
     finally:
         if outside.exists():
             outside.unlink()
+
+
+# ---------------------------------------------------------------------------
+# #1818 — skipped rows are counted, not silently dropped
+# ---------------------------------------------------------------------------
+
+
+def test_read_msprt_rows_counts_every_skip_reason(tmp_path, monkeypatch):
+    from soup_cli.utils.ab_test import (
+        SKIP_ARM,
+        SKIP_INVALID_JSON,
+        SKIP_METRIC,
+        SKIP_NOT_FINITE,
+        SKIP_NOT_OBJECT,
+        MsprtConfig,
+        read_msprt_rows,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    inp = tmp_path / "ab.jsonl"
+    inp.write_text(
+        "\n".join(
+            [
+                json.dumps({"arm": "control", "latency": 1.0}),
+                json.dumps({"arm": "treatment", "latency": 2.0}),
+                "{not json",
+                "[1, 2]",
+                json.dumps({"latency": 1.0}),
+                json.dumps({"arm": "Control", "latency": 3.0}),
+                json.dumps({"arm": "treatment"}),
+                json.dumps({"arm": "control", "latency": "fast"}),
+                '{"arm": "control", "latency": NaN}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    rows = read_msprt_rows(str(inp), config=MsprtConfig(metric="latency"))
+
+    assert rows.control == (1.0,)
+    assert rows.treatment == (2.0,)
+    assert rows.skipped == {
+        SKIP_INVALID_JSON: 1,
+        SKIP_NOT_OBJECT: 1,
+        SKIP_ARM: 2,
+        SKIP_METRIC: 2,
+        SKIP_NOT_FINITE: 1,
+    }
+    assert rows.skipped_note() == (
+        "Skipped rows: 1 invalid JSON, 1 not an object, "
+        "2 arm missing or not control/treatment, "
+        "2 metric missing or non-numeric, 1 metric not finite."
+    )
+
+
+def test_cli_ab_names_the_rows_it_skipped(tmp_path, monkeypatch):
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    inp = tmp_path / "ab.jsonl"
+    inp.write_text(
+        "\n".join(
+            [
+                json.dumps({"arm": "control", "latency": 1.0}),
+                json.dumps({"arm": "treatment", "latency": 2.0}),
+                json.dumps({"latency": 1.0}),
+                json.dumps({"arm": "control"}),
+                json.dumps({"arm": "treatment", "latency": "fast"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        ["ab", "--input", str(inp), "--metric", "latency"],
+    )
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    plain = _plain(result.output)
+    assert "Not enough rows yet" in plain
+    assert (
+        "Skipped rows: 1 arm missing or not control/treatment, "
+        "2 metric missing or non-numeric."
+    ) in plain
+
+
+def test_cli_ab_prints_no_skip_note_when_nothing_was_skipped(tmp_path, monkeypatch):
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    inp = tmp_path / "ab.jsonl"
+    inp.write_text(
+        "\n".join(
+            [
+                json.dumps({"arm": "control", "latency": 1.0}),
+                json.dumps({"arm": "treatment", "latency": 2.0}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        ["ab", "--input", str(inp), "--metric", "latency"],
+    )
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    plain = _plain(result.output)
+    assert "Not enough rows yet" in plain
+    assert "Skipped rows:" not in plain

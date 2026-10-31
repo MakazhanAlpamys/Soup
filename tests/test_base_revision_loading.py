@@ -31,8 +31,13 @@ def test_capture_happens_before_the_loader_reads_the_file(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "runs.db"))
     monkeypatch.setattr("soup_cli.utils.launcher.is_in_distributed", lambda: False)
-    monkeypatch.setattr("soup_cli.utils.gpu.detect_device", lambda: ("cpu", "CPU"))
-    monkeypatch.setattr("soup_cli.utils.gpu.get_gpu_info", lambda: {})
+    monkeypatch.setattr(
+        "soup_cli.commands.train.detect_device", lambda backend=None: ("cpu", "CPU")
+    )
+    monkeypatch.setattr(
+        "soup_cli.commands.train.get_gpu_info",
+        lambda backend=None: {"memory_total": "N/A"},
+    )
     original_bytes = b'{"instruction":"hi", "output":"hello"}\n'
     source = tmp_path / ("data" + suffix)
     source.write_bytes(original_bytes)
@@ -113,13 +118,13 @@ def test_actual_sft_loads_pin_tokenizer_model_and_config(tmp_path, monkeypatch, 
         # AutoTokenizer also reads the redirected local model's config internally.
         return original_config(model_id, **kwargs)
 
-    def model(model_id, *, trust_remote_code, device_map, torch_dtype, config, revision):
+    def model(model_id, *, trust_remote_code, device_map, dtype, config, revision):
         assert model_id == BASE
         assert revision == REVISION
         calls.append("model")
         return original_model(
             local, trust_remote_code=trust_remote_code, device_map=device_map,
-            torch_dtype=torch_dtype, config=config,
+            dtype=dtype, config=config,
         )
 
     monkeypatch.setattr(AutoTokenizer, "from_pretrained", tokenizer)
@@ -209,8 +214,13 @@ def test_dry_run_does_not_capture_training_identity(tmp_path, monkeypatch):
     from soup_cli.cli import app
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("soup_cli.utils.gpu.detect_device", lambda: ("cpu", "CPU"))
-    monkeypatch.setattr("soup_cli.utils.gpu.get_gpu_info", lambda: {})
+    monkeypatch.setattr(
+        "soup_cli.commands.train.detect_device", lambda backend=None: ("cpu", "CPU")
+    )
+    monkeypatch.setattr(
+        "soup_cli.commands.train.get_gpu_info",
+        lambda backend=None: {"memory_total": "N/A"},
+    )
     capture = Mock(side_effect=AssertionError("dry-run must not hash the training source"))
     monkeypatch.setattr("soup_cli.utils.training_identity.capture_training_data_hash", capture)
     (tmp_path / "data.jsonl").write_text(
@@ -244,8 +254,13 @@ def test_train_cli_records_identity_and_writes_final_artifact(
     if mode == "offline":
         monkeypatch.setenv("HF_HUB_OFFLINE", "1")
     monkeypatch.setattr("soup_cli.utils.launcher.is_in_distributed", lambda: mode == "distributed")
-    monkeypatch.setattr("soup_cli.utils.gpu.detect_device", lambda: ("cpu", "CPU"))
-    monkeypatch.setattr("soup_cli.utils.gpu.get_gpu_info", lambda: {})
+    monkeypatch.setattr(
+        "soup_cli.commands.train.detect_device", lambda backend=None: ("cpu", "CPU")
+    )
+    monkeypatch.setattr(
+        "soup_cli.commands.train.get_gpu_info",
+        lambda backend=None: {"memory_total": "N/A"},
+    )
     alternate_snapshot = None
     bound = mode in {"bound", "streaming"} or mode.startswith("distributed")
     if mode.startswith("distributed"):

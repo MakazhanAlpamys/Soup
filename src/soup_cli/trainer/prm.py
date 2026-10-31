@@ -58,7 +58,7 @@ def make_prm_trainer_class(base_cls: type) -> type:
     The factory pattern (with ``lru_cache``) lets us subclass whichever
     HF Trainer the caller supplies without an import-time dependency.
     """
-    from soup_cli.utils.prm import compute_prm_loss
+    from soup_cli.utils.prm import compute_prm_loss, forward_takes_logits_to_keep
 
     class _PRMTrainer(base_cls):  # type: ignore[misc, valid-type]
         """HF Trainer subclass for PRM stepwise reward training."""
@@ -82,10 +82,19 @@ def make_prm_trainer_class(base_cls: type) -> type:
             step_positions = inputs["step_positions"]
             labels = inputs["labels"].float()
 
+            # #2368: only ``hidden_states[-1]`` is read, so the LM head runs on the
+            # last position alone where the forward takes ``logits_to_keep``
+            # (checked once on the unwrapped model). The call stays on the
+            # top-level forward, the one Accelerate autocasts (#1235 below).
+            keep_last = getattr(self, "_prm_logits_to_keep", None)
+            if keep_last is None:
+                keep_last = forward_takes_logits_to_keep(self.model)
+                self._prm_logits_to_keep = keep_last
             outputs = model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 output_hidden_states=True,
+                **({"logits_to_keep": 1} if keep_last else {}),
             )
             last_hidden = outputs.hidden_states[-1]  # [B, T, H]
             # Gather hidden states at step_positions.
@@ -292,7 +301,7 @@ class PRMTrainerWrapper:
             # RMSNorm weight at 1.0 never moves), cannot go through the fp16
             # GradScaler on pre-Ampere cards, and makes the Metal optimizer abort
             # on MPS (#564).
-            torch_dtype=resolve_base_load_dtype(self.device, full_finetune=True),
+            dtype=resolve_base_load_dtype(self.device, full_finetune=True),
             **base_revision_kwargs(cfg.base),
         )
         hidden_size = base_model.config.hidden_size

@@ -327,14 +327,19 @@ def _lora_params(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return params
 
 
-def _ran_alpha(record: Dict[str, Any]) -> Optional[float]:
+# scale * sqrt(rank) for alpha 5 is 5.000000000000001. _cmp uses ==.
+_RSLO_ALPHA_DECIMALS = 9
+
+
+def _ran_alpha(record: Dict[str, Any], *, use_rslora: bool = False) -> Optional[float]:
     """The alpha a run used, from whichever shape its writer chose.
 
-    PEFT stores `lora_alpha` directly. MLX stores **`scale`**, which is
-    `alpha / rank` -- there is no `alpha` key at all. Reading one and hoping
-    is how this returned `unknown` for every real MLX adapter: the fixture
-    invented an `alpha` key, the fixture passed, and a live run on Metal
-    showed `lora_parameters = {"rank": 4, "scale": 2.0, ...}`.
+    PEFT stores `lora_alpha` directly. MLX stores **`scale`** and no `alpha`
+    key. Plain LoRA writes `scale = alpha / rank`. When `use_rslora` is set,
+    MLX writes `scale = alpha / sqrt(rank)` instead (#1853). Reading one and
+    hoping is how this returned `unknown` for every real MLX adapter: the
+    fixture invented an `alpha` key, the fixture passed, and a live run on
+    Metal showed `lora_parameters = {"rank": 4, "scale": 2.0, ...}`.
     """
     direct = record.get("lora_alpha")
     if direct is not None:
@@ -348,6 +353,14 @@ def _ran_alpha(record: Dict[str, Any]) -> Optional[float]:
         # raised `TypeError` out of the command. Either way the record carries
         # no readable alpha, which is `unknown`, never agreement.
         return None
+    if use_rslora:
+        # rank <= 0 is unusable for rsLoRA: math.sqrt raises ValueError on a
+        # negative, and a non-positive rank is never a trained rsLoRA shape.
+        # Unreadable values stay `unknown` (via None), never an exception out
+        # of `soup adapters audit` (#2255 review).
+        if rank <= 0:
+            return None
+        return round(scale * math.sqrt(rank), _RSLO_ALPHA_DECIMALS)
     return scale * rank
 
 
@@ -513,7 +526,13 @@ def audit_adapter(config: Dict[str, Any], record: Dict[str, Any]) -> AuditResult
             ran_r = params.get("rank")
         rows.append(_cmp("lora.r", lora["r"], ran_r))
     if "alpha" in lora:
-        rows.append(_cmp("lora.alpha", lora["alpha"], _ran_alpha(record)))
+        rows.append(
+            _cmp(
+                "lora.alpha",
+                lora["alpha"],
+                _ran_alpha(record, use_rslora=lora.get("use_rslora") is True),
+            )
+        )
 
     # #342 — gradient watchdog skip fraction.  Only GRPO runs carry the
     # watchdog; elsewhere the row could never be known.

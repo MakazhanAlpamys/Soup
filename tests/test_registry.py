@@ -734,6 +734,22 @@ class TestTrackerHook:
         store.close()
         tracker.close()
 
+    def test_register_from_uncompleted_run_raises(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "exp.db"))
+        from soup_cli.experiment.tracker import ExperimentTracker
+        from soup_cli.registry.store import RegistryStore
+
+        tracker = ExperimentTracker()
+        run_id = tracker.start_run(
+            config_dict={"base": "llama-3.1-8b", "task": "sft"},
+            device="cpu", device_name="cpu", gpu_info={},
+        )
+        store = RegistryStore(db_path=tmp_path / "reg.db")
+        with pytest.raises(ValueError, match="only a completed run can be registered"):
+            store.register_from_run(tracker, run_id, tag="auto", name="auto-chat")
+        store.close()
+        tracker.close()
+
 
 # ---------------------------------------------------------------------------
 # CLI tests
@@ -802,6 +818,70 @@ class TestRegistryCLI:
                   "--name", "m1", "--tag", "v1"],
         )
         assert result.exit_code != 0, (result.output, repr(result.exception))
+
+    @pytest.mark.parametrize("status", ["failed", "running", "terminated", "launching"])
+    def test_push_rejects_uncompleted_run_statuses(self, tmp_path, monkeypatch, status):
+        self._setup_dbs(tmp_path, monkeypatch)
+        from soup_cli.experiment.tracker import ExperimentTracker
+        from soup_cli.registry.store import RegistryStore
+        from tests.conftest import strip_ansi
+
+        tracker = ExperimentTracker()
+        run_id = tracker.start_run(
+            config_dict={"base": "llama", "task": "sft"},
+            device="cpu", device_name="cpu", gpu_info={},
+        )
+        if status == "running":
+            pass
+        elif status == "failed":
+            tracker.fail_run(run_id, error="diverged")
+        else:
+            tracker._get_conn().execute(
+                "UPDATE runs SET status = ? WHERE run_id = ?", (status, run_id)
+            )
+            tracker._get_conn().commit()
+        tracker.close()
+
+        result = runner.invoke(
+            app, ["registry", "push", "--run-id", run_id,
+                  "--name", "m1", "--tag", "v1"],
+        )
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        message = " ".join(strip_ansi(result.output).split())
+        expected = (
+            f"run {run_id} has status '{status}'; only a completed run can be registered"
+        )
+        assert expected in message
+        with RegistryStore() as store:
+            assert store.list() == []
+
+    def test_push_completed_run_control(self, tmp_path, monkeypatch):
+        self._setup_dbs(tmp_path, monkeypatch)
+        from soup_cli.experiment.tracker import ExperimentTracker
+        from soup_cli.registry.store import RegistryStore
+        from tests.conftest import strip_ansi
+
+        tracker = ExperimentTracker()
+        run_id = tracker.start_run(
+            config_dict={"base": "llama", "task": "sft"},
+            device="cpu", device_name="cpu", gpu_info={},
+        )
+        tracker.finish_run(run_id, 2.0, 0.5, 100, 60.0, str(tmp_path / "out"))
+        tracker.close()
+
+        result = runner.invoke(
+            app, ["registry", "push", "--run-id", run_id,
+                  "--name", "m1", "--tag", "v1"],
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        message = " ".join(strip_ansi(result.output).split())
+        assert "Registered m1:v1" in message
+        with RegistryStore() as store:
+            entries = store.list()
+            assert len(entries) == 1
+            assert entries[0]["name"] == "m1"
+            assert "v1" in entries[0]["tags"]
+            assert entries[0]["run_id"] == run_id
 
     def test_show(self, tmp_path, monkeypatch):
         self._setup_dbs(tmp_path, monkeypatch)

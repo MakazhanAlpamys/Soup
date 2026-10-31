@@ -269,6 +269,10 @@ def check(
     """Check a model for memorization of the manifest's canaries."""
     if output is not None:
         _guard_under_cwd(output, "Output")
+        try:
+            ensure_distinct_paths([("--manifest", manifest)], [("--output", output)])
+        except ValueError as exc:
+            _refuse(str(exc))
     try:
         canaries = load_manifest(manifest)
     except (ValueError, OSError) as exc:

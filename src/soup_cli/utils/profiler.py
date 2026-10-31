@@ -75,6 +75,35 @@ GPU_MEMORY: dict[str, int] = {
 # no --gpu and no device is detected. Always reported as assumed, not measured.
 ASSUMED_GPU_MEMORY_GB = 24.0
 
+#: ``gpu_memory_source`` when the memory is Metal's recommended working set (#2049).
+MLX_WORKING_SET_SOURCE = "mlx working set"
+
+
+def detected_gpu_memory() -> tuple[float, str]:
+    """The card's memory in GiB and its source, with no ``--gpu``.
+
+    On Apple Silicon that is Metal's recommended working set (``"mlx working
+    set"``), never the total unified memory; elsewhere the CUDA device
+    (``"detected"``). Neither: ``ASSUMED_GPU_MEMORY_GB``, ``"assumed"``.
+    """
+    from soup_cli.utils import mlx
+
+    if mlx.is_apple_silicon():
+        working_set = mlx.get_mlx_working_set_bytes()
+        if working_set:
+            return working_set / 1024**3, MLX_WORKING_SET_SOURCE
+        return ASSUMED_GPU_MEMORY_GB, "assumed"
+    try:
+        from soup_cli.utils.gpu import get_gpu_info
+
+        mem_bytes = get_gpu_info().get("memory_total_bytes", 0)
+        if mem_bytes > 0:
+            return mem_bytes / (1024**3), "detected"
+    except (ImportError, RuntimeError, OSError):
+        pass
+    return ASSUMED_GPU_MEMORY_GB, "assumed"
+
+
 _GPU_NAME_NOISE = re.compile(r"\b(nvidia|geforce|tesla|gpu)\b")
 # A memory size written as its own word, which the table spells as a suffix.
 _GPU_NAME_SIZE = re.compile(r"[\s-](\d+)\s*gb\b")
@@ -117,149 +146,28 @@ def get_model_arch(model_name: str, model_params_b: float) -> dict:
     }
 
 
-def estimate_model_memory(model_params_b: float, quantization: str) -> float:
-    """Estimate model weight memory in GB.
+def checkpointing_tier(value: Any) -> str:
+    """``off``, ``full``, ``medium`` or ``selective``: the checkpointing a run is priced with.
 
-    Args:
-        model_params_b: Model size in billions of parameters.
-        quantization: '4bit', '8bit', or 'none' (FP16).
-
-    Returns:
-        Estimated memory in GB.
+    ``value`` is what the estimate was given: ``False`` or a tier name, or a config's
+    ``True`` / ``"auto"``, which price as ``full``.
     """
-    bytes_per_param = {"4bit": 0.5, "8bit": 1.0, "none": 2.0}
-    bpp = bytes_per_param.get(quantization, 2.0)
-    return model_params_b * bpp
+    if not value:
+        return "off"
+    return value if value in ("medium", "selective") else "full"
 
 
-def estimate_trainable_params(
-    model_params_b: float, lora_r: int, hidden_size: int
-) -> int:
-    """Estimate number of trainable LoRA parameters.
-
-    LoRA adds r × hidden_size × 2 params per target module.
-    Typical target modules: q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj
-    """
-    num_target_modules = 7  # typical for LLaMA-family
-    arch = get_model_arch("", model_params_b)
-    num_layers = arch["num_layers"]
-
-    # Each module: r * hidden_size (A) + hidden_size * r (B) = 2 * r * hidden_size
-    params_per_layer = num_target_modules * 2 * lora_r * hidden_size
-    return params_per_layer * num_layers
-
-
-def estimate_lora_memory(
-    model_params_b: float, lora_r: int, lora_alpha: int
-) -> float:
-    """Estimate LoRA adapter memory in GB (FP16 for trainable params)."""
-    arch = get_model_arch("", model_params_b)
-    trainable = estimate_trainable_params(model_params_b, lora_r, arch["hidden_size"])
-    # FP16 = 2 bytes per param
-    return trainable * 2 / (1024**3)
-
-
-def estimate_optimizer_memory(trainable_params: int, optimizer: str) -> float:
-    """Estimate optimizer state memory in GB.
-
-    Adam: 2 states per param (mean + variance) = 2 × param_bytes
-    SGD: 1 state (momentum) = 1 × param_bytes
-    8bit Adam: ~0.5 × normal Adam
-    """
-    bytes_per_param = 2  # FP16 trainable params
-
-    if "8bit" in optimizer or "bnb" in optimizer:
-        # 8-bit optimizer states
-        state_multiplier = 1.0  # reduced from 2.0
-    elif "sgd" in optimizer.lower():
-        state_multiplier = 1.0  # only momentum
-    else:
-        # AdamW and similar: mean + variance
-        state_multiplier = 2.0
-
-    total_bytes = trainable_params * bytes_per_param * state_multiplier
-    return total_bytes / (1024**3)
-
-
-def estimate_activation_memory(
-    batch_size: int,
-    seq_len: int,
-    hidden_size: int,
-    num_layers: int,
-    gradient_checkpointing: bool = False,
-) -> float:
-    """Estimate activation memory in GB.
-
-    Activations scale with batch_size × seq_len × hidden_size × num_layers.
-    Gradient checkpointing reduces this by ~sqrt(num_layers).
-    """
-    # ~2 bytes per activation value, ~4 activations per layer per position
-    activation_bytes = batch_size * seq_len * hidden_size * 4 * 2
-
-    if gradient_checkpointing:
-        # Only store activations at checkpoints (sqrt reduction)
-        effective_layers = max(1, int(math.sqrt(num_layers)))
-    else:
-        effective_layers = num_layers
-
-    total_bytes = activation_bytes * effective_layers
-    return total_bytes / (1024**3)
-
-
-def estimate_total(
-    model_name: str,
-    model_params_b: float,
-    quantization: str,
-    lora_r: int,
-    lora_alpha: int,
-    batch_size: int,
-    seq_len: int,
-    optimizer: str,
-    gradient_checkpointing: bool,
-    peft: str = "lora",
+def profile_result(
+    breakdown: Any, *, model_name: str, gradient_checkpointing: Any = None
 ) -> dict:
-    """Compute full memory profile from a parameter count.
-
-    The shared estimate (``utils/vram_estimate.py``) over a shape guessed from
-    ``model_params_b``, so the vocabulary and the logits term are unknown here.
-    ``soup profile`` reads the model's own shape instead (:func:`profile_from_config`).
-    """
-    from soup_cli.utils.hardware_fit import (
-        _VALID_OPTIMIZERS,
-        CONFIG_QUANT_TO_FIT,
-        HardwareFitInput,
-        estimate_peak_vram_gb,
-        validate_batch_size,
-        validate_seq_len,
-    )
-
-    quant = CONFIG_QUANT_TO_FIT.get(quantization, "none")
-    if peft == "full":
-        mode = "full"
-    else:
-        mode = "qlora" if quant == "4bit" else "lora"
-    inp = HardwareFitInput(
-        params_b=float(model_params_b),
-        seq_len=validate_seq_len(min(max(int(seq_len), 64), 1_048_576)),
-        batch_size=validate_batch_size(min(max(int(batch_size), 1), 1024)),
-        optimizer=optimizer if optimizer in _VALID_OPTIMIZERS else "adamw_torch",
-        quant=quant,
-        peft=mode,
-        gradient_checkpointing=gradient_checkpointing,
-        lora_r=int(lora_r),
-    )
-    result = profile_result(estimate_peak_vram_gb(inp), model_name=model_name)
-    result["quantization"] = quantization
-    result["peft"] = peft
-    return result
-
-
-def profile_result(breakdown: Any, *, model_name: str) -> dict:
     """``soup profile``'s result fields from a ``hardware_fit.VRAMBreakdown``.
 
     The old field names keep their meaning (``lora_memory_gb`` is the adapters);
     ``logits_memory_gb``, ``dequant_memory_gb``, the exact byte counts, the shape's
     source and the notes are new with #2049. GB is 1e9 bytes.
+    ``gradient_checkpointing`` is reported as the config wrote it (``True``, ``False``,
+    ``"auto"`` or a tier), as it always was; ``gradient_checkpointing_tier`` is the
+    tier the estimate priced, which ``auto`` and the task resolve.
     """
     est = breakdown.estimate
     shape, run = est.shape, est.run
@@ -279,13 +187,22 @@ def profile_result(breakdown: Any, *, model_name: str) -> dict:
         "activation_memory_gb": round(breakdown.activations_gb, 2),
         "logits_memory_gb": round(breakdown.logits_gb, 2),
         "dequant_memory_gb": round(breakdown.dequant_gb, 2),
+        "optimizer_step_memory_gb": round(breakdown.optimizer_step_gb, 2),
         "overhead_gb": round(breakdown.overhead_gb, 2),
         "total_memory_gb": round(breakdown.total_gb, 2),
         "total_memory_bytes": est.total_bytes,
         "memory_terms_bytes": dict(est.terms),
+        # A full fine-tune has no adapters, so no rank (Spectrum and LISA too, whose
+        # lora.r keeps its default).
+        "lora_r": None if run.peft == "full" else run.lora_r,
         "batch_size": run.batch_size,
         "seq_len": run.seq_len,
-        "gradient_checkpointing": run.gradient_checkpointing,
+        "gradient_checkpointing": (
+            run.gradient_checkpointing
+            if gradient_checkpointing is None
+            else gradient_checkpointing
+        ),
+        "gradient_checkpointing_tier": checkpointing_tier(run.gradient_checkpointing),
         "hidden_size": shape.hidden_size,
         "num_layers": shape.num_layers,
         "vocab_size": shape.vocab_size,
@@ -315,8 +232,144 @@ def profile_from_config(
     )
     if inp is None:
         return None
-    result = profile_result(estimate_peak_vram_gb(inp), model_name=cfg.base)
+    result = profile_result(
+        estimate_peak_vram_gb(inp),
+        model_name=cfg.base,
+        gradient_checkpointing=cfg.training.gradient_checkpointing,
+    )
     result["quantization"] = cfg.training.quantization
+    return result
+
+
+#: ``soup profile --model``'s methods: (quantization as soup.yaml names it, peft mode).
+MODEL_QUERY_METHODS: dict[str, tuple[str, str]] = {
+    "lora": ("none", "lora"),
+    "qlora": ("4bit", "qlora"),
+    "full": ("none", "full"),
+}
+
+#: ``--gradient-checkpointing`` values, as soup.yaml's ``gradient_checkpointing``.
+MODEL_QUERY_CHECKPOINTING: dict[str, Any] = {
+    "off": False,
+    "full": True,
+    "medium": "medium",
+    "selective": "selective",
+    "auto": "auto",
+}
+
+
+class ModelShapeUnavailableError(ValueError):
+    """``--model``'s config.json could not be read, so nothing is estimated."""
+
+
+def _unreadable_reason(model: str, *, allow_network: bool) -> str:
+    import os
+
+    from soup_cli.utils.model_shape import _REPO_ID, hub_offline
+
+    if os.path.isdir(model):
+        return "there is no readable config.json in that directory"
+    if not _REPO_ID.fullmatch(model) or ".." in model:
+        return "it is not a local model directory or a Hugging Face model id"
+    if hub_offline():
+        return (
+            "its config.json is not in the Hugging Face cache, and HF_HUB_OFFLINE "
+            "or TRANSFORMERS_OFFLINE is set"
+        )
+    if not allow_network:
+        return "its config.json is not in the Hugging Face cache"
+    return (
+        "its config.json is not in the Hugging Face cache and could not be fetched "
+        "from the Hub (no network, a gated or private repo, or no such model)"
+    )
+
+
+def profile_from_model(
+    model: str,
+    *,
+    method: str = "qlora",
+    seq_len: int = 2048,
+    batch_size: int = 4,
+    lora_r: int = 64,
+    optimizer: str = "adamw_torch",
+    gradient_checkpointing: str = "off",
+    allow_network: bool = True,
+    gpu_memory_gb: Optional[float] = None,
+) -> dict:
+    """The memory profile of a model id or directory, with no soup.yaml (#2049).
+
+    The same estimate as :func:`profile_from_config` for the same run. The shape must
+    come from the model's own config.json (a local directory, the Hugging Face cache,
+    then the Hub unless offline); a shape guessed from the name is not an answer to
+    "will it fit", so that raises :class:`ModelShapeUnavailableError`. Out-of-range
+    numbers raise ``ValueError``.
+    """
+    from soup_cli.utils.hardware_fit import (
+        HardwareFitInput,
+        checkpointing_for_task,
+        estimate_peak_vram_gb,
+        validate_batch_size,
+        validate_seq_len,
+    )
+    from soup_cli.utils.model_shape import read_model_shape
+
+    quant, peft = MODEL_QUERY_METHODS[method]
+    shape = read_model_shape(model, allow_network=allow_network)
+    if shape.guessed:
+        raise ModelShapeUnavailableError(_unreadable_reason(model, allow_network=allow_network))
+    inp = HardwareFitInput(
+        params_b=shape.params / 1e9,
+        seq_len=validate_seq_len(seq_len),
+        batch_size=validate_batch_size(batch_size),
+        optimizer=optimizer,
+        quant=quant,
+        peft=peft,
+        gradient_checkpointing=checkpointing_for_task(
+            MODEL_QUERY_CHECKPOINTING[gradient_checkpointing],
+            task="sft",
+            gpu_memory_gb=gpu_memory_gb,
+        ),
+        shape=shape,
+        lora_r=lora_r,
+    )
+    result = profile_result(estimate_peak_vram_gb(inp), model_name=model)
+    result["quantization"] = quant
+    return result
+
+
+def finish_profile(
+    result: dict, *, seq_len: int, gpu_memory_gb: float, gpu_memory_source: str
+) -> dict:
+    """Add the speed, the recommendations and the fit to an estimate's ``result``.
+
+    Shared by ``soup profile`` (``--config`` and ``--model``) and the MCP tool.
+    ``gpu_memory_gb`` is the card's GiB.
+    """
+    from soup_cli.utils.vram_estimate import fit_verdict
+
+    tokens_per_sec = estimate_speed(
+        result["model_params_b"], result["quantization"], result["batch_size"]
+    )
+    result["tokens_per_sec"] = round(tokens_per_sec, 1)
+    result["samples_per_sec"] = round(tokens_per_sec / max(seq_len, 1), 2)
+    result["recommended_batch_size"] = recommend_batch_size(
+        result["total_memory_gb"], gpu_memory_gb
+    )
+    result["compatible_gpus"] = recommend_gpu(result["total_memory_gb"])
+    result["gpu_memory_gb"] = gpu_memory_gb
+    # "flag" (--gpu), "detected" (a CUDA device), "mlx working set" (Apple Silicon)
+    # or "assumed" (none of them: a default, not a measurement).
+    result["gpu_memory_source"] = gpu_memory_source
+    # "fits", "tight" (fits, but not with the train pre-flight's margin) or
+    # "does not fit". A card's GB are binary: an "rtx3060laptop" 6 is 6144 MiB.
+    result["fit"] = fit_verdict(result["total_memory_bytes"], gpu_memory_gb * 1024**3)
+    if gpu_memory_source == MLX_WORKING_SET_SOURCE:
+        result["notes"].append(
+            f"Apple Silicon: the fit is against Metal's recommended working-set size "
+            f"({gpu_memory_gb:.1f} GB), not the whole unified memory. The estimate's "
+            "terms were measured with PyTorch on CUDA and are not measured on Apple "
+            "hardware."
+        )
     return result
 
 

@@ -103,9 +103,9 @@ def _runner():
 
     Not sufficient on its own here; see :func:`_pin_console`.
     """
-    from typer.testing import CliRunner
+    from tests.conftest import make_cli_runner
 
-    return CliRunner(env={"COLUMNS": "200"})
+    return make_cli_runner(env={"COLUMNS": "200"})
 
 
 def _pin_console(monkeypatch):
@@ -339,7 +339,7 @@ class TestTheCommand:
 
         cfg = self._write(tmp_path, _mlx_record(optimizer="SGD"), _config())
         res = _runner().invoke(app, ["audit", ".", "--config", cfg.name, "--json"])
-        payload = json.loads(res.output)
+        payload = json.loads(res.stdout)
         assert payload["diverged_count"] == 1
         assert any(r["setting"] == "optimizer" for r in payload["rows"])
 

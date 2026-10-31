@@ -268,7 +268,7 @@ def _load_model(
             base_model,
             trust_remote_code=trc,
             device_map=device_map,
-            torch_dtype=torch_dtype,
+            dtype=torch_dtype,
         )
         model_obj = PeftModel.from_pretrained(base, model_path)
     else:
@@ -276,7 +276,7 @@ def _load_model(
             model_path,
             trust_remote_code=trc,
             device_map=device_map,
-            torch_dtype=torch_dtype,
+            dtype=torch_dtype,
         )
 
     model_obj.eval()

@@ -1539,7 +1539,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         return (mode == "bf16", mode == "fp16")
 
     def _resolve_load_dtype(self, tcfg):
-        """Decide the ``torch_dtype`` kwarg for ``from_pretrained`` (#339, #471, #492).
+        """Decide the ``dtype`` kwarg for ``from_pretrained`` (#339, #471, #492).
 
         Two cases, told apart by the module-level ``is_full_finetune`` (also
         used by ``commands/train.py``'s VRAM pre-flight, so the two cannot
@@ -1569,12 +1569,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
           implementations (#492 review) — this was itself the finding that
           produced #492's helper.
 
-        #492 review — the kwarg name is ``torch_dtype``, not ``dtype``: the
-        latter only exists in transformers>=4.56, and this project's declared
-        floor is >=4.36.0, so ``dtype=`` was a hard ``TypeError`` at model
-        load on every version from the floor to 4.55 (measured live on
-        4.46.1) — not a silent no-op, since transformers only forwards a
-        kwarg into the config if the config already ``hasattr`` it.
+        The loader uses ``dtype`` consistently with the declared Transformers
+        5.16.1 floor (#2200); the former ``torch_dtype`` spelling is deprecated.
+        This changes the argument name, not the precision decision above.
         """
         return resolve_base_load_dtype(
             self.device, full_finetune=is_full_finetune(tcfg)
@@ -1679,7 +1676,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code,
             "device_map": dev_map,
-            "torch_dtype": self._resolve_load_dtype(tcfg),
+            "dtype": self._resolve_load_dtype(tcfg),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -2100,7 +2097,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # mismatch risk as the text path). Routed through the shared
             # method anyway rather than hardcoding a string, so this stays
             # correct by construction if a vision full-FT branch is ever added.
-            "torch_dtype": self._resolve_load_dtype(tcfg),
+            "dtype": self._resolve_load_dtype(tcfg),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -2266,7 +2263,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # schema gates unfrozen_parameters / lisa_enabled / lora.r==0 to
             # modality='text'); still routed through the shared method since
             # #471's pre-Ampere torch.float16 override can still apply here.
-            "torch_dtype": self._resolve_load_dtype(tcfg),
+            "dtype": self._resolve_load_dtype(tcfg),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj

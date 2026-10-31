@@ -1,0 +1,18 @@
+
+base: NousResearch/Meta-Llama-3.1-8B-Instruct
+task: sft
+data:
+  train: train-a.jsonl
+  max_length: 256
+training:
+  epochs: 1
+  batch_size: 1
+  lr: 0.0002
+  logging_steps: 1
+  quantization: 4bit
+  stream_layers: true
+  stream_buffers: 2
+  lora:
+    r: 8
+    alpha: 16
+output: ./out-8b

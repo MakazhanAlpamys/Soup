@@ -207,9 +207,11 @@ def aider(
     from soup_cli.eval.aider_polyglot import (
         AiderEvalError,
         build_docker_command,
+        new_container_name,
         parse_aider_results,
         preflight_docker,
         prepare_output_dir,
+        remove_container,
         validate_exercises_dir,
         write_soup_result,
     )
@@ -230,6 +232,7 @@ def aider(
         corpus_dir = validate_exercises_dir(exercises_dir)
         corpus_outside_cwd = not is_under_cwd(corpus_dir)
         docker = preflight_docker(image)
+        container_name = new_container_name()
         command = build_docker_command(
             docker=docker,
             image=image,
@@ -239,6 +242,7 @@ def aider(
             threads=threads,
             num_tests=num_tests,
             allow_host_services=allow_host_services,
+            container_name=container_name,
         )
     except AiderEvalError as exc:
         if tracker is not None:
@@ -280,7 +284,21 @@ def aider(
         if tracker is not None:
             tracker.close()
         console.print(f"[red]Aider benchmark timed out after {timeout} seconds.[/]")
+        if not remove_container(docker, container_name):
+            console.print(
+                f"[yellow]Could not remove container {escape(container_name)}; "
+                f"remove it with: docker rm -f {escape(container_name)}[/]",
+                soft_wrap=True,
+            )
         raise typer.Exit(1) from exc
+    except KeyboardInterrupt:
+        if not remove_container(docker, container_name):
+            console.print(
+                f"[yellow]Could not remove container {escape(container_name)}; "
+                f"remove it with: docker rm -f {escape(container_name)}[/]",
+                soft_wrap=True,
+            )
+        raise
     except OSError as exc:
         if tracker is not None:
             tracker.close()
@@ -1446,6 +1464,23 @@ def quant_check_cmd(
         console.print(f"[red]--after not found: {resolved_after}[/]")
         raise typer.Exit(EXIT_USAGE_ERROR)
 
+    # Pre-parse --tasks before any model is loaded (#2053): an unparseable
+    # tasks file is a usage error (exit 3) with the loader's message, not a
+    # late ValueError after both models have already been loaded. The parsed
+    # list is handed to run_quant_check so the file is read once, not once
+    # per model. OSError (FileNotFoundError, IsADirectoryError,
+    # PermissionError, ...) and ValueError (bad JSON / schema, decoding)
+    # both mark a file the user wrote as unusable.
+    from soup_cli.eval.custom import load_eval_tasks
+
+    try:
+        pre_tasks = load_eval_tasks(tasks)
+    except (OSError, ValueError) as exc:
+        console.print(
+            f"[red]Cannot load --tasks: {for_terminal(str(exc))}[/]"
+        )
+        raise typer.Exit(EXIT_USAGE_ERROR) from exc
+
     # Live model scoring: build transformers-backed generators per side.
     # Deterministic stubs are used only if --allow-stub is explicitly passed.
     from soup_cli.eval.quant_check import make_model_generator
@@ -1487,7 +1522,7 @@ def quant_check_cmd(
     result = run_quant_check(
         before_gen=before_gen,
         after_gen=after_gen,
-        tasks_file=tasks,
+        tasks=pre_tasks,
         stub=is_stub,
     )
     rendered = render(result, fmt=fmt)
