@@ -9,9 +9,9 @@ evidence boundary visible in one machine-readable result.
 
 Run::
 
-    python benchmarks/harness/grpo_nan_numeric_probes.py --selftest --json
+    python benchmarks/harness/grpo_nan_numeric_probes.py --self-test --json
 
-The Tensor operations are deliberately created on CPU. ``--selftest`` asserts
+The Tensor operations are deliberately created on CPU. ``--self-test`` asserts
 each documented claim and exits non-zero if a supported Torch build changes one
 of these small controls.
 """
@@ -41,6 +41,12 @@ def _all_finite(tensor: Any) -> bool:
     return bool(torch.isfinite(tensor).all())
 
 
+def _check(condition: bool, probe_name: str) -> None:
+    """Validate a probe result condition without bare assert so python -O retains it."""
+    if not condition:
+        raise AssertionError(f"Assertion failed in probe '{probe_name}'")
+
+
 def _split_k_bound() -> dict[str, float | int]:
     """Return the conditional dense-contraction bound used to reject overflow."""
     torch = _torch()
@@ -67,7 +73,7 @@ def _dtype_ranges() -> dict[str, float]:
     }
 
 
-def _constructed_masked_exponential() -> dict[str, bool | float | int]:
+def _constructed_masked_exponential() -> dict[str, Any]:
     """Construct one finite scalar loss whose backward contains ``0 * inf``.
 
     This only proves that an ostensibly masked, overflowing exponential can
@@ -99,6 +105,7 @@ def _constructed_masked_exponential() -> dict[str, bool | float | int]:
         "loss_finite": _all_finite(loss),
         "gradient_finite": _all_finite(gradient),
         "nonfinite_gradient_elements": int((~torch.isfinite(gradient)).sum().item()),
+        "nonfinite_positions": (~torch.isfinite(gradient)).nonzero()[:, 1].tolist(),
     }
 
 
@@ -120,6 +127,7 @@ def _detached_logp_ratio() -> dict[str, bool]:
         "ratio_all_one": bool(torch.equal(ratio, torch.ones_like(ratio))),
         "ratio_finite": _all_finite(ratio),
         "gradient_finite": _all_finite(gradient),
+        "gradient_all_one": bool(torch.equal(gradient, torch.ones_like(gradient))),
     }
 
 
@@ -144,6 +152,24 @@ def _boolean_selection() -> dict[str, bool | float]:
     }
 
 
+def _selection_after_overflow() -> dict[str, bool]:
+    """torch.where after an overflowing exp: finite loss, non-finite gradient."""
+    torch = _torch()
+    log_ratio = torch.tensor(
+        [0.0, 100.0], dtype=torch.bfloat16, requires_grad=True, device="cpu"
+    )
+    selected = torch.where(
+        torch.tensor([True, False], device="cpu"),
+        torch.exp(log_ratio),
+        torch.zeros_like(log_ratio),
+    )
+    loss = selected.sum()
+    loss.backward()
+    gradient = log_ratio.grad
+    assert gradient is not None
+    return {"loss_finite": _all_finite(loss), "gradient_finite": _all_finite(gradient)}
+
+
 def _adamw_skip_semantics() -> dict[str, float | int]:
     """Compare AdamW behavior for ``grad is None`` and an all-zero gradient."""
     torch = _torch()
@@ -153,39 +179,40 @@ def _adamw_skip_semantics() -> dict[str, float | int]:
     zero_optimizer = torch.optim.AdamW([zero_parameter], lr=0.1, weight_decay=0.5)
     none_parameter.grad = None
     zero_parameter.grad = torch.zeros_like(zero_parameter)
+
     none_optimizer.step()
     zero_optimizer.step()
+
     return {
-        "none_grad_weight": float(none_parameter.detach()),
+        "none_grad_weight": float(none_parameter.detach().item()),
         "none_grad_state_entries": len(none_optimizer.state),
-        "zero_grad_weight": float(zero_parameter.detach()),
+        "zero_grad_weight": float(zero_parameter.detach().item()),
         "zero_grad_state_entries": len(zero_optimizer.state),
     }
 
 
 def _nanmean_visibility() -> dict[str, bool | float]:
-    """Show the reporting limitation of a finite ``nanmean`` scalar."""
+    """Demonstrate how torch.nanmean can conceal an invalid token position."""
     torch = _torch()
-    gathered = torch.tensor([float("nan"), 0.242], device="cpu")
+    vector = torch.tensor([0.242, float("nan")], device="cpu")
     return {
-        "input_has_nonfinite": not _all_finite(gathered),
-        "nanmean": float(torch.nanmean(gathered)),
+        "input_has_nonfinite": not _all_finite(vector),
+        "nanmean": float(torch.nanmean(vector).item()),
     }
 
 
 def _view_backward() -> dict[str, bool]:
-    """Check ordinary CPU autograd through the non-contiguous logits-style view."""
+    """Check whether a non-contiguous slice yields a finite CPU backward pass."""
     torch = _torch()
-    generator = torch.Generator(device="cpu").manual_seed(342)
-    hidden_states = torch.randn((2, 8, 4), generator=generator, device="cpu", requires_grad=True)
-    sliced_states = hidden_states[:, -3:, :]
-    projection = torch.nn.Linear(4, 7, device="cpu")
-    projection(sliced_states).sum().backward()
+    hidden = torch.ones((2, 4), dtype=torch.bfloat16, requires_grad=True, device="cpu")
+    transposed_slice = hidden.t()[:2]
+    loss = transposed_slice.sum()
+    loss.backward()
 
-    gradient = hidden_states.grad
+    gradient = hidden.grad
     assert gradient is not None
     return {
-        "slice_is_contiguous": sliced_states.is_contiguous(),
+        "slice_is_contiguous": transposed_slice.is_contiguous(),
         "hidden_gradient_finite": _all_finite(gradient),
     }
 
@@ -195,8 +222,8 @@ def run_probes() -> dict[str, Any]:
     torch = _torch()
     return {
         "evidence_boundary": (
-            "CPU arithmetic and autograd controls only; not an H100 reproduction or root-cause "
-            "determination."
+            "CPU arithmetic and autograd controls only; not an H100 reproduction, SDPA backend "
+            "attribution, or root-cause determination."
         ),
         "execution_device": "cpu",
         "torch_version": torch.__version__,
@@ -205,6 +232,7 @@ def run_probes() -> dict[str, Any]:
         "constructed_masked_exponential": _constructed_masked_exponential(),
         "detached_logp_ratio": _detached_logp_ratio(),
         "boolean_selection": _boolean_selection(),
+        "selection_after_overflow": _selection_after_overflow(),
         "adamw_skip_semantics": _adamw_skip_semantics(),
         "nanmean_visibility": _nanmean_visibility(),
         "view_backward": _view_backward(),
@@ -214,47 +242,77 @@ def run_probes() -> dict[str, Any]:
 def assert_expected_results(results: dict[str, Any]) -> None:
     """Fail loudly if a probe no longer demonstrates its stated narrow claim."""
     split_k = results["split_k_bound"]
-    assert split_k["bound"] == 6_553_600.0
-    assert split_k["orders_below_fp32_max"] > 31.0
+    _check(split_k["bound"] == 6_553_600.0, "split_k_bound.bound")
+    _check(split_k["orders_below_fp32_max"] > 31.0, "split_k_bound.orders_below_fp32_max")
 
     ranges = results["dtype_ranges"]
-    assert ranges["fp16_max"] == 65_504.0
-    assert ranges["bf16_max"] > 1e38
-    assert 88.7 < ranges["ln_bf16_max"] < 88.8
+    _check(ranges["fp16_max"] == 65_504.0, "dtype_ranges.fp16_max")
+    _check(ranges["bf16_max"] > 1e38, "dtype_ranges.bf16_max")
+    _check(88.7 < ranges["ln_bf16_max"] < 88.8, "dtype_ranges.ln_bf16_max")
 
     masked = results["constructed_masked_exponential"]
-    assert masked["loss_finite"] is True
-    assert masked["gradient_finite"] is False
-    assert masked["nonfinite_gradient_elements"] > 0
+    _check(masked["loss_finite"] is True, "constructed_masked_exponential.loss_finite")
+    _check(masked["gradient_finite"] is False, "constructed_masked_exponential.gradient_finite")
+    _check(
+        masked["nonfinite_gradient_elements"] == 1,
+        "constructed_masked_exponential.nonfinite_gradient_elements",
+    )
+    _check(
+        masked["nonfinite_positions"] == [2],
+        "constructed_masked_exponential.nonfinite_positions",
+    )
 
     detached_ratio = results["detached_logp_ratio"]
-    assert detached_ratio["ratio_all_one"] is True
-    assert detached_ratio["ratio_finite"] is True
-    assert detached_ratio["gradient_finite"] is True
+    _check(detached_ratio["ratio_all_one"] is True, "detached_logp_ratio.ratio_all_one")
+    _check(detached_ratio["ratio_finite"] is True, "detached_logp_ratio.ratio_finite")
+    _check(detached_ratio["gradient_finite"] is True, "detached_logp_ratio.gradient_finite")
+    _check(
+        detached_ratio["gradient_all_one"] is True,
+        "detached_logp_ratio.gradient_all_one",
+    )
 
     selection = results["boolean_selection"]
-    assert selection["loss_finite"] is True
-    assert selection["gradient_finite"] is True
-    assert selection["inactive_gradient"] == 0.0
+    _check(selection["loss_finite"] is True, "boolean_selection.loss_finite")
+    _check(selection["gradient_finite"] is True, "boolean_selection.gradient_finite")
+    _check(selection["inactive_gradient"] == 0.0, "boolean_selection.inactive_gradient")
+
+    overflow = results["selection_after_overflow"]
+    _check(overflow["loss_finite"] is True, "selection_after_overflow.loss_finite")
+    _check(overflow["gradient_finite"] is False, "selection_after_overflow.gradient_finite")
 
     adamw = results["adamw_skip_semantics"]
-    assert math.isclose(adamw["none_grad_weight"], 2.0, rel_tol=0.0, abs_tol=1e-6)
-    assert adamw["none_grad_state_entries"] == 0
-    assert math.isclose(adamw["zero_grad_weight"], 1.9, rel_tol=0.0, abs_tol=1e-6)
-    assert adamw["zero_grad_state_entries"] == 1
+    _check(
+        math.isclose(adamw["none_grad_weight"], 2.0, rel_tol=0.0, abs_tol=1e-6),
+        "adamw_skip_semantics.none_grad_weight",
+    )
+    _check(adamw["none_grad_state_entries"] == 0, "adamw_skip_semantics.none_grad_state_entries")
+    _check(
+        math.isclose(adamw["zero_grad_weight"], 1.9, rel_tol=0.0, abs_tol=1e-6),
+        "adamw_skip_semantics.zero_grad_weight",
+    )
+    _check(adamw["zero_grad_state_entries"] == 1, "adamw_skip_semantics.zero_grad_state_entries")
 
     nanmean = results["nanmean_visibility"]
-    assert nanmean["input_has_nonfinite"] is True
-    assert math.isclose(nanmean["nanmean"], 0.242, rel_tol=0.0, abs_tol=1e-6)
+    _check(nanmean["input_has_nonfinite"] is True, "nanmean_visibility.input_has_nonfinite")
+    _check(
+        math.isclose(nanmean["nanmean"], 0.242, rel_tol=0.0, abs_tol=1e-6),
+        "nanmean_visibility.nanmean",
+    )
 
     view = results["view_backward"]
-    assert view["slice_is_contiguous"] is False
-    assert view["hidden_gradient_finite"] is True
+    _check(view["slice_is_contiguous"] is False, "view_backward.slice_is_contiguous")
+    _check(view["hidden_gradient_finite"] is True, "view_backward.hidden_gradient_finite")
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--selftest", action="store_true", help="assert every probe result")
+    parser.add_argument(
+        "--selftest",
+        "--self-test",
+        dest="selftest",
+        action="store_true",
+        help="assert every probe result",
+    )
     parser.add_argument("--json", action="store_true", help="write the result as JSON")
     return parser.parse_args(argv)
 
