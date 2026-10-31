@@ -20,7 +20,9 @@ Every term is in bytes; GB in the output is 1e9 bytes. The terms:
   planner's measured loss arithmetic (``layer_stream.LOGITS_LOSS_BYTES_PER_ELEMENT``).
   A PRM step builds the logits and no loss over them, so it is charged the logits
   alone, the half-precision output and its fp32 copy
-  (``LOGITS_TENSOR_BYTES_PER_ELEMENT``). Checkpointing does not reduce it.
+  (``LOGITS_TENSOR_BYTES_PER_ELEMENT``), on the one position ``logits_to_keep=1``
+  keeps (#2368; every position for ``FULL_LOGITS_MODEL_TYPES`` and remote-code
+  bases). Checkpointing does not reduce it.
 - ``dequant``: under 4-bit loading, the bf16 copy of the largest weight a matmul
   dequantizes.
 - ``overhead``: the CUDA context and allocator slack, which ``max_memory_allocated``
@@ -136,8 +138,25 @@ KBIT_LOGITS_EXTRA_BYTES = 2
 #: The logits a step that builds no loss over them holds at the end of its forward:
 #: the half-precision output autocast builds (2 bytes an element) and the fp32 copy
 #: Accelerate's ``convert_outputs_to_fp32`` makes of it (4), both live at once. What a
-#: PRM step (``RunSpec.logits_loss`` false) is charged.
+#: PRM step (``RunSpec.logits_loss`` false) is charged, per position it keeps.
 LOGITS_TENSOR_BYTES_PER_ELEMENT = 6
+#: #2368: a PRM step passes ``logits_to_keep=1`` where the causal-LM forward takes it,
+#: so its logits cover one position. These causal-LM model types (transformers'
+#: ``MODEL_FOR_CAUSAL_LM_MAPPING_NAMES``) have a forward without the argument and
+#: build the logits at every position. The estimate cannot see a forward, so a
+#: remote-code base (``ModelShape.remote_code``) is charged every position too.
+FULL_LOGITS_MODEL_TYPES = frozenset(
+    {
+        "gemma4_assistant",
+        "gemma4_unified_assistant",
+        "musicgen",
+        "musicgen_melody",
+        "prophetnet",
+        "trocr",
+        "whisper",
+        "xlstm",
+    }
+)
 #: Config flags whose fused loss can avoid building the full logits.
 FUSED_LOSS_FLAGS = frozenset({"use_liger", "use_cut_ce"})
 
@@ -195,7 +214,8 @@ class RunSpec:
     #: embedding head): it builds no logits over the vocabulary.
     lm_head: bool = True
     #: False for a step that builds the logits but no loss over them (a PRM step,
-    #: whose loss comes from a reward head): only the logits tensor is charged.
+    #: whose loss comes from a reward head): only the logits tensor is charged, on
+    #: the positions ``logits_positions`` counts (#2368).
     logits_loss: bool = True
     #: The fused-loss flags set on a run whose trainer applies them
     #: (``use_liger``, ``use_cut_ce``). The logits term is still charged, since
@@ -334,7 +354,10 @@ def logits_bytes(shape: ModelShape, run: RunSpec) -> int:
     the streaming path (``LOGITS_RETENTION_BYTES_PER_ELEMENT``), and it is not charged.
     A step with no loss over the logits (``run.logits_loss`` false: a PRM step) is
     charged the logits alone, ``LOGITS_TENSOR_BYTES_PER_ELEMENT``: the half-precision
-    output and the fp32 copy Accelerate makes of it.
+    output and the fp32 copy Accelerate makes of it. Its forward passes
+    ``logits_to_keep=1`` (#2368), so it is charged one position, except on a model
+    type whose forward lacks the argument (``FULL_LOGITS_MODEL_TYPES``) or a
+    remote-code base, which keep every position (``logits_positions``).
     Under 4-bit and 8-bit loading either charge adds ``KBIT_LOGITS_EXTRA_BYTES``.
     A model without an LM head builds no logits over the vocabulary.
     """
@@ -345,7 +368,24 @@ def logits_bytes(shape: ModelShape, run: RunSpec) -> int:
     per = LOGITS_LOSS_BYTES_PER_ELEMENT if run.logits_loss else LOGITS_TENSOR_BYTES_PER_ELEMENT
     if activation_mode(run) in ("nf4", "int8"):
         per += KBIT_LOGITS_EXTRA_BYTES
-    return math.ceil(shape.vocab_size * run.seq_len * run.batch_size * per)
+    return math.ceil(shape.vocab_size * logits_positions(shape, run) * run.batch_size * per)
+
+
+def logits_positions(shape: ModelShape, run: RunSpec) -> int:
+    """The sequence positions the step's logits cover.
+
+    Every position for a step with a loss over the logits. A PRM step
+    (``run.logits_loss`` false) passes ``logits_to_keep=1`` where the forward takes
+    it, so one position, unless the model type's forward has no such argument
+    (``FULL_LOGITS_MODEL_TYPES``, the outer and the nested text config's type both
+    checked) or the base ships its own code (``shape.remote_code``), whose forward
+    the estimate cannot see: those keep every position, the side of over-pricing.
+    """
+    if run.logits_loss or shape.remote_code:
+        return run.seq_len
+    if {shape.model_type, shape.config_model_type} & FULL_LOGITS_MODEL_TYPES:
+        return run.seq_len
+    return 1
 
 
 def dequant_bytes(shape: ModelShape, run: RunSpec) -> int:
