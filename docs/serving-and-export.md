@@ -69,6 +69,43 @@ training output. Load or export that directory directly; `soup merge` is only
 for adapter-only outputs and must not be used to reconstruct a ReLoRA run.
 
 
+### Native MLX adapter fusion
+
+On Apple Silicon, merge an ordinary native text LoRA into a standalone dense checkpoint:
+
+```bash
+soup merge --backend mlx --adapter ./mlx-adapter --output ./fused --dtype float32
+# Explicit opt-in for a genuinely 4-bit source; output remains dense:
+soup merge --backend mlx --adapter ./mlx-4bit-adapter --output ./fused --dequantize
+soup infer --backend mlx --model ./fused --input prompts.jsonl --output results.jsonl
+```
+
+The shared native loader resolves the saved base identity and validates all adapter
+keys/shapes before applying tensors. `--base`, if supplied, must match that identity.
+Fusion uses MLX-LM's linear LoRA fusion and dequantizes the whole model, including
+untargeted embeddings. `--dtype` chooses float16 (default), bfloat16 or float32;
+`--save-format fp16` names the standard dense format, independently of this dtype.
+`--dequantize` is a no-op for an already dense base. There is no automatic
+requantization. The saved weights, model configuration and
+tokenizer reload without the original base/adapter directories; quantization metadata
+and live adapter tensors are removed, while tied-weight configuration is preserved.
+Saving uses the local base snapshot already loaded, including for a Hub identifier,
+with the same file filters as the model loader; uncached README or repository
+metadata files are not required, including with MLX-LM 0.31.3. It does not fetch a
+Hub README. MLX-LM copies the base's top-level `*.py` files and
+`generation_config.json` when present and generates a local README. An `auto_map`
+entry still requires explicit `--trust-remote-code` when loading the result.
+
+Output must be new, contained under the current directory and disjoint from both
+inputs, including through symlinks. Writes are staged in its parent; failed or
+interrupted saves do not publish an incomplete checkpoint. Inputs remain unchanged.
+DoRA and other unqualified adapter variants, BNB save formats and explicit
+`--double-quant` controls, `--low-memory`, and non-HF hubs are refused on the native path.
+Native fusion loads the full model; it does not implement tensor-streaming merge.
+`--trust-remote-code` remains opt-in. This qualifies the bounded native lifecycle on
+tiny dense/affine 4-bit text fixtures, not general model quality or GGUF conversion.
+
+
 ## Export to GGUF
 
 Export models to GGUF format for use with [Ollama](https://ollama.com/) and [llama.cpp](https://github.com/ggerganov/llama.cpp):
