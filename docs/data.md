@@ -287,6 +287,15 @@ soup data evolve --input seeds.jsonl --provider ollama --model llama3.1 \
 
 Every command applies the project-wide TOCTOU policy (`os.lstat + S_ISLNK` symlink rejection before any open) and cwd containment via the shared `paths.enforce_under_cwd_and_no_symlink` helper. All five are LIVE: `soup build` materialises with five built-in transforms (`identity` / `drop_empty` / `lowercase` / `strip` / `dedup_exact`) and SQLite-tracked incremental re-transform (v0.71.6); `soup data gen-magpie` and provider-backed `best-of-n` harvest via raw completion against `--provider ollama|vllm` (SSRF-validated; `anthropic` rejected because the Messages API has no raw-completion endpoint). Provider-backed `best-of-n` records the sampler provider and model in each row's `_best_of_n` provenance; omit `--provider` to retain the local Transformers `--base` path.
 
+`soup data evolve` and `soup data gen-magpie` report failed Ollama/vLLM calls,
+including transport errors, non-200 replies, malformed or empty completions and
+responses over the byte limit. If no rows survive and any provider call failed,
+they exit 1, name the provider, endpoint and first error, and leave an existing
+output untouched (or create no file). If usable rows survive, they write those
+rows, exit 0 and warn with the failed/total call counts. A reachable provider
+whose successful replies are all filtered out still writes an empty file,
+exits 0 and prints the existing zero-row warning. `--plan-only` makes no requests.
+
 `best-of-n` fsyncs each completed prompt group to a private recovery journal
 (`<output>.checkpoint.jsonl` by default). `--resume` reuses only a sequential
 prefix whose prompt and run-configuration digest matches exactly, so completed

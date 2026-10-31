@@ -3362,7 +3362,13 @@ def gen_magpie(
     from rich.markup import escape as _escape
     from rich.panel import Panel
 
-    from soup_cli.utils.magpie import build_magpie_config, run_magpie
+    from soup_cli.utils.data_forge import ForgeJudgeStats
+    from soup_cli.utils.magpie import (
+        MagpieProviderError,
+        build_magpie_config,
+        magpie_failure_summary,
+        run_magpie,
+    )
 
     try:
         cfg = build_magpie_config(
@@ -3392,13 +3398,18 @@ def gen_magpie(
         console.print("[red]--output is required unless --plan-only is set.[/]")
         raise typer.Exit(2)
 
+    stats = ForgeJudgeStats()
     try:
         result = run_magpie(
             cfg,
             output_path=output,
             base_url=base_url or None,
             max_tokens=max_tokens,
+            stats=stats,
         )
+    except MagpieProviderError as exc:
+        console.print(f"[red]{for_terminal(exc)}[/]")
+        raise typer.Exit(1) from exc
     except (TypeError, ValueError, ImportError) as exc:
         console.print(f"[red]{_escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
@@ -3413,6 +3424,11 @@ def gen_magpie(
             title="soup data gen-magpie — done",
         )
     )
+    if stats.failures:
+        console.print(
+            "[yellow]Warning:[/] "
+            + for_terminal(magpie_failure_summary(stats, cfg.provider, base_url or None))
+        )
     if result.rows_kept == 0:
         console.print(
             "[yellow]Warning:[/] 0 rows generated — is the provider reachable "
@@ -4228,8 +4244,9 @@ def evolve(
     from rich.markup import escape as _escape
     from rich.panel import Panel
 
+    from soup_cli.utils.data_forge import ForgeJudgeStats
     from soup_cli.utils.evolve import STRATEGIES, run_evolve
-    from soup_cli.utils.magpie import make_magpie_generate_fn
+    from soup_cli.utils.magpie import magpie_failure_summary, make_magpie_generate_fn
     from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
 
     if strategy not in STRATEGIES:
@@ -4246,12 +4263,14 @@ def evolve(
         seeds = _evolve_load_prompts(input_path)
         if output:
             enforce_under_cwd_and_no_symlink(output, "--output path")
+        stats = ForgeJudgeStats()
         generate_fn = make_magpie_generate_fn(
             provider,
             model=model,
             base_url=base_url or None,
             temperature=temperature,
             max_tokens=max_tokens,
+            stats=stats,
         )
     except (FileNotFoundError, TypeError, ValueError, ImportError) as exc:
         console.print(f"[red]{_escape(str(exc))}[/]")
@@ -4276,6 +4295,12 @@ def evolve(
         raise typer.Exit(2)
 
     evolved_rows = run_evolve(seeds, strategy, rounds, generate_fn)
+    if not evolved_rows and stats.failures:
+        console.print(
+            "[red]No usable rows produced:[/] "
+            + for_terminal(magpie_failure_summary(stats, provider, base_url or None))
+        )
+        raise typer.Exit(1)
     out_lines = [
         json.dumps(
             {
@@ -4305,6 +4330,11 @@ def evolve(
             title="soup data evolve — done",
         )
     )
+    if stats.failures:
+        console.print(
+            "[yellow]Warning:[/] "
+            + for_terminal(magpie_failure_summary(stats, provider, base_url or None))
+        )
     if not evolved_rows:
         console.print(
             "[yellow]Warning:[/] 0 rows — is the provider reachable and the "
