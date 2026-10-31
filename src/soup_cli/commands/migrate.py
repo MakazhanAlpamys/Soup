@@ -8,7 +8,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.syntax import Syntax
 
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
@@ -63,7 +63,7 @@ def migrate(
     try:
         input_path = validate_input_path(input_path)
     except ValueError as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(1)
 
     # Keep the permissive content check for explicit .jsonl files. For every
@@ -79,7 +79,8 @@ def migrate(
     if is_jsonl:
         console.print(
             f"[red]Expected a {source} YAML config; got JSONL "
-            f"({input_path.name}) — did you pass the wrong file?[/]"
+            f"({for_terminal(input_path.name)}) — did you pass the wrong file?[/]",
+            emoji=False,
         )
         console.print(
             "[dim]Tip: `soup migrate` migrates competitor *configs*, not "
@@ -93,7 +94,7 @@ def migrate(
         try:
             output_path = validate_output_path(output_path)
         except ValueError as exc:
-            console.print(f"[red]{exc}[/]")
+            console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
             raise typer.Exit(1)
 
     # Run migration
@@ -155,8 +156,9 @@ def migrate(
 
     # Check for existing file
     if output_path.exists() and not yes:
+        # Click prints the prompt as plain text, so only the controls are stripped.
         confirm = typer.confirm(
-            f"File '{output}' already exists. Overwrite?"
+            f"File '{strip_control(output)}' already exists. Overwrite?"
         )
         if not confirm:
             console.print("[yellow]Aborted.[/]")
@@ -164,8 +166,9 @@ def migrate(
 
     # Write output
     output_path.write_text(yaml_str, encoding="utf-8")
-    console.print(f"[green]\u2713[/] Config written to [bold]{output}[/]")
-    console.print(f"[dim]Next: soup train --config {output}[/]")
+    display_output = for_terminal(output)
+    console.print(f"[green]\u2713[/] Config written to [bold]{display_output}[/]", emoji=False)
+    console.print(f"[dim]Next: soup train --config {display_output}[/]", emoji=False)
 
 
 def _looks_like_jsonl(path: Path, *, require_multiple_objects: bool = False) -> bool:
