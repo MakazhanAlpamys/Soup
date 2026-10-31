@@ -512,8 +512,8 @@ def test_strict_gate_missing_null_key_uses_generic(work):
 def test_strict_gate_hostile_off_table_key_stays_opaque(work):
     """Off-table hostile key reaches _cleared_of_drift_fields without echoing (#2219)."""
     payload = _produce()
-    evil = "EVILKEY"
-    payload["provenance"]["binding"][evil] = "[31mPRIVATE"
+    evil = "EVIL\x1bKEY"
+    payload["provenance"]["binding"][evil] = "\x1b[31mPRIVATE"
     (work / "bound.json").write_text(json.dumps(payload), encoding="utf-8")
     result = _gate()
     assert result.exit_code == 3, (result.output, result.exception)
@@ -522,7 +522,7 @@ def test_strict_gate_hostile_off_table_key_stays_opaque(work):
     assert _GENERIC_STALE_LINE in diagnostic
     assert "PRIVATE" not in result.output
     assert "EVIL" not in result.output
-    assert "" not in plain
+    assert "\x1b" not in plain
 
 
 def test_strict_gate_suite_label_dedup_and_full_recovery_sentence(work):
