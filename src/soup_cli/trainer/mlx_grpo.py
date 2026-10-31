@@ -543,10 +543,12 @@ BASE_QUANTIZATION_MODE = "affine"
 
 def _is_quantized(module: Any) -> bool:
     """Any quantized kind: nn.QuantizedLinear / QuantizedEmbedding, mlx-lm's
-    QuantizedSwitchLinear, or anything else that stores quantization scales."""
+    QuantizedSwitchLinear, or anything else that stores quantization scales, as
+    ``scales`` or, like mlx-lm's BitNet ``BitLinear``, as ``weight_scale``."""
     import mlx.nn as nn
 
-    return isinstance(module, (nn.QuantizedLinear, nn.QuantizedEmbedding)) or "scales" in module
+    return (isinstance(module, (nn.QuantizedLinear, nn.QuantizedEmbedding))
+            or "scales" in module or "weight_scale" in module)
 
 
 def qualify_base(model: Any, base: str) -> Optional[dict]:
@@ -558,7 +560,8 @@ def qualify_base(model: Any, base: str) -> Optional[dict]:
     layers mlx-lm left dense stay dense. Refused, with the layer's name, kind,
     bits and mode: other bit widths (an 8-bit base, a mixed-bit recipe), the
     ``mxfp4`` / ``mxfp8`` / ``nvfp4`` modes, quantized MoE layers
-    (``QuantizedSwitchLinear``) and any other module that stores scales.
+    (``QuantizedSwitchLinear``), BitNet ``BitLinear`` layers and any other module
+    that stores scales.
     """
     import mlx.nn as nn
 

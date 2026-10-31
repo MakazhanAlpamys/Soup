@@ -441,7 +441,14 @@ right after the load, with the first layer outside the rule and its kind, bits
 and mode:
 - an 8-bit base, or a mixed-bit recipe with any layer that is not 4-bit;
 - `mxfp4`, `mxfp8` and `nvfp4`;
-- quantized MoE expert layers (`QuantizedSwitchLinear`).
+- quantized MoE expert layers (`QuantizedSwitchLinear`);
+- BitNet `BitLinear` layers (a `quantization_config.quant_method: bitnet`
+  checkpoint), whose scale mlx-lm keeps as `weight_scale`.
+
+The rule reads the layers mlx-lm loads, not the checkpoint's format. A GPTQ, AWQ
+or `compressed-tensors` 4-bit checkpoint, which mlx-lm converts on load into
+4-bit `affine` `QuantizedLinear` layers, therefore passes it as well. The native
+tests cover only bases quantized by mlx-lm's own `quantize_model`.
 
 On MLX, `training.quantization` only names the base, since nothing is quantized
 at load, so the base's own layers decide; `quantization: 8bit` stays refused at

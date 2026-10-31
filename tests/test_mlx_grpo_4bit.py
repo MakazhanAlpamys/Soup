@@ -63,14 +63,25 @@ GROUP = 4
 
 
 def _save_base(path, *, bits=4, mode="affine", group_size=32, predicate=None,
-               arch="llama", quantize=True, seed=0):
-    """A tiny random base, quantized by mlx-lm and saved in mlx-lm's format."""
+               arch="llama", quantize=True, bitnet=False, tie=True, seed=0):
+    """A tiny random base, quantized by mlx-lm and saved in mlx-lm's format.
+
+    ``bitnet=True`` converts it with mlx-lm's ``bitnet_quantize`` instead and records
+    ``quantization_config.quant_method: bitnet``, so mlx-lm loads ``BitLinear`` layers.
+    """
     from mlx_lm.utils import quantize_model, save_config, save_model
 
     mx.random.seed(seed)
     family, config = (llama, dict(_LLAMA)) if arch == "llama" else (mixtral, dict(_MIXTRAL))
+    if not tie:
+        config["tie_word_embeddings"] = False
     model = family.Model(family.ModelArgs(**config))
-    if quantize:
+    if bitnet:
+        from mlx_lm.models.bitlinear_layers import bitnet_quantize
+
+        config["quantization_config"] = {"quant_method": "bitnet"}
+        model = bitnet_quantize(model, config["quantization_config"])
+    elif quantize:
         model, config = quantize_model(model, config, group_size, bits, mode=mode,
                                        quant_predicate=predicate)
     path.mkdir(parents=True)
@@ -198,6 +209,17 @@ class TestTheBase:
             _loaded(tmp_path, monkeypatch, base=base)
         assert re.search(found, str(refused.value)), str(refused.value)
         assert str(base) in str(refused.value)
+
+    def test_a_bitnet_base_is_refused_right_after_loading_by_name(self, tmp_path,
+                                                                  monkeypatch):
+        """mlx-lm's BitLinear keeps its scale as ``weight_scale``, not ``scales``."""
+        base = _save_base(tmp_path / "base", bitnet=True)
+        with pytest.raises(ValueError, match="MLX GRPO trains a dense base or one "
+                                             "pre-quantized at 4 bits") as refused:
+            _loaded(tmp_path, monkeypatch, base=base)
+        assert re.search(r"14 layer\(s\) outside it, first: model\.layers\.\d\.\w+\.\w+_proj "
+                         r"\(BitLinear, bits=None, mode=None\)", str(refused.value)), \
+            str(refused.value)
 
     def test_train_checks_the_base_again(self, tmp_path, monkeypatch):
         wrapper = _loaded(tmp_path, monkeypatch)
@@ -523,6 +545,29 @@ class TestTheQuantizedHead:
         assert split is not None
         assert split[1].__self__ is model.model.embed_tokens
         assert isinstance(split[1].__self__, nn.QuantizedEmbedding)
+        tokens, _, start = collate_completions([([3, 4, 5], [6, 7, 8, 9, 10, 2]),
+                                                ([3, 4], [11, 12, 2])])
+        model.eval()
+        full = np.array(completion_token_logps(model, mx.array(tokens), start))
+        chunked = np.array(completion_token_logps(model, mx.array(tokens), start,
+                                                  head_split=split, chunk_size=2))
+        np.testing.assert_allclose(chunked, full, rtol=1e-5, atol=1e-5)
+        assert wrapper._verify_head_split([3, 4, 5, 6, 7]) is not None
+
+    def test_an_untied_head_is_the_quantized_lm_head_and_matches_the_full_forward(
+            self, tmp_path, monkeypatch):
+        """A base with its own ``lm_head``: the chunked head is that 4-bit linear layer."""
+        from soup_cli.trainer.mlx_dpo import resolve_head_split
+        from soup_cli.trainer.mlx_grpo import collate_completions, completion_token_logps
+
+        wrapper = _loaded(tmp_path, monkeypatch, base=_save_base(tmp_path / "base", tie=False))
+        assert wrapper._base_quantization == {**_RECORD, "quantized_linear": 15}
+        model = wrapper.model
+        _random_lora_b(wrapper)(model)
+        split = resolve_head_split(model)
+        assert split is not None
+        assert split[1] is model.lm_head
+        assert isinstance(model.lm_head, nn.QuantizedLinear)
         tokens, _, start = collate_completions([([3, 4, 5], [6, 7, 8, 9, 10, 2]),
                                                 ([3, 4], [11, 12, 2])])
         model.eval()
