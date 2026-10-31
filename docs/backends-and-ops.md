@@ -439,6 +439,39 @@ went from 0.04 to 0.99 as the model learned to work the product out before
 answering. That task is easy and fully verifiable; it shows the loop training,
 not reasoning quality in general.
 
+**Bases.** A dense base, or one pre-quantized by mlx-lm at 4 bits in `affine`
+mode, as `mlx_lm.convert -q` and the `mlx-community/...-4bit` repos write it:
+every quantized layer a `QuantizedLinear` or a `QuantizedEmbedding`, so a tied
+output head runs through the quantized embedding. Layers mlx-lm left dense stay
+dense. The quantized weights, scales and biases stay frozen and only the LoRA
+adapter trains. The run checks that no quantized tensor is trainable once the
+adapter is attached, and refuses before the first update if one is. The same
+loop and objective train both kinds of base. Any other quantized base is refused
+right after the load, with the first layer outside the rule and its kind, bits
+and mode:
+- an 8-bit base, or a mixed-bit recipe with any layer that is not 4-bit;
+- `mxfp4`, `mxfp8` and `nvfp4`;
+- quantized MoE expert layers (`QuantizedSwitchLinear`);
+- BitNet `BitLinear` layers (a `quantization_config.quant_method: bitnet`
+  checkpoint), whose scale mlx-lm keeps as `weight_scale`.
+
+The rule reads the layers mlx-lm loads, not the checkpoint's format. A 4-bit
+GPTQ or AWQ checkpoint, and a `compressed-tensors` one that mlx-lm loads as 4-bit
+`affine` (every one at mlx-lm 0.31.3, only the `pack-quantized` format at
+0.32.2), therefore passes it as well; a `compressed-tensors` checkpoint in an
+`nvfp4` or `mxfp4` format loads in that mode and is refused. The native tests
+cover only bases quantized by mlx-lm's own `quantize_model`.
+
+On MLX, `training.quantization` only names the base, since nothing is quantized
+at load, so the base's own layers decide; `quantization: 8bit` stays refused at
+load. The 4-bit path is covered by native tests on tiny random Llamas that
+mlx-lm's own `quantize_model` quantizes, saved and loaded through `mlx_lm.load`
+(Apple M6, `mlx-lm` 0.31.3 and 0.32.2). They check updates, accumulation,
+gradient checkpointing, checkpoints and a fresh-process reload, quantized tensors
+bit-identical after training, and the loss and gradients against an independent
+reference on the same quantized base. They show behaviour, not quality or speed
+on a real 4-bit model.
+
 | setting | value |
 |---|---|
 | `loss_type` | `dapo`: per-token clipped surrogate, summed over every completion token of the update and divided by that token count (EOS included) |
@@ -472,7 +505,7 @@ training:
   gradient_accumulation_steps: 2
   grpo_beta: 0.1
   lr: 1e-5
-  quantization: none
+  quantization: none         # 4bit with a 4-bit MLX base, e.g. mlx-community/...-4bit
   lora:
     r: 16
     alpha: 32
@@ -513,7 +546,8 @@ The loader does not auto-detect bare `{"prompt", "answer"}` rows; use `messages`
   completion stops the run.
 - **Reference.** With `grpo_beta > 0` the reference is the base model, as TRL
   uses for a PEFT model. It is the policy with every LoRA scale set to 0, run
-  on the generated tokens before each update. No second copy is loaded.
+  on the generated tokens before each update. No second copy is loaded; on a
+  4-bit base the reference is that same frozen quantized base.
 - **Watchdog.** A nonfinite loss or gradient skips the update, as Soup's GRPO
   watchdog does on transformers. The weights and optimizer moments do not
   change. The skip is printed and counted in the result and in
@@ -545,7 +579,10 @@ The loader does not auto-detect bare `{"prompt", "answer"}` rows; use `messages`
   `mlx_lm.load(base, adapter_path=output)`. Both are written atomically, and the
   metadata before the first update. The metadata records every setting in the
   table above, the reward, the advantage epsilon and std, the reference and
-  generation mode, and the skipped-update count. `save_steps` counts updates.
+  generation mode, and the skipped-update count. It also records the base's
+  quantization as `base_quantization`: `bits`, `group_size`, `mode`, and the
+  number of quantized linear and embedding layers, or `null` for a dense base.
+  `save_steps` counts updates.
 - **Cost.** Rollouts dominate: each update samples up to `data.max_length`
   tokens for `num_generations` completions of every prompt. Keep
   `data.max_length` small. With `grpo_beta > 0` each micro-step adds one
@@ -559,9 +596,11 @@ The loader does not auto-detect bare `{"prompt", "answer"}` rows; use `messages`
   streaming.
 - **Refused at launch or after the load:** `--deepspeed` / `--fsdp`, and
   `--resume` / `--hf-resume`: only the adapter is saved, and resume is not
-  implemented for MLX GRPO. A base that loads quantized is refused right after
-  the load. 4-bit bases come in a follow-up. `quantization: 4bit` is Soup's default and, on MLX, only names a
-  pre-quantized base, so a dense base trains with it.
+  implemented for MLX GRPO. A quantized base in any format but 4-bit `affine` is
+  refused right after the load (see **Bases** above), and a quantized tensor left
+  trainable once the adapter is attached is refused before the first update.
+  `quantization: 4bit` is Soup's default and, on MLX, only names a pre-quantized
+  base, so a dense base trains with it too.
 
 #### DoRA on MLX
 
