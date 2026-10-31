@@ -11,14 +11,9 @@ Verifies that the rendered Lambda controller:
 
 from __future__ import annotations
 
-import json
 import subprocess
-import sys
-import time
 import types
 from pathlib import Path
-
-import pytest
 
 from soup_cli.cloud.lambda_labs import render_lambda_stub
 
@@ -45,19 +40,13 @@ def _setup_env(tmp_path: Path, monkeypatch) -> tuple[str, Path]:
 
 def _make_fake_run(success: bool = True):
     """Create a fake_run that simulates successful training (poll returns 0 immediately)."""
-    poll_state = {"calls": 0}
 
     def fake_run(argv, **kw):
         if argv[0] == "ssh":
-            # Check if this is a tail command (contains "tail")
             cmd_str = argv[-1] if argv else ""
             if "tail" in cmd_str:
                 return subprocess.CompletedProcess(argv, 0, "error tail\n", "")
-            # Poll command - return success immediately
-            poll_state["calls"] += 1
-            if success:
-                return subprocess.CompletedProcess(argv, 0, "0\n", "")
-            return subprocess.CompletedProcess(argv, 0, "1\n", "")
+            return subprocess.CompletedProcess(argv, 0, "0\n", "")
         if argv[0] == "scp":
             return subprocess.CompletedProcess(argv, 0, "", "")
         return subprocess.CompletedProcess(argv, 0, "", "")
@@ -86,9 +75,8 @@ def _exec_controller(
     def fake_sleep(seconds: float) -> None:
         clock["now"] += seconds
 
-    # Pass the test's closure lists to fake_request_fn
-    namespace["_request_json"] = lambda api_key, path, *, method="GET", payload=None: fake_request_fn(
-        api_key, path, method=method, payload=payload
+    namespace["_request_json"] = lambda api_key, path, *, method="GET", payload=None: (
+        fake_request_fn(api_key, path, method=method, payload=payload)
     )
     namespace["_wait_for_ip"] = lambda *_: "192.0.2.1"
     namespace["_wait_for_termination"] = lambda *_: None
@@ -133,15 +121,20 @@ class TestLambdaLaunchRecovery:
             return {"data": {}}
 
         fake_run = _make_fake_run(success=True)
-        rc, terms, lkups = _exec_controller(stub, fake_run, fake_request, captured_prints=prints, terminations=terminations, lookups=lookups)
+        rc, terms, lkups = _exec_controller(
+            stub, fake_run, fake_request, captured_prints=prints,
+            terminations=terminations, lookups=lookups
+        )
 
         assert rc == 0
         assert len(terms) == 1
         assert terms[0][2] == {"instance_ids": ["instance-known"]}
-        # No reconciliation lookup for known-ID path
         assert len(lkups) == 0
         assert any("Lambda instance launched: instance-known" in p for p in prints)
-        assert any("Lambda instance termination verified: instance-known" in p for p in prints)
+        assert any(
+            "Lambda instance termination verified: instance-known" in p
+            for p in prints
+        )
 
     def test_definite_rejection_no_cleanup(self, tmp_path: Path, monkeypatch) -> None:
         """Definite rejection: 4xx (except 408) from launch POST means no instance created."""
@@ -152,8 +145,10 @@ class TestLambdaLaunchRecovery:
 
         def fake_request(api_key, path, *, method="GET", payload=None, **_):
             if path.endswith("/launch"):
-                # Simulate 400 Bad Request - definite rejection
-                raise RuntimeError("Lambda API POST /instance-operations/launch failed with HTTP 400: bad request")
+                raise RuntimeError(
+                    "Lambda API POST /instance-operations/launch failed "
+                    "with HTTP 400: bad request"
+                )
             if path.endswith("/terminate"):
                 terminations.append((api_key, path, payload))
                 return {"data": {}}
@@ -163,14 +158,18 @@ class TestLambdaLaunchRecovery:
             return {"data": {}}
 
         fake_run = _make_fake_run(success=True)
-        rc, terms, lkups = _exec_controller(stub, fake_run, fake_request, captured_prints=prints, terminations=terminations, lookups=lookups)
+        rc, terms, lkups = _exec_controller(
+            stub, fake_run, fake_request, captured_prints=prints,
+            terminations=terminations, lookups=lookups
+        )
 
         assert rc == 1
-        # No termination attempted for definite rejection
         assert len(terms) == 0
-        # No reconciliation lookup
         assert len(lkups) == 0
-        assert any("Lambda create request rejected; no instance to clean up" in p for p in prints)
+        assert any(
+            "Lambda create request rejected; no instance to clean up" in p
+            for p in prints
+        )
 
     def test_definite_rejection_404_no_cleanup(self, tmp_path: Path, monkeypatch) -> None:
         """Definite rejection: 404 from launch POST means no instance created."""
@@ -181,7 +180,10 @@ class TestLambdaLaunchRecovery:
 
         def fake_request(api_key, path, *, method="GET", payload=None, **_):
             if path.endswith("/launch"):
-                raise RuntimeError("Lambda API POST /instance-operations/launch failed with HTTP 404: not found")
+                raise RuntimeError(
+                    "Lambda API POST /instance-operations/launch failed "
+                    "with HTTP 404: not found"
+                )
             if path.endswith("/terminate"):
                 terminations.append((api_key, path, payload))
                 return {"data": {}}
@@ -191,44 +193,50 @@ class TestLambdaLaunchRecovery:
             return {"data": {}}
 
         fake_run = _make_fake_run(success=True)
-        rc, terms, lkups = _exec_controller(stub, fake_run, fake_request, captured_prints=prints, terminations=terminations, lookups=lookups)
+        rc, terms, lkups = _exec_controller(
+            stub, fake_run, fake_request, captured_prints=prints,
+            terminations=terminations, lookups=lookups
+        )
 
         assert rc == 1
         assert len(terms) == 0
         assert len(lkups) == 0
-        assert any("Lambda create request rejected; no instance to clean up" in p for p in prints)
+        assert any(
+            "Lambda create request rejected; no instance to clean up" in p
+            for p in prints
+        )
 
     def test_ambiguous_transport_error_reconciles_and_terminates(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        """Ambiguous failure: transport error triggers reconciliation and termination of matching instance."""
+        """Ambiguous failure: transport error triggers reconciliation and termination."""
         stub, _ = _setup_env(tmp_path, monkeypatch)
         prints: list[str] = []
         terminations: list[tuple] = []
         lookups: list[tuple] = []
-
-        # The controller's generated name is in the stub; we need to extract it
-        # or use a predictable one. Since uuid is random, we'll check the payload
-        # sent to launch and the name used in reconciliation.
         launch_payloads: list[dict] = []
 
         def fake_request(api_key, path, *, method="GET", payload=None, **_):
             if path.endswith("/launch"):
                 launch_payloads.append(payload)
-                # Simulate transport error (response lost)
-                raise RuntimeError("Lambda API POST /instance-operations/launch failed with HTTP 500: internal error")
+                raise RuntimeError(
+                    "Lambda API POST /instance-operations/launch failed "
+                    "with HTTP 500: internal error"
+                )
             if path.endswith("/terminate"):
                 terminations.append((api_key, path, payload))
                 return {"data": {}}
             if path == "/instances":
                 lookups.append((api_key, path))
-                # Return the instance with the matching name
                 name = launch_payloads[0].get("name") if launch_payloads else "unknown"
                 return {"data": [{"id": "instance-recovered", "name": name}]}
             return {"data": {}}
 
         fake_run = _make_fake_run(success=True)
-        rc, terms, lkups = _exec_controller(stub, fake_run, fake_request, captured_prints=prints, terminations=terminations, lookups=lookups)
+        rc, terms, lkups = _exec_controller(
+            stub, fake_run, fake_request, captured_prints=prints,
+            terminations=terminations, lookups=lookups
+        )
 
         assert rc == 0
         assert len(launch_payloads) == 1
@@ -237,7 +245,10 @@ class TestLambdaLaunchRecovery:
         assert len(terms) == 1
         assert terms[0][2] == {"instance_ids": ["instance-recovered"]}
         assert len(lkups) == 1
-        assert any("Lambda termination verified for ambiguous launch" in p for p in prints)
+        assert any(
+            "Lambda termination verified for ambiguous launch" in p
+            for p in prints
+        )
 
     def test_ambiguous_malformed_response_reconciles(
         self, tmp_path: Path, monkeypatch
@@ -252,7 +263,6 @@ class TestLambdaLaunchRecovery:
         def fake_request(api_key, path, *, method="GET", payload=None, **_):
             if path.endswith("/launch"):
                 launch_payloads.append(payload)
-                # Return zero IDs - ambiguous
                 return {"data": {"instance_ids": []}}
             if path.endswith("/terminate"):
                 terminations.append((api_key, path, payload))
@@ -264,13 +274,19 @@ class TestLambdaLaunchRecovery:
             return {"data": {}}
 
         fake_run = _make_fake_run(success=True)
-        rc, terms, lkups = _exec_controller(stub, fake_run, fake_request, captured_prints=prints, terminations=terminations, lookups=lookups)
+        rc, terms, lkups = _exec_controller(
+            stub, fake_run, fake_request, captured_prints=prints,
+            terminations=terminations, lookups=lookups
+        )
 
         assert rc == 0
         assert len(terms) == 1
         assert terms[0][2] == {"instance_ids": ["instance-recovered-2"]}
         assert len(lkups) == 1
-        assert any("Lambda termination verified for ambiguous launch" in p for p in prints)
+        assert any(
+            "Lambda termination verified for ambiguous launch" in p
+            for p in prints
+        )
 
     def test_ambiguous_reconciliation_fails_prints_critical(
         self, tmp_path: Path, monkeypatch
@@ -285,24 +301,32 @@ class TestLambdaLaunchRecovery:
         def fake_request(api_key, path, *, method="GET", payload=None, **_):
             if path.endswith("/launch"):
                 launch_payloads.append(payload)
-                raise RuntimeError("Lambda API POST /instance-operations/launch failed with HTTP 503: service unavailable")
+                raise RuntimeError(
+                    "Lambda API POST /instance-operations/launch failed "
+                    "with HTTP 503: service unavailable"
+                )
             if path.endswith("/terminate"):
                 terminations.append((api_key, path, payload))
                 return {"data": {}}
             if path == "/instances":
                 lookups.append((api_key, path))
-                # Return no matching instances (reconciliation fails)
                 return {"data": []}
             return {"data": {}}
 
         fake_run = _make_fake_run(success=True)
-        rc, terms, lkups = _exec_controller(stub, fake_run, fake_request, captured_prints=prints, terminations=terminations, lookups=lookups)
+        rc, terms, lkups = _exec_controller(
+            stub, fake_run, fake_request, captured_prints=prints,
+            terminations=terminations, lookups=lookups
+        )
 
         assert rc == 1
         assert len(terms) == 0
         assert len(lkups) >= 1
         name = launch_payloads[0].get("name") if launch_payloads else "unknown"
-        assert any(f"CRITICAL: Lambda cleanup unconfirmed; check the console for {name}" in p for p in prints)
+        assert any(
+            f"CRITICAL: Lambda cleanup unconfirmed; check the console for {name}" in p
+            for p in prints
+        )
 
     def test_unrelated_instances_not_terminated(
         self, tmp_path: Path, monkeypatch
@@ -317,14 +341,16 @@ class TestLambdaLaunchRecovery:
         def fake_request(api_key, path, *, method="GET", payload=None, **_):
             if path.endswith("/launch"):
                 launch_payloads.append(payload)
-                raise RuntimeError("Lambda API POST /instance-operations/launch failed with HTTP 500: internal error")
+                raise RuntimeError(
+                    "Lambda API POST /instance-operations/launch failed "
+                    "with HTTP 500: internal error"
+                )
             if path.endswith("/terminate"):
                 terminations.append((api_key, path, payload))
                 return {"data": {}}
             if path == "/instances":
                 lookups.append((api_key, path))
                 name = launch_payloads[0].get("name") if launch_payloads else "unknown"
-                # Return one matching and one unrelated instance
                 return {"data": [
                     {"id": "instance-matching", "name": name},
                     {"id": "instance-unrelated", "name": "other-user-instance"},
@@ -332,13 +358,18 @@ class TestLambdaLaunchRecovery:
             return {"data": {}}
 
         fake_run = _make_fake_run(success=True)
-        rc, terms, lkups = _exec_controller(stub, fake_run, fake_request, captured_prints=prints, terminations=terminations, lookups=lookups)
+        rc, terms, lkups = _exec_controller(
+            stub, fake_run, fake_request, captured_prints=prints,
+            terminations=terminations, lookups=lookups
+        )
 
         assert rc == 0
-        # Only the matching instance should be terminated
         assert len(terms) == 1
         assert terms[0][2] == {"instance_ids": ["instance-matching"]}
-        assert any("Lambda termination verified for ambiguous launch" in p for p in prints)
+        assert any(
+            "Lambda termination verified for ambiguous launch" in p
+            for p in prints
+        )
 
     def test_launch_payload_contains_name(self, tmp_path: Path, monkeypatch) -> None:
         """The launch payload includes a unique name field."""
@@ -352,14 +383,12 @@ class TestLambdaLaunchRecovery:
             return {"data": {}}
 
         fake_run = _make_fake_run(success=True)
-        terminations: list[tuple] = []
-        lookups: list[tuple] = []
-        _exec_controller(stub, fake_run, fake_request, terminations=terminations, lookups=lookups)
+        _exec_controller(stub, fake_run, fake_request)
 
         assert len(launch_payloads) == 1
         assert "name" in launch_payloads[0]
         assert launch_payloads[0]["name"].startswith("soup-")
-        assert len(launch_payloads[0]["name"]) <= 64  # Lambda API limit
+        assert len(launch_payloads[0]["name"]) <= 64
 
     def test_408_request_timeout_is_ambiguous(self, tmp_path: Path, monkeypatch) -> None:
         """408 Request Timeout is treated as ambiguous, not definite rejection."""
@@ -372,8 +401,10 @@ class TestLambdaLaunchRecovery:
         def fake_request(api_key, path, *, method="GET", payload=None, **_):
             if path.endswith("/launch"):
                 launch_payloads.append(payload)
-                # 408 is ambiguous - the instance may have been created
-                raise RuntimeError("Lambda API POST /instance-operations/launch failed with HTTP 408: request timeout")
+                raise RuntimeError(
+                    "Lambda API POST /instance-operations/launch failed "
+                    "with HTTP 408: request timeout"
+                )
             if path.endswith("/terminate"):
                 terminations.append((api_key, path, payload))
                 return {"data": {}}
@@ -384,10 +415,16 @@ class TestLambdaLaunchRecovery:
             return {"data": {}}
 
         fake_run = _make_fake_run(success=True)
-        rc, terms, lkups = _exec_controller(stub, fake_run, fake_request, captured_prints=prints, terminations=terminations, lookups=lookups)
+        rc, terms, lkups = _exec_controller(
+            stub, fake_run, fake_request, captured_prints=prints,
+            terminations=terminations, lookups=lookups
+        )
 
         assert rc == 0
         assert len(terms) == 1
         assert terms[0][2] == {"instance_ids": ["instance-408"]}
         assert len(lkups) == 1
-        assert any("Lambda termination verified for ambiguous launch" in p for p in prints)
+        assert any(
+            "Lambda termination verified for ambiguous launch" in p
+            for p in prints
+        )
