@@ -1188,19 +1188,8 @@ def train(
         )
 
     # --- MiniLLM on-policy rollout shortcut (v0.71.18 #257) ---
-    # Applied before SoupConfig validation via load_config(training_overrides=),
-    # so --minillm-on-policy can still select student-only sampling when the
-    # YAML leaves mix at 0 (#692 / #977). The assignment below is therefore a
-    # no-op when the flag was set; it stays so a later reader sees the flag
-    # take effect on cfg.training.
+    # Applied at config load time via load_config(training_overrides=).
     if minillm_on_policy:
-        if not cfg.training.minillm_enabled:
-            console.print(
-                "[red]--minillm-on-policy requires "
-                "training.minillm_enabled=true (task='distill')[/]"
-            )
-            raise typer.Exit(1)
-        cfg.training.minillm_on_policy = True
         console.print("[green]MiniLLM on-policy rollout enabled[/]")
 
     # --- Cloud GPU training (v0.71.18 #16, v0.71.22 #264) ---
