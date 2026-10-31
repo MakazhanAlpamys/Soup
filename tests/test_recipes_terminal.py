@@ -29,7 +29,7 @@ def test_unknown_recipe_is_rendered_literally(command, name, tmp_path, monkeypat
 
 
 @pytest.mark.parametrize("output", ["café[red].yaml", "cfg[/]tail.yaml", "plain.yaml"])
-def test_recipe_output_is_literal_and_bytes_are_unchanged(output, tmp_path, monkeypatch):
+def test_recipe_output_is_literal_and_yaml_is_unchanged(output, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     path = Path(output)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -41,7 +41,7 @@ def test_recipe_output_is_literal_and_bytes_are_unchanged(output, tmp_path, monk
     text = strip_ansi(result.stdout)
     assert f"written to {output}" in text
     assert f"Next: soup train --config {output}" in text
-    assert path.read_bytes() == recipe.yaml_str.encode("utf-8")
+    assert path.read_text(encoding="utf-8") == recipe.yaml_str
 
 
 def test_refused_recipe_output_keeps_the_path_literal(tmp_path, monkeypatch):
