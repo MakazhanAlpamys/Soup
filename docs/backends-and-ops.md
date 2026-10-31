@@ -445,10 +445,12 @@ and mode:
 - BitNet `BitLinear` layers (a `quantization_config.quant_method: bitnet`
   checkpoint), whose scale mlx-lm keeps as `weight_scale`.
 
-The rule reads the layers mlx-lm loads, not the checkpoint's format. A GPTQ, AWQ
-or `compressed-tensors` 4-bit checkpoint, which mlx-lm converts on load into
-4-bit `affine` `QuantizedLinear` layers, therefore passes it as well. The native
-tests cover only bases quantized by mlx-lm's own `quantize_model`.
+The rule reads the layers mlx-lm loads, not the checkpoint's format. A 4-bit
+GPTQ or AWQ checkpoint, and a `compressed-tensors` one that mlx-lm loads as 4-bit
+`affine` (every one at mlx-lm 0.31.3, only the `pack-quantized` format at
+0.32.2), therefore passes it as well; a `compressed-tensors` checkpoint in an
+`nvfp4` or `mxfp4` format loads in that mode and is refused. The native tests
+cover only bases quantized by mlx-lm's own `quantize_model`.
 
 On MLX, `training.quantization` only names the base, since nothing is quantized
 at load, so the base's own layers decide; `quantization: 8bit` stays refused at
