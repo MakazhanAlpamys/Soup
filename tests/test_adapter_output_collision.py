@@ -102,3 +102,26 @@ def test_merge_cmaes_refuses_before_search(adapters, monkeypatch):
     assert "same file" in _plain(res.output)
     assert calls == []
     assert {name: _snapshot(adapters / name) for name in ("A", "B")} == before
+
+
+def test_arithmetic_refuses_before_reading_any_adapter(adapters, monkeypatch):
+    from soup_cli.utils import adapter_arithmetic, adapter_scan
+
+    def _must_not_read(*args, **kwargs):
+        raise AssertionError("an adapter was read before the output check")
+
+    monkeypatch.setattr(adapter_arithmetic, "read_adapter_base", _must_not_read)
+    monkeypatch.setattr(adapter_scan, "scan_adapter", _must_not_read)
+    res = _invoke(["arithmetic", "A + B", "--adapter", "A=A", "--adapter", "B=B", "-o", "A"])
+    assert res.exit_code == 1, (res.output, repr(res.exception))
+    assert "same file" in _plain(res.output)
+
+
+@pytest.mark.parametrize("output", ["A", "./B"])
+def test_merge_adapters_refuses_output_naming_an_input(adapters, output):
+    from soup_cli.utils.adapter_merge import merge_adapters
+
+    before = {name: _snapshot(adapters / name) for name in ("A", "B")}
+    with pytest.raises(ValueError, match="same file"):
+        merge_adapters(["A", "B"], output, strategy="linear")
+    assert {name: _snapshot(adapters / name) for name in ("A", "B")} == before
