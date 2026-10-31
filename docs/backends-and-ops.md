@@ -1063,6 +1063,10 @@ soup recipes verify --config soup.yaml
 soup recipes verify --json    # one row per config on stdout, for CI
 ```
 
+`recipes use --output` keeps the requested filename and writes the recipe's YAML unchanged.
+Receipts and errors display brackets literally and strip terminal control characters only from
+the display.
+
 **What's covered:**
 
 | Category | Models |
