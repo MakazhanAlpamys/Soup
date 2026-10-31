@@ -53,7 +53,8 @@ def test_push_missing_model_is_named_literally(model_dir, name):
     result = _push("--model", name, "--repo", "user/model")
 
     assert result.exit_code == 1
-    assert f"Model path not found: {name}" in _plain(result)
+    # Windows prints the path with backslashes, as Path does.
+    assert f"Model path not found: {Path(name)}" in _plain(result)
 
 
 def test_push_missing_model_strips_controls_from_the_display(model_dir):
@@ -74,7 +75,7 @@ def test_push_file_instead_of_directory_is_named_literally(model_dir, name):
     result = _push("--model", name, "--repo", "user/model")
 
     assert result.exit_code == 1
-    assert f"Expected a directory, got a file: {name}" in _plain(result)
+    assert f"Expected a directory, got a file: {Path(name)}" in _plain(result)
 
 
 @pytest.mark.parametrize("repo", ["[red]x", "user/[/]", "bad:warning:"])
