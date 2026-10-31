@@ -135,7 +135,7 @@ def test_no_install_deps_missing_packages_refuses_before_merge_or_lookup(
     output = strip_ansi(result.output)
     assert "gguf" in output and "protobuf" in output
     assert "--no-install-deps" in output
-    assert not (model.parent / ".soup_merge_tmp_model").exists()
+    assert not list(model.parent.glob(".soup_merge_tmp_model*"))
     assert not destination.parent.exists()
 
 
@@ -280,7 +280,7 @@ def test_cli_reports_each_reached_phase_once(monkeypatch, cli_inputs, quant, man
 
     def merge(source, base, output, trust_remote_code):
         calls.append(("merge", base))
-        Path(output).mkdir()
+        Path(output).mkdir(exist_ok=True)
         (Path(output) / "config.json").write_text(
             '{"architectures":["LlamaForCausalLM"]}', encoding="utf-8",
         )
@@ -321,5 +321,5 @@ def test_cli_reports_each_reached_phase_once(monkeypatch, cli_inputs, quant, man
         assert ("quantize", "q4_0") in calls
     else:
         assert all(name != "quantize" for name, _ in calls)
-    assert not (model.parent / ".soup_merge_tmp_model").exists()
+    assert not list(model.parent.glob(".soup_merge_tmp_model*"))
     assert not list(destination.parent.glob(".soup_gguf_*"))

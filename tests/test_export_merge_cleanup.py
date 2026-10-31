@@ -728,7 +728,9 @@ def test_a_merge_that_fails_early_leaves_a_directory_it_did_not_create(
     assert result.exit_code == 1, (result.output, repr(result.exception))
     assert "merge failed before writing" in str(result.exception)
     assert marker.read_text(encoding="utf-8") == "not created by this export"
+    assert sorted(p.name for p in existing.iterdir()) == ["keep-me.txt"]
     assert existing.is_dir()
+    assert _leftovers(tmp_path) == [existing]
 
 
 @pytest.mark.parametrize(("fmt", "extra_args"), _FORMATS)
@@ -745,15 +747,19 @@ def test_a_later_failure_also_leaves_a_directory_it_did_not_create(
         app, ["export", "--model", str(adapter), "--format", fmt, *extra_args]
     )
 
-    assert merges == [str(existing)]
+    assert merges != []
+    assert merges[0] != str(existing)
+    assert Path(merges[0]).name.startswith(".soup_merge_tmp_adapter_")
     assert result.exit_code == 1, (result.output, repr(result.exception))
     assert marker.read_text(encoding="utf-8") == "not created by this export"
+    assert sorted(p.name for p in existing.iterdir()) == ["keep-me.txt"]
     assert existing.is_dir()
+    assert _leftovers(tmp_path) == [existing]
 
 
-def test_the_run_says_it_left_the_directory(tmp_path, monkeypatch):
+def test_a_preexisting_directory_is_never_written_to(tmp_path, monkeypatch):
     adapter = _adapter_dir(tmp_path)
-    existing, _ = _preexisting_merge_dir(tmp_path)
+    existing, marker = _preexisting_merge_dir(tmp_path)
     merges: list[str] = []
     monkeypatch.setattr(export_mod, "_merge_adapter", _make_fake_merge(merges))
 
@@ -765,11 +771,111 @@ def test_the_run_says_it_left_the_directory(tmp_path, monkeypatch):
         ],
     )
 
+    assert merges != []
+    assert merges[0] != str(existing)
+    assert Path(merges[0]).name.startswith(".soup_merge_tmp_adapter_")
     assert result.exit_code == 1, (result.output, repr(result.exception))
-    text = _plain(result.output)
-    assert "existed before this export" in text
-    assert "Cleaning up temporary merge files" not in text
+    assert marker.read_text(encoding="utf-8") == "not created by this export"
+    assert sorted(p.name for p in existing.iterdir()) == ["keep-me.txt"]
     assert existing.is_dir()
+    assert _leftovers(tmp_path) == [existing]
+
+
+def test_a_successful_export_leaves_a_preexisting_directory_alone(tmp_path, monkeypatch):
+    adapter = _adapter_dir(tmp_path)
+    existing, marker = _preexisting_merge_dir(tmp_path)
+    merges: list[str] = []
+    monkeypatch.setattr(export_mod, "_merge_adapter", _make_fake_merge(merges))
+
+    llama = tmp_path / "llama"
+    llama.mkdir()
+    (llama / "convert_hf_to_gguf.py").write_text("# stub", encoding="utf-8")
+    monkeypatch.setattr(export_mod, "_find_llama_cpp", lambda p=None: llama)
+    monkeypatch.setattr(export_mod, "_install_convert_deps", lambda: None)
+
+    def fake_convert(script, model_path, output_path, outtype, **kwargs):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"F16_GGUF")
+
+    def fake_quantize(llama_dir, src, dst, quant, **kwargs):
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(b"Q4_0_GGUF")
+
+    monkeypatch.setattr(export_mod, "_run_convert", fake_convert)
+    monkeypatch.setattr(export_mod, "_run_quantize", fake_quantize)
+
+    out_file = tmp_path / "output.gguf"
+    result = CliRunner().invoke(
+        app,
+        [
+            "export", "--model", str(adapter), "--format", "gguf", "--quant", "q4_0",
+            "--output", str(out_file),
+        ],
+    )
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert out_file.exists()
+    assert merges != []
+    assert merges[0] != str(existing)
+    assert marker.read_text(encoding="utf-8") == "not created by this export"
+    assert sorted(p.name for p in existing.iterdir()) == ["keep-me.txt"]
+    assert existing.is_dir()
+    assert _leftovers(tmp_path) == [existing]
+
+
+def test_two_exports_of_the_same_adapter_use_different_merge_directories(
+    tmp_path, monkeypatch
+):
+    adapter = _adapter_dir(tmp_path)
+    merges: list[str] = []
+    monkeypatch.setattr(export_mod, "_merge_adapter", _make_fake_merge(merges))
+
+    for _ in range(2):
+        result = CliRunner().invoke(
+            app,
+            [
+                "export", "--model", str(adapter), "--format", "gguf", "--quant", "q4_0",
+                "--llama-cpp", str(tmp_path / "missing"),
+            ],
+        )
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+
+    assert len(merges) == 2
+    assert merges[0] != merges[1]
+    assert all(
+        Path(path).name.startswith(".soup_merge_tmp_adapter_") for path in merges
+    )
+    assert _leftovers(tmp_path) == []
+
+
+@pytest.mark.parametrize(("fmt", "extra_args"), _FORMATS)
+def test_the_merge_directory_exists_empty_next_to_the_adapter_before_the_merge(
+    tmp_path, monkeypatch, fmt, extra_args
+):
+    adapter = _adapter_dir(tmp_path)
+    _stub_optional_modules(monkeypatch)
+    seen: list[tuple[Path, bool, list[str]]] = []
+
+    def recording_merge(adapter_path, base_model, output_dir, trust_remote_code=False):
+        out = Path(output_dir)
+        contents = sorted(p.name for p in out.iterdir()) if out.is_dir() else []
+        seen.append((out, out.is_dir(), contents))
+        raise RuntimeError("stop after recording")
+
+    monkeypatch.setattr(export_mod, "_merge_adapter", recording_merge)
+
+    result = CliRunner().invoke(
+        app, ["export", "--model", str(adapter), "--format", fmt, *extra_args]
+    )
+
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert len(seen) == 1
+    out, existed, contents = seen[0]
+    assert existed
+    assert contents == []
+    assert out.name.startswith(".soup_merge_tmp_adapter_")
+    assert out.parent.resolve() == adapter.parent.resolve()
+    assert _leftovers(tmp_path) == []
 
 
 @pytest.mark.parametrize(("fmt", "extra_args"), _FORMATS)
