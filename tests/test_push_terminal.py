@@ -57,12 +57,12 @@ def test_push_missing_model_is_named_literally(model_dir, name):
 
 
 def test_push_missing_model_strips_controls_from_the_display(model_dir):
-    result = _push("--model", "[bold]gone\x9b‮", "--repo", "user/model")
+    result = _push("--model", "[bold]gone\x9b\u202e", "--repo", "user/model")
 
     assert result.exit_code == 1
     text = _plain(result)
     assert "Model path not found: [bold]gone" in text
-    assert "\x9b" not in text and "‮" not in text
+    assert "\x9b" not in text and "\u202e" not in text
 
 
 @pytest.mark.parametrize("name", ["[red]weights.bin", "[/].bin", COLON_NAME])
@@ -107,7 +107,7 @@ def test_push_upload_failure_is_shown_as_typed(model_dir, monkeypatch, message):
 
 def test_push_upload_failure_strips_controls(model_dir, monkeypatch):
     monkeypatch.setattr(
-        hf_utils, "get_hf_api", lambda **kwargs: _FailingApi("[bold]boom\x9b‮")
+        hf_utils, "get_hf_api", lambda **kwargs: _FailingApi("[bold]boom\x9b\u202e")
     )
 
     result = _push("--model", str(model_dir), "--repo", "user/model")
@@ -115,7 +115,7 @@ def test_push_upload_failure_strips_controls(model_dir, monkeypatch):
     assert result.exit_code == 1
     text = _plain(result)
     assert "Upload failed: [bold]boom" in text
-    assert "\x9b" not in text and "‮" not in text
+    assert "\x9b" not in text and "\u202e" not in text
 
 
 class _WorkingApi(_FailingApi):
