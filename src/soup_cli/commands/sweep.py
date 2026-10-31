@@ -11,10 +11,11 @@ import yaml
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.config.loader import load_config
 from soup_cli.utils.sweep_config import load_sweep_yaml
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
@@ -111,7 +112,7 @@ def sweep(
     """Run hyperparameter sweep: grid or random search over training parameters."""
     config_path = Path(config)
     if not config_path.exists():
-        console.print(f"[red]Config not found: {config_path}[/]")
+        console.print(f"[red]Config not found: {for_terminal(config_path)}[/]", emoji=False)
         raise typer.Exit(1)
 
     if param and sweep_config:
@@ -140,7 +141,10 @@ def sweep(
         raise typer.Exit(1)
 
     if strategy not in ("grid", "random"):
-        console.print(f"[red]Invalid strategy: {strategy}. Must be grid or random.[/]")
+        console.print(
+            f"[red]Invalid strategy: {for_terminal(strategy)}. Must be grid or random.[/]",
+            emoji=False,
+        )
         raise typer.Exit(1)
 
     if not sweep_params:
@@ -180,15 +184,18 @@ def sweep(
                     _set_nested_param(arm, key, val)
                 _reject_staged_sweep_params(arm)
         except ValueError as exc:
-            console.print(f"[red]{exc}[/]")
+            console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
             raise typer.Exit(1) from exc
 
     console.print(
         Panel(
-            f"Config:   [bold]{config_path}[/]\n"
-            f"Strategy: [bold]{strategy}[/]\n"
-            f"Params:   [bold]{', '.join(sweep_params.keys())}[/]\n"
-            f"Runs:     [bold]{len(combinations)}[/]",
+            Text.from_markup(
+                f"Config:   [bold]{for_terminal(config_path)}[/]\n"
+                f"Strategy: [bold]{strategy}[/]\n"
+                f"Params:   [bold]{for_terminal(', '.join(sweep_params.keys()))}[/]\n"
+                f"Runs:     [bold]{len(combinations)}[/]",
+                emoji=False,
+            ),
             title="Sweep Plan",
         )
     )
@@ -197,10 +204,10 @@ def sweep(
     param_table = Table(title="Parameter Grid")
     param_table.add_column("Run", style="bold")
     for key in sweep_params:
-        param_table.add_column(key)
+        param_table.add_column(Text(strip_control(key)))
 
     for idx, combo in enumerate(combinations):
-        row_values = [str(combo[key]) for key in sweep_params]
+        row_values = [Text(strip_control(combo[key])) for key in sweep_params]
         param_table.add_row(f"#{idx + 1}", *row_values)
 
     console.print(param_table)
@@ -220,10 +227,13 @@ def sweep(
 
     for idx, combo in enumerate(combinations):
         run_name = f"{name or 'sweep'}_{idx + 1}"
-        console.print(f"\n[bold]--- Run {idx + 1}/{len(combinations)}: {run_name} ---[/]")
+        console.print(
+            f"\n[bold]--- Run {idx + 1}/{len(combinations)}: {for_terminal(run_name)} ---[/]",
+            emoji=False,
+        )
 
         for key, val in combo.items():
-            console.print(f"  {key} = {val}")
+            console.print(f"  {for_terminal(key)} = {for_terminal(val)}", emoji=False)
 
         try:
             result = _run_single(base_cfg, combo, run_name, config_path)
@@ -259,7 +269,9 @@ def sweep(
             # straight into the markup string, Rich reads `[mlx]` as a style tag
             # and drops it, so the hint that tells the user what to install is
             # the part that disappears. `for_terminal` escapes it.
-            console.print(f"[red]Run {run_name} failed:[/] {for_terminal(exc)}")
+            console.print(
+                f"[red]Run {for_terminal(run_name)} failed:[/] {for_terminal(exc)}", emoji=False
+            )
             results.append({
                 "name": run_name,
                 "params": combo,
@@ -313,7 +325,10 @@ def _parse_sweep_params(params: list[str]) -> dict[str, list]:
     result = {}
     for param_str in params:
         if "=" not in param_str:
-            console.print(f"[yellow]Skipping invalid param: {param_str} (missing '=')[/]")
+            console.print(
+                f"[yellow]Skipping invalid param: {for_terminal(param_str)} (missing '=')[/]",
+                emoji=False,
+            )
             continue
 
         key, values_str = param_str.split("=", 1)
@@ -599,7 +614,7 @@ def _display_summary(results: list[dict], sweep_params: dict[str, list]):
     table = Table(title="Sweep Results")
     table.add_column("Run", style="bold")
     for key in sweep_params:
-        table.add_column(key)
+        table.add_column(Text(strip_control(key)))
     table.add_column("Final Loss", justify="right", style="green")
     table.add_column("Duration", justify="right")
     table.add_column("Status")
@@ -611,7 +626,7 @@ def _display_summary(results: list[dict], sweep_params: dict[str, list]):
         diverged = res["status"] == "completed" and _is_diverged_loss(res.get("final_loss"))
         display_status = "diverged" if diverged else res["status"]
         status_style = "green" if display_status == "completed" else "red"
-        param_vals = [str(res["params"].get(k, "")) for k in sweep_params]
+        param_vals = [Text(strip_control(res["params"].get(k, ""))) for k in sweep_params]
         finite_loss = _finite_loss(res.get("final_loss"))
         if diverged:
             loss_str = str(res["final_loss"])
@@ -625,7 +640,7 @@ def _display_summary(results: list[dict], sweep_params: dict[str, list]):
             else ""
         )
         table.add_row(
-            res["name"],
+            Text(strip_control(res["name"])),
             *param_vals,
             f"{loss_str}{best_marker}",
             res.get("duration", "-"),
@@ -643,10 +658,11 @@ def _display_summary(results: list[dict], sweep_params: dict[str, list]):
     if completed:
         best = completed[0]
         console.print(
-            f"\n[bold green]Best run:[/] {best['name']} "
-            f"(loss: {best['final_loss']:.4f})"
+            f"\n[bold green]Best run:[/] {for_terminal(best['name'])} "
+            f"(loss: {best['final_loss']:.4f})",
+            emoji=False,
         )
         for key, val in best["params"].items():
-            console.print(f"  {key} = {val}")
+            console.print(f"  {for_terminal(key)} = {for_terminal(val)}", emoji=False)
         if best.get("run_id"):
             console.print(f"\n[dim]View details: soup runs show {best['run_id']}[/]")
