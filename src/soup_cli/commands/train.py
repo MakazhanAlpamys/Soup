@@ -2698,14 +2698,15 @@ def _highest_numbered_mlx_checkpoint(paths) -> Path | None:
 
 
 def _resolve_mlx_checkpoint(resume: str, output_dir: str) -> str | None:
-    """MLX-style checkpoint resolution (#634).
+    """MLX full-state and legacy checkpoint resolution (#1977, #634).
 
     mlx-lm's tuner saves step-numbered adapter snapshots
     (``NNNNNNN_adapters.safetensors``) plus a final ``adapters.safetensors``
     with no step prefix — files, not the ``checkpoint-N`` directories the
     transformers/unsloth backends write. "auto" picks the highest-numbered
-    snapshot if one exists, else the final file. A direct ``resume`` value
-    must point at one of these files directly.
+    snapshot if one exists, else the final file, unless a committed full-state
+    ``mlx-state-N`` bundle exists: those take precedence by numeric update.
+    Direct full-state directories are validated at the native training boundary.
 
     Takes no ``experiment_name``, unlike the transformers/unsloth resolver
     below: ``mlx_sft.py``'s ``output_dir`` is always ``Path(cfg.output)``,
@@ -2721,6 +2722,12 @@ def _resolve_mlx_checkpoint(resume: str, output_dir: str) -> str | None:
         if not base.is_dir():
             return None
 
+        from soup_cli.trainer.mlx_checkpoint import discover_bundle
+
+        bundle = discover_bundle(base)
+        if bundle is not None:
+            return str(bundle)
+
         highest = _highest_numbered_mlx_checkpoint(base.iterdir())
         if highest is not None:
             return str(highest)
@@ -2730,8 +2737,13 @@ def _resolve_mlx_checkpoint(resume: str, output_dir: str) -> str | None:
             return str(final)
         return None
 
-    # Direct path to a specific adapter file
+    # A full-state directory has its own strict validation at the native boundary.
+    from soup_cli.trainer.mlx_checkpoint import is_bundle
+
     checkpoint_path = Path(resume)
+    if is_bundle(checkpoint_path):
+        return str(checkpoint_path)
+    # Direct path to a specific adapter file
     if checkpoint_path.exists() and checkpoint_path.is_file():
         return str(checkpoint_path)
     return None
