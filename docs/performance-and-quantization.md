@@ -1339,9 +1339,11 @@ loop, and names `data.train_on_responses_only: false` as the remedy.
 In practice this affects thinking-style templates: `Qwen3` injects its empty thinking
 block only for the *last* assistant message, so multi-turn Qwen3 rows are refused
 (single-turn rows are fine). Llama 3.1 and Gemma 3 mask correctly on both shapes.
-`data.train_on_messages_with_train_field` and `data.train_on_prompt` have no MLX
-equivalent and are reported in the `MLX backend ignores:` line rather than silently
-dropped.
+`data.train_on_messages_with_train_field` is supported for native text SFT when
+`train_on_responses_only` is false: explicit flags override the assistant-role
+default, and selected turns include their headers. `data.train_on_prompt` has no
+MLX equivalent and is reported in the `MLX backend ignores:` line rather than
+silently dropped.
 
 After tokenization and truncation, every response-only row must retain at least one shifted
 causal-loss target. Soup rejects the row by split and row number when

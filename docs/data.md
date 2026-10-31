@@ -1105,10 +1105,33 @@ too, since distill builds every row that way. On `task: sft` with
 `modality: vision` or `audio` it is accepted but not applied: those rows are
 built by the vision and audio preparers, which never read it (#1156).
 
-**`backend: mlx` ignores it:** MLX SFT builds its own mask and supervises every
-assistant turn, so the same config trains the last turn on transformers and every
-turn on MLX. `soup train` says so on its "MLX backend ignores:" line, and
-`soup doctor --config` reports it.
+**Native MLX text SFT:** `mask_history` selects the last actual assistant message,
+including consecutive assistant turns and a conversation ending in a tool turn.
+All earlier context remains in the input. The existing native response-only rule
+still excludes assistant headers and includes its end marker.
+
+Alternatively, set `train_on_responses_only: false` and
+`train_on_messages_with_train_field: true`. Each message's `train: true` selects
+its whole token span (header, content and end marker), even for user, system,
+developer or tool roles. `false` excludes it; missing/`null` uses the assistant-role
+default. A non-boolean non-null flag is refused. This uses the shared per-message
+label policy with verified actual token-prefix boundaries; it does not estimate
+spans from rendered string lengths or apply an approximate alignment fallback.
+
+Both selective modes require chat message rows and verifiable native token
+boundaries. History masking checks the selected final assistant span: a template
+may rewrite ignored earlier reasoning if that span's boundaries remain exact.
+Per-message masking verifies every message boundary. Unsupported template renders
+raise an actionable error. Rows with no
+selected causal target, including a selected turn fully truncated by
+`data.max_length`, are refused rather than training another turn. Each binary
+mask belongs to the original token position before the causal shift; padding has
+zero weight even when PAD=EOS. Batching/truncation retain this alignment. Saved
+adapter metadata records the effective selective flags. Existing assistant-only
+and full-sequence defaults are unchanged; no custom-template or train-on-EOT
+support is added here. Native evidence covers ordinary LoRA with dense and genuine
+4-bit text bases. Selective native masking on vision/audio is explicitly refused
+and reported by `soup doctor`; other task backends retain their existing scope.
 
 **Multimodal vision and audio ignore it:** For `modality: vision` and `modality: audio`,
 every text token is supervised. Soup's vision collator masks only padding and image
