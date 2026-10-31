@@ -318,6 +318,15 @@ class TestNEFTuneTaskGate:
         ):
             self._make_cfg(task, 5.0, **extra)
 
+    def test_non_applying_task_error_uses_plain_text_for_training_arguments(self):
+        """The terminal error does not include reStructuredText markup."""
+        with pytest.raises(ValidationError) as excinfo:
+            self._make_cfg("grpo")
+
+        message = str(excinfo.value)
+        assert "forward it to TrainingArguments.neftune_noise_alpha. Remove " in message
+        assert "``" not in message
+
     def test_mutation_check_drop_one_task(self, monkeypatch):
         """Mutation test: removing a task from NEFTUNE_APPLYING_TASKS fails.
 
