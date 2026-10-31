@@ -5301,8 +5301,9 @@ def _refuse_mlx_grpo_scope(cfg: Any) -> None:
     """#1976 — what ``task: grpo`` on ``backend: mlx`` trains, refused at load.
 
     The native loop (``trainer/mlx_grpo.py``) trains a LoRA adapter on a dense
-    text base with one of the built-in rewards. Everything else is refused here,
-    before the model loads, with the setting's name and a remedy.
+    text base, or one pre-quantized by mlx-lm at 4 bits (affine), with one of the
+    built-in rewards. Everything else is refused here, before the model loads,
+    with the setting's name and a remedy.
     """
     tcfg = cfg.training
     if cfg.modality != "text":
@@ -5319,15 +5320,16 @@ def _refuse_mlx_grpo_scope(cfg: Any) -> None:
             "backend='mlx'."
         )
     # '4bit' is the schema default and, on MLX, only names a pre-quantized base
-    # (load_mlx_model does not quantize), so it cannot be refused here without
-    # failing every default config; the trainer refuses a base that loads
-    # quantized instead, right after the load. '8bit' is refused outright.
+    # (load_mlx_model does not quantize). What the base really is gets checked by
+    # the trainer right after the load (qualify_base in trainer/mlx_grpo.py:
+    # dense, or 4-bit affine only). '8bit' is refused outright.
     if tcfg.quantization == "8bit":
         raise ValueError(
             "training.quantization='8bit' is not supported by task='grpo' on "
-            "backend='mlx': MLX GRPO trains a dense (unquantized) base in this "
-            "release. Set training.quantization: none and use an unquantized base, "
-            "or use backend: transformers."
+            "backend='mlx': MLX GRPO trains a dense base or one pre-quantized at 4 "
+            "bits (affine), not an 8-bit one. Set training.quantization: none with an "
+            "unquantized base or 4bit with a 4-bit MLX base, or use backend: "
+            "transformers."
         )
     spec = str(tcfg.reward_fn or "")
     parts = [part.strip() for part in spec.split(",")]
