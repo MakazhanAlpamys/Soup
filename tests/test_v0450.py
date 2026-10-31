@@ -508,6 +508,46 @@ def test_from_anthropic_omits_sampling_defaults_when_absent():
     assert "top_p" not in out
 
 
+@pytest.mark.parametrize(
+    ("extra", "error", "field"),
+    [
+        ({"temperature": True}, TypeError, "temperature"),
+        ({"temperature": "0.5"}, TypeError, "temperature"),
+        ({"temperature": None}, TypeError, "temperature"),
+        ({"temperature": -0.1}, ValueError, "temperature"),
+        ({"temperature": 2.01}, ValueError, "temperature"),
+        ({"top_p": False}, TypeError, "top_p"),
+        ({"top_p": "0.5"}, TypeError, "top_p"),
+        ({"top_p": -0.01}, ValueError, "top_p"),
+        ({"top_p": 1.01}, ValueError, "top_p"),
+    ],
+)
+def test_from_anthropic_refuses_bad_sampling(extra, error, field):
+    payload = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 4,
+        **extra,
+    }
+    with pytest.raises(error, match=field):
+        from_anthropic(payload)
+
+
+@pytest.mark.parametrize(("temperature", "top_p"), [(0, 0), (2, 1)])
+def test_from_anthropic_accepts_sampling_edges(temperature, top_p):
+    out = from_anthropic(
+        {
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 4,
+            "temperature": temperature,
+            "top_p": top_p,
+        }
+    )
+    assert out["temperature"] == float(temperature)
+    assert out["top_p"] == float(top_p)
+    assert isinstance(out["temperature"], float) and isinstance(out["top_p"], float)
+
 
 def test_validate_anthropic_payload_rejects_empty_messages():
     with pytest.raises(ValueError):

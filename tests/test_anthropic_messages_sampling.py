@@ -27,10 +27,12 @@ def test_messages_forwards_temperature_and_top_p_like_chat_completions():
                 "temperature": temperature,
                 "top_p": 0.5,
             }
-            client.post("/v1/chat/completions", json=body)
-            chat = seen[-1]
-            client.post("/v1/messages", json=body)
-            messages = seen[-1]
+            resp = client.post("/v1/chat/completions", json=body)
+            assert resp.status_code == 200, resp.text
+            chat = seen.pop()
+            resp = client.post("/v1/messages", json=body)
+            assert resp.status_code == 200, resp.text
+            messages = seen.pop()
             assert messages == chat == (float(temperature), 0.5)
 
 
@@ -49,5 +51,6 @@ def test_messages_uses_defaults_when_sampling_omitted():
             "messages": [{"role": "user", "content": "hi"}],
             "max_tokens": 4,
         }
-        client.post("/v1/messages", json=body)
-        assert seen[-1] == (0.7, 0.9)
+        resp = client.post("/v1/messages", json=body)
+        assert resp.status_code == 200, resp.text
+        assert seen == [(0.7, 0.9)]
