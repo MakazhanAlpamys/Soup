@@ -2,6 +2,7 @@
 
 import re
 import sys
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -52,7 +53,8 @@ def test_sweep_missing_config_is_named_as_typed(tmp_path, monkeypatch, name):
     result = runner.invoke(app, ["sweep", "--config", name, "--param", "lr=1e-5,2e-5"])
 
     assert result.exit_code == 1
-    assert f"Config not found: {name}" in _plain(result)
+    # Windows prints the path with backslashes, as Path does.
+    assert f"Config not found: {Path(name).as_posix()}" in _plain(result)
 
 
 @pytest.mark.parametrize("strategy", ["[red]x", "[/]x", "x:warning:"])
