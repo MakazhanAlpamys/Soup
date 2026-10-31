@@ -515,7 +515,7 @@ jobs:
         # neither listed here nor exempted there. The four non-test_mlx files it
         # found (#2308) are the three below and the exempt upstream tripwire in
         # tests/test_issue23_mlx_val_loss_producer.py.
-        run: pytest -o addopts= -q tests/test_rewind_mlx.py tests/test_mlx_dora_native.py tests/test_mlx_dpo.py tests/test_mlx_orpo.py tests/test_mlx_eval_steps.py tests/test_mlx_simpo.py tests/test_mlx_sft_seed.py tests/test_mlx_kto.py tests/test_mlx_grpo.py tests/test_issue683_mlx_response_masking.py tests/test_issue686_mlx_optimizer_schedule.py tests/test_rewind_wiring.py
+        run: pytest -o addopts= -q tests/test_rewind_mlx.py tests/test_mlx_dora_native.py tests/test_mlx_dpo.py tests/test_mlx_orpo.py tests/test_mlx_eval_steps.py tests/test_mlx_simpo.py tests/test_mlx_sft_seed.py tests/test_mlx_kto.py tests/test_mlx_grpo.py tests/test_mlx_grpo_4bit.py tests/test_issue683_mlx_response_masking.py tests/test_issue686_mlx_optimizer_schedule.py tests/test_rewind_wiring.py
   torchao-contract:
     needs: plan
     # Not on a pull request, approval run included: it is not a required check.
