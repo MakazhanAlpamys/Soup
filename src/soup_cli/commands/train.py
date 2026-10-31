@@ -60,6 +60,29 @@ def _stdin_isatty() -> bool:
     return sys.stdin.isatty()
 
 
+def _preflight_config_eval_gate(cfg: "SoupConfig") -> None:
+    """Refuse a ``training.eval_gate.suite`` that cannot load, before any data is read.
+
+    ``--gate`` validates its suite up front and exits 1. A gate enabled in
+    ``soup.yaml`` got no such check: ``SoupTrainerCallback._setup_eval_gate``
+    logs a suite it cannot load at WARNING and trains with no gate at all, so
+    ``on_regression: stop`` could never fire. The callback keeps that lenient
+    handling on purpose (#1895); this runs the same check ``--gate`` already
+    runs, with the same exit code, and before ``--dry-run`` returns (#2231).
+    """
+    gate_cfg = getattr(cfg.training, "eval_gate", None)
+    if gate_cfg is None or not gate_cfg.enabled or not gate_cfg.suite:
+        return
+    from soup_cli.eval.gate import load_suite
+    from soup_cli.utils.terminal import for_terminal
+
+    try:
+        load_suite(gate_cfg.suite)
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[red]Invalid training.eval_gate.suite: {for_terminal(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
+
 def _nondefault_unwired_training_settings(training_config) -> list[str]:
     """Return staged training settings whose value differs from the schema default."""
     fields = type(training_config).model_fields
@@ -1288,6 +1311,8 @@ def train(
             raise typer.Exit(1) from exc
         cfg.training.eval_gate = EvalGateConfig(enabled=True, suite=gate)
         console.print(f"[green]Eval gate enabled[/] with suite: {gate}")
+    else:
+        _preflight_config_eval_gate(cfg)
 
     # Honesty guard: these staged flags (plus forgetting_threshold) are accepted
     # but not enforced mid-training in this build. Their other tuning knobs are
