@@ -269,7 +269,7 @@ soup bench <model>                            Inference speed + memory (same as 
 soup bench infer <model> --p50 --p95          Bench with tail-latency percentiles (v0.53.9)
 soup bench infer <model> --cuda-graphs         Bench with experimental CUDA graph decode
 soup bench train --config soup.yaml --steps 20 --warmup 3 -o bench-train.json  Timed SFT steps; exits 1 when the model was not training (#836)
-soup bench <model> --backend auto             Auto-detect transformers/mlx backend (v0.53.9)
+soup bench <model> --backend auto             Measures transformers; another backend is refused, an auto-detected one is named (#1811)
 soup serve --model ./output --reasoning-parser deepseek-r1   Strip <think> blocks from responses (v0.53.9)
 soup doctor [--nccl] [--disk] [--config F]    Check environment (optionally check NCCL bandwidth, media type; --disk ~9s cold / ~2.4s warm).
                                               --config also reports which settings that config switches on (a `false` or unset value is not reported; `seed: 0` is) that its task/backend does not read (#755, #1330); exits 2 if it cannot be read, and exits 1 when a required core dependency is missing, or when any installed package is beyond its declared ceiling — core or [train] (#828, #874).
