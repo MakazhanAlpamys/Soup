@@ -257,10 +257,10 @@ def compare(
     r2 = tracker.get_run(run_2)
 
     if not r1:
-        console.print(f"[red]Run not found: {run_1}[/]")
+        console.print(f"[red]Run not found: {for_terminal(run_1)}[/]", emoji=False)
         raise typer.Exit(1)
     if not r2:
-        console.print(f"[red]Run not found: {run_2}[/]")
+        console.print(f"[red]Run not found: {for_terminal(run_2)}[/]", emoji=False)
         raise typer.Exit(1)
 
     table = Table(title="Run Comparison")
@@ -332,7 +332,7 @@ def delete(
     run = tracker.get_run(run_id)
 
     if not run:
-        console.print(f"[red]Run not found: {run_id}[/]")
+        console.print(f"[red]Run not found: {for_terminal(run_id)}[/]", emoji=False)
         raise typer.Exit(1)
 
     if not force:
@@ -416,7 +416,7 @@ def clean(
     elif run_id:
         run = tracker.get_run(run_id)
         if not run:
-            console.print(f"[red]Run not found: {run_id}[/]")
+            console.print(f"[red]Run not found: {for_terminal(run_id)}[/]", emoji=False)
             raise typer.Exit(1)
         runs_to_clean = [run]
     else:
@@ -493,9 +493,9 @@ def clean(
                       f"from {len(files_to_delete)} files "
                       f"and {len(dirs_to_delete)} directories.")
         for d in dirs_to_delete:
-            console.print(f"  [red]Delete dir:[/]\t{d}")
+            console.print(f"  [red]Delete dir:[/]\t{for_terminal(d)}", emoji=False)
         for f in files_to_delete:
-            console.print(f"  [red]Delete file:[/]\t{f}")
+            console.print(f"  [red]Delete file:[/]\t{for_terminal(f)}", emoji=False)
         raise typer.Exit()
 
     if not force:
@@ -507,12 +507,19 @@ def clean(
         try:
             f.unlink()
         except OSError as e:
-            console.print(f"[yellow]Warning:[/] Failed to delete file {f}: {e}")
+            console.print(
+                f"[yellow]Warning:[/] Failed to delete file {for_terminal(f)}: {for_terminal(e)}",
+                emoji=False,
+            )
     for d in dirs_to_delete:
         try:
             shutil.rmtree(d)
         except OSError as e:
-            console.print(f"[yellow]Warning:[/] Failed to delete directory {d}: {e}")
+            console.print(
+                f"[yellow]Warning:[/] Failed to delete directory {for_terminal(d)}: "
+                f"{for_terminal(e)}",
+                emoji=False,
+            )
 
     console.print(f"[green]Successfully reclaimed {gb_to_reclaim:.2f} GB.[/]")
 
