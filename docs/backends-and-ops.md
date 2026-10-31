@@ -143,7 +143,16 @@ training:
     alpha: 32
 ```
 
-MLX backend supports SFT, DPO, ORPO, SimPO, KTO and GRPO. Any other task with `backend: mlx` (`ipo`, `preference`, ...) is refused when the config is loaded, with an error naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for ready-made Apple Silicon configs.
+MLX backend supports SFT, DPO, ORPO, SimPO, KTO and GRPO. `task: preference`
+with `training.preference_loss: dpo`, `orpo` or `simpo` selects the corresponding
+native MLX trainer, with the same load-time restrictions and doctor support
+report as the explicit native task. The configured task remains `preference`;
+the saved `adapter_config.json` records `dpo`, `orpo` or `simpo`, so the adapter
+can also be resumed with that explicit native task. IPO, BCO and
+`training.preference_loss_weights` blends remain refused on MLX. Other tasks
+without a native trainer are refused when the config is loaded, with an error
+naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for
+ready-made Apple Silicon configs.
 
 `training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO, SimPO, KTO and GRPO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
 
@@ -244,8 +253,9 @@ training:
   metadata, from another task, or from another base, before any tensor loads.
 - **Refused at load:** `quantization: 8bit` (use `none`, or a pre-quantized
   4-bit base with `quantization: 4bit`), `training.lora.r: 0`, non-text
-  `modality`, LoRA+, and `task: preference` with `preference_loss: orpo` on
-  `backend: mlx` (use `task: orpo`). The other settings MLX DPO does not apply
+  `modality`, LoRA+ and `data.chat_template`. `task: preference` with
+  `training.preference_loss: orpo` uses this same native trainer and these
+  same restrictions. The other settings MLX DPO does not apply
   are not applied here either.
 
 #### SimPO on MLX
@@ -302,9 +312,9 @@ That shows the objective moving, not alignment quality.
   another task (ORPO and DPO included), or from another base, before any tensor
   loads.
 - **Refused at load:** `quantization: 8bit`, `training.lora.r: 0`, non-text
-  `modality`, LoRA+, `data.chat_template` (as for MLX DPO and ORPO), and
-  `task: preference` with `preference_loss: simpo` on
-  `backend: mlx` (use `task: simpo`). The other settings MLX DPO does not apply
+  `modality`, LoRA+ and `data.chat_template` (as for MLX DPO and ORPO).
+  `task: preference` with `training.preference_loss: simpo` uses this same
+  native trainer and these same restrictions. The other settings MLX DPO does not apply
   are not applied here either.
 
 #### KTO on MLX
@@ -671,6 +681,14 @@ Works with the tasks that have an unsloth setup: SFT (text; SFT vision and audio
 `training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: unsloth` for every task that has an unsloth setup ([#2153](https://github.com/MakazhanAlpamys/Soup/issues/2153)): the unsloth loader attaches every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
 
 > **Tip:** Soup auto-detects unsloth. When it is installed, `soup train` prints a hint if you haven't enabled it yet and your config would load with it.
+
+With `training.lora.target_modules: auto`, the Unsloth loader and VRAM estimate
+both use `q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj` and
+`down_proj`; explicit targets are preserved. Under 4-bit loading the estimate
+prices the embedding and output head at 2 bytes per parameter, from a real load
+and LoRA injection ([dtype record](../benchmarks/unsloth-4bit-weight-dtypes.md)).
+The Transformers backend keeps its architecture-specific automatic targets and
+fp32 k-bit embedding/head figure.
 
 ### Gradient checkpointing on Unsloth
 
@@ -1874,11 +1892,11 @@ The estimate is per term, in bytes (GB in the output is 1e9 bytes):
 
 | term | what it prices |
 |---|---|
-| `weights` | the base at its loaded precision: 2 bytes a parameter in bf16, 4 under full fine-tuning (fp32 master weights, #339). Under `4bit` and `8bit` loading only the decoder's linear layers are quantized (0.53 and 1.02 bytes a parameter); the embeddings, output head and norms are cast to fp32 for training |
-| `adapters` | LoRA's A and B, `r * (in + out)` per adapted module per layer, from the model's own dims and `lora.target_modules` (`auto` is peft's default for the architecture), in fp32 |
+| `weights` | the base at its loaded precision: 2 bytes a parameter in bf16, 4 under full fine-tuning (fp32 master weights, #339). Under `4bit` and `8bit` loading only the decoder's linear layers are quantized (0.53 and 1.02 bytes a parameter); Transformers casts the embeddings and output head to fp32 for training. Unsloth `4bit` prices those two weights at the observed 2 bytes per parameter ([dtype record](../benchmarks/unsloth-4bit-weight-dtypes.md)) |
+| `adapters` | LoRA's A and B, `r * (in + out)` per adapted module per layer, from the model's own dims and `lora.target_modules`, in fp32. `auto` uses peft's default for the architecture on Transformers, and the loader's seven projections on Unsloth |
 | `gradients`, `optimizer` | per trainable parameter: 4 bytes of gradient, and 8 for AdamW, 2 for the 8-bit optimizers, 4 for Adafactor |
-| `activations` | what the backward pass keeps per layer; with `gradient_checkpointing`, one hidden-sized tensor per layer plus one layer recomputed. `medium` keeps every other layer; `selective` is priced as no checkpointing, an upper bound. `auto` is resolved on the card as the `sft` trainer resolves it (`full` below 24 GB, `medium` to 80 GB, `selective` above), and only `sft` and `tts` apply the tiers: every other task checkpoints fully. With `activation_offloading: cpu` or `disk` it is still charged as resident, since what offloading moves off the card is not measured, and the output says so (#2327) |
-| `logits` | the output head's logits and the loss over them, 12 bytes an element (14 under `4bit` / `8bit`, whose output head is fp32). Checkpointing does not reduce it, and on a 150k vocabulary it is often the largest term. Not charged for the tasks without an LM head (`classifier`, `reranker`, `cross_encoder`, `embedding`, `reward_model`). On `prm`, whose step runs the causal-LM forward without labels and takes its loss from the reward head, only the logits are charged, 6 bytes an element: the half-precision output and the fp32 copy Accelerate makes of it, both live at the end of the forward. That forward passes `logits_to_keep=1` where the model takes it, so the logits cover one position, `vocab * batch * 6` bytes; the model types whose forward has no such argument (`gemma4_assistant`, `gemma4_unified_assistant`, `musicgen`, `musicgen_melody`, `prophetnet`, `trocr`, `whisper`, `xlstm`) and a base whose `config.json` has an `auto_map` (remote code) are charged every position. With `use_liger` or `use_cut_ce` on `sft` or `tts` it is still charged, since the fused loss may not apply, and the output says it may overstate the peak |
+| `activations` | what the backward pass keeps per layer; the estimate charges saved inputs for the backend's resolved LoRA targets, including all seven projections for Unsloth `auto`, unless checkpointing is full. With `gradient_checkpointing`, one hidden-sized tensor per layer plus one layer recomputed. `medium` keeps every other layer; `selective` is priced as no checkpointing, an upper bound. `auto` is resolved on the card as the `sft` trainer resolves it (`full` below 24 GB, `medium` to 80 GB, `selective` above), and only `sft` and `tts` apply the tiers: every other task checkpoints fully. With `activation_offloading: cpu` or `disk` it is still charged as resident, since what offloading moves off the card is not measured, and the output says so (#2327) |
+| `logits` | the output head's logits and the loss over them, 12 bytes an element (14 under `4bit` / `8bit` for the Transformers fp32 head). The 14-byte charge is also retained for Unsloth `4bit`, whose head was observed in 16-bit; its logits and loss allocations have not been measured. Checkpointing does not reduce it, and on a 150k vocabulary it is often the largest term. Not charged for the tasks without an LM head (`classifier`, `reranker`, `cross_encoder`, `embedding`, `reward_model`). On `prm`, whose step runs the causal-LM forward without labels and takes its loss from the reward head, only the logits are charged, 6 bytes an element: the half-precision output and the fp32 copy Accelerate makes of it, both live at the end of the forward. That forward passes `logits_to_keep=1` where the model takes it, so the logits cover one position, `vocab * batch * 6` bytes; the model types whose forward has no such argument (`gemma4_assistant`, `gemma4_unified_assistant`, `musicgen`, `musicgen_melody`, `prophetnet`, `trocr`, `whisper`, `xlstm`) and a base whose `config.json` has an `auto_map` (remote code) are charged every position. With `use_liger` or `use_cut_ce` on `sft` or `tts` it is still charged, since the fused loss may not apply, and the output says it may overstate the peak |
 | `dequant` | under `4bit`, the bf16 copy of the largest weight a matmul dequantizes |
 | `optimizer_step` | how far the optimizer step's peak exceeds the forward and backward pass, or 0. The step holds the weights, adapters, gradients and optimizer state plus, for `adamw_torch`, 4 bytes a trained parameter of foreach scratch, after the activations and logits are freed. It sets the peak on a short full fine-tune (#2277) and stays out of the floor below |
 | `overhead` | the CUDA context and allocator slack, which `max_memory_allocated()` does not see |

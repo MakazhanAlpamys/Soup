@@ -9,8 +9,9 @@ decides whether a long, large-vocabulary run fits. Both now call
 Every term is in bytes; GB in the output is 1e9 bytes. The terms:
 
 - ``weights``: the base at its loaded precision. Under 4-bit and 8-bit loading only
-  the decoder's linear layers are quantized; the embeddings, output head and norms are
-  cast to fp32 for training. Full fine-tuning keeps fp32 master weights (#339).
+  the decoder's linear layers are quantized. Transformers casts the embeddings and
+  output head to fp32 for training; Unsloth 4-bit keeps them in 16-bit (measured).
+  Full fine-tuning keeps fp32 master weights (#339).
 - ``adapters``: LoRA's A and B matrices, r * (in + out) per adapted module per layer,
   from the model's own dims and the configured target modules, in fp32.
 - ``gradients`` and ``optimizer``: per trainable parameter.
@@ -67,9 +68,13 @@ BYTES_PER_PARAM_BY_QUANT: dict[str, float] = {
 #: Bytes per quantized linear parameter, including the block scales.
 NF4_BYTES_PER_PARAM = 0.53
 INT8_BYTES_PER_PARAM = 1.02
-#: Under 4-bit and 8-bit loading, what is not quantized (embeddings, output head,
-#: norms) is cast to fp32 for training (peft ``prepare_model_for_kbit_training``).
+#: On the Transformers backend, embeddings and the output head are cast to fp32
+#: for k-bit training (peft ``prepare_model_for_kbit_training``).
 KBIT_UNQUANTIZED_BYTES = 4.0
+#: Both embedding and head stayed bf16 after a real 4-bit Unsloth load and LoRA
+#: injection on an RTX 5090 (Unsloth 2026.10.10). See the pinned model, dtypes and
+#: reproduction in ``benchmarks/unsloth-4bit-weight-dtypes.md``. No runtime probe.
+UNSLOTH_4BIT_EMBEDDING_HEAD_BYTES = 2.0
 
 #: Full fine-tuning loads the trainable base at fp32 (#339).
 FULL_FT_WEIGHT_BYTES = 4.0
@@ -225,6 +230,8 @@ class RunSpec:
     #: activation term is still charged as if every saved tensor stayed on the card,
     #: since what offloading moves off it is not measured, and a note says so.
     activation_offloading: Optional[str] = None
+    #: The loader whose default LoRA targets and weight dtypes are being estimated.
+    backend: str = "transformers"
 
     def __post_init__(self) -> None:
         if not isinstance(self.lm_head, bool):
@@ -283,7 +290,9 @@ class VramEstimate:
         """The modules the adapters were sized on; empty for full fine-tuning."""
         if self.run.peft == "full":
             return ()
-        return lora_targets(self.run.target_modules, self.shape.model_type)
+        return lora_targets(
+            self.run.target_modules, self.shape.model_type, backend=self.run.backend
+        )
 
 
 def _embedding_params(shape: ModelShape) -> int:
@@ -299,7 +308,10 @@ def weights_bytes(shape: ModelShape, run: RunSpec) -> int:
         embed = _embedding_params(shape)
         linear = max(shape.params - embed, 0)
         per = NF4_BYTES_PER_PARAM if run.quant == "4bit" else INT8_BYTES_PER_PARAM
-        return math.ceil(linear * per + embed * KBIT_UNQUANTIZED_BYTES)
+        embedding_head_bytes = KBIT_UNQUANTIZED_BYTES
+        if run.backend == "unsloth" and run.quant == "4bit":
+            embedding_head_bytes = UNSLOTH_4BIT_EMBEDDING_HEAD_BYTES
+        return math.ceil(linear * per + embed * embedding_head_bytes)
     return math.ceil(shape.params * BYTES_PER_PARAM_BY_QUANT[run.quant])
 
 
@@ -313,7 +325,9 @@ def activation_mode(run: RunSpec) -> str:
 def trainable_params(shape: ModelShape, run: RunSpec) -> int:
     if run.peft == "full":
         return shape.params
-    return lora_param_count(shape, r=run.lora_r, target_modules=run.target_modules)
+    return lora_param_count(
+        shape, r=run.lora_r, target_modules=run.target_modules, backend=run.backend
+    )
 
 
 def activations_bytes(shape: ModelShape, run: RunSpec) -> int:
@@ -325,7 +339,7 @@ def activations_bytes(shape: ModelShape, run: RunSpec) -> int:
         if mode == "full"
         else sum(
             module_dims(shape, name)[0]
-            for name in lora_targets(run.target_modules, shape.model_type)
+            for name in lora_targets(run.target_modules, shape.model_type, backend=run.backend)
         )
     )
     per_layer = tokens * ACTIVATION_BYTES * (
