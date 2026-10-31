@@ -145,7 +145,7 @@ class TestThroughSoupTrainDryRun:
         assert result.exit_code == 1, (result.output, repr(result.exception))
         assert (
             "Config validation error: training -> grpo_judge: judge_model "
-            "'http://judge.example.com/m' uses unsupported scheme"
+            "'http://judge.example.com/m' uses http to a host that is not loopback"
         ) in out, out
         assert "Value error" not in out, out
 
@@ -202,7 +202,9 @@ class TestThePrintedLines:
             "Config validation error:",
             "",
             "  training -> grpo_judge: judge_model 'http://judge.example.com/m' uses "
-            "unsupported scheme",
+            "http to a host that is not loopback; http is accepted for a loopback host only "
+            "(127.0.0.1, ::1, localhost). Use https://, ollama:// or a loopback http:// URL "
+            "instead",
         ]
 
 
