@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from pathlib import Path
 
 import pytest
 
@@ -478,14 +479,14 @@ class TestConfig:
         with pytest.raises(Exception, match="MLX backend"):
             load_config_from_string(yaml_str)
 
-    def test_the_preference_alias_is_refused_naming_task_dpo(self):
+    def test_the_preference_alias_selects_native_dpo(self):
         from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.dispatch import build_trainer
+        from soup_cli.trainer.mlx_dpo import MLXDPOTrainerWrapper
 
         alias = (_MLX_DPO_YAML.replace("task: dpo", "task: preference")
                  .replace("  lr: 1e-6\n", "  lr: 1e-6\n  preference_loss: dpo\n"))
-        with pytest.raises(Exception, match="task='preference' has no trainer") as info:
-            load_config_from_string(alias)
-        assert "Use task: dpo for the native MLX trainer." in str(info.value)
+        assert isinstance(build_trainer(load_config_from_string(alias)), MLXDPOTrainerWrapper)
 
 
 # --------------------------------------------------------------------------
@@ -1136,3 +1137,86 @@ class TestRefusalsAndReporting:
         wrapper.train(display=Display())
         assert events and all(e.type == "metric" and e.loss is not None for e in events)
         assert any(e.val_loss is not None for e in events)
+
+
+# Preference aliases share these native loops and adapter contracts.
+@pytest.mark.parametrize("loss", ["dpo", "orpo", "simpo"])
+@pytest.mark.parametrize("resume_alias", [False, True], ids=["native-resume", "alias-resume"])
+def test_alias_trains_a_native_adapter_that_the_native_task_can_resume(
+    loss: str, resume_alias: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mx = pytest.importorskip("mlx.core")
+    pytest.importorskip("mlx_lm")
+    from mlx_lm.models import llama
+
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.trainer.dispatch import build_trainer
+    from tests.test_mlx_orpo import CharTokenizer
+    from tests.test_mlx_preference import _config
+
+    monkeypatch.chdir(tmp_path)
+    text = _config(loss, training=(
+        "  quantization: none\n"
+        "  batch_size: 2\n"
+        "  gradient_accumulation_steps: 1\n"
+        "  gradient_checkpointing: false\n"
+        "  save_steps: 1\n"
+        "  lora: {r: 2, alpha: 4, dropout: 0.0}\n"
+    ), data="  max_length: 64\n")
+    args = llama.ModelArgs(
+        model_type="llama", hidden_size=32, num_hidden_layers=2, intermediate_size=64,
+        num_attention_heads=4, num_key_value_heads=2, rms_norm_eps=1e-5, vocab_size=200,
+        tie_word_embeddings=True,
+    )
+    rows = [{"prompt": f"q{i}:", "chosen": " good", "rejected": " bad"} for i in range(4)]
+    cfg = load_config_from_string(text)
+    cfg.output = str(tmp_path / "alias")
+    trainer = build_trainer(cfg)
+    mx.random.seed(0)
+    trainer.model = llama.Model(args)
+    trainer.tokenizer = CharTokenizer()
+    trainer._dataset = {"train": rows, "val": []}
+    result = trainer.train()
+
+    assert result["losses"] and all(math.isfinite(value) for value in result["losses"])
+    metadata = json.loads((tmp_path / "alias" / "adapter_config.json").read_text())
+    assert metadata["task"] == loss
+    assert metadata["model"] == "local-test-model"
+    weights = mx.load(str(tmp_path / "alias" / "adapters.safetensors"))
+    updates = [value for name, value in weights.items() if name.endswith("lora_b")]
+    assert updates and any(bool(mx.any(value != 0).item()) for value in updates)
+
+    native = text.replace("task: preference\n", f"task: {loss}\n").replace(
+        f"  preference_loss: {loss}\n", "",
+    )
+    resumed_cfg = load_config_from_string(text if resume_alias else native)
+    resumed_cfg.output = str(tmp_path / "resumed")
+    resumed = build_trainer(resumed_cfg)
+    mx.random.seed(0)
+    resumed.model = llama.Model(args)
+    resumed.tokenizer = CharTokenizer()
+    resumed._dataset = {"train": rows, "val": []}
+    if resume_alias:
+        meta_path = tmp_path / "alias" / "adapter_config.json"
+        for change, message in [
+            ({"task": "sft"}, "was trained with task='sft'"),
+            ({"model": "different-base"}, "belongs to base"),
+        ]:
+            mx.random.seed(0)
+            resumed.model = llama.Model(args)
+            meta_path.write_text(json.dumps({**metadata, **change}), encoding="utf-8")
+            with pytest.raises(ValueError, match=message):
+                resumed.train(
+                    resume_from_checkpoint=str(tmp_path / "alias" / "adapters.safetensors"),
+                )
+        meta_path.write_text(json.dumps(metadata), encoding="utf-8")
+        mx.random.seed(0)
+        resumed.model = llama.Model(args)
+    resumed_result = resumed.train(
+        resume_from_checkpoint=str(tmp_path / "alias" / "adapters.safetensors"),
+    )
+    assert resumed_result["losses"] and all(
+        math.isfinite(value) for value in resumed_result["losses"]
+    )
+    resumed_meta = json.loads((tmp_path / "resumed" / "adapter_config.json").read_text())
+    assert resumed_meta["task"] == loss

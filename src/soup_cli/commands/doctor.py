@@ -411,6 +411,11 @@ def _report_config_support(cfg) -> None:
 
     backend = getattr(cfg, "backend", DEFAULT_BACKEND)
     modality = getattr(cfg, "modality", DEFAULT_MODALITY)
+    task = cfg.task
+    if backend == "mlx":
+        from soup_cli.config.schema import resolve_mlx_task
+
+        task = resolve_mlx_task(task, cfg.training.preference_loss)
     gaps = check_config(cfg)
 
     modality_str = f" modality=[bold]{modality}[/]" if modality != DEFAULT_MODALITY else ""
@@ -419,7 +424,7 @@ def _report_config_support(cfg) -> None:
         f"backend=[bold]{backend}[/]{modality_str}"
     )
     if not gaps:
-        known = unsupported_for(cfg.task, backend, modality)
+        known = unsupported_for(task, backend, modality)
         modality_msg = f" modality={modality}" if modality != DEFAULT_MODALITY else ""
         console.print(
             f"  [green]None of the {len(known)} setting(s) known to be unread "

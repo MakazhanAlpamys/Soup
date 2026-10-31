@@ -143,7 +143,16 @@ training:
     alpha: 32
 ```
 
-MLX backend supports SFT, DPO, ORPO, SimPO, KTO and GRPO. Any other task with `backend: mlx` (`ipo`, `preference`, ...) is refused when the config is loaded, with an error naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for ready-made Apple Silicon configs.
+MLX backend supports SFT, DPO, ORPO, SimPO, KTO and GRPO. `task: preference`
+with `training.preference_loss: dpo`, `orpo` or `simpo` selects the corresponding
+native MLX trainer, with the same load-time restrictions and doctor support
+report as the explicit native task. The configured task remains `preference`;
+the saved `adapter_config.json` records `dpo`, `orpo` or `simpo`, so the adapter
+can also be resumed with that explicit native task. IPO, BCO and
+`training.preference_loss_weights` blends remain refused on MLX. Other tasks
+without a native trainer are refused when the config is loaded, with an error
+naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for
+ready-made Apple Silicon configs.
 
 `training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO, SimPO, KTO and GRPO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
 
@@ -244,8 +253,9 @@ training:
   metadata, from another task, or from another base, before any tensor loads.
 - **Refused at load:** `quantization: 8bit` (use `none`, or a pre-quantized
   4-bit base with `quantization: 4bit`), `training.lora.r: 0`, non-text
-  `modality`, LoRA+, and `task: preference` with `preference_loss: orpo` on
-  `backend: mlx` (use `task: orpo`). The other settings MLX DPO does not apply
+  `modality`, LoRA+ and `data.chat_template`. `task: preference` with
+  `training.preference_loss: orpo` uses this same native trainer and these
+  same restrictions. The other settings MLX DPO does not apply
   are not applied here either.
 
 #### SimPO on MLX
@@ -302,9 +312,9 @@ That shows the objective moving, not alignment quality.
   another task (ORPO and DPO included), or from another base, before any tensor
   loads.
 - **Refused at load:** `quantization: 8bit`, `training.lora.r: 0`, non-text
-  `modality`, LoRA+, `data.chat_template` (as for MLX DPO and ORPO), and
-  `task: preference` with `preference_loss: simpo` on
-  `backend: mlx` (use `task: simpo`). The other settings MLX DPO does not apply
+  `modality`, LoRA+ and `data.chat_template` (as for MLX DPO and ORPO).
+  `task: preference` with `training.preference_loss: simpo` uses this same
+  native trainer and these same restrictions. The other settings MLX DPO does not apply
   are not applied here either.
 
 #### KTO on MLX
