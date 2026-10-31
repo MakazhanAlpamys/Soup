@@ -70,6 +70,37 @@ def test_config_prices_the_projections_built_by_its_backend(
     assert estimate.terms["adapters"] == adapter_bytes
 
 
+def test_unsloth_loader_and_estimate_use_the_same_auto_targets(tmp_path: Path) -> None:
+    from unittest.mock import MagicMock, patch
+
+    from soup_cli.utils import unsloth as unsloth_utils
+
+    fast_model = MagicMock()
+    fast_model.from_pretrained.return_value = (MagicMock(), MagicMock())
+    with patch.dict("sys.modules", {"unsloth": MagicMock(FastLanguageModel=fast_model)}):
+        unsloth_utils.load_model_and_tokenizer("test-model", 2048, target_modules="auto")
+    loaded = tuple(fast_model.get_peft_model.call_args.kwargs["target_modules"])
+    inp = hardware_fit_input_from_config(_config(tmp_path, "unsloth"), allow_network=False)
+    assert inp is not None
+    assert loaded == estimate_peak_vram_gb(inp).estimate.lora_targets == SEVEN_PROJECTIONS
+
+
+@pytest.mark.parametrize(
+    ("checkpointing", "extra_bytes"), [(False, 6_442_450_944), ("medium", 3_422_552_064)]
+)
+def test_unsloth_activations_keep_the_inputs_of_all_seven_projections(
+    tmp_path: Path, checkpointing: bool | str, extra_bytes: int
+) -> None:
+    activations: dict[str, int] = {}
+    for backend in ("transformers", "unsloth"):
+        cfg = _config(tmp_path, backend)
+        cfg.training.gradient_checkpointing = checkpointing
+        inp = hardware_fit_input_from_config(cfg, allow_network=False)
+        assert inp is not None
+        activations[backend] = estimate_peak_vram_gb(inp).estimate.terms["activations"]
+    assert activations["unsloth"] - activations["transformers"] == extra_bytes
+
+
 def test_unsloth_explicit_targets_are_not_expanded(tmp_path: Path) -> None:
     inp = hardware_fit_input_from_config(
         _config(tmp_path, "unsloth", ["q_proj"]), allow_network=False
