@@ -135,7 +135,44 @@ def test_mlx_auto_with_no_adapter_file_names_the_output_dir(
     assert f"{PREFIX} no adapter file in '{output}'" in out
 
 
-def test_reason_escapes_terminal_control_characters(tmp_path: Path) -> None:
-    reason = train_module._resume_failure_reason("bad\x1b[bold red]x", str(tmp_path))
+HOSTILE = "bad\x1b[bold red]x"
+
+
+@pytest.mark.parametrize(
+    ("backend", "resume", "output_name", "experiment_name"),
+    [
+        ("transformers", HOSTILE, "out", None),  # explicit path
+        ("transformers", "auto", "out", HOSTILE),  # auto, experiment_name applied
+        ("mlx", HOSTILE, "out", None),  # MLX explicit adapter path
+        ("mlx", "auto", HOSTILE, None),  # MLX auto output directory
+    ],
+)
+def test_every_branch_escapes_terminal_control_characters(
+    tmp_path: Path, backend, resume, output_name, experiment_name
+) -> None:
+    output = tmp_path / output_name
+    output.mkdir(parents=True, exist_ok=True)
+    reason = train_module._resume_failure_reason(
+        resume, str(output), experiment_name, backend=backend
+    )
     assert "\x1b" not in reason
     assert "\\[bold red]" in reason
+
+
+def test_mlx_auto_ignores_experiment_name_like_the_resolver(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    output = tmp_path / "out"
+    output.mkdir()
+    cfg = _cfg(output, backend="mlx", experiment_name="my-run")
+    out = _refusal(monkeypatch, capsys, cfg, "auto")
+    assert f"{PREFIX} no adapter file in '{output}'" in out
+
+
+def test_auto_is_case_insensitive_like_the_resolver(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    output = tmp_path / "out"
+    output.mkdir()
+    out = _refusal(monkeypatch, capsys, _cfg(output), "AUTO")
+    assert f"{PREFIX} no checkpoint-N directory in '{output}'" in out
