@@ -531,3 +531,70 @@ def test_native_watchdog_runs_final_eval_at_stopped_update(tmp_path):
     assert result["eval_updates"] == [2]
     assert wrapper._eval_log[0]["optimizer_step"] == 2
     assert math.isfinite(result["val_loss"])
+
+
+@pytest.mark.parametrize('quantized', [False, True])
+def test_native_chat_trained_adapter_fresh_process(tmp_path, quantized, monkeypatch):
+    """Train locally, then prove the saved adapter affects the public chat consumer."""
+    import os
+    import subprocess
+    import sys
+
+    monkeypatch.chdir(tmp_path)
+    base = _checkpoint(tmp_path / 'base', quantized)
+    adapter = tmp_path / 'adapter'
+    cfg = _config(base, adapter, dora=False, quantized=quantized, targets=['lm_head'])
+    cfg.training.lr = 0.01
+    cfg.training.epochs = 4
+    wrapper = MLXSFTTrainerWrapper(cfg)
+    wrapper.setup(_rows())
+    wrapper.train()
+    script = r'''
+import json
+from pathlib import Path
+from typer.testing import CliRunner
+import mlx.core as mx
+from soup_cli.cli import app
+from soup_cli.utils.mlx_generation import load_native_model, generate_native
+model, tokenizer = load_native_model('adapter')
+base, _ = load_native_model('base')
+tokens = mx.array([[5, 6, 7, 5]])
+assert not mx.allclose(model(tokens), base(tokens), atol=1e-5, rtol=1e-5).item()
+messages = [{'role': 'user', 'content': 'alpha'}]
+expected, count = generate_native(model, tokenizer, messages, max_tokens=4, temperature=0)
+control, _ = generate_native(base, tokenizer, messages, max_tokens=4, temperature=0)
+assert expected != control
+runner = CliRunner()
+result = runner.invoke(app, ['chat', '--backend', 'mlx', '--model', 'adapter',
+                            '--temperature', '0', '--max-tokens', '4'], input='alpha\n/quit\n')
+assert result.exit_code == 0, (result.output, repr(result.exception))
+from tests.conftest import strip_ansi
+plain = ' '.join(strip_ansi(result.output).split())
+assert ' '.join(f'Assistant: {expected}'.split()) in plain and 'Goodbye' in plain
+Path('chat-evidence.json').write_text(json.dumps({'adapter': expected, 'base': control,
+                                               'tokens_generated': count}))
+weights = mx.load('adapter/adapters.safetensors')
+for mutation in ('missing', 'extra', 'shape', 'nonfinite', 'integer'):
+    changed = dict(weights)
+    name = next(iter(changed))
+    if mutation == 'missing': del changed[name]
+    elif mutation == 'extra': changed['not.an.adapter'] = mx.zeros((1,))
+    elif mutation == 'shape': changed[name] = mx.zeros((1, 1))
+    elif mutation == 'nonfinite': changed[name] = mx.full(changed[name].shape, float('nan'))
+    else: changed[name] = mx.zeros(changed[name].shape, dtype=mx.int32)
+    mx.save_safetensors('adapter/adapters.safetensors', changed)
+    failed = runner.invoke(app, ['chat', '--backend', 'mlx', '--model', 'adapter'])
+    diagnostic = 'finite floating' if mutation in ('nonfinite', 'integer') else 'keys/shapes'
+    plain = ' '.join(strip_ansi(failed.output).split())
+    assert failed.exit_code == 1 and diagnostic in plain
+    assert 'Model loaded' not in plain
+mx.save_safetensors('adapter/adapters.safetensors', weights)
+'''
+    env = dict(os.environ, HF_HUB_OFFLINE='1')
+    root = __import__('pathlib').Path(__file__).parents[1]
+    env['PYTHONPATH'] = os.pathsep.join((str(root / 'src'), str(root)))
+    result = subprocess.run([sys.executable, '-c', script], cwd=tmp_path, env=env,
+                            capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    evidence = json.loads((tmp_path / 'chat-evidence.json').read_text())
+    assert evidence['adapter'] != evidence['base']
