@@ -107,6 +107,8 @@ def test_json_says_the_gpu_memory_was_assumed(config_file, no_gpu):
 
 
 def test_a_detected_gpu_is_still_a_real_verdict(config_file, monkeypatch):
+    # A CUDA card: on Apple Silicon (the macOS runners) the limit is Metal's working set.
+    monkeypatch.setattr("soup_cli.utils.mlx.is_apple_silicon", lambda: False)
     monkeypatch.setattr(
         "soup_cli.utils.gpu.get_gpu_info",
         lambda: {"memory_total_bytes": 8 * 1024**3, "memory_total": "8 GB", "gpu_count": 1},

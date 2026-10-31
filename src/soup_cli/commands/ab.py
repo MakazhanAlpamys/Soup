@@ -125,7 +125,7 @@ def ab(
         "continue": "cyan",
     }[verdict.decision]
 
-    table = Table(title=f"mSPRT verdict — {escape(canonical)}", border_style=decision_colour)
+    table = Table(title=f"A/B verdict — {escape(canonical)}", border_style=decision_colour)
     table.add_column("Field")
     table.add_column("Value")
     table.add_row("decision", f"[bold]{verdict.decision}[/]")

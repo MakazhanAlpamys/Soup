@@ -338,6 +338,8 @@ def test_the_fit_verdict_on_a_detected_card(workdir, monkeypatch, factor, fit, l
     # The card is read in GiB and compared in bytes, so a card a few percent above the
     # estimate is tight, not short: 1.05 x total in 1e9-byte GB would not fit.
     card = int(total * factor)
+    # A CUDA card: on Apple Silicon (the macOS runners) the limit is Metal's working set.
+    monkeypatch.setattr("soup_cli.utils.mlx.is_apple_silicon", lambda: False)
     monkeypatch.setattr("soup_cli.utils.gpu.get_gpu_info", lambda: {"memory_total_bytes": card})
 
     assert tool_profile({"config": "soup.yaml"})["fit"] == fit

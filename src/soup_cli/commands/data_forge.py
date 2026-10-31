@@ -106,6 +106,19 @@ def forge(
         write_provenance,
     )
     from soup_cli.utils.hubs import validate_hub_name
+    from soup_cli.utils.paths import ensure_distinct_paths
+
+    # Discover names without reading document contents or contacting a teacher.
+    try:
+        doc_paths = discover_documents(docs)
+        ensure_distinct_paths(
+            [("--docs", docs)] + [("--docs", path) for path in doc_paths],
+            [("--output", output), ("--provenance", provenance)],
+        )
+        ensure_distinct_paths([("--output", output)], [("--provenance", provenance)])
+    except (TypeError, ValueError, FileNotFoundError) as exc:
+        console.print(f"[red]Plan failed:[/] {escape(str(exc))}")
+        raise typer.Exit(1) from exc
 
     try:
         hub_canonical = validate_hub_name(hub)
@@ -178,7 +191,6 @@ def forge(
             teacher=effective_teacher,
             uncertainty_threshold=uncertainty_threshold,
         )
-        doc_paths = discover_documents(docs)
     except (TypeError, ValueError, FileNotFoundError) as exc:
         console.print(f"[red]Plan failed:[/] {escape(str(exc))}")
         raise typer.Exit(1) from exc

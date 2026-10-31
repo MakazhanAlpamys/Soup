@@ -412,6 +412,14 @@ def dedup(
         console.print("[red]Dataset is empty.[/]")
         raise typer.Exit(1)
 
+    if field and not any(field in row for row in data):
+        console.print(
+            f"--field {field!r} is absent from every row; "
+            "choose a field present in the dataset.",
+            markup=False, highlight=False, emoji=False,
+        )
+        raise typer.Exit(1)
+
     # Output resolution + containment is shared by BOTH backends.
     if output is None:
         output = str(file_path.stem) + "_deduped.jsonl"
@@ -3197,6 +3205,8 @@ def recipe(
 
     from soup_cli.utils.recipe_dag import load_recipe_yaml
 
+    if execute and output is not None:
+        _refuse_output_over_input([("the input", path)], [("--output", output)])
     try:
         dag = load_recipe_yaml(path)
     except FileNotFoundError as exc:
@@ -3231,13 +3241,22 @@ def recipe(
         # cwd-contained, and we never want the live runner to be the
         # first/only enforcement point.
         from soup_cli.utils.paths import is_under_cwd
-        from soup_cli.utils.recipe_run import run_recipe
+        from soup_cli.utils.recipe_run import _recipe_write_paths, run_recipe
 
         if not output or not is_under_cwd(output):
             console.print(
                 "[red]--output must be a non-empty path under the current directory[/]"
             )
             raise typer.Exit(2)
+
+        inputs = [("the input", path)] + [
+            (f"seed {node.name}.path", node.config["path"])
+            for node in dag.nodes
+            if node.kind == "seed" and isinstance(node.config.get("path"), str)
+        ]
+        _refuse_output_over_input(
+            inputs, [("--output", target) for target in _recipe_write_paths(dag, output)]
+        )
 
         if provider is not None and offline:
             console.print("[red]--provider and --offline cannot be used together.[/]")
@@ -3343,7 +3362,13 @@ def gen_magpie(
     from rich.markup import escape as _escape
     from rich.panel import Panel
 
-    from soup_cli.utils.magpie import build_magpie_config, run_magpie
+    from soup_cli.utils.data_forge import ForgeJudgeStats
+    from soup_cli.utils.magpie import (
+        MagpieProviderError,
+        build_magpie_config,
+        magpie_failure_summary,
+        run_magpie,
+    )
 
     try:
         cfg = build_magpie_config(
@@ -3373,13 +3398,18 @@ def gen_magpie(
         console.print("[red]--output is required unless --plan-only is set.[/]")
         raise typer.Exit(2)
 
+    stats = ForgeJudgeStats()
     try:
         result = run_magpie(
             cfg,
             output_path=output,
             base_url=base_url or None,
             max_tokens=max_tokens,
+            stats=stats,
         )
+    except MagpieProviderError as exc:
+        console.print(f"[red]{for_terminal(exc)}[/]")
+        raise typer.Exit(1) from exc
     except (TypeError, ValueError, ImportError) as exc:
         console.print(f"[red]{_escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
@@ -3394,6 +3424,11 @@ def gen_magpie(
             title="soup data gen-magpie — done",
         )
     )
+    if stats.failures:
+        console.print(
+            "[yellow]Warning:[/] "
+            + for_terminal(magpie_failure_summary(stats, cfg.provider, base_url or None))
+        )
     if result.rows_kept == 0:
         console.print(
             "[yellow]Warning:[/] 0 rows generated — is the provider reachable "
@@ -4209,8 +4244,9 @@ def evolve(
     from rich.markup import escape as _escape
     from rich.panel import Panel
 
+    from soup_cli.utils.data_forge import ForgeJudgeStats
     from soup_cli.utils.evolve import STRATEGIES, run_evolve
-    from soup_cli.utils.magpie import make_magpie_generate_fn
+    from soup_cli.utils.magpie import magpie_failure_summary, make_magpie_generate_fn
     from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
 
     if strategy not in STRATEGIES:
@@ -4227,12 +4263,14 @@ def evolve(
         seeds = _evolve_load_prompts(input_path)
         if output:
             enforce_under_cwd_and_no_symlink(output, "--output path")
+        stats = ForgeJudgeStats()
         generate_fn = make_magpie_generate_fn(
             provider,
             model=model,
             base_url=base_url or None,
             temperature=temperature,
             max_tokens=max_tokens,
+            stats=stats,
         )
     except (FileNotFoundError, TypeError, ValueError, ImportError) as exc:
         console.print(f"[red]{_escape(str(exc))}[/]")
@@ -4257,6 +4295,12 @@ def evolve(
         raise typer.Exit(2)
 
     evolved_rows = run_evolve(seeds, strategy, rounds, generate_fn)
+    if not evolved_rows and stats.failures:
+        console.print(
+            "[red]No usable rows produced:[/] "
+            + for_terminal(magpie_failure_summary(stats, provider, base_url or None))
+        )
+        raise typer.Exit(1)
     out_lines = [
         json.dumps(
             {
@@ -4286,6 +4330,11 @@ def evolve(
             title="soup data evolve — done",
         )
     )
+    if stats.failures:
+        console.print(
+            "[yellow]Warning:[/] "
+            + for_terminal(magpie_failure_summary(stats, provider, base_url or None))
+        )
     if not evolved_rows:
         console.print(
             "[yellow]Warning:[/] 0 rows — is the provider reachable and the "
@@ -4313,6 +4362,13 @@ def persona_mix(
     ``--output`` JSONL with ``{prompt, persona, style}`` rows. When
     ``--personas`` / ``--styles`` are omitted the bundled diversity set is used.
     """
+    inputs = [("--prompts", prompts)]
+    if personas:
+        inputs.append(("--personas", personas))
+    if styles:
+        inputs.append(("--styles", styles))
+    _refuse_output_over_input(inputs, [("--output", output)])
+
     import os
     import tempfile
 

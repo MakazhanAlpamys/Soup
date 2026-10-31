@@ -60,6 +60,22 @@ def _stdin_isatty() -> bool:
     return sys.stdin.isatty()
 
 
+def _confirm_start_training() -> None:
+    """Refuse on a non-TTY stdin (#1913) or ask for interactive confirmation."""
+    from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR
+
+    if not _stdin_isatty():
+        console.print(
+            "[red]stdin is not a TTY, so the start-training confirmation "
+            "cannot be answered.[/] Pass --yes to start without the "
+            "confirmation."
+        )
+        raise typer.Exit(EXIT_USAGE_ERROR)
+    if not typer.confirm("Start training?", default=True):
+        console.print("[yellow]Cancelled.[/]")
+        raise typer.Exit()
+
+
 def _nondefault_unwired_training_settings(training_config) -> list[str]:
     """Return staged training settings whose value differs from the schema default."""
     fields = type(training_config).model_fields
@@ -360,13 +376,83 @@ def _build_hardware_fit_input(cfg, gpu_memory_gb=None):
     return hardware_fit_input_from_config(cfg, gpu_memory_gb=gpu_memory_gb)
 
 
-def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
+#: How the pre-flight panel names each sharding mode it prices per card (#2300).
+_SHARDING_LABELS = {
+    "full_shard": "--fsdp full_shard",
+    "shard_grad": "--fsdp shard_grad",
+    "full_offload": "--fsdp full_offload",
+    "zero2": "DeepSpeed ZeRO-2",
+    "zero3": "DeepSpeed ZeRO-3",
+}
+
+
+def _deepspeed_zero_stage(path: str) -> int | None:
+    """``zero_optimization.stage`` of the DeepSpeed config ``_resolve_deepspeed`` returned.
+
+    ``None`` when the file cannot be read or names no integer stage: the run is then
+    priced as one unsharded card, as before #2300.
+    """
+    try:
+        with open(path, encoding="utf-8") as handle:
+            config = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    zero = config.get("zero_optimization") if isinstance(config, dict) else None
+    stage = zero.get("stage") if isinstance(zero, dict) else None
+    if isinstance(stage, bool) or not isinstance(stage, int):
+        return None
+    return stage
+
+
+def _preflight_sharding(
+    fsdp: str | None, ds_config_path: str | None, num_gpus: int | None, nodes: int
+) -> tuple[str | None, int]:
+    """The sharding mode and the process count the VRAM pre-flight prices (#2300).
+
+    The mode is the ``--fsdp`` preset, or ``zero2`` / ``zero3`` from the stage of the
+    resolved DeepSpeed config (a preset's temp file or the user's JSON); ``None`` for
+    anything else. The process count is ``WORLD_SIZE`` inside a launched rank, otherwise
+    ``num_gpus * nodes`` as the launcher computes it, otherwise 1.
+    """
+    mode = None
+    if fsdp:
+        mode = fsdp
+    elif ds_config_path:
+        stage = _deepspeed_zero_stage(ds_config_path)
+        mode = f"zero{stage}" if stage in (2, 3) else None
+
+    from soup_cli.utils.launcher import is_in_distributed
+
+    processes = 0
+    if is_in_distributed():
+        try:
+            processes = int(os.environ.get("WORLD_SIZE", ""))
+        except ValueError:
+            processes = 0
+    if processes < 1:
+        processes = num_gpus * max(nodes, 1) if num_gpus and num_gpus > 0 else 1
+    return mode, processes
+
+
+def _hardware_fit_preflight(
+    cfg,
+    gpu_info,
+    *,
+    allow_oom_attempt: bool,
+    sharding: str | None = None,
+    num_processes: int = 1,
+) -> None:
     """Refuse (or warn) before launch when the predicted peak VRAM won't fit.
 
     Skips silently on CPU / when VRAM is unknown / when the run isn't
     statically predictable, so CI and small runs are unaffected. A quantization
     the predictor has no figure for is skipped with one line (#1652). Honors
     the documented ``--allow-oom-attempt`` opt-out.
+
+    ``sharding`` and ``num_processes`` come from ``_preflight_sharding`` (#2300). A run
+    sharded across more than one process is checked against its floor per card; its
+    estimate, fitted on single-card runs, is a warning as it is outside the calibrated
+    range. Any other run, one process included, is priced as one unsharded card.
     """
     # v0.72.0 — layer streaming bounds peak VRAM by ONE decoder layer, so the
     # resident prediction (full weights + optimizer + grads on the card) is the
@@ -421,7 +507,16 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
     # optimizer) are bytes per parameter times a count, not extrapolated, so a run whose
     # floor alone does not fit the card is refused outside the range too.
     outside = outside_calibrated_range(inp, backend=getattr(cfg, "backend", None))
-    floor_gb, floor_terms = unextrapolated_floor(cfg, inp, b)
+    # #2300: a sharded run's floor is per card, and the estimate, fitted on one card, is
+    # outside the range it was fitted on.
+    sharded = sharding in _SHARDING_LABELS and num_processes > 1
+    if sharded:
+        outside = (*outside, f"sharded across {num_processes} processes")
+    else:
+        sharding, num_processes = None, 1
+    floor_gb, floor_terms = unextrapolated_floor(
+        cfg, inp, b, sharding=sharding, num_processes=num_processes
+    )
     floor_exceeds_card = floor_gb > report.available_vram_gb
     refuse = not allow_oom_attempt and (not outside or floor_exceeds_card)
     # #1631: a "quantized" run priced like an unquantized one needs a word why.
@@ -432,6 +527,11 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
         if dequantized
         else ""
     )
+    if sharded:
+        note += (
+            f"Sharded across {num_processes} processes ({_SHARDING_LABELS[sharding]}): "
+            "the floor is per card; the other figures are for one unsharded card.\n"
+        )
     # #2049: the terms the old formula did not have, shown when they count.
     extra = "".join(
         f" | {label} {value:.1f}"
@@ -439,6 +539,7 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
             ("adapters", b.adapters_gb),
             ("logits", b.logits_gb),
             ("dequant", b.dequant_gb),
+            ("optimizer step", b.optimizer_step_gb),
         )
         if value >= 0.05
     )
@@ -893,8 +994,10 @@ def train(
         "a100",
         "--gpu",
         help=(
-            "Cloud GPU type for --cloud (t4 / l4 / a10 / a10g / a100 / a100-80gb / "
-            "l40s / h100 / a6000). Default a100. Provider-specific allowlists apply."
+            "Cloud GPU type for --cloud. modal: t4, l4, a10g, a100, a100-80gb, "
+            "l40s, h100. lambda: a10, a100, a6000, h100. runpod: a100, a40, h100, "
+            "rtx3090, rtx4090. Default a100. A type another provider lists is "
+            "refused with exit 2."
         ),
     ),
     cloud_submit: bool = typer.Option(
@@ -1380,6 +1483,14 @@ def train(
 
             num_processes = num_gpus * nodes
             if not is_in_distributed():
+                # #2239: ask the start-training confirmation once in the
+                # launching process before spawning N ranks that would all read
+                # from the same terminal, and pass --yes to the launched ranks
+                # so they skip asking again.
+                will_reexec = not dry_run and not no_reexec
+                if will_reexec and not yes:
+                    _confirm_start_training()
+
                 # v0.33.0 #37 — auto-reexec under accelerate launch unless
                 # --no-reexec was passed. On POSIX the accelerate process
                 # replaces this one (os.execvp): no leftover PID tree, stdio
@@ -1414,7 +1525,7 @@ def train(
                         track_energy=track_energy,
                         energy_country=energy_country,
                         energy_out=energy_out,
-                        yes=yes,
+                        yes=yes or will_reexec,
                         minillm_on_policy=minillm_on_policy,
                         capture_activations=capture_activations,
                         capture_prompts=capture_prompts,
@@ -1532,7 +1643,14 @@ def train(
     # analytical VRAM predictor says the run won't fit. Skips silently on CPU
     # or when the config isn't statically predictable (e.g. batch_size='auto');
     # says so when the quantization has no memory model (hqq:*).
-    _hardware_fit_preflight(cfg, gpu_info, allow_oom_attempt=allow_oom_attempt)
+    sharding, sharded_processes = _preflight_sharding(fsdp, ds_config_path, num_gpus, nodes)
+    _hardware_fit_preflight(
+        cfg,
+        gpu_info,
+        allow_oom_attempt=allow_oom_attempt,
+        sharding=sharding,
+        num_processes=sharded_processes,
+    )
 
     backend_label = cfg.backend
     if cfg.backend == "unsloth":
@@ -1769,21 +1887,7 @@ def train(
             raise typer.Exit(1) from exc
 
     if not dry_run and not yes:
-        # #1913: on a non-TTY stdin the confirm can never be answered — a pipe
-        # hangs until its writer closes (EOF aborts via typer) and an
-        # unattended service waits forever. Fail with the escape hatch named.
-        from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR
-
-        if not _stdin_isatty():
-            console.print(
-                "[red]stdin is not a TTY, so the start-training confirmation "
-                "cannot be answered.[/] Pass --yes to start without the "
-                "confirmation."
-            )
-            raise typer.Exit(EXIT_USAGE_ERROR)
-        if not typer.confirm("Start training?", default=True):
-            console.print("[yellow]Cancelled.[/]")
-            raise typer.Exit()
+        _confirm_start_training()
 
     # #1223: a split nothing evaluates is not withheld -- generation tasks train
     # on every row unless training.eval_steps asks for evaluation.

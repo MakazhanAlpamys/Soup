@@ -13,7 +13,6 @@ from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -64,16 +63,16 @@ def env_lock_cmd(
         lock = snapshot_env()
         write_lock(lock, output)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
         raise typer.Exit(2) from exc
 
     console.print(
         Panel(
             f"[green]Locked {len(lock.entries)} packages to "
-            f"{escape(output)}[/]\n"
-            f"Python: {escape(lock.python_version)} | "
-            f"Platform: {escape(lock.platform)} | "
-            f"CUDA: {escape(lock.cuda_version or 'none')}",
+            f"{for_terminal(output)}[/]\n"
+            f"Python: {for_terminal(lock.python_version)} | "
+            f"Platform: {for_terminal(lock.platform)} | "
+            f"CUDA: {for_terminal(lock.cuda_version or 'none')}",
             title="env lock",
             border_style="green",
         )
@@ -93,22 +92,22 @@ def env_status_cmd(
         lock = read_lock(lock_path)
     except FileNotFoundError:
         console.print(
-            f"[yellow]No lock file at {escape(lock_path)}; "
+            f"[yellow]No lock file at {for_terminal(lock_path)}; "
             "run `soup env lock` first.[/]"
         )
         raise typer.Exit(1) from None
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
         raise typer.Exit(2) from exc
 
     header = Table(title="env status (locked)")
     header.add_column("Field")
     header.add_column("Value")
-    header.add_row("soup_version", escape(lock.soup_version))
-    header.add_row("python_version", escape(lock.python_version))
-    header.add_row("platform", escape(lock.platform))
-    header.add_row("cuda_version", escape(lock.cuda_version or "none"))
-    header.add_row("created_at", escape(lock.created_at))
+    header.add_row("soup_version", for_terminal(lock.soup_version))
+    header.add_row("python_version", for_terminal(lock.python_version))
+    header.add_row("platform", for_terminal(lock.platform))
+    header.add_row("cuda_version", for_terminal(lock.cuda_version or "none"))
+    header.add_row("created_at", for_terminal(lock.created_at))
     header.add_row("entries", str(len(lock.entries)))
     console.print(header)
 
@@ -118,7 +117,7 @@ def env_status_cmd(
         body.add_column("Version")
         body.add_column("Source")
         for e in lock.entries:
-            body.add_row(escape(e.name), escape(e.version), escape(e.source))
+            body.add_row(for_terminal(e.name), for_terminal(e.version), for_terminal(e.source))
         console.print(body)
 
 
@@ -146,12 +145,12 @@ def env_check_cmd(
         locked = read_lock(lock_path)
     except FileNotFoundError:
         console.print(
-            f"[red]No lock file at {escape(lock_path)}; "
+            f"[red]No lock file at {for_terminal(lock_path)}; "
             "run `soup env lock` first.[/]"
         )
         lock_exit = 1
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
         lock_exit = 2
     else:
         current = snapshot_env()
@@ -165,7 +164,7 @@ def env_check_cmd(
                 )
             )
         else:
-            body = "\n".join(f"- {escape(c)}" for c in report.changes)
+            body = "\n".join(f"- {for_terminal(c)}" for c in report.changes)
             console.print(
                 Panel(
                     f"[red]{report.drift_count} ABI-sensitive drift(s):[/]\n{body}",
@@ -177,8 +176,8 @@ def env_check_cmd(
 
     if not bounds.ok:
         rows = "\n".join(
-            f"- {escape(v.name)} {escape(v.installed)} violates declared bound "
-            f"{escape(v.specifier)}"
+            f"- {for_terminal(v.name)} {for_terminal(v.installed)} violates declared bound "
+            f"{for_terminal(v.specifier)}"
             for v in bounds.violations
         )
         console.print(
@@ -227,24 +226,24 @@ def env_fix_cmd(
         lock = read_lock(lock_path)
     except FileNotFoundError:
         console.print(
-            f"[red]No lock file at {escape(lock_path)}; "
+            f"[red]No lock file at {for_terminal(lock_path)}; "
             "run `soup env lock` first.[/]"
         )
         raise typer.Exit(1) from None
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
         raise typer.Exit(2) from exc
 
     try:
         plan = render_install_plan(lock, fmt=fmt)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
         raise typer.Exit(2) from exc
 
     console.print(
         Panel(
-            escape(plan.rstrip("\n")),
-            title=f"env fix — install plan ({escape(fmt)})",
+            for_terminal(plan.rstrip("\n")),
+            title=f"env fix — install plan ({for_terminal(fmt)})",
             border_style="green",
         )
     )
@@ -259,9 +258,9 @@ def env_fix_cmd(
         try:
             write_requirements_txt(lock, output)
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]{escape(str(exc))}[/]")
+            console.print(f"[red]{for_terminal(str(exc))}[/]")
             raise typer.Exit(2) from exc
-        console.print(f"[green]Wrote requirements to {escape(output)}[/]")
+        console.print(f"[green]Wrote requirements to {for_terminal(output)}[/]")
 
 
 __all__ = ["env_app"]

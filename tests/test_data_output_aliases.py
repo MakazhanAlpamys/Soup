@@ -58,6 +58,10 @@ _SCORED = tuple(
     for idx in range(4)
 )
 _SEEDS = ({"prompt": "Write a short poem about the sea"},)
+_RECIPE = ({"nodes": [
+    {"name": "source", "kind": "seed", "config": {"path": "seed.jsonl"}},
+    {"name": "sink", "kind": "sampler", "config": {}},
+], "edges": [["source", "sink"]]},)
 
 
 @pytest.fixture(autouse=True)
@@ -143,6 +147,25 @@ def _patch_evolve(monkeypatch) -> None:
     )
 
 
+def _patch_generate(monkeypatch) -> None:
+    from soup_cli.commands import generate
+
+    monkeypatch.setattr(generate, "_generate_batch", lambda **_kwargs: list(_ALPACA[2:3]))
+
+
+def _patch_canary_check(monkeypatch) -> None:
+    from soup_cli.commands import data_canary
+    monkeypatch.setattr(data_canary, "_load_pair", lambda *_a: (object(), object(), "cpu"))
+    monkeypatch.setattr(data_canary, "compute_pair_losses",
+                        lambda _m, _t, pairs, **_k: [10.0, 10.0] + [1.0] * (len(pairs) - 2))
+
+
+def _patch_mix_live(monkeypatch) -> None:
+    from soup_cli.utils import mix_proxy
+
+    monkeypatch.setattr(mix_proxy, "proxy_run_for_weights", lambda *_a, **_k: 1.0)
+
+
 @dataclass(frozen=True)
 class Case:
     command: str
@@ -155,6 +178,9 @@ class Case:
     readers: tuple[str, ...]
     patch_for_success: Callable | None = None
     extra_files: dict = field(default_factory=dict)
+    output_is_dir: bool = False
+    output_field: str = "--output"
+    absolute_input: bool = False
 
 
 _CASES = (
@@ -259,6 +285,82 @@ _CASES = (
         ),
         _patch_evolve,
     ),
+    Case(
+        "persona-prompts", "d.jsonl", _SEEDS,
+        lambda inp, out: ["data", "persona-mix", "--prompts", inp, "--n", "1", "--output", out],
+        "--prompts", 1, ("builtins.open",),
+    ),
+    Case(
+        "persona-personas", "d.jsonl", ({"persona": "A careful scientist"},),
+        lambda inp, out: ["data", "persona-mix", "--prompts", "p.jsonl", "--personas", inp,
+                          "--n", "1", "--output", out],
+        "--personas", 1, ("builtins.open",), extra_files={"p.jsonl": _SEEDS},
+    ),
+    Case(
+        "persona-styles", "d.jsonl", ({"style": "Concise"},),
+        lambda inp, out: ["data", "persona-mix", "--prompts", "p.jsonl", "--styles", inp,
+                          "--n", "1", "--output", out],
+        "--styles", 1, ("builtins.open",), extra_files={"p.jsonl": _SEEDS},
+    ),
+    *(
+        Case(
+            f"generate-{option}", "d.jsonl", _ALPACA[:1],
+            lambda inp, out, option=option: ["data", "generate", "--prompt", "examples",
+                                             "--count", "1", "--" + option, inp, "-o", out],
+            "--" + option, 1,
+            ("soup_cli.data.loader.load_raw_data", "pathlib.Path.read_text",
+             "soup_cli.commands.generate._generate_batch"),
+            _patch_generate,
+        ) for option in ("seed", "dedup-with", "context")
+    ),
+    Case(
+        "canary-check", "d.jsonl", _ALPACA[:1],
+        lambda inp, out: ["data", "canary", "check", "--manifest", inp, "--base", "fake/model",
+                          "--controls", "4", "-o", out],
+        "--manifest", 1, ("soup_cli.commands.data_canary.load_manifest",
+                            "soup_cli.commands.data_canary._load_pair"),
+        _patch_canary_check,
+    ),
+    *(
+        Case(
+            f"mix-dataset-{position}", "d.jsonl", _ALPACA,
+            lambda inp, out, position=position: [
+                "data", "mix", "--optimize", "--datasets",
+                f"{inp},e.jsonl" if position == 0 else f"e.jsonl,{inp}",
+                "--num-probes", "1", "--overwrite", "-o", out,
+            ],
+            "--datasets", 1, ("soup_cli.utils.data_mix.build_optimization_plan",),
+            extra_files={"e.jsonl": _ALPACA[:1]},
+        ) for position in (0, 1)
+    ),
+    Case(
+        "mix-base-yaml", "d.jsonl", ({"base": "fake/model"},),
+        lambda inp, out: ["data", "mix", "--optimize", "--datasets", "a.jsonl,b.jsonl",
+                          "--live", "--base-yaml", inp, "--num-probes", "1", "--overwrite",
+                          "-o", out],
+        "--base-yaml", 1, ("soup_cli.utils.data_mix.build_optimization_plan",
+                             "soup_cli.utils.mix_proxy.proxy_run_for_weights"),
+        _patch_mix_live,
+        extra_files={"a.jsonl": _ALPACA[:1], "b.jsonl": _ALPACA[1:2]},
+    ),
+    *(
+        Case(
+            f"forge-{option}", "d.jsonl", _ALPACA,
+            lambda inp, out, option=option: [
+                "data", "forge", "--docs", ".", "--target-rows", "1",
+                "--" + option, out,
+            ],
+            "--docs", 1, ("soup_cli.utils.data_forge._read_doc_text",
+                            "soup_cli.utils.data_forge.make_judge_provider_fn"),
+            output_field="--" + option, absolute_input=True,
+        ) for option in ("output", "provenance")
+    ),
+    Case(
+        "recipe", "recipe.jsonl", _RECIPE,
+        lambda inp, out: ["data", "recipe", inp, "--execute", "-o", out],
+        "the input", 1, ("soup_cli.utils.recipe_dag.load_recipe_yaml",),
+        extra_files={"seed.jsonl": _ALPACA}, output_is_dir=True,
+    ),
 )
 _BY_NAME = {case.command: case for case in _CASES}
 
@@ -266,6 +368,11 @@ _BY_NAME = {case.command: case for case in _CASES}
 def _setup(case: Case) -> dict[str, bytes]:
     """Write the case's input files; return each one's bytes."""
     before = {case.input_name: _write_rows(case.input_name, case.rows)}
+    if case.command == "canary-check":
+        from soup_cli.utils.canary import generate_canaries, write_manifest
+
+        write_manifest(generate_canaries(count=2, seed=3), case.input_name, "alpaca")
+        before[case.input_name] = _read_bytes(case.input_name)
     for name, rows in case.extra_files.items():
         before[name] = _write_rows(name, rows)
     return before
@@ -308,9 +415,10 @@ _SPELLINGS = (
 
 
 def _invoke_refused(monkeypatch, case: Case, argv: list[str]):
-    for target in case.readers:
-        monkeypatch.setattr(target, _fail_if_called(target))
-    result = runner.invoke(app, argv)
+    with monkeypatch.context() as readers_patch:
+        for target in case.readers:
+            readers_patch.setattr(target, _fail_if_called(target))
+        result = runner.invoke(app, argv)
     # A reader that ran raises AssertionError, which CliRunner turns into exit 1;
     # only a refusal through typer.Exit leaves a SystemExit here.
     assert isinstance(result.exception, SystemExit), (result.output, repr(result.exception))
@@ -325,11 +433,78 @@ def test_output_naming_the_input_is_refused_before_any_read(monkeypatch, command
     before = _setup(case)
     out = _spell(spelling, case.input_name)
     result = _invoke_refused(monkeypatch, case, case.argv(case.input_name, out))
-    assert _squeezed(_refusal("--output", out, case.input_field, case.input_name)) in _squeezed(
+    input_path = os.path.abspath(case.input_name) if case.absolute_input else case.input_name
+    assert _squeezed(_refusal(case.output_field, out, case.input_field, input_path)) in _squeezed(
         result.output
     ), result.output
     for name, payload in before.items():
         assert _read_bytes(name) == payload, f"{name} was modified"
+
+
+@pytest.mark.parametrize("artifact", ["sink.jsonl", ".node-source.jsonl", ".node-sink.jsonl",
+                                     ".checkpoint.json"])
+@pytest.mark.parametrize("protected", ["recipe", "seed"])
+def test_recipe_outputs_cannot_replace_recipe_or_seed_files(monkeypatch, artifact, protected):
+    seed_path = artifact if protected == "seed" else "seed.jsonl"
+    recipe_path = artifact if protected == "recipe" else "plan.yaml"
+    seed_bytes = _write_rows(seed_path, _ALPACA)
+    recipe = {"nodes": [
+        {"name": "source", "kind": "seed", "config": {"path": seed_path}},
+        {"name": "sink", "kind": "sampler", "config": {}},
+    ], "edges": [["source", "sink"]]}
+    recipe_bytes = _write_rows(recipe_path, (recipe,))
+    monkeypatch.setattr("soup_cli.utils.recipe_run.run_recipe", _fail_if_called("run_recipe"))
+    result = runner.invoke(app, ["data", "recipe", recipe_path, "--execute", "-o", "."])
+    assert isinstance(result.exception, SystemExit), (result.output, repr(result.exception))
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "same file as" in _plain(result.output), result.output
+    assert _read_bytes(seed_path) == seed_bytes
+    assert _read_bytes(recipe_path) == recipe_bytes
+
+
+def test_forge_outputs_must_not_replace_each_other(monkeypatch):
+    payload = _write_rows("d.jsonl", _ALPACA)
+    monkeypatch.setattr("soup_cli.utils.data_forge._read_doc_text", _fail_if_called("doc read"))
+    result = runner.invoke(app, ["data", "forge", "--docs", ".", "--target-rows", "1",
+                                 "--output", "out.jsonl", "--provenance", "./out.jsonl"])
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert _squeezed(_refusal("--provenance", "./out.jsonl", "--output", "out.jsonl")) in (
+        _squeezed(result.output)
+    )
+    assert _read_bytes("d.jsonl") == payload
+    assert not os.path.exists("out.jsonl")
+
+
+def test_mix_apply_only_prints_even_when_output_names_the_recipe():
+    import yaml
+
+    recipe = {"data": {"train": ["a.jsonl", "b.jsonl"],
+                       "interleave": {"strategy": "probs", "probs": [0.5, 0.5]}}}
+    payload = yaml.safe_dump(recipe).encode("utf-8")
+    with open("mix.yaml", "wb") as stream:
+        stream.write(payload)
+    result = runner.invoke(app, ["data", "mix", "--apply", "mix.yaml", "-o", "mix.yaml"])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert _read_bytes("mix.yaml") == payload
+
+
+def test_gen_magpie_has_no_file_input_and_preserves_plan_only_output():
+    payload = _write_rows("untouched.jsonl", _ALPACA)
+    result = runner.invoke(app, ["data", "gen-magpie", "--base", "fake/model", "--provider",
+                                 "ollama", "--target", "1", "--output", "untouched.jsonl",
+                                 "--plan-only"])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert _read_bytes("untouched.jsonl") == payload
+
+
+def test_recipe_can_read_noncolliding_inputs_inside_its_output_directory():
+    seed = _write_rows("seed.jsonl", _ALPACA)
+    recipe = _write_rows("plan.yaml", _RECIPE)
+    result = runner.invoke(app, ["data", "recipe", "plan.yaml", "--execute", "-o", "."])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert _read_bytes("seed.jsonl") == seed
+    assert _read_bytes("plan.yaml") == recipe
+    assert [json.loads(line) for line in _read_bytes("sink.jsonl").splitlines()] == list(_ALPACA)
 
 
 def test_merge_refuses_an_output_that_is_its_second_input(monkeypatch):
@@ -407,6 +582,8 @@ def test_a_distinct_output_still_works(monkeypatch, command):
     before = _setup(case)
     result = runner.invoke(app, case.argv(case.input_name, "result.jsonl"))
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert os.path.isfile("result.jsonl"), _plain(result.output)
+    assert (os.path.isdir if case.output_is_dir else os.path.isfile)("result.jsonl"), (
+        _plain(result.output)
+    )
     for name, payload in before.items():
         assert _read_bytes(name) == payload, f"{name} was modified"

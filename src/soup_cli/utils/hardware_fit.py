@@ -19,8 +19,9 @@ Public surface:
 - ``VRAMBreakdown`` frozen dataclass + ``total_gb`` property.
 - ``HardwareFitReport`` frozen dataclass.
 - ``estimate_peak_vram_gb(inp)`` -> ``VRAMBreakdown``.
-- ``unextrapolated_floor(cfg, inp, breakdown)`` -> what the run needs on the card whatever
-  its activations are (weights, CUDA context, trained-parameter state), and what that is.
+- ``unextrapolated_floor(cfg, inp, breakdown, *, sharding=None, num_processes=1)`` -> what
+  the run needs on one card whatever its activations are (weights, CUDA context,
+  trained-parameter state), and what that is; per card for a sharded run (#2300).
 - ``decide_hardware_fit(inp, *, available_vram_gb)`` -> ``HardwareFitReport``.
 - ``resolve_peft_mode(cfg, quant=None)`` -> ``str``.
 - ``hardware_fit_input_from_config(cfg, ...)`` -> ``HardwareFitInput | None``.
@@ -107,8 +108,14 @@ class HardwareFitInput:
     target_modules: Any = "auto"
     #: False for a task whose model has no LM head (``NO_LM_HEAD_TASKS``).
     lm_head: bool = True
+    #: False for a task that builds the logits but no loss over them
+    #: (``LOGITS_ONLY_TASKS``).
+    logits_loss: bool = True
     #: The fused-loss flags the run's trainer applies (``use_liger``, ``use_cut_ce``).
     fused_loss: tuple[str, ...] = ()
+    #: ``training.activation_offloading`` (``cpu``, ``disk`` or ``None``); not modelled,
+    #: so the estimate only says so.
+    activation_offloading: Optional[str] = None
 
     def __post_init__(self) -> None:
         if isinstance(self.params_b, bool):
@@ -164,6 +171,8 @@ class VRAMBreakdown:
     adapters_gb: float = 0.0
     logits_gb: float = 0.0
     dequant_gb: float = 0.0
+    #: How far the optimizer step's peak exceeds the forward/backward pass (#2277).
+    optimizer_step_gb: float = 0.0
     #: The full estimate behind these numbers (terms in bytes, shape, notes).
     estimate: Optional[VramEstimate] = field(default=None, compare=False, repr=False)
 
@@ -171,6 +180,7 @@ class VRAMBreakdown:
         for fld in (
             "weights_gb", "optimizer_gb", "gradients_gb",
             "activations_gb", "overhead_gb", "adapters_gb", "logits_gb", "dequant_gb",
+            "optimizer_step_gb",
         ):
             val = getattr(self, fld)
             if isinstance(val, bool):
@@ -193,6 +203,7 @@ class VRAMBreakdown:
             + self.adapters_gb
             + self.logits_gb
             + self.dequant_gb
+            + self.optimizer_step_gb
         )
 
 
@@ -338,6 +349,17 @@ _EXACT_STATE_OPTIMIZERS = frozenset(
 GALORE_APPLYING_TASKS: frozenset[str] = frozenset({"sft", "tts", "pretrain"})
 
 
+#: Sharding modes that split the parameters across the processes: each card holds a share of
+#: the weights and of the adapters (#2300). ``--fsdp full_offload`` is priced as
+#: ``full_shard``: offloading moves state off the card, so this only overstates the floor.
+SHARDS_PARAMETERS: frozenset[str] = frozenset({"full_shard", "full_offload", "zero3"})
+#: Sharding modes that split the gradients and the optimizer state (#2300). DeepSpeed's
+#: offload presets are read by their stage, so they are priced as the stage without offload.
+SHARDS_TRAINING_STATE: frozenset[str] = frozenset(
+    {"shard_grad", "full_shard", "full_offload", "zero2", "zero3"}
+)
+
+
 def _trains_a_subset(tcfg: Any) -> bool:
     """Whether a full fine-tune trains only some of the parameters (Spectrum, LISA, freezing)."""
     return bool(
@@ -350,7 +372,12 @@ def _trains_a_subset(tcfg: Any) -> bool:
 
 
 def unextrapolated_floor(
-    cfg: Any, inp: HardwareFitInput, breakdown: VRAMBreakdown
+    cfg: Any,
+    inp: HardwareFitInput,
+    breakdown: VRAMBreakdown,
+    *,
+    sharding: Optional[str] = None,
+    num_processes: int = 1,
 ) -> tuple[float, tuple[str, ...]]:
     """What the run needs on the card whatever its activations are, in GB, and its terms.
 
@@ -381,8 +408,17 @@ def unextrapolated_floor(
       the attention and MLP projections and full AdamW state for the other parameters
       (embeddings, output head, norms), a mix the estimate has no figure for. On any
       other task ``use_galore`` changes nothing and the configured optimizer is counted.
+
+    For a run sharded across ``num_processes`` processes (#2300) the floor is per card: a
+    mode in ``SHARDS_PARAMETERS`` divides the weights and the adapters by the process
+    count, and one in ``SHARDS_TRAINING_STATE`` divides the gradients and the optimizer
+    state. The CUDA context is per card and never divided. Any other ``sharding``, or one
+    process, prices the run as one unsharded card.
     """
-    floor = breakdown.weights_gb + OVERHEAD_FIXED_BYTES / GB
+    processes = max(int(num_processes or 1), 1)
+    param_share = processes if sharding in SHARDS_PARAMETERS else 1
+    state_share = processes if sharding in SHARDS_TRAINING_STATE else 1
+    floor = breakdown.weights_gb / param_share + OVERHEAD_FIXED_BYTES / GB
     terms = ["weights", "CUDA context"]
     tcfg = getattr(cfg, "training", None)
     if inp.peft == "full" and _trains_a_subset(tcfg):
@@ -392,11 +428,15 @@ def unextrapolated_floor(
         getattr(cfg, "task", "sft") in GALORE_APPLYING_TASKS
     )
     charges = [
-        ("adapters", breakdown.adapters_gb, True),
-        ("gradients", breakdown.gradients_gb, optimizer not in _FUSED_BACKWARD_OPTIMIZERS),
+        ("adapters", breakdown.adapters_gb / param_share, True),
+        (
+            "gradients",
+            breakdown.gradients_gb / state_share,
+            optimizer not in _FUSED_BACKWARD_OPTIMIZERS,
+        ),
         (
             "optimizer state",
-            breakdown.optimizer_gb,
+            breakdown.optimizer_gb / state_share,
             optimizer in _EXACT_STATE_OPTIMIZERS and not galore,
         ),
     ]
@@ -414,6 +454,13 @@ def unextrapolated_floor(
 NO_LM_HEAD_TASKS: frozenset[str] = frozenset(
     {"classifier", "reranker", "cross_encoder", "embedding", "reward_model"}
 )
+
+#: Tasks whose step builds the logits but no loss over them, so the estimate charges
+#: the logits tensor alone: prm runs the causal-LM forward without labels and takes
+#: its loss from ``reward_head`` (``trainer/prm.py``), with ``logits_to_keep=1``
+#: where the forward takes it, so on one position (#2368,
+#: ``vram_estimate.logits_positions``).
+LOGITS_ONLY_TASKS: frozenset[str] = frozenset({"prm"})
 
 #: Tasks whose trainer installs the checkpointing tiers: ``trainer/sft.py``'s
 #: ``plan_gradient_checkpointing``, inherited by tts. Every other trainer hands any
@@ -512,7 +559,9 @@ def hardware_fit_input_from_config(
             lora_r=int(getattr(lora, "r", 64) or 0),
             target_modules=getattr(lora, "target_modules", "auto"),
             lm_head=task not in NO_LM_HEAD_TASKS,
+            logits_loss=task not in LOGITS_ONLY_TASKS,
             fused_loss=fused_loss,
+            activation_offloading=getattr(tcfg, "activation_offloading", None),
         )
     except (ValueError, TypeError, ArithmeticError):
         return None  # dims out of the predictor's supported range
@@ -539,7 +588,9 @@ def estimate_peak_vram_gb(inp: HardwareFitInput) -> VRAMBreakdown:
             lora_r=inp.lora_r,
             target_modules=inp.target_modules,
             lm_head=inp.lm_head,
+            logits_loss=inp.logits_loss,
             fused_loss=inp.fused_loss,
+            activation_offloading=inp.activation_offloading,
         ),
     )
     return breakdown_from_estimate(est)
@@ -555,6 +606,7 @@ def breakdown_from_estimate(est: VramEstimate) -> VRAMBreakdown:
         adapters_gb=est.gb("adapters"),
         logits_gb=est.gb("logits"),
         dequant_gb=est.gb("dequant"),
+        optimizer_step_gb=est.gb("optimizer_step"),
         estimate=est,
     )
 
