@@ -2001,6 +2001,7 @@ Subcommands:
 - [`custom`](#soup-eval-custom)
 - [`design`](#soup-eval-design)
 - [`discover`](#soup-eval-discover)
+- [`export-check`](#soup-eval-export-check)
 - [`gate`](#soup-eval-gate)
 - [`gate-install`](#soup-eval-gate-install)
 - [`human`](#soup-eval-human)
@@ -2196,6 +2197,22 @@ Usage: `soup eval discover [OPTIONS] DATA`
 | `--per-cluster` | integer | `3` |  | Held-out canaries to draw per cluster (1-64). |
 | `--seed` | integer | `0` |  | Deterministic seed. |
 | `--output`, `-o` | text | `evals/canaries.json` |  | Where to write the rendered CanarySet JSON. |
+
+### `soup eval export-check`
+
+Verify that an exported model preserved the adapter's behavioral delta.
+
+Usage: `soup eval export-check [OPTIONS]`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `--adapter` | text |  | yes | Path to the LoRA adapter directory used as the reference. Its base model is auto-detected from adapter_config.json unless --base is supplied. |
+| `--exported` | text |  | yes | Path to the exported artifact to test — a merged safetensors directory (from 'soup merge'). Standalone GGUF, ONNX, and MLX fused directories are refused with a diagnostic. |
+| `--base` | text |  |  | Base model path or HuggingFace Hub id. Auto-detected from adapter_config.json when absent. |
+| `--prompts` | text |  |  | Path to prompts file (JSONL or plain text, one per line). Must be provided: give --prompts to specify representative evaluation prompts. |
+| `--min-agreement` | float, 0.0 to 1.0 | `0.8` |  | Minimum required average character-overlap agreement between the exported model and adapter reference on prompts where the adapter changes behavior. Range \[0.0, 1.0]. Default 0.80. |
+| `--format` | text | `table` |  | Output format: table \| json \| markdown |
+| `--allow-stub` | flag | off |  | Use deterministic stub generators if live model loading fails (for CI smoke-testing only; stubs do not verify fidelity and fail the gate). |
 
 ### `soup eval gate`
 
