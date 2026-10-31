@@ -5,12 +5,20 @@ import sys
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _wide_console(monkeypatch):
+    """Rich wraps at the terminal width, which CI sets differently from a laptop."""
+    monkeypatch.setattr("soup_cli.commands.quickstart.console", Console(width=500))
+
 
 # A colon is not a legal file-name character on Windows.
 COLON_NAME = pytest.param(
