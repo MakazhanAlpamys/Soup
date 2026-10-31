@@ -1045,6 +1045,9 @@ soup recipes verify --config soup.yaml
 soup recipes verify --json    # one row per config on stdout, for CI
 ```
 
+`recipes use --output` preserves the requested filename and recipe bytes. Receipts and
+errors display brackets literally and strip terminal control characters only from the display.
+
 **What's covered:**
 
 | Category | Models |
