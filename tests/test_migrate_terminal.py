@@ -81,7 +81,8 @@ def test_migrate_missing_input_is_named_literally(source, name):
     result = _migrate(name, "--output", "soup.yaml", "--yes")
 
     assert result.exit_code == 1
-    assert f"Input file not found: {name}" in _plain(result)
+    # Windows prints the path with backslashes, as Path does.
+    assert f"Input file not found: {Path(name)}" in _plain(result)
     assert not Path("soup.yaml").exists()
 
 
