@@ -50,7 +50,9 @@ def shift_for_next_token(labels: Any, ignore_index: int = IGNORE_INDEX) -> Any:
     return functional.pad(labels, (0, 1), value=ignore_index)[..., 1:]
 
 
-def _chunk_terms(head: Callable[[Any], Any], piece: Any, target: Any, ignore_index: int):
+def _chunk_terms(
+    head: Callable[[Any], Any], piece: Any, target: Any, ignore_index: int,
+) -> tuple[Any, Any, Any, Any]:
     """One chunk: the cross-entropy sum, and what the metrics need, the latter
     without gradients."""
     import torch

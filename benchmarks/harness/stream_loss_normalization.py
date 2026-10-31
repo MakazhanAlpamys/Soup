@@ -19,11 +19,14 @@ import platform
 import statistics
 import time
 from pathlib import Path
+from typing import Any
 
 from rich.console import Console
 
 
-def legacy_chunk_terms(head, piece, target, ignore_index):
+def legacy_chunk_terms(
+    head: Any, piece: Any, target: Any, ignore_index: int,
+) -> tuple[Any, Any, Any, Any]:
     """Reference from main at 7fd7df5, before sharing the FP32 normalization."""
     import torch
     from torch.nn import functional
@@ -47,7 +50,9 @@ def legacy_chunk_terms(head, piece, target, ignore_index):
     return total, entropy, token_loss, correct
 
 
-def run_arm(seed, steps, legacy):
+def run_arm(
+    seed: int, steps: int, legacy: bool,
+) -> tuple[dict[str, float], list[float], list[Any], dict[str, Any], dict[str, Any]]:
     import torch
     from transformers import LlamaConfig, LlamaForCausalLM
 
@@ -66,7 +71,7 @@ def run_arm(seed, steps, legacy):
     )
     # Disjoint starting offsets for training and held-out examples. Mask the prompt in
     # one row and padding in the other, exercising both metric and loss masks.
-    def batches(count, data_seed, heldout=False):
+    def batches(count: int, data_seed: int, heldout: bool = False) -> tuple[Any, Any]:
         generator = torch.Generator().manual_seed(data_seed)
         low, high = (48, 64) if heldout else (0, 48)
         starts = torch.randint(low, high, (count, 2, 1), generator=generator)
@@ -84,7 +89,7 @@ def run_arm(seed, steps, legacy):
     if legacy:
         chunk_loss._chunk_terms = legacy_chunk_terms
     durations, curve, metrics = [], [], []
-    first_grad = None
+    first_grad = {}
     try:
         model.train()
         for index, (tokens, targets) in enumerate(zip(inputs, labels, strict=True)):
@@ -129,7 +134,7 @@ def run_arm(seed, steps, legacy):
     }, curve, metrics, first_grad, model.state_dict()
 
 
-def main():
+def main() -> None:
     import torch
     import transformers
 
