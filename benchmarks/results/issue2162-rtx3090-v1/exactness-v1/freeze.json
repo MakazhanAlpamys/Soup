@@ -1,0 +1,84 @@
+{
+  "at": "2026-10-26T12:28:13.753283+00:00",
+  "source_archive_sha256": "82b91f0f05b1601459d71b627d73d2dd9ab30eddc547b8998f9e9eee07d93b38",
+  "source_commit": "ef5bb3c0",
+  "gpu_uuid": "GPU-05919122-a78e-9af3-3b3c-f9a14fb4d2f4",
+  "cap_bytes": 8589934592,
+  "roster": [
+    {
+      "seq": 2048,
+      "arm": "auto",
+      "tag": "auto",
+      "profile": false
+    },
+    {
+      "seq": 2048,
+      "arm": "auto",
+      "tag": "auto-repeat",
+      "profile": false
+    },
+    {
+      "seq": 2048,
+      "arm": "qkvo",
+      "tag": "qkvo",
+      "profile": false
+    },
+    {
+      "seq": 2048,
+      "arm": "auto",
+      "tag": "auto-profile",
+      "profile": true
+    },
+    {
+      "seq": 2048,
+      "arm": "qkvo",
+      "tag": "qkvo-profile",
+      "profile": true
+    },
+    {
+      "seq": 4096,
+      "arm": "auto",
+      "tag": "auto",
+      "profile": false
+    },
+    {
+      "seq": 4096,
+      "arm": "auto",
+      "tag": "auto-repeat",
+      "profile": false
+    },
+    {
+      "seq": 4096,
+      "arm": "qkvo",
+      "tag": "qkvo",
+      "profile": false
+    },
+    {
+      "seq": 4096,
+      "arm": "auto",
+      "tag": "auto-profile",
+      "profile": true
+    },
+    {
+      "seq": 4096,
+      "arm": "qkvo",
+      "tag": "qkvo-profile",
+      "profile": true
+    }
+  ],
+  "optimizer": "PagedAdamW8bit",
+  "learning_rate": 0.0002,
+  "updates_each": 2,
+  "seed": 42,
+  "B_seed": 7,
+  "input_seed": 1234,
+  "attention": "selected default SDPA; no backend forcing",
+  "deterministic": true,
+  "tf32": false,
+  "primary_sequence": 2048,
+  "required": "all 10 complete receipts, exact repeats/profiles/candidate and memory gates",
+  "census": {
+    "2048": "aabf9f0e31844c8cfa5f5aaab947963c316b97ad8dfd2583b068b95fedb14608",
+    "4096": "3c1002490f8c7496c34c05345e07a9330ec3b27efb911440e788a43bb26b5cbd"
+  }
+}

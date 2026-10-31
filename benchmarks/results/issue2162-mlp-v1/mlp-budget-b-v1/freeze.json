@@ -1,0 +1,276 @@
+{
+  "at": "2026-10-26T20:35:30.652760+00:00",
+  "archive_sha256": "cc6177df580e7801e6e652a136452696b41df37238c0d594fae1c020289344c5",
+  "controller_sha256": "d354c136c8a6be6b92203fd13ba405c0efb77d9b942e37dace4890160c055090",
+  "protocol_sha256": "73c6a3b7d64a02e20da94e0d5e4353e31413999d5384e06e99072664c1215a5b",
+  "sources_sha256": "921f8c247b8e159539f724ace5198d5f395ac6472808fc4451c78bb474d59d14",
+  "reference_sha256": "bb452c9025fa24a09240809f85023f37494d3ef5c09635a91047fc6a54d5dcaa",
+  "census_sha256": "aabf9f0e31844c8cfa5f5aaab947963c316b97ad8dfd2583b068b95fedb14608",
+  "gates": [
+    {
+      "stage": "gate",
+      "arm": "native",
+      "variant": "normal",
+      "tag": "gate-native-normal"
+    },
+    {
+      "stage": "gate",
+      "arm": "qkvo",
+      "variant": "normal",
+      "tag": "gate-qkvo-normal"
+    },
+    {
+      "stage": "gate",
+      "arm": "mixed",
+      "variant": "normal",
+      "tag": "gate-mixed-normal"
+    },
+    {
+      "stage": "gate",
+      "arm": "native",
+      "variant": "profile",
+      "tag": "gate-native-profile"
+    },
+    {
+      "stage": "gate",
+      "arm": "qkvo",
+      "variant": "profile",
+      "tag": "gate-qkvo-profile"
+    },
+    {
+      "stage": "gate",
+      "arm": "mixed",
+      "variant": "profile",
+      "tag": "gate-mixed-profile"
+    }
+  ],
+  "timings": [
+    {
+      "stage": "timing",
+      "arm": "qkvo",
+      "block": 1,
+      "tag": "block1-qkvo"
+    },
+    {
+      "stage": "timing",
+      "arm": "mixed",
+      "block": 1,
+      "tag": "block1-mixed"
+    },
+    {
+      "stage": "timing",
+      "arm": "native",
+      "block": 1,
+      "tag": "block1-native"
+    },
+    {
+      "stage": "timing",
+      "arm": "native",
+      "block": 2,
+      "tag": "block2-native"
+    },
+    {
+      "stage": "timing",
+      "arm": "mixed",
+      "block": 2,
+      "tag": "block2-mixed"
+    },
+    {
+      "stage": "timing",
+      "arm": "qkvo",
+      "block": 2,
+      "tag": "block2-qkvo"
+    },
+    {
+      "stage": "timing",
+      "arm": "qkvo",
+      "block": 3,
+      "tag": "block3-qkvo"
+    },
+    {
+      "stage": "timing",
+      "arm": "native",
+      "block": 3,
+      "tag": "block3-native"
+    },
+    {
+      "stage": "timing",
+      "arm": "mixed",
+      "block": 3,
+      "tag": "block3-mixed"
+    },
+    {
+      "stage": "timing",
+      "arm": "mixed",
+      "block": 4,
+      "tag": "block4-mixed"
+    },
+    {
+      "stage": "timing",
+      "arm": "native",
+      "block": 4,
+      "tag": "block4-native"
+    },
+    {
+      "stage": "timing",
+      "arm": "qkvo",
+      "block": 4,
+      "tag": "block4-qkvo"
+    },
+    {
+      "stage": "timing",
+      "arm": "native",
+      "block": 5,
+      "tag": "block5-native"
+    },
+    {
+      "stage": "timing",
+      "arm": "qkvo",
+      "block": 5,
+      "tag": "block5-qkvo"
+    },
+    {
+      "stage": "timing",
+      "arm": "mixed",
+      "block": 5,
+      "tag": "block5-mixed"
+    },
+    {
+      "stage": "timing",
+      "arm": "mixed",
+      "block": 6,
+      "tag": "block6-mixed"
+    },
+    {
+      "stage": "timing",
+      "arm": "qkvo",
+      "block": 6,
+      "tag": "block6-qkvo"
+    },
+    {
+      "stage": "timing",
+      "arm": "native",
+      "block": 6,
+      "tag": "block6-native"
+    }
+  ],
+  "confirmation": [
+    {
+      "stage": "confirmation",
+      "arm": "native",
+      "pair": 1,
+      "tag": "confirm1-native"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "mixed",
+      "pair": 1,
+      "tag": "confirm1-mixed"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "mixed",
+      "pair": 2,
+      "tag": "confirm2-mixed"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "native",
+      "pair": 2,
+      "tag": "confirm2-native"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "native",
+      "pair": 3,
+      "tag": "confirm3-native"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "mixed",
+      "pair": 3,
+      "tag": "confirm3-mixed"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "mixed",
+      "pair": 4,
+      "tag": "confirm4-mixed"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "native",
+      "pair": 4,
+      "tag": "confirm4-native"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "native",
+      "pair": 5,
+      "tag": "confirm5-native"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "mixed",
+      "pair": 5,
+      "tag": "confirm5-mixed"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "mixed",
+      "pair": 6,
+      "tag": "confirm6-mixed"
+    },
+    {
+      "stage": "confirmation",
+      "arm": "native",
+      "pair": 6,
+      "tag": "confirm6-native"
+    }
+  ],
+  "orders": [
+    [
+      "qkvo",
+      "mixed",
+      "native"
+    ],
+    [
+      "native",
+      "mixed",
+      "qkvo"
+    ],
+    [
+      "qkvo",
+      "native",
+      "mixed"
+    ],
+    [
+      "mixed",
+      "native",
+      "qkvo"
+    ],
+    [
+      "native",
+      "qkvo",
+      "mixed"
+    ],
+    [
+      "mixed",
+      "qkvo",
+      "native"
+    ]
+  ],
+  "warmup": 10,
+  "measured_updates": 50,
+  "family": 12,
+  "resamples": 10000,
+  "stage_a_seed": 42,
+  "confirmation_seed": 73,
+  "primary": "mixed_vs_native",
+  "contrasts": [
+    "mixed_vs_native",
+    "mixed_vs_qkvo",
+    "qkvo_vs_native"
+  ],
+  "rule": "Stage A primary median>=2 and ordinary/adjusted lowers>0; mixed-vs-qkvo lowers>0; then confirmation median>=2 and both lowers>0; all gates must pass."
+}

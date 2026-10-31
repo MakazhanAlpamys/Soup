@@ -1,0 +1,17 @@
+{
+  "captured_at": "2026-10-26T19:02:10.6985756Z",
+  "kind": "post-experiment read-only inventory; not timing telemetry",
+  "os": {
+    "caption": "Microsoft Windows 11 Pro for Workstations",
+    "version": "10.0.26200",
+    "build": "26200",
+    "last_boot_utc": "2026-10-26T12:07:23.5Z"
+  },
+  "nvidia_smi_query": "index,uuid,name,driver_version,memory.total,power.limit,clocks.sm,temperature.gpu",
+  "nvidia_smi_csv": [
+    "0, GPU-05919122-a78e-9af3-3b3c-f9a14fb4d2f4, NVIDIA GeForce RTX 3090, 610.88, 24576, 420.00, 210, 34",
+    "1, GPU-7b0178c9-5f01-96cd-6911-25d9e5fa4126, NVIDIA GeForce RTX 3090, 610.88, 24576, 350.00, 210, 34",
+    "2, GPU-7c1f2b70-2fd5-9552-b36f-8bb959f66fd6, NVIDIA GeForce RTX 3090, 610.88, 24576, 420.00, 210, 35",
+    "3, GPU-928172b9-95ec-7dce-c9aa-5bcbe966c3f7, NVIDIA GeForce RTX 3090, 610.88, 24576, 420.00, 210, 34"
+  ]
+}

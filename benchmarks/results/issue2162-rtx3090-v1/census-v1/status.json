@@ -1,0 +1,16 @@
+[
+  {
+    "sequence": 2048,
+    "returncode": 0,
+    "guard_failure": null,
+    "output_exists": true,
+    "optimizer_updates": 0
+  },
+  {
+    "sequence": 4096,
+    "returncode": 0,
+    "guard_failure": null,
+    "output_exists": true,
+    "optimizer_updates": 0
+  }
+]

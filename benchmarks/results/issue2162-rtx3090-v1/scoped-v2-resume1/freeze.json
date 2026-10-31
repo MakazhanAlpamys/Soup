@@ -1,0 +1,548 @@
+{
+  "at": "2026-10-26T16:24:33.864396+00:00",
+  "source_commit": "4e28c20614465e601acdc6f2c226b950c98e0b9b",
+  "archive_sha256": "f22e448af12fa15a7180682f8b43e2565eddd1cda957e1c9ea99d05aa0dca010",
+  "controller_sha256": "466e00016af672d4768ae97692d98567bebd9ca1aa84b7d23232a16952160118",
+  "confirmation": [
+    {
+      "stage": "confirmation",
+      "case": "native",
+      "pair": 1,
+      "tag": "confirm1-native"
+    },
+    {
+      "stage": "confirmation",
+      "case": "scoped",
+      "pair": 1,
+      "tag": "confirm1-scoped"
+    },
+    {
+      "stage": "confirmation",
+      "case": "scoped",
+      "pair": 2,
+      "tag": "confirm2-scoped"
+    },
+    {
+      "stage": "confirmation",
+      "case": "native",
+      "pair": 2,
+      "tag": "confirm2-native"
+    },
+    {
+      "stage": "confirmation",
+      "case": "native",
+      "pair": 3,
+      "tag": "confirm3-native"
+    },
+    {
+      "stage": "confirmation",
+      "case": "scoped",
+      "pair": 3,
+      "tag": "confirm3-scoped"
+    },
+    {
+      "stage": "confirmation",
+      "case": "scoped",
+      "pair": 4,
+      "tag": "confirm4-scoped"
+    },
+    {
+      "stage": "confirmation",
+      "case": "native",
+      "pair": 4,
+      "tag": "confirm4-native"
+    },
+    {
+      "stage": "confirmation",
+      "case": "native",
+      "pair": 5,
+      "tag": "confirm5-native"
+    },
+    {
+      "stage": "confirmation",
+      "case": "scoped",
+      "pair": 5,
+      "tag": "confirm5-scoped"
+    },
+    {
+      "stage": "confirmation",
+      "case": "scoped",
+      "pair": 6,
+      "tag": "confirm6-scoped"
+    },
+    {
+      "stage": "confirmation",
+      "case": "native",
+      "pair": 6,
+      "tag": "confirm6-native"
+    }
+  ],
+  "confirmation_bootstrap": {
+    "pairs": 6,
+    "n": 10000,
+    "seed": 73,
+    "quantile": "linear",
+    "ordinary": [
+      0.025,
+      0.975
+    ]
+  },
+  "protocol_sha256": "b686c19f793cdd8c7028938a55b1ca154ade99dd9c43371e609b38a288f4c959",
+  "gpu_uuid": "GPU-05919122-a78e-9af3-3b3c-f9a14fb4d2f4",
+  "power_limit_w": 420,
+  "cap_bytes": 8589934592,
+  "sequence": 2048,
+  "arms": {
+    "native": {
+      "arm": "auto",
+      "allocation": "native",
+      "cache_scope": "layer",
+      "effective_k": 11,
+      "plan": {
+        "retained_indices": [
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31
+        ],
+        "recomputed_indices": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20
+        ],
+        "selected_indices": [
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20
+        ],
+        "raw_bytes": 377487360,
+        "charged_bytes": 433254618,
+        "residual_bytes": 454509122,
+        "reason": "planned"
+      }
+    },
+    "legacy": {
+      "arm": "qkvo",
+      "allocation": "kminus1",
+      "cache_scope": "layer",
+      "effective_k": 10,
+      "plan": {
+        "native_k": 11,
+        "effective_k": 10,
+        "freed_full_layer_charge": 482015738,
+        "retained_indices": [
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31
+        ],
+        "recomputed_indices": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21
+        ],
+        "selected_indices": [
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21
+        ],
+        "raw_bytes": 796917760,
+        "charged_bytes": 914648638,
+        "residual_bytes": 936524860,
+        "reason": "kminus1-planned"
+      }
+    },
+    "scoped": {
+      "arm": "qkvo",
+      "allocation": "kminus1",
+      "cache_scope": "projection",
+      "effective_k": 10,
+      "plan": {
+        "native_k": 11,
+        "effective_k": 10,
+        "freed_full_layer_charge": 482015738,
+        "retained_indices": [
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31
+        ],
+        "recomputed_indices": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21
+        ],
+        "selected_indices": [
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21
+        ],
+        "raw_bytes": 796917760,
+        "charged_bytes": 914648638,
+        "residual_bytes": 936524860,
+        "reason": "kminus1-planned"
+      }
+    }
+  },
+  "gates": [
+    {
+      "stage": "gate",
+      "case": "native",
+      "variant": "normal",
+      "tag": "gate-native-normal"
+    },
+    {
+      "stage": "gate",
+      "case": "native",
+      "variant": "repeat",
+      "tag": "gate-native-repeat"
+    },
+    {
+      "stage": "gate",
+      "case": "native",
+      "variant": "profile",
+      "tag": "gate-native-profile"
+    },
+    {
+      "stage": "gate",
+      "case": "legacy",
+      "variant": "normal",
+      "tag": "gate-legacy-normal"
+    },
+    {
+      "stage": "gate",
+      "case": "legacy",
+      "variant": "repeat",
+      "tag": "gate-legacy-repeat"
+    },
+    {
+      "stage": "gate",
+      "case": "legacy",
+      "variant": "profile",
+      "tag": "gate-legacy-profile"
+    },
+    {
+      "stage": "gate",
+      "case": "scoped",
+      "variant": "normal",
+      "tag": "gate-scoped-normal"
+    },
+    {
+      "stage": "gate",
+      "case": "scoped",
+      "variant": "repeat",
+      "tag": "gate-scoped-repeat"
+    },
+    {
+      "stage": "gate",
+      "case": "scoped",
+      "variant": "profile",
+      "tag": "gate-scoped-profile"
+    }
+  ],
+  "timings": [
+    {
+      "stage": "timing",
+      "case": "legacy",
+      "block": 1,
+      "tag": "block1-legacy"
+    },
+    {
+      "stage": "timing",
+      "case": "scoped",
+      "block": 1,
+      "tag": "block1-scoped"
+    },
+    {
+      "stage": "timing",
+      "case": "native",
+      "block": 1,
+      "tag": "block1-native"
+    },
+    {
+      "stage": "timing",
+      "case": "native",
+      "block": 2,
+      "tag": "block2-native"
+    },
+    {
+      "stage": "timing",
+      "case": "scoped",
+      "block": 2,
+      "tag": "block2-scoped"
+    },
+    {
+      "stage": "timing",
+      "case": "legacy",
+      "block": 2,
+      "tag": "block2-legacy"
+    },
+    {
+      "stage": "timing",
+      "case": "legacy",
+      "block": 3,
+      "tag": "block3-legacy"
+    },
+    {
+      "stage": "timing",
+      "case": "native",
+      "block": 3,
+      "tag": "block3-native"
+    },
+    {
+      "stage": "timing",
+      "case": "scoped",
+      "block": 3,
+      "tag": "block3-scoped"
+    },
+    {
+      "stage": "timing",
+      "case": "scoped",
+      "block": 4,
+      "tag": "block4-scoped"
+    },
+    {
+      "stage": "timing",
+      "case": "native",
+      "block": 4,
+      "tag": "block4-native"
+    },
+    {
+      "stage": "timing",
+      "case": "legacy",
+      "block": 4,
+      "tag": "block4-legacy"
+    },
+    {
+      "stage": "timing",
+      "case": "native",
+      "block": 5,
+      "tag": "block5-native"
+    },
+    {
+      "stage": "timing",
+      "case": "legacy",
+      "block": 5,
+      "tag": "block5-legacy"
+    },
+    {
+      "stage": "timing",
+      "case": "scoped",
+      "block": 5,
+      "tag": "block5-scoped"
+    },
+    {
+      "stage": "timing",
+      "case": "scoped",
+      "block": 6,
+      "tag": "block6-scoped"
+    },
+    {
+      "stage": "timing",
+      "case": "legacy",
+      "block": 6,
+      "tag": "block6-legacy"
+    },
+    {
+      "stage": "timing",
+      "case": "native",
+      "block": 6,
+      "tag": "block6-native"
+    }
+  ],
+  "orders": [
+    [
+      "legacy",
+      "scoped",
+      "native"
+    ],
+    [
+      "native",
+      "scoped",
+      "legacy"
+    ],
+    [
+      "legacy",
+      "native",
+      "scoped"
+    ],
+    [
+      "scoped",
+      "native",
+      "legacy"
+    ],
+    [
+      "native",
+      "legacy",
+      "scoped"
+    ],
+    [
+      "scoped",
+      "legacy",
+      "native"
+    ]
+  ],
+  "census_sha256": "aabf9f0e31844c8cfa5f5aaab947963c316b97ad8dfd2583b068b95fedb14608",
+  "reference_sha256": "bb452c9025fa24a09240809f85023f37494d3ef5c09635a91047fc6a54d5dcaa",
+  "primary": "scoped_vs_native",
+  "contrasts": [
+    "scoped_vs_native",
+    "scoped_vs_legacy",
+    "legacy_vs_native"
+  ],
+  "bootstrap": {
+    "blocks": 6,
+    "n": 10000,
+    "seed": 42,
+    "quantile": "linear",
+    "ordinary": [
+      0.025,
+      0.975
+    ],
+    "adjusted": [
+      0.008333333333333333,
+      0.9916666666666667
+    ],
+    "family": 3
+  },
+  "rule": "stage A primary median >=2 and both lower bounds >0 plus scoped_vs_legacy both lowers >0; then independent confirmation median >=2 and lower95 >0; all correctness, memory and resource gates",
+  "warmup": 10,
+  "steps": 50,
+  "initial_exact_updates_within_warmup": 2,
+  "recipe": {
+    "lora_r": 8,
+    "alpha": 16,
+    "targets": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj"
+    ],
+    "seed": 42,
+    "B_seed": 7,
+    "input_seed": 1234,
+    "optimizer": "PagedAdamW8bit",
+    "lr": 0.0002,
+    "attention": "default selected SDPA efficient",
+    "dtype": "bfloat16",
+    "quant": "nf4",
+    "buffers": 2,
+    "tier": "pinned RAM",
+    "batch": 1,
+    "tf32": false,
+    "deterministic": true
+  }
+}
