@@ -166,8 +166,12 @@ def run_once(
         raise TypeError("state must be LoopState")
     if not isinstance(config, WatchConfig):
         raise TypeError("config must be WatchConfig")
-    # #2362: read the month from the OLD last_run_date, before the daily
-    # reset overwrites it, and with the same `now` so both agree at midnight.
+    # #2362: read the clock once, so the month and day rollovers agree even
+    # when `soup loop watch` runs across midnight at the end of a month.
+    if now is None:
+        now = datetime.now(timezone.utc)
+    # Read the month from the OLD last_run_date, before the daily reset
+    # overwrites it.
     spent = reset_monthly_spend_if_new_month(
         state.spent_this_month_usd, state.last_run_date, now=now
     )
