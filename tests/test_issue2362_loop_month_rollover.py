@@ -1,6 +1,7 @@
 """#2362: `soup loop watch` resets the monthly spend when the UTC month rolls over.
 
-Every test fixes the clock by passing ``now`` into ``run_once``.
+Every rollover test fixes the clock by passing ``now`` into ``run_once``; the
+last test checks that both rollovers read one clock when ``now`` is None.
 """
 
 from __future__ import annotations
@@ -9,6 +10,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+import soup_cli.utils.loop_daemon as loop_daemon
 from soup_cli.utils.loop_daemon import WatchConfig, run_once
 from soup_cli.utils.loop_state import LoopState, read_state, write_state
 
@@ -147,3 +149,28 @@ class TestDailyCapAcrossMonthChange:
         assert second.proceed is False
         assert "daily cap reached" in second.reason
         assert state.spent_this_month_usd == pytest.approx(0.50)
+
+
+class TestOneClock:
+    @pytest.mark.parametrize("now", [None, _at(2026, 10, 30)])
+    def test_both_rollovers_read_one_clock(self, monkeypatch, now):
+        seen = []
+        real_month = loop_daemon.reset_monthly_spend_if_new_month
+        real_day = loop_daemon.reset_daily_counter_if_new_day
+
+        def month(spent, last_run_date, *, now=None):
+            seen.append(now)
+            return real_month(spent, last_run_date, now=now)
+
+        def day(runs_today, last_run_date, *, now=None):
+            seen.append(now)
+            return real_day(runs_today, last_run_date, now=now)
+
+        monkeypatch.setattr(loop_daemon, "reset_monthly_spend_if_new_month", month)
+        monkeypatch.setattr(loop_daemon, "reset_daily_counter_if_new_day", day)
+        run_once(_state(), _config(0.50, []), now=now)
+        assert len(seen) == 2
+        assert seen[0] is not None
+        assert seen[0] is seen[1]
+        if now is not None:
+            assert seen[0] is now
