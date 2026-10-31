@@ -1,3 +1,5 @@
+<!-- synced-from: README.md sha256:e6f82927020a21ba77157b9c2891d7b7918a7eb34e2a291a4fa7ecbd0fb90f0a -->
+<p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <strong>中文</strong> | <a href="README.ru.md">Русский</a></p>
 <!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <strong>中文</strong></p>
 
