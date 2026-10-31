@@ -11,6 +11,7 @@ it in. The card check is stubbed throughout, so this runs on a CPU runner.
 from __future__ import annotations
 
 import json
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -27,6 +28,17 @@ from soup_cli.utils.deepspeed import (
 
 PRESETS = sorted(CONFIGS)
 REFUSAL = "cannot be set to `fp16` when `bf16` is set in the DeepSpeed config file"
+
+# Rich wraps and colours console.print() output in CI even when capsys captures it
+# (width defaults narrower than a developer's terminal, and colour can be forced by
+# the runner's env). A substring check on the raw text then depends on where a word
+# happened to land relative to the wrap, same issue test_auto_tuning.py works around.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    """Strip ANSI escapes and collapse whitespace, so a wrapped line still matches."""
+    return re.sub(r"\s+", " ", _ANSI_RE.sub("", text))
 
 
 def _cfg(task="sft", grpo_fp16=False, auto_mixed_precision=False):
@@ -141,7 +153,7 @@ class TestAccelerateAcceptsTheWrittenFile:
 class TestTheNoteIsPrinted:
     def test_a_precision_change_is_printed(self, capsys):
         write_deepspeed_config("zero2", gpu_count=1, precision="fp16")
-        out = capsys.readouterr().out
+        out = _plain(capsys.readouterr().out)
         assert "bf16 true -> false" in out and "fp16 unset -> true" in out
 
     def test_no_change_prints_nothing(self, capsys):
@@ -173,6 +185,89 @@ class TestZeroPlusPlusQuantiser:
         assert cfg["zero_optimization"]["zero_quantized_weights"] is False
         assert any("may be bf16" in note for note in notes)
 
+    def test_a_user_file_set_to_auto_keeps_the_quantiser_off_even_on_a_known_fp16_run(self):
+        """Pinned per review: a user file that names `bf16: auto, fp16: auto` passes
+        `_match_precision` unchanged (an `"auto"` entry already agrees with any
+        trainer precision, #2266), so the quantiser decision still reads the FILE's
+        `bf16: "auto"`, not the `precision="fp16"` the caller knows. Intended: the
+        file as written genuinely does not rule out DeepSpeed resolving to bf16 (it
+        decides from the trainer's `mixed_precision` at Trainer init, which this
+        resolver does not control), so "may be bf16" stays the honest answer. A file
+        that wants the quantiser on an fp16 run should say `fp16: true` explicitly,
+        which matches precision and leaves the quantiser alone (see
+        TestAUsersOwnFile)."""
+        config = {
+            "bf16": {"enabled": "auto"}, "fp16": {"enabled": "auto"},
+            "zero_optimization": {
+                "stage": 3, "zero_quantized_weights": True, "zero_quantized_gradients": True,
+            },
+        }
+        cfg, notes = resolve_deepspeed_config(config, gpu_count=4, precision="fp16")
+        assert cfg["bf16"]["enabled"] == "auto"
+        assert cfg["fp16"]["enabled"] == "auto"
+        assert cfg["zero_optimization"]["zero_quantized_weights"] is False
+        assert any("may be bf16" in note for note in notes)
+
+
+class TestUnsupportedShapesArePassedThrough:
+    """Two shapes the resolver leaves alone rather than repairs (#2266 review)."""
+
+    def test_a_file_with_neither_key_is_not_touched(self):
+        """An absent key does not enable the wrong dtype, so it needs no repair:
+        accelerate fills both bf16 and fp16 in from the trainer's own flags when it
+        builds the DeepSpeedPlugin, if the file names neither (#359's promise that an
+        untouched config reaches DeepSpeed byte-identical)."""
+        config = {"zero_optimization": {"stage": 2}}
+        cfg, notes = resolve_deepspeed_config(config, gpu_count=1, precision="fp16")
+        assert cfg == config
+        assert notes == []
+
+    def test_a_non_mapping_value_does_not_raise_and_is_left_alone(self):
+        """{"fp16": true} instead of {"fp16": {"enabled": true}}: Soup cannot read what
+        `enabled` would mean there, and spreading it ({**True}) used to raise
+        TypeError. Passed through for DeepSpeed to accept or reject on its own terms."""
+        for config in ({"fp16": True}, {"bf16": True}):
+            for precision in ("fp16", "bf16", "auto"):
+                cfg, notes = resolve_deepspeed_config(
+                    dict(config), gpu_count=1, precision=precision
+                )
+                assert cfg == config, (config, precision)
+                assert notes == []
+
+    def test_one_key_a_real_dict_the_other_a_non_mapping(self):
+        """The non-mapping key is left alone even when its sibling is a genuine
+        conflict that does get repaired."""
+        config = {"bf16": {"enabled": True}, "fp16": True}
+        cfg, notes = resolve_deepspeed_config(config, gpu_count=1, precision="fp16")
+        assert cfg["bf16"]["enabled"] is False
+        assert cfg["fp16"] is True  # untouched, not turned into a dict
+        assert any("bf16" in note for note in notes)
+
+    def test_a_user_file_with_neither_key_resolves_to_the_same_path(self, tmp_path):
+        path = tmp_path / "ds.json"
+        path.write_text(json.dumps({"zero_optimization": {"stage": 2}}), encoding="utf-8")
+        assert resolve_user_deepspeed_file(str(path), gpu_count=1, precision="fp16") == str(path)
+        assert resolve_user_deepspeed_file(str(path), gpu_count=1, precision="bf16") == str(path)
+
+
+class TestEnabledReadsTheStringShape:
+    """`{"enabled": "true"}` / `"false"` -- DeepSpeed's own JSON is case- and
+    quote-insensitive about these strings in practice; `_enabled` reads them the
+    same as the literal booleans. The surviving mutation from the first review
+    (`return lowered == "true"` -> `return False`) is caught here."""
+
+    def test_the_string_true_is_read_as_true_and_gets_repaired(self):
+        config = {"bf16": {"enabled": "true"}}
+        cfg, notes = resolve_deepspeed_config(config, gpu_count=1, precision="fp16")
+        assert cfg["bf16"]["enabled"] is False
+        assert any("bf16 true -> false" in note for note in notes)
+
+    def test_the_string_false_is_read_as_false_and_is_left_alone(self):
+        config = {"bf16": {"enabled": "false"}, "fp16": {"enabled": True}}
+        cfg, notes = resolve_deepspeed_config(config, gpu_count=1, precision="fp16")
+        assert cfg == config
+        assert notes == []
+
 
 class TestAUsersOwnFile:
     def _write(self, tmp_path, config):
@@ -202,7 +297,7 @@ class TestAUsersOwnFile:
         assert repaired["bf16"]["enabled"] is False
         assert repaired["fp16"]["enabled"] is True
         assert path.read_bytes() == before
-        assert "#2266" in capsys.readouterr().out
+        assert "#2266" in _plain(capsys.readouterr().out)
 
 
 class TestSoupTrainPassesThePrecision:

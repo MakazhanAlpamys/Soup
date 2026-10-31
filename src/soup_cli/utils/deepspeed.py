@@ -282,9 +282,29 @@ def _match_precision(resolved: dict, precision: str) -> str | None:
     ``bf16: true`` stopped every fp16 run before its first step (#2266). Values
     that already agree, ``"auto"`` included, are left alone. Returns the note to
     print, or ``None`` when nothing changed.
+
+    Two shapes are passed through untouched rather than repaired, per review:
+
+    * a key that is absent entirely, on BOTH ``bf16`` and ``fp16`` -- nothing
+      here declares a precision, so nothing conflicts, and accelerate fills
+      both in from the trainer's own flags when it builds the
+      ``DeepSpeedPlugin`` (``TrainingArguments.__post_init__``). Repairing an
+      empty file would contradict the #359 promise that an untouched config
+      reaches DeepSpeed byte-identical.
+    * a key whose raw value is present but not a mapping, for example
+      ``{"fp16": true}`` instead of ``{"fp16": {"enabled": true}}``. Soup
+      cannot read what ``enabled`` would mean there without guessing, and
+      spreading a non-mapping (``{**True}``) raises ``TypeError``. Left for
+      DeepSpeed to accept or reject on its own terms.
     """
+    if _enabled(resolved, "bf16") is None and _enabled(resolved, "fp16") is None:
+        return None
+
     changes = []
     for key in ("bf16", "fp16"):
+        section = resolved.get(key)
+        if section is not None and not isinstance(section, dict):
+            continue
         current = _enabled(resolved, key)
         if precision == "auto":
             target = "auto" if current is not None and current != "auto" else current
