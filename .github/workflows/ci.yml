@@ -478,7 +478,7 @@ jobs:
     # #394: prove the documented standalone install on an Apple Silicon runner.
     # Keep this separate from the main matrix because `.[dev]` deliberately
     # installs the PyTorch/TRL stack and would hide an accidental MLX dependency.
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 20
     # Every step below carries `if: needs.plan.outputs.docs_only != 'true'` (2026-10-20): a
     # docs-only pull request reports this job as SUCCESS without doing its work (see the
