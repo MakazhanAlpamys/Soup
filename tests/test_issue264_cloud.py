@@ -67,7 +67,7 @@ class TestRenderLambdaLabsStub:
         compile(stub, "soup_lambda_app.py", "exec")
         namespace = {"__name__": "test"}
         exec(stub, namespace)
-        payload = namespace["_launch_payload"]("us-tx-1", "registered-key")
+        payload = namespace["_launch_payload"]("us-tx-1", "registered-key", "test-name")
         assert payload["user_data"] == namespace["_USER_DATA"]
         assert "soup-cli[train]==0.71.22" in payload["user_data"]
         assert payload["ssh_key_names"] == ["registered-key"]
@@ -276,7 +276,7 @@ class TestCloudNoSecrets:
 
         namespace = {"__name__": "test"}
         exec(stub_lambda, namespace)
-        payload = namespace["_launch_payload"]("us-tx-1", "registered-key")
+        payload = namespace["_launch_payload"]("us-tx-1", "registered-key", "test-name")
         payload_str = str(payload)
         assert secret not in payload_str
         assert hf_token not in payload_str
