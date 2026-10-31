@@ -483,6 +483,32 @@ def test_from_anthropic_with_system():
     assert out["messages"][0] == {"role": "system", "content": "rules"}
 
 
+def test_from_anthropic_forwards_temperature_and_top_p():
+    """/v1/messages must not drop sampling knobs (#2381)."""
+    payload = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 4,
+        "temperature": 0,
+        "top_p": 0.5,
+    }
+    out = from_anthropic(payload)
+    assert out["temperature"] == 0.0
+    assert out["top_p"] == 0.5
+
+
+def test_from_anthropic_omits_sampling_defaults_when_absent():
+    payload = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 4,
+    }
+    out = from_anthropic(payload)
+    assert "temperature" not in out
+    assert "top_p" not in out
+
+
+
 def test_validate_anthropic_payload_rejects_empty_messages():
     with pytest.raises(ValueError):
         validate_anthropic_payload({
