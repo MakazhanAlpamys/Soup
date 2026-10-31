@@ -8894,6 +8894,9 @@ class SoupConfig(BaseModel):
         if self.backend != "mlx":
             return self
         task = resolve_mlx_task(self.task, self.training.preference_loss)
+        task_label = f"task={self.task!r}"
+        if self.task == "preference":
+            task_label += f" with preference_loss={self.training.preference_loss!r}"
         if task == "grpo":
             _refuse_mlx_grpo_scope(self)
             return self
@@ -8906,7 +8909,7 @@ class SoupConfig(BaseModel):
             name = {"dpo": "DPO", "orpo": "ORPO", "simpo": "SimPO", "kto": "KTO"}[task]
             if self.modality != "text":
                 raise ValueError(
-                    f"modality='{self.modality}' is not supported by task='{task}' "
+                    f"modality='{self.modality}' is not supported by {task_label} "
                     f"on backend='mlx': MLX {name} trains on text and chat rows only. "
                     "Use backend=transformers, or modality: text."
                 )
@@ -8919,12 +8922,12 @@ class SoupConfig(BaseModel):
                     "implemented on backend='mlx'"
                 )
                 raise ValueError(
-                    f"training.lora.r must be at least 1 for task='{task}' on "
+                    f"training.lora.r must be at least 1 for {task_label} on "
                     f"backend='mlx': {why}."
                 )
             if task in ("orpo", "simpo", "kto") and self.training.quantization == "8bit":
                 raise ValueError(
-                    f"training.quantization='8bit' is not supported by task='{task}' "
+                    f"training.quantization='8bit' is not supported by {task_label} "
                     "on backend='mlx': use quantization: none, or a pre-quantized "
                     "mlx-community 4-bit base with quantization: 4bit."
                 )

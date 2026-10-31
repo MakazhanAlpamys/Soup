@@ -143,15 +143,52 @@ def test_alias_keeps_native_scope_refusals(
     native = alias.replace("task: preference\n", f"task: {loss}\n").replace(
         f"  preference_loss: {loss}\n", "",
     )
-    for text in (native, alias):
-        with pytest.raises(ValueError, match=message):
+    for is_alias, text in ((False, native), (True, alias)):
+        with pytest.raises(ValueError, match=message) as info:
             load_config_from_string(text)
+        task_label = (
+            f"task='preference' with preference_loss='{loss}'"
+            if is_alias else f"task='{loss}'"
+        )
+        if training == "  lora: {r: 0}\n":
+            reasons = {
+                "dpo": "the reference model is the untrained LoRA policy, which needs "
+                "a LoRA adapter to exist",
+                "orpo": "MLX ORPO trains a LoRA adapter; full fine-tuning is not "
+                "implemented on backend='mlx'",
+                "simpo": "MLX SimPO trains a LoRA adapter; full fine-tuning is not "
+                "implemented on backend='mlx'",
+            }
+            assert (
+                f"training.lora.r must be at least 1 for {task_label} on "
+                f"backend='mlx': {reasons[loss]}."
+            ) in str(info.value)
+        if top == "modality: vision\n":
+            objective = {"dpo": "DPO", "orpo": "ORPO", "simpo": "SimPO"}[loss]
+            assert (
+                f"modality='vision' is not supported by {task_label} on "
+                f"backend='mlx': MLX {objective} trains on text and chat rows only. "
+                "Use backend=transformers, or modality: text."
+            ) in str(info.value)
 
 
 @pytest.mark.parametrize("loss", ["orpo", "simpo"])
-def test_alias_does_not_admit_unsupported_eight_bit_training(loss: str) -> None:
-    with pytest.raises(ValueError, match=f"quantization='8bit' is not supported by task='{loss}'"):
-        load_config_from_string(_config(loss, training="  quantization: 8bit\n"))
+@pytest.mark.parametrize("is_alias", [False, True], ids=["native", "alias"])
+def test_alias_does_not_admit_unsupported_eight_bit_training(loss: str, is_alias: bool) -> None:
+    text = _config(loss, training="  quantization: 8bit\n")
+    task_label = f"task='preference' with preference_loss='{loss}'"
+    if not is_alias:
+        text = text.replace("task: preference\n", f"task: {loss}\n").replace(
+            f"  preference_loss: {loss}\n", "",
+        )
+        task_label = f"task='{loss}'"
+    with pytest.raises(ValueError) as info:
+        load_config_from_string(text)
+    assert (
+        f"training.quantization='8bit' is not supported by {task_label} on "
+        "backend='mlx': use quantization: none, or a pre-quantized "
+        "mlx-community 4-bit base with quantization: 4bit."
+    ) in str(info.value)
 
 
 @pytest.mark.parametrize("loss", ["ipo", "bco", "dpo", "orpo", "simpo"])
