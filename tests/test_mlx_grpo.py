@@ -924,6 +924,21 @@ def _wrapper(tmp_path, monkeypatch, *, train=None, val=None, model_seed=0, **tra
     return wrapper
 
 
+class TestFloat32Matmul:
+    def test_a_float32_matmul_is_float32_precise(self):
+        """``tests/conftest.py`` turns off MLX's TF32 default for float32 matmuls
+        (#2385); with it on, an Apple M6 GPU's matmul is off by about 1e-2 here and
+        the float32 oracles of these tests compare against TF32 results."""
+        mx = pytest.importorskip("mlx.core")
+
+        rng = np.random.default_rng(0)
+        a = rng.standard_normal((4, 32)).astype(np.float32)
+        b = rng.standard_normal((32, 64)).astype(np.float32)
+        out = np.array(mx.array(a) @ mx.array(b))
+        np.testing.assert_allclose(out, a.astype(np.float64) @ b.astype(np.float64),
+                                   rtol=0, atol=1e-5)
+
+
 class _RecordingOptimizer:
     """Delegates to the real (clipping) optimizer; snapshots after each update."""
 
@@ -1031,10 +1046,21 @@ class TestTraining:
 
     def test_micro_batches_accumulate_to_one_batch_without_dividing(self, tmp_path, monkeypatch):
         """DAPO: one normaliser, the token count of the whole update; no /accum."""
+        from soup_cli.trainer.rewards import validate_reward_funcs
+
         def run(path, batch_size, accum):
             wrapper = _wrapper(path, monkeypatch, train=_prompt_rows(2), batch_size=batch_size,
                                gradient_accumulation_steps=accum, optimizer="sgd",
                                scheduler="constant", seed=7)
+            wrapper._prepare(wrapper._dataset)
+            group = wrapper._units.num_generations
+
+            # The first completion of each group scores 1 and the others 0, so every
+            # group has unequal rewards whatever the device samples (#2385).
+            def first_of_group(completions, **_):
+                return [float(index % group == 0) for index in range(len(completions))]
+
+            wrapper._reward_fn = validate_reward_funcs(first_of_group)
             result = wrapper.train()
             return result, _flat(wrapper.model.trainable_parameters())
 
