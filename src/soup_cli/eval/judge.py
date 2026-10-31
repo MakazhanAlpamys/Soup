@@ -627,11 +627,37 @@ def _parse_pairwise(text: str) -> int:
                 return 1
         except (json.JSONDecodeError, TypeError, ValueError):
             pass
-    # Fallback: a bare "A" / "B" token.
-    stripped = (text or "").strip().upper()
-    if stripped.startswith("A") and not stripped.startswith("B"):
+    # Fallback: look for explicit A/B verdict tokens.
+    # Accept clear indicators like "A", "B", "Answer: A", "Winner: B", etc.
+    # but reject ambiguous text like "Answer: B" (starts with A) or "Better: A" (starts with B).
+    stripped = (text or "").strip()
+    if not stripped:
+        return -1
+    upper = stripped.upper()
+    # Check for explicit verdict patterns first
+    patterns_a = [
+        r'\bA\b',
+        r'ANSWER\s*[:=]\s*A\b',
+        r'WINNER\s*[:=]\s*A\b',
+        r'BETTER\s*[:=]\s*A\b',
+        r'CHOICE\s*[:=]\s*A\b',
+        r'VOTE\s*[:=]\s*A\b',
+        r'PREFER\s*[:=]\s*A\b',
+    ]
+    patterns_b = [
+        r'\bB\b',
+        r'ANSWER\s*[:=]\s*B\b',
+        r'WINNER\s*[:=]\s*B\b',
+        r'BETTER\s*[:=]\s*B\b',
+        r'CHOICE\s*[:=]\s*B\b',
+        r'VOTE\s*[:=]\s*B\b',
+        r'PREFER\s*[:=]\s*B\b',
+    ]
+    has_a = any(re.search(p, upper) for p in patterns_a)
+    has_b = any(re.search(p, upper) for p in patterns_b)
+    if has_a and not has_b:
         return 0
-    if stripped.startswith("B"):
+    if has_b and not has_a:
         return 1
     return -1
 
