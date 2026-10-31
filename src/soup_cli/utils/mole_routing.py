@@ -680,13 +680,18 @@ class LoadedMole:
         max_tokens: int = 512,
         temperature: float = 0.0,
         top_p: float = 1.0,
-    ) -> Tuple[str, int, int]:
+    ) -> Tuple[str, int, int, str]:
         """Apply the chat template, blend-generate, decode.
 
-        Returns ``(response, prompt_tokens, completion_tokens)`` so the serve
-        chat handler can use it interchangeably with ``_generate_response``.
+        Returns ``(response, prompt_tokens, completion_tokens, finish_reason)``
+        so the serve chat handler can use it interchangeably with
+        ``_generate_response``.
         """
-        from soup_cli.utils.vllm import encode_chat_prompt
+        from soup_cli.utils.vllm import (
+            encode_chat_prompt,
+            eos_id_set,
+            token_finish_reason,
+        )
 
         tokenizer = self.tokenizer
         inputs = encode_chat_prompt(
@@ -698,17 +703,22 @@ class LoadedMole:
         if device is not None:
             input_ids = input_ids.to(device)
             attention_mask = attention_mask.to(device)
+        eos_token_id = getattr(tokenizer, "eos_token_id", None)
         out = self.generate(
             input_ids,
             attention_mask,
             max_new_tokens=int(max_tokens),
-            eos_token_id=getattr(tokenizer, "eos_token_id", None),
+            eos_token_id=eos_token_id,
             temperature=temperature,
             top_p=top_p,
         )
         new_tokens = out[0][input_ids.shape[1]:]
         response = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
-        return response, int(input_ids.shape[1]), int(len(new_tokens))
+        # #2361 — the same end token the loop above stops on.
+        finish_reason = token_finish_reason(
+            new_tokens, int(max_tokens), eos_id_set(eos_token_id)
+        )
+        return response, int(input_ids.shape[1]), int(len(new_tokens)), finish_reason
 
 
 def _sample_next(logits, temperature: float, top_p: float):
