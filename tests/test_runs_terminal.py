@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
@@ -11,6 +12,13 @@ from soup_cli.experiment.tracker import ExperimentTracker
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _wide_console(monkeypatch):
+    """Rich wraps at the terminal width, which CI sets differently from a laptop."""
+    monkeypatch.setattr("soup_cli.commands.runs.console", Console(width=500))
+
 
 NOT_FOUND_NAMES = [
     "[red]nope",
