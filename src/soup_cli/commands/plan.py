@@ -15,6 +15,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.terminal import for_terminal
 from soup_cli.utils.terraform_plan import (
     DEFAULT_STATE_FILE,
     TrainingState,
@@ -30,6 +31,8 @@ def _load_yaml_config(path: str, *, minillm_on_policy: bool = False) -> dict:
     import os
     import stat as _stat
 
+    import yaml
+
     if not isinstance(path, str):
         raise TypeError(f"config path must be str, got {type(path).__name__}")
     if "\x00" in path:
@@ -38,11 +41,28 @@ def _load_yaml_config(path: str, *, minillm_on_policy: bool = False) -> dict:
         raise ValueError(f"config {path!r} is outside cwd")
     # TOCTOU defence: reject symlink at the YAML path BEFORE open so a
     # pre-placed `soup.yaml -> /etc/shadow` cannot redirect the read.
-    if os.path.lexists(path):
-        st = os.lstat(path)
-        if _stat.S_ISLNK(st.st_mode):
-            raise ValueError("config path must not be a symlink")
-    data = load_yaml_file_limited(path, f"config {path!r}", max_bytes=MAX_CONFIG_BYTES)
+    try:
+        if os.path.lexists(path):
+            st = os.lstat(path)
+            if _stat.S_ISLNK(st.st_mode):
+                raise ValueError("config path must not be a symlink")
+        data = load_yaml_file_limited(path, f"config {path!r}", max_bytes=MAX_CONFIG_BYTES)
+    except FileNotFoundError:
+        raise
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            f"Config {path!r} is not valid UTF-8: {exc.reason} at byte {exc.start}"
+        ) from exc
+    except yaml.YAMLError as exc:
+        detail = " ".join(str(getattr(exc, "problem", None) or exc).split())[:200]
+        mark = getattr(exc, "problem_mark", None)
+        if mark is not None:
+            detail += f" (line {mark.line + 1}, column {mark.column + 1})"
+        raise ValueError(f"Config {path!r} is not valid YAML: {detail}") from exc
+    except OSError as exc:
+        raise ValueError(
+            f"Config {path!r} cannot be read: {exc.strerror or type(exc).__name__}"
+        ) from exc
     if not isinstance(data, dict):
         raise ValueError("config must parse to a dict")
     # The loader's own checks, so the plan refuses what `soup train` refuses,
@@ -79,7 +99,7 @@ def plan_cmd(
         console.print(f"[red]Config not found: {escape(config)}[/]")
         raise typer.Exit(1) from None
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(2) from exc
 
     try:
@@ -115,12 +135,20 @@ def plan_cmd(
     table.add_row("dataset_sha", escape(plan.dataset_sha[:16] + "..."))
     table.add_row("estimated_cost", f"${plan.estimated_cost_usd:.4f}")
     table.add_row("estimated_minutes", f"{plan.estimated_minutes:.1f}")
-    table.add_row(
-        "peak_vram_gb",
+    peak = (
         f"{plan.peak_vram_gb:.1f}"
         if plan.peak_vram_gb is not None
-        else f"unknown: {escape(plan.peak_vram_reason or '')}",
+        else f"unknown: {escape(plan.peak_vram_reason or '')}"
     )
+    training = cfg.get("training")
+    offloading = training.get("activation_offloading") if isinstance(training, dict) else None
+    if plan.peak_vram_gb is not None and offloading:
+        # #2327: the figure charges every saved tensor as resident.
+        peak += (
+            f"\n[dim]training.activation_offloading: {escape(str(offloading))} is not "
+            "modelled; activations are charged as resident[/]"
+        )
+    table.add_row("peak_vram_gb", peak)
     table.add_row("spot_price_usd_per_hour", f"${plan.spot_price_usd_per_hour:.2f}")
     console.print(table)
     console.print(
@@ -161,7 +189,7 @@ def apply_cmd(
         console.print(f"[red]Config not found: {escape(config)}[/]")
         raise typer.Exit(1) from None
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(2) from exc
 
     try:

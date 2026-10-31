@@ -23,7 +23,6 @@ import yaml
 torch = pytest.importorskip("torch")
 
 from soup_cli.bench.collector import fingerprint_trainable, summarize_trainable  # noqa: E402
-from tests._windows_ci import skip_on_windows_ci  # noqa: E402
 
 FLOAT_DTYPES = [torch.float16, torch.bfloat16, torch.float32, torch.float64]
 
@@ -134,10 +133,11 @@ def _lora_dtypes(model):
 class TestThroughARealTrainer:
     # #382: PR #2321's windows 3.12 cell (run 40761798582) died here with
     # ``0xc000001d`` in the bf16 LoRA ``Linear.forward`` of the first real step, and
-    # the cell then hung to its timeout. Only this case casts the adapters to bf16;
-    # the one below trains them as loaded and keeps running on every cell.
-    @skip_on_windows_ci
-    def test_a_run_with_bf16_adapters_is_measured_and_valid(self, tmp_path, monkeypatch):
+    # the cell then hung to its timeout. Only this case casts the adapters to bf16, so it
+    # requests aten_half_matmuls, which keeps that matmul off oneDNN and MKL (#2307).
+    def test_a_run_with_bf16_adapters_is_measured_and_valid(
+        self, tmp_path, monkeypatch, aten_half_matmuls
+    ):
         """The shape TRL leaves a QLoRA model in on a bf16 card: trainable adapters
         in bf16 when the first fingerprint is taken."""
         _workdir(tmp_path, monkeypatch)

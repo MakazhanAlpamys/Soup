@@ -80,6 +80,35 @@ def test_unsloth_explicit_targets_are_not_expanded(tmp_path: Path) -> None:
     assert estimate.terms["adapters"] == 16_777_216
 
 
+@pytest.mark.parametrize("backend", ["transformers", "unsloth"])
+@pytest.mark.parametrize("mode", [None, "cpu", "disk"])
+def test_backend_estimate_preserves_activation_offloading(
+    tmp_path: Path, backend: str, mode: str | None
+) -> None:
+    cfg = _config(tmp_path, backend)
+    cfg.training.activation_offloading = mode
+    inp = hardware_fit_input_from_config(cfg, allow_network=False)
+    assert inp is not None
+    estimate = estimate_peak_vram_gb(inp).estimate
+    assert inp.backend == estimate.run.backend == backend
+    assert inp.activation_offloading == estimate.run.activation_offloading == mode
+    assert estimate.lora_targets == (
+        SEVEN_PROJECTIONS if backend == "unsloth" else ("q_proj", "v_proj")
+    )
+    assert estimate.terms["weights"] == (
+        5_800_527_995 if backend == "unsloth" else 7_901_874_299
+    )
+    notes = [note for note in estimate.notes if "activation_offloading" in note]
+    if mode is None:
+        assert notes == []
+    else:
+        assert notes == [
+            f"training.activation_offloading: {mode} is set: the activation term "
+            f"({estimate.gb('activations'):.2f} GB) is charged as if every saved tensor "
+            "stayed on the card; what offloading moves off it is not modelled."
+        ]
+
+
 @pytest.mark.parametrize("targets", ["auto", None])
 def test_unsloth_auto_uses_seven_projections_for_any_architecture(targets: str | None) -> None:
     assert lora_targets(targets, "phi3", backend="unsloth") == SEVEN_PROJECTIONS

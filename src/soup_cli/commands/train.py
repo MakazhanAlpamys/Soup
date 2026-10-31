@@ -523,6 +523,7 @@ def _hardware_fit_preflight(
             ("adapters", b.adapters_gb),
             ("logits", b.logits_gb),
             ("dequant", b.dequant_gb),
+            ("optimizer step", b.optimizer_step_gb),
         )
         if value >= 0.05
     )
@@ -977,8 +978,10 @@ def train(
         "a100",
         "--gpu",
         help=(
-            "Cloud GPU type for --cloud (t4 / l4 / a10 / a10g / a100 / a100-80gb / "
-            "l40s / h100 / a6000). Default a100. Provider-specific allowlists apply."
+            "Cloud GPU type for --cloud. modal: t4, l4, a10g, a100, a100-80gb, "
+            "l40s, h100. lambda: a10, a100, a6000, h100. runpod: a100, a40, h100, "
+            "rtx3090, rtx4090. Default a100. A type another provider lists is "
+            "refused with exit 2."
         ),
     ),
     cloud_submit: bool = typer.Option(

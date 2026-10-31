@@ -2171,13 +2171,14 @@ class TrainingConfig(BaseModel):
         ),
     )
     # ---- v0.53.0 Quant Menu II — UD GGUFs + KV cache + NVFP4 ---------------
-    # Part C — KV cache types (serve-side hint, captured here for round-trip).
+    # Part C — KV cache types (recorded for round-trip; serve uses its own flag).
     kv_cache_type: Optional[Literal["q8_0", "bf16", "f16", "fp8"]] = Field(
         default=None,
         description=(
             "KV-cache element type for inference (q8_0 / bf16 / f16 / fp8). "
-            "Applied by soup serve on the transformers backend; backend and "
-            "hardware compatibility are validated before model loading."
+            "Recorded in soup.yaml only: neither soup train nor soup serve reads "
+            "this key (fp8 is refused with backend: mlx). To apply a type, pass "
+            "soup serve --kv-cache-type <type> (transformers backend)."
         ),
     )
     # Part D — Train-time advanced precision.
