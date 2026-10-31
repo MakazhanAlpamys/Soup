@@ -1,0 +1,106 @@
+{
+  "environment": {
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "processor": "arm64",
+    "python": "3.11.8",
+    "torch": "2.15.0",
+    "transformers": "5.22.1",
+    "threads": 1
+  },
+  "config": {
+    "timed_steps": 60,
+    "warmup_steps": 10,
+    "dtype": "float32",
+    "device": "cpu",
+    "batch": 2,
+    "sequence": 128,
+    "chunk": 64,
+    "vocab": 8192,
+    "hidden": 64,
+    "layers": 2
+  },
+  "pairs": [
+    {
+      "seed": 1234,
+      "order": "old,new",
+      "old": {
+        "median_step_ms": 19.05891700880602,
+        "timed_training_ms": 1232.8770068706945,
+        "initial_loss": 9.025008201599121,
+        "final_loss": 7.9086713790893555,
+        "heldout_loss": 8.038981139659882,
+        "heldout_accuracy": 0.5982558139534884
+      },
+      "new": {
+        "median_step_ms": 16.29429150489159,
+        "timed_training_ms": 987.447542953305,
+        "initial_loss": 9.025008201599121,
+        "final_loss": 7.9086713790893555,
+        "heldout_loss": 8.038981139659882,
+        "heldout_accuracy": 0.5982558139534884
+      },
+      "deltas": {
+        "train_loss_max_abs": 0.0,
+        "metrics_max_abs": 0.0,
+        "first_gradient_max_abs": 0.0,
+        "final_weight_max_abs": 0.0
+      },
+      "speedup": 1.2485493691982334
+    },
+    {
+      "seed": 1235,
+      "order": "new,old",
+      "old": {
+        "median_step_ms": 19.449521001661196,
+        "timed_training_ms": 1198.4034578199498,
+        "initial_loss": 9.011361122131348,
+        "final_loss": 8.435790061950684,
+        "heldout_loss": 7.986829161643982,
+        "heldout_accuracy": 0.6226744186046511
+      },
+      "new": {
+        "median_step_ms": 25.30447897152044,
+        "timed_training_ms": 1979.4102080632001,
+        "initial_loss": 9.011361122131348,
+        "final_loss": 8.435790061950684,
+        "heldout_loss": 7.986829161643982,
+        "heldout_accuracy": 0.6226744186046511
+      },
+      "deltas": {
+        "train_loss_max_abs": 0.0,
+        "metrics_max_abs": 0.0,
+        "first_gradient_max_abs": 0.0,
+        "final_weight_max_abs": 0.0
+      },
+      "speedup": 0.6054346152900543
+    },
+    {
+      "seed": 1236,
+      "order": "old,new",
+      "old": {
+        "median_step_ms": 18.94722951692529,
+        "timed_training_ms": 1139.412250253372,
+        "initial_loss": 9.027673721313477,
+        "final_loss": 8.04057502746582,
+        "heldout_loss": 7.952853679656982,
+        "heldout_accuracy": 0.6843023255813954
+      },
+      "new": {
+        "median_step_ms": 16.287499980535358,
+        "timed_training_ms": 982.8537472640164,
+        "initial_loss": 9.027673721313477,
+        "final_loss": 8.04057502746582,
+        "heldout_loss": 7.952853679656982,
+        "heldout_accuracy": 0.6843023255813954
+      },
+      "deltas": {
+        "train_loss_max_abs": 0.0,
+        "metrics_max_abs": 0.0,
+        "first_gradient_max_abs": 0.0,
+        "final_weight_max_abs": 0.0
+      },
+      "speedup": 1.1592897248702256
+    }
+  ],
+  "median_speedup": 1.1592897248702256
+}

@@ -1,0 +1,199 @@
+{
+  "environment": {
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "processor": "arm64",
+    "python": "3.11.8",
+    "torch": "2.15.0",
+    "transformers": "5.22.1",
+    "threads": 1
+  },
+  "config": {
+    "timed_steps": 300,
+    "warmup_steps": 10,
+    "dtype": "float32",
+    "device": "cpu",
+    "batch": 2,
+    "sequence": 128,
+    "chunk": 64,
+    "vocab": 8192,
+    "hidden": 64,
+    "layers": 2
+  },
+  "pairs": [
+    {
+      "seed": 1234,
+      "order": "old,new",
+      "old": {
+        "median_step_ms": 19.190041988622397,
+        "timed_training_ms": 6343.465240905061,
+        "initial_loss": 9.009724617004395,
+        "final_loss": 6.379120349884033,
+        "heldout_loss": 6.438383936882019,
+        "heldout_accuracy": 0.9784883720930233
+      },
+      "new": {
+        "median_step_ms": 16.350458521628752,
+        "timed_training_ms": 4944.497374352068,
+        "initial_loss": 9.009724617004395,
+        "final_loss": 6.379120349884033,
+        "heldout_loss": 6.438383936882019,
+        "heldout_accuracy": 0.9784883720930233
+      },
+      "deltas": {
+        "train_loss_max_abs": 0.0,
+        "metrics_max_abs": 0.0,
+        "first_gradient_max_abs": 0.0,
+        "final_weight_max_abs": 0.0,
+        "heldout_loss_abs": 0.0,
+        "heldout_accuracy_abs": 0.0
+      },
+      "speedup": 1.282934292534904
+    },
+    {
+      "seed": 1235,
+      "order": "new,old",
+      "old": {
+        "median_step_ms": 19.523062015650794,
+        "timed_training_ms": 6246.653677138966,
+        "initial_loss": 9.015692710876465,
+        "final_loss": 6.484856128692627,
+        "heldout_loss": 6.476580321788788,
+        "heldout_accuracy": 0.9872093023255814
+      },
+      "new": {
+        "median_step_ms": 16.53587498003617,
+        "timed_training_ms": 5810.282709775493,
+        "initial_loss": 9.015692710876465,
+        "final_loss": 6.484856128692627,
+        "heldout_loss": 6.476580321788788,
+        "heldout_accuracy": 0.9872093023255814
+      },
+      "deltas": {
+        "train_loss_max_abs": 0.0,
+        "metrics_max_abs": 0.0,
+        "first_gradient_max_abs": 0.0,
+        "final_weight_max_abs": 0.0,
+        "heldout_loss_abs": 0.0,
+        "heldout_accuracy_abs": 0.0
+      },
+      "speedup": 1.075103224603736
+    },
+    {
+      "seed": 1236,
+      "order": "old,new",
+      "old": {
+        "median_step_ms": 19.149562489474192,
+        "timed_training_ms": 5969.574908842333,
+        "initial_loss": 9.050372123718262,
+        "final_loss": 6.451093673706055,
+        "heldout_loss": 6.462359189987183,
+        "heldout_accuracy": 0.9866279069767442
+      },
+      "new": {
+        "median_step_ms": 16.686416522134095,
+        "timed_training_ms": 5810.46269624494,
+        "initial_loss": 9.050372123718262,
+        "final_loss": 6.451093673706055,
+        "heldout_loss": 6.462359189987183,
+        "heldout_accuracy": 0.9866279069767442
+      },
+      "deltas": {
+        "train_loss_max_abs": 0.0,
+        "metrics_max_abs": 0.0,
+        "first_gradient_max_abs": 0.0,
+        "final_weight_max_abs": 0.0,
+        "heldout_loss_abs": 0.0,
+        "heldout_accuracy_abs": 0.0
+      },
+      "speedup": 1.0273837422104475
+    },
+    {
+      "seed": 1237,
+      "order": "new,old",
+      "old": {
+        "median_step_ms": 19.51922950684093,
+        "timed_training_ms": 6685.804590815678,
+        "initial_loss": 9.030654907226562,
+        "final_loss": 6.448922157287598,
+        "heldout_loss": 6.522264242172241,
+        "heldout_accuracy": 0.9837209302325581
+      },
+      "new": {
+        "median_step_ms": 16.862187505466864,
+        "timed_training_ms": 5266.585004224908,
+        "initial_loss": 9.030654907226562,
+        "final_loss": 6.448922157287598,
+        "heldout_loss": 6.522264242172241,
+        "heldout_accuracy": 0.9837209302325581
+      },
+      "deltas": {
+        "train_loss_max_abs": 0.0,
+        "metrics_max_abs": 0.0,
+        "first_gradient_max_abs": 0.0,
+        "final_weight_max_abs": 0.0,
+        "heldout_loss_abs": 0.0,
+        "heldout_accuracy_abs": 0.0
+      },
+      "speedup": 1.2694762517745861
+    },
+    {
+      "seed": 1238,
+      "order": "old,new",
+      "old": {
+        "median_step_ms": 19.137750001391396,
+        "timed_training_ms": 6221.248910296708,
+        "initial_loss": 9.042210578918457,
+        "final_loss": 6.440206050872803,
+        "heldout_loss": 6.421858310699463,
+        "heldout_accuracy": 0.9866279069767442
+      },
+      "new": {
+        "median_step_ms": 16.386750008678064,
+        "timed_training_ms": 4993.445418251213,
+        "initial_loss": 9.042210578918457,
+        "final_loss": 6.440206050872803,
+        "heldout_loss": 6.421858310699463,
+        "heldout_accuracy": 0.9866279069767442
+      },
+      "deltas": {
+        "train_loss_max_abs": 0.0,
+        "metrics_max_abs": 0.0,
+        "first_gradient_max_abs": 0.0,
+        "final_weight_max_abs": 0.0,
+        "heldout_loss_abs": 0.0,
+        "heldout_accuracy_abs": 0.0
+      },
+      "speedup": 1.2458830304939015
+    },
+    {
+      "seed": 1239,
+      "order": "new,old",
+      "old": {
+        "median_step_ms": 19.099083001492545,
+        "timed_training_ms": 5867.68733576173,
+        "initial_loss": 9.021388053894043,
+        "final_loss": 6.449865818023682,
+        "heldout_loss": 6.539858937263489,
+        "heldout_accuracy": 0.983139534883721
+      },
+      "new": {
+        "median_step_ms": 16.49737497791648,
+        "timed_training_ms": 5503.48979246337,
+        "initial_loss": 9.021388053894043,
+        "final_loss": 6.449865818023682,
+        "heldout_loss": 6.539858937263489,
+        "heldout_accuracy": 0.983139534883721
+      },
+      "deltas": {
+        "train_loss_max_abs": 0.0,
+        "metrics_max_abs": 0.0,
+        "first_gradient_max_abs": 0.0,
+        "final_weight_max_abs": 0.0,
+        "heldout_loss_abs": 0.0,
+        "heldout_accuracy_abs": 0.0
+      },
+      "speedup": 1.0661757461233239
+    }
+  ],
+  "median_speedup": 1.1604931275488188
+}
