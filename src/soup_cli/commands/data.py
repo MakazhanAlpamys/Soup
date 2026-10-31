@@ -577,9 +577,10 @@ def filter_data(
             )
         except ImportError:
             console.print(
-                "[yellow]torch/transformers not available for perplexity scoring. "
-                "Skipping perplexity.[/]"
+                r'[red]Perplexity scoring requires torch and transformers.[/] '
+                r'Install with: pip install "soup-cli\[train]"'
             )
+            raise typer.Exit(1) from None
 
     if score_only:
         # Add scores to each row and write output

@@ -1205,6 +1205,13 @@ soup data clean ./data/train.jsonl
 soup data clean ./data/train.jsonl -o ./data/clean.jsonl --dry-run
 ```
 
+`soup data filter --perplexity` and `--score-only` require torch and transformers
+(install with `pip install "soup-cli[train]"`). If either package cannot be
+imported, the command exits 1 with installation instructions before writing an
+output: an existing file stays unchanged, and no new file is created.
+`--score-only` requests both perplexity and coherence scores; it does not fall
+back to coherence-only output. `--coherence` alone works without these packages.
+
 `soup data validate` exits with code `0` when at least one row is usable and the
 optional minimum valid fraction is met. It exits with code `3` for input errors,
 such as a missing file or an undetectable format, and code `2` when a non-empty
