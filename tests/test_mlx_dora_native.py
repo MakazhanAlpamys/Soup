@@ -73,6 +73,147 @@ def _rows():
     return {"train": [{"text": "alpha beta gamma alpha beta gamma"}] * 4}
 
 
+def _selective_fixture(path, quantized):
+    """Real local tokenizer: one BOS, explicit role headers, PAD=EOS, Unicode."""
+    _checkpoint(path, quantized)
+    words = ["<unk>", "<eos>", "<bos>", "user", "assistant", "alpha", "beta", "gamma",
+             "system", "developer", "tool", "répété", "policy", "ignored"]
+    raw = Tokenizer(models.WordLevel({word: i for i, word in enumerate(words)}, unk_token="<unk>"))
+    raw.pre_tokenizer = pre_tokenizers.WhitespaceSplit()
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=raw, unk_token="<unk>", bos_token="<bos>",
+        eos_token="<eos>", pad_token="<eos>",
+    )
+    tokenizer.chat_template = (
+        "{{ bos_token }} {% for message in messages %}"
+        "{{ message['role'] }} {{ message['content'] }} <eos> {% endfor %}"
+        "{% if add_generation_prompt %}assistant {% endif %}"
+    )
+    tokenizer.save_pretrained(path)
+    messages = [
+        {"role": "system", "content": "policy", "train": True},
+        {"role": "developer", "content": "ignored", "train": False},
+        {"role": "user", "content": "répété", "train": True},
+        {"role": "assistant", "content": "répété", "train": False},
+        {"role": "tool", "content": "beta", "train": True},
+        {"role": "assistant", "content": "alpha", "train": None},
+        {"role": "assistant", "content": "gamma alpha"},
+    ]
+    # Hand-checked token positions, independent of every production label builder.
+    ids = [2, 8, 12, 1, 9, 13, 1, 3, 11, 1, 4, 11, 1,
+           10, 6, 1, 4, 5, 1, 4, 7, 5, 1]
+    return messages, ids
+
+
+@pytest.mark.parametrize("mode", ["train_field", "mask_history", "responses_only"])
+@pytest.mark.parametrize("quantized", [False, True])
+def test_native_selective_loss_gradients_public_training_and_reload(
+    tmp_path, monkeypatch, mode, quantized,
+):
+    from mlx_lm.tuner.datasets import CacheDataset
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+    from soup_cli.trainer.mlx_masking import MaskedChatDataset, masked_iterate_batches, masked_loss
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    base = tmp_path / "base"
+    messages, ids = _selective_fixture(base, quantized)
+    cfg = _config(base, tmp_path / "out", dora=False, quantized=quantized)
+    cfg.data.format = "chatml"
+    cfg.data.val_split = 0
+    cfg.data.train_on_responses_only = mode != "train_field"
+    cfg.data.mask_history = mode == "mask_history"
+    cfg.data.train_on_messages_with_train_field = mode == "train_field"
+    data = tmp_path / "data.jsonl"
+    data.write_text("\n".join(json.dumps({"messages": messages}) for _ in range(4)) + "\n")
+    cfg.data.train = str(data)
+    wrapper = MLXSFTTrainerWrapper(cfg)
+    wrapper.setup({"train": [{"messages": messages}] * 4})
+    wrapper._apply_lora(wrapper.model)
+    wrapper.model.eval()
+    dataset = MaskedChatDataset(
+        [{"messages": messages}], wrapper.tokenizer,
+        train_field=mode == "train_field", mask_history=mode == "mask_history", max_length=64,
+    )
+    tokens, mask = dataset.process(dataset[0])
+    positions = {
+        "train_field": [*range(4), 7, 8, 9, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22],
+        "mask_history": [20, 21, 22],
+        "responses_only": [11, 12, 17, 18, 20, 21, 22],
+    }[mode]
+    assert tokens == ids
+    assert mask == [int(i in positions) for i in range(len(ids))]
+    batch, actual_mask = next(masked_iterate_batches(CacheDataset(dataset), 1, 64))
+    assert batch.shape == actual_mask.shape
+    assert actual_mask[0, len(ids):].sum().item() == 0
+    assert mask[-1] == 1  # Real EOS stays supervised although PAD=EOS.
+
+    expected_positions = [position - 1 for position in positions if position > 0]
+
+    def oracle(model, batch, unused):
+        logits = model(batch[:, :-1]).astype(mx.float32)
+        chosen = logits[0, expected_positions]
+        targets = mx.array([ids[position + 1] for position in expected_positions])
+        losses = mx.logsumexp(chosen, axis=-1) - mx.take_along_axis(
+            chosen, targets[:, None], axis=-1,
+        ).squeeze(-1)
+        return losses.mean(), mx.array(len(expected_positions))
+
+    (actual, count), gradients = nn.value_and_grad(wrapper.model, masked_loss)(
+        wrapper.model, batch, actual_mask,
+    )
+    (expected, _), reference = nn.value_and_grad(wrapper.model, oracle)(
+        wrapper.model, batch, actual_mask,
+    )
+    assert count.item() == len(expected_positions)
+    assert actual.item() == pytest.approx(expected.item(), abs=2e-6)
+    reference = dict(tree_flatten(reference))
+    assert any(mx.abs(value).sum().item() > 0 for _, value in tree_flatten(gradients))
+    for name, value in tree_flatten(gradients):
+        assert mx.allclose(value, reference[name], atol=2e-6, rtol=2e-5).item(), name
+
+    # Perturb a target under controlled fixed logits, keeping causal context constant.
+    logits = wrapper.model(batch[:, :-1]).astype(mx.float32)
+    fixed = lambda inputs: logits  # noqa: E731
+    original_loss = masked_loss(fixed, batch, actual_mask)[0].item()
+    ignored = next(i for i in range(1, len(ids)) if i not in positions)
+    changed = mx.array(batch)
+    changed[0, ignored] = (ids[ignored] + 1) % 32
+    assert masked_loss(fixed, changed, actual_mask)[0].item() == original_loss
+    changed[0, positions[-2]] = (ids[positions[-2]] + 1) % 32
+    assert abs(masked_loss(fixed, changed, actual_mask)[0].item() - original_loss) > 1e-5
+
+    original, _ = load(str(base))
+    frozen = dict(tree_flatten(original.parameters()))
+    config_file = tmp_path / "config.json"
+    config_file.write_text(cfg.model_dump_json())
+    outcome = CliRunner().invoke(app, ["train", "--config", str(config_file), "--yes"])
+    assert outcome.exit_code == 0, (outcome.output, repr(outcome.exception))
+    restored, _ = load(str(base), adapter_path=str(tmp_path / "out"))
+    restored.eval()
+    trained = dict(tree_flatten(restored.parameters()))
+    for name, value in frozen.items():
+        parent, leaf = name.rsplit(".", 1)
+        actual_name = f"{parent}.linear.{leaf}"
+        assert mx.array_equal(trained.get(actual_name, trained.get(name)), value).item(), name
+    weights = mx.load(str(tmp_path / "out" / "adapters.safetensors"))
+    assert any(mx.abs(value).sum().item() > 0 for name, value in weights.items()
+               if name.endswith("lora_b"))
+    metadata = json.loads((tmp_path / "out" / "adapter_config.json").read_text())
+    assert metadata["response_token_mask"] is True
+    assert metadata["mask_history"] is (mode == "mask_history")
+    assert metadata["train_on_messages_with_train_field"] is (mode == "train_field")
+    restored_weights = dict(tree_flatten(restored.parameters()))
+    assert all(mx.array_equal(restored_weights[name], value).item()
+               for name, value in weights.items())
+    assert mx.abs(restored(mx.array([ids])) - original(mx.array([ids]))).max().item() > 1e-4
+    again, _ = load(str(base), adapter_path=str(tmp_path / "out"))
+    again.eval()
+    assert mx.allclose(again(mx.array([ids])), restored(mx.array([ids])), atol=1e-5).item()
+
+
 @pytest.mark.parametrize("quantized, checkpoint, accumulation", [
     (False, False, 1), (True, False, 1), (False, True, 2), (True, True, 2),
 ])

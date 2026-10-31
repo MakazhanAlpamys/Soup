@@ -61,7 +61,10 @@ class MaskingPlan:
     """Non-empty when the request cannot be honoured for this shape."""
 
 
-def plan_response_masking(responses_only: bool, sample: Dict[str, Any]) -> MaskingPlan:
+def plan_response_masking(
+    responses_only: bool, sample: Dict[str, Any], *, train_field: bool = False,
+    mask_history: bool = False,
+) -> MaskingPlan:
     """Choose a masking strategy from the config flag and one sample row.
 
     Dispatches on the same row shapes upstream's ``create_dataset`` does
@@ -77,6 +80,12 @@ def plan_response_masking(responses_only: bool, sample: Dict[str, Any]) -> Maski
       run into a crash. Warn instead, which is what the rest of
       ``_check_unsupported`` does for fields MLX cannot honour.
     """
+    if train_field and responses_only or mask_history and (train_field or not responses_only):
+        raise ResponseMaskError("incompatible response-only, train-field and mask_history modes")
+    if train_field or mask_history:
+        if _CHAT_KEY not in sample:
+            raise ResponseMaskError("selective message masking requires chat messages")
+        return MaskingPlan(token_mask=True, mask_prompt=False)
     if not responses_only:
         return MaskingPlan(token_mask=False, mask_prompt=False)
     if _CHAT_KEY in sample:
@@ -118,6 +127,7 @@ def build_response_mask(
     tokenizer: Any,
     *,
     tools: Any = None,
+    mask_history: bool = False,
 ) -> Tuple[List[int], List[int]]:
     """Tokenize ``messages`` and mark which tokens are assistant content.
 
@@ -135,7 +145,10 @@ def build_response_mask(
     trailing marker, re-order turns, or inject a summary of earlier turns are
     not, and for those the spans this would compute are wrong. Every prefix is
     checked against the full sequence and ``ResponseMaskError`` is raised
-    rather than returning a mask that looks plausible.
+    rather than returning a mask that looks plausible. History-only selection
+    checks the two boundaries of the selected final assistant message: earlier
+    unselected turns may be rewritten by a reasoning template without making
+    that final, independently verified span unsafe.
     """
     messages = list(messages)
     if not messages:
@@ -144,8 +157,14 @@ def build_response_mask(
     tokens = _apply(tokenizer, messages, tools=tools)
     mask = [0] * len(tokens)
     saw_response = False
+    last_response = max(
+        (index for index, message in enumerate(messages) if message.get("role") == RESPONSE_ROLE),
+        default=-1,
+    )
 
     for k, message in enumerate(messages):
+        if mask_history and k != last_response:
+            continue
         is_response = message.get("role") == RESPONSE_ROLE
         if k == 0:
             # HuggingFace tokenizers raise on an empty conversation
@@ -187,7 +206,7 @@ def build_response_mask(
                 "than for the turns before it"
             )
 
-        if is_response:
+        if is_response and (not mask_history or k == last_response):
             for i in range(len(prefix), len(upto)):
                 mask[i] = 1
             saw_response = len(upto) > len(prefix) or saw_response
@@ -209,15 +228,58 @@ class MaskedChatDataset:
     ``CacheDataset`` wraps it unchanged and the caching behaviour is identical.
     """
 
-    def __init__(self, data: Sequence[Dict[str, Any]], tokenizer: Any, chat_key: str = "messages"):
+    def __init__(
+        self, data: Sequence[Dict[str, Any]], tokenizer: Any, chat_key: str = "messages",
+        *, train_field: bool = False, mask_history: bool = False, max_length: int | None = None,
+    ):
         self._data = list(data)
         self.tokenizer = tokenizer
         self.chat_key = chat_key
+        self.train_field = train_field
+        self.mask_history = mask_history
+        self.max_length = max_length
 
     def process(self, d: Dict[str, Any]) -> Tuple[List[int], List[int]]:
-        return build_response_mask(
-            d[self.chat_key], self.tokenizer, tools=d.get("tools")
+        from soup_cli.data.loss_mask import (
+            IGNORE_INDEX,
+            build_per_message_train_labels,
+            ensure_causal_loss_target,
         )
+
+        messages = d.get(self.chat_key)
+        if not isinstance(messages, (list, tuple)) or not messages or any(
+            not isinstance(message, dict) or not isinstance(message.get("role"), str)
+            for message in messages
+        ):
+            raise ResponseMaskError("conversation has no messages or has malformed message roles")
+        if self.train_field and self.mask_history:
+            raise ResponseMaskError("incompatible train-field and mask_history modes")
+        if self.train_field and any(
+            message.get("train") is not None and type(message["train"]) is not bool
+            for message in messages
+        ):
+            raise ResponseMaskError("per-message train must be bool or None")
+        try:
+            if self.train_field:
+                # Use the shared per-message policy, with verified token boundaries
+                # instead of its Transformers fallback's approximate text alignment.
+                labeled = build_per_message_train_labels(
+                    messages, self.tokenizer, max_length=2**31 - 1,
+                    verified_prefix=True, tools=d.get("tools"),
+                )
+                tokens = labeled["input_ids"]
+                mask = [int(label != IGNORE_INDEX) for label in labeled["labels"]]
+            else:
+                tokens, mask = build_response_mask(
+                    messages, self.tokenizer, tools=d.get("tools"), mask_history=self.mask_history,
+                )
+            if self.train_field or self.mask_history:
+                labels = [token if keep else IGNORE_INDEX for token, keep in zip(tokens, mask)]
+                length = self.max_length if self.max_length is not None else len(tokens)
+                ensure_causal_loss_target(labels[:length], max_length=length)
+            return tokens, mask
+        except ValueError as exc:
+            raise ResponseMaskError(str(exc)) from exc
 
     def __getitem__(self, idx: int):
         return self._data[idx]
