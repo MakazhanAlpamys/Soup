@@ -1196,8 +1196,7 @@ def test_alias_trains_a_native_adapter_that_the_native_task_can_resume(
     resumed.model = llama.Model(args)
     resumed.tokenizer = CharTokenizer()
     resumed._dataset = {"train": rows, "val": []}
-    if resume_alias and loss in {"orpo", "simpo"}:
-        # DPO's older metadata-validation gap is tracked separately in #2232.
+    if resume_alias:
         meta_path = tmp_path / "alias" / "adapter_config.json"
         for change, message in [
             ({"task": "sft"}, "was trained with task='sft'"),
