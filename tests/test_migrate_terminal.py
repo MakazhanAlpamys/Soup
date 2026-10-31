@@ -50,7 +50,7 @@ def test_migrate_reports_literal_output_path_after_writing(source, name):
 
 
 def test_migrate_strips_controls_only_from_displayed_output_path(source):
-    output = Path("[bold]config\x9b‮.yaml")
+    output = Path("[bold]config\x9b\u202e.yaml")
 
     result = _migrate(str(source), "--output", str(output), "--yes")
 
@@ -59,7 +59,7 @@ def test_migrate_strips_controls_only_from_displayed_output_path(source):
     text = _plain(result)
     assert "Config written to [bold]config.yaml" in text
     assert "soup train --config [bold]config.yaml" in text
-    assert "\x9b" not in text and "‮" not in text
+    assert "\x9b" not in text and "\u202e" not in text
 
 
 def test_migrate_overwrite_prompt_shows_the_path_as_typed(source):
@@ -86,13 +86,13 @@ def test_migrate_missing_input_is_named_literally(source, name):
 
 
 def test_migrate_strips_controls_from_a_refused_input_path(source):
-    result = _migrate("../[bold]out\x9b‮.yaml", "--output", "soup.yaml", "--yes")
+    result = _migrate("../[bold]out\x9b\u202e.yaml", "--output", "soup.yaml", "--yes")
 
     assert result.exit_code == 1
     text = _plain(result)
     assert "Input path is outside the current directory:" in text
     assert "[bold]out.yaml" in text
-    assert "\x9b" not in text and "‮" not in text
+    assert "\x9b" not in text and "\u202e" not in text
 
 
 def test_migrate_refused_output_path_is_named_literally(source):
