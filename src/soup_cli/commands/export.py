@@ -179,7 +179,8 @@ def export(
         flags = [name for name, enabled in (
             ("--verbose", verbose), ("--no-install-deps", no_install_deps),
         ) if enabled]
-        console.print(f"[red]{' and '.join(flags)} require --format gguf.[/]")
+        verb = "requires" if len(flags) == 1 else "require"
+        console.print(f"[red]{' and '.join(flags)} {verb} --format gguf.[/]")
         raise typer.Exit(2)
 
     model_name = Path(model).name
