@@ -726,8 +726,14 @@ Only ed25519 and RSA public keys are accepted:
 soup train --config soup.yaml --cloud runpod --gpu rtx4090 --cloud-submit
 ```
 
-The local controller creates one Secure Cloud GPU Pod with TCP SSH access, installs
-the running Soup version, runs training over SSH and copies the configured relative
+The local controller creates one Secure Cloud GPU Pod with TCP SSH access, creates
+`/workspace/venv` with `python3 -m venv --system-site-packages`, and installs the
+running Soup version with `/workspace/venv/bin/python -m pip`. This keeps the
+image's preinstalled torch visible and avoids installing Soup into its system
+Python. Training uses `/workspace/venv/bin/soup` by absolute path, so it does not
+depend on the non-login SSH command's script search path. Environment creation
+and installation diagnostics go to stderr; either failure stops before training.
+The controller runs training over SSH and copies the configured relative
 output directory back before deleting the Pod. Choose a fresh local output path;
 existing outputs, symlink/junction paths and path components starting with `-` are
 refused before allocation and rechecked before copying. SCP separates options from
@@ -794,6 +800,9 @@ or claim successful artifact retrieval.
 **Not yet live-validated.** Tests use local mocked API/SSH transports. The code
 PR does not include a paid run; provider execution, GPU behavior, retrieval and
 billing termination remain a separate live-validation task, per #264's ruling.
+That first live run (#2098) should also record the image's externally-managed
+Python marker and SSH `PATH`, to establish whether the image needed the venv
+workaround tracked in #2192.
 API contract: [RunPod REST v1 OpenAPI](https://rest.runpod.io/v1/openapi.json),
 [SSH setup](https://docs.runpod.io/pods/configuration/use-ssh).
 
