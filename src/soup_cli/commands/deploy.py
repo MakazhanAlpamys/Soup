@@ -13,6 +13,9 @@ if TYPE_CHECKING:
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
+
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
@@ -295,15 +298,16 @@ def ollama(
             raise typer.Exit(1)
 
         if not yes:
-            confirm = typer.confirm(f"Remove model '{remove}' from Ollama?")
+            # Click prints the prompt as plain text, so only the controls are stripped.
+            confirm = typer.confirm(f"Remove model '{strip_control(remove)}' from Ollama?")
             if not confirm:
                 raise typer.Exit(0)
 
         success, message = remove_model(remove)
         if success:
-            console.print(f"[green]{message}[/]")
+            console.print(f"[green]{for_terminal(message)}[/]", emoji=False)
         else:
-            console.print(f"[red]{message}[/]")
+            console.print(f"[red]{for_terminal(message)}[/]", emoji=False)
             raise typer.Exit(1)
         raise typer.Exit(0)
 
@@ -328,7 +332,7 @@ def ollama(
     gguf_path = Path(model)
     valid_path, path_err = validate_gguf_path(gguf_path)
     if not valid_path:
-        console.print(f"[red]{path_err}[/]")
+        console.print(f"[red]{for_terminal(path_err)}[/]", emoji=False)
         raise typer.Exit(1)
 
     # Check Ollama is installed
@@ -351,8 +355,9 @@ def ollama(
         resolved_template = template
     else:
         console.print(
-            f"[red]Unknown template: {template}[/]\n"
-            f"Available: auto, {', '.join(OLLAMA_TEMPLATES.keys())}"
+            f"[red]Unknown template: {for_terminal(template)}[/]\n"
+            f"Available: auto, {', '.join(OLLAMA_TEMPLATES.keys())}",
+            emoji=False,
         )
         raise typer.Exit(1)
 
@@ -361,7 +366,9 @@ def ollama(
     if parameter:
         for param_str in parameter:
             if "=" not in param_str:
-                console.print(f"[red]Invalid parameter format: {param_str}[/]")
+                console.print(
+                    f"[red]Invalid parameter format: {for_terminal(param_str)}[/]", emoji=False
+                )
                 console.print("[dim]Expected format: key=value (e.g. temperature=0.7)[/]")
                 raise typer.Exit(1)
             key, value = param_str.split("=", 1)
@@ -370,11 +377,14 @@ def ollama(
     # Show deploy plan
     console.print(
         Panel(
-            f"Model:    [bold]{name}[/]\n"
-            f"GGUF:     [bold]{gguf_path}[/]\n"
-            f"Template: [bold]{resolved_template}[/]"
-            + (f"\nSystem:   [bold]{system}[/]" if system else "")
-            + (f"\nParams:   [bold]{params}[/]" if params else ""),
+            Text.from_markup(
+                f"Model:    [bold]{for_terminal(name)}[/]\n"
+                f"GGUF:     [bold]{for_terminal(gguf_path)}[/]\n"
+                f"Template: [bold]{resolved_template}[/]"
+                + (f"\nSystem:   [bold]{for_terminal(system)}[/]" if system else "")
+                + (f"\nParams:   [bold]{for_terminal(params)}[/]" if params else ""),
+                emoji=False,
+            ),
             title="Deploy to Ollama",
         )
     )
@@ -383,7 +393,8 @@ def ollama(
     if not yes:
         console.print(
             "[yellow]Warning:[/] This will overwrite any existing Ollama model "
-            f"named '{name}'."
+            f"named '{for_terminal(name)}'.",
+            emoji=False,
         )
         confirm = typer.confirm("Proceed?")
         if not confirm:
@@ -399,7 +410,7 @@ def ollama(
             parameters=params,
         )
     except ValueError as exc:
-        console.print(f"[red]Invalid parameter:[/] {exc}")
+        console.print(f"[red]Invalid parameter:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1)
     console.print("[green]\u2713[/] Modelfile generated")
 
@@ -407,13 +418,15 @@ def ollama(
     console.print("[dim]Creating model in Ollama...[/]")
     success, message = deploy_to_ollama(name, modelfile)
     if not success:
-        console.print(f"[red]Deploy failed:[/] {message}")
+        console.print(f"[red]Deploy failed:[/] {for_terminal(message)}", emoji=False)
         raise typer.Exit(1)
 
-    console.print(f"[green]\u2713[/] Model created: [bold]{name}[/]")
+    console.print(
+        f"[green]\u2713[/] Model created: [bold]{for_terminal(name)}[/]", emoji=False
+    )
     console.print(
         Panel(
-            f"Run: [bold]ollama run {name}[/]",
+            Text.from_markup(f"Run: [bold]ollama run {for_terminal(name)}[/]", emoji=False),
             title="[bold green]Deploy Complete![/]",
         )
     )
