@@ -29,6 +29,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from soup_cli.utils.lora_scaling import lora_scaling_factor
+
 _MAX_EXPR_LEN = 4096
 _MAX_TERMS = 64
 _MAX_COEFF = 1e6
@@ -327,7 +329,7 @@ def read_adapter_base(adapter_dir: str) -> str | None:
 
 
 def read_adapter_lora_scaling(adapter_dir: str) -> float | None:
-    """Return a LoRA adapter's decode-time scaling ``lora_alpha / r``.
+    """Return decode-time scaling: ``alpha/r``, or ``alpha/sqrt(r)`` for rsLoRA.
 
     Returns ``None`` when the config is absent, ``r`` / ``lora_alpha`` are
     missing or non-numeric, or ``r <= 0`` (a degenerate config the caller
@@ -347,7 +349,9 @@ def read_adapter_lora_scaling(adapter_dir: str) -> float | None:
         return None
     if r <= 0:
         return None
-    scaling = float(alpha) / float(r)
+    scaling = lora_scaling_factor(
+        float(r), float(alpha), use_rslora=bool(data.get("use_rslora", False))
+    )
     return scaling if math.isfinite(scaling) else None
 
 
@@ -419,9 +423,10 @@ def merge_task_arithmetic_concat(
         B_out @ A_out = Σ cᵢ·sᵢ·(Bᵢ @ Aᵢ)   exactly
 
     ``coeffs[i]`` is folded into ``Bᵢ`` and the per-adapter scaling ``scalings[i]``
-    (``lora_alpha/r``, default ``1.0``) into ``Aᵢ`` — so a single-scaling output
-    adapter (``lora_alpha = r_out``) reproduces ``Σ cᵢ·(effective ΔWᵢ)``. Negation
-    is exact (flips the ``Bᵢ`` block). When ``rank`` is given AND smaller than the
+    (``alpha/r`` or ``alpha/sqrt(r)`` for rsLoRA, default ``1.0``) into ``Aᵢ``.
+    An ordinary-LoRA output (``lora_alpha = r_out``, ``use_rslora = False``) then
+    reproduces ``Σ cᵢ·(effective ΔWᵢ)``. Negation is exact (flips the ``Bᵢ`` block).
+    When ``rank`` is given AND smaller than the
     concatenated rank ``Σ rᵢ``, each module's delta is refactored to the best
     rank-``rank`` approximation via truncated SVD.
 

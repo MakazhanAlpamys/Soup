@@ -410,7 +410,21 @@ soup adapters branches
 
 **v0.71.4:** the merge verdict is now LIVE — `soup adapters merge … --canary suite.json` lifts the `MergeReport.verdict` `UNKNOWN` stub. A pre-scored `{"baseline_scores","candidate_scores"}` suite classifies the blend OK / MINOR / MAJOR with no model load; a `{"tasks":[...]}` suite uses an injectable scorer. `--strict-verdict` exits 2 on MAJOR. The backdoor-scan and license-conflict gates now run for **every** strategy, including `cmaes`. `soup adapters branch <name> --from-registry <id>` / `--attach-to-registry <id>` link training-env snapshots into the Registry lineage DAG (shown as a `branches` node in `soup history`).
 
-**v0.71.34 — task-vector arithmetic.** `soup adapters arithmetic "<expr>"` applies task arithmetic (arXiv:2212.04089) to LoRA deltas: **add** (blend two skills), **scale** (`2*coder`), and — the differentiator — **negate** (`- toxic` removes a behaviour). Names in the expression map to adapter dirs via repeatable `--adapter name=path`. The math is done at the effective-delta level: a LoRA contributes `ΔW = B·A`, so the coefficient is applied so that `ΔW` scales **linearly** (subtracting an adapter actually negates its delta — a naïve element-wise sum would scale by `c²`, making negation a no-op). Adapters must share the base model (`--allow-cross-base` to override) and rank (mixed ranks are refused, not silently approximated). Each input passes the v0.71.2 backdoor-scan gate (`--allow-unscanned` to skip). Output is a single loadable adapter; exit 0 = ok, 1 = refusal.
+**Task-vector arithmetic.** `soup adapters arithmetic "<expr>"` adds, scales and negates
+LoRA task vectors. Names in the expression map to adapter directories through repeatable
+`--adapter name=path` options. Without `--rank`, same-rank inputs retain the fast
+element-wise path; mixed-rank inputs use exact concatenation. Passing `--rank N` selects
+the concat path for either case and caps the output rank through truncated SVD.
+
+The concat path folds each input's scalar decode-time scaling into its factors:
+`lora_alpha / r` for ordinary LoRA, or `lora_alpha / sqrt(r)` for rsLoRA. Ordinary and
+rsLoRA inputs can be mixed. The exported concat adapter uses unit scaling
+(`r == lora_alpha`, `use_rslora: false`) and clears inherited per-module rank/alpha
+overrides, so the template adapter cannot scale the result a second time.
+
+Inputs must share the base model (`--allow-cross-base` to override). Each passes the
+backdoor-scan gate (`--allow-unscanned` to skip). Output is a single loadable adapter;
+exit 0 = success, 1 = refusal.
 
 
 ## Soup Cans (Shareable Recipes)

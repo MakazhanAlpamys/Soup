@@ -299,16 +299,24 @@ class TestMergeConcat:
 
 
 class TestReadAdapterScaling:
-    def test_reads_scaling(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize(
+        "config, expected",
+        [
+            ({"r": 8, "lora_alpha": 16}, 2.0),
+            ({"r": 8, "lora_alpha": 8, "use_rslora": True}, 2.8284271247461903),
+        ],
+        ids=["ordinary", "rslora"],
+    )
+    def test_reads_scaling(self, tmp_path, monkeypatch, config, expected):
         from soup_cli.utils.adapter_arithmetic import read_adapter_lora_scaling
 
         monkeypatch.chdir(tmp_path)
         d = tmp_path / "ad"
         d.mkdir()
         (d / "adapter_config.json").write_text(
-            json.dumps({"r": 8, "lora_alpha": 16}), encoding="utf-8"
+            json.dumps(config), encoding="utf-8"
         )
-        assert read_adapter_lora_scaling("ad") == pytest.approx(2.0)
+        assert read_adapter_lora_scaling("ad") == pytest.approx(expected)
 
     def test_missing_returns_none(self, tmp_path, monkeypatch):
         from soup_cli.utils.adapter_arithmetic import read_adapter_lora_scaling
@@ -329,7 +337,8 @@ class TestReadAdapterScaling:
         )
         assert read_adapter_lora_scaling("ad") is None
 
-    def test_zero_alpha_returns_zero_not_none(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("use_rslora", [False, True])
+    def test_zero_alpha_returns_zero_not_none(self, tmp_path, monkeypatch, use_rslora):
         # lora_alpha=0 with r>0 is a valid (intentionally-zeroed) task vector —
         # scaling is 0.0, NOT None. The CLI must not `or 1.0` it back to full.
         from soup_cli.utils.adapter_arithmetic import read_adapter_lora_scaling
@@ -338,7 +347,7 @@ class TestReadAdapterScaling:
         d = tmp_path / "ad"
         d.mkdir()
         (d / "adapter_config.json").write_text(
-            json.dumps({"r": 8, "lora_alpha": 0}), encoding="utf-8"
+            json.dumps({"r": 8, "lora_alpha": 0, "use_rslora": use_rslora}), encoding="utf-8"
         )
         assert read_adapter_lora_scaling("ad") == 0.0
 
@@ -423,6 +432,47 @@ class TestWriteMergedAdapterConfigOverrides:
 
 def _rng_tensor(shape, seed):
     return np.random.default_rng(seed).standard_normal(shape).astype(np.float32)
+
+
+def _projection_adapter(directory, rank, use_rslora, coordinate):
+    ak, bk = _lora_keys("base_model.model.proj")
+    a = np.zeros((rank, 2), dtype=np.float32)
+    b = np.zeros((2, rank), dtype=np.float32)
+    a[0, coordinate] = b[coordinate, 0] = 1.0
+    return _make_adapter(
+        directory, "tiny-local", {ak: a, bk: b}, r=rank, alpha=rank,
+        extra_config={
+            "target_modules": ["proj"],
+            "use_rslora": use_rslora,
+            "bias": "none",
+            "lora_dropout": 0.0,
+        },
+    )
+
+
+@pytest.fixture
+def peft_delta():
+    torch = pytest.importorskip("torch")
+    peft = pytest.importorskip("peft")
+
+    class Tiny(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.proj = torch.nn.Linear(2, 2, bias=False, device="cpu", dtype=torch.float32)
+            with torch.no_grad():
+                self.proj.weight.zero_()
+
+        def forward(self, value):
+            return self.proj(value)
+
+    def load_delta(directory):
+        with torch.random.fork_rng(devices=[]), torch.no_grad():
+            model = peft.PeftModel.from_pretrained(
+                Tiny(), directory, local_files_only=True, torch_device="cpu"
+            ).eval()
+            return model(torch.eye(2, device="cpu", dtype=torch.float32)).numpy().T
+
+    return load_delta
 
 
 class TestArithmeticMixedRankCli:
@@ -593,3 +643,55 @@ class TestArithmeticMixedRankCli:
 
         merged = load_file(str(tmp_path / "out" / "adapter_model.safetensors"))
         assert merged[ak].shape == (4, 16)
+
+    @pytest.mark.parametrize(
+        "rs_a, rs_b, expression",
+        [
+            (False, False, "a + b"),
+            (True, True, "a + b"),
+            (True, False, "a + 0.5*b"),
+            (True, False, "0.5*b + a"),
+        ],
+        ids=["ordinary", "rslora", "mixed-rslora-first", "mixed-ordinary-first"],
+    )
+    def test_concat_preserves_peft_effective_delta(
+        self, tmp_path, peft_delta, rs_a, rs_b, expression
+    ):
+        a = _projection_adapter(tmp_path / "a", 8, rs_a, 0)
+        b = _projection_adapter(tmp_path / "b", 4, rs_b, 1)
+        coefficient_b = 0.5 if rs_a != rs_b else 1.0
+        expected = peft_delta(a) + coefficient_b * peft_delta(b)
+
+        result = self._run(
+            ["arithmetic", expression, "--adapter", f"a={a}", "--adapter", f"b={b}",
+             "--allow-unscanned", "-o", "out"],
+            tmp_path,
+        )
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        np.testing.assert_allclose(
+            peft_delta(str(tmp_path / "out")), expected, rtol=1e-6, atol=1e-6
+        )
+        config = json.loads((tmp_path / "out" / "adapter_config.json").read_text())
+        assert config["use_rslora"] is False
+        assert config["r"] == config["lora_alpha"] == 12
+
+    @pytest.mark.parametrize("rank", [2, 8], ids=["exact-svd", "untruncated"])
+    def test_explicit_rank_preserves_rslora_effective_delta(self, tmp_path, peft_delta, rank):
+        # The input delta has matrix rank 1: either output rank represents it exactly.
+        adapter = _projection_adapter(tmp_path / "a", 8, True, 0)
+        expected = peft_delta(adapter)
+
+        result = self._run(
+            ["arithmetic", "a", "--adapter", f"a={adapter}", "--rank", str(rank),
+             "--allow-unscanned", "-o", "out"],
+            tmp_path,
+        )
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        np.testing.assert_allclose(
+            peft_delta(str(tmp_path / "out")), expected, rtol=1e-6, atol=1e-6
+        )
+        config = json.loads((tmp_path / "out" / "adapter_config.json").read_text())
+        assert config["use_rslora"] is False
+        assert config["r"] == config["lora_alpha"] == rank
