@@ -9,6 +9,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.text import Text
 
 from soup_cli.utils.terminal import for_terminal
 
@@ -161,14 +162,16 @@ def quickstart(
     display_dir = for_terminal(out_dir)
     console.print(
         Panel(
-            "This will:\n"
-            f"  1. Create [bold]{display_dir}/quickstart_data.jsonl[/] (20 examples)\n"
-            f"  2. Create [bold]{display_dir}/quickstart_soup.yaml[/] config\n"
-            "  3. Train a tiny LoRA adapter (~1 min on GPU)\n\n"
-            f"Model: [bold]{model_id}[/]",
+            Text.from_markup(
+                "This will:\n"
+                f"  1. Create [bold]{display_dir}/quickstart_data.jsonl[/] (20 examples)\n"
+                f"  2. Create [bold]{display_dir}/quickstart_soup.yaml[/] config\n"
+                "  3. Train a tiny LoRA adapter (~1 min on GPU)\n\n"
+                f"Model: [bold]{model_id}[/]",
+                emoji=False,
+            ),
             title="[bold]Soup Quickstart[/]",
-        ),
-        emoji=False,
+        )
     )
 
     if not yes and not dry_run:

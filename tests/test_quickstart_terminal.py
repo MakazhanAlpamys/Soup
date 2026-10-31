@@ -1,5 +1,6 @@
 """soup quickstart prints the directory and files it creates as typed, not as Rich markup."""
 
+import re
 import sys
 from pathlib import Path
 
@@ -49,9 +50,11 @@ def test_quickstart_names_the_working_directory_as_typed(tmp_path, monkeypatch, 
     assert (workdir / "quickstart_data.jsonl").exists()
     text = _plain(result)
     shown = text.replace("\\", "/")
-    for target in ("quickstart_data.jsonl", "quickstart_soup.yaml"):
-        assert f"{name}/{target}" in shown
-    assert "soup train --config" in shown
+    # The confirmation panel, which is the only place a raw Rich Panel is used.
+    escaped = re.escape(name)
+    assert re.search(rf"1\. Create \S*{escaped}/quickstart_data\.jsonl \(20 examples\)", shown)
+    assert re.search(rf"2\. Create \S*{escaped}/quickstart_soup\.yaml config", shown)
+    assert f"{name}/quickstart_soup.yaml" in shown.split("soup train --config")[1]
 
 
 def test_quickstart_strips_controls_only_from_the_displayed_directory(tmp_path, monkeypatch):
