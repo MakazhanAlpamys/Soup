@@ -455,6 +455,14 @@ def merge(
             )
             raise typer.Exit(2)
 
+    from soup_cli.utils.paths import ensure_distinct_paths
+
+    try:
+        ensure_distinct_paths([("adapter", path) for path in adapters], [("--output", output)])
+    except ValueError as exc:
+        console.print(f"[red]Output path refused: {escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
     # v0.71.2 #192 — backdoor-scan gate. Refuse to merge any input whose
     # spectral scan returns FAIL (or that cannot be scanned at all) unless the
     # operator passes --allow-unscanned. WARN is advisory-only. Runs BEFORE the
@@ -811,6 +819,16 @@ def arithmetic(
     referenced = [t.name for t in terms]
     ref_paths = [mapping[n] for n in referenced]
 
+    # Refuse writing over a referenced adapter before any adapter is read (#2358).
+    try:
+        ensure_distinct_paths(
+            [(f"adapter {n}", path) for n, path in zip(referenced, ref_paths)],
+            [("--output", output)],
+        )
+    except ValueError as exc:
+        console.print(f"[red]Output path refused: {escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
     from soup_cli.utils.adapter_diff import (
         WRITE_ADAPTER_DEPS,
         require_adapter_dependencies,
@@ -880,12 +898,9 @@ def arithmetic(
             "base models (results may be meaningless).[/]"
         )
 
-    # 5. Output containment; refuse writing over a referenced adapter (#2358).
+    # 5. Output containment.
     try:
         enforce_under_cwd_and_no_symlink(output, "output")
-        ensure_distinct_paths(
-            [(f"adapter {n}", mapping[n]) for n in referenced], [("--output", output)]
-        )
     except (ValueError, OSError) as exc:
         console.print(f"[red]Output path refused: {escape(str(exc))}[/]")
         raise typer.Exit(1) from exc
