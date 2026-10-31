@@ -271,9 +271,8 @@ def _merge_low_memory(
     trust_remote_code: bool,
 ) -> None:
     try:
+        from soup_cli.utils.lowmem_merge import LowMemoryMergeError, merge_low_memory  # noqa: I001
         from transformers import AutoTokenizer
-
-        from soup_cli.utils.lowmem_merge import LowMemoryMergeError, merge_low_memory
         from soup_cli.utils.trust_remote import (
             model_requires_trust_remote_code,
             resolve_trust_remote_code,
