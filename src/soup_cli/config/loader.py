@@ -197,6 +197,17 @@ def _print_validation_errors(errors: list) -> None:
             console.print(f"  {for_terminal(msg)}", emoji=False)
 
 
+def _describe_validation_error(err: dict) -> "tuple[str, str]":
+    """Location and message for one pydantic error in ``load_config_from_string``.
+
+    A ``SoupConfig``-level validator has an empty ``loc``, which joined as a
+    bare ``": ..."``, so it is labelled ``config``. Pydantic's ``Value error, ``
+    prefix is dropped; the message after it is ours and is kept as it is.
+    """
+    loc = " -> ".join(str(part) for part in err["loc"]) or "config"
+    return loc, err["msg"].removeprefix(_PYDANTIC_VALUE_ERROR_PREFIX)
+
+
 def _clip(detail: str) -> str:
     """``detail`` on one line, cut to ``_MAX_DETAIL_CHARS`` with an ellipsis."""
     detail = " ".join(detail.split())
@@ -388,8 +399,8 @@ def load_config_from_string(yaml_str: str, *, max_bytes: "int | None" = None) ->
         entries = exc.errors() if staged_first is None else staged_first[1]
         errors = []
         for err in entries:
-            loc = " -> ".join(str(part) for part in err["loc"])
-            errors.append(f"{loc}: {err['msg']}")
+            loc, msg = _describe_validation_error(err)
+            errors.append(f"{loc}: {msg}")
         if staged_first is None:
             raise ValueError("; ".join(errors))
         # The staged lines first, one per field as on a load that builds; the
