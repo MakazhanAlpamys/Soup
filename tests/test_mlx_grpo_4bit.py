@@ -435,8 +435,16 @@ class TestTheObjective:
 
     def test_gradients_match_finite_differences_on_the_quantized_base(self, tmp_path,
                                                                        monkeypatch):
-        """The trainer's own loss on the 4-bit model, differentiated by MLX, against
-        central differences of a float64 NumPy evaluation of the same objective."""
+        """The trainer's own loss on the 4-bit model, differentiated by MLX on the
+        default device, against central differences of a float64 NumPy evaluation of
+        the same objective, along three random directions over every LoRA tensor.
+
+        The differences take the forward on the CPU: an Apple M6 GPU computes the
+        float32 forward with ~1e-5 of noise in the loss (the precision of #2385),
+        which swamps any step small enough to be accurate. On the CPU, a step of
+        1e-3 is within ~0.05% of the derivative. What remains on the GPU is its own
+        rounding of the gradient, ~0.2% here, so 1e-2 is allowed.
+        """
         from soup_cli.trainer.mlx_dpo import resolve_head_split
         from soup_cli.trainer.mlx_grpo import (
             collate_completions,
@@ -469,21 +477,19 @@ class TestTheObjective:
         targets = tokens[:, 1:]
 
         def numpy_loss(old=None):
-            z = np.array(model(tokens_mx[:, :-1]))[:, start:]
+            with mx.stream(mx.cpu):
+                z = np.array(model(tokens_mx[:, :-1]))[:, start:]
             lp = _np_logps(z, targets[:, start:])
+            # At the expansion point every ratio is exactly 1, so the clip does not
+            # bind and the derivative is the unclipped one; the reference holds the
+            # clip open so that a step cannot cross its kink.
             return _np_loss(lp, lp if old is None else old, np.array(ref), adv, mask_np,
-                            beta=beta, num_items=num_items), lp
+                            beta=beta, num_items=num_items, eps_low=1.0, eps_high=1e9), lp
 
         _, old = numpy_loss()
-        # Directional derivatives over every LoRA tensor at once: an Apple M6 GPU
-        # computes this float32 forward with about 1e-5 of noise in the loss
-        # (#2385), which swamps a central difference on a single entry; along a
-        # whole direction the signal is ~1e-2 at this step, so the difference
-        # is accurate to well under the 2% allowed (measured 0.4% on the GPU and
-        # 1.1% on the CPU, where the rest is the step's own truncation error).
         params = _flat(model.trainable_parameters())
         rng = np.random.default_rng(11)
-        eps = 5e-3
+        eps = 1e-3
         for _ in range(3):
             direction = {k: rng.normal(0.0, 1.0, v.shape).astype(np.float32)
                          for k, v in params.items()}
@@ -496,7 +502,7 @@ class TestTheObjective:
             numeric = (values[0] - values[1]) / (2 * eps)
             analytic = sum(float((grads[k] * direction[k]).sum()) for k in params)
             assert abs(numeric) > 0.1, "the direction must carry gradient"
-            assert analytic == pytest.approx(numeric, rel=2e-2)
+            assert analytic == pytest.approx(numeric, rel=1e-2)
 
 
 # --------------------------------------------------------------------------
