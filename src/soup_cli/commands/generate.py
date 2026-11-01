@@ -171,17 +171,12 @@ def generate(
     ),
 ):
     """Generate synthetic training data using an LLM."""
-    from soup_cli.utils.paths import ensure_distinct_paths
-    from soup_cli.utils.terminal import for_terminal
+    from soup_cli.commands._common import refuse_output_over_input
 
     inputs = [(field, path) for field, path in (
         ("--seed", seed_file), ("--dedup-with", dedup_with), ("--context", template_context),
     ) if path]
-    try:
-        ensure_distinct_paths(inputs, [("--output", output)])
-    except ValueError as exc:
-        console.print(f"[red]{for_terminal(exc)}[/]")
-        raise typer.Exit(1) from exc
+    refuse_output_over_input(inputs, [("--output", output)], console=console)
 
     if fmt not in VALID_FORMATS:
         console.print(
