@@ -191,6 +191,7 @@ def render_lambda_stub(
         "import time",
         "import urllib.error",
         "import urllib.request",
+        "import uuid",
         "",
         # ssh and scp are found and given their environment the way soup runs every
         # external program (soup_cli/utils/tool_paths.py); this script runs without
@@ -238,15 +239,16 @@ def render_lambda_stub(
         "    except urllib.error.HTTPError as exc:",
         "        detail = exc.read().decode('utf-8', errors='replace')",
         "        raise RuntimeError(",
-        "            f'Lambda API {method} {path} failed with HTTP {exc.code}: {detail}'",
+        "            f'Lambda API {method} {path} failed with HTTP {exc.code}: {detail}',"
         "        ) from exc",
         "",
-        "def _launch_payload(region, ssh_key_name):",
+        "def _launch_payload(region, ssh_key_name, name):",
         "    return {",
         "        'region_name': region,",
         "        'instance_type_name': _INSTANCE_TYPE,",
         "        'ssh_key_names': [ssh_key_name],",
         "        'user_data': _USER_DATA,",
+        "        'name': name,",
         "    }",
         "",
         "def _wait_for_ip(api_key, instance_id):",
@@ -280,6 +282,28 @@ def render_lambda_stub(
         "            return",
         "        time.sleep(5)",
         "    raise RuntimeError('Lambda did not confirm termination within 5 minutes')",
+        "",
+        "def _recover_created(api_key, name):",
+        "    \"\"\"A lost POST response must not cause another POST or delete "
+        "unrelated instances.\"\"\"",
+        "    deadline = time.monotonic() + 60",
+        "    while time.monotonic() < deadline:",
+        "        records = _request_json(api_key, '/instances')",
+        "        if not isinstance(records, dict) or not isinstance(",
+        "            records.get('data'), list",
+        "        ):",
+        "            raise RuntimeError(",
+        "                'Lambda could not reconcile the launch; check the console'",
+        "            )",
+        "        found = [",
+        "            item['id'] for item in records['data']",
+        "            if isinstance(item, dict) and item.get('name') == name",
+        "        ]",
+        "        if found:",
+        "            return [str(f) for f in found]",
+        "        time.sleep(5)",
+        "    raise RuntimeError('Lambda launch result is unknown; check the console')",
+        "",
         "_SSH_OUTAGE_WINDOW = 900",
         "_SCP_RETRY_WINDOW = 900",
         "_LOG_TAIL_LINES = 50",
@@ -335,11 +359,11 @@ def render_lambda_stub(
         "        '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=6',",
         "    ]",
         "    poll_cmd = (",
-        '        \'case "$(cloud-init status 2>/dev/null)" in \'',
-        '        \'*running*|*"not started"*|*"not run"*) echo RUNNING ;; \'',
-        '        \'*) if [ -s /home/ubuntu/soup.exit ]; then cat /home/ubuntu/soup.exit; \'',
-        '        \'else echo MISSING; fi ;; \'',
-        '        \'esac\'',
+        "        'case \"$(cloud-init status 2>/dev/null)\" in '",
+        "        '*running*|*\"not started\"*|*\"not run\"*) echo RUNNING ;; '",
+        "        '*) if [ -s /home/ubuntu/soup.exit ]; then cat /home/ubuntu/soup.exit; '",
+        "        'else echo MISSING; fi ;; '",
+        "        'esac'",
         "    )",
         "    ssh, scp = _tool('ssh'), _tool('scp')",
         "    env = _tool_environment()",
@@ -438,10 +462,13 @@ def render_lambda_stub(
         "        return 2",
         "    instance_id = None",
         "    rc = 1",
+        "    name = 'soup-' + uuid.uuid4().hex",
+        "    launched = False",
         "    try:",
+        "        launched = True",
         "        response = _request_json(",
         "            api_key, '/instance-operations/launch', method='POST',",
-        "            payload=_launch_payload(region, ssh_key_name),",
+        "            payload=_launch_payload(region, ssh_key_name, name),",
         "        )",
         "        instance_ids = response.get('data', {}).get('instance_ids', [])",
         "        if len(instance_ids) != 1:",
@@ -452,18 +479,52 @@ def render_lambda_stub(
         "        _train_and_copy(ip, private_key)",
         "        print(f'Training completed; checkpoints copied to {_LOCAL_OUTPUT}')",
         "        rc = 0",
-        "    except Exception as exc:",
+        "    except RuntimeError as exc:",
+        "        msg = str(exc)",
+        "        # Definite rejection: 4xx (except 408) from the launch POST means "
+        "the instance was never created.",
+        "        if 'Lambda API POST /instance-operations/launch failed with HTTP' in msg:",
+        "            import re as _re",
+        r"            m = _re.search(r'HTTP (\d+)', msg)",
+        "            if m and 400 <= int(m.group(1)) < 500 and int(m.group(1)) != 408:",
+        "                launched = False",
         "        print(f'Lambda training failed: {exc}')",
         "    finally:",
-        "        if instance_id is not None:",
-        "            try:",
+        "        # Repeated Ctrl+C must not abandon cleanup of a billable resource.",
+        "        try:",
+        "            if instance_id is not None:",
+        "                # Known-ID path: we have the ID, terminate and verify it.",
         "                _request_json(",
         "                    api_key, '/instance-operations/terminate', method='POST',",
         "                    payload={'instance_ids': [instance_id]},",
         "                )",
         "                _wait_for_termination(api_key, instance_id)",
         "                print(f'Lambda instance termination verified: {instance_id}')",
-        "            except Exception as exc:",
+        "            elif launched:",
+        "                # Ambiguous launch: the POST was sent but we never got a confirmed ID.",
+        "                try:",
+        "                    ids = _recover_created(api_key, name)",
+        "                    for owned_id in ids:",
+        "                        _request_json(",
+        "                            api_key, '/instance-operations/terminate', method='POST',",
+        "                            payload={'instance_ids': [owned_id]},",
+        "                        )",
+        "                        _wait_for_termination(api_key, owned_id)",
+        "                    print(",
+        "                        f'Lambda termination verified for ambiguous launch: {ids}',"
+        "                    )",
+        "                    rc = 0",
+        "                except Exception:",
+        "                    print(",
+        "                        (f'CRITICAL: Lambda cleanup unconfirmed; check the console "
+        "for {name}'),"
+        "                    )",
+        "                    rc = 1",
+        "            else:",
+        "                # Definite rejection: no instance was created, nothing to clean up.",
+        "                print('Lambda create request rejected; no instance to clean up.')",
+        "        except Exception as exc:",
+        "            if instance_id is not None:",
         "                print(f'CRITICAL: Lambda termination failed for {instance_id}: {exc}')",
         "                rc = 1",
         "    return rc",
@@ -500,10 +561,7 @@ def plan_lambda_run(
     enforce_under_cwd_and_no_symlink(output_dir, "output_dir")
     _validate_path_shape(stub_path, "stub_path")
     stub_text = render_lambda_stub(
-        config_yaml,
-        gpu=gpu_key,
-        output_dir=output_dir,
-        soup_version=soup_version,
+        config_yaml, gpu=gpu_key, output_dir=output_dir, soup_version=soup_version
     )
     return CloudPlan(
         cloud="lambda",
@@ -513,11 +571,6 @@ def plan_lambda_run(
         stub_text=stub_text,
         run_command=f"python -I {stub_path}",
     )
-
-
-def write_stub(plan: CloudPlan) -> str:
-    """Write a Lambda controller atomically under the current directory."""
-    return write_cloud_stub(plan)
 
 
 _WAITING_NOTICE = (
@@ -539,21 +592,9 @@ def _notify_waiting_for_controller() -> None:
         pass
 
 
-def _controller_environment(
-    environ: Mapping, *, case_insensitive: Optional[bool] = None
-) -> dict[str, str]:
-    """Return the variables of ``environ`` the local controller is started with.
-
-    Only the names in ``_CONTROLLER_ENV_NAMES`` are kept. Windows variable names
-    are case-insensitive (``SystemRoot`` is ``SYSTEMROOT``), so they are matched
-    folded to upper case there and exactly everywhere else.
-    """
-    if case_insensitive is None:
-        case_insensitive = os.name == "nt"
-    if case_insensitive:
-        wanted = {name.upper() for name in _CONTROLLER_ENV_NAMES}
-        return {key: value for key, value in environ.items() if key.upper() in wanted}
-    return {key: value for key, value in environ.items() if key in _CONTROLLER_ENV_NAMES}
+def write_stub(plan: CloudPlan) -> str:
+    """Write a Lambda controller atomically under the current directory."""
+    return write_cloud_stub(plan)
 
 
 def submit_lambda_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:
@@ -578,6 +619,9 @@ def submit_lambda_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:
             + ", ".join(missing)
             + ", then re-run with --cloud-submit."
         )
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    enforce_under_cwd_and_no_symlink(plan.stub_path, "stub_path")
     import subprocess
 
     # Not subprocess.run: on KeyboardInterrupt it kills the child 0.25 s later,
@@ -598,7 +642,7 @@ def submit_lambda_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:
                 # controller needs; the generated file imports the standard
                 # library alone, so it does not depend on its own directory
                 # or on any PYTHON* variable.
-                proc = subprocess.Popen(  # noqa: S603 — argv list, no shell
+                proc = subprocess.Popen(
                     [sys.executable, "-I", plan.stub_path],
                     env=_controller_environment(environ),
                 )
@@ -616,3 +660,20 @@ def submit_lambda_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:
             # instance in its finally block; killing it here would leave the
             # instance running. Keep waiting until it exits.
             _notify_waiting_for_controller()
+
+
+def _controller_environment(
+    environ: Mapping, *, case_insensitive: Optional[bool] = None
+) -> dict[str, str]:
+    """Return the variables of ``environ`` the local controller is started with.
+
+    Only the names in ``_CONTROLLER_ENV_NAMES`` are kept. Windows variable names
+    are case-insensitive (``SystemRoot`` is ``SYSTEMROOT``), so they are matched
+    folded to upper case there and exactly everywhere else.
+    """
+    if case_insensitive is None:
+        case_insensitive = os.name == "nt"
+    if case_insensitive:
+        wanted = {name.upper() for name in _CONTROLLER_ENV_NAMES}
+        return {key: value for key, value in environ.items() if key.upper() in wanted}
+    return {key: value for key, value in environ.items() if key in _CONTROLLER_ENV_NAMES}
