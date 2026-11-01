@@ -431,23 +431,28 @@ class TestUserSuppliedDeepspeedFileIsResolved:
         path = self._write(tmp_path, self._PLAIN)
         seen = {}
 
-        def _fake(config_path, *, gpu_count=None):
+        def _fake(config_path, *, gpu_count=None, precision=None):
             seen["path"] = config_path
+            seen["precision"] = precision
             return "/tmp/resolved.json"
 
         monkeypatch.setattr(ds, "resolve_user_deepspeed_file", _fake)
-        assert _resolve_deepspeed(str(path)) == "/tmp/resolved.json"
+        assert _resolve_deepspeed(str(path), precision="fp16") == "/tmp/resolved.json"
         assert seen["path"] == str(path)
+        assert seen["precision"] == "fp16"  # #2266: the trainer's precision reaches it
 
     def test_a_named_preset_still_takes_the_preset_path(self, monkeypatch):
         import soup_cli.utils.deepspeed as ds
         from soup_cli.commands.train import _resolve_deepspeed
 
-        monkeypatch.setattr(ds, "write_deepspeed_config", lambda stage: f"preset:{stage}")
+        monkeypatch.setattr(
+            ds, "write_deepspeed_config",
+            lambda stage, *, precision=None: f"preset:{stage}:{precision}",
+        )
         monkeypatch.setattr(
             ds, "resolve_user_deepspeed_file", lambda *a, **k: pytest.fail("not a file")
         )
-        assert _resolve_deepspeed("zero2") == "preset:zero2"
+        assert _resolve_deepspeed("zero2", precision="fp16") == "preset:zero2:fp16"
 
 
 def test_deepspeed_refusing_exemption_is_earned():
