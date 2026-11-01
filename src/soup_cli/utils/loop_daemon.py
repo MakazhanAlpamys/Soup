@@ -37,6 +37,7 @@ from soup_cli.utils.loop_budget import (
     BudgetDecision,
     check_budget,
     reset_daily_counter_if_new_day,
+    reset_monthly_spend_if_new_month,
 )
 from soup_cli.utils.loop_iteration import (
     IterationRecord,
@@ -153,16 +154,36 @@ class WatchConfig:
 def run_once(
     state: LoopState,
     config: WatchConfig,
+    *,
+    now: Optional[datetime] = None,
 ) -> "tuple[LoopState, IterationRecord, BudgetDecision]":
-    """Execute one full iteration synchronously. Pure with respect to time."""
+    """Execute one full iteration synchronously. Pure with respect to time.
+
+    ``now`` fixes the clock for the day and month rollovers (tests); None
+    uses the current UTC time.
+    """
     if not isinstance(state, LoopState):
         raise TypeError("state must be LoopState")
     if not isinstance(config, WatchConfig):
         raise TypeError("config must be WatchConfig")
-    runs_today, today = reset_daily_counter_if_new_day(
-        state.runs_today, state.last_run_date
+    # #2362: read the clock once, so the month and day rollovers agree even
+    # when `soup loop watch` runs across midnight at the end of a month.
+    if now is None:
+        now = datetime.now(timezone.utc)
+    # Read the month from the OLD last_run_date, before the daily reset
+    # overwrites it.
+    spent = reset_monthly_spend_if_new_month(
+        state.spent_this_month_usd, state.last_run_date, now=now
     )
-    state = _state_with(state, runs_today=runs_today, last_run_date=today)
+    runs_today, today = reset_daily_counter_if_new_day(
+        state.runs_today, state.last_run_date, now=now
+    )
+    state = _state_with(
+        state,
+        runs_today=runs_today,
+        last_run_date=today,
+        spent_this_month_usd=spent,
+    )
     canary_verdict, rollback_policy = _evaluate_active_canary(state, config)
     rolled_back = rollback_policy is not None
     if rollback_policy is not None:
