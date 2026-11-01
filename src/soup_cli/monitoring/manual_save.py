@@ -53,10 +53,10 @@ def manual_save_context(trainer: Any, *, stop_after_save: bool = False) -> Itera
     class ManualSaveCallback(TrainerCallback):
         trigger_pending = False
 
-        def on_train_begin(self, args, state, control, **event_kwargs):
+        def on_train_begin(self, args: Any, state: Any, control: Any, **event_kwargs: Any) -> None:
             handler.install()
 
-        def on_step_end(self, args, state, control, **event_kwargs):
+        def on_step_end(self, args: Any, state: Any, control: Any, **event_kwargs: Any) -> None:
             # Signal requests live outside TrainerControl, whose flags the
             # default flow resets at step begin. Thus a signal during loading
             # or gradient accumulation remains latched until a safe step.
@@ -70,7 +70,7 @@ def manual_save_context(trainer: Any, *, stop_after_save: bool = False) -> Itera
             if stop:
                 control.should_training_stop = True
 
-        def on_save(self, args, state, control, **event_kwargs):
+        def on_save(self, args: Any, state: Any, control: Any, **event_kwargs: Any) -> None:
             if self.trigger_pending and state.is_world_process_zero:
                 consume_trigger(args.output_dir)
             self.trigger_pending = False
@@ -83,7 +83,7 @@ def manual_save_context(trainer: Any, *, stop_after_save: bool = False) -> Itera
                 if stop_after_save:
                     raise _StopAfterCheckpoint
 
-        def on_train_end(self, args, state, control, **event_kwargs):
+        def on_train_end(self, args: Any, state: Any, control: Any, **event_kwargs: Any) -> None:
             handler.restore()
 
     callback = ManualSaveCallback()
