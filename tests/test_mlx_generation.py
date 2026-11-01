@@ -10,8 +10,13 @@ import pytest
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests.conftest import strip_ansi
 
 runner = CliRunner()
+
+
+def _plain(output: str) -> str:
+    return " ".join(strip_ansi(output).split())
 
 
 @pytest.fixture
@@ -90,7 +95,7 @@ def test_native_infer_reject_peft_metadata(tmp_path, monkeypatch):
     args += ["--input", "prompts.jsonl", "--output", "results.jsonl"]
     result = runner.invoke(app, args)
     assert result.exit_code == 1
-    assert "native MLX metadata" in result.output
+    assert "native MLX metadata" in _plain(result.output)
     assert not (tmp_path / "results.jsonl").exists()
 
 
@@ -237,7 +242,7 @@ def test_infer_keeps_completed_rows_on_generation_failure(tmp_path, monkeypatch)
     assert json.loads((tmp_path / "results.jsonl").read_text()) == {
         "prompt": "one", "response": "complete", "tokens_generated": 2,
     }
-    assert "Inference Complete" not in result.output
+    assert "Inference Complete" not in _plain(result.output)
 
 
 @pytest.mark.parametrize("temperature", [0, 0.7])
@@ -303,7 +308,7 @@ def test_default_backend_refuses_native_artifact_before_transformers(tmp_path):
     args += ["--input", "unused.jsonl", "--output", "unused-results.jsonl"]
     result = runner.invoke(app, args)
     assert result.exit_code == 1
-    assert "select --backend mlx" in result.output
+    assert "select --backend mlx" in _plain(result.output)
 
 
 @pytest.mark.parametrize("option,diagnostic,code", [
@@ -326,12 +331,10 @@ def test_public_native_option_refusals_precede_loading(
     assert control.exit_code == 0, control.output
     (tmp_path / "results.jsonl").unlink()
     result = runner.invoke(app, args + option)
-    from tests.conftest import strip_ansi
-
     assert result.exit_code == code, result.output
-    assert diagnostic in " ".join(strip_ansi(result.output).split())
+    assert diagnostic in _plain(result.output)
     assert not (tmp_path / "results.jsonl").exists()
-    assert "Model loaded" not in result.output
+    assert "Model loaded" not in _plain(result.output)
 
 
 @pytest.mark.parametrize("requested", [False, True])
@@ -353,7 +356,7 @@ def test_infer_remote_code_flag_reaches_native_engine(
     assert target == (str(tmp_path / "base") if adapter else "base")
     assert tokenizer_config == {"trust_remote_code": requested}
     assert architecture_trust is requested
-    assert ("REMOTE CODE WARNING" in result.output) is requested
+    assert ("REMOTE CODE WARNING" in _plain(result.output)) is requested
 
 
 @pytest.mark.parametrize("adapter", [False, True])
@@ -455,14 +458,12 @@ def test_native_loader_corrupt_weights_have_friendly_cli_error(
     result = runner.invoke(app, args + ["--model", str(path)])
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
-    assert "Cannot read native MLX adapter weights" in result.output
+    assert "Cannot read native MLX adapter weights" in _plain(result.output)
     assert not (tmp_path / "results.jsonl").exists()
 
 
 def test_native_missing_dependency_has_install_hint(tmp_path, monkeypatch):
     import builtins
-
-    from tests.conftest import strip_ansi
 
     args = _infer_args(tmp_path, monkeypatch)
     original = builtins.__import__
@@ -475,7 +476,7 @@ def test_native_missing_dependency_has_install_hint(tmp_path, monkeypatch):
     monkeypatch.setattr(builtins, "__import__", missing)
     result = runner.invoke(app, args)
     assert result.exit_code == 1
-    assert "soup-cli[mlx]" in " ".join(strip_ansi(result.output).split())
+    assert "soup-cli[mlx]" in _plain(result.output)
     assert not (tmp_path / "results.jsonl").exists()
 
 
