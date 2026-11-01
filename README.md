@@ -91,55 +91,39 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.77.0 — what v0.76 warned about is now refused.** 31 config fields that nothing reads, and
-three deprecated values, no longer load with a warning: the load stops with one line per setting
-that names it and says what to delete. A config that loaded on v0.76, with warnings or
-silently, can stop loading on v0.77: run `soup doctor --config soup.yaml` first.
+**v0.77.1 — a patch: `soup data` keeps its input, `soup plan` agrees with `soup train`, and
+GRPO trains on Apple Silicon.** Nothing in v0.77.0 is taken back. That release refuses
+settings v0.76 warned about or ignored, so a config that loaded on v0.76 can stop loading:
+coming from 0.76.x, run `soup doctor --config soup.yaml` first and read the
+[v0.77.0 release notes](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0).
 
-- **Breaking: staged fields and deprecated values are refused.** Among the fields:
-  `training.lr_groups`, `early_stop_patience`, `forgetting_eval_steps`, `checkpoint_eval_*`,
-  `quantize_ref_model`, `long_context_grpo`, `vision_grpo`, `data.split_thinking` and the
-  `data.video_*` keys. `training.rl_checkpoint_include_ref_model` and
-  `rl_checkpoint_include_rollout_buffer` were staged after v0.76.0, so no release warned about
-  them first. The values: `data.remove_unused_columns: true`, `training.quantization: 4bit` /
-  `8bit` (or `load_in_8bit: true`) on a task that never quantises, and `soup ab --beta`.
-  Fourteen settings v0.76 ignored without a word are refused too, such as `use_mod` or
-  `neftune_alpha` where nothing applies them, `expand_layers` with a LoRA rank, `8bit` or vision
-  SFT on Unsloth, and `lora.rank_pattern` on MLX or Unsloth: see the CHANGELOG upgrade notes.
-- **Breaking: Python 3.11–3.13, no AWQ or GPTQ export, a token for two `soup serve` routes.**
-  Python 3.10 is no longer supported (end of life 2026-10-01); on 3.10, pip keeps resolving
-  v0.76.x. `soup export --format awq` / `gptq` and `soup quantize --to awq` / `gptq` are removed,
-  because both upstream projects are archived: use `gguf`, `onnx`, `tensorrt`, `bitnet` or
-  `tq1_0`, or stay on v0.76.x. `/v1/tools/python` and `/v1/tools/bash` answer 401 unless the
-  server was started with `--tool-auth-token` (or `SOUP_TOOL_AUTH_TOKEN`), on every bind, and
-  `/v1/tools/python` answers 501 where the host has no OS-level isolation, as bash already did.
-- **DPO, ORPO, SimPO and KTO run natively on Apple Silicon.** `task: dpo`, `orpo`, `simpo` and
-  `kto` with `backend: mlx` train through Soup's own MLX loop on TRL's objectives (ORPO and SimPO
-  with no reference model). MLX text SFT gains native DoRA, `training.eval_steps`,
-  `training.seed` and the loss watchdog. `lora.use_rslora` is now applied on MLX and Unsloth, so
-  an rsLoRA run there trains at the scale it asked for, and its results change.
-- **Layer streaming reaches DeepSeek-V3-family MoE.** Soup's layer streaming (an implementation
-  of L2L, Pudipeddi et al. 2020) now streams `model_type: deepseek_v3` with resident-vs-streamed
-  parity forward and backward, and dequantises FP8 block-quantised checkpoints at shard time.
-  Kimi-K2-Base and -Instruct are admitted behind a field-by-field check (a tiny K2-shaped
-  checkpoint streams bit for bit on CPU; nothing has been trained on K2 itself).
-  `training.stream_expert_layout: per_expert` streams one routed expert at a time: on one RTX
-  5070 Laptop 8 GB, the same Moonlight-16B LoRA config peaked at 1.0 GB of GPU memory against
-  3.1 GB fused (NF4 experts against bf16, different cache tiers), at about 2.7x the step time
-  ([record](benchmarks/probe-rtx5070-moonlight-16b.md)). `training.stream_recompute: off` /
-  `auto` keeps streamed activations instead of recomputing them, with bit-identical gradients:
-  on the same card's RAM tier a Mistral-7B NF4 step is 22% faster at 512 tokens and 8.5% at 2048
-  ([record](benchmarks/gate-stream-recompute.md)). Opt-in (`stream_layers: true`), BETA.
-- **Provenance you can check.** `soup registry push --data <file>` records the training file's
-  SHA-256, and `--idempotency-key` makes a push safe to retry; on the transformers backend,
-  resident, layer-streamed and multi-GPU runs record the Hub commit of the base they loaded;
-  `soup ship --require-provenance` checks the evidence against the adapter, task and source
-  bytes, suite version and verdict policy it was stamped with.
-- **Also new.** `soup --version`; `pip install "soup-cli[documents]"` for PDF and DOCX in
-  `soup data ingest`; `soup merge --low-memory`; GRPO can score with an LLM judge
-  (`training.reward_fn: judge_rank`); and [`docs/config-reference.md`](docs/config-reference.md)
-  and [`docs/cli-reference.md`](docs/cli-reference.md) are generated from the code, and the test
-  suite fails when either stops stating what the code does.
+- **`soup data` commands no longer write over their input.** Eighteen of them (`dedup`,
+  `filter`, `convert`, `merge`, `sample`, `pii`, `toxicity` and the rest) refuse an `--output`
+  that is the same file as an input, under any spelling, before they read anything, and a
+  default output name that the input already has is refused too. Write to a new file instead.
+- **`soup plan` and `soup apply` refuse the configs `soup train` refuses,** with the same
+  message, and write no plan.
+- **GRPO trains natively on Apple Silicon.** `task: grpo` with `backend: mlx` runs Soup's own
+  MLX loop on the objective the transformers path trains, with the built-in `accuracy` or
+  `format` reward. `soup infer --backend mlx` generates from MLX bases and native text LoRA
+  adapters without Torch.
+- **One peak-VRAM estimate** for `soup train`'s pre-flight, `soup profile` and `soup plan`,
+  calibrated on 39 measured runs ([record](benchmarks/gate-2049-resident-vram.md)). For dense
+  models up to about 3.5B parameters, the range it was fitted on, the pre-flight now refuses
+  some long-sequence, large-vocabulary runs it let through, and `--allow-oom-attempt` still
+  launches them. Outside that range (a larger or mixture-of-experts model, `medium` or
+  `selective` checkpointing, `use_liger` / `use_cut_ce`, `backend: unsloth`) a run that does
+  not fit gets the estimate as a warning and starts, unless its weights, the CUDA context and
+  the gradients and optimizer state of the parameters it trains are more than the card holds
+  (a 7B full fine-tune on 80 GB, Llama-3.1-70B in 4-bit on 24 GB): that run is refused there
+  too. LoRA runs and runs that train a subset (Spectrum, LISA, freezing) are judged on fewer
+  terms, and `--allow-oom-attempt` still launches a refused run.
+- **External programs start by an absolute path found on `PATH`.** The current directory and
+  relative `PATH` entries are no longer searched: a tool that only lives there needs its
+  directory on `PATH`.
+- **Also new.** `soup ship --progress jsonl`; unknown config keys written the way another
+  library names them get the Soup field (`learning_rate` suggests `lr`); and the Docker
+  example below passes `--yes`, which a non-interactive `soup train` needs since v0.77.0.
 
 Older highlights live on the [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) page.
 

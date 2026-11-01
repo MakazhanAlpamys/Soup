@@ -23,6 +23,11 @@ Generation is Soup's own loop over ``mlx-lm``'s model call and KV cache (no
 ``BatchGenerator``): each prompt's ``num_generations`` copies are prefilled
 once and sampled at temperature 1 with no top-p / top-k / min-p, stopping on
 the tokenizer's single ``eos_token_id`` and keeping it, as TRL does.
+
+The base is dense or pre-quantized by mlx-lm at 4 bits in ``affine`` mode
+(``mlx_lm.convert -q``, the ``mlx-community/...-4bit`` repos): its
+``QuantizedLinear`` and ``QuantizedEmbedding`` layers stay frozen and only the
+LoRA adapter trains. :func:`qualify_base` is the one rule for which bases load.
 """
 
 from __future__ import annotations
@@ -180,7 +185,7 @@ def plan_prompt_updates(*, n_prompts: int, prompts_per_update: int, epochs: int,
             "gradient_accumulation_steps, or add rows."
         )
     rng = random.Random(seed)
-    plan = []
+    plan: list[list[int]] = []
     for _ in range(max(1, int(epochs))):
         order = list(range(n_prompts))
         rng.shuffle(order)
@@ -253,7 +258,7 @@ def group_advantages(rewards: list, group: int, eps: float = ADVANTAGE_EPSILON) 
     root. No statistic crosses a group boundary.
     """
     values = _checked_rewards(rewards, group)
-    out = []
+    out: list[float] = []
     for start in range(0, len(values), group):
         chunk = values[start : start + group]
         mean = statistics.fmean(chunk)
@@ -527,6 +532,91 @@ def adapter_disabled(model: Any) -> Iterator[int]:
 
 
 # --------------------------------------------------------------------------
+# The base: dense, or pre-quantized at 4 bits (affine)
+# --------------------------------------------------------------------------
+
+#: The one quantization format MLX GRPO trains on: what ``mlx_lm.convert -q``
+#: and mlx-lm's ``quantize_model`` write by default.
+BASE_QUANTIZATION_BITS = 4
+BASE_QUANTIZATION_MODE = "affine"
+
+
+def _is_quantized(module: Any) -> bool:
+    """Any quantized kind: nn.QuantizedLinear / QuantizedEmbedding, mlx-lm's
+    QuantizedSwitchLinear, or anything else that stores quantization scales, as
+    ``scales`` or, like mlx-lm's BitNet ``BitLinear``, as ``weight_scale``."""
+    import mlx.nn as nn
+
+    return (isinstance(module, (nn.QuantizedLinear, nn.QuantizedEmbedding))
+            or "scales" in module or "weight_scale" in module)
+
+
+def qualify_base(model: Any, base: str) -> Optional[dict]:
+    """The base's quantization, or a refusal naming the first layer outside it.
+
+    Accepted: a dense base (returns None), or one whose every quantized layer is
+    an ``nn.QuantizedLinear`` or ``nn.QuantizedEmbedding`` (a tied output head
+    runs through ``QuantizedEmbedding.as_linear``) at 4 bits in ``affine`` mode;
+    layers mlx-lm left dense stay dense. Refused, with the layer's name, kind,
+    bits and mode: other bit widths (an 8-bit base, a mixed-bit recipe), the
+    ``mxfp4`` / ``mxfp8`` / ``nvfp4`` modes, quantized MoE layers
+    (``QuantizedSwitchLinear``), BitNet ``BitLinear`` layers and any other module
+    that stores scales.
+    """
+    import mlx.nn as nn
+
+    counts = {"quantized_linear": 0, "quantized_embedding": 0}
+    group_sizes: set = set()
+    outside = []
+    for name, module in model.named_modules():
+        if not _is_quantized(module):
+            continue
+        kind = type(module).__name__
+        bits, mode = getattr(module, "bits", None), getattr(module, "mode", None)
+        accepted_kind = isinstance(module, (nn.QuantizedLinear, nn.QuantizedEmbedding))
+        if (accepted_kind and bits == BASE_QUANTIZATION_BITS
+                and mode == BASE_QUANTIZATION_MODE):
+            key = ("quantized_embedding" if isinstance(module, nn.QuantizedEmbedding)
+                   else "quantized_linear")
+            counts[key] += 1
+            group_sizes.add(int(module.group_size))
+        else:
+            outside.append((name, kind, bits, mode))
+    if outside:
+        name, kind, bits, mode = outside[0]
+        raise ValueError(
+            f"MLX GRPO trains a dense base or one pre-quantized at "
+            f"{BASE_QUANTIZATION_BITS} bits in mode {BASE_QUANTIZATION_MODE!r} (its "
+            "QuantizedLinear / QuantizedEmbedding layers, as mlx_lm.convert -q writes "
+            f"them), and {base} has {len(outside)} layer(s) outside it, first: {name} "
+            f"({kind}, bits={bits}, mode={mode!r}). 8-bit and mixed-bit recipes, the "
+            "mxfp4 / mxfp8 / nvfp4 modes and quantized MoE layers are not trained on "
+            "backend: mlx. Use a dense (bf16 / fp16 / fp32) or a 4-bit affine MLX base, "
+            "or backend: transformers."
+        )
+    if not group_sizes:
+        return None
+    sizes = sorted(group_sizes)
+    return {
+        "bits": BASE_QUANTIZATION_BITS,
+        "group_size": sizes[0] if len(sizes) == 1 else sizes,
+        "mode": BASE_QUANTIZATION_MODE,
+        **counts,
+    }
+
+
+def trainable_quantized_tensors(model: Any) -> list:
+    """Every trainable parameter of a quantized layer, by its full name."""
+    from mlx.utils import tree_flatten
+
+    return [
+        f"{name}.{key}" if name else key
+        for name, module in model.named_modules() if _is_quantized(module)
+        for key, _ in tree_flatten(module.trainable_parameters())
+    ]
+
+
+# --------------------------------------------------------------------------
 # Trainer
 # --------------------------------------------------------------------------
 
@@ -559,6 +649,7 @@ class MLXGRPOTrainerWrapper(MLXDPOTrainerWrapper):
         super().__init__(config, **kwargs)
         self._prompts: Optional[dict] = None
         self._skipped = 0
+        self._base_quantization: Optional[dict] = None
 
     # -- data, before the model loads ----------------------------------------
 
@@ -612,27 +703,34 @@ class MLXGRPOTrainerWrapper(MLXDPOTrainerWrapper):
         self.model, self.tokenizer = load_mlx_model(
             cfg.base, quantization=cfg.training.quantization
         )
-        self._check_dense(self.model)
+        self._check_base(self.model)
         console.print(
             f"[green]MLX model loaded:[/] {cfg.base} (task=grpo, lora_r={cfg.training.lora.r})"
         )
+        quant = self._base_quantization
+        if quant is not None:
+            console.print(
+                f"[dim]MLX GRPO: pre-quantized base ({quant['bits']}-bit {quant['mode']}, "
+                f"group size {quant['group_size']}; {quant['quantized_linear']} linear and "
+                f"{quant['quantized_embedding']} embedding layer(s)), kept frozen: only the "
+                "LoRA adapter trains[/]"
+            )
         self._dataset = dataset
 
-    def _check_dense(self, model: Any) -> None:
-        import mlx.nn as nn
+    def _check_base(self, model: Any) -> None:
+        """Refuse a base :func:`qualify_base` does not accept; record what it found."""
+        self._base_quantization = qualify_base(model, str(self.config.base))
 
-        # Any quantized kind: nn.QuantizedLinear / QuantizedEmbedding, mlx-lm's
-        # QuantizedSwitchLinear, or anything else that stores quantization scales.
-        quantized = [
-            name for name, module in model.named_modules()
-            if isinstance(module, (nn.QuantizedLinear, nn.QuantizedEmbedding))
-            or "scales" in module
-        ]
-        if quantized:
-            raise ValueError(
-                f"MLX GRPO trains a dense base in this release, and {self.config.base} is "
-                f"quantized ({len(quantized)} quantized layer(s), first: {quantized[0]}). "
-                "Use an unquantized (bf16 / fp16 / fp32) base, or backend: transformers."
+    @staticmethod
+    def _check_frozen_base(model: Any) -> None:
+        """After the adapter is attached: no quantized tensor may train."""
+        trainable = trainable_quantized_tensors(model)
+        if trainable:
+            raise RuntimeError(
+                f"MLX GRPO: {len(trainable)} quantized base tensor(s) are trainable "
+                f"(first: {trainable[0]}); the quantized weights, scales and biases must "
+                "stay frozen and only the LoRA adapter train. Refusing before the first "
+                "update."
             )
 
     # -- tokens ---------------------------------------------------------------
@@ -688,6 +786,7 @@ class MLXGRPOTrainerWrapper(MLXDPOTrainerWrapper):
             )
             return None
         tokens = mx.array([list(sample) + [int(sample[-1])]])
+        assert self.model is not None
         self.model.eval()
         full = completion_token_logps(self.model, tokens, 0)
         chunked = completion_token_logps(self.model, tokens, 0, head_split=split)
@@ -705,6 +804,7 @@ class MLXGRPOTrainerWrapper(MLXDPOTrainerWrapper):
         """Base-model log-probs of the generated tokens: the adapter switched off."""
         import mlx.core as mx
 
+        assert self.model is not None
         was_training = bool(getattr(self.model, "training", True))
         self.model.eval()
         try:
@@ -757,6 +857,8 @@ class MLXGRPOTrainerWrapper(MLXDPOTrainerWrapper):
                 "optimizer step and learning-rate schedule unchanged"
             ),
             "skipped_steps": self._skipped,
+            # None for a dense base; see qualify_base for what else is recorded.
+            "base_quantization": self._base_quantization,
         }
 
     def _format_metrics(self, metrics: dict) -> str:
@@ -820,8 +922,9 @@ class MLXGRPOTrainerWrapper(MLXDPOTrainerWrapper):
         total_updates = len(plan)
         per_epoch = max(1, len(train_rows) // units.prompts_per_update)
 
-        self._check_dense(self.model)
+        self._check_base(self.model)
         self._apply_lora(self.model)
+        self._check_frozen_base(self.model)
         if tcfg.gradient_checkpointing:
             from mlx_lm.tuner.trainer import grad_checkpoint
 
@@ -988,6 +1091,7 @@ class MLXGRPOTrainerWrapper(MLXDPOTrainerWrapper):
         import mlx.core as mx
 
         group = self._units.num_generations
+        assert self.model is not None
         was_training = bool(getattr(self.model, "training", True))
         self.model.eval()
         mx.random.seed(seed)

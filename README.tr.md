@@ -93,60 +93,40 @@ yerine altyapıyla boğuşarak geçiriyor. Soup bunu çözer.
 
 ## Yenilikler
 
-**v0.77.0 — v0.76'nın uyardığı şeyler artık reddediliyor.** Hiçbir şeyin okumadığı 31 yapılandırma
-alanı ve kullanımdan kaldırılmış üç değer artık bir uyarıyla yüklenmiyor: yükleme, her ayar için o ayarı
-adlandıran ve neyin silineceğini söyleyen bir satırla duruyor. v0.76'da uyarılarla ya da sessizce yüklenen bir
-yapılandırma v0.77'de yüklenmeyebilir: önce `soup doctor --config soup.yaml` komutunu çalıştırın.
+**v0.77.1 — bir yama: `soup data` girdisini koruyor, `soup plan` `soup train` ile aynı kararı veriyor
+ve GRPO Apple Silicon'da eğitiliyor.** v0.77.0'daki hiçbir şey geri alınmıyor. O sürüm, v0.76'nın
+uyardığı ya da yok saydığı ayarları reddediyor; bu yüzden v0.76'da yüklenen bir yapılandırma artık
+yüklenmeyebilir: 0.76.x'ten geliyorsanız önce `soup doctor --config soup.yaml` komutunu çalıştırın ve
+[v0.77.0 sürüm notlarını](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0) okuyun.
 
-- **Geriye dönük uyumsuz değişiklik: bekletilen (staged) alanlar ve kullanımdan kaldırılmış değerler
-  reddediliyor.** Alanlar arasında `training.lr_groups`, `early_stop_patience`, `forgetting_eval_steps`,
-  `checkpoint_eval_*`, `quantize_ref_model`, `long_context_grpo`, `vision_grpo`, `data.split_thinking`
-  ve `data.video_*` anahtarları var. `training.rl_checkpoint_include_ref_model` ve
-  `rl_checkpoint_include_rollout_buffer` v0.76.0'dan sonra bekletmeye alındı; bu yüzden hiçbir sürüm
-  önce onlar hakkında uyarmadı. Değerler: `data.remove_unused_columns: true`, hiç niceleme yapmayan bir
-  görevde `training.quantization: 4bit` / `8bit` (veya `load_in_8bit: true`) ve `soup ab --beta`.
-  v0.76'nın hiçbir şey söylemeden yok saydığı on dört ayar da artık reddediliyor; örneğin hiçbir
-  şeyin uygulamadığı yerlerde `use_mod` veya `neftune_alpha`, LoRA rank'ı ile `expand_layers`, Unsloth'ta
-  `8bit` veya görsel SFT ve MLX ya da Unsloth'ta `lora.rank_pattern`: CHANGELOG'daki yükseltme notlarına
-  bakın.
-- **Geriye dönük uyumsuz değişiklik: Python 3.11–3.13, AWQ ve GPTQ dışa aktarımı yok, iki `soup serve`
-  rotası için belirteç.** Python 3.10 artık desteklenmiyor (destek süresi 2026-10-01'de sona erdi);
-  3.10'da pip v0.76.x'i seçmeye devam ediyor. `soup export --format awq` / `gptq` ve
-  `soup quantize --to awq` / `gptq` kaldırıldı, çünkü her iki üst proje de arşivlenmiş durumda: `gguf`,
-  `onnx`, `tensorrt`, `bitnet` veya `tq1_0` kullanın ya da v0.76.x'te kalın. `/v1/tools/python` ve
-  `/v1/tools/bash`, sunucu `--tool-auth-token` (veya `SOUP_TOOL_AUTH_TOKEN`) ile başlatılmadıysa her
-  bağlamada 401 döndürüyor; `/v1/tools/python`, ana makinede işletim sistemi düzeyinde yalıtım yoksa
-  bash'in zaten yaptığı gibi 501 döndürüyor.
-- **DPO, ORPO, SimPO ve KTO, Apple Silicon üzerinde yerel olarak çalışıyor.** `backend: mlx` ile
-  `task: dpo`, `orpo`, `simpo` ve `kto`, Soup'un kendi MLX döngüsüyle TRL'nin hedefleri üzerinden
-  eğitiliyor (ORPO ve SimPO referans model olmadan). MLX metin SFT'si yerel DoRA,
-  `training.eval_steps`, `training.seed` ve kayıp bekçisini (loss watchdog) kazandı.
-  `lora.use_rslora` artık MLX ve Unsloth üzerinde uygulanıyor; bu yüzden oradaki bir rsLoRA
-  çalıştırması istediği ölçekte eğitiliyor ve sonuçları değişiyor.
-- **Katman akışı DeepSeek-V3 ailesinin MoE modellerine ulaştı.** Soup'un katman akışı (L2L'nin bir
-  uygulaması, Pudipeddi et al. 2020) artık `model_type: deepseek_v3` modelini, yerleşik ve akışlı model
-  arasında ileri ve geri geçişte eşlikle (parity) akıtıyor ve FP8 blok nicelemeli checkpoint'leri
-  parçalama (shard) sırasında nicelemeden çözüyor. Kimi-K2-Base ve -Instruct alan alan bir denetimden
-  geçerek kabul ediliyor (K2 biçimindeki küçük bir checkpoint CPU'da bit bit aynı sonuçla akıyor; K2'nin
-  kendisi üzerinde hiçbir şey eğitilmedi). `training.stream_expert_layout: per_expert` her seferinde
-  tek bir yönlendirilmiş uzmanı akıtıyor: tek bir RTX 5070 Laptop 8 GB üzerinde aynı Moonlight-16B
-  LoRA yapılandırması, birleşik (fused) düzendeki 3.1 GB'a karşı 1.0 GB GPU belleğiyle zirve yaptı
-  (bf16 uzmanlara karşı NF4 uzmanlar, farklı önbellek katmanları); adım süresi yaklaşık 2.7x
-  ([kayıt](benchmarks/probe-rtx5070-moonlight-16b.md)). `training.stream_recompute: off` / `auto`,
-  akışlı katmanların aktivasyonlarını yeniden hesaplamak yerine saklıyor ve gradyanlar bit bit aynı
-  kalıyor: aynı kartın RAM katmanında bir Mistral-7B NF4 adımı 512 token'da %22, 2048'de %8.5 daha hızlı
-  ([kayıt](benchmarks/gate-stream-recompute.md)). İsteğe bağlıdır (`stream_layers: true`), BETA.
-- **Doğrulanabilir köken (provenance).** `soup registry push --data <file>` eğitim dosyasının SHA-256
-  özetini kaydediyor ve `--idempotency-key` bir gönderimi yeniden denemeye güvenli hâle getiriyor;
-  transformers arka ucunda yerleşik, katman akışlı ve çoklu GPU çalıştırmaları, yükledikleri temel
-  modelin Hub commit'ini kaydediyor; `soup ship --require-provenance` kanıtı, damgalandığı adaptör,
-  görev ve kaynak baytları, paket (suite) sürümü ve karar politikasıyla karşılaştırıyor.
-- **Ayrıca yeni.** `soup --version`; `soup data ingest` içinde PDF ve DOCX için
-  `pip install "soup-cli[documents]"`; `soup merge --low-memory`; GRPO artık bir LLM hakemiyle
-  değerlendirme yapabiliyor (`training.reward_fn: judge_rank`); ve
-  [`docs/config-reference.md`](docs/config-reference.md) ile
-  [`docs/cli-reference.md`](docs/cli-reference.md) koddan üretiliyor; bu sayfalardan biri kodun
-  yaptığını artık söylemediğinde test paketi başarısız oluyor.
+- **`soup data` komutları artık girdilerinin üzerine yazmıyor.** Bunlardan on sekizi (`dedup`,
+  `filter`, `convert`, `merge`, `sample`, `pii`, `toxicity` ve diğerleri), hangi yazımla verilirse
+  verilsin bir girdiyle aynı dosya olan bir `--output` değerini hiçbir şey okumadan önce reddediyor;
+  girdinin zaten taşıdığı varsayılan bir çıktı adı da reddediliyor. Bunun yerine yeni bir dosyaya yazın.
+- **`soup plan` ve `soup apply`, `soup train`'in reddettiği yapılandırmaları** aynı mesajla reddediyor
+  ve plan yazmıyor.
+- **GRPO, Apple Silicon'da yerel olarak eğitiliyor.** `backend: mlx` ile `task: grpo`, Soup'un kendi
+  MLX döngüsünü transformers yolunun eğittiği hedefle ve yerleşik `accuracy` ya da `format` ödülüyle
+  çalıştırıyor. `soup infer --backend mlx`, MLX taban modellerinden ve yerel metin LoRA
+  adaptörlerinden Torch olmadan üretim yapıyor.
+- **Tek bir tepe VRAM tahmini:** `soup train`'in ön kontrolü, `soup profile` ve `soup plan` aynı
+  tahmini kullanıyor; tahmin 39 ölçülmüş çalıştırmayla kalibre edildi
+  ([kayıt](benchmarks/gate-2049-resident-vram.md)). Tahminin kalibre edildiği aralıkta, yani yaklaşık
+  3.5B parametreye kadar yoğun modellerde, ön kontrol artık daha önce geçirdiği bazı uzun dizili, büyük
+  sözlüklü çalıştırmaları reddediyor; `--allow-oom-attempt` onları yine de başlatıyor. Bu aralığın
+  dışında (daha büyük ya da mixture-of-experts bir model, `medium` ya da `selective` checkpointing,
+  `use_liger` / `use_cut_ce`, `backend: unsloth`) sığmayan bir çalıştırma için tahmini bir uyarı olarak
+  yazdırıyor ve çalıştırmayı başlatıyor; ancak ağırlıklar, CUDA bağlamı ve eğitilen parametrelerin
+  gradyanları ile optimizer durumu kartın kapasitesini aşıyorsa (80 GB'ta 7B tam ince ayar, 24 GB'ta
+  4-bit Llama-3.1-70B) o çalıştırma orada da reddediliyor. LoRA çalıştırmaları ve parametrelerin bir
+  kısmını eğiten çalıştırmalar (Spectrum, LISA, dondurma) daha az terimle değerlendiriliyor;
+  `--allow-oom-attempt` reddedilen bir çalıştırmayı yine de başlatıyor.
+- **Harici programlar `PATH` üzerinde bulunan mutlak bir yolla başlatılıyor.** Geçerli dizin ve göreli
+  `PATH` girdileri artık aranmıyor: yalnızca orada bulunan bir aracın dizinini `PATH`'e ekleyin.
+- **Ayrıca yeni.** `soup ship --progress jsonl`; başka bir kütüphanenin adlandırdığı biçimde yazılmış
+  bilinmeyen yapılandırma anahtarları için Soup alanı öneriliyor (`learning_rate` için `lr`); ve
+  aşağıdaki Docker örneği, etkileşimsiz bir `soup train`'in v0.77.0'dan beri ihtiyaç duyduğu `--yes`
+  bayrağını geçiriyor.
 
 Eski sürümlerin öne çıkanları [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) sayfasında.
 

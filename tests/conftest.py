@@ -11,6 +11,13 @@ import pytest
 
 from tests import _source_scan
 
+# MLX runs float32 matmuls at TF32 precision by default (``MLX_ENABLE_TF32``,
+# ml-explore/mlx#3860). On an Apple M6 GPU that puts a float32 matmul about 1e-2
+# off, so the native MLX tests' float32 oracles fail there (#2385). MLX reads the
+# variable once, at its first matmul, so it is set here, before any test runs one;
+# an explicit MLX_ENABLE_TF32=1 is left alone.
+os.environ.setdefault("MLX_ENABLE_TF32", "0")
+
 #: The skip message for a ``gpu``-marked test on a machine without CUDA (#833).
 GPU_SKIP_REASON = "needs a CUDA device (run the GPU subset with: pytest -m gpu --no-cov)"
 
@@ -321,3 +328,22 @@ output: {tmp_path / 'output'}
         encoding="utf-8",
     )
     return config_path
+
+
+def make_cli_runner(**extra_kwargs):
+    """Return a CliRunner that keeps stderr separated from stdout on Click 8.1 and 8.2+ (#1551).
+
+    On Click 8.1, CliRunner interleaves stderr into result.output unless created with
+    mix_stderr=False. On Click 8.2+, mix_stderr was removed from CliRunner.__init__ and
+    result.stdout is separated by default while result.output contains interleaved streams.
+    Inspect Typer's runner rather than Click's version because Typer can vendor Click.
+    The signature allows both versions to produce a clean result.stdout.
+    """
+    import inspect
+
+    from typer.testing import CliRunner
+
+    kwargs = dict(extra_kwargs)
+    if "mix_stderr" in inspect.signature(CliRunner).parameters and "mix_stderr" not in kwargs:
+        kwargs["mix_stderr"] = False
+    return CliRunner(**kwargs)

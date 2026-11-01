@@ -363,11 +363,16 @@ def test_changed_during_hash_is_refused(tmp_path, monkeypatch):
 
     weights = _base(tmp_path / "base") / "model.safetensors"
     original_fstat = quest.os.fstat
+    target = weights.stat()
     reads = 0
 
     def changed_fstat(fd):
         nonlocal reads
         result = original_fstat(fd)
+        if (result.st_dev, result.st_ino) != (target.st_dev, target.st_ino):
+            # ``quest.os`` is the os module itself: every other fstat in the
+            # process, pytest's capture included, must see the real result.
+            return result
         reads += 1
         if reads == 2:
             return SimpleNamespace(

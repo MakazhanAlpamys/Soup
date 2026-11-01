@@ -92,58 +92,39 @@ LLM の学習は、今でも骨の折れる作業です。経験豊富なチー�
 
 ## 新着情報
 
-**v0.77.0 — v0.76 が警告していたものは、拒否されるようになりました。** 何からも読み取られない
-31 個の設定フィールドと、非推奨の三つの値は、警告付きで読み込まれることがなくなりました。読み込みは、
-設定ごとに一行で、その設定名と削除すべきものを示して停止します。v0.76 では警告付きで、あるいは黙って読み込めた設定が、
-v0.77 では読み込めなくなることがあります。まず `soup doctor --config soup.yaml` を実行してください。
+**v0.77.1 — パッチリリース：`soup data` が入力を守り、`soup plan` が `soup train` と同じ判断をし、
+GRPO が Apple Silicon で学習できるようになりました。** v0.77.0 で入ったものは何も取り消されていません。v0.77.0 は
+v0.76 が警告した設定や無視した設定を拒否するため、v0.76 で読み込めた設定が読み込めなくなることがあります。
+0.76.x から移行する場合は、まず `soup doctor --config soup.yaml` を実行し、
+[v0.77.0 のリリースノート](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0)を読んでください。
 
-- **破壊的変更: ステージされたフィールドと非推奨の値は拒否されます。** 対象のフィールドには、
-  `training.lr_groups`、`early_stop_patience`、`forgetting_eval_steps`、`checkpoint_eval_*`、
-  `quantize_ref_model`、`long_context_grpo`、`vision_grpo`、`data.split_thinking`、そして
-  `data.video_*` キーが含まれます。`training.rl_checkpoint_include_ref_model` と
-  `rl_checkpoint_include_rollout_buffer` は v0.76.0 より後にステージされたため、事前に警告した
-  リリースはありません。値は、`data.remove_unused_columns: true`、量子化を一切行わないタスクでの
-  `training.quantization: 4bit` / `8bit`（または `load_in_8bit: true`）、そして `soup ab --beta` です。
-  v0.76 が何も言わずに無視していた十四個の設定も拒否されます。たとえば何も適用しない場所での `use_mod` や
-  `neftune_alpha`、LoRA ランク付きの `expand_layers`、Unsloth での `8bit` やビジョン SFT、MLX または
-  Unsloth での `lora.rank_pattern` です。CHANGELOG のアップグレードノートを参照してください。
-- **破壊的変更: Python 3.11–3.13、AWQ と GPTQ のエクスポートは廃止、`soup serve` の二つのルートに
-  トークンが必要に。** Python 3.10 はサポート対象外になりました（2026-10-01 にサポート終了）。3.10 では
-  pip は引き続き v0.76.x を解決します。`soup export --format awq` / `gptq` と
-  `soup quantize --to awq` / `gptq` は削除されました。どちらの上流プロジェクトもアーカイブ済みのためです。
-  `gguf`、`onnx`、`tensorrt`、`bitnet`、`tq1_0` を使うか、v0.76.x にとどまってください。
-  `/v1/tools/python` と `/v1/tools/bash` は、サーバーが `--tool-auth-token`（または
-  `SOUP_TOOL_AUTH_TOKEN`）付きで起動されていなければ、どのバインドでも 401 を返します。また
-  `/v1/tools/python` は、ホストに OS レベルの分離がない環境では、bash と同じく 501 を返します。
-- **DPO、ORPO、SimPO、KTO が Apple Silicon でネイティブに動作します。** `backend: mlx` での
-  `task: dpo`、`orpo`、`simpo`、`kto` は、Soup 独自の MLX ループで TRL の目的関数に従って学習します
-  （ORPO と SimPO は参照モデル不要）。MLX のテキスト SFT は、ネイティブ DoRA、`training.eval_steps`、
-  `training.seed`、損失ウォッチドッグに対応しました。`lora.use_rslora` は MLX と Unsloth で適用される
-  ようになったため、そこでの rsLoRA 実行は要求したスケールで学習し、結果が変わります。
-- **レイヤーストリーミングが DeepSeek-V3 系の MoE に対応しました。** Soup のレイヤーストリーミング
-  （L2L の実装、Pudipeddi et al. 2020）は、`model_type: deepseek_v3` を、常駐とストリーミングで
-  フォワードとバックワードの一致（パリティ）を確認したうえでストリーミングし、FP8 ブロック量子化
-  チェックポイントをシャード時に逆量子化します。Kimi-K2-Base と -Instruct は、フィールドごとの検査を
-  通ったうえで受け入れられます（K2 形状の小さなチェックポイントが CPU 上でビット単位で一致して
-  ストリーミングされます。K2 そのものでは何も学習していません）。
-  `training.stream_expert_layout: per_expert` は、ルーティングされたエキスパートを一つずつストリーミング
-  します。RTX 5070 Laptop 8 GB 一台で、同じ Moonlight-16B の LoRA 設定は、fused の 3.1 GB に対して
-  GPU メモリのピークが 1.0 GB（エキスパートは bf16 に対して NF4、キャッシュ階層も異なる）で、ステップ時間は約 2.7x でした
-  （[記録](benchmarks/probe-rtx5070-moonlight-16b.md)）。`training.stream_recompute: off` / `auto` は、
-  ストリーミングされるレイヤーのアクティベーションを再計算せずに保持し、勾配はビット単位で一致します。
-  同じカードの RAM 階層では、Mistral-7B NF4 のステップが 512 トークンで 22%、2048 で 8.5% 速くなります
-  （[記録](benchmarks/gate-stream-recompute.md)）。オプトイン方式（`stream_layers: true`）で、BETA です。
-- **検証できる来歴（provenance）。** `soup registry push --data <file>` は学習ファイルの SHA-256 を
-  記録し、`--idempotency-key` によりプッシュを安全に再試行できます。transformers バックエンドでは、常駐、
-  レイヤーストリーミング、マルチ GPU の各実行が、読み込んだベースモデルの Hub コミットを記録します。
-  `soup ship --require-provenance` は、エビデンスを、それに刻まれたアダプター・タスク・ソースのバイト列、
-  スイートのバージョン、判定ポリシーと照合します。
-- **その他の新機能。** `soup --version`。`soup data ingest` で PDF と DOCX を扱うための
-  `pip install "soup-cli[documents]"`。`soup merge --low-memory`。GRPO が LLM ジャッジで採点できる
-  ようになりました（`training.reward_fn: judge_rank`）。そして
-  [`docs/config-reference.md`](docs/config-reference.md) と
-  [`docs/cli-reference.md`](docs/cli-reference.md) はコードから生成され、どちらかがコードの動作を正しく
-  述べなくなると、テストスイートが失敗します。
+- **`soup data` のコマンドが入力を上書きしなくなりました。** そのうち十八個（`dedup`、`filter`、
+  `convert`、`merge`、`sample`、`pii`、`toxicity` など）は、どのような書き方であっても入力と同じファイルを
+  指す `--output` を、何も読み込む前に拒否します。入力がすでに使っている既定の出力名も拒否されます。
+  代わりに新しいファイルへ書き出してください。
+- **`soup plan` と `soup apply` は、`soup train` が拒否する設定を**同じメッセージで拒否し、プランを
+  書き込みません。
+- **GRPO が Apple Silicon でネイティブに学習できます。** `backend: mlx` の `task: grpo` は、
+  transformers 経路が学習するのと同じ目的関数で Soup 独自の MLX ループを実行し、組み込みの `accuracy`
+  または `format` 報酬を使います。`soup infer --backend mlx` は、MLX のベースモデルとネイティブの
+  テキスト LoRA アダプターから Torch なしで生成します。
+- **ピーク VRAM の推定がひとつになりました。** `soup train` の事前チェック、`soup profile`、`soup plan` が
+  同じ推定を使い、39 回の実測で較正されています（[記録](benchmarks/gate-2049-resident-vram.md)）。
+  推定が較正された範囲、つまり約 3.5B パラメータまでの dense モデルでは、事前チェックはこれまで通していた
+  長いシーケンス・大きな語彙の実行の一部を拒否するようになりました。`--allow-oom-attempt` を付ければ
+  引き続き起動できます。その範囲外（より大きなモデルや mixture-of-experts モデル、`medium` または
+  `selective` のチェックポイント、`use_liger` / `use_cut_ce`、`backend: unsloth`）では、収まらない実行に
+  ついて推定を警告として表示し、実行を開始します。ただし、重み、CUDA コンテキスト、学習するパラメータの
+  勾配とオプティマイザ状態だけでカードの容量を超える実行（80 GB での 7B のフルファインチューニング、
+  24 GB での 4-bit の Llama-3.1-70B）は、範囲外でも拒否されます。LoRA の実行や一部のパラメータだけを
+  学習する実行（Spectrum、LISA、凍結）は、より少ない項目で判定されます。`--allow-oom-attempt` を
+  付ければ、拒否された実行も起動できます。
+- **外部プログラムは `PATH` 上で見つかった絶対パスで起動されます。** カレントディレクトリと相対的な
+  `PATH` エントリは検索されなくなりました。そこにしかないツールは、そのディレクトリを `PATH` に
+  加えてください。
+- **その他の新機能。** `soup ship --progress jsonl`、他のライブラリの名前で書かれた未知の設定キーに
+  対応する Soup のフィールドの提案（`learning_rate` には `lr`）、そして下の Docker の例が、v0.77.0 以降の
+  非対話的な `soup train` に必要な `--yes` を渡すようになりました。
 
 過去のハイライトは [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) ページにあります。
 

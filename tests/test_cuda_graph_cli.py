@@ -547,3 +547,69 @@ def test_file_derived_text_in_the_refusal_is_terminal_safe(monkeypatch, tmp_path
     for raw in ("\x1b[2J", "\x1b]0;", "\x07"):
         assert raw not in result.output
 
+
+def _adapter_env(monkeypatch, tmp_path, base_config):
+    """A local LoRA adapter recording ``tmp_path/base``, whose config.json is ``base_config``."""
+    adapter_dir = _infer_env(
+        monkeypatch, tmp_path, ["question"], MagicMock(return_value=("answer", 2))
+    )
+    (adapter_dir / "config.json").unlink()
+    base_dir = tmp_path / "base"
+    base_dir.mkdir()
+    (base_dir / "config.json").write_text(json.dumps(base_config))
+    (adapter_dir / "adapter_config.json").write_text(
+        json.dumps({"peft_type": "LORA", "base_model_name_or_path": str(base_dir)})
+    )
+    return adapter_dir
+
+
+@pytest.mark.parametrize("command", ["infer", "bench"])
+@pytest.mark.parametrize(
+    ("config", "message"),
+    [
+        ({"model_type": "gpt2"}, "stock Qwen2 and Llama"),
+        ({"model_type": "qwen2", "quantization_config": {"bits": 4}}, "unquantized"),
+    ],
+)
+def test_the_base_a_local_adapter_records_is_refused_before_the_model_loads(
+    monkeypatch, tmp_path, command, config, message
+):
+    from soup_cli.commands import infer
+
+    adapter_dir = _adapter_env(monkeypatch, tmp_path, config)
+    load = MagicMock()
+    monkeypatch.setattr(infer, "_load_model", load)
+    result = _invoke(command, adapter_dir)
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert message in _plain(result.output)
+    assert "Omit --cuda-graphs" in _plain(result.output)
+    load.assert_not_called()
+
+
+@pytest.mark.parametrize("command", ["infer", "bench"])
+def test_a_stock_recorded_base_reaches_the_loader(monkeypatch, tmp_path, command):
+    from soup_cli.commands import infer
+
+    adapter_dir = _adapter_env(monkeypatch, tmp_path, {"model_type": "qwen2"})
+    load = MagicMock(return_value=(object(), object()))
+    monkeypatch.setattr(infer, "_load_model", load)
+    result = _invoke(command, adapter_dir)
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert load.call_count == 1
+    assert load.call_args.args[1] is None  # the loader still resolves the recorded base itself
+
+
+@pytest.mark.parametrize("command", ["infer", "bench"])
+def test_an_explicit_base_wins_over_the_recorded_one(monkeypatch, tmp_path, command):
+    from soup_cli.commands import infer
+
+    adapter_dir = _adapter_env(monkeypatch, tmp_path, {"model_type": "gpt2"})
+    explicit = tmp_path / "explicit"
+    explicit.mkdir()
+    (explicit / "config.json").write_text(json.dumps({"model_type": "llama"}))
+    load = MagicMock(return_value=(object(), object()))
+    monkeypatch.setattr(infer, "_load_model", load)
+    result = _invoke(command, adapter_dir, "--base", str(explicit))
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert load.call_count == 1
+    assert load.call_args.args[1] == str(explicit)

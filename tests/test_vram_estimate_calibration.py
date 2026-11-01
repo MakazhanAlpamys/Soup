@@ -109,3 +109,34 @@ def test_without_the_logits_term_large_vocabulary_rows_fail(monkeypatch):
         if _predicted_allocated(row) / row["peak_allocated"] < BANDS[_kind(row)][0]
     ]
     assert under == [_ident(row) for row in large]
+
+
+def _step_term(row: dict) -> int:
+    config, run = row["config"], row["run"]
+    shape = shape_from_config(config, params=config["params"], params_source="safetensors")
+    quant = run["quantization"]
+    full = run["lora_r"] == 0
+    spec = RunSpec(
+        seq_len=run["seq"],
+        batch_size=run["batch"],
+        quant=quant,
+        peft="full" if full else ("qlora" if quant == "4bit" else "lora"),
+        optimizer=run["optimizer"],
+        gradient_checkpointing=run["gradient_checkpointing"],
+        lora_r=run["lora_r"],
+        target_modules=run["target_modules"],
+    )
+    return estimate_vram(shape, spec).terms["optimizer_step"]
+
+
+def test_without_the_step_scratch_the_step_phase_rows_fail(monkeypatch):
+    """Mutation check from #2277: the scratch is what prices the rows the step sets."""
+    step_rows = [_ident(row) for row in _rows() if _step_term(row) > 0]
+    assert step_rows
+    monkeypatch.setattr(ve, "OPTIMIZER_STEP_SCRATCH_BYTES_PER_PARAM", {})
+    under = [
+        _ident(row)
+        for row in _rows()
+        if _predicted_allocated(row) / row["peak_allocated"] < BANDS[_kind(row)][0]
+    ]
+    assert under == step_rows

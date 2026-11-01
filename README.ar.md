@@ -92,55 +92,36 @@ soup train
 
 ## ما الجديد
 
-**v0.77.0 — ما حذّر منه v0.76 صار يُرفَض الآن.** لم تعد 31 حقلًا من حقول الإعداد لا يقرؤها شيء، ولا ثلاث
-قيم مُهمَلة (deprecated)، تُحمَّل مع تحذير: بل يتوقف التحميل بسطر لكل إعداد يسمّيه ويقول ما ينبغي حذفه.
-وقد يتوقف على v0.77 تحميلُ إعداد كان يُحمَّل على v0.76، مع تحذيرات أو بصمت: شغّل `soup doctor --config soup.yaml`
-أولًا.
+**v0.77.1 — إصدار تصحيحي: `soup data` يحافظ على مدخلاته، و`soup plan` يتفق مع `soup train`، وGRPO
+يتدرّب على Apple Silicon.** لا يتراجع هذا الإصدار عن أي شيء في v0.77.0. ذلك الإصدار يرفض الإعدادات التي حذّر منها
+v0.76 أو تجاهلها، لذا قد يتوقف تحميل إعداد كان يُحمَّل على v0.76: إن كنت قادمًا من 0.76.x فشغّل
+`soup doctor --config soup.yaml` أولًا واقرأ
+[ملاحظات إصدار v0.77.0](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0).
 
-- **تغيير غير متوافق مع الإصدارات السابقة: تُرفَض الحقول المرحلية (staged) والقيم المُهمَلة.** ومن الحقول
-  `training.lr_groups` و`early_stop_patience` و`forgetting_eval_steps` و`checkpoint_eval_*`
-  و`quantize_ref_model` و`long_context_grpo` و`vision_grpo` و`data.split_thinking` ومفاتيح
-  `data.video_*`. وقد أُدرج `training.rl_checkpoint_include_ref_model`
-  و`rl_checkpoint_include_rollout_buffer` بعد v0.76.0، فلم يحذّر منهما أي إصدار قبل ذلك. أما القيم فهي:
-  `data.remove_unused_columns: true`، و`training.quantization: 4bit` / `8bit` (أو
-  `load_in_8bit: true`) في مهمة لا تُكمِّم النموذج أبدًا، و`soup ab --beta`.
-  وتُرفَض أيضًا أربعة عشر إعدادًا كان v0.76 يتجاهلها دون أي كلمة، مثل `use_mod` أو `neftune_alpha` حيث
-  لا يطبّقهما شيء، و`expand_layers` مع رتبة LoRA، و`8bit` أو SFT للرؤية على Unsloth، و`lora.rank_pattern`
-  على MLX أو Unsloth: راجع ملاحظات الترقية في CHANGELOG.
-- **تغيير غير متوافق مع الإصدارات السابقة: Python 3.11–3.13، ولا تصدير بصيغتي AWQ أو GPTQ، ورمز مصادقة
-  لمسارين في `soup serve`.** لم يعد Python 3.10 مدعومًا (انتهى عمر دعمه في 2026-10-01)؛ وعلى 3.10 يواصل
-  pip اختيار v0.76.x. وأُزيل `soup export --format awq` / `gptq` و`soup quantize --to awq` / `gptq`، لأن
-  كلا المشروعين الأصليين مؤرشف: استخدم `gguf` أو `onnx` أو `tensorrt` أو `bitnet` أو `tq1_0`، أو ابقَ على
-  v0.76.x. ويجيب `/v1/tools/python` و`/v1/tools/bash` بالرمز 401 ما لم يُشغَّل الخادم مع
-  <span dir="ltr">`--tool-auth-token`</span> (أو `SOUP_TOOL_AUTH_TOKEN`)، على أي عنوان ربط، ويجيب
-  `/v1/tools/python` بالرمز 501 حيث لا يوفّر المضيف عزلًا على مستوى نظام التشغيل، كما يفعل bash من قبل.
-- **يعمل DPO وORPO وSimPO وKTO أصليًا على Apple Silicon.** يتدرّب `task: dpo` و`orpo` و`simpo` و`kto` مع
-  `backend: mlx` عبر حلقة MLX الخاصة بـ Soup وفق أهداف TRL (ORPO وSimPO دون نموذج مرجعي). ويكتسب SFT
-  النصي على MLX دعم DoRA الأصلي و`training.eval_steps` و`training.seed` ومراقب الخسارة (loss watchdog).
-  وصار `lora.use_rslora` يُطبَّق على MLX وUnsloth، فيتدرّب تشغيل rsLoRA هناك بالمقياس الذي طلبه، وتتغيّر
-  نتائجه.
-- **بثّ الطبقات يصل إلى نماذج MoE من عائلة DeepSeek-V3.** صار بثّ الطبقات في Soup (وهو تطبيق لـ L2L،
-  Pudipeddi et al. 2020) يبثّ `model_type: deepseek_v3` مع تطابق بين النموذج المقيم والمبثوث في
-  التمريرتين الأمامية والخلفية، ويُزيل تكميم نقاط الحفظ (checkpoints) المكمَّمة بالكتل بصيغة FP8 وقت
-  التقسيم (shard). ويُقبَل Kimi-K2-Base و-Instruct بعد فحص حقلًا بحقل (تُبَثّ نقطة حفظ صغيرة بشكل K2
-  مطابقةً بتًّا ببت على CPU؛ ولم يُدرَّب أي شيء على K2 نفسه). ويبثّ
-  `training.stream_expert_layout: per_expert` خبيرًا موجَّهًا واحدًا في كل مرة: على جهاز
-  RTX 5070 Laptop واحد سعة 8 GB، بلغت ذروة ذاكرة GPU لتدريب LoRA على Moonlight-16B بالإعداد نفسه
-  مقدار 1.0 GB مقابل 3.1 GB في التخطيط المدمج (fused)، بخبراء NF4 مقابل bf16 وبطبقتَي تخزين مؤقت مختلفتين، بزمن خطوة أطول بنحو 2.7x
-  ([السجل](benchmarks/probe-rtx5070-moonlight-16b.md)). ويحتفظ `training.stream_recompute: off` /
-  `auto` بتنشيطات الطبقات المبثوثة بدل إعادة حسابها، مع تدرّجات مطابقة بتًّا ببت: على طبقة RAM في البطاقة
-  نفسها تصير خطوة Mistral-7B NF4 أسرع بنسبة 22% عند 512 رمزًا و8.5% عند 2048
-  ([السجل](benchmarks/gate-stream-recompute.md)). لا يُفعَّل إلا بطلب صريح (`stream_layers: true`)، BETA.
-- **مصدر (provenance) يمكنك التحقق منه.** يسجّل `soup registry push --data <file>` بصمة SHA-256 لملف
-  التدريب، ويجعل <span dir="ltr">`--idempotency-key`</span> إعادة محاولة الدفع آمنة؛ وعلى الواجهة الخلفية
-  transformers تسجّل التشغيلات المقيمة والمبثوثة الطبقات والمتعددة وحدات GPU الـ commit على Hub للنموذج
-  الأساسي الذي حمّلته؛ ويقارن `soup ship --require-provenance` الدليلَ بما خُتم به من بايتات المهايئ
-  والمهمة والمصدر، وإصدار الحزمة (suite)، وسياسة الحكم.
-- **وجديد أيضًا.** `soup --version`؛ و`pip install "soup-cli[documents]"` لملفات PDF وDOCX في
-  `soup data ingest`؛ و<span dir="ltr">`soup merge --low-memory`</span>؛ ويمكن لـ GRPO أن يقيّم بحَكَم من
-  نموذج لغوي كبير (`training.reward_fn: judge_rank`)؛ وصارت
-  [`docs/config-reference.md`](docs/config-reference.md) و[`docs/cli-reference.md`](docs/cli-reference.md)
-  تُولَّد من الشيفرة، وتفشل مجموعة الاختبارات حين تكفّ إحداهما عن ذكر ما تفعله الشيفرة فعلًا.
+- **لم تعد أوامر `soup data` تكتب فوق مدخلاتها.** ثمانية عشر منها (`dedup` و`filter` و`convert`
+  و`merge` و`sample` و`pii` و`toxicity` وغيرها) ترفض، قبل أن تقرأ أي شيء، قيمةَ `--output` تشير إلى
+  الملف نفسه الذي هو أحد المدخلات، بأي كتابة جاءت، ويُرفَض أيضًا اسم إخراج افتراضي يحمله المُدخل أصلًا.
+  اكتب إلى ملف جديد بدلًا من ذلك.
+- **يرفض `soup plan` و`soup apply` الإعدادات التي يرفضها `soup train`** بالرسالة نفسها، ولا يكتبان
+  خطة.
+- **يتدرّب GRPO أصليًا على Apple Silicon.** يشغّل `task: grpo` مع `backend: mlx` حلقة MLX الخاصة
+  بـ Soup على الهدف نفسه الذي يدرّبه مسار transformers، مع المكافأة المدمجة `accuracy` أو `format`.
+  ويولّد `soup infer --backend mlx` من نماذج MLX الأساسية ومحوّلات LoRA النصية الأصلية دون Torch.
+- **تقدير واحد لذروة VRAM:** يستخدم الفحص المسبق في `soup train` و`soup profile` و`soup plan` التقدير
+  نفسه، وهو معايَر على 39 تشغيلًا مقيسًا ([السجل](benchmarks/gate-2049-resident-vram.md)). وفي النطاق
+  الذي عويِر عليه، أي النماذج الكثيفة حتى نحو 3.5B معامل، صار الفحص المسبق يرفض بعض التشغيلات طويلة
+  التسلسل كبيرة المفردات التي كان يمرّرها، وما زال `--allow-oom-attempt` يطلقها. أما خارج هذا النطاق
+  (نموذج أكبر أو نموذج mixture-of-experts، أو نقاط حفظ `medium` أو `selective`، أو
+  `use_liger` / `use_cut_ce`، أو `backend: unsloth`) فيطبع التقدير تحذيرًا للتشغيل الذي لا يتسع له
+  ويبدأه، إلا إذا كانت الأوزان وسياق CUDA والتدرّجات وحالة المُحسِّن للمعاملات التي يدرّبها أكبر مما
+  تتسع له البطاقة (ضبط دقيق كامل لنموذج 7B على 80 GB، أو Llama-3.1-70B بدقة 4-bit على 24 GB): فعندئذ
+  يُرفَض التشغيل هناك أيضًا. وتُقيَّم تشغيلات LoRA والتشغيلات التي تدرّب جزءًا من المعاملات (Spectrum
+  وLISA والتجميد) على حدود أقل، وما زال `--allow-oom-attempt` يطلق التشغيل المرفوض.
+- **تُشغَّل البرامج الخارجية بمسار مطلق موجود على `PATH`.** لم يعد يُبحث في المجلد الحالي ولا في
+  مدخلات `PATH` النسبية: أضف إلى `PATH` مجلد أي أداة لا توجد إلا هناك.
+- **وجديد أيضًا.** `soup ship --progress jsonl`؛ ومفاتيح الإعداد المجهولة المكتوبة بالطريقة التي
+  تسمّيها بها مكتبة أخرى صارت تقترح حقل Soup المقابل (`learning_rate` يقترح `lr`)؛ ومثال Docker أدناه
+  يمرّر `--yes`، الذي يحتاجه `soup train` غير التفاعلي منذ v0.77.0.
 
 تجد أبرز ما في الإصدارات الأقدم في صفحة [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 

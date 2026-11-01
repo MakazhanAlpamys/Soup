@@ -7,6 +7,9 @@ off its default, a refused deprecated value or any other schema refusal planned 
 command before ``soup train`` refused the same file. Both commands now run the loader's
 own validation, so they exit 1 with the lines ``soup train`` prints, write no plan and
 leave an existing state file as it was.
+
+A config needing --minillm-on-policy is refused without the flag; plan and apply
+merge it before validation when it is given, just as train does.
 """
 
 from __future__ import annotations
@@ -25,27 +28,50 @@ from tests.conftest import strip_ansi
 _HEADER = "Config validation error:"
 _STATE = "soup.tfstate"
 
-#: case -> (training extras, data extras, what the refusal names, the fix it gives)
+_TEACHER = "hf-internal-testing/tiny-random-gpt2"
+
+#: case -> (training extras, data extras, what the refusal names, the fix it gives, task)
 _REFUSED = {
     "staged field": (
         {"early_stop_patience": 5},
         {},
         "training.early_stop_patience",
         "Delete the line.",
+        "sft",
     ),
     "deprecated value": (
         {},
         {"remove_unused_columns": True},
         "data.remove_unused_columns: true",
         "Delete the line.",
+        "sft",
     ),
     "value out of range": (
         {"lr": -1},
         {},
         "training -> lr",
         "greater than 0",
+        "sft",
+    ),
+    # Both require --minillm-on-policy, and must still be refused without it.
+    "valid only with the train flag, mix ratio 0": (
+        {"teacher_model": _TEACHER, "minillm_enabled": True, "minillm_teacher_mix_ratio": 0.0},
+        {},
+        "minillm_teacher_mix_ratio",
+        "minillm_on_policy=true",
+        "distill",
+    ),
+    "valid only with the train flag, rollout length": (
+        {"teacher_model": _TEACHER, "minillm_enabled": True, "minillm_rollout_length": 16},
+        {},
+        "minillm_rollout_length",
+        "minillm_on_policy=True",
+        "distill",
     ),
 }
+
+
+_FLAG_ONLY = [case for case in sorted(_REFUSED) if case.startswith("valid only with")]
 
 
 def _plain(text: str) -> str:
@@ -62,10 +88,16 @@ def workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-def _config(workdir: Path, *, training: dict | None = None, data: dict | None = None) -> dict:
+def _config(
+    workdir: Path,
+    *,
+    training: dict | None = None,
+    data: dict | None = None,
+    task: str = "sft",
+) -> dict:
     return {
         "base": str(workdir / "tiny"),
-        "task": "sft",
+        "task": task,
         "data": {"train": "train.jsonl", "max_length": 512, **(data or {})},
         "training": {"batch_size": 2, "quantization": "none", **(training or {})},
     }
@@ -75,9 +107,9 @@ def _write(config: dict) -> None:
     Path("soup.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
 
 
-def _train_refusal() -> str:
+def _train_refusal(*options: str) -> str:
     """What ``soup train`` prints for ``soup.yaml``, from the refusal header on."""
-    result = CliRunner().invoke(app, ["train", "--config", "soup.yaml", "--dry-run"])
+    result = CliRunner().invoke(app, ["train", "--config", "soup.yaml", "--dry-run", *options])
     assert result.exit_code == 1, (result.output, repr(result.exception))
     out = _plain(result.output)
     assert _HEADER in out, out
@@ -86,8 +118,8 @@ def _train_refusal() -> str:
 
 @pytest.mark.parametrize("case", sorted(_REFUSED))
 def test_soup_plan_refuses_with_train_s_message_and_writes_no_plan(workdir, case):
-    training, data, names, fix = _REFUSED[case]
-    _write(_config(workdir, training=training, data=data))
+    training, data, names, fix, task = _REFUSED[case]
+    _write(_config(workdir, training=training, data=data, task=task))
     expected = _train_refusal()
 
     result = CliRunner().invoke(app, ["plan", "--config", "soup.yaml", "--state", _STATE])
@@ -106,8 +138,8 @@ def test_soup_plan_refuses_with_train_s_message_and_writes_no_plan(workdir, case
 def test_soup_apply_refuses_with_train_s_message_and_leaves_the_state_alone(
     workdir, case, dry_run
 ):
-    training, data, names, fix = _REFUSED[case]
-    config = _config(workdir, training=training, data=data)
+    training, data, names, fix, task = _REFUSED[case]
+    config = _config(workdir, training=training, data=data, task=task)
     _write(config)
     # The state ``soup plan`` used to write for this very file: no drift, so ``apply``
     # locked it (exit 0) and ``apply --dry-run`` said it would proceed.
@@ -130,6 +162,28 @@ def test_soup_apply_refuses_with_train_s_message_and_leaves_the_state_alone(
     assert "Plan locked" not in out, out
     assert Path(_STATE).read_bytes() == before
     assert read_state(_STATE).applied is False
+
+
+@pytest.mark.parametrize("case", _FLAG_ONLY)
+def test_a_flag_only_config_is_valid_with_the_train_flag_and_with_the_yaml_line(workdir, case):
+    # The premise of the "valid only with the train flag" cases: the flag is what makes
+    # them legal, and the line the refusal names is the same switch written in the YAML.
+    from soup_cli.config.loader import load_config
+
+    training, data, _names, _fix, task = _REFUSED[case]
+    _write(_config(workdir, training=training, data=data, task=task))
+    flagged = load_config("soup.yaml", training_overrides={"minillm_on_policy": True})
+    assert flagged.training.minillm_on_policy is True
+
+    _write(_config(workdir, training={**training, "minillm_on_policy": True}, task=task))
+    runner = CliRunner()
+    planned = runner.invoke(app, ["plan", "--config", "soup.yaml", "--state", _STATE])
+    assert planned.exit_code == 0, (planned.output, repr(planned.exception))
+    checked = runner.invoke(
+        app, ["apply", "--config", "soup.yaml", "--state", _STATE, "--dry-run"]
+    )
+    assert checked.exit_code == 0, (checked.output, repr(checked.exception))
+    assert "No drift detected; would proceed." in _plain(checked.output)
 
 
 def test_a_valid_config_still_plans_and_applies(workdir):
@@ -158,3 +212,87 @@ def test_a_valid_config_still_plans_and_applies(workdir):
     assert applied.exit_code == 0, (applied.output, repr(applied.exception))
     assert f"Plan locked in {_STATE}." in _plain(applied.output)
     assert read_state(_STATE).applied is True
+    assert "Now run: soup train --config soup.yaml" in _plain(applied.output)
+    assert "--minillm-on-policy" not in _plain(applied.output)
+
+
+@pytest.mark.parametrize("case", _FLAG_ONLY)
+def test_on_policy_flag_is_merged_before_plan_and_apply_validate(workdir, case):
+    training, data, _names, _fix, task = _REFUSED[case]
+    document = _config(workdir, training=training, data=data, task=task)
+    _write(document)
+    original = Path("soup.yaml").read_bytes()
+    runner = CliRunner()
+    flag = ["--minillm-on-policy"]
+
+    planned = runner.invoke(app, ["plan", "--config", "soup.yaml", *flag])
+    assert planned.exit_code == 0, (planned.output, repr(planned.exception))
+    effective = {**document, "training": {**document["training"], "minillm_on_policy": True}}
+    assert read_state(_STATE).plan.config_sha == build_plan(effective).config_sha
+    assert read_state(_STATE).applied is False
+
+    checked = runner.invoke(app, ["apply", "--config", "soup.yaml", "--dry-run", *flag])
+    assert checked.exit_code == 0, (checked.output, repr(checked.exception))
+    assert read_state(_STATE).applied is False
+    applied = runner.invoke(app, ["apply", "--config", "soup.yaml", *flag])
+    assert applied.exit_code == 0, (applied.output, repr(applied.exception))
+    assert read_state(_STATE).applied is True
+    assert "Now run: soup train --config soup.yaml --minillm-on-policy" in _plain(applied.output)
+    assert "does not start training" in _plain(applied.output)
+    assert "v0.64.1" not in _plain(applied.output)
+    assert Path("soup.yaml").read_bytes() == original
+
+
+@pytest.mark.parametrize("command", [["plan"], ["apply"], ["apply", "--dry-run"]])
+@pytest.mark.parametrize("case", ["disabled", "absent", "null-training"])
+def test_on_policy_flag_requires_minillm_enabled_with_train_s_message(workdir, command, case):
+    training = {"teacher_model": _TEACHER}
+    if case == "disabled":
+        training["minillm_enabled"] = False
+    document = _config(workdir, training=training, task="distill")
+    if case == "null-training":
+        document["training"] = None
+    _write(document)
+    original = Path("soup.yaml").read_bytes()
+    expected = _train_refusal("--minillm-on-policy")
+    before = b"existing state stays intact"
+    Path(_STATE).write_bytes(before)
+
+    result = CliRunner().invoke(app, [*command, "--minillm-on-policy"])
+
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert _plain(result.output) == expected
+    assert Path(_STATE).read_bytes() == before
+    assert Path("soup.yaml").read_bytes() == original
+
+
+@pytest.mark.parametrize("plan_flag", [False, True])
+def test_on_policy_flag_participates_in_drift_detection(workdir, plan_flag):
+    document = _config(
+        workdir, task="distill",
+        training={"teacher_model": _TEACHER, "minillm_enabled": True,
+                  "minillm_teacher_mix_ratio": 0.3},
+    )
+    _write(document)
+    runner = CliRunner()
+    planned = runner.invoke(app, ["plan", *(["--minillm-on-policy"] if plan_flag else [])])
+    assert planned.exit_code == 0, (planned.output, repr(planned.exception))
+    before = Path(_STATE).read_bytes()
+    result = runner.invoke(
+        app, ["apply", *(["--minillm-on-policy"] if not plan_flag else [])]
+    )
+    assert result.exit_code == 3, (result.output, repr(result.exception))
+    assert "config_sha" in _plain(result.output)
+    assert Path(_STATE).read_bytes() == before
+
+
+def test_on_policy_flag_does_not_hide_other_validation_errors(workdir):
+    document = _config(
+        workdir, task="distill",
+        training={"teacher_model": _TEACHER, "minillm_enabled": True, "lr": -1},
+    )
+    _write(document)
+    result = CliRunner().invoke(app, ["plan", "--minillm-on-policy"])
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "training -> lr" in _plain(result.output)
+    assert not Path(_STATE).exists()

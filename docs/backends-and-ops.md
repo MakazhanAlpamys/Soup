@@ -143,7 +143,16 @@ training:
     alpha: 32
 ```
 
-MLX backend supports SFT, DPO, ORPO, SimPO, KTO and GRPO. Any other task with `backend: mlx` (`ipo`, `preference`, ...) is refused when the config is loaded, with an error naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for ready-made Apple Silicon configs.
+MLX backend supports SFT, DPO, ORPO, SimPO, KTO and GRPO. `task: preference`
+with `training.preference_loss: dpo`, `orpo` or `simpo` selects the corresponding
+native MLX trainer, with the same load-time restrictions and doctor support
+report as the explicit native task. The configured task remains `preference`;
+the saved `adapter_config.json` records `dpo`, `orpo` or `simpo`, so the adapter
+can also be resumed with that explicit native task. IPO, BCO and
+`training.preference_loss_weights` blends remain refused on MLX. Other tasks
+without a native trainer are refused when the config is loaded, with an error
+naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for
+ready-made Apple Silicon configs.
 
 `training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO, SimPO, KTO and GRPO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
 
@@ -173,7 +182,7 @@ training:
     alpha: 32
 ```
 
-- **No second model in memory.** LoRA `B` starts at zero, so before the first update the policy *is* the base model. Reference log-probs are computed once from it before training, which is what TRL's `precompute_ref_log_probs` does. `--resume` computes them before the checkpoint loads, so the reference is always the base model.
+- **No second model in memory.** LoRA `B` starts at zero, so before the first update the policy *is* the base model. Reference log-probs are computed once from it before training, which is what TRL's `precompute_ref_log_probs` does. `--resume` computes them before the checkpoint loads, so the reference is always the base model. `--resume` refuses a checkpoint without `adapter_config.json`, from another task (an MLX SFT adapter included), or from another base, before any tensor loads.
 - **The rows `load_dataset` gives every backend.** Each row is read by the loader's own `format: dpo` converter, so MLX accepts exactly the layouts the transformers backend does: text (three strings) or conversational (a message-list prompt, or full `chosen` / `rejected` conversations that repeat the user turn, as the bundled examples do). Text rows get EOS appended; conversational rows go through the model's chat template; the prompt is capped at `max_length // 2` and completions at what remains, as on TRL 0.29. Where this differs from TRL, it does on purpose: a pair whose `chosen` equals its `rejected` is skipped with a count (TRL trains it at a constant loss and zero gradient), and a row the chat template is not prefix-stable for is skipped with a count and the first row's index (TRL warns and slices anyway). Fewer pairs than `training.batch_size` after skipping is refused, naming both.
 - **Seeded.** `training.seed` seeds `mx.random` (LoRA init, dropout) and the batch order; `training.data_seed`, when set, owns the batch order instead. Two runs with the same seed reproduce each other's losses.
 - **LoRA dropout applies.** `lora.dropout` (default 0.05) is active during training, as in MLX SFT; TRL's `disable_dropout` (on by default in 0.29.1) turns it off on the transformers backend. Set `lora.dropout: 0` to match it.
@@ -244,8 +253,9 @@ training:
   metadata, from another task, or from another base, before any tensor loads.
 - **Refused at load:** `quantization: 8bit` (use `none`, or a pre-quantized
   4-bit base with `quantization: 4bit`), `training.lora.r: 0`, non-text
-  `modality`, LoRA+, and `task: preference` with `preference_loss: orpo` on
-  `backend: mlx` (use `task: orpo`). The other settings MLX DPO does not apply
+  `modality`, LoRA+ and `data.chat_template`. `task: preference` with
+  `training.preference_loss: orpo` uses this same native trainer and these
+  same restrictions. The other settings MLX DPO does not apply
   are not applied here either.
 
 #### SimPO on MLX
@@ -302,9 +312,9 @@ That shows the objective moving, not alignment quality.
   another task (ORPO and DPO included), or from another base, before any tensor
   loads.
 - **Refused at load:** `quantization: 8bit`, `training.lora.r: 0`, non-text
-  `modality`, LoRA+, `data.chat_template` (as for MLX DPO and ORPO), and
-  `task: preference` with `preference_loss: simpo` on
-  `backend: mlx` (use `task: simpo`). The other settings MLX DPO does not apply
+  `modality`, LoRA+ and `data.chat_template` (as for MLX DPO and ORPO).
+  `task: preference` with `training.preference_loss: simpo` uses this same
+  native trainer and these same restrictions. The other settings MLX DPO does not apply
   are not applied here either.
 
 #### KTO on MLX
@@ -429,6 +439,39 @@ went from 0.04 to 0.99 as the model learned to work the product out before
 answering. That task is easy and fully verifiable; it shows the loop training,
 not reasoning quality in general.
 
+**Bases.** A dense base, or one pre-quantized by mlx-lm at 4 bits in `affine`
+mode, as `mlx_lm.convert -q` and the `mlx-community/...-4bit` repos write it:
+every quantized layer a `QuantizedLinear` or a `QuantizedEmbedding`, so a tied
+output head runs through the quantized embedding. Layers mlx-lm left dense stay
+dense. The quantized weights, scales and biases stay frozen and only the LoRA
+adapter trains. The run checks that no quantized tensor is trainable once the
+adapter is attached, and refuses before the first update if one is. The same
+loop and objective train both kinds of base. Any other quantized base is refused
+right after the load, with the first layer outside the rule and its kind, bits
+and mode:
+- an 8-bit base, or a mixed-bit recipe with any layer that is not 4-bit;
+- `mxfp4`, `mxfp8` and `nvfp4`;
+- quantized MoE expert layers (`QuantizedSwitchLinear`);
+- BitNet `BitLinear` layers (a `quantization_config.quant_method: bitnet`
+  checkpoint), whose scale mlx-lm keeps as `weight_scale`.
+
+The rule reads the layers mlx-lm loads, not the checkpoint's format. A 4-bit
+GPTQ or AWQ checkpoint, and a `compressed-tensors` one that mlx-lm loads as 4-bit
+`affine` (every one at mlx-lm 0.31.3, only the `pack-quantized` format at
+0.32.2), therefore passes it as well; a `compressed-tensors` checkpoint in an
+`nvfp4` or `mxfp4` format loads in that mode and is refused. The native tests
+cover only bases quantized by mlx-lm's own `quantize_model`.
+
+On MLX, `training.quantization` only names the base, since nothing is quantized
+at load, so the base's own layers decide; `quantization: 8bit` stays refused at
+load. The 4-bit path is covered by native tests on tiny random Llamas that
+mlx-lm's own `quantize_model` quantizes, saved and loaded through `mlx_lm.load`
+(Apple M6, `mlx-lm` 0.31.3 and 0.32.2). They check updates, accumulation,
+gradient checkpointing, checkpoints and a fresh-process reload, quantized tensors
+bit-identical after training, and the loss and gradients against an independent
+reference on the same quantized base. They show behaviour, not quality or speed
+on a real 4-bit model.
+
 | setting | value |
 |---|---|
 | `loss_type` | `dapo`: per-token clipped surrogate, summed over every completion token of the update and divided by that token count (EOS included) |
@@ -462,7 +505,7 @@ training:
   gradient_accumulation_steps: 2
   grpo_beta: 0.1
   lr: 1e-5
-  quantization: none
+  quantization: none         # 4bit with a 4-bit MLX base, e.g. mlx-community/...-4bit
   lora:
     r: 16
     alpha: 32
@@ -503,7 +546,8 @@ The loader does not auto-detect bare `{"prompt", "answer"}` rows; use `messages`
   completion stops the run.
 - **Reference.** With `grpo_beta > 0` the reference is the base model, as TRL
   uses for a PEFT model. It is the policy with every LoRA scale set to 0, run
-  on the generated tokens before each update. No second copy is loaded.
+  on the generated tokens before each update. No second copy is loaded; on a
+  4-bit base the reference is that same frozen quantized base.
 - **Watchdog.** A nonfinite loss or gradient skips the update, as Soup's GRPO
   watchdog does on transformers. The weights and optimizer moments do not
   change. The skip is printed and counted in the result and in
@@ -535,7 +579,10 @@ The loader does not auto-detect bare `{"prompt", "answer"}` rows; use `messages`
   `mlx_lm.load(base, adapter_path=output)`. Both are written atomically, and the
   metadata before the first update. The metadata records every setting in the
   table above, the reward, the advantage epsilon and std, the reference and
-  generation mode, and the skipped-update count. `save_steps` counts updates.
+  generation mode, and the skipped-update count. It also records the base's
+  quantization as `base_quantization`: `bits`, `group_size`, `mode`, and the
+  number of quantized linear and embedding layers, or `null` for a dense base.
+  `save_steps` counts updates.
 - **Cost.** Rollouts dominate: each update samples up to `data.max_length`
   tokens for `num_generations` completions of every prompt. Keep
   `data.max_length` small. With `grpo_beta > 0` each micro-step adds one
@@ -549,9 +596,11 @@ The loader does not auto-detect bare `{"prompt", "answer"}` rows; use `messages`
   streaming.
 - **Refused at launch or after the load:** `--deepspeed` / `--fsdp`, and
   `--resume` / `--hf-resume`: only the adapter is saved, and resume is not
-  implemented for MLX GRPO. A base that loads quantized is refused right after
-  the load. 4-bit bases come in a follow-up. `quantization: 4bit` is Soup's default and, on MLX, only names a
-  pre-quantized base, so a dense base trains with it.
+  implemented for MLX GRPO. A quantized base in any format but 4-bit `affine` is
+  refused right after the load (see **Bases** above), and a quantized tensor left
+  trainable once the adapter is attached is refused before the first update.
+  `quantization: 4bit` is Soup's default and, on MLX, only names a pre-quantized
+  base, so a dense base trains with it too.
 
 #### DoRA on MLX
 
@@ -672,6 +721,14 @@ Works with the tasks that have an unsloth setup: SFT (text; SFT vision and audio
 
 > **Tip:** Soup auto-detects unsloth. When it is installed, `soup train` prints a hint if you haven't enabled it yet and your config would load with it.
 
+With `training.lora.target_modules: auto`, the Unsloth loader and VRAM estimate
+both use `q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj` and
+`down_proj`; explicit targets are preserved. Under 4-bit loading the estimate
+prices the embedding and output head at 2 bytes per parameter, from a real load
+and LoRA injection ([dtype record](../benchmarks/unsloth-4bit-weight-dtypes.md)).
+The Transformers backend keeps its architecture-specific automatic targets and
+fp32 k-bit embedding/head figure.
+
 ### Gradient checkpointing on Unsloth
 
 On `backend: unsloth`, `training.gradient_checkpointing` is honoured instead of silently ignored ([#797](https://github.com/MakazhanAlpamys/Soup/issues/797)):
@@ -774,8 +831,22 @@ than retried, to avoid duplicate training. Keepalive probes run every 30 seconds
 with six missed probes allowed (roughly three minutes); the training command has
 a 25-hour timeout. Artifacts are copied only after a successful training command,
 with one SCP attempt capped at 15 minutes. A failed copy still terminates the Pod,
-so an incomplete download cannot be recovered from that Pod afterward. Remote log
-tail retrieval and a copy retry window are not implemented in this controller.
+so an incomplete download cannot be recovered from that Pod afterward. A copy retry
+window remains unimplemented.
+
+When the remote training command exits nonzero, the controller prints the last
+50 lines of its stderr, capped at 50 KB, before deleting the Pod. Unsafe terminal
+controls are removed using the same character policy as `utils/terminal.py` (TAB is kept),
+and Rich markup is displayed literally. URL user information and common token
+patterns are replaced with `<redacted>` before local truncation. This pattern-based
+masking does not cover scheme-less `user:pw@host`, raw `#` or `?` in URL user
+information, or other token families such as standalone GitHub `ghp_` or AWS
+`AKIA` tokens. If the remote byte limit cuts a log line, that partial line is
+omitted so a credential cannot lose its identifying prefix. This preserves pip
+diagnostics; when training itself fails, the remote script also sends the bounded tail of
+`train.log` to stderr. A timeout names the SSH readiness probe (30 seconds) or the
+remote training command (25 hours). The diagnostic tail does not preserve the Pod
+or claim successful artifact retrieval.
 
 **Not yet live-validated.** Tests use local mocked API/SSH transports. The code
 PR does not include a paid run; provider execution, GPU behavior, retrieval and
@@ -798,8 +869,9 @@ way to skip that cleanup is to kill the controller process itself (for example w
 another terminal), which can leave the instance running. If remote training fails with a non-zero exit
 code, the controller fetches the last 50 lines of `/home/ubuntu/soup/train.log` over SSH (capped at 50 KB
 and sanitized of terminal control sequences) and prints them before terminating the instance so
-the root cause is immediately visible (the log file holds only `soup train` output; an earlier failure
-during cloud-init or `pip install` is not captured in it).
+the root cause is immediately visible. The log is created before the first step that can fail and
+holds the `apt-get` and `pip install` output as well as `soup train` output, so an early install
+failure (for example a `Requires-Python` mismatch) is shown instead of an empty tail.
 
 Register the public half of an SSH key with Lambda first, then set:
 
@@ -1131,6 +1203,14 @@ PyTorch reinstall hint based on the CUDA version reported by the driver. When
 the driver version cannot be mapped to a supported wheel, the hint remains
 actionable without constructing a `whl/None` URL.
 
+If `nvidia-smi` detects a card but `CUDA_VISIBLE_DEVICES=-1` or an invalid
+device list hides every card from PyTorch, `soup doctor` reports that setting
+and recommends unsetting it, without suggesting a PyTorch reinstall. This
+includes an empty value, a negative or out-of-range first index, and a word
+such as `NoDevFiles`. CUDA exposes the devices before the first invalid entry:
+`-1,0` hides every card, while `0,-1` leaves device 0 visible. GPU/MIG UUID
+selectors retain the existing diagnostic; their validity is not checked here.
+
 
 ## Version Info
 
@@ -1187,7 +1267,7 @@ Config validation error:
   unknown config key 'training.quantizaton' - did you mean 'quantization' or 'quantization_aware'? Refused.
 ```
 
-Known foreign parameter names (such as Hugging Face `learning_rate` or `num_train_epochs`) get an authoritative `use <field>` hint instead of a guess.
+Known foreign parameter names (such as Hugging Face `learning_rate` or `num_train_epochs`), and one-edit typos of them, get an authoritative `use <field>` hint instead of a guess; a name that is merely similar gets the "did you mean" ranking over the fields Soup declares. A Hugging Face name with no Soup counterpart (`per_device_eval_batch_size`, `warmup_steps`) gets a sentence saying so, at the top level and under `training:` alike, and no replacement field.
 
 **Since v0.75 an unknown config key refuses the load.** v0.74 shipped the same report
 as a warning that named this deadline, so there was exactly one release of notice —
@@ -1243,8 +1323,14 @@ set, so a program started by bare name by Soup's libraries or by a program Soup 
 or reward script included) is not looked for in the current directory either, as on Linux and
 macOS. A value already set is kept, and Windows leaves the current directory out for any
 non-empty value, `0` included, so no setting brings the old search back: to run a program from
-the current directory, give its path (`.\tool.exe`) or put the directory on `PATH` as an absolute
-path.
+the current directory, give its path (`./tool.exe`, or an absolute path in quotes) or put the
+directory on `PATH` as an absolute path. `soup adapters bisect --eval-command` uses native command-line splitting:
+POSIX quoting on Linux/macOS and Windows quoting on Windows, preserving backslashes in
+`.\tool.bat` and `C:\tools\tool.bat`. Quote a program path containing spaces.
+The template is split once before checkpoint substitution; checkpoint text remains one
+argument even when it contains spaces or quotes. No shell interprets that text. A missing
+or unstartable program is an invocation error (exit 2), with no bisect verdict or result
+file; a program that starts and exits nonzero still means a failing checkpoint.
 
 
 ## Experiment Tracking
@@ -1438,6 +1524,8 @@ Tools that explain *why* a run misbehaved instead of dumping a stack trace.
 
 Heuristic explainer — reads the most recent (or named) run and surfaces
 plain-English diagnoses with concrete next steps.
+
+The summary keeps recorded zero losses and step counts; `-` means the value was not recorded.
 
 ```bash
 soup why                 # most recent run
@@ -1777,6 +1865,11 @@ entry points.
 
 A training run is a one-shot infrastructure-shaped operation: spot price, expected cost, base SHA, dataset SHA, peak VRAM. v0.64 borrows Terraform's plan-apply split so you can review the numbers before committing money.
 
+Both commands refuse unreadable inputs before creating or changing the state file.
+Malformed YAML reports the config path and line/column; invalid UTF-8 reports the
+byte offset; an OS read error names its cause. These refusals exit 2. A missing config
+keeps exit 1, and schema validation keeps its existing validation messages and exit code.
+
 ```bash
 # Render a pre-flight summary + write soup.tfstate
 soup plan --config soup.yaml
@@ -1787,6 +1880,20 @@ soup apply --config soup.yaml
 # Validate without actually running anything
 soup apply --config soup.yaml --dry-run
 ```
+
+For a MiniLLM distillation config that needs on-policy rollout, pass the same flag to
+both commands:
+
+```bash
+soup plan --config soup.yaml --minillm-on-policy
+soup apply --config soup.yaml --minillm-on-policy
+```
+
+The flag requires `training.minillm_enabled: true` on `task: distill` and overrides
+`training.minillm_on_policy` before config validation. It participates in the plan hash,
+so using a different flag value at apply time can cause drift. The suggested `soup train`
+command carries the flag when it was given. Apply records the reviewed plan and does not
+start training or rewrite the config.
 
 The state file is a thin JSON envelope; the actual training is still driven by `soup train`. The gate prevents the "wait, why did I spend another $0.50 on the wrong config" surprise.
 
@@ -1810,31 +1917,41 @@ soup env check
 
 `soup-env.lock` captures Python + platform + CUDA + 15 ABI-sensitive packages (torch / transformers / peft / trl / accelerate / bitsandbytes / flash-attn / xformers / deepspeed / unsloth / vllm / sentencepiece / tokenizers / datasets / huggingface-hub). Wire `soup env check` into your CI to refuse silent ABI breakage.
 
+The `soup env` commands display lock metadata, package versions, drift descriptions
+and paths literally, with terminal control characters and bidi marks removed. This
+only affects terminal output: lock files and generated requirements keep their original
+contents.
+
 
 ## Hardware-Fit Calculator
 
-One peak-VRAM estimate (`soup_cli/utils/vram_estimate.py`) serves the `soup train` pre-flight, `soup profile`, the MCP `profile` tool and `soup plan`, so the same config gets the same number from each (#2049). The pre-flight adds a 10% margin and refuses a run whose estimate does not fit the card (`--allow-oom-attempt` launches it anyway); it skips layer-streaming runs, which the streaming planner sizes, and `backend: mlx`.
+One peak-VRAM estimate (`soup_cli/utils/vram_estimate.py`) serves the `soup train` pre-flight, `soup profile`, the MCP `profile` tool and `soup plan`, so the same config gets the same number from each (#2049). The pre-flight adds a 10% margin and refuses a run whose estimate does not fit the card when the run is inside the range the coefficients were fitted on (below); outside that range it prints the estimate as a warning and continues, unless its weights, the CUDA context and the state of the parameters it trains (adapters, gradients and, for AdamW, optimizer state) alone are more than the card holds, which is refused there too. `--allow-oom-attempt` launches a refused run anyway. It skips layer-streaming runs, which the streaming planner sizes, and `backend: mlx`.
 
 The estimate is per term, in bytes (GB in the output is 1e9 bytes):
 
 | term | what it prices |
 |---|---|
-| `weights` | the base at its loaded precision: 2 bytes a parameter in bf16, 4 under full fine-tuning (fp32 master weights, #339). Under `4bit` and `8bit` loading only the decoder's linear layers are quantized (0.53 and 1.02 bytes a parameter); the embeddings, output head and norms are cast to fp32 for training |
-| `adapters` | LoRA's A and B, `r * (in + out)` per adapted module per layer, from the model's own dims and `lora.target_modules` (`auto` is peft's default for the architecture), in fp32 |
+| `weights` | the base at its loaded precision: 2 bytes a parameter in bf16, 4 under full fine-tuning (fp32 master weights, #339). Under `4bit` and `8bit` loading only the decoder's linear layers are quantized (0.53 and 1.02 bytes a parameter); Transformers casts the embeddings and output head to fp32 for training. Unsloth `4bit` prices those two weights at the observed 2 bytes per parameter ([dtype record](../benchmarks/unsloth-4bit-weight-dtypes.md)) |
+| `adapters` | LoRA's A and B, `r * (in + out)` per adapted module per layer, from the model's own dims and `lora.target_modules`, in fp32. `auto` uses peft's default for the architecture on Transformers, and the loader's seven projections on Unsloth |
 | `gradients`, `optimizer` | per trainable parameter: 4 bytes of gradient, and 8 for AdamW, 2 for the 8-bit optimizers, 4 for Adafactor |
-| `activations` | what the backward pass keeps per layer; with `gradient_checkpointing`, one hidden-sized tensor per layer plus one layer recomputed. `medium` keeps every other layer; `selective` is priced as no checkpointing, an upper bound. `auto` is resolved on the card as the `sft` trainer resolves it (`full` below 24 GB, `medium` to 80 GB, `selective` above), and only `sft` and `tts` apply the tiers: every other task checkpoints fully |
-| `logits` | the output head's logits and the loss over them, 12 bytes an element (14 under `4bit` / `8bit`, whose output head is fp32). Checkpointing does not reduce it, and on a 150k vocabulary it is often the largest term. Not charged for the tasks without an LM head (`classifier`, `reranker`, `cross_encoder`, `embedding`, `reward_model`). With `use_liger` or `use_cut_ce` on `sft` or `tts` it is still charged, since the fused loss may not apply, and the output says it may overstate the peak |
+| `activations` | what the backward pass keeps per layer; the estimate charges saved inputs for the backend's resolved LoRA targets, including all seven projections for Unsloth `auto`, unless checkpointing is full. With `gradient_checkpointing`, one hidden-sized tensor per layer plus one layer recomputed. `medium` keeps every other layer; `selective` is priced as no checkpointing, an upper bound. `auto` is resolved on the card as the `sft` trainer resolves it (`full` below 24 GB, `medium` to 80 GB, `selective` above), and only `sft` and `tts` apply the tiers: every other task checkpoints fully. With `activation_offloading: cpu` or `disk` it is still charged as resident, since what offloading moves off the card is not measured, and the output says so (#2327) |
+| `logits` | the output head's logits and the loss over them, 12 bytes an element (14 under `4bit` / `8bit` for the Transformers fp32 head). The 14-byte charge is also retained for Unsloth `4bit`, whose head was observed in 16-bit; its logits and loss allocations have not been measured. Checkpointing does not reduce it, and on a 150k vocabulary it is often the largest term. Not charged for the tasks without an LM head (`classifier`, `reranker`, `cross_encoder`, `embedding`, `reward_model`). On `prm`, whose step runs the causal-LM forward without labels and takes its loss from the reward head, only the logits are charged, 6 bytes an element: the half-precision output and the fp32 copy Accelerate makes of it, both live at the end of the forward. That forward passes `logits_to_keep=1` where the model takes it, so the logits cover one position, `vocab * batch * 6` bytes; the model types whose forward has no such argument (`gemma4_assistant`, `gemma4_unified_assistant`, `musicgen`, `musicgen_melody`, `prophetnet`, `trocr`, `whisper`, `xlstm`) and a base whose `config.json` has an `auto_map` (remote code) are charged every position. With `use_liger` or `use_cut_ce` on `sft` or `tts` it is still charged, since the fused loss may not apply, and the output says it may overstate the peak |
 | `dequant` | under `4bit`, the bf16 copy of the largest weight a matmul dequantizes |
+| `optimizer_step` | how far the optimizer step's peak exceeds the forward and backward pass, or 0. The step holds the weights, adapters, gradients and optimizer state plus, for `adamw_torch`, 4 bytes a trained parameter of foreach scratch, after the activations and logits are freed. It sets the peak on a short full fine-tune (#2277) and stays out of the floor below |
 | `overhead` | the CUDA context and allocator slack, which `max_memory_allocated()` does not see |
 
-The coefficients come from 39 two-step `soup train` runs on an RTX 3060 Laptop across seven models from 135M to 3B parameters ([`gate-2049-resident-vram.md`](../benchmarks/gate-2049-resident-vram.md)); `tests/test_vram_estimate_calibration.py` holds the estimate to a stated band of every measured peak (0.98 to 1.10 of it for bf16 LoRA, wider for 4-bit, 8-bit and full fine-tuning).
+The coefficients come from 42 two-step `soup train` runs on an RTX 3060 Laptop across seven models from 135M to 3B parameters ([`gate-2049-resident-vram.md`](../benchmarks/gate-2049-resident-vram.md)); `tests/test_vram_estimate_calibration.py` holds the estimate to a stated band of every measured peak (0.98 to 1.10 of it for bf16 LoRA, wider for 4-bit, 8-bit and full fine-tuning).
 
-What those numbers do not cover: the rows are seven dense decoders of 135M to 3B parameters, at up to 4,096 tokens and batch 4, on one 6 GB card under WSL2 with one software stack (torch 2.14.0+cu130, transformers 5.17.0). The coefficients are fitted on the same 39 rows the test checks, so the bands show how well they fit those rows, not an error on runs they were not fitted to. Mixture-of-experts models are sized as dense ones, no model of 7B or more was measured, and neither were the `medium` and `selective` checkpointing tiers. The pre-flight refuses runs on this basis; `--allow-oom-attempt` launches one anyway.
+What those numbers do not cover: the rows are seven dense decoders of 135M to 3B parameters, at up to 4,096 tokens and batch 4, on one 6 GB card under WSL2 with one software stack (torch 2.14.0+cu130, transformers 5.17.0). The coefficients are fitted on 39 of the 42 rows the test checks, so the bands show how well they fit those rows, not an error on runs they were not fitted to. Mixture-of-experts models are sized as dense ones, no model of 7B or more was measured, and neither were the `medium` and `selective` checkpointing tiers, the fused losses (`use_liger`, `use_cut_ce`) or `backend: unsloth`, which replaces the loss and the checkpointing. So the pre-flight refuses a peak that does not fit only inside the measured range, dense models of 3.5B parameters and below. A run above that size, a mixture-of-experts model, a `medium` or `selective` tier, a fused-loss flag or `backend: unsloth` that does not fit gets the estimate as a warning ("outside the calibrated range ...; the estimate may overstate the peak") and starts, unless its floor alone is more than the card holds, and that run is refused. The floor is the weights, the CUDA context and the state of the parameters the run trains (adapters, gradients and optimizer state): each is bytes per parameter times a count, or a constant, so none is an extrapolation (a full fine-tune of a 7B model holds 27 GB of weights, as much again in gradients and twice that in AdamW state, whatever its sequence length). A term is left out where the estimate prices more than the run holds or has no exact figure. On a full fine-tune, Spectrum, LISA, `freeze_layers`, `freeze_ratio` and `expand_layers` train a subset of the parameters, so only the weights and the CUDA context count; with LoRA these settings change nothing in the floor, and the adapters with their gradients and optimizer state count as usual. `lomo` and `adalomo` keep no full gradient. Optimizer state counts only for `adamw_torch`, `adamw_torch_fused`, `schedule_free_adamw` and `adamw_bnb_8bit`. Adafactor, `lion_8bit` and `adalomo` hold less than the estimate's figure, a paged optimizer moves its state to host memory, and an optimizer without a figure is priced as AdamW, so none of them has a state term. On `sft`, `tts` and `pretrain`, `use_galore` replaces the optimizer with `galore_adamw`, which keeps low-rank state for the attention and MLP projections and full AdamW state for the other parameters (embeddings, output head, norms); the estimate has no figure for that mix, so the floor counts no optimizer state there, which can only understate it. On other tasks `use_galore` changes nothing and the optimizer's state counts as usual. Activations, logits and the allocator slack never enter the floor. A run sharded across more than one process (`WORLD_SIZE` in a launched rank, otherwise `--gpus` times `--nodes`) is checked against its floor per card: `--fsdp full_shard`, `full_offload` and DeepSpeed ZeRO-3 divide the weights and the adapters by the process count, those and `--fsdp shard_grad` and ZeRO-2 divide the gradients and optimizer state, and the CUDA context is not divided. The stage is read from `zero_optimization.stage` of the preset or JSON given to `--deepspeed`, and an offload preset is priced as its stage without offload. The estimate is fitted on one card, so for such a run it is a warning, and the panel says the run is sharded and that only the floor is per card (#2300). `--gpus N` without `--fsdp` or `--deepspeed` is checked as one card. Inside the range the refusal says so and names `--allow-oom-attempt`, which launches the run anyway. The shipped `longcontext` template (an 8B model at 131,072 tokens) is outside the range: it warns and launches, and its header says how to turn on the fused loss.
 
 The model's shape comes from its `config.json` (a local directory, then the Hugging Face cache, then the Hub unless `HF_HUB_OFFLINE` or `TRANSFORMERS_OFFLINE` is set), and its exact parameter count from the safetensors headers (local files, a cached snapshot, or the Hub's header-only metadata call on `huggingface-hub` 0.20 or later; otherwise it is counted from `config.json`). No weight is downloaded and torch is not imported. Reaching the Hub writes the model's `config.json` into the Hugging Face cache; the size is checked with a HEAD request first, each request has a timeout, and the metadata lookup as a whole has a deadline. The MCP `profile` tool never reaches the Hub: it reads a local directory or the local cache, and prices any other model from a guessed shape. When no `config.json` can be read, the shape is guessed from the parameter count (`model_size_from_name`), the logits term is not counted, and the output says so. That count:
 - A local checkpoint path is measured directly from safetensors metadata headers. The files measured are the checkpoint's own: the ones `model.safetensors.index.json` names; without an index `model.safetensors`, else the `model-*-of-*.safetensors` shards, else every `*.safetensors` except `consolidated*`. The Hub download for layer streaming and `soup spectrum scan` fetches by the same rule, so what is downloaded is what is counted. A `consolidated.safetensors` beside the checkpoint (the mistral-inference copy Mistral's repositories ship, which transformers never loads) is not counted, not downloaded for layer streaming or `soup spectrum scan`, not copied out of the HF cache, and not sharded; a directory holding only such a file is refused with its name (#1806).
 - A Hub id is parsed: e.g. `72B`, `8x7B` → `46.7` total, `17B-16E` → `109` total, with active-parameter markers (`-A22B`) ignored.
 - An id with no size token (e.g. `DeepSeek-V3`, `Kimi-K2`, `GLM-5`, `MiniMax-M2`) still falls back to `7B`, which under-predicts these models (they have 229B to 1T parameters). Point `base:` at a local download to have the checkpoint measured instead.
+
+`soup profile --model <id or directory>` asks the same question without a `soup.yaml`, for example `soup profile --model Qwen/Qwen2.5-7B-Instruct --gpu rtx5070 --seq 2048 --method qlora`. The run comes from `--seq` (default 2048), `--batch` (4), `--method` `lora`, `qlora` or `full` (`qlora`), `--lora-r` (64), `--optimizer` (`adamw_torch`) and `--gradient-checkpointing` `off`, `full`, `medium`, `selective` or `auto` (`off`): a `soup.yaml`'s defaults, with batch 4 for `auto` as `soup profile` prices it. It is the same estimate, so a `soup.yaml` describing the same run gets the same bytes. The shape is read as above and works offline once the model's `config.json` is cached. When no `config.json` can be read, it stops and says why (not cached while offline, not reachable on the Hub, gated, or not a directory or model id) instead of guessing the shape from the name. `--model` together with `--config` is refused, and so are the run flags without `--model` and `--lora-r` with `--method full`, which trains no adapters (the JSON's `lora_r` is `null` for any full fine-tune).
+
+On Apple Silicon, `soup profile` and the MCP `profile` tool check the fit against Metal's recommended working-set size (`max_recommended_working_set_size`, read through mlx), not the whole unified memory, and report `gpu_memory_source: "mlx working set"`. If mlx is missing or cannot read it, the memory is reported as assumed, and `--gpu` still overrides it. The terms were measured with PyTorch on CUDA; how close they come to an MLX run's peak is not measured, and the output says so. The `soup train` pre-flight still skips `backend: mlx`.
 
 ```python
 from soup_cli.utils.hardware_fit import HardwareFitInput, decide_hardware_fit
@@ -1857,6 +1974,9 @@ That input carries no shape, so it is guessed from `params_b` and the logits ter
 ## Shell Completions (`soup completions`)
 
 Tab-completion for `soup` + every subcommand. The generated script is Click/Typer-backed so new commands are picked up automatically.
+
+Scripts use the installed Typer's completion protocol and response format. Regenerate
+an installed script after upgrading Soup or Typer.
 
 ```bash
 # Bash
