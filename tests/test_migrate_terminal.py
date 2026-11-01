@@ -53,8 +53,9 @@ def test_migrate_reports_literal_output_path_after_writing(source, name):
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert "meta-llama/Llama-3.1-8B-Instruct" in output.read_text(encoding="utf-8")
     text = _plain(result)
-    assert f"Config written to {output}" in text
-    assert f"soup train --config {output}" in text
+    # The receipt echoes the CLI argument, including its original separator spelling.
+    assert f"Config written to {name}" in text
+    assert f"soup train --config {name}" in text
 
 
 def test_migrate_strips_controls_only_from_displayed_output_path(source):
