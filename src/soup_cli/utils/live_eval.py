@@ -377,6 +377,7 @@ def make_generator(
         return outputs
 
     _gen.batch = _batch
+    _gen.batch_size = batch_size
     return _gen
 
 
