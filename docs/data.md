@@ -1155,7 +1155,7 @@ Data commands refuse a file output that aliases an input before reading or
 writing the data, including alternate spellings (`./x`, `sub/../x`, absolute
 paths and Windows case variants), hard links and symlinks to the same file.
 The same terminal-safe message names both paths and says which output to change.
-`augment` and `evolve` exit 2, `lint` exits 3, and every other command exits 1.
+`augment`, `evolve` and `best-of-n` exit 2, `lint` exits 3, and every other command exits 1.
 Optional report outputs are checked only when provided. `persona-mix` protects
 `--prompts`, `--personas` and `--styles`; `generate` protects `--seed`,
 `--dedup-with` and `--context`; and `canary check` protects `--manifest`.
