@@ -16,8 +16,8 @@ runner = CliRunner()
 
 @pytest.fixture(autouse=True)
 def _wide_console(monkeypatch):
-    """Rich wraps at the terminal width, which CI sets differently from a laptop."""
-    monkeypatch.setattr("soup_cli.commands.quickstart.console", Console(width=500))
+    """Set both dimensions: Rich ignores width alone on a forced-color dumb terminal."""
+    monkeypatch.setattr("soup_cli.commands.quickstart.console", Console(width=500, height=100))
 
 
 # A colon is not a legal file-name character on Windows.
