@@ -20,7 +20,6 @@ NO top-level torch: this module is imported by five trainer modules.
 """
 
 import contextlib
-import logging
 import math
 import os
 import shutil
@@ -36,7 +35,6 @@ from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.stripe_roots import ReadAheadDecision, effective_read_ahead
 
 console = Console()
-logger = logging.getLogger(__name__)
 
 
 #: How far over the predicted budget `training.stream_vram_probe` may still
@@ -798,7 +796,6 @@ class StreamingSetupMixin:
     _stream_runtime = None
     # #1693 -- the head-and-loss hook of a run with `stream_loss_chunk` set.
     _stream_loss_chunk_hook = None
-    _closed_stream_runtime = None
 
     #: ``trust_remote_code`` for the streamed MODEL (config, meta skeleton,
     #: install): always False. Every entry of ``SUPPORTED_STREAM_ARCHS`` passed
@@ -1716,17 +1713,8 @@ class StreamingSetupMixin:
     def _close_stream_runtime(self) -> None:
         """Release the streaming weight source, if this run had one."""
         runtime = getattr(self, "_stream_runtime", None)
-        if runtime is None or runtime is getattr(self, "_closed_stream_runtime", None):
-            return
-        self._closed_stream_runtime = runtime
-        try:
+        if runtime is not None:
             runtime.close()
-        except Exception as close_exc:
-            logger.warning(
-                "Failed to close streaming runtime: %s",
-                close_exc,
-                exc_info=True,
-            )
 
     def _remove_stream_loss_chunk_hook(self) -> None:
         """Take the chunked head and loss off the model when training ends (#1693).
@@ -1828,6 +1816,7 @@ class StreamingSetupMixin:
             calibrated_logits_bytes_per_element,
             decide_stream_fit,
             dtype_bytes,
+            estimate_activation_bytes,
             estimate_logits_bytes,
             estimate_recompute_bytes,
             estimate_stream_peak_vram,
@@ -1966,6 +1955,21 @@ class StreamingSetupMixin:
                 f"  logits       calibrated {calibrated:.3f} B/element on this stack, "
                 f"above the shipped {LOGITS_BYTES_PER_ELEMENT:.0f}: budget raised to match"
             )
+        # #2327: the activation term above is charged as resident whatever the mode.
+        offloading = getattr(tcfg, "activation_offloading", None)
+        offloading_note = None
+        if offloading is not None:
+            from soup_cli.utils.vram_estimate import activation_offloading_note
+
+            activations = estimate_activation_bytes(
+                hidden_size=hidden,
+                intermediate_size=inter,
+                n_layers=index.n_layers,
+                seq_len=seq_len,
+                batch_size=rows,
+            )
+            offloading_note = activation_offloading_note(offloading, activations)
+            lines.append(f"  activations  {offloading_note}")
 
         if not on_cuda:
             # Nothing to measure against: the probe reads CUDA peak counters.
@@ -1987,8 +1991,9 @@ class StreamingSetupMixin:
         )
         fit = decide_stream_fit(predicted_bytes=predicted, available_bytes=available)
         if not fit.fits:
+            reason = fit.reason if offloading_note is None else f"{fit.reason} {offloading_note}"
             if not tcfg.stream_vram_probe:
-                raise ValueError(fit.reason)
+                raise ValueError(reason)
             if predicted > available * _PROBE_DEFERRAL_CEILING:
                 # The probe exists to settle a DISAGREEMENT, and the largest
                 # disagreement ever measured is 21% (formula 0.787x the real peak
@@ -1998,7 +2003,7 @@ class StreamingSetupMixin:
                 # allocation attempt at that shape — driven by a soup.yaml whose
                 # author need not be whoever runs it.
                 raise ValueError(
-                    f"{fit.reason} training.stream_vram_probe cannot overrule a "
+                    f"{reason} training.stream_vram_probe cannot overrule a "
                     f"prediction this far over budget "
                     f"({predicted / available:.1f}x): the probe corrects a "
                     f"margin, not an order of magnitude."

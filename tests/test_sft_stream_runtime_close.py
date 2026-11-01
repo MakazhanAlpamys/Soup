@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import io
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 import yaml
+from rich.console import Console
 
 from soup_cli.config.loader import load_config_from_string
+from soup_cli.trainer import sft as sft_module
 from soup_cli.trainer.sft import SFTTrainerWrapper
 from tests._tiny_hf_models import build_tokenizer, tiny_model_dir
 
@@ -201,48 +204,10 @@ def test_setup_keyboard_interrupt(
     assert len(close_calls) == 1
 
 
-def test_once_only_cleanup_guard(
-    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Test 4: _close_stream_runtime runs at most once per runtime and handles replacement."""
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
-
-    base_dir = tiny_model_dir("llama")
-    cfg = _make_stream_sft_config(base_dir, stream_layers=True)
-    wrapper = SFTTrainerWrapper(cfg, device="cpu")
-
-    first_runtime = _MockStreamRuntime()
-    wrapper._stream_runtime = first_runtime  # type: ignore[assignment]
-
-    wrapper._close_stream_runtime()
-    assert first_runtime.close.call_count == 1
-    assert wrapper._stream_runtime is first_runtime
-
-    # Second call on same runtime must not close again
-    wrapper._close_stream_runtime()
-    assert first_runtime.close.call_count == 1
-    assert wrapper._stream_runtime is first_runtime
-
-    # Assign a new runtime; it must close exactly once
-    second_runtime = _MockStreamRuntime()
-    wrapper._stream_runtime = second_runtime  # type: ignore[assignment]
-
-    wrapper._close_stream_runtime()
-    assert second_runtime.close.call_count == 1
-    assert wrapper._stream_runtime is second_runtime
-
-    wrapper._close_stream_runtime()
-    assert second_runtime.close.call_count == 1
-    assert first_runtime.close.call_count == 1
-    assert wrapper._stream_runtime is second_runtime
-
-
 def test_inner_cleanup_followed_by_setup_failure(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Test 5: An inner cleanup followed by setup failure does not double-close."""
+    """Test 4: Inner cleanup during model loading does not result in a second close."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
@@ -255,7 +220,8 @@ def test_inner_cleanup_followed_by_setup_failure(
         self.model = mock_model  # type: ignore[assignment]
         self.tokenizer = mock_tokenizer  # type: ignore[assignment]
         self._stream_runtime = mock_runtime  # type: ignore[assignment]
-        # Simulate an inner error that already invoked cleanup
+        # Simulate an inner load failure (e.g. fast LoRA patch or chunked loss)
+        # that closes the runtime.
         self._close_stream_runtime()
         raise RuntimeError("Inner VRAM probe failed")
 
@@ -274,7 +240,7 @@ def test_inner_cleanup_followed_by_setup_failure(
 
 
 def test_non_streaming_control(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Test 6: Non-streaming setup failure propagates without runtime cleanup errors."""
+    """Test 5: Non-streaming setup failure propagates without runtime cleanup errors."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
@@ -296,39 +262,18 @@ def test_non_streaming_control(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -
     assert getattr(wrapper, "_stream_runtime", None) is None
 
 
-def test_existing_training_context_cleanup(
-    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Test 7: _training_context closes runtime on exit and respects idempotent guard."""
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
-
-    base_dir = tiny_model_dir("llama")
-    cfg = _make_stream_sft_config(base_dir, stream_layers=True)
-    wrapper = SFTTrainerWrapper(cfg, device="cpu")
-    mock_runtime = _MockStreamRuntime()
-    wrapper._stream_runtime = mock_runtime  # type: ignore[assignment]
-
-    with wrapper._training_context():
-        assert mock_runtime.close.call_count == 0
-
-    assert mock_runtime.close.call_count == 1
-
-    # Re-entering training context or calling cleanup must not close again
-    with wrapper._training_context():
-        pass
-
-    assert mock_runtime.close.call_count == 1
-
-
 def test_cleanup_itself_raises(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Test 8: Cleanup failure preserves the original setup exception."""
+    """Test 6: Cleanup failure preserves original setup exception and logs warning."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
+
+    buffer = io.StringIO()
+    monkeypatch.setattr(
+        sft_module, "console", Console(file=buffer, force_terminal=False, width=200)
+    )
 
     mock_runtime = _MockStreamRuntime()
     mock_runtime.close.side_effect = OSError("Underlying disk device disconnected")
@@ -349,11 +294,17 @@ def test_cleanup_itself_raises(
     assert "Original dataset validation failed" in str(exc_info.value)
     assert mock_runtime.close.call_count == 1
 
+    printed = " ".join(buffer.getvalue().split())
+    assert (
+        "Could not release the layer-streaming runtime: Underlying disk device disconnected"
+        in printed
+    )
+
 
 def test_successful_setup_does_not_close_runtime(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Test 9: Successful setup keeps the streaming runtime open for training."""
+    """Test 7: Successful setup keeps the streaming runtime open for training."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))

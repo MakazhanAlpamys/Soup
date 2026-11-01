@@ -730,574 +730,587 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def setup(self, dataset: dict):
         """Load model, tokenizer, apply LoRA, create trainer."""
+        # Enable Rich progress bar for HuggingFace downloads
+        _enable_hf_transfer_progress()
+
+        cfg = self.config
+        tcfg = cfg.training
+
+        # #353: seed before the model exists. Threading `seed` into
+        # TrainingArguments is not enough on its own, because `get_peft_model`
+        # draws `lora_A` before there is a Trainer to run `set_seed(args.seed)`.
+        apply_training_seed(tcfg)
+
+        use_unsloth = cfg.backend == "unsloth"
+        use_vision = cfg.modality == "vision"
+
+        use_audio = cfg.modality == "audio"
+
+        # v0.72.0 BETA — layer streaming replaces the model-load path entirely
+        # (meta skeleton, never a resident load), so it dispatches ahead of the
+        # backend branches. The schema already rejects streaming + unsloth/mlx
+        # and streaming + vision/audio.
+        use_streaming = bool(getattr(tcfg, "stream_layers", False))
+
+        if use_vision:
+            self._setup_vision_transformers(cfg, tcfg)
+        elif use_audio:
+            self._setup_audio_transformers(cfg, tcfg)
+        elif use_streaming:
+            self._setup_streaming_transformers(cfg, tcfg)
+        elif use_unsloth:
+            self._setup_unsloth(cfg, tcfg)
+        else:
+            self._setup_transformers(cfg, tcfg)
+
+        # #1464: a streamed run holds its runtime from here on, and training's
+        # cleanup context does not exist until train(). The streamed load above
+        # releases the runtime on its own failures; this covers everything after it.
         try:
-            from transformers import TrainingArguments
-            from trl import SFTTrainer
-
-            # Enable Rich progress bar for HuggingFace downloads
-            _enable_hf_transfer_progress()
-
-            cfg = self.config
-            tcfg = cfg.training
-
-            # #353: seed before the model exists. Threading `seed` into
-            # TrainingArguments is not enough on its own, because `get_peft_model`
-            # draws `lora_A` before there is a Trainer to run `set_seed(args.seed)`.
-            apply_training_seed(tcfg)
-
-            use_unsloth = cfg.backend == "unsloth"
-            use_vision = cfg.modality == "vision"
-
-            use_audio = cfg.modality == "audio"
-
-            # v0.72.0 BETA — layer streaming replaces the model-load path entirely
-            # (meta skeleton, never a resident load), so it dispatches ahead of the
-            # backend branches. The schema already rejects streaming + unsloth/mlx
-            # and streaming + vision/audio.
-            use_streaming = bool(getattr(tcfg, "stream_layers", False))
-
-            if use_vision:
-                self._setup_vision_transformers(cfg, tcfg)
-            elif use_audio:
-                self._setup_audio_transformers(cfg, tcfg)
-            elif use_streaming:
-                self._setup_streaming_transformers(cfg, tcfg)
-            elif use_unsloth:
-                self._setup_unsloth(cfg, tcfg)
-            else:
-                self._setup_transformers(cfg, tcfg)
-
-            # v0.71.23 #266 — the Spectrum full-FT branch leaves a raw (non-PEFT)
-            # model, which has no get_nb_trainable_parameters(); fall back to a
-            # direct parameter count.
-            if hasattr(self.model, "get_nb_trainable_parameters"):
-                trainable, total = self.model.get_nb_trainable_parameters()
-            else:
-                trainable = sum(
-                    p.numel() for p in self.model.parameters() if p.requires_grad
+            self._finish_setup(dataset, cfg, tcfg, use_vision=use_vision, use_audio=use_audio)
+        except BaseException:
+            try:
+                self._close_stream_runtime()
+            except Exception as close_error:
+                console.print(
+                    "[yellow]Could not release the layer-streaming runtime: "
+                    f"{for_terminal(str(close_error))}[/]"
                 )
-                total = sum(p.numel() for p in self.model.parameters())
-            # v0.72.2 — under NF4 streaming PEFT's total is wrong by ~6.5x. It
-            # special-cases Params4bit as `numel * 2 * quant_storage.itemsize`,
-            # which is right for a RESIDENT one (whose numel is the packed count)
-            # but not for our `meta` placeholder, which still carries the LOGICAL
-            # shape. Measured on SmolLM2-135M: 878,154,048 vs a true 134,515,008.
-            # The sharder counted the real source elements, so use that.
-            stream_total = getattr(self._stream_runtime, "total_params", 0)
-            if stream_total:
-                total = stream_total
-            pct = 100 * trainable / total if total else 0.0
-            # #340 — "LoRA applied" is a false statement on a full-FT run, and this
-            # is the line an operator screenshots to show what trained.
-            if tcfg.unfrozen_parameters:
-                label = "Spectrum targeted FT"
-            elif tcfg.lisa_enabled:
-                label = "LISA full fine-tuning"
-            elif tcfg.lora.r == 0 and cfg.modality == "text" and cfg.backend == "transformers":
-                label = "Full fine-tuning"
+            raise
+
+    def _finish_setup(self, dataset: dict, cfg, tcfg, *, use_vision: bool, use_audio: bool):
+        """The rest of setup(), once the model is loaded (#1464)."""
+        from transformers import TrainingArguments
+        from trl import SFTTrainer
+
+        # v0.71.23 #266 — the Spectrum full-FT branch leaves a raw (non-PEFT)
+        # model, which has no get_nb_trainable_parameters(); fall back to a
+        # direct parameter count.
+        if hasattr(self.model, "get_nb_trainable_parameters"):
+            trainable, total = self.model.get_nb_trainable_parameters()
+        else:
+            trainable = sum(
+                p.numel() for p in self.model.parameters() if p.requires_grad
+            )
+            total = sum(p.numel() for p in self.model.parameters())
+        # v0.72.2 — under NF4 streaming PEFT's total is wrong by ~6.5x. It
+        # special-cases Params4bit as `numel * 2 * quant_storage.itemsize`,
+        # which is right for a RESIDENT one (whose numel is the packed count)
+        # but not for our `meta` placeholder, which still carries the LOGICAL
+        # shape. Measured on SmolLM2-135M: 878,154,048 vs a true 134,515,008.
+        # The sharder counted the real source elements, so use that.
+        stream_total = getattr(self._stream_runtime, "total_params", 0)
+        if stream_total:
+            total = stream_total
+        pct = 100 * trainable / total if total else 0.0
+        # #340 — "LoRA applied" is a false statement on a full-FT run, and this
+        # is the line an operator screenshots to show what trained.
+        if tcfg.unfrozen_parameters:
+            label = "Spectrum targeted FT"
+        elif tcfg.lisa_enabled:
+            label = "LISA full fine-tuning"
+        elif tcfg.lora.r == 0 and cfg.modality == "text" and cfg.backend == "transformers":
+            label = "Full fine-tuning"
+        else:
+            label = "LoRA applied"
+        console.print(
+            f"[green]{label}:[/] {trainable:,} trainable"
+            f" / {total:,} total ({pct:.2f}%)"
+        )
+
+        # --- Batch size ---
+        batch_size = tcfg.batch_size
+        if batch_size == "auto":
+            from soup_cli.utils.batch_probe import pick_batch_size
+            from soup_cli.utils.gpu import get_gpu_info
+
+            gpu_info = get_gpu_info()
+            model_size = model_size_from_name(cfg.base)
+            static_estimate = estimate_batch_size(
+                model_params_b=model_size,
+                seq_length=cfg.data.max_length,
+                gpu_memory_bytes=gpu_info["memory_total_bytes"],
+                quantization=tcfg.quantization,
+                lora_r=tcfg.lora.r,
+            )
+            # v0.36.0 Part D: real OOM probe with cache short-circuit. Falls
+            # back to the static estimate on CPU or when probe_fn unavailable.
+            gpu_memory_gb_total = int(
+                (gpu_info.get("memory_total_bytes") or 0) // (1024 ** 3)
+            )
+            # v0.40.3 (#64): live CUDA probe_fn — runs ONE forward+backward
+            # on a synthetic batch per candidate before training. No-op on CPU.
+            from soup_cli.utils.batch_probe import make_cuda_probe_fn
+
+            probe_fn = make_cuda_probe_fn(
+                self.model,
+                self.tokenizer,
+                max_length=cfg.data.max_length,
+                device=self.device,
+            )
+            batch_size = pick_batch_size(
+                static_estimate=static_estimate,
+                strategy=tcfg.auto_batch_size_strategy,
+                base=cfg.base,
+                max_length=cfg.data.max_length,
+                quantization=tcfg.quantization,
+                lora_r=tcfg.lora.r,
+                gpu_name=str(gpu_info.get("name") or "cpu"),
+                gpu_memory_gb=gpu_memory_gb_total,
+                probe_fn=probe_fn,
+                console=console,
+            )
+            console.print(f"[green]Auto batch size:[/] {batch_size}")
+
+        # --- Curriculum learning: sort dataset by difficulty ---
+        if tcfg.curriculum:
+            from soup_cli.utils.curriculum import sort_by_length
+
+            if tcfg.curriculum_metric == "length":
+                dataset["train"] = sort_by_length(dataset["train"])
+                console.print(
+                    f"[green]Curriculum learning enabled:[/] "
+                    f"metric=length, buckets={tcfg.curriculum_buckets}"
+                )
             else:
-                label = "LoRA applied"
+                console.print(
+                    f"[yellow]Curriculum metric '{tcfg.curriculum_metric}' "
+                    "requires pre-computed scores. Using length-based sorting.[/]"
+                )
+                dataset["train"] = sort_by_length(dataset["train"])
+
+        # --- Dataset ---
+        # v0.53.7 #86 — short-circuit tokenization when caller pre-tokenized
+        # via `soup data preprocess`. Skips the format_row + tokenizer pass
+        # entirely; rows already carry input_ids/labels/attention_mask.
+        # v0.71.10 #199 — RAFT format: golden/distractor-doc rows are NOT
+        # {messages}; build a pre-tokenised answer-only-mask dataset instead.
+        self._is_raft = cfg.data.format == "raft"
+        # v0.71.17 #253 — RAFT epoch-aware shuffle: when on, keep RAW rows so
+        # the collator re-permutes documents per epoch (vs one baked order).
+        self._raft_epoch_shuffle = self._is_raft and bool(
+            getattr(cfg.data, "raft_epoch_shuffle", False)
+        )
+        pretok = _maybe_load_pretokenized(
+            cfg.data, cfg.base, console, tcfg, task=cfg.task
+        )
+        if pretok is not None:
+            train_ds, eval_ds = pretok
+            _validate_pretokenized_targets(
+                train_ds, split="train", max_length=cfg.data.max_length
+            )
+            if eval_ds is not None:
+                _validate_pretokenized_targets(
+                    eval_ds, split="validation", max_length=cfg.data.max_length
+                )
+        elif self._raft_epoch_shuffle:
+            train_ds, eval_ds = self._prepare_raft_raw_dataset(dataset, cfg, tcfg)
+        elif self._is_raft:
+            train_ds, eval_ds = self._prepare_raft_dataset(dataset, cfg, tcfg)
+        elif use_vision:
+            train_ds, eval_ds = self._prepare_vision_dataset(dataset)
+        elif use_audio:
+            train_ds, eval_ds = self._prepare_audio_dataset(dataset)
+        else:
+            from soup_cli.data.sft_format import build_format_row
+
+            format_row = build_format_row(
+                tokenizer=self.tokenizer,
+                data_cfg=cfg.data,
+                console=console,
+                training_cfg=tcfg,
+            )
+            train_ds = _map_text_sft_rows(
+                dataset["train"],
+                format_row=format_row,
+                split="train",
+                max_length=cfg.data.max_length,
+            )
+            eval_ds = None
+            if "val" in dataset and dataset["val"]:
+                eval_ds = _map_text_sft_rows(
+                    dataset["val"],
+                    format_row=format_row,
+                    split="validation",
+                    max_length=cfg.data.max_length,
+                )
+
+        # #1236 - Ensure assistant_masks exists alongside labels for TRL packing
+        train_ds = _ensure_assistant_masks(train_ds)
+        if eval_ds is not None:
+            eval_ds = _ensure_assistant_masks(eval_ds)
+
+        # --- Output dir ---
+        output_dir = Path(cfg.output)
+        if cfg.experiment_name:
+            output_dir = output_dir / cfg.experiment_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # #674 — QuEST calibration needs the actual tokenized training rows,
+        # so this route is installed here rather than in _setup_transformers.
+        # The schema requires an explicit batch size, therefore the earlier
+        # auto-probe cannot silently size the unconverted model.
+        if tcfg.quantization_aware == "quest":
+            self._setup_quest(train_ds)
+
+        # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
+
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
+
+        # --- Training args ---
+        # v0.33.0 #58: auto_mixed_precision wires pick_mixed_precision()
+        # into bf16/fp16 kwargs. Default behaviour (bf16 on CUDA) preserved
+        # when the auto flag is False.
+        bf16_flag, fp16_flag = self._resolve_mixed_precision(tcfg, cfg.base)
+
+        training_kwargs = {
+            "output_dir": str(output_dir),
+            "num_train_epochs": tcfg.epochs,
+            "per_device_train_batch_size": batch_size,
+            "gradient_accumulation_steps": tcfg.gradient_accumulation_steps,
+            "learning_rate": tcfg.lr,
+            "warmup_steps": warmup_steps,
+            "weight_decay": tcfg.weight_decay,
+            "max_grad_norm": tcfg.max_grad_norm,
+            "optim": tcfg.optimizer,
+            "lr_scheduler_type": tcfg.scheduler,
+            "logging_steps": tcfg.logging_steps,
+            "save_steps": tcfg.save_steps,
+            "save_total_limit": 3,
+            "bf16": bf16_flag,
+            "fp16": fp16_flag,
+            "report_to": self.report_to,
+            "remove_unused_columns": False,
+            "deepspeed": self.deepspeed_config,
+            # #341: the general training seed. Until this landed there was no
+            # knob at all, so every run took HF's defaults (seed=42,
+            # data_seed=None) and replicates of one config differed only by row
+            # permutation and GPU nondeterminism. `None` means "unset", and
+            # unset must reproduce the pre-#341 numbers exactly, hence 42 rather
+            # than a new default. #353 moved the resolution into utils.seeding
+            # so the other 17 task wrappers resolve it identically.
+            **training_seed_kwargs(tcfg),
+            # #1223: evaluate the split handed to the trainer below, at the
+            # resolved train batch. Before this nothing set eval_strategy, so
+            # the default val_split was withheld and never evaluated.
+            **training_eval_kwargs(cfg, eval_ds, batch_size=batch_size),
+        }
+
+        # FSDP2 — alternative to DeepSpeed. The helper also enables
+        # torch.compile when tcfg.use_fsdp2_compile is True.
+        from soup_cli.utils.fsdp import apply_fsdp_training_kwargs
+
+        apply_fsdp_training_kwargs(
+            training_kwargs,
+            fsdp_config=self.fsdp_config,
+            use_fsdp2_compile=tcfg.use_fsdp2_compile,
+        )
+        if self.fsdp_config and tcfg.use_fsdp2_compile:
+            console.print("[green]torch.compile enabled on FSDP2[/]")
+
+        # Gradient checkpointing — tiered (v0.28.0): bool or tier string.
+        # v0.72.0: layer streaming checkpoints every layer itself, so enabling
+        # HF's too would double-recompute silently (see layer_stream).
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+        hf_grad_ckpt = should_enable_hf_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+        )
+        if tcfg.gradient_checkpointing and not hf_grad_ckpt:
             console.print(
-                f"[green]{label}:[/] {trainable:,} trainable"
-                f" / {total:,} total ({pct:.2f}%)"
+                "[dim]Gradient checkpointing: handled per-layer by layer "
+                "streaming (HF's own is left off to avoid double recompute)[/]"
+            )
+        if hf_grad_ckpt:
+            from soup_cli.utils.gpu import get_gpu_info
+            from soup_cli.utils.gradient_ckpt import (
+                plan_gradient_checkpointing,
             )
 
-            # --- Batch size ---
-            batch_size = tcfg.batch_size
-            if batch_size == "auto":
-                from soup_cli.utils.batch_probe import pick_batch_size
-                from soup_cli.utils.gpu import get_gpu_info
+            gpu_memory_gb: Optional[float] = None
+            try:
+                gpu_memory_gb = get_gpu_info().get(
+                    "memory_total_bytes", 0
+                ) / (1024**3) or None
+            except (KeyError, TypeError, ZeroDivisionError):
+                gpu_memory_gb = None
 
-                gpu_info = get_gpu_info()
-                model_size = model_size_from_name(cfg.base)
-                static_estimate = estimate_batch_size(
-                    model_params_b=model_size,
-                    seq_length=cfg.data.max_length,
-                    gpu_memory_bytes=gpu_info["memory_total_bytes"],
-                    quantization=tcfg.quantization,
-                    lora_r=tcfg.lora.r,
+            ckpt_plan = plan_gradient_checkpointing(
+                self.model,
+                tcfg.gradient_checkpointing,
+                gpu_memory_gb=gpu_memory_gb,
+            )
+            training_kwargs.update(ckpt_plan.kwargs)
+            if ckpt_plan.kwargs:
+                console.print(
+                    f"[green]Gradient checkpointing:[/] "
+                    f"{ckpt_plan.description}"
                 )
-                # v0.36.0 Part D: real OOM probe with cache short-circuit. Falls
-                # back to the static estimate on CPU or when probe_fn unavailable.
-                gpu_memory_gb_total = int(
-                    (gpu_info.get("memory_total_bytes") or 0) // (1024 ** 3)
-                )
-                # v0.40.3 (#64): live CUDA probe_fn — runs ONE forward+backward
-                # on a synthetic batch per candidate before training. No-op on CPU.
-                from soup_cli.utils.batch_probe import make_cuda_probe_fn
 
-                probe_fn = make_cuda_probe_fn(
-                    self.model,
+        # NEFTune — noisy embeddings for better fine-tuning quality
+        if tcfg.neftune_alpha is not None:
+            training_kwargs["neftune_noise_alpha"] = tcfg.neftune_alpha
+
+        # LoRA+ — different learning rates for A and B matrices. Not a
+        # TrainingArguments field: the optimizer is built and attached after the
+        # trainer exists (attach_loraplus_optimizer), so it must NOT be forwarded
+        # here (#724).
+
+        # LoRA-FA — freezes LoRA A matrices and trains B matrices. Not a
+        # TrainingArguments field: the optimizer is built and attached after the
+        # trainer exists (attach_lorafa_optimizer), so it must NOT be forwarded
+        # here (#725).
+
+        # GaLore — memory-efficient full-parameter training
+        if tcfg.use_galore:
+            from soup_cli.utils.galore import get_galore_optimizer_and_params
+
+            if tcfg.optimizer != "adamw_torch":
+                console.print(
+                    f"[yellow]GaLore overrides optimizer '{tcfg.optimizer}' "
+                    f"with 'galore_adamw'.[/]"
+                )
+            galore_kwargs = get_galore_optimizer_and_params(
+                galore_rank=tcfg.galore_rank,
+                galore_update_proj_gap=tcfg.galore_update_proj_gap,
+                galore_scale=tcfg.galore_scale,
+            )
+            training_kwargs.update(galore_kwargs)
+            console.print(
+                f"[green]GaLore enabled:[/] rank={tcfg.galore_rank}, "
+                f"update_gap={tcfg.galore_update_proj_gap}, scale={tcfg.galore_scale}"
+            )
+
+        # #78 — only when Soup's own patch actually landed, so an unsupported
+        # architecture keeps today's warning instead of becoming an HF exception.
+        if getattr(self, "_liger_applied", False):
+            training_kwargs["use_liger_kernel"] = True
+
+        training_args = TrainingArguments(**training_kwargs)
+
+        # #78 — `data.max_length` above 1024 was silently ignored on EVERY SFT run.
+        # `SFTTrainer.__init__` converts a plain `TrainingArguments` with
+        # `SFTConfig(**args.to_dict())`, and `max_length` is an SFT-only field that
+        # `TrainingArguments` does not carry, so it always took SFTConfig's own
+        # default of 1024. Measured before the fix: max_length=4096 produced 1024
+        # tokens per sample, with no warning. Building the SFTConfig here mirrors
+        # TRL's own conversion (including the hub_token dance it does) and adds the
+        # one field that was being dropped.
+        training_args = self._as_sft_config(
+            training_args, cfg.data.max_length, packing=tcfg.packing,
+        )
+
+        # --- Trainer ---
+        trainer_kwargs = {
+            "model": self.model,
+            "args": training_args,
+            "train_dataset": train_ds,
+            "eval_dataset": eval_ds,
+            "processing_class": self.tokenizer,
+        }
+
+        # Sample packing — pack multiple short samples into one sequence
+        if tcfg.packing:
+            if cfg.data.max_length < 256:
+                console.print(
+                    f"[yellow]Warning:[/] packing=true with max_length={cfg.data.max_length} "
+                    "may be suboptimal. Consider increasing max_length for better packing."
+                )
+            console.print("[green]Sample packing enabled[/]")
+
+        # v0.40.4 #65 — multipack live wiring. ``make_multipack_trainer_class``
+        # mixes a ``get_train_dataloader`` override into the SFTTrainer MRO
+        # that returns a DataLoader whose ``batch_sampler`` is the FFD
+        # bin-packing :class:`MultipackBatchSampler`. The factory is cached
+        # so two ``multipack: true`` runs against the same base class share
+        # the same subclass.
+        use_multipack = bool(getattr(tcfg, "multipack", False))
+        # #1693 -- with `stream_loss_chunk` the model returns no logits, which
+        # TRL's `compute_loss` reads for its metrics. The schema keeps the
+        # option to the two branches below that build `sft_cls`.
+        sft_cls = SFTTrainer
+        chunk_hook = getattr(self, "_stream_loss_chunk_hook", None)
+        if chunk_hook is not None:
+            from soup_cli.utils.stream_loss_chunk import (
+                HOOK_ATTR,
+                make_chunked_loss_trainer_class,
+            )
+
+            sft_cls = make_chunked_loss_trainer_class(SFTTrainer)
+        if self._is_raft:
+            # v0.71.10 #199 — RAFT uses a plain Trainer + weighted-CE loss
+            # (answer-only mask via loss_weights; citation-span boost when
+            # training.citation_faithful is set — #202). The pre-tokenised
+            # rows + custom collator skip SFTTrainer's text-column processing.
+            from transformers import Trainer
+
+            from soup_cli.trainer.raft import (
+                RaftDataCollator,
+                make_raft_trainer_class,
+            )
+
+            raft_cls = make_raft_trainer_class(Trainer)
+            if self._raft_epoch_shuffle:
+                # v0.71.17 #253 — RAW rows + per-epoch re-tokenising collator +
+                # a callback that advances the epoch salt at each epoch start.
+                from soup_cli.trainer.raft import (
+                    RaftEpochShuffleCollator,
+                    RaftEpochState,
+                    make_raft_epoch_callback,
+                )
+
+                epoch_state = RaftEpochState()
+                collator = RaftEpochShuffleCollator(
                     self.tokenizer,
                     max_length=cfg.data.max_length,
-                    device=self.device,
-                )
-                batch_size = pick_batch_size(
-                    static_estimate=static_estimate,
-                    strategy=tcfg.auto_batch_size_strategy,
-                    base=cfg.base,
-                    max_length=cfg.data.max_length,
-                    quantization=tcfg.quantization,
-                    lora_r=tcfg.lora.r,
-                    gpu_name=str(gpu_info.get("name") or "cpu"),
-                    gpu_memory_gb=gpu_memory_gb_total,
-                    probe_fn=probe_fn,
-                    console=console,
-                )
-                console.print(f"[green]Auto batch size:[/] {batch_size}")
-
-            # --- Curriculum learning: sort dataset by difficulty ---
-            if tcfg.curriculum:
-                from soup_cli.utils.curriculum import sort_by_length
-
-                if tcfg.curriculum_metric == "length":
-                    dataset["train"] = sort_by_length(dataset["train"])
-                    console.print(
-                        f"[green]Curriculum learning enabled:[/] "
-                        f"metric=length, buckets={tcfg.curriculum_buckets}"
-                    )
-                else:
-                    console.print(
-                        f"[yellow]Curriculum metric '{tcfg.curriculum_metric}' "
-                        "requires pre-computed scores. Using length-based sorting.[/]"
-                    )
-                    dataset["train"] = sort_by_length(dataset["train"])
-
-            # --- Dataset ---
-            # v0.53.7 #86 — short-circuit tokenization when caller pre-tokenized
-            # via `soup data preprocess`. Skips the format_row + tokenizer pass
-            # entirely; rows already carry input_ids/labels/attention_mask.
-            # v0.71.10 #199 — RAFT format: golden/distractor-doc rows are NOT
-            # {messages}; build a pre-tokenised answer-only-mask dataset instead.
-            self._is_raft = cfg.data.format == "raft"
-            # v0.71.17 #253 — RAFT epoch-aware shuffle: when on, keep RAW rows so
-            # the collator re-permutes documents per epoch (vs one baked order).
-            self._raft_epoch_shuffle = self._is_raft and bool(
-                getattr(cfg.data, "raft_epoch_shuffle", False)
-            )
-            pretok = _maybe_load_pretokenized(
-                cfg.data, cfg.base, console, tcfg, task=cfg.task
-            )
-            if pretok is not None:
-                train_ds, eval_ds = pretok
-                _validate_pretokenized_targets(
-                    train_ds, split="train", max_length=cfg.data.max_length
-                )
-                if eval_ds is not None:
-                    _validate_pretokenized_targets(
-                        eval_ds, split="validation", max_length=cfg.data.max_length
-                    )
-            elif self._raft_epoch_shuffle:
-                train_ds, eval_ds = self._prepare_raft_raw_dataset(dataset, cfg, tcfg)
-            elif self._is_raft:
-                train_ds, eval_ds = self._prepare_raft_dataset(dataset, cfg, tcfg)
-            elif use_vision:
-                train_ds, eval_ds = self._prepare_vision_dataset(dataset)
-            elif use_audio:
-                train_ds, eval_ds = self._prepare_audio_dataset(dataset)
-            else:
-                from soup_cli.data.sft_format import build_format_row
-
-                format_row = build_format_row(
-                    tokenizer=self.tokenizer,
-                    data_cfg=cfg.data,
-                    console=console,
-                    training_cfg=tcfg,
-                )
-                train_ds = _map_text_sft_rows(
-                    dataset["train"],
-                    format_row=format_row,
-                    split="train",
-                    max_length=cfg.data.max_length,
-                )
-                eval_ds = None
-                if "val" in dataset and dataset["val"]:
-                    eval_ds = _map_text_sft_rows(
-                        dataset["val"],
-                        format_row=format_row,
-                        split="validation",
-                        max_length=cfg.data.max_length,
-                    )
-
-            # #1236 - Ensure assistant_masks exists alongside labels for TRL packing
-            train_ds = _ensure_assistant_masks(train_ds)
-            if eval_ds is not None:
-                eval_ds = _ensure_assistant_masks(eval_ds)
-
-            # --- Output dir ---
-            output_dir = Path(cfg.output)
-            if cfg.experiment_name:
-                output_dir = output_dir / cfg.experiment_name
-            output_dir.mkdir(parents=True, exist_ok=True)
-
-            # #674 — QuEST calibration needs the actual tokenized training rows,
-            # so this route is installed here rather than in _setup_transformers.
-            # The schema requires an explicit batch size, therefore the earlier
-            # auto-probe cannot silently size the unconverted model.
-            if tcfg.quantization_aware == "quest":
-                self._setup_quest(train_ds)
-
-            # --- Calculate warmup steps from ratio (#1431) ---
-            from soup_cli.utils.warmup import resolve_trainer_warmup_steps
-
-            warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
-
-            # --- Training args ---
-            # v0.33.0 #58: auto_mixed_precision wires pick_mixed_precision()
-            # into bf16/fp16 kwargs. Default behaviour (bf16 on CUDA) preserved
-            # when the auto flag is False.
-            bf16_flag, fp16_flag = self._resolve_mixed_precision(tcfg, cfg.base)
-
-            training_kwargs = {
-                "output_dir": str(output_dir),
-                "num_train_epochs": tcfg.epochs,
-                "per_device_train_batch_size": batch_size,
-                "gradient_accumulation_steps": tcfg.gradient_accumulation_steps,
-                "learning_rate": tcfg.lr,
-                "warmup_steps": warmup_steps,
-                "weight_decay": tcfg.weight_decay,
-                "max_grad_norm": tcfg.max_grad_norm,
-                "optim": tcfg.optimizer,
-                "lr_scheduler_type": tcfg.scheduler,
-                "logging_steps": tcfg.logging_steps,
-                "save_steps": tcfg.save_steps,
-                "save_total_limit": 3,
-                "bf16": bf16_flag,
-                "fp16": fp16_flag,
-                "report_to": self.report_to,
-                "remove_unused_columns": False,
-                "deepspeed": self.deepspeed_config,
-                # #341: the general training seed. Until this landed there was no
-                # knob at all, so every run took HF's defaults (seed=42,
-                # data_seed=None) and replicates of one config differed only by row
-                # permutation and GPU nondeterminism. `None` means "unset", and
-                # unset must reproduce the pre-#341 numbers exactly, hence 42 rather
-                # than a new default. #353 moved the resolution into utils.seeding
-                # so the other 17 task wrappers resolve it identically.
-                **training_seed_kwargs(tcfg),
-                # #1223: evaluate the split handed to the trainer below, at the
-                # resolved train batch. Before this nothing set eval_strategy, so
-                # the default val_split was withheld and never evaluated.
-                **training_eval_kwargs(cfg, eval_ds, batch_size=batch_size),
-            }
-
-            # FSDP2 — alternative to DeepSpeed. The helper also enables
-            # torch.compile when tcfg.use_fsdp2_compile is True.
-            from soup_cli.utils.fsdp import apply_fsdp_training_kwargs
-
-            apply_fsdp_training_kwargs(
-                training_kwargs,
-                fsdp_config=self.fsdp_config,
-                use_fsdp2_compile=tcfg.use_fsdp2_compile,
-            )
-            if self.fsdp_config and tcfg.use_fsdp2_compile:
-                console.print("[green]torch.compile enabled on FSDP2[/]")
-
-            # Gradient checkpointing — tiered (v0.28.0): bool or tier string.
-            # v0.72.0: layer streaming checkpoints every layer itself, so enabling
-            # HF's too would double-recompute silently (see layer_stream).
-            from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
-
-            hf_grad_ckpt = should_enable_hf_gradient_checkpointing(
-                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
-            )
-            if tcfg.gradient_checkpointing and not hf_grad_ckpt:
-                console.print(
-                    "[dim]Gradient checkpointing: handled per-layer by layer "
-                    "streaming (HF's own is left off to avoid double recompute)[/]"
-                )
-            if hf_grad_ckpt:
-                from soup_cli.utils.gpu import get_gpu_info
-                from soup_cli.utils.gradient_ckpt import (
-                    plan_gradient_checkpointing,
-                )
-
-                gpu_memory_gb: Optional[float] = None
-                try:
-                    gpu_memory_gb = get_gpu_info().get(
-                        "memory_total_bytes", 0
-                    ) / (1024**3) or None
-                except (KeyError, TypeError, ZeroDivisionError):
-                    gpu_memory_gb = None
-
-                ckpt_plan = plan_gradient_checkpointing(
-                    self.model,
-                    tcfg.gradient_checkpointing,
-                    gpu_memory_gb=gpu_memory_gb,
-                )
-                training_kwargs.update(ckpt_plan.kwargs)
-                if ckpt_plan.kwargs:
-                    console.print(
-                        f"[green]Gradient checkpointing:[/] "
-                        f"{ckpt_plan.description}"
-                    )
-
-            # NEFTune — noisy embeddings for better fine-tuning quality
-            if tcfg.neftune_alpha is not None:
-                training_kwargs["neftune_noise_alpha"] = tcfg.neftune_alpha
-
-            # LoRA+ — different learning rates for A and B matrices. Not a
-            # TrainingArguments field: the optimizer is built and attached after the
-            # trainer exists (attach_loraplus_optimizer), so it must NOT be forwarded
-            # here (#724).
-
-            # LoRA-FA — freezes LoRA A matrices and trains B matrices. Not a
-            # TrainingArguments field: the optimizer is built and attached after the
-            # trainer exists (attach_lorafa_optimizer), so it must NOT be forwarded
-            # here (#725).
-
-            # GaLore — memory-efficient full-parameter training
-            if tcfg.use_galore:
-                from soup_cli.utils.galore import get_galore_optimizer_and_params
-
-                if tcfg.optimizer != "adamw_torch":
-                    console.print(
-                        f"[yellow]GaLore overrides optimizer '{tcfg.optimizer}' "
-                        f"with 'galore_adamw'.[/]"
-                    )
-                galore_kwargs = get_galore_optimizer_and_params(
-                    galore_rank=tcfg.galore_rank,
-                    galore_update_proj_gap=tcfg.galore_update_proj_gap,
-                    galore_scale=tcfg.galore_scale,
-                )
-                training_kwargs.update(galore_kwargs)
-                console.print(
-                    f"[green]GaLore enabled:[/] rank={tcfg.galore_rank}, "
-                    f"update_gap={tcfg.galore_update_proj_gap}, scale={tcfg.galore_scale}"
-                )
-
-            # #78 — only when Soup's own patch actually landed, so an unsupported
-            # architecture keeps today's warning instead of becoming an HF exception.
-            if getattr(self, "_liger_applied", False):
-                training_kwargs["use_liger_kernel"] = True
-
-            training_args = TrainingArguments(**training_kwargs)
-
-            # #78 — `data.max_length` above 1024 was silently ignored on EVERY SFT run.
-            # `SFTTrainer.__init__` converts a plain `TrainingArguments` with
-            # `SFTConfig(**args.to_dict())`, and `max_length` is an SFT-only field that
-            # `TrainingArguments` does not carry, so it always took SFTConfig's own
-            # default of 1024. Measured before the fix: max_length=4096 produced 1024
-            # tokens per sample, with no warning. Building the SFTConfig here mirrors
-            # TRL's own conversion (including the hub_token dance it does) and adds the
-            # one field that was being dropped.
-            training_args = self._as_sft_config(
-                training_args, cfg.data.max_length, packing=tcfg.packing,
-            )
-
-            # --- Trainer ---
-            trainer_kwargs = {
-                "model": self.model,
-                "args": training_args,
-                "train_dataset": train_ds,
-                "eval_dataset": eval_ds,
-                "processing_class": self.tokenizer,
-            }
-
-            # Sample packing — pack multiple short samples into one sequence
-            if tcfg.packing:
-                if cfg.data.max_length < 256:
-                    console.print(
-                        f"[yellow]Warning:[/] packing=true with max_length={cfg.data.max_length} "
-                        "may be suboptimal. Consider increasing max_length for better packing."
-                    )
-                console.print("[green]Sample packing enabled[/]")
-
-            # v0.40.4 #65 — multipack live wiring. ``make_multipack_trainer_class``
-            # mixes a ``get_train_dataloader`` override into the SFTTrainer MRO
-            # that returns a DataLoader whose ``batch_sampler`` is the FFD
-            # bin-packing :class:`MultipackBatchSampler`. The factory is cached
-            # so two ``multipack: true`` runs against the same base class share
-            # the same subclass.
-            use_multipack = bool(getattr(tcfg, "multipack", False))
-            # #1693 -- with `stream_loss_chunk` the model returns no logits, which
-            # TRL's `compute_loss` reads for its metrics. The schema keeps the
-            # option to the two branches below that build `sft_cls`.
-            sft_cls = SFTTrainer
-            chunk_hook = getattr(self, "_stream_loss_chunk_hook", None)
-            if chunk_hook is not None:
-                from soup_cli.utils.stream_loss_chunk import (
-                    HOOK_ATTR,
-                    make_chunked_loss_trainer_class,
-                )
-
-                sft_cls = make_chunked_loss_trainer_class(SFTTrainer)
-            if self._is_raft:
-                # v0.71.10 #199 — RAFT uses a plain Trainer + weighted-CE loss
-                # (answer-only mask via loss_weights; citation-span boost when
-                # training.citation_faithful is set — #202). The pre-tokenised
-                # rows + custom collator skip SFTTrainer's text-column processing.
-                from transformers import Trainer
-
-                from soup_cli.trainer.raft import (
-                    RaftDataCollator,
-                    make_raft_trainer_class,
-                )
-
-                raft_cls = make_raft_trainer_class(Trainer)
-                if self._raft_epoch_shuffle:
-                    # v0.71.17 #253 — RAW rows + per-epoch re-tokenising collator +
-                    # a callback that advances the epoch salt at each epoch start.
-                    from soup_cli.trainer.raft import (
-                        RaftEpochShuffleCollator,
-                        RaftEpochState,
-                        make_raft_epoch_callback,
-                    )
-
-                    epoch_state = RaftEpochState()
-                    collator = RaftEpochShuffleCollator(
-                        self.tokenizer,
-                        max_length=cfg.data.max_length,
-                        epoch_state=epoch_state,
-                        shuffle_seed=cfg.data.raft_shuffle_seed,
-                        citation_faithful=bool(tcfg.citation_faithful),
-                        citation_style=tcfg.citation_style or "bracket",
-                    )
-                else:
-                    collator = RaftDataCollator(self.tokenizer)
-                self.trainer = raft_cls(
-                    model=self.model,
-                    args=training_args,
-                    train_dataset=train_ds,
-                    eval_dataset=eval_ds,
-                    data_collator=collator,
-                    processing_class=self.tokenizer,
-                )
-                if self._raft_epoch_shuffle:
-                    self.trainer.add_callback(make_raft_epoch_callback(epoch_state))
-                    console.print(
-                        "[green]RAFT epoch-shuffle:[/] documents re-permuted each "
-                        "epoch (per-epoch salt)"
-                    )
-                if tcfg.citation_faithful:
-                    console.print(
-                        "[green]RAFT + citation-faithful:[/] answer-only mask "
-                        f"with boosted [{tcfg.citation_style or 'bracket'}] "
-                        "citation spans"
-                    )
-                else:
-                    console.print("[green]RAFT trainer enabled:[/] answer-only loss mask")
-            elif use_multipack:
-                from soup_cli.utils.multipack_sampler import (
-                    validate_multipack_architecture,
-                )
-                from soup_cli.utils.multipack_trainer import (
-                    attach_multipack_state,
-                    detect_arch_name,
-                    lengths_from_dataset,
-                    make_multipack_trainer_class,
-                )
-
-                arch = detect_arch_name(self.model)
-                if arch:
-                    validate_multipack_architecture(arch)
-                trainer_cls = make_multipack_trainer_class(SFTTrainer)
-                self.trainer = trainer_cls(**trainer_kwargs)
-                attach_multipack_state(
-                    self.trainer,
-                    lengths=lengths_from_dataset(train_ds),
-                    max_seq_len=cfg.data.max_length,
-                    batch_size=batch_size,
-                    # #341 — this lookup used to be defensive cover for an
-                    # attribute that did not exist, so it was always 0. The field
-                    # exists now; unset still resolves to 0 so existing multipack
-                    # runs keep their row order.
-                    seed=(
-                        DEFAULT_MULTIPACK_SEED if tcfg.seed is None else tcfg.seed
-                    ),
-                )
-                console.print("[green]Multipack FFD bin-packing sampler enabled[/]")
-            elif use_vision and not tcfg.packing:
-                # Vision rows still contain PIL images and structured messages.
-                # Plain Trainer must receive the custom collator directly; letting
-                # SFTTrainer pre-tokenize them takes the text-only path on older TRL
-                # and drops Idefics3's image-token expansion (#302).
-                self.trainer = _make_vision_trainer(
-                    trainer_kwargs,
-                    processor=self.processor,
-                    max_length=cfg.data.max_length,
-                )
-            elif (
-                tcfg.rewind_log
-                and cfg.task == "sft"
-                and pretok is None
-                and not use_vision
-                and not use_audio
-            ):
-                self.trainer = self._build_rewind_trainer(
-                    sft_cls,
-                    trainer_kwargs,
-                    rows=dataset["train"],
-                    output_dir=output_dir,
-                    batch_size=batch_size,
-                    grad_accum=int(tcfg.gradient_accumulation_steps),
+                    epoch_state=epoch_state,
+                    shuffle_seed=cfg.data.raft_shuffle_seed,
+                    citation_faithful=bool(tcfg.citation_faithful),
+                    citation_style=tcfg.citation_style or "bracket",
                 )
             else:
-                self.trainer = sft_cls(**trainer_kwargs)
-            if chunk_hook is not None:
-                setattr(self.trainer, HOOK_ATTR, chunk_hook)
-
-            # The recording trainer is the last branch above, so RAFT, multipack,
-            # vision, audio and a pre-tokenised dataset all skip it -- silently,
-            # until now. Silence is the failure this repo keeps filing: the run
-            # writes no log, and `soup rewind` then offers "it was not an SFT run"
-            # among its reasons, which is false. Name the reason once, here, where
-            # every skipping path lands.
-            if tcfg.rewind_log and getattr(self, "_rewind_state", None) is None:
-                if not getattr(self, "_rewind_notice", False):
-                    console.print(
-                        "[yellow]Rewind log off:[/] "
-                        + rewind_skip_reason(
-                            task=cfg.task,
-                            pretokenized=pretok is not None,
-                            is_raft=self._is_raft,
-                            multipack=use_multipack,
-                            vision=use_vision,
-                            audio=use_audio,
-                        )
-                    )
-
-            # #336 — DeepSpeed + LoRA died on every stage before the first step.
-            # HF builds two optimizer parameter groups (decay / no-decay) and with
-            # LoRA the no-decay group is empty; DeepSpeed drops it while the LR
-            # scheduler keeps two ``base_lrs``, and torch >= 2.13's strict ``zip``
-            # raises at ``lr_scheduler.step()``. The guard prunes the empty group
-            # inside ``create_optimizer``, i.e. before the scheduler is built.
-            # Only under DeepSpeed: full fine-tuning populates both groups and the
-            # ordinary path must not have its optimizer rewritten.
-            if self.deepspeed_config:
-                from soup_cli.utils.deepspeed import attach_empty_param_group_guard
-
-                attach_empty_param_group_guard(self.trainer)
-
-            self._output_dir = str(output_dir)
-            self._batch_size = batch_size
-
-            # #351: normalise every `checkpoint-*` adapter as the Trainer writes it.
-            # The final save is repaired at the end of `train()`; HF dispatches
-            # `on_save` only for the periodic checkpoints, so the two call sites
-            # cover different files and neither is redundant.
-            #
-            # Attached in `setup()` rather than alongside the other callbacks in
-            # `train()` because `CallbackHandler.call_event` dispatches in insertion
-            # order and `HFPushCallback.on_save` UPLOADS `checkpoint-{step}` on this
-            # same event. `--push-as` adds that callback straight to this trainer
-            # once `setup()` has returned (`commands/train.py`), so a normalisation
-            # attached any later than it would publish the prefixed adapter and keep
-            # the repaired one to itself. Being ahead of anything the caller adds is
-            # the whole point of the position.
-            from soup_cli.utils.peft_wiring import attach_compile_prefix_callback
-
-            attach_compile_prefix_callback(self.trainer, tcfg, self._output_dir, console)
-            if self._quest_metadata is not None:
-                from soup_cli.utils.quest import QuestMetadataCallback
-
-                self.trainer.add_callback(
-                    QuestMetadataCallback(self._output_dir, self._quest_metadata)
+                collator = RaftDataCollator(self.tokenizer)
+            self.trainer = raft_cls(
+                model=self.model,
+                args=training_args,
+                train_dataset=train_ds,
+                eval_dataset=eval_ds,
+                data_collator=collator,
+                processing_class=self.tokenizer,
+            )
+            if self._raft_epoch_shuffle:
+                self.trainer.add_callback(make_raft_epoch_callback(epoch_state))
+                console.print(
+                    "[green]RAFT epoch-shuffle:[/] documents re-permuted each "
+                    "epoch (per-epoch salt)"
                 )
-        except BaseException:
-            self._close_stream_runtime()
-            raise
+            if tcfg.citation_faithful:
+                console.print(
+                    "[green]RAFT + citation-faithful:[/] answer-only mask "
+                    f"with boosted [{tcfg.citation_style or 'bracket'}] "
+                    "citation spans"
+                )
+            else:
+                console.print("[green]RAFT trainer enabled:[/] answer-only loss mask")
+        elif use_multipack:
+            from soup_cli.utils.multipack_sampler import (
+                validate_multipack_architecture,
+            )
+            from soup_cli.utils.multipack_trainer import (
+                attach_multipack_state,
+                detect_arch_name,
+                lengths_from_dataset,
+                make_multipack_trainer_class,
+            )
+
+            arch = detect_arch_name(self.model)
+            if arch:
+                validate_multipack_architecture(arch)
+            trainer_cls = make_multipack_trainer_class(SFTTrainer)
+            self.trainer = trainer_cls(**trainer_kwargs)
+            attach_multipack_state(
+                self.trainer,
+                lengths=lengths_from_dataset(train_ds),
+                max_seq_len=cfg.data.max_length,
+                batch_size=batch_size,
+                # #341 — this lookup used to be defensive cover for an
+                # attribute that did not exist, so it was always 0. The field
+                # exists now; unset still resolves to 0 so existing multipack
+                # runs keep their row order.
+                seed=(
+                    DEFAULT_MULTIPACK_SEED if tcfg.seed is None else tcfg.seed
+                ),
+            )
+            console.print("[green]Multipack FFD bin-packing sampler enabled[/]")
+        elif use_vision and not tcfg.packing:
+            # Vision rows still contain PIL images and structured messages.
+            # Plain Trainer must receive the custom collator directly; letting
+            # SFTTrainer pre-tokenize them takes the text-only path on older TRL
+            # and drops Idefics3's image-token expansion (#302).
+            self.trainer = _make_vision_trainer(
+                trainer_kwargs,
+                processor=self.processor,
+                max_length=cfg.data.max_length,
+            )
+        elif (
+            tcfg.rewind_log
+            and cfg.task == "sft"
+            and pretok is None
+            and not use_vision
+            and not use_audio
+        ):
+            self.trainer = self._build_rewind_trainer(
+                sft_cls,
+                trainer_kwargs,
+                rows=dataset["train"],
+                output_dir=output_dir,
+                batch_size=batch_size,
+                grad_accum=int(tcfg.gradient_accumulation_steps),
+            )
+        else:
+            self.trainer = sft_cls(**trainer_kwargs)
+        if chunk_hook is not None:
+            setattr(self.trainer, HOOK_ATTR, chunk_hook)
+
+        # The recording trainer is the last branch above, so RAFT, multipack,
+        # vision, audio and a pre-tokenised dataset all skip it -- silently,
+        # until now. Silence is the failure this repo keeps filing: the run
+        # writes no log, and `soup rewind` then offers "it was not an SFT run"
+        # among its reasons, which is false. Name the reason once, here, where
+        # every skipping path lands.
+        if tcfg.rewind_log and getattr(self, "_rewind_state", None) is None:
+            if not getattr(self, "_rewind_notice", False):
+                console.print(
+                    "[yellow]Rewind log off:[/] "
+                    + rewind_skip_reason(
+                        task=cfg.task,
+                        pretokenized=pretok is not None,
+                        is_raft=self._is_raft,
+                        multipack=use_multipack,
+                        vision=use_vision,
+                        audio=use_audio,
+                    )
+                )
+
+        # #336 — DeepSpeed + LoRA died on every stage before the first step.
+        # HF builds two optimizer parameter groups (decay / no-decay) and with
+        # LoRA the no-decay group is empty; DeepSpeed drops it while the LR
+        # scheduler keeps two ``base_lrs``, and torch >= 2.13's strict ``zip``
+        # raises at ``lr_scheduler.step()``. The guard prunes the empty group
+        # inside ``create_optimizer``, i.e. before the scheduler is built.
+        # Only under DeepSpeed: full fine-tuning populates both groups and the
+        # ordinary path must not have its optimizer rewritten.
+        if self.deepspeed_config:
+            from soup_cli.utils.deepspeed import attach_empty_param_group_guard
+
+            attach_empty_param_group_guard(self.trainer)
+
+        self._output_dir = str(output_dir)
+        self._batch_size = batch_size
+
+        # #351: normalise every `checkpoint-*` adapter as the Trainer writes it.
+        # The final save is repaired at the end of `train()`; HF dispatches
+        # `on_save` only for the periodic checkpoints, so the two call sites
+        # cover different files and neither is redundant.
+        #
+        # Attached in `setup()` rather than alongside the other callbacks in
+        # `train()` because `CallbackHandler.call_event` dispatches in insertion
+        # order and `HFPushCallback.on_save` UPLOADS `checkpoint-{step}` on this
+        # same event. `--push-as` adds that callback straight to this trainer
+        # once `setup()` has returned (`commands/train.py`), so a normalisation
+        # attached any later than it would publish the prefixed adapter and keep
+        # the repaired one to itself. Being ahead of anything the caller adds is
+        # the whole point of the position.
+        from soup_cli.utils.peft_wiring import attach_compile_prefix_callback
+
+        attach_compile_prefix_callback(self.trainer, tcfg, self._output_dir, console)
+        if self._quest_metadata is not None:
+            from soup_cli.utils.quest import QuestMetadataCallback
+
+            self.trainer.add_callback(
+                QuestMetadataCallback(self._output_dir, self._quest_metadata)
+            )
 
     def _setup_quest(self, train_ds: Any) -> None:
         """Calibrate and install #674's explicit mixed fake-quant route."""
