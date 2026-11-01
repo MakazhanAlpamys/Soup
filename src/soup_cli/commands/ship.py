@@ -529,7 +529,15 @@ def _live_eval_numerics(
     from soup_cli.utils import live_eval
 
     resolved = live_eval.resolve_device(device)
-    return "bfloat16" if resolved.startswith("cuda") else "float32"
+    if not resolved.startswith("cuda"):
+        return "float32"
+    # Training picks fp16 on a card without bf16 units (T4, V100, RTX 20xx) through
+    # the same helper, so the live eval runs at the precision the model trained in
+    # and the stamp records what was loaded (#2409).
+    from soup_cli.utils.gpu import bf16_fp16_flags
+
+    _bf16, fp16 = bf16_fp16_flags(resolved)
+    return "float16" if fp16 else "bfloat16"
 
 
 def _expected_numerics_family(soup_config: "SoupConfig") -> str:
