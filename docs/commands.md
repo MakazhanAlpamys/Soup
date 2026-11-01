@@ -162,7 +162,7 @@ soup data educational --input rows.jsonl -o scored.jsonl  Score educational valu
 soup train --config soup.yaml --tracker mlflow  MLflow / SwanLab / Trackio integration
 soup profile --config soup.yaml              Estimate memory/speed before training
 soup profile --config soup.yaml --gpu a100   Estimate for specific GPU
-soup profile --config soup.yaml --json       Machine-readable output
+soup profile --config soup.yaml --json       Profile JSON on stdout; diagnostics on stderr
 soup profile --model Qwen/Qwen2.5-7B-Instruct --gpu rtx5070 --method qlora  Will a model fit, without a soup.yaml
 soup cost --config soup.yaml                 Estimate training cost in USD across providers
 soup cost --config soup.yaml --gpu H100      Estimate training cost for specific GPU
