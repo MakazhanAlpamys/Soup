@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 
 from soup_cli.cli import app
 from soup_cli.utils import mlx as mlx_utils
@@ -67,7 +68,9 @@ def _assert_streams(result, json_mode: bool) -> str:
 @pytest.mark.parametrize("failure", ["missing", "empty", "invalid_yaml", "schema", "unknown_gpu"])
 @pytest.mark.parametrize("width", [40, 80])
 def test_profile_config_refusal_streams(tmp_path, monkeypatch, failure, json_mode, width):
-    monkeypatch.setenv("COLUMNS", str(width))
+    # Explicit dimensions exercise this width even with FORCE_COLOR=1 and TERM=dumb.
+    monkeypatch.setattr("soup_cli.commands.profile.console", Console(width=width, height=100))
+    monkeypatch.setattr("soup_cli.config.loader.console", Console(width=width, height=100))
     path = _config(tmp_path, "missing" if failure == "missing" else failure)
 
     args = ["profile", "--config", str(path)]
