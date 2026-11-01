@@ -88,7 +88,8 @@ def doctor(
             "Detect the disk media type (NVMe / SSD / HDD). Layer streaming's "
             "disk overflow tier needs NVMe. Off by default: the probe costs ~9 s "
             "on Windows, and on Linux it WRITES a ~64 MiB scratch file "
-            "(.soup-diskprobe-*, git-ignored) into the current directory to "
+            "(.soup-diskprobe-*, git-ignored) into the layer cache folder "
+            "(SOUP_LAYER_STREAM_CACHE_DIR or ~/.soup/layer-stream) to "
             "measure sequential read throughput."
         ),
     ),
@@ -969,9 +970,23 @@ def _get_ram_gb() -> str:
     return "Unknown"
 
 
+def _existing_probe_path(path: str) -> str:
+    """Return ``path`` or its nearest existing parent without creating folders."""
+    probe = os.path.expanduser(path)
+    while not os.path.exists(probe):
+        parent = os.path.dirname(probe)
+        if not parent or parent == probe:
+            break
+        probe = parent
+    return probe
+
+
 def _check_resources(probe_disk: bool = False, issues: list[str] | None = None):
     """Check RAM and Disk space and display info."""
     import shutil
+
+    from soup_cli.utils.layer_shard import resolve_cache_root
+    from soup_cli.utils.terminal import for_terminal
 
     table = Table(title="System Resources")
     table.add_column("Resource", style="bold")
@@ -979,8 +994,11 @@ def _check_resources(probe_disk: bool = False, issues: list[str] | None = None):
 
     table.add_row("RAM", _get_ram_gb())
 
+    cache_root = resolve_cache_root()
+    probe_path = _existing_probe_path(cache_root)
+
     try:
-        usage = shutil.disk_usage(".")
+        usage = shutil.disk_usage(probe_path)
         disk_str = f"{usage.free / _GB:.0f} GB free"
     except OSError:
         disk_str = "Unknown"
@@ -1002,28 +1020,40 @@ def _check_resources(probe_disk: bool = False, issues: list[str] | None = None):
         try:
             from soup_cli.utils.layer_stream import detect_disk_kind
 
-            kind = detect_disk_kind(".")
+            kind = detect_disk_kind(probe_path)
         except Exception:  # noqa: BLE001 — a diagnostic must never crash the report
             kind = "unknown"
+        cache_label = for_terminal(str(cache_root))
         verdict = {
-            "nvme": "[green]NVMe[/] — layer streaming can use the disk overflow tier",
-            "ssd": "[yellow]SATA SSD[/] — layer streaming refuses the disk tier (RAM only)",
-            "hdd": "[red]HDD[/] — layer streaming refuses the disk tier (RAM only)",
-        }.get(kind, "[yellow]Unknown[/] — layer streaming will refuse the disk tier")
+            "nvme": (
+                f"[green]NVMe[/] (cache: {cache_label}) "
+                "— layer streaming can use the disk overflow tier"
+            ),
+            "ssd": (
+                f"[yellow]SATA SSD[/] (cache: {cache_label}) "
+                "— layer streaming refuses the disk tier (RAM only)"
+            ),
+            "hdd": (
+                f"[red]HDD[/] (cache: {cache_label}) "
+                "— layer streaming refuses the disk tier (RAM only)"
+            ),
+        }.get(
+            kind,
+            f"[yellow]Unknown[/] (cache: {cache_label}) "
+            "— layer streaming will refuse the disk tier",
+        )
         table.add_row("Disk type", verdict)
 
     stripe_var = os.environ.get("SOUP_LAYER_STREAM_STRIPE_DIRS")
     if stripe_var:
-        from soup_cli.utils.layer_shard import resolve_cache_root
         from soup_cli.utils.stripe_roots import (
             STRIPE_DIRS_ENV,
             iter_early_stripe_roots,
             parse_stripe_dirs,
         )
-        from soup_cli.utils.terminal import for_terminal
 
         stripe_entries = parse_stripe_dirs(stripe_var)
-        primary = resolve_cache_root()
+        primary = cache_root
         has_refused = False
 
         for entry, resolved, reason in iter_early_stripe_roots(primary, stripe_entries):
