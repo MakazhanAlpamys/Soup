@@ -551,7 +551,7 @@ def _is_quantized(module: Any) -> bool:
             or "scales" in module or "weight_scale" in module)
 
 
-def qualify_base(model: Any, base: str) -> Optional[dict]:
+def qualify_base(model: Any, base: str, *, context: str = "MLX GRPO") -> Optional[dict]:
     """The base's quantization, or a refusal naming the first layer outside it.
 
     Accepted: a dense base (returns None), or one whose every quantized layer is
@@ -585,7 +585,7 @@ def qualify_base(model: Any, base: str) -> Optional[dict]:
     if outside:
         name, kind, bits, mode = outside[0]
         raise ValueError(
-            f"MLX GRPO trains a dense base or one pre-quantized at "
+            f"{context} trains a dense base or one pre-quantized at "
             f"{BASE_QUANTIZATION_BITS} bits in mode {BASE_QUANTIZATION_MODE!r} (its "
             "QuantizedLinear / QuantizedEmbedding layers, as mlx_lm.convert -q writes "
             f"them), and {base} has {len(outside)} layer(s) outside it, first: {name} "

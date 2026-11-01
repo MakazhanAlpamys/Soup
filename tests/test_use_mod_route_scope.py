@@ -311,7 +311,7 @@ class TestAlreadyRefusedForAnotherReason:
         [
             (
                 _yaml("pretrain", {"backend": "mlx"}, use_mod=True),
-                "MLX backend only ships SFT",
+                "MLX pretrain does not support training.use_mod",
             ),
             (
                 _yaml("tts", {"backend": "mlx"}, use_mod=True),

@@ -549,6 +549,7 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
     dataset = load_dataset(
         data_config_for_task(loader_data_config(cfg), cfg.task),
         preserve_source_columns=task_preserves_source_columns(cfg.task),
+        **({"native_pretrain": True} if (cfg.backend, cfg.task) == ("mlx", "pretrain") else {}),
     )
     console.print(f"[dim]Loaded {len(dataset['train'])} train samples[/]")
     # #2047 -- the judge_rank cost guard, between the data load and the model load.

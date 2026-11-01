@@ -61,6 +61,7 @@ Sections:
 | Key | Type | Default | Constraints | Description |
 |---|---|---|---|---|
 | `data.train` | `str \| list[str]` | **required** |  | Path to training data or HF dataset name, or a list of >= 2 local file paths to combine via data.interleave. (#443) |
+| `data.validation` | `str \| null` | `null` |  | Explicit local validation TXT/JSONL file (native MLX pretrain only) |
 | `data.format` | `str` | `"auto"` | one of `"alpaca"`, `"sharegpt"`, `"chatml"`, `"dpo"`, `"kto"`, `"llava"`, `"sharegpt4v"`, `"plaintext"`, `"embedding"`, `"audio"`, `"tool-calling"`, `"auto"`, `"prm"`, `"pre_tokenized"`, `"input_output"`, `"video"`, `"multimodal"`, `"raft"`, `"asr"`, `"cross_encoder"` | Data format |
 | `data.val_split` | `float` | `0.1` | `>= 0.0`, `<= 0.5` | Validation split ratio |
 | `data.max_length` | `int` | `2048` | `>= 64`, `<= 1048576` | Max sequence length in tokens |
@@ -199,7 +200,7 @@ Sections:
 | `training.train_router_only` | `bool` | `false` |  | Freeze every expert + train only the gating router (unsloth MoE recipe). Requires moe_lora=true. (v0.52.0) |
 | `training.reasoning_effort` | `str \| null` | `null` | one of `"low"`, `"medium"`, `"high"` | gpt-oss train-time reasoning effort level. Injected as a prompt prefix by the SFT data formatter; task sft, tts or distill only. |
 | `training.train_on_eot` | `bool` | `false` |  | Include explicit EOT / EOS control tokens in the SFT loss (axolotl ``train_on_eot``). Default False matches HF Trainer convention. Applied by the SFT data formatter; task sft, tts or distill only. (v0.52.0) |
-| `training.kv_cache_type` | `str \| null` | `null` | one of `"q8_0"`, `"bf16"`, `"f16"`, `"fp8"` | KV-cache element type for inference (q8_0 / bf16 / f16 / fp8). Applied by soup serve on the transformers backend; backend and hardware compatibility are validated before model loading. |
+| `training.kv_cache_type` | `str \| null` | `null` | one of `"q8_0"`, `"bf16"`, `"f16"`, `"fp8"` | KV-cache element type for inference (q8_0 / bf16 / f16 / fp8). Recorded in soup.yaml only: neither soup train nor soup serve reads this key (fp8 is refused with backend: mlx). To apply a type, pass soup serve --kv-cache-type &lt;type> (transformers backend). |
 | `training.fp8_attention` | `bool` | `false` |  | Extend the v0.28.0 FP8 menu to FP8 attention (axolotl-parity flag). Requires quantization_aware='fp8'. DPO-family, GRPO/PPO, pre-training, reward-model, and embedding wrappers route it through the shared advanced-precision setup; the default SFT path does not consume it. |
 | `training.nvfp4` | `bool` | `false` |  | Blackwell-only NVFP4 training (unsloth + axolotl). DPO-family, GRPO/PPO, pre-training, reward-model, and embedding wrappers route it through torchao conversion; the default SFT path does not consume it. |
 | `training.unsloth_bnb_4bit` | `bool` | `false` |  | Promote Unsloth Dynamic 4-bit from 'inferable' to a native flag. Requires backend='unsloth' and quantization='4bit'. (v0.53.0) |

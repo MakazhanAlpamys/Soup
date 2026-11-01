@@ -38,6 +38,7 @@
     "data.train_on_prompt": false,
     "data.train_on_responses_only": true,
     "data.val_split": 0.1,
+    "data.validation": null,
     "data.video_dir": null,
     "data.video_fps": null,
     "data.video_maxlen": null,

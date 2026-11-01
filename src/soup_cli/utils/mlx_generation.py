@@ -109,6 +109,14 @@ def read_native_adapter(path: Path, base: str | None = None) -> dict | None:
         raise ValueError("Native MLX metadata requires unique resolved target keys")
     if not (path / "adapters.safetensors").is_file():
         raise ValueError("Native MLX adapter is missing adapters.safetensors")
+    if config.get("task") == "pretrain":
+        from soup_cli.utils.mlx_pretrain_checkpoint import read_snapshot
+
+        snapshot = read_snapshot(path / "adapters.safetensors", config.get("contract"))
+        if {k: v for k, v in snapshot.items() if k not in (
+            "weights_sha256", "snapshot_version",
+        )} != config:
+            raise ValueError("Native MLX pretrain metadata is not a committed final artifact")
     return config
 
 
@@ -172,6 +180,18 @@ def load_native_model(
     ):
         raise ValueError("Native MLX generation supports text causal language models only")
     if config:
+        if config.get("task") == "pretrain":
+            from soup_cli.utils.mlx_pretrain_checkpoint import base_identity, tokenizer_identity
+
+            contract = config["contract"]
+            if (contract.get("task") != "pretrain"
+                    or contract.get("model") != base_identity(base)
+                    or contract.get("tokenizer_sha256") != tokenizer_identity(tokenizer)
+                    or contract.get("lora_parameters") != config["lora_parameters"]
+                    or contract.get("base_quantization") != config.get("base_quantization")):
+                raise ValueError(
+                    "Native MLX pretrain base/tokenizer/adapter identity does not match",
+                )
         layers = getattr(model, "layers", [])
         if config["num_layers"] > len(layers):
             raise ValueError("Native MLX metadata num_layers exceeds the base model's layers")
