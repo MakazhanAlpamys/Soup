@@ -9,8 +9,9 @@ decides whether a long, large-vocabulary run fits. Both now call
 Every term is in bytes; GB in the output is 1e9 bytes. The terms:
 
 - ``weights``: the base at its loaded precision. Under 4-bit and 8-bit loading only
-  the decoder's linear layers are quantized; the embeddings, output head and norms are
-  cast to fp32 for training. Full fine-tuning keeps fp32 master weights (#339).
+  the decoder's linear layers are quantized. Transformers casts the embeddings and
+  output head to fp32 for training; Unsloth 4-bit keeps them in 16-bit (measured).
+  Full fine-tuning keeps fp32 master weights (#339).
 - ``adapters``: LoRA's A and B matrices, r * (in + out) per adapted module per layer,
   from the model's own dims and the configured target modules, in fp32.
 - ``gradients`` and ``optimizer``: per trainable parameter.
@@ -20,7 +21,9 @@ Every term is in bytes; GB in the output is 1e9 bytes. The terms:
   planner's measured loss arithmetic (``layer_stream.LOGITS_LOSS_BYTES_PER_ELEMENT``).
   A PRM step builds the logits and no loss over them, so it is charged the logits
   alone, the half-precision output and its fp32 copy
-  (``LOGITS_TENSOR_BYTES_PER_ELEMENT``). Checkpointing does not reduce it.
+  (``LOGITS_TENSOR_BYTES_PER_ELEMENT``), on the one position ``logits_to_keep=1``
+  keeps (#2368; every position for ``FULL_LOGITS_MODEL_TYPES`` and remote-code
+  bases). Checkpointing does not reduce it.
 - ``dequant``: under 4-bit loading, the bf16 copy of the largest weight a matmul
   dequantizes.
 - ``overhead``: the CUDA context and allocator slack, which ``max_memory_allocated``
@@ -37,7 +40,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 from soup_cli.utils.model_shape import ModelShape, lora_param_count, lora_targets, module_dims
 
@@ -65,9 +68,13 @@ BYTES_PER_PARAM_BY_QUANT: dict[str, float] = {
 #: Bytes per quantized linear parameter, including the block scales.
 NF4_BYTES_PER_PARAM = 0.53
 INT8_BYTES_PER_PARAM = 1.02
-#: Under 4-bit and 8-bit loading, what is not quantized (embeddings, output head,
-#: norms) is cast to fp32 for training (peft ``prepare_model_for_kbit_training``).
+#: On the Transformers backend, embeddings and the output head are cast to fp32
+#: for k-bit training (peft ``prepare_model_for_kbit_training``).
 KBIT_UNQUANTIZED_BYTES = 4.0
+#: Both embedding and head stayed bf16 after a real 4-bit Unsloth load and LoRA
+#: injection on an RTX 5090 (Unsloth 2026.10.10). See the pinned model, dtypes and
+#: reproduction in ``benchmarks/unsloth-4bit-weight-dtypes.md``. No runtime probe.
+UNSLOTH_4BIT_EMBEDDING_HEAD_BYTES = 2.0
 
 #: Full fine-tuning loads the trainable base at fp32 (#339).
 FULL_FT_WEIGHT_BYTES = 4.0
@@ -91,6 +98,15 @@ OPTIMIZER_BYTES_PER_PARAM: dict[str, float] = {
     "lomo": 0.0,
     "adalomo": 2.0,
     "schedule_free_adamw": 8.0,
+}
+
+#: Memory the optimizer step allocates on top of its state, per trainable parameter
+#: (#2277). torch's AdamW without ``fused=True`` takes the foreach path on CUDA, and
+#: its ``_foreach_sqrt`` holds one fp32 copy of ``exp_avg_sq``: 4 bytes, measured on
+#: SmolLM2-135M full fine-tuning. The others are 0 until one is measured. A slight
+#: upper bound, since torch updates one parameter group at a time.
+OPTIMIZER_STEP_SCRATCH_BYTES_PER_PARAM: dict[str, float] = {
+    "adamw_torch": 4.0,
 }
 
 # --- activations ---------------------------------------------------------------
@@ -127,10 +143,31 @@ KBIT_LOGITS_EXTRA_BYTES = 2
 #: The logits a step that builds no loss over them holds at the end of its forward:
 #: the half-precision output autocast builds (2 bytes an element) and the fp32 copy
 #: Accelerate's ``convert_outputs_to_fp32`` makes of it (4), both live at once. What a
-#: PRM step (``RunSpec.logits_loss`` false) is charged.
+#: PRM step (``RunSpec.logits_loss`` false) is charged, per position it keeps.
 LOGITS_TENSOR_BYTES_PER_ELEMENT = 6
+#: #2368: a PRM step passes ``logits_to_keep=1`` where the causal-LM forward takes it,
+#: so its logits cover one position. These causal-LM model types (transformers'
+#: ``MODEL_FOR_CAUSAL_LM_MAPPING_NAMES``) have a forward without the argument and
+#: build the logits at every position. The estimate cannot see a forward, so a
+#: remote-code base (``ModelShape.remote_code``) is charged every position too.
+FULL_LOGITS_MODEL_TYPES = frozenset(
+    {
+        "gemma4_assistant",
+        "gemma4_unified_assistant",
+        "musicgen",
+        "musicgen_melody",
+        "prophetnet",
+        "trocr",
+        "whisper",
+        "xlstm",
+    }
+)
 #: Config flags whose fused loss can avoid building the full logits.
 FUSED_LOSS_FLAGS = frozenset({"use_liger", "use_cut_ce"})
+
+#: ``training.activation_offloading``'s modes. The estimate does not model what they move
+#: off the card: the activation term is charged as resident, and a note says so (#2327).
+ACTIVATION_OFFLOADING_MODES = frozenset({"cpu", "disk"})
 
 # --- 4-bit dequantization --------------------------------------------------------
 
@@ -152,6 +189,7 @@ TERM_NAMES = (
     "activations",
     "logits",
     "dequant",
+    "optimizer_step",
     "overhead",
 )
 
@@ -181,12 +219,19 @@ class RunSpec:
     #: embedding head): it builds no logits over the vocabulary.
     lm_head: bool = True
     #: False for a step that builds the logits but no loss over them (a PRM step,
-    #: whose loss comes from a reward head): only the logits tensor is charged.
+    #: whose loss comes from a reward head): only the logits tensor is charged, on
+    #: the positions ``logits_positions`` counts (#2368).
     logits_loss: bool = True
     #: The fused-loss flags set on a run whose trainer applies them
     #: (``use_liger``, ``use_cut_ce``). The logits term is still charged, since
     #: whether the patch lands is only known at train time, and a note says so.
     fused_loss: tuple[str, ...] = ()
+    #: ``training.activation_offloading`` (``cpu``, ``disk`` or ``None``). The
+    #: activation term is still charged as if every saved tensor stayed on the card,
+    #: since what offloading moves off it is not measured, and a note says so.
+    activation_offloading: Optional[str] = None
+    #: The loader whose default LoRA targets and weight dtypes are being estimated.
+    backend: str = "transformers"
 
     def __post_init__(self) -> None:
         if not isinstance(self.lm_head, bool):
@@ -197,6 +242,11 @@ class RunSpec:
             )
         if not set(self.fused_loss) <= FUSED_LOSS_FLAGS:
             raise ValueError(f"unknown fused_loss {self.fused_loss!r}")
+        if self.activation_offloading is not None and not (
+            isinstance(self.activation_offloading, str)
+            and self.activation_offloading in ACTIVATION_OFFLOADING_MODES
+        ):
+            raise ValueError(f"unknown activation_offloading {self.activation_offloading!r}")
         for name in ("seq_len", "batch_size", "lora_r"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
@@ -240,7 +290,9 @@ class VramEstimate:
         """The modules the adapters were sized on; empty for full fine-tuning."""
         if self.run.peft == "full":
             return ()
-        return lora_targets(self.run.target_modules, self.shape.model_type)
+        return lora_targets(
+            self.run.target_modules, self.shape.model_type, backend=self.run.backend
+        )
 
 
 def _embedding_params(shape: ModelShape) -> int:
@@ -256,7 +308,10 @@ def weights_bytes(shape: ModelShape, run: RunSpec) -> int:
         embed = _embedding_params(shape)
         linear = max(shape.params - embed, 0)
         per = NF4_BYTES_PER_PARAM if run.quant == "4bit" else INT8_BYTES_PER_PARAM
-        return math.ceil(linear * per + embed * KBIT_UNQUANTIZED_BYTES)
+        embedding_head_bytes = KBIT_UNQUANTIZED_BYTES
+        if run.backend == "unsloth" and run.quant == "4bit":
+            embedding_head_bytes = UNSLOTH_4BIT_EMBEDDING_HEAD_BYTES
+        return math.ceil(linear * per + embed * embedding_head_bytes)
     return math.ceil(shape.params * BYTES_PER_PARAM_BY_QUANT[run.quant])
 
 
@@ -270,7 +325,9 @@ def activation_mode(run: RunSpec) -> str:
 def trainable_params(shape: ModelShape, run: RunSpec) -> int:
     if run.peft == "full":
         return shape.params
-    return lora_param_count(shape, r=run.lora_r, target_modules=run.target_modules)
+    return lora_param_count(
+        shape, r=run.lora_r, target_modules=run.target_modules, backend=run.backend
+    )
 
 
 def activations_bytes(shape: ModelShape, run: RunSpec) -> int:
@@ -282,7 +339,7 @@ def activations_bytes(shape: ModelShape, run: RunSpec) -> int:
         if mode == "full"
         else sum(
             module_dims(shape, name)[0]
-            for name in lora_targets(run.target_modules, shape.model_type)
+            for name in lora_targets(run.target_modules, shape.model_type, backend=run.backend)
         )
     )
     per_layer = tokens * ACTIVATION_BYTES * (
@@ -311,7 +368,10 @@ def logits_bytes(shape: ModelShape, run: RunSpec) -> int:
     the streaming path (``LOGITS_RETENTION_BYTES_PER_ELEMENT``), and it is not charged.
     A step with no loss over the logits (``run.logits_loss`` false: a PRM step) is
     charged the logits alone, ``LOGITS_TENSOR_BYTES_PER_ELEMENT``: the half-precision
-    output and the fp32 copy Accelerate makes of it.
+    output and the fp32 copy Accelerate makes of it. Its forward passes
+    ``logits_to_keep=1`` (#2368), so it is charged one position, except on a model
+    type whose forward lacks the argument (``FULL_LOGITS_MODEL_TYPES``) or a
+    remote-code base, which keep every position (``logits_positions``).
     Under 4-bit and 8-bit loading either charge adds ``KBIT_LOGITS_EXTRA_BYTES``.
     A model without an LM head builds no logits over the vocabulary.
     """
@@ -322,7 +382,24 @@ def logits_bytes(shape: ModelShape, run: RunSpec) -> int:
     per = LOGITS_LOSS_BYTES_PER_ELEMENT if run.logits_loss else LOGITS_TENSOR_BYTES_PER_ELEMENT
     if activation_mode(run) in ("nf4", "int8"):
         per += KBIT_LOGITS_EXTRA_BYTES
-    return math.ceil(shape.vocab_size * run.seq_len * run.batch_size * per)
+    return math.ceil(shape.vocab_size * logits_positions(shape, run) * run.batch_size * per)
+
+
+def logits_positions(shape: ModelShape, run: RunSpec) -> int:
+    """The sequence positions the step's logits cover.
+
+    Every position for a step with a loss over the logits. A PRM step
+    (``run.logits_loss`` false) passes ``logits_to_keep=1`` where the forward takes
+    it, so one position, unless the model type's forward has no such argument
+    (``FULL_LOGITS_MODEL_TYPES``, the outer and the nested text config's type both
+    checked) or the base ships its own code (``shape.remote_code``), whose forward
+    the estimate cannot see: those keep every position, the side of over-pricing.
+    """
+    if run.logits_loss or shape.remote_code:
+        return run.seq_len
+    if {shape.model_type, shape.config_model_type} & FULL_LOGITS_MODEL_TYPES:
+        return run.seq_len
+    return 1
 
 
 def dequant_bytes(shape: ModelShape, run: RunSpec) -> int:
@@ -352,6 +429,20 @@ def estimate_vram(shape: ModelShape, run: RunSpec) -> VramEstimate:
         "logits": logits_bytes(shape, run),
         "dequant": dequant_bytes(shape, run),
     }
+    # The peak is the larger of two phases (#2277). The forward/backward pass holds
+    # every term above. The optimizer step holds the parameters, their gradients, the
+    # optimizer state and the step's scratch, after the activations, logits and
+    # dequantized copy are freed. `optimizer_step` is how far the step exceeds the
+    # pass, so the total stays a sum of terms.
+    forward_backward = sum(terms.values())
+    step = (
+        terms["weights"]
+        + terms["adapters"]
+        + terms["gradients"]
+        + terms["optimizer"]
+        + math.ceil(trainable * OPTIMIZER_STEP_SCRATCH_BYTES_PER_PARAM.get(run.optimizer, 0.0))
+    )
+    terms["optimizer_step"] = max(step - forward_backward, 0)
     allocated = sum(terms.values())
     terms["overhead"] = math.ceil(OVERHEAD_FIXED_BYTES + OVERHEAD_SLACK * allocated)
     notes = []
@@ -377,6 +468,12 @@ def estimate_vram(shape: ModelShape, run: RunSpec) -> VramEstimate:
             "Selective checkpointing (attention only) is priced as no checkpointing, an "
             "upper bound; the tier is not measured."
         )
+    if terms["optimizer_step"]:
+        notes.append(
+            "The optimizer step, not the forward and backward pass, sets this peak: "
+            "the update holds the optimizer state and its scratch after the "
+            "activations are freed."
+        )
     if run.fused_loss and terms["logits"]:
         flags = " and ".join(f"training.{flag}" for flag in sorted(run.fused_loss))
         notes.append(
@@ -385,7 +482,22 @@ def estimate_vram(shape: ModelShape, run: RunSpec) -> VramEstimate:
             f"so the logits term ({terms['logits'] / GB:.1f} GB) overstates the peak. "
             "The fused path is not measured."
         )
+    if run.activation_offloading is not None:
+        notes.append(activation_offloading_note(run.activation_offloading, terms["activations"]))
     return VramEstimate(terms=terms, shape=shape, run=run, notes=tuple(notes))
+
+
+def activation_offloading_note(mode: str, activation_bytes: int) -> str:
+    """What the estimate says when ``training.activation_offloading`` is set.
+
+    The resident estimate and the streaming plan panel both print it, with their own
+    activation term.
+    """
+    return (
+        f"training.activation_offloading: {mode} is set: the activation term "
+        f"({activation_bytes / GB:.2f} GB) is charged as if every saved tensor stayed on "
+        "the card; what offloading moves off it is not modelled."
+    )
 
 
 def fit_verdict(total_bytes: float, available_bytes: float) -> str:
@@ -398,13 +510,16 @@ def fit_verdict(total_bytes: float, available_bytes: float) -> str:
 
 
 __all__ = [
+    "ACTIVATION_OFFLOADING_MODES",
     "BYTES_PER_PARAM_BY_QUANT",
     "GB",
     "OPTIMIZER_BYTES_PER_PARAM",
+    "OPTIMIZER_STEP_SCRATCH_BYTES_PER_PARAM",
     "TERM_NAMES",
     "VRAM_SAFETY_MARGIN",
     "RunSpec",
     "VramEstimate",
+    "activation_offloading_note",
     "estimate_vram",
     "fit_verdict",
 ]

@@ -293,6 +293,10 @@ def _render_profile(result: dict, gpu_memory_gb: float, gpu_memory_source: str) 
         mem_table.add_row("Logits and loss", "not counted (vocabulary unknown)")
     if result.get("dequant_memory_gb"):
         mem_table.add_row("4-bit dequantization", f"~{result['dequant_memory_gb']:.1f} GB")
+    if result.get("optimizer_step_memory_gb"):
+        mem_table.add_row(
+            "Optimizer step (over the pass)", f"~{result['optimizer_step_memory_gb']:.1f} GB"
+        )
     mem_table.add_row("Overhead", f"~{result['overhead_gb']:.1f} GB")
     mem_table.add_row("-" * 20, "-" * 10)
     mem_table.add_row("[bold]Total[/]", f"[bold]~{result['total_memory_gb']:.1f} GB[/]")

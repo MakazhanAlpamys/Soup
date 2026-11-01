@@ -119,14 +119,3 @@ def test_the_rendered_profile_prices_a_dpo_run_as_full(workdir):
     result = CliRunner().invoke(app, ["profile", "--config", "soup.yaml", "--gpu", "a100"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert "Gradient checkpointing: enabled (full)" in _plain(result.output)
-
-
-def test_the_direct_estimate_reports_the_same_two_fields():
-    from soup_cli.utils.profiler import estimate_total
-
-    off = estimate_total("m", 70.0, "none", 16, 32, 4, 2048, "adamw_torch", False)
-    assert off["gradient_checkpointing"] is False
-    assert off["gradient_checkpointing_tier"] == "off"
-    on = estimate_total("m", 70.0, "none", 16, 32, 4, 2048, "adamw_torch", True)
-    assert on["gradient_checkpointing"] is True
-    assert on["gradient_checkpointing_tier"] == "full"

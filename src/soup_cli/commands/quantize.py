@@ -15,6 +15,9 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
+from soup_cli.config.deprecation import EXPORT_FORMATS_REMOVED_IN
+from soup_cli.utils.terminal import for_terminal
+
 console = Console()
 
 VALID_FORMATS = frozenset({"gguf", "onnx", "tensorrt"})
@@ -50,8 +53,13 @@ def quantize(
     canonical = to.lower().strip()
     if canonical not in VALID_FORMATS:
         console.print(
-            f"[red]--to must be one of {sorted(VALID_FORMATS)}; got {to!r}[/]"
+            f"[red]--to must be one of {sorted(VALID_FORMATS)}; "
+            f"got {for_terminal(repr(to))}[/]"
         )
+        if canonical in ("awq", "gptq"):
+            console.print(
+                f"[yellow]--to {canonical} was removed in v{EXPORT_FORMATS_REMOVED_IN}.[/]"
+            )
         raise typer.Exit(code=2)
     if isinstance(bits, bool) or not isinstance(bits, int):
         console.print("[red]--bits must be int[/]")
