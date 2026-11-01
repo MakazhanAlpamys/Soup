@@ -749,6 +749,8 @@ soup serve --model ./output --structured-output regex --regex-pattern '\d{3}-\d{
 
 The `validate_json_schema` helper caps serialised size at 64KB and requires a top-level `type` field so malformed schemas fail fast at server startup, not per-request.
 
+Structured output, `--reasoning-parser`, `--trace-log` and `--record-thumbs` are applied on `--backend transformers` only. With `--backend vllm`, `sglang` or `mii` they are refused with exit 2, naming each flag, instead of serving unconstrained, unparsed, untraced responses (#1811).
+
 ### Continuous-Batching Dashboard + `/metrics`
 
 Track live server health:
@@ -880,7 +882,7 @@ soup ui --port 8080 --no-browser
 soup serve --model ./out --trace-log ./serve-trace.jsonl --trace-log-cap-mb 100
 ```
 
-Each line: `{"ts": ..., "prompt": ..., "response": ..., "latency_ms": ..., "tokens": ...}`. Path-containment validated, hard rotation cap (default 100 MB, one backup retained), symlink-reject on the backup path (TOCTOU defence), and `hf_*` / `sk-*` / `Bearer …` token shapes redacted to `<redacted>` before write. Failures (disk full, serialisation errors) never crash the request handler.
+Transformers backend only; another `--backend` refuses the flag (#1811). Each line: `{"ts": ..., "prompt": ..., "response": ..., "latency_ms": ..., "tokens": ...}`. Path-containment validated, hard rotation cap (default 100 MB, one backup retained), symlink-reject on the backup path (TOCTOU defence), and `hf_*` / `sk-*` / `Bearer …` token shapes redacted to `<redacted>` before write. Failures (disk full, serialisation errors) never crash the request handler.
 
 
 ## Soup Quantize — Ergonomic Export Alias
