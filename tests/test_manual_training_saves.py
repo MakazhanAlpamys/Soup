@@ -211,3 +211,51 @@ def test_distributed_step_combines_save_and_stop_requests(monkeypatch):
 
     monkeypatch.setattr(distributed, "all_reduce", reduce)
     assert _shared_requests(True, False) == (True, True)
+
+
+def _ppo_case(tmp_path, monkeypatch):
+    from transformers import TrainerCallback
+
+    from tests.test_issue1391_ppo_real_step import _wrapper
+
+    wrapper = _wrapper(tmp_path, monkeypatch)
+    wrapper.trainer.args.num_total_batches = 4
+    wrapper.trainer.state.save_steps = 1000
+    saved = []
+    ended = []
+
+    class Signals(TrainerCallback):
+        def on_step_end(self, args, state, control, **kwargs):
+            if state.global_step in (1, 2):
+                signal.raise_signal(signal.SIGINT)
+
+        def on_save(self, args, state, control, **kwargs):
+            checkpoint = Path(args.output_dir) / f"checkpoint-{state.global_step}"
+            assert (checkpoint / "trainer_state.json").is_file()
+            saved.append(state.global_step)
+
+        def on_train_end(self, args, state, control, **kwargs):
+            ended.append(state.global_step)
+
+    wrapper.trainer.add_callback(Signals())
+    previous = signal.getsignal(signal.SIGINT)
+    result = wrapper.train()
+    return {"step": result["total_steps"], "saved": saved, "ended": ended,
+            "restored": signal.getsignal(signal.SIGINT) == previous,
+            "final_adapter": (Path(wrapper._output_dir) / "adapter_config.json").is_file()}
+
+
+def test_experimental_ppo_stops_after_the_second_signal_checkpoint(tmp_path):
+    script = (
+        "import json,sys; from pathlib import Path; import pytest; "
+        "from tests.test_manual_training_saves import _ppo_case; "
+        "patch=pytest.MonkeyPatch(); result=_ppo_case(Path(sys.argv[1]),patch); patch.undo(); "
+        "print('RESULT='+json.dumps(result))"
+    )
+    process = subprocess.run([sys.executable, "-c", script, str(tmp_path)],
+                             capture_output=True, text=True, encoding="utf-8", timeout=150)
+    assert process.returncode == 0, (process.stdout[-2000:], process.stderr[-2000:])
+    result = json.loads(next(line[7:] for line in process.stdout.splitlines()
+                             if line.startswith("RESULT=")))
+    assert result == {"step": 2, "saved": [1, 2], "ended": [2],
+                      "restored": True, "final_adapter": True}

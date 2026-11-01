@@ -10,6 +10,10 @@ from soup_cli.utils.checkpoint_trigger import consume_trigger, should_save_now
 from soup_cli.utils.graceful_save import GracefulSaveHandler
 
 
+class _StopAfterCheckpoint(BaseException):
+    """Leave a custom HF-backed loop only after its checkpoint succeeded."""
+
+
 def _shared_requests(save: bool, stop: bool) -> tuple[bool, bool]:
     """All initialized distributed ranks must take the same safe-step decision."""
     import torch
@@ -25,12 +29,14 @@ def _shared_requests(save: bool, stop: bool) -> tuple[bool, bool]:
 
 
 @contextmanager
-def manual_save_context(trainer: Any) -> Iterator[None]:
+def manual_save_context(trainer: Any, *, stop_after_save: bool = False) -> Iterator[None]:
     """Run a HF-backed trainer with checkpoint triggers and scoped SIGINT handling.
 
     A separate callback keeps these controls available without a live display.
     The finally block also covers startup, training and checkpoint exceptions:
     HF does not emit on_train_end when its loop raises.
+    ``stop_after_save`` also leaves custom TRL loops that emit callbacks but
+    ignore TrainerControl.should_training_stop (experimental PPO).
     """
     # Custom loops and lightweight trainer implementations without the HF
     # callback protocol keep their existing behavior and need no HF import.
@@ -74,6 +80,8 @@ def manual_save_context(trainer: Any) -> Iterator[None]:
             _save, stop = _shared_requests(False, requests.should_training_stop)
             if stop:
                 control.should_training_stop = True
+                if stop_after_save:
+                    raise _StopAfterCheckpoint
 
         def on_train_end(self, args, state, control, **event_kwargs):
             handler.restore()
@@ -82,6 +90,10 @@ def manual_save_context(trainer: Any) -> Iterator[None]:
     trainer.add_callback(callback)
     try:
         yield
+    except _StopAfterCheckpoint:
+        trainer.control = trainer.callback_handler.on_train_end(
+            trainer.args, trainer.state, trainer.control
+        )
     finally:
         handler.restore()
         trainer.remove_callback(callback)

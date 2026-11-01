@@ -910,7 +910,7 @@ class PPOTrainerWrapper:
                     fp16=getattr(self.trainer.args, "fp16", False),
                     bf16=getattr(self.trainer.args, "bf16", False),
                 )
-                with manual_save_context(self.trainer):
+                with manual_save_context(self.trainer, stop_after_save=True):
                     self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
             else:
                 if resume_from_checkpoint:
@@ -923,7 +923,7 @@ class PPOTrainerWrapper:
                     fp16=getattr(self.trainer.args, "fp16", False),
                     bf16=getattr(self.trainer.args, "bf16", False),
                 )
-                with manual_save_context(self.trainer):
+                with manual_save_context(self.trainer, stop_after_save=True):
                     self.trainer.train()
         duration = time.time() - start
 
