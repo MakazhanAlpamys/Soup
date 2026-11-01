@@ -903,8 +903,8 @@ def arithmetic(
     config_overrides: Optional[dict[str, object]] = None
 
     if use_concat:
-        # Bake each adapter's own decode-time scaling (lora_alpha/r) into its A
-        # block so a single-scaling output reproduces Σ cᵢ·(effective ΔWᵢ). Use
+        # Bake each adapter's decode-time scaling (alpha/r, or alpha/sqrt(r) for
+        # rsLoRA) into its A block so unit-scaled output reproduces Σ cᵢ·(effective ΔWᵢ). Use
         # an explicit `is None` fallback so a valid scaling of 0.0 (lora_alpha=0,
         # r>0 — an intentionally zeroed task vector) is NOT silently promoted to
         # 1.0 by `or`.
@@ -925,13 +925,13 @@ def arithmetic(
                 "nothing to merge.[/]"
             )
             raise typer.Exit(1)
-        # Output is a single-scaling adapter: r == lora_alpha == new_rank. Clear
-        # any per-module rank_pattern/alpha_pattern (v0.39.0) carried over from
-        # the template source — the concat output is uniform-rank, so stale
-        # per-module overrides would mis-scale it.
+        # Input scalings are baked in: ordinary LoRA with r == lora_alpha gives
+        # unit output scaling. Clear rsLoRA and per-module rank/alpha overrides
+        # inherited from the template so they cannot scale the result again.
         config_overrides = {
             "r": new_rank,
             "lora_alpha": new_rank,
+            "use_rslora": False,
             "rank_pattern": {},
             "alpha_pattern": {},
         }

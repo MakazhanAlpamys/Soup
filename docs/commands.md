@@ -285,7 +285,7 @@ soup adapters verify <adapter> [--strict] [--public-key <pem>] [--cert-identity 
 soup adapters check <adapter> [--json]        Is the adapter trained? Total/per-layer ||dW||_F, live fraction, all-zero lora_B, leaked .inner. keys; ends in alive or inactive: <reason> (exit 0 / 2; 1 = usage error)
 soup adapters check-safetensors <adapter> [--strict]  Refuse pickle / PyTorch-classic weights
 soup adapters merge ... [--license <id>] [--license-override <reason>] [--allow-unscanned]  License + backdoor-scan gates (auto-detect license; scan FAIL refused)
-soup adapters arithmetic "coder + 0.5*math - toxic" --adapter coder=<p> --adapter math=<p> --adapter toxic=<p> -o <out> [--allow-unscanned --allow-cross-base]  Task-vector algebra over LoRA adapters (add/scale/negate; same-rank; scan + same-base gated) (v0.71.34)
+soup adapters arithmetic "coder + 0.5*math - toxic" --adapter coder=<p> --adapter math=<p> --adapter toxic=<p> -o <out> [--rank <N>] [--allow-unscanned --allow-cross-base]  Task-vector algebra over LoRA adapters (same-rank fast path; mixed-rank concat with LoRA/rsLoRA scaling; optional SVD rank cap; scan + same-base gated)
 soup attest emit ... [--sign unsigned|ed25519|sigstore] [--key <pem>] [--interactive-oidc] [-o att.json]  in-toto/SLSA-3 attestation; Sigstore requires -o
 soup attest verify <statement> --signature <sig> [--public-key <pem>] [--cert-identity <san> --cert-oidc-issuer <url>]  Verify ed25519/Sigstore attestation signature
 soup airgap-bundle --model <m> --output <out.tar> [--repro-receipt <r.json>]  Signed tarball for data-diode transfer (embeds repro-receipt)
