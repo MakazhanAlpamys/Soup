@@ -1590,3 +1590,8 @@ _register_v0650(app, console)
 from soup_cli.commands._eval_v07110 import register as _register_v07110  # noqa: E402
 
 _register_v07110(app, console)
+
+# Register v0.76.x subcommand (eval export-check — #2048)
+from soup_cli.commands._eval_export_check import register as _register_export_check  # noqa: E402
+
+_register_export_check(app, console)

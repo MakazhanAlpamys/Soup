@@ -1047,6 +1047,36 @@ soup eval quant-check --before X --after Y --tasks t.jsonl --allow-stub
 
 Paths are containment-checked, and `registry://` refs are resolved with an optional `kinds` filter so you never pick the wrong artifact. Standalone `.gguf` file paths are refused up front; pass directory paths containing safetensors/HuggingFace weights or `registry://` references. An unparseable or unreadable `--tasks` file is refused as a usage error (exit 3) with the task loader's message before any model is loaded.
 
+### Export Behavior Check
+
+After merging a LoRA adapter, check that the merged Hugging Face model still carries the
+adapter's behavior rather than silently reverting to the base model:
+
+```bash
+soup eval export-check \
+  --adapter ./output/adapter \
+  --exported ./output/merged \
+  --prompts ./evals/adapter-probes.jsonl
+```
+
+The checker greedily generates from the base model, base plus adapter, and exported model
+on identical prompts. A prompt contributes evidence only when the adapter changes the base
+output. For each such prompt, an export that is closer to the base than to the adapter is
+reported as `DELTA_LOST`; this fails with exit code 2. The report also includes exported-
+to-reference agreement, exact-match rate, and the first divergent character.
+
+`--min-agreement` defaults to `0.80`: it tolerates small wording differences from a merge,
+while the independent closer-to-base check still rejects a reverted adapter delta. If no
+prompt changes with the adapter, the command fails with exit code 2 rather than claiming a
+pass; provide held-out prompts that exercise the adapter's intended behavior. Input paths
+must stay under the current working directory. JSONL prompt rows use a `prompt` string;
+plain-text files use one prompt per line.
+
+This first implementation supports merged Hugging Face directories with `.safetensors` or
+`.bin` weights. Standalone GGUF files and MLX-fused directories are refused clearly; their
+live inference backends are not yet integrated. `--allow-stub` is only for exercising the
+command in environments without model dependencies and always fails the gate.
+
 ### Custom Eval Format
 
 `scoring` must be a supported string label; omitted values default to `exact`.
@@ -1241,3 +1271,56 @@ soup eval irt-subset per_item_correctness.jsonl --size small --model 2pl
 ```
 
 `--model` picks the item-response model (default `1pl`). `1pl` is the closed-form Rasch fit (`β̂_i = -log(p̂_i / (1 - p̂_i))`); `2pl` adds a per-item discrimination parameter and `3pl` a guessing floor, both via joint coordinate-ascent MLE (v0.71.6). Items rank by Fisher information at θ=0 (`p̂ · (1-p̂)` in 1PL — maximised at 50/50 items, since extremes carry no new ranking information). `full` keeps 100%, `small` keeps 30%, `tiny` keeps 10%.
+
+---
+
+## Export Behavior Verification (`soup eval export-check`)
+
+Verifies that an exported model artifact (such as a merged safetensors directory produced by `soup merge`) still preserves the behavioral delta of the LoRA adapter it was created from.
+
+```bash
+soup eval export-check \
+    --adapter ./my-lora-adapter \
+    --exported ./merged-model \
+    --prompts ./eval-prompts.jsonl \
+    --min-agreement 0.80 \
+    --format table
+```
+
+### The Core Problem: Did the LoRA Delta Survive Export?
+
+When fine-tuned adapters are merged into base weights or converted for deployment, subtle numerical loss, incorrect merge weights, or format corruption can cause the exported model to quietly revert to the unmodified base model.
+
+`soup eval export-check` compares three models under deterministic greedy decoding on the same prompt set:
+1. **Base model**: The unmodified base foundation model (`--base` or auto-detected from `adapter_config.json`).
+2. **Reference model**: Base + LoRA adapter loaded dynamically via PEFT.
+3. **Exported model**: The merged safetensors directory under test (`--exported`).
+
+### Comparison Methodology
+
+- **Active Prompts**: Prompts where the adapter produces a different output or token stream from the base model ($Y_{\text{base}} \neq Y_{\text{ref}}$). Inactive prompts (where the adapter produced no behavioral shift) are reported as `INACTIVE` and excluded from fidelity scoring.
+- **Fidelity Agreement**: Average character bigram overlap between the exported artifact and the reference model across all active prompts.
+- **Delta Loss Detection**: Even if character overlap meets `--min-agreement`, if the exported artifact is strictly closer to the base model than to the adapter reference on active prompts, the delta was lost and the check fails (`DELTA_LOST`).
+- **Token Divergence**: Reports the 0-based index of the first divergent generated token ID between the exported model and adapter reference.
+- **Held-Out Causal NLL**: Computes negative log-likelihood over evaluation texts using masked next-token loss:
+  $$\text{shift\_logits} = \text{logits}[:, :-1, :], \quad \text{shift\_labels} = \text{input\_ids}[:, 1:]$$
+  Masked out padding tokens are excluded, and token-weighted mean NLL is evaluated across base, reference, and exported models.
+
+### Prompts File Format
+
+`--prompts` is required (omitting it exits `3` with `give --prompts`). Supported formats:
+- Plain text: One prompt per non-empty line.
+- JSONL with `"prompt"` key: `{"prompt": "Summarize this article..."}`
+- Alpaca format: `{"instruction": "...", "input": "..."}`
+- ChatML format: `{"messages": [{"role": "user", "content": "..."}]}`
+- JSON strings: `"What is 7 * 8?"`
+
+### Supported Formats & Refusals
+
+Only Hugging Face safetensors directories are supported for direct live inference. Standalone GGUF files, ONNX files, and MLX-fused directories are cleanly refused with exit code `3` and diagnostic instructions pointing to `soup llama cli` or `mlx_lm.generate`. Passing an adapter directory (with `adapter_config.json`) to `--exported` is also rejected with exit code `3`.
+
+### Exit Codes
+
+- `0`: PASS — Adapter delta is preserved across active prompts and agreement meets `--min-agreement`.
+- `2`: GATE FAILED — `DELTA_LOST` (model reverted to base), `LOW_AGREEMENT` (agreement fell below threshold), or `NO_EVIDENCE` (no active adapter prompts found).
+- `3`: USAGE ERROR — Missing `--prompts`, path outside current working directory, unsupported artifact format, or invalid arguments.
