@@ -287,13 +287,15 @@ That shows the objective moving, not alignment quality.
   micro-batch and the micro-batches are averaged with equal weight, as the
   transformers Trainer does for TRL's CPO.
 - **Tokens** are ORPO's above: TRL's CPO and ORPO trainers tokenize rows with
-  the same code, so rows that fit in `data.max_length` train on the same tokens
-  on either backend. MLX SimPO, DPO and ORPO cut over-long rows by the prompt
-  alone (prompt to `max_length // 2`, keeping its end, answers to the remaining
-  room). The transformers SimPO path now applies that same cap, but only when a
-  row does not fit `data.max_length` (TRL 0.29.1 cuts only the answers, so a
-  long prompt reached the model whole); Soup refuses a row whose shorter answer
-  that cut empties.
+  the same code. MLX SimPO, like MLX DPO and ORPO, cuts by the prompt alone: a
+  prompt longer than `max_length // 2` tokens is cut to that many, keeping its
+  end, and the answers to the remaining room, even when the row would fit. The
+  transformers SimPO path applies the same cap only when a row does not fit
+  `data.max_length` (TRL 0.29.1 cuts only the answers, so a long prompt reached
+  the model whole); Soup refuses a row whose shorter answer that cut empties.
+  Rows that fit with a prompt of at most `max_length // 2` tokens train on the
+  same tokens on either backend; a row that fits with a longer prompt keeps its
+  whole prompt on transformers and loses its start on MLX.
 - **Ties train**, as in TRL: the preference term is the constant
   `softplus(simpo_gamma)` and the NLL still learns.
 - **Stops on a nonfinite loss** instead of training on NaN.
