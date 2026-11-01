@@ -1,7 +1,7 @@
 """v0.44.0 Part B — Ctrl+C graceful-save SIGINT handler.
 
-First SIGINT writes a checkpoint by setting `should_save=True` on the HF
-Trainer state; second SIGINT exits via `should_training_stop=True` (or raises
+First SIGINT requests a checkpoint by setting `should_save=True` on the
+attached request state; second SIGINT sets `should_training_stop=True` (or raises
 KeyboardInterrupt if no trainer state is wired).
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import signal
 from dataclasses import dataclass, field
-from threading import Lock
+from threading import RLock
 from typing import Any, Optional
 
 
@@ -17,14 +17,14 @@ from typing import Any, Optional
 class GracefulSaveHandler:
     """SIGINT handler that survives a first Ctrl+C by requesting a save."""
 
-    state: Optional[Any] = None  # HF TrainerState (duck-typed)
+    state: Optional[Any] = None  # Latched save/stop requests (duck-typed)
     sigint_count: int = 0
-    _lock: Lock = field(default_factory=Lock, repr=False, compare=False)
+    _lock: Any = field(default_factory=RLock, repr=False, compare=False)
     _previous_handler: Any = field(default=None, repr=False, compare=False)
     _installed: bool = field(default=False, repr=False, compare=False)
 
     def attach_state(self, state: Any) -> None:
-        """Plug an HF TrainerState in. Must be called before SIGINT fires."""
+        """Attach save/stop request flags before SIGINT fires."""
         with self._lock:
             self.state = state
 
