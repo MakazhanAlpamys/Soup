@@ -6868,7 +6868,7 @@ class SoupConfig(BaseModel):
                 f"training.neftune_alpha={tcfg.neftune_alpha!r} is set, but "
                 f"task={self.task!r} never applies it (any value, including 0.0, "
                 f"is refused). Only tasks in {sorted(NEFTUNE_APPLYING_TASKS)} forward "
-                f"it to ``TrainingArguments.neftune_noise_alpha``. Remove "
+                f"it to TrainingArguments.neftune_noise_alpha. Remove "
                 f"training.neftune_alpha, or use one of those tasks."
             )
         return self

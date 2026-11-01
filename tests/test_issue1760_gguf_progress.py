@@ -171,17 +171,23 @@ def test_no_install_deps_present_never_runs_pip_and_reports_phases(monkeypatch, 
     assert not list(destination.parent.glob(".soup_gguf_*"))
 
 
-@pytest.mark.parametrize("flag", ["--verbose", "--no-install-deps"])
-def test_gguf_only_flags_are_not_silently_ignored(monkeypatch, cli_inputs, flag):
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [
+        (["--verbose"], "--verbose requires --format gguf."),
+        (["--no-install-deps"], "--no-install-deps requires --format gguf."),
+        (
+            ["--verbose", "--no-install-deps"],
+            "--verbose and --no-install-deps require --format gguf.",
+        ),
+    ],
+)
+def test_gguf_only_flags_are_not_silently_ignored(monkeypatch, cli_inputs, flags, expected):
     model, _, destination = cli_inputs
     result = CliRunner().invoke(app, ["export", "--model", str(model), "--format", "onnx",
-                                    "--output", str(destination), flag])
+                                    "--output", str(destination), *flags])
     assert result.exit_code == 2, result.output
-    output = strip_ansi(result.output)
-    assert "--format gguf" in output
-    assert flag in output
-    other = "--no-install-deps" if flag == "--verbose" else "--verbose"
-    assert other not in output
+    assert " ".join(strip_ansi(result.output).split()) == expected
 
 
 def test_dependency_probe_names_all_missing_packages(monkeypatch):
