@@ -1,5 +1,6 @@
 """Pydantic schemas for soup.yaml config — single source of truth."""
 
+import functools
 import math
 import re
 from typing import Any, Callable, Dict, List, Literal, NamedTuple, Optional, Union
@@ -8,7 +9,6 @@ from pydantic import (
     BaseModel,
     Field,
     ValidationInfo,
-    ValidatorFunctionWrapHandler,
     field_validator,
     model_validator,
 )
@@ -42,6 +42,28 @@ from soup_cli.utils.long_context import LONGROPE_REFUSAL
 
 # Stdlib-only structural check shared by every regex a config can carry.
 from soup_cli.utils.safe_regex import check_config_regex
+
+
+def _type_error_as_value_error(validator: Callable[..., Any]) -> Callable[..., Any]:
+    """#2366 — let a field validator's ``TypeError`` reach Pydantic as a ``ValueError``.
+
+    Pydantic turns a ``ValueError`` raised in a validator into a
+    ``ValidationError`` that names the field; it lets a ``TypeError`` escape
+    ``SoupConfig(...)`` unchanged. Several validators raise ``TypeError`` for a
+    wrong-typed value, directly or through a shared helper that keeps raising
+    it for its other callers, so the conversion happens here, on the schema
+    callback. ``functools.wraps`` keeps the signature Pydantic inspects to
+    decide whether the validator takes ``info``.
+    """
+
+    @functools.wraps(validator)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return validator(*args, **kwargs)
+        except TypeError as exc:
+            raise ValueError(str(exc)) from exc
+
+    return wrapper
 
 # v0.39.0 Part C — per-pattern LoRA rank/alpha bounds
 _MAX_LORA_RANK_PATTERN_KEYS = 256
@@ -2665,6 +2687,7 @@ class TrainingConfig(BaseModel):
         mode="before",
     )
     @classmethod
+    @_type_error_as_value_error
     def _validate_reward_hack_bool_fields(cls, v, info: ValidationInfo):
         """v0.71.26 — bool guard so YAML ``yes`` / ``1`` cannot silently coerce."""
         if v is None or isinstance(v, bool):
@@ -2725,6 +2748,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("reward_hack_halt", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_reward_hack_halt(cls, v):
         """v0.70.0 — explicit bool guard so YAML ``yes`` / ``1`` integers
         cannot silently coerce. Matches project bool-before-int policy.
@@ -2744,6 +2768,7 @@ class TrainingConfig(BaseModel):
         mode="before",
     )
     @classmethod
+    @_type_error_as_value_error
     def _validate_echo_trap_bool_fields(cls, v, info: ValidationInfo):
         """v0.70.0 Part F — bool guards for echo-trap toggles."""
         if v is None:
@@ -2761,6 +2786,7 @@ class TrainingConfig(BaseModel):
         mode="before",
     )
     @classmethod
+    @_type_error_as_value_error
     def _validate_rl_checkpoint_bool_fields(cls, v, info: ValidationInfo):
         """v0.70.0 Part D — bool guards for RL-checkpoint toggles."""
         if v is None:
@@ -2778,6 +2804,7 @@ class TrainingConfig(BaseModel):
         mode="before",
     )
     @classmethod
+    @_type_error_as_value_error
     def _validate_minillm_bool_fields(cls, v, info: ValidationInfo):
         """v0.70.0 Part C — bool guards for MiniLLM toggles."""
         if v is None:
@@ -2803,6 +2830,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("minillm_rollout_length", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_minillm_rollout_length(cls, v):
         """v0.71.18 #257 — reject bool before Pydantic coerces True->1."""
         if v is None:
@@ -2822,6 +2850,7 @@ class TrainingConfig(BaseModel):
         mode="before",
     )
     @classmethod
+    @_type_error_as_value_error
     def _validate_v053_bool_fields(cls, v, info: ValidationInfo):
         """v0.53.0 — explicit bool guard so YAML ``yes`` / ``1`` integers
         cannot silently coerce. Matches project bool-before-int policy.
@@ -2840,6 +2869,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("kv_cache_type", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_kv_cache_type(cls, v):
         """v0.53.0 Part C — bool / null-byte / oversize / case-insensitive
         normalisation via the shared helper.
@@ -2868,6 +2898,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("distill_divergence", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _normalize_distill_divergence(cls, v):
         """v0.52.0 Part C — canonicalise ``kl`` → ``forward_kl``.
 
@@ -2883,6 +2914,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("distill_temperature", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_distill_temperature(cls, v):
         """v0.52.0 Part C — bool/NaN-rejected float in [0.05, 100]."""
         if v is None:
@@ -2893,6 +2925,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("distill_mode", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_distill_mode(cls, v):
         """v0.71.12 #145 — canonicalise + reject unknown distill modes."""
         if v is None:
@@ -2933,6 +2966,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("mod_capacity_factor", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_mod_capacity_factor(cls, v):
         """v0.71.12 #84 — bool-before-float guard (bool subclasses int)."""
         if v is None:
@@ -2943,6 +2977,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("ebft_temperature", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_ebft_temperature(cls, v):
         """v0.52.0 Part E — bool/NaN-rejected float in [1e-4, 100]."""
         if v is None:
@@ -3055,6 +3090,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("num_labels", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_num_labels(cls, v):
         """v0.52.0 Part B (security review fix) — bool-before-int guard.
 
@@ -3071,6 +3107,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("reasoning_effort", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_reasoning_effort(cls, v):
         """v0.52.0 Part G (security review fix) — canonicalise case +
         bool/null-byte/oversize rejection via the shared helper.
@@ -3108,6 +3145,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("hub", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _normalize_hub(cls, v):
         """v0.51.0 Part E review fix — accept any case (HF / Modelscope /
         MODELERS) and normalise to lowercase before the Literal check.
@@ -4616,6 +4654,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("unlearn_method", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_unlearn_method(cls, v):
         """v0.61.0 Part A — bool / null-byte / oversize / case-insensitive
         normalisation via the shared helper.
@@ -4633,6 +4672,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("unlearn_alpha", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_unlearn_alpha(cls, v):
         """v0.61.0 Part A — bool/NaN/Inf-rejected float bounded [0.0, 10.0]."""
         if v is None:
@@ -4665,6 +4705,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("ra_dit_stage", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_ra_dit_stage(cls, v):
         """v0.62.0 Part B — case-insensitive normalisation via shared helper."""
         if v is None:
@@ -4675,6 +4716,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("ra_dit_retriever_model", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_ra_dit_retriever_model(cls, v):
         """v0.62.0 Part B — bool/null-byte/oversize rejection on retriever id."""
         if v is None:
@@ -4712,6 +4754,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("citation_style", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_citation_style(cls, v):
         """v0.62.0 Part D — case-insensitive normalisation via shared helper."""
         if v is None:
@@ -4722,6 +4765,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("citation_recall_threshold", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_citation_recall_threshold(cls, v):
         """v0.62.0 Part D — bool/NaN/Inf-rejected float bounded [0.0, 1.0]."""
         if v is None:
@@ -4758,6 +4802,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("grace_codebook_size", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_grace_codebook_size(cls, v):
         """v0.62.0 Part E — bool-rejected positive int <= MAX_CODEBOOK_SIZE."""
         if v is None:
@@ -4768,6 +4813,7 @@ class TrainingConfig(BaseModel):
 
     @field_validator("grace_codebook_dim", mode="before")
     @classmethod
+    @_type_error_as_value_error
     def _validate_grace_codebook_dim(cls, v):
         """v0.62.0 Part E — bool-rejected positive int <= MAX_CODEBOOK_DIM."""
         if v is None:
@@ -4776,24 +4822,6 @@ class TrainingConfig(BaseModel):
 
         return validate_grace_codebook_dim(v)
 
-    # Keep this the last validator of TrainingConfig. Pydantic runs ``before``
-    # and ``wrap`` validators in reverse order of definition, so a wrap
-    # validator defined last wraps every other validator of the field.
-    @field_validator("*", mode="wrap")
-    @classmethod
-    def _type_error_as_value_error(
-        cls, v: Any, handler: ValidatorFunctionWrapHandler
-    ) -> Any:
-        """#2366 — Pydantic does not turn a ``TypeError`` raised in a validator
-        into a ``ValidationError``, so a wrong-typed value escaped
-        ``SoupConfig(...)`` without the field's location. Re-raise it as a
-        ``ValueError`` with the same text; the shared helpers keep raising
-        ``TypeError`` for their other callers.
-        """
-        try:
-            return handler(v)
-        except TypeError as exc:
-            raise ValueError(str(exc)) from exc
 
 
 class ShipConfig(BaseModel):

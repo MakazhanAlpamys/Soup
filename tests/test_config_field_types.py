@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.config.loader import load_config_from_string
-from soup_cli.config.schema import SoupConfig
+from soup_cli.config.schema import SoupConfig, TrainingConfig
 from tests.conftest import strip_ansi
 
 WRONG_VALUES = [0, True, "false", [], {}, 1.5]
@@ -58,6 +58,31 @@ def test_wrong_typed_value_is_a_validation_error(model, name):
             model.model_validate(payload)
         except ValidationError:
             pass
+
+
+@pytest.mark.parametrize(("model", "name"), FIELDS)
+def test_default_value_still_validates(model, name):
+    field = model.model_fields[name]
+    if field.is_required() or field.default_factory is not None:
+        pytest.skip("no plain default to round-trip")
+    payload = {**REQUIRED.get(model.__name__, {}), name: field.default}
+    model.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "minillm_enabled",
+        "fp8_attention",
+        "echo_trap_halt",
+        "rl_checkpoint_include_optimizer",
+        "reward_hack_rollback",
+        "reward_hack_halt",
+    ],
+)
+@pytest.mark.parametrize("value", [True, False])
+def test_bool_flags_accept_bools(field, value):
+    assert getattr(TrainingConfig(**{field: value}), field) is value
 
 
 @pytest.mark.parametrize(
