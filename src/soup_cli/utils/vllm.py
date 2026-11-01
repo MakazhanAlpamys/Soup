@@ -203,6 +203,42 @@ def resolve_finish_reason(output: Any, max_tokens: Optional[int]) -> str:
     return "stop"
 
 
+def eos_id_set(value: Any) -> frozenset:
+    """The end-of-sequence ids in ``value``: an int, a list of ints, or neither."""
+    if isinstance(value, bool):
+        return frozenset()
+    if isinstance(value, int):
+        return frozenset({value})
+    if isinstance(value, (list, tuple)):
+        return frozenset(v for v in value if isinstance(v, int) and not isinstance(v, bool))
+    return frozenset()
+
+
+def generation_eos_ids(model: Any, tokenizer: Any) -> frozenset:
+    """The ids ``generate`` stops on: the model's generation config, else the tokenizer's."""
+    config = getattr(model, "generation_config", None)
+    ids = eos_id_set(getattr(config, "eos_token_id", None))
+    if ids:
+        return ids
+    return eos_id_set(getattr(tokenizer, "eos_token_id", None))
+
+
+def token_finish_reason(new_tokens: Any, max_tokens: Optional[int], eos_ids: frozenset) -> str:
+    """Why in-process generation ended, from the raw generated ids (#2361).
+
+    ``"stop"`` when the last id is an end-of-sequence id, even one that landed
+    exactly on the budget. ``"length"`` when the run used the whole budget
+    without one. ``"stop"`` otherwise. Read before decoding, since decoding
+    drops the end token.
+    """
+    ids = new_tokens.tolist() if hasattr(new_tokens, "tolist") else list(new_tokens)
+    if ids and ids[-1] in eos_ids:
+        return "stop"
+    if max_tokens and len(ids) >= int(max_tokens):
+        return "length"
+    return "stop"
+
+
 def is_vllm_available() -> bool:
     """Check if vLLM is installed."""
     try:
