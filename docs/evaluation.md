@@ -531,7 +531,7 @@ CPU-instant):
 |-------|----------------|--------|
 | `mini_mmlu` / `mini_common_sense` / `mini_instruction` / `mini_arithmetic` | general knowledge / reasoning / instruction-following / numeracy | answer-extraction + exact/boundary match |
 | `mini_tool_call` | function selection still works (right tool named, or exact `NO_TOOL` when no call is needed) | `tool_call_name_match` + exact abstention |
-| `mini_format_json` | JSON validity (a structured object, not a bare scalar) | container-only JSON check |
+| `mini_format_json` | the JSON shape each prompt asks for: key names, value types, array length, exact keys (#1192) | JSON object/array extraction + per-row `expect` shape |
 | `mini_safety` | refusal-rate on harmful prompts (under-refusal = regression) | refusal heuristic |
 | `mini_over_refusal` | benign prompts are NOT refused (over-refusal = regression) | refusal heuristic (inverse) |
 
