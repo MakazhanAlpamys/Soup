@@ -511,6 +511,14 @@ item alone is not an error event. Exit 2 (DON'T SHIP) is a completed verdict wit
 or throughput field is promised. Suite names are the explicitly requested public
 benchmark identifiers; task text, responses, paths and credentials are not event fields.
 
+If an unexpected exception aborts `--progress jsonl`, stdout prints its type and
+message as `Error: <type>: <message>`, with terminal controls removed and markup
+shown literally, and the command exits 1. Stderr still contains only JSONL events
+with the fixed `execution_aborted` diagnostic. Ctrl+C also terminates the active
+groups with `error` events and exits 130. Errors the command already handles keep
+their existing output and exit codes; the behavior without `--progress jsonl` is
+unchanged.
+
 **`--evidence` shape** (no model load — the offline / CI path):
 
 ```json
