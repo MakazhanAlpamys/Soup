@@ -174,9 +174,15 @@ def generate(
     from soup_cli.utils.paths import ensure_distinct_paths
     from soup_cli.utils.terminal import for_terminal
 
-    inputs = [(field, path) for field, path in (
-        ("--seed", seed_file), ("--dedup-with", dedup_with), ("--context", template_context),
-    ) if path]
+    inputs = [
+        (field, path)
+        for field, path in (
+            ("--seed", seed_file),
+            ("--dedup-with", dedup_with),
+            ("--context", template_context),
+        )
+        if path
+    ]
     try:
         ensure_distinct_paths(inputs, [("--output", output)])
     except ValueError as exc:
@@ -184,9 +190,7 @@ def generate(
         raise typer.Exit(1) from exc
 
     if fmt not in VALID_FORMATS:
-        console.print(
-            f"[red]Invalid format: {fmt}. Must be one of: {', '.join(VALID_FORMATS)}[/]"
-        )
+        console.print(f"[red]Invalid format: {fmt}. Must be one of: {', '.join(VALID_FORMATS)}[/]")
         raise typer.Exit(1)
 
     # Handle --ollama-model shorthand
@@ -196,16 +200,14 @@ def generate(
 
     if provider not in VALID_PROVIDERS:
         console.print(
-            f"[red]Invalid provider: {provider}. "
-            f"Must be one of: {', '.join(VALID_PROVIDERS)}[/]"
+            f"[red]Invalid provider: {provider}. Must be one of: {', '.join(VALID_PROVIDERS)}[/]"
         )
         raise typer.Exit(1)
 
     # Validate template
     if template and template not in VALID_TEMPLATES:
         console.print(
-            f"[red]Invalid template: {template}. "
-            f"Must be one of: {', '.join(VALID_TEMPLATES)}[/]"
+            f"[red]Invalid template: {template}. Must be one of: {', '.join(VALID_TEMPLATES)}[/]"
         )
         raise typer.Exit(1)
 
@@ -281,6 +283,9 @@ def generate(
 
         remaining = count
         last_request_time = 0.0
+        consecutive_empty = 0
+        max_empty_retries = 3
+
         while remaining > 0:
             current_batch = min(batch_size, remaining)
 
@@ -331,6 +336,7 @@ def generate(
 
             last_request_time = time.monotonic()
 
+            previous_count = len(all_examples)
             # Validate and dedup
             for example in batch:
                 is_valid = _validate_example(example, fmt)
@@ -344,10 +350,37 @@ def generate(
                     continue
                 existing_texts.add(text)
                 all_examples.append(example)
+                if len(all_examples) == count:
+                    break
 
-            generated_this_round = len(batch)
-            remaining -= current_batch
-            progress.update(task, advance=generated_this_round)
+            added_this_round = len(all_examples) - previous_count
+            progress.update(task, advance=added_this_round)
+            remaining = count - len(all_examples)
+
+            if added_this_round == 0:
+                consecutive_empty += 1
+                if consecutive_empty >= max_empty_retries:
+                    console.print(
+                        f"[red]Generation halted: received no valid, unique examples after "
+                        f"{consecutive_empty} consecutive attempts "
+                        f"({len(all_examples)}/{count} generated)[/]"
+                    )
+                    if all_examples:
+                        try:
+                            partial_path = Path(output).resolve()
+                            if _path_within_cwd(partial_path, cwd):
+                                with open(partial_path, "w", encoding="utf-8") as f:
+                                    for row in all_examples:
+                                        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+                                console.print(
+                                    f"[yellow]Saved {len(all_examples)} examples "
+                                    f"to {partial_path}[/]"
+                                )
+                        except OSError:
+                            pass
+                    raise typer.Exit(1)
+            else:
+                consecutive_empty = 0
 
     # Sanitize output path (prevent path traversal)
     out_path = Path(output).resolve()
@@ -430,8 +463,7 @@ def _run_filter_pipeline(path: Path) -> None:
                 for row in kept:
                     f.write(json.dumps(row, ensure_ascii=False) + "\n")
             console.print(
-                f"[yellow]Filter: removed {removed} low-quality entries, "
-                f"{len(kept)} remaining[/]"
+                f"[yellow]Filter: removed {removed} low-quality entries, {len(kept)} remaining[/]"
             )
         else:
             console.print(f"[green]Filter: all {len(data)} entries passed[/]")
@@ -460,7 +492,7 @@ def _run_dedup_pipeline(path: Path) -> None:
             words = text.split()
             shingles = set()
             for ii in range(max(1, len(words) - 2)):
-                shingles.add(" ".join(words[ii: ii + 3]))
+                shingles.add(" ".join(words[ii : ii + 3]))
 
             mhash = MinHash(num_perm=num_perm)
             for shingle in shingles:
@@ -490,15 +522,14 @@ def _run_dedup_pipeline(path: Path) -> None:
                 for row in unique_data:
                     f.write(json.dumps(row, ensure_ascii=False) + "\n")
             console.print(
-                f"[yellow]Dedup: removed {removed} near-duplicates, "
-                f"{len(unique_data)} remaining[/]"
+                f"[yellow]Dedup: removed {removed} near-duplicates, {len(unique_data)} remaining[/]"
             )
         else:
             console.print(f"[green]Dedup: no duplicates found in {len(data)} entries[/]")
     except ImportError:
         console.print(
             "[yellow]Dedup: datasketch not installed, skipping. "
-            "Install: pip install \"soup-cli\\[data]\"[/]"
+            'Install: pip install "soup-cli\\[data]"[/]'
         )
 
 
@@ -660,7 +691,7 @@ def _get_format_spec(fmt: str) -> str:
     """Get the format specification string for the given format."""
     specs = {
         "alpaca": (
-            'Each example must be a JSON object with keys: '
+            "Each example must be a JSON object with keys: "
             '"instruction", "input" (can be empty string), "output".'
         ),
         "sharegpt": (
@@ -710,9 +741,7 @@ def _generate_openai(
 
     resolved_key = api_key or os.environ.get("OPENAI_API_KEY")
     if not resolved_key:
-        raise ValueError(
-            "OpenAI API key not found. Set OPENAI_API_KEY env var or pass --api-key."
-        )
+        raise ValueError("OpenAI API key not found. Set OPENAI_API_KEY env var or pass --api-key.")
 
     try:
         import httpx  # noqa: F401 -- retain the optional-dependency diagnostic
@@ -769,9 +798,7 @@ def _generate_openai(
     )
 
     if response.status_code != 200:
-        raise ValueError(
-            f"API returned {response.status_code}. Check your API key and model name."
-        )
+        raise ValueError(f"API returned {response.status_code}. Check your API key and model name.")
 
     data = response.json()
     content = data["choices"][0]["message"]["content"]
@@ -845,7 +872,7 @@ def _generate_local(
             pad_token_id=tokenizer.pad_token_id,
         )
 
-    new_tokens = outputs[0][input_ids.shape[1]:]
+    new_tokens = outputs[0][input_ids.shape[1] :]
     content = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
 
     return _parse_json_array(content)
@@ -886,9 +913,7 @@ def _generate_server(
 
         parsed = urlparse(api_base)
         if parsed.scheme not in ("http", "https"):
-            raise ValueError(
-                f"api_base must use HTTP or HTTPS scheme (got {parsed.scheme}://)"
-            )
+            raise ValueError(f"api_base must use HTTP or HTTPS scheme (got {parsed.scheme}://)")
         is_local = parsed.hostname in LOOPBACK_HOSTS
         if not is_local and parsed.scheme != "https":
             if parsed.hostname == "0.0.0.0":
