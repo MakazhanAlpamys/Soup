@@ -317,7 +317,7 @@ class TestAlreadyRefusedForAnotherReason:
     def test_pretrain_on_mlx(self):
         message = _refusal(_yaml("pretrain", {"backend": "mlx"}, rope_scaling_type="yarn"))
 
-        assert "MLX backend only ships SFT" in message, message
+        assert "MLX pretrain does not support training.rope_scaling_type" in message, message
 
     def test_pretrain_with_stream_layers(self):
         message = _refusal(

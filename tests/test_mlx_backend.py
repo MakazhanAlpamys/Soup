@@ -246,7 +246,7 @@ class TestMLXRouting:
         from soup_cli.trainer import mlx_routing
 
         assert "ppo" not in mlx_routing.MLX_TRAINER_REGISTRY
-        assert "pretrain" not in mlx_routing.MLX_TRAINER_REGISTRY
+        assert "pretrain" in mlx_routing.MLX_TRAINER_REGISTRY
         assert "embedding" not in mlx_routing.MLX_TRAINER_REGISTRY
 
 

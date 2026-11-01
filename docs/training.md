@@ -646,6 +646,101 @@ soup init --template pretrain
 soup train
 ```
 
+### Native MLX continued pretraining
+
+On an Apple Silicon Mac, install `pip install "soup-cli[mlx]"` and use a local
+text causal LM supported by MLX-LM (`>=0.31.3`), with a serializable fast tokenizer:
+
+```yaml
+base: ./local-mlx-model
+backend: mlx
+task: pretrain
+data:
+  train: ./data/corpus.jsonl
+  validation: ./data/heldout.jsonl  # optional; otherwise use val_split (default 0.1)
+  format: plaintext
+  max_length: 512
+training:
+  quantization: none              # dense bf16/fp16/fp32 base
+  epochs: 1                      # positive integers; fractional epochs are refused
+  batch_size: 2                   # auto resolves to 1
+  gradient_accumulation_steps: 4
+  seed: 42
+  data_seed: 42
+  lr: 1e-4
+  lora: {r: 8, alpha: 16, dropout: 0.0}
+output: ./outputs/mlx-pretrain
+```
+
+Run `soup train --config soup.yaml --yes`. This path needs no PyTorch, TRL,
+PEFT or `datasets`. For a **genuinely pre-quantized 4-bit affine MLX base**,
+change `base` and set `training.quantization: 4bit`. Soup inspects the loaded
+quantized modules; this setting does not quantize a dense model. A mismatch,
+8-bit/mixed-bit, non-affine quantization or quantized MoE base is refused.
+
+TXT means one nonempty **stripped line per document**; blank lines are ignored.
+JSONL means one `{"text": "..."}` document per row, preserving embedded
+newlines and indentation. Prefer JSONL for code or paragraphs. Invalid JSON,
+non-object rows and unusable text retain the existing reader diagnostics;
+accepted/dropped counts and source hashes are recorded without corpus contents.
+An explicit validation file takes precedence over `val_split`. Otherwise Soup
+splits documents before tokenization; windows from one document stay together.
+Empty required splits and splits without next-token targets are errors. Separate
+files are not deduplicated against one another.
+
+Raw text is encoded with `add_special_tokens=True`; no chat template or response
+mask is applied. Tokenizer-declared BOS/EOS behavior is retained; when an EOS ID
+exists it is appended only if not already last. Without EOS, the last encoded
+token is the last target. A tokenized document with fewer than two tokens has no
+targets and is counted separately. The first token is context only.
+
+Each document is divided into windows of at most `max_length` tokens, carrying
+one context token to the next window. With `[BOS, 10, 11, 12, EOS]` and a toy
+three-token width, the windows are `[BOS, 10, 11]` and `[11, 12, EOS]`: targets
+are `[10, 11]` then `[12, EOS]`. Every within-document adjacent pair is scored
+once per complete epoch. Long-document tails are retained; windows never join
+documents. This policy is specific to this path and does not assert identical
+windowing to the Transformers pretrain trainer. Padding is masked by position,
+so a real EOS remains supervised even when PAD equals EOS.
+
+The loop sums causal losses/gradients and divides by each update's actual valid
+target count, then clips the accumulated gradient. Partial batches and the final
+partial accumulation group of **every epoch** are consumed. Optimizer schedules,
+warmup, `save_steps` and `eval_steps` count completed optimizer updates.
+Validation uses inference mode and a token-weighted mean over all held-out
+windows, including short tails. It runs every epoch by default, or every
+`eval_steps` updates and after the final update. A split smaller than one batch
+works. The report includes loss, not exponentiated perplexity, avoiding an
+overflow-prone implied quality metric.
+
+Only standard linear LoRA with a frozen base is supported (including the shared
+rsLoRA scale). Full fine-tuning, DoRA/other PEFT variants, per-module rank/alpha
+patterns, chat masks/templates, packing, remote/streaming/interleaved corpora,
+gradient checkpointing and other unimplemented training extensions receive
+named configuration errors. Unset SFT response-mask/rewind defaults resolve to
+false in the effective config; explicitly enabling either is refused. Pretrain
+does not use the SFT rewind recorder or loss watchdog.
+
+Snapshots use `NNNNNNN_adapters.safetensors` plus a matching JSON completion
+sidecar. The final adapter additionally has `adapters.safetensors`,
+`adapters.json` and `adapter_config.json`. Keep these files together.
+`soup train --config soup.yaml --resume auto --yes` selects the highest numbered
+snapshot, falling back to the final adapter; `--resume path/to/0000001_adapters.safetensors`
+selects an explicit one. This is a **weights-only warm start**: optimizer,
+schedule, RNG/data position and update counters restart. Exact state resume
+remains separate (#1977). Base/model-file and tokenizer hashes, task,
+preprocessing/window policy, LoRA keys/rank/scale and actual quantization must
+match; missing, truncated, non-finite or incompatible weights are refused before
+application. Failed writes cannot pass the completion/digest checks.
+
+`adapter_config.json` records corpus/target coverage, effective optimizer plan,
+seeds, validation measurements, model loading/preparation time, one real
+forward/backward graph warmup, update throughput and peak MLX memory. The loop
+uses eager MLX graphs, without an explicit `mx.compile` stage; new shapes can
+still incur runtime kernel preparation. Peak MLX allocation is not whole-process
+RSS or the machine's total unified memory. These measurements do not establish
+CUDA parity or domain-quality gains.
+
 
 ## Knowledge Distillation
 

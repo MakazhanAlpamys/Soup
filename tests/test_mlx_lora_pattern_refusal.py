@@ -181,7 +181,7 @@ class TestOtherRefusalsKeepTheirOwnWords:
     """Each of these configs names a problem that "use backend: transformers" would not
     fix, or that has a more basic answer, so that refusal has to come first."""
 
-    @pytest.mark.parametrize("task", ["ipo", "pretrain"])
+    @pytest.mark.parametrize("task", ["ipo", "ppo"])
     def test_a_task_mlx_cannot_run_is_refused_for_that_first(self, task: str) -> None:
         with pytest.raises(ValidationError) as excinfo:
             _config(task, rank_pattern={"q_proj": 4})
