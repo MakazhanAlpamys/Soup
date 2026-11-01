@@ -84,7 +84,7 @@ def track(items: Iterable[T], total: int) -> Iterator[T]:
         state = None
     for item in items:
         yield item
-        if state is not None:
+        if state is not None and state.done is not None:
             state.done += 1
             state.emit("progress")
 

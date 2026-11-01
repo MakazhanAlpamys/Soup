@@ -151,18 +151,19 @@ def init(
     if template:
         config_text = load_template(template)
         if config_text is None:
-            console.print(f"[red]Unknown template: {template}[/]")
+            console.print(f"[red]Unknown template: {for_terminal(template)}[/]")
             console.print(f"Available: {', '.join(list_templates())}")
             raise typer.Exit(1)
-        console.print(f"[green]Using template:[/] {template}")
+        console.print(f"[green]Using template:[/] {for_terminal(template)}")
     else:
         config_text = _interactive_wizard()
 
     _write_config(output, config_text)
+    display_output = for_terminal(output_path)
     console.print(
         Panel(
-            f"[bold green]Config saved to {output_path}[/]\n\n"
-            f"Next step: [bold]soup train --config {output_path}[/]",
+            f"[bold green]Config saved to {display_output}[/]\n\n"
+            f"Next step: [bold]soup train --config {display_output}[/]",
             title="Ready!",
         )
     )

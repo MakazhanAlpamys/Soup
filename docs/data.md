@@ -80,6 +80,12 @@ against your own data, and check what got dropped.
 `--threshold` means Jaccard for MinHash and cosine for `--semantic`. They are
 different scales; a value tuned for one is not meaningful for the other.
 
+With either backend, a nonempty `--field` must occur in at least one loaded
+row. A field absent from every row is refused before backend work or output
+writes, preserving any existing output. Present-but-empty values and fields
+missing from only some rows keep their existing deduplication behavior.
+Omitting `--field` or passing `--field ""` deduplicates on all text fields.
+
 ## Dataset Sanitization & Repair (`soup data clean`)
 
 `soup data clean` applies deterministic hygiene rules to repair corrupted, malformed, or noisy fine-tuning datasets without ever modifying the input file in place:
@@ -280,6 +286,15 @@ soup data evolve --input seeds.jsonl --provider ollama --model llama3.1 \
 ```
 
 Every command applies the project-wide TOCTOU policy (`os.lstat + S_ISLNK` symlink rejection before any open) and cwd containment via the shared `paths.enforce_under_cwd_and_no_symlink` helper. All five are LIVE: `soup build` materialises with five built-in transforms (`identity` / `drop_empty` / `lowercase` / `strip` / `dedup_exact`) and SQLite-tracked incremental re-transform (v0.71.6); `soup data gen-magpie` and provider-backed `best-of-n` harvest via raw completion against `--provider ollama|vllm` (SSRF-validated; `anthropic` rejected because the Messages API has no raw-completion endpoint). Provider-backed `best-of-n` records the sampler provider and model in each row's `_best_of_n` provenance; omit `--provider` to retain the local Transformers `--base` path.
+
+`soup data evolve` and `soup data gen-magpie` report failed Ollama/vLLM calls,
+including transport errors, non-200 replies, malformed or empty completions and
+responses over the byte limit. If no rows survive and any provider call failed,
+they exit 1, name the provider, endpoint and first error, and leave an existing
+output untouched (or create no file). If usable rows survive, they write those
+rows, exit 0 and warn with the failed/total call counts. A reachable provider
+whose successful replies are all filtered out still writes an empty file,
+exits 0 and prints the existing zero-row warning. `--plan-only` makes no requests.
 
 `best-of-n` fsyncs each completed prompt group to a private recovery journal
 (`<output>.checkpoint.jsonl` by default). `--resume` reuses only a sequential
@@ -1189,6 +1204,13 @@ soup data filter ./data/train.jsonl --score-only  # add scores without filtering
 soup data clean ./data/train.jsonl
 soup data clean ./data/train.jsonl -o ./data/clean.jsonl --dry-run
 ```
+
+`soup data filter --perplexity` and `--score-only` require torch and transformers
+(install with `pip install "soup-cli[train]"`). If either package cannot be
+imported, the command exits 1 with installation instructions before writing an
+output: an existing file stays unchanged, and no new file is created.
+`--score-only` requests both perplexity and coherence scores; it does not fall
+back to coherence-only output. `--coherence` alone works without these packages.
 
 `soup data validate` exits with code `0` when at least one row is usable and the
 optional minimum valid fraction is met. It exits with code `3` for input errors,

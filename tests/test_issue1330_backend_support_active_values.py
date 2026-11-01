@@ -25,6 +25,29 @@ from tests.conftest import strip_ansi
 
 _FORMAT = {"text": "alpaca", "vision": "llava", "audio": "chatml"}
 
+# How to switch each declared row on. A row not listed is tried as
+# ``<field>: true``; one that needs a sibling setting or a non-boolean value is
+# listed. If the loader refuses the setting, the row can never reach doctor and
+# has to go (#2238).
+_ROW_SETTINGS = {
+    "training.neftune_alpha": {"training.neftune_alpha": 5.0},
+    "data.mask_history": {
+        "data.mask_history": True,
+        "data.train_on_responses_only": True,
+    },
+    "data.train_on_messages_with_train_field": {
+        "data.train_on_messages_with_train_field": True,
+        "data.train_on_responses_only": False,
+    },
+    "data.train_on_prompt": {
+        "data.train_on_prompt": True,
+        "data.train_on_responses_only": False,
+    },
+}
+_ROWS = [
+    (key, entry.field) for key, entries in REGISTRY.items() for entry in entries
+]
+
 
 def _config(task: str, backend: str, modality: str) -> dict:
     """The smallest config that loads for a registered (task, backend, modality)."""
@@ -128,6 +151,77 @@ def test_seed_zero_on_mlx_is_not_reported_now_that_mlx_seeds():
 
 def test_schema_refused_settings_have_no_doctor_rows():
     assert all(entry.status != REJECTED for entries in REGISTRY.values() for entry in entries)
+
+
+@pytest.mark.parametrize(
+    ("key", "field"),
+    _ROWS,
+    ids=[f"{'-'.join(key)}:{field}" for key, field in _ROWS],
+)
+def test_every_row_left_in_a_table_can_reach_doctor(key, field):
+    config = _config(*key)
+    for dotted, value in _ROW_SETTINGS.get(field, {field: True}).items():
+        section, name = dotted.split(".")
+        config.setdefault(section, {})[name] = value
+    cfg = _load(config)
+    assert field in {entry.field for entry in check_config(cfg)}
+
+
+@pytest.mark.parametrize("task", ["sft", "dpo", "orpo", "simpo", "kto"])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("use_lorafa", True),
+        ("quantization_aware", True),
+        ("use_liger", True),
+        ("use_flash_attn", True),
+    ],
+)
+def test_every_mlx_support_row_is_reachable(task, field, value):
+    """A refused setting cannot remain in doctor's support registry."""
+    config = _config(task, "mlx", "text")
+    config["training"] = {field: value}
+    dotted = f"training.{field}"
+
+    if task == "sft" and field in {"use_liger", "use_flash_attn"}:
+        cfg = _load(config)
+        assert dotted in {entry.field for entry in check_config(cfg)}
+        assert dotted in {entry.field for entry in unsupported_for(task, "mlx", "text")}
+    else:
+        with pytest.raises(ValueError, match=field):
+            _load(config)
+        assert dotted not in {
+            entry.field for entry in unsupported_for(task, "mlx", "text")
+        }
+
+
+@pytest.mark.parametrize(
+    ("task", "expected_count"),
+    [("sft", 10), ("dpo", 5), ("orpo", 5), ("simpo", 5), ("kto", 5)],
+)
+def test_mlx_doctor_all_clear_counts_only_reachable_settings(
+    task, expected_count, tmp_path, capsys, monkeypatch
+):
+    from rich.console import Console
+
+    import soup_cli.commands.doctor as doctor_module
+    from soup_cli.commands.doctor import doctor
+
+    monkeypatch.setattr(doctor_module, "console", Console(width=200))
+    config_file = tmp_path / f"{task}.yaml"
+    config_file.write_text(
+        yaml.safe_dump(_config(task, "mlx", "text"), sort_keys=False),
+        encoding="utf-8",
+    )
+
+    doctor(nccl=False, disk=False, config=str(config_file))
+
+    output = strip_ansi(capsys.readouterr().out)
+    assert len(unsupported_for(task, "mlx", "text")) == expected_count
+    assert (
+        f"None of the {expected_count} setting(s) known to be unread "
+        f"on task={task} backend=mlx is switched on in this config."
+    ) in output
 
 
 @pytest.mark.parametrize("modality", ["vision", "audio"])

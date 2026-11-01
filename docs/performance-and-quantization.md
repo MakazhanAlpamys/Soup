@@ -448,6 +448,8 @@ training:
 
 Not compatible with unsloth (own memory manager) or mlx. Wired across every transformer-backend trainer (SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward-Model, Embedding, Pretrain).
 
+The VRAM estimate (`soup train`'s pre-flight, `soup profile`, `soup plan` and the layer-streaming plan panel) does not model what offloading moves off the card: it charges the activation term as if every saved tensor stayed there, and says so when `activation_offloading` is set ([#2327](https://github.com/MakazhanAlpamys/Soup/issues/2327)).
+
 
 ## Layer Streaming (BETA, v0.72.0; NF4 v0.72.2; disk + wider archs v0.72.3; preference losses v0.72.4)
 

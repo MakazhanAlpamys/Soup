@@ -166,6 +166,7 @@ soup profile --config soup.yaml --json       Machine-readable output
 soup profile --model Qwen/Qwen2.5-7B-Instruct --gpu rtx5070 --method qlora  Will a model fit, without a soup.yaml
 soup cost --config soup.yaml                 Estimate training cost in USD across providers
 soup cost --config soup.yaml --gpu H100      Estimate training cost for specific GPU
+soup cost --config soup.yaml --json          Cost JSON on stdout; diagnostics on stderr
 soup adapters list ./output/                 Scan for LoRA adapters
 soup adapters info ./output/checkpoint-500/  Show adapter metadata
 soup adapters compare adapter1/ adapter2/    Compare two adapters
@@ -313,7 +314,7 @@ soup ingest --source langfuse --pull [--since 7d --max-pages 100 --allow-private
 soup prune-prompt --input <jsonl> --output <jsonl> --min-frequency 0.95  Detect + strip shared system-prompt prefix
 soup prune-prompt ... --tokenizer <id-or-path>  Tokenizer-aware prefix detection (decodes remaining ids, boundary-safe)
 soup data active-sample --input <jsonl> --output <jsonl> --budget N  Top-N uncertain prod traces for human review
-soup ab --input <jsonl> --metric latency|judge_score|retry_rate  Two-sided mSPRT sequential A/B (decision: continue / reject_h0 / accept_h0; a reject_h0 reports direction better / worse; valid when re-run after every new row; the first 5 rows per arm set the --effect-size scale)
+soup ab --input <jsonl> --metric latency|judge_score|retry_rate  Two-sided sequential A/B harness on latency / judge_score / retry_rate (Bayes factor with a confidence-sequence accept rule; decision: continue / reject_h0 / accept_h0; a reject_h0 reports direction better / worse; valid when re-run after every new row; the first 5 rows per arm set the --effect-size scale) (v0.63.0)
 soup ingest|prune-prompt|ab|data active-sample ... --slack-url <https> | --discord-url <https>  Shared SSRF-validated webhook on completion
 soup drift-alarm --reference <jsonl> --live <jsonl> --threshold 0.2  Rolling-KL drift alarm (exit 3 on drift)
 soup drift-alarm ... --slack-url <https> | --discord-url <https>  Optional SSRF-validated webhook on drift detected

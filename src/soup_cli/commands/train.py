@@ -60,6 +60,22 @@ def _stdin_isatty() -> bool:
     return sys.stdin.isatty()
 
 
+def _confirm_start_training() -> None:
+    """Refuse on a non-TTY stdin (#1913) or ask for interactive confirmation."""
+    from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR
+
+    if not _stdin_isatty():
+        console.print(
+            "[red]stdin is not a TTY, so the start-training confirmation "
+            "cannot be answered.[/] Pass --yes to start without the "
+            "confirmation."
+        )
+        raise typer.Exit(EXIT_USAGE_ERROR)
+    if not typer.confirm("Start training?", default=True):
+        console.print("[yellow]Cancelled.[/]")
+        raise typer.Exit()
+
+
 def _nondefault_unwired_training_settings(training_config) -> list[str]:
     """Return staged training settings whose value differs from the schema default."""
     fields = type(training_config).model_fields
@@ -523,6 +539,7 @@ def _hardware_fit_preflight(
             ("adapters", b.adapters_gb),
             ("logits", b.logits_gb),
             ("dequant", b.dequant_gb),
+            ("optimizer step", b.optimizer_step_gb),
         )
         if value >= 0.05
     )
@@ -977,8 +994,10 @@ def train(
         "a100",
         "--gpu",
         help=(
-            "Cloud GPU type for --cloud (t4 / l4 / a10 / a10g / a100 / a100-80gb / "
-            "l40s / h100 / a6000). Default a100. Provider-specific allowlists apply."
+            "Cloud GPU type for --cloud. modal: t4, l4, a10g, a100, a100-80gb, "
+            "l40s, h100. lambda: a10, a100, a6000, h100. runpod: a100, a40, h100, "
+            "rtx3090, rtx4090. Default a100. A type another provider lists is "
+            "refused with exit 2."
         ),
     ),
     cloud_submit: bool = typer.Option(
@@ -1464,6 +1483,14 @@ def train(
 
             num_processes = num_gpus * nodes
             if not is_in_distributed():
+                # #2239: ask the start-training confirmation once in the
+                # launching process before spawning N ranks that would all read
+                # from the same terminal, and pass --yes to the launched ranks
+                # so they skip asking again.
+                will_reexec = not dry_run and not no_reexec
+                if will_reexec and not yes:
+                    _confirm_start_training()
+
                 # v0.33.0 #37 — auto-reexec under accelerate launch unless
                 # --no-reexec was passed. On POSIX the accelerate process
                 # replaces this one (os.execvp): no leftover PID tree, stdio
@@ -1498,7 +1525,7 @@ def train(
                         track_energy=track_energy,
                         energy_country=energy_country,
                         energy_out=energy_out,
-                        yes=yes,
+                        yes=yes or will_reexec,
                         minillm_on_policy=minillm_on_policy,
                         capture_activations=capture_activations,
                         capture_prompts=capture_prompts,
@@ -1860,21 +1887,7 @@ def train(
             raise typer.Exit(1) from exc
 
     if not dry_run and not yes:
-        # #1913: on a non-TTY stdin the confirm can never be answered — a pipe
-        # hangs until its writer closes (EOF aborts via typer) and an
-        # unattended service waits forever. Fail with the escape hatch named.
-        from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR
-
-        if not _stdin_isatty():
-            console.print(
-                "[red]stdin is not a TTY, so the start-training confirmation "
-                "cannot be answered.[/] Pass --yes to start without the "
-                "confirmation."
-            )
-            raise typer.Exit(EXIT_USAGE_ERROR)
-        if not typer.confirm("Start training?", default=True):
-            console.print("[yellow]Cancelled.[/]")
-            raise typer.Exit()
+        _confirm_start_training()
 
     # #1223: a split nothing evaluates is not withheld -- generation tasks train
     # on every row unless training.eval_steps asks for evaluation.

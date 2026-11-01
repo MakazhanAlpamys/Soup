@@ -1483,7 +1483,8 @@ when the fraction exceeds 5%) and persisted in `trainer_state.json` so
 `soup adapters audit` can see it.
 
 On Apple Silicon, `backend: mlx` trains GRPO natively with the same objective
-(TRL's `loss_type="dapo"` defaults) and the built-in rewards; see
+(TRL's `loss_type="dapo"` defaults) and the built-in rewards, on a dense or a
+pre-quantized 4-bit (`affine`) MLX base; see
 [GRPO on MLX](backends-and-ops.md#grpo-on-mlx) for the units, the rollout
 mode and what it refuses.
 

@@ -2739,7 +2739,7 @@ def _attach_streamed_boundary_adapter_bridge(model: Any) -> None:
         )
 
     def _add_adapter(self: Any, *args: Any, **kwargs: Any) -> Any:
-        boundaries = {}
+        boundaries: Dict[int, Tuple[Any, List[Tuple[Any, str]]]] = {}
         for getter in (self.get_input_embeddings, self.get_output_embeddings):
             wrapper = getter()
             if isinstance(wrapper, _streamed_large_layer_class()):

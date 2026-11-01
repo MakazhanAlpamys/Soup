@@ -274,7 +274,7 @@ class TestFilterCommand:
         assert len(filtered) == 1
         assert filtered[0]["text"].startswith("This is")
 
-    def test_filter_score_only(self, tmp_path):
+    def test_filter_score_only(self, tmp_path, monkeypatch):
         """soup data filter --score-only should add scores without removing rows."""
         import json
 
@@ -294,16 +294,20 @@ class TestFilterCommand:
         output_file = tmp_path / "scored.jsonl"
         runner = CliRunner()
 
-        # score-only without perplexity (only coherence scores)
+        # Score-only requests both scores; keep this CLI test offline.
+        monkeypatch.setattr(
+            "soup_cli.utils.quality.compute_perplexity_scores",
+            lambda *_args, **_kwargs: [10.0, 20.0],
+        )
         result = runner.invoke(app, [
             "data", "filter",
             str(data_file),
             "--score-only",
             "--output", str(output_file),
         ])
-        # May fail on torch import, but command structure should work
-        if result.exit_code == 0:
-            with open(output_file) as f:
-                scored = [json.loads(line) for line in f if line.strip()]
-            assert len(scored) == 2
-            assert "_coherence_score" in scored[0]
+        assert result.exit_code == 0, (result.output, result.exception)
+        with open(output_file) as f:
+            scored = [json.loads(line) for line in f if line.strip()]
+        assert [row["text"] for row in scored] == [row["text"] for row in rows]
+        assert [row["_perplexity_score"] for row in scored] == [10.0, 20.0]
+        assert all("_coherence_score" in row for row in scored)
