@@ -270,10 +270,15 @@ def _merge_low_memory(
     dtype: str,
     trust_remote_code: bool,
 ) -> None:
+    # Bound before the `try`: the `except` clauses below name it, so it must exist even when the
+    # `transformers` import raises ImportError (core install without the [train] extra). This
+    # module imports torch and safetensors only inside its functions, so it needs neither.
+    from soup_cli.utils.lowmem_merge import LowMemoryMergeError
+
     try:
         from transformers import AutoTokenizer
 
-        from soup_cli.utils.lowmem_merge import LowMemoryMergeError, merge_low_memory
+        from soup_cli.utils.lowmem_merge import merge_low_memory
         from soup_cli.utils.trust_remote import (
             model_requires_trust_remote_code,
             resolve_trust_remote_code,
