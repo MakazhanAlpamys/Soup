@@ -159,3 +159,44 @@ def test_push_collection_failure_is_shown_as_typed(model_dir, monkeypatch):
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert "Could not add to collection: no such [/] collection" in _plain(result)
+
+
+@pytest.mark.parametrize(
+    ("name", "shown"),
+    [
+        ("plain", "plain"),
+        ("[red]model", "[red]model"),
+        ("[/]model", "[/]model"),
+        ("[bold]model\x9b\u202e", "[bold]model"),
+        pytest.param(
+            "model:warning:", "model:warning:",
+            marks=pytest.mark.skipif(
+                sys.platform == "win32", reason="':' is not valid in a Windows name"
+            ),
+        ),
+    ],
+)
+def test_push_plan_keeps_literal_paths_and_uploads_the_original_directory(
+    model_dir, monkeypatch, name, shown
+):
+    path = Path(name)
+    path.mkdir(parents=True)
+    (path / "config.json").write_text("{}", encoding="utf-8")
+    (path / "README.md").write_text("existing model card", encoding="utf-8")
+    uploaded = []
+
+    class RecordingApi(_WorkingApi):
+        def upload_folder(self, **kwargs):
+            uploaded.append(kwargs)
+
+    monkeypatch.setattr(hf_utils, "get_hf_api", lambda **kwargs: RecordingApi(""))
+
+    result = _push("--model", name, "--repo", "user/model")
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    text = _plain(result).replace("\\", "/")
+    assert f"Source: {shown}" in text
+    assert "\x9b" not in text and "\u202e" not in text
+    assert len(uploaded) == 1
+    assert uploaded[0]["folder_path"] == str(path)
+    assert uploaded[0]["repo_id"] == "user/model"

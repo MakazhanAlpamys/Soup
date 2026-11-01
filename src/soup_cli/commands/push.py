@@ -11,6 +11,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.text import Text
 
 from soup_cli.utils.terminal import for_terminal
 
@@ -190,12 +191,15 @@ def push(
 
     console.print(
         Panel(
-            f"Source:  [bold]{model_path}[/]\n"
-            f"Repo:   [bold]{repo}[/]\n"
-            f"Type:   [bold]{'LoRA adapter' if is_adapter else 'Full model'}[/]\n"
-            f"Files:  [bold]{file_count}[/]\n"
-            f"Size:   [bold]{size_str}[/]\n"
-            f"Private: [bold]{private}[/]",
+            Text.from_markup(
+                f"Source:  [bold]{for_terminal(model_path)}[/]\n"
+                f"Repo:   [bold]{for_terminal(repo)}[/]\n"
+                f"Type:   [bold]{'LoRA adapter' if is_adapter else 'Full model'}[/]\n"
+                f"Files:  [bold]{file_count}[/]\n"
+                f"Size:   [bold]{size_str}[/]\n"
+                f"Private: [bold]{private}[/]",
+                emoji=False,
+            ),
             title="Upload Plan",
         )
     )
