@@ -91,14 +91,17 @@ def _check_positive_int(value: object, name: str) -> int:
 
 
 def resolve_device(device: Optional[str] = None) -> str:
-    """Return ``device`` if given, else ``"cuda"`` when available, else ``"cpu"``.
+    """Return concrete device (``"cuda"`` if available, else ``"cpu"``) for ``None``/``"auto"``.
 
-    Never raises — falls back to ``"cpu"`` if torch is unavailable.
+    Explicit device strings (e.g. ``"cpu"``, ``"cuda:0"``) are returned verbatim.
+    Raises ``ValueError`` if ``device`` is not a non-empty string or None.
+    Falls back to ``"cpu"`` if torch is unavailable.
     """
     if device is not None:
         if not isinstance(device, str) or not device.strip():
             raise ValueError("device must be a non-empty string or None")
-        return device
+        if device.strip().lower() != "auto":
+            return device
     try:
         import torch
 
