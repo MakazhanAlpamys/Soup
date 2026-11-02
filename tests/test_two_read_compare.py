@@ -421,7 +421,8 @@ def test_step_dir_reads_moved_step_files_by_base_name(cmp, tmp_path, host_path):
     paths, published = _moved(tmp_path, _quad(), host_path)
     record_paths = [paths[n] for n in RUNS]
     code, report = _compare(cmp, tmp_path, record_paths, limits=True)
-    _refused_with(code, report, "does not exist")
+    assert (code, report["verdict"], report["timing"]) == (2, "REFUSED", None)
+    assert all(entry["step_sha256"] is None for entry in report["inputs"].values())
     code = cmp.main(["--runs", *map(str, record_paths), "--out", str(tmp_path / "c.json"),
                      "--memory-max", str(GIB32), "--swap-max", "0",
                      "--step-dir", str(published)])
@@ -536,3 +537,241 @@ def test_a_supervisor_memory_peak_that_is_not_a_number_is_not_printed(cmp, tmp_p
     assert report["per_run"]["A1"]["supervisor_memory_peak_bytes"] is None
     assert report["per_run"]["B1"]["supervisor_memory_peak_bytes"] == 5000
     assert "\x1b[2J" not in capsys.readouterr().out
+
+
+def test_every_later_step_slower_still_passes(cmp, tmp_path):
+    quad = _quad({"A1": [3.0, 2.0, 2.0], "B1": [2.5, 2.01, 2.5],
+                  "B2": [2.5, 2.01, 2.5], "A2": [3.0, 2.0, 2.0]})
+    code, report = _run(cmp, tmp_path, quad)
+    assert (code, report["verdict"], report["failures"]) == (0, "PASS", [])
+    assert [row["class"] for row in report["timing"]["later"]] == \
+        ["two-read slower", "two-read slower"]
+
+
+@pytest.mark.parametrize("escape", ["\x1b[2J", "\x1b]0;untrusted\x07", "\x9b2J"])
+def test_escape_bytes_in_a_refusal_do_not_reach_the_terminal(cmp, tmp_path, capsys, escape):
+    quad = _quad()
+    for name in ("A1", "B1"):
+        record, step = quad[name]
+        record["run_id"] = step["supervisor_run_id"] = escape + "dup"
+    code, report = _run(cmp, tmp_path, quad)
+    assert (code, report["verdict"]) == (2, "REFUSED")
+    assert escape not in capsys.readouterr().out
+    assert any(escape in reason for reason in report["refusals"])
+
+
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf],
+                         ids=["nan", "+inf", "-inf"])
+@pytest.mark.parametrize("quantity", [
+    "supervisor_memory_peak_bytes", "ssd_read_bytes", "expert_read_seconds",
+    "nvml_peak_process_bytes", "cgroup_memory_peak_bytes",
+])
+def test_non_finite_reported_metrics_are_unusable(cmp, tmp_path, quantity, value):
+    quad = _quad()
+    if quantity == "supervisor_memory_peak_bytes":
+        quad["A1"][0]["memory_peak_bytes"] = value
+        output_key = quantity
+    else:
+        for index in range(3):
+            _mutate_step(quad, "A1", index, quantity, value)
+        output_key = quantity + "_max" if "peak" in quantity else quantity
+    code, report = _run(cmp, tmp_path, quad)
+    assert (code, report["verdict"]) == (0, "PASS")
+    assert report["per_run"]["A1"][output_key] is None
+    # Strict JSON consumers must be able to read the complete report.
+    json.dumps(report, allow_nan=False)
+
+
+@pytest.mark.parametrize("kind", ["record", "step"])
+def test_deeply_nested_json_refuses_and_writes_report(cmp, tmp_path, kind):
+    paths = _write(tmp_path, _quad())
+    data = b"[" * 10000 + b"0" + b"]" * 10000
+    if kind == "record":
+        paths["B1"].write_bytes(data)
+    else:
+        (tmp_path / "out" / "B1.step.json").write_bytes(data)
+        record = json.loads(paths["B1"].read_bytes())
+        record["expect_json"]["sha256"] = hashlib.sha256(data).hexdigest()
+        paths["B1"].write_text(json.dumps(record), encoding="utf-8")
+    code, report = _compare(cmp, tmp_path, [paths[n] for n in RUNS])
+    assert (code, report["verdict"], report["timing"]) == (2, "REFUSED", None)
+    assert any(reason.startswith("B1:") for reason in report["refusals"])
+    assert report["failures"] == []
+
+
+@pytest.mark.parametrize("kind", ["absolute", "traversal", "record-cwd"])
+def test_record_cannot_read_a_step_outside_its_directory(cmp, tmp_path, kind):
+    paths = _write(tmp_path, _quad())
+    outside = tmp_path / "external"
+    outside.mkdir()
+    target = outside / "B1.step.json"
+    shutil.move(str(tmp_path / "out" / target.name), target)
+    record = json.loads(paths["B1"].read_bytes())
+    if kind == "absolute":
+        record["expect_json"]["path"] = str(target)
+    elif kind == "traversal":
+        record["cwd"] = str(tmp_path / "out")
+        record["expect_json"]["path"] = "../external/B1.step.json"
+    else:
+        record["cwd"] = str(outside)
+        record["expect_json"]["path"] = target.name
+    paths["B1"].write_text(json.dumps(record), encoding="utf-8")
+    code, report = _compare(cmp, tmp_path, [paths[n] for n in RUNS])
+    assert (code, report["verdict"]) == (2, "REFUSED")
+    assert report["inputs"]["B1"]["step_sha256"] is None
+    assert any(reason.startswith("B1:") for reason in report["refusals"])
+
+
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize("step_dir", [False, True])
+def test_step_symlink_cannot_escape_the_selected_directory(cmp, tmp_path, step_dir):
+    paths = _write(tmp_path, _quad())
+    target = tmp_path / "external.json"
+    link = tmp_path / "out" / "B1.step.json"
+    shutil.move(str(link), target)
+    link.symlink_to(target)
+    output = tmp_path / "compare.json"
+    args = ["--runs", *(str(paths[n]) for n in RUNS), "--out", str(output)]
+    if step_dir:
+        args += ["--step-dir", str(tmp_path / "out")]
+    code = cmp.main(args)
+    report = json.loads(output.read_bytes())
+    assert (code, report["verdict"]) == (2, "REFUSED")
+    assert report["inputs"]["B1"]["step_sha256"] is None
+
+
+@pytest.mark.parametrize("kind", ["record", "step"])
+def test_output_cannot_overwrite_an_input(cmp, tmp_path, kind):
+    paths = _write(tmp_path, _quad())
+    target = paths["B1"] if kind == "record" else tmp_path / "out" / "B1.step.json"
+    original = target.read_bytes()
+    code = cmp.main(["--runs", *(str(paths[n]) for n in RUNS), "--out", str(target)])
+    assert code == 2
+    assert target.read_bytes() == original
+
+
+def test_report_write_does_not_clobber_an_existing_temp_file(cmp, tmp_path):
+    paths = _write(tmp_path, _quad())
+    existing = tmp_path / "compare.json.tmp"
+    existing.write_bytes(b"unrelated contents")
+    code, report = _compare(cmp, tmp_path, [paths[n] for n in RUNS])
+    assert (code, report["verdict"]) == (0, "PASS")
+    assert existing.read_bytes() == b"unrelated contents"
+
+
+def test_report_write_failure_preserves_previous_report_and_cleans_temp(cmp, tmp_path,
+                                                                      monkeypatch):
+    paths = _write(tmp_path, _quad())
+    output = tmp_path / "compare.json"
+    output.write_bytes(b"previous report")
+    before = set(tmp_path.iterdir())
+
+    def fail_replace(source, destination):
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(cmp.os, "replace", fail_replace)
+    code = cmp.main(["--runs", *(str(paths[n]) for n in RUNS), "--out", str(output)])
+    assert code == 2
+    assert output.read_bytes() == b"previous report"
+    assert set(tmp_path.iterdir()) == before
+
+
+@pytest.mark.parametrize("value, verdict", [
+    (2**63 - 1, "PASS"), (1 - 2**63, "PASS"),
+    (2**63, "REFUSED"), (-2**63, "REFUSED"),
+])
+def test_loss_integer_boundary(cmp, tmp_path, value, verdict):
+    quad = _quad()
+    for name in RUNS:
+        _mutate_step(quad, name, 1, "loss", value)
+    code, report = _run(cmp, tmp_path, quad)
+    assert report["verdict"] == verdict
+    assert code == (0 if verdict == "PASS" else 2)
+
+
+def test_long_invalid_step_value_has_a_bounded_diagnostic(cmp, tmp_path):
+    quad = _quad()
+    _mutate_step(quad, "B1", 1, "lora_grads_sha256", "x" * 1000 + "unbounded-tail")
+    code, report = _run(cmp, tmp_path, quad)
+    assert (code, report["verdict"]) == (2, "REFUSED")
+    assert len(report["refusals"]) == 1
+    assert "lora_grads_sha256" in report["refusals"][0]
+    assert "unbounded-tail" not in report["refusals"][0]
+    assert len(report["refusals"][0]) < 150
+
+
+@pytest.mark.requires_hardlink
+def test_output_hardlink_cannot_replace_an_input_alias(cmp, tmp_path):
+    paths = _write(tmp_path, _quad())
+    target = tmp_path / "out" / "B1.step.json"
+    output = tmp_path / "alias.json"
+    output.hardlink_to(target)
+    original = target.read_bytes()
+    code = cmp.main(["--runs", *(str(paths[n]) for n in RUNS), "--out", str(output)])
+    assert code == 2
+    assert output.read_bytes() == target.read_bytes() == original
+
+
+def test_non_finite_computed_metrics_do_not_break_json_output(cmp, tmp_path):
+    quad = _quad({"A1": [1.0, 1e-308, 1e-308], "B1": [1.0, 1e308, 1e308],
+                  "B2": [1.0, 1.0, 1.0], "A2": [1.0, 1.0, 1.0]})
+    for index in range(3):
+        _mutate_step(quad, "A1", index, "expert_read_seconds", 1e308)
+    code, report = _run(cmp, tmp_path, quad)
+    assert (code, report["verdict"]) == (0, "PASS")
+    assert report["per_run"]["A1"]["expert_read_seconds"] is None
+    assert report["timing"]["later"][0]["ratios"]["B1/A1"] is None
+    assert report["timing"]["later_median_seconds"]["B1"] is None
+    json.dumps(report, allow_nan=False)
+
+
+@pytest.mark.parametrize("escape", ["\x1b[2J", "\x1b]0;untrusted\x07", "\x9b2J"])
+def test_failure_rendering_strips_controls_without_changing_report(cmp, tmp_path, capsys,
+                                                                escape):
+    from rich.text import Text
+
+    quad = _quad()
+    _mutate_step(quad, "B1", 1, "loss", 99.0)
+    code, report = _run(cmp, tmp_path, quad)
+    assert (code, report["verdict"]) == (1, "FAIL")
+    capsys.readouterr()
+    report["failures"][0]["reason"] = escape + "[/bad]failure"
+    original = json.dumps(report)
+    cmp.render(report)
+    output = capsys.readouterr().out
+    assert escape not in output
+    assert "[/bad]failure" in Text.from_ansi(output).plain
+    assert json.dumps(report) == original
+
+
+@pytest.mark.parametrize("envelope", [[], "invalid", 0, True])
+def test_malformed_envelope_refuses_and_writes_report(cmp, tmp_path, envelope):
+    quad = _quad()
+    quad["B1"][1]["envelope"] = envelope
+    code, report = _run(cmp, tmp_path, quad)
+    assert (code, report["verdict"], report["timing"]) == (2, "REFUSED", None)
+    assert report["failures"] == []
+    assert any(reason.startswith("B1: envelope") for reason in report["refusals"])
+
+
+@pytest.mark.parametrize("envelope", [None, {}], ids=["null", "object"])
+def test_optional_envelope_shapes_remain_supported(cmp, tmp_path, envelope):
+    quad = _quad()
+    for name in RUNS:
+        quad[name][1]["envelope"] = envelope
+    code, report = _run(cmp, tmp_path, quad)
+    assert (code, report["verdict"], report["refusals"]) == (0, "PASS", [])
+
+
+@pytest.mark.parametrize("key", ["initial_trainable_sha256", "input_ids_sha256"])
+@pytest.mark.parametrize("value", [None, "", "not-a-digest", 7, []],
+                         ids=["null", "empty", "invalid", "integer", "list"])
+def test_equal_invalid_initial_state_digests_refuse(cmp, tmp_path, key, value):
+    quad = _quad()
+    for name in RUNS:
+        quad[name][1][key] = value
+    code, report = _run(cmp, tmp_path, quad)
+    assert (code, report["verdict"], report["timing"]) == (2, "REFUSED", None)
+    assert report["failures"] == []
+    for name in RUNS:
+        assert any(reason.startswith(f"{name}: {key}") for reason in report["refusals"])

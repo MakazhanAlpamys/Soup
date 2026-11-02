@@ -4,13 +4,15 @@ Run order is A1 B1 B2 A2 (A = three-read, B = two-read ``two_read_experts``), on
 process per run, each in its own cgroup leaf under a series parent cgroup. Every input is a
 run record of schema ``two-read-cgroup-run/2`` written by the process that supervised the
 run (that supervisor is not in this repository); its step JSON is
-``record["expect_json"]["path"]``, used as is when absolute and resolved against the
-record's ``cwd`` (which must then be absolute) when relative.
+``record["expect_json"]["path"]``, resolved against the record's absolute ``cwd`` when
+relative. The resolved step file must stay inside the record file's directory.
+Record-supplied network/device paths and symlink escapes are refused before reading.
 
 ``--step-dir DIR`` re-checks runs whose files were moved off the host that wrote them (a
 published record): each step JSON is then read from DIR under the base name of its
-``expect_json.path``, and the record's path is not opened. The binding below is
-unchanged, so a file in DIR only counts if it is the one the supervisor judged.
+``expect_json.path``, and the record's path is not opened. The resolved file must stay
+inside DIR. Use this explicit option when step files live outside the record directory.
+The hash and run-id binding below is unchanged.
 
 Each step JSON is bound to its record: the SHA-256 of its bytes must equal
 ``expect_json.sha256`` (the bytes the supervisor judged; the step JSON is parsed from the
@@ -20,7 +22,14 @@ JSON files (both by real path), the four ``run_id`` values and the four step SHA
 must each be distinct: one run named twice, or a record copied under another file name,
 refuses.
 
-Verdicts and exit codes (``--out`` is written atomically in every case):
+Verdicts and exit codes:
+
+``--out`` is written atomically using a unique temporary file in its destination
+directory. It must not alias a run record or step JSON, or be a symlink. An invalid or
+unwritable output gives REFUSED (2) on the terminal without replacing the destination.
+Otherwise a report is written for every verdict, including unreadable or deeply nested
+JSON inputs. Refusal/failure text keeps its original values in JSON; terminal output
+strips control characters.
 
 * ``REFUSED`` (2): a precondition fails (record schema, the binding and distinctness
   above, run status, verdicts, phase, arms, every run in ``--deterministic strict``,
@@ -34,15 +43,17 @@ Verdicts and exit codes (``--out`` is written atomically in every case):
   parent ``series.readback`` must show those values; a record without ``series`` (a run
   with no limit on the series parent) refuses, since the leaf limit alone does not count
   page cache charged to the parent by earlier runs. Every reason is listed; no timing is
-  reported. A step JSON that cannot be read, parsed or matched to its hash skips the
-  content checks.
+  reported. Initial-trainable and input-ID digests must each be 64 lowercase hex
+  characters, and ``envelope`` must be an object or null. A step JSON that cannot be
+  read, parsed or matched to its hash skips the content checks.
 * ``FAIL`` (1): at some step index the losses (``float.hex``), gradient digests or dense /
   large H2D bytes differ among the four, or an A expert quantity times 2 differs from a B
   one times 3 (or is zero) for ``expert_fetches``, ``expert_bytes_read``,
   ``h2d_bytes.experts``. Every failing index and quantity is listed.
 * ``PASS`` (0): otherwise. Timing is reported and never changes the verdict. A reported
-  value that is not a usable number (seconds, a peak, the supervisor's memory peak) is
-  shown as ``-``, never refused.
+  value that is not a finite usable number (seconds, a total, a peak, the supervisor's
+  memory peak, or a computed timing ratio/median) is shown as ``-`` and stored as JSON
+  ``null``, never refused. Invalid peak samples are ignored when finite samples remain.
 
     python benchmarks/harness/two_read_compare.py \\
         --runs A1.run.json B1.run.json B2.run.json A2.run.json --out compare.json \\
@@ -58,11 +69,15 @@ import math
 import os
 import re
 import statistics
+import tempfile
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from rich.console import Console
 from rich.table import Table
+
+from soup_cli.utils.paths import ensure_distinct_paths, is_network_or_device_path, is_under
+from soup_cli.utils.terminal import strip_control
 
 SCHEMA = "two-read-compare/1"
 RECORD_SCHEMA = "two-read-cgroup-run/2"
@@ -108,6 +123,10 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, float) or _is_int(value)
 
 
+def _usable(value: Any) -> bool:
+    return _is_number(value) and math.isfinite(value)
+
+
 def _shown(value: Any) -> str:
     """``repr`` of a step value for a refusal, cut to 60 characters: a JSON integer can have
     thousands of digits, and ``repr`` of one past 4,300 digits raises."""
@@ -141,7 +160,7 @@ def load_run(name: str, record_path: str, refusals: List[str],
                            "step_sha256": None, "step": None}
     try:
         record = _read_json(record_path)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         refusals.append(f"{name}: run record {record_path} unreadable: {exc}")
         return run
     if not isinstance(record, dict):
@@ -168,15 +187,35 @@ def load_run(name: str, record_path: str, refusals: List[str],
         if base in ("", ".", ".."):
             refusals.append(f"{name}: expect_json.path {expect_path!r} has no file name")
             return run
-        expect_path = os.path.join(step_dir, base)
-    elif not os.path.isabs(expect_path):
-        cwd = record.get("cwd")
-        if not isinstance(cwd, str) or not os.path.isabs(cwd):
-            refusals.append(f"{name}: expect_json.path {expect_path!r} is relative and record "
-                            f"cwd {cwd!r} is not an absolute path")
+        if is_network_or_device_path(base):
+            refusals.append(f"{name}: expect_json.path {expect_path!r} is not a local file")
             return run
-        expect_path = os.path.join(cwd, expect_path)
-    run["step_path"] = os.path.realpath(expect_path)
+        expect_path = os.path.join(step_dir, base)
+    else:
+        if is_network_or_device_path(expect_path):
+            refusals.append(f"{name}: expect_json.path {expect_path!r} is not a local file")
+            return run
+        if not os.path.isabs(expect_path):
+            cwd = record.get("cwd")
+            if not isinstance(cwd, str) or not os.path.isabs(cwd):
+                refusals.append(f"{name}: expect_json.path {expect_path!r} is relative and "
+                                f"record cwd {cwd!r} is not an absolute path")
+                return run
+            if is_network_or_device_path(cwd):
+                refusals.append(f"{name}: record cwd {cwd!r} is not a local directory")
+                return run
+            expect_path = os.path.join(cwd, expect_path)
+    try:
+        root = step_dir if step_dir is not None else os.path.dirname(
+            os.path.realpath(record_path))
+        run["step_path"] = os.path.realpath(expect_path)
+        if not is_under(run["step_path"], root):
+            refusals.append(f"{name}: step JSON {expect_path!r} is outside {root!r}; "
+                            "use --step-dir to select its directory explicitly")
+            return run
+    except (OSError, ValueError) as exc:
+        refusals.append(f"{name}: invalid step JSON path {expect_path!r}: {exc}")
+        return run
     if not os.path.isfile(run["step_path"]):
         refusals.append(f"{name}: step JSON {run['step_path']} does not exist")
         return run
@@ -195,7 +234,7 @@ def load_run(name: str, record_path: str, refusals: List[str],
         return run
     try:
         step = json.loads(data.decode("utf-8"))
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:
         refusals.append(f"{name}: step JSON {run['step_path']} unreadable: {exc}")
         return run
     if not isinstance(step, dict):
@@ -234,6 +273,13 @@ def _per_run_checks(run: Dict[str, Any], refusals: List[str]) -> None:
     if arm is not TWO_READ[name]:
         refusals.append(f"{name}: two_read_experts {arm!r}, expected {TWO_READ[name]} "
                         f"(order A1 B1 B2 A2; A = three-read, B = two-read)")
+    envelope = step.get("envelope")
+    if envelope is not None and not isinstance(envelope, dict):
+        refusals.append(f"{name}: envelope {_shown(envelope)} is not an object or null")
+    for key in ("initial_trainable_sha256", "input_ids_sha256"):
+        digest = step.get(key)
+        if not isinstance(digest, str) or not _HEX64.fullmatch(digest):
+            refusals.append(f"{name}: {key} {_shown(digest)} is not a 64-hex digest")
     steps = step.get("steps")
     if not isinstance(steps, list) or not steps:
         refusals.append(f"{name}: no steps")
@@ -278,9 +324,9 @@ _STEP_FIELDS: Dict[str, Callable[[Dict[str, Any]], Any]] = {
     "memory.mode": lambda s: _get(s, "memory.mode"),
     # The inputs only: context overhead and the fraction derived from it are measured per
     # process and differ by a few MiB between fresh processes of the same configuration.
-    "envelope (target, card total, margin)": lambda s: None if s.get("envelope") is None else {
+    "envelope (target, card total, margin)": lambda s: {
         key: s["envelope"].get(key) for key in ("target_mib", "total_mib", "margin_mib")
-    },
+    } if isinstance(s.get("envelope"), dict) else None,
     "nvml_device.uuid": lambda s: _get(s, "nvml_device.uuid", None),
     "memory.nvml_total_bytes": lambda s: _get(s, "memory.nvml_total_bytes", None),
 }
@@ -409,11 +455,14 @@ def classify(ratios: List[Optional[float]]) -> str:
 
 def _seconds(entry: Dict[str, Any]) -> Optional[float]:
     value = entry.get("seconds")
-    return float(value) if _is_number(value) and math.isfinite(value) and value >= 0 else None
+    return float(value) if _usable(value) and value >= 0 else None
 
 
 def _ratio(num: Optional[float], den: Optional[float]) -> Optional[float]:
-    return num / den if num is not None and den is not None and den > 0 else None
+    if num is None or den is None or den <= 0:
+        return None
+    value = num / den
+    return value if _usable(value) else None
 
 
 def timing_for(runs: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
@@ -432,17 +481,21 @@ def timing_for(runs: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     for name in RUNS:
         later = [row["seconds"][name] for row in rows[1:]]
         usable = bool(later) and all(value is not None for value in later)
-        medians[name] = statistics.median(later) if usable else None
+        value = statistics.median(later) if usable else None
+        medians[name] = value if _usable(value) else None
     return {"step0": step0, "later": rows[1:], "later_median_seconds": medians}
 
 
-def _total(entries: List[Dict[str, Any]], key: str) -> Optional[int]:
+def _total(entries: List[Dict[str, Any]], key: str) -> Optional[float]:
     values = [_get(e, key, None) for e in entries]
-    return sum(values) if all(_is_number(v) for v in values) else None
+    if not all(_usable(v) for v in values):
+        return None
+    total = sum(values)
+    return total if math.isfinite(total) else None
 
 
-def _peak(entries: List[Dict[str, Any]], key: str) -> Optional[int]:
-    values = [v for v in (e.get(key) for e in entries) if _is_number(v)]
+def _peak(entries: List[Dict[str, Any]], key: str) -> Optional[float]:
+    values = [v for v in (e.get(key) for e in entries) if _usable(v)]
     return max(values) if values else None
 
 
@@ -464,7 +517,7 @@ def per_run_for(runs: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
             "nvml_peak_process_bytes_max": _peak(entries, "nvml_peak_process_bytes"),
             "cgroup_memory_peak_bytes_max": _peak(entries, "cgroup_memory_peak_bytes"),
             "supervisor_memory_peak_bytes": (
-                supervisor_peak if _is_number(supervisor_peak) else None),
+                supervisor_peak if _usable(supervisor_peak) else None),
         }
     return columns
 
@@ -499,12 +552,21 @@ def compare(record_paths: List[str], memory_max: Optional[int],
 # output
 # --------------------------------------------------------------------------
 def write_report(path: str, report: Dict[str, Any]) -> None:
+    inputs = [(f"{name} {key}", value) for name, entry in report["inputs"].items()
+              for key in ("record", "step_json") if (value := entry[key]) is not None]
+    ensure_distinct_paths(inputs, [("--out", path)])
+    if os.path.islink(path):
+        raise ValueError("--out must not be a symlink")
     folder = os.path.dirname(os.path.abspath(path))
     os.makedirs(folder, exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(report, handle, indent=2, default=str)
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(prefix=".two-read-compare.", suffix=".tmp", dir=folder)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(report, handle, indent=2, allow_nan=False)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
 
 
 def _fmt(value: Any) -> str:
@@ -519,10 +581,11 @@ def render(report: Dict[str, Any]) -> None:
     style = {"PASS": "green", "FAIL": "red", "REFUSED": "yellow"}[report["verdict"]]
     console.print(f"[bold {style}]{report['verdict']}[/]  (exit {report['exit_code']})")
     for reason in report["refusals"]:
-        console.print(f"  refused: {reason}", markup=False)
+        console.print(strip_control(f"  refused: {reason}"), markup=False)
     for item in report["failures"]:
-        console.print(f"  step {item['index']} {item['quantity']}: {item['reason']} "
-                      f"{item['values']}", markup=False)
+        console.print(strip_control(
+            f"  step {item['index']} {item['quantity']}: {item['reason']} {item['values']}"
+        ), markup=False)
     timing = report["timing"]
     if timing is not None:
         table = Table(title="step seconds (A1 B1 B2 A2)")
@@ -553,7 +616,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="four distinct supervisor run records (schema "
                              f"{RECORD_SCHEMA}) in run order A1 B1 B2 A2; each step JSON must "
                              "match the record's expect_json.sha256 and run_id")
-    parser.add_argument("--out", required=True, help="compare.json path")
+    parser.add_argument("--out", required=True,
+                        help="atomic compare.json output; must not alias an input or be a symlink")
     parser.add_argument("--memory-max", type=int, default=None,
                         help="required memory.max read-back (bytes) of every run's leaf "
                              "cgroup and of the series parent (record series.readback)")
@@ -562,12 +626,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "cgroup and of the series parent (record series.readback)")
     parser.add_argument("--step-dir", default=None, metavar="DIR",
                         help="read each step JSON from DIR by the base name of the record's "
-                             "expect_json.path, for runs moved off the host that wrote them; "
-                             "the sha256 and run_id checks still apply")
+                             "expect_json.path, for moved files or files outside the record "
+                             "directory; paths must stay inside DIR and hash/run_id checks apply")
     args = parser.parse_args(argv)
     report = compare(args.runs, args.memory_max, args.swap_max, args.step_dir)
     report["exit_code"] = EXIT[report["verdict"]]
-    write_report(args.out, report)
+    try:
+        write_report(args.out, report)
+    except (OSError, ValueError) as exc:
+        report.update(verdict="REFUSED", exit_code=EXIT["REFUSED"],
+                      timing=None, per_run=None, failures=[])
+        report["refusals"].append(f"cannot write --out {args.out!r}: {exc}")
     render(report)
     return report["exit_code"]
 
