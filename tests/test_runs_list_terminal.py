@@ -105,10 +105,14 @@ def test_curriculum_curve_strips_controls_from_a_missing_history_file(db):
     assert "\x9b" not in text and "\u202e" not in text
 
 
-_SYMLINK_NAMES = ["x[red]l.jsonl", "l:warning:.jsonl", f"x[bold]l{_CONTROLS}.jsonl"]
+_SYMLINK_NAMES = [
+    "x[red]l.jsonl",
+    pytest.param("l:warning:.jsonl", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+    f"x[bold]l{_CONTROLS}.jsonl",
+]
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="creating a symlink needs a privilege")
+@pytest.mark.requires_symlink
 @pytest.mark.parametrize("name", _SYMLINK_NAMES)
 def test_curriculum_curve_names_a_symlinked_history_file_as_typed(db, name):
     Path("real.jsonl").write_text("{}", encoding="utf-8")
