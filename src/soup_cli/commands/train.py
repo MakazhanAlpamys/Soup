@@ -2789,6 +2789,59 @@ def _resolve_checkpoint(
     return None
 
 
+def _resume_failure_reason(
+    resume: str,
+    output_dir: str,
+    experiment_name: str | None = None,
+    *,
+    backend: str = "transformers",
+) -> str:
+    """Say which path ``_resolve_checkpoint`` searched and why it found nothing.
+
+    The resolvers return a bare ``None`` for several different situations: a
+    missing path, a path that is not a directory (or an adapter file on MLX), an
+    output directory that does not exist, and one that holds no checkpoint
+    entry. This re-walks the same checks, only after resolution failed, so the
+    message names the path the user can fix (#2296).
+    """
+    from soup_cli.utils.terminal import for_terminal
+
+    if backend == "mlx":
+        if resume.lower() == "auto":
+            base = Path(output_dir)
+            base_text = for_terminal(output_dir)
+            if not base.exists():
+                return f"'{base_text}' does not exist"
+            if not base.is_dir():
+                return f"'{base_text}' is not a directory"
+            return f"no adapter file in '{base_text}'"
+        checkpoint_path = Path(resume)
+        path_text = for_terminal(resume)
+        if not checkpoint_path.exists():
+            return f"'{path_text}' does not exist"
+        return (
+            "--resume on MLX takes an adapter file, "
+            f"but '{path_text}' is not a file"
+        )
+
+    if resume.lower() == "auto":
+        base = Path(output_dir)
+        if experiment_name:
+            base = base / experiment_name
+        base_text = for_terminal(str(base))
+        if not base.exists():
+            return f"'{base_text}' does not exist"
+        if not base.is_dir():
+            return f"'{base_text}' is not a directory"
+        return f"no checkpoint-N directory in '{base_text}'"
+
+    checkpoint_path = Path(resume)
+    path_text = for_terminal(resume)
+    if not checkpoint_path.exists():
+        return f"'{path_text}' does not exist"
+    return f"'{path_text}' is not a directory"
+
+
 def _resolve_resume_or_exit(resume: str, cfg: "SoupConfig") -> str | None:
     """Resolve ``--resume`` against ``cfg``, printing status and exiting on
     failure. Extracted out of ``train()`` (#634 review) so the
@@ -2808,7 +2861,10 @@ def _resolve_resume_or_exit(resume: str, cfg: "SoupConfig") -> str | None:
     if resume_from:
         console.print(f"[green]Resuming from:[/] {resume_from}")
     else:
-        console.print("[red]No checkpoint found to resume from.[/]")
+        reason = _resume_failure_reason(
+            resume, cfg.output, cfg.experiment_name, backend=cfg.backend
+        )
+        console.print(f"[red]No checkpoint found to resume from: {reason}[/]")
         raise typer.Exit(1)
     return resume_from
 
