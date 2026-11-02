@@ -256,4 +256,3 @@ def test_run_lookup_strips_controls_from_a_missing_run(db, command):
     text = _plain(result)
     assert "Run not found: [bold]gone" in text
     assert "\x9b" not in text and "\u202e" not in text
-
