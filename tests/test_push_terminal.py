@@ -200,3 +200,29 @@ def test_push_plan_keeps_literal_paths_and_uploads_the_original_directory(
     assert len(uploaded) == 1
     assert uploaded[0]["folder_path"] == str(path)
     assert uploaded[0]["repo_id"] == "user/model"
+
+
+@pytest.fixture
+def empty_registry(tmp_path, monkeypatch):
+    monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(tmp_path / "registry.db"))
+
+
+@pytest.mark.parametrize("ref", ["x[red]r", "x[/]r", "r:warning:", "x[bold]r:warning:"])
+def test_push_card_missing_ref_is_named_as_typed(model_dir, empty_registry, ref):
+    result = _push("--model", str(model_dir), "--repo", "user/model", "--card", ref)
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert f"--card: Registry entry not found: {ref}" in _plain(result)
+
+
+def test_push_card_missing_ref_strips_controls_from_the_display(model_dir, empty_registry):
+    result = _push(
+        "--model", str(model_dir), "--repo", "user/model", "--card", "x[bold]r\x9b\u202e"
+    )
+
+    assert result.exit_code == 1
+    text = _plain(result)
+    assert "--card: Registry entry not found: x[bold]r" in text
+    assert "\x9b" not in text and "\u202e" not in text
+
