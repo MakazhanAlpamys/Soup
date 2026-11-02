@@ -2771,15 +2771,15 @@ class TrainingConfig(BaseModel):
         mode="before",
     )
     @classmethod
-    def _validate_minillm_bool_fields(cls, v):
+    def _validate_minillm_bool_fields(cls, v, info):
         """v0.70.0 Part C — bool guards for MiniLLM toggles."""
         if v is None:
             return v
         if isinstance(v, bool):
             return v
-        raise TypeError(
-            f"v0.70.0 MiniLLM flag must be bool, got {type(v).__name__}"
-        )
+        # Name the field: this validator covers three toggles and used to say only
+        # "v0.70.0 MiniLLM flag", which left the user guessing which key to fix.
+        raise TypeError(f"{info.field_name} must be bool, got {type(v).__name__}")
 
     @field_validator("minillm_pretrain_anchor_path")
     @classmethod
@@ -4768,6 +4768,20 @@ class TrainingConfig(BaseModel):
         from soup_cli.utils.grace_codebook import validate_grace_codebook_dim
 
         return validate_grace_codebook_dim(v)
+
+    # Must stay the LAST validator in this class: Pydantic applies ``before`` and ``wrap``
+    # validators in reverse definition order, so only a wildcard defined after them wraps
+    # every other validator of the field. Moved earlier it silently stops covering them.
+    @field_validator("*", mode="wrap")
+    @classmethod
+    def _typeerror_is_a_validation_error(cls, value, handler, info):
+        """Let a helper's TypeError surface as a ValidationError that locates the field."""
+        try:
+            return handler(value)
+        except TypeError as exc:
+            # Pydantic does not wrap TypeError, so it escaped SoupConfig() unlabelled and
+            # the CLI printed "Error: TypeError: ..." with no section and no field name.
+            raise ValueError(str(exc)) from exc
 
 
 class ShipConfig(BaseModel):
