@@ -225,4 +225,3 @@ def test_migrate_warnings_are_shown_as_typed(source, monkeypatch, warning):
     text = _plain(result)
     assert f"! {warning.replace(_CONTROLS, '')}" in text
     assert "\x9b" not in text and "\u202e" not in text
-
