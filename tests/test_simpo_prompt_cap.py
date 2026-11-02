@@ -168,9 +168,10 @@ def _prompt_words_for(tmp_path, monkeypatch, n_tokens: int) -> int:
 
 
 class TestThePromptBudgetBoundary:
-    """The cap cuts by the prompt alone: any prompt over ``max_length // 2``
-    tokens loses its start, even when prompt plus answers fit in
-    ``max_length``; one of exactly ``max_length // 2`` tokens is untouched."""
+    """The cap cuts only when the row overflows ``max_length``: a prompt over
+    ``max_length // 2`` tokens is left whole while the whole row fits, and loses
+    its start down to its last ``max_length // 2`` tokens once the row
+    overflows; one of exactly ``max_length // 2`` tokens is untouched."""
 
     def test_a_prompt_of_exactly_the_budget_is_unchanged(self, tmp_path, monkeypatch):
         raw = _row(_prompt_words_for(tmp_path, monkeypatch, PROMPT_BUDGET), 2, 1)
@@ -181,25 +182,43 @@ class TestThePromptBudgetBoundary:
         for key, value in before.items():
             assert after[key] == value, key
 
-    def test_one_token_over_the_budget_is_cut_although_the_row_fits(
+    def test_one_token_over_the_budget_is_untouched_while_the_row_fits(
         self, tmp_path, monkeypatch
     ):
         raw = _row(_prompt_words_for(tmp_path, monkeypatch, PROMPT_BUDGET + 1), 2, 1)
         wrapper = _setup_simpo(tmp_path, monkeypatch, [raw] * 4)
         before = _before(wrapper, raw)
         assert len(before["prompt_input_ids"]) == PROMPT_BUDGET + 1
-        # The whole row already fits: the cut comes from the prompt budget alone.
+        # The whole row fits, so the over-budget prompt is left whole.
         assert all(len(before[key]) <= MAX_LENGTH for key in SEQUENCE_KEYS), before
 
         after = wrapper.trainer.train_dataset[0]
+        for key, value in before.items():
+            assert after[key] == value, key
+
+    def test_an_over_budget_prompt_is_cut_to_the_budget_once_the_row_overflows(
+        self, tmp_path, monkeypatch
+    ):
+        # TRL's CPO tokenizer already fits any row whose prompt leaves room for
+        # its answers, so a prompt reaches the cap only once the row it builds
+        # overflows ``max_length``. A prompt one token over ``max_length`` is the
+        # tightest such row; its cut must land on exactly ``PROMPT_BUDGET``.
+        raw = _row(_prompt_words_for(tmp_path, monkeypatch, MAX_LENGTH + 1), 2, 1)
+        wrapper = _setup_simpo(tmp_path, monkeypatch, [raw] * 4)
+        before = _before(wrapper, raw)
+        assert len(before["prompt_input_ids"]) == MAX_LENGTH + 1
+        # The row does not fit: the cap trims the prompt to its last PROMPT_BUDGET.
+        assert any(len(before[key]) > MAX_LENGTH for key in SEQUENCE_KEYS), before
+
+        after = wrapper.trainer.train_dataset[0]
         kept = before["prompt_input_ids"][-PROMPT_BUDGET:]
+        assert len(after["prompt_input_ids"]) == PROMPT_BUDGET
         assert after["prompt_input_ids"] == kept
         assert after["prompt_attention_mask"] == [1] * PROMPT_BUDGET
         for side in ("chosen", "rejected"):
             assert after[f"{side}_input_ids"][:PROMPT_BUDGET] == kept, side
             assert after[f"{side}_labels"][:PROMPT_BUDGET] == [-100] * PROMPT_BUDGET, side
-            assert len(after[f"{side}_input_ids"]) == len(before[f"{side}_input_ids"]) - 1
-            assert _trainable(after, side) == _trainable(before, side), side
+            assert len(after[f"{side}_input_ids"]) <= MAX_LENGTH, side
 
 
 class TestTheCapAndThe1208Refusal:

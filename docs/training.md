@@ -1374,6 +1374,12 @@ frozen reference.
 Same input format as DPO; rows are split internally to TRL's BCO
 unpaired schema (`{prompt, completion, label}`).
 
+When TRL no longer exposes `max_prompt_length`, Soup still enforces
+`data.max_length`: BCO, IPO, KTO, and SimPO cut prompts only when a row
+would exceed `max_length`. BCO, KTO, and SimPO keep the prompt end; IPO
+follows DPO's `truncation_mode` (`keep_start` by default). DPO/ORPO keep
+their legacy `max_length // 2` prompt cap.
+
 ```yaml
 task: bco
 data:
@@ -1949,14 +1955,12 @@ training:
   quantization: 4bit
 ```
 
-**Long prompts are capped as in DPO and ORPO.** trl's CPO trainer cuts only the
-answers, so after it tokenizes, `soup train` cuts the prompt to
-`data.max_length // 2` tokens, keeping its end, and the answers to the room
-left, for the train and validation splits. Every sequence is then at most
-`data.max_length`. The cut goes by the prompt alone: a prompt longer than
-`data.max_length // 2` tokens loses its start even when prompt and answers
-would fit in `data.max_length`. A row whose prompt is at most
-`data.max_length // 2` tokens and which fits is unchanged.
+**Long prompts are capped only when a row overflows.** trl's CPO trainer cuts
+only the answers, so a long prompt reached the model whole. A SimPO prompt is
+now cut only when the row does not fit in `data.max_length`: it is then cut to
+`data.max_length // 2` tokens, keeping its end, and the answers get the room
+left, for the train and validation splits, so every sequence is at most
+`data.max_length`. A row that fits is unchanged, whatever its prompt length.
 
 **Rows whose completion trl truncates away are refused.** trl's CPO trainer
 truncates each answer to `data.max_length` minus the **longer** answer's length,
