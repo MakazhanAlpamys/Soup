@@ -28,6 +28,7 @@ from soup_cli.data.loader import load_raw_data
 from soup_cli.utils._eval_text import row_text
 from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
+from soup_cli.utils.terminal import for_terminal
 from soup_cli.utils.topics import build_topic_report, kmeans, resolve_k
 
 console = Console()
@@ -84,12 +85,13 @@ def topics(
     """
     file_path = Path(path)
     if not file_path.exists():
-        console.print(f"[red]File not found: {escape(str(file_path))}[/]")
+        console.print(f"[red]File not found: {for_terminal(file_path)}[/]", emoji=False)
         raise typer.Exit(1)
     if output is not None and not is_under_cwd(Path(output)):
         console.print(
             "[red]Output path is outside the working directory: "
-            f"{escape(str(output))}[/]"
+            f"{for_terminal(output)}[/]",
+            emoji=False,
         )
         raise typer.Exit(1)
     if output is not None:
@@ -112,7 +114,8 @@ def topics(
         for row in rows
     ]
     console.print(
-        f"[dim]Embedding {len(rows)} rows with {escape(embed_model)}...[/]"
+        f"[dim]Embedding {len(rows)} rows with {for_terminal(embed_model)}...[/]",
+        emoji=False,
     )
     try:
         vectors = embed_texts(texts, model_id=embed_model, device=device)
@@ -125,7 +128,7 @@ def topics(
         )
         raise typer.Exit(1)
     except (ValueError, TypeError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(1)
 
     labels = kmeans(vectors, k=k_eff, seed=seed)
@@ -155,4 +158,4 @@ def topics(
         atomic_write_text(
             json.dumps(_report_to_dict(report), indent=2), output
         )
-        console.print(f"[green]Report written:[/] [bold]{escape(output)}[/]")
+        console.print(f"[green]Report written:[/] [bold]{for_terminal(output)}[/]", emoji=False)
