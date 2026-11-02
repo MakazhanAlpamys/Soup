@@ -153,7 +153,7 @@ def show(
     run = tracker.get_run(run_id)
 
     if not run:
-        console.print(f"[red]Run not found:[/] {markup_escape(run_id)}")
+        console.print(f"[red]Run not found:[/] {for_terminal(run_id)}", emoji=False)
         console.print("[dim]Use [bold]soup runs[/] to see all runs.[/]")
         raise typer.Exit(1)
 
@@ -552,7 +552,7 @@ def replay(
     tracker = ExperimentTracker()
     run = tracker.get_run(run_id)
     if run is None:
-        console.print(f"[red]Run not found:[/] {markup_escape(run_id)}")
+        console.print(f"[red]Run not found:[/] {for_terminal(run_id)}", emoji=False)
         raise typer.Exit(1)
 
     metrics = tracker.get_metrics(run["run_id"])
@@ -653,7 +653,7 @@ def curriculum_curve(
     tracker = ExperimentTracker()
     run = tracker.get_run(run_id)
     if run is None:
-        console.print(f"[red]Run not found:[/] {markup_escape(run_id)}")
+        console.print(f"[red]Run not found:[/] {for_terminal(run_id)}", emoji=False)
         raise typer.Exit(1)
 
     if history_path is None:

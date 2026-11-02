@@ -236,3 +236,24 @@ def test_clean_failed_delete_shows_an_emoji_code_in_the_path_as_typed(
     text = _plain(result).replace("\\", "/")
     assert label in text
     assert "x:warning:out/checkpoint-1" in text
+
+
+@pytest.mark.parametrize("command", ["show", "replay", "curriculum-curve"])
+@pytest.mark.parametrize("name", NOT_FOUND_NAMES)
+def test_run_lookup_names_a_missing_run_as_typed(db, command, name):
+    result = runner.invoke(app, ["runs", command, name])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert f"Run not found: {name}" in _plain(result)
+
+
+@pytest.mark.parametrize("command", ["show", "replay", "curriculum-curve"])
+def test_run_lookup_strips_controls_from_a_missing_run(db, command):
+    result = runner.invoke(app, ["runs", command, "[bold]gone\x9b\u202e"])
+
+    assert result.exit_code == 1
+    text = _plain(result)
+    assert "Run not found: [bold]gone" in text
+    assert "\x9b" not in text and "\u202e" not in text
+
