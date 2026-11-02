@@ -159,3 +159,29 @@ def test_sweep_runs_and_best_run_are_named_as_typed(tmp_path, monkeypatch, run_n
     assert f"Best run: {run_name}_1" in text
     # The results table lists the arm's name and parameter values too.
     assert text.count(f"{run_name}_1") >= 3
+    # lr=[red]a is arm 1, the best arm: its own line and the best-run line.
+    assert text.count("lr = [red]a") == 2
+    # Grid row, arm line, results row, best-run line; b:warning: has no best-run line.
+    assert text.count("[red]a") == 4
+    assert text.count("b:warning:") == 3
+
+
+@pytest.mark.parametrize("run_name", ["x[red]n", "[/]n"])
+def test_sweep_failed_run_is_named_as_typed(tmp_path, monkeypatch, run_name):
+    config = _config(tmp_path)
+
+    def _fail(base_cfg, combo, name, config_path):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("soup_cli.commands.sweep._run_single", _fail)
+
+    result = runner.invoke(
+        app,
+        ["sweep", "--config", str(config), "--param", "lr=1e-5,2e-5", "--name", run_name, "--yes"],
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    text = _plain(result)
+    assert f"Run {run_name}_1 failed: boom" in text
+    assert "No sweep run completed: 2 of 2" in text
