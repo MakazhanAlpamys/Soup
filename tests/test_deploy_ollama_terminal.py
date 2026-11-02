@@ -150,7 +150,7 @@ def test_deploy_failure_message_is_shown_as_typed(monkeypatch, message):
     assert f"Deploy failed: {message}" in _plain(result)
 
 
-@pytest.mark.parametrize("message", ["bad [/] value", "[red]refused"])
+@pytest.mark.parametrize("message", ["bad [/] value", "[red]refused", "stop:warning:"])
 def test_remove_failure_message_is_shown_as_typed(monkeypatch, message):
     monkeypatch.setattr(f"{_OLLAMA}.remove_model", lambda name: (False, message))
 
@@ -159,3 +159,35 @@ def test_remove_failure_message_is_shown_as_typed(monkeypatch, message):
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
     assert message in _plain(result)
+
+
+@pytest.mark.parametrize("message", ["gone [/] now", "[red]removed", "done:warning:"])
+def test_remove_success_message_is_shown_as_typed(monkeypatch, message):
+    monkeypatch.setattr(f"{_OLLAMA}.remove_model", lambda name: (True, message))
+
+    result = runner.invoke(app, ["deploy", "ollama", "--remove", "soup-test", "--yes"])
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert message in _plain(result)
+
+
+@pytest.mark.parametrize("key", ["[red]x", "[/]x", "x:warning:"])
+def test_deploy_unknown_parameter_key_is_shown_as_typed(key):
+    path = _gguf()
+
+    result = _deploy("--model", str(path), "--parameter", f"{key}=1", "--yes")
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert f"Invalid parameter: Unknown Ollama parameter: '{key}'." in _plain(result)
+
+
+def test_deploy_overwrite_warning_shows_the_model_name_as_typed():
+    path = _gguf()
+
+    result = runner.invoke(
+        app, ["deploy", "ollama", "--name", "m:warning:", "--model", str(path)], input="n\n"
+    )
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "overwrite any existing Ollama model named 'm:warning:'." in _plain(result)

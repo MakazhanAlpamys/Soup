@@ -15,7 +15,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from soup_cli.utils.terminal import for_terminal, strip_control
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -298,8 +298,7 @@ def ollama(
             raise typer.Exit(1)
 
         if not yes:
-            # Click prints the prompt as plain text, so only the controls are stripped.
-            confirm = typer.confirm(f"Remove model '{strip_control(remove)}' from Ollama?")
+            confirm = typer.confirm(f"Remove model '{remove}' from Ollama?")
             if not confirm:
                 raise typer.Exit(0)
 
@@ -378,7 +377,7 @@ def ollama(
     console.print(
         Panel(
             Text.from_markup(
-                f"Model:    [bold]{for_terminal(name)}[/]\n"
+                f"Model:    [bold]{name}[/]\n"
                 f"GGUF:     [bold]{for_terminal(gguf_path)}[/]\n"
                 f"Template: [bold]{resolved_template}[/]"
                 + (f"\nSystem:   [bold]{for_terminal(system)}[/]" if system else "")
@@ -393,7 +392,7 @@ def ollama(
     if not yes:
         console.print(
             "[yellow]Warning:[/] This will overwrite any existing Ollama model "
-            f"named '{for_terminal(name)}'.",
+            f"named '{name}'.",
             emoji=False,
         )
         confirm = typer.confirm("Proceed?")
@@ -422,11 +421,11 @@ def ollama(
         raise typer.Exit(1)
 
     console.print(
-        f"[green]\u2713[/] Model created: [bold]{for_terminal(name)}[/]", emoji=False
+        f"[green]\u2713[/] Model created: [bold]{name}[/]", emoji=False
     )
     console.print(
         Panel(
-            Text.from_markup(f"Run: [bold]ollama run {for_terminal(name)}[/]", emoji=False),
+            Text.from_markup(f"Run: [bold]ollama run {name}[/]", emoji=False),
             title="[bold green]Deploy Complete![/]",
         )
     )
