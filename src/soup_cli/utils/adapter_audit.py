@@ -21,6 +21,7 @@ run.
 from __future__ import annotations
 
 import math
+import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -47,6 +48,10 @@ OK = "ok"
 DIVERGED = "diverged"
 UNKNOWN = "unknown"
 
+# The largest finite double. An int outside ``[-_MAX_FLOAT, _MAX_FLOAT]`` cannot be converted
+# to a float, so the audit cannot compare it at all.
+_MAX_FLOAT = sys.float_info.max
+
 
 def _is_number(value: Any) -> bool:
     """A real number, excluding ``bool``.
@@ -56,6 +61,12 @@ def _is_number(value: Any) -> bool:
     too rather than in three separate places.
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    # An int past the double range is refused here rather than by `float()`: `math.isfinite`
+    # converts its argument first, so it raised OverflowError out of the command for exactly
+    # the inputs this guard exists to reject (#2370). Checking the bound keeps the conversion
+    # unreachable instead of catching its failure.
+    if isinstance(value, int) and not -int(_MAX_FLOAT) <= value <= int(_MAX_FLOAT):
         return False
     # NaN and inf are floats, so they passed this guard and reached `int()`,
     # which refuses both -- ValueError for NaN, OverflowError for inf, raised
