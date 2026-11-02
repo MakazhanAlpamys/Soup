@@ -2,7 +2,8 @@
 
 First SIGINT requests a checkpoint by setting `should_save=True` on the
 attached request state; second SIGINT sets `should_training_stop=True` (or raises
-KeyboardInterrupt if no trainer state is wired).
+KeyboardInterrupt if no trainer state is wired). A third SIGINT restores the
+previous handler and raises KeyboardInterrupt immediately.
 """
 
 from __future__ import annotations
@@ -60,6 +61,10 @@ class GracefulSaveHandler:
             self.sigint_count += 1
             count = self.sigint_count
             state = self.state
+        if count >= 3 or state is None:
+            # Escalate when the safe step or checkpoint is taking too long.
+            self.restore()
+            raise KeyboardInterrupt
         if count == 1 and state is not None:
             # First Ctrl+C: ask the trainer to save & continue.
             try:
@@ -67,7 +72,7 @@ class GracefulSaveHandler:
             except AttributeError:
                 pass
             return
-        # Second Ctrl+C (or first when no state attached): stop training.
+        # Second Ctrl+C: save and stop at the next safe step.
         if state is not None:
             try:
                 state.should_training_stop = True

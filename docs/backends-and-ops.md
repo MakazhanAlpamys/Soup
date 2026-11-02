@@ -1618,15 +1618,17 @@ LIVE (v0.71.21): reshapes fused Llama-4 expert weights `[E*din, dout]` → `[E, 
 
 For HF Trainer-backed runs, the first SIGINT requests a checkpoint after the
 next completed optimizer step and training continues. The second requests a
-checkpoint and stops after that save. Requests survive gradient accumulation
+checkpoint and stops after that save. A third SIGINT restores the prior signal
+handler and raises `KeyboardInterrupt` immediately, without waiting for a safe
+step or a checkpoint to finish. Requests survive gradient accumulation
 and TrainerControl resets. Initialized distributed ranks share the save/stop
 decision at the safe step. The prior signal handler is restored on normal
 completion and on startup, training or checkpoint errors. The controls work
 without a live display. Signal installation is unavailable on non-main threads;
 the file trigger still works there.
 
-Native MLX training and custom loops that do not use HF Trainer (including the
-legacy PPO loop) do not implement these manual-save controls.
+Native MLX training and custom loops that do not use HF Trainer (including
+`task: unlearn`) do not implement these manual-save controls.
 
 
 ## Checkpoint-Now Trigger File

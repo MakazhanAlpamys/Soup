@@ -83,9 +83,6 @@ def manual_save_context(trainer: Any, *, stop_after_save: bool = False) -> Itera
                 if stop_after_save:
                     raise _StopAfterCheckpoint
 
-        def on_train_end(self, args: Any, state: Any, control: Any, **event_kwargs: Any) -> None:
-            handler.restore()
-
     callback = ManualSaveCallback()
     trainer.add_callback(callback)
     try:

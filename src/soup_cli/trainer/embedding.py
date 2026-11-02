@@ -660,6 +660,9 @@ class _EmbeddingTrainer:
     def add_callback(self, callback):
         return self._trainer.add_callback(callback)
 
+    def remove_callback(self, callback: object) -> None:
+        self._trainer.remove_callback(callback)
+
     @property
     def state(self):
         return self._trainer.state

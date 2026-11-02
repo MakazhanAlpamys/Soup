@@ -1,10 +1,13 @@
 """Manual checkpoint controls drive real local HF/TRL/PEFT training."""
 
+import ast
 import json
 import signal
 import subprocess
 import sys
+import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,8 +17,9 @@ def _train_case(tmp_path, monkeypatch, mode):
 
     from tests.test_issue691_sft_packing import _sft_wrapper
 
-    wrapper, _ = _sft_wrapper(tmp_path, monkeypatch, n_rows=4,
-                              gradient_accumulation_steps=1,
+    accumulated = mode == "accumulated-signal"
+    wrapper, _ = _sft_wrapper(tmp_path, monkeypatch, n_rows=8 if accumulated else 4,
+                              gradient_accumulation_steps=2 if accumulated else 1,
                               save_steps=1 if mode == "scheduled" else 1000)
     output = Path(wrapper._output_dir)
     output.mkdir(exist_ok=True)
@@ -33,6 +37,14 @@ def _train_case(tmp_path, monkeypatch, mode):
                 signal.raise_signal(signal.SIGINT)
             if mode == "step-error" and state.global_step == 1:
                 raise RuntimeError("deliberate step failure")
+            if mode == "third-signal" and state.global_step == 1:
+                for _ in range(3):
+                    signal.raise_signal(signal.SIGINT)
+
+        def on_substep_end(self, args, state, control, **kwargs):
+            if accumulated and state.global_step == 1:
+                assert args.gradient_accumulation_steps == 2
+                signal.raise_signal(signal.SIGINT)
 
         def on_save(self, args, state, control, **kwargs):
             checkpoint = output / f"checkpoint-{state.global_step}"
@@ -84,8 +96,10 @@ def test_trigger_adds_a_real_checkpoint_without_changing_scheduled_saves(
 
 @pytest.mark.parametrize("mode,expected,step", [("first-signal", [2, 4], 4),
                                                 ("second-signal", [2, 3], 3),
-                                                ("signal-during-save", [2], 2)])
-def test_signals_save_continue_then_save_and_stop_in_a_fresh_process(
+                                                ("signal-during-save", [2], 2),
+                                                ("accumulated-signal", [2, 4], 4),
+                                                ("third-signal", [], 1)])
+def test_signal_controls_in_a_fresh_process(
     tmp_path, mode, expected, step,
 ):
     script = (
@@ -101,7 +115,8 @@ def test_signals_save_continue_then_save_and_stop_in_a_fresh_process(
     result = json.loads(next(line[7:] for line in process.stdout.splitlines()
                              if line.startswith("RESULT=")))
     assert result == {"saved": expected, "step": step, "trigger_exists": False,
-                      "restored": True, "error": None}
+                      "restored": True,
+                      "error": "KeyboardInterrupt: " if mode == "third-signal" else None}
 
 
 @pytest.mark.parametrize("mode,message,step", [("step-error", "deliberate step failure", 1),
@@ -191,6 +206,131 @@ def test_custom_trainer_without_hf_callbacks_keeps_its_behavior():
     with manual_save_context(trainer):
         assert trainer.train() == "result"
     assert calls == ["trained"]
+
+
+def test_embedding_delegate_attaches_and_removes_the_manual_save_callback():
+    from soup_cli.monitoring.manual_save import manual_save_context
+    from soup_cli.trainer.embedding import _EmbeddingTrainer
+
+    class Inner:
+        def __init__(self):
+            self.callbacks = []
+
+        def add_callback(self, callback):
+            self.callbacks.append(callback)
+
+        def remove_callback(self, callback):
+            self.callbacks.remove(callback)
+
+    delegate = object.__new__(_EmbeddingTrainer)
+    delegate._trainer = Inner()
+    with manual_save_context(delegate):
+        assert len(delegate._trainer.callbacks) == 1
+    assert delegate._trainer.callbacks == []
+
+
+def test_embedding_trigger_saves_before_the_final_checkpoint(tmp_path, monkeypatch):
+    from transformers import TrainerCallback
+
+    from tests.test_issue690_embedding_trainer_attrs import _embedding_wrapper
+
+    wrapper = _embedding_wrapper(tmp_path, monkeypatch)
+    wrapper.trainer.args.max_steps = 3
+    output = Path(wrapper._output_dir)
+    output.mkdir(exist_ok=True)
+    trigger = output / ".checkpoint_now"
+    trigger.write_text("")
+    saved = []
+
+    class Observe(TrainerCallback):
+        def on_save(self, args, state, control, **kwargs):
+            checkpoint = output / f"checkpoint-{state.global_step}"
+            assert (checkpoint / "trainer_state.json").is_file()
+            assert (checkpoint / "adapter_model.safetensors").is_file()
+            saved.append(state.global_step)
+
+    wrapper.trainer.add_callback(Observe())
+    original_callbacks = list(wrapper.trainer._trainer.callback_handler.callbacks)
+    previous = signal.getsignal(signal.SIGINT)
+    result = wrapper.train()
+    assert saved == [1, 3]
+    assert result["total_steps"] == 3
+    assert not trigger.exists()
+    assert signal.getsignal(signal.SIGINT) == previous
+    assert wrapper.trainer._trainer.callback_handler.callbacks == original_callbacks
+
+
+def test_a_third_sigint_restores_the_previous_handler_and_interrupts():
+    from soup_cli.utils.graceful_save import GracefulSaveHandler
+
+    requests = SimpleNamespace(should_save=False, should_training_stop=False)
+    handler = GracefulSaveHandler()
+    handler.attach_state(requests)
+    previous = signal.getsignal(signal.SIGINT)
+    handler.install()
+    try:
+        handler._handle_sigint(signal.SIGINT, None)
+        assert requests.should_save is True
+        assert requests.should_training_stop is False
+        handler._handle_sigint(signal.SIGINT, None)
+        assert requests.should_training_stop is True
+        with pytest.raises(KeyboardInterrupt):
+            handler._handle_sigint(signal.SIGINT, None)
+        assert signal.getsignal(signal.SIGINT) == previous
+    finally:
+        handler.restore()
+
+
+def test_a_signal_during_restore_does_not_deadlock(monkeypatch):
+    from soup_cli.utils import graceful_save
+
+    requests = SimpleNamespace(should_save=False, should_training_stop=False)
+    handler = graceful_save.GracefulSaveHandler()
+    handler.attach_state(requests)
+    handler._installed = True  # Exercise restoration without changing the real handler.
+
+    def signal_arrives(signum, action):
+        handler._handle_sigint(signal.SIGINT, None)
+
+    monkeypatch.setattr(graceful_save.signal, "signal", signal_arrives)
+    worker = threading.Thread(target=handler.restore, daemon=True)
+    worker.start()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert requests.should_save is True
+
+
+_TRAINER_DIR = Path(__file__).resolve().parents[1] / "src" / "soup_cli" / "trainer"
+_WRAPPERS = (
+    "asr", "bco", "classifier", "distill", "dpo", "embedding", "grpo", "ipo", "kto",
+    "mole_routing", "online_dpo", "orpo", "ppo", "pretrain", "prm", "reward_model", "sft", "simpo",
+)
+
+
+@pytest.mark.parametrize("module", _WRAPPERS)
+def test_every_trainer_train_call_runs_inside_manual_save_context(module):
+    tree = ast.parse((_TRAINER_DIR / f"{module}.py").read_text(encoding="utf-8"))
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+
+    def inside_context(node):
+        while node in parents:
+            node = parents[node]
+            if isinstance(node, ast.With) and any(
+                isinstance(item.context_expr, ast.Call)
+                and getattr(item.context_expr.func, "id", None) == "manual_save_context"
+                for item in node.items
+            ):
+                return True
+        return False
+
+    calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "train" and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "trainer"
+    ]
+    assert calls, module
+    assert all(inside_context(call) for call in calls), module
 
 
 def test_distributed_step_combines_save_and_stop_requests(monkeypatch):
