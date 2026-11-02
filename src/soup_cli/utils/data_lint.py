@@ -23,7 +23,9 @@ Five checks:
 
 Same OK / MINOR / MAJOR taxonomy as ``utils/data_doctor.py`` (imported from
 there to keep one source of truth for the two doctor/lint twins shipped in
-the same release).
+the same release), plus SKIPPED for a check that could not run (a missing
+optional dependency). SKIPPED never raises the overall verdict, but it is
+reported so an unrun check cannot pass as OK.
 
 No top-level torch / transformers import.
 """
@@ -35,6 +37,9 @@ from dataclasses import dataclass
 from typing import Any, Callable, List, Mapping, Sequence, Tuple
 
 from soup_cli.utils.data_doctor import VERDICTS, sample_indices
+
+SKIPPED = "SKIPPED"
+LINT_VERDICTS: Tuple[str, ...] = (*VERDICTS, SKIPPED)
 
 CHECKS: Tuple[str, ...] = (
     "length_bias",
@@ -65,8 +70,8 @@ class LintCheck:
     def __post_init__(self) -> None:
         if self.name not in CHECKS:
             raise ValueError(f"unknown lint check {self.name!r}")
-        if self.verdict not in VERDICTS:
-            raise ValueError(f"verdict must be one of {VERDICTS}, got {self.verdict!r}")
+        if self.verdict not in LINT_VERDICTS:
+            raise ValueError(f"verdict must be one of {LINT_VERDICTS}, got {self.verdict!r}")
         for attr in ("message", "evidence"):
             value = getattr(self, attr)
             if not isinstance(value, str):
@@ -78,7 +83,7 @@ class LintCheck:
 
 
 def _overall_verdict(checks: Sequence[LintCheck]) -> str:
-    rank = {"OK": 0, "MINOR": 1, "MAJOR": 2}
+    rank = {"OK": 0, "MINOR": 1, "MAJOR": 2, SKIPPED: 0}
     worst = "OK"
     for check in checks:
         if not isinstance(check, LintCheck):
@@ -112,6 +117,10 @@ class LintReport:
                 raise ValueError(f"{attr} must be a non-negative int")
         if self.rows_scanned > self.total_rows:
             raise ValueError("rows_scanned cannot exceed total_rows")
+
+    @property
+    def skipped_count(self) -> int:
+        return sum(1 for check in self.checks if check.verdict == SKIPPED)
 
     def to_dict(self) -> dict:
         return {
@@ -309,14 +318,14 @@ def check_near_duplicates(
 ) -> LintCheck:
     """MinHash/LSH near-duplicate detection (mirrors ``commands/data.py::dedup``).
     MAJOR when >=20% of rows have a near-duplicate elsewhere in the sample,
-    MINOR at >=5%, else OK. Degrades to an advisory OK (not a false "no
-    duplicates" claim) when ``datasketch`` isn't installed."""
+    MINOR at >=5%, else OK. Reports SKIPPED (not a false "no duplicates"
+    OK) when ``datasketch`` isn't installed."""
     try:
         from datasketch import MinHash, MinHashLSH  # noqa: PLC0415
     except ImportError:
         return LintCheck(
             name="near_duplicates",
-            verdict="OK",
+            verdict=SKIPPED,
             message="near-dup check skipped (datasketch not installed)",
             evidence="pip install \"soup-cli[data]\" to enable",
         )

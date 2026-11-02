@@ -41,7 +41,8 @@ _PREFERENCE_FORMATS = ("dpo", "kto")
 
 
 def _verdict_style(verdict: str) -> str:
-    return {"OK": "green", "MINOR": "yellow", "MAJOR": "red"}.get(verdict, "white")
+    styles = {"OK": "green", "MINOR": "yellow", "MAJOR": "red", "SKIPPED": "yellow"}
+    return styles.get(verdict, "white")
 
 
 _AnyCheck = Union[engine.DoctorCheck, lint_engine.LintCheck]
@@ -76,10 +77,14 @@ def _render_doctor_report(report: engine.DoctorReport) -> None:
 
 def _render_lint_report(report: lint_engine.LintReport) -> None:
     _render_checks_table(f"soup data lint ({escape(report.fmt)})", report.checks)
+    skipped = report.skipped_count
+    skipped_note = (
+        f", [yellow]{skipped} check{'s' if skipped != 1 else ''} skipped[/]" if skipped else ""
+    )
     console.print(
         Panel.fit(
             f"[bold {_verdict_style(report.overall)}]{report.overall}[/] — "
-            f"{report.rows_scanned}/{report.total_rows} rows scanned",
+            f"{report.rows_scanned}/{report.total_rows} rows scanned{skipped_note}",
             title="overall",
         )
     )
