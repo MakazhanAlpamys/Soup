@@ -227,6 +227,14 @@ def render_lambda_stub(
         '_REGION_RE = re.compile(r"^[a-z0-9-]{1,64}$")',
         '_INSTANCE_ID_RE = re.compile(r"^[a-z0-9-]+$")',
         "",
+        "class _LambdaAPIError(RuntimeError):",
+        "    def __init__(self, message: str, status: int, method: str) -> None:",
+        "        super().__init__(message)",
+        "        self.status = status",
+        "        self.method = method",
+        "        # A 4xx (except 408) on the launch POST means no instance was created.",
+        "        self.create_rejected = method == 'POST' and 400 <= status < 500 and status != 408",
+        "",
         "def _request_json(api_key, path, *, method='GET', payload=None):",
         "    data = None if payload is None else json.dumps(payload).encode('utf-8')",
         "    request = urllib.request.Request(_API_BASE + path, data=data, method=method)",
@@ -238,8 +246,9 @@ def render_lambda_stub(
         "            return json.loads(response.read().decode('utf-8'))",
         "    except urllib.error.HTTPError as exc:",
         "        detail = exc.read().decode('utf-8', errors='replace')",
-        "        raise RuntimeError(",
-        "            f'Lambda API {method} {path} failed with HTTP {exc.code}: {detail}',"
+        "        raise _LambdaAPIError(",
+        "            f'Lambda API {method} {path} failed with HTTP {exc.code}: {detail}',",
+        "            exc.code, method,",
         "        ) from exc",
         "",
         "def _launch_payload(region, ssh_key_name, name):",
@@ -359,11 +368,11 @@ def render_lambda_stub(
         "        '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=6',",
         "    ]",
         "    poll_cmd = (",
-        "        'case \"$(cloud-init status 2>/dev/null)\" in '",
-        "        '*running*|*\"not started\"*|*\"not run\"*) echo RUNNING ;; '",
-        "        '*) if [ -s /home/ubuntu/soup.exit ]; then cat /home/ubuntu/soup.exit; '",
-        "        'else echo MISSING; fi ;; '",
-        "        'esac'",
+        '        \'case "$(cloud-init status 2>/dev/null)" in \'',
+        '        \'*running*|*"not started"*|*"not run"*) echo RUNNING ;; \'',
+        '        \'*) if [ -s /home/ubuntu/soup.exit ]; then cat /home/ubuntu/soup.exit; \'',
+        '        \'else echo MISSING; fi ;; \'',
+        '        \'esac\'',
         "    )",
         "    ssh, scp = _tool('ssh'), _tool('scp')",
         "    env = _tool_environment()",
@@ -479,18 +488,18 @@ def render_lambda_stub(
         "        _train_and_copy(ip, private_key)",
         "        print(f'Training completed; checkpoints copied to {_LOCAL_OUTPUT}')",
         "        rc = 0",
-        "    except RuntimeError as exc:",
-        "        msg = str(exc)",
-        "        # Definite rejection: 4xx (except 408) from the launch POST means "
-        "the instance was never created.",
-        "        if 'Lambda API POST /instance-operations/launch failed with HTTP' in msg:",
-        "            import re as _re",
-        r"            m = _re.search(r'HTTP (\d+)', msg)",
-        "            if m and 400 <= int(m.group(1)) < 500 and int(m.group(1)) != 408:",
-        "                launched = False",
+        "    except Exception as exc:",
+        "        # Definite rejection: _LambdaAPIError with 4xx (except 408) from the launch POST "
+        "means the instance was never created.",
+        "        if getattr(exc, 'create_rejected', False):",
+        "            launched = False",
         "        print(f'Lambda training failed: {exc}')",
         "    finally:",
         "        # Repeated Ctrl+C must not abandon cleanup of a billable resource.",
+        "        # A second interrupt during cleanup is ignored so the recovery",
+        "        # runs to completion.",
+        "        import signal",
+        "        previous = signal.signal(signal.SIGINT, signal.SIG_IGN)",
         "        try:",
         "            if instance_id is not None:",
         "                # Known-ID path: we have the ID, terminate and verify it.",
@@ -513,7 +522,6 @@ def render_lambda_stub(
         "                    print(",
         "                        f'Lambda termination verified for ambiguous launch: {ids}',"
         "                    )",
-        "                    rc = 0",
         "                except Exception:",
         "                    print(",
         "                        (f'CRITICAL: Lambda cleanup unconfirmed; check the console "
@@ -527,6 +535,8 @@ def render_lambda_stub(
         "            if instance_id is not None:",
         "                print(f'CRITICAL: Lambda termination failed for {instance_id}: {exc}')",
         "                rc = 1",
+        "        finally:",
+        "            signal.signal(signal.SIGINT, previous)",
         "    return rc",
         "",
         "if __name__ == '__main__':",
@@ -561,7 +571,10 @@ def plan_lambda_run(
     enforce_under_cwd_and_no_symlink(output_dir, "output_dir")
     _validate_path_shape(stub_path, "stub_path")
     stub_text = render_lambda_stub(
-        config_yaml, gpu=gpu_key, output_dir=output_dir, soup_version=soup_version
+        config_yaml,
+        gpu=gpu_key,
+        output_dir=output_dir,
+        soup_version=soup_version,
     )
     return CloudPlan(
         cloud="lambda",
@@ -571,6 +584,11 @@ def plan_lambda_run(
         stub_text=stub_text,
         run_command=f"python -I {stub_path}",
     )
+
+
+def write_stub(plan: CloudPlan) -> str:
+    """Write a Lambda controller atomically under the current directory."""
+    return write_cloud_stub(plan)
 
 
 _WAITING_NOTICE = (
@@ -592,9 +610,21 @@ def _notify_waiting_for_controller() -> None:
         pass
 
 
-def write_stub(plan: CloudPlan) -> str:
-    """Write a Lambda controller atomically under the current directory."""
-    return write_cloud_stub(plan)
+def _controller_environment(
+    environ: Mapping, *, case_insensitive: Optional[bool] = None
+) -> dict[str, str]:
+    """Return the variables of ``environ`` the local controller is started with.
+
+    Only the names in ``_CONTROLLER_ENV_NAMES`` are kept. Windows variable names
+    are case-insensitive (``SystemRoot`` is ``SYSTEMROOT``), so they are matched
+    folded to upper case there and exactly everywhere else.
+    """
+    if case_insensitive is None:
+        case_insensitive = os.name == "nt"
+    if case_insensitive:
+        wanted = {name.upper() for name in _CONTROLLER_ENV_NAMES}
+        return {key: value for key, value in environ.items() if key.upper() in wanted}
+    return {key: value for key, value in environ.items() if key in _CONTROLLER_ENV_NAMES}
 
 
 def submit_lambda_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:
@@ -619,9 +649,6 @@ def submit_lambda_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:
             + ", ".join(missing)
             + ", then re-run with --cloud-submit."
         )
-    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
-
-    enforce_under_cwd_and_no_symlink(plan.stub_path, "stub_path")
     import subprocess
 
     # Not subprocess.run: on KeyboardInterrupt it kills the child 0.25 s later,
@@ -642,7 +669,7 @@ def submit_lambda_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:
                 # controller needs; the generated file imports the standard
                 # library alone, so it does not depend on its own directory
                 # or on any PYTHON* variable.
-                proc = subprocess.Popen(
+                proc = subprocess.Popen(  # noqa: S603 — argv list, no shell
                     [sys.executable, "-I", plan.stub_path],
                     env=_controller_environment(environ),
                 )
@@ -660,20 +687,3 @@ def submit_lambda_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:
             # instance in its finally block; killing it here would leave the
             # instance running. Keep waiting until it exits.
             _notify_waiting_for_controller()
-
-
-def _controller_environment(
-    environ: Mapping, *, case_insensitive: Optional[bool] = None
-) -> dict[str, str]:
-    """Return the variables of ``environ`` the local controller is started with.
-
-    Only the names in ``_CONTROLLER_ENV_NAMES`` are kept. Windows variable names
-    are case-insensitive (``SystemRoot`` is ``SYSTEMROOT``), so they are matched
-    folded to upper case there and exactly everywhere else.
-    """
-    if case_insensitive is None:
-        case_insensitive = os.name == "nt"
-    if case_insensitive:
-        wanted = {name.upper() for name in _CONTROLLER_ENV_NAMES}
-        return {key: value for key, value in environ.items() if key.upper() in wanted}
-    return {key: value for key, value in environ.items() if key in _CONTROLLER_ENV_NAMES}
