@@ -14,7 +14,7 @@ def test_messages_forwards_temperature_and_top_p_like_chat_completions():
 
     def fake(model, tok, messages, **kw):
         seen.append((kw.get("temperature"), kw.get("top_p")))
-        return ("ok", 1, 1)
+        return ("ok", 1, 1, "stop")
 
     with patch.object(serve, "_generate_response", fake):
         app = serve._create_app(MagicMock(), MagicMock(), "cpu", "m", 16)
@@ -41,7 +41,7 @@ def test_messages_uses_defaults_when_sampling_omitted():
 
     def fake(model, tok, messages, **kw):
         seen.append((kw.get("temperature"), kw.get("top_p")))
-        return ("ok", 1, 1)
+        return ("ok", 1, 1, "stop")
 
     with patch.object(serve, "_generate_response", fake):
         app = serve._create_app(MagicMock(), MagicMock(), "cpu", "m", 16)
