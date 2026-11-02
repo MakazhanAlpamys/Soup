@@ -614,51 +614,44 @@ _PAIRWISE_INSTRUCTIONS = (
 )
 
 
+#: A whole pairwise reply that is just a verdict letter, optionally labelled or
+#: wrapped in quotes / markdown emphasis / brackets: ``B``, ``"A"``, ``**B**``,
+#: ``[A]``, ``Answer: B``, ``The winner is B``, ``Better response is A``.
+#: The letter is read by position, never searched for, so the English article
+#: "a" in prose cannot masquerade as verdict A (#2356).
+_VERDICT_ONLY = re.compile(
+    r"^(?:(?:the\s+)?(?:final\s+)?"
+    r"(?:answer|winner|verdict|choice|vote|prefer(?:red)?(?:\s+response)?"
+    r"|better(?:\s+(?:response|one))?)\s*(?::|=|\bis\b)\s*)?"
+    r"[\"'*(\[]*([AB])[\"'*)\].]*$",
+    re.IGNORECASE,
+)
+
+#: A reply that opens with a letter and a copula: ``A is clearly better``,
+#: ``B wins here``. Also position-based, so prose that merely mentions a letter
+#: later on stays unparseable.
+_LEADING_VERDICT = re.compile(r"^([AB])\s+(?:is|wins)\b", re.IGNORECASE)
+
+
 def _parse_pairwise(text: str) -> int:
-    """Parse a judge reply into 0 (A) / 1 (B) / -1 (tie or unparseable)."""
-    match = re.search(r'\{[^{}]*\}', text or "", re.DOTALL)
-    if match:
-        try:
-            data = json.loads(match.group())
-            winner = str(data.get("winner", "")).strip().upper()
-            if winner == "A":
-                return 0
-            if winner == "B":
-                return 1
-        except (json.JSONDecodeError, TypeError, ValueError):
-            pass
-    # Fallback: look for explicit A/B verdict tokens.
-    # Accept clear indicators like "A", "B", "Answer: A", "Winner: B", etc.
-    # but reject ambiguous text like "Answer: B" (starts with A) or "Better: A" (starts with B).
+    """Parse a judge reply into 0 (A) / 1 (B) / -1 (tie or unparseable).
+
+    A reply is read as a verdict only when the letter is where a verdict would
+    be: a JSON object's ``winner``, a whole reply that is just the letter (with
+    optional label), or a reply that opens with ``A is`` / ``B wins``. Anything
+    else abstains with -1, which every caller already treats as "no verdict", so
+    a judge that names no winner cannot flip the tuned win-rate (#2356).
+    """
     stripped = (text or "").strip()
-    if not stripped:
+    if len(stripped) > _MAX_JUDGE_REPLY_CHARS:
         return -1
-    upper = stripped.upper()
-    # Check for explicit verdict patterns first
-    patterns_a = [
-        r'\bA\b',
-        r'ANSWER\s*[:=]\s*A\b',
-        r'WINNER\s*[:=]\s*A\b',
-        r'BETTER\s*[:=]\s*A\b',
-        r'CHOICE\s*[:=]\s*A\b',
-        r'VOTE\s*[:=]\s*A\b',
-        r'PREFER\s*[:=]\s*A\b',
-    ]
-    patterns_b = [
-        r'\bB\b',
-        r'ANSWER\s*[:=]\s*B\b',
-        r'WINNER\s*[:=]\s*B\b',
-        r'BETTER\s*[:=]\s*B\b',
-        r'CHOICE\s*[:=]\s*B\b',
-        r'VOTE\s*[:=]\s*B\b',
-        r'PREFER\s*[:=]\s*B\b',
-    ]
-    has_a = any(re.search(p, upper) for p in patterns_a)
-    has_b = any(re.search(p, upper) for p in patterns_b)
-    if has_a and not has_b:
-        return 0
-    if has_b and not has_a:
-        return 1
+    data = _first_json_object(stripped) if stripped else None
+    if isinstance(data, dict) and "winner" in data:
+        return {"A": 0, "B": 1}.get(str(data["winner"]).strip().upper(), -1)
+    for pattern in (_VERDICT_ONLY, _LEADING_VERDICT):
+        match = pattern.match(stripped)
+        if match:
+            return 0 if match.group(1).upper() == "A" else 1
     return -1
 
 
