@@ -448,6 +448,8 @@ response = client.chat.completions.create(
 )
 ```
 
+On the default Transformers backend, including a MoLE runtime, `finish_reason` is `"length"` when generation used the whole `max_tokens` budget without an end token and `"stop"` otherwise, even when the end token is the last one the budget allows. `/v1/messages` reports the same as `stop_reason` `max_tokens` / `end_turn`, in the reply and in the final `message_delta` event.
+
 ### KV Cache Quantization (`soup serve --kv-cache-type`)
 
 Shrink the inference-time KV cache on the transformers backend:
