@@ -4,6 +4,10 @@
 ``reward_head``, so the step builds the logits (a half-precision output and the fp32
 copy Accelerate's ``convert_outputs_to_fp32`` makes of it) and no loss over them.
 Every other task with an LM head keeps the logits-and-loss charge.
+
+#2368: that forward passes ``logits_to_keep=1`` where the model takes it, so the PRM
+logits cover one position. The model types whose forward lacks the argument
+(``FULL_LOGITS_MODEL_TYPES``) and remote-code bases (``auto_map``) keep every position.
 """
 
 from __future__ import annotations
@@ -28,6 +32,8 @@ _VOCAB = 32_000
 _SEQ = 2048
 _BATCH = 4
 _ELEMENTS = _VOCAB * _SEQ * _BATCH
+#: A PRM step's logits under ``logits_to_keep=1``: one position (#2368).
+_ONE_POSITION = _VOCAB * 1 * _BATCH
 
 
 @pytest.fixture
@@ -84,9 +90,10 @@ def test_the_config_carries_logits_loss(workdir, task, logits_loss):
 
 
 def test_prm_is_charged_the_logits_tensor_only(workdir):
+    # #2368: one position, since the forward keeps the last position's logits only.
     logits = _terms(_input(workdir, "prm"))["logits"]
-    assert logits == _ELEMENTS * 6
-    assert logits == _ELEMENTS * vram_estimate.LOGITS_TENSOR_BYTES_PER_ELEMENT
+    assert logits == _ONE_POSITION * 6
+    assert logits == _ONE_POSITION * vram_estimate.LOGITS_TENSOR_BYTES_PER_ELEMENT
 
 
 def _shape(workdir: Path):
@@ -101,8 +108,8 @@ def test_the_logits_are_eight_bytes_under_4bit(workdir):
         seq_len=_SEQ, batch_size=_BATCH, quant="4bit", peft="qlora", logits_loss=False
     )
     logits = vram_estimate.logits_bytes(_shape(workdir), run)
-    assert logits == _ELEMENTS * 8
-    assert logits == _ELEMENTS * (
+    assert logits == _ONE_POSITION * 8
+    assert logits == _ONE_POSITION * (
         vram_estimate.LOGITS_TENSOR_BYTES_PER_ELEMENT + vram_estimate.KBIT_LOGITS_EXTRA_BYTES
     )
 
@@ -173,7 +180,8 @@ def _profile(workdir: Path, task: str) -> dict:
 def test_soup_profile_reports_the_prm_logits_term(workdir):
     report = _profile(workdir, "prm")
     terms = report["memory_terms_bytes"]
-    assert terms["logits"] == _ELEMENTS * vram_estimate.LOGITS_TENSOR_BYTES_PER_ELEMENT
+    # #2368: one position of logits, not the whole sequence.
+    assert terms["logits"] == _ONE_POSITION * vram_estimate.LOGITS_TENSOR_BYTES_PER_ELEMENT
 
     # The same run with the loss chain charged, as before #2332.
     inp = _input(workdir, "prm")
@@ -190,10 +198,80 @@ def test_soup_profile_reports_the_prm_logits_term(workdir):
         vram_estimate.OVERHEAD_FIXED_BYTES + vram_estimate.OVERHEAD_SLACK * allocated
     )
     drop = before["logits"] - terms["logits"]
-    assert drop == _ELEMENTS * (
-        LOGITS_LOSS_BYTES_PER_ELEMENT - vram_estimate.LOGITS_TENSOR_BYTES_PER_ELEMENT
+    assert drop == (
+        _ELEMENTS * LOGITS_LOSS_BYTES_PER_ELEMENT
+        - _ONE_POSITION * vram_estimate.LOGITS_TENSOR_BYTES_PER_ELEMENT
     )
     assert report["total_memory_bytes"] == sum(terms.values())
     assert sum(before.values()) - report["total_memory_bytes"] == drop + (
         before["overhead"] - terms["overhead"]
     )
+
+
+# --- #2368: the forwards without logits_to_keep keep every position ---------------
+
+#: transformers 5.20.2: the causal-LM classes (``MODEL_FOR_CAUSAL_LM_MAPPING_NAMES``)
+#: whose ``forward`` has no ``logits_to_keep``.
+_WITHOUT_LOGITS_TO_KEEP = {
+    "gemma4_assistant",
+    "gemma4_unified_assistant",
+    "musicgen",
+    "musicgen_melody",
+    "prophetnet",
+    "trocr",
+    "whisper",
+    "xlstm",
+}
+
+
+def test_the_full_logits_model_types_are_the_eight_without_the_argument():
+    assert vram_estimate.FULL_LOGITS_MODEL_TYPES == _WITHOUT_LOGITS_TO_KEEP
+
+
+def _prm_logits(base: Path) -> int:
+    cfg = load_config_from_string(_yaml(str(base), "prm"))
+    inp = hardware_fit.hardware_fit_input_from_config(cfg, allow_network=False)
+    assert inp is not None
+    return _terms(inp)["logits"]
+
+
+@pytest.mark.parametrize("model_type", sorted(_WITHOUT_LOGITS_TO_KEEP))
+def test_a_model_type_without_logits_to_keep_is_charged_every_position(
+    tmp_path, monkeypatch, model_type
+):
+    monkeypatch.chdir(tmp_path)
+    write_tiny_model(tmp_path / "base", vocab_size=_VOCAB, model_type=model_type)
+    assert _prm_logits(tmp_path / "base") == _ELEMENTS * 6
+
+
+def test_the_outer_model_type_counts_under_a_nested_text_config(tmp_path, monkeypatch):
+    # gemma4_assistant nests a gemma4_text text_config (transformers 5.20.2), and the
+    # shape's model_type is the nested one; the outer one decides here.
+    from tests._tiny_checkpoint import TINY_LLAMA, tensors_for, write_safetensors
+
+    monkeypatch.chdir(tmp_path)
+    base = tmp_path / "assistant"
+    base.mkdir()
+    text = {**TINY_LLAMA, "vocab_size": _VOCAB, "model_type": "gemma4_text"}
+    config = {"model_type": "gemma4_assistant", "text_config": text}
+    (base / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    write_safetensors(base / "model.safetensors", tensors_for(text))
+    shape = read_model_shape(str(base), allow_network=False)
+    assert (shape.model_type, shape.config_model_type) == ("gemma4_text", "gemma4_assistant")
+    assert _prm_logits(base) == _ELEMENTS * 6
+
+
+def test_a_remote_code_base_is_charged_every_position(tmp_path, monkeypatch):
+    # The estimate cannot see a remote-code forward, so it does not assume the argument.
+    monkeypatch.chdir(tmp_path)
+    auto_map = {"AutoModelForCausalLM": "modeling_tiny.TinyForCausalLM"}
+    write_tiny_model(tmp_path / "remote", vocab_size=_VOCAB, auto_map=auto_map)
+    assert read_model_shape(str(tmp_path / "remote"), allow_network=False).remote_code
+    assert _prm_logits(tmp_path / "remote") == _ELEMENTS * 6
+
+
+def test_a_native_base_reads_as_no_remote_code(workdir):
+    shape = _shape(workdir)
+    assert shape.remote_code is False
+    assert shape.config_model_type == shape.model_type == "llama"
+

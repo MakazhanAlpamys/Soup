@@ -732,14 +732,14 @@ class TestConfig:
         with pytest.raises(Exception, match=match):
             self._load(top, training)
 
-    def test_the_preference_alias_is_refused_explicitly(self):
+    def test_the_preference_alias_selects_native_orpo(self):
         from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.dispatch import build_trainer
+        from soup_cli.trainer.mlx_orpo import MLXORPOTrainerWrapper
 
         alias = (_ORPO_YAML.replace("task: orpo", "task: preference")
                  .replace("  orpo_beta: 0.1\n", "  preference_loss: orpo\n"))
-        with pytest.raises(Exception, match="task='preference' has no trainer") as info:
-            load_config_from_string(alias)
-        assert "Use task: orpo for the native MLX trainer." in str(info.value)
+        assert isinstance(build_trainer(load_config_from_string(alias)), MLXORPOTrainerWrapper)
 
     def test_the_transformers_route_is_unchanged(self):
         from soup_cli.config.loader import load_config_from_string
