@@ -23,6 +23,8 @@ How to read a table:
 - **Type** uses `str`, `int`, `float`, `bool`, `list[...]` and `dict[...]`; `null` means
   the key may be left out or set to `null`; `section` is a nested block with a table of
   its own. A value in quotes (`"auto"`) is the one literal accepted next to the type.
+  A boolean is not a number in `soup.yaml`: boolean values (`true`, `false`, and YAML 1.1
+  aliases like `yes`, `no`) are refused by `int` and `float` fields.
 - **Default** is written the way YAML reads it (`null`, `true`, `"auto"`, `["a"]`).
   **required** means there is none. *(set at runtime)* marks a default computed on
   the machine, which this page does not print.
