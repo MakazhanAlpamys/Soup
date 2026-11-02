@@ -99,6 +99,24 @@ def test_quickstart_names_existing_files_as_typed(tmp_path, monkeypatch, name):
     assert f"{name}/quickstart_soup.yaml" in text
 
 
+@pytest.mark.parametrize("name", ["x[red]proj", "[bold]proj\x9b\u202e"])
+def test_quickstart_existing_file_lines_show_the_path_as_typed(tmp_path, monkeypatch, name):
+    workdir = tmp_path / name
+    workdir.mkdir(parents=True)
+    monkeypatch.chdir(workdir)
+    (workdir / "quickstart_data.jsonl").write_text("keep\n", encoding="utf-8")
+    (workdir / "quickstart_soup.yaml").write_text("keep: me\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["quickstart", "--dry-run", "--yes"])
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    text = _plain(result).replace("\\", "/")
+    shown = re.escape(name.replace("\x9b", "").replace("\u202e", ""))
+    assert re.search(rf"Data file already exists: \S*{shown}/quickstart_data\.jsonl", text)
+    assert re.search(rf"Config file already exists: \S*{shown}/quickstart_soup\.yaml", text)
+    assert "\x9b" not in text and "\u202e" not in text
+
+
 @pytest.mark.parametrize("name", ["../[red]elsewhere", "../[/]x", "../gone:warning:"])
 def test_quickstart_refused_output_is_named_as_typed(tmp_path, monkeypatch, name):
     workdir = tmp_path / "work"
