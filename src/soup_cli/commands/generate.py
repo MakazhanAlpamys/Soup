@@ -276,6 +276,8 @@ def generate(
 
         remaining = count
         last_request_time = 0.0
+        consecutive_empty = 0
+        max_empty_retries = 3
         while remaining > 0:
             current_batch = min(batch_size, remaining)
 
@@ -326,6 +328,7 @@ def generate(
 
             last_request_time = time.monotonic()
 
+            previous_count = len(all_examples)
             # Validate and dedup
             for example in batch:
                 is_valid = _validate_example(example, fmt)
@@ -339,10 +342,37 @@ def generate(
                     continue
                 existing_texts.add(text)
                 all_examples.append(example)
+                if len(all_examples) == count:
+                    break
 
-            generated_this_round = len(batch)
-            remaining -= current_batch
-            progress.update(task, advance=generated_this_round)
+            added_this_round = len(all_examples) - previous_count
+            progress.update(task, advance=added_this_round)
+            remaining = count - len(all_examples)
+
+            if added_this_round == 0:
+                consecutive_empty += 1
+                if consecutive_empty >= max_empty_retries:
+                    console.print(
+                        f"[red]Generation halted: received no valid, unique examples after "
+                        f"{consecutive_empty} consecutive attempts "
+                        f"({len(all_examples)}/{count} generated)[/]"
+                    )
+                    if all_examples:
+                        try:
+                            partial_path = Path(output).resolve()
+                            if _path_within_cwd(partial_path, cwd):
+                                with open(partial_path, "w", encoding="utf-8") as f:
+                                    for row in all_examples:
+                                        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+                                console.print(
+                                    f"[yellow]Saved {len(all_examples)} examples "
+                                    f"to {partial_path}[/]"
+                                )
+                        except OSError:
+                            pass
+                    raise typer.Exit(1)
+            else:
+                consecutive_empty = 0
 
     # Sanitize output path (prevent path traversal)
     out_path = Path(output).resolve()
