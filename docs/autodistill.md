@@ -213,15 +213,19 @@ logits and model activations. No dense teacher tensor is constructed by this obj
 
 A later consumer must verify available-manifest chains, exact cache and model/tokenizer/data
 identities, completed teacher-process exit, and reservation/checkpoint/replay state before
-calling this function. This prototype does not establish those boundaries or qualify CUDA,
+calling this function. This prototype does not establish those boundaries or qualify
 Apple Silicon, real pretrained-model quality, resumable training, or the adaptive loop.
 
-Five CUDA-marked numerical and tiny-student update cases are ready for a later hardware
-run. They skip on hosts without CUDA; their presence is not hardware qualification:
+Five CUDA-marked numerical and tiny-student update cases skip on hosts without CUDA:
 
 ```bash
 pytest -m gpu --no-cov tests/test_autodistill_student_loss.py -q
 ```
+
+The [2026-11-02 CUDA record](../benchmarks/autodistill-student-cuda-2026-11-02.md)
+reports all five passing on an RTX 3090, plus all 52 cases of this test file with zero
+skips. The GPU cases use float64 student logits/backbones; reduced-precision GPU training
+and the full cache-to-training workflow remain outside that qualification.
 
 ## 6. Teacher fidelity tiers
 
