@@ -274,4 +274,3 @@ def test_compare_strips_controls_from_a_missing_run(db, position):
     text = _plain(result)
     assert "Run not found: [bold]gone" in text
     assert "\x9b" not in text and "\u202e" not in text
-
