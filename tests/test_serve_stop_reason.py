@@ -5,7 +5,8 @@ off: OpenAI ``finish_reason`` is ``length`` and Anthropic ``stop_reason`` is
 ``max_tokens``. A run that ends on the end token, even one landing exactly on
 the budget, stopped naturally: ``stop`` / ``end_turn``. Every case runs real
 greedy generation on a tiny in-memory Llama, through both protocols, in the
-reply and in the last stream frame.
+reply and in the last stream frame; the last test checks the helpers directly,
+without a model.
 """
 
 from __future__ import annotations
@@ -48,8 +49,9 @@ def _tokenizer():
 def served():
     """A tiny random Llama behind the serve app, recording what it generates.
 
-    ``/v1/messages`` does not forward ``temperature``, so that route samples;
-    seeding before every call keeps each run's tokens repeatable.
+    Every request sends ``temperature: 0``, which both routes now forward, so
+    decoding is greedy; seeding before every call stays as a guard that keeps
+    each run's tokens repeatable even if a route sampled.
     """
     import torch
     from fastapi.testclient import TestClient
@@ -194,8 +196,8 @@ def _constant_mole(next_token: int):
         def forward(self, input_ids=None, attention_mask=None, output_hidden_states=False):
             b, t = input_ids.shape
             logits = torch.zeros(b, t, 64)
-            # Peaked hard enough that sampling picks it too: /v1/messages
-            # does not forward temperature, so that route samples.
+            # Peaked hard enough that sampling would pick it too, so the
+            # result does not depend on a route decoding greedily.
             logits[..., next_token] = 100.0
             hidden = [torch.ones(b, t, 4)] if output_hidden_states else None
             return _Out(logits, hidden)
@@ -237,3 +239,22 @@ def test_mole_cut_off_reaches_the_response(path, stream):
     with TestClient(app, base_url="http://localhost") as client:
         response = _post(client, path, BUDGET, stream)
     assert _reported(path, response, stream) == _CUT_OFF[path]
+
+
+def test_the_stop_cause_reads_the_last_id_and_every_end_token():
+    from types import SimpleNamespace
+
+    from soup_cli.utils.vllm import generation_eos_ids, token_finish_reason
+
+    tokenizer = SimpleNamespace(eos_token_id=2)
+    model = SimpleNamespace(generation_config=SimpleNamespace(eos_token_id=[1, 7]))
+    assert generation_eos_ids(model, tokenizer) == frozenset({1, 7})
+    model.generation_config.eos_token_id = None
+    assert generation_eos_ids(model, tokenizer) == frozenset({2})
+    model.generation_config.eos_token_id = True
+    assert generation_eos_ids(model, tokenizer) == frozenset({2})
+
+    # An end token after other tokens, exactly on the budget, is a natural stop.
+    assert token_finish_reason([5, 6, 7], 3, frozenset({1, 7})) == "stop"
+    # The same budget used up without one is a cut-off.
+    assert token_finish_reason([5, 6, 8], 3, frozenset({1, 7})) == "length"
