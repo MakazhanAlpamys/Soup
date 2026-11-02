@@ -349,6 +349,7 @@ def read_adapter_lora_scaling(adapter_dir: str) -> float | None:
         return None
     if r <= 0:
         return None
+    # Match PEFT's truthiness read, unlike the stricter _flag() in lowmem_merge.
     scaling = lora_scaling_factor(
         float(r), float(alpha), use_rslora=bool(data.get("use_rslora", False))
     )

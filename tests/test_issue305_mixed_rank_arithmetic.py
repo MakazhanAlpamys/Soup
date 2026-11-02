@@ -304,8 +304,12 @@ class TestReadAdapterScaling:
         [
             ({"r": 8, "lora_alpha": 16}, 2.0),
             ({"r": 8, "lora_alpha": 8, "use_rslora": True}, 2.8284271247461903),
+            # PEFT reads the flag by truthiness when it loads the adapter, so the
+            # concat path must too, or the export stops matching the input.
+            ({"r": 8, "lora_alpha": 8, "use_rslora": "true"}, 2.8284271247461903),
+            ({"r": 8, "lora_alpha": 8, "use_rslora": 1}, 2.8284271247461903),
         ],
-        ids=["ordinary", "rslora"],
+        ids=["ordinary", "rslora", "rslora-string", "rslora-int"],
     )
     def test_reads_scaling(self, tmp_path, monkeypatch, config, expected):
         from soup_cli.utils.adapter_arithmetic import read_adapter_lora_scaling
