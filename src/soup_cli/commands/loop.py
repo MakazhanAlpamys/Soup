@@ -23,6 +23,7 @@ import subprocess
 import sys
 import uuid
 from dataclasses import replace
+from datetime import datetime, timezone
 from typing import Optional
 
 import typer
@@ -32,7 +33,11 @@ from rich.panel import Panel
 from rich.table import Table
 
 from soup_cli.utils.canary_router import CanaryPolicy
-from soup_cli.utils.loop_budget import parse_budget_string
+from soup_cli.utils.loop_budget import (
+    parse_budget_string,
+    reset_daily_counter_if_new_day,
+    reset_monthly_spend_if_new_month,
+)
 from soup_cli.utils.loop_daemon import WatchConfig, watch
 from soup_cli.utils.loop_iteration import list_iterations, read_iteration
 from soup_cli.utils.loop_state import (
@@ -143,6 +148,20 @@ def init_cmd(
 def status_cmd() -> None:
     """Show counters and current status."""
     state = _safe_read()
+    # Show the spend and run count the next iteration will see (#2390): run_once resets both
+    # from the saved last_run_date, so between iterations the stored values can be a past
+    # month's or day's. One clock read for both, as in run_once; loop.yaml is not written.
+    now = datetime.now(timezone.utc)
+    try:
+        spent = reset_monthly_spend_if_new_month(
+            state.spent_this_month_usd, state.last_run_date, now=now
+        )
+        runs_today, _ = reset_daily_counter_if_new_day(
+            state.runs_today, state.last_run_date, now=now
+        )
+    except ValueError as exc:
+        console.print(f"[red]loop state invalid:[/] {escape(str(exc))}")
+        raise typer.Exit(code=2)
     table = Table(title="soup loop status", show_header=False)
     table.add_column("field", style="bold")
     table.add_column("value")
@@ -165,12 +184,12 @@ def status_cmd() -> None:
     if state.monthly_budget_usd is not None:
         table.add_row(
             "budget",
-            f"${state.spent_this_month_usd:.2f} / ${state.monthly_budget_usd:.2f}",
+            f"${spent:.2f} / ${state.monthly_budget_usd:.2f}",
         )
     if state.max_runs_per_day is not None:
         table.add_row(
             "runs_today",
-            f"{state.runs_today} / {state.max_runs_per_day}",
+            f"{runs_today} / {state.max_runs_per_day}",
         )
     console.print(table)
 
