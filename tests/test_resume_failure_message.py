@@ -151,7 +151,6 @@ def test_every_branch_escapes_terminal_control_characters(
     tmp_path: Path, backend, resume, output_name, experiment_name
 ) -> None:
     output = tmp_path / output_name
-    output.mkdir(parents=True, exist_ok=True)
     reason = train_module._resume_failure_reason(
         resume, str(output), experiment_name, backend=backend
     )
