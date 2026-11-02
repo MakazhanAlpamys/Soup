@@ -111,7 +111,15 @@ def test_status_does_not_write_the_state(tmp_path, monkeypatch):
 
 
 def test_both_values_read_one_clock(tmp_path, monkeypatch):
-    _fix_clock(monkeypatch, _at(2026, 10, 31))
+    reads = []
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            reads.append(tz)
+            return _at(2026, 10, 31)  # a new object on every read
+
+    monkeypatch.setattr(loop_cmd, "datetime", _Clock)
     seen = []
     real_month = loop_cmd.reset_monthly_spend_if_new_month
     real_day = loop_cmd.reset_daily_counter_if_new_day
@@ -127,6 +135,7 @@ def test_both_values_read_one_clock(tmp_path, monkeypatch):
     monkeypatch.setattr(loop_cmd, "reset_monthly_spend_if_new_month", month)
     monkeypatch.setattr(loop_cmd, "reset_daily_counter_if_new_day", day)
     _status(tmp_path, monkeypatch, _state(last_run_date="2026-10-30"))
+    assert reads == [timezone.utc]
     assert len(seen) == 2
     assert seen[0] is not None
     assert seen[0] is seen[1]
