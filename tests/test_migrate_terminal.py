@@ -114,6 +114,16 @@ def test_migrate_refused_output_path_is_named_literally(source):
     assert "[red]out.yaml" in text
 
 
+def test_migrate_strips_controls_from_a_refused_output_path(source):
+    result = _migrate(str(source), "--output", "../x[bold]out\x9b\u202e.yaml", "--yes")
+
+    assert result.exit_code == 1
+    text = _plain(result)
+    assert "Output path is outside the current directory:" in text
+    assert "x[bold]out.yaml" in text
+    assert "\x9b" not in text and "\u202e" not in text
+
+
 def test_migrate_jsonl_refusal_names_the_file_literally(source):
     data = Path("[red]data.jsonl")
     data.write_text('{"a": 1}\n{"a": 2}\n', encoding="utf-8")
