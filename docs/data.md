@@ -1569,10 +1569,11 @@ needs |d| >= 0.8 and mean lengths at least 10% apart, MINOR |d| >= 0.3 and 5%, s
 consistent one-word gap between near-constant lengths is not flagged —
 `label_imbalance` (KTO desirable:undesirable ratio), `near_duplicates`
 (MinHash/LSH, reuses the `soup data dedup` kernel; requires
-`pip install "soup-cli[data]"`, degrades to an advisory skip otherwise),
+`pip install "soup-cli[data]"`; without it the check is reported as `SKIPPED`
+and the summary line counts it),
 `identical_pairs` (`chosen == rejected` — zero preference signal), and
 `prompt_leak` (the prompt echoed verbatim inside the completion, a common
 synthetic-data pipeline bug). For conversational `chosen` / `rejected` (message
 lists), `length_bias` and `prompt_leak` read only the assistant turns, since the
 leading user turn is the prompt itself. Same OK/MINOR/MAJOR taxonomy and exit codes as
-`soup data doctor`.
+`soup data doctor`; a `SKIPPED` check never raises the overall verdict or the exit code.

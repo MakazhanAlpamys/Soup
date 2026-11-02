@@ -1492,9 +1492,14 @@ class TestCheckNearDuplicatesNoDep:
         _write_jsonl(data_path, rows)
         result = runner.invoke(app, ["data", "lint", str(data_path)])
         assert result.exit_code == 0, result.output
-        output = strip_ansi(result.output)
+        output = " ".join(strip_ansi(result.output).split())
         assert "SKIPPED" in output
         assert "1 check skipped" in output
+
+    def test_a_skipped_check_is_shown_yellow_not_green(self):
+        from soup_cli.commands.data_doctor import _verdict_style
+
+        assert _verdict_style("SKIPPED") == "yellow"
 
 
 class TestRunLint:
