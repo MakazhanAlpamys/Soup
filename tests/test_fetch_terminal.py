@@ -130,8 +130,8 @@ def test_existing_output_strips_controls_from_the_display():
     assert _not_shown(text)
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="creating a symlink needs a privilege")
-@pytest.mark.parametrize("name", [*_FILE_NAMES[:2], "o:warning:.yaml", f"x[bold]o{_CONTROLS}.yaml"])
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize("name", [*_FILE_NAMES, f"x[bold]o{_CONTROLS}.yaml"])
 def test_symlinked_output_is_named_as_typed(name):
     Path(name).write_text("keep", encoding="utf-8")
     os.symlink(name, "link.yaml")
