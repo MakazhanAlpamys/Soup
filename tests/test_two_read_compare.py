@@ -423,6 +423,7 @@ def test_step_dir_reads_moved_step_files_by_base_name(cmp, tmp_path, host_path):
     code, report = _compare(cmp, tmp_path, record_paths, limits=True)
     assert (code, report["verdict"], report["timing"]) == (2, "REFUSED", None)
     assert all(entry["step_sha256"] is None for entry in report["inputs"].values())
+    assert all("is outside" in reason for reason in report["refusals"])
     code = cmp.main(["--runs", *map(str, record_paths), "--out", str(tmp_path / "c.json"),
                      "--memory-max", str(GIB32), "--swap-max", "0",
                      "--step-dir", str(published)])
@@ -640,6 +641,19 @@ def test_step_symlink_cannot_escape_the_selected_directory(cmp, tmp_path, step_d
     assert report["inputs"]["B1"]["step_sha256"] is None
 
 
+@pytest.mark.requires_symlink
+def test_output_symlink_refuses_and_keeps_its_target(cmp, tmp_path):
+    paths = _write(tmp_path, _quad())
+    target = tmp_path / "elsewhere.json"
+    target.write_bytes(b"keep")
+    link = tmp_path / "compare.json"
+    link.symlink_to(target)
+    code = cmp.main(["--runs", *(str(paths[n]) for n in RUNS), "--out", str(link)])
+    assert code == 2
+    assert link.is_symlink()
+    assert target.read_bytes() == b"keep"
+
+
 @pytest.mark.parametrize("kind", ["record", "step"])
 def test_output_cannot_overwrite_an_input(cmp, tmp_path, kind):
     paths = _write(tmp_path, _quad())
@@ -764,8 +778,8 @@ def test_optional_envelope_shapes_remain_supported(cmp, tmp_path, envelope):
 
 
 @pytest.mark.parametrize("key", ["initial_trainable_sha256", "input_ids_sha256"])
-@pytest.mark.parametrize("value", [None, "", "not-a-digest", 7, []],
-                         ids=["null", "empty", "invalid", "integer", "list"])
+@pytest.mark.parametrize("value", [None, "", "not-a-digest", 7, [], "a" * 64 + "0"],
+                         ids=["null", "empty", "invalid", "integer", "list", "overlong"])
 def test_equal_invalid_initial_state_digests_refuse(cmp, tmp_path, key, value):
     quad = _quad()
     for name in RUNS:
@@ -775,3 +789,45 @@ def test_equal_invalid_initial_state_digests_refuse(cmp, tmp_path, key, value):
     assert report["failures"] == []
     for name in RUNS:
         assert any(reason.startswith(f"{name}: {key}") for reason in report["refusals"])
+
+
+@pytest.mark.parametrize("location, expect_path, cwd, refusal", [
+    ("step-dir", r"C:\runs\NUL", None, "is not a local file"),
+    ("step-path", "//soup-test.invalid/share/A1.step.json", None, "is not a local file"),
+    ("record-cwd", "A1.step.json", "//soup-test.invalid/share", "is not a local directory"),
+])
+def test_nonlocal_record_paths_refuse_before_resolution(cmp, tmp_path, monkeypatch,
+                                                       location, expect_path, cwd, refusal):
+    from functools import partial
+
+    from soup_cli.utils.paths import is_network_or_device_path
+
+    paths = _write(tmp_path, _quad())
+    record = json.loads(paths["A1"].read_bytes())
+    record["expect_json"]["path"] = expect_path
+    if cwd is not None:
+        record["cwd"] = cwd
+    paths["A1"].write_text(json.dumps(record), encoding="utf-8")
+
+    # Use the real Windows device-name policy on every CI platform. No device or
+    # network access is allowed, even when a mutation removes an early guard.
+    nonlocal_path = partial(is_network_or_device_path, dos_device_names=True)
+    monkeypatch.setattr(cmp, "is_network_or_device_path", nonlocal_path)
+    realpath = cmp.os.path.realpath
+
+    def local_realpath(path, *args, **kwargs):
+        assert not nonlocal_path(cmp.os.fspath(path)), "nonlocal path reached realpath"
+        return realpath(path, *args, **kwargs)
+
+    monkeypatch.setattr(cmp.os.path, "realpath", local_realpath)
+    output = tmp_path / "compare.json"
+    args = ["--runs", *(str(paths[n]) for n in RUNS), "--out", str(output)]
+    if location == "step-dir":
+        args += ["--step-dir", str(tmp_path / "out")]
+    code = cmp.main(args)
+    report = json.loads(output.read_bytes())
+    _refused_with(code, report, refusal)
+    source = f"record cwd {cwd!r}" if cwd is not None else f"expect_json.path {expect_path!r}"
+    assert report["refusals"] == [f"A1: {source} {refusal}"]
+    assert report["inputs"]["A1"]["step_json"] is None
+    assert report["inputs"]["A1"]["step_sha256"] is None
