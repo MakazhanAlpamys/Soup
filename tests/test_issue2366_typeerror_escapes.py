@@ -110,15 +110,16 @@ def test_the_known_leak_set_is_the_one_that_used_to_fail() -> None:
 
 @pytest.mark.unit
 def test_minillm_flag_names_the_field_and_the_section() -> None:
-    """``minillm_enabled: 0`` reports ``training -> minillm_enabled``, not a release name."""
+    """``minillm_enabled: 0`` names the field, not the release it shipped in."""
     with pytest.raises(ValidationError) as excinfo:
         TrainingConfig(minillm_enabled=0)
     errors = excinfo.value.errors()
     assert len(errors) == 1, errors
-    error = errors[0]
-    assert error["loc"] == ("minillm_enabled",), error["loc"]
-    # The message has to name the field, otherwise the user has to guess which key to fix.
-    assert "minillm_enabled" in error["msg"], error["msg"]
+    # A model-level entry has an empty ``loc`` on every supported Pydantic, so the field name
+    # has to come from the message. The validator reads it from ``info.field_name``, which is
+    # why this now says ``minillm_enabled`` instead of ``v0.70.0 MiniLLM flag``.
+    assert "minillm_enabled" in errors[0]["msg"], errors[0]["msg"]
+    assert "v0.70.0" not in errors[0]["msg"], errors[0]["msg"]
 
 
 @pytest.mark.unit
@@ -142,15 +143,16 @@ def test_distill_temperature_bool_is_a_validation_error() -> None:
     """``distill_temperature`` goes through a helper in ``trainer/distill.py``."""
     with pytest.raises(ValidationError) as excinfo:
         TrainingConfig(distill_temperature=True)
-    assert "distill_temperature" in str(excinfo.value.errors()[0]["loc"])
+    assert "distill_temperature" in excinfo.value.errors()[0]["msg"]
 
 
 @pytest.mark.unit
-def test_soup_config_surfaces_the_section_and_field() -> None:
-    """Through the outer model the location is ``training -> <field>``, which is what prints."""
+def test_soup_config_names_the_field_somewhere_in_the_report() -> None:
+    """Through the outer model the field name survives, on the ``Config validation error:`` path."""
     with pytest.raises(ValidationError) as excinfo:
         SoupConfig(task="sft", training={"minillm_enabled": 0})
-    locations = [
-        " -> ".join(str(part) for part in error["loc"]) for error in excinfo.value.errors()
-    ]
-    assert any("minillm_enabled" in loc for loc in locations), locations
+    rendered = "; ".join(
+        f"{' -> '.join(str(part) for part in error['loc'])}: {error['msg']}"
+        for error in excinfo.value.errors()
+    )
+    assert "minillm_enabled" in rendered, rendered

@@ -4769,18 +4769,22 @@ class TrainingConfig(BaseModel):
 
         return validate_grace_codebook_dim(v)
 
-    # Must stay the LAST validator in this class: Pydantic applies ``before`` and ``wrap``
-    # validators in reverse definition order, so only a wildcard defined after them wraps
-    # every other validator of the field. Moved earlier it silently stops covering them.
-    @field_validator("*", mode="wrap")
+    # Model-level, not ``field_validator("*", mode="wrap")``: on Pydantic 2.0.0, the declared
+    # minimum, an outer wildcard field wrap handler loses the field context of any inner
+    # validator that takes ``info``, so valid input raised RuntimeError
+    # (#2382#pullrequestreview-5726885957). A model wrap keeps that context and is the same
+    # on 2.0.0 and on current Pydantic.
+    @model_validator(mode="wrap")
     @classmethod
-    def _typeerror_is_a_validation_error(cls, value, handler, info):
-        """Let a helper's TypeError surface as a ValidationError that locates the field."""
+    def _typeerror_is_a_validation_error(cls, data, handler):
+        """Let a helper's TypeError surface as a ValidationError instead of a bare crash."""
         try:
-            return handler(value)
+            return handler(data)
         except TypeError as exc:
             # Pydantic does not wrap TypeError, so it escaped SoupConfig() unlabelled and
-            # the CLI printed "Error: TypeError: ..." with no section and no field name.
+            # the CLI printed "Error: TypeError: ..." with no field name. Converting it here
+            # puts it on the ``Config validation error:`` path; the field name comes from the
+            # message the validator raised, since a model-level entry has an empty ``loc``.
             raise ValueError(str(exc)) from exc
 
 
