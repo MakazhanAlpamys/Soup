@@ -191,3 +191,68 @@ def test_deploy_overwrite_warning_shows_the_model_name_as_typed():
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert "overwrite any existing Ollama model named 'm:warning:'." in _plain(result)
+
+
+_CONTROLS = "\x9b\u202e"
+
+
+@pytest.mark.parametrize(
+    ("args", "shown"),
+    [
+        (["--model", f"x[bold]w{_CONTROLS}.gguf"], "GGUF file not found: x[bold]w.gguf"),
+        (
+            ["--model", "model.gguf", "--template", f"x[bold]t{_CONTROLS}"],
+            "Unknown template: x[bold]t",
+        ),
+        (
+            ["--model", "model.gguf", "--parameter", f"x[bold]p{_CONTROLS}"],
+            "Invalid parameter format: x[bold]p",
+        ),
+    ],
+)
+def test_deploy_refusals_strip_controls_from_the_display_only(args, shown):
+    _gguf()
+
+    result = _deploy(*args, "--yes")
+
+    assert result.exit_code == 1
+    text = _plain(result)
+    assert shown in text
+    assert "\x9b" not in text and "\u202e" not in text
+
+
+def test_deploy_plan_strips_controls_from_the_gguf_path():
+    path = _gguf(f"x[bold]g{_CONTROLS}")
+
+    result = _deploy("--model", str(path), "--yes")
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    text = _plain(result)
+    assert "GGUF: x[bold]g/model.gguf" in text
+    assert "\x9b" not in text and "\u202e" not in text
+
+
+@pytest.mark.parametrize("removed", [True, False])
+def test_remove_message_strips_controls_from_the_display_only(monkeypatch, removed):
+    monkeypatch.setattr(f"{_OLLAMA}.remove_model", lambda name: (removed, f"x[bold]m{_CONTROLS}"))
+
+    result = runner.invoke(app, ["deploy", "ollama", "--remove", "soup-test", "--yes"])
+
+    assert result.exit_code == (0 if removed else 1)
+    text = _plain(result)
+    assert "x[bold]m" in text
+    assert "\x9b" not in text and "\u202e" not in text
+
+
+def test_deploy_failure_message_strips_controls_from_the_display_only(monkeypatch):
+    monkeypatch.setattr(
+        f"{_OLLAMA}.deploy_to_ollama", lambda name, modelfile: (False, f"x[bold]m{_CONTROLS}")
+    )
+    path = _gguf()
+
+    result = _deploy("--model", str(path), "--yes")
+
+    assert result.exit_code == 1
+    text = _plain(result)
+    assert "Deploy failed: x[bold]m" in text
+    assert "\x9b" not in text and "\u202e" not in text
