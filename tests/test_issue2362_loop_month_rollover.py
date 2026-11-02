@@ -6,7 +6,7 @@ last test checks that both rollovers read one clock when ``now`` is None.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -172,5 +172,6 @@ class TestOneClock:
         assert len(seen) == 2
         assert seen[0] is not None
         assert seen[0] is seen[1]
+        assert seen[0].utcoffset() == timedelta(0)
         if now is not None:
             assert seen[0] is now
