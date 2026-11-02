@@ -1,5 +1,6 @@
 """soup runs prints run ids and checkpoint paths as typed, not as Rich markup."""
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -179,3 +180,59 @@ def test_clean_failed_directory_delete_warning_is_shown_as_typed(db, tmp_path, m
     assert "Failed to delete directory" in text
     assert "x[red]out" in text
     assert "cannot [/] remove" in text
+
+
+# A colon is not a legal file-name character on Windows.
+_emoji_dir = pytest.mark.skipif(
+    sys.platform == "win32", reason="':' is not valid in a Windows name"
+)
+
+
+@_emoji_dir
+@pytest.mark.parametrize(
+    ("flags", "label"),
+    [
+        (["--dry-run"], "Delete file:"),
+        (["--dry-run", "--no-keep-weights"], "Delete dir:"),
+    ],
+)
+def test_clean_dry_run_shows_an_emoji_code_in_the_path_as_typed(db, tmp_path, flags, label):
+    output = tmp_path / "work" / "x:warning:out"
+    run_id = _run_with_checkpoints(db, output)
+
+    result = runner.invoke(app, ["runs", "clean", run_id, *flags])
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    text = _plain(result).replace("\\", "/")
+    assert label in text
+    assert "x:warning:out/checkpoint-1" in text
+
+
+@_emoji_dir
+@pytest.mark.parametrize(
+    ("flags", "patched", "label"),
+    [
+        (["--force"], (Path, "unlink"), "Failed to delete file"),
+        (["--force", "--no-keep-weights"], (None, "rmtree"), "Failed to delete directory"),
+    ],
+)
+def test_clean_failed_delete_shows_an_emoji_code_in_the_path_as_typed(
+    db, tmp_path, monkeypatch, flags, patched, label
+):
+    import shutil
+
+    output = tmp_path / "work" / "x:warning:out"
+    run_id = _run_with_checkpoints(db, output)
+
+    def _refuse(*args, **kwargs):
+        raise OSError("cannot remove")
+
+    owner = patched[0] or shutil
+    monkeypatch.setattr(owner, patched[1], _refuse)
+
+    result = runner.invoke(app, ["runs", "clean", run_id, *flags])
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    text = _plain(result).replace("\\", "/")
+    assert label in text
+    assert "x:warning:out/checkpoint-1" in text
