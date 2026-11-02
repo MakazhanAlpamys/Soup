@@ -6,6 +6,8 @@ import inspect
 import json
 import math
 import os
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -126,6 +128,7 @@ def reject_native_adapter(model: str) -> None:
 
 def load_native_model(
     model_path: str, base_model: str | None = None, *, trust_remote_code: bool = False,
+    require_dense: bool = False,
 ) -> tuple[Any, Any]:
     """Load a base and strictly apply every saved ordinary linear LoRA tensor."""
     path = Path(model_path)
@@ -162,6 +165,13 @@ def load_native_model(
         tokenizer_config={"trust_remote_code": trust_remote_code},
         return_config=True, **trust,
     )
+    if require_dense and (
+        base_config.get("quantization") or base_config.get("quantization_config")
+        or any(isinstance(module, (nn.QuantizedLinear,
+                                  getattr(nn, "QuantizedEmbedding", nn.QuantizedLinear)))
+               for _, module in model.named_modules())
+    ):
+        raise ValueError("Native MLX serving currently supports dense checkpoints only")
     # MLX-LM 0.31.3 replaces tokenizer EOS with model EOS; retain both as newer
     # versions do. Use the declared ID, never a guessed control-token string.
     if tokenizer.eos_token_id is not None:
@@ -212,12 +222,35 @@ def load_native_model(
     return model, tokenizer
 
 
-def generate_native(
+@dataclass(frozen=True)
+class NativeGenerationChunk:
+    """One detokenized increment, with actual engine token counts."""
+
+    text: str
+    prompt_tokens: int
+    completion_tokens: int
+    finish_reason: str | None = None
+
+
+def stream_native(
     model: Any, tokenizer: Any, messages: list[dict], *, max_tokens: int = 256,
-    temperature: float = 0.7,
-) -> tuple[str, int]:
-    """Return completion text and sampled token count (including a terminating EOS)."""
+    temperature: float = 0.7, top_p: float = 0.9, stop: tuple[str, ...] = (),
+    max_prompt_tokens: int | None = None, seed: int | None = None,
+) -> Iterator[NativeGenerationChunk]:
+    """Stream native text once, retaining only a possible stop-string prefix.
+
+    Closing the iterator closes the engine and its request-local KV cache. Counts
+    include a sampled EOS or a token containing a stop string, even when hidden.
+    """
     validate_native_options(temperature=temperature, max_tokens=max_tokens, device=None, hub="hf")
+    if not math.isfinite(top_p) or not 0 < top_p <= 1:
+        raise ValueError(
+            "MLX top_p must be finite and in (0, 1]; zero disables native nucleus filtering"
+        )
+    if len(stop) > 4 or any(
+        not isinstance(item, str) or not 1 <= len(item) <= 256 for item in stop
+    ):
+        raise ValueError("MLX stop accepts at most four nonempty strings of at most 256 characters")
     from contextlib import closing
 
     from mlx_lm import stream_generate
@@ -230,13 +263,55 @@ def generate_native(
     prompt = tokenizer.encode(rendered, add_special_tokens=not templated)
     if not prompt:
         raise ValueError("MLX generation requires a nonempty tokenized prompt")
-    text = []
+    if max_prompt_tokens is not None and len(prompt) > max_prompt_tokens:
+        raise ValueError("MLX prompt exceeds the input token limit")
+    if seed is not None:
+        import mlx.core as mx
+
+        mx.random.seed(seed)
+    pending = ""
     count = 0
     with closing(stream_generate(
         model, tokenizer, prompt=prompt, max_tokens=max_tokens,
-        sampler=make_sampler(temp=temperature, top_p=0.9 if temperature > 0 else 1.0),
+        sampler=make_sampler(temp=temperature, top_p=top_p if temperature > 0 else 1.0),
     )) as responses:
         for response in responses:
-            text.append(response.text)
+            pending += response.text
             count = response.generation_tokens
+            positions = [pending.index(item) for item in stop if item in pending]
+            if positions:
+                yield NativeGenerationChunk(pending[:min(positions)], len(prompt), count, "stop")
+                return
+            reason = getattr(response, "finish_reason", None)
+            if reason in {"stop", "length"}:
+                yield NativeGenerationChunk(pending, len(prompt), count, reason)
+                return
+            # Never expose a prefix which a later token could complete as a stop.
+            retained = max((
+                length for item in stop for length in range(1, len(item))
+                if pending.endswith(item[:length])
+            ), default=0)
+            emitted = pending[:-retained] if retained else pending
+            pending = pending[-retained:] if retained else ""
+            yield NativeGenerationChunk(emitted, len(prompt), count)
+    yield NativeGenerationChunk(
+        pending, len(prompt), count, "length" if count >= max_tokens else "stop",
+    )
+
+
+def generate_native(
+    model: Any, tokenizer: Any, messages: list[dict], *, max_tokens: int = 256,
+    temperature: float = 0.7,
+) -> tuple[str, int]:
+    """Return completion text and sampled token count (including a terminating EOS)."""
+    from contextlib import closing
+
+    text = []
+    count = 0
+    with closing(stream_native(
+        model, tokenizer, messages, max_tokens=max_tokens, temperature=temperature,
+    )) as chunks:
+        for chunk in chunks:
+            text.append(chunk.text)
+            count = chunk.completion_tokens
     return "".join(text).strip(), count

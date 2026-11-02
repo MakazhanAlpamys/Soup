@@ -116,7 +116,7 @@ def serve(
     backend: str = typer.Option(
         "transformers",
         "--backend",
-        help="Inference backend: transformers (default), vllm, sglang, or mii",
+        help="Inference backend: transformers (default), vllm, sglang, mii, or mlx",
     ),
     tensor_parallel: int = typer.Option(
         1,
@@ -340,6 +340,38 @@ def serve(
     # The token that check asks for does not cover every route: say which.
     for _notice in _non_loopback_notices(host, backend):
         console.print(f"[yellow]Note:[/] {_notice}")
+    if backend.lower() == "mlx":
+        from soup_cli.utils.mlx_generation import validate_native_options
+        from soup_cli.utils.mlx_serve import validate_serve_options, validate_serve_paths
+
+        try:
+            validate_serve_options({
+                "--device": (device, None), "--hub": (hub, "hf"),
+                "--tensor-parallel": (tensor_parallel, 1),
+                "--gpu-memory": (gpu_memory_utilization, 0.9),
+                "--max-model-len": (max_model_len, None),
+                "--speculative-decoding": (speculative_model, None),
+                "--num-speculative-tokens": (num_speculative_tokens, 5),
+                "--adapters": (adapters, None), "--prefix-cache": (prefix_cache, False),
+                "--auto-spec": (auto_spec, False),
+                "--structured-output": (structured_output, "off"),
+                "--json-schema": (json_schema, None), "--regex-pattern": (regex_pattern, None),
+                "--dashboard": (dashboard, False), "--trace": (trace, False),
+                "--trace-endpoint": (trace_endpoint, None), "--auto-quant": (auto_quant, False),
+                "--trace-log": (trace_log, None), "--trace-log-cap-mb": (trace_log_cap_mb, 100),
+                "--record-thumbs": (record_thumbs, None),
+                "--reasoning-parser": (reasoning_parser, None), "--steer": (steer, None),
+                "--steer-strength": (steer_strength, 1.0), "--bank": (bank, None),
+                "--bank-strength": (bank_strength, 1.0), "--mole": (mole, None),
+                "--kv-cache-type": (kv_cache_type, None),
+            })
+            validate_native_options(
+                temperature=0.7, max_tokens=max_tokens_default, device=None, hub="hf",
+            )
+            validate_serve_paths(model, base_model)
+        except ValueError as exc:
+            console.print(f"[red]{for_terminal(str(exc))}[/]")
+            raise typer.Exit(2) from exc
     # v0.71.12 #221 — validate `--bank` up front (path containment + backend)
     # so a typo / bad path surfaces before backend init.
     if bank is not None:
@@ -513,11 +545,11 @@ def serve(
 
     # Validate backend
     backend = backend.lower()
-    if backend not in ("transformers", "vllm", "sglang", "mii"):
+    if backend not in ("transformers", "vllm", "sglang", "mii", "mlx"):
         console.print(
             f"[red]Unknown backend: {backend}[/]\n"
             "Supported backends: [bold]transformers[/], [bold]vllm[/], "
-            "[bold]sglang[/], [bold]mii[/]"
+            "[bold]sglang[/], [bold]mii[/], [bold]mlx[/]"
         )
         raise typer.Exit(1)
 
@@ -703,7 +735,11 @@ def serve(
     is_adapter = adapter_config_path.exists()
 
     # Resolve base model
-    if is_adapter and not base_model:
+    if is_adapter and backend == "mlx":
+        from soup_cli.utils.mlx_generation import read_native_adapter
+
+        base_model = read_native_adapter(model_path, base_model)["model"]
+    elif is_adapter and not base_model:
         base_model = _detect_base_model(adapter_config_path)
         if not base_model:
             console.print(
@@ -717,6 +753,8 @@ def serve(
         from soup_cli.utils.gpu import detect_device
 
         device, _ = detect_device()
+    elif backend == "mlx":
+        device = "mlx"
     elif not device:
         device = "cuda"
 
@@ -796,13 +834,18 @@ def serve(
     )
 
     _trust_probe_target = base_model or str(model_path)
-    _trust_requires = model_requires_trust_remote_code(str(model_path)) or False
-    resolved_trust = resolve_trust_remote_code(
-        _trust_probe_target,
-        requested=trust_remote_code,
-        console=console,
-        requires_remote_code=_trust_requires,
-    )
+    if backend == "mlx":
+        # The shared native loader resolves the actual metadata base and applies
+        # the same default-deny policy on the worker, before optional model loading.
+        resolved_trust = trust_remote_code
+    else:
+        _trust_requires = model_requires_trust_remote_code(str(model_path)) or False
+        resolved_trust = resolve_trust_remote_code(
+            _trust_probe_target,
+            requested=trust_remote_code,
+            console=console,
+            requires_remote_code=_trust_requires,
+        )
 
     if backend == "vllm":
         if speculative_model:
@@ -838,6 +881,16 @@ def serve(
             gpu_memory_utilization=gpu_memory_utilization,
             trust_remote_code=resolved_trust,
             host=host,
+        )
+    elif backend == "mlx":
+        from soup_cli.utils.mlx_serve import NativeServerRuntime
+
+        app = _create_app(
+            None, None, device="mlx", model_name=model_path.name,
+            max_tokens_default=max_tokens_default, auth_token=tool_auth_token, host=host,
+            native_runtime=NativeServerRuntime(
+                str(model_path), base_model, trust_remote_code=resolved_trust,
+            ),
         )
     else:
         # Transformers backend (original). ``resolved_trust`` was computed
@@ -1142,7 +1195,7 @@ def serve(
             f'"messages": [{{"role": "user", "content": "Hello!"}}]'
             f"}}'\n\n"
             f"Press [bold]Ctrl+C[/] to stop.",
-            title="[bold green]Server Ready[/]",
+            title="Starting server" if backend == "mlx" else "[bold green]Server Ready[/]",
         )
     )
 
@@ -1791,6 +1844,7 @@ def _create_app(
     kv_cache_generate_kwargs: Optional[Dict[str, Any]] = None,
     canary_state_path: Optional[str] = None,
     canary_stats_path: Optional[str] = None,
+    native_runtime: Any = None,
 ):
     """Create the FastAPI application with OpenAI-compatible endpoints.
 
@@ -1875,12 +1929,18 @@ def _create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
+            if native_runtime is not None:
+                await native_runtime.start()
             yield
         finally:
             try:
-                canary_outcomes.close()
-            except (OSError, TypeError, ValueError):
-                logger.warning("canary shutdown flush failed", exc_info=True)
+                if native_runtime is not None:
+                    await native_runtime.aclose()
+            finally:
+                try:
+                    canary_outcomes.close()
+                except (OSError, TypeError, ValueError):
+                    logger.warning("canary shutdown flush failed", exc_info=True)
 
     app = FastAPI(title="Soup Inference Server", version="1.0.0", lifespan=lifespan)
     app.state.canary_outcomes = canary_outcomes
@@ -1906,6 +1966,16 @@ def _create_app(
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
     )
+
+    if native_runtime is not None:
+        from soup_cli.utils.mlx_serve import install_native_routes
+
+        app.state.native_runtime = native_runtime
+        install_native_routes(
+            app, native_runtime, model_name=model_name, max_tokens_default=max_tokens_default,
+            browser_guard=_check_browser_origin,
+        )
+        return app
 
     # Shared metrics bucket — always created so /metrics works whether or
     # not --dashboard is enabled.
