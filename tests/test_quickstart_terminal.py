@@ -127,3 +127,40 @@ def test_quickstart_refused_output_is_named_as_typed(tmp_path, monkeypatch, name
 
     assert result.exit_code == 2
     assert f"got: {name}" in _plain(result)
+
+
+_COLON_DIR = pytest.mark.skipif(
+    sys.platform == "win32", reason="':' is not valid in a Windows name"
+)
+
+
+@_COLON_DIR
+def test_quickstart_created_lines_show_an_emoji_code_in_the_path_as_typed(tmp_path, monkeypatch):
+    workdir = tmp_path / "x:warning:proj"
+    workdir.mkdir(parents=True)
+    monkeypatch.chdir(workdir)
+
+    result = runner.invoke(app, ["quickstart", "--dry-run", "--yes"])
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    text = _plain(result).replace("\\", "/")
+    assert re.search(r"Created: \S*x:warning:proj/quickstart_data\.jsonl \(20 examples\)", text)
+    assert re.search(r"Created: \S*x:warning:proj/quickstart_soup\.yaml(?! config)", text)
+
+
+@_COLON_DIR
+def test_quickstart_existing_file_lines_show_an_emoji_code_in_the_path_as_typed(
+    tmp_path, monkeypatch
+):
+    workdir = tmp_path / "x:warning:proj"
+    workdir.mkdir(parents=True)
+    monkeypatch.chdir(workdir)
+    (workdir / "quickstart_data.jsonl").write_text("keep\n", encoding="utf-8")
+    (workdir / "quickstart_soup.yaml").write_text("keep: me\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["quickstart", "--dry-run", "--yes"])
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    text = _plain(result).replace("\\", "/")
+    assert re.search(r"Data file already exists: \S*x:warning:proj/quickstart_data\.jsonl", text)
+    assert re.search(r"Config file already exists: \S*x:warning:proj/quickstart_soup\.yaml", text)
