@@ -1179,6 +1179,9 @@ Listed by first contribution. PR numbers link the work.
 - **WU Leizhi** ([@MbappeWU](https://github.com/MbappeWU))
   - First contribution. MLX writes `scale = alpha / sqrt(rank)` for an rsLoRA run, but `soup adapters audit` rebuilt the alpha as `scale * rank`, so every correct MLX rsLoRA adapter was reported as `lora.alpha` DIVERGED with exit 2. They passed `lora.use_rslora` from the config into the alpha reader, rebuilt the alpha as `scale * sqrt(rank)` with a rounding that keeps exact agreement, and kept a plain scale against an rsLoRA config diverging. **Review found that the rounding constant and the rank guard could change without a failing test; they turned the near-miss expectations into literals, added a nine-decimal case and a rank-0 case, and pinned `unknown` for a bad rank.** With `main`'s source 10 of the 13 tests fail, and 8 of 9 one-at-a-time changes are caught ([#2228](https://github.com/MakazhanAlpamys/Soup/issues/2228), [#2255](https://github.com/MakazhanAlpamys/Soup/pull/2255))
 
+- **ShryukGrandhi** ([@ShryukGrandhi](https://github.com/ShryukGrandhi))
+  - First contribution. `soup adapters arithmetic` and `soup adapters merge` wrote over an input adapter when `--output` named it, losing the tensors only that adapter had. They passed every input adapter to the existing `ensure_distinct_paths` helper, so `A`, `./A`, `A/` and the other spellings of the same directory are refused with exit 1 before any adapter is read, and on `merge` before the backdoor scan and the cmaes search, with `merge_adapters` keeping its own check for other callers. The tests compare both adapters byte for byte, cover the cmaes route, pin that no adapter is read before the refusal, and catch 11 of 11 one-at-a-time changes ([#2358](https://github.com/MakazhanAlpamys/Soup/issues/2358), [#2379](https://github.com/MakazhanAlpamys/Soup/pull/2379))
+
 ---
 
 Want to join this list? See [CONTRIBUTING.md](CONTRIBUTING.md) — good first issues are
