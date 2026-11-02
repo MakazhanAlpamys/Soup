@@ -132,3 +132,22 @@ def test_migrate_jsonl_refusal_names_the_file_literally(source):
 
     assert result.exit_code == 2
     assert "got JSONL ([red]data.jsonl)" in _plain(result)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="':' is not valid in a Windows name")
+def test_migrate_jsonl_refusal_shows_an_emoji_code_in_the_name_as_typed(source):
+    data = Path("data:warning:.jsonl")
+    data.write_text('{"a": 1}\n{"a": 2}\n', encoding="utf-8")
+
+    result = _migrate(str(data), "--output", "soup.yaml", "--yes")
+
+    assert result.exit_code == 2
+    assert "got JSONL (data:warning:.jsonl)" in _plain(result)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="':' is not valid in a Windows name")
+def test_migrate_refused_output_path_shows_an_emoji_code_as_typed(source):
+    result = _migrate(str(source), "--output", "../x:warning:.yaml", "--yes")
+
+    assert result.exit_code == 1
+    assert "Output path is outside the current directory: ../x:warning:.yaml" in _plain(result)
