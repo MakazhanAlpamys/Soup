@@ -12,9 +12,10 @@ from rich.console import Console
 from rich.markup import escape as markup_escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.run_cost import format_cost_usd
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
@@ -123,14 +124,13 @@ def list_runs(
         # Shorten run_id for display
         short_id = run["run_id"]
 
-        # experiment_name / base_model / task are config-derived — escape so a
-        # crafted value can't inject Rich markup (registry.py escapes the same
-        # fields).
+        # experiment_name / base_model / task are config-derived: Text, not str, so a
+        # crafted value is neither parsed as markup nor turned into an emoji.
         table.add_row(
-            markup_escape(str(short_id)),
-            markup_escape(str(run.get("experiment_name") or "")),
-            markup_escape(str(run.get("base_model") or "")),
-            markup_escape(str(run.get("task") or "")),
+            Text(strip_control(str(short_id))),
+            Text(strip_control(str(run.get("experiment_name") or ""))),
+            Text(strip_control(str(run.get("base_model") or ""))),
+            Text(strip_control(str(run.get("task") or ""))),
             status_str,
             loss_str,
             str(run.get("total_steps") or ""),
@@ -673,13 +673,15 @@ def curriculum_curve(
     except OSError as exc:
         console.print(
             f"[red]history path is not stat-able:[/] "
-            f"{markup_escape(os.path.basename(candidate))}"
+            f"{for_terminal(os.path.basename(candidate))}",
+            emoji=False,
         )
         raise typer.Exit(2) from exc
     if _st is not None and _stat.S_ISLNK(_st.st_mode):
         console.print(
             f"[red]history path is a symlink (rejected for safety):[/] "
-            f"{markup_escape(os.path.basename(candidate))}"
+            f"{for_terminal(os.path.basename(candidate))}",
+            emoji=False,
         )
         raise typer.Exit(2)
     real = os.path.realpath(candidate)
@@ -689,7 +691,8 @@ def curriculum_curve(
     if not os.path.isfile(real):
         console.print(
             f"[yellow]curriculum_history.jsonl not found:[/] "
-            f"{markup_escape(os.path.basename(real))}"
+            f"{for_terminal(os.path.basename(real))}",
+            emoji=False,
         )
         raise typer.Exit(1)
     max_history_bytes = 50 * 1024 * 1024  # 50 MB
