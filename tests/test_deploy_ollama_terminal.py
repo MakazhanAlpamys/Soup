@@ -305,4 +305,3 @@ def test_deploy_detected_version_is_shown_as_typed(monkeypatch, version, shown):
     text = _plain(result)
     assert shown in text
     assert "\x9b" not in text and "\u202e" not in text
-
