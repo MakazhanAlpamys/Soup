@@ -394,7 +394,7 @@ def test_infer_base_override_is_forwarded_and_mismatch_writes_nothing(
     (tmp_path / "results.jsonl").unlink()
     failed = runner.invoke(app, args + ["--base", "owner/wrong"])
     assert failed.exit_code == 1, failed.output
-    assert "does not match" in failed.output
+    assert "does not match" in _plain(failed.output)
     assert not (tmp_path / "results.jsonl").exists()
 
 
