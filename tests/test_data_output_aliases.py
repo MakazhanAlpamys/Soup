@@ -185,6 +185,12 @@ class Case:
 
 _CASES = (
     Case(
+        "data-ingest", "document.txt", _ALPACA,
+        lambda inp, out: ["data", "ingest", inp, "-o", out],
+        "the input", 1,
+        ("soup_cli.utils.data_pipeline.detect_ingest_format",),
+    ),
+    Case(
         "lint", "d.jsonl", _DPO,
         lambda inp, out: ["data", "lint", inp, "-o", out],
         "the input", EXIT_USAGE_ERROR,
@@ -587,3 +593,43 @@ def test_a_distinct_output_still_works(monkeypatch, command):
     )
     for name, payload in before.items():
         assert _read_bytes(name) == payload, f"{name} was modified"
+
+
+@pytest.mark.parametrize("extension", ["txt", "md"])
+@pytest.mark.parametrize("alias", ["same", pytest.param(
+    "hardlink", marks=pytest.mark.requires_hardlink,
+)])
+def test_document_ingest_preserves_real_source_bytes(extension, alias):
+    source = f"notes.{extension}"
+    payload = b"# Notes\r\nalpha\r\nbeta\r\ngamma\r\n"
+    with open(source, "wb") as stream:
+        stream.write(payload)
+    output = _spell(alias, source)
+
+    result = runner.invoke(app, ["data", "ingest", source, "--output", output])
+
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert _squeezed(_refusal("--output", output, "the input", source)) in _squeezed(
+        result.output
+    )
+    assert _read_bytes(source) == payload
+    assert _read_bytes(output) == payload
+
+
+@pytest.mark.parametrize("extension", ["txt", "md"])
+def test_document_ingest_distinct_output_contains_the_document(extension):
+    source = f"notes.{extension}"
+    payload = b"alpha\nbeta\ngamma\n"
+    with open(source, "wb") as stream:
+        stream.write(payload)
+
+    result = runner.invoke(app, ["data", "ingest", source, "-o", "rows.jsonl"])
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    rows = [json.loads(line) for line in _read_bytes("rows.jsonl").splitlines()]
+    expected = {"text": payload.decode() if extension == "txt" else "alpha\nbeta\ngamma",
+                "source": source}
+    if extension == "md":
+        expected.update(section=None, level=None)
+    assert rows == [expected]
+    assert _read_bytes(source) == payload
