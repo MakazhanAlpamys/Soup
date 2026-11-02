@@ -1,6 +1,5 @@
 """soup runs prints run ids and checkpoint paths as typed, not as Rich markup."""
 
-import sys
 from pathlib import Path
 
 import pytest
@@ -128,7 +127,6 @@ def test_clean_dry_run_lists_paths_as_typed(db, tmp_path, directory):
     assert (output / "checkpoint-1" / "optimizer.pt").exists()
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
 def test_clean_failed_delete_warning_is_shown_as_typed(db, tmp_path, monkeypatch):
     output = tmp_path / "work" / "[red]out"
     run_id = _run_with_checkpoints(db, output)
@@ -144,4 +142,40 @@ def test_clean_failed_delete_warning_is_shown_as_typed(db, tmp_path, monkeypatch
     text = _plain(result)
     assert "Failed to delete file" in text
     assert "[red]out" in text
+    assert "cannot [/] remove" in text
+
+
+@pytest.mark.parametrize("directory", ["x[red]out", "x[/]out", "[bold]out\x9b\u202e"])
+def test_clean_dry_run_lists_whole_checkpoints_as_typed(db, tmp_path, directory):
+    output = tmp_path / "work" / directory
+    run_id = _run_with_checkpoints(db, output)
+
+    result = runner.invoke(app, ["runs", "clean", run_id, "--dry-run", "--no-keep-weights"])
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    text = _plain(result).replace("\\", "/")
+    shown = directory.replace("\x9b", "").replace("\u202e", "")
+    assert "Delete dir:" in text
+    assert f"{shown}/checkpoint-1" in text
+    assert "\x9b" not in text and "\u202e" not in text
+    assert (output / "checkpoint-1").is_dir()
+
+
+def test_clean_failed_directory_delete_warning_is_shown_as_typed(db, tmp_path, monkeypatch):
+    import shutil
+
+    output = tmp_path / "work" / "x[red]out"
+    run_id = _run_with_checkpoints(db, output)
+
+    def _refuse(path, *args, **kwargs):
+        raise OSError("cannot [/] remove")
+
+    monkeypatch.setattr(shutil, "rmtree", _refuse)
+
+    result = runner.invoke(app, ["runs", "clean", run_id, "--force", "--no-keep-weights"])
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    text = _plain(result)
+    assert "Failed to delete directory" in text
+    assert "x[red]out" in text
     assert "cannot [/] remove" in text
