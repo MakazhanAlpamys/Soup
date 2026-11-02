@@ -256,3 +256,53 @@ def test_deploy_failure_message_strips_controls_from_the_display_only(monkeypatc
     text = _plain(result)
     assert "Deploy failed: x[bold]m" in text
     assert "\x9b" not in text and "\u202e" not in text
+
+
+@pytest.mark.parametrize("name", ["soup-[red]a", "soup-[/]a", "soup-a:warning:"])
+def test_deploy_list_shows_model_names_and_sizes_as_typed(monkeypatch, name):
+    monkeypatch.setattr(
+        f"{_OLLAMA}.list_soup_models", lambda: [{"name": name, "size": "[bold]1 GB:warning:"}]
+    )
+
+    result = runner.invoke(app, ["deploy", "ollama", "--list"])
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    text = _plain(result)
+    assert name in text
+    assert "[bold]1 GB:warning:" in text
+
+
+def test_deploy_list_strips_controls_from_the_display_only(monkeypatch):
+    monkeypatch.setattr(
+        f"{_OLLAMA}.list_soup_models",
+        lambda: [{"name": f"soup-x[bold]n{_CONTROLS}", "size": f"x[bold]s{_CONTROLS}"}],
+    )
+
+    result = runner.invoke(app, ["deploy", "ollama", "--list"])
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    text = _plain(result)
+    assert "soup-x[bold]n" in text and "x[bold]s" in text
+    assert "\x9b" not in text and "\u202e" not in text
+
+
+@pytest.mark.parametrize(
+    ("version", "shown"),
+    [
+        ("[red]odd", "Ollama v[red]odd detected"),
+        ("[/]odd", "Ollama v[/]odd detected"),
+        ("odd:warning:", "Ollama vodd:warning: detected"),
+        (f"x[bold]v{_CONTROLS}", "Ollama vx[bold]v detected"),
+    ],
+)
+def test_deploy_detected_version_is_shown_as_typed(monkeypatch, version, shown):
+    monkeypatch.setattr(f"{_OLLAMA}.detect_ollama", lambda: version)
+    path = _gguf()
+
+    result = _deploy("--model", str(path), "--yes")
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    text = _plain(result)
+    assert shown in text
+    assert "\x9b" not in text and "\u202e" not in text
+
