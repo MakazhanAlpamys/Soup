@@ -225,4 +225,3 @@ def test_push_card_missing_ref_strips_controls_from_the_display(model_dir, empty
     text = _plain(result)
     assert "--card: Registry entry not found: x[bold]r" in text
     assert "\x9b" not in text and "\u202e" not in text
-
