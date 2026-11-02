@@ -47,6 +47,12 @@ HUB_TIMEOUT_S = 5.0
 #: Seconds allowed for the whole safetensors-metadata lookup, which makes one request
 #: per shard; past this the count comes from config.json instead.
 HUB_METADATA_DEADLINE_S = 20.0
+#: What ``soup plan``, ``soup profile`` and the train pre-flight print from their
+#: ``on_hub_request``, before the wait those timeouts allow (#2306).
+HUB_REQUEST_LINE = (
+    "Reading the model's config.json from the Hub to size the run "
+    "(HF_HUB_OFFLINE=1 skips this)..."
+)
 
 # The sizes ``get_model_arch`` used to guess from a parameter count, kept as the
 # fallback when no config.json can be read: params (B) -> (hidden, layers, intermediate).
