@@ -165,8 +165,8 @@ def list_cmd(
                 escape(short_id),
                 escape(entry["name"]),
                 escape(", ".join(entry.get("tags", []))),
-                escape(entry["base_model"]),
-                escape(entry["task"]),
+                Text(strip_control(entry["base_model"])),
+                Text(strip_control(entry["task"])),
                 escape(entry["created_at"][:16].replace("T", " ")),
             )
 
@@ -203,8 +203,11 @@ def show_cmd(
             ("created_at", entry["created_at"]),
             ("notes", entry.get("notes") or ""),
         ]
+        # The name, the tags, the ids and the hashes are validated when an entry is pushed;
+        # the base model, the task, the run id and the notes are free text, so every value
+        # is a Text: never read as markup or emoji codes.
         for key, val in fields:
-            table.add_row(escape(key), escape(str(val)))
+            table.add_row(escape(key), Text(strip_control(str(val))))
         console.print(table)
 
         artifacts = store.get_artifacts(entry["id"])
@@ -217,7 +220,7 @@ def show_cmd(
             for art in artifacts:
                 art_table.add_row(
                     escape(art["kind"]),
-                    escape(art["path"]),
+                    Text(strip_control(art["path"])),
                     f"{art['size_bytes'] / 1024 / 1024:.1f} MB"
                     if art["size_bytes"] > 1024 * 1024
                     else f"{art['size_bytes']} B",
@@ -263,8 +266,8 @@ def search_cmd(
             table.add_row(
                 escape(entry["id"]),
                 escape(entry["name"]),
-                escape(entry["base_model"]),
-                escape(entry["task"]),
+                Text(strip_control(entry["base_model"])),
+                Text(strip_control(entry["task"])),
             )
         console.print(table)
 
@@ -299,10 +302,10 @@ def diff_cmd(
         else:
             for change in changes:
                 table.add_row(
-                    escape(change.path),
+                    Text(strip_control(change.path)),
                     escape(change.kind),
-                    escape(str(change.left) if change.left is not None else "-"),
-                    escape(str(change.right) if change.right is not None else "-"),
+                    Text(strip_control(str(change.left) if change.left is not None else "-")),
+                    Text(strip_control(str(change.right) if change.right is not None else "-")),
                 )
             console.print(table)
 
@@ -319,7 +322,7 @@ def diff_cmd(
                 delta_val = row["delta"]
                 delta_str = f"{delta_val:+.3f}" if delta_val is not None else "-"
                 eval_table.add_row(
-                    escape(str(row["benchmark"])),
+                    Text(strip_control(str(row["benchmark"]))),
                     f"{row['left']:.3f}" if row["left"] is not None else "-",
                     f"{row['right']:.3f}" if row["right"] is not None else "-",
                     delta_str,
