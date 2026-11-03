@@ -592,7 +592,8 @@ def hardware_fit_input_or_reason(
         allow_network=allow_network,
         on_hub_request=on_hub_request,
     )
-    if shape.params / GB > _MAX_PARAMS_B:
+    # Compared as is: dividing a count too large for a float would raise here.
+    if shape.params > _MAX_PARAMS_B * GB:
         return FitUnavailable(
             "base",
             f"the model in base has over {_MAX_PARAMS_B:,.0f}B parameters, the most the "
