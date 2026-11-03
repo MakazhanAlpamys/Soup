@@ -15,7 +15,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
@@ -281,7 +281,9 @@ def ollama(
         table.add_column("Name", style="bold cyan")
         table.add_column("Size", style="green")
         for entry in models:
-            table.add_row(entry["name"], entry["size"])
+            # Text, not str: a cell string is parsed as markup, and these names are
+            # whatever `ollama list` printed.
+            table.add_row(Text(strip_control(entry["name"])), Text(strip_control(entry["size"])))
         console.print(table)
         raise typer.Exit(0)
 
@@ -400,7 +402,7 @@ def ollama(
             raise typer.Exit(0)
 
     # Generate Modelfile
-    console.print(f"[green]\u2713[/] Ollama v{version} detected")
+    console.print(f"[green]\u2713[/] Ollama v{for_terminal(version)} detected", emoji=False)
     try:
         modelfile = create_modelfile(
             gguf_path=gguf_path,
