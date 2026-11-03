@@ -109,3 +109,35 @@ def test_a_hostile_plugin_name_is_rejected_before_it_can_be_printed(command, val
     assert "kebab-case" in text
     assert _shown(value) not in text
     assert _not_shown(text)
+
+
+class _Dist:
+    def __init__(self, version):
+        self.version = version
+
+
+class _InstalledEntryPoint:
+    """An installed third-party plugin, listed from its package metadata, never imported."""
+
+    name = "third-party"
+
+    def __init__(self, version):
+        self.dist = _Dist(version)
+
+    def load(self):
+        raise AssertionError("a plugin that is not enabled must not be imported")
+
+
+@pytest.mark.parametrize("value", _SPELLINGS)
+def test_list_shows_an_installed_version_as_typed(monkeypatch, value):
+    version = f"1.0.0{value}"
+    monkeypatch.setattr(
+        plugins_pkg, "_iter_plugin_entry_points", lambda: (_InstalledEntryPoint(version),)
+    )
+
+    result = runner.invoke(app, ["plugins", "list"])
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    text = _plain(result)
+    assert re.search(r"third-party \W " + re.escape(_shown(version)) + r" \W disabled", text)
+    assert _not_shown(text)

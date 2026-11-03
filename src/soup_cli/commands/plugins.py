@@ -107,7 +107,7 @@ def _show_table() -> None:
             resources.append(f"model groups: {', '.join(spec.model_groups)}")
         table.add_row(
             escape(spec.name),
-            escape(spec.version),
+            Text(strip_control(spec.version)),
             state,
             ", ".join(hooks) if hooks else "[dim]none[/]",
             Text(strip_control("\n".join(resources))) if resources else "[dim]none[/]",
