@@ -1,4 +1,4 @@
-"""Native Arrow-cache lifecycle; optional reader installed by mlx-cache CI."""
+"""Native Arrow-cache lifecycle; optional reader and native runtime required."""
 
 import json
 
