@@ -446,7 +446,8 @@ def _hardware_fit_preflight(
 
     Skips silently on CPU / when VRAM is unknown / when the run isn't
     statically predictable, so CI and small runs are unaffected. A quantization
-    the predictor has no figure for is skipped with one line (#1652). Honors
+    the predictor has no figure for (#1652) and ``batch_size: auto`` (#2363) are
+    skipped with one line each. Honors
     the documented ``--allow-oom-attempt`` opt-out.
 
     ``sharding`` and ``num_processes`` come from ``_preflight_sharding`` (#2300). A run
@@ -481,6 +482,13 @@ def _hardware_fit_preflight(
     # The card in GiB, as trainer/sft.py reads it to resolve `auto` checkpointing.
     inp = _build_hardware_fit_input(cfg, gpu_memory_gb=total_bytes / 1024**3)
     if inp is None:
+        batch_size = getattr(cfg.training, "batch_size", None)
+        if not isinstance(batch_size, int) or isinstance(batch_size, bool):
+            # #2363: the default, so silence here read as "fits" on most runs.
+            console.print(
+                f"[yellow]Pre-flight skipped:[/] batch_size: {batch_size} is resolved "
+                "after the model loads, so VRAM fit is not checked before training"
+            )
         quantization = str(getattr(cfg.training, "quantization", "none") or "none")
         if quantization not in CONFIG_QUANT_TO_FIT:
             # #1652: silence here read as "fits".

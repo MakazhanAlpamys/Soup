@@ -332,15 +332,27 @@ class TestTheSkipLine:
         assert console.printed == []
 
     @pytest.mark.parametrize("quant", ["gptq", "none"])
-    def test_the_other_reason_to_skip_stays_silent(self, console, quant):
-        # The line is about the format. batch_size: auto is skipped as before.
+    @pytest.mark.parametrize("allow_oom_attempt", [False, True])
+    def test_batch_size_auto_is_let_through_with_its_own_line(
+        self, console, quant, allow_oom_attempt
+    ):
+        # #2363: auto is resolved after the model loads, so no batch is assumed here.
         cfg = _cfg(quant, batch_size="auto")
         assert _build_hardware_fit_input(cfg) is None
-        _hardware_fit_preflight(cfg, SMALL_CARD, allow_oom_attempt=False)
-        assert console.printed == []
+        _hardware_fit_preflight(cfg, SMALL_CARD, allow_oom_attempt=allow_oom_attempt)
+        assert [_plain(line) for line in console.printed] == [AUTO_LINE]
 
-    def test_hqq_with_batch_size_auto_still_gets_the_line(self, console):
+    def test_auto_with_an_unpriced_format_names_both_reasons(self, console):
         _hardware_fit_preflight(
             _cfg("hqq:4bit", batch_size="auto"), SMALL_CARD, allow_oom_attempt=False
         )
-        assert len(console.printed) == 1
+        assert [_plain(line) for line in console.printed] == [
+            AUTO_LINE,
+            "Pre-flight skipped: no memory model for quantization: hqq:4bit",
+        ]
+
+
+AUTO_LINE = (
+    "Pre-flight skipped: batch_size: auto is resolved after the model loads, "
+    "so VRAM fit is not checked before training"
+)
