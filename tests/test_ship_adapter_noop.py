@@ -12,13 +12,18 @@ import numpy as np
 import pytest
 
 from soup_cli.commands import ship as ship_cmd
-from soup_cli.utils.ship_verdict import FAILED_ADAPTER_NOOP
+from soup_cli.utils.ship_verdict import FAILED_ADAPTER_NOOP, FAILED_TASK_WIN
 from tests.cli_runner import CliRunner
+from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
 Q_A = "base_model.model.layers.0.self_attn.q_proj.lora_A.weight"
 Q_B = "base_model.model.layers.0.self_attn.q_proj.lora_B.weight"
+
+
+def _plain(text: str) -> str:
+    return " ".join(strip_ansi(text).split())
 
 
 def _write_adapter(dir_path: Path, weights: dict) -> None:
@@ -80,21 +85,25 @@ def test_all_zero_lora_b_refused_before_any_model_load(monkeypatch):
 def test_trained_adapter_runs_the_live_eval(monkeypatch):
     res, loads, out, _ = _run(monkeypatch, _lora(0.5))
     assert loads == ["lora"], res.output
-    assert out["failed_rule"] != FAILED_ADAPTER_NOOP
+    assert res.exit_code == 2, res.output
+    assert out["failed_rule"] == FAILED_TASK_WIN
 
 
 def test_adapter_without_lora_b_keys_is_left_alone(monkeypatch):
     vera = {"base_model.model.layers.0.self_attn.q_proj.vera_lambda_b": np.zeros(4, np.float32)}
     res, loads, out, _ = _run(monkeypatch, vera)
     assert loads == ["lora"], res.output
-    assert out["failed_rule"] != FAILED_ADAPTER_NOOP
+    assert res.exit_code == 2, res.output
+    assert out["failed_rule"] == FAILED_TASK_WIN
 
 
 def test_non_zero_standalone_tensor_is_left_alone(monkeypatch):
     weights = _lora(0.0)
     weights["base_model.model.score.weight"] = np.ones((2, 4), dtype=np.float32)
-    res, loads, _, _ = _run(monkeypatch, weights)
+    res, loads, out, _ = _run(monkeypatch, weights)
     assert loads == ["lora"], res.output
+    assert res.exit_code == 2, res.output
+    assert out["failed_rule"] == FAILED_TASK_WIN
 
 
 def test_unreadable_weights_warn_and_continue(monkeypatch):
@@ -102,6 +111,44 @@ def test_unreadable_weights_warn_and_continue(monkeypatch):
         dir_path.mkdir()
         (dir_path / "adapter_model.bin").write_bytes(b"\x00" * 16)
 
-    res, loads, _, _ = _run(monkeypatch, {}, write=_bin_adapter)
+    res, loads, out, _ = _run(monkeypatch, {}, write=_bin_adapter)
     assert loads == ["lora"], res.output
-    assert "Warning" in res.output
+    assert res.exit_code == 2, res.output
+    assert out["failed_rule"] == FAILED_TASK_WIN
+    assert "could not read the adapter weights" in _plain(res.output)
+
+
+def test_partly_zero_lora_b_runs_the_live_eval(monkeypatch):
+    weights = _lora(0.0)
+    weights[Q_A.replace("q_proj", "v_proj")] = np.ones((2, 4), dtype=np.float32)
+    weights[Q_B.replace("q_proj", "v_proj")] = np.full((4, 2), 0.5, dtype=np.float32)
+    res, loads, out, _ = _run(monkeypatch, weights)
+    assert loads == ["lora"], (res.output, repr(res.exception))
+    assert res.exit_code == 2, res.output
+    assert out["failed_rule"] == FAILED_TASK_WIN
+
+
+def test_adapter_that_is_not_a_local_directory_is_skipped_silently(monkeypatch):
+    res, loads, out, _ = _run(monkeypatch, {}, write=lambda dir_path, weights: None)
+    assert loads == ["lora"], (res.output, repr(res.exception))
+    assert res.exit_code == 2, res.output
+    assert out["failed_rule"] == FAILED_TASK_WIN
+    assert "could not read the adapter weights" not in _plain(res.output)
+
+
+@pytest.mark.parametrize("exc_type", [ValueError, TypeError, OSError, RuntimeError, ImportError])
+def test_read_failure_warns_with_the_reason_and_continues(monkeypatch, exc_type):
+    from soup_cli.utils import adapter_check
+
+    def _raise(path):
+        raise exc_type("bad [tag] header")
+
+    monkeypatch.setattr(adapter_check, "check_adapter", _raise)
+    res, loads, out, _ = _run(monkeypatch, _lora(0.0))
+    assert loads == ["lora"], (res.output, repr(res.exception))
+    assert res.exit_code == 2, res.output
+    assert out["failed_rule"] == FAILED_TASK_WIN
+    plain = _plain(res.output)
+    assert "could not read the adapter weights" in plain
+    assert "bad [tag] header" in plain
+    assert "\\[tag]" not in plain
