@@ -126,7 +126,11 @@ def test_curriculum_curve_names_a_symlinked_history_file_as_typed(db, name):
     assert "\x9b" not in text and "\u202e" not in text
 
 
-_UNREADABLE_NAMES = ["x[red]s.jsonl", "s:warning:.jsonl", f"x[bold]s{_CONTROLS}.jsonl"]
+_UNREADABLE_NAMES = [
+    "x[red]s.jsonl",
+    pytest.param("s:warning:.jsonl", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+    f"x[bold]s{_CONTROLS}.jsonl",
+]
 
 
 @pytest.mark.parametrize("name", _UNREADABLE_NAMES)
