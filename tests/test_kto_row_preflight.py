@@ -6,6 +6,9 @@ fields the KTO trainer requires), name the detected format, name the three
 required fields, and tell the user to set data.format: kto.  The check fires
 on both the --dry-run path and the real-run path.  Valid kto-shaped rows
 continue to work under both format: auto and format: kto.
+
+Existing tasks (dpo, ipo, simpo, orpo, bco, preference, reward_model) keep
+their existing messages unchanged.
 """
 
 import json
@@ -33,6 +36,11 @@ def _write(path, rows):
     )
 
 
+def _normalise(text: str) -> str:
+    """Strip ANSI codes and collapse all whitespace to single spaces."""
+    return " ".join(strip_ansi(text).split())
+
+
 @pytest.fixture(autouse=True)
 def fixed_console_width(monkeypatch):
     from soup_cli.commands import train
@@ -41,7 +49,7 @@ def fixed_console_width(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Unit-level tests for the validator function directly
+# Unit-level tests for _validate_preference_dataset_if_applicable directly
 # ---------------------------------------------------------------------------
 
 _NON_KTO_SHAPES = [
@@ -70,17 +78,18 @@ def test_validator_refuses_non_kto_row_in_train(monkeypatch, capsys, fmt, row):
     with pytest.raises(typer.Exit) as exc_info:
         _validate_preference_dataset_if_applicable(cfg, {"train": [row]})
     assert exc_info.value.exit_code == 1
-    output = " ".join(strip_ansi(capsys.readouterr().out).split())
-    assert "kto" in output
-    assert fmt in output
-    assert "data.format: kto" in output
-    assert "prompt" in output
-    assert "completion" in output
-    assert "label" in output
+
+    output = _normalise(capsys.readouterr().out)
+    assert "kto" in output, output
+    assert fmt in output, output
+    assert "data.format: kto" in output, output
+    assert "prompt" in output, output
+    assert "completion" in output, output
+    assert "label" in output, output
 
 
 def test_validator_names_the_split_and_row_index(monkeypatch, capsys):
-    """When a bad row is in the val split, the message must name 'val row N'."""
+    """When a bad row is in the val split the message must name 'val row N'."""
     import typer
 
     from soup_cli.commands.train import _validate_preference_dataset_if_applicable
@@ -96,9 +105,10 @@ def test_validator_names_the_split_and_row_index(monkeypatch, capsys):
             cfg, {"train": [KTO_ROW], "val": [KTO_ROW, bad]}
         )
     assert exc_info.value.exit_code == 1
-    output = " ".join(strip_ansi(capsys.readouterr().out).split())
-    assert "val row 2" in output
-    assert "chatml" in output
+
+    output = _normalise(capsys.readouterr().out)
+    assert "val row 2" in output, output
+    assert "chatml" in output, output
 
 
 def test_validator_accepts_valid_kto_row(monkeypatch):
@@ -110,7 +120,7 @@ def test_validator_accepts_valid_kto_row(monkeypatch):
         loader, "last_load_outcome", lambda: loader.LoadOutcome(fmt="kto")
     )
     cfg = SimpleNamespace(task="kto", data=SimpleNamespace(format="kto"))
-    # Should return without raising
+    # Must return without raising
     _validate_preference_dataset_if_applicable(cfg, {"train": [KTO_ROW]})
 
 
@@ -118,15 +128,20 @@ def test_validator_leaves_non_kto_non_preference_tasks_unchanged():
     """The validator must still be a no-op for tasks outside kto/preference-pair."""
     from soup_cli.commands.train import _validate_preference_dataset_if_applicable
 
-    # sft rows lack all three keys — must not raise
+    # sft rows lack all three kto keys — must not raise
     _validate_preference_dataset_if_applicable(
         SimpleNamespace(task="sft"),
         {"train": [{"messages": [USER, GOOD]}]},
     )
 
 
-def test_validator_still_guards_dpo_task(monkeypatch, capsys):
-    """Existing dpo guard must be untouched by the kto addition."""
+@pytest.mark.parametrize("task", ["dpo", "ipo", "simpo", "orpo", "bco", "preference", "reward_model"])
+def test_validator_still_guards_pair_tasks_with_existing_message(monkeypatch, capsys, task):
+    """Existing pair-task guard must be untouched by the kto addition.
+
+    The error message for pair tasks must still say 'data.format: dpo' and name
+    'chosen' and 'rejected'; it must NOT say 'data.format: kto'.
+    """
     import typer
 
     from soup_cli.commands.train import _validate_preference_dataset_if_applicable
@@ -136,14 +151,15 @@ def test_validator_still_guards_dpo_task(monkeypatch, capsys):
     monkeypatch.setattr(
         loader, "last_load_outcome", lambda: loader.LoadOutcome(fmt="chatml")
     )
-    cfg = SimpleNamespace(task="dpo", data=SimpleNamespace(format="auto"))
+    cfg = SimpleNamespace(task=task, data=SimpleNamespace(format="auto"))
     with pytest.raises(typer.Exit) as exc_info:
         _validate_preference_dataset_if_applicable(cfg, {"train": [bad]})
     assert exc_info.value.exit_code == 1
-    output = " ".join(strip_ansi(capsys.readouterr().out).split())
-    # Must still say dpo, not kto
-    assert "data.format: dpo" in output
-    assert "chosen" in output and "rejected" in output
+
+    output = _normalise(capsys.readouterr().out)
+    assert "data.format: dpo" in output, output
+    assert "chosen" in output and "rejected" in output, output
+    assert "data.format: kto" not in output, output
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +197,7 @@ def test_cli_refuses_non_kto_rows_before_trainer(tmp_path, monkeypatch, fmt, row
     if dry_run:
         args.append("--dry-run")
     result = CliRunner().invoke(app, args)
-    output = " ".join(strip_ansi(result.output).split())
+    output = _normalise(result.output)
 
     assert result.exit_code == 1, (output, result.exception)
     assert "kto" in output, output
@@ -191,7 +207,7 @@ def test_cli_refuses_non_kto_rows_before_trainer(tmp_path, monkeypatch, fmt, row
 
 
 def test_cli_kto_dry_run_passes_with_valid_rows(tmp_path, monkeypatch):
-    """--dry-run must succeed and print Ready to train! for proper kto rows."""
+    """--dry-run must succeed and print 'Ready to train!' for proper kto rows."""
     from soup_cli.cli import app
 
     monkeypatch.chdir(tmp_path)
@@ -203,7 +219,7 @@ def test_cli_kto_dry_run_passes_with_valid_rows(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     result = CliRunner().invoke(app, ["train", "--config", "soup.yaml", "--dry-run"])
-    output = " ".join(strip_ansi(result.output).split())
+    output = _normalise(result.output)
     assert result.exit_code == 0, (output, result.exception)
     assert "Ready to train" in output
 
@@ -221,6 +237,6 @@ def test_cli_kto_explicit_format_dry_run_passes(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     result = CliRunner().invoke(app, ["train", "--config", "soup.yaml", "--dry-run"])
-    output = " ".join(strip_ansi(result.output).split())
+    output = _normalise(result.output)
     assert result.exit_code == 0, (output, result.exception)
     assert "Ready to train" in output
