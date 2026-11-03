@@ -318,9 +318,6 @@ a rank of 0 the SFT trainer skips `get_peft_model` entirely: `soup train` prints
 instead of `LoRA applied`, and the output directory holds a complete model, not
 an adapter to merge.
 
-A boolean is not a number in `soup.yaml`: setting `r: false` (or `lr: true`) is refused
-at config load rather than coerced into `0` or `1`. Full fine-tuning must be configured
-with an explicit integer `r: 0`.
 
 Requirements, each rejected at config load with the reason named:
 `task: sft`, `backend: transformers`, `modality: text`, and

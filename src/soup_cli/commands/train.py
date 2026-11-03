@@ -279,6 +279,9 @@ def _validate_csm_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
 
 def _validate_preference_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
     """Reject a lossy format choice before constructing any preference trainer."""
+    if cfg.task != "kto" and cfg.task not in PREFERENCE_PAIR_TASKS:
+        return
+
     from soup_cli.data.loader import last_load_outcome
 
     outcome = last_load_outcome()
@@ -300,16 +303,6 @@ def _validate_preference_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
                     "Use data.format: kto with kto rows."
                 )
                 raise typer.Exit(1)
-        if not dataset.get("train") and outcome.first_drop is not None:
-            console.print(
-                f"[red]No training rows:[/] kto data loaded as format "
-                f"{markup_escape(repr(fmt))} must provide prompt, completion and label. "
-                "Use data.format: kto with kto rows."
-            )
-            raise typer.Exit(1)
-        return
-
-    if cfg.task not in PREFERENCE_PAIR_TASKS:
         return
 
     required = {"prompt", "chosen", "rejected"}

@@ -28,6 +28,7 @@ from tests.conftest import strip_ansi
 USER = {"role": "user", "content": "Q"}
 GOOD = {"role": "assistant", "content": "A"}
 KTO_ROW = {"prompt": "Q", "completion": "A", "label": True}
+KTO_ROW_CONV = {"prompt": [USER], "completion": [GOOD], "label": True}
 
 
 def _write(path, rows):
@@ -53,10 +54,12 @@ def fixed_console_width(monkeypatch):
 # ---------------------------------------------------------------------------
 
 _NON_KTO_SHAPES = [
-    ("llava", {"image": "img.png", "conversations": [{"from": "human", "value": "<image>Q"}, {"from": "gpt", "value": "A"}]}),
-    ("audio", {"audio": "a.wav", "messages": [{"role": "user", "content": "Q"}, {"role": "assistant", "content": "A"}]}),
+    ("llava", {"image": "img.png", "conversations": [
+        {"from": "human", "value": "<image>Q"}, {"from": "gpt", "value": "A"},
+    ]}),
+    ("audio", {"audio": "a.wav", "messages": [USER, GOOD]}),
     ("asr", {"audio": "a.wav", "text": "hello"}),
-    ("chatml", {"messages": [{"role": "user", "content": "Q"}, {"role": "assistant", "content": "A"}]}),
+    ("chatml", {"messages": [USER, GOOD]}),
     ("alpaca", {"instruction": "Q", "output": "A"}),
     ("plaintext", {"text": "some text"}),
     ("dpo", {"prompt": "Q", "chosen": "A", "rejected": "B"}),
@@ -86,6 +89,32 @@ def test_validator_refuses_non_kto_row_in_train(monkeypatch, capsys, fmt, row):
     assert "prompt" in output, output
     assert "completion" in output, output
     assert "label" in output, output
+
+
+@pytest.mark.parametrize("missing", ["prompt", "completion", "label", "object"])
+def test_validator_refuses_a_kto_row_missing_any_field(monkeypatch, capsys, missing):
+    """Dropping any single required field must trigger exit(1)."""
+    import typer
+
+    from soup_cli.commands.train import _validate_preference_dataset_if_applicable
+    from soup_cli.data import loader
+
+    bad = (
+        {key: value for key, value in KTO_ROW.items() if key != missing}
+        if missing != "object" else []
+    )
+    monkeypatch.setattr(
+        loader, "last_load_outcome", lambda: loader.LoadOutcome(fmt="kto")
+    )
+    cfg = SimpleNamespace(task="kto", data=SimpleNamespace(format="kto"))
+    with pytest.raises(typer.Exit) as exc_info:
+        _validate_preference_dataset_if_applicable(cfg, {"train": [KTO_ROW, bad]})
+    assert exc_info.value.exit_code == 1
+    expected = (
+        "Invalid kto dataset: train row 2 loaded as format 'kto' lacks prompt, "
+        "completion or label. Use data.format: kto with kto rows."
+    )
+    assert expected in _normalise(capsys.readouterr().out)
 
 
 def test_validator_names_the_split_and_row_index(monkeypatch, capsys):
@@ -120,23 +149,32 @@ def test_validator_accepts_valid_kto_row(monkeypatch):
         loader, "last_load_outcome", lambda: loader.LoadOutcome(fmt="kto")
     )
     cfg = SimpleNamespace(task="kto", data=SimpleNamespace(format="kto"))
-    # Must return without raising
     _validate_preference_dataset_if_applicable(cfg, {"train": [KTO_ROW]})
 
 
-def test_validator_leaves_non_kto_non_preference_tasks_unchanged():
-    """The validator must still be a no-op for tasks outside kto/preference-pair."""
-    from soup_cli.commands.train import _validate_preference_dataset_if_applicable
+def test_validator_ignores_other_tasks_without_reading_the_load(monkeypatch):
+    """Validator must return before calling last_load_outcome for unrelated tasks.
 
-    # sft rows lack all three kto keys — must not raise
+    Passes an empty LoadOutcome (no fmt) and a config without data so that any
+    attempt to read outcome.fmt or cfg.data.format raises AttributeError.
+    """
+    from soup_cli.commands.train import _validate_preference_dataset_if_applicable
+    from soup_cli.data import loader
+
+    monkeypatch.setattr(loader, "last_load_outcome", lambda: loader.LoadOutcome())
     _validate_preference_dataset_if_applicable(
         SimpleNamespace(task="sft"),
         {"train": [{"messages": [USER, GOOD]}]},
     )
 
 
-@pytest.mark.parametrize("task", ["dpo", "ipo", "simpo", "orpo", "bco", "preference", "reward_model"])
-def test_validator_still_guards_pair_tasks_with_existing_message(monkeypatch, capsys, task):
+@pytest.mark.parametrize(
+    "task",
+    ["dpo", "ipo", "simpo", "orpo", "bco", "preference", "reward_model"],
+)
+def test_validator_still_guards_pair_tasks_with_existing_message(
+    monkeypatch, capsys, task
+):
     """Existing pair-task guard must be untouched by the kto addition.
 
     The error message for pair tasks must still say 'data.format: dpo' and name
@@ -167,7 +205,11 @@ def test_validator_still_guards_pair_tasks_with_existing_message(monkeypatch, ca
 # ---------------------------------------------------------------------------
 
 _NON_KTO_SHAPES_CLI = [
-    ("llava", {"image": "img.png", "conversations": [{"from": "human", "value": "<image>Q"}, {"from": "gpt", "value": "A"}]}),
+    ("llava", {"image": "img.png", "conversations": [
+        {"from": "human", "value": "<image>Q"}, {"from": "gpt", "value": "A"},
+    ]}),
+    ("audio", {"audio": "a.wav", "messages": [USER, GOOD]}),
+    ("asr", {"audio": "a.wav", "text": "hello"}),
     ("chatml", {"messages": [USER, GOOD]}),
     ("alpaca", {"instruction": "Q", "output": "A"}),
     ("plaintext", {"text": "some text"}),
@@ -177,7 +219,9 @@ _NON_KTO_SHAPES_CLI = [
 
 @pytest.mark.parametrize("fmt, row", _NON_KTO_SHAPES_CLI)
 @pytest.mark.parametrize("dry_run", [False, True])
-def test_cli_refuses_non_kto_rows_before_trainer(tmp_path, monkeypatch, fmt, row, dry_run):
+def test_cli_refuses_non_kto_rows_before_trainer(
+    tmp_path, monkeypatch, fmt, row, dry_run
+):
     """CLI must exit(1) with a helpful message before build_trainer is called."""
     from soup_cli.cli import app
     from soup_cli.trainer import dispatch
@@ -199,44 +243,32 @@ def test_cli_refuses_non_kto_rows_before_trainer(tmp_path, monkeypatch, fmt, row
     result = CliRunner().invoke(app, args)
     output = _normalise(result.output)
 
-    assert result.exit_code == 1, (output, result.exception)
+    assert result.exit_code == 1, (output, repr(result.exception))
     assert "kto" in output, output
     assert "data.format: kto" in output, output
     assert "prompt" in output and "completion" in output and "label" in output, output
     build.assert_not_called()
 
 
-def test_cli_kto_dry_run_passes_with_valid_rows(tmp_path, monkeypatch):
-    """--dry-run must succeed and print 'Ready to train!' for proper kto rows."""
+@pytest.mark.parametrize("fmt, kto_row", [
+    ("auto", KTO_ROW),
+    ("kto", KTO_ROW),
+    ("auto", KTO_ROW_CONV),
+    ("kto", KTO_ROW_CONV),
+])
+def test_cli_kto_dry_run_passes_with_valid_rows(tmp_path, monkeypatch, fmt, kto_row):
+    """--dry-run must succeed for string and conversational kto rows under auto and kto."""
     from soup_cli.cli import app
 
     monkeypatch.chdir(tmp_path)
-    _write(tmp_path / "data.jsonl", [KTO_ROW, KTO_ROW])
+    _write(tmp_path / "data.jsonl", [kto_row, kto_row])
     (tmp_path / "soup.yaml").write_text(
-        "base: public/model\ntask: kto\n"
-        "data: {train: data.jsonl, format: auto, val_split: 0}\n"
+        f"base: public/model\ntask: kto\n"
+        f"data: {{train: data.jsonl, format: {fmt}, val_split: 0}}\n"
         "training: {quantization: none}\noutput: out\n",
         encoding="utf-8",
     )
     result = CliRunner().invoke(app, ["train", "--config", "soup.yaml", "--dry-run"])
     output = _normalise(result.output)
-    assert result.exit_code == 0, (output, result.exception)
-    assert "Ready to train" in output
-
-
-def test_cli_kto_explicit_format_dry_run_passes(tmp_path, monkeypatch):
-    """Explicit format: kto with correct rows must also pass --dry-run."""
-    from soup_cli.cli import app
-
-    monkeypatch.chdir(tmp_path)
-    _write(tmp_path / "data.jsonl", [KTO_ROW])
-    (tmp_path / "soup.yaml").write_text(
-        "base: public/model\ntask: kto\n"
-        "data: {train: data.jsonl, format: kto, val_split: 0}\n"
-        "training: {quantization: none}\noutput: out\n",
-        encoding="utf-8",
-    )
-    result = CliRunner().invoke(app, ["train", "--config", "soup.yaml", "--dry-run"])
-    output = _normalise(result.output)
-    assert result.exit_code == 0, (output, result.exception)
+    assert result.exit_code == 0, (output, repr(result.exception))
     assert "Ready to train" in output
