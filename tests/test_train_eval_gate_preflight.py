@@ -169,6 +169,99 @@ def test_a_missing_suite_file_in_soup_yaml_is_refused(
     assert heavy_steps_are_never_reached == {"load_dataset": 0, "build_trainer": 0}
 
 
+def test_a_directory_as_suite_is_refused_not_a_traceback(
+    tmp_path: Path, heavy_steps_are_never_reached: dict[str, int]
+) -> None:
+    """Opening a directory raises ``OSError`` (``PermissionError`` on Windows,
+    ``IsADirectoryError`` elsewhere). The callback catches ``OSError``, so before
+    the preflight a directory suite printed a warning and trained ungated; the
+    preflight must refuse it the same way as any other bad suite."""
+    (tmp_path / "gate_dir").mkdir()
+    config = _write_config(tmp_path, suite="gate_dir")
+
+    result = _dry_run(config)
+
+    output = _plain(result.output)
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert not isinstance(result.exception, OSError), repr(result.exception)
+    assert "Invalid training.eval_gate.suite:" in output, output
+    assert "gate_dir" in output, output
+    assert heavy_steps_are_never_reached == {"load_dataset": 0, "build_trainer": 0}
+
+
+def test_a_suite_with_a_non_string_key_is_refused_not_a_traceback(
+    tmp_path: Path, heavy_steps_are_never_reached: dict[str, int]
+) -> None:
+    """``EvalSuite(**{1: "foo"})`` raises ``TypeError``, not ``ValueError``."""
+    suite = _write_suite(tmp_path, "gate.yaml", "1: foo\ntasks: []\n")
+    config = _write_config(tmp_path, suite=suite)
+
+    result = _dry_run(config)
+
+    output = _plain(result.output)
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert not isinstance(result.exception, TypeError), repr(result.exception)
+    assert "Invalid training.eval_gate.suite:" in output, output
+    assert heavy_steps_are_never_reached == {"load_dataset": 0, "build_trainer": 0}
+
+
+def test_a_suite_outside_the_working_directory_is_refused_through_the_config_route(
+    tmp_path: Path, heavy_steps_are_never_reached: dict[str, int]
+) -> None:
+    """A valid suite one level above cwd must be refused by ``is_under_cwd``,
+    not loaded: the refusal names the containment rule, not a missing file."""
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.yaml"
+    outside.write_text(
+        yaml.safe_dump({"suite": "ok", "tasks": [_VALID_TASK]}), encoding="utf-8"
+    )
+    try:
+        config = _write_config(tmp_path, suite=f"../{outside.name}")
+
+        result = _dry_run(config)
+    finally:
+        outside.unlink()
+
+    output = _plain(result.output)
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "Invalid training.eval_gate.suite:" in output, output
+    assert "is outside cwd - refusing to load" in output, output
+    assert "not found" not in output, output
+    assert heavy_steps_are_never_reached == {"load_dataset": 0, "build_trainer": 0}
+
+
+def test_rich_markup_in_the_suite_path_is_shown_literally(
+    tmp_path: Path, heavy_steps_are_never_reached: dict[str, int]
+) -> None:
+    """The loader's message carries the path; printing it without
+    ``for_terminal`` would let ``[bold red]`` restyle the terminal and vanish."""
+    config = _write_config(tmp_path, suite='"[bold red]missing[/].yaml"')
+
+    result = _dry_run(config)
+
+    output = _plain(result.output)
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "Invalid training.eval_gate.suite:" in output, output
+    assert "[bold red]missing[/].yaml" in output, output
+    assert heavy_steps_are_never_reached == {"load_dataset": 0, "build_trainer": 0}
+
+
+def test_an_escape_byte_in_the_suite_path_never_reaches_the_terminal(
+    tmp_path: Path, heavy_steps_are_never_reached: dict[str, int]
+) -> None:
+    """A raw ESC in the path would start a live escape sequence; ``for_terminal``
+    strips it, so the name is printed without it."""
+    config = _write_config(tmp_path, suite='"miss\\x1b]0;owned\\x07ing.yaml"')
+
+    result = _dry_run(config)
+
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "\x1b]0;owned\x07" not in result.output, repr(result.output)
+    output = _plain(result.output)
+    assert "Invalid training.eval_gate.suite:" in output, output
+    assert "miss]0;owneding.yaml" in output, output
+    assert heavy_steps_are_never_reached == {"load_dataset": 0, "build_trainer": 0}
+
+
 def test_a_valid_suite_in_soup_yaml_still_dry_runs(tmp_path: Path) -> None:
     suite = _write_suite(tmp_path, "gate.yaml", {"suite": "ok", "tasks": [_VALID_TASK]})
     config = _write_config(tmp_path, suite=suite)

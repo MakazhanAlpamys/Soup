@@ -92,9 +92,13 @@ def _preflight_config_eval_gate(cfg: "SoupConfig") -> None:
     from soup_cli.eval.gate import load_suite
     from soup_cli.utils.terminal import for_terminal
 
+    # ``OSError`` covers a missing file and a path that is a directory
+    # (``PermissionError`` / ``IsADirectoryError``), which the callback also
+    # catches; ``TypeError`` is a suite mapping with a non-string key, which
+    # ``EvalSuite(**data)`` raises. ``UnicodeDecodeError`` is a ``ValueError``.
     try:
         load_suite(gate_cfg.suite)
-    except (FileNotFoundError, ValueError) as exc:
+    except (OSError, ValueError, TypeError) as exc:
         console.print(f"[red]Invalid training.eval_gate.suite: {for_terminal(str(exc))}[/]")
         raise typer.Exit(1) from exc
 
