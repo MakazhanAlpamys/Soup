@@ -94,6 +94,21 @@ def test_interrupt_exits_130_and_jsonl_still_ends_in_an_error_event(
         assert "schema_version" not in result.stderr
 
 
+def test_the_wrapper_itself_maps_an_interrupt_to_exit_130() -> None:
+    import typer
+
+    from soup_cli.utils.ship_progress import jsonl_command
+
+    def command(progress: str | None = None) -> None:
+        raise KeyboardInterrupt
+
+    # Catch an unconverted interrupt so a regression fails instead of stopping pytest.
+    with pytest.raises((typer.Exit, KeyboardInterrupt)) as caught:
+        jsonl_command(command)(progress="jsonl")
+    assert isinstance(caught.value, typer.Exit), type(caught.value)
+    assert caught.value.exit_code == 130
+
+
 @pytest.mark.parametrize("color", [False, True], ids=["plain", "color"])
 def test_error_text_strips_controls_and_displays_markup_literally(
     color: bool, tmp_path: Path,
