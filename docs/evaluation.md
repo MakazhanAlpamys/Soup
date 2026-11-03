@@ -549,9 +549,11 @@ CPU-instant):
 
 Custom task evaluation and bundled suites accept an ordinary `gen(prompt) -> str`
 callable and also use its optional `gen.batch(prompts) -> list[str]` method. Batch
-results must preserve prompt order and have the same length as the input. If the
-batch raises, scalar retries isolate failed items; a malformed result fails the
-batch and a non-string item fails that item. Generation failures always score zero,
+results must preserve the original prompt order and count. Each batch receives its
+own list and may mutate or consume it without changing chunk membership. If a
+batch raises, scalar retries use that chunk's original prompts in their original
+order; a malformed result fails that chunk and a non-string item fails that item.
+Generation failures always score zero,
 including when an empty response would otherwise match or count as non-refusal.
 
 The shared live greedy generator used by `soup ship` exposes this method with left
@@ -562,9 +564,10 @@ saved generation configuration requests multiple sequences; the shared model
 configuration is not changed. Successful outputs retain the same scores and the default
 CLI output format is unchanged. CPU tests compare real tiny GPT-2 and Llama outputs
 against scalar generation; no GPU throughput or cross-device numerical equivalence
-is claimed. Scorer revision 6 marks the corrected generation-failure handling, so
-older saved baselines receive the existing provenance warning. Progress events are
-a separate follow-up to #1759.
+is claimed. Scorer revision 6 marks the corrected generation-failure handling;
+revision 8 also preserves failed items when a batch mutates its input. Older saved
+baselines receive the existing provenance warning. Chunk boundaries and lazy scalar
+generation are preserved, so scoring and progress still precede the next chunk.
 
 Each suite is >20 items so a single-item flip (1/N < 0.05) trips the default threshold instead
 of being rounded away. The scorer is answer-**extraction** — a spurious substring inside a word
