@@ -3,6 +3,7 @@
 import json
 from unittest.mock import patch
 
+import pytest
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
@@ -156,3 +157,92 @@ def test_generate_resets_consecutive_empty_rounds_on_success(tmp_path, monkeypat
     with open(output_file, "r", encoding="utf-8") as f:
         rows = [json.loads(line) for line in f if line.strip()]
     assert len(rows) == 4
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_generate_halt_without_rows_preserves_output(tmp_path, monkeypatch, existing):
+    """No accepted rows must neither create nor truncate the output file."""
+    monkeypatch.chdir(tmp_path)
+    output_file = tmp_path / "output.jsonl"
+    sentinel = b"existing dataset\n"
+    if existing:
+        output_file.write_bytes(sentinel)
+    with patch("soup_cli.commands.generate._generate_batch", return_value=[]) as provider:
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "generate",
+                "--prompt",
+                "Test",
+                "--count",
+                "5",
+                "--requests-per-minute",
+                "6000",
+                "--provider",
+                "openai",
+                "--api-key",
+                "fake-key",
+                "--output",
+                str(output_file),
+            ],
+        )
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert provider.call_count == 3
+    assert "after 3 consecutive attempts (0/5 generated)" in " ".join(
+        strip_ansi(result.output).split()
+    )
+    if existing:
+        assert output_file.read_bytes() == sentinel
+    else:
+        assert not output_file.exists()
+
+
+@pytest.mark.requires_symlink
+def test_generate_halt_does_not_save_through_escaped_symlink(tmp_path, monkeypatch):
+    """Re-resolve the output at partial save time rather than trust its old path."""
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    outside = tmp_path / "outside.jsonl"
+    sentinel = b"outside dataset\n"
+    outside.write_bytes(sentinel)
+    output_file = work / "output.jsonl"
+    calls = 0
+
+    def generate_then_redirect(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return [{"instruction": "Q", "output": "A"}]
+        if calls == 4:
+            output_file.symlink_to(outside)
+        return []
+
+    with patch("soup_cli.commands.generate._generate_batch", side_effect=generate_then_redirect):
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "generate",
+                "--prompt",
+                "Test",
+                "--count",
+                "5",
+                "--requests-per-minute",
+                "6000",
+                "--provider",
+                "openai",
+                "--api-key",
+                "fake-key",
+                "--output",
+                str(output_file),
+            ],
+        )
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert calls == 4
+    assert "after 3 consecutive attempts (1/5 generated)" in " ".join(
+        strip_ansi(result.output).split()
+    )
+    assert output_file.is_symlink()
+    assert outside.read_bytes() == sentinel
