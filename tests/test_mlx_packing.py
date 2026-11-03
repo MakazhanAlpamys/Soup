@@ -67,8 +67,6 @@ def config(**training):
     ({"batch_size": 2}, "batch_size"),
     ({"gradient_checkpointing": True}, "gradient_checkpointing"),
     ({"lora": {"use_dora": True}}, "ordinary LoRA"),
-    ({"lora": {"rank_pattern": {"q_proj": 4}}}, "ordinary LoRA"),
-    ({"lora": {"alpha_pattern": {"q_proj": 4}}}, "ordinary LoRA"),
 ])
 def test_exact_configuration_guard_with_valid_control(training, reason):
     validate_packing_config(config())
@@ -90,8 +88,6 @@ def test_streaming_guard_and_valid_control():
     ({"batch_size": 2}, "packing requires batch_size"),
     ({"gradient_checkpointing": True}, "packing requires gradient_checkpointing"),
     ({"lora": {"use_dora": True}}, "packing supports ordinary LoRA"),
-    ({"lora": {"rank_pattern": {"q_proj": 4}}}, "packing supports ordinary LoRA"),
-    ({"lora": {"alpha_pattern": {"q_proj": 4}}}, "packing supports ordinary LoRA"),
 ])
 def test_public_setup_reaches_each_new_refusal_before_model_loading(monkeypatch, training, reason):
     from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
@@ -105,3 +101,33 @@ def test_public_setup_reaches_each_new_refusal_before_model_loading(monkeypatch,
     monkeypatch.setattr("soup_cli.utils.mlx.load_mlx_model", must_not_load)
     with pytest.raises(ValueError, match=reason):
         MLXSFTTrainerWrapper(config(**training)).setup({"train": [{"text": "x"}] * 2})
+
+
+@pytest.mark.parametrize("field", ["rank_pattern", "alpha_pattern"])
+def test_patterns_are_refused_at_config_load_with_empty_control(field):
+    validate_packing_config(config(lora={field: {}}))
+    with pytest.raises(ValueError, match=rf"training\.lora\.{field}"):
+        config(lora={field: {"q_proj": 4}})
+
+
+@pytest.mark.parametrize("field", ["rank_pattern", "alpha_pattern"])
+def test_runtime_pattern_guard_reaches_mutated_config_before_loading(monkeypatch, field):
+    from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
+    from tests.test_issue634_mlx_resume import _install_fake_mlx
+
+    # A config changed in memory still needs the runtime guard. Serialized
+    # patterns are already refused by the schema before setup can run.
+    cfg = config(lora={field: {}})
+    validate_packing_config(cfg)
+    setattr(cfg.training.lora, field, {"q_proj": 4})
+    with pytest.raises(ValueError, match="packing supports ordinary LoRA"):
+        validate_packing_config(cfg)
+
+    _install_fake_mlx(monkeypatch)
+
+    def must_not_load(*args, **kwargs):
+        raise AssertionError("packing pattern refusal must precede model loading")
+
+    monkeypatch.setattr("soup_cli.utils.mlx.load_mlx_model", must_not_load)
+    with pytest.raises(ValueError, match="packing supports ordinary LoRA"):
+        MLXSFTTrainerWrapper(cfg).setup({"train": [{"text": "x"}] * 2})
