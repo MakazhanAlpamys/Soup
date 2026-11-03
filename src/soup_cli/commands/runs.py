@@ -336,11 +336,12 @@ def delete(
         raise typer.Exit(1)
 
     if not force:
-        if not typer.confirm(f"Delete run {run['run_id']}?"):
+        # typer.confirm prints through click, not Rich: only the strip applies.
+        if not typer.confirm(f"Delete run {strip_control(run['run_id'])}?"):
             raise typer.Exit()
 
     tracker.delete_run(run["run_id"])
-    console.print(f"[green]Deleted run: {run['run_id']}[/]")
+    console.print(f"[green]Deleted run: {for_terminal(run['run_id'])}[/]", emoji=False)
 
 
 def _checkpoint_step(checkpoint: Path) -> Optional[int]:
@@ -458,7 +459,8 @@ def clean(
         if fallback:
             console.print(
                 f"[dim]{for_terminal(run['run_id'])}: no checkpoint has a recorded loss; "
-                f"keeping the latest, checkpoint-{keep_step}, whole.[/]"
+                f"keeping the latest, checkpoint-{keep_step}, whole.[/]",
+                emoji=False,
             )
         for ckpt in checkpoints:
             if keep_step is not None and _checkpoint_step(ckpt) == keep_step:
@@ -559,8 +561,8 @@ def replay(
     summary = summarise(metrics)
 
     rendered = [
-        f"Run ID:     [bold]{run['run_id']}[/]",
-        f"Status:     {run.get('status') or '-'}",
+        f"Run ID:     [bold]{for_terminal(run['run_id'])}[/]",
+        f"Status:     {for_terminal(run.get('status') or '-')}",
         f"Steps:      {summary.first_step or '-'} → {summary.last_step or '-'}"
         f" ({summary.total_rows} rows)",
     ]
@@ -571,7 +573,9 @@ def replay(
             f"Best:       {summary.min_loss:.4f} @ step {summary.min_loss_step}"
         )
     rendered.append(f"Cost:       {_fmt_cost(run)}")
-    console.print(Panel("\n".join(rendered), title="Replay"))
+    console.print(
+        Panel(Text.from_markup("\n".join(rendered), emoji=False), title="Replay")
+    )
 
     if plot and metrics:
         sampled = downsample(metrics)
