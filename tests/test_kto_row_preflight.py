@@ -244,9 +244,10 @@ def test_cli_refuses_non_kto_rows_before_trainer(
     output = _normalise(result.output)
 
     assert result.exit_code == 1, (output, repr(result.exception))
-    assert "kto" in output, output
-    assert "data.format: kto" in output, output
-    assert "prompt" in output and "completion" in output and "label" in output, output
+    assert (
+        f"train row 1 loaded as format '{fmt}' lacks prompt, completion or label. "
+        "Use data.format: kto with kto rows."
+    ) in output, output
     build.assert_not_called()
 
 

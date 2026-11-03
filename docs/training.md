@@ -318,7 +318,6 @@ a rank of 0 the SFT trainer skips `get_peft_model` entirely: `soup train` prints
 instead of `LoRA applied`, and the output directory holds a complete model, not
 an adapter to merge.
 
-
 Requirements, each rejected at config load with the reason named:
 `task: sft`, `backend: transformers`, `modality: text`, and
 `quantization: none` (quantized weights cannot be trained directly — use LoRA
