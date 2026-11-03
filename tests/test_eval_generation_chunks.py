@@ -38,6 +38,25 @@ def test_suite_progress_is_emitted_before_the_next_chunk_starts():
     assert all(event["total"] == 5 and event["schema_version"] == 1 for event in progress)
 
 
+@pytest.mark.parametrize("hint", [0, -1, True, 2.0, "2", None])
+def test_invalid_batch_size_hint_keeps_one_batch_call(hint):
+    calls = []
+
+    class Generator:
+        batch_size = hint
+
+        def __call__(self, prompt):
+            pytest.fail("successful batches must not be retried")
+
+        def batch(self, prompts):
+            calls.append(list(prompts))
+            return list(prompts)
+
+    prompts = ["a", "b", "c"]
+    assert list(iter_outputs(Generator(), prompts)) == prompts
+    assert calls == [prompts]
+
+
 def test_failed_chunk_retries_its_items_without_repeating_successful_chunks():
     calls = []
 
