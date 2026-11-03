@@ -287,6 +287,9 @@ def _validated_or_none(config: Mapping[str, Any]) -> Optional["SoupConfig"]:
     """``config`` validated, or ``None`` when it does not validate."""
     from soup_cli.config.loader import config_from_mapping
 
+    # A guard, not a known need: no validator is known to change the mapping it is
+    # given (those that rewrite one copy it first), and the caller's dict must stay
+    # as the YAML round trip this replaces left it.
     try:
         return config_from_mapping(copy.deepcopy(dict(config)))
     except (ValueError, TypeError):
