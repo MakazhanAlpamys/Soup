@@ -177,3 +177,20 @@ def test_write_failure_names_the_output_as_typed(name):
     text = _plain(result)
     assert f"write failed: output_path already exists (use overwrite=True): {out!r}" in text
     assert _not_shown(text)
+
+
+def test_apply_failure_shows_the_quoted_recipe_line_as_typed():
+    # A value YAML cannot build is reported with the line it sits on. PyYAML
+    # refuses C0 and C1 controls in a document but accepts U+202E, so that
+    # line can carry one that repr() never sees.
+    bidi = _CONTROLS[-1]
+    line = f'data: {{when: 2026-02-30, note: "x[bold]n{bidi}"}}'
+    Path("r.yaml").write_text(line + "\n", encoding="utf-8")
+
+    result = _mix("--apply", "r.yaml")
+
+    assert result.exit_code == 2
+    text = _plain(result)
+    assert "apply failed: cannot build this value: day is out of range for month" in text
+    assert line.replace(bidi, "") in text
+    assert _not_shown(text)

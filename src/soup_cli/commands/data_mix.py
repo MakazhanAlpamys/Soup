@@ -119,9 +119,9 @@ def mix(
         try:
             data_block = load_mix_recipe(apply_recipe)
         except (ValueError, FileNotFoundError, TypeError) as exc:
-            # Every message names the path with repr(), which already shows
-            # control characters as escapes: only ":name:" codes are left.
-            console.print(f"[red]apply failed: {escape(str(exc))}[/red]", emoji=False)
+            # Most messages name the path with repr(), but a YAML error quotes the
+            # source line as it is in the file, and PyYAML accepts U+202E there.
+            console.print(f"[red]apply failed: {for_terminal(exc)}[/red]", emoji=False)
             raise typer.Exit(code=2) from exc
         console.print(
             Panel.fit(
