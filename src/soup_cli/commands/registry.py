@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.registry.diff import config_diff, eval_delta
 from soup_cli.registry.store import (
@@ -19,6 +20,7 @@ from soup_cli.registry.store import (
     validate_name,
     validate_tag,
 )
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
@@ -26,7 +28,9 @@ app = typer.Typer(no_args_is_help=True)
 
 
 def _fail(message: str) -> None:
-    console.print(f"[red]{escape(message)}[/]")
+    # Most messages carry text the user typed (a reference, a run id, a path, a name or a tag
+    # that validate_name / validate_tag quote as typed), so strip, escape and keep ":name:" literal.
+    console.print(f"[red]{for_terminal(message)}[/]", emoji=False)
     raise typer.Exit(1)
 
 
@@ -246,10 +250,11 @@ def search_cmd(
     with RegistryStore() as store:
         hits = store.search(query, limit=max(1, min(limit, 500)))
         if not hits:
-            console.print(f"[dim]No entries match '{escape(query)}'.[/]")
+            console.print(f"[dim]No entries match '{for_terminal(query)}'.[/]", emoji=False)
             return
 
-        table = Table(title=f"Search: '{escape(query)}'")
+        # A Text does not get the italic a str title gets, so the title style is set by hand.
+        table = Table(title=Text(f"Search: '{strip_control(query)}'", style="table.title"))
         table.add_column("Entry ID", style="bold cyan")
         table.add_column("Name")
         table.add_column("Base Model")
