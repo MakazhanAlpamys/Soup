@@ -263,10 +263,12 @@ def compare(
         console.print(f"[red]Run not found: {for_terminal(run_2)}[/]", emoji=False)
         raise typer.Exit(1)
 
+    # Run ids, names, models and config values are stored text: every cell is a
+    # Text, so none is parsed as markup or turned into an emoji.
     table = Table(title="Run Comparison")
     table.add_column("Metric", style="bold")
-    table.add_column(r1["run_id"][:20], justify="right")
-    table.add_column(r2["run_id"][:20], justify="right")
+    table.add_column(Text(strip_control(r1["run_id"][:20])), justify="right")
+    table.add_column(Text(strip_control(r2["run_id"][:20])), justify="right")
 
     rows = [
         ("Name", r1.get("experiment_name") or "-", r2.get("experiment_name") or "-"),
@@ -312,10 +314,12 @@ def compare(
 
     for label, val1, val2 in rows:
         # Highlight differences
-        if val1 != val2:
-            table.add_row(label, f"[yellow]{val1}[/]", f"[yellow]{val2}[/]")
-        else:
-            table.add_row(label, val1, val2)
+        style = "yellow" if val1 != val2 else ""
+        table.add_row(
+            label,
+            Text(strip_control(val1), style=style),
+            Text(strip_control(val2), style=style),
+        )
 
     console.print(table)
 
