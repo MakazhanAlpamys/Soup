@@ -437,7 +437,7 @@ With a local `--adapter`, ship reads the adapter weights before loading either m
 `lora_B` tensor is zero (an untrained adapter, or a DPO run's `ref/` folder) and no other saved
 tensor is non-zero, the adapter adds nothing to the base model: the verdict is DON'T SHIP with
 failed rule `adapter_noop`, and no evidence is written. Adapters without `lora_B` keys (VeRA and
-other PEFT types) are not checked, and an `--adapter` that is not a local directory (a Hub id) is
+other PEFT types) are not refused, and an `--adapter` that is not a local directory (a Hub id) is
 skipped without a message. Weights the reader refuses (`adapter_model.bin`, a symlink, a path
 outside the working directory, or a file over 2 GiB) print a warning and the live run continues
 (#2410).

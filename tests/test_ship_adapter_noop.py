@@ -75,17 +75,19 @@ def test_all_zero_lora_b_refused_before_any_model_load(monkeypatch):
     res, loads, out, evidence_written = _run(
         monkeypatch, _lora(0.0), "--emit-evidence", "ev.json"
     )
-    assert res.exit_code == 2, res.output
-    assert loads == []
+    assert res.exit_code == 2, (res.output, repr(res.exception))
+    assert loads == [], res.output
     assert out["failed_rule"] == FAILED_ADAPTER_NOOP
-    assert "lora_B" in res.output
+    plain = _plain(res.output)
+    assert "lora_B" in plain
+    assert "no scores were measured; evidence not written" in plain
     assert not evidence_written
 
 
 def test_trained_adapter_runs_the_live_eval(monkeypatch):
     res, loads, out, _ = _run(monkeypatch, _lora(0.5))
     assert loads == ["lora"], res.output
-    assert res.exit_code == 2, res.output
+    assert res.exit_code == 2, (res.output, repr(res.exception))
     assert out["failed_rule"] == FAILED_TASK_WIN
 
 
@@ -93,7 +95,7 @@ def test_adapter_without_lora_b_keys_is_left_alone(monkeypatch):
     vera = {"base_model.model.layers.0.self_attn.q_proj.vera_lambda_b": np.zeros(4, np.float32)}
     res, loads, out, _ = _run(monkeypatch, vera)
     assert loads == ["lora"], res.output
-    assert res.exit_code == 2, res.output
+    assert res.exit_code == 2, (res.output, repr(res.exception))
     assert out["failed_rule"] == FAILED_TASK_WIN
 
 
@@ -102,7 +104,7 @@ def test_non_zero_standalone_tensor_is_left_alone(monkeypatch):
     weights["base_model.model.score.weight"] = np.ones((2, 4), dtype=np.float32)
     res, loads, out, _ = _run(monkeypatch, weights)
     assert loads == ["lora"], res.output
-    assert res.exit_code == 2, res.output
+    assert res.exit_code == 2, (res.output, repr(res.exception))
     assert out["failed_rule"] == FAILED_TASK_WIN
 
 
@@ -113,7 +115,7 @@ def test_unreadable_weights_warn_and_continue(monkeypatch):
 
     res, loads, out, _ = _run(monkeypatch, {}, write=_bin_adapter)
     assert loads == ["lora"], res.output
-    assert res.exit_code == 2, res.output
+    assert res.exit_code == 2, (res.output, repr(res.exception))
     assert out["failed_rule"] == FAILED_TASK_WIN
     assert "could not read the adapter weights" in _plain(res.output)
 
@@ -124,14 +126,14 @@ def test_partly_zero_lora_b_runs_the_live_eval(monkeypatch):
     weights[Q_B.replace("q_proj", "v_proj")] = np.full((4, 2), 0.5, dtype=np.float32)
     res, loads, out, _ = _run(monkeypatch, weights)
     assert loads == ["lora"], (res.output, repr(res.exception))
-    assert res.exit_code == 2, res.output
+    assert res.exit_code == 2, (res.output, repr(res.exception))
     assert out["failed_rule"] == FAILED_TASK_WIN
 
 
 def test_adapter_that_is_not_a_local_directory_is_skipped_silently(monkeypatch):
     res, loads, out, _ = _run(monkeypatch, {}, write=lambda dir_path, weights: None)
     assert loads == ["lora"], (res.output, repr(res.exception))
-    assert res.exit_code == 2, res.output
+    assert res.exit_code == 2, (res.output, repr(res.exception))
     assert out["failed_rule"] == FAILED_TASK_WIN
     assert "could not read the adapter weights" not in _plain(res.output)
 
@@ -141,13 +143,14 @@ def test_read_failure_warns_with_the_reason_and_continues(monkeypatch, exc_type)
     from soup_cli.utils import adapter_check
 
     def _raise(path):
-        raise exc_type("bad [tag] header")
+        raise exc_type("bad\x00\x9b [tag] header")
 
     monkeypatch.setattr(adapter_check, "check_adapter", _raise)
     res, loads, out, _ = _run(monkeypatch, _lora(0.0))
     assert loads == ["lora"], (res.output, repr(res.exception))
-    assert res.exit_code == 2, res.output
+    assert res.exit_code == 2, (res.output, repr(res.exception))
     assert out["failed_rule"] == FAILED_TASK_WIN
+    assert "\x00" not in res.output and "\x9b" not in res.output
     plain = _plain(res.output)
     assert "could not read the adapter weights" in plain
     assert "bad [tag] header" in plain
