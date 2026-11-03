@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import subprocess
@@ -116,17 +117,51 @@ def test_noncontiguous_slice_has_finite_ordinary_cpu_backward(probe_results):
     assert result["hidden_gradient_finite"] is True
 
 
-def test_selftest_exits_one_and_names_the_failing_probe(monkeypatch, capsys):
-    pytest.importorskip("torch")
+_SELFTEST_FAILURE_CASES = [
+    ("split_k_bound", "bound", 0.0),
+    ("dtype_ranges", "fp16_max", 0.0),
+    ("constructed_masked_exponential", "gradient_finite", True),
+    ("detached_logp_ratio", "gradient_all_one", False),
+    ("boolean_selection", "inactive_gradient", 1.0),
+    ("selection_after_overflow", "gradient_finite", True),
+    ("adamw_skip_semantics", "none_grad_state_entries", 1),
+    ("nanmean_visibility", "nanmean", 0.0),
+    ("view_backward", "slice_is_contiguous", True),
+]
+
+
+@pytest.mark.parametrize(("probe_name", "key", "invalid_value"), _SELFTEST_FAILURE_CASES)
+def test_selftest_exits_one_and_names_the_failing_probe(
+    probe_name, key, invalid_value, probe_results, monkeypatch, capsys
+):
     harness = _load_harness()
-    results = harness.run_probes()
-    results["view_backward"]["slice_is_contiguous"] = True
+    results = copy.deepcopy(probe_results)
+    results[probe_name][key] = invalid_value
     monkeypatch.setattr(harness, "run_probes", lambda: results)
 
     assert harness.main(["--selftest", "--json"]) == 1
     payload = json.loads(capsys.readouterr().out)
     assert payload["selftest_passed"] is False
-    assert "view_backward" in payload["selftest_error"]
+    assert probe_name in payload["selftest_error"]
+
+
+def test_check_survives_python_optimize_mode():
+    code = (
+        "import importlib.util\n"
+        f"spec = importlib.util.spec_from_file_location('probes', {str(HARNESS)!r})\n"
+        "module = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(module)\n"
+        "module._check(False, 'probe.name')\n"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-O", "-c", code],
+        capture_output=True,
+        encoding="utf-8",
+        check=False,
+        timeout=30,
+    )
+    assert completed.returncode != 0
+    assert "AssertionError: Assertion failed in probe 'probe.name'" in completed.stderr
 
 
 def test_selftest_json_is_machine_readable_and_passes():
