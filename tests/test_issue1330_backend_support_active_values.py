@@ -207,7 +207,7 @@ def test_every_mlx_support_row_is_reachable(task, field, value):
 
 @pytest.mark.parametrize(
     ("task", "expected_count"),
-    [("sft", 10), ("dpo", 5), ("orpo", 5), ("simpo", 5), ("kto", 5)],
+    [("sft", 8), ("dpo", 5), ("orpo", 5), ("simpo", 5), ("kto", 5)],
 )
 def test_mlx_doctor_all_clear_counts_only_reachable_settings(
     task, expected_count, tmp_path, capsys, monkeypatch

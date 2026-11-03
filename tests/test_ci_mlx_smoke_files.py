@@ -39,6 +39,12 @@ JOB = "mlx-smoke"
 #: job, with the reason. Adding an entry is a decision a reviewer should see, so it carries a
 #: sentence, not a flag.
 EXEMPT: dict[str, str] = {
+    "test_mlx_cache_native.py": (
+        "native cache lifecycle needs the optional datasets reader, deliberately absent from "
+        "the standalone mlx-smoke environment; the dedicated workflow was removed as requested "
+        "in #1940. Current/floor native runs remain local evidence. A hosted reader selection "
+        "needs a maintainer CI decision before this draft is made ready."
+    ),
     "test_mlx_max_grad_norm.py": (
         "three of its tests read the installed mlx-lm / mlx surface (TrainingArgs has no clipping "
         "field, mlx.optimizers.clip_grad_norm exists) as a tripwire for an upstream release; "
