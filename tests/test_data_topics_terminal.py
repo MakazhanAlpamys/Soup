@@ -153,3 +153,15 @@ def test_written_report_path_is_named_as_typed(dataset, embeddings, name):
     assert f"Report written: {name.replace(_CONTROLS, '')}" in text
     assert _not_shown(text)
     assert Path(name).is_file()
+
+
+@pytest.mark.parametrize(
+    "value", ["x[red]k", "[/]k", "k:warning:", f"x[bold]k{_CONTROLS}"]
+)
+def test_clusters_error_names_the_value_as_typed(dataset, value):
+    result = _topics(dataset, "--clusters", value)
+
+    assert result.exit_code == 1
+    text = _plain(result)
+    assert f"got {value!r}" in text
+    assert _not_shown(text)

@@ -106,7 +106,7 @@ def topics(
     try:
         k_eff = resolve_k(len(rows), _parse_clusters(clusters))
     except (ValueError, TypeError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{escape(str(exc))}[/]", emoji=False)
         raise typer.Exit(1)
 
     texts = [
