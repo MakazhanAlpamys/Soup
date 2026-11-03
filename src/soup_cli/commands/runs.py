@@ -181,11 +181,12 @@ def show(
         minutes = int((secs % 3600) // 60)
         duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
-    # Build info panel — config-derived fields escaped (mirrors registry.py).
-    _esc = markup_escape
+    # Build info panel — config-derived fields go through for_terminal and the
+    # panel text is parsed with emoji codes off: escape() alone leaves ":name:"
+    # codes and control characters in the text.
     info_lines = [
-        f"Run ID:     [bold]{_esc(str(run['run_id']))}[/]",
-        f"Name:       {_esc(str(run.get('experiment_name') or '-'))}",
+        f"Run ID:     [bold]{for_terminal(run['run_id'])}[/]",
+        f"Name:       {for_terminal(run.get('experiment_name') or '-')}",
         f"Status:     {status_str}",
         f"Date:       {run['created_at'][:19].replace('T', ' ')}",
     ]
@@ -199,21 +200,23 @@ def show(
         info_lines.append(f"Error:      {for_terminal(run['error_message'])}")
     info_lines.extend([
         "",
-        f"Model:      [bold]{_esc(str(run.get('base_model') or '-'))}[/]",
+        f"Model:      [bold]{for_terminal(run.get('base_model') or '-')}[/]",
         f"Revision:   {for_terminal(run.get('base_revision') or 'unknown')}",
         f"Identity:   {for_terminal(run.get('base_revision_source') or 'unknown')}",
-        f"Task:       {_esc(str(run.get('task') or '-'))}",
-        f"Device:     {_esc(str(run.get('device_name') or '-'))} "
-        f"({_esc(str(run.get('device') or '-'))})",
-        f"GPU Memory: {_esc(str(run.get('gpu_memory') or '-'))}",
+        f"Task:       {for_terminal(run.get('task') or '-')}",
+        f"Device:     {for_terminal(run.get('device_name') or '-')} "
+        f"({for_terminal(run.get('device') or '-')})",
+        f"GPU Memory: {for_terminal(run.get('gpu_memory') or '-')}",
         "",
         f"Loss:       {_fmt_loss(run)}",
         f"Steps:      {run.get('total_steps') or '-'}",
         f"Duration:   {duration_str}",
         f"Cost:       {_fmt_cost(run)}",
-        f"Output:     {_esc(str(run.get('output_dir') or '-'))}",
+        f"Output:     {for_terminal(run.get('output_dir') or '-')}",
     ])
-    console.print(Panel("\n".join(info_lines), title="Run Details"))
+    console.print(
+        Panel(Text.from_markup("\n".join(info_lines), emoji=False), title="Run Details")
+    )
 
     # Config section
     if run.get("config_json"):
@@ -223,7 +226,9 @@ def show(
             # Truncate long configs
             if len(config_str) > 1500:
                 config_str = config_str[:1500] + "\n..."
-            console.print(Panel(config_str, title="Config"))
+            # json.dumps already escapes control characters, so Text only has to
+            # stop Rich from reading the JSON as markup or emoji codes.
+            console.print(Panel(Text(config_str), title="Config"))
         except json.JSONDecodeError:
             pass
 
@@ -234,7 +239,9 @@ def show(
         eval_table.add_column("Benchmark", style="bold")
         eval_table.add_column("Score", justify="right")
         for result in eval_results:
-            eval_table.add_row(result["benchmark"], f"{result['score']:.4f}")
+            eval_table.add_row(
+                Text(strip_control(str(result["benchmark"]))), f"{result['score']:.4f}"
+            )
         console.print(eval_table)
 
     # Loss curve
