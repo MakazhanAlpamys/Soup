@@ -37,7 +37,7 @@ def _write(path, rows):
     )
 
 
-def _normalise(text: str) -> str:
+def _strip_ansi(text: str) -> str:
     """Strip ANSI codes and collapse all whitespace to single spaces."""
     return " ".join(strip_ansi(text).split())
 
@@ -82,7 +82,7 @@ def test_validator_refuses_non_kto_row_in_train(monkeypatch, capsys, fmt, row):
         _validate_preference_dataset_if_applicable(cfg, {"train": [row]})
     assert exc_info.value.exit_code == 1
 
-    output = _normalise(capsys.readouterr().out)
+    output = _strip_ansi(capsys.readouterr().out)
     assert "kto" in output, output
     assert fmt in output, output
     assert "data.format: kto" in output, output
@@ -114,7 +114,7 @@ def test_validator_refuses_a_kto_row_missing_any_field(monkeypatch, capsys, miss
         "Invalid kto dataset: train row 2 loaded as format 'kto' lacks prompt, "
         "completion or label. Use data.format: kto with kto rows."
     )
-    assert expected in _normalise(capsys.readouterr().out)
+    assert expected in _strip_ansi(capsys.readouterr().out)
 
 
 def test_validator_names_the_split_and_row_index(monkeypatch, capsys):
@@ -135,7 +135,7 @@ def test_validator_names_the_split_and_row_index(monkeypatch, capsys):
         )
     assert exc_info.value.exit_code == 1
 
-    output = _normalise(capsys.readouterr().out)
+    output = _strip_ansi(capsys.readouterr().out)
     assert "val row 2" in output, output
     assert "chatml" in output, output
 
@@ -194,7 +194,7 @@ def test_validator_still_guards_pair_tasks_with_existing_message(
         _validate_preference_dataset_if_applicable(cfg, {"train": [bad]})
     assert exc_info.value.exit_code == 1
 
-    output = _normalise(capsys.readouterr().out)
+    output = _strip_ansi(capsys.readouterr().out)
     assert "data.format: dpo" in output, output
     assert "chosen" in output and "rejected" in output, output
     assert "data.format: kto" not in output, output
@@ -241,7 +241,7 @@ def test_cli_refuses_non_kto_rows_before_trainer(
     if dry_run:
         args.append("--dry-run")
     result = CliRunner().invoke(app, args)
-    output = _normalise(result.output)
+    output = _strip_ansi(result.output)
 
     assert result.exit_code == 1, (output, repr(result.exception))
     assert (
@@ -270,6 +270,6 @@ def test_cli_kto_dry_run_passes_with_valid_rows(tmp_path, monkeypatch, fmt, kto_
         encoding="utf-8",
     )
     result = CliRunner().invoke(app, ["train", "--config", "soup.yaml", "--dry-run"])
-    output = _normalise(result.output)
+    output = _strip_ansi(result.output)
     assert result.exit_code == 0, (output, repr(result.exception))
     assert "Ready to train" in output
