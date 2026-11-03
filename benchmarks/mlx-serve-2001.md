@@ -65,7 +65,7 @@ requires the first content frame to arrive while the generator is still blocked.
 
 ## Validation records
 
-- Current and minimum stacks after the clarified follow-up: **183 passed each**, including real native model
+- Current and minimum stacks after the item 13 follow-up: **184 passed each**, including real native model
   tests. Minimum-stack HTTPX emits 55 deprecation warnings about the older
   TestClient shortcut; these are not failures.
 - Seven isolated mutants fail as intended: whole-response buffering, lost active
@@ -130,7 +130,8 @@ generation timeout. Expiry cancels the job, closes native decoding, releases the
 worker and cancels a blocked streamed ASGI send. The regression leaves the client
 connected and blocks its first body send forever; a second request must complete,
 the first iterator must close, and the blocked send must end within bounded waits.
-Tests shorten only this internal constant to 0.05 seconds.
+The stalled-reader test uses a 0.5-second budget to allow scheduling margin; the
+separate direct queue test uses 0.01 seconds.
 
 Additional regressions make only the route poll see a streamed departure and
 assert no error frame, fabricated DONE or error log; reject symlinked files inside
@@ -145,3 +146,23 @@ portable run. All three real public CLI JSON records match the revised source.
 The final follow-up serial suite passed on 2026-11-03: **49,003 passed, 590 skipped,
 10 deselected**, **88.00% coverage**, 1587.54 seconds, exit 0; its functional source
 digest was unchanged throughout.
+
+## Healthy slow-reader contract (item 13)
+
+A portable HTTP regression pins the documented 30.0-second default, then uses a
+0.5-second test budget and reads 40 content frames at 25 ms per body frame. It
+asserts that elapsed stream time exceeds one budget while all 40 characters, the
+terminal reason/usage and DONE are received. A default of 0.05 or a deadline shared
+by the whole job each fails this case. The permanently stalled-reader test uses
+0.5 seconds without suppressing missing-attribute errors. Deadline expiry emits
+one warning naming the configured limit; cancellation prevents repeated warnings.
+Removing that warning fails the direct queue case. The three isolated counterfactuals
+fail and restored controls pass.
+
+Current and minimum real-native stacks each pass **184 tests**. Independent
+Pydantic 2.1.1 and 2.3.0 core/serve stacks each pass **181 portable tests**, as does
+the forced-color portable run. All three public CLI records were refreshed and
+match the final source and qualification scripts. The final serial suite passed
+on 2026-11-03: **49,004 passed, 590 skipped, 10 deselected**, **88.00% coverage**
+(77% required), 1591.77 seconds, exit 0; the functional source digest was unchanged.
+Ruff, dependency checks and generated-reference structure pass.

@@ -265,6 +265,10 @@ class NativeServerRuntime:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 job.output_timed_out.set()
+                logger.warning(
+                    "MLX output queue put exceeded %g-second deadline; cancelling request",
+                    OUTPUT_PUT_TIMEOUT_SECONDS,
+                )
                 self.cancel(job)
                 return False
             try:

@@ -921,7 +921,7 @@ def test_a_connected_reader_that_stops_reading_cannot_hold_the_worker(monkeypatc
     from soup_cli.utils.mlx_generation import NativeGenerationChunk as Chunk
 
     # The production timeout is documented separately; use a short test budget.
-    monkeypatch.setattr(mlx_serve, "OUTPUT_PUT_TIMEOUT_SECONDS", 0.05, raising=False)
+    monkeypatch.setattr(mlx_serve, "OUTPUT_PUT_TIMEOUT_SECONDS", 0.5)
     closed = threading.Event()
 
     def generate(*args, **options):
@@ -965,7 +965,7 @@ def test_a_connected_reader_that_stops_reading_cannot_hold_the_worker(monkeypatc
     asyncio.run(run())
 
 
-def test_put_timeout_cancels_the_job_without_enqueuing_more_output(monkeypatch):
+def test_put_timeout_cancels_the_job_without_enqueuing_more_output(monkeypatch, caplog):
     from soup_cli.utils import mlx_serve
 
     monkeypatch.setattr(mlx_serve, "OUTPUT_PUT_TIMEOUT_SECONDS", 0.01)
@@ -973,7 +973,52 @@ def test_put_timeout_cancels_the_job_without_enqueuing_more_output(monkeypatch):
     job = mlx_serve._Job({})
     for _ in range(job.events.maxsize):
         job.events.put_nowait(object())
-    assert runtime._put(job, object()) is False
+    with caplog.at_level(logging.WARNING, logger="soup_cli.utils.mlx_serve"):
+        assert runtime._put(job, object()) is False
+        assert runtime._put(job, object()) is False  # No repeated warning after cancellation.
     assert job.cancelled.is_set(), "put deadline must cancel the job itself"
     assert job.output_timed_out.is_set()
     assert job.events.qsize() == job.events.maxsize
+    assert [record.getMessage() for record in caplog.records
+            if record.name == "soup_cli.utils.mlx_serve"] == [
+        "MLX output queue put exceeded 0.01-second deadline; cancelling request",
+    ]
+
+
+def test_a_reader_that_keeps_reading_slowly_gets_the_whole_stream(monkeypatch):
+    from soup_cli.utils import mlx_serve
+    from soup_cli.utils.mlx_generation import NativeGenerationChunk as Chunk
+
+    assert mlx_serve.OUTPUT_PUT_TIMEOUT_SECONDS == 30.0
+    budget = 0.5
+    monkeypatch.setattr(mlx_serve, "OUTPUT_PUT_TIMEOUT_SECONDS", budget)
+    count = 40
+
+    def generate(*args, **options):
+        for index in range(1, count):
+            yield Chunk("x", 2, index)
+        yield Chunk("x", 2, count, "stop")
+
+    async def read_slowly(body, incoming):
+        await asyncio.sleep(0.025)
+
+    async def run():
+        app, _ = _application(generator=generate)
+        async with app.router.lifespan_context(app):
+            start = asyncio.get_running_loop().time()
+            events = await _asgi_post(
+                app, _body(stream=True, max_tokens=count), on_body=read_slowly,
+            )
+            elapsed = asyncio.get_running_loop().time() - start
+            return b"".join(event.get("body", b"") for event in events).decode(), elapsed
+
+    text, elapsed = asyncio.run(run())
+    frames = _frames(text)
+    assert elapsed > budget, "the healthy stream must outlive one put deadline"
+    assert "".join(frame["choices"][0]["delta"].get("content", "")
+                   for frame in frames[:-1]) == "x" * count
+    assert frames[-2]["choices"][0]["finish_reason"] == "stop"
+    assert frames[-2]["usage"] == {
+        "prompt_tokens": 2, "completion_tokens": count, "total_tokens": count + 2,
+    }
+    assert frames[-1] == "DONE"

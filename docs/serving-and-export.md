@@ -494,6 +494,7 @@ Each increment waits at most **30 seconds** for an output-queue slot
 closed and the worker proceeds to the next request. A streamed response blocked on
 ASGI send is also cancelled; it does not fabricate a successful finish or `[DONE]`.
 This is an output-backpressure deadline, not a total generation or kernel timeout.
+A warning names the configured put deadline when a stalled reader is cancelled.
 
 Messages accept text-only `system`, `user` and `assistant` roles. Supported controls
 are `temperature` (0–2; zero is greedy), `top_p` (greater than 0, at most 1),
