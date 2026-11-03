@@ -515,3 +515,69 @@ def test_packing_refuses_actual_eight_bit_base_weights(tmp_path):
     assert model.layers[0].self_attn.k_proj.bits == 8
     with pytest.raises(ValueError, match="dense or 4-bit base weights"):
         validate_packing_model(model)
+
+
+def _packing_seed_wrapper(tmp_path, **training):
+    import mlx.core as mx
+
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
+    from tests.test_mlx_sft_seed import _CharTokenizer, _scramble_global_rngs, _tiny_llama
+
+    cfg = SoupConfig(base="local-tiny", backend="mlx", output=str(tmp_path),
+                     data={"train": "unused.jsonl", "format": "plaintext", "max_length": 64},
+                     training={"packing": True, "batch_size": 1, "epochs": 2,
+                               "gradient_accumulation_steps": 1, **training})
+    wrapper = MLXSFTTrainerWrapper(cfg)
+    mx.random.seed(1234)
+    wrapper.model, wrapper.tokenizer = _tiny_llama(), _CharTokenizer()
+    _scramble_global_rngs()
+    wrapper._dataset = {"train": [{"text": chr(65 + i) + "abc" * 24} for i in range(12)],
+                        "val": []}
+    return wrapper
+
+
+@pytest.mark.parametrize("training, expected_seed", [
+    ({}, 42), ({"seed": 0}, 0), ({"seed": 7}, 7),
+    ({"seed": 7, "data_seed": 0}, 0), ({"seed": 2, "data_seed": 9}, 9),
+])
+def test_public_training_hook_uses_data_seed_for_each_packed_epoch(
+    tmp_path, monkeypatch, training, expected_seed,
+):
+    from itertools import islice
+
+    import mlx_lm.tuner.trainer as trainer
+    import numpy as np
+
+    observed = []
+
+    def record_train(*, train_dataset, iterate_batches, **kwargs):
+        # This is how mlx-lm calls the real hook: no explicit iterator seed.
+        batches = iterate_batches(dataset=train_dataset, batch_size=1,
+                                  max_seq_length=64, loop=True)
+        observed.extend(batch[0][0, 1].item() for batch in islice(batches, 24))
+
+    monkeypatch.setattr(trainer, "train", record_train)
+    _packing_seed_wrapper(tmp_path, **training).train()
+    rng = np.random.default_rng(expected_seed)
+    tokens = [3 + ord(chr(65 + i)) % 60 for i in range(12)]
+    expected = [tokens[int(i)] for _ in range(2) for i in rng.permutation(12)]
+    assert observed == expected
+
+
+def test_packed_training_reproduces_adapters_after_rng_scrambling(tmp_path):
+    import mlx.core as mx
+
+    def train(name, data_seed):
+        output = tmp_path / name
+        result = _packing_seed_wrapper(output, seed=5, data_seed=data_seed).train()
+        weights = mx.load(str(output / "adapters.safetensors"))
+        return result, {key: value.tolist() for key, value in weights.items()}
+
+    first, first_weights = train("a", 9)
+    second, second_weights = train("b", 9)
+    _, changed_weights = train("c", 10)
+    assert first["initial_loss"] == second["initial_loss"]
+    assert first["final_loss"] == second["final_loss"]
+    assert first_weights and first_weights == second_weights
+    assert changed_weights != first_weights

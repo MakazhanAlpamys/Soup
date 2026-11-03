@@ -921,7 +921,7 @@ class MLXSFTTrainerWrapper:
             train_hooks = {
                 "loss": packed_loss,
                 "iterate_batches": partial(
-                    packed_iterate_batches, accumulation=grad_accumulation_steps,
+                    packed_iterate_batches, accumulation=grad_accumulation_steps, seed=data_seed,
                 ),
             }
             packing_metadata = train_dataset.metadata
