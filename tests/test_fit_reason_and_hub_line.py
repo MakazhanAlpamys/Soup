@@ -155,6 +155,19 @@ class TestTheReason:
                 hardware_fit_input_or_reason(cfg, profile_defaults=True), HardwareFitInput
             )
 
+    def test_any_other_refusal_gets_the_generic_reason(self, workdir, monkeypatch):
+        # No validated config is known to reach this branch; the dataclass stands in.
+        from soup_cli.utils import hardware_fit
+
+        def refuse(**kwargs):
+            raise ValueError("refused")
+
+        monkeypatch.setattr(hardware_fit, "HardwareFitInput", refuse)
+        result = hardware_fit_input_or_reason(_cfg(str(workdir / "tiny")))
+        assert result == FitUnavailable(
+            field=None, reason="the run's inputs are outside the range the estimate prices"
+        )
+
 
 class TestWhereTheReasonIsPrinted:
     @pytest.mark.parametrize("cause", list(_CAUSES))
@@ -370,6 +383,17 @@ class TestTheLineBeforeTheHub:
         text = _preflight(workdir, monkeypatch, hub)
         assert hub == ["line", "head", "download", "count"]
         assert text == HUB_REQUEST_LINE
+
+    def test_a_batch_it_cannot_price_sends_no_request(self, workdir, hub):
+        # A Hub id with nothing cached: reading its shape would send requests.
+        result = hardware_fit_input_or_reason(
+            _cfg(batch_size=2048), on_hub_request=lambda: hub.append("line")
+        )
+        assert result == FitUnavailable(
+            field="training.batch_size",
+            reason="training.batch_size is outside 1 to 1,024, the range the estimate prices",
+        )
+        assert hub == []
 
     @pytest.mark.parametrize("variable", ["HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"])
     @pytest.mark.parametrize("command", _COMMANDS)
