@@ -652,6 +652,8 @@ def run_gate(
             context="baseline score",
         )
     _require_gate_tasks(suite)
+    if not math.isfinite(regression_threshold):
+        raise ValueError("regression_threshold must be finite")
     task_results: list[GateTaskResult] = []
     any_regressed = False
     any_failed_threshold = False
