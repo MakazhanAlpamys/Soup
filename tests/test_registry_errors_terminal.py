@@ -181,3 +181,21 @@ def test_search_names_the_query_in_its_title_as_typed(query):
     assert re.search(r"Search: '" + re.escape(_shown(query)) + r"'", text)
     assert "demo" in text
     assert _not_shown(text)
+
+
+def test_search_keeps_the_italic_of_its_title(monkeypatch):
+    monkeypatch.setattr(
+        "soup_cli.commands.registry.console",
+        Console(width=500, force_terminal=True, color_system="standard", legacy_windows=False),
+    )
+    with RegistryStore() as store:
+        store.push(
+            name="demo", tag="v1", base_model="org/base", task="sft",
+            run_id=None, config={}, notes="about plain",
+        )
+
+    result = _registry("search", "plain")
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    # Italic is SGR 3.
+    assert re.search(r"\x1b\[3m\s*Search: 'plain'", result.output)

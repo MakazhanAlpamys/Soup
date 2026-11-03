@@ -253,7 +253,8 @@ def search_cmd(
             console.print(f"[dim]No entries match '{for_terminal(query)}'.[/]", emoji=False)
             return
 
-        table = Table(title=Text(f"Search: '{strip_control(query)}'"))
+        # A Text does not get the italic a str title gets, so the title style is set by hand.
+        table = Table(title=Text(f"Search: '{strip_control(query)}'", style="table.title"))
         table.add_column("Entry ID", style="bold cyan")
         table.add_column("Name")
         table.add_column("Base Model")
