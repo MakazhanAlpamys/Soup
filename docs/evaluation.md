@@ -490,7 +490,11 @@ Countable task and bundled-suite groups start at `done: 0`, `total: null` until
 the scorer resolves its items. Each `progress` follows actual item scoring,
 including a generation/predicate failure recorded as a failed item, and reports
 the now-known total. Scalar generation reports before the next item is generated;
-batch generation reports scored items after the batch returns. `end` includes
+live batch generation reports scored items after each generation chunk returns,
+before the next chunk starts (eight prompts by default). A failed chunk retries
+its prompts individually without repeating completed chunks. Third-party batch
+generators can expose a positive integer `batch_size` to declare this boundary;
+without it, their results are reported after their whole batch returns. `end` includes
 the final count (zero for an empty item list). Metric and judge-score groups are
 per side; pairwise scoring reports one `tuned` comparison group, with the base
 reference implicit, and counts one completed swap-debiased pair per task.
