@@ -140,8 +140,9 @@ def expect_cmd(
             raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
         raise
 
-    # The path is typed text: a Text title is not read as markup or emoji codes.
-    table = Table(title=Text(f"soup expect — {strip_control(data)}"))
+    # The path is typed text: a Text title is not read as markup or emoji codes. A Text does
+    # not get the italic a str title gets, so the table's title style is set by hand.
+    table = Table(title=Text(f"soup expect — {strip_control(data)}", style="table.title"))
     table.add_column("Expectation")
     table.add_column("Passed")
     table.add_column("Rows")

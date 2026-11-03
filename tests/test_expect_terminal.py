@@ -1,5 +1,6 @@
 """soup expect prints typed paths, judge URLs and loader errors as typed, not as Rich markup."""
 
+import re
 import sys
 from pathlib import Path
 
@@ -217,3 +218,16 @@ def test_an_unreachable_judge_is_shown_as_typed(monkeypatch, value):
     text = _plain(result)
     assert f"judge unavailable at http://judge.example: judge said {_shown(value)}" in text
     assert _not_shown(text)
+
+
+def test_the_table_title_keeps_its_italic_style(monkeypatch):
+    monkeypatch.setattr(
+        "soup_cli.commands.expect.console",
+        Console(width=500, force_terminal=True, color_system="standard", legacy_windows=False),
+    )
+
+    result = _expect(_data(), _suite())
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    # Italic is SGR 3.
+    assert re.search(r"\x1b\[3m\s*soup expect", result.output)
