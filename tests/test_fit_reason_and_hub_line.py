@@ -396,15 +396,26 @@ class TestTheLineBeforeTheHub:
         assert hub == []
 
     @pytest.mark.parametrize("variable", ["HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"])
-    @pytest.mark.parametrize("command", _COMMANDS)
-    def test_offline_profile_neither_says_it_nor_sends_a_request(
-        self, workdir, hub, monkeypatch, command, variable
+    def test_offline_profile_config_neither_says_it_nor_sends_a_request(
+        self, workdir, hub, monkeypatch, variable
     ):
+        # Nothing cached: online this would read the Hub, offline the shape is guessed.
         monkeypatch.setenv(variable, "1")
-        _cache(workdir, HUB_MODEL, weights=True)
-        text = _run(command, workdir, monkeypatch, hub)
+        text = _run("profile --config", workdir, monkeypatch, hub)
         assert hub == []
         assert HUB_REQUEST_LINE not in text
+
+    @pytest.mark.parametrize("variable", ["HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"])
+    def test_offline_profile_model_neither_says_it_nor_sends_a_request(
+        self, workdir, hub, monkeypatch, variable
+    ):
+        # Nothing cached: --model does not guess a shape, so it stops and says why.
+        monkeypatch.setenv(variable, "1")
+        _record_line(monkeypatch, profile_mod.console, hub)
+        result = _profile_model(workdir)
+        assert result.exit_code == 1
+        assert f"Cannot read {HUB_MODEL}" in _plain(result.output)
+        assert hub == []
 
     def test_offline_pre_flight_neither_says_it_nor_sends_a_request(
         self, workdir, hub, monkeypatch
