@@ -372,6 +372,14 @@ def serve(
         except ValueError as exc:
             console.print(f"[red]{for_terminal(str(exc))}[/]")
             raise typer.Exit(2) from exc
+        from importlib.util import find_spec
+
+        if find_spec("mlx_lm") is None:
+            console.print(
+                '[red]Native MLX serving requires MLX-LM on Apple Silicon.[/]\n'
+                'Install with: [bold]pip install "soup-cli\\[mlx,serve]"[/]'
+            )
+            raise typer.Exit(1)
     # v0.71.12 #221 — validate `--bank` up front (path containment + backend)
     # so a typo / bad path surfaces before backend init.
     if bank is not None:

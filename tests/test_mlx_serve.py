@@ -1,6 +1,7 @@
 """Portable contracts for the native server; replace only the native boundary."""
 
 import asyncio
+import importlib.util
 import json
 import threading
 from types import SimpleNamespace
@@ -17,6 +18,12 @@ def test_public_native_server_uses_existing_app_factory(tmp_path, monkeypatch):
 
     from soup_cli.cli import app
     from soup_cli.utils import mlx_generation
+
+    find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util, "find_spec",
+        lambda name: True if name in {"mlx", "mlx_lm"} else find_spec(name),
+    )
 
     monkeypatch.chdir(tmp_path)
     base = tmp_path / "base"
@@ -229,6 +236,7 @@ def test_worker_owns_load_decode_and_request_seeds(monkeypatch):
     for _, _, options in records[1:]:
         assert options["max_tokens"] == 7 and options["top_p"] == 0.3
         assert options["temperature"] == 0 and options["stop"] == ("END",)
+        assert options["max_prompt_tokens"] == 16384
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -263,8 +271,10 @@ def test_generation_errors_are_sanitized_and_next_request_works(stream, after_fi
 
 
 def test_prompt_failure_is_422_and_startup_failure_cleans_worker():
+    from soup_cli.utils.mlx_generation import NativePromptError
+
     def invalid(*args, **options):
-        raise ValueError("sensitive model path")
+        raise NativePromptError("sensitive model path")
 
     app, _ = _application(generator=invalid)
     with TestClient(app) as client:
@@ -285,7 +295,7 @@ def test_prompt_failure_is_422_and_startup_failure_cleans_worker():
     assert not runtime.ready and not runtime._thread.is_alive()
 
 
-async def _asgi_post(app, body, *, on_body=None, incoming=None):
+async def _asgi_post(app, body, *, on_body=None, on_start=None, incoming=None):
     """Capture ASGI frames as sent, without TestClient's streaming buffer."""
     incoming = incoming or asyncio.Queue()
     incoming.put_nowait(
@@ -297,6 +307,8 @@ async def _asgi_post(app, body, *, on_body=None, incoming=None):
         return await incoming.get()
 
     async def send(event):
+        if event["type"] == "http.response.start" and on_start is not None:
+            on_start(event)
         sent.append(event)
         if event["type"] == "http.response.body" and on_body is not None:
             on_body(event.get("body", b""), incoming)
@@ -451,8 +463,9 @@ def test_nonstream_disconnect_removes_waiting_request():
             assert len(runtime._pending) == 1
             incoming.put_nowait({"type": "http.disconnect"})
             try:
-                with pytest.raises(asyncio.CancelledError):
-                    await waiting
+                events = await waiting
+                assert events[0]["status"] == 204
+                assert b"".join(event.get("body", b"") for event in events) == b""
                 assert len(runtime._pending) == 0
             finally:
                 runtime.cancel(active)
@@ -584,15 +597,29 @@ def test_native_cli_refuses_unimplemented_flags_before_loading(
     assert "Loading model" not in result.output
 
 
-def test_native_cli_keeps_nonloopback_token_rule(tmp_path, monkeypatch):
+@pytest.mark.parametrize("force_color", [False, True])
+def test_native_cli_keeps_nonloopback_token_rule(tmp_path, monkeypatch, force_color):
+    from rich.console import Console
+
     from soup_cli.cli import app
+    from soup_cli.commands import serve
+    from tests.conftest import strip_ansi
 
     monkeypatch.chdir(tmp_path)
-    result = CliRunner().invoke(
-        app, ["serve", "--backend", "mlx", "--model", "missing", "--host", "0.0.0.0"]
+    monkeypatch.setenv("COLUMNS", "400")
+    monkeypatch.setattr(
+        serve, "console", Console(
+            force_terminal=force_color, no_color=False, color_system="standard", width=400
+        )
     )
-    assert result.exit_code == 2
-    assert "requires --tool-auth-token" in result.output
+    result = CliRunner().invoke(
+        app, ["serve", "--backend", "mlx", "--model", "missing", "--host", "0.0.0.0"],
+        color=force_color,
+    )
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    if force_color:
+        assert "\x1b[" in result.output
+    assert "requires --tool-auth-token" in " ".join(strip_ansi(result.output).split())
 
 
 @pytest.mark.requires_symlink
@@ -616,3 +643,176 @@ def test_native_paths_refuse_escape_symlinks_and_conflicting_base(tmp_path, monk
         validate_serve_paths(str(link), None)
     with pytest.raises(ValueError, match="only valid"):
         validate_serve_paths(str(base), "org/other")
+
+
+def test_a_stream_whose_body_never_starts_still_cancels_its_decode():
+    from soup_cli.utils.mlx_generation import NativeGenerationChunk as Chunk
+
+    closed = threading.Event()
+
+    def generate(*args, **options):
+        if options["messages"][0]["content"] == "next":
+            yield Chunk("next", 2, 1, "stop")
+            return
+        try:
+            for index in range(1000):
+                yield Chunk("increment", 2, index + 1)
+        finally:
+            closed.set()
+
+    def disconnect(event):
+        raise OSError("client left before the first byte")
+
+    async def run():
+        app, _ = _application(generator=generate)
+        async with app.router.lifespan_context(app):
+            with pytest.raises(Exception):
+                await _asgi_post(app, _body(stream=True), on_start=disconnect)
+            assert await asyncio.to_thread(closed.wait, 2), "decode outlived its stream"
+            later = await _asgi_post(app, {"messages": [{"role": "user", "content": "next"}]})
+            payload = json.loads(b"".join(event.get("body", b"") for event in later))
+            assert payload["choices"][0]["message"]["content"] == "next"
+
+    asyncio.run(run())
+
+
+def test_missing_native_dependency_is_refused_before_startup(tmp_path, monkeypatch):
+    import sys
+
+    import uvicorn
+
+    from soup_cli.cli import app
+    from soup_cli.utils import mlx_generation
+    from tests.conftest import strip_ansi
+
+    monkeypatch.chdir(tmp_path)
+    base = tmp_path / "base"
+    base.mkdir()
+    monkeypatch.setitem(sys.modules, "mlx_lm", None)
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("missing dependency must be refused before loading or starting uvicorn")
+
+    monkeypatch.setattr(uvicorn, "run", unexpected)
+    monkeypatch.setattr(mlx_generation, "load_native_model", unexpected)
+    result = CliRunner().invoke(app, ["serve", "--backend", "mlx", "--model", str(base)])
+    text = " ".join(strip_ansi(result.output).split())
+    assert result.exit_code == 1, (text, repr(result.exception))
+    assert 'pip install "soup-cli[mlx,serve]"' in text
+    assert "Starting server" not in text and "Loading model" not in text
+
+
+@pytest.mark.parametrize("invalid", [{"stop": [""]}, {"temperature": "private-secret"}])
+def test_validation_errors_only_expose_portable_public_details(invalid):
+    app, _ = _application()
+    with TestClient(app) as client:
+        response = client.post("/v1/chat/completions", json=_body(**invalid))
+        assert response.status_code == 422
+        errors = response.json()["detail"]
+        assert errors and all(set(error) == {"loc", "msg", "type"} for error in errors)
+        assert "private-secret" not in response.text
+
+
+def test_engine_value_error_is_not_reported_as_a_bad_prompt():
+    from soup_cli.utils.mlx_generation import NativeGenerationChunk as Chunk
+
+    def generate(*args, **options):
+        if options["messages"][0]["content"] == "bad":
+            raise ValueError("private kernel shape mismatch")
+        yield Chunk("recovered", 3, 1, "stop")
+
+    app, _ = _application(generator=generate)
+    with TestClient(app) as client:
+        bad = client.post(
+            "/v1/chat/completions", json={"messages": [{"role": "user", "content": "bad"}]}
+        )
+        assert bad.status_code == 500
+        assert bad.json()["detail"] == "MLX generation failed"
+        assert "private" not in bad.text
+        assert client.post("/v1/chat/completions", json=_body()).status_code == 200
+
+
+def test_cancelled_decode_does_not_advance_the_iterator_again(monkeypatch):
+    from soup_cli.utils.mlx_generation import NativeGenerationChunk as Chunk
+
+    steps = []
+    closed = threading.Event()
+
+    def generate(*args, **options):
+        try:
+            for index in range(3):
+                steps.append(index)
+                yield Chunk("increment", 2, index + 1)
+        finally:
+            closed.set()
+
+    async def run():
+        app, runtime = _application(generator=generate)
+        put = runtime._put
+
+        def cancel_after_put(job, event):
+            result = put(job, event)
+            runtime.cancel(job)
+            return result
+
+        monkeypatch.setattr(runtime, "_put", cancel_after_put)
+        async with app.router.lifespan_context(app):
+            runtime.submit({})
+            assert await asyncio.to_thread(closed.wait, 2), "cancelled iterator was not closed"
+            assert steps == [0], "decode advanced after cancellation"
+
+    asyncio.run(run())
+
+
+def test_simultaneous_http_streams_keep_outputs_and_usage_separate(monkeypatch):
+    from soup_cli.utils import mlx_serve
+    from soup_cli.utils.mlx_generation import NativeGenerationChunk as Chunk
+
+    entered, release = threading.Event(), threading.Event()
+    seeds = iter([123, 456])
+    monkeypatch.setattr(mlx_serve.secrets, "randbits", lambda bits: next(seeds))
+    observed = []
+
+    def generate(*args, **options):
+        content = options["messages"][0]["content"]
+        observed.append((content, options["seed"]))
+        if content == "first é":
+            entered.set()
+            assert release.wait(3), "concurrent request never reached the HTTP queue"
+        yield Chunk(content, 3, 1)
+        yield Chunk("!", 3, 2, "length")
+
+    async def run():
+        app, runtime = _application(generator=generate)
+        async with app.router.lifespan_context(app):
+            first = asyncio.create_task(_asgi_post(
+                app, {"messages": [{"role": "user", "content": "first é"}], "stream": True}
+            ))
+            assert await asyncio.to_thread(entered.wait, 2)
+            second = asyncio.create_task(_asgi_post(
+                app, {"messages": [{"role": "user", "content": "second 中"}], "stream": True}
+            ))
+            try:
+                for _ in range(100):
+                    if runtime._pending:
+                        break
+                    await asyncio.sleep(0.01)
+                assert len(runtime._pending) == 1
+            finally:
+                release.set()
+            responses = await asyncio.gather(first, second)
+            identities = []
+            for events, expected in zip(responses, ["first é!", "second 中!"], strict=True):
+                assert events[0]["status"] == 200
+                frames = _frames(b"".join(e.get("body", b"") for e in events).decode())
+                assert frames[-1] == "DONE"
+                assert "".join(f["choices"][0]["delta"].get("content", "")
+                               for f in frames[:-1]) == expected
+                assert frames[-2]["usage"] == {
+                    "prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5,
+                }
+                identities.append(frames[0]["id"])
+            assert len(set(identities)) == 2
+            assert observed == [("first é", 123), ("second 中", 456)]
+
+    asyncio.run(run())

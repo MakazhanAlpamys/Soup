@@ -61,12 +61,12 @@ requires the first content frame to arrive while the generator is still blocked.
 | Request isolation | New messages, native generator, default fresh KV cache and random seed per job; no per-request mutation of the active model or adapter. Repeated native HTTP results match independent direct generation after an unrelated request. |
 | Cancellation | Queued jobs are removed immediately. Active cancellation is latched and checked before the next iterator advance; closing the native iterator releases its local cache. The response wrapper also cancels if a client disconnects before its body iterator starts. A running prefill/kernel cannot be interrupted mid-call. |
 | Startup/shutdown | Readiness follows successful loading, with no per-request reload. Startup exceptions and normal/exceptional response exits close the worker. Shutdown cancels pending/active jobs and joins at a decode boundary; a worker that cannot stop within ten seconds is reported as a shutdown failure. |
-| Errors and SSE | Before headers, generation errors return sanitized HTTP errors. After headers, a sanitized SSE error and DONE terminate the stream. No internal exception or filesystem path is returned. Stop prefixes are retained so cross-increment delimiters cannot leak into content. |
+| Errors and SSE | Validation details contain only loc/msg/type using the Pydantic 2.x API. Empty/over-limit prompts are 422; other engine failures are 500. Client departures use a private handled exception rather than task cancellation. Before headers, generation errors return sanitized HTTP errors. After headers, a sanitized SSE error and DONE terminate the stream. No internal exception or filesystem path is returned. Stop prefixes are retained so cross-increment delimiters cannot leak into content. |
 
 ## Validation records
 
-- Current and minimum stacks: **166 passed each**, including real native model
-  tests. Minimum-stack HTTPX emits 52 deprecation warnings about the older
+- Current and minimum stacks after the first review: **175 passed each**, including real native model
+  tests. Minimum-stack HTTPX emits 55 deprecation warnings about the older
   TestClient shortcut; these are not failures.
 - Seven isolated mutants fail as intended: whole-response buffering, lost active
   cancellation, unbounded admission, leaked stop prefixes, ignored adapters,
@@ -94,9 +94,32 @@ selected in the existing `mlx-smoke` job, installing the serving extras and HTTP
 test client there. Portable streaming/cancellation/queue tests use real ASGI handlers
 and controlled generators; they are kept separate from Metal model qualification.
 
-The final full serial run (`python -m pytest tests/ -v --tb=short`) passed on
+The original full serial run (`python -m pytest tests/ -v --tb=short`) passed on
 2026-11-03: **48,986 passed, 590 skipped, 10 deselected**, **87.99% coverage**
 (77% required), 1490.56 seconds, exit 0. The functional source digest was unchanged.
 Loopback traffic bypassed the macOS system proxy while external traffic retained
 its proxy. Ruff, generated-reference structure and all three dependency checks
 passed. Incomplete or failing development attempts are not counted as passing runs.
+
+## First review regressions
+
+The response-start failure case proves that a stream whose body never starts still
+cancels its decode and releases the next request. Additional regressions verify the
+MLX seed call, missing-dependency preflight, forced-color token diagnostics, quiet
+nonstreamed disconnects, validation-detail compatibility, no iterator advance after
+cancellation, the portable prompt cap, engine-error classification and simultaneous
+distinguishable HTTP streams. Ten individual review mutations fail; restored
+controls pass. The ANSI case deliberately retains actual escape sequences.
+
+Independent core/serve-only environments with FastAPI 0.104.0, uvicorn 0.24.0 and
+Pydantic **2.1.1** and **2.3.0** each pass **172 portable tests**. These use a replaced
+native boundary and are not additional real-MLX dependency-floor claims. The
+separate current/minimum native environments and refreshed public CLI JSON records
+qualify the actual native path. The final revision serial result is recorded
+separately after completion; the original serial result above describes the initial
+qualified implementation.
+
+The reviewed revision also passed the full serial suite on 2026-11-03:
+**48,995 passed, 590 skipped, 10 deselected**, **88.00% coverage**, 1657.05 seconds,
+exit 0, with its functional source digest unchanged throughout. Review items 7
+and 8 remain pending clarification of their failure cases.

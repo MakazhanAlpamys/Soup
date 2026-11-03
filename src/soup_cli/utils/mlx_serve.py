@@ -22,7 +22,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from soup_cli.utils.mlx_generation import NativeGenerationChunk
+from soup_cli.utils.mlx_generation import NativeGenerationChunk, NativePromptError
 
 logger = logging.getLogger(__name__)
 MAX_BODY_BYTES = 1024 * 1024
@@ -166,6 +166,10 @@ class _Failure:
     error: Exception
 
 
+class _RequestDisconnectedError(Exception):
+    """The HTTP client left; this is not cancellation of the ASGI task."""
+
+
 class NativeServerRuntime:
     """One model, one worker, at most eight waiting jobs and eight buffered increments."""
 
@@ -244,14 +248,14 @@ class NativeServerRuntime:
         while not job.cancelled.is_set():
             if disconnected is not None and await disconnected():
                 self.cancel(job)
-                raise asyncio.CancelledError
+                raise _RequestDisconnectedError
             try:
                 return job.events.get_nowait()
             except queue.Empty:
                 if self._error is not None:
                     return _Failure(self._error)
                 await asyncio.sleep(0.01)
-        raise asyncio.CancelledError
+        raise _RequestDisconnectedError
 
     def _put(self, job: _Job, event: Any) -> bool:
         while not job.cancelled.is_set():
@@ -313,7 +317,8 @@ class NativeServerRuntime:
                         self._put(job, _Failure(RuntimeError("Native generator ended early")))
                 except Exception as exc:
                     logger.exception("MLX generation failed")
-                    error = ValueError() if isinstance(exc, ValueError) else RuntimeError()
+                    error = (NativePromptError() if isinstance(exc, NativePromptError)
+                             else RuntimeError())
                     self._put(job, _Failure(error))
                 finally:
                     try:
@@ -355,7 +360,7 @@ def install_native_routes(
 ) -> None:
     """Register only the agreed native routes; keep middleware in the shared factory."""
     from fastapi import Depends, HTTPException, Request
-    from fastapi.responses import StreamingResponse
+    from fastapi.responses import Response, StreamingResponse
 
     class NativeStreamingResponse(StreamingResponse):
         native_job: _Job
@@ -382,7 +387,7 @@ def install_native_routes(
 
     def check_failure(event: Any) -> None:
         if isinstance(event, _Failure):
-            if isinstance(event.error, ValueError):
+            if isinstance(event.error, NativePromptError):
                 raise HTTPException(422, "MLX prompt is invalid or exceeds the input token limit")
             raise HTTPException(500, "MLX generation failed")
 
@@ -412,7 +417,8 @@ def install_native_routes(
             request = NativeRequest.model_validate_json(body)
         except ValidationError as exc:
             raise HTTPException(
-                422, exc.errors(include_input=False, include_context=False)
+                422, [{key: error[key] for key in ("loc", "msg", "type")}
+                      for error in exc.errors()]
             ) from exc
         if request.model not in {None, model_name}:
             raise HTTPException(404, "Unknown model; use GET /v1/models")
@@ -472,6 +478,8 @@ def install_native_routes(
                                 break
                             chunk = await runtime.next_event(job, raw.is_disconnected)
                         yield "data: [DONE]\n\n"
+                    except _RequestDisconnectedError:
+                        return
                     except Exception:
                         logger.exception("MLX streaming response failed")
                         yield 'data: {"error":{"message":"MLX generation failed"}}\n\n'
@@ -504,6 +512,8 @@ def install_native_routes(
                 ],
                 usage=usage(chunk),
             )
+        except _RequestDisconnectedError:
+            return Response(status_code=204)
         finally:
             if not request.stream or sys.exc_info()[0] is not None:
                 runtime.cancel(job)

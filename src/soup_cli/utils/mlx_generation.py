@@ -47,6 +47,10 @@ _MAX_ADAPTER_KEYS = 1024
 _MAX_ADAPTER_KEY_LEN = 256
 
 
+class NativePromptError(ValueError):
+    """A tokenized prompt is empty or exceeds the caller's input limit."""
+
+
 def _finite(value: Any) -> bool:
     """``value`` is an int or float that is finite (a huge int is not: it has no float)."""
     if type(value) not in (int, float):
@@ -262,9 +266,9 @@ def stream_native(
     rendered, templated = _render_chat_prompt(messages, tokenizer, fallback_on_error=False)
     prompt = tokenizer.encode(rendered, add_special_tokens=not templated)
     if not prompt:
-        raise ValueError("MLX generation requires a nonempty tokenized prompt")
+        raise NativePromptError("MLX generation requires a nonempty tokenized prompt")
     if max_prompt_tokens is not None and len(prompt) > max_prompt_tokens:
-        raise ValueError("MLX prompt exceeds the input token limit")
+        raise NativePromptError("MLX prompt exceeds the input token limit")
     if seed is not None:
         import mlx.core as mx
 

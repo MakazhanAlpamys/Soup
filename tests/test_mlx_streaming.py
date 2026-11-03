@@ -130,3 +130,18 @@ def test_zero_top_p_is_refused_instead_of_disabling_native_nucleus_filtering(eng
     with pytest.raises(ValueError, match="zero disables"):
         list(stream_native(None, engine.tokenizer, [], top_p=0))
     assert not engine.calls
+
+
+def test_the_request_seed_reaches_the_native_rng(engine, monkeypatch):
+    from soup_cli.utils.mlx_generation import stream_native
+
+    seeded = []
+    core = ModuleType("mlx.core")
+    core.random = SimpleNamespace(seed=seeded.append)
+    package = ModuleType("mlx")
+    package.core = core
+    monkeypatch.setitem(sys.modules, "mlx", package)
+    monkeypatch.setitem(sys.modules, "mlx.core", core)
+    engine.responses = [_response("x", 1, "length")]
+    list(stream_native(None, engine.tokenizer, [], max_tokens=1, seed=1234))
+    assert seeded == [1234]

@@ -1,11 +1,11 @@
 {
-  "soup_base_sha": "cf519ba9d100af337056e5c973b19a16bb4f995c",
+  "soup_base_sha": "0ab15ef6d01a92b4e6769ab895db30b8cb17c8b2",
   "source_files_sha256": {
-    "src/soup_cli/commands/serve.py": "7dda0ea7b252a63d2615a01bf4abc9e57614f715d84f76c0bc83c96c164e012d",
-    "src/soup_cli/utils/mlx_generation.py": "eaffa314cda97965d72480936fd3739c780f08180689eeab655e875b1cb6c4be",
-    "src/soup_cli/utils/mlx_serve.py": "b86eb629be5575fb62432f22eebdfd5f407dff8f58b4ebcbb837628ff0e63075"
+    "src/soup_cli/commands/serve.py": "b66a80bcec00efd138aa56bf1d2533aa955e8ba2a135684cbe573aca4a9af8bf",
+    "src/soup_cli/utils/mlx_generation.py": "ea926e1b6682cec2217b551c2ba7d00f6f640e1825fd9365a86bbdcfa465b0cc",
+    "src/soup_cli/utils/mlx_serve.py": "a792c7160213cb1b800dea10ffba2aee4c5514bd50e3cb8f0f75634c9b1f6c78"
   },
-  "working_source_tree_sha256": "6bd2f1fe736b9cb4f5b3ea71f98cd92996096fb49d4138b1ac473968764f89aa",
+  "working_source_tree_sha256": "16651c9a42f4f8a89ed127f3d6b71c84c3c1da52e59f3d14184de15fa208aa5d",
   "benchmark_sha256": "5a8a926c1dfa89fe603cece25e1f9846e6e563828982e87054d4a0e45a28d9aa",
   "fixture_generator_sha256": "e9026dcee42aca161cc98f124f3eaff108f2f15805e41ced6ac0e84a0d04fa0b",
   "python": "3.12.7",
@@ -30,7 +30,7 @@
   "metal_available": true,
   "training_packages_present": [],
   "model_files_sha256": {
-    "adapter_config.json": "c8773fec2f9e5c4b8c09375850c17f778ba3621e21fcc2bc5472d1ced50dcc47",
+    "adapter_config.json": "270387f3478ae4acee2dd70a2fc98941b3518baafcf7d7974caf431fddf15493",
     "adapters.safetensors": "36bc85068022bf4a98025802d4474b3b4f73594cfb4786db459c5a4073bccee0"
   },
   "base_files_sha256": {
@@ -65,11 +65,11 @@
     "--backend",
     "mlx",
     "--model",
-    "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/test-results/2001/fixture-final-v3/adapter",
+    "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/test-results/2433-review-20261103/fixture-current/fixture/adapter",
     "--port",
-    "62620"
+    "59798"
   ],
-  "readiness_seconds": 1.0093684169696644,
+  "readiness_seconds": 1.0827488340437412,
   "child_returncode": 0,
   "results": [
     {
@@ -84,8 +84,8 @@
         }
       },
       "http": {
-        "id": "chatcmpl-6b1688b3a4814204bf7040bb047f646e",
-        "created": 1793639640,
+        "id": "chatcmpl-7221a04880a142c0bd1c8de045b0aa6e",
+        "created": 1793693200,
         "model": "adapter",
         "object": "chat.completion",
         "choices": [
@@ -110,8 +110,8 @@
         "completion_tokens": 8,
         "total_tokens": 10
       },
-      "first_content_seconds": 0.01343937503406778,
-      "stream_seconds": 0.014341083995532244
+      "first_content_seconds": 0.012398040969856083,
+      "stream_seconds": 0.013110957981552929
     },
     {
       "case": 1,
@@ -125,8 +125,8 @@
         }
       },
       "http": {
-        "id": "chatcmpl-2d0075ea907244e6a1326ef88ea51a45",
-        "created": 1793639640,
+        "id": "chatcmpl-a38a880cd1c2446ab26df821b81eb275",
+        "created": 1793693200,
         "model": "adapter",
         "object": "chat.completion",
         "choices": [
@@ -151,8 +151,8 @@
         "completion_tokens": 8,
         "total_tokens": 10
       },
-      "first_content_seconds": 0.013396458001807332,
-      "stream_seconds": 0.014149333001114428
+      "first_content_seconds": 0.012218375049997121,
+      "stream_seconds": 0.012826083053369075
     },
     {
       "case": 0,
@@ -166,8 +166,8 @@
         }
       },
       "http": {
-        "id": "chatcmpl-437dd19c6193489f9fca8d23e1f8745d",
-        "created": 1793639640,
+        "id": "chatcmpl-1e5f44d41f6545379bbdde1beb63adbd",
+        "created": 1793693200,
         "model": "adapter",
         "object": "chat.completion",
         "choices": [
@@ -192,8 +192,8 @@
         "completion_tokens": 8,
         "total_tokens": 10
       },
-      "first_content_seconds": 0.013702958996873349,
-      "stream_seconds": 0.01439133397070691
+      "first_content_seconds": 0.012517750030383468,
+      "stream_seconds": 0.013056542025879025
     }
   ],
   "base_only_controls": [
@@ -217,8 +217,8 @@
     }
   ],
   "fixture": {
-    "base": "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/test-results/2001/fixture-final-v3/base",
-    "adapter": "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/test-results/2001/fixture-final-v3/adapter",
+    "base": "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/test-results/2433-review-20261103/fixture-current/fixture/base",
+    "adapter": "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/test-results/2433-review-20261103/fixture-current/fixture/adapter",
     "losses": [
       4.773211479187012,
       1.4672682285308838,

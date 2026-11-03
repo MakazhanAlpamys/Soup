@@ -478,8 +478,9 @@ supports `/health`, `/v1/models` and `/v1/chat/completions` only. There are no t
 adapter-switching, legacy completions, Anthropic messages or metrics routes. One
 fixed model and optional standard LoRA stay loaded for the process; the request's
 `model` must match `/v1/models` (or be omitted). There is no Transformers fallback.
-Readiness is reported only after successful native loading; startup failure stops
-the server. Quantized bases are currently refused by serving, although native batch
+A missing MLX-LM dependency is refused by the public CLI with an installation hint
+before server startup. Readiness is reported only after successful native loading;
+startup failure stops the server. Quantized bases are currently refused by serving, although native batch
 inference retains its separately qualified 4-bit support.
 
 Generation is serialized on one native worker with at most **8 waiting requests**.
@@ -499,7 +500,8 @@ do not extend a checkpoint's context window. Invalid/extra fields, including too
 multimodal content, `n`, `seed`, logprobs, per-request adapters and `stream_options`,
 are refused rather than ignored. `top_p: 0` is refused: MLX-LM treats zero as
 disabled nucleus filtering, not a zero-mass nucleus. Model/adapter paths are operator startup inputs,
-not request parameters. Local paths and their files must stay under the working
+not request parameters. Validation errors expose only location, message and error
+type, without echoing input or exception context. Local paths and their files must stay under the working
 directory without symlinks; a base Hub identity may come from adapter metadata.
 `--trust-remote-code` retains the shared default-deny policy.
 
@@ -509,6 +511,9 @@ tokens, including a sampled EOS or a token containing a suppressed stop string.
 Nonstreamed responses use the same accounting. `stop` covers EOS and stop strings;
 `length` means the generation limit was reached. An error before the first increment
 returns an HTTP error; after headers it emits a sanitized SSE error and `[DONE]`.
+Only empty or over-limit tokenized prompts are 422 errors; internal engine failures,
+including other `ValueError`s, are 500 errors. Client disconnects end quietly rather
+than being raised as ASGI task cancellations.
 
 The existing bind/token, CORS and browser-Origin policy is unchanged. In particular,
 generation routes do **not** authenticate bearer tokens, even on a non-loopback bind:
