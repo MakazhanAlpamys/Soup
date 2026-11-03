@@ -2,7 +2,9 @@
 
 import asyncio
 import importlib.util
+import inspect
 import json
+import logging
 import threading
 from types import SimpleNamespace
 
@@ -311,7 +313,9 @@ async def _asgi_post(app, body, *, on_body=None, on_start=None, incoming=None):
             on_start(event)
         sent.append(event)
         if event["type"] == "http.response.body" and on_body is not None:
-            on_body(event.get("body", b""), incoming)
+            result = on_body(event.get("body", b""), incoming)
+            if inspect.isawaitable(result):
+                await result
 
     scope = dict(
         type="http",
@@ -816,3 +820,160 @@ def test_simultaneous_http_streams_keep_outputs_and_usage_separate(monkeypatch):
             assert observed == [("first é", 123), ("second 中", 456)]
 
     asyncio.run(run())
+
+
+def test_a_streamed_client_that_leaves_ends_without_an_error_frame(monkeypatch, caplog):
+    from starlette.requests import Request
+
+    from soup_cli.utils.mlx_generation import NativeGenerationChunk as Chunk
+
+    left, closed = threading.Event(), threading.Event()
+
+    async def is_disconnected(self):
+        return left.is_set()
+
+    # Starlette's listener sees no disconnect; only the route's poll does.
+    monkeypatch.setattr(Request, "is_disconnected", is_disconnected)
+
+    def generate(*args, **options):
+        try:
+            for index in range(1000):
+                yield Chunk("increment", 2, index + 1)
+        finally:
+            closed.set()
+
+    def leave(body, incoming):
+        if b"increment" in body:
+            left.set()
+
+    async def run():
+        app, _ = _application(generator=generate)
+        async with app.router.lifespan_context(app):
+            events = await _asgi_post(app, _body(stream=True), on_body=leave)
+            assert await asyncio.to_thread(closed.wait, 2), "decode outlived its stream"
+            return b"".join(event.get("body", b"") for event in events).decode()
+
+    with caplog.at_level(logging.ERROR, logger="soup_cli.utils.mlx_serve"):
+        text = asyncio.run(run())
+    assert not any(isinstance(frame, dict) and "error" in frame for frame in _frames(text))
+    assert "[DONE]" not in text
+    assert "MLX streaming response failed" not in caplog.text
+
+
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize("artifact", ["model", "adapter"])
+def test_native_paths_refuse_a_symlinked_file_inside_the_artifact(
+    tmp_path, monkeypatch, artifact,
+):
+    from soup_cli.utils.mlx_serve import validate_serve_paths
+
+    cwd, outside = tmp_path / "cwd", tmp_path / "outside"
+    cwd.mkdir()
+    outside.mkdir()
+    base = cwd / "base"
+    base.mkdir()
+    (base / "config.json").write_text("{}")
+    monkeypatch.chdir(cwd)
+    target = base
+    if artifact == "adapter":
+        target = cwd / "adapter"
+        target.mkdir()
+        (target / "adapters.safetensors").write_bytes(b"")
+        _write_native_metadata(target, base)
+    validate_serve_paths(str(target), None)
+    name = "config.json" if artifact == "model" else "adapters.safetensors"
+    (outside / name).write_bytes(b"")
+    (target / name).unlink()
+    (target / name).symlink_to(outside / name)
+    with pytest.raises(ValueError, match="must not be symlinks"):
+        validate_serve_paths(str(target), None)
+
+
+def _write_native_metadata(adapter, base):
+    (adapter / "adapter_config.json").write_text(json.dumps({
+        "model": str(base), "fine_tune_type": "lora", "num_layers": 1,
+        "lora_parameters": {
+            "rank": 4, "scale": 2.0, "dropout": 0.0, "keys": ["self_attn.q_proj"],
+        },
+    }))
+
+
+def test_native_paths_refuse_an_adapter_whose_metadata_base_is_outside_cwd(tmp_path, monkeypatch):
+    from soup_cli.utils.mlx_serve import validate_serve_paths
+
+    cwd, outside = tmp_path / "cwd", tmp_path / "outside"
+    cwd.mkdir()
+    outside.mkdir()
+    base, adapter = cwd / "base", cwd / "adapter"
+    base.mkdir()
+    adapter.mkdir()
+    (adapter / "adapters.safetensors").write_bytes(b"")
+    monkeypatch.chdir(cwd)
+    _write_native_metadata(adapter, base)
+    validate_serve_paths(str(adapter), None)
+    _write_native_metadata(adapter, outside)
+    with pytest.raises(ValueError, match="under cwd"):
+        validate_serve_paths(str(adapter), None)
+
+
+def test_a_connected_reader_that_stops_reading_cannot_hold_the_worker(monkeypatch):
+    from soup_cli.utils import mlx_serve
+    from soup_cli.utils.mlx_generation import NativeGenerationChunk as Chunk
+
+    # The production timeout is documented separately; use a short test budget.
+    monkeypatch.setattr(mlx_serve, "OUTPUT_PUT_TIMEOUT_SECONDS", 0.05, raising=False)
+    closed = threading.Event()
+
+    def generate(*args, **options):
+        if options["messages"][0]["content"] == "next":
+            yield Chunk("next", 2, 1, "stop")
+            return
+        try:
+            for index in range(1000):
+                yield Chunk("increment", 2, index + 1)
+        finally:
+            closed.set()
+
+    async def run():
+        blocked, send_closed = asyncio.Event(), asyncio.Event()
+
+        async def stop_reading(body, incoming):
+            blocked.set()
+            try:
+                await asyncio.Future()  # Connected, without draining any more body frames.
+            finally:
+                send_closed.set()
+
+        app, runtime = _application(generator=generate)
+        async with app.router.lifespan_context(app):
+            slow = asyncio.create_task(_asgi_post(app, _body(stream=True), on_body=stop_reading))
+            try:
+                await asyncio.wait_for(blocked.wait(), 2)
+                events = await asyncio.wait_for(_asgi_post(
+                    app, {"messages": [{"role": "user", "content": "next"}]}
+                ), 2)
+                payload = json.loads(b"".join(event.get("body", b"") for event in events))
+                assert payload["choices"][0]["message"]["content"] == "next"
+                assert closed.is_set(), "stalled decode was not closed before the next request"
+                await asyncio.wait_for(slow, 2)
+                assert send_closed.is_set(), "blocked ASGI send survived output timeout"
+                assert not runtime._pending
+            finally:
+                slow.cancel()
+                await asyncio.gather(slow, return_exceptions=True)
+
+    asyncio.run(run())
+
+
+def test_put_timeout_cancels_the_job_without_enqueuing_more_output(monkeypatch):
+    from soup_cli.utils import mlx_serve
+
+    monkeypatch.setattr(mlx_serve, "OUTPUT_PUT_TIMEOUT_SECONDS", 0.01)
+    _, runtime = _application()
+    job = mlx_serve._Job({})
+    for _ in range(job.events.maxsize):
+        job.events.put_nowait(object())
+    assert runtime._put(job, object()) is False
+    assert job.cancelled.is_set(), "put deadline must cancel the job itself"
+    assert job.output_timed_out.is_set()
+    assert job.events.qsize() == job.events.maxsize

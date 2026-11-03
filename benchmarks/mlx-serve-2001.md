@@ -57,7 +57,7 @@ requires the first content frame to arrive while the generator is still blocked.
 | Model/adapter paths | CLI validates local directories and their immediate files under cwd using realpath/commonpath, rejecting symlink components/files. Native metadata binds an optional `--base` to the saved base identity. HTTP accepts only the loaded model ID, never a filesystem path or per-request adapter. Hub base identities in operator-provided metadata use the existing shared loader. |
 | Remote code | The same shared default-deny loader policy checks the actual base. Explicit operator `--trust-remote-code` retains the existing opt-in; no HTTP parameter enables it. Native loader validates every adapter key, shape and finite floating tensor. Corrupt adapters fail startup rather than becoming base-only generation. |
 | Input bounds | Body size is checked before extending the buffer (1 MiB). Strict schemas bound 128 messages, 65536 chars/message, 16384 input tokens and 1–16384 generated tokens. Numeric NaN/Inf, unknown fields, unsupported roles/content/controls and another model ID fail. Stop strings are bounded separately. |
-| Admission/backpressure | One worker owns model initialization, decode and cleanup. At most eight jobs wait; overload is 503 with Retry-After. Each consumer buffers at most eight increments. Tests hold an active decode, fill the queue and prove cancelled queued work releases admission capacity. |
+| Admission/backpressure | One worker owns model initialization, decode and cleanup. At most eight jobs wait; overload is 503 with Retry-After. Each consumer buffers at most eight increments. Every increment has a 30-second put deadline (`OUTPUT_PUT_TIMEOUT_SECONDS`): expiry cancels the job and closes the iterator so the worker serves the next job. A timeout monitor also cancels any blocked streamed ASGI send. Tests keep a client connected with a permanently blocked send and verify the next request and cleanup within bounded waits; separate controls pin cancellation and the timeout signal. Admission tests fill the waiting queue and prove cancelled work releases capacity. |
 | Request isolation | New messages, native generator, default fresh KV cache and random seed per job; no per-request mutation of the active model or adapter. Repeated native HTTP results match independent direct generation after an unrelated request. |
 | Cancellation | Queued jobs are removed immediately. Active cancellation is latched and checked before the next iterator advance; closing the native iterator releases its local cache. The response wrapper also cancels if a client disconnects before its body iterator starts. A running prefill/kernel cannot be interrupted mid-call. |
 | Startup/shutdown | Readiness follows successful loading, with no per-request reload. Startup exceptions and normal/exceptional response exits close the worker. Shutdown cancels pending/active jobs and joins at a decode boundary; a worker that cannot stop within ten seconds is reported as a shutdown failure. |
@@ -65,7 +65,7 @@ requires the first content frame to arrive while the generator is still blocked.
 
 ## Validation records
 
-- Current and minimum stacks after the first review: **175 passed each**, including real native model
+- Current and minimum stacks after the clarified follow-up: **183 passed each**, including real native model
   tests. Minimum-stack HTTPX emits 55 deprecation warnings about the older
   TestClient shortcut; these are not failures.
 - Seven isolated mutants fail as intended: whole-response buffering, lost active
@@ -121,5 +121,27 @@ qualified implementation.
 
 The reviewed revision also passed the full serial suite on 2026-11-03:
 **48,995 passed, 590 skipped, 10 deselected**, **88.00% coverage**, 1657.05 seconds,
-exit 0, with its functional source digest unchanged throughout. Review items 7
-and 8 remain pending clarification of their failure cases.
+exit 0, with its functional source digest unchanged throughout. Those were the first-review results; the clarified follow-up is recorded below.
+
+## Clarified follow-up (items 5, 7, 8 and 11)
+
+The output queue has a **30-second per-increment put deadline**, not a total
+generation timeout. Expiry cancels the job, closes native decoding, releases the
+worker and cancels a blocked streamed ASGI send. The regression leaves the client
+connected and blocks its first body send forever; a second request must complete,
+the first iterator must close, and the blocked send must end within bounded waits.
+Tests shorten only this internal constant to 0.05 seconds.
+
+Additional regressions make only the route poll see a streamed departure and
+assert no error frame, fabricated DONE or error log; reject symlinked files inside
+both model and adapter directories and an adapter metadata base outside cwd; and
+require NativePromptError at both source-level prompt refusal sites. Each path
+test first validates an otherwise-valid artifact. Ten isolated follow-up mutations
+fail, including both path guards, both error types, deadline/cancellation/timeout
+signal/send cleanup, quiet departure and the pre-existing response-start cancel.
+Current and minimum real-native stacks each pass **183 tests**. Pydantic 2.1.1
+and 2.3.0 core/serve stacks each pass **180 portable tests**, as does the forced-color
+portable run. All three real public CLI JSON records match the revised source.
+The final follow-up serial suite passed on 2026-11-03: **49,003 passed, 590 skipped,
+10 deselected**, **88.00% coverage**, 1587.54 seconds, exit 0; its functional source
+digest was unchanged throughout.

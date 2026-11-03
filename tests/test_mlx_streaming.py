@@ -145,3 +145,16 @@ def test_the_request_seed_reaches_the_native_rng(engine, monkeypatch):
     engine.responses = [_response("x", 1, "length")]
     list(stream_native(None, engine.tokenizer, [], max_tokens=1, seed=1234))
     assert seeded == [1234]
+
+
+@pytest.mark.parametrize(
+    "encoded,options,diagnostic",
+    [([], {}, "nonempty"), ([1, 2, 3], {"max_prompt_tokens": 2}, "input token limit")],
+)
+def test_prompt_refusals_raise_the_native_prompt_error(engine, encoded, options, diagnostic):
+    from soup_cli.utils.mlx_generation import NativePromptError, stream_native
+
+    engine.tokenizer.encode = lambda *args, **kwargs: encoded
+    with pytest.raises(NativePromptError, match=diagnostic):
+        list(stream_native(None, engine.tokenizer, [], **options))
+    assert not engine.calls

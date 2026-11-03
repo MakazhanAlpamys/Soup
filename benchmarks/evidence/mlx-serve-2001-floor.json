@@ -1,11 +1,11 @@
 {
-  "soup_base_sha": "0ab15ef6d01a92b4e6769ab895db30b8cb17c8b2",
+  "soup_base_sha": "fd84c0f527ac81b60b60d9ecda80a95a62946b20",
   "source_files_sha256": {
     "src/soup_cli/commands/serve.py": "b66a80bcec00efd138aa56bf1d2533aa955e8ba2a135684cbe573aca4a9af8bf",
     "src/soup_cli/utils/mlx_generation.py": "ea926e1b6682cec2217b551c2ba7d00f6f640e1825fd9365a86bbdcfa465b0cc",
-    "src/soup_cli/utils/mlx_serve.py": "a792c7160213cb1b800dea10ffba2aee4c5514bd50e3cb8f0f75634c9b1f6c78"
+    "src/soup_cli/utils/mlx_serve.py": "d8684418a4703d5147696bf1846d8c4b1777118bd5fd4fd57b06215d97698197"
   },
-  "working_source_tree_sha256": "16651c9a42f4f8a89ed127f3d6b71c84c3c1da52e59f3d14184de15fa208aa5d",
+  "working_source_tree_sha256": "df027d74498a984b0e9c0aea5fdea749e0eb951a31a0df35a897654ed249fa61",
   "benchmark_sha256": "5a8a926c1dfa89fe603cece25e1f9846e6e563828982e87054d4a0e45a28d9aa",
   "fixture_generator_sha256": "e9026dcee42aca161cc98f124f3eaff108f2f15805e41ced6ac0e84a0d04fa0b",
   "python": "3.12.7",
@@ -30,7 +30,7 @@
   "metal_available": true,
   "training_packages_present": [],
   "model_files_sha256": {
-    "adapter_config.json": "409b017c48500c938abecc6b8b677e95b5b434b627db5ec956560d7faefa04b4",
+    "adapter_config.json": "7405e370fa5a589fb7f988681131944d47b690333a3fa421ea87f11ad83720dc",
     "adapters.safetensors": "b134462ebdb48e4673d521194eb45a528dcc1cf586e1eb8a2cab63c07974b810"
   },
   "base_files_sha256": {
@@ -65,11 +65,11 @@
     "--backend",
     "mlx",
     "--model",
-    "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/test-results/2433-review-20261103/fixture-floor/fixture/adapter",
+    "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/test-results/2433-review-20261103-round2/fixture-floor/fixture/adapter",
     "--port",
-    "59815"
+    "64566"
   ],
-  "readiness_seconds": 1.2676304589840584,
+  "readiness_seconds": 1.1701652909978293,
   "child_returncode": 0,
   "results": [
     {
@@ -84,8 +84,8 @@
         }
       },
       "http": {
-        "id": "chatcmpl-118b8b59232a44198a4e95b0482c01c9",
-        "created": 1793693203,
+        "id": "chatcmpl-3862efe779e540d886d2326fe11ca13e",
+        "created": 1793699808,
         "model": "adapter",
         "object": "chat.completion",
         "choices": [
@@ -110,8 +110,8 @@
         "completion_tokens": 8,
         "total_tokens": 10
       },
-      "first_content_seconds": 0.01249854196794331,
-      "stream_seconds": 0.013123916985932738
+      "first_content_seconds": 0.01238416600972414,
+      "stream_seconds": 0.013124125020112842
     },
     {
       "case": 1,
@@ -125,8 +125,8 @@
         }
       },
       "http": {
-        "id": "chatcmpl-33a4ca65edc74d63a2b1e1f5bb593243",
-        "created": 1793693203,
+        "id": "chatcmpl-e85249bba7284a678a54323eaa0765d7",
+        "created": 1793699808,
         "model": "adapter",
         "object": "chat.completion",
         "choices": [
@@ -151,8 +151,8 @@
         "completion_tokens": 8,
         "total_tokens": 10
       },
-      "first_content_seconds": 0.01197933399816975,
-      "stream_seconds": 0.012391500000376254
+      "first_content_seconds": 0.012470707995817065,
+      "stream_seconds": 0.013550832984037697
     },
     {
       "case": 0,
@@ -166,8 +166,8 @@
         }
       },
       "http": {
-        "id": "chatcmpl-630f52e261ae46bbaff5db7623e77bf3",
-        "created": 1793693203,
+        "id": "chatcmpl-b029ce9f809f4b78a7069525495daa61",
+        "created": 1793699808,
         "model": "adapter",
         "object": "chat.completion",
         "choices": [
@@ -192,8 +192,8 @@
         "completion_tokens": 8,
         "total_tokens": 10
       },
-      "first_content_seconds": 0.012584666954353452,
-      "stream_seconds": 0.012973541975952685
+      "first_content_seconds": 0.012650125019717962,
+      "stream_seconds": 0.0134090410429053
     }
   ],
   "base_only_controls": [
@@ -217,8 +217,8 @@
     }
   ],
   "fixture": {
-    "base": "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/test-results/2433-review-20261103/fixture-floor/fixture/base",
-    "adapter": "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/test-results/2433-review-20261103/fixture-floor/fixture/adapter",
+    "base": "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/test-results/2433-review-20261103-round2/fixture-floor/fixture/base",
+    "adapter": "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/test-results/2433-review-20261103-round2/fixture-floor/fixture/adapter",
     "losses": [
       4.773211479187012,
       1.4672683477401733,

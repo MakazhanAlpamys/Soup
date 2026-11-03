@@ -489,6 +489,11 @@ decode iterator, KV cache and private random seed. Disconnecting cancels queued 
 or stops an active decode at the next safe step, closes its iterator and releases the
 next request. A running native prefill/kernel is not interrupted mid-call. A slow
 stream reader buffers at most 8 native increments before applying backpressure.
+Each increment waits at most **30 seconds** for an output-queue slot
+(`OUTPUT_PUT_TIMEOUT_SECONDS`). On expiry, the job is cancelled, its iterator is
+closed and the worker proceeds to the next request. A streamed response blocked on
+ASGI send is also cancelled; it does not fabricate a successful finish or `[DONE]`.
+This is an output-backpressure deadline, not a total generation or kernel timeout.
 
 Messages accept text-only `system`, `user` and `assistant` roles. Supported controls
 are `temperature` (0–2; zero is greedy), `top_p` (greater than 0, at most 1),
@@ -511,7 +516,8 @@ tokens, including a sampled EOS or a token containing a suppressed stop string.
 Nonstreamed responses use the same accounting. `stop` covers EOS and stop strings;
 `length` means the generation limit was reached. An error before the first increment
 returns an HTTP error; after headers it emits a sanitized SSE error and `[DONE]`.
-Only empty or over-limit tokenized prompts are 422 errors; internal engine failures,
+Among generation errors, only empty or over-limit tokenized prompts are 422;
+internal engine failures,
 including other `ValueError`s, are 500 errors. Client disconnects end quietly rather
 than being raised as ASGI task cancellations.
 

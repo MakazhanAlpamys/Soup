@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 MAX_BODY_BYTES = 1024 * 1024
 MAX_PROMPT_TOKENS = 16384
 QUEUE_CAPACITY = 8
+OUTPUT_PUT_TIMEOUT_SECONDS = 30.0
 
 
 class NativeMessage(BaseModel):
@@ -159,6 +160,7 @@ class _Job:
     options: dict[str, Any]
     cancelled: threading.Event = field(default_factory=threading.Event)
     events: queue.Queue = field(default_factory=lambda: queue.Queue(maxsize=8))
+    output_timed_out: threading.Event = field(default_factory=threading.Event)
 
 
 @dataclass
@@ -258,9 +260,15 @@ class NativeServerRuntime:
         raise _RequestDisconnectedError
 
     def _put(self, job: _Job, event: Any) -> bool:
+        deadline = time.monotonic() + OUTPUT_PUT_TIMEOUT_SECONDS
         while not job.cancelled.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                job.output_timed_out.set()
+                self.cancel(job)
+                return False
             try:
-                job.events.put(event, timeout=0.05)
+                job.events.put(event, timeout=min(0.05, remaining))
                 return True
             except queue.Full:
                 continue
@@ -366,11 +374,29 @@ def install_native_routes(
         native_job: _Job
 
         async def __call__(self, scope: dict, receive: Callable, send: Callable) -> None:
+            async def wait_for_output_timeout() -> None:
+                while not self.native_job.output_timed_out.is_set():
+                    await asyncio.sleep(0.01)
+
+            response = asyncio.create_task(super().__call__(scope, receive, send))
+            timed_out = asyncio.create_task(wait_for_output_timeout())
             try:
-                await super().__call__(scope, receive, send)
+                done, _ = await asyncio.wait(
+                    (response, timed_out), return_when=asyncio.FIRST_COMPLETED,
+                )
+                if response in done:
+                    await response
+                else:
+                    # The native deadline must also release a blocked ASGI send.
+                    response.cancel()
+                    await asyncio.gather(response, return_exceptions=True)
             finally:
                 # Also runs when disconnect happens before the iterator starts.
                 runtime.cancel(self.native_job)
+                for task in (response, timed_out):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(response, timed_out, return_exceptions=True)
 
     @app.get("/health", response_model=NativeHealth)
     def health() -> dict:
