@@ -2,7 +2,19 @@
 
 import math
 import re
-from typing import Any, Callable, Dict, List, Literal, NamedTuple, Optional, Union
+from types import UnionType
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    NamedTuple,
+    Optional,
+    Union,
+    get_args,
+    get_origin,
+)
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -69,7 +81,94 @@ _LISA_SUPPORTED_TASKS = ("sft", "pretrain")
 _LORAFA_SUPPORTED_TASKS = ("sft", "pretrain", "embedding")
 
 
+def _is_scalar_numeric_annotation(annotation: Any) -> bool:
+    """Whether an annotation represents a scalar int/float, including unions."""
+    if annotation in (int, float):
+        return True
+    if get_origin(annotation) in (Union, UnionType):
+        return any(
+            _is_scalar_numeric_annotation(member)
+            for member in get_args(annotation)
+        )
+    return False
+
+
+def _scalar_numeric_types(annotation: Any) -> set[type]:
+    """Return scalar numeric types accepted by an annotation."""
+    if annotation in (int, float):
+        return {annotation}
+    if get_origin(annotation) in (Union, UnionType):
+        result: set[type] = set()
+        for member in get_args(annotation):
+            result.update(_scalar_numeric_types(member))
+        return result
+    return set()
+
+
+def _annotation_accepts_bool(annotation: Any) -> bool:
+    """Whether an annotation explicitly permits bool, including bool literals."""
+    if annotation is bool:
+        return True
+
+    origin = get_origin(annotation)
+    if origin is Literal:
+        return any(type(value) is bool for value in get_args(annotation))
+
+    if origin in (Union, UnionType):
+        return any(
+            _annotation_accepts_bool(member)
+            for member in get_args(annotation)
+        )
+
+    return False
+
+
+def _reject_boolean_numeric_fields(
+    model: type[BaseModel], values: Any
+) -> Any:
+    """Reject booleans in soup.yaml scalar numeric fields before coercion.
+
+    Python treats bool as a subclass of int, but configuration booleans are
+    never numeric values. Reject them before field-specific validators run.
+    """
+    if not isinstance(values, dict):
+        return values
+
+    for input_name, value in values.items():
+        if not isinstance(value, bool):
+            continue
+
+        field_name = input_name
+        field = model.model_fields.get(field_name)
+
+        # Also recognise simple string aliases if a config field defines one.
+        if field is None:
+            for candidate_name, candidate in model.model_fields.items():
+                if input_name in (candidate.alias, candidate.validation_alias):
+                    field_name = candidate_name
+                    field = candidate
+                    break
+
+        if field is None:
+            continue
+
+        annotation = field.annotation
+        if (
+            _is_scalar_numeric_annotation(annotation)
+            and not _annotation_accepts_bool(annotation)
+        ):
+            if _scalar_numeric_types(annotation) == {int}:
+                raise ValueError(f"{field_name} must be an int, not a bool")
+            raise ValueError(f"{field_name} must be a number, not a bool")
+
+    return values
+
 class LoraConfig(BaseModel):
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_boolean_numeric_inputs(cls, values: Any) -> Any:
+        return _reject_boolean_numeric_fields(cls, values)
+
     # #340 — `r: 0` is the first-class full-fine-tuning switch: no
     # adapter is applied and the base weights train directly. It is the
     # spelling `trainer/classifier.py` has read as "no adapter" since
@@ -1125,6 +1224,11 @@ class EvalGateConfig(BaseModel):
 
 
 class TrainingConfig(BaseModel):
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_boolean_numeric_inputs(cls, values: Any) -> Any:
+        return _reject_boolean_numeric_fields(cls, values)
+
     epochs: int = Field(default=3, ge=1, description="Number of training epochs")
     lr: float = Field(default=2e-5, gt=0, description="Learning rate")
     batch_size: Union[int, Literal["auto"]] = Field(
