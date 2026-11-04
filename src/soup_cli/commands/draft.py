@@ -94,7 +94,7 @@ def _fail(message: str, code: int = 1) -> NoReturn:
     """Print a red error and exit. Raises internally so a forgotten ``raise``
     at a call site can never silently turn a failure into a no-op (mirrors
     ``commands/ship.py::_fail``)."""
-    console.print(f"[red]{escape(message)}[/]")
+    console.print(f"[red]{for_terminal(message)}[/]", emoji=False)
     raise typer.Exit(code)
 
 
