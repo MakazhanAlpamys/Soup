@@ -13,9 +13,5 @@
       "only_difference": "LF to CRLF in Windows git archive"
     }
   },
-  "archive_sha256": "855bc75a6c4e3f5077f94d19bc1c9174ddff50d8ff9ba9c7613b48ab51ddf39f",
-  "budget_usd": 2.0,
-  "estimated_rental_usd": 0.03223768223215032,
-  "task_instances_destroyed": true,
-  "raw_evidence_zip_sha256": "df3f1b1f8de3786fa608c0791308377c4e667480f8b08b4f105f971e243b3db1"
+  "archive_sha256": "855bc75a6c4e3f5077f94d19bc1c9174ddff50d8ff9ba9c7613b48ab51ddf39f"
 }

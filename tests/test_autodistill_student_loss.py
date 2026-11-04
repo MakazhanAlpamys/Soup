@@ -121,6 +121,19 @@ def test_tiny_student_tail_is_computed_without_subtracting_rounded_selected_mass
     assert logits.grad[0, 1].item() < 0.0
 
 
+@pytest.mark.parametrize("dtype_name", ["float16", "bfloat16"])
+def test_half_precision_logits_use_float32_objective_arithmetic(dtype_name):
+    import torch
+
+    logits = torch.tensor([[1.2345, -0.6789, 0.3142, -1.879]], dtype=getattr(torch, dtype_name))
+    rows = [_capture(temperature=1.3)]
+    expected = _loss(logits.double(), rows)
+    actual = _loss(logits, rows)
+
+    assert actual.total.dtype == torch.float32
+    assert actual.total.item() == pytest.approx(expected.total.item(), rel=0.0, abs=1e-5)
+
+
 def test_identical_sparse_distributions_have_zero_kd_and_stationary_gradients():
     import torch
 
@@ -169,20 +182,34 @@ def test_microbatch_sums_use_the_global_token_denominator(ce, kd):
     torch.testing.assert_close(split.grad, expected, rtol=1e-12, atol=1e-12)
 
 
-@pytest.mark.parametrize("kwargs", [
-    {"ce": -1.0}, {"kd": float("nan")}, {"ce": True}, {"kd": float("inf")},
-    {"ce": 0.0, "kd": 0.0}, {"chunk": 0}, {"chunk": True}, {"chunk": 1.5},
-    {"checkpoint": "yes"},
+@pytest.mark.parametrize(("kwargs", "error", "message"), [
+    ({"ce": -1.0}, ValueError, "ce_weight must be a finite non-negative number"),
+    ({"kd": float("nan")}, ValueError, "kd_weight must be a finite non-negative number"),
+    ({"ce": True}, TypeError, "ce_weight must be a finite non-negative number"),
+    ({"kd": float("inf")}, ValueError, "kd_weight must be a finite non-negative number"),
+    ({"ce": 0.0, "kd": 0.0}, ValueError, "at least one objective weight must be positive"),
+    ({"chunk": 0}, ValueError, "token_chunk_size must be a positive integer"),
+    ({"chunk": -1}, ValueError, "token_chunk_size must be a positive integer"),
+    ({"chunk": True}, TypeError, "token_chunk_size must be a positive integer"),
+    ({"chunk": 1.5}, TypeError, "token_chunk_size must be a positive integer"),
+    ({"checkpoint": "yes"}, TypeError, "checkpoint_chunks must be bool"),
 ])
-def test_invalid_objective_options_are_refused(kwargs):
+def test_invalid_objective_options_are_refused(kwargs, error, message):
     import torch
 
-    with pytest.raises((TypeError, ValueError)):
+    with pytest.raises(error, match=message):
         _loss(torch.zeros(1, 4), [_capture()], **kwargs)
 
 
-@pytest.mark.parametrize("case", ["empty", "count", "vocab", "rank", "integer", "nan"])
-def test_invalid_logits_are_refused(case):
+@pytest.mark.parametrize(("case", "error", "message"), [
+    ("empty", ValueError, r"non-empty \[tokens, vocabulary\] shape"),
+    ("count", ValueError, "one capture row is required per student logit position"),
+    ("vocab", ValueError, "student vocabulary does not match the capture"),
+    ("rank", ValueError, r"non-empty \[tokens, vocabulary\] shape"),
+    ("integer", TypeError, "student_logits must be a floating-point tensor"),
+    ("nan", ValueError, "student_logits must be finite"),
+])
+def test_invalid_logits_are_refused(case, error, message):
     import torch
 
     shapes = {"empty": (0, 4), "count": (2, 4), "vocab": (1, 5), "rank": (4,)}
@@ -190,8 +217,15 @@ def test_invalid_logits_are_refused(case):
                          dtype=torch.int64 if case == "integer" else torch.float32)
     if case == "nan":
         logits[0, 0] = float("nan")
-    with pytest.raises((TypeError, ValueError)):
+    with pytest.raises(error, match=message):
         _loss(logits, [] if case == "empty" else [_capture()])
+
+
+def test_mapping_cannot_stand_in_for_a_capture_token():
+    import torch
+
+    with pytest.raises(TypeError, match="captures must contain CaptureToken instances"):
+        _loss(torch.zeros(1, 4), [_capture().model_dump(by_alias=True)])
 
 
 def test_rollouts_and_unvalidated_copied_rows_are_refused():
@@ -229,7 +263,9 @@ def test_nonrepresentable_objectives_raise_instead_of_returning_nan_or_infinity(
     if case == "difference":
         logits[0, 2] = 3e38
         logits[0, 0] = -3e38
-    with pytest.raises(ValueError, match="not finite"):
+    message = ("weighted objective is not finite" if case == "weight"
+               else "objective is not finite at the working dtype and temperature")
+    with pytest.raises(ValueError, match=message):
         _loss(logits, [row], ce=1e300 if case == "weight" else 0.3)
 
 

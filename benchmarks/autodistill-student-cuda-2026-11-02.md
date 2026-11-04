@@ -33,6 +33,10 @@ half/bfloat16/float32 edge cases execute on CPU. This record does not qualify re
 precision GPU training, MLX/Apple Silicon, cache admission, teacher-process isolation,
 consumption/checkpoint state, exact resume or the adaptive loop.
 
+The CUDA run predates the review updates to the tests and the objective docstring.
+It establishes neither default top-k or loss weights nor compression or model quality.
+The maintainer still needs to agree the next #580 scope.
+
 ## Host and environment
 
 - Vast.ai, one NVIDIA GeForce RTX 3090, 24 GiB; compute capability 8.6.
@@ -66,33 +70,21 @@ avoids those unrelated fixtures and their CUDA-skip policy; the five selected ca
 must actually construct CUDA tensors and all five must execute, with zero skips.
 This is not a GPU run of the whole repository suite.
 
-The byte-original `cuda-evidence.json`, `cuda.log`, `cuda.xml`, `all.log` and
-`all.xml` are preserved inside `autodistill-student-cuda-2026-11-02/raw-evidence.zip`.
-An independently readable JSON snapshot (with a final newline),
-`source-provenance.json` and `cpu-suite-summary.json` are alongside it. The zip
-preserves original end-of-file bytes through text hooks and Windows checkouts.
-The provenance records both Git blob and transferred-file hashes. Windows `git archive`
-converted LF to CRLF; transferred hashes match the remote files exactly, and the only
-difference from the Git blobs is that line-ending conversion. Raw Git and transfer
-hashes are deliberately not called identical.
+The reports are committed as text with a final newline. Hashes below use LF
+line endings, as stored in Git. Convert CRLF to LF before hashing a Windows
+checkout that uses CRLF. The source provenance records both Git blob and
+transferred-file hashes. Windows `git archive` converted LF to CRLF, and the
+transferred hashes match the remote source files.
 
-## Failed setup and budget
-
-The first RTX 5080 attempt reached SSH, then failed before installing dependencies:
-the non-login shell had no bare `python` command. Its container was destroyed.
-The successful attempt used the documented `/venv/main/bin/python` environment and
-verified a real CUDA tensor operation before installing the small test dependencies.
-
-Both task-created instances were destroyed after report collection, and a separate
-API read confirmed neither remained. The pre-existing instance was left untouched.
-The two rental-rate estimates are $0.015694 and $0.016544, **$0.032238 total** against
-the authorized $2 limit. Rates include the selected storage allocation and both
-offers had zero inbound/outbound traffic price. This is elapsed-time times advertised
-rate, conservatively including loading time, not a claim about a final settled invoice;
-account-wide credit changes also include the pre-existing rental.
-
-No default top-k, loss weights, compression or production-quality claim follows from
-this qualification. The maintainer still needs to agree the next #580 scope.
+| File | SHA-256 (LF) |
+|---|---|
+| [`all.log`](results/autodistill-student-cuda-2026-11-02/all.log) | `e113e9d8b52ff6f544591e798da448182e80314987ee76edcedf6532bb2d5770` |
+| [`all.xml`](results/autodistill-student-cuda-2026-11-02/all.xml) | `05e7bfec5d21490a1cf47795c951159a7280de0cec5669fd1e50f8146bb11c0e` |
+| [`cpu-suite-summary.json`](results/autodistill-student-cuda-2026-11-02/cpu-suite-summary.json) | `47a4ed6d973361848774c0cc4777edd79bc28207ecab62cb51d8fec8ad937435` |
+| [`cuda-evidence.json`](results/autodistill-student-cuda-2026-11-02/cuda-evidence.json) | `2df4148e464e35ebd3e8315c120ed30e27b0fd1a2368a157e500fcc9876101cf` |
+| [`cuda.log`](results/autodistill-student-cuda-2026-11-02/cuda.log) | `9a530402132f5e3753d240885f3ab914f4ff0086e3b895472e98e644a0796f37` |
+| [`cuda.xml`](results/autodistill-student-cuda-2026-11-02/cuda.xml) | `2cb9aca34a57eb0cef25551abd23c922c1245dd214cce279899921980c41bfd3` |
+| [`source-provenance.json`](results/autodistill-student-cuda-2026-11-02/source-provenance.json) | `ee0d222c18d4f2e1cf22f7619dac9d57cbc0dc5e3903d255e2649bdcdb0e2566` |
 
 ## Local full-suite control
 

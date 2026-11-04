@@ -84,10 +84,10 @@ def captured_token_loss(
     no implicit temperature-squared multiplier. Loss weights are explicit.
 
     The caller supplies student logits of shape [captured_tokens, vocabulary].
-    Chunking bounds additional objective intermediates; it does not remove
-    already-materialized student logits or model activations. There is no dense
-    teacher tensor. Optional non-reentrant checkpointing recomputes this pure
-    objective during backward, rather than retaining per-chunk intermediates.
+    With ``checkpoint_chunks=True``, chunking bounds the objective intermediates
+    recomputed at once during backward. Without checkpointing, row intermediates
+    are retained through backward. Student logits and model activations are
+    already materialized. There is no dense teacher tensor.
 
     This is not a shard consumer or a training/resume controller: cache and
     process-isolation checks must precede the call. Student rollouts are refused.
