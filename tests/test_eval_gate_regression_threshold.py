@@ -44,6 +44,20 @@ def test_sdk_refuses_nonfinite_tolerance_before_generation(
     assert calls == []
 
 
+@pytest.mark.parametrize("baseline", [None, {"control": 1.0}])
+def test_sdk_refuses_integer_tolerance_beyond_float_range(
+    suite: gate.EvalSuite, baseline: dict[str, float] | None,
+) -> None:
+    calls: list[str] = []
+    with pytest.raises(ValueError) as caught:
+        gate.run_gate(
+            suite, generate_fn=lambda prompt: calls.append(prompt) or "no",
+            baseline=baseline, regression_threshold=10**400,
+        )
+    assert str(caught.value) == ERROR
+    assert calls == []
+
+
 @pytest.mark.parametrize("baseline,exception,message", [
     ([], TypeError, "baseline must be a mapping"),
     ({"control": True}, TypeError, "baseline score for 'control' must be a number"),
@@ -87,7 +101,7 @@ def test_suite_errors_keep_priority(
 @pytest.mark.parametrize("threshold,regression", [
     (0.0, True), (0.5, True), (-0.5, True),
     (1.0, False), (-1.0, False), (2.0, False), (-2.0, False),
-    (1e308, False), (-1e308, False),
+    (1e308, False), (-1e308, False), (10**300, False),
 ])
 def test_finite_tolerances_keep_absolute_value_and_strict_boundary(
     suite: gate.EvalSuite, threshold: float, regression: bool,
