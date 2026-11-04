@@ -123,51 +123,93 @@ def _annotation_accepts_bool(annotation: Any) -> bool:
     return False
 
 
-def _reject_boolean_numeric_fields(
-    model: type[BaseModel], values: Any
+def _reject_boolean_numeric_field(
+    model: type[BaseModel],
+    field_name: str,
+    value: Any,
+    *,
+    exempt_fields: frozenset[str] = frozenset(),
 ) -> Any:
-    """Reject booleans in soup.yaml scalar numeric fields before coercion.
+    """Reject bools in scalar numeric fields before Pydantic coercion."""
+    if not isinstance(value, bool) or field_name in exempt_fields:
+        return value
 
-    Python treats bool as a subclass of int, but configuration booleans are
-    never numeric values. Reject them before field-specific validators run.
-    """
-    if not isinstance(values, dict):
-        return values
+    field = model.model_fields.get(field_name)
+    if field is None:
+        return value
 
-    for input_name, value in values.items():
-        if not isinstance(value, bool):
-            continue
+    annotation = field.annotation
+    if (
+        _is_scalar_numeric_annotation(annotation)
+        and not _annotation_accepts_bool(annotation)
+    ):
+        if _scalar_numeric_types(annotation) == {int}:
+            raise ValueError(f"{field_name} must be an int, not a bool")
+        raise ValueError(f"{field_name} must be a number, not a bool")
 
-        field_name = input_name
-        field = model.model_fields.get(field_name)
+    return value
 
-        # Also recognise simple string aliases if a config field defines one.
-        if field is None:
-            for candidate_name, candidate in model.model_fields.items():
-                if input_name in (candidate.alias, candidate.validation_alias):
-                    field_name = candidate_name
-                    field = candidate
-                    break
 
-        if field is None:
-            continue
-
-        annotation = field.annotation
-        if (
-            _is_scalar_numeric_annotation(annotation)
-            and not _annotation_accepts_bool(annotation)
-        ):
-            if _scalar_numeric_types(annotation) == {int}:
-                raise ValueError(f"{field_name} must be an int, not a bool")
-            raise ValueError(f"{field_name} must be a number, not a bool")
-
-    return values
+_TRAINING_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS = frozenset({
+    "seed",
+    "data_seed",
+    "expand_layers",
+    "freeze_trainable_layers",
+    "eval_steps",
+    "grpo_beta",
+    "grpo_judge_max_tokens",
+    "grpo_judge_max_calls",
+    "grpo_judge_max_failure_rate",
+    "reward_hack_dwell_steps",
+    "reward_hack_release_patience",
+    "reward_hack_rollback_patience",
+    "reward_hack_max_recovery_attempts",
+    "reward_hack_smoothing_window",
+    "reward_hack_beta_floor",
+    "reward_hack_beta_ceil",
+    "reward_hack_trip_band",
+    "reward_hack_release_band",
+    "reward_hack_kl_gain",
+    "reward_hack_pid_kp",
+    "reward_hack_pid_ki",
+    "reward_hack_pid_kd",
+    "reward_hack_signal_target",
+    "reward_hack_integral_clamp",
+    "reward_hack_shaping_strength",
+    "minillm_rollout_length",
+    "mole_top_k",
+    "mole_temperature",
+    "distill_chunk_size",
+    "distill_temperature",
+    "mod_capacity_factor",
+    "ebft_temperature",
+    "num_labels",
+    "lisa_num_layers",
+    "lisa_interval_steps",
+    "stream_buffers",
+    "stream_read_ahead",
+    "stream_vram_override",
+    "stream_loss_chunk",
+    "unlearn_alpha",
+    "ref_model_ema_alpha",
+    "tis_threshold",
+    "off_policy_mask_threshold",
+    "replay_buffer_size",
+    "grpo_delta",
+    "yarn_factor",
+    "yarn_attn_factor",
+    "yarn_beta_fast",
+    "yarn_beta_slow",
+    "citation_recall_threshold",
+    "grace_codebook_size",
+    "grace_codebook_dim",
+})
 
 class LoraConfig(BaseModel):
-    @model_validator(mode="before")
+    @field_validator("*", mode="before")
     @classmethod
-    def _reject_boolean_numeric_inputs(cls, values: Any) -> Any:
-        return _reject_boolean_numeric_fields(cls, values)
+    def _reject_boolean_numeric_inputs(cls, value: Any, info: Any) -> Any:
+        return _reject_boolean_numeric_field(cls, info.field_name, value)
 
     # #340 — `r: 0` is the first-class full-fine-tuning switch: no
     # adapter is applied and the base weights train directly. It is the
@@ -1224,10 +1266,15 @@ class EvalGateConfig(BaseModel):
 
 
 class TrainingConfig(BaseModel):
-    @model_validator(mode="before")
+    @field_validator("*", mode="before")
     @classmethod
-    def _reject_boolean_numeric_inputs(cls, values: Any) -> Any:
-        return _reject_boolean_numeric_fields(cls, values)
+    def _reject_boolean_numeric_inputs(cls, value: Any, info: Any) -> Any:
+        return _reject_boolean_numeric_field(
+            cls,
+            info.field_name,
+            value,
+            exempt_fields=_TRAINING_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS,
+        )
 
     epochs: int = Field(default=3, ge=1, description="Number of training epochs")
     lr: float = Field(default=2e-5, gt=0, description="Learning rate")

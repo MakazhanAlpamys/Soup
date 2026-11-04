@@ -12,6 +12,63 @@ from soup_cli.config.schema import LoraConfig, TrainingConfig
 # a reason. A new bool/numeric union should trigger an explicit review.
 _BOOL_NUMERIC_UNION_EXEMPTIONS: dict[tuple[type[BaseModel], str], str] = {}
 
+# These TrainingConfig fields already have dedicated bool-rejection validators.
+# Keep their existing exception types and field-specific messages unchanged.
+_EXISTING_BOOL_VALIDATORS = {
+    "seed",
+    "data_seed",
+    "expand_layers",
+    "freeze_trainable_layers",
+    "eval_steps",
+    "grpo_beta",
+    "grpo_judge_max_tokens",
+    "grpo_judge_max_calls",
+    "grpo_judge_max_failure_rate",
+    "distill_chunk_size",
+    "distill_temperature",
+    "mod_capacity_factor",
+    "ebft_temperature",
+    "num_labels",
+    "minillm_rollout_length",
+    "mole_top_k",
+    "mole_temperature",
+    "lisa_num_layers",
+    "lisa_interval_steps",
+    "stream_buffers",
+    "stream_read_ahead",
+    "stream_vram_override",
+    "stream_loss_chunk",
+    "unlearn_alpha",
+    "ref_model_ema_alpha",
+    "tis_threshold",
+    "off_policy_mask_threshold",
+    "replay_buffer_size",
+    "grpo_delta",
+    "yarn_factor",
+    "yarn_attn_factor",
+    "yarn_beta_fast",
+    "yarn_beta_slow",
+    "citation_recall_threshold",
+    "grace_codebook_size",
+    "grace_codebook_dim",
+    "reward_hack_dwell_steps",
+    "reward_hack_release_patience",
+    "reward_hack_rollback_patience",
+    "reward_hack_max_recovery_attempts",
+    "reward_hack_smoothing_window",
+    "reward_hack_beta_floor",
+    "reward_hack_beta_ceil",
+    "reward_hack_trip_band",
+    "reward_hack_release_band",
+    "reward_hack_kl_gain",
+    "reward_hack_pid_kp",
+    "reward_hack_pid_ki",
+    "reward_hack_pid_kd",
+    "reward_hack_signal_target",
+    "reward_hack_integral_clamp",
+    "reward_hack_shaping_strength",
+}
+
 
 def _union_members(annotation):
     """Walk union members without treating list[int] or dict[str, int] as scalars."""
@@ -23,9 +80,8 @@ def _union_members(annotation):
 
 
 def _is_bool_literal(annotation):
-    return (
-        get_origin(annotation) is Literal
-        and any(type(value) is bool for value in get_args(annotation))
+    return get_origin(annotation) is Literal and any(
+        type(value) is bool for value in get_args(annotation)
     )
 
 
@@ -41,10 +97,11 @@ def _numeric_field_cases():
                 continue
 
             key = (model, name)
-            permits_bool = any(
-                member is bool or _is_bool_literal(member)
-                for member in members
-            )
+
+            if model is TrainingConfig and name in _EXISTING_BOOL_VALIDATORS:
+                continue
+
+            permits_bool = any(member is bool or _is_bool_literal(member) for member in members)
 
             if permits_bool:
                 discovered_exemptions.add(key)
@@ -58,9 +115,7 @@ def _numeric_field_cases():
             assert key not in _BOOL_NUMERIC_UNION_EXEMPTIONS, (
                 f"Stale boolean exemption for {model.__name__}.{name}"
             )
-            cases.append(
-                pytest.param(model, name, id=f"{model.__name__}.{name}")
-            )
+            cases.append(pytest.param(model, name, id=f"{model.__name__}.{name}"))
 
     assert discovered_exemptions == set(_BOOL_NUMERIC_UNION_EXEMPTIONS), (
         "The numeric boolean exemption list does not match the schema."
@@ -77,7 +132,17 @@ def test_numeric_fields_reject_booleans(model, field_name, value):
     with pytest.raises(ValidationError) as exc_info:
         model(**{field_name: value})
 
-    assert field_name in str(exc_info.value)
+    error = exc_info.value.errors()[0]
+    assert error["loc"] == (field_name,)
+
+    annotation = model.model_fields[field_name].annotation
+    members = tuple(_union_members(annotation))
+    expected = (
+        f"{field_name} must be an int, not a bool"
+        if int in members and float not in members
+        else f"{field_name} must be a number, not a bool"
+    )
+    assert expected in error["msg"]
 
 
 def test_valid_numeric_controls_remain_valid():

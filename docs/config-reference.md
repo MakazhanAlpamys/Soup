@@ -16,9 +16,10 @@ its default" is declared but read by nothing: leave it out, or at its default.
 The guides linked from the [docs index](README.md) explain what the settings do
 together; this page is the lookup table.
 
-Booleans are not numbers: `true` and `false` (including YAML aliases such as
-`yes` and `no`) are refused for scalar `int` and `float` fields. Write an explicit
-numeric value instead. The `lora.r` field requires an integer, not `false`.
+Within `training` and `training.lora`, booleans (`true` and `false`, including
+YAML aliases such as `yes` and `no`) are refused for scalar `int` and `float`
+fields. Write an explicit numeric value instead. The `training.lora.r` field
+requires an integer, not `false`.
 
 How to read a table:
 
