@@ -217,4 +217,7 @@ def build_optimizer(plan: OptimizerPlan):
     kwargs: Dict[str, Any] = {"learning_rate": build_lr_schedule(plan)}
     if plan.optimizer_name not in _NO_WEIGHT_DECAY:
         kwargs["weight_decay"] = plan.weight_decay
+    if plan.optimizer_name == "Adafactor":
+        kwargs["relative_step"] = False
+        kwargs["scale_parameter"] = False
     return cls(**kwargs)
