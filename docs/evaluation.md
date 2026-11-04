@@ -973,6 +973,10 @@ numeric entry in `results`; this command does not save its sub-task rows automat
 
 soup eval compare and soup eval leaderboard use the newest eval row for each benchmark (on the leaderboard, for each model and benchmark), so re-running a benchmark replaces its score; rows with the same created_at resolve to the later insert. soup registry diff compares eval scores the same way.
 
+`soup eval compare` and all `soup eval leaderboard` formats refuse a selected
+non-finite stored score with a named diagnostic and exit `1` before any output;
+they do not fall back to an older finite score (#2466).
+
 ### Aider Polyglot
 
 The `aider-chat` wheel does not include Aider's benchmark harness. The
