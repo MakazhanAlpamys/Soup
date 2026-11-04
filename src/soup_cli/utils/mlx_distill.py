@@ -31,7 +31,7 @@ def validate_native_distill(config) -> None:
         refused.append("training.lora.r (ordinary LoRA is required)")
     lora_defaults = type(tcfg.lora)().model_dump()
     refused.extend(f"training.lora.{key}" for key, value in tcfg.lora.model_dump().items()
-                   if key not in {"r", "alpha", "dropout", "target_modules"}
+                   if key not in {"r", "alpha", "dropout", "target_modules", "use_rslora"}
                    and value != lora_defaults[key])
     if tcfg.optimizer not in {"adamw", "adamw_torch", "adamw_hf"}:
         refused.append("training.optimizer (qualified AdamW aliases: adamw, adamw_torch, adamw_hf)")

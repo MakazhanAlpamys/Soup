@@ -39,7 +39,6 @@ def test_supported_token_configuration_routes_to_native_trainer(divergence):
 
 @pytest.mark.parametrize("field,value,diagnostic", [
     ("distill_mode", "sequence", "distill_mode"),
-    ("quantization", "4bit", "quantization"),
     ("optimizer", "lion", "optimizer"),
     ("scheduler", "polynomial", "scheduler"),
     ("gradient_checkpointing", "full", "gradient_checkpointing"),
@@ -53,6 +52,39 @@ def test_unsupported_native_modifiers_refuse_by_name_with_valid_control(field, v
     assert SoupConfig.model_validate(recipe()).task == "distill"
     with pytest.raises(ValueError, match=diagnostic):
         SoupConfig.model_validate(recipe(**{field: value}))
+
+
+def test_native_distillation_is_a_reviewed_backend_combination():
+    from soup_cli.config.backend_support import REGISTRY, TRAINER_MODULES, check_config
+
+    cfg = SoupConfig.model_validate(recipe())
+    pair = ("distill", "mlx", "text")
+    assert REGISTRY[pair] == ()
+    assert "soup_cli/trainer/mlx_distill.py" in TRAINER_MODULES[pair]
+    assert "soup_cli/utils/mlx_distill.py" in TRAINER_MODULES[pair]
+    assert check_config(cfg) == []
+
+
+@pytest.mark.parametrize("field", ["neftune_alpha", "use_galore"])
+def test_settings_refused_at_load_have_no_doctor_row(field):
+    from soup_cli.config.backend_support import unsupported_for
+
+    assert SoupConfig.model_validate(recipe()).task == "distill"
+    with pytest.raises(ValueError, match=field):
+        SoupConfig.model_validate(recipe(**{field: 0.2 if field == "neftune_alpha" else True}))
+    assert f"training.{field}" not in {
+        entry.field for entry in unsupported_for("distill", "mlx")
+    }
+
+
+@pytest.mark.parametrize("value", ["4bit", "8bit"])
+def test_quantization_refusal_names_the_supplied_value(value):
+    assert SoupConfig.model_validate(recipe()).training.quantization == "none"
+    raw = recipe()
+    del raw["training"]["quantization"]
+    assert SoupConfig.model_validate(raw).training.quantization == "none"
+    with pytest.raises(ValueError, match=rf"training.quantization='{value}'"):
+        SoupConfig.model_validate(recipe(quantization=value))
 
 
 @pytest.mark.parametrize("value", [True, 0, -1, float("nan"), float("inf"), 0.049, 100.01])
