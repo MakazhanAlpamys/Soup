@@ -76,8 +76,9 @@ def test_all_zero_lora_b_refused_before_any_model_load(monkeypatch):
         monkeypatch, _lora(0.0), "--emit-evidence", "ev.json"
     )
     assert res.exit_code == 2, (res.output, repr(res.exception))
-    assert loads == [], res.output
+    assert loads == [], (res.output, repr(res.exception))
     assert out["failed_rule"] == FAILED_ADAPTER_NOOP
+    assert out["failed_rule"] == "adapter_noop"
     plain = _plain(res.output)
     assert "lora_B" in plain
     assert "no scores were measured; evidence not written" in plain
@@ -86,7 +87,7 @@ def test_all_zero_lora_b_refused_before_any_model_load(monkeypatch):
 
 def test_trained_adapter_runs_the_live_eval(monkeypatch):
     res, loads, out, _ = _run(monkeypatch, _lora(0.5))
-    assert loads == ["lora"], res.output
+    assert loads == ["lora"], (res.output, repr(res.exception))
     assert res.exit_code == 2, (res.output, repr(res.exception))
     assert out["failed_rule"] == FAILED_TASK_WIN
 
@@ -94,7 +95,7 @@ def test_trained_adapter_runs_the_live_eval(monkeypatch):
 def test_adapter_without_lora_b_keys_is_left_alone(monkeypatch):
     vera = {"base_model.model.layers.0.self_attn.q_proj.vera_lambda_b": np.zeros(4, np.float32)}
     res, loads, out, _ = _run(monkeypatch, vera)
-    assert loads == ["lora"], res.output
+    assert loads == ["lora"], (res.output, repr(res.exception))
     assert res.exit_code == 2, (res.output, repr(res.exception))
     assert out["failed_rule"] == FAILED_TASK_WIN
 
@@ -103,7 +104,7 @@ def test_non_zero_standalone_tensor_is_left_alone(monkeypatch):
     weights = _lora(0.0)
     weights["base_model.model.score.weight"] = np.ones((2, 4), dtype=np.float32)
     res, loads, out, _ = _run(monkeypatch, weights)
-    assert loads == ["lora"], res.output
+    assert loads == ["lora"], (res.output, repr(res.exception))
     assert res.exit_code == 2, (res.output, repr(res.exception))
     assert out["failed_rule"] == FAILED_TASK_WIN
 
@@ -114,7 +115,7 @@ def test_unreadable_weights_warn_and_continue(monkeypatch):
         (dir_path / "adapter_model.bin").write_bytes(b"\x00" * 16)
 
     res, loads, out, _ = _run(monkeypatch, {}, write=_bin_adapter)
-    assert loads == ["lora"], res.output
+    assert loads == ["lora"], (res.output, repr(res.exception))
     assert res.exit_code == 2, (res.output, repr(res.exception))
     assert out["failed_rule"] == FAILED_TASK_WIN
     assert "could not read the adapter weights" in _plain(res.output)
