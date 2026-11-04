@@ -16,6 +16,7 @@ test reads the markdown on CPU and pins four things:
   note fails this check).
 """
 
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -116,13 +117,16 @@ def test_finding_9_is_unchanged_and_carries_a_clarification():
     assert "CLARIFICATION" in note
     assert "WRONG" in note
     assert "6.56x" in note
-    # 评审要求：note 引用的每个数字都要钉住，否则把 8/256 改成 4/256 测试也不会响
+    # Every figure the note quotes is pinned, so editing one of them fails.
     for figure in ("8/256", "256/256", "425.07", "64.79"):
         assert figure in note, f"the note no longer quotes {figure}"
+    # ...and each figure stays next to the arm it belongs to, so swapping the
+    # two arms fails even though both phrases are still present somewhere.
+    flat = " ".join(note.replace(">", " ").split())
+    assert "the `pin=True` arm was timed while it was WRONG (8/256" in flat
+    assert "the `pin=False` arm was exact (256/256)" in flat
     date_text = note.split("CLARIFICATION", 1)[1].split()[0]
-    from datetime import date as _date
-
-    _date.fromisoformat(date_text)  # 真解析，不是数连字符的数量
+    date.fromisoformat(date_text)
     assert note.lstrip().startswith(">"), "the note is not in the record's blockquote form"
 
 
