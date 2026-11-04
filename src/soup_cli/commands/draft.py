@@ -33,6 +33,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli import __version__
 from soup_cli.utils.adapter_fuse import merge_adapter_to_dense
@@ -693,11 +694,17 @@ def distill(
             f"-> uld_strategy=wasserstein_aligned"
         )
         console.print(
-            f"[bold]Plan[/] — distil [cyan]{escape(target)}[/] into "
-            f"[cyan]{escape(draft_base)}[/] over {len(rows)} rows "
-            f"({vocab_desc})\n"
+            Text.assemble(
+                ("Plan", "bold"),
+                " — distil ",
+                (strip_control(target), "cyan"),
+                " into ",
+                (strip_control(draft_base), "cyan"),
+                f" over {len(rows)} rows ({vocab_desc})\n",
+            )
         )
-        console.print(escape(yaml_text))
+        # The YAML already quotes its scalars. Rich must not reinterpret those bytes.
+        console.print(yaml_text, markup=False, emoji=False)
         console.print("[dim]--plan-only: nothing written.[/]")
         return
 
