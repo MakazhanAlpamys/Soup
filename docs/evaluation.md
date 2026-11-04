@@ -268,6 +268,10 @@ smoke generator are unchanged (#1798).
 Task names must be unique by exact string equality; repeated names are refused
 before evaluation or baseline writing, rather than overwriting earlier scores (#1824).
 
+The `run_gate` SDK refuses a non-finite `regression_threshold` with a named
+`ValueError` before generation. Finite tolerances retain their absolute-value
+handling and strict drop boundary; CLI and config bounds are unchanged (#1844).
+
 Baselines may be a registry reference (`registry://<name-or-id>`), a file path, or omitted for the first run. A registry baseline uses the newest eval row for each benchmark — re-measuring a benchmark replaces its baseline score — and warns, per benchmark, when that row's scorer stamp is missing or from a different scorer revision. A task whose evaluation raises (`ValueError`, `FileNotFoundError`, `OSError`, or a judge that stays unreachable) gets no score and fails the gate closed under `on_regression: stop`; the log line lists it as a task that could not be scored, with the error, rather than as a regression (#1447).
 
 A zero-byte or whitespace-only judge prompt file is an input error naming the
