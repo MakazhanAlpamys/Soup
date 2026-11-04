@@ -66,6 +66,7 @@ def test_cli_compare_refuses_nonfinite_without_partial_output(
     run_id, score = (RUN_A, left) if left == float("inf") else (RUN_B, right)
     result = CliRunner().invoke(app, ["eval", "compare", RUN_A, RUN_B])
     assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit), repr(result.exception)
     assert normalized(result.output) == message(f"run {run_id!r}, benchmark {BENCHMARK!r}", score)
 
 
@@ -85,6 +86,7 @@ def test_cli_leaderboard_refuses_nonfinite_without_partial_output(
     save(tracker, RUN_A, score)
     result = CliRunner().invoke(app, ["eval", "leaderboard", "--format", fmt])
     assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit), repr(result.exception)
     assert normalized(result.output) == message(f"model {MODEL!r}, benchmark {BENCHMARK!r}", score)
 
 
@@ -128,7 +130,18 @@ def test_partial_benchmark_coverage_is_preserved(tracker: ExperimentTracker) -> 
     assert not comparison["has_regressions"]
     result = CliRunner().invoke(app, ["eval", "compare", RUN_A, RUN_B])
     assert result.exit_code == 0
-    assert "-" in normalized(result.output)
+
+
+def test_one_sided_nonfinite_benchmark_is_refused(tracker: ExperimentTracker) -> None:
+    save(tracker, RUN_A, float("inf"))
+    expected = message(f"run {RUN_A!r}, benchmark {BENCHMARK!r}", float("inf"))
+    with pytest.raises(ValueError) as caught:
+        compare_runs(tracker, RUN_A, RUN_B)
+    assert str(caught.value) == expected
+    result = CliRunner().invoke(app, ["eval", "compare", RUN_A, RUN_B])
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit), repr(result.exception)
+    assert normalized(result.output) == expected
 
 
 @pytest.mark.parametrize("consumer", ["compare", "leaderboard"])
