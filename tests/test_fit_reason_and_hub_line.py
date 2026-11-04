@@ -6,7 +6,7 @@ that listed every cause. ``hardware_fit_input_or_reason`` returns a ``FitUnavail
 naming the one field. ``soup plan`` validated the config twice, the second time after
 a YAML round trip; it now prices the config it validated. And only ``soup plan``
 printed a line before the estimate's Hub request: ``soup profile`` (``--config`` and
-``--model``) and the train pre-flight now print the same line.
+``--model``) now print the same line; the train pre-flight leaves out the offline hint.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from soup_cli.utils.hardware_fit import (
     hardware_fit_input_from_config,
     hardware_fit_input_or_reason,
 )
-from soup_cli.utils.model_shape import HUB_REQUEST_LINE
+from soup_cli.utils.model_shape import HUB_REQUEST_LINE, HUB_REQUEST_LINE_BEFORE_DOWNLOAD
 from soup_cli.utils.terraform_plan import build_plan
 from tests._tiny_checkpoint import TINY_LLAMA, write_tiny_model
 from tests.conftest import make_cli_runner, strip_ansi
@@ -324,11 +324,11 @@ def _cache(workdir, repo: str, *, weights: bool) -> None:
         (snapshot / "config.json").write_text(json.dumps(TINY_LLAMA), encoding="utf-8")
 
 
-def _record_line(monkeypatch, console, events: list[str]) -> None:
+def _record_line(monkeypatch, console, events: list[str], line: str = HUB_REQUEST_LINE) -> None:
     real_print = console.print
 
     def recording(*args, **kwargs):
-        if args and isinstance(args[0], str) and HUB_REQUEST_LINE in args[0]:
+        if args and isinstance(args[0], str) and line in args[0]:
             events.append("line")
         return real_print(*args, **kwargs)
 
@@ -352,7 +352,7 @@ def _preflight(workdir, monkeypatch, events: list[str]) -> str:
     buffer = io.StringIO()
     console = Console(file=buffer, width=400, force_terminal=False)
     monkeypatch.setattr(train_mod, "console", console)
-    _record_line(monkeypatch, console, events)
+    _record_line(monkeypatch, console, events, HUB_REQUEST_LINE_BEFORE_DOWNLOAD)
     train_mod._hardware_fit_preflight(_cfg(), LARGE_CARD, allow_oom_attempt=False)
     return _plain(buffer.getvalue())
 
@@ -382,7 +382,12 @@ class TestTheLineBeforeTheHub:
     ):
         text = _preflight(workdir, monkeypatch, hub)
         assert hub == ["line", "head", "download", "count"]
-        assert text == HUB_REQUEST_LINE
+        assert text == HUB_REQUEST_LINE_BEFORE_DOWNLOAD
+
+    def test_the_pre_flight_line_has_no_offline_hint(self, workdir, hub, monkeypatch):
+        text = _preflight(workdir, monkeypatch, hub)
+        assert "HF_HUB_OFFLINE" not in text
+        assert text == "Reading the model's details from the Hub to size the run..."
 
     def test_a_batch_it_cannot_price_sends_no_request(self, workdir, hub):
         # A Hub id with nothing cached: reading its shape would send requests.
