@@ -5632,9 +5632,16 @@ class SoupConfig(BaseModel):
             if "quantization" not in tcfg.model_fields_set and tcfg.load_in_8bit is not True:
                 tcfg.quantization = "none"
                 return self
+            if tcfg.load_in_8bit is True:
+                fix = (
+                    "Delete training.load_in_8bit: true, which sets quantization "
+                    "to 8bit, and any training.quantization line."
+                )
+            else:
+                fix = "set training.quantization: none"
             raise ValueError(
                 f"training.quantization={tcfg.quantization!r} is not supported by "
-                "task='distill' on backend='mlx': set training.quantization: none"
+                f"task='distill' on backend='mlx': {fix}"
             )
         # ``bnb_4bit_quant_storage`` is checked against ``quantization`` by a
         # TrainingConfig validator that has already run on the unresolved default,
