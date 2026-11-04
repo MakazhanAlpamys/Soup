@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import asdict
@@ -235,7 +236,11 @@ def trained(tmp_path, native_stack):
         {"prompt": "Q", "chosen": "good " + f"t{i}", "rejected": "bad long " + f"t{i}"}
         for i in range(8, 13)
     ]
-    trainer.setup({"train": rows, "val": rows[:3]})
+    validation = [
+        {"prompt": "Q", "chosen": f"good t{i}", "rejected": f"bad long t{i}"}
+        for i in range(13, 16)
+    ]
+    trainer.setup({"train": rows, "val": validation})
     result = trainer.train()
     return trainer, result, Path(cfg.output), base
 
@@ -396,48 +401,33 @@ def test_relocated_base_without_tokenizer(trained, tmp_path):
 
 
 @pytest.mark.usefixtures("native_stack")
-@pytest.mark.parametrize(
-    "fault",
-    [
-        "file_symlink",
-        "file_hardlink",
-        "directory_symlink",
-        "duplicate_json",
-        "nonfinite_json",
-        "oversize_header",
-        "custom_code",
-    ],
-)
 @pytest.mark.requires_symlink
-def test_bundle_read_safety(trained, tmp_path, fault):
-    _, _, root, base = trained
+@pytest.mark.parametrize("member", ["file", "directory"])
+def test_bundle_symlinks_are_refused(trained, tmp_path, member):
+    _, _, root, _ = trained
+    assert load_reward_scorer(root)
     payload, _ = read_bundle(root)
-    if fault in ("duplicate_json", "nonfinite_json"):
-        (root / "reward_model.json").write_text(
-            '{"a":1,"a":2}' if fault == "duplicate_json" else '{"a":1e999}'
-        )
-    elif fault == "custom_code":
-        config = json.loads((base / "config.json").read_text())
-        config["model_file"] = "evil.py"
-        (base / "config.json").write_text(json.dumps(config))
-    elif fault == "oversize_header":
-        path = payload / "reward.safetensors"
-        path.write_bytes((4 * 1024 * 1024 + 1).to_bytes(8, "little"))
-    elif fault == "directory_symlink":
-        token = payload / "tokenizer"
-        new = tmp_path / "moved-tokenizer"
-        token.rename(new)
-        token.symlink_to(new, target_is_directory=True)
-    else:
-        path = payload / "reward.safetensors"
-        new = tmp_path / "moved-weight"
-        path.rename(new)
-        if fault == "file_symlink":
-            path.symlink_to(new)
-        else:
-            os.link(new, path)
+    path = payload / ("reward.safetensors" if member == "file" else "tokenizer")
+    moved = tmp_path / "moved-member"
+    path.rename(moved)
+    path.symlink_to(moved, target_is_directory=member == "directory")
     with pytest.raises((ValueError, OSError)):
         load_reward_scorer(root)
+
+
+@pytest.mark.usefixtures("native_stack")
+@pytest.mark.requires_hardlink
+def test_bundle_hardlinks_are_refused(trained, tmp_path):
+    _, _, root, _ = trained
+    assert load_reward_scorer(root)
+    payload, _ = read_bundle(root)
+    path = payload / "reward.safetensors"
+    moved = tmp_path / "moved-weight"
+    path.rename(moved)
+    os.link(moved, path)
+    with pytest.raises((ValueError, OSError)):
+        load_reward_scorer(root)
+
 
 
 @pytest.mark.usefixtures("native_stack")
@@ -486,10 +476,14 @@ def test_missing_base_member_names_remedy(trained):
 
 @pytest.mark.usefixtures("native_stack")
 def test_diagnostic_labels_escape_markup_controls_and_bound():
+    from rich.text import Text
+
     from soup_cli.utils.mlx_reward_bundle import label
 
     value = label("[bold]\x1b" + "x" * 500)
-    assert "[" not in value and "\x1b" not in value and len(value) <= 260
+    shown = Text.from_markup(value)
+    assert "[bold]" in shown.plain and not shown.spans
+    assert "\x1b" not in value and len(value) <= 260
 
 
 @pytest.fixture
@@ -657,6 +651,153 @@ def reward_config(**changes):
     return SoupConfig(**values)
 
 
+def test_documented_reward_configuration_loads_and_dispatches():
+    import yaml
+
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.trainer.mlx_routing import resolve_trainer
+
+    page = (Path(__file__).parents[1] / "docs/mlx-reward-model.md").read_text()
+    blocks = re.findall(r"```yaml\n(.*?)\n```", page, re.DOTALL)
+    assert blocks
+    config = SoupConfig(**yaml.safe_load(blocks[0]))
+    assert (config.backend, config.task) == ("mlx", "reward_model")
+    assert resolve_trainer(config)[0] is MLXRewardModelTrainerWrapper
+
+
+def test_omitted_reward_rewind_is_disabled_and_config_remains_reloadable():
+    from soup_cli.config.schema import SoupConfig, TrainingConfig
+
+    config = SoupConfig(
+        base="local", backend="mlx", task="reward_model", data={"train": "pairs.jsonl"},
+        training={"quantization": "none"},
+    )
+    assert config.training.rewind_log is False
+    assert SoupConfig(**config.model_dump()).model_dump() == config.model_dump()
+    assert TrainingConfig().rewind_log is True
+    assert reward_config(training={"rewind_log": False}).training.rewind_log is False
+    with pytest.raises(ValueError, match="training.rewind_log"):
+        reward_config(training={"rewind_log": True})
+
+
+@pytest.mark.parametrize("value", ["4bit", "8bit"])
+def test_quantization_diagnostic_names_the_actual_field_and_value(value):
+    with pytest.raises(ValueError) as error:
+        reward_config(training={"quantization": value})
+    assert error.value.errors()[0]["msg"] == (
+        f"Value error, MLX reward_model does not support training.quantization='{value}'. "
+        "Set training.quantization to none for a dense base."
+    )
+
+
+@pytest.mark.usefixtures("native_stack")
+def test_publish_does_not_hash_or_reload_the_base(trained, monkeypatch):
+    import mlx_lm.utils
+
+    import soup_cli.utils.mlx_reward_bundle as bundles
+
+    trainer, _, root, _ = trained
+    _, manifest = read_bundle(root)
+    contract = {key: value for key, value in manifest.items()
+                if key not in ("files", "format_version", "artifact_type")}
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("saving rehashed or reloaded the base")
+
+    monkeypatch.setattr(bundles, "verify_base", refuse)
+    monkeypatch.setattr(bundles, "base_identity", refuse)
+    monkeypatch.setattr(mlx_lm.utils, "load_model", refuse)
+    before = (root / "reward_model.json").read_bytes()
+    publish_bundle(root, trainer.model, trainer.tokenizer, contract)
+    assert (root / "reward_model.json").read_bytes() != before
+    payload, _ = read_bundle(root)
+    saved = (root / "reward_model.json").read_bytes()
+    (payload / "reward.safetensors").write_bytes(b"corrupt")
+    with pytest.raises(ValueError, match="size or SHA-256 mismatch"):
+        publish_bundle(root, trainer.model, trainer.tokenizer, contract)
+    assert (root / "reward_model.json").read_bytes() == saved
+
+
+@pytest.mark.usefixtures("native_stack")
+def test_hub_download_only_selects_native_base_and_tokenizer_assets(trained, monkeypatch):
+    import huggingface_hub
+    from huggingface_hub.utils import filter_repo_objects
+
+    from soup_cli.config.schema import SoupConfig
+
+    trainer, _, root, base = trained
+    calls = []
+
+    def download(model, **kwargs):
+        calls.append((model, kwargs))
+        return str(base)
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", download)
+    values = trainer.config.model_dump()
+    values.update(base="example/native-reward-base", output=str(root) + "-hub")
+    wrapper = MLXRewardModelTrainerWrapper(SoupConfig(**values))
+    wrapper.setup({"train": [{"prompt": "Q", "chosen": "good", "rejected": "bad"}]})
+    assert len(calls) == 1 and calls[0][0] == values["base"]
+    options = calls[0][1]
+    allowed = {
+        "config.json", "model.safetensors", "model-00001-of-00002.safetensors",
+        "model.safetensors.index.json", "tokenizer.json", "tokenizer_config.json",
+        "special_tokens_map.json", "added_tokens.json", "tokenizer.model", "tiktoken.model",
+        "vocab.txt", "vocab.json", "merges.txt", "chat_template.jinja",
+        "chat_templates/default.jinja", "tokenizer.tiktoken", "hf_quant_config.json",
+    }
+    refused = {"pytorch_model.bin", "model.bin", "model.npz", "model.py", "data.json",
+               "data.jsonl", "other/model.safetensors", "model-dir/model.safetensors", "README.md"}
+    selected = set(filter_repo_objects(
+        sorted(allowed | refused), allow_patterns=options.get("allow_patterns"),
+        ignore_patterns=options.get("ignore_patterns"),
+    ))
+    assert selected == allowed
+
+
+@pytest.mark.usefixtures("native_stack")
+@pytest.mark.parametrize("member", ["pytorch_model.bin", "model.npz", "hf_quant_config.json"])
+def test_unsupported_base_member_is_named_and_not_deleted(trained, member):
+    _, _, _, base = trained
+    assert base_identity(base)["files"]
+    path = base / member
+    path.write_bytes(b"unused cached member")
+    with pytest.raises(ValueError, match=re.escape(member)):
+        base_identity(base)
+    assert path.read_bytes() == b"unused cached member"
+
+
+@pytest.mark.usefixtures("native_stack")
+def test_unseen_pairs_improve_over_seeded_initial_head_and_zero_lora(trained):
+    from soup_cli.config.schema import SoupConfig
+
+    trainer, _, root, _ = trained
+    train_tokens = {tuple(pair.chosen) for pair in trainer._pairs}
+    train_tokens |= {tuple(pair.rejected) for pair in trainer._pairs}
+    held_tokens = {tuple(pair.chosen) for pair in trainer._val_pairs}
+    held_tokens |= {tuple(pair.rejected) for pair in trainer._val_pairs}
+    assert len(trainer._val_pairs) == 3 and train_tokens.isdisjoint(held_tokens)
+    held = [{"prompt": "Q", "chosen": f"good t{i}", "rejected": f"bad long t{i}"}
+            for i in range(13, 16)]
+    for index in range(13, 16):
+        assert trainer.tokenizer.encode(f"t{index}", add_special_tokens=False) == [index]
+    values = trainer.config.model_dump()
+    values["output"] += "-initial"
+    initial = MLXRewardModelTrainerWrapper(SoupConfig(**values))
+    initial.setup({"train": held})
+    lora_b = [value for key, value in flat(initial.model.trainable_parameters()).items()
+              if key.endswith("lora_b")]
+    assert lora_b and all(bool(mx.all(value == 0).item()) for value in lora_b)
+    items = [(row["prompt"], row[side]) for row in held for side in ("chosen", "rejected")]
+    before = score_completions(NativeRewardScorer(initial.model, initial.tokenizer, 64), items)
+    after = score_completions(load_reward_scorer(root), items)
+    initial_margins = [before[i] - before[i + 1] for i in range(0, len(items), 2)]
+    trained_margins = [after[i] - after[i + 1] for i in range(0, len(items), 2)]
+    assert all(margin > 0 for margin in trained_margins)
+    # Both supported stacks improved by >5.8; retain a wide deterministic margin.
+    assert sum(trained_margins) / 3 - sum(initial_margins) / 3 > 1.0
+
+
 def test_public_registry_and_neighbor_routes():
     from soup_cli.config.schema import MLX_TASKS
     from soup_cli.trainer.mlx_routing import MLX_TRAINER_REGISTRY, resolve_trainer
@@ -756,25 +897,31 @@ def test_dropout_and_rslora_are_applied_like_sft(trained):
 
 
 def public_cli(config_path, *args):
+    environment = dict(os.environ, HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
+    environment.setdefault("COLUMNS", "240")
     return subprocess.run(
         [sys.executable, "-m", "soup_cli", "train", "--config", str(config_path), "--yes", *args],
         cwd=config_path.parent,
         capture_output=True,
         text=True,
         timeout=120,
-        env=dict(os.environ, HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", COLUMNS="240"),
+        env=environment,
     )
 
 
 @pytest.mark.parametrize(
     "args,expected",
     [
-        (["--push-as", "org/model"], "--push-as"),
-        (["--gate", "missing.yaml"], "--gate"),
-        (["--diagnose-gate", "missing.yaml"], "--diagnose-gate"),
-        (["--capture-activations", "activations"], "--capture-activations"),
-        (["--resume", "missing", "--push-as", "org/model"], "--resume is not supported"),
-        (["--hf-resume", "--push-as", "org/model"], "--hf-resume is not supported"),
+        (["--push-as", "org/model"], "MLX reward_model does not support --push-as."),
+        (["--gate", "missing.yaml"], "MLX reward_model does not support --gate."),
+        (["--diagnose-gate", "missing.yaml"],
+         "MLX reward_model does not support --diagnose-gate."),
+        (["--capture-activations", "activations"],
+         "MLX reward_model does not support --capture-activations."),
+        (["--resume", "missing", "--push-as", "org/model"],
+         "--resume is not supported for task 'reward_model' on backend 'mlx'"),
+        (["--hf-resume", "--push-as", "org/model"],
+         "--hf-resume is not supported for task 'reward_model' on backend 'mlx'"),
     ],
 )
 def test_public_cli_early_refusals(tmp_path, args, expected):
@@ -784,7 +931,9 @@ def test_public_cli_early_refusals(tmp_path, args, expected):
     config.write_text(yaml.safe_dump(reward_config().model_dump(mode="json")))
     result = public_cli(config, *args)
     assert result.returncode == 1, result.stdout + result.stderr
-    assert expected in result.stdout, result.stdout + result.stderr
+    from tests.conftest import strip_ansi
+
+    assert expected in " ".join(strip_ansi(result.stdout).split()), result.stdout + result.stderr
     assert "Setting up model" not in result.stdout
     assert not (tmp_path / ".soup").exists()
 
@@ -857,3 +1006,354 @@ def test_setup_seed_reproducibility_and_independent_data_seed(trained):
                    for key, value in snapshots[0].items() if key.endswith(suffix))
     expected = mx.random.normal((1, 32), dtype=mx.float32, key=mx.random.key(42)) * 0.02
     assert mx.array_equal(snapshots[0]["score.weight"], expected).item()
+
+
+@pytest.mark.usefixtures("native_stack")
+@pytest.mark.parametrize(
+    "fault", ["duplicate_json", "nonfinite_json", "oversize_header", "custom_code"],
+)
+def test_bundle_corruption_reaches_the_specific_check(trained, monkeypatch, fault):
+    import hashlib
+
+    import mlx_lm.utils
+
+    import soup_cli.utils.mlx_reward_bundle as bundles
+    _, _, root, base = trained
+    # A valid control is proved before planting exactly one fault.
+    assert score_completions(load_reward_scorer(root), [("Q", "good t13")])
+    payload, manifest = read_bundle(root)
+    pointer_path = root / 'reward_model.json'
+    pointer = json.loads(pointer_path.read_text())
+    expected = 'invalid bounded JSON'
+    if fault == 'duplicate_json':
+        raw = json.dumps(pointer)
+        assert raw.count('"format_version": 1') == 1
+        pointer_path.write_text(raw.replace('"format_version": 1',
+                                           '"format_version": 1, "format_version": 1'))
+    else:
+        if fault == 'nonfinite_json':
+            manifest['training']['plan_probe'] = 1.0
+        elif fault == 'oversize_header':
+            path = payload / 'reward.safetensors'
+            data = path.read_bytes()
+            old_length = int.from_bytes(data[:8], 'little')
+            new_length = bundles.MAX_JSON + 8
+            path.write_bytes(new_length.to_bytes(8, 'little') +
+                             data[8:8+old_length].ljust(new_length, b' ') +
+                             data[8+old_length:])
+            raw = path.read_bytes()
+            manifest['files']['reward.safetensors'] = {
+                'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
+            expected = 'invalid safetensors header length'
+        else:
+            path = base / 'config.json'
+            config = json.loads(path.read_text())
+            config['model_file'] = 'unused.py'
+            path.write_text(json.dumps(config))
+            raw = path.read_bytes()
+            manifest['base']['files']['config.json'] = {
+                'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
+            def refuse(*args, **kwargs):
+                raise AssertionError('the custom-model route reached the model loader')
+            monkeypatch.setattr(mlx_lm.utils, 'load_model', refuse)
+            expected = 'dense Llama backbone required'
+        raw = json.dumps(manifest, sort_keys=True).encode()
+        if fault == 'nonfinite_json':
+            assert raw.count(b'"plan_probe": 1.0') == 1
+            raw = raw.replace(b'"plan_probe": 1.0', b'"plan_probe": 1e999')
+        (payload / 'manifest.json').write_bytes(raw)
+        pointer['manifest_sha256'] = hashlib.sha256(raw).hexdigest()
+        pointer_path.write_text(json.dumps(pointer))
+    with pytest.raises(ValueError, match=expected):
+        load_reward_scorer(root)
+
+
+@pytest.mark.parametrize("raw", [b'{"x":1,"x":2}', b'{"x":NaN}', b'{"x":Infinity}',
+                                 b'{"x":-Infinity}', b'{"x":[1e999]}', b'[]'])
+def test_json_parser_checks_complete_objects(raw):
+    from soup_cli.utils.mlx_reward_bundle import _json
+
+    assert _json(b'{"x":[1,2.5,{"y":true}]}') == {"x": [1, 2.5, {"y": True}]}
+    with pytest.raises(ValueError, match="duplicate|nonfinite|expected JSON object"):
+        _json(raw)
+
+
+def test_json_byte_bound_is_checked_before_parsing(tmp_path):
+    from soup_cli.utils.mlx_reward_bundle import MAX_JSON, read_json
+
+    path = tmp_path / "bounded.json"
+    path.write_bytes(b'{"x":1}'.ljust(MAX_JSON, b" "))
+    assert read_json(path) == {"x": 1}
+    path.write_bytes(path.read_bytes() + b" ")
+    with pytest.raises(ValueError, match="bounded JSON"):
+        read_json(path)
+
+
+@pytest.mark.parametrize("version", [True, False, 1.0, "1", 2, None])
+def test_version_requires_the_exact_integer_type(version):
+    from soup_cli.utils.mlx_reward_bundle import ARTIFACT, _version
+
+    _version({"format_version": 1, "artifact_type": ARTIFACT}, "pointer")
+    with pytest.raises(ValueError, match="format_version: expected 1"):
+        _version({"format_version": version, "artifact_type": ARTIFACT}, "pointer")
+
+
+def _tensor_file(path, header, body=b"\0\0\0\0"):
+    raw = json.dumps(header).encode()
+    raw = raw.ljust((len(raw) + 7) // 8 * 8, b" ")
+    path.write_bytes(len(raw).to_bytes(8, "little") + raw + body)
+
+
+@pytest.mark.parametrize("fault", ["dtype", "shape_bool", "shape_negative", "offset_bool",
+                                   "offset_negative", "bytes", "overlap", "gap", "size"])
+def test_tensor_header_layout_checks_have_valid_controls(tmp_path, fault):
+    from soup_cli.utils.mlx_reward_bundle import tensor_header
+
+    path = tmp_path / "weights.safetensors"
+    meta = {"dtype": "F32", "shape": [1], "data_offsets": [0, 4]}
+    _tensor_file(path, {"weight": meta})
+    with path.open("rb") as stream:
+        assert tensor_header(stream, path.name)["weight"] == meta
+    body = b"\0" * 4
+    header = {"weight": meta}
+    if fault == "dtype":
+        meta["dtype"] = "UNKNOWN"
+    elif fault == "shape_bool":
+        meta["shape"] = [True]
+    elif fault == "shape_negative":
+        meta["shape"] = [-1]
+    elif fault == "offset_bool":
+        meta["data_offsets"] = [False, 4]
+    elif fault == "offset_negative":
+        meta["data_offsets"] = [-1, 3]
+    elif fault == "bytes":
+        meta["data_offsets"] = [0, 8]
+        body = b"\0" * 8
+    elif fault == "overlap":
+        header["other"] = dict(meta)
+    elif fault == "gap":
+        meta["data_offsets"] = [4, 8]
+        body = b"\0" * 8
+    else:
+        body = b""
+    _tensor_file(path, header, body)
+    expected = "invalid tensor shape, dtype or byte range"
+    if fault in ("overlap", "gap"):
+        expected = "overlapping or non-contiguous tensor ranges"
+    elif fault == "size":
+        expected = "tensor byte ranges differ from file size"
+    with path.open("rb") as stream, pytest.raises(ValueError, match=expected):
+        tensor_header(stream, path.name)
+
+
+@pytest.mark.requires_symlink
+def test_json_read_refuses_linked_parent_and_contained_member(tmp_path):
+    from soup_cli.utils.mlx_reward_bundle import contained, read_json
+
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "data.json").write_text('{"x":1}')
+    assert read_json(target / "data.json") == {"x": 1}
+    assert contained(tmp_path, "target/data.json") == target / "data.json"
+    linked = tmp_path / "linked"
+    linked.symlink_to(target, target_is_directory=True)
+    with pytest.raises(ValueError, match="unreadable|linked"):
+        read_json(linked / "data.json")
+    with pytest.raises(ValueError, match="linked parent"):
+        contained(tmp_path, "linked/data.json")
+
+
+@pytest.mark.requires_hardlink
+def test_json_read_refuses_hardlinks(tmp_path):
+    from soup_cli.utils.mlx_reward_bundle import read_json
+
+    path = tmp_path / "data.json"
+    path.write_text('{"x":1}')
+    assert read_json(path) == {"x": 1}
+    os.link(path, tmp_path / "other.json")
+    with pytest.raises(ValueError, match="unreadable|linked"):
+        read_json(path)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFO creation is unavailable")
+def test_checked_file_refuses_nonregular_files_without_reading(tmp_path):
+    from soup_cli.utils.mlx_reward_bundle import checked_file
+
+    path = tmp_path / "fifo"
+    os.mkfifo(path)
+    with pytest.raises(ValueError, match="regular non-linked file"), checked_file(path):
+        pytest.fail("nonregular descriptor was accepted")
+
+
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize("parent", [False, True])
+def test_output_rejects_linked_root_or_parent_before_writing(tmp_path, parent):
+    from soup_cli.utils.mlx_reward_bundle import validate_output
+
+    target = tmp_path / "target"
+    target.mkdir()
+    validate_output(target)
+    linked = tmp_path / "linked"
+    linked.symlink_to(target, target_is_directory=True)
+    with pytest.raises(OSError, match="symbolic link|reparse"):
+        validate_output(linked / "new" if parent else linked)
+    assert list(target.iterdir()) == []
+
+
+@pytest.mark.usefixtures("native_stack")
+def test_weights_use_the_verified_descriptor_after_path_replacement(trained, monkeypatch):
+    import soup_cli.utils.mlx_reward_bundle as bundles
+
+    trainer, _, root, _ = trained
+    payload, manifest = read_bundle(root)
+    path = payload / "reward.safetensors"
+    expected = flat(trainer.model.trainable_parameters())
+    replacement = dict(expected)
+    replacement["score.weight"] = expected["score.weight"] + 1
+    changed = payload / "replacement.safetensors"
+    mx.save_safetensors(str(changed), replacement)
+    original = bundles.tensor_header
+
+    def swap(stream, member):
+        header = original(stream, member)
+        os.replace(changed, path)
+        return header
+
+    monkeypatch.setattr(bundles, "tensor_header", swap)
+    loaded = bundles.read_weights(path, expected, manifest["files"]["reward.safetensors"])
+    assert not changed.exists()
+    for key, value in expected.items():
+        assert mx.array_equal(loaded[key], value).item(), key
+
+
+@pytest.mark.usefixtures("native_stack")
+@pytest.mark.parametrize("member", ["config.json", "tokenizer_config.json"])
+@pytest.mark.parametrize("key", ["model_file", "auto_map"])
+def test_saved_tokenizer_metadata_refuses_custom_routes_before_loading(
+    trained, monkeypatch, member, key,
+):
+    from transformers import AutoTokenizer
+
+    _, _, root, _ = trained
+    assert load_reward_scorer(root)
+
+    def change(payload, manifest):
+        import hashlib
+
+        path = payload / "tokenizer" / member
+        config = json.loads(path.read_text()) if path.exists() else {"model_type": "llama"}
+        config[key] = "unsupported"
+        raw = json.dumps(config).encode()
+        path.write_bytes(raw)
+        manifest["files"][f"tokenizer/{member}"] = {
+            "size": len(raw), "sha256": hashlib.sha256(raw).hexdigest(),
+        }
+
+    repoint(root, change)
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("custom metadata reached AutoTokenizer")
+
+    monkeypatch.setattr(AutoTokenizer, "from_pretrained", refuse)
+    with pytest.raises(ValueError, match="custom code is not supported"):
+        load_reward_scorer(root)
+
+
+@pytest.mark.parametrize('field,value,pattern', [
+    ('max_length', True, 'max_length'), ('max_length', 1, 'max_length'),
+    ('training', None, 'training metadata'), ('head.seed', True, 'head initialization'),
+    ('lora.rank', True, 'LoRA metadata'), ('lora.rank', 4097, 'LoRA metadata'),
+    ('lora.layers', 65537, 'LoRA metadata'), ('lora.keys', ['x' * 257], 'LoRA metadata'),
+    ('lora.keys', [f'p{i}' for i in range(1025)], 'LoRA metadata'),
+    ('lora.scale', False, 'LoRA scale'),
+    pytest.param('lora.scale', 10 ** 4000, 'LoRA scale', id='overflowing-scale'),
+    ('lora.dropout', 1.0, 'LoRA scale or dropout'),
+    ('tokenizer.eos_id', True, 'tokenizer identity'),
+    ('tokenizer.vocab_size', 2, 'tokenizer identity'),
+])
+def test_manifest_contract_bounds_are_independent(field, value, pattern):
+    from soup_cli.utils.mlx_reward_bundle import POLICY, validate_contract
+
+    manifest = dict(base={'path':'local', 'files':{
+        'config.json':{'size':1, 'sha256':'a' * 64}}}, training={}, max_length=64,
+        policy=dict(POLICY), head=dict(seed=42, std=0.02, dtype='float32', bias=False),
+        lora=dict(rank=2, scale=2., dropout=0., keys=['self_attn.q_proj'], layers=2),
+        tokenizer=dict(eos_id=2, vocab_size=32))
+    validate_contract(manifest)
+    if '.' in field:
+        namespace, name = field.split('.')
+        manifest[namespace][name] = value
+    else:
+        manifest[field] = value
+    with pytest.raises(ValueError, match=pattern):
+        validate_contract(manifest)
+
+
+def test_public_cli_preserves_requested_terminal_width(tmp_path, monkeypatch):
+    observed = {}
+    monkeypatch.setenv('COLUMNS', '80')
+    monkeypatch.setenv('FORCE_COLOR', '1')
+
+    def run(*args, **kwargs):
+        observed.update(kwargs['env'])
+
+    monkeypatch.setattr(subprocess, 'run', run)
+    public_cli(tmp_path / 'config.yaml', '--gate', 'missing.yaml')
+    assert observed['COLUMNS'] == '80' and observed['FORCE_COLOR'] == '1'
+
+
+@pytest.mark.usefixtures("native_stack")
+@pytest.mark.parametrize("member", ["config.json", "tokenizer_config.json"])
+@pytest.mark.parametrize("key", ["model_file", "auto_map"])
+def test_base_metadata_checks_precede_identity_or_model_loading(trained, monkeypatch,
+                                                              member, key):
+    import hashlib
+
+    import mlx_lm.utils
+
+    _, _, root, base = trained
+    assert load_reward_scorer(root)
+
+    def change(payload, manifest):
+        path = base / member
+        config = json.loads(path.read_text())
+        config[key] = "unsupported"
+        raw = json.dumps(config).encode()
+        path.write_bytes(raw)
+        if member in manifest["base"]["files"]:
+            manifest["base"]["files"][member] = {
+                "size": len(raw), "sha256": hashlib.sha256(raw).hexdigest(),
+            }
+
+    repoint(root, change)
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("unsupported metadata reached the model loader")
+
+    monkeypatch.setattr(mlx_lm.utils, "load_model", refuse)
+    expected = "dense Llama backbone required" if member == "config.json" else "custom code"
+    with pytest.raises(ValueError, match=expected):
+        load_reward_scorer(root)
+
+
+@pytest.mark.usefixtures("native_stack")
+def test_failed_payload_rename_cannot_publish_a_pointer(trained, monkeypatch):
+    trainer, _, root, _ = trained
+    _, manifest = read_bundle(root)
+    contract = {key: value for key, value in manifest.items()
+                if key not in ("files", "format_version", "artifact_type")}
+    before = (root / "reward_model.json").read_bytes()
+    generations = set((root / "bundles").iterdir())
+    original = Path.rename
+
+    def fail_stage(path, target):
+        if path.name.startswith('.staging-'):
+            raise OSError('injected payload rename failure')
+        return original(path, target)
+
+    monkeypatch.setattr(Path, 'rename', fail_stage)
+    with pytest.raises(OSError, match='injected payload rename'):
+        publish_bundle(root, trainer.model, trainer.tokenizer, contract)
+    assert (root / 'reward_model.json').read_bytes() == before
+    assert set((root / 'bundles').iterdir()) == generations
+    assert score_completions(load_reward_scorer(root), [('Q', 'good')])

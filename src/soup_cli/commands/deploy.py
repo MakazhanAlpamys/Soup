@@ -685,6 +685,15 @@ def autopilot(
         console.print("[red]--target is required (or use --list).[/]")
         raise typer.Exit(2)
 
+    if measure:
+        from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+        try:
+            refuse_reward_artifact(base)
+        except ValueError as exc:
+            console.print(str(exc), markup=False)
+            raise typer.Exit(1) from exc
+
     try:
         profile = get_profile(target)
     except (KeyError, ValueError, TypeError) as exc:
@@ -783,6 +792,14 @@ def _run_deploy_autopilot_measure(
     measure_candidates: Optional[str],
 ) -> None:
     """Lazy-import + invoke the measurement helper from utils.deploy_measure."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        refuse_reward_artifact(base)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     import hashlib
 
     from rich.markup import escape

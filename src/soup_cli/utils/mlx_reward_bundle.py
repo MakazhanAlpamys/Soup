@@ -34,7 +34,9 @@ POLICY = {
 
 def label(value: Any) -> str:
     """Bound and escape untrusted names; no control codes or rich markup."""
-    return ascii(str(value)).replace("[", "\\u005b").replace("]", "\\u005d")[:260]
+    from soup_cli.utils.terminal import for_terminal
+
+    return for_terminal(ascii(str(value)))[:260]
 
 
 def bad(member: Any, reason: str) -> ValueError:
@@ -379,12 +381,14 @@ def base_identity(root: Path) -> dict:
             obj = read_json(Path(os.path.realpath(candidate)))
             if "auto_map" in obj or "model_file" in obj:
                 raise bad(name, "custom code is not supported")
-    if (
-        (root / "hf_quant_config.json").exists()
-        or list(root.glob("*.bin"))
-        or list(root.glob("*.npz"))
-    ):
-        raise ValueError("MLX reward: dense Llama backbone required.")
+    unsupported = [root / "hf_quant_config.json", *sorted(root.glob("*.bin")),
+                   *sorted(root.glob("*.npz"))]
+    for member in unsupported:
+        if os.path.lexists(member):
+            raise ValueError(
+                f"MLX reward: base member {label(member.name)}: unsupported weight format "
+                "or quantization sidecar. Provide a clean dense MLX safetensors base."
+            )
     weights = sorted(root.glob("model*.safetensors"))
     if not weights:
         raise ValueError(
@@ -562,7 +566,9 @@ def validate_output(root: Path) -> None:
                     "Choose a new output directory."
                 )
     if os.path.lexists(root / "reward_model.json"):
-        load_scorer(root)
+        # The writer already owns a loaded base. Check the previous publication
+        # without rehashing/reloading that base at every save interval.
+        read_bundle(root)
 
 
 def _write_json(path: Path, value: dict) -> None:

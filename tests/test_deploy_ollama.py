@@ -795,3 +795,22 @@ def test_export_deploy_invalid_name():
 
     with pytest.raises((SystemExit, typer.Exit)):
         _auto_deploy_ollama(Path("m.gguf"), "model", "ollama", "bad/name")
+
+
+@pytest.mark.parametrize('member', ['root', 'reward_model.json', 'reward.safetensors'])
+def test_reward_bundle_is_not_a_deployable_gguf_file(tmp_path, monkeypatch, member):
+    monkeypatch.chdir(tmp_path)
+    root = tmp_path / 'reward'
+    root.mkdir()
+    (root / 'reward_model.json').write_text('broken')
+    (root / 'reward.safetensors').write_bytes(b'not gguf')
+
+    def refuse(*args, **kwargs):
+        raise AssertionError('a reward bundle reached Ollama detection')
+
+    monkeypatch.setattr('soup_cli.utils.ollama.detect_ollama', refuse)
+    model = root if member == 'root' else root / member
+    result = runner.invoke(app, ['deploy', 'ollama', '--model', str(model), '--name', 'test'])
+    assert result.exit_code == 1, result.output
+    assert not isinstance(result.exception, AssertionError)
+    assert 'not a file' in result.output or '.gguf extension' in result.output

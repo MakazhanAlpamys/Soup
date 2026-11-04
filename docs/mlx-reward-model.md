@@ -19,7 +19,6 @@ data:
   val_split: 0.1
 training:
   quantization: none
-  rewind_log: false
   epochs: 1
   batch_size: 2
   gradient_accumulation_steps: 2
@@ -28,7 +27,7 @@ training:
     alpha: 16
     dropout: 0.05
     use_rslora: false
-    target_modules: [q_proj, v_proj]
+    target_modules: [self_attn.q_proj, self_attn.v_proj]
 ```
 
 Run `soup train --config soup.yaml --yes`; score the saved bundle with the API
@@ -80,8 +79,9 @@ this slice. Raw pairs use `format: auto` or `dpo`; chat/token-mask tunables do
 not define a scalar loss and non-default values are refused. `eval_steps` is
 refused because validation is per epoch. `training.eval_gate.enabled` and
 `eval.auto_eval` are refused because their LM evaluation paths cannot score
-these bundles. Set `rewind_log: false` explicitly: SFT's default-on recorder
-requires per-row token losses, which this pairwise scalar loop does not emit.
+these bundles. The SFT token-loss recorder is off for this scalar task when
+`rewind_log` is omitted; explicitly enabling it is refused. An explicit false
+is accepted, and the saved effective configuration remains reloadable.
 Project defaults are not changed. Other task-only knobs retain their neutral
 schema defaults; changing them is refused rather than silently ignored.
 
@@ -128,6 +128,23 @@ include sample text.
 Pinned example: `HuggingFaceTB/SmolLM2-135M-Instruct` at
 `12fd25f77366fa6b3b4b768ec3050bf629380bac`, EOS = PAD = 2, no automatic BOS:
 
+These IDs are produced by the pinned model's fast tokenizer with
+`add_special_tokens=True`, followed by the reward pipeline's missing-EOS
+append. They can be reproduced without loading model weights:
+
+```python
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained(
+    "HuggingFaceTB/SmolLM2-135M-Instruct",
+    revision="12fd25f77366fa6b3b4b768ec3050bf629380bac",
+    use_fast=True, trust_remote_code=False,
+)
+ids = tokenizer.encode("Color: red blue green", add_special_tokens=True)
+if not ids or ids[-1] != tokenizer.eos_token_id:
+    ids.append(tokenizer.eos_token_id)
+```
+
 - `Color: red blue green` yields `[13646,42,2382,4461,2654,2]`; replacing green
   with yellow gives 5724 instead of 2654. At M=5 both truncate to
   `[13646,42,2382,4461,2]`, so the pair is skipped as collapsed.
@@ -166,50 +183,32 @@ grows with the number of saves. `soup_run.json` is auxiliary: the bundle's own
 base identity is authoritative. This is not a promise of filesystem durability
 against power loss or unchanged auxiliary CLI logs after a crash.
 
-Read-time checks include:
+The loader refuses incomplete, incompatible or changed bundles rather than
+silently selecting an older generation. Use the error's member name to locate
+the problem; restore the complete bundle instead of editing its metadata.
 
-- Exact version/type and pointer fields. `bundle` must match
-  `bundles/[0-9a-f]{32}`; absolute paths, backslashes and traversal are refused.
-- `realpath`/`commonpath` containment, linked-directory/reparse checks and
-  checked non-following descriptors; bundle hardlinks are refused too.
-- Pointer, manifest and safetensors header bounded to 4 MiB; duplicate JSON
-  keys, nonfinite numbers and malformed tensor byte ranges are refused.
-- Exact actual member inventory, including every file below `tokenizer/`,
-  SHA-256/size checks, local fast tokenizer reload with remote code disabled,
-  and saved EOS/vocabulary/length/pooling contract checks. Extra tokenizer
-  files, linked directories or changed assets fail before tokenizer loading.
-- The full `model*.safetensors` glob used by MLX-LM, config and optional shard
-  index are hashed. Missing/extra indexed shards, duplicate tensor keys,
-  unsupported weight formats and quantization sidecars are refused. HF cache
-  symlinks are allowed only at this separate base boundary. `model_file` and
-  model/tokenizer `auto_map` are refused before either model loader, including
-  MLX-LM 0.31.3's unguarded `model_file` route.
-- LoRA metadata has bounded rank (4096), layers (65536), target count (1024)
-  and key length (256). Expected tensor names/shapes/dtypes come from the
-  checked base, attached LoRA and head, not from manifest declarations alone.
-  The payload is hashed, its header checked, and the **same descriptor**
-  rewound for `mx.load(..., format="safetensors")`; finite values are checked
-  before applying every exact expected tensor. No pickle or custom code.
-
-The trusted local base tree is not protected against a hostile process
-concurrently replacing the whole tree. Scoring does not fall back to an older
-published generation when the selected one is corrupt.
+| Refusal | Recovery |
+|---|---|
+| Incompatible bundle version or contract | Use a compatible Soup version and an intact bundle. |
+| Missing, changed or linked bundle files | Restore the complete generation and its original files. |
+| Base unavailable or different | Supply `base=` with the identical local model snapshot. |
+| Unsupported base, tokenizer or weight format | Use a supported dense MLX safetensors base and fast tokenizer. |
+| Invalid or overlength scoring input | Correct the input and keep it within the saved maximum length. |
 
 ## Consumers and CLI boundaries
 
-One light helper, `refuse_reward_artifact`, recognizes a root by `lexists` on
-`reward_model.json` before parsing, including a directory, broken link or
-truncated file with that name. A payload is recognized by `reward.safetensors`
-or a bounded no-follow manifest declaring `artifact_type: mlx_reward_model`.
-The helper also checks local bases recorded in LM adapter metadata before a
-consumer can start output or model work; resolved-base seams check again.
+Language-model consumers refuse these scoring bundles and direct users to
+`load_reward_scorer` / `score_completions`. This covers chat, infer, serve and
+named adapters, merge, export, push, model-loading eval, draft, shrink, native
+MLX loading, live evaluation and model-loading adapter operations. Recursive
+adapter listing leaves scoring bundles out of its LM adapter results.
 
-The same change guards chat; infer before backend dispatch; serve and named
-adapters; merge; export including ONNX; push; model-loading eval routes; draft;
-shrink; live evaluation; native MLX loading; and adapter info, compare, diff,
-merge, arithmetic, blame, scan, check and audit. Recursive adapter listing
-prunes reward roots/payloads and their subtrees. Config-only branch/checkout and
-file-only signing/safety/report commands retain their semantics.
+Standalone `soup diff`, the local provider of `soup data generate`, and
+`soup deploy autopilot --measure` also refuse scoring bundles before work.
+Remote generation providers and HF Spaces interpret their model argument as
+a remote model ID. Ollama deployment accepts a GGUF file, not a reward bundle
+or its safetensors payload. Pure recipe planning and file-only signing/report
+operations keep their existing semantics.
 
 The training CLI rejects `--push-as`, `--gate`, `--diagnose-gate` and
 `--capture-activations`, with resume refusals taking precedence, and replaces
@@ -243,6 +242,7 @@ reward_model {split} row {i} chosen/rejected: identical after tokenization/trunc
 reward_model {split}: no usable preference rows remain. Correct the reported rows or length setting.
 MLX reward: fast tokenizer with offsets and EOS required.
 MLX reward: dense Llama backbone required.
+MLX reward: base member {member}: unsupported weight format or quantization sidecar. Provide a clean dense MLX safetensors base.
 MLX reward: scoring-only bundle; use load_reward_scorer/score_completions.
 MLX reward: output contains a model or adapter file {member}. Choose a new output directory.
 MLX reward: base member {member} is unavailable. Provide the identical local/cached base with base=.

@@ -8889,9 +8889,10 @@ class SoupConfig(BaseModel):
     def _validate_mlx_task_support(self) -> "SoupConfig":
         """MLX backend supports sft, dpo, orpo, simpo, kto, grpo and reward_model.
 
-        SFT runs through mlx-lm's tuner; DPO, ORPO, SimPO, KTO and GRPO through
-        Soup's own loops in ``trainer/mlx_dpo.py`` / ``trainer/mlx_orpo.py`` /
-        ``trainer/mlx_simpo.py`` / ``trainer/mlx_kto.py`` / ``trainer/mlx_grpo.py``.
+        SFT runs through mlx-lm's tuner; DPO, ORPO, SimPO, KTO, GRPO and
+        reward_model through Soup's own loops in ``trainer/mlx_dpo.py`` / ``trainer/mlx_orpo.py`` /
+        ``trainer/mlx_simpo.py`` / ``trainer/mlx_kto.py`` / ``trainer/mlx_grpo.py`` /
+        ``trainer/mlx_reward_model.py``.
         Scalar preference aliases share their native task's scope restrictions.
         Every other task is refused here rather than at ``train()`` time.
         """

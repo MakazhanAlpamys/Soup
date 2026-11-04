@@ -55,8 +55,10 @@ def validate_reward_scope(cfg: Any) -> None:
         _refuse("modality", cfg.modality, "text (raw preference pairs)")
     if training.quantization != "none":
         _refuse("training.quantization", training.quantization, "none for a dense base")
-    if training.rewind_log:
+    if training.rewind_log and "rewind_log" in training.model_fields_set:
         _refuse("training.rewind_log", True, "false; per-row token-loss recording is SFT-only")
+    if "rewind_log" not in training.model_fields_set:
+        cfg.training = training = training.model_copy(update={"rewind_log": False})
     if training.quantize_reward_model:
         _refuse("training.quantize_reward_model", True, "false")
     if training.eval_gate is not None and training.eval_gate.enabled:

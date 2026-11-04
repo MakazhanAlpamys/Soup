@@ -5,6 +5,52 @@ import json
 import pytest
 
 
+@pytest.mark.parametrize('field', ['model_a', 'model_b', 'base_a', 'base_b'])
+def test_reward_model_diff_refused_before_device_or_prompt_work(tmp_path, field):
+    from soup_cli.commands.diff import diff
+    from tests.reward_guard_helpers import assert_reward_guard
+
+    root = tmp_path / 'reward'
+    root.mkdir()
+    (root / 'reward_model.json').write_text('broken')
+    kwargs = dict(model_a='ordinary-a', model_b='ordinary-b', base_a=None, base_b=None)
+    kwargs[field] = str(root)
+    assert_reward_guard(diff, kwargs, 'path_a = Path(model_a)')
+
+
+@pytest.mark.parametrize('field', ['model_path', 'base_model', 'metadata'])
+def test_reward_diff_loader_refused_before_heavy_imports(tmp_path, field):
+    from soup_cli.commands.diff import _load_model
+    from tests.reward_guard_helpers import assert_reward_guard
+
+    root = tmp_path / 'reward'
+    root.mkdir()
+    (root / 'reward_model.json').write_text('broken')
+    kwargs = dict(model_path='ordinary', base_model=None, device='cpu')
+    if field == 'metadata':
+        adapter = tmp_path / 'adapter'
+        adapter.mkdir()
+        (adapter / 'adapter_config.json').write_text(json.dumps({'model': str(root)}))
+        kwargs['model_path'] = str(adapter)
+    else:
+        kwargs[field] = str(root)
+    assert_reward_guard(
+        _load_model, kwargs, 'from transformers import AutoModelForCausalLM, AutoTokenizer',
+    )
+
+
+def test_ordinary_diff_models_reach_existing_work():
+    from soup_cli.commands.diff import _load_model, diff
+    from tests.reward_guard_helpers import assert_reward_guard
+
+    assert_reward_guard(diff, dict(model_a='ordinary-a', model_b='ordinary-b'),
+                        'path_a = Path(model_a)', refused=False)
+    assert_reward_guard(
+        _load_model, dict(model_path='ordinary', base_model=None, device='cpu'),
+        'from transformers import AutoModelForCausalLM, AutoTokenizer', refused=False,
+    )
+
+
 class TestCollectPrompts:
     """Test prompt collection from files and arguments."""
 

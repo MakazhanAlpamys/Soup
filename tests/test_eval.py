@@ -94,6 +94,11 @@ def test_reward_resolved_benchmark_base_refused(tmp_path, monkeypatch):
     # Isolate the post-resolution seam from the independent preflight check.
     monkeypatch.setattr(mlx_reward_bundle, 'read_json', lambda _: {})
     assert_reward_guard(benchmark, {'model': str(adapter)}, 'if base_model:')
+    import typer
+
+    with pytest.raises(typer.Exit) as error:
+        benchmark(model=str(adapter))
+    assert error.value.exit_code == 1
 
 
 @pytest.mark.parametrize('field', ['output', 'base'])
@@ -113,3 +118,8 @@ def test_reward_auto_eval_paths_refused_before_work(tmp_path, monkeypatch, field
     values[field] = str(root)
     monkeypatch.setattr(loader, 'load_config', lambda _: SimpleNamespace(**values))
     assert_reward_guard(auto, {'config': str(config)}, 'output_dir = Path(soup_config.output)')
+    import typer
+
+    with pytest.raises(typer.Exit) as error:
+        auto(config=str(config))
+    assert error.value.exit_code == 1

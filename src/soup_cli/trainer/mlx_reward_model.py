@@ -23,6 +23,12 @@ from soup_cli.trainer.mlx_sft import (
 )
 
 console = Console()
+BASE_DOWNLOAD_PATTERNS = (
+    "config.json", "model*.safetensors", "model.safetensors.index.json",
+    "tokenizer.json", "tokenizer_config.json", "special_tokens_map.json", "added_tokens.json",
+    "tokenizer.model", "tiktoken.model", "*.tiktoken", "vocab.json", "vocab.txt", "merges.txt",
+    "chat_template.jinja", "chat_templates/*.jinja", "hf_quant_config.json",
+)
 RESUME_REFUSAL = (
     "--resume is not supported for task 'reward_model' on backend 'mlx': scoring bundles "
     "do not save optimizer/RNG state. Start a fresh run in a new output directory."
@@ -57,7 +63,10 @@ class MLXRewardModelTrainerWrapper(MLXSFTTrainerWrapper):
         if not base.is_dir():
             from huggingface_hub import snapshot_download
 
-            base = Path(snapshot_download(cfg.base))
+            base = Path(snapshot_download(
+                cfg.base, allow_patterns=list(BASE_DOWNLOAD_PATTERNS),
+                ignore_patterns=["*/*.safetensors"],
+            ))
         self._base_identity = base_identity(base)  # custom-code checks precede MLX-LM
         self.tokenizer = load_tokenizer(base, allow_cache_links=True)
         self._pairs, self._train_counts = prepare_pairs(

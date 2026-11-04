@@ -173,3 +173,14 @@ def test_remote_error_is_shown_as_typed(monkeypatch, value):
     text = _plain(result)
     assert f"Space deploy failed: hub said {_shown(value)}" in text
     assert _not_shown(text)
+
+
+def test_remote_model_id_is_not_interpreted_as_a_local_reward_bundle(tmp_path, monkeypatch):
+    from soup_cli.commands.deploy import render_space_template
+
+    monkeypatch.chdir(tmp_path)
+    root = tmp_path / 'org' / 'model'
+    root.mkdir(parents=True)
+    (root / 'reward_model.json').write_text('broken')
+    files = render_space_template('gradio-chat', 'org/model')
+    assert 'org/model' in files['app.py']
