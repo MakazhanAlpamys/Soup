@@ -59,6 +59,7 @@ def test_generate_retries_until_target_count(tmp_path, monkeypatch):
     with open(output_file, "r", encoding="utf-8") as f:
         rows = [json.loads(line) for line in f if line.strip()]
     assert len(rows) == 5
+    assert "Generated 5 examples" in " ".join(strip_ansi(result.output).split())
 
 
 def test_generate_exits_1_when_provider_repeatedly_empty(tmp_path, monkeypatch):
@@ -102,7 +103,7 @@ def test_generate_exits_1_when_provider_repeatedly_empty(tmp_path, monkeypatch):
 
     output_text = " ".join(strip_ansi(result.output).split())
     expected_msg = (
-        "Generation halted: received no valid, unique examples after 3 consecutive attempts "
+        "Generation halted: received no valid examples after 3 consecutive attempts "
         "(1/5 generated)"
     )
     assert expected_msg in output_text
@@ -336,3 +337,23 @@ def test_generate_duplicates_do_not_hide_an_under_delivery(tmp_path, monkeypatch
     output_text = " ".join(strip_ansi(result.output).split())
     assert "after 3 consecutive attempts (1/4 generated)" in output_text
     assert [row["instruction"] for row in _rows(output_file)] == ["Q0"]
+
+def test_generate_rounds_of_duplicates_are_not_empty_rounds(tmp_path, monkeypatch):
+    """Three or more rounds of duplicates in a row do not halt the run: exit 0."""
+    monkeypatch.chdir(tmp_path)
+    output_file = tmp_path / "output.jsonl"
+    calls = []
+
+    def provider(**kwargs):
+        calls.append(kwargs["count"])
+        return [{"instruction": f"Question {i}", "output": "Answer"} for i in range(2)]
+
+    result = _run_generate(provider, output_file, count=10, batch_size=2)
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert calls == [2, 2, 2, 2, 2]
+    output_text = " ".join(strip_ansi(result.output).split())
+    assert "Generated 2 of 10 requested examples" in output_text
+    assert "Duplicates: 8 removed" in output_text
+    assert [row["instruction"] for row in _rows(output_file)] == ["Question 0", "Question 1"]
+

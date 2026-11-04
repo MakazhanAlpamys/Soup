@@ -30,7 +30,7 @@ def generate(
         100,
         "--count",
         "-n",
-        help="Number of examples to generate",
+        help="Number of examples requested",
     ),
     output: str = typer.Option(
         "generated.jsonl",
@@ -353,7 +353,7 @@ def generate(
                 consecutive_empty += 1
                 if consecutive_empty >= max_empty_retries:
                     console.print(
-                        f"[red]Generation halted: received no valid, unique examples after "
+                        f"[red]Generation halted: received no valid examples after "
                         f"{consecutive_empty} consecutive attempts "
                         f"({len(all_examples)}/{count} generated)[/]"
                     )
