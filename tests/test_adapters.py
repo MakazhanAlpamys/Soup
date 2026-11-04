@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
@@ -268,3 +269,92 @@ class TestAdapterDiscovery:
         config = _read_adapter_config(adapter_path)
         assert config["base_model_name_or_path"] == "test-model"
         assert config["r"] == 32
+
+
+# #2003: scoring bundles must stop before the first LM-consumer operation.
+@pytest.mark.parametrize("artifact_kind", ["root", "payload", "recorded-base"])
+@pytest.mark.parametrize(
+    "function_name, argument, first_work_line, list_input",
+    [
+        ("info", "adapter", "adapter_path = Path(adapter).resolve()", False),
+        ("compare", "adapter1", "path1 = Path(adapter1).resolve()", False),
+        ("compare", "adapter2", "path1 = Path(adapter1).resolve()", False),
+        ("diff", "adapter_a", "from soup_cli.utils.adapter_diff import (", False),
+        ("diff", "adapter_b", "from soup_cli.utils.adapter_diff import (", False),
+        (
+            "merge",
+            "adapters",
+            "from soup_cli.utils.adapter_merge import SUPPORTED_STRATEGIES, merge_adapters",
+            True,
+        ),
+        ("blame", "adapter_dir", "from soup_cli.utils.blame import (", False),
+        (
+            "scan",
+            "adapter",
+            "from soup_cli.utils.adapter_scan import render_report_text, scan_adapter",
+            False,
+        ),
+        ("audit", "adapter", "import contextlib", False),
+        ("check_cmd", "adapter", "from soup_cli.utils.adapter_check import (", False),
+    ],
+)
+def test_reward_bundle_refused_before_work(
+    tmp_path,
+    function_name,
+    argument,
+    first_work_line,
+    list_input,
+    artifact_kind,
+):
+    from importlib import import_module
+
+    from tests.reward_guard_helpers import assert_reward_guard
+
+    root = tmp_path / "reward"
+    root.mkdir()
+    if artifact_kind == "payload":
+        (root / "reward.safetensors").write_bytes(b"broken")
+    else:
+        (root / "reward_model.json").write_text("broken")
+    if artifact_kind == "recorded-base":
+        import json
+
+        adapter = tmp_path / "lm-adapter"
+        adapter.mkdir()
+        (adapter / "adapter_config.json").write_text(
+            json.dumps({"base_model_name_or_path": str(root)})
+        )
+        root = adapter
+    function = getattr(import_module("soup_cli.commands.adapters"), function_name)
+    value = [str(root)] if list_input else str(root)
+    kwargs = {}
+    kwargs[argument] = value
+    assert_reward_guard(function, kwargs, first_work_line)
+
+
+def test_reward_subtrees_are_not_listed(tmp_path):
+    from soup_cli.commands.adapters import _find_adapters
+
+    reward = tmp_path / 'reward'
+    nested = reward / 'bundles' / 'id' / 'old-adapter'
+    nested.mkdir(parents=True)
+    (reward / 'reward_model.json').write_text('corrupt')
+    (nested / 'adapter_config.json').write_text('{}')
+    ordinary = tmp_path / 'ordinary'
+    ordinary.mkdir()
+    (ordinary / 'adapter_config.json').write_text('{}')
+    assert _find_adapters(tmp_path) == [ordinary]
+
+
+def test_reward_arithmetic_refused_before_expression(tmp_path, monkeypatch):
+    from soup_cli.commands.adapters import arithmetic
+    from tests.reward_guard_helpers import assert_reward_guard
+
+    monkeypatch.chdir(tmp_path)
+    root = tmp_path / 'reward'
+    root.mkdir()
+    (root / 'reward_model.json').write_text('corrupt')
+    assert_reward_guard(
+        arithmetic, {'expression': 'a', 'adapter': [f'a={root}']},
+        'terms = parse_expression(expression, set(mapping))',
+    )

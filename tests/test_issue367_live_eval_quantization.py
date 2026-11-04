@@ -548,3 +548,70 @@ class TestShipDerivesQuantizationFromConfig:
             )
             assert res.exit_code in (0, 2), (res.output, repr(res.exception))
             assert captured["quantization"] == "4bit"
+
+
+# #2003: scoring bundles must stop before the first LM-consumer operation.
+@pytest.mark.parametrize("artifact_kind", ["root", "payload", "recorded-base"])
+@pytest.mark.parametrize(
+    "function_name, argument, first_work_line, list_input",
+    [
+        (
+            "load_model_and_tokenizer",
+            "model_id",
+            "if not isinstance(model_id, str) or not model_id.strip():",
+            False,
+        ),
+        (
+            "load_model_and_tokenizer",
+            "adapter",
+            "if not isinstance(model_id, str) or not model_id.strip():",
+            False,
+        ),
+    ],
+)
+def test_reward_bundle_refused_before_work(
+    tmp_path,
+    function_name,
+    argument,
+    first_work_line,
+    list_input,
+    artifact_kind,
+):
+    from importlib import import_module
+
+    from tests.reward_guard_helpers import assert_reward_guard
+
+    root = tmp_path / "reward"
+    root.mkdir()
+    if artifact_kind == "payload":
+        (root / "reward.safetensors").write_bytes(b"broken")
+    else:
+        (root / "reward_model.json").write_text("broken")
+    if artifact_kind == "recorded-base":
+        import json
+
+        adapter = tmp_path / "lm-adapter"
+        adapter.mkdir()
+        (adapter / "adapter_config.json").write_text(
+            json.dumps({"base_model_name_or_path": str(root)})
+        )
+        root = adapter
+    function = getattr(import_module("soup_cli.utils.live_eval"), function_name)
+    value = [str(root)] if list_input else str(root)
+    kwargs = {"model_id": "ordinary/base"}
+    kwargs[argument] = value
+    assert_reward_guard(function, kwargs, first_work_line)
+
+
+def test_reward_resolved_live_base_refused_before_import(tmp_path, monkeypatch):
+    from soup_cli.utils import live_eval, run_provenance
+    from tests.reward_guard_helpers import assert_reward_guard
+
+    root = tmp_path / 'reward'
+    root.mkdir()
+    (root / 'reward_model.json').write_text('broken')
+    monkeypatch.setattr(run_provenance, 'recorded_adapter_base', lambda _: str(root))
+    assert_reward_guard(
+        live_eval.load_model_and_tokenizer, {'model_id': 'ordinary-base'},
+        'import torch  # noqa: F401 — ensures torch present',
+    )

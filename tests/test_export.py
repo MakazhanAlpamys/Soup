@@ -4,6 +4,7 @@ import json
 import re
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
@@ -157,3 +158,66 @@ def test_export_help_names_every_supported_format():
         assert re.search(rf"(?<![\w-]){re.escape(fmt)}(?![\w-])", listed), (
             f"--format help does not list {fmt!r}: {listed[:200]}"
         )
+
+
+# #2003: scoring bundles must stop before the first LM-consumer operation.
+@pytest.mark.parametrize("artifact_kind", ["root", "payload", "recorded-base"])
+@pytest.mark.parametrize(
+    "function_name, argument, first_work_line, list_input",
+    [
+        ("export", "model", 'if hub and hub != "hf":', False),
+        ("export", "base", 'if hub and hub != "hf":', False),
+        ("_export_onnx", "model_path", "from optimum.exporters.onnx import main_export", False),
+        ("_export_onnx", "base", "from optimum.exporters.onnx import main_export", False),
+    ],
+)
+def test_reward_bundle_refused_before_work(
+    tmp_path,
+    function_name,
+    argument,
+    first_work_line,
+    list_input,
+    artifact_kind,
+):
+    from importlib import import_module
+
+    from tests.reward_guard_helpers import assert_reward_guard
+
+    root = tmp_path / "reward"
+    root.mkdir()
+    if artifact_kind == "payload":
+        (root / "reward.safetensors").write_bytes(b"broken")
+    else:
+        (root / "reward_model.json").write_text("broken")
+    if artifact_kind == "recorded-base":
+        import json
+
+        adapter = tmp_path / "lm-adapter"
+        adapter.mkdir()
+        (adapter / "adapter_config.json").write_text(
+            json.dumps({"base_model_name_or_path": str(root)})
+        )
+        root = adapter
+    function = getattr(import_module("soup_cli.commands.export"), function_name)
+    value = [str(root)] if list_input else str(root)
+    kwargs = (
+        {"model_path": tmp_path, "output": None, "base": None}
+        if function_name == "_export_onnx"
+        else {}
+    )
+    kwargs[argument] = value
+    assert_reward_guard(function, kwargs, first_work_line)
+
+
+def test_reward_recorded_base_refused_at_resolution(tmp_path):
+    import json
+
+    from soup_cli.commands.export import _detect_base_model
+    from tests.reward_guard_helpers import assert_reward_guard
+
+    root = tmp_path / "reward"
+    root.mkdir()
+    (root / "reward_model.json").write_text("broken")
+    config = tmp_path / "adapter_config.json"
+    config.write_text(json.dumps({"base_model_name_or_path": str(root)}))
+    assert_reward_guard(_detect_base_model, {"adapter_config_path": config}, "return base")

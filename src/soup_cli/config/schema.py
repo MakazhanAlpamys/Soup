@@ -5244,10 +5244,12 @@ def _unsloth_flag_clause(training: "TrainingConfig") -> str:
 
 
 #: The tasks with a trainer on ``backend: mlx``: SFT through mlx-lm's tuner;
-#: DPO, ORPO, SimPO, KTO and GRPO through Soup's own loops (``trainer/mlx_dpo.py``,
+#: DPO, ORPO, SimPO, KTO, GRPO and reward_model through Soup's own loops (``trainer/mlx_dpo.py``,
 #: ``trainer/mlx_orpo.py``, ``trainer/mlx_grpo.py``). Validators that defer
 #: to :meth:`SoupConfig._validate_mlx_task_support` read this, not ``"sft"``.
-MLX_TASKS: frozenset[str] = frozenset({"sft", "dpo", "orpo", "simpo", "kto", "grpo"})
+MLX_TASKS: frozenset[str] = frozenset({
+    "sft", "dpo", "orpo", "simpo", "kto", "grpo", "reward_model",
+})
 
 
 def resolve_mlx_task(task: str, preference_loss: str | None = None) -> str:
@@ -8885,7 +8887,7 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_mlx_task_support(self) -> "SoupConfig":
-        """MLX backend supports sft, dpo, orpo, simpo, kto and grpo.
+        """MLX backend supports sft, dpo, orpo, simpo, kto, grpo and reward_model.
 
         SFT runs through mlx-lm's tuner; DPO, ORPO, SimPO, KTO and GRPO through
         Soup's own loops in ``trainer/mlx_dpo.py`` / ``trainer/mlx_orpo.py`` /
@@ -8937,7 +8939,7 @@ class SoupConfig(BaseModel):
         if task in MLX_TASKS:
             return self
         raise ValueError(
-            f"MLX backend only ships SFT, DPO, ORPO, SimPO, KTO and GRPO; "
+            f"MLX backend only ships SFT, DPO, ORPO, SimPO, KTO, GRPO and reward_model; "
             f"task='{self.task}' has "
             "no trainer on backend='mlx'."
             f" Use backend=transformers for task={self.task}."
@@ -9610,6 +9612,15 @@ class SoupConfig(BaseModel):
                 f"do not use Unsloth; got modality={self.modality!r}. "
                 "Use backend: transformers for multimodal SFT."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_mlx_reward_scope(self) -> "SoupConfig":
+        """#2003: keep earlier task/LoRA/eval diagnostics, then check native scope."""
+        if self.backend == "mlx" and self.task == "reward_model":
+            from soup_cli.config.mlx_reward import validate_reward_scope
+
+            validate_reward_scope(self)
         return self
 
     @model_validator(mode="after")

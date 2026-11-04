@@ -516,6 +516,8 @@ _NOT_SEEDED = {
     "mlx_sft": "seeds mx.random and numpy in train(), where the adapter is "
                "built (#1850; tests/test_mlx_sft_seed.py)",
     "mlx_grpo": "MLX backend, which seeds nothing on any path yet",
+    "mlx_reward_model": "seeds mx.random before loading/LoRA and uses a dedicated head key; "
+                        "real setup seed controls in tests/test_mlx_reward_model.py",
 }
 
 

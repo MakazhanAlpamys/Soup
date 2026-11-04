@@ -142,6 +142,16 @@ def export(
     ),
 ):
     """Export a model to GGUF, ONNX, TensorRT-LLM, BitNet, or TorchAO format."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (model, base):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     # v0.53.10 #152 — pre-fetch the base model from a non-HF hub. ``model``
     # is typically a local merged dir / adapter dir; only ``base`` is rewritten.
     if hub and hub != "hf":
@@ -446,7 +456,12 @@ def _detect_base_model(adapter_config_path: Path) -> Optional[str]:
     try:
         with open(adapter_config_path, encoding="utf-8") as f:
             config = json.load(f)
-        return config.get("base_model_name_or_path")
+        from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+        base = config.get("base_model_name_or_path")
+        if isinstance(base, str):
+            refuse_reward_artifact(base)
+        return base
     except (json.JSONDecodeError, OSError):
         return None
 
@@ -840,6 +855,16 @@ def _export_onnx(
     trust_remote_code: bool = False,
 ) -> Optional[Path]:
     """Export model to ONNX format via optimum."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (model_path, base):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     try:
         from optimum.exporters.onnx import main_export
     except ImportError:

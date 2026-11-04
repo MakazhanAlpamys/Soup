@@ -65,6 +65,9 @@ def _parse_adapters(adapters: Optional[List[str]]) -> Dict[str, str]:
                 f"Invalid adapter format: '{item}'. Expected key=path format."
             )
         name, path = item.split("=", 1)
+        from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+        refuse_reward_artifact(path.strip())
         result[name.strip()] = path.strip()
     return result
 
@@ -322,6 +325,16 @@ def serve(
     ),
 ):
     """Start a local inference server with OpenAI-compatible API."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (model, base_model, speculative_model):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     # The token rule `soup ui` and `soup mcp serve` apply, checked before anything
     # else on every bind. An empty value is no token: the bind check below says so.
     if tool_auth_token:
@@ -1470,7 +1483,12 @@ def _detect_base_model(adapter_config_path: Path) -> Optional[str]:
     try:
         with open(adapter_config_path, encoding="utf-8") as f:
             config = json.load(f)
-        return config.get("base_model_name_or_path")
+        from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+        base = config.get("base_model_name_or_path")
+        if isinstance(base, str):
+            refuse_reward_artifact(base)
+        return base
     except (json.JSONDecodeError, OSError):
         return None
 

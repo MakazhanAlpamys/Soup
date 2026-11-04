@@ -461,3 +461,48 @@ class TestSweepK:
 def test_isfinite_guard_used():
     """Sanity for the fixture numbers: all finite."""
     assert all(math.isfinite(x) for x in (_TARGET_TOK_S, _DRAFT_TOK_S, _ALPHA))
+
+
+# #2003: scoring bundles must stop before the first LM-consumer operation.
+@pytest.mark.parametrize("artifact_kind", ["root", "payload", "recorded-base"])
+@pytest.mark.parametrize(
+    "function_name, argument, first_work_line, list_input",
+    [
+        ("distill", "target", 'enforce_under_cwd_and_no_symlink(output, "output dir")', False),
+        ("distill", "draft_base", 'enforce_under_cwd_and_no_symlink(output, "output dir")', False),
+        ("measure", "target", "sweep_values: Optional[list[int]] = None", False),
+        ("measure", "draft", "sweep_values: Optional[list[int]] = None", False),
+    ],
+)
+def test_reward_bundle_refused_before_work(
+    tmp_path,
+    function_name,
+    argument,
+    first_work_line,
+    list_input,
+    artifact_kind,
+):
+    from importlib import import_module
+
+    from tests.reward_guard_helpers import assert_reward_guard
+
+    root = tmp_path / "reward"
+    root.mkdir()
+    if artifact_kind == "payload":
+        (root / "reward.safetensors").write_bytes(b"broken")
+    else:
+        (root / "reward_model.json").write_text("broken")
+    if artifact_kind == "recorded-base":
+        import json
+
+        adapter = tmp_path / "lm-adapter"
+        adapter.mkdir()
+        (adapter / "adapter_config.json").write_text(
+            json.dumps({"base_model_name_or_path": str(root)})
+        )
+        root = adapter
+    function = getattr(import_module("soup_cli.commands.draft"), function_name)
+    value = [str(root)] if list_input else str(root)
+    kwargs = {}
+    kwargs[argument] = value
+    assert_reward_guard(function, kwargs, first_work_line)

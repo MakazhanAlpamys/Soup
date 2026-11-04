@@ -105,3 +105,18 @@ data:
     )
     assert result.exit_code == 1
     assert "no checkpoint found" in result.output.lower()
+
+
+def test_mlx_reward_resume_refusal_is_task_specific():
+    from types import SimpleNamespace
+
+    from soup_cli.commands.train import _resume_refusal
+    from soup_cli.trainer.mlx_reward_model import RESUME_REFUSAL
+
+    config = SimpleNamespace(task='reward_model', backend='mlx')
+    assert _resume_refusal(config, '--resume') == RESUME_REFUSAL
+    assert _resume_refusal(config, '--hf-resume') == RESUME_REFUSAL.replace(
+        '--resume', '--hf-resume', 1,
+    )
+    config.backend = 'transformers'
+    assert _resume_refusal(config, '--resume') is None

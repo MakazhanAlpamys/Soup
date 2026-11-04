@@ -237,12 +237,16 @@ def load_model_and_tokenizer(
     way it was trained instead of always upcasting to full precision; see
     :func:`_build_quantization_config`.
     """
+    from pathlib import Path
+
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    for reward_path in (model_id, adapter):
+        if isinstance(reward_path, (str, Path)):
+            refuse_reward_artifact(reward_path)
+
     if not isinstance(model_id, str) or not model_id.strip():
         raise ValueError("model_id must be a non-empty string")
-    import torch  # noqa: F401 — ensures torch present
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-
-    dev = resolve_device(device)
     from soup_cli.utils.run_provenance import (
         base_revision_kwargs,
         recorded_adapter_base,
@@ -254,6 +258,11 @@ def load_model_and_tokenizer(
         saved_base = recorded_adapter_base(model_id)
         if saved_base is not None:
             adapter, model_id = model_id, saved_base
+    refuse_reward_artifact(model_id)
+    import torch  # noqa: F401 — ensures torch present
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    dev = resolve_device(device)
     revision_kwargs = base_revision_kwargs(model_id) or recorded_base_kwargs(adapter, model_id)
     tokenizer = AutoTokenizer.from_pretrained(
         tokenizer_id, trust_remote_code=trust_remote_code,
