@@ -328,28 +328,28 @@ def generate(
 
             last_request_time = time.monotonic()
 
-            previous_count = len(all_examples)
+            counted_before = len(all_examples) + duplicates
             # Validate and dedup
             for example in batch:
                 is_valid = _validate_example(example, fmt)
                 if not is_valid and template == "preference" and _validate_preference(example):
                     is_valid = True
                 if not is_valid:
-                    continue
+                    continue  # asked for again in a later round
                 text = _row_to_text(example)
                 if text in existing_texts:
-                    duplicates += 1
-                    continue
-                existing_texts.add(text)
-                all_examples.append(example)
-                if len(all_examples) == count:
+                    duplicates += 1  # an accepted reduction of --count
+                else:
+                    existing_texts.add(text)
+                    all_examples.append(example)
+                if len(all_examples) + duplicates >= count:
                     break
 
-            added_this_round = len(all_examples) - previous_count
-            progress.update(task, advance=added_this_round)
-            remaining = count - len(all_examples)
+            counted_this_round = len(all_examples) + duplicates - counted_before
+            progress.update(task, advance=counted_this_round)
+            remaining = count - len(all_examples) - duplicates
 
-            if added_this_round == 0:
+            if counted_this_round == 0:
                 consecutive_empty += 1
                 if consecutive_empty >= max_empty_retries:
                     console.print(
@@ -385,8 +385,13 @@ def generate(
         for row in all_examples:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
+    summary_count = (
+        f"{len(all_examples)} of {count} requested"
+        if len(all_examples) < count
+        else f"{len(all_examples)}"
+    )
     console.print(
-        f"\n[green]Generated {len(all_examples)} examples[/]\n"
+        f"\n[green]Generated {summary_count} examples[/]\n"
         f"Format:     [bold]{fmt}[/]\n"
         f"Output:     [bold]{out_path}[/]\n"
         + (f"Template:   [bold]{template}[/]\n" if template else "")
