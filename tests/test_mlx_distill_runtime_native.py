@@ -97,13 +97,27 @@ def test_real_multiturn_boundaries_padding_eos_and_truncation(pair):
         )
 
 
-@pytest.mark.parametrize("student_checkpoint", [False, True])
-def test_updates_freeze_eval_save_reload_and_warm_start(pair, tmp_path, student_checkpoint):
+@pytest.mark.parametrize("student_checkpoint,use_rslora", [
+    (False, False), (True, False), (False, True),
+])
+def test_updates_freeze_eval_save_reload_and_warm_start(
+    pair, tmp_path, student_checkpoint, use_rslora,
+):
     from soup_cli.trainer.mlx_distill import MLXDistillTrainerWrapper
 
-    cfg = config(*pair, tmp_path / "out", gradient_checkpointing=student_checkpoint)
+    cfg = config(
+        *pair, tmp_path / "out", gradient_checkpointing=student_checkpoint,
+        lora={"r": 4, "alpha": 8, "dropout": 0, "use_rslora": use_rslora},
+    )
     trainer = MLXDistillTrainerWrapper(cfg)
     trainer.setup(rows())
+    from mlx_lm.tuner.lora import LoRALinear
+
+    expected_scale = 8 / (4 ** 0.5 if use_rslora else 4)
+    student_adapters = [module for _, module in trainer.model.named_modules()
+                        if isinstance(module, LoRALinear)]
+    assert len(student_adapters) == 4
+    assert all(module.scale == pytest.approx(expected_scale) for module in student_adapters)
     teacher = trainer.teacher
     before_teacher = dict(tree_flatten(teacher.parameters()))
     before_student = dict(tree_flatten(trainer.model.parameters()))
@@ -141,10 +155,11 @@ def test_updates_freeze_eval_save_reload_and_warm_start(pair, tmp_path, student_
     trainer.model.eval()
     expected = trainer.model(tokens)
     restored, _ = load(str(pair[0]), adapter_path=cfg.output)
+    metadata = json.loads((tmp_path / "out" / "adapter_config.json").read_text())
+    assert metadata["lora_parameters"]["scale"] == pytest.approx(expected_scale)
     restored.eval()
     assert mx.allclose(expected, restored(tokens), atol=1e-5, rtol=1e-5).item()
     from mlx.utils import tree_unflatten
-    from mlx_lm.tuner.lora import LoRALinear
 
     # Exercise the actual MLX-LM fusion operation on the saved/reloaded adapter.
     adapted = [(name, module) for name, module in restored.named_modules()
@@ -162,7 +177,9 @@ def test_updates_freeze_eval_save_reload_and_warm_start(pair, tmp_path, student_
     metrics = json.loads((tmp_path / "out" / "distillation_metrics.json").read_text())
     assert metrics["training"] == result["history"]
     assert metrics["validation"] == result["evaluation_history"]
-    resumed = MLXDistillTrainerWrapper(config(*pair, tmp_path / "resumed"))
+    resumed = MLXDistillTrainerWrapper(config(
+        *pair, tmp_path / "resumed", lora=cfg.training.lora.model_dump(),
+    ))
     resumed.setup(rows())
     resumed._load_checkpoint_weights(str(tmp_path / "out" / "adapters.safetensors"))
     resumed.model.eval()
