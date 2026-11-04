@@ -20,7 +20,7 @@ the truth; it can only stop it rotting, which is the failure that produced #749.
 
 Scope today: ``task=sft`` on ``backend=mlx`` and on ``backend=unsloth`` (#1124;
 both apply to every modality), ``task=dpo``, ``task=orpo``, ``task=simpo``, ``task=kto``
-and ``task=grpo`` on ``backend=mlx``, plus multimodal vision and audio on
+``task=grpo`` and ``task=distill`` on ``backend=mlx``, plus multimodal vision and audio on
 ``backend=transformers`` (#1156). Other combinations report nothing rather than guessing,
 which is the honest default for a table that has not been reviewed for them.
 """
@@ -237,6 +237,7 @@ REGISTRY: dict[tuple[str, str, str], tuple[SupportEntry, ...]] = {
     ("simpo", "mlx", "text"): _MLX_SIMPO,
     ("kto", "mlx", "text"): _MLX_KTO,
     ("grpo", "mlx", "text"): _MLX_GRPO,
+    ("distill", "mlx", "text"): (),
     ("sft", "unsloth", "text"): _UNSLOTH_SFT,
     ("sft", "transformers", "vision"): _TRANSFORMERS_VISION_SFT,
     ("sft", "transformers", "audio"): _TRANSFORMERS_AUDIO_SFT,
@@ -259,6 +260,17 @@ _TRANSFORMERS_SFT_MODULES = (
 #: leave ``warmup_ratio=`` and ``weight_decay=`` visible at the call site. A
 #: field wired entirely inside a helper would have passed.
 TRAINER_MODULES: dict[tuple[str, str, str], tuple[str, ...]] = {
+    ("distill", "mlx", "text"): (
+        "soup_cli/trainer/mlx_distill.py",
+        "soup_cli/trainer/mlx_distill_data.py",
+        "soup_cli/trainer/mlx_distill_loss.py",
+        "soup_cli/trainer/mlx_sft.py",
+        "soup_cli/trainer/mlx_optim.py",
+        "soup_cli/trainer/loss_summary.py",
+        "soup_cli/utils/mlx.py",
+        "soup_cli/utils/mlx_distill.py",
+        "soup_cli/utils/distill.py",
+    ),
     ("sft", "mlx", "text"): (
         "soup_cli/trainer/mlx_sft.py",
         "soup_cli/trainer/mlx_optim.py",
