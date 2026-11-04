@@ -278,7 +278,7 @@ def shrink(
     except typer.Exit:
         raise
     except (typer.BadParameter, ValueError, RuntimeError, OSError, ImportError) as exc:
-        console.print(f"[red]Error:[/] {escape(str(exc))}")
+        console.print(f"[red]Error:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
 
 
