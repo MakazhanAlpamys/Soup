@@ -40,10 +40,9 @@ JOB = "mlx-smoke"
 #: sentence, not a flag.
 EXEMPT: dict[str, str] = {
     "test_mlx_harness_native.py": (
-        "The native harness also needs the eval extra, including datasets, which mlx-smoke "
-        "deliberately excludes to verify the standalone MLX installation. The dedicated eval "
-        "workflow was removed as requested in #1940; current and minimum native-harness "
-        "qualification is local until its CI environment is separately approved."
+        "Every test needs lm-eval and datasets; the mlx-smoke job installs only .[mlx] "
+        "and pytest and fails when datasets is installed, so hosted CI cannot run this file. "
+        "It is checked locally with the eval extra."
     ),
     "test_mlx_max_grad_norm.py": (
         "three of its tests read the installed mlx-lm / mlx surface (TrainingArgs has no clipping "
