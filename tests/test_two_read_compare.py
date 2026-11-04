@@ -795,7 +795,7 @@ def test_equal_invalid_initial_state_digests_refuse(cmp, tmp_path, key, value):
     ("step-dir", r"C:\runs\NUL", None, "is not a local file"),
     ("step-path", "//soup-test.invalid/share/A1.step.json", None, "is not a local file"),
     ("record-cwd", "A1.step.json", "//soup-test.invalid/share", "is not a local directory"),
-])
+], ids=["step-dir", "step-path", "record-cwd"])
 def test_nonlocal_record_paths_refuse_before_resolution(cmp, tmp_path, monkeypatch,
                                                        location, expect_path, cwd, refusal):
     from functools import partial
