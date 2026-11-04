@@ -868,6 +868,14 @@ of the logits term alone; the measured peaks are at the end of this section. The
 takes an explicit number of tokens from 16 to 8192; there is no default and no `true`, and
 unset is off.
 
+With an FP32 output head, each chunk shares one `log_softmax` between the training
+loss and the metrics instead of normalizing the vocabulary twice. The loss uses
+NLL over those log-probabilities; entropy and per-row losses read the same values
+without gradients. BF16/FP16 heads keep separate native-dtype metrics and an FP32
+cross-entropy loss. This optimization does not remove prompt positions from entropy
+or change the loss mask. See the [paired CPU training measurement](
+../benchmarks/stream-loss-normalization.md) for its measured scope and limitations.
+
 **What it costs.** Two `[batch, seq, hidden]` tensors in the stream dtype, which the
 pre-flight adds to its estimate: the gradient on the hidden states, filled chunk by chunk in
 the forward and handed to the backward, and its product with the incoming gradient. At

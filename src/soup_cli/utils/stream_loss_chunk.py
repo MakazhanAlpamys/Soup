@@ -50,32 +50,53 @@ def shift_for_next_token(labels: Any, ignore_index: int = IGNORE_INDEX) -> Any:
     return functional.pad(labels, (0, 1), value=ignore_index)[..., 1:]
 
 
-def _chunk_terms(head: Callable[[Any], Any], piece: Any, target: Any, ignore_index: int):
+def _chunk_terms(
+    head: Callable[[Any], Any], piece: Any, target: Any, ignore_index: int,
+) -> tuple[Any, Any, Any, Any]:
     """One chunk: the cross-entropy sum, and what the metrics need, the latter
     without gradients."""
     import torch
     from torch.nn import functional
 
     logits = head(piece)
+    # FP32 loss and metrics need the same normalization. Keep its graph for
+    # NLL backward and read it without gradients for the metrics below.
+    # Lower-precision heads still need native-dtype metrics and an FP32 loss.
+    shared_log_probs = (
+        functional.log_softmax(logits, dim=-1) if logits.dtype == torch.float32 else None
+    )
     with torch.no_grad():
         # In the head's own dtype, as TRL's `entropy_from_logits` reads them.
-        log_probs = functional.log_softmax(logits, dim=-1)
+        log_probs = (
+            shared_log_probs.detach()
+            if shared_log_probs is not None
+            else functional.log_softmax(logits, dim=-1)
+        )
         entropy = -(torch.exp(log_probs) * log_probs).sum(-1)
         labelled = target != ignore_index
         correct = ((logits.argmax(dim=-1) == target) & labelled).sum()
         # Also in the head's dtype and only then cast, as `row_losses` does.
         at_label = log_probs.gather(-1, target.clamp(min=0).unsqueeze(-1)).squeeze(-1)
         token_loss = (-at_label).float() * labelled
-        # Gone before the fp32 copy below is made, so the two do not add up.
+        # Release native lower-precision log-probabilities before the FP32
+        # loss copy. The shared FP32 buffer stays alive for NLL backward.
         del log_probs
-    # `ForCausalLMLoss` upcasts before the loss; so does each chunk.
-    wide = logits.float()
-    total = functional.cross_entropy(
-        wide.view(-1, wide.shape[-1]),
-        target.reshape(-1),
-        ignore_index=ignore_index,
-        reduction="sum",
-    )
+    if shared_log_probs is not None:
+        total = functional.nll_loss(
+            shared_log_probs.view(-1, shared_log_probs.shape[-1]),
+            target.reshape(-1),
+            ignore_index=ignore_index,
+            reduction="sum",
+        )
+    else:
+        # `ForCausalLMLoss` upcasts before the loss; so does each chunk.
+        wide = logits.float()
+        total = functional.cross_entropy(
+            wide.view(-1, wide.shape[-1]),
+            target.reshape(-1),
+            ignore_index=ignore_index,
+            reduction="sum",
+        )
     return total, entropy, token_loss, correct
 
 

@@ -79,6 +79,24 @@ def _close(got, want):
 
 
 class TestTheLossAndItsGradient:
+    def test_fp32_normalization_is_shared_by_loss_and_metrics(self) -> None:
+        """A chunk needs one vocabulary normalization, including in backward."""
+        from soup_cli.utils.stream_loss_chunk import _chunk_terms
+
+        head, hidden, target = _case()
+        hidden.requires_grad_(True)
+        with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU]) as profile:
+            loss, entropy, token_loss, correct = _chunk_terms(head, hidden, target, -100)
+            loss.backward()
+
+        normalizations = sum(
+            event.count for event in profile.key_averages() if event.key == "aten::_log_softmax"
+        )
+        assert normalizations == 1
+        assert not entropy.requires_grad and not token_loss.requires_grad
+        assert not correct.requires_grad
+        assert hidden.grad is not None and hidden.grad.abs().max() > 0
+
     @pytest.mark.parametrize(
         "dtype",
         [
