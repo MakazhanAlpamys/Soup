@@ -13,7 +13,7 @@ from rich.prompt import Prompt
 
 from soup_cli.templates import list_templates, load_template
 from soup_cli.utils.paths import open_no_follow, refuse_linked_dirs
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
@@ -144,7 +144,7 @@ def init(
     _refuse_link_at(output)
 
     if output_path.exists() and not force:
-        overwrite = typer.confirm(f"{output_path} already exists. Overwrite?")
+        overwrite = typer.confirm(f"{strip_control(output_path)} already exists. Overwrite?")
         if not overwrite:
             raise typer.Exit()
 
