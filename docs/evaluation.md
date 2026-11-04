@@ -278,6 +278,11 @@ A zero-byte or whitespace-only judge prompt file is an input error naming the
 task and file. It has no measured score, fails the gate even at threshold zero,
 and cannot create or replace a baseline when no other task was scored.
 
+Judge JSONL rows must be objects and an explicitly present `prompt` must be a
+string; invalid rows are refused before that row reaches generation, naming the
+task, file, physical line and field or row shape. Missing and empty-string
+prompts keep their existing behavior, as does the CLI's failed-gate exit (#1949).
+
 
 ## Sequential A/B Harness (`soup ab`)
 
