@@ -116,10 +116,13 @@ def test_finding_9_is_unchanged_and_carries_a_clarification():
     assert "CLARIFICATION" in note
     assert "WRONG" in note
     assert "6.56x" in note
-    date = note.split("CLARIFICATION", 1)[1].split()[0]
-    assert date.count("-") == 2 and len(date) == 10, (
-        f"the note carries no YYYY-MM-DD date: {date!r}"
-    )
+    # 评审要求：note 引用的每个数字都要钉住，否则把 8/256 改成 4/256 测试也不会响
+    for figure in ("8/256", "256/256", "425.07", "64.79"):
+        assert figure in note, f"the note no longer quotes {figure}"
+    date_text = note.split("CLARIFICATION", 1)[1].split()[0]
+    from datetime import date as _date
+
+    _date.fromisoformat(date_text)  # 真解析，不是数连字符的数量
     assert note.lstrip().startswith(">"), "the note is not in the record's blockquote form"
 
 
