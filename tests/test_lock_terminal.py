@@ -263,6 +263,30 @@ def test_check_names_the_lock_when_it_drifted_as_typed(name):
     assert _not_shown(text)
 
 
+@pytest.mark.parametrize(
+    ("overrides", "status", "exit_code"),
+    [
+        pytest.param({}, "OK", 0, id="matching"),
+        pytest.param({"--dataset-sha": "d" * 64}, "DRIFT", EXIT_GATE_FAILED, id="drifted"),
+    ],
+)
+def test_check_keeps_backslash_before_unmatched_bracket(overrides, status, exit_code):
+    # A literal backslash on POSIX and a directory separator on Windows.
+    displayed = r"nested\[unclosed.lock"
+    name = displayed.replace(".lock", f"{_CONTROLS}.lock")
+    path = Path(name)
+    path.parent.mkdir(exist_ok=True)
+    _lock_file(name)
+    before = path.read_bytes()
+
+    result = _check(name, **overrides)
+
+    assert result.exit_code == exit_code, (result.output, repr(result.exception))
+    assert _not_shown(result.stdout)
+    assert re.search(_two_lines(f"Lock: {displayed}", f"Status: {status}"), _plain(result))
+    assert path.read_bytes() == before
+
+
 @pytest.mark.parametrize("value", _VALUES)
 def test_check_shows_the_locked_soup_version_as_typed(value):
     _lock_file("soup.lock", soup_version=value)
