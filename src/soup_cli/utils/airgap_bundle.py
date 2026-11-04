@@ -179,6 +179,18 @@ def build_airgap_bundle(plan: AirgapBundlePlan) -> BundleManifest:
     for entry in plan.kernel_dirs:
         enforce_under_cwd_and_no_symlink(entry, "kernel_dir")
 
+    if not os.path.isdir(plan.model_dir):
+        raise FileNotFoundError(f"model directory not found: {plan.model_dir}")
+    for entry in plan.dataset_dirs:
+        if not os.path.isdir(entry):
+            raise FileNotFoundError(f"dataset directory not found: {entry}")
+    for entry in plan.wheel_dirs:
+        if not os.path.isdir(entry):
+            raise FileNotFoundError(f"wheel directory not found: {entry}")
+    for entry in plan.kernel_dirs:
+        if not os.path.isdir(entry):
+            raise FileNotFoundError(f"kernel directory not found: {entry}")
+
     members: list[tuple[str, str]] = []
     members.extend(_enumerate_dir(plan.model_dir, label="model"))
     # Label by sorted basename rather than caller-supplied index so the
