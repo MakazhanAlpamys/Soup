@@ -235,7 +235,7 @@ def test_pretrain_settings_refused_at_load_have_no_doctor_row(field):
     }
 
 
-@pytest.mark.parametrize("val_split", [0.2, 0.05])
+@pytest.mark.parametrize("val_split", [0.2, 0.1])  # 0.1 is the written schema default.
 def test_explicit_positive_val_split_with_validation_file_is_refused(val_split):
     with pytest.raises(ValueError) as error:
         _reviewed_pretrain_config(data={"validation": "val.txt", "val_split": val_split})
