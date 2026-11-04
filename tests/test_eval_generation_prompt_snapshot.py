@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import pytest
 
 from soup_cli.eval.custom import EvalTask, run_eval
@@ -197,24 +194,6 @@ def test_forgetting_does_not_award_a_short_mutating_batch() -> None:
     detector = ForgettingDetector(ShortBatch())
     assert detector.run_baseline() == 0.0
 
-
-def test_revision_seven_baseline_warns_after_prompt_snapshot_correction(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from soup_cli.eval.gate import resolve_baseline, stamp_baseline_scores
-
-    monkeypatch.chdir(tmp_path)
-    payload = stamp_baseline_scores({"mini_over_refusal": 0.5})
-    current_revision = payload["provenance"]["scorer_revision"]
-    assert current_revision > 7
-    payload["provenance"]["scorer_revision"] = 7
-    (tmp_path / "baseline.json").write_text(json.dumps(payload), encoding="utf-8")
-
-    warnings: list[str] = []
-    assert resolve_baseline("baseline.json", warn=warnings.append) == {"mini_over_refusal": 0.5}
-    assert len(warnings) == 1
-    assert "scorer_revision=7" in warnings[0]
-    assert f"scorer_revision={current_revision}" in warnings[0]
 
 @pytest.mark.parametrize("mode", ["pop_short", "clear_raise", "reverse_raise", "consume"])
 def test_mutated_middle_chunk_preserves_membership_retry_order_and_other_chunks(

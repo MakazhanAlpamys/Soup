@@ -564,9 +564,8 @@ saved generation configuration requests multiple sequences; the shared model
 configuration is not changed. Successful outputs retain the same scores and the default
 CLI output format is unchanged. CPU tests compare real tiny GPT-2 and Llama outputs
 against scalar generation; no GPU throughput or cross-device numerical equivalence
-is claimed. Scorer revision 6 marks the corrected generation-failure handling;
-revision 8 also preserves failed items when a batch mutates its input. Older saved
-baselines receive the existing provenance warning. Chunk boundaries and lazy scalar
+is claimed. Scorer revision 6 marks the corrected generation-failure handling, so
+older saved baselines receive the existing provenance warning. Chunk boundaries and lazy scalar
 generation are preserved, so scoring and progress still precede the next chunk.
 
 Each suite is >20 items so a single-item flip (1/N < 0.05) trips the default threshold instead
