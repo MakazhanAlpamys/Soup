@@ -230,6 +230,14 @@ class TestFromTracesCLI:
         ([], []),
         ([("Q", "Better", 1)], [("Better", "Same")]),
         ([("Q", "Worse", 0), ("Q", "Better", 1)], [("Same", "Worse")]),
+        pytest.param(
+            [("Q", "Worse", 0), ("Q", "Awful", 0)], [("Same", "Worse")],
+            id="first-distinct-downvote",
+        ),
+        pytest.param(
+            [("Q", "Better", 1), ("Q", "Best", 1)], [("Better", "Same")],
+            id="first-distinct-upvote",
+        ),
     ])
     def test_thumbs_require_distinct_completions(self, tmp_path, monkeypatch, extra, expected):
         monkeypatch.chdir(tmp_path)
