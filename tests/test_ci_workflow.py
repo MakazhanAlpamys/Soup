@@ -94,7 +94,7 @@ def test_supported_python_constants_match_pyproject():
     assert _MAX_SUPPORTED_PYTHON == (ceil[0], ceil[1] - 1)
 
 
-@pytest.mark.parametrize("version", ["3.10", "3.9", "3.14", "2.7"])
+@pytest.mark.parametrize("version", ["3.10", "3.9", "3.14", "2.7", "4.12", "3.111"])
 def test_ci_init_rejects_unsupported_python_versions(tmp_path, monkeypatch, version):
     from soup_cli import __version__
 
