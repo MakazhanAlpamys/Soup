@@ -223,9 +223,10 @@ pytest -m gpu --no-cov tests/test_autodistill_student_loss.py -q
 ```
 
 The [2026-11-02 CUDA record](../benchmarks/autodistill-student-cuda-2026-11-02.md)
-reports all five passing on an RTX 3090, plus all 52 cases of this test file with zero
-skips. The GPU cases use float64 student logits/backbones; reduced-precision GPU training
-and the full cache-to-training workflow remain outside that qualification.
+reports all five passing on an RTX 3090. The full file run passed all 52 cases
+present at the time, with zero skips. The GPU cases use float64 student logits/backbones;
+reduced-precision GPU training and the full cache-to-training workflow remain outside
+that qualification.
 
 ## 6. Teacher fidelity tiers
 

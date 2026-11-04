@@ -186,6 +186,10 @@ def test_microbatch_sums_use_the_global_token_denominator(ce, kd):
     ({"ce": -1.0}, ValueError, "ce_weight must be a finite non-negative number"),
     ({"kd": float("nan")}, ValueError, "kd_weight must be a finite non-negative number"),
     ({"ce": True}, TypeError, "ce_weight must be a finite non-negative number"),
+    pytest.param(
+        {"ce": "0.3"}, TypeError, "ce_weight must be a finite non-negative number",
+        id="string-ce-weight",
+    ),
     ({"kd": float("inf")}, ValueError, "kd_weight must be a finite non-negative number"),
     ({"ce": 0.0, "kd": 0.0}, ValueError, "at least one objective weight must be positive"),
     ({"chunk": 0}, ValueError, "token_chunk_size must be a positive integer"),
@@ -219,6 +223,11 @@ def test_invalid_logits_are_refused(case, error, message):
         logits[0, 0] = float("nan")
     with pytest.raises(error, match=message):
         _loss(logits, [] if case == "empty" else [_capture()])
+
+
+def test_logits_that_are_not_a_tensor_are_refused():
+    with pytest.raises(TypeError, match="student_logits must be a floating-point tensor"):
+        _loss([[0.0, 0.0, 0.0, 0.0]], [_capture()])
 
 
 def test_mapping_cannot_stand_in_for_a_capture_token():
