@@ -87,6 +87,39 @@ def test_quantization_refusal_names_the_supplied_value(value):
         SoupConfig.model_validate(recipe(quantization=value))
 
 
+@pytest.mark.parametrize("quantization", [None, "none", "8bit"], ids=["unset", "none", "8bit"])
+def test_load_in_8bit_refusal_names_alias_and_gives_working_recovery(quantization):
+    raw = recipe(load_in_8bit=True)
+    if quantization is None:
+        del raw["training"]["quantization"]
+    else:
+        raw["training"]["quantization"] = quantization
+
+    with pytest.raises(ValueError) as caught:
+        SoupConfig.model_validate(raw)
+    message = str(caught.value)
+    assert "training.quantization='8bit'" in message
+    assert "task='distill' on backend='mlx'" in message
+    assert "Delete training.load_in_8bit: true" in message
+    assert "any training.quantization line" in message
+
+    # Follow the diagnostic rather than only checking that validation refuses.
+    del raw["training"]["load_in_8bit"]
+    raw["training"].pop("quantization", None)
+    fixed = SoupConfig.model_validate(raw)
+    assert fixed.training.quantization == "none"
+    assert fixed.training.load_in_8bit is not True
+    assert SoupConfig.model_validate_json(fixed.model_dump_json()).training.quantization == "none"
+
+
+def test_false_load_in_8bit_keeps_the_explicit_quantization_recovery_hint():
+    assert SoupConfig.model_validate(recipe()).training.quantization == "none"
+    with pytest.raises(ValueError, match="training.quantization='8bit'") as caught:
+        SoupConfig.model_validate(recipe(load_in_8bit=False, quantization="8bit"))
+    assert "set training.quantization: none" in str(caught.value)
+    assert "Delete training.load_in_8bit" not in str(caught.value)
+
+
 @pytest.mark.parametrize("value", [True, 0, -1, float("nan"), float("inf"), 0.049, 100.01])
 def test_bad_temperatures_never_coerce_to_supported_runtime(value):
     with pytest.raises((ValueError, TypeError), match="temperature"):
