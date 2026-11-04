@@ -389,6 +389,9 @@ class TestTheLineBeforeTheHub:
         assert "HF_HUB_OFFLINE" not in text
         assert text == "Reading the model's details from the Hub to size the run..."
 
+    def test_the_line_says_details_not_config_json(self):
+        assert HUB_REQUEST_LINE.startswith("Reading the model's details from the Hub")
+
     def test_a_batch_it_cannot_price_sends_no_request(self, workdir, hub):
         # A Hub id with nothing cached: reading its shape would send requests.
         result = hardware_fit_input_or_reason(
