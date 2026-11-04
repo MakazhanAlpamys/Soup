@@ -173,7 +173,7 @@ def export(
         raise typer.Exit(1)
 
     if not model_path.exists():
-        console.print(f"[red]Model path not found: {model_path}[/]")
+        console.print(Text(f"Model path not found: {strip_control(model_path)}", style="red"))
         raise typer.Exit(1)
 
     if (verbose or no_install_deps) and fmt != "gguf":
