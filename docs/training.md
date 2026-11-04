@@ -703,7 +703,8 @@ about 7.8 GiB at B=4/S=2048/V=128256; budget for additional intermediates as wel
 
 Use `backend: mlx`, `task: distill`, `modality: text`, `training.teacher_model`
 and `training.quantization: none`. Both checkpoints must be unquantized native
-MLX causal text models. The student trains ordinary linear LoRA, with optional
+MLX causal text models. Remove `training.load_in_8bit: true` as well: that alias
+overrides `quantization: none`. The student trains ordinary linear LoRA, with optional
 `training.lora.use_rslora: true` for `alpha / sqrt(r)` scaling (otherwise `alpha / r`),
 as in MLX SFT. Its base and the teacher remain frozen. Actual quantized modules are
 refused even if the recipe
