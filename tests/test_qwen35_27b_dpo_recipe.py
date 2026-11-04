@@ -24,11 +24,12 @@ def test_metadata_selects_the_27b_preference_model_independently() -> None:
     assert recipe.model == BASE
     assert recipe.task == "dpo"
     assert recipe.size == "27B"
-    assert {"qwen", "qwen3.5", "dpo", "preference", "large"} <= set(recipe.tags)
+    assert {"qwen", "qwen3.5", "dpo", "alignment", "preference", "large"} <= set(recipe.tags)
+    assert "Apache-2.0" in recipe.description
     assert recipe in search_recipes(query="qwen3.5", task="dpo", size="27b")
 
 
-def test_yaml_selects_the_27b_text_decoder_and_inherited_dpo_settings() -> None:
+def test_yaml_selects_the_27b_text_decoder_and_dpo_settings() -> None:
     raw = yaml.safe_load(RECIPES[NAME].yaml_str)
     assert raw["base"] == BASE
     assert raw["task"] == "dpo"
@@ -45,6 +46,7 @@ def test_yaml_selects_the_27b_text_decoder_and_inherited_dpo_settings() -> None:
     assert cfg.training.epochs == 3
     assert cfg.training.dpo_beta == 0.1
     assert cfg.training.batch_size == "auto"
+    assert cfg.training.gradient_accumulation_steps == 8
     assert cfg.training.quantization == "4bit"
     assert cfg.training.lora.r == 16
     assert cfg.training.lora.alpha == 32

@@ -1753,6 +1753,7 @@
       "data.max_length": 4096,
       "data.train": "./data/preference_train.jsonl",
       "task": "dpo",
+      "training.gradient_accumulation_steps": 8,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 5e-06

@@ -84,9 +84,10 @@ establish full-checkpoint 2B training quality, NF4 execution, or GPU memory use.
 
 `soup recipes use qwen3.5-27b-dpo` selects `Qwen/Qwen3.5-27B`'s language
 decoder for the same text preference layout. It inherits the 9B DPO recipe's
-4096-token limit, learning rate, epochs, LoRA and quantization settings, including
-the default four accumulation steps rather than the 27B SFT recipe's eight.
-These are starting values, not measured 27B tuning or memory-fit recommendations.
+4096-token limit, learning rate, epochs, LoRA and quantization settings. It uses
+eight accumulation steps, matching the Qwen3.5 27B SFT, Qwen3.6 27B DPO and
+Gemma 3 27B DPO recipes. These settings are starting values. Full-size tuning
+and memory fit have not been measured.
 The pinned public configuration builds on the meta device, and a tiny random
 decoder with both attention block kinds passes a CPU LoRA forward/backward check.
 Full 27B weights, NF4 execution, GPU memory use and training quality are unverified.
