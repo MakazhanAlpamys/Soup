@@ -201,6 +201,90 @@ def test_explicit_validation_and_eval_steps_are_exclusive_to_native_pretrain():
         SoupConfig(**{**raw, "backend": "transformers"})
 
 
+def _reviewed_pretrain_config(*, data=None, training=None):
+    from soup_cli.config.schema import SoupConfig
+
+    return SoupConfig(
+        base="local", backend="mlx", task="pretrain",
+        data={"train": "corpus.txt", "format": "plaintext", **(data or {})},
+        training={"quantization": "none", **(training or {})},
+    )
+
+
+def test_native_pretrain_is_a_reviewed_backend_combination():
+    from soup_cli.config.backend_support import REGISTRY, TRAINER_MODULES, check_config
+
+    pair = ("pretrain", "mlx", "text")
+    assert pair in REGISTRY
+    assert REGISTRY[pair] == ()
+    assert TRAINER_MODULES[pair][0] == "soup_cli/trainer/mlx_pretrain.py"
+    assert check_config(_reviewed_pretrain_config()) == []
+
+
+@pytest.mark.parametrize("field", [
+    "use_galore", "use_ring_attention", "moe_lora", "gradient_checkpointing", "packing",
+])
+def test_pretrain_settings_refused_at_load_have_no_doctor_row(field):
+    from soup_cli.config.backend_support import unsupported_for
+
+    with pytest.raises(ValueError) as error:
+        _reviewed_pretrain_config(training={field: True})
+    assert field in error.value.errors()[0]["msg"]
+    assert f"training.{field}" not in {
+        entry.field for entry in unsupported_for("pretrain", "mlx", "text")
+    }
+
+
+@pytest.mark.parametrize("val_split", [0.2, 0.05])
+def test_explicit_positive_val_split_with_validation_file_is_refused(val_split):
+    with pytest.raises(ValueError) as error:
+        _reviewed_pretrain_config(data={"validation": "val.txt", "val_split": val_split})
+    message = error.value.errors()[0]["msg"]
+    assert "data.val_split" in message
+    assert "data.validation" in message
+
+
+def test_validation_file_with_unset_val_split_stays_loadable_after_serialization(tmp_path):
+    from soup_cli.config.schema import DataConfig, SoupConfig
+    from soup_cli.data.mlx_pretrain import load_pretrain_corpus
+
+    train, val = tmp_path / "train.txt", tmp_path / "val.txt"
+    train.write_text("training document\n", encoding="utf-8")
+    val.write_text("validation document\n", encoding="utf-8")
+    cfg = _reviewed_pretrain_config(data={"train": str(train), "validation": str(val)})
+    reloaded = SoupConfig(**cfg.model_dump())
+    assert reloaded.model_dump() == cfg.model_dump()
+    corpus = load_pretrain_corpus(reloaded.data)
+    assert corpus["train"] == [{"text": "training document"}]
+    assert corpus["val"] == [{"text": "validation document"}]
+    default_split = DataConfig.model_fields["val_split"].default
+    assert _reviewed_pretrain_config().data.val_split == default_split
+
+
+def test_positive_val_split_without_validation_file_keeps_document_splitting():
+    cfg = _reviewed_pretrain_config(data={"val_split": 0.2})
+    assert cfg.data.validation is None
+    assert cfg.data.val_split == 0.2
+
+
+def test_validation_file_with_explicit_zero_val_split_is_accepted():
+    from soup_cli.config.schema import SoupConfig
+
+    cfg = _reviewed_pretrain_config(data={"validation": "val.txt", "val_split": 0})
+    assert cfg.data.validation == "val.txt"
+    assert cfg.data.val_split == 0
+    assert SoupConfig(**cfg.model_dump()).model_dump() == cfg.model_dump()
+
+
+def test_pretrain_quantization_refusal_names_the_field_and_value():
+    with pytest.raises(ValueError) as error:
+        _reviewed_pretrain_config(training={"quantization": "8bit"})
+    assert error.value.errors()[0]["msg"] == (
+        "Value error, training.quantization='8bit' is not supported by task='pretrain' "
+        "on backend='mlx': use none, or 4bit with a pre-quantized base"
+    )
+
+
 def test_missing_mlx_and_non_apple_errors_are_actionable(monkeypatch):
     import sys
 

@@ -66,6 +66,33 @@ excludes loading transients. No CUDA-parity or domain-adaptation claim is made.
 
 ## Reproduction
 
+### Review follow-up, 2026-11-04
+
+The three config/backend-support revisions in #2412 were qualified again on the
+same M4 Pro. The new source tree SHA-256 is
+`934c5e7dc70f3ff1da95ceed56d6614099213536e4e157acf0f6806b91f224c6`;
+the original measurements above retain their original source identity.
+
+Current MLX 0.32.4 / MLX-LM 0.32.2 / Transformers 5.22.1 and the resolved floor
+MLX 0.31.2 / MLX-LM 0.31.3 / Transformers 5.16.1 each pass 59 dedicated tests.
+Both dense and actual affine 4-bit bases complete 8 updates / 192 targets on
+each stack, retaining all 11 dense or 27 quantized base tensors unchanged.
+All four fresh-process reloads have maximum logit error 0. The qualification
+configurations set `data.validation` and omit `data.val_split`, exercising its
+effective zero split through the public config/dispatch and corpus loader.
+The 4-bit path still loads seven quantized linear modules and one quantized
+embedding. Detailed versions, source identity and bounded metrics are in
+[`evidence/mlx-pretrain-2412-review-20261104.json`](evidence/mlx-pretrain-2412-review-20261104.json).
+
+Portable backend/config/changelog regressions pass 192 tests. Five isolated
+mutations are detected: removing either backend registration, accepting a
+written positive split with a validation file, retaining the unused implicit
+split through config serialization, and restoring the vague quantization
+message. The message test inspects Pydantic's actual diagnostic, not its echoed
+input value. These follow-up measurements retain the fixture limitations above.
+
+### Commands
+
 From this source checkout, in an Apple Silicon `.[mlx]` environment with pytest:
 
 ```bash

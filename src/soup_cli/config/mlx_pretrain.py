@@ -12,6 +12,14 @@ def refuse_unsupported_pretrain(cfg) -> None:
     data, training = cfg.data, cfg.training
     if data.format != "plaintext":
         raise ValueError("MLX pretrain requires data.format: plaintext")
+    if data.validation is not None:
+        if "val_split" in data.model_fields_set and data.val_split > 0:
+            raise ValueError(
+                "MLX pretrain data.val_split must be 0 or unset when data.validation is set"
+            )
+        if "val_split" not in data.model_fields_set:
+            # The file supplies validation; keep the effective config reloadable.
+            cfg.data = data = data.model_copy(update={"val_split": 0.0})
     for name in ("train", "validation"):
         source = getattr(data, name)
         if source is not None and (
@@ -22,7 +30,10 @@ def refuse_unsupported_pretrain(cfg) -> None:
     if training.lora.r < 1:
         raise ValueError("MLX pretrain requires training.lora.r >= 1 (frozen base with LoRA)")
     if training.quantization not in {"none", "4bit"}:
-        raise ValueError("MLX pretrain training.quantization accepts none or pre-quantized 4bit")
+        raise ValueError(
+            f"training.quantization={training.quantization!r} is not supported by "
+            "task='pretrain' on backend='mlx': use none, or 4bit with a pre-quantized base"
+        )
     # Only fields actually implemented by this loop (or consumed by its CLI).
     # Compare defaults so unrelated task knobs do not make every minimal config fail.
     supported = {

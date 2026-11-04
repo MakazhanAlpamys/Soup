@@ -683,8 +683,12 @@ JSONL means one `{"text": "..."}` document per row, preserving embedded
 newlines and indentation. Prefer JSONL for code or paragraphs. Invalid JSON,
 non-object rows and unusable text retain the existing reader diagnostics;
 accepted/dropped counts and source hashes are recorded without corpus contents.
-An explicit validation file takes precedence over `val_split`. Otherwise Soup
-splits documents before tokenization; windows from one document stay together.
+With an explicit `data.validation` file, omit `data.val_split` or set it to `0`;
+an explicitly positive split is refused because the file supplies validation.
+When omitted beside a validation file, the effective split becomes `0` so the
+saved configuration can be reloaded. Without a validation file, the split
+default is unchanged: Soup splits documents before tokenization, and windows
+from one document stay together.
 Empty required splits and splits without next-token targets are errors. Separate
 files are not deduplicated against one another.
 
