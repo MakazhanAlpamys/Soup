@@ -10,6 +10,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
+from rich.text import Text
 
 from soup_cli.templates import list_templates, load_template
 from soup_cli.utils.paths import open_no_follow, refuse_linked_dirs
@@ -22,7 +23,8 @@ def _print_link_refusal(output: str) -> None:
     console.print(
         f"[red]{for_terminal(output)} is a symbolic link, junction or other reparse "
         "point; soup init does not write through it.[/]\n"
-        "Remove it or choose a different --output."
+        "Remove it or choose a different --output.",
+        emoji=False,
     )
 
 
@@ -151,7 +153,7 @@ def init(
     if template:
         config_text = load_template(template)
         if config_text is None:
-            console.print(f"[red]Unknown template: {for_terminal(template)}[/]")
+            console.print(f"[red]Unknown template: {for_terminal(template)}[/]", emoji=False)
             console.print(f"Available: {', '.join(list_templates())}")
             raise typer.Exit(1)
         console.print(f"[green]Using template:[/] {for_terminal(template)}")
@@ -162,8 +164,11 @@ def init(
     display_output = for_terminal(output_path)
     console.print(
         Panel(
-            f"[bold green]Config saved to {display_output}[/]\n\n"
-            f"Next step: [bold]soup train --config {display_output}[/]",
+            Text.from_markup(
+                f"[bold green]Config saved to {display_output}[/]\n\n"
+                f"Next step: [bold]soup train --config {display_output}[/]",
+                emoji=False,
+            ),
             title="Ready!",
         )
     )
