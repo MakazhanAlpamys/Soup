@@ -6,7 +6,11 @@ from typing import Literal, Union, get_args, get_origin
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from soup_cli.config.schema import LoraConfig, TrainingConfig
+from soup_cli.config.schema import (
+    _TRAINING_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS,
+    LoraConfig,
+    TrainingConfig,
+)
 
 # Any numeric field that intentionally accepts bool must be listed here with
 # a reason. A new bool/numeric union should trigger an explicit review.
@@ -14,60 +18,6 @@ _BOOL_NUMERIC_UNION_EXEMPTIONS: dict[tuple[type[BaseModel], str], str] = {}
 
 # These TrainingConfig fields already have dedicated bool-rejection validators.
 # Keep their existing exception types and field-specific messages unchanged.
-_EXISTING_BOOL_VALIDATORS = {
-    "seed",
-    "data_seed",
-    "expand_layers",
-    "freeze_trainable_layers",
-    "eval_steps",
-    "grpo_beta",
-    "grpo_judge_max_tokens",
-    "grpo_judge_max_calls",
-    "grpo_judge_max_failure_rate",
-    "distill_chunk_size",
-    "distill_temperature",
-    "mod_capacity_factor",
-    "ebft_temperature",
-    "num_labels",
-    "minillm_rollout_length",
-    "mole_top_k",
-    "mole_temperature",
-    "lisa_num_layers",
-    "lisa_interval_steps",
-    "stream_buffers",
-    "stream_read_ahead",
-    "stream_vram_override",
-    "stream_loss_chunk",
-    "unlearn_alpha",
-    "ref_model_ema_alpha",
-    "tis_threshold",
-    "off_policy_mask_threshold",
-    "replay_buffer_size",
-    "grpo_delta",
-    "yarn_factor",
-    "yarn_attn_factor",
-    "yarn_beta_fast",
-    "yarn_beta_slow",
-    "citation_recall_threshold",
-    "grace_codebook_size",
-    "grace_codebook_dim",
-    "reward_hack_dwell_steps",
-    "reward_hack_release_patience",
-    "reward_hack_rollback_patience",
-    "reward_hack_max_recovery_attempts",
-    "reward_hack_smoothing_window",
-    "reward_hack_beta_floor",
-    "reward_hack_beta_ceil",
-    "reward_hack_trip_band",
-    "reward_hack_release_band",
-    "reward_hack_kl_gain",
-    "reward_hack_pid_kp",
-    "reward_hack_pid_ki",
-    "reward_hack_pid_kd",
-    "reward_hack_signal_target",
-    "reward_hack_integral_clamp",
-    "reward_hack_shaping_strength",
-}
 
 
 def _union_members(annotation):
@@ -98,7 +48,7 @@ def _numeric_field_cases():
 
             key = (model, name)
 
-            if model is TrainingConfig and name in _EXISTING_BOOL_VALIDATORS:
+            if model is TrainingConfig and name in _TRAINING_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS:
                 continue
 
             permits_bool = any(member is bool or _is_bool_literal(member) for member in members)
@@ -164,3 +114,13 @@ def test_actual_boolean_fields_still_accept_booleans():
         tis_threshold=2.0,
     )
     assert training.mask_truncated_completions is True
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    sorted(_TRAINING_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS),
+)
+@pytest.mark.parametrize("value", [True, False], ids=["true", "false"])
+def test_fields_with_their_own_check_still_refuse_booleans(field_name, value):
+    with pytest.raises((ValidationError, TypeError)):
+        TrainingConfig(**{field_name: value})
