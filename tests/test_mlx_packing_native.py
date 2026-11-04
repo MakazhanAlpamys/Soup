@@ -257,12 +257,10 @@ def test_unequal_pack_accumulation_uses_the_group_target_denominator(tmp_path):
     assert mx.isfinite(expected).item()
 
 
-@pytest.mark.parametrize("mode", ["responses_only", "mask_history", "cache"])
-def test_public_target_modes_and_cached_validation_keep_their_exact_targets(
+@pytest.mark.parametrize("mode", ["responses_only", "mask_history"])
+def test_public_raw_target_modes_keep_their_exact_targets(
     tmp_path, monkeypatch, mode,
 ):
-    import mlx.core as mx
-    from datasets import Dataset, DatasetDict
     from mlx_lm.tuner import trainer
 
     from soup_cli.trainer.mlx_masking import MaskedChatDataset
@@ -291,18 +289,6 @@ def test_public_target_modes_and_cached_validation_keep_their_exact_targets(
         tokens, mask = raw.process(rows[0])
         observed["expected"] = [token if keep else -100 for token, keep in zip(tokens, mask)]
 
-    if mode == "cache":
-        labels = [-100] * len(ids)
-        labels[-3:] = [3, 4, 1]  # Explicit targets differ from the stored input IDs.
-        cache = tmp_path / "cache"
-        records = Dataset.from_dict({"input_ids": [ids]*4, "labels": [labels]*4})
-        DatasetDict(train=records, validation=records.select([0, 1])).save_to_disk(str(cache))
-        # The public CLI still validates the configured source's declared format.
-        source.write_text("\n".join(json.dumps(record) for record in records) + "\n")
-        cfg.data.format = "pre_tokenized"
-        cfg.data.tokenized_path = str(cache)
-        cfg.training.eval_steps = 1
-        observed["cached_labels"] = labels
     monkeypatch.setattr(MLXSFTTrainerWrapper, "setup", observe_setup)
     real_train = trainer.train
 
@@ -312,7 +298,7 @@ def test_public_target_modes_and_cached_validation_keep_their_exact_targets(
         def observe_batches(*args, **options):
             for batch in iterator(*args, **options):
                 actual = batch[1][0][0, :2 * len(ids)].tolist()
-                expected = observed.get("cached_labels", observed["expected"])
+                expected = observed["expected"]
                 expected = [-100, *expected[1:]] * 2
                 assert actual == expected
                 yield batch
@@ -324,13 +310,6 @@ def test_public_target_modes_and_cached_validation_keep_their_exact_targets(
     path.write_text(cfg.model_dump_json())
     result = CliRunner().invoke(app, ["train", "--config", str(path), "--yes"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    if mode == "cache":
-        wrapper = observed["wrapper"]
-        wrapper.model.eval()
-        rows = [(ids, observed["cached_labels"])] * 2
-        expected = _reference_sum(wrapper.model, rows).item()
-        assert wrapper._eval_log[-1]["val_loss"] == pytest.approx(expected, abs=2e-5)
-        assert mx.isfinite(mx.array(expected)).item()
 
 
 def test_an_incomplete_accumulation_group_is_refused_instead_of_dropping_a_pack(tmp_path):

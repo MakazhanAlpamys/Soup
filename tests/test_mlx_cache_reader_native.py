@@ -145,3 +145,64 @@ def test_native_real_preprocess_cache_loss_training_and_reload(
     assert all(all(value == expected_count for value in record["row_tokens"]) for record in steps)
     metadata = json.loads((tmp_path / "out" / "adapter_config.json").read_text())
     assert metadata["pre_tokenized"] is True
+
+
+
+def test_public_packing_cached_validation_keeps_its_exact_targets(tmp_path, monkeypatch):
+    from datasets import Dataset, DatasetDict
+    from mlx_lm.tuner import trainer
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+    from tests.test_mlx_packing_native import _reference_sum
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    base = tmp_path / "base"
+    _, ids = _selective_fixture(base, False)
+    labels = [-100] * len(ids)
+    labels[-3:] = [3, 4, 1]  # Explicit targets differ from the stored input IDs.
+    records = Dataset.from_dict({"input_ids": [ids] * 4, "labels": [labels] * 4})
+    cache = tmp_path / "cache"
+    DatasetDict(train=records, validation=records.select([0, 1])).save_to_disk(str(cache))
+    source = tmp_path / "data.jsonl"
+    source.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+    cfg = _config(base, tmp_path / "out", dora=False)
+    cfg.data.train = str(source)
+    cfg.data.format = "pre_tokenized"
+    cfg.data.tokenized_path = str(cache)
+    cfg.data.val_split = 0.0
+    cfg.data.train_on_responses_only = True
+    cfg.training.packing = True
+    cfg.training.eval_steps = 1
+    observed = {}
+    setup = MLXSFTTrainerWrapper.setup
+
+    def observe_setup(self, dataset):
+        setup(self, dataset)
+        observed["wrapper"] = self
+
+    monkeypatch.setattr(MLXSFTTrainerWrapper, "setup", observe_setup)
+    real_train = trainer.train
+
+    def observe_train(**kwargs):
+        iterator = kwargs["iterate_batches"]
+
+        def observe_batches(*args, **options):
+            for batch in iterator(*args, **options):
+                actual = batch[1][0][0, :2 * len(ids)].tolist()
+                assert actual == [-100, *labels[1:]] * 2
+                yield batch
+
+        return real_train(**{**kwargs, "iterate_batches": observe_batches})
+
+    monkeypatch.setattr(trainer, "train", observe_train)
+    path = tmp_path / "config.json"
+    path.write_text(cfg.model_dump_json())
+    result = CliRunner().invoke(app, ["train", "--config", str(path), "--yes"])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    wrapper = observed["wrapper"]
+    wrapper.model.eval()
+    expected = _reference_sum(wrapper.model, [(ids, labels)] * 2).item()
+    assert wrapper._eval_log[-1]["val_loss"] == pytest.approx(expected, abs=2e-5)
+    assert mx.isfinite(mx.array(expected)).item()
