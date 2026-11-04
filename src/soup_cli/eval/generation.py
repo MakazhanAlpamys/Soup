@@ -25,7 +25,7 @@ def iter_outputs(gen: Callable[[str], str], prompts: list[str]) -> Iterator[Opti
         for start in range(0, len(prompts), size):
             chunk = prompts[start:start + size]
             try:
-                outputs = batch(chunk)
+                outputs = batch(list(chunk))
             except Exception:  # noqa: BLE001 — retry this chunk's items only
                 yield from _scalar_outputs(gen, chunk)
             else:
