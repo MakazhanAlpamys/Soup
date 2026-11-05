@@ -1355,3 +1355,62 @@ def test_a_failed_load_never_removes_an_adapter_that_was_already_there(tmp_path,
         serve_cmd._load_runtime_adapter(wrapped, str(empty), "v1")
 
     assert list(wrapped.peft_config) == ["v1"]
+
+
+# ---------------------------------------------------------------------------
+# the first load cannot race a generation (--adapter-dir locks every generation)
+# ---------------------------------------------------------------------------
+
+
+class _PlainModel:
+    """The served model before any adapter: not a PeftModel (no set_adapter / disable_adapter)."""
+
+
+def test_a_chat_queued_behind_the_first_load_waits_and_runs_without_the_new_adapter(
+    root, loader, seen
+):
+    served = _serve(root, model_obj=_PlainModel())
+    loader.returned.current = "v2"  # PEFT activates the adapter it has just loaded
+    loader.hold = threading.Event()
+    path = _adapter(root, "v2")
+    results = {}
+    load = threading.Thread(target=lambda: results.update(load=served.load("v2", path)))
+    load.start()
+    assert loader.entered.wait(10)
+    chat = threading.Thread(target=lambda: results.update(chat=served.chat()))
+    chat.start()
+    chat.join(0.5)
+    assert seen == [], "a generation ran while the first load was wrapping the model"
+    loader.hold.set()
+    load.join(10)
+    chat.join(10)
+    assert results["load"].status_code == 200, results["load"].text
+    assert results["chat"].status_code == 200, results["chat"].text
+    # It ran on the wrapped model, with the new adapter disabled (base for this request).
+    assert seen == [(loader.returned, None)]
+
+
+def test_chat_and_stream_lock_every_generation_only_with_an_adapter_dir(root, seen, monkeypatch):
+    flags = []
+    real = serve_cmd._adapter_scope
+
+    def spy(*args, **kwargs):
+        flags.append(kwargs.get("always_lock"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(serve_cmd, "_adapter_scope", spy)
+    assert _serve(root, adapter_dir=None).chat().status_code == 200
+    with_dir = _serve(root)
+    assert with_dir.chat().status_code == 200
+    streamed = with_dir.chat(stream=True)
+    assert streamed.status_code == 200
+    streamed.read()
+    assert flags == [False, True, True]
+
+
+def test_adapter_scope_always_lock_holds_the_lock_with_no_adapter_loaded():
+    lock = threading.Lock()
+    with serve_cmd._adapter_scope(_PlainModel(), lock, set(), None, None, always_lock=True):
+        assert lock.locked()
+    with serve_cmd._adapter_scope(_PlainModel(), lock, set(), None, None):
+        assert not lock.locked()
