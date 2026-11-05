@@ -216,6 +216,10 @@ class ShipVerdict:
     #: pre-#367 evidence that never stamped it — the panel then says
     #: ``unstamped`` rather than implying bf16.
     numerics: Optional[str] = None
+    #: ``soup ship --base-adapter``: the LoRA adapter the BEFORE side was loaded with
+    #: (before = base + this adapter). ``None`` means the before side is the bare base
+    #: model, which is every verdict not produced by a live ``--base-adapter`` run.
+    base_adapter: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -651,6 +655,9 @@ def render_ship_panel(verdict: ShipVerdict) -> Panel:
         f"{escape(verdict.numerics) if verdict.numerics is not None else 'unstamped'}"
         "[/]"
     )
+    if verdict.base_adapter is not None:
+        # The path comes from the command line: markup-escape it AND strip control bytes.
+        header += f"\n[dim]Base adapter: {escape(for_terminal(verdict.base_adapter))}[/]"
 
     table = Table(
         title=f"Leg 2 general suite (threshold {verdict.forgetting_threshold:.2%})",
@@ -1016,4 +1023,5 @@ def verdict_to_dict(verdict: ShipVerdict) -> Dict[str, object]:
             }
         ),
         "numerics": verdict.numerics,
+        "base_adapter": verdict.base_adapter,
     }

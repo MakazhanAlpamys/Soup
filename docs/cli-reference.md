@@ -3473,6 +3473,7 @@ Usage: `soup ship [OPTIONS] [<command>] [ARGS]...`
 | `--base` | text |  |  | Base model id/path (the 'before'). |
 | `--tuned` | text |  |  | Tuned model id/path (a separate 'after' model). |
 | `--adapter` | text |  |  | LoRA adapter path (tuned = base + this adapter). |
+| `--base-adapter` | text |  |  | LoRA adapter applied to the base side (before = base + this adapter), e.g. the current production version. Live run with --adapter only. |
 | `--task-eval` | text |  |  | JSONL of leg-1 task-win eval tasks. |
 | `--task-mode` | text | `metric` |  | Leg-1 mode: metric \| judge_score \| pairwise (judge win-rate). |
 | `--noise-floor` | integer |  |  | Re-run the BASE model N times (2-10) to measure what this instrument can resolve, print it beside the verdict, and refuse to call any delta smaller than the measured floor significant. Costs N extra base passes. The leg-1 task floor is measured in every --task-mode; in judge_score / pairwise each repeat is N extra JUDGE passes (N x the judge API calls), and the floor is labelled decode + judge. |
