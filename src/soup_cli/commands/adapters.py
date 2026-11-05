@@ -1637,19 +1637,94 @@ def adapter_pr(
     )
 
 
+def _split_windows_command(command: str) -> list[str]:
+    """Split a command line according to Microsoft C runtime rules,
+    with single-quote grouping support for cross-platform compatibility.
+    """
+    args: list[str] = []
+    current: list[str] = []
+    in_dquote = False
+    in_squote = False
+    has_token = False
+
+    i = 0
+    n = len(command)
+    while i < n:
+        c = command[i]
+
+        if not in_dquote and not in_squote and c in (" ", "\t"):
+            if has_token:
+                args.append("".join(current))
+                current = []
+                has_token = False
+            i += 1
+            continue
+
+        has_token = True
+
+        if c == "'" and not in_dquote:
+            in_squote = not in_squote
+            i += 1
+            continue
+
+        if in_squote:
+            current.append(c)
+            i += 1
+            continue
+
+        if c == "\\":
+            num_bs = 0
+            while i < n and command[i] == "\\":
+                num_bs += 1
+                i += 1
+
+            if i < n and command[i] == '"':
+                current.append("\\" * (num_bs // 2))
+                if num_bs % 2 != 0:
+                    current.append('"')
+                    i += 1
+                else:
+                    if in_dquote and i + 1 < n and command[i + 1] == '"':
+                        current.append('"')
+                        i += 2
+                    else:
+                        in_dquote = not in_dquote
+                        i += 1
+            else:
+                current.append("\\" * num_bs)
+            continue
+
+        if c == '"':
+            if in_dquote and i + 1 < n and command[i + 1] == '"':
+                current.append('"')
+                i += 2
+            else:
+                in_dquote = not in_dquote
+                i += 1
+            continue
+
+        current.append(c)
+        i += 1
+
+    if has_token:
+        args.append("".join(current))
+
+    if in_dquote or in_squote:
+        raise ValueError("No closing quotation in --eval-command")
+
+    return args
+
+
 def _split_bisect_eval_command(command: str, *, windows: Optional[bool] = None) -> list[str]:
     """Split the template before substitution, preserving native path spelling."""
     import shlex
 
     if windows is None:
         windows = os.name == "nt"
-    argv = shlex.split(command, posix=not windows)
     if windows:
-        argv = [
-            word[1:-1] if len(word) >= 2 and word.startswith('"') and word.endswith('"')
-            else word
-            for word in argv
-        ]
+        argv = _split_windows_command(command)
+    else:
+        argv = shlex.split(command, posix=True)
     if not argv or not argv[0]:
         raise ValueError("--eval-command must name a program")
     return argv
