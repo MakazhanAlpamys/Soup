@@ -4574,12 +4574,27 @@ def _spec_bytes(
     )
 
 
+def freeze_for_inference(model: Any) -> None:
+    """Make a streamed model forward-only: eval mode, frozen, no layer checkpointing.
+
+    Run after :func:`install_streaming`. The streamed layers checkpoint only when autograd
+    is recording, so a caller who forgets ``torch.inference_mode()`` would otherwise still
+    route every layer through ``torch.utils.checkpoint``; switching it off here keeps a
+    plain ``model(...)`` call on the same code path as the inference-mode one.
+    """
+    model.eval()
+    for param in model.parameters():
+        param.requires_grad_(False)
+    for layer in streamed_decoder_layers(model):
+        layer.use_checkpoint = False
+
+
 def build_streamed_model(
     *,
     model_id: str,
     shard_dir: str,
     index: Any,
-    lora_config: Any,
+    lora_config: Any = None,
     device: str = "cuda",
     dtype: str = "bfloat16",
     buffers: int = 2,
@@ -4601,11 +4616,20 @@ def build_streamed_model(
 ) -> Tuple[Any, StreamRuntime]:
     """Meta skeleton -> extras -> LoRA -> streaming. No resident base load.
 
+    ``lora_config=None`` (the default) builds the forward-only INFERENCE model instead:
+    peft is never imported, no adapter exists, the model is in eval mode with every
+    parameter frozen, and the streamed layers do not checkpoint. The returned model is the
+    plain Hugging Face class (not a ``PeftModel``), and everything else (weight source,
+    tier, buffer pool, prefetch, NF4 rebuild, scale cache, stripe roots) is the training
+    path's. Use :func:`soup_cli.utils.stream_inference.build_streamed_inference_model` for
+    the supported entry point.
+
     ``read_ahead_decision`` (R4) is the setup's ``ReadAheadDecision`` for ``read_ahead``,
     handed to ``install_streaming`` for its page-lock advice. ``two_read_experts`` is
     ``install_streaming``'s: an API switch, no config field.
     """
-    from peft import get_peft_model
+    if lora_config is not None:
+        from peft import get_peft_model
 
     model = build_meta_skeleton(
         model_id,
@@ -4634,10 +4658,11 @@ def build_streamed_model(
         from soup_cli.utils.peft_wiring import apply_pre_lora_patches
 
         apply_pre_lora_patches(model, model_id)
-        _refuse_trainable_streamed_boundary(model, index, lora_config)
-        model = get_peft_model(model, lora_config)
-        materialize_meta_adapters(model, seed=seed, device=device)
-        assert_trainable_adapters_materialized(model)
+        if lora_config is not None:
+            _refuse_trainable_streamed_boundary(model, index, lora_config)
+            model = get_peft_model(model, lora_config)
+            materialize_meta_adapters(model, seed=seed, device=device)
+            assert_trainable_adapters_materialized(model)
         runtime = install_streaming(
             model,
             shard_dir=shard_dir,
@@ -4655,6 +4680,12 @@ def build_streamed_model(
             nf4_scale_cache=nf4_scale_cache,
             two_read_experts=two_read_experts,
         )
+        if lora_config is None:
+            try:
+                freeze_for_inference(model)
+            except BaseException:
+                runtime.close()
+                raise
     except BaseException:
         for external in external_sources:
             external.close()
