@@ -3428,7 +3428,7 @@ Usage: `soup serve [OPTIONS]`
 | `--model`, `-m` | text |  | yes | Path to LoRA adapter directory or full model |
 | `--base`, `-b` | text |  |  | Base model ID. Auto-detected from adapter_config.json if not set. |
 | `--port`, `-p` | integer | `8000` |  | Port to serve on |
-| `--host` | text | `127.0.0.1` |  | Host to bind to. Defaults to loopback (127.0.0.1). Any other host needs --tool-auth-token, which is checked on the tool, thumbs and adapter routes only: the generation routes take no token. |
+| `--host` | text | `127.0.0.1` |  | Host to bind to. Defaults to loopback (127.0.0.1). Any other host needs --tool-auth-token, which is checked on the tool, thumbs, feedback and adapter routes only: the generation routes take no token. |
 | `--device` | text |  |  | Device: cuda, cuda:&lt;index>, mps or cpu. Auto-detected if not set. With the transformers backend, cpu loads on the CPU in float32 (unless --kv-cache-type bf16/f16 picks the dtype); cuda:&lt;index> and mps are pinned to that device; cuda uses device_map=auto, all in float16. |
 | `--max-tokens` | integer | `512` |  | Default max tokens for generation |
 | `--backend` | text | `transformers` |  | Inference backend: transformers (default), vllm, sglang, or mii |
@@ -3448,7 +3448,7 @@ Usage: `soup serve [OPTIONS]`
 | `--trace-endpoint` | text |  |  | OTLP endpoint URL (default: http://localhost:4317). |
 | `--auto-quant` | flag | off |  | Unavailable until Soup can measure each loaded candidate; the command refuses instead of guessing a format. |
 | `--trust-remote-code` | flag | off |  | Allow loading models that ship custom Python via auto_map. Default deny (v0.36.0). Only enable if you trust the source. |
-| `--trace-log` | text |  |  | Append per-request {prompt, response, latency_ms, tokens, ts} to JSONL at this path. Path must stay under cwd. Rotates at 100 MB (one backup retained). Added in v0.40.3 (#33). |
+| `--trace-log` | text |  |  | Append one conversation record per answer (the v1 format of docs/loop-formats.md) to JSONL at this path. Path must stay under cwd. Rotates at 100 MB (one backup retained). Added in v0.40.3 (#33). |
 | `--trace-log-cap-mb` | integer | `100` |  | Rotation cap in MB for --trace-log (1 - 10000). Default 100. |
 | `--record-thumbs` | text |  |  | Auto-capture thumbs-up/down feedback into a local-rl SQLite at this path via POST /v1/thumbs. Path must stay under cwd. Transformers backend only. v0.71.1 (#230). |
 | `--feedback-log` | text |  |  | Append feedback (POST /v1/feedback) as JSONL records to this path; must stay under cwd. |
@@ -3460,7 +3460,7 @@ Usage: `soup serve [OPTIONS]`
 | `--bank-strength` | float | `1.0` |  | Vector-bank delta strength multiplier. Ignored when --bank is unset. |
 | `--mole` | text |  |  | Path to a MoLE training output dir (mole_gate.pt + mole_manifest.json). Serves the base + N frozen task LoRAs with per-token gate blending at decode time. Requires --backend transformers; not combinable with --bank / --steer / --adapters. (v0.71.17 #259) |
 | `--kv-cache-type` | text |  |  | KV-cache type for decoding: q8_0 (8-bit quantized, needs hqq) / bf16 / f16 (cache dtype) / fp8 (vLLM+Hopper only). Transformers backend only — vLLM / SGLang routing is in the blocked tail. v0.71.14 (#140). |
-| `--tool-auth-token` | text |  |  | Require 'Authorization: Bearer &lt;token>' on the tool endpoints (/v1/tools/python, /v1/tools/bash, /v1/tools/web_search). Without it, /v1/tools/python and /v1/tools/bash answer 401 on every bind and a non-loopback --host is refused. 16-128 characters of A-Z, a-z, 0-9, '\_' and '-', as secrets.token_urlsafe(32) makes. Env: `SOUP_TOOL_AUTH_TOKEN`. |
+| `--tool-auth-token` | text |  |  | Require 'Authorization: Bearer &lt;token>' on the tool endpoints (/v1/tools/python, /v1/tools/bash, /v1/tools/web_search), and on /v1/thumbs, /v1/feedback and the adapter routes (/v1/adapters, /v1/adapters/activate/&lt;name>, /v1/adapters/deactivate). Without it, /v1/tools/python and /v1/tools/bash answer 401 on every bind and a non-loopback --host is refused. 16-128 characters of A-Z, a-z, 0-9, '\_' and '-', as secrets.token_urlsafe(32) makes. Env: `SOUP_TOOL_AUTH_TOKEN`. |
 
 ## `soup ship`
 

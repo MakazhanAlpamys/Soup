@@ -266,7 +266,7 @@ def test_open_stage_vocabulary_accepts_both_producers():
 
 
 def test_version_0_trace_line_is_not_a_version_1_record():
-    """The line soup serve --trace-log writes today is version 0 (docs/loop-formats.md)."""
+    """The line soup serve --trace-log wrote before version 1 is version 0 (loop-formats.md)."""
     legacy = {
         "ts": 1762340400.0,
         "prompt": "How do I reset my router?",

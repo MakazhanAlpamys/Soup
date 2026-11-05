@@ -95,8 +95,8 @@ def serve(
         "--host",
         help=(
             "Host to bind to. Defaults to loopback (127.0.0.1). Any other host "
-            "needs --tool-auth-token, which is checked on the tool, thumbs and "
-            "adapter routes only: the generation routes take no token."
+            "needs --tool-auth-token, which is checked on the tool, thumbs, feedback "
+            "and adapter routes only: the generation routes take no token."
         ),
     ),
     device: Optional[str] = typer.Option(
@@ -219,9 +219,9 @@ def serve(
         None,
         "--trace-log",
         help=(
-            "Append per-request {prompt, response, latency_ms, tokens, ts} "
-            "to JSONL at this path. Path must stay under cwd. Rotates at "
-            "100 MB (one backup retained). Added in v0.40.3 (#33)."
+            "Append one conversation record per answer (the v1 format of "
+            "docs/loop-formats.md) to JSONL at this path. Path must stay under "
+            "cwd. Rotates at 100 MB (one backup retained). Added in v0.40.3 (#33)."
         ),
     ),
     trace_log_cap_mb: int = typer.Option(
@@ -323,7 +323,7 @@ def serve(
         help=(
             "Require 'Authorization: Bearer <token>' on the tool endpoints "
             "(/v1/tools/python, /v1/tools/bash, /v1/tools/web_search), and on "
-            "/v1/thumbs and the adapter routes (/v1/adapters, "
+            "/v1/thumbs, /v1/feedback and the adapter routes (/v1/adapters, "
             "/v1/adapters/activate/<name>, /v1/adapters/deactivate). Without it, "
             "/v1/tools/python and /v1/tools/bash answer 401 on every bind and a "
             "non-loopback --host is refused. 16-128 characters of A-Z, a-z, 0-9, "
@@ -1358,8 +1358,8 @@ def _non_loopback_notices(host: str, backend: str) -> list[str]:
     non-loopback bind is refused without ``--tool-auth-token``, which reads as
     if the token covered every route, and it does not.
 
-    * transformers: the token is checked on the tool, thumbs and adapter
-      routes only. On a wildcard bind those routes cannot compare ``Host``
+    * transformers: the token is checked on the tool, thumbs, feedback and
+      adapter routes only. On a wildcard bind those routes cannot compare ``Host``
       with a bound name either, which is the second line.
     * vLLM / SGLang / MII: their apps have no such routes and are never handed
       the token, so no route checks it.
@@ -1384,8 +1384,8 @@ def _non_loopback_notices(host: str, backend: str) -> list[str]:
             f"intended. Requests {_PLAIN_HTTP_NOTE}"
         ]
     notices = [
-        f"{where}. --tool-auth-token is checked on the tool, thumbs and adapter routes "
-        "only: /v1/chat/completions, /v1/messages, /v1/models, /health and /metrics "
+        f"{where}. --tool-auth-token is checked on the tool, thumbs, feedback and adapter "
+        "routes only: /v1/chat/completions, /v1/messages, /v1/models, /health and /metrics "
         "answer every client that can reach this port without a token. Put a proxy "
         "that authenticates in front if that is not intended. Requests, the bearer "
         f"token included, {_PLAIN_HTTP_NOTE}"
@@ -1393,7 +1393,7 @@ def _non_loopback_notices(host: str, backend: str) -> list[str]:
     if is_wildcard_bind(host):
         notices.append(
             "a wildcard bind has no single name, so the Host header is not compared: "
-            "the tool, thumbs and adapter routes check only that an Origin header, "
+            "the tool, thumbs, feedback and adapter routes check only that an Origin header, "
             "when sent, names the same host as Host."
         )
     return notices
@@ -2033,8 +2033,8 @@ def _create_app(
     #     requests to the generation routes and the adapter listing, so a page
     #     the operator merely visits cannot burn GPU time or enumerate loaded
     #     adapters. No Origin means no browser, so a proxy / curl / SDK passes.
-    #   * `_check_local_request` (Host AND Origin) covers the tool, thumbs and
-    #     adapter-mutation routes, which no reverse proxy needs to rename.
+    #   * `_check_local_request` (Host AND Origin) covers the tool, thumbs, feedback
+    #     and adapter-mutation routes, which no reverse proxy needs to rename.
     # None of the three covers a non-browser client, which sends no Origin at
     # all and can name the bind address in Host — for those, on a non-loopback
     # bind, the bearer token checked by `_check_tool_auth` is the only thing

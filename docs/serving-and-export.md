@@ -1177,15 +1177,16 @@ option or from `SOUP_TOOL_AUTH_TOKEN` first, on every bind, and exits with statu
 loading the model when it does not match; the message names the rule, never the value. An
 empty value counts as no token.
 
-`/v1/tools/web_search`, `/v1/thumbs` and the adapter routes keep their rule: on a loopback
-bind they take a token only when the server has one.
+`/v1/tools/web_search`, `/v1/thumbs`, `/v1/feedback` and the adapter routes keep their
+rule: on a loopback bind they take a token only when the server has one.
 
-Tool routes, `/v1/thumbs` and adapter activate/deactivate accept requests only when the
-`Host` header names the bound address (any loopback name for a loopback bind) and any
-`Origin` header names the same; otherwise they answer 421 or 403. That check runs first.
-The tool routes and all three adapter routes (`GET /v1/adapters`, activate, deactivate)
-then also require `Authorization: Bearer <token>` whenever `--tool-auth-token` is set,
-on loopback too, and answer 401 without it.
+Tool routes, `/v1/thumbs`, `/v1/feedback` and adapter activate/deactivate accept requests
+only when the `Host` header names the bound address (any loopback name for a loopback
+bind) and any `Origin` header names the same; otherwise they answer 421 or 403. That check
+runs first. The tool routes, `/v1/thumbs`, `/v1/feedback` and all three adapter routes
+(`GET /v1/adapters`, activate, deactivate) then also require
+`Authorization: Bearer <token>` whenever `--tool-auth-token` is set, on loopback too, and
+answer 401 without it.
 
 The generation routes (`/v1/chat/completions`, `/v1/messages`) and the adapter listing
 (`GET /v1/adapters`) carry the narrower half of that check: a request whose `Origin` names
@@ -1198,8 +1199,8 @@ checked on these routes, so a proxy can still front them under its own hostname.
 generation routes (`/v1/chat/completions`, and `/v1/messages` on vLLM).
 
 **What `--tool-auth-token` does not cover.** `soup serve` refuses a non-loopback `--host`
-without `--tool-auth-token`, but the token is checked on the tool routes, `/v1/thumbs` and
-the adapter routes only. `/v1/chat/completions`, `/v1/messages`, `/v1/models`, `/health` and
+without `--tool-auth-token`, but the token is checked on the tool routes, `/v1/thumbs`,
+`/v1/feedback` and the adapter routes only. `/v1/chat/completions`, `/v1/messages`, `/v1/models`, `/health` and
 `/metrics` take no token on any bind, so they answer every client that can reach the port;
 put a proxy that authenticates in front of the server if that is not intended. With
 `--backend vllm`, `sglang` or `mii` there are no tool or adapter routes, so no route checks
