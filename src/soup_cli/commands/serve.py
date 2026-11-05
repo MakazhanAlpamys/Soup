@@ -1696,14 +1696,22 @@ def _load_runtime_adapter(model_obj, path: str, name: str):
 
 
 @contextlib.contextmanager
-def _adapter_scope(model, lock, names, requested, active):
+def _adapter_scope(
+    model, lock, names, requested, active, *, always_lock=False, model_getter=None
+):
     """Select the LoRA adapter for one generation, serialized by ``lock``.
 
     ``requested`` (request body ``adapter`` field) overrides ``active`` (the
     ``/v1/adapters/activate`` selection). A name not in ``names`` (or ``None``)
     runs the base model with adapters disabled. No-op when no named adapters
     were loaded (``names`` empty), so the ordinary single-model serve path is
-    completely unaffected.
+    completely unaffected -- unless ``always_lock`` (``soup serve
+    --adapter-dir``): then even a generation with no adapter loaded holds the
+    lock, because ``POST /v1/adapters/load`` may turn the model into a
+    PeftModel under that lock at any moment, and a generation running
+    outside it would see the model half wrapped. ``model_getter`` re-reads
+    the model once the lock is held: a request that queued behind that first
+    load holds the unwrapped object, which has no ``disable_adapter``.
 
     The lock spans the whole generation because the PeftModel is process-global
     and ``set_adapter`` mutates shared state — two concurrent requests on
@@ -1711,13 +1719,15 @@ def _adapter_scope(model, lock, names, requested, active):
     every path (chat / stream / completions all generate-then-return), so this
     serializes adapter-selected requests but never holds across true streaming.
     """
-    if not names or lock is None:
+    if lock is None or (not names and not always_lock):
         yield
         return
     # An explicit empty string is the internal sentinel for the unadapted base.
     # Test identity rather than truthiness so it overrides a manual full cutover.
     name = active if requested is None else requested
     with lock:
+        if model_getter is not None:
+            model = model_getter()
         if name and name in names and hasattr(model, "set_adapter"):
             model.set_adapter(name)
             yield
@@ -2396,6 +2406,7 @@ def _create_app(
                     x_user_id=x_user_id,
                     adapter_lock=_generation_lock,
                     adapter_names=_peft_adapter_names,
+                    always_lock=_adapter_root is not None,
                     requested_adapter=requested_adapter,
                     active_adapter=_active_snapshot(),
                     canary_outcome=(
@@ -2449,6 +2460,8 @@ def _create_app(
                         with _adapter_scope(
                             model_obj, _generation_lock, _peft_adapter_names,
                             requested_adapter, _active_snapshot(),
+                            always_lock=_adapter_root is not None,
+                            model_getter=lambda: model_obj,
                         ):
                             (
                                 response_text,
@@ -2922,7 +2935,7 @@ def _stream_response(
     kv_cache_generate_kwargs=None,
     mole_runtime=None,
     loaded_bank=None, x_user_id=None,
-    adapter_lock=None, adapter_names=None,
+    adapter_lock=None, adapter_names=None, always_lock=False,
     requested_adapter=None, active_adapter=None,
     canary_outcome=None,
     logits_processor=None,
@@ -2962,6 +2975,7 @@ def _stream_response(
             with _adapter_scope(
                 model, adapter_lock, adapter_names,
                 requested_adapter, active_adapter,
+                always_lock=always_lock,
             ):
                 (
                     response_text, _, completion_tokens_for_log, finish_reason,
