@@ -91,39 +91,40 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.77.1 — a patch: `soup data` keeps its input, `soup plan` agrees with `soup train`, and
-GRPO trains on Apple Silicon.** Nothing in v0.77.0 is taken back. That release refuses
-settings v0.76 warned about or ignored, so a config that loaded on v0.76 can stop loading:
-coming from 0.76.x, run `soup doctor --config soup.yaml` first and read the
-[v0.77.0 release notes](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0).
+**v0.77.2 — a cut of `main` after v0.77.1: 159 pull requests, 153 of them from 30 people outside
+the maintainer.** Most of it is fixes. It also adds features and two rules that can refuse what
+v0.77.1 accepted, so read the
+[v0.77.2 release notes](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.2) before
+upgrading a server or a `task: sft` config. Coming from 0.76.x, run `soup doctor --config soup.yaml`
+first and read the [v0.77.0 release notes](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0).
 
-- **`soup data` commands no longer write over their input.** Eighteen of them (`dedup`,
-  `filter`, `convert`, `merge`, `sample`, `pii`, `toxicity` and the rest) refuse an `--output`
-  that is the same file as an input, under any spelling, before they read anything, and a
-  default output name that the input already has is refused too. Write to a new file instead.
-- **`soup plan` and `soup apply` refuse the configs `soup train` refuses,** with the same
-  message, and write no plan.
-- **GRPO trains natively on Apple Silicon.** `task: grpo` with `backend: mlx` runs Soup's own
-  MLX loop on the objective the transformers path trains, with the built-in `accuracy` or
-  `format` reward. `soup infer --backend mlx` generates from MLX bases and native text LoRA
-  adapters without Torch.
-- **One peak-VRAM estimate** for `soup train`'s pre-flight, `soup profile` and `soup plan`,
-  calibrated on 39 measured runs ([record](benchmarks/gate-2049-resident-vram.md)). For dense
-  models up to about 3.5B parameters, the range it was fitted on, the pre-flight now refuses
-  some long-sequence, large-vocabulary runs it let through, and `--allow-oom-attempt` still
-  launches them. Outside that range (a larger or mixture-of-experts model, `medium` or
-  `selective` checkpointing, `use_liger` / `use_cut_ce`, `backend: unsloth`) a run that does
-  not fit gets the estimate as a warning and starts, unless its weights, the CUDA context and
-  the gradients and optimizer state of the parameters it trains are more than the card holds
-  (a 7B full fine-tune on 80 GB, Llama-3.1-70B in 4-bit on 24 GB): that run is refused there
-  too. LoRA runs and runs that train a subset (Spectrum, LISA, freezing) are judged on fewer
-  terms, and `--allow-oom-attempt` still launches a refused run.
-- **External programs start by an absolute path found on `PATH`.** The current directory and
-  relative `PATH` entries are no longer searched: a tool that only lives there needs its
-  directory on `PATH`.
-- **Also new.** `soup ship --progress jsonl`; unknown config keys written the way another
-  library names them get the Soup field (`learning_rate` suggests `lr`); and the Docker
-  example below passes `--yes`, which a non-interactive `soup train` needs since v0.77.0.
+- **`soup profile --model <id>` answers "will it fit?" without a `soup.yaml`.** It prices the run
+  from the model's `config.json`, shaped by `--seq`, `--batch`, `--method`, `--lora-r`,
+  `--optimizer` and `--gradient-checkpointing`; on Apple Silicon it compares with Metal's working
+  set. `soup plan` and `soup apply` take `--minillm-on-policy`.
+- **More training on Apple Silicon.** `task: preference` with `preference_loss: dpo`, `orpo` or
+  `simpo` runs the native MLX trainer, MLX GRPO trains on 4-bit `mlx-community` bases, and MLX
+  Adafactor follows the configured learning rate and schedule.
+- **Two new DPO recipes,** `qwen3.5-0.8b-dpo` and `qwen3.5-27b-dpo`.
+- **Closer VRAM estimates.** The optimizer step is its own phase, a PRM step is charged the logits
+  of one position, a sharded FSDP or ZeRO run is priced per card, a `stream_loss_chunk` step its
+  last layer's recompute, and Unsloth's LoRA targets as its loader picks them.
+- **Fewer silent overwrites and empty results.** More commands refuse an `--output` that names an
+  input (`soup data ingest`, `persona-mix`, `generate` and others); `soup ship --adapter` refuses an
+  adapter that changes nothing; `soup distill-prompt`, `soup data evolve`, `gen-magpie` and
+  `filter --perplexity` fail instead of writing an empty or unfiltered file.
+- **Preference and RL fixes.** `data.max_length` holds again for SimPO and KTO, PPO checkpoints its
+  policy when asked (and no longer crashes under 4-bit and 8-bit), and `soup merge` loads the base
+  commit the adapter was trained on.
+- **Text shown as typed.** Dozens of commands print paths, names and messages with brackets and
+  `:name:` text kept and terminal control characters removed.
+
+**Behaviour changes to know.** `soup serve --tool-auth-token` must be 16 to 128 characters of
+`A-Z`, `a-z`, `0-9`, `_` and `-` (exit 2 otherwise). `task: sft` refuses `reasoning_effort`,
+`train_on_eot`, `use_flash_attn` and `use_liger` on the vision, audio, MLX, Unsloth, RAFT and
+pre-tokenised paths that never applied them. Scripts from `soup completions` need regenerating.
+`soup data from-traces --signal thumbs_up`, MLX Adafactor, `soup merge` and the VRAM pre-flight can
+give a different result than on v0.77.1.
 
 Older highlights live on the [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) page.
 
