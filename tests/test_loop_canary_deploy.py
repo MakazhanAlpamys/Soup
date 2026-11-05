@@ -389,6 +389,26 @@ def test_rollback_refuses_when_nothing_was_promoted(cwd):
     result, text = _invoke("rollback")
     assert result.exit_code == 2, (result.output, repr(result.exception))
     assert "nothing to roll back to" in text
+    assert "no canary is running" in text
+
+
+def test_rollback_withdraws_a_first_canary(cwd, monkeypatch):
+    # Nothing was promoted yet, but a canary is running: rollback ends it, and the
+    # served model keeps all traffic. The server is not told: its unkeyed traffic
+    # already goes to the served model, and the router reads the canary from loop.yaml.
+    write_state(_state(canary_active="v1", canary_adapter=".soup-loops/adapters/v1",
+                       canary_traffic_pct=5.0, canary_rollout_id="r"))
+    calls = []
+    monkeypatch.setattr(ls, "_post_activate", lambda *a: calls.append(a) or True)
+    monkeypatch.setattr(ls, "_post_deactivate", lambda *a: calls.append(a) or True)
+    result, text = _invoke("rollback")
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert calls == []
+    state = read_state()
+    assert (state.canary_active, state.canary_adapter) == (None, None)
+    assert (state.canary_traffic_pct, state.canary_rollout_id) == (None, None)
+    assert state.production_name is None
+    assert "canary withdrawn: v1; the served model keeps all traffic" in text
 
 
 def test_a_refused_rollback_leaves_loop_yaml_unchanged(cwd, monkeypatch):
