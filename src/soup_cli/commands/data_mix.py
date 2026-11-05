@@ -156,13 +156,13 @@ def mix(
             # index-aligned with data.interleave.probs, now that soup train
             # actually consumes the mixture. (Also matches pre-#330 recipes
             # on disk, which happened to be list-shaped by accident.)
-            from yaml import safe_dump
+            import yaml
 
             console.print("  train:")
             for path in train_value or []:
                 # Quote every path and escape non-ASCII on the terminal while
                 # keeping the original value when the snippet is parsed.
-                scalar = safe_dump(
+                scalar = yaml.safe_dump(
                     str(path), default_style='"', allow_unicode=False, width=float("inf")
                 ).removesuffix("\n")
                 console.print(
