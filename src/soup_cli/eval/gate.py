@@ -345,6 +345,42 @@ def _row_provenance(row: Mapping[str, object]) -> Optional[dict[str, object]]:
     return None
 
 
+def previous_baseline_refusal(spec: object, *, field: Optional[str] = None) -> Optional[str]:
+    """The refusal text when ``spec`` is ``previous``, else ``None`` (#2523).
+
+    ``previous`` was documented as a baseline form but never implemented: it was
+    read as a file named ``previous``, and the epoch-end gate then went on with an
+    empty baseline and nothing to regress against. It has no defined meaning (Soup
+    keeps no version chain to resolve it against), so it is refused rather than
+    guessed at.
+
+    Every spelling a user could type for it is caught: any case (``Previous``,
+    ``PREVIOUS``), surrounding whitespace (``" previous "``) and one pair of
+    quotes kept by a copy of the old docs (``"'previous'"``). A file named
+    ``previous`` is still reachable as ``./previous``.
+
+    ``field`` is the dotted config key, put in front of the message when the
+    refusal comes from config validation; a CLI flag leaves it out and adds its
+    own prefix.
+    """
+    if not isinstance(spec, str):
+        return None
+    text = spec.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"":
+        text = text[1:-1].strip()
+    if text.casefold() != "previous":
+        return None
+    prefix = f"{field}: " if field else ""
+    return (
+        f"{prefix}{spec!r} is not a supported baseline. 'previous' has no defined "
+        "meaning (Soup keeps no version chain to resolve it against), so the gate "
+        "would run with no baseline. Use registry://<id> or the path to a scores "
+        "JSON file; `soup eval gate --suite <suite> --model <model> "
+        "--write-baseline <file>` writes one. To use a file named previous, write "
+        "./previous."
+    )
+
+
 def resolve_baseline(
     spec: Optional[str],
     *,
@@ -353,6 +389,8 @@ def resolve_baseline(
     """Resolve a baseline specifier to a ``{task_name: score}`` map.
 
     - ``None`` / ``""``: return empty map
+    - ``previous`` (any case, whitespace or quoting): ``ValueError`` - it has no
+      defined meaning and is refused, not read as a file named ``previous`` (#2523)
     - ``registry://<id>``: look up eval_results for that entry via the
       experiment tracker, keyed by benchmark
     - filesystem path: JSON mapping of ``{name: score}`` **or** a stamped
@@ -367,6 +405,10 @@ def resolve_baseline(
     """
     if not spec:
         return {}
+
+    refusal = previous_baseline_refusal(spec)
+    if refusal is not None:
+        raise ValueError(refusal)
 
     if spec.startswith("registry://"):
         from soup_cli.registry.store import RegistryStore
