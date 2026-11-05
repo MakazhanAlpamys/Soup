@@ -112,8 +112,9 @@ soup train
   (`soup data ingest` و`persona-mix` و`generate` وغيرها)؛ ويرفض `soup ship --adapter` محوّلًا لا
   يغيّر شيئًا؛ وتفشل `soup distill-prompt` و`soup data evolve` و`gen-magpie` و`filter --perplexity`
   بدل أن تكتب ملفًا فارغًا أو غير مُصفّى.
-- **إصلاحات التفضيل والتعلّم المعزَّز.** عاد `data.max_length` يُطبَّق على SimPO وKTO، ويعمل PPO مع
-  gradient checkpointing، ويحمّل `soup merge` الإيداع الأساسي الذي دُرِّب عليه المحوّل.
+- **إصلاحات التفضيل والتعلّم المعزَّز.** عاد `data.max_length` يُطبَّق على SimPO وKTO، ويطبّق PPO الـ
+  gradient checkpointing على سياسته عند طلبه (ولم ينهَر بعد الآن مع 4 بت و8 بت)، ويحمّل `soup merge`
+  الإيداع الأساسي الذي دُرِّب عليه المحوّل.
 - **النص يُعرض كما كُتب.** عشرات الأوامر تطبع المسارات والأسماء والرسائل مع الإبقاء على الأقواس
   ونص `:name:` وإزالة محارف التحكم في الطرفية.
 

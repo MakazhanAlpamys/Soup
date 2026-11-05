@@ -113,8 +113,9 @@ first and read the [v0.77.0 release notes](https://github.com/MakazhanAlpamys/So
   input (`soup data ingest`, `persona-mix`, `generate` and others); `soup ship --adapter` refuses an
   adapter that changes nothing; `soup distill-prompt`, `soup data evolve`, `gen-magpie` and
   `filter --perplexity` fail instead of writing an empty or unfiltered file.
-- **Preference and RL fixes.** `data.max_length` holds again for SimPO and KTO, PPO with gradient
-  checkpointing runs, and `soup merge` loads the base commit the adapter was trained on.
+- **Preference and RL fixes.** `data.max_length` holds again for SimPO and KTO, PPO checkpoints its
+  policy when asked (and no longer crashes under 4-bit and 8-bit), and `soup merge` loads the base
+  commit the adapter was trained on.
 - **Text shown as typed.** Dozens of commands print paths, names and messages with brackets and
   `:name:` text kept and terminal control characters removed.
 

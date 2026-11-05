@@ -114,8 +114,9 @@ LLM の学習は、今でも骨の折れる作業です。経験豊富なチー�
   （`soup data ingest`、`persona-mix`、`generate` など）。`soup ship --adapter` は何も変えないアダプターを
   拒否し、`soup distill-prompt`、`soup data evolve`、`gen-magpie`、`filter --perplexity` は空または
   未フィルターのファイルを書く代わりに失敗します。
-- **選好学習と RL の修正。** `data.max_length` が SimPO と KTO で再び効くようになり、gradient
-  checkpointing 付きの PPO が動き、`soup merge` はアダプターを学習したときのベースのコミットを読み込みます。
+- **選好学習と RL の修正。** `data.max_length` が SimPO と KTO で再び効くようになり、PPO は要求されると方策に
+  gradient checkpointing を適用し（4 ビット・8 ビットでもクラッシュしなくなり）、`soup merge` は
+  アダプターを学習したときのベースのコミットを読み込みます。
 - **テキストを入力どおりに表示。** 数十のコマンドが、パス・名前・メッセージを、角括弧と `:name:` の
   テキストを保ったまま、端末制御文字を取り除いて表示します。
 

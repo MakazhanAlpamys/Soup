@@ -111,8 +111,8 @@ NF4 达到 **952 MHz 下 119.6 tok/s，峰值 3.32 GB**（修复前）——与�
   `persona-mix`、`generate` 等）；`soup ship --adapter` 会拒绝不改变任何东西的适配器；
   `soup distill-prompt`、`soup data evolve`、`gen-magpie` 和 `filter --perplexity` 会报错，
   而不是写出空文件或未过滤的文件。
-- **偏好与强化学习修复。** `data.max_length` 对 SimPO 和 KTO 重新生效，启用 gradient checkpointing
-  的 PPO 可以运行，`soup merge` 会加载适配器训练时所用的基座提交。
+- **偏好与强化学习修复。** `data.max_length` 对 SimPO 和 KTO 重新生效，PPO 在要求时会对策略启用
+  gradient checkpointing（在 4 位和 8 位下也不再崩溃），`soup merge` 会加载适配器训练时所用的基座提交。
 - **文本按输入原样显示。** 数十个命令在显示路径、名称和消息时保留方括号和 `:name:` 文本，
   并移除终端控制字符。
 

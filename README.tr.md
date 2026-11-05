@@ -116,8 +116,9 @@ yükseltmeden önce [v0.77.2 sürüm notlarını](https://github.com/MakazhanAlp
   `soup ship --adapter` hiçbir şeyi değiştirmeyen bir adaptörü reddediyor; `soup distill-prompt`,
   `soup data evolve`, `gen-magpie` ve `filter --perplexity` boş ya da filtrelenmemiş bir dosya yazmak
   yerine hata veriyor.
-- **Tercih ve RL düzeltmeleri.** `data.max_length` SimPO ve KTO için yeniden geçerli, gradient
-  checkpointing'li PPO çalışıyor ve `soup merge` adaptörün eğitildiği taban commit'ini yüklüyor.
+- **Tercih ve RL düzeltmeleri.** `data.max_length` SimPO ve KTO için yeniden geçerli, PPO istenince
+  politikasını checkpoint'liyor (4-bit ve 8-bit altında artık çökmüyor) ve `soup merge` adaptörün
+  eğitildiği taban commit'ini yüklüyor.
 - **Metin yazıldığı gibi gösteriliyor.** Onlarca komut yolları, adları ve iletileri köşeli
   parantezler ve `:name:` metni korunarak, terminal denetim karakterleri kaldırılarak yazdırıyor.
 
