@@ -190,13 +190,16 @@ def check_lock_cmd(
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     drift = check_lock_drift(expected, actual)
+    display_path = strip_control(path)
     if drift.ok:
         console.print(
             Panel(
-                Text.from_markup(
-                    f"Lock:        [bold]{for_terminal(path)}[/]\n"
-                    f"Status:      [green]OK[/] — closure matches",
-                    emoji=False,
+                Text.assemble(
+                    "Lock:        ",
+                    (display_path, "bold"),
+                    "\nStatus:      ",
+                    ("OK", "green"),
+                    " — closure matches",
                 ),
                 title="soup lock check",
             )
@@ -205,10 +208,11 @@ def check_lock_cmd(
 
     console.print(
         Panel(
-            Text.from_markup(
-                f"Lock:    [bold]{for_terminal(path)}[/]\n"
-                f"Status:  [red]DRIFT[/]",
-                emoji=False,
+            Text.assemble(
+                "Lock:    ",
+                (display_path, "bold"),
+                "\nStatus:  ",
+                ("DRIFT", "red"),
             ),
             title="soup lock check",
         )
