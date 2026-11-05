@@ -93,40 +93,41 @@ yerine altyapıyla boğuşarak geçiriyor. Soup bunu çözer.
 
 ## Yenilikler
 
-**v0.77.1 — bir yama: `soup data` girdisini koruyor, `soup plan` `soup train` ile aynı kararı veriyor
-ve GRPO Apple Silicon'da eğitiliyor.** v0.77.0'daki hiçbir şey geri alınmıyor. O sürüm, v0.76'nın
-uyardığı ya da yok saydığı ayarları reddediyor; bu yüzden v0.76'da yüklenen bir yapılandırma artık
-yüklenmeyebilir: 0.76.x'ten geliyorsanız önce `soup doctor --config soup.yaml` komutunu çalıştırın ve
-[v0.77.0 sürüm notlarını](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0) okuyun.
+**v0.77.2 — v0.77.1'den sonra `main`'in bir kesiti: 159 pull request, bunların 153'ü bakımcı
+dışındaki 30 kişiden.** Büyük kısmı düzeltme. Ayrıca yeni özellikler ve v0.77.1'in kabul ettiğini
+reddedebilen iki kural getiriyor; bu yüzden bir sunucuyu ya da bir `task: sft` yapılandırmasını
+yükseltmeden önce [v0.77.2 sürüm notlarını](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.2) okuyun. 0.76.x'ten geliyorsanız önce
+`soup doctor --config soup.yaml` komutunu çalıştırın ve [v0.77.0 sürüm notlarını](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0) okuyun.
 
-- **`soup data` komutları artık girdilerinin üzerine yazmıyor.** Bunlardan on sekizi (`dedup`,
-  `filter`, `convert`, `merge`, `sample`, `pii`, `toxicity` ve diğerleri), hangi yazımla verilirse
-  verilsin bir girdiyle aynı dosya olan bir `--output` değerini hiçbir şey okumadan önce reddediyor;
-  girdinin zaten taşıdığı varsayılan bir çıktı adı da reddediliyor. Bunun yerine yeni bir dosyaya yazın.
-- **`soup plan` ve `soup apply`, `soup train`'in reddettiği yapılandırmaları** aynı mesajla reddediyor
-  ve plan yazmıyor.
-- **GRPO, Apple Silicon'da yerel olarak eğitiliyor.** `backend: mlx` ile `task: grpo`, Soup'un kendi
-  MLX döngüsünü transformers yolunun eğittiği hedefle ve yerleşik `accuracy` ya da `format` ödülüyle
-  çalıştırıyor. `soup infer --backend mlx`, MLX taban modellerinden ve yerel metin LoRA
-  adaptörlerinden Torch olmadan üretim yapıyor.
-- **Tek bir tepe VRAM tahmini:** `soup train`'in ön kontrolü, `soup profile` ve `soup plan` aynı
-  tahmini kullanıyor; tahmin 39 ölçülmüş çalıştırmayla kalibre edildi
-  ([kayıt](benchmarks/gate-2049-resident-vram.md)). Tahminin kalibre edildiği aralıkta, yani yaklaşık
-  3.5B parametreye kadar yoğun modellerde, ön kontrol artık daha önce geçirdiği bazı uzun dizili, büyük
-  sözlüklü çalıştırmaları reddediyor; `--allow-oom-attempt` onları yine de başlatıyor. Bu aralığın
-  dışında (daha büyük ya da mixture-of-experts bir model, `medium` ya da `selective` checkpointing,
-  `use_liger` / `use_cut_ce`, `backend: unsloth`) sığmayan bir çalıştırma için tahmini bir uyarı olarak
-  yazdırıyor ve çalıştırmayı başlatıyor; ancak ağırlıklar, CUDA bağlamı ve eğitilen parametrelerin
-  gradyanları ile optimizer durumu kartın kapasitesini aşıyorsa (80 GB'ta 7B tam ince ayar, 24 GB'ta
-  4-bit Llama-3.1-70B) o çalıştırma orada da reddediliyor. LoRA çalıştırmaları ve parametrelerin bir
-  kısmını eğiten çalıştırmalar (Spectrum, LISA, dondurma) daha az terimle değerlendiriliyor;
-  `--allow-oom-attempt` reddedilen bir çalıştırmayı yine de başlatıyor.
-- **Harici programlar `PATH` üzerinde bulunan mutlak bir yolla başlatılıyor.** Geçerli dizin ve göreli
-  `PATH` girdileri artık aranmıyor: yalnızca orada bulunan bir aracın dizinini `PATH`'e ekleyin.
-- **Ayrıca yeni.** `soup ship --progress jsonl`; başka bir kütüphanenin adlandırdığı biçimde yazılmış
-  bilinmeyen yapılandırma anahtarları için Soup alanı öneriliyor (`learning_rate` için `lr`); ve
-  aşağıdaki Docker örneği, etkileşimsiz bir `soup train`'in v0.77.0'dan beri ihtiyaç duyduğu `--yes`
-  bayrağını geçiriyor.
+- **`soup profile --model <id>`, `soup.yaml` olmadan "sığar mı?" sorusunu yanıtlıyor.** Çalıştırmayı
+  modelin `config.json` dosyasından fiyatlıyor; sonucu `--seq`, `--batch`, `--method`, `--lora-r`,
+  `--optimizer` ve `--gradient-checkpointing` belirliyor; Apple Silicon'da Metal'in çalışma kümesiyle
+  karşılaştırıyor. `soup plan` ve `soup apply` artık `--minillm-on-policy` alıyor.
+- **Apple Silicon'da daha fazla eğitim.** `preference_loss: dpo`, `orpo` ya da `simpo` ile
+  `task: preference` yerel MLX eğiticisini çalıştırıyor, MLX GRPO 4-bit `mlx-community` tabanlarında
+  eğitiliyor ve MLX Adafactor yapılandırılmış öğrenme oranını ve çizelgesini izliyor.
+- **İki yeni DPO tarifi:** `qwen3.5-0.8b-dpo` ve `qwen3.5-27b-dpo`.
+- **Daha yakın VRAM tahminleri.** Optimizer adımı kendi başına bir aşama; bir PRM adımına tek konumun
+  logit'leri yazılıyor; parçalanmış bir FSDP ya da ZeRO çalıştırması kart başına fiyatlanıyor;
+  `stream_loss_chunk` adımına son katmanının yeniden hesaplaması yazılıyor; Unsloth'un LoRA hedefleri
+  yükleyicisinin seçtiği gibi hesaplanıyor.
+- **Sessiz üzerine yazmalar ve boş sonuçlar azaldı.** Daha fazla komut, bir girdiyi adlandıran
+  `--output` değerini reddediyor (`soup data ingest`, `persona-mix`, `generate` ve diğerleri);
+  `soup ship --adapter` hiçbir şeyi değiştirmeyen bir adaptörü reddediyor; `soup distill-prompt`,
+  `soup data evolve`, `gen-magpie` ve `filter --perplexity` boş ya da filtrelenmemiş bir dosya yazmak
+  yerine hata veriyor.
+- **Tercih ve RL düzeltmeleri.** `data.max_length` SimPO ve KTO için yeniden geçerli, gradient
+  checkpointing'li PPO çalışıyor ve `soup merge` adaptörün eğitildiği taban commit'ini yüklüyor.
+- **Metin yazıldığı gibi gösteriliyor.** Onlarca komut yolları, adları ve iletileri köşeli
+  parantezler ve `:name:` metni korunarak, terminal denetim karakterleri kaldırılarak yazdırıyor.
+
+**Bilmeniz gereken davranış değişiklikleri.** `soup serve --tool-auth-token`, `A-Z`, `a-z`, `0-9`,
+`_` ve `-` karakterlerinden oluşan 16 ila 128 karakter olmalı (aksi halde çıkış kodu 2).
+`task: sft`, `reasoning_effort`, `train_on_eot`, `use_flash_attn` ve `use_liger` ayarlarını,
+bunları hiç uygulamayan görü, ses, MLX, Unsloth, RAFT ve önceden belirteçlenmiş yollarda reddediyor.
+`soup completions` betiklerinin yeniden üretilmesi gerekiyor.
+`soup data from-traces --signal thumbs_up`, MLX Adafactor, `soup merge` ve VRAM ön kontrolü
+v0.77.1'den farklı bir sonuç verebilir.
 
 Eski sürümlerin öne çıkanları [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) sayfasında.
 

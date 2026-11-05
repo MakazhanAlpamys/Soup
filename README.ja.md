@@ -92,39 +92,39 @@ LLM の学習は、今でも骨の折れる作業です。経験豊富なチー�
 
 ## 新着情報
 
-**v0.77.1 — パッチリリース：`soup data` が入力を守り、`soup plan` が `soup train` と同じ判断をし、
-GRPO が Apple Silicon で学習できるようになりました。** v0.77.0 で入ったものは何も取り消されていません。v0.77.0 は
-v0.76 が警告した設定や無視した設定を拒否するため、v0.76 で読み込めた設定が読み込めなくなることがあります。
-0.76.x から移行する場合は、まず `soup doctor --config soup.yaml` を実行し、
-[v0.77.0 のリリースノート](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0)を読んでください。
+**v0.77.2 — v0.77.1 以降の `main` をそのまま切り出したリリース：プルリクエスト 159 件、うち 153 件は
+メンテナー以外の 30 人によるものです。** 大半は修正ですが、新機能と、v0.77.1 が受け入れていたものを
+拒否することがある 2 つの規則も含みます。サーバーや `task: sft` の設定をアップグレードする前に
+[v0.77.2 のリリースノート](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.2)を読んでください。0.76.x から移行する場合は、まず
+`soup doctor --config soup.yaml` を実行し、[v0.77.0 のリリースノート](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0)を読んでください。
 
-- **`soup data` のコマンドが入力を上書きしなくなりました。** そのうち十八個（`dedup`、`filter`、
-  `convert`、`merge`、`sample`、`pii`、`toxicity` など）は、どのような書き方であっても入力と同じファイルを
-  指す `--output` を、何も読み込む前に拒否します。入力がすでに使っている既定の出力名も拒否されます。
-  代わりに新しいファイルへ書き出してください。
-- **`soup plan` と `soup apply` は、`soup train` が拒否する設定を**同じメッセージで拒否し、プランを
-  書き込みません。
-- **GRPO が Apple Silicon でネイティブに学習できます。** `backend: mlx` の `task: grpo` は、
-  transformers 経路が学習するのと同じ目的関数で Soup 独自の MLX ループを実行し、組み込みの `accuracy`
-  または `format` 報酬を使います。`soup infer --backend mlx` は、MLX のベースモデルとネイティブの
-  テキスト LoRA アダプターから Torch なしで生成します。
-- **ピーク VRAM の推定がひとつになりました。** `soup train` の事前チェック、`soup profile`、`soup plan` が
-  同じ推定を使い、39 回の実測で較正されています（[記録](benchmarks/gate-2049-resident-vram.md)）。
-  推定が較正された範囲、つまり約 3.5B パラメータまでの dense モデルでは、事前チェックはこれまで通していた
-  長いシーケンス・大きな語彙の実行の一部を拒否するようになりました。`--allow-oom-attempt` を付ければ
-  引き続き起動できます。その範囲外（より大きなモデルや mixture-of-experts モデル、`medium` または
-  `selective` のチェックポイント、`use_liger` / `use_cut_ce`、`backend: unsloth`）では、収まらない実行に
-  ついて推定を警告として表示し、実行を開始します。ただし、重み、CUDA コンテキスト、学習するパラメータの
-  勾配とオプティマイザ状態だけでカードの容量を超える実行（80 GB での 7B のフルファインチューニング、
-  24 GB での 4-bit の Llama-3.1-70B）は、範囲外でも拒否されます。LoRA の実行や一部のパラメータだけを
-  学習する実行（Spectrum、LISA、凍結）は、より少ない項目で判定されます。`--allow-oom-attempt` を
-  付ければ、拒否された実行も起動できます。
-- **外部プログラムは `PATH` 上で見つかった絶対パスで起動されます。** カレントディレクトリと相対的な
-  `PATH` エントリは検索されなくなりました。そこにしかないツールは、そのディレクトリを `PATH` に
-  加えてください。
-- **その他の新機能。** `soup ship --progress jsonl`、他のライブラリの名前で書かれた未知の設定キーに
-  対応する Soup のフィールドの提案（`learning_rate` には `lr`）、そして下の Docker の例が、v0.77.0 以降の
-  非対話的な `soup train` に必要な `--yes` を渡すようになりました。
+- **`soup profile --model <id>` は `soup.yaml` なしで「収まるか」に答えます。** モデルの
+  `config.json` から実行の見積もりを出し、`--seq`、`--batch`、`--method`、`--lora-r`、`--optimizer`、
+  `--gradient-checkpointing` で形が決まります。Apple Silicon では Metal のワーキングセットと比較します。
+  `soup plan` と `soup apply` は `--minillm-on-policy` を受け付けます。
+- **Apple Silicon での学習が増えました。** `preference_loss: dpo`、`orpo`、`simpo` を指定した
+  `task: preference` はネイティブ MLX トレーナーで動き、MLX GRPO は 4 ビットの `mlx-community`
+  ベースで学習でき、MLX Adafactor は設定された学習率とスケジュールに従います。
+- **新しい DPO レシピが 2 つ：** `qwen3.5-0.8b-dpo` と `qwen3.5-27b-dpo`。
+- **VRAM の見積もりが実測に近づきました。** optimizer ステップを独立したフェーズとして扱い、
+  PRM ステップには 1 位置分の logits を計上し、分割された FSDP / ZeRO の実行はカードごとに見積もり、
+  `stream_loss_chunk` のステップには最終層の再計算を計上し、Unsloth の LoRA ターゲットはそのローダーが
+  選ぶとおりに扱います。
+- **黙った上書きと空の結果が減りました。** より多くのコマンドが、入力を指す `--output` を拒否します
+  （`soup data ingest`、`persona-mix`、`generate` など）。`soup ship --adapter` は何も変えないアダプターを
+  拒否し、`soup distill-prompt`、`soup data evolve`、`gen-magpie`、`filter --perplexity` は空または
+  未フィルターのファイルを書く代わりに失敗します。
+- **選好学習と RL の修正。** `data.max_length` が SimPO と KTO で再び効くようになり、gradient
+  checkpointing 付きの PPO が動き、`soup merge` はアダプターを学習したときのベースのコミットを読み込みます。
+- **テキストを入力どおりに表示。** 数十のコマンドが、パス・名前・メッセージを、角括弧と `:name:` の
+  テキストを保ったまま、端末制御文字を取り除いて表示します。
+
+**知っておくべき挙動の変更。** `soup serve --tool-auth-token` は `A-Z`、`a-z`、`0-9`、`_`、`-` からなる
+16〜128 文字でなければなりません（そうでなければ終了コード 2）。`task: sft` は、`reasoning_effort`、
+`train_on_eot`、`use_flash_attn`、`use_liger` を、それらを一度も適用していなかった画像・音声・MLX・
+Unsloth・RAFT・事前トークナイズ済みの経路で拒否します。`soup completions` のスクリプトは再生成が必要です。
+`soup data from-traces --signal thumbs_up`、MLX Adafactor、`soup merge`、VRAM の事前チェックは、
+v0.77.1 と異なる結果になることがあります。
 
 過去のハイライトは [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) ページにあります。
 
