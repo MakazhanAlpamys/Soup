@@ -247,7 +247,9 @@ class TestFreezeLayersRestrictsLoraAdapter:
         with pytest.raises(ValueError, match="leaving no layer"):
             wrapper.setup(dataset)
 
-    def test_freeze_layers_with_regex_target_modules_scopes_the_adapter(self, tmp_path, monkeypatch):
+    def test_freeze_layers_with_regex_target_modules_scopes_the_adapter(
+        self, tmp_path, monkeypatch
+    ):
         """A regex target is resolved to explicit module names and then kept to
         the layers the freeze plan leaves trainable (#2201), instead of being
         refused as it was in #1432."""
