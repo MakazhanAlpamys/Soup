@@ -81,7 +81,7 @@ class LoopState:
     base_model: Optional[str] = None
     # The directory of conversation logs (`soup serve --trace-log` files,
     # *.jsonl) the pre-wired harvest reads: `soup loop init --trace-dir`.
-    # None = no trace harvest. The loop never guesses a directory.
+    # None = .soup-loops/traces. The served model path is never read as one.
     trace_dir: Optional[str] = None
 
     def __post_init__(self) -> None:  # noqa: D401 — validator hook

@@ -109,7 +109,7 @@ def init_cmd(
         None, "--trace-dir",
         help=(
             "Directory of conversation logs (soup serve --trace-log files, *.jsonl) "
-            "the pre-wired harvest reads. Not set: no trace harvest. "
+            "the pre-wired harvest reads. Default: .soup-loops/traces. "
             "SOUP_LOOP_TRACE_DIR overrides it."
         ),
     ),
@@ -187,7 +187,7 @@ def init_cmd(
             f"served_model: [bold]{escape(state.served_model)}[/]\n"
             f"eval_suite:   [bold]{escape(state.eval_suite)}[/]\n"
             f"baseline:     [bold]{escape(state.baseline)}[/]\n"
-            f"trace_dir:    [bold]{escape(state.trace_dir or 'not set')}[/]\n"
+            f"trace_dir:    [bold]{escape(_trace_dir_label(state))}[/]\n"
             f"base_model:   [bold]{escape(state.base_model or 'unknown')}[/]"
             + (f" (from {escape(base_source)})" if base_source else ""),
             title="soup loop init",
@@ -221,7 +221,7 @@ def status_cmd() -> None:
     table.add_row("eval_suite", escape(state.eval_suite))
     table.add_row("baseline", escape(state.baseline))
     table.add_row("base_model", escape(state.base_model or "unknown"))
-    table.add_row("trace_dir", escape(state.trace_dir or "not set"))
+    table.add_row("trace_dir", escape(_trace_dir_label(state)))
     table.add_row("pre_wired", "yes" if state.pre_wired else "no")
     table.add_row("traces_collected", str(state.traces_collected))
     table.add_row("pairs_distilled", str(state.pairs_distilled))
@@ -519,6 +519,14 @@ def replay_cmd(
     for k, v in record.to_dict().items():
         table.add_row(escape(str(k)), escape(str(v)))
     console.print(table)
+
+
+def _trace_dir_label(state: LoopState) -> str:
+    """The trace directory the pre-wired harvest reads, and where it came from."""
+    from soup_cli.utils.loop_stages import trace_dir_source
+
+    path, source = trace_dir_source(state)
+    return f"{path} (from {'--trace-dir' if source == 'trace_dir' else source})"
 
 
 def _parse_traffic(raw: str) -> float:

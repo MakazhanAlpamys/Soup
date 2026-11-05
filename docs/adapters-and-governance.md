@@ -130,14 +130,13 @@ soup loop watch --pre-wired --pack-cans --poll-interval 300
 soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod \
     --pre-wired --base-model Qwen/Qwen2.5-0.5B-Instruct
 
-# The harvest reads conversation logs only from the directory it is given:
-# --trace-dir (saved in loop.yaml) or SOUP_LOOP_TRACE_DIR. Nothing is guessed:
-# not the served model path, not .soup-loops/traces (watch warns if that one exists).
+# The harvest reads conversation logs from SOUP_LOOP_TRACE_DIR, else --trace-dir
+# (saved in loop.yaml), else .soup-loops/traces. The served model path is never
+# read as a trace directory. `soup loop init` prints which one applies.
 # A pair needs a thumbs-up and a thumbs-down answer to one prompt; serve trace lines
 # carry no feedback yet, so today the pairs come from --thumbs-db.
-soup serve --model ./base --trace-log .soup-loops/conversations/serve.jsonl
-soup loop init ./base --eval evals/lock.json --baseline registry://prod \
-    --pre-wired --trace-dir .soup-loops/conversations
+soup serve --model ./base --trace-log .soup-loops/traces/serve.jsonl
+soup loop init ./base --eval evals/lock.json --baseline registry://prod --pre-wired
 
 # Learn from Soup's own serving (#1440): the pre-wired harvest also reads the
 # thumbs `soup serve --record-thumbs` captures through POST /v1/thumbs, pairing

@@ -1,10 +1,10 @@
-"""The pre-wired harvest reads the trace directory it was given, and nothing else.
+"""The pre-wired harvest never reads the served model path as a trace directory.
 
 ``_resolve_trace_dir`` used to try the served model path when it was a local
-directory, then ``.soup-loops/traces``: a model directory that held ``*.jsonl``
-files (a dataset next to the weights) was harvested as serve logs. Now only
-``soup loop init --trace-dir`` (saved as ``trace_dir`` in ``loop.yaml``) or
-``SOUP_LOOP_TRACE_DIR`` names it.
+directory: a model directory that held ``*.jsonl`` files (a dataset next to the
+weights) was harvested as serve logs. Now the directory is
+``SOUP_LOOP_TRACE_DIR``, else ``trace_dir`` from ``loop.yaml`` (``soup loop
+init --trace-dir``), else the documented default ``.soup-loops/traces``.
 """
 
 from __future__ import annotations
@@ -79,10 +79,17 @@ def test_served_model_directory_is_never_read_as_traces(cwd):
     assert out["pairs_harvested"] == 0
 
 
-def test_old_implicit_directory_is_not_read_without_configuration(cwd):
+def test_default_directory_is_read_when_nothing_is_configured(cwd):
     _write_traces(os.path.join(".soup-loops", "traces"))
     out = ls.harvest_from_traces(_state())
-    assert out["traces_collected"] == 0
+    assert out["traces_collected"] == 2
+    assert ls.trace_dir_source(_state()) == (".soup-loops/traces", "default")
+
+
+def test_configured_directory_replaces_the_default(cwd):
+    _write_traces(os.path.join(".soup-loops", "traces"))
+    os.makedirs("logs")
+    assert ls.harvest_from_traces(_state(trace_dir="logs"))["traces_collected"] == 0
 
 
 def test_environment_overrides_loop_yaml(cwd, monkeypatch):
@@ -121,14 +128,14 @@ def test_notice_refuses_a_file_by_field(cwd, monkeypatch):
         ls.trace_dir_notice(_state())
 
 
-def test_notice_names_the_old_implicit_directory(cwd):
-    os.makedirs(os.path.join(".soup-loops", "traces"))
-    notice = ls.trace_dir_notice(_state())
-    assert ".soup-loops/traces is not read unless it is configured" in notice
-    assert "--trace-dir .soup-loops/traces" in notice
+def test_notice_refuses_a_default_path_that_is_a_file(cwd):
+    os.makedirs(".soup-loops")
+    open(os.path.join(".soup-loops", "traces"), "w").close()
+    with pytest.raises(ValueError, match=r"\.soup-loops/traces \(the default\): .* is not a dir"):
+        ls.trace_dir_notice(_state())
 
 
-def test_notice_is_silent_when_nothing_is_configured_or_left_over(cwd):
+def test_notice_is_silent_for_a_missing_default_directory(cwd):
     assert ls.trace_dir_notice(_state()) is None
 
 
@@ -144,17 +151,17 @@ def test_init_saves_trace_dir_and_status_shows_it(cwd):
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert read_state().trace_dir == "logs"
-    assert "trace_dir: logs" in text
+    assert "trace_dir: logs (from --trace-dir)" in text
     status, status_text = _invoke("status")
     assert status.exit_code == 0, (status.output, repr(status.exception))
-    assert re.search(r"trace_dir\W+logs", status_text), status_text
+    assert re.search(r"trace_dir\W+logs \(from --trace-dir\)", status_text), status_text
 
 
-def test_init_without_trace_dir_says_not_set(cwd):
+def test_init_without_trace_dir_names_the_default(cwd):
     result, text = _invoke("init", "./model", "--eval", "e", "--baseline", "b")
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert read_state().trace_dir is None
-    assert "trace_dir: not set" in text
+    assert "trace_dir: .soup-loops/traces (from default)" in text
 
 
 def test_init_warns_for_a_directory_that_does_not_exist_yet(cwd):
@@ -190,7 +197,7 @@ def test_watch_pre_wired_refuses_a_trace_dir_that_is_a_file(cwd, monkeypatch):
     assert read_state().iteration_count == 0
 
 
-def test_watch_pre_wired_warns_about_the_old_implicit_directory(cwd, monkeypatch):
+def test_watch_pre_wired_starts_quietly_with_the_default_directory(cwd, monkeypatch):
     _invoke("init", "./model", "--eval", "e", "--baseline", "b", "--base-model", "org/b")
     os.makedirs(os.path.join(".soup-loops", "traces"))
     calls = []
@@ -199,8 +206,17 @@ def test_watch_pre_wired_warns_about_the_old_implicit_directory(cwd, monkeypatch
     ))
     result, text = _invoke("watch", "--pre-wired", "--max-iterations", "1", "--poll-interval", "1")
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert ".soup-loops/traces is not read unless it is configured" in text
+    assert "warning" not in text.lower()
     assert len(calls) == 1
+
+
+def test_watch_pre_wired_warns_for_a_configured_directory_not_there_yet(cwd, monkeypatch):
+    _invoke("init", "./model", "--eval", "e", "--baseline", "b", "--base-model", "org/b",
+            "--trace-dir", "logs")
+    monkeypatch.setattr("soup_cli.commands.loop.watch", lambda cfg: (read_state(), 0))
+    result, text = _invoke("watch", "--pre-wired", "--max-iterations", "1", "--poll-interval", "1")
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "trace_dir: no conversation logs at 'logs' yet" in text
 
 
 def test_state_file_without_trace_dir_still_loads(cwd):
