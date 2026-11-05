@@ -3,6 +3,7 @@
 import contextlib
 import json
 import logging
+import os
 import re
 import subprocess
 import threading
@@ -156,6 +157,14 @@ def serve(
         None,
         "--adapters",
         help="LoRA adapters as name=path pairs (repeatable). E.g. chat=./chat-adapter",
+    ),
+    adapter_dir: Optional[str] = typer.Option(
+        None,
+        "--adapter-dir",
+        help=(
+            "Directory runtime adapters may be loaded from through POST "
+            "/v1/adapters/load (needs --tool-auth-token). Not set: the route is off."
+        ),
     ),
     prefix_cache: bool = typer.Option(
         False,
@@ -387,6 +396,7 @@ def serve(
                 ("--bank", bank),
                 ("--steer", steer),
                 ("--adapters", adapters),
+                ("--adapter-dir", adapter_dir),
                 ("--speculative-decoding", speculative_model),
             )
             if val
@@ -396,6 +406,22 @@ def serve(
                 "[red]--mole cannot be combined with:[/] "
                 f"{_rich_escape(', '.join(conflicts))} "
                 "(MoLE replaces the served model with its own per-token blend)."
+            )
+            raise typer.Exit(code=2)
+    # `--adapter-dir` turns on POST /v1/adapters/load. Checked up front, like --bank and
+    # --mole, so a typo or a backend without the route surfaces before any model load.
+    if adapter_dir is not None:
+        if not os.path.isdir(adapter_dir):
+            console.print(
+                f"[red]--adapter-dir:[/] {for_terminal(adapter_dir)} is not an existing "
+                "directory."
+            )
+            raise typer.Exit(code=2)
+        if backend.lower() != "transformers":
+            console.print(
+                "[red]--adapter-dir requires --backend transformers[/] "
+                "(runtime loading wraps the served model in a PEFT model; "
+                "vLLM / SGLang / MII are not supported)."
             )
             raise typer.Exit(code=2)
     # v0.62.0 Part C / v0.71.10 #201 — validate `--steer` name + strength up
@@ -1101,6 +1127,14 @@ def serve(
             record_thumbs_db = record_thumbs
             console.print(f"[green]Thumbs feedback log:[/] {_escape(record_thumbs)}")
 
+        runtime_adapter_dir: Optional[str] = None
+        if adapter_dir is not None:
+            runtime_adapter_dir = os.path.realpath(adapter_dir)
+            console.print(
+                "[green]Runtime adapter loading:[/] POST /v1/adapters/load accepts adapters "
+                f"from {for_terminal(runtime_adapter_dir)} (needs --tool-auth-token)"
+            )
+
         app = _create_app(
             model_obj=model_obj,
             tokenizer=tokenizer,
@@ -1127,6 +1161,7 @@ def serve(
                 if resolved_kv_runtime
                 else None
             ),
+            adapter_dir=runtime_adapter_dir,
         )
 
     console.print(
@@ -1266,6 +1301,13 @@ _CODE_TOOL_TOKEN_REQUIRED = (
     "Authentication required: /v1/tools/python and /v1/tools/bash need a token on "
     "every bind. Start soup serve with --tool-auth-token <secret> (or set "
     "SOUP_TOOL_AUTH_TOKEN) and send 'Authorization: Bearer <secret>'."
+)
+# What POST /v1/adapters/load answers, on any bind, when the server was started without
+# --tool-auth-token: it loads files into the serving process, so it takes a token everywhere.
+_ADAPTER_LOAD_TOKEN_REQUIRED = (
+    "Authentication required: POST /v1/adapters/load needs a token on every bind. "
+    "Start soup serve with --tool-auth-token <secret> (or set SOUP_TOOL_AUTH_TOKEN) "
+    "and send 'Authorization: Bearer <secret>'."
 )
 # What /v1/tools/python and /v1/tools/bash answer (501) when their sandbox is not
 # available or cannot start, whatever the cause; the cause goes to the debug log.
@@ -1565,6 +1607,94 @@ def _load_named_adapters(model_obj, adapter_map: Dict[str, str]):
     return model_obj, set(names)
 
 
+# --- POST /v1/adapters/load (runtime adapter loading) -------------------------------
+# At most this many adapters are added to one process through the route; adapters given
+# with --adapters at startup do not count.
+_MAX_RUNTIME_ADAPTERS = 16
+# The route's JSON body is a name and a path; anything bigger is not a request for it.
+_ADAPTER_LOAD_MAX_BODY_BYTES = 64 * 1024
+_ADAPTER_NAME_MAX_CHARS = 64
+_ADAPTER_PATH_MAX_CHARS = 4096
+# The pattern of /v1/adapters/activate/{name}, matched in full (``$`` would let a trailing
+# newline through).
+_ADAPTER_NAME_PATTERN = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9\-]*")
+
+
+def _parse_adapter_load_body(raw: bytes):
+    """``(name, path)`` from the JSON body of POST /v1/adapters/load, or ``None`` if invalid."""
+    try:
+        body = json.loads(raw)
+    except (ValueError, RecursionError):  # ValueError covers JSONDecodeError, bad UTF-8
+        return None
+    if not isinstance(body, dict):
+        return None
+    name, path = body.get("name"), body.get("path")
+    if not isinstance(name, str) or not isinstance(path, str):
+        return None
+    if len(name) > _ADAPTER_NAME_MAX_CHARS or not _ADAPTER_NAME_PATTERN.fullmatch(name):
+        return None
+    if not path or "\x00" in path or len(path) > _ADAPTER_PATH_MAX_CHARS:
+        return None
+    return name, path
+
+
+def _resolve_inside(path: str, root: str):
+    """``os.path.realpath(path)`` if it lies inside ``root`` (a real path), else ``None``.
+
+    Relative paths resolve against the process's working directory, and a symlink that
+    leaves ``root`` fails here because ``realpath`` follows it.
+    """
+    from soup_cli.utils.paths import is_under
+
+    try:
+        resolved = os.path.realpath(path)
+    except (OSError, ValueError):
+        return None
+    return resolved if is_under(resolved, root) else None
+
+
+def _model_has_adapter(model_obj, name: str) -> bool:
+    """Whether the served PEFT model already carries an adapter called ``name``.
+
+    ``soup serve --model ./adapter`` serves a PeftModel whose adapter is called "default",
+    which no ``--adapters`` map lists: loading under that name would overwrite it.
+    """
+    peft_config = getattr(model_obj, "peft_config", None)
+    return isinstance(peft_config, Mapping) and name in peft_config
+
+
+def _load_runtime_adapter(model_obj, path: str, name: str):
+    """Add the LoRA adapter at ``path`` to ``model_obj`` as ``name``; return the model to serve.
+
+    A plain model is wrapped in a PeftModel (a new object, which the caller must serve from
+    then on); a PeftModel gets the adapter added to itself. The adapter is not activated.
+    Raises on pickle weights (they would execute on load) or any PEFT failure, and a failed
+    add does not leave a half-registered adapter behind.
+    """
+    from peft import PeftModel
+
+    from soup_cli.utils.strict_safetensors import assert_safe_top_level_weights
+
+    assert_safe_top_level_weights(path)
+    if not isinstance(model_obj, PeftModel):
+        model_obj = PeftModel.from_pretrained(model_obj, path, adapter_name=name)
+    else:
+        was_there = name in model_obj.peft_config
+        try:
+            model_obj.load_adapter(path, adapter_name=name)
+        except Exception:
+            # PEFT registers the adapter before it reads the weights; drop it again so the
+            # name is free for a corrected adapter. One that was already loaded stays.
+            if not was_there and name in model_obj.peft_config:
+                try:
+                    model_obj.delete_adapter(name)
+                except Exception:  # noqa: BLE001 — the load error is the one to report
+                    logger.warning("could not discard adapter %r after a failed load", name)
+            raise
+    model_obj.eval()
+    return model_obj
+
+
 @contextlib.contextmanager
 def _adapter_scope(model, lock, names, requested, active):
     """Select the LoRA adapter for one generation, serialized by ``lock``.
@@ -1799,6 +1929,7 @@ def _create_app(
     kv_cache_generate_kwargs: Optional[Dict[str, Any]] = None,
     canary_state_path: Optional[str] = None,
     canary_stats_path: Optional[str] = None,
+    adapter_dir: Optional[str] = None,
 ):
     """Create the FastAPI application with OpenAI-compatible endpoints.
 
@@ -1810,12 +1941,16 @@ def _create_app(
             When ``None`` (default), ``/v1/tools/python`` and ``/v1/tools/bash``
             answer 401 on every bind; the other routes take no token on a
             loopback bind and answer 401 on any other.
+        adapter_dir: The one directory ``POST /v1/adapters/load`` may load adapters
+            from, resolved once here. ``None`` (default) switches the route off (404).
+            The route takes ``auth_token`` on every bind, like the code-tool routes.
     """
     import secrets as _secrets
     import threading as _threading
 
     from fastapi import Depends, FastAPI, Header, HTTPException, Request
     from fastapi import Path as FPath
+    from fastapi.concurrency import run_in_threadpool
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import StreamingResponse
     from pydantic import BaseModel as PydanticBaseModel
@@ -1867,6 +2002,16 @@ def _create_app(
             raise HTTPException(
                 status_code=401,
                 detail=_CODE_TOOL_TOKEN_REQUIRED,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        _check_tool_auth(authorization)
+
+    def _check_adapter_load_auth(authorization: Optional[str]) -> None:
+        """POST /v1/adapters/load takes a token on every bind, loopback included."""
+        if not auth_token:
+            raise HTTPException(
+                status_code=401,
+                detail=_ADAPTER_LOAD_TOKEN_REQUIRED,
                 headers={"WWW-Authenticate": "Bearer"},
             )
         _check_tool_auth(authorization)
@@ -1960,6 +2105,13 @@ def _create_app(
     # v0.71.17 #259 — serve-time MoLE runtime (or None). When set, the chat
     # handler routes generation through the per-token gate-blend decode loop.
     _mole_runtime = mole_runtime
+    # POST /v1/adapters/load: the one directory adapters may come from, resolved once so a
+    # symlink re-pointed later cannot move it (None: the route is off); the names added
+    # through the route (for the cap); and a lock that makes two loads take turns, so the
+    # name and cap checks cannot race. The load itself also takes `_generation_lock`.
+    _adapter_root = os.path.realpath(adapter_dir) if adapter_dir else None
+    _runtime_adapters: List[str] = []
+    _adapter_load_lock = threading.Lock()
 
     # --- Endpoints ---
 
@@ -2047,7 +2199,8 @@ def _create_app(
         return {
             "adapters": [
                 {"name": name, "active": name == current}
-                for name in _adapter_map
+                # A snapshot: POST /v1/adapters/load adds to the map from another thread.
+                for name in list(_adapter_map)
             ],
             "active": current,
         }
@@ -2081,6 +2234,86 @@ def _create_app(
         with active_lock:
             active_state["active"] = None
         return {"active": None, "status": "ok"}
+
+    def _load_adapter_blocking(name: str, path: str) -> Dict[str, str]:
+        """Checks d-i of POST /v1/adapters/load. Runs in a worker thread: PEFT is slow."""
+        nonlocal model_obj
+        resolved = _resolve_inside(path, _adapter_root)
+        if resolved is None:
+            raise HTTPException(status_code=403, detail="adapter path is outside --adapter-dir")
+        if not os.path.isfile(os.path.join(resolved, "adapter_config.json")):
+            raise HTTPException(status_code=400, detail="not a LoRA adapter directory")
+        with _adapter_load_lock:
+            if (
+                name in _adapter_map
+                or name in _peft_adapter_names
+                or _model_has_adapter(model_obj, name)
+            ):
+                raise HTTPException(status_code=409, detail="adapter name already loaded")
+            if len(_runtime_adapters) >= _MAX_RUNTIME_ADAPTERS:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"runtime adapter limit reached ({_MAX_RUNTIME_ADAPTERS})",
+                )
+            for unsupported, feature in (
+                (_mole_runtime, "--mole"),
+                (_loaded_bank, "--bank"),
+            ):
+                if unsupported is not None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"runtime adapter loading is not supported with {feature}",
+                    )
+            # The model is process-global: the load takes the lock a generation holds.
+            with _generation_lock:
+                try:
+                    loaded = _load_runtime_adapter(model_obj, resolved, name)
+                except Exception:
+                    logger.exception(
+                        "POST /v1/adapters/load: adapter %r could not be loaded from %r",
+                        name,
+                        resolved,
+                    )
+                    raise HTTPException(
+                        status_code=400, detail="adapter could not be loaded"
+                    ) from None
+                # Only now does anything change. The model first (a wrapped base is a new
+                # object every handler must use from here on), the map last: it is what
+                # makes the adapter selectable.
+                model_obj = loaded
+                _peft_adapter_names.add(name)
+                _adapter_map[name] = resolved
+                _runtime_adapters.append(name)
+        return {"name": name, "status": "loaded"}
+
+    @app.post("/v1/adapters/load", dependencies=[Depends(_check_local_request)])
+    async def load_adapter(
+        request: Request, authorization: Optional[str] = Header(default=None)
+    ):
+        """Add a LoRA adapter from --adapter-dir to the running server (not activated)."""
+        # Security first: before the route says whether it is enabled, and before the body
+        # is read, an unauthenticated caller learns nothing.
+        _check_adapter_load_auth(authorization)
+        if _adapter_root is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "runtime adapter loading is not enabled; "
+                    "start soup serve with --adapter-dir"
+                ),
+            )
+        # The body is read by hand, not declared as a model: a malformed one must answer
+        # 400 "Invalid request" (not FastAPI's 422), and `curl -d` sends it labelled as a form.
+        chunks, size = [], 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > _ADAPTER_LOAD_MAX_BODY_BYTES:
+                raise HTTPException(status_code=400, detail="Invalid request")
+            chunks.append(chunk)
+        parsed = _parse_adapter_load_body(b"".join(chunks))
+        if parsed is None:
+            raise HTTPException(status_code=400, detail="Invalid request")
+        return await run_in_threadpool(_load_adapter_blocking, *parsed)
 
     @app.get("/v1/models")
     def list_models():

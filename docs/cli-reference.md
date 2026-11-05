@@ -3450,6 +3450,7 @@ Usage: `soup serve [OPTIONS]`
 | `--speculative-decoding` | text |  |  | Draft model for speculative decoding (smaller/faster model ID or path) |
 | `--num-speculative-tokens` | integer | `5` |  | Number of tokens the draft model generates per step (speculative decoding) |
 | `--adapters` | text, repeatable |  |  | LoRA adapters as name=path pairs (repeatable). E.g. chat=./chat-adapter |
+| `--adapter-dir` | text |  |  | Directory runtime adapters may be loaded from through POST /v1/adapters/load (needs --tool-auth-token). Not set: the route is off. |
 | `--prefix-cache` | flag | off |  | Enable vLLM prefix caching for shared system prompts (RAG/agent workloads). |
 | `--auto-spec` | flag | off |  | Auto-pair draft model for speculative decoding based on target model. |
 | `--structured-output` | text | `off` |  | Constrain generation: off (default) \| json \| regex. |
