@@ -165,15 +165,26 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # Background subprocess (writes PID, no shell)
 soup loop watch --detach
 
-# The deploy stage activates the adapter on SOUP_LOOP_SERVE_ENDPOINT. A server
-# started with --tool-auth-token requires that token on the adapter routes, so
-# give the loop the same one: --tool-auth-token, or SOUP_TOOL_AUTH_TOKEN to keep
-# it out of the shell history. A --detach child gets it through its environment
-# (so does the train stage's `soup train` child, which ignores it). soup serve has
-# no TLS and the loop refuses plain http off-loopback, so run the loop on the
-# serving box against loopback, or put a TLS-terminating proxy in front.
-soup serve --model base-model --adapters chat=./chat --host 0.0.0.0 --tool-auth-token "$TOKEN" &
+# The deploy stage loads a SHIP-verdict adapter into the running server
+# (POST /v1/adapters/load on SOUP_LOOP_SERVE_ENDPOINT, which needs soup serve
+# --adapter-dir and its --tool-auth-token) and starts a canary: the adapter gets
+# --canary-traffic (default 5%) of keyed traffic; unkeyed traffic stays on
+# production. While the canary runs, watch starts no new iteration. At 30 canary
+# answers the next cycle decides: OK promotes it (unkeyed traffic is switched to
+# it and it becomes the router's stable side), MAJOR withdraws it and production
+# never changed. Give the loop the server's token: --tool-auth-token, or
+# SOUP_TOOL_AUTH_TOKEN to keep it out of the shell history. A --detach child gets
+# it through its environment (so does the train stage's `soup train` child, which
+# ignores it). soup serve has no TLS and the loop refuses plain http off-loopback,
+# so run the loop on the serving box against loopback, or put a TLS-terminating
+# proxy in front.
+soup serve --model ./base --adapter-dir .soup-loops/adapters --tool-auth-token "$TOKEN" &
 SOUP_LOOP_SERVE_ENDPOINT=http://127.0.0.1:8000 SOUP_TOOL_AUTH_TOKEN="$TOKEN" soup loop watch --detach
+
+# Go back to the version that was production before the last promotion (points
+# unkeyed traffic back and withdraws a running canary); refused when nothing was
+# promoted.
+SOUP_LOOP_SERVE_ENDPOINT=http://127.0.0.1:8000 SOUP_TOOL_AUTH_TOKEN="$TOKEN" soup loop rollback
 
 # Start serve with the candidate loaded, then promote it at 5% traffic.
 soup serve --model ./base --adapters candidate=./candidate
@@ -190,7 +201,7 @@ soup loop replay iter-20260515T120000-abcdef01
 State lives in `.soup/loop.yaml` (atomic write, cwd-contained, symlink-rejected). Per-iteration manifests under `.soup-loops/<iter-id>/iteration.json` are laid out so a v0.26 Soup Can can wrap them directly.
 
 Canary routing is available on the transformers backend when the candidate name was
-loaded with `soup serve --adapters`. Send a stable key as the
+loaded with `soup serve --adapters` or `POST /v1/adapters/load`. Send a stable key as the
 `conversation_id` field or `X-Conversation-Id` header on
 `POST /v1/chat/completions`; requests without a key keep the normal active-adapter
 behavior. The router hashes the key, so every request in one conversation stays in
@@ -201,10 +212,12 @@ buckets in `.soup/canary-stats.json`. `soup loop watch` evaluates those observat
 after at least 30 canary samples. If the canary success rate trails the stable rate by
 more than five percentage points, the verdict is `MAJOR`; with
 `--autoroll-on-regress`, the watcher atomically clears the canary and its traffic share
-from `loop.yaml`. `/v1/adapters/activate/<name>` remains an explicit 100% cutover for
-requests without a conversation key and does not change the canary policy. Keyed
-requests still follow the canary split; their stable bucket uses the served base
-model, even when another adapter was activated manually. Start `soup serve` from the
+from `loop.yaml`. With 30 canary answers and no regression the verdict is `OK`, and
+`soup loop watch` promotes the canary. `/v1/adapters/activate/<name>` remains an
+explicit 100% cutover for requests without a conversation key and does not change the
+canary policy. Keyed requests still follow the canary split; their stable bucket uses
+the promoted production adapter, or the served base model before any promotion, even
+when another adapter was activated manually. Start `soup serve` from the
 directory containing `.soup/`, because the loop state and canary statistics paths are
 resolved from the working directory. Clients choose their own stable key, so a client
 can deliberately select a key that hashes into the canary bucket.

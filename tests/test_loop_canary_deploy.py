@@ -360,12 +360,21 @@ def test_init_saves_the_canary_traffic_and_status_shows_it(cwd):
     assert re.search(r"canary_traffic\W+10% per new canary", status), status
 
 
-@pytest.mark.parametrize("value", ["0", "0%", "101", "lots"])
-def test_init_refuses_a_bad_canary_traffic(cwd, value):
-    result, _ = _invoke(
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("0", "--canary-traffic must be above 0%"),
+        ("0%", "--canary-traffic must be above 0%"),
+        ("101", "--canary-traffic must be in [0, 100]"),
+        ("lots", "invalid --canary-traffic: lots"),
+    ],
+)
+def test_init_refuses_a_bad_canary_traffic(cwd, value, message):
+    result, text = _invoke(
         "init", "./base", "--eval", "tasks.jsonl", "--baseline", "b", "--canary-traffic", value
     )
     assert result.exit_code == 2, (result.output, repr(result.exception))
+    assert message in text
     assert not os.path.exists(os.path.join(".soup", "loop.yaml"))
 
 

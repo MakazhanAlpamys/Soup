@@ -153,7 +153,7 @@ def init_cmd(
         except (TypeError, ValueError) as exc:
             console.print(f"[red]invalid --thumbs-db:[/] {for_terminal(exc)}")
             raise typer.Exit(code=2)
-    deploy_pct = _parse_traffic(canary_traffic)
+    deploy_pct = _parse_traffic(canary_traffic, flag="--canary-traffic")
     if deploy_pct <= 0.0:
         console.print("[red]--canary-traffic must be above 0%[/]")
         raise typer.Exit(code=2)
@@ -630,10 +630,10 @@ def _trace_dir_label(state: LoopState) -> str:
     return f"{path} (from {'--trace-dir' if source == 'trace_dir' else source})"
 
 
-def _parse_traffic(raw: str) -> float:
-    """Parse ``"5%"`` / ``"5"`` / ``"  5.5 %"`` into a percent float."""
+def _parse_traffic(raw: str, *, flag: str = "--traffic") -> float:
+    """Parse ``"5%"`` / ``"5"`` / ``"  5.5 %"`` into a percent float; messages name ``flag``."""
     if not isinstance(raw, str):
-        console.print(f"[red]--traffic must be a string, got {type(raw).__name__}[/]")
+        console.print(f"[red]{flag} must be a string, got {type(raw).__name__}[/]")
         raise typer.Exit(code=2)
     txt = raw.strip()
     if txt.endswith("%"):
@@ -641,9 +641,9 @@ def _parse_traffic(raw: str) -> float:
     try:
         pct = float(txt)
     except ValueError:
-        console.print(f"[red]invalid --traffic:[/] {escape(raw)}")
+        console.print(f"[red]invalid {flag}:[/] {escape(raw)}")
         raise typer.Exit(code=2)
     if not (0.0 <= pct <= 100.0):
-        console.print("[red]--traffic must be in [0, 100][/]")
+        console.print(f"[red]{flag} must be in [0, 100][/]")
         raise typer.Exit(code=2)
     return pct
