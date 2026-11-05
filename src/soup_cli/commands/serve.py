@@ -1,6 +1,7 @@
 """soup serve — local inference server with OpenAI-compatible API."""
 
 import contextlib
+import functools
 import json
 import logging
 import re
@@ -1673,7 +1674,11 @@ def _plain_kv_kwargs(mapping: Any) -> Dict[str, Any]:
 
 
 def _stop_event_criteria(stop_event):
-    """A ``StoppingCriteriaList`` that ends generation once ``stop_event`` is set."""
+    """A ``StoppingCriteriaList`` that ends generation once ``stop_event`` is set.
+
+    The event lives in this closure, not on the instance, so a copy of the list
+    (a deep copy included) watches the same event.
+    """
     import torch
     from transformers import StoppingCriteria, StoppingCriteriaList
 
@@ -1685,10 +1690,6 @@ def _stop_event_criteria(stop_event):
                 device=input_ids.device,
                 dtype=torch.bool,
             )
-
-        def __deepcopy__(self, memo):
-            # An Event cannot be copied, and every copy must watch the same one.
-            return self
 
     return StoppingCriteriaList([_StopOnEvent()])
 
@@ -2715,11 +2716,73 @@ def _stream_anthropic_messages(
     yield _frame("message_stop", {"type": "message_stop"})
 
 
-# The worker thread of a streamed reply, and how long to wait on it once told to stop.
-# One token step is normally milliseconds; the cap only keeps a wedged generate()
-# from hanging a request that has already been told to stop.
+# The worker thread of a streamed reply, and how long to wait on it once the reply has
+# ended. The cap only keeps a generate() that wedged after its last token from hanging
+# a request that is already finished. Closing the stream never waits on the worker.
 _STREAM_WORKER_NAME = "soup-serve-generate"
 _STREAM_JOIN_SECONDS = 60.0
+
+
+@functools.lru_cache(maxsize=1)
+def _reply_streamer_class():
+    """The ``TextIteratorStreamer`` subclass a streamed reply uses (built on first use)."""
+    from transformers import TextIteratorStreamer
+
+    class _ReplyStreamer(TextIteratorStreamer):
+        """``TextIteratorStreamer`` without the token-cache reset after a newline.
+
+        ``TextStreamer`` empties its cache after every newline, so the first token of
+        the next line is decoded on its own. A SentencePiece (Llama-2-style) decoder
+        drops the leading space of whatever token starts the text it is given, so a
+        line that starts with a space or an indent loses it. Here the cache keeps the
+        whole reply, so every piece sent is a slice of the same decode that produces
+        the plain reply.
+
+        It decodes the whole reply on every token, as the stock streamer does inside
+        a line. A bounded window of left context would be cheaper, but it is exact
+        only if the tokenizer decodes a window the way it decodes the same tokens in
+        context, and that is the property that fails here: the decoder drops the
+        leading space of the first token of any text it is given. A piece that is not
+        a slice of the final decode is what this class exists to avoid, so the cost
+        is accepted.
+        """
+
+        def put(self, value):
+            if len(value.shape) > 1 and value.shape[0] > 1:
+                raise ValueError("TextStreamer only supports batch size 1")
+            if len(value.shape) > 1:
+                value = value[0]
+            if self.skip_prompt and self.next_tokens_are_prompt:
+                self.next_tokens_are_prompt = False
+                return
+            self.token_cache.extend(value.tolist())
+            text = self.tokenizer.decode(self.token_cache, **self.decode_kwargs)
+            if text and self._is_chinese_char(ord(text[-1])):
+                end = len(text)
+            else:
+                # Up to the last space or newline: a word that is still being
+                # written may change with the next token, so it is held back.
+                end = max(text.rfind(" "), text.rfind("\n")) + 1
+            if end > self.print_len:
+                self.on_finalized_text(text[self.print_len:end])
+                self.print_len = end
+
+    return _ReplyStreamer
+
+
+def _can_stream(model) -> bool:
+    """False for a model whose generation config makes ``generate`` refuse a streamer.
+
+    transformers raises on a streamer combined with beam search, and ``TextStreamer``
+    takes a batch of one, so ``num_beams`` or ``num_return_sequences`` above 1 keeps
+    the reply generated in full.
+    """
+    config = getattr(model, "generation_config", None)
+    for name in ("num_beams", "num_return_sequences"):
+        value = getattr(config, name, 1)
+        if isinstance(value, int) and value > 1:
+            return False
+    return True
 
 
 class _StripEmitter:
@@ -2752,8 +2815,9 @@ def _iter_generated_text(tokenizer, generate, outcome: dict):
 
     ``generate(streamer=..., stop_event=...)`` is called on a new thread, in a copy
     of the caller's ``contextvars`` context (a request-local selection such as the
-    per-user bank must be visible to it). Pieces come from a
-    ``TextIteratorStreamer``, which holds a word back until it is complete.
+    per-user bank must be visible to it). Pieces come from a ``TextIteratorStreamer``
+    that holds a word back until it is complete and keeps the whole reply in its
+    token cache (see ``_reply_streamer_class``).
     ``generate``'s return value lands in ``outcome["result"]``; an exception it
     raised is re-raised here once the text that came before it has been yielded.
 
@@ -2761,14 +2825,13 @@ def _iter_generated_text(tokenizer, generate, outcome: dict):
     the loop below cannot wait on a thread that has already died. There is no read
     timeout: one would only measure how long a big model takes to finish a word, and
     cut off a slow but healthy reply. Closing this generator (the client went away)
-    sets the stop event, which ends ``generate`` after its current token, and joins
-    the worker.
+    sets the stop event, which ends ``generate`` after its current token, and returns
+    at once: the worker finishes that token and releases the adapter lock on its own
+    thread. When the reply ends normally the worker is joined.
     """
     import contextvars
 
-    from transformers import TextIteratorStreamer
-
-    streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
+    streamer = _reply_streamer_class()(tokenizer, skip_prompt=True, skip_special_tokens=True)
     stop_event = threading.Event()
     failure: list = []
 
@@ -2784,6 +2847,7 @@ def _iter_generated_text(tokenizer, generate, outcome: dict):
         target=contextvars.copy_context().run,
         args=(worker,),
         name=_STREAM_WORKER_NAME,
+        # A generate() that never returns must not keep the interpreter from exiting.
         daemon=True,
     )
     thread.start()
@@ -2793,16 +2857,26 @@ def _iter_generated_text(tokenizer, generate, outcome: dict):
             if piece is streamer.stop_signal:
                 break
             yield piece
-    finally:
+    except BaseException:
+        # GeneratorExit (the stream was closed), or any other exception thrown in.
+        # Never wait here: this generator can be closed on the server's event-loop
+        # thread. The worker stops after its current token and releases the adapter
+        # lock on its own thread.
         stop_event.set()
-        thread.join(_STREAM_JOIN_SECONDS)
-        if thread.is_alive():
-            logger.warning(
-                "stream generation thread still running %.0fs after it was told to stop",
-                _STREAM_JOIN_SECONDS,
-            )
+        raise
+    stop_event.set()
+    thread.join(_STREAM_JOIN_SECONDS)
+    if thread.is_alive():
+        logger.warning(
+            "stream generation thread still running %.0fs after the reply ended",
+            _STREAM_JOIN_SECONDS,
+        )
     if failure:
-        raise failure[0]
+        # pop, not failure[0]: the list sits in the worker frame's closure and the
+        # exception's traceback holds that frame, so leaving the exception in the list
+        # makes a cycle that keeps a failed generation's frames (input ids, KV cache,
+        # activations) alive until the next full garbage collection.
+        raise failure.pop()
 
 
 def _stream_response(
@@ -2823,13 +2897,16 @@ def _stream_response(
     """Generator that yields SSE chunks for streaming responses.
 
     A plain request streams: ``generate`` runs on a worker thread and each piece of
-    text is sent as it is produced. Three kinds of request still generate the whole
+    text is sent as it is produced. Four kinds of request still generate the whole
     reply first and send it afterwards, because streaming them is not safe:
 
     * ``reasoning_parser`` cuts reasoning blocks out of the finished text;
     * ``mole_runtime`` blends adapters in its own decode loop, not in ``generate``;
     * a draft model or n-gram lookup (assisted decoding) is not streamed here, as
-      ``soup serve`` has always told the user (see the note printed at startup).
+      ``soup serve`` has always told the user (see the note printed at startup);
+    * a model whose generation config sets beam search or several return
+      sequences, which ``generate`` refuses to combine with a streamer
+      (``_can_stream``).
     """
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
     created = int(time.time())
@@ -2897,7 +2974,12 @@ def _stream_response(
                         **streaming,
                     )
 
-            if reasoning_parser is None and assistant_model is None and ngram_config is None:
+            if (
+                reasoning_parser is None
+                and assistant_model is None
+                and ngram_config is None
+                and _can_stream(model)
+            ):
                 outcome: dict = {}
                 pieces = _iter_generated_text(tokenizer, generate, outcome)
                 emitter = _StripEmitter()
@@ -2908,7 +2990,8 @@ def _stream_response(
                             sent += text
                             yield content_chunk(text)
                 finally:
-                    # Client gone (GeneratorExit): stop generate() and join the worker.
+                    # Client gone (GeneratorExit): close the text iterator now, which
+                    # sets the stop event for generate(). It does not wait for the worker.
                     pieces.close()
                 (
                     response_text, _, completion_tokens_for_log, finish_reason,

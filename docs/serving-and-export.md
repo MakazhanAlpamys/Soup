@@ -443,8 +443,9 @@ as the model generates it (word by word), so the first chunk arrives before gene
 ends. The chunk fields, final chunk, `[DONE]` and `finish_reason` are the same as for a
 reply generated in full. A request served with `--reasoning-parser`, a draft model
 (`--speculative-decoding`), n-gram lookup or MoLE routing is generated in full first and
-sent afterwards, and so is the `/v1/messages` stream. Use `--backend vllm` for token
-streaming with speculative decoding.
+sent afterwards, and so is a request to a model whose generation config sets beam search
+(`num_beams` above 1) or several return sequences, and so is the `/v1/messages` stream.
+Use `--backend vllm` for token streaming with speculative decoding.
 
 Compatible with OpenAI SDK:
 ```python

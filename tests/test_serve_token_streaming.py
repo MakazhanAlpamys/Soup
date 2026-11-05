@@ -8,8 +8,8 @@ then got a burst. ``generate`` now runs in a worker thread with a
 The wire format is unchanged: the same chunk fields, final chunk, ``[DONE]`` and
 ``finish_reason`` for the same generated text. Only the timing moves. Requests
 whose output is post-processed on the full text (reasoning parser), or whose decode
-loop is not a plain ``generate`` call (draft model, n-gram lookup, MoLE), keep the
-generate-then-send path; each has a test pinning that.
+loop is not a plain ``generate`` call (draft model, n-gram lookup, MoLE), or whose
+model sets beam search, keep the generate-then-send path; each has a test pinning that.
 
 The fake models below call the streamer the way ``transformers`` does: the prompt
 first (dropped by ``skip_prompt``), then one ``put`` per new token, then ``end``.
@@ -18,11 +18,15 @@ first (dropped by ``skip_prompt``), then one ``put`` per new token, then ``end``
 from __future__ import annotations
 
 import contextvars
+import copy
+import gc
+import inspect
 import json
 import logging
 import threading
 import time
 import types
+import weakref
 from unittest.mock import MagicMock
 
 import pytest
@@ -39,6 +43,13 @@ EOS_ID = 1
 FIRST_PIECE_ID = 10
 WORKER_NAME = "soup-serve-generate"
 MESSAGES = [{"role": "user", "content": "hi"}]
+# How long a fake generate() waits for the test (a gate to open, a stop event). Nothing
+# waits this long on a passing run; it only keeps a broken test from hanging for good.
+GATE_TIMEOUT = 30.0
+
+
+class _Abort(BaseException):
+    """Not an ``Exception``: only an ``except BaseException`` sees it."""
 
 
 class _PieceTokenizer:
@@ -86,32 +97,49 @@ class _ScriptedModel:
         *,
         hold_after=None,
         fail_at=None,
-        step_delay=0.0,
         use_streamer=True,
         stream_only=None,
         streamed_ids=None,
         on_generate=None,
+        fail_with=None,
+        wait_for_stop=False,
+        after_stop_seconds=0.0,
+        linger=None,
     ):
         self.token_ids = list(token_ids)
         self.hold_after = hold_after
         self.fail_at = fail_at
-        self.step_delay = step_delay
         self.use_streamer = use_streamer
         # Only the first ``stream_only`` tokens reach the streamer (the rest are still
         # returned), or ``streamed_ids`` reach it in place of the real ones.
         self.stream_only = stream_only
         self.streamed_ids = streamed_ids
         self.on_generate = on_generate
+        self.fail_with = fail_with
+        # After its tokens, generate() keeps running until the stop criteria fire, then
+        # spends ``after_stop_seconds`` finishing the decode step it was in.
+        self.wait_for_stop = wait_for_stop
+        self.after_stop_seconds = after_stop_seconds
+        # Set after streamer.end(): generate() has produced everything but not returned.
+        self.linger = linger
         self.gate = threading.Event()
         self.gate_timed_out = False
         self.generate_returned = threading.Event()
         self.stopped_early = False
         self.calls = []
         self.threads = []
-        self.produced = 0
 
     def _streams(self, index):
         return self.stream_only is None or index < self.stream_only
+
+    @staticmethod
+    def _wait_until_stopped(criteria, sequence):
+        deadline = time.monotonic() + GATE_TIMEOUT
+        while time.monotonic() < deadline:
+            if bool(criteria(torch.tensor([sequence]), None).any()):
+                return True
+            time.sleep(0.002)
+        return False
 
     def generate(self, **kwargs):
         self.calls.append(kwargs)
@@ -129,19 +157,22 @@ class _ScriptedModel:
                     self.stopped_early = True
                     break
                 if index == self.fail_at:
-                    raise RuntimeError("boom in generate")
-                if self.step_delay:
-                    time.sleep(self.step_delay)
+                    raise self.fail_with or RuntimeError("boom in generate")
                 sequence.append(token)
-                self.produced += 1
                 if streamer is not None and self._streams(index):
                     shown = token if self.streamed_ids is None else self.streamed_ids[index]
                     streamer.put(torch.tensor([shown]))
                 if self.hold_after is not None and index + 1 == self.hold_after:
                     # A generate() that is still running: the reply is not finished.
-                    self.gate_timed_out = not self.gate.wait(timeout=3.0)
+                    self.gate_timed_out = not self.gate.wait(timeout=GATE_TIMEOUT)
+            if self.wait_for_stop:
+                self.stopped_early = self._wait_until_stopped(criteria, sequence)
+                if self.after_stop_seconds:
+                    time.sleep(self.after_stop_seconds)
             if streamer is not None:
                 streamer.end()
+            if self.linger is not None:
+                self.linger.wait(timeout=GATE_TIMEOUT)
             return torch.tensor([sequence])
         finally:
             self.generate_returned.set()
@@ -261,11 +292,24 @@ def test_generate_gets_a_streamer_and_runs_on_a_worker_thread():
 
     _drain(_stream(model, tokenizer))
 
+    from transformers import TextIteratorStreamer
+
     kwargs = model.calls[0]
-    assert type(kwargs["streamer"]).__name__ == "TextIteratorStreamer"
+    assert isinstance(kwargs["streamer"], TextIteratorStreamer)
+    assert type(kwargs["streamer"]).__name__ == "_ReplyStreamer"
     assert model.threads[0].name == WORKER_NAME
     assert model.threads[0] is not threading.current_thread()
     assert not _wait_for_workers_to_exit()
+
+
+def test_the_worker_thread_is_a_daemon():
+    """A generate() that never returns must not keep the interpreter from exiting."""
+    tokenizer, ids = _script("Hello", " world")
+    model = _ScriptedModel(ids)
+
+    _drain(_stream(model, tokenizer))
+
+    assert model.threads[0].daemon is True
 
 
 # --------------------------------------------------------------------------- #
@@ -356,6 +400,27 @@ def test_text_already_sent_is_never_taken_back():
     assert frames[-1] == "[DONE]"
 
 
+def test_a_longer_final_reply_is_not_spliced_onto_text_that_is_not_its_prefix():
+    """The text sent is not a prefix of the final decode, and the final decode is longer.
+
+    Appending the rest of the final reply would join two different decodes ("Hullo
+    big" and " world", from "Hello big world"), so nothing more is sent.
+    """
+    tokenizer, ids = _script("Hello", " big", " world", "Hullo")
+    hello, big, world, hullo, _eos = ids
+    model = _ScriptedModel(
+        [hello, big, world, EOS_ID],
+        stream_only=2,
+        streamed_ids=[hullo, big, world, EOS_ID],
+    )
+
+    frames = _frames(_drain(_stream(model, tokenizer)))
+
+    assert _content(frames) == "Hullo big"
+    assert frames[-2]["choices"][0]["finish_reason"] == "stop"
+    assert frames[-1] == "[DONE]"
+
+
 def test_an_empty_reply_keeps_the_single_empty_chunk():
     tokenizer, ids = _script()
     frames = _frames(_drain(_stream(_ScriptedModel(ids), tokenizer)))
@@ -439,28 +504,69 @@ def test_successful_stream_records_one_canary_success():
     assert outcomes == [True]
 
 
-def test_closing_the_stream_stops_generation_and_joins_the_worker():
-    pieces = ["w"] + [" w"] * 399
-    tokenizer, ids = _script(*pieces, eos=False)
-    model = _ScriptedModel(ids, step_delay=0.01)
+@pytest.mark.parametrize("reasoning_parser", [None, "deepseek-r1"], ids=["streamed", "inline"])
+def test_a_base_exception_in_generate_reaches_the_stream_as_it_does_inline(reasoning_parser):
+    """The worker catches ``BaseException``: an exit signal is not turned into a KeyError."""
+    tokenizer, ids = _script("Hello", " world")
+    abort = _Abort("stop it")
+    model = _ScriptedModel(ids, fail_at=1, fail_with=abort)
+
+    with pytest.raises(_Abort) as raised:
+        _drain(_stream(model, tokenizer, reasoning_parser=reasoning_parser))
+
+    assert raised.value is abort
+    assert not _wait_for_workers_to_exit()
+
+
+class _Leftovers:
+    """Stands in for what a failed generation leaves in its frames (ids, KV cache)."""
+
+
+class _FailsHoldingState(_ScriptedModel):
+    def generate(self, **kwargs):
+        held = _Leftovers()
+        self.held = weakref.ref(held)
+        raise RuntimeError("boom in generate")
+
+
+def test_a_failed_generation_is_freed_without_a_garbage_collection(monkeypatch):
+    """The failure list must not keep the exception, and with it the worker's frames."""
+    # A log record carries the exception and would keep it alive on its own.
+    monkeypatch.setattr(serve, "logger", MagicMock())
+    tokenizer, ids = _script("Hello")
+    model = _FailsHoldingState(ids)
+    gc.collect()
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        chunks = _drain(_stream(model, tokenizer))
+
+        assert chunks == ['data: {"error": "Internal server error"}\n\n']
+        assert model.held() is None, "the failed generation's frames are still alive"
+    finally:
+        if was_enabled:
+            gc.enable()
+
+
+def test_closing_the_stream_stops_generation_after_the_current_token():
+    tokenizer, ids = _script("w", " w", " w", eos=False)
+    model = _ScriptedModel(ids, wait_for_stop=True)
     stream = _stream(model, tokenizer, max_tokens=1000)
 
     next(stream)
     stream.close()
 
-    # close() joins the worker, so generate() has returned by the time it comes back.
-    assert model.generate_returned.is_set()
-    assert model.stopped_early, "the stop criteria never saw the stop event"
-    assert model.produced < len(ids)
-    assert not model.threads[0].is_alive()
-    assert not _worker_threads()
+    # The stop criteria see the event, so generate() ends on its own thread.
+    assert model.generate_returned.wait(timeout=5.0), "generate() never saw the stop event"
+    assert model.stopped_early
+    assert not _wait_for_workers_to_exit()
 
 
-def test_closing_the_stream_releases_the_adapter_lock():
-    pieces = ["w"] + [" w"] * 399
-    tokenizer, ids = _script(*pieces, eos=False)
+def test_closing_the_stream_does_not_wait_for_the_worker_and_the_lock_is_released_later():
+    """``close()`` can run on the server's event-loop thread, so it returns at once."""
+    tokenizer, ids = _script("w", " w", " w", eos=False)
     lock = threading.Lock()
-    model = _ScriptedModel(ids, step_delay=0.01)
+    model = _ScriptedModel(ids, wait_for_stop=True, after_stop_seconds=2.0)
     model.set_adapter = MagicMock()
     stream = _stream(
         model, tokenizer, max_tokens=1000,
@@ -469,9 +575,120 @@ def test_closing_the_stream_releases_the_adapter_lock():
 
     next(stream)
     assert lock.locked()
+    started = time.monotonic()
+    stream.close()
+    elapsed = time.monotonic() - started
+
+    # The worker is still inside the decode step it was in when the stream closed.
+    assert elapsed < 1.0, f"close() took {elapsed:.2f}s: it waited for the worker"
+    assert not model.generate_returned.is_set()
+    assert lock.locked()
+    # It ends that step, returns, and releases the lock on its own thread.
+    deadline = time.monotonic() + 5.0
+    while lock.locked() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert not lock.locked()
+    assert model.stopped_early
+    assert not _wait_for_workers_to_exit()
+
+
+def test_closing_the_stream_closes_the_inner_iterator_even_if_it_is_kept_alive(monkeypatch):
+    """The stop event is set when the stream closes, not whenever the iterator is freed.
+
+    Another reference (a traceback, a debugger, an interpreter without refcounting)
+    can keep the inner iterator alive after the SSE generator is gone.
+    """
+    opened = []
+    real = serve._iter_generated_text
+
+    def spy(*args, **kwargs):
+        iterator = real(*args, **kwargs)
+        opened.append(iterator)
+        return iterator
+
+    monkeypatch.setattr(serve, "_iter_generated_text", spy)
+    tokenizer, ids = _script("w", " w", " w", eos=False)
+    model = _ScriptedModel(ids, wait_for_stop=True)
+    stream = _stream(model, tokenizer, max_tokens=1000)
+
+    next(stream)
     stream.close()
 
-    assert not lock.locked()
+    assert inspect.getgeneratorstate(opened[0]) == inspect.GEN_CLOSED
+    assert model.generate_returned.wait(timeout=5.0)
+    assert model.stopped_early
+
+
+def test_a_worker_still_running_after_the_reply_ended_is_logged(monkeypatch, caplog):
+    monkeypatch.setattr(serve, "_STREAM_JOIN_SECONDS", 0.05)
+    tokenizer, ids = _script("Hello", " world")
+    linger = threading.Event()
+    model = _ScriptedModel(ids, linger=linger)
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=serve.logger.name):
+            _drain(_stream(model, tokenizer))
+    finally:
+        linger.set()
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("stream generation thread still running" in message for message in messages), (
+        messages
+    )
+    assert not _wait_for_workers_to_exit()
+
+
+def test_an_exception_thrown_into_the_text_iterator_also_stops_generation_at_once():
+    """Not only a close: any exception thrown in sets the stop event and does not wait."""
+    tokenizer, _ = _script("a", " b")
+    seen = {}
+
+    def generate(streamer, stop_event):
+        seen["event"] = stop_event
+        streamer.put(torch.tensor([PROMPT_IDS]))
+        streamer.put(torch.tensor([FIRST_PIECE_ID]))
+        streamer.put(torch.tensor([FIRST_PIECE_ID + 1]))
+        stop_event.wait(timeout=GATE_TIMEOUT)
+        streamer.end()
+
+    pieces = serve._iter_generated_text(tokenizer, generate, {})
+
+    assert next(pieces) == "a "
+    with pytest.raises(RuntimeError, match="thrown in"):
+        pieces.throw(RuntimeError("thrown in"))
+    assert seen["event"].is_set()
+    assert not _wait_for_workers_to_exit()
+
+
+def test_the_reply_is_finished_only_after_generate_has_returned():
+    """``streamer.end()`` runs inside generate(); its result lands in the outcome on return."""
+    tokenizer, ids = _script("Hello", " world")
+    linger = threading.Event()
+    timer = threading.Timer(0.3, linger.set)
+    model = _ScriptedModel(ids, linger=linger)
+
+    timer.start()
+    try:
+        frames = _frames(_drain(_stream(model, tokenizer)))
+    finally:
+        timer.cancel()
+        linger.set()
+
+    assert _content(frames) == "Hello world"
+    assert frames[-2]["choices"][0]["finish_reason"] == "stop"
+    assert frames[-1] == "[DONE]"
+
+
+def test_a_copy_of_the_stop_criteria_watches_the_same_event():
+    stop = threading.Event()
+    criteria = serve._stop_event_criteria(stop)
+    clone = copy.deepcopy(criteria)
+    sequence = torch.tensor([[1, 2, 3]])
+
+    assert not bool(clone(sequence, None).any())
+    stop.set()
+    assert bool(clone(sequence, None).all())
+    assert bool(criteria(sequence, None).all())
 
 
 # --------------------------------------------------------------------------- #
@@ -599,6 +816,184 @@ def test_mole_runtime_keeps_full_generation():
     assert frames[-2]["choices"][0]["finish_reason"] == "stop"
 
 
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"num_beams": 4},
+        {"num_return_sequences": 2},
+        {"num_beams": 2, "num_return_sequences": 2},
+    ],
+    ids=["beams", "return_sequences", "both"],
+)
+def test_beam_search_or_several_return_sequences_keep_full_generation(settings):
+    """transformers refuses a streamer with beam search, and TextStreamer takes one sequence."""
+    tokenizer, ids = _script("Hello", " world")
+    model = _ScriptedModel(ids)
+    model.generation_config = types.SimpleNamespace(eos_token_id=EOS_ID, **settings)
+
+    frames = _frames(_drain(_stream(model, tokenizer)))
+
+    _assert_not_streamed(model)
+    assert _content(frames) == "Hello world"
+    assert frames[-2]["choices"][0]["finish_reason"] == "stop"
+    assert frames[-1] == "[DONE]"
+
+
+@pytest.mark.parametrize(
+    "config, expected",
+    [
+        (None, True),
+        (types.SimpleNamespace(), True),
+        (types.SimpleNamespace(num_beams=1, num_return_sequences=1), True),
+        (types.SimpleNamespace(num_beams=None, num_return_sequences=None), True),
+        (types.SimpleNamespace(num_beams=2), False),
+        (types.SimpleNamespace(num_return_sequences=3), False),
+    ],
+)
+def test_can_stream_follows_the_generation_config(config, expected):
+    assert serve._can_stream(types.SimpleNamespace(generation_config=config)) is expected
+
+
+def test_can_stream_without_a_generation_config():
+    assert serve._can_stream(object()) is True
+
+
+# --------------------------------------------------------------------------- #
+# A SentencePiece-style decoder drops the leading space of the text it is given
+# --------------------------------------------------------------------------- #
+
+SPIECE = chr(0x2581)  # the SentencePiece word-start marker
+# Tokens are written with "_" for the marker. The reply is what the whole token list
+# decodes to: the decoder drops the marker of the very first token and turns every
+# other one into a space.
+_SENTENCEPIECE_REPLIES = {
+    "indented_code": (
+        ["_def", "_f():", "\n", "___", "_return", "_1"],
+        "def f():\n    return 1",
+    ),
+    "numbered_list": (
+        ["_Steps:", "\n", "_1.", "_mix", "\n", "_2.", "_bake"],
+        "Steps:\n 1. mix\n 2. bake",
+    ),
+}
+
+
+def _sentencepiece_tokenizer():
+    from tokenizers import Tokenizer, decoders, pre_tokenizers
+    from tokenizers.models import WordLevel
+    from transformers import PreTrainedTokenizerFast
+
+    vocab = {"<pad>": 0, "<eos>": EOS_ID, "<unk>": 2}
+    for tokens, _ in _SENTENCEPIECE_REPLIES.values():
+        for token in tokens:
+            vocab.setdefault(token.replace("_", SPIECE), len(vocab))
+    backend = Tokenizer(WordLevel(vocab=vocab, unk_token="<unk>"))
+    backend.pre_tokenizer = pre_tokenizers.Metaspace(prepend_scheme="first")
+    backend.decoder = decoders.Metaspace(prepend_scheme="first")
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=backend, pad_token="<pad>", eos_token="<eos>", unk_token="<unk>"
+    )
+    tokenizer.chat_template = (
+        "{% for m in messages %}{{ m['role'] }} {{ m['content'] }} {% endfor %}assistant"
+    )
+    return tokenizer
+
+
+def _sentencepiece_ids(tokenizer, name):
+    tokens, reply = _SENTENCEPIECE_REPLIES[name]
+    ids = [tokenizer.convert_tokens_to_ids(token.replace("_", SPIECE)) for token in tokens]
+    ids.append(EOS_ID)
+    assert tokenizer.decode(ids, skip_special_tokens=True).strip() == reply
+    return ids, reply
+
+
+def _text_released_by(streamer_class, tokenizer, ids):
+    """The text ``streamer_class`` releases for ``ids``, the prompt first as generate() sends it."""
+    streamer = streamer_class(tokenizer, skip_prompt=True, skip_special_tokens=True)
+    streamer.put(torch.tensor([PROMPT_IDS]))
+    for token in ids:
+        streamer.put(torch.tensor([token]))
+    streamer.end()
+    parts = []
+    while True:
+        part = streamer.text_queue.get_nowait()
+        if part is streamer.stop_signal:
+            return "".join(parts)
+        parts.append(part)
+
+
+@pytest.mark.parametrize("name", sorted(_SENTENCEPIECE_REPLIES))
+def test_reply_streamer_keeps_the_leading_space_of_a_line(name):
+    tokenizer = _sentencepiece_tokenizer()
+    ids, reply = _sentencepiece_ids(tokenizer, name)
+
+    assert _text_released_by(serve._reply_streamer_class(), tokenizer, ids) == reply
+
+
+@pytest.mark.parametrize("name", sorted(_SENTENCEPIECE_REPLIES))
+def test_the_stock_streamer_loses_that_space_on_the_same_tokenizer(name):
+    """Control: the tokenizer above is one the stock streamer gets wrong."""
+    from transformers import TextIteratorStreamer
+
+    tokenizer = _sentencepiece_tokenizer()
+    ids, reply = _sentencepiece_ids(tokenizer, name)
+
+    stock = _text_released_by(TextIteratorStreamer, tokenizer, ids)
+
+    if stock == reply:
+        pytest.skip("the stock streamer keeps the space here; _ReplyStreamer is not needed")
+    assert stock.replace(" ", "") == reply.replace(" ", "")  # only spaces are lost
+    assert len(stock) < len(reply)
+
+
+CJK = chr(0x65E5) + chr(0x672C)
+
+
+def _reply_streamer(tokenizer):
+    return serve._reply_streamer_class()(tokenizer, skip_prompt=True, skip_special_tokens=True)
+
+
+@pytest.mark.parametrize(
+    "pieces, released",
+    [
+        (["Hello"], ""),
+        (["Hello", " wor"], "Hello "),
+        (["Line", "\n"], "Line\n"),
+        (["abc", CJK], "abc" + CJK),
+    ],
+    ids=["unfinished_word", "space", "newline", "cjk"],
+)
+def test_reply_streamer_releases_text_at_a_space_a_newline_or_a_cjk_character(pieces, released):
+    tokenizer, ids = _script(*pieces, eos=False)
+    streamer = _reply_streamer(tokenizer)
+    streamer.put(torch.tensor([PROMPT_IDS]))
+    for token in ids:
+        streamer.put(torch.tensor([token]))
+
+    parts = []
+    while not streamer.text_queue.empty():
+        parts.append(streamer.text_queue.get_nowait())
+    assert "".join(parts) == released
+
+
+def test_reply_streamer_refuses_a_batch():
+    tokenizer, _ = _script("Hello")
+
+    with pytest.raises(ValueError, match="batch size 1"):
+        _reply_streamer(tokenizer).put(torch.tensor([[1, 2], [3, 4]]))
+
+
+@pytest.mark.parametrize("name", sorted(_SENTENCEPIECE_REPLIES))
+def test_streamed_deltas_keep_the_leading_space_of_a_line(name):
+    tokenizer = _sentencepiece_tokenizer()
+    ids, reply = _sentencepiece_ids(tokenizer, name)
+
+    frames = _frames(_drain(_stream(_ScriptedModel(ids), tokenizer)))
+
+    assert _content(frames) == reply
+    assert frames[-2]["choices"][0]["finish_reason"] == "stop"
+
+
 # --------------------------------------------------------------------------- #
 # Real transformers: tiny random Llama, real generate + TextIteratorStreamer
 # --------------------------------------------------------------------------- #
@@ -675,6 +1070,29 @@ def test_real_generate_streams_the_same_reply_as_the_plain_call(tiny_llama, monk
     assert plain["usage"]["completion_tokens"] == 12
     assert got_streamer == [False, True]
     assert not _wait_for_workers_to_exit()
+
+
+def test_real_model_with_beam_search_still_returns_its_reply(tiny_llama, monkeypatch):
+    """The real ``generate`` refuses a streamer with beam search; the gate keeps it away."""
+    from fastapi.testclient import TestClient
+
+    model, tokenizer = tiny_llama
+    config = copy.deepcopy(model.generation_config)
+    config.num_beams = 2
+    monkeypatch.setattr(model, "generation_config", config)
+    app = serve._create_app(model, tokenizer, "cpu", "tiny", 6)
+    client = TestClient(app, base_url="http://localhost")
+    body = {"model": "tiny", "messages": MESSAGES, "temperature": 0, "max_tokens": 6}
+
+    plain = client.post("/v1/chat/completions", json=body).json()
+    streamed = client.post("/v1/chat/completions", json={**body, "stream": True})
+
+    assert streamed.status_code == 200
+    frames = _frames([part + "\n\n" for part in streamed.text.split("\n\n") if part])
+    expected = plain["choices"][0]["message"]["content"]
+    assert expected
+    assert not [frame for frame in frames if isinstance(frame, dict) and "error" in frame]
+    assert _content(frames) == expected
 
 
 def test_real_generate_stops_when_the_stop_event_is_set(tiny_llama):
