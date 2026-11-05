@@ -21,6 +21,7 @@ import math
 import os
 import threading
 from dataclasses import dataclass, field
+from fractions import Fraction
 from types import MappingProxyType
 from typing import Mapping, Optional
 
@@ -239,6 +240,75 @@ class BucketStats:
                     "canary_major": self.canary_major,
                 }
             )
+
+
+@dataclass(frozen=True)
+class QualityStats:
+    """Rated answers and negative feedback per bucket of one rollout: the quality verdict.
+
+    ``BucketStats`` counts only whether a request failed; a canary whose answers all arrive
+    but are bad passes it. Here an answer is *rated* when a person gave it a thumb, a rating
+    or an edit, and *negative* when that was a thumb down, a rating of 1-2 or an edit
+    (``loop_feedback.read_quality_stats`` counts them from the feedback log).
+    """
+
+    stable_rated: int = 0
+    stable_negative: int = 0
+    canary_rated: int = 0
+    canary_negative: int = 0
+
+    def __post_init__(self) -> None:
+        for name in ("stable_rated", "stable_negative", "canary_rated", "canary_negative"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} must be a non-negative int, got {value!r}")
+        if self.stable_negative > self.stable_rated:
+            raise ValueError("stable_negative cannot exceed stable_rated")
+        if self.canary_negative > self.canary_rated:
+            raise ValueError("canary_negative cannot exceed canary_rated")
+
+    def verdict(self, *, min_samples: int = 30, regression_threshold: float = 0.05) -> str:
+        """Return ``"OK"`` / ``"MAJOR"`` / ``"UNKNOWN"``.
+
+        - ``UNKNOWN``: fewer than ``min_samples`` rated answers in the canary bucket OR in
+          the stable bucket. A comparison needs both sides: with no stable ratings there is
+          nothing to hold the canary against, and a canary that is not worse could be
+          withdrawn.
+        - ``MAJOR``: the canary's share of negative answers exceeds stable's by more than
+          ``regression_threshold`` (default 5 percentage points).
+        - ``OK``: otherwise.
+
+        The comparison is exact (fractions), so a canary exactly five points worse is OK
+        and not a rounding accident.
+        """
+        if isinstance(min_samples, bool) or not isinstance(min_samples, int) or min_samples < 1:
+            raise ValueError("min_samples must be a positive int")
+        v = regression_threshold
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+            raise ValueError("regression_threshold must be a finite number")
+        if not (0.0 <= float(v) <= 1.0):
+            raise ValueError("regression_threshold must be in [0, 1]")
+        if self.canary_rated < min_samples or self.stable_rated < min_samples:
+            return "UNKNOWN"
+        canary_share = Fraction(self.canary_negative, self.canary_rated)
+        stable_share = Fraction(self.stable_negative, self.stable_rated)
+        if canary_share - stable_share > Fraction(repr(float(v))):
+            return "MAJOR"
+        return "OK"
+
+    def summary(self) -> str:
+        """``3/31 negative vs 2/40 stable``: the shares a verdict was made from."""
+        return (
+            f"{self.canary_negative}/{self.canary_rated} negative vs "
+            f"{self.stable_negative}/{self.stable_rated} stable"
+        )
+
+    def progress(self, min_samples: int = 30) -> str:
+        """``12/30 canary, 40/30 stable rated``: how far each side is from a verdict."""
+        return (
+            f"{self.canary_rated}/{min_samples} canary, "
+            f"{self.stable_rated}/{min_samples} stable rated"
+        )
 
 
 def default_stats_path() -> str:

@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -581,6 +582,7 @@ def canary_cmd(
         canary_traffic_pct=policy.traffic_pct,
         canary_autoroll_on_regress=autoroll_on_regress,
         canary_rollout_id=uuid.uuid4().hex,
+        canary_started_ts=time.time(),
     )
     write_state(new_state)
     # Reload so the in-memory value reflects the persisted updated_at.
@@ -625,6 +627,7 @@ def rollback_cmd() -> None:
             canary_traffic_pct=None,
             canary_rollout_id=None,
             canary_adapter=None,
+            canary_started_ts=None,
         )
     )
     label = target or "the served model"

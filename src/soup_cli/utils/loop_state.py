@@ -126,6 +126,11 @@ class LoopState:
     # (rows labelled good or bad) or "sft" (the answers people corrected).
     # `min_new_pairs` counts new rows of this method's dataset.
     train_method: str = "dpo"
+    # When the active rollout started (epoch seconds): the deploy stage, or `soup loop
+    # canary`, writes it with canary_active. The quality verdict counts only answers given
+    # from then on. None = no canary, or one started before this field existed (it is then
+    # judged by request errors alone).
+    canary_started_ts: Optional[float] = None
 
     def __post_init__(self) -> None:  # noqa: D401 — validator hook
         # Closed-allowlist enforcement + bool-as-int rejection mirror the
@@ -220,6 +225,17 @@ class LoopState:
             raise ValueError(
                 f"train_method must be one of {list(TRAIN_METHODS)}, got {self.train_method!r}"
             )
+        if self.canary_started_ts is not None:
+            v = self.canary_started_ts
+            if (
+                isinstance(v, bool)
+                or not isinstance(v, (int, float))
+                or not (0 <= v <= MAX_CURSOR_TS)  # False for NaN too
+            ):
+                raise ValueError(
+                    "canary_started_ts must be epoch seconds in "
+                    f"[0, {int(MAX_CURSOR_TS)}] or None, got {v!r}"
+                )
         if self.canary_rollout_id is not None:
             _require_str("canary_rollout_id", self.canary_rollout_id, allow_empty=False)
         if self.last_iteration_id is not None:

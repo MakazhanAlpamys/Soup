@@ -255,6 +255,33 @@ directory containing `.soup/`, because the loop state and canary statistics path
 resolved from the working directory. Clients choose their own stable key, so a client
 can deliberately select a key that hashes into the canary bucket.
 
+Failed requests are not the only way a canary can be worse: its answers can all arrive
+and still be bad. When the loop has a feedback log (`.soup-loops/feedback.jsonl`, or
+`--feedback-log` / `SOUP_LOOP_FEEDBACK_LOG`; see the feedback datasets above) and the canary
+recorded its start (`canary_started_ts` in `loop.yaml`, written when the deploy stage or
+`soup loop canary` starts it), `soup loop watch` also reads what people said about the
+rollout's answers. It takes the conversation records whose `canary_bucket` is `stable` or
+`canary`, whose `adapter` is that side's adapter (the base model has none while nothing
+is promoted) and that were answered after the rollout started, and counts per bucket the
+rated answers (a thumb, a rating or an edit) and the share of them with negative feedback:
+a thumb down, a rating of 1-2, or an edit. Once 30 answers are rated in EACH bucket, the
+quality verdict is `MAJOR` when the canary's negative share exceeds stable's by more than
+five percentage points, else `OK`; with fewer ratings on either side it is `UNKNOWN`
+(without stable ratings there is nothing to hold the canary against). The two verdicts
+combine strictly: `MAJOR` if either is `MAJOR` (with `--autoroll-on-regress` the canary is
+withdrawn although every request succeeded), `OK` only when both are `OK`, `UNKNOWN`
+otherwise. The iteration record notes both verdicts: `canary errors: OK` and
+`canary quality: 3/31 negative vs 2/40 stable (OK)`, or, while it is still `UNKNOWN`, how
+far each side is: `canary quality: 12/30 canary, 40/30 stable rated (UNKNOWN)`.
+
+So once a feedback log exists, a canary waits for ratings: it is promoted only after 30
+canary and 30 stable answers were rated, and `soup loop watch` starts no new iteration
+until then. `soup loop rollback` ends a wait (it withdraws the running canary together
+with returning to the previous version), but it refuses when no version was promoted yet;
+then `soup loop canary <adapter>` starts a new rollout instead. A loop without a feedback
+log, or a canary that recorded no start (a `loop.yaml` from before the field), is judged by
+errors alone, as before.
+
 The serving process caches the parsed policy using the state file's
 `(st_mtime_ns, st_size, st_ino)` identity. Atomic replacement invalidates it,
 so a rollback written by `soup loop watch` affects the next keyed request.

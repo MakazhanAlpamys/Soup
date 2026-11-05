@@ -31,6 +31,7 @@ from typing import Callable, Mapping, Optional
 from soup_cli.utils.canary_router import (
     BucketStats,
     CanaryPolicy,
+    QualityStats,
     read_bucket_stats,
     rollback,
 )
@@ -60,6 +61,8 @@ GateFn = Callable[[LoopState, Mapping[str, object]], Mapping[str, object]]
 DeployFn = Callable[[LoopState, Mapping[str, object]], Mapping[str, object]]
 CostFn = Callable[[LoopState], float]
 PromoteFn = Callable[[LoopState], Mapping[str, object]]
+# What people said about the active canary's answers; None = the quality verdict takes no part.
+QualityFn = Callable[[LoopState], Optional[QualityStats]]
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +131,9 @@ class WatchConfig:
     pack_iterations: bool = False
     served_model: Optional[str] = None
     base_model: str = "unknown"
+    # The feedback side of the canary verdict (loop_stages.canary_quality for the pre-wired
+    # loop); None = judge by request errors alone, as the stub stages do.
+    quality_fn: Optional[QualityFn] = None
 
     def __post_init__(self) -> None:
         v = self.poll_interval_sec
@@ -144,6 +150,8 @@ class WatchConfig:
                 raise ValueError(f"{fname} must be callable")
         if self.on_iteration is not None and not callable(self.on_iteration):
             raise ValueError("on_iteration must be callable or None")
+        if self.quality_fn is not None and not callable(self.quality_fn):
+            raise ValueError("quality_fn must be callable or None")
         if not isinstance(self.pack_iterations, bool):
             raise ValueError("pack_iterations must be bool")
         # Validate the #177 registry-packing identity fields like every other
@@ -194,21 +202,26 @@ def run_once(
         last_run_date=today,
         spent_this_month_usd=spent,
     )
-    canary_verdict, rollback_policy, canary_samples = _evaluate_active_canary(state, config)
+    canary_verdict, rollback_policy, canary_samples, quality_notes = _evaluate_active_canary(
+        state, config
+    )
     rolled_back = rollback_policy is not None
     canary_notes = []
     if rollback_policy is not None:
         canary_notes.append(f"canary {state.canary_active} rolled back ({canary_verdict})")
+        canary_notes.extend(quality_notes)
         state = _state_with(
             state,
             canary_active=rollback_policy.canary,
             canary_traffic_pct=rollback_policy.traffic_pct,
             canary_rollout_id=None,
             canary_adapter=None,
+            canary_started_ts=None,
         )
     elif canary_verdict == "OK" and state.canary_active:
         state, note = _promote(state, config)
         canary_notes.append(note)
+        canary_notes.extend(quality_notes)
     elif state.canary_active:
         # A canary is still collecting answers: no new iteration until it is decided.
         record = IterationRecord(
@@ -222,10 +235,11 @@ def run_once(
             shipped=False,
             rolled_back=False,
             estimated_cost_usd=0.0,
-            notes=(
+            notes=" | ".join([
                 f"canary-wait: {state.canary_active} has {canary_samples} canary answers "
-                f"(verdict at {CANARY_MIN_SAMPLES})"
-            ),
+                f"(verdict at {CANARY_MIN_SAMPLES})",
+                *quality_notes,
+            ])[:4096],
         )
         return state, record, BudgetDecision(
             proceed=False,
@@ -324,9 +338,26 @@ def run_once(
             ),
             canary_traffic_pct=float(deploy_out.get("canary_traffic_pct") or 0.0),
             canary_rollout_id=str(deploy_out.get("canary_rollout_id") or uuid.uuid4().hex),
+            canary_started_ts=_rollout_start(deploy_out),
             canary_autoroll_on_regress=True,
         )
     return new_state, record, decision
+
+
+def _rollout_start(deploy_out: Mapping[str, object]) -> float:
+    """When the canary the deploy stage started began: its own stamp, else now.
+
+    A custom ``deploy_fn`` that reports none (or a value ``LoopState`` would refuse) gets
+    the time of this cycle, so the quality verdict still has a start to count from.
+    """
+    started = deploy_out.get("canary_started_ts")
+    if (
+        isinstance(started, bool)
+        or not isinstance(started, (int, float))
+        or not (0 <= started <= MAX_CURSOR_TS)  # False for NaN too
+    ):
+        return datetime.now(timezone.utc).timestamp()
+    return float(started)
 
 
 def _training_ran(train_out: Mapping[str, object]) -> bool:
@@ -377,6 +408,7 @@ def _promote(state: LoopState, config: WatchConfig) -> "tuple[LoopState, str]":
         canary_traffic_pct=None,
         canary_rollout_id=None,
         canary_adapter=None,
+        canary_started_ts=None,
     )
     note = f"canary {name} promoted to production"
     if out.get("notes"):
@@ -388,11 +420,16 @@ def _promote(state: LoopState, config: WatchConfig) -> "tuple[LoopState, str]":
 
 def _evaluate_active_canary(
     state: LoopState, config: WatchConfig
-) -> "tuple[Optional[str], Optional[CanaryPolicy], int]":
-    """Read live bucket outcomes: ``(verdict, rollback policy or None, canary samples)``."""
+) -> "tuple[Optional[str], Optional[CanaryPolicy], int, list[str]]":
+    """Read live bucket outcomes and feedback.
+
+    Returns ``(verdict, rollback policy or None, canary samples, notes)``. The verdict is
+    the request-error verdict alone, or, when ``config.quality_fn`` has feedback to judge
+    by, the two combined (``combine_canary_verdicts``); the notes then record both.
+    """
     active_canary = state.canary_active
     if active_canary is None:
-        return None, None, 0
+        return None, None, 0, []
     try:
         policy = CanaryPolicy(
             stable=state.stable_name(),
@@ -410,10 +447,52 @@ def _evaluate_active_canary(
         samples = counts["canary_ok"] + counts["canary_major"]
     except (OSError, TypeError, ValueError):
         _LOG.warning("canary stats read failed", exc_info=True)
-        return None, None, 0
+        return None, None, 0, []
+    notes: "list[str]" = []
+    quality = _read_quality(state, config)
+    if quality is not None:
+        quality_verdict = quality.verdict(min_samples=CANARY_MIN_SAMPLES)
+        # A verdict is made of shares; before it, show how far each side is from one.
+        detail = (
+            quality.progress(CANARY_MIN_SAMPLES)
+            if quality_verdict == "UNKNOWN"
+            else quality.summary()
+        )
+        notes = [f"canary errors: {verdict}", f"canary quality: {detail} ({quality_verdict})"]
+        verdict = combine_canary_verdicts(verdict, quality_verdict)
     if verdict == "MAJOR" and state.canary_autoroll_on_regress:
-        return verdict, maybe_rollback(policy, verdict), samples
-    return verdict, None, samples
+        return verdict, maybe_rollback(policy, verdict), samples, notes
+    return verdict, None, samples, notes
+
+
+def _read_quality(state: LoopState, config: WatchConfig) -> Optional[QualityStats]:
+    """What people said about the canary's answers, or ``None`` (no hook, no data, a failure).
+
+    A failing read must not stop the loop or roll a canary back: it is logged and the
+    request-error verdict stands alone for this cycle.
+    """
+    if config.quality_fn is None:
+        return None
+    try:
+        quality = config.quality_fn(state)
+    except (OSError, TypeError, ValueError):
+        _LOG.warning("canary quality read failed", exc_info=True)
+        return None
+    return quality if isinstance(quality, QualityStats) else None
+
+
+def combine_canary_verdicts(error_verdict: str, quality_verdict: str) -> str:
+    """One canary verdict from the request-error verdict and the feedback verdict.
+
+    Strict: ``MAJOR`` if either is, ``OK`` only when both are, ``UNKNOWN`` otherwise, so a
+    canary is promoted only once its requests succeeded AND enough people rated its
+    answers well enough.
+    """
+    if "MAJOR" in (error_verdict, quality_verdict):
+        return "MAJOR"
+    if error_verdict == "OK" and quality_verdict == "OK":
+        return "OK"
+    return "UNKNOWN"
 
 
 def watch(config: WatchConfig) -> "tuple[LoopState, int]":

@@ -19,6 +19,7 @@ import json
 import os
 import re
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import pytest
@@ -28,7 +29,7 @@ from typer.testing import CliRunner
 
 import soup_cli.commands.serve as serve
 import soup_cli.utils.loop_stages as ls
-from soup_cli.utils.loop_daemon import watch
+from soup_cli.utils.loop_daemon import run_once, watch
 from soup_cli.utils.loop_iteration import list_iterations, read_iteration
 from soup_cli.utils.loop_state import read_state
 
@@ -460,8 +461,124 @@ def test_a_correction_given_as_feedback_trains_the_chosen_method_and_reaches_a_c
     assert record.gate_verdict == "OK" and record.shipped is True
     assert name in loop["model"].loaded
 
-    # The canary is healthy: the next cycle promotes it, and trains nothing new.
+    # Every request is answered, but a feedback log exists and nobody has rated the canary's
+    # answers yet: it waits for ratings (the quality verdict, below) instead of being promoted.
     loop["keyed_traffic"]()
     loop["cycle"]()
-    assert read_state().production_name == name
+    state = read_state()
+    assert state.canary_active == name and state.production_name is None
     assert len(loop["trained_on"]) == 1 and len(loop["verdicts"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# A canary is judged by what people say about its answers, not only by errors
+# ---------------------------------------------------------------------------
+
+
+def _log_keyed_answers(loop, name) -> list:
+    """Run keyed traffic and log each answer the way an application does (version 1).
+
+    Returns ``(answer id, bucket)`` per answer: the canary's answers carry the canary
+    adapter, the stable bucket's the base model (no adapter), both stamped after the
+    rollout began.
+    """
+    loop["served_by"].clear()
+    loop["keyed_traffic"]()
+    now = datetime.now(timezone.utc).isoformat()
+    logged = []
+    lines = []
+    for index, adapter in enumerate(loop["served_by"], start=1):
+        bucket = "canary" if adapter == name else "stable"
+        lines.append(dict(_answer(index, _HELLO, f"answer from {adapter or 'base'}"),
+                          ts=now, adapter=adapter, canary_bucket=bucket))
+        logged.append((index, bucket))
+    _jsonl(os.path.join(".soup-loops", "traces", "quality.jsonl"), lines)
+    return logged
+
+
+def _rate(logged, *, canary, stable, limit=None, log=None):
+    """Thumbs on the logged answers: ``canary`` / ``stable`` are the value (1, -1) or None."""
+    path = log or os.path.join(".soup-loops", "feedback.jsonl")
+    now = datetime.now(timezone.utc).isoformat()
+    lines = []
+    given = {"canary": 0, "stable": 0}
+    for index, bucket in logged:
+        value = canary if bucket == "canary" else stable
+        if value is None or (limit is not None and given[bucket] >= limit):
+            continue
+        given[bucket] += 1
+        lines.append(_feedback(index, "thumb", now, value=value))
+    _jsonl(path, lines)
+    return given
+
+
+def test_a_canary_people_thumb_down_is_withdrawn_though_no_request_failed(loop):
+    name = _start_canary(loop)
+    assert read_state().canary_started_ts is not None
+    logged = _log_keyed_answers(loop, name)
+    given = _rate(logged, canary=-1, stable=1)
+    assert given["canary"] >= 30 and given["stable"] >= 30
+
+    loop["cycle"]()
+
+    state = read_state()
+    assert state.canary_active is None and state.canary_adapter is None
+    assert state.canary_started_ts is None
+    assert state.production_name is None  # production never changed
+    assert _active_adapter(loop["client"]) is None
+    record = read_iteration(list_iterations()[-1])
+    assert record.rolled_back is True and record.canary_verdict == "MAJOR"
+    assert f"canary {name} rolled back (MAJOR)" in record.notes
+    assert "canary errors: OK" in record.notes  # every request was answered
+    assert (
+        f"canary quality: {given['canary']}/{given['canary']} negative vs "
+        f"0/{given['stable']} stable (MAJOR)"
+    ) in record.notes
+    assert len(loop["trained_on"]) == 1  # and nothing retrained on stale feedback
+
+
+def test_a_canary_people_like_is_promoted(loop):
+    name = _start_canary(loop)
+    logged = _log_keyed_answers(loop, name)
+    given = _rate(logged, canary=1, stable=1)
+
+    loop["cycle"]()
+
+    state = read_state()
+    assert state.canary_active is None and state.canary_started_ts is None
+    assert state.production_name == name
+    assert _active_adapter(loop["client"]) == name
+    promoted = [r for r in _records() if "promoted to production" in r.notes]
+    assert len(promoted) == 1
+    assert (
+        f"canary quality: 0/{given['canary']} negative vs 0/{given['stable']} stable (OK)"
+    ) in promoted[0].notes
+
+
+def test_a_canary_waits_for_feedback_once_there_is_a_feedback_log(loop):
+    name = _start_canary(loop)
+    logged = _log_keyed_answers(loop, name)
+    _rate(logged, canary=1, stable=1, limit=5)  # five thumbs per side: not enough
+    before = len(list_iterations())
+
+    loop["cycle"]()
+
+    state = read_state()
+    assert state.canary_active == name and state.production_name is None
+    assert _active_adapter(loop["client"]) is None
+    assert len(list_iterations()) == before  # a waiting canary starts no iteration
+    # What the cycle decided, and said (a wait is not written as an iteration record):
+    config = dataclasses.replace(
+        ls.build_prewired_watch_config(max_iterations=1, poll_interval_sec=1.0),
+        cost_fn=lambda current: 0.0,
+    )
+    _, waiting, decision = run_once(state, config)
+    assert decision.proceed is False
+    assert waiting.canary_verdict == "UNKNOWN" and waiting.rolled_back is False
+    assert "canary errors: OK" in waiting.notes
+    assert "canary quality: 5/30 canary, 5/30 stable rated (UNKNOWN)" in waiting.notes
+
+    # More thumbs arrive: the next cycle decides.
+    _rate(logged, canary=1, stable=1)
+    loop["cycle"]()
+    assert read_state().production_name == name
