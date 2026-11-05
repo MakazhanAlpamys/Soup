@@ -96,7 +96,7 @@ def validate_feedback(payload: Any) -> dict[str, Any]:
     if not isinstance(response_id, str) or _UUID_RE.fullmatch(response_id) is None:
         raise FeedbackValidationError("response_id")
     kind = payload.get("kind")
-    if not isinstance(kind, str) or kind not in FEEDBACK_KINDS:
+    if kind not in FEEDBACK_KINDS:  # also refuses a non-string: only the four names equal
         raise FeedbackValidationError("kind")
 
     fields: dict[str, Any] = {"response_id": response_id, "kind": kind}

@@ -331,6 +331,18 @@ class TestStreamedResponseId:
         assert len(ids) == 1
         assert UUID_RE.fullmatch(ids.pop())
 
+    def test_a_stream_without_a_given_id_makes_a_new_one_each_time(self, cwd, monkeypatch):
+        monkeypatch.setattr(serve, "_generate_response", _fake_generate)
+
+        def stream_id() -> str:
+            chunks = serve._stream_response(
+                MagicMock(), MagicMock(), [{"role": "user", "content": "hi"}],
+                max_tokens=8, temperature=0.7, top_p=0.9, model_name=MODEL_NAME,
+            )
+            return _sse_chunks("".join(chunks))[0]["response_id"]
+
+        assert len({stream_id() for _ in range(4)}) == 4
+
 
 class TestAnthropicMessagesRoute:
     BODY = {"model": MODEL_NAME, "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]}
@@ -766,6 +778,26 @@ class TestTraceWriter:
 
         assert resp.status_code == 200, resp.text
         assert UUID_RE.fullmatch(resp.json()["response_id"])
+
+    def test_a_request_without_messages_is_not_logged(self, cwd, caplog):
+        writer = TraceLogWriter(str(cwd / "t.jsonl"))
+
+        with caplog.at_level("WARNING", logger="soup_cli.monitoring.trace_logger"):
+            writer.record_conversation(
+                response_id=str(uuid.uuid4()), model="m", messages=[], response="a",
+            )
+
+        assert _conversation_records(cwd / "t.jsonl") == []
+        assert "the request has no messages" in caplog.text
+
+    def test_an_answer_to_an_empty_message_list_still_carries_an_id(self, cwd, monkeypatch):
+        client = _client(cwd, monkeypatch)
+
+        resp = client.post("/v1/chat/completions", json={"messages": []})
+
+        assert resp.status_code == 200, resp.text
+        assert UUID_RE.fullmatch(resp.json()["response_id"])
+        assert _trace(cwd) == []
 
     @pytest.mark.parametrize(
         ("field", "value"),
@@ -1453,6 +1485,45 @@ class TestFeedbackLogWriter:
 
         written = _feedback_records(cwd / "fb.jsonl")
         assert sorted(r["id"] for r in written) == sorted(r["id"] for r in records)
+
+    def test_only_one_append_is_in_flight_at_a_time(self, cwd):
+        # Whole lines survive without a lock only by luck of the platform's append
+        # semantics; the lock is what makes it a guarantee. Watch the writes overlap.
+        import time
+
+        in_flight = []
+        peak = []
+
+        class _SlowHandle:
+            def write(self, data):
+                in_flight.append(1)
+                peak.append(len(in_flight))
+                time.sleep(0.02)
+                in_flight.pop()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc_info):
+                return False
+
+        class _SlowPath:
+            def open(self, mode):
+                assert mode == "ab"
+                return _SlowHandle()
+
+        writer = FeedbackLogWriter(str(cwd / "fb.jsonl"))
+        writer._path = _SlowPath()
+        record = build_record(validate_feedback(_body(kind="thumb", value=1)))
+
+        threads = [threading.Thread(target=writer.append, args=(record,)) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert len(peak) == 8
+        assert max(peak) == 1
 
     def test_a_failed_write_raises(self, cwd):
         writer = FeedbackLogWriter(str(cwd / "gone" / "fb.jsonl"))
