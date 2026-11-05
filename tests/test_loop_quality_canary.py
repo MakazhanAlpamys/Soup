@@ -6,8 +6,10 @@ The quality verdict reads the feedback log: for the answers of the active rollou
 conversation record's ``canary_bucket`` is stable or canary, its ``adapter`` is that side's
 adapter, and it was given after the rollout started, ``canary_started_ts`` in loop.yaml) it
 takes the share of rated answers that got negative feedback (a thumb down, a rating of 1-2
-or an edit) per bucket. With 30 rated canary answers it is MAJOR when the canary's share
-exceeds stable's by more than five percentage points, else OK; with fewer it is UNKNOWN.
+or an edit) per bucket. With 30 rated answers on each side it is MAJOR when the canary's
+share exceeds stable's by more than five percentage points AND a one-sided pooled
+two-proportion z-test calls the gap significant (z > 1.645), else OK; with fewer it is
+UNKNOWN. (How long a canary waits for those ratings: tests/test_loop_canary_max_wait.py.)
 
 The two verdicts combine strictly: MAJOR if either is MAJOR, OK only when both are OK,
 UNKNOWN otherwise. The quality verdict takes part only when there is a feedback log to read
@@ -27,6 +29,7 @@ from datetime import datetime, timezone
 import pytest
 from typer.testing import CliRunner
 
+import soup_cli.utils.loop_daemon as daemon
 import soup_cli.utils.loop_feedback as lf
 import soup_cli.utils.loop_stages as ls
 from soup_cli.utils.canary_router import CanaryPolicy, QualityStats, record_bucket_outcome
@@ -143,10 +146,56 @@ class TestVerdict:
         assert stats(40, 8, 40, 6).verdict() == "OK"      # 20% vs 15%
         assert stats(30, 6, 40, 6).verdict() == "OK"      # 20% vs 15% with other sizes
 
-    def test_more_than_five_points_worse_is_major(self):
-        assert stats(100, 22, 100, 16).verdict() == "MAJOR"
-        assert stats(40, 9, 40, 6).verdict() == "MAJOR"   # 22.5% vs 15%
-        assert stats(30, 7, 40, 6).verdict() == "MAJOR"   # 23.3% vs 15%
+    def test_a_clearly_worse_canary_is_major(self):
+        assert stats(100, 30, 100, 15).verdict() == "MAJOR"   # 30% vs 15%, z 2.54
+        assert stats(100, 25, 100, 15).verdict() == "MAJOR"   # 25% vs 15%, z 1.77
+        assert stats(200, 45, 200, 32).verdict() == "MAJOR"   # 22.5% vs 16%, z 1.649
+
+    def test_more_than_five_points_worse_is_not_major_without_significance(self):
+        """These were MAJOR before the z-test; a gap this size is common by chance."""
+        assert stats(40, 9, 40, 6).verdict() == "OK"      # 22.5% vs 15%, z 0.86
+        assert stats(30, 7, 40, 6).verdict() == "OK"      # 23.3% vs 15%, z 0.89
+        assert stats(100, 22, 100, 16).verdict() == "OK"  # 22% vs 16%, z 1.08
+        assert stats(100, 24, 100, 15).verdict() == "OK"  # 24% vs 15%, z 1.61
+        assert stats(200, 44, 200, 32).verdict() == "OK"  # 22% vs 16%, z 1.53
+
+    def test_the_significance_threshold_is_one_point_six_four_five(self):
+        from soup_cli.utils.canary_router import QUALITY_Z_THRESHOLD
+
+        assert QUALITY_Z_THRESHOLD == 1.645
+        # z 1.645026: over the threshold by 0.00003, so it is MAJOR although z shows as 1.645
+        over = stats(106, 7, 39, 0)
+        assert over.evidence()["z"] == 1.645
+        assert over.verdict() == "MAJOR"
+        # z 1.644992: under it, and also shows as 1.645
+        under = stats(119, 17, 30, 1)
+        assert under.evidence()["z"] == 1.645
+        assert under.verdict() == "OK"
+
+    def test_a_significant_gap_of_five_points_or_less_is_still_ok(self):
+        """The tolerance stays: a tiny gap measured on many answers is not a regression."""
+        assert stats(1000, 140, 1000, 100).verdict() == "OK"   # 14% vs 10%, z 2.75
+        # exactly five points on a thousand answers each (z 2.88): not MORE than five
+        assert stats(1000, 210, 1000, 160).verdict() == "OK"
+        assert stats(1000, 211, 1000, 160).verdict() == "MAJOR"
+        # 19.6% vs 14.6% is five points to the digit (z 2.97), but 0.196 - 0.146 is
+        # 0.05000000000000002 in floats: the comparison must be exact
+        assert stats(1000, 196, 1000, 146).verdict() == "OK"
+        assert stats(1000, 197, 1000, 146).verdict() == "MAJOR"
+
+    def test_a_canary_with_no_variance_in_the_ratings_is_never_major(self):
+        """Every answer negative, or none: the test statistic is undefined (se is 0)."""
+        assert stats(30, 0, 30, 0).verdict() == "OK"
+        assert stats(30, 30, 30, 30).verdict() == "OK"
+        assert stats(500, 500, 30, 30).verdict() == "OK"
+        assert stats(30, 30, 30, 30).verdict(regression_threshold=0.0) == "OK"
+        assert stats(30, 0, 30, 0).evidence()["z"] is None
+        assert stats(30, 30, 30, 30).evidence()["z"] is None
+
+    def test_the_z_test_needs_a_gap_in_the_bad_direction(self):
+        assert stats(100, 5, 100, 30).verdict() == "OK"       # canary much better
+        assert stats(100, 5, 100, 30).evidence()["z"] < 0
+        assert stats(100, 5, 100, 30).evidence()["p_value"] > 0.99
 
     def test_the_thresholds_are_parameters_checked_like_the_error_verdict(self):
         assert stats(10, 10, 10, 0).verdict(min_samples=10) == "MAJOR"
@@ -172,10 +221,168 @@ class TestVerdict:
         assert stats(12, 0, 40, 0).progress(min_samples=10) == "12/10 canary, 40/10 stable rated"
 
 
+class TestEvidence:
+    """The numbers behind a verdict, in the field names of the iteration format."""
+
+    FIELDS = {
+        "verdict", "rated", "negative", "share", "difference", "z", "p_value", "min_rated",
+        "threshold", "timed_out", "decided_on",
+    }
+
+    def test_a_gap_over_five_points_that_is_not_significant(self):
+        # (canary 40 rated / 9 negative) vs (stable 40 rated / 6 negative): was MAJOR
+        assert stats(40, 9, 40, 6).evidence() == {
+            "verdict": "OK",
+            "rated": {"stable": 40, "canary": 40},
+            "negative": {"stable": 6, "canary": 9},
+            "share": {"stable": 0.15, "canary": 0.225},
+            "difference": 0.075,
+            "z": 0.8593,
+            "p_value": 0.1951,
+            "min_rated": 30,
+            "threshold": 0.05,
+            "timed_out": False,
+            "decided_on": "errors_and_quality",
+        }
+
+    def test_a_significant_regression(self):
+        # (canary 100 rated / 30 negative) vs (stable 100 rated / 15 negative)
+        assert stats(100, 30, 100, 15).evidence() == {
+            "verdict": "MAJOR",
+            "rated": {"stable": 100, "canary": 100},
+            "negative": {"stable": 15, "canary": 30},
+            "share": {"stable": 0.15, "canary": 0.3},
+            "difference": 0.15,
+            "z": 2.54,
+            "p_value": 0.0055,
+            "min_rated": 30,
+            "threshold": 0.05,
+            "timed_out": False,
+            "decided_on": "errors_and_quality",
+        }
+
+    def test_nothing_rated_yet_has_no_shares_and_no_test(self):
+        assert stats(0, 0, 0, 0).evidence() == {
+            "verdict": "UNKNOWN",
+            "rated": {"stable": 0, "canary": 0},
+            "negative": {"stable": 0, "canary": 0},
+            "share": {"stable": None, "canary": None},
+            "difference": None,
+            "z": None,
+            "p_value": None,
+            "min_rated": 30,
+            "threshold": 0.05,
+            "timed_out": False,
+            "decided_on": "errors_and_quality",
+        }
+
+    def test_one_side_without_ratings_has_a_share_for_the_other_only(self):
+        found = stats(12, 3, 0, 0).evidence()
+
+        assert found["share"] == {"stable": None, "canary": 0.25}
+        assert found["difference"] is None and found["z"] is None and found["p_value"] is None
+        assert found["verdict"] == "UNKNOWN"
+
+    def test_the_fields_are_exactly_those_of_the_iteration_format(self):
+        for found in (stats(40, 9, 40, 6), stats(0, 0, 0, 0), stats(30, 30, 30, 30)):
+            assert set(found.evidence()) == self.FIELDS
+
+    def test_it_is_plain_json_even_where_the_test_is_undefined(self):
+        for found in (stats(40, 9, 40, 6), stats(0, 0, 0, 0), stats(30, 30, 30, 30)):
+            text = json.dumps(found.evidence(), allow_nan=False)
+            assert json.loads(text) == found.evidence()
+
+    def test_the_p_value_is_the_one_sided_tail_of_z(self):
+        import math
+
+        for args in ((40, 9, 40, 6), (100, 30, 100, 15), (100, 5, 100, 30), (50, 20, 70, 30)):
+            found = stats(*args).evidence()
+            assert found["p_value"] == pytest.approx(
+                0.5 * math.erfc(found["z"] / math.sqrt(2)), abs=1e-4
+            )
+
+    def test_z_is_the_pooled_two_proportion_statistic_positive_when_the_canary_is_worse(self):
+        import math
+
+        # canary 18/60, stable 9/40: pooled p = 27/100, se = sqrt(p (1-p) (1/60 + 1/40))
+        pooled = 27 / 100
+        se = math.sqrt(pooled * (1 - pooled) * (1 / 60 + 1 / 40))
+        expected = (18 / 60 - 9 / 40) / se
+
+        assert stats(60, 18, 40, 9).evidence()["z"] == pytest.approx(expected, abs=1e-4)
+        assert expected > 0
+        assert stats(40, 9, 60, 18).evidence()["z"] == pytest.approx(
+            (9 / 40 - 18 / 60) / se, abs=1e-4
+        )
+
+    def test_the_difference_is_canary_minus_stable(self):
+        assert stats(40, 4, 40, 8).evidence()["difference"] == -0.1
+        assert stats(40, 8, 40, 4).evidence()["difference"] == 0.1
+
+    def test_shares_and_statistics_are_rounded_for_display_to_four_places(self):
+        found = stats(3, 1, 7, 1).evidence(min_samples=1)
+
+        assert found["share"] == {"stable": 0.1429, "canary": 0.3333}
+        assert found["difference"] == 0.1905
+
+    def test_a_negative_zero_does_not_leak_into_the_record(self):
+        found = stats(20001, 1, 20000, 1).evidence()  # a gap of -0.0000000025
+
+        assert str(found["difference"]) == "0.0"
+        assert str(found["z"]) == "0.0"
+        assert "-0.0" not in json.dumps(found)
+
+    def test_it_echoes_the_minimum_and_the_threshold_it_was_asked_with(self):
+        found = stats(12, 0, 12, 0).evidence(min_samples=10, regression_threshold=0.1)
+
+        assert found["min_rated"] == 10 and found["threshold"] == 0.1
+        assert found["verdict"] == "OK"
+
+    def test_a_verdict_can_be_given_for_a_wait_that_ran_out(self):
+        found = stats(7, 0, 40, 0).evidence(
+            verdict="INSUFFICIENT", timed_out=True, decided_on="errors_only"
+        )
+
+        assert found["verdict"] == "INSUFFICIENT"
+        assert found["timed_out"] is True and found["decided_on"] == "errors_only"
+        assert found["rated"] == {"stable": 40, "canary": 7}
+
+    @pytest.mark.parametrize(
+        ("kwargs", "message"),
+        [
+            ({"verdict": "GOOD"}, "verdict"),
+            ({"verdict": None, "decided_on": "quality_only"}, "decided_on"),
+            ({"timed_out": 1}, "timed_out"),
+            ({"timed_out": None}, "timed_out"),
+            ({"min_samples": 0}, "min_samples"),
+            ({"min_samples": True}, "min_samples"),
+            ({"regression_threshold": 1.5}, "regression_threshold"),
+            ({"regression_threshold": float("nan")}, "regression_threshold"),
+        ],
+    )
+    def test_bad_arguments_are_refused_naming_the_argument(self, kwargs, message):
+        with pytest.raises(ValueError, match=message):
+            stats(40, 9, 40, 6).evidence(**kwargs)
+
+    def test_the_shortfall_names_the_sides_that_are_short(self):
+        assert stats(7, 0, 40, 0).shortfall() == "7/30 canary rated"
+        assert stats(40, 0, 5, 0).shortfall() == "5/30 stable rated"
+        assert stats(7, 0, 5, 0).shortfall() == "7/30 canary, 5/30 stable rated"
+        assert stats(7, 0, 5, 0).shortfall(min_samples=10) == "7/10 canary, 5/10 stable rated"
+        assert stats(0, 0, 0, 0).shortfall() == "0/30 canary, 0/30 stable rated"
+
+    def test_the_shortfall_of_a_side_that_is_enough_is_not_listed(self):
+        assert "stable" not in stats(7, 0, 30, 0).shortfall()
+        assert "canary" not in stats(30, 0, 7, 0).shortfall()
+
+
 class TestCombination:
     @pytest.mark.parametrize(
         ("error", "quality", "expected"),
         [
+            ("OK", "INSUFFICIENT", "OK"),            # the ratings never came: errors decide
+            ("MAJOR", "INSUFFICIENT", "MAJOR"),
+            ("UNKNOWN", "INSUFFICIENT", "UNKNOWN"),
             ("OK", "OK", "OK"),
             ("OK", "MAJOR", "MAJOR"),
             ("MAJOR", "OK", "MAJOR"),
@@ -454,6 +661,13 @@ def _config(quality, **kwargs):
 
 
 class TestDaemon:
+    @pytest.fixture(autouse=True)
+    def _clock(self, monkeypatch):
+        """A minute after the rollout started: nobody has waited long enough to give up."""
+        monkeypatch.setattr(
+            daemon, "_now", lambda: datetime.fromtimestamp(T0 + 60, timezone.utc)
+        )
+
     def test_bad_feedback_withdraws_a_canary_whose_requests_all_succeeded(self, cwd):
         state = _canary_state()
         _record(state, ok=30, bad=0)
@@ -660,10 +874,11 @@ _INIT = ("init", "./base", "--eval", "tasks.jsonl", "--baseline", "b", "--base-m
 
 
 class TestState:
-    def test_the_field_is_last_and_defaults_to_none(self):
+    def test_the_field_follows_train_method_and_defaults_to_none(self):
+        """Appended last when added; the fields added after it are in test_loop_canary_max_wait."""
         names = list(LoopState.__dataclass_fields__)
 
-        assert names[-1] == "canary_started_ts"
+        assert names.index("canary_started_ts") == names.index("train_method") + 1
         assert _state().canary_started_ts is None
 
     @pytest.mark.parametrize("value", [0, 0.0, 1_700_000_000.25])

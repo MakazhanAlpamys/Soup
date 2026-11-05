@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import tempfile
 from dataclasses import asdict, dataclass, replace
@@ -32,6 +33,14 @@ LOOP_STATUSES: frozenset = frozenset({"running", "paused", "stopped"})
 VERIFY_METHODS: tuple = ("ship", "eval_gate")
 # The dataset the pre-wired loop trains on (`soup loop init --train-method`).
 TRAIN_METHODS: tuple = ("dpo", "kto", "sft")
+# What a canary does when the ratings its quality verdict needs have not arrived by the
+# maximum wait (`soup loop init --canary-on-timeout`): "errors-only" lets the request-error
+# verdict decide, "rollback" withdraws the canary, "wait" never gives up.
+CANARY_ON_TIMEOUT: tuple = ("errors-only", "rollback", "wait")
+# How long after a rollout started the ratings may stay short (`soup loop init
+# --canary-max-wait`): a day by default, at most 30 days.
+DEFAULT_CANARY_MAX_WAIT_SEC = 86400.0
+MAX_CANARY_MAX_WAIT_SEC = 30 * 86400.0
 
 _MAX_PATH_LEN = 4096
 _MAX_STR_FIELD = 512
@@ -131,6 +140,12 @@ class LoopState:
     # from then on. None = no canary, or one started before this field existed (it is then
     # judged by request errors alone).
     canary_started_ts: Optional[float] = None
+    # How long (seconds) after a rollout started its quality verdict may stay short of
+    # ratings before `canary_on_timeout` applies (`soup loop init --canary-max-wait`).
+    # Last, so adding it shifted no existing positional field.
+    canary_max_wait_sec: float = DEFAULT_CANARY_MAX_WAIT_SEC
+    # What happens then: "errors-only", "rollback" or "wait" (CANARY_ON_TIMEOUT).
+    canary_on_timeout: str = "errors-only"
 
     def __post_init__(self) -> None:  # noqa: D401 — validator hook
         # Closed-allowlist enforcement + bool-as-int rejection mirror the
@@ -236,6 +251,21 @@ class LoopState:
                     "canary_started_ts must be epoch seconds in "
                     f"[0, {int(MAX_CURSOR_TS)}] or None, got {v!r}"
                 )
+        v = self.canary_max_wait_sec
+        if (
+            isinstance(v, bool)
+            or not isinstance(v, (int, float))
+            or not (0 < v <= MAX_CANARY_MAX_WAIT_SEC)  # False for NaN too
+        ):
+            raise ValueError(
+                "canary_max_wait_sec must be seconds in "
+                f"(0, {int(MAX_CANARY_MAX_WAIT_SEC)}], got {v!r}"
+            )
+        if self.canary_on_timeout not in CANARY_ON_TIMEOUT:
+            raise ValueError(
+                f"canary_on_timeout must be one of {list(CANARY_ON_TIMEOUT)}, "
+                f"got {self.canary_on_timeout!r}"
+            )
         if self.canary_rollout_id is not None:
             _require_str("canary_rollout_id", self.canary_rollout_id, allow_empty=False)
         if self.last_iteration_id is not None:
@@ -293,6 +323,51 @@ def _require_str(field: str, value: object, *, allow_empty: bool = False) -> Non
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+_WAIT_UNITS = {"m": 60, "h": 3600, "d": 86400}
+# ASCII digits only: str.isdigit() and \d accept other scripts' digits (and superscripts).
+_WAIT_RE = re.compile(r"([0-9]+)([mhd]?)", re.ASCII)
+_MAX_WAIT_DIGITS = 12  # more cannot be within the 30-day cap; never build a huge int
+_WAIT_FORMS = "use <int>m, <int>h or <int>d (for example 90m, 24h, 7d) or plain seconds"
+
+
+def parse_wait_duration(raw: object) -> float:
+    """Seconds from ``"90m"`` / ``"24h"`` / ``"7d"`` / ``"3600"`` (plain seconds).
+
+    Whole numbers only, an optional surrounding space and any case; zero, a sign, a fraction,
+    anything else, and more than 30 days raise ``ValueError`` (the message does not name the
+    flag; the command adds it).
+    """
+    if not isinstance(raw, str):
+        raise ValueError(f"{raw!r} is not a valid wait: {_WAIT_FORMS}")
+    match = _WAIT_RE.fullmatch(raw.strip().lower())
+    if match is None:
+        raise ValueError(f"{raw!r} is not a valid wait: {_WAIT_FORMS}")
+    digits, unit = match.groups()
+    if len(digits.lstrip("0")) > _MAX_WAIT_DIGITS:
+        seconds = float("inf")
+    else:
+        seconds = float(int(digits) * _WAIT_UNITS.get(unit, 1))
+    if seconds == 0:
+        raise ValueError(f"{raw.strip()!r} must be above 0: {_WAIT_FORMS}")
+    if seconds > MAX_CANARY_MAX_WAIT_SEC:
+        raise ValueError(f"{raw.strip()!r} must be at most 30d")
+    return seconds
+
+
+def format_wait_duration(seconds: float) -> str:
+    """``86400`` -> ``"24h"``: the largest of d (two days or more), h, m that divides it."""
+    whole = int(seconds)
+    if whole != seconds:
+        return f"{seconds:g}s"
+    if whole % 86400 == 0 and whole >= 2 * 86400:
+        return f"{whole // 86400}d"
+    if whole % 3600 == 0:
+        return f"{whole // 3600}h"
+    if whole % 60 == 0:
+        return f"{whole // 60}m"
+    return f"{whole}s"
 
 
 def default_state_path(cwd: Optional[str] = None) -> str:
@@ -414,6 +489,8 @@ def init_state(
     min_new_pairs: int = 1,
     feedback_log: Optional[str] = None,
     train_method: str = "dpo",
+    canary_max_wait_sec: float = DEFAULT_CANARY_MAX_WAIT_SEC,
+    canary_on_timeout: str = "errors-only",
     path: Optional[str] = None,
     force: bool = False,
 ) -> Tuple[LoopState, str]:
@@ -452,6 +529,8 @@ def init_state(
         min_new_pairs=min_new_pairs,
         feedback_log=feedback_log,
         train_method=train_method,
+        canary_max_wait_sec=canary_max_wait_sec,
+        canary_on_timeout=canary_on_timeout,
         monthly_budget_usd=monthly_budget_usd,
         max_runs_per_day=max_runs_per_day,
         created_at=now,

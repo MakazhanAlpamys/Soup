@@ -46,7 +46,13 @@ from soup_cli.utils.loop_iteration import (
     new_iteration_id,
     write_iteration,
 )
-from soup_cli.utils.loop_state import MAX_CURSOR_TS, LoopState, read_state, write_state
+from soup_cli.utils.loop_state import (
+    MAX_CURSOR_TS,
+    LoopState,
+    format_wait_duration,
+    read_state,
+    write_state,
+)
 
 _LOG = logging.getLogger(__name__)
 # BucketStats.verdict's default: canary answers needed before a verdict.
@@ -169,6 +175,11 @@ class WatchConfig:
             raise ValueError("base_model must be a non-empty NUL-free str <= 512 chars")
 
 
+def _now() -> datetime:
+    """The clock ``run_once`` reads when it is not given ``now`` (tests replace this)."""
+    return datetime.now(timezone.utc)
+
+
 def run_once(
     state: LoopState,
     config: WatchConfig,
@@ -177,8 +188,8 @@ def run_once(
 ) -> "tuple[LoopState, IterationRecord, BudgetDecision]":
     """Execute one full iteration synchronously. Pure with respect to time.
 
-    ``now`` fixes the clock for the day and month rollovers (tests); None
-    uses the current UTC time.
+    ``now`` fixes the clock for the day and month rollovers and for how long a canary has
+    waited for ratings (tests); None reads ``_now()``, the current UTC time.
     """
     if not isinstance(state, LoopState):
         raise TypeError("state must be LoopState")
@@ -187,7 +198,7 @@ def run_once(
     # #2362: read the clock once, so the month and day rollovers agree even
     # when `soup loop watch` runs across midnight at the end of a month.
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = _now()
     # Read the month from the OLD last_run_date, before the daily reset
     # overwrites it.
     spent = reset_monthly_spend_if_new_month(
@@ -202,13 +213,16 @@ def run_once(
         last_run_date=today,
         spent_this_month_usd=spent,
     )
-    canary_verdict, rollback_policy, canary_samples, quality_notes = _evaluate_active_canary(
-        state, config
-    )
+    reading = _evaluate_active_canary(state, config, now)
+    canary_verdict, rollback_policy = reading.verdict, reading.rollback
+    canary_samples, quality_notes = reading.samples, list(reading.notes)
     rolled_back = rollback_policy is not None
     canary_notes = []
     if rollback_policy is not None:
-        canary_notes.append(f"canary {state.canary_active} rolled back ({canary_verdict})")
+        canary_notes.append(
+            reading.rollback_note
+            or f"canary {state.canary_active} rolled back ({canary_verdict})"
+        )
         canary_notes.extend(quality_notes)
         state = _state_with(
             state,
@@ -221,6 +235,8 @@ def run_once(
     elif canary_verdict == "OK" and state.canary_active:
         state, note = _promote(state, config)
         canary_notes.append(note)
+        if reading.promote_note and state.canary_active is None:
+            canary_notes.append(reading.promote_note)  # (a refused promotion keeps the canary)
         canary_notes.extend(quality_notes)
     elif state.canary_active:
         # A canary is still collecting answers: no new iteration until it is decided.
@@ -240,6 +256,7 @@ def run_once(
                 f"(verdict at {CANARY_MIN_SAMPLES})",
                 *quality_notes,
             ])[:4096],
+            canary_quality=reading.evidence,
         )
         return state, record, BudgetDecision(
             proceed=False,
@@ -270,6 +287,7 @@ def run_once(
             rolled_back=rolled_back,
             estimated_cost_usd=estimated,
             notes=" | ".join([*canary_notes, f"budget-skip: {decision.reason}"])[:4096],
+            canary_quality=reading.evidence,
         )
         return state, record, decision
     harvest_out = dict(config.harvest_fn(state))
@@ -310,6 +328,7 @@ def run_once(
             )
             if n
         )[:4096],
+        canary_quality=reading.evidence,
     )
     # The lifetime totals count what training used: an iteration that only waited for
     # more feedback (or whose training failed) would otherwise add the whole pile again.
@@ -418,18 +437,46 @@ def _promote(state: LoopState, config: WatchConfig) -> "tuple[LoopState, str]":
     return promoted, note
 
 
+@dataclass(frozen=True)
+class _CanaryReading:
+    """What one cycle learned about the active canary (``None``/empty: no canary)."""
+
+    verdict: Optional[str] = None
+    rollback: Optional[CanaryPolicy] = None  # set when the canary is to be withdrawn
+    samples: int = 0
+    notes: "tuple[str, ...]" = ()
+    # The numbers behind the quality verdict (QualityStats.evidence), None without one.
+    evidence: "Optional[dict[str, object]]" = None
+    # Why a withdrawal that is not a MAJOR verdict happened (the maximum wait ran out).
+    rollback_note: Optional[str] = None
+    # Appended to the notes once the canary was promoted without its ratings.
+    promote_note: Optional[str] = None
+
+
+def _wait_is_over(state: LoopState, now: datetime) -> bool:
+    """True when the rollout started at least ``canary_max_wait_sec`` before ``now``."""
+    started = state.canary_started_ts
+    if started is None:  # a rollout from before the field: nothing to count from
+        return False
+    return now.timestamp() - started >= state.canary_max_wait_sec
+
+
 def _evaluate_active_canary(
-    state: LoopState, config: WatchConfig
-) -> "tuple[Optional[str], Optional[CanaryPolicy], int, list[str]]":
+    state: LoopState, config: WatchConfig, now: datetime
+) -> _CanaryReading:
     """Read live bucket outcomes and feedback.
 
-    Returns ``(verdict, rollback policy or None, canary samples, notes)``. The verdict is
-    the request-error verdict alone, or, when ``config.quality_fn`` has feedback to judge
-    by, the two combined (``combine_canary_verdicts``); the notes then record both.
+    The verdict is the request-error verdict alone, or, when ``config.quality_fn`` has
+    feedback to judge by, the two combined (``combine_canary_verdicts``); the notes then
+    record both. If the quality verdict would be ``UNKNOWN`` and the canary has waited
+    ``state.canary_max_wait_sec`` since it started, it becomes ``INSUFFICIENT`` and
+    ``state.canary_on_timeout`` decides: ``errors-only`` (the error verdict stands alone),
+    ``rollback`` (withdraw it, whatever ``canary_autoroll_on_regress`` says) or ``wait``
+    (no time limit: it stays ``UNKNOWN``).
     """
     active_canary = state.canary_active
     if active_canary is None:
-        return None, None, 0, []
+        return _CanaryReading()
     try:
         policy = CanaryPolicy(
             stable=state.stable_name(),
@@ -447,22 +494,68 @@ def _evaluate_active_canary(
         samples = counts["canary_ok"] + counts["canary_major"]
     except (OSError, TypeError, ValueError):
         _LOG.warning("canary stats read failed", exc_info=True)
-        return None, None, 0, []
-    notes: "list[str]" = []
+        return _CanaryReading()
     quality = _read_quality(state, config)
-    if quality is not None:
-        quality_verdict = quality.verdict(min_samples=CANARY_MIN_SAMPLES)
-        # A verdict is made of shares; before it, show how far each side is from one.
-        detail = (
-            quality.progress(CANARY_MIN_SAMPLES)
-            if quality_verdict == "UNKNOWN"
-            else quality.summary()
+    if quality is None:
+        regressed = verdict == "MAJOR" and state.canary_autoroll_on_regress
+        return _CanaryReading(
+            verdict=verdict,
+            rollback=maybe_rollback(policy, verdict) if regressed else None,
+            samples=samples,
         )
-        notes = [f"canary errors: {verdict}", f"canary quality: {detail} ({quality_verdict})"]
-        verdict = combine_canary_verdicts(verdict, quality_verdict)
-    if verdict == "MAJOR" and state.canary_autoroll_on_regress:
-        return verdict, maybe_rollback(policy, verdict), samples, notes
-    return verdict, None, samples, notes
+    quality_verdict = quality.verdict(min_samples=CANARY_MIN_SAMPLES)
+    timed_out = (
+        quality_verdict == "UNKNOWN"
+        and state.canary_on_timeout != "wait"
+        and _wait_is_over(state, now)
+    )
+    if timed_out:
+        quality_verdict = "INSUFFICIENT"
+    # A verdict is made of shares; before it, show how far each side is from one.
+    detail = (
+        quality.summary()
+        if quality_verdict in ("OK", "MAJOR")
+        else quality.progress(CANARY_MIN_SAMPLES)
+    )
+    notes = (f"canary errors: {verdict}", f"canary quality: {detail} ({quality_verdict})")
+    verdict = combine_canary_verdicts(verdict, quality_verdict)
+    decided_on = "errors_and_quality"
+    withdraw = None
+    rollback_note = None
+    promote_note = None
+    if timed_out:
+        waited = format_wait_duration(state.canary_max_wait_sec)
+        missing = f"{quality.shortfall(CANARY_MIN_SAMPLES)} in {waited}"
+        if state.canary_on_timeout == "rollback":
+            # Withdrawn although nothing is known to be wrong, and whatever
+            # --autoroll-on-regress says: the person asked for this on timeout.
+            withdraw = rollback(policy, reason="canary quality unverified after the maximum wait")
+            if verdict != "MAJOR":
+                verdict = "UNKNOWN"
+                rollback_note = (
+                    f"canary {active_canary} rolled back: {missing}, quality unverified "
+                    "(--canary-on-timeout rollback)"
+                )
+        else:
+            decided_on = "errors_only"
+            # Added to the notes only if the canary then is promoted (run_once: verdict OK).
+            promote_note = f"promoted on errors only - quality unverified: {missing}"
+    if withdraw is None and verdict == "MAJOR" and state.canary_autoroll_on_regress:
+        withdraw = maybe_rollback(policy, verdict)
+    return _CanaryReading(
+        verdict=verdict,
+        rollback=withdraw,
+        samples=samples,
+        notes=notes,
+        evidence=quality.evidence(
+            min_samples=CANARY_MIN_SAMPLES,
+            verdict=quality_verdict,
+            timed_out=timed_out,
+            decided_on=decided_on,
+        ),
+        rollback_note=rollback_note,
+        promote_note=promote_note,
+    )
 
 
 def _read_quality(state: LoopState, config: WatchConfig) -> Optional[QualityStats]:
@@ -486,8 +579,11 @@ def combine_canary_verdicts(error_verdict: str, quality_verdict: str) -> str:
 
     Strict: ``MAJOR`` if either is, ``OK`` only when both are, ``UNKNOWN`` otherwise, so a
     canary is promoted only once its requests succeeded AND enough people rated its
-    answers well enough.
+    answers well enough. The exception is ``INSUFFICIENT`` (the maximum wait for ratings ran
+    out): the ratings never came, so the error verdict stands alone.
     """
+    if quality_verdict == "INSUFFICIENT":
+        return error_verdict
     if "MAJOR" in (error_verdict, quality_verdict):
         return "MAJOR"
     if error_verdict == "OK" and quality_verdict == "OK":

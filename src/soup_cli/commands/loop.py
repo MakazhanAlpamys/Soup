@@ -43,10 +43,13 @@ from soup_cli.utils.loop_budget import (
 from soup_cli.utils.loop_daemon import WatchConfig, watch
 from soup_cli.utils.loop_iteration import list_iterations, read_iteration
 from soup_cli.utils.loop_state import (
+    CANARY_ON_TIMEOUT,
     TRAIN_METHODS,
     VERIFY_METHODS,
     LoopState,
+    format_wait_duration,
     init_state,
+    parse_wait_duration,
     read_state,
     write_state,
 )
@@ -132,6 +135,22 @@ def init_cmd(
             'runs, e.g. "5%" (the default) or "10".'
         ),
     ),
+    canary_max_wait: str = typer.Option(
+        "24h", "--canary-max-wait",
+        help=(
+            "How long after a canary started its ratings may stay short of the 30 per side "
+            "the quality verdict needs: <int>m, <int>h or <int>d, or plain seconds (at most "
+            "30d, default 24h). Then --canary-on-timeout applies."
+        ),
+    ),
+    canary_on_timeout: str = typer.Option(
+        "errors-only", "--canary-on-timeout",
+        help=(
+            "What happens when --canary-max-wait runs out: errors-only (the request-error "
+            "verdict alone decides; the default), rollback (withdraw the canary) or wait "
+            "(keep waiting, no time limit)."
+        ),
+    ),
     min_new_pairs: int = typer.Option(
         1, "--min-new-pairs",
         help=(
@@ -184,6 +203,14 @@ def init_cmd(
     deploy_pct = _parse_traffic(canary_traffic, flag="--canary-traffic")
     if deploy_pct <= 0.0:
         console.print("[red]--canary-traffic must be above 0%[/]")
+        raise typer.Exit(code=2)
+    max_wait_sec = _parse_wait(canary_max_wait, flag="--canary-max-wait")
+    timeout_policy = canary_on_timeout.strip().lower().replace("_", "-")
+    if timeout_policy not in CANARY_ON_TIMEOUT:
+        console.print(
+            f"[red]--canary-on-timeout must be one of {', '.join(CANARY_ON_TIMEOUT)}, "
+            f"got {for_terminal(repr(canary_on_timeout))}[/]"
+        )
         raise typer.Exit(code=2)
     if base_model is not None and not base_model.strip():
         console.print("[red]--base-model must not be empty[/]")
@@ -264,6 +291,8 @@ def init_cmd(
             min_new_pairs=min_new_pairs,
             feedback_log=feedback_log,
             train_method=method,
+            canary_max_wait_sec=max_wait_sec,
+            canary_on_timeout=timeout_policy,
             production_adapter=(
                 served_model
                 if os.path.isfile(os.path.join(served_model, "adapter_config.json"))
@@ -284,6 +313,8 @@ def init_cmd(
             f"trace_dir:    [bold]{escape(_trace_dir_label(state))}[/]\n"
             f"feedback_log: [bold]{escape(_feedback_log_label(state))}[/]\n"
             f"train_method: [bold]{escape(state.train_method)}[/]\n"
+            f"canary_max_wait: [bold]{format_wait_duration(state.canary_max_wait_sec)}[/]\n"
+            f"canary_on_timeout: [bold]{escape(state.canary_on_timeout)}[/]\n"
             f"base_model:   [bold]{escape(state.base_model or 'unknown')}[/]"
             + (f" (from {escape(base_source)})" if base_source else ""),
             title="soup loop init",
@@ -329,6 +360,8 @@ def status_cmd() -> None:
         ),
     )
     table.add_row("canary_traffic", f"{state.deploy_traffic_pct:g}% per new canary")
+    table.add_row("canary_max_wait", format_wait_duration(state.canary_max_wait_sec))
+    table.add_row("canary_on_timeout", escape(state.canary_on_timeout))
     table.add_row("new_data_since", _cursor_label(state))
     table.add_row("min_new_pairs", str(state.min_new_pairs))
     table.add_row("pre_wired", "yes" if state.pre_wired else "no")
@@ -732,6 +765,15 @@ def _cursor_label(state: LoopState) -> str:
         return "the start"
     moment = datetime.fromtimestamp(state.harvest_cursor_ts, timezone.utc)
     return moment.replace(microsecond=0).isoformat()
+
+
+def _parse_wait(raw: str, *, flag: str) -> float:
+    """Seconds from ``"90m"`` / ``"24h"`` / ``"7d"`` / ``"3600"``; messages name ``flag``."""
+    try:
+        return parse_wait_duration(raw)
+    except ValueError as exc:
+        console.print(f"[red]invalid {flag}:[/] {for_terminal(exc)}")
+        raise typer.Exit(code=2)
 
 
 def _parse_traffic(raw: str, *, flag: str = "--traffic") -> float:
