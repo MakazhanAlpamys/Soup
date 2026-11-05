@@ -1577,9 +1577,10 @@ def _adapter_scope(model, lock, names, requested, active):
 
     The lock spans the whole generation because the PeftModel is process-global
     and ``set_adapter`` mutates shared state — two concurrent requests on
-    different adapters would otherwise race. Generation is one blocking call in
-    every path (chat / stream / completions all generate-then-return), so this
-    serializes adapter-selected requests but never holds across true streaming.
+    different adapters would otherwise race. Every path runs generation inside
+    this scope, on the thread that calls ``generate``: a streamed reply takes it
+    on its worker thread, so the lock is held for exactly the length of the
+    generation and released by the thread that took it, however the client leaves.
     """
     if not names or lock is None:
         yield
@@ -1671,6 +1672,27 @@ def _plain_kv_kwargs(mapping: Any) -> Dict[str, Any]:
     return out
 
 
+def _stop_event_criteria(stop_event):
+    """A ``StoppingCriteriaList`` that ends generation once ``stop_event`` is set."""
+    import torch
+    from transformers import StoppingCriteria, StoppingCriteriaList
+
+    class _StopOnEvent(StoppingCriteria):
+        def __call__(self, input_ids, scores, **kwargs):
+            return torch.full(
+                (input_ids.shape[0],),
+                stop_event.is_set(),
+                device=input_ids.device,
+                dtype=torch.bool,
+            )
+
+        def __deepcopy__(self, memo):
+            # An Event cannot be copied, and every copy must watch the same one.
+            return self
+
+    return StoppingCriteriaList([_StopOnEvent()])
+
+
 def _generate_response(
     model,
     tokenizer,
@@ -1685,8 +1707,16 @@ def _generate_response(
     logits_processor=None,
     ngram_config: Any = None,
     kv_cache_generate_kwargs: Optional[Dict[str, Any]] = None,
+    streamer: Any = None,
+    stop_event: Any = None,
 ):
-    """Generate a response from the model."""
+    """Generate a response from the model.
+
+    ``streamer`` (a ``transformers`` streamer) receives each token as it is
+    produced; the full reply is still returned. ``stop_event`` (a
+    ``threading.Event``) ends generation after the current token once it is set.
+    Both are only passed by the streaming SSE path, never for a plain reply.
+    """
     import torch
 
     from soup_cli.utils.vllm import (
@@ -1735,6 +1765,10 @@ def _generate_response(
         # v0.33.0 #53 — structured-output LogitsProcessor list (may be empty).
         if logits_processor:
             gen_kwargs["logits_processor"] = logits_processor
+        if streamer is not None:
+            gen_kwargs["streamer"] = streamer
+        if stop_event is not None:
+            gen_kwargs["stopping_criteria"] = _stop_event_criteria(stop_event)
         # v0.53.6 #104 — n-gram speculative decoding (transformers backend).
         # Mutually exclusive with a real draft `assistant_model`.
         if ngram_config is not None and assistant_model is None:
@@ -2681,6 +2715,96 @@ def _stream_anthropic_messages(
     yield _frame("message_stop", {"type": "message_stop"})
 
 
+# The worker thread of a streamed reply, and how long to wait on it once told to stop.
+# One token step is normally milliseconds; the cap only keeps a wedged generate()
+# from hanging a request that has already been told to stop.
+_STREAM_WORKER_NAME = "soup-serve-generate"
+_STREAM_JOIN_SECONDS = 60.0
+
+
+class _StripEmitter:
+    """Apply ``str.strip()`` to a reply that arrives in pieces.
+
+    The plain reply is ``decode(...).strip()``. Leading whitespace is dropped
+    until the first visible character; trailing whitespace is held back until
+    more text follows it, so the text sent is always a prefix of the stripped
+    reply and the whitespace at the very end is never sent.
+    """
+
+    def __init__(self) -> None:
+        self._started = False
+        self._held = ""
+
+    def feed(self, piece: str) -> str:
+        if not self._started:
+            piece = piece.lstrip()
+            if not piece:
+                return ""
+            self._started = True
+        text = self._held + piece
+        body = text.rstrip()
+        self._held = text[len(body):]
+        return body
+
+
+def _iter_generated_text(tokenizer, generate, outcome: dict):
+    """Run ``generate`` on a worker thread and yield its text as it is produced.
+
+    ``generate(streamer=..., stop_event=...)`` is called on a new thread, in a copy
+    of the caller's ``contextvars`` context (a request-local selection such as the
+    per-user bank must be visible to it). Pieces come from a
+    ``TextIteratorStreamer``, which holds a word back until it is complete.
+    ``generate``'s return value lands in ``outcome["result"]``; an exception it
+    raised is re-raised here once the text that came before it has been yielded.
+
+    The worker always ends the queue in a ``finally``, however ``generate`` ends, so
+    the loop below cannot wait on a thread that has already died. There is no read
+    timeout: one would only measure how long a big model takes to finish a word, and
+    cut off a slow but healthy reply. Closing this generator (the client went away)
+    sets the stop event, which ends ``generate`` after its current token, and joins
+    the worker.
+    """
+    import contextvars
+
+    from transformers import TextIteratorStreamer
+
+    streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
+    stop_event = threading.Event()
+    failure: list = []
+
+    def worker() -> None:
+        try:
+            outcome["result"] = generate(streamer=streamer, stop_event=stop_event)
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the consumer's thread
+            failure.append(exc)
+        finally:
+            streamer.text_queue.put(streamer.stop_signal)
+
+    thread = threading.Thread(
+        target=contextvars.copy_context().run,
+        args=(worker,),
+        name=_STREAM_WORKER_NAME,
+        daemon=True,
+    )
+    thread.start()
+    try:
+        while True:
+            piece = streamer.text_queue.get()
+            if piece is streamer.stop_signal:
+                break
+            yield piece
+    finally:
+        stop_event.set()
+        thread.join(_STREAM_JOIN_SECONDS)
+        if thread.is_alive():
+            logger.warning(
+                "stream generation thread still running %.0fs after it was told to stop",
+                _STREAM_JOIN_SECONDS,
+            )
+    if failure:
+        raise failure[0]
+
+
 def _stream_response(
     model, tokenizer, messages,
     max_tokens, temperature, top_p, model_name,
@@ -2696,25 +2820,51 @@ def _stream_response(
     ngram_config=None,
     reasoning_parser=None,
 ):
-    """Generator that yields SSE chunks for streaming responses."""
+    """Generator that yields SSE chunks for streaming responses.
+
+    A plain request streams: ``generate`` runs on a worker thread and each piece of
+    text is sent as it is produced. Three kinds of request still generate the whole
+    reply first and send it afterwards, because streaming them is not safe:
+
+    * ``reasoning_parser`` cuts reasoning blocks out of the finished text;
+    * ``mole_runtime`` blends adapters in its own decode loop, not in ``generate``;
+    * a draft model or n-gram lookup (assisted decoding) is not streamed here, as
+      ``soup serve`` has always told the user (see the note printed at startup).
+    """
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
     created = int(time.time())
 
-    # Generate full response (true token-by-token streaming requires TextIteratorStreamer)
+    def content_chunk(text: str) -> str:
+        chunk = {
+            "id": chat_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model_name,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": text},
+                    "finish_reason": None,
+                }
+            ],
+        }
+        return f"data: {json.dumps(chunk)}\n\n"
+
     completion_tokens_for_log = 0
+    sent = ""  # the text already sent while the reply was being generated
     try:
         # v0.71.17 #260 — re-select the per-user bank inside the generator's own
         # context. set_active_user runs in the sync endpoint thread, but this
         # generator is iterated later by the async event loop in a DIFFERENT
         # contextvars.Context, so the endpoint's selection is not visible here.
         # Re-set so streamed requests still apply per-user steering (and fail
-        # closed to no-steering for an unknown / absent id).
+        # closed to no-steering for an unknown / absent id). The worker thread
+        # below runs in a copy of this context, so it sees the selection too.
         if loaded_bank is not None:
             loaded_bank.set_active_user(x_user_id)
         if mole_runtime is not None:
             # v0.71.17 #259 — MoLE blends per-token via a custom decode loop;
-            # generate the full text then simulate streaming (same shape as the
-            # transformers path, which also generates-then-streams).
+            # generate the full text then simulate streaming.
             (
                 response_text, _, completion_tokens_for_log, finish_reason,
             ) = mole_runtime.generate_text(
@@ -2724,26 +2874,49 @@ def _stream_response(
                 top_p=top_p,
             )
         else:
-            # v0.71.33 — select the request's LoRA adapter under the generation
-            # lock (resolved in the endpoint, applied here where generate runs).
-            with _adapter_scope(
-                model, adapter_lock, adapter_names,
-                requested_adapter, active_adapter,
-            ):
+            def generate(**streaming):
+                # v0.71.33 — select the request's LoRA adapter under the generation
+                # lock (resolved in the endpoint, applied here where generate runs).
+                # Entered on whichever thread calls generate, so the lock is taken
+                # and released by the same thread.
+                with _adapter_scope(
+                    model, adapter_lock, adapter_names,
+                    requested_adapter, active_adapter,
+                ):
+                    return _generate_response(
+                        model, tokenizer, messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        top_p=top_p,
+                        assistant_model=assistant_model,
+                        assistant_tokenizer=assistant_tokenizer,
+                        num_assistant_tokens=num_assistant_tokens,
+                        logits_processor=logits_processor,
+                        ngram_config=ngram_config,
+                        kv_cache_generate_kwargs=kv_cache_generate_kwargs,
+                        **streaming,
+                    )
+
+            if reasoning_parser is None and assistant_model is None and ngram_config is None:
+                outcome: dict = {}
+                pieces = _iter_generated_text(tokenizer, generate, outcome)
+                emitter = _StripEmitter()
+                try:
+                    for piece in pieces:
+                        text = emitter.feed(piece)
+                        if text:
+                            sent += text
+                            yield content_chunk(text)
+                finally:
+                    # Client gone (GeneratorExit): stop generate() and join the worker.
+                    pieces.close()
                 (
                     response_text, _, completion_tokens_for_log, finish_reason,
-                ) = _generate_response(
-                    model, tokenizer, messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    assistant_model=assistant_model,
-                    assistant_tokenizer=assistant_tokenizer,
-                    num_assistant_tokens=num_assistant_tokens,
-                    logits_processor=logits_processor,
-                    ngram_config=ngram_config,
-                    kv_cache_generate_kwargs=kv_cache_generate_kwargs,
-                )
+                ) = outcome["result"]
+            else:
+                (
+                    response_text, _, completion_tokens_for_log, finish_reason,
+                ) = generate()
     except Exception:
         if canary_outcome is not None:
             canary_outcome(False)
@@ -2762,24 +2935,22 @@ def _stream_response(
             response_text, reasoning_parser,
         )
 
-    # Simulate streaming by sending word-by-word
-    words = response_text.split(" ")
-    for idx, word in enumerate(words):
-        chunk_text = word if idx == 0 else f" {word}"
-        chunk = {
-            "id": chat_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": model_name,
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {"content": chunk_text},
-                    "finish_reason": None,
-                }
-            ],
-        }
-        yield f"data: {json.dumps(chunk)}\n\n"
+    if not sent:
+        # Nothing went out while generating (reasoning parser, draft model, n-gram,
+        # MoLE, a generate() that never called the streamer, or an empty reply):
+        # send the finished reply word by word.
+        words = response_text.split(" ")
+        for idx, word in enumerate(words):
+            yield content_chunk(word if idx == 0 else f" {word}")
+    elif response_text.startswith(sent):
+        # Whatever the streamer did not release; the stripped reply is what counts.
+        if len(response_text) > len(sent):
+            yield content_chunk(response_text[len(sent):])
+    else:
+        # The incremental decode and the final decode disagree (a tokenizer that
+        # decodes a suffix differently from the same text in context): what was
+        # already sent stays sent.
+        logger.debug("streamed text differs from the final decode; nothing more is sent")
 
     # Final chunk
     final_chunk = {
