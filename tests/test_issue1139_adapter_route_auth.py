@@ -129,8 +129,14 @@ def deploy_env(tmp_path, monkeypatch):
 
 
 def _route_httpx_to(monkeypatch, client: TestClient) -> list:
-    """Send the deploy stage's ``httpx.post`` to a real app through ``client``."""
+    """Send the deploy stage's POSTs to a real app through ``client``.
+
+    Activation goes through ``httpx.post``, loading and deactivation through
+    ``post_capped``: both are routed.
+    """
     import httpx
+
+    from soup_cli.utils import http_response
 
     sent = []
 
@@ -139,6 +145,7 @@ def _route_httpx_to(monkeypatch, client: TestClient) -> list:
         return client.post(url, headers=headers or {}, json=json)
 
     monkeypatch.setattr(httpx, "post", post)
+    monkeypatch.setattr(http_response, "post_capped", post)
     return sent
 
 

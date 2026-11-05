@@ -144,29 +144,79 @@ def test_no_second_canary_while_one_runs(cwd, monkeypatch):
 def test_the_real_loader_posts_name_and_path_with_the_token(cwd, monkeypatch):
     import httpx
 
+    from soup_cli.utils import http_response
+
     sent = {}
 
     def post(url, **kwargs):
         sent.update(url=url, **kwargs)
         return httpx.Response(200, json={"name": "v2", "status": "loaded"})
 
-    monkeypatch.setattr(httpx, "post", post)
+    monkeypatch.setattr(http_response, "post_capped", post)
     status, _ = ls._post_load("http://127.0.0.1:8000", "v2", "/abs/v2")
     assert status == 200
     assert sent["url"] == "http://127.0.0.1:8000/v1/adapters/load"
     assert sent["json"] == {"name": "v2", "path": "/abs/v2"}
     assert sent["headers"] == {"Authorization": "Bearer " + "t" * 32}
     assert sent["trust_env"] is False
+    assert sent["max_bytes"] == ls._SERVE_REPLY_LIMIT_BYTES == 64 * 1024
 
 
 def test_the_real_loader_returns_the_server_detail(cwd, monkeypatch):
     import httpx
 
+    from soup_cli.utils import http_response
+
     monkeypatch.setattr(
-        httpx, "post", lambda url, **kw: httpx.Response(409, json={"detail": "x\x1b[2Jy"})
+        http_response, "post_capped",
+        lambda url, **kw: httpx.Response(409, json={"detail": "x\x1b[2Jy"}),
     )
     status, detail = ls._post_load("http://127.0.0.1:8000", "v2", "/abs/v2")
     assert (status, detail) == (409, "x [2Jy")
+
+
+def _stream_reply(monkeypatch, body: bytes, status: int = 200) -> list:
+    """Answer every ``httpx.stream`` call with ``body``: what post_capped reads."""
+    import contextlib
+
+    import httpx
+
+    urls = []
+
+    @contextlib.contextmanager
+    def stream(method, url, **kwargs):
+        urls.append((method, url))
+        yield httpx.Response(status, content=body, request=httpx.Request(method, url))
+
+    monkeypatch.setattr(httpx, "stream", stream)
+    return urls
+
+
+def test_the_load_reply_is_read_through_the_capped_reader(cwd, monkeypatch):
+    urls = _stream_reply(monkeypatch, b'{"name": "v2", "status": "loaded"}')
+
+    assert ls._post_load("http://127.0.0.1:8000", "v2", "/abs/v2") == (200, "")
+    assert urls == [("POST", "http://127.0.0.1:8000/v1/adapters/load")]
+
+
+def test_a_load_reply_over_the_cap_counts_as_no_answer(cwd, monkeypatch):
+    _stream_reply(monkeypatch, b"x" * (64 * 1024 + 1))
+
+    status, detail = ls._post_load("http://127.0.0.1:8000", "v2", "/abs/v2")
+    assert (status, detail) == (0, "ResponseTooLargeError")
+
+
+def test_the_deactivate_reply_is_read_through_the_capped_reader(cwd, monkeypatch):
+    urls = _stream_reply(monkeypatch, b'{"active_adapter": null}')
+
+    assert ls._post_deactivate("http://127.0.0.1:8000") is True
+    assert urls == [("POST", "http://127.0.0.1:8000/v1/adapters/deactivate")]
+
+
+def test_a_deactivate_reply_over_the_cap_counts_as_no_answer(cwd, monkeypatch):
+    _stream_reply(monkeypatch, b"x" * (64 * 1024 + 1))
+
+    assert ls._post_deactivate("http://127.0.0.1:8000") is False
 
 
 # ---------------------------------------------------------------------------
