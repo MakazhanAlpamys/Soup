@@ -134,6 +134,143 @@ def test_iteration_examples_show_latest_line_wins_progression():
     assert [r["outcome"] for r in lines] == ["running", "canary", "promoted"]
 
 
+QUALITY_FIELDS = {
+    "verdict",
+    "rated",
+    "negative",
+    "share",
+    "difference",
+    "z",
+    "p_value",
+    "min_rated",
+    "threshold",
+    "timed_out",
+    "decided_on",
+}
+
+
+def _quality_examples() -> list[dict]:
+    return [
+        record["canary"]["quality"]
+        for record in loop_formats.load_examples("iteration")
+        if isinstance(record.get("canary"), dict) and "quality" in record["canary"]
+    ]
+
+
+def test_iteration_examples_show_canary_quality_evidence():
+    examples = _quality_examples()
+    assert len(examples) >= 2
+    for quality in examples:
+        assert set(quality) == QUALITY_FIELDS
+    # one that is still waiting (null shares) and one that was decided
+    assert {quality["verdict"] for quality in examples} >= {"UNKNOWN", "OK"}
+
+
+def test_iteration_example_quality_validates_on_its_own_line():
+    lines = [
+        (index, record)
+        for index, record in enumerate(loop_formats.load_examples("iteration"))
+        if isinstance(record.get("canary"), dict) and "quality" in record["canary"]
+    ]
+    assert lines
+    for index, record in lines:
+        assert _errors("iteration", record) == [], f"iteration example line {index + 1}"
+
+
+def test_iteration_line_without_quality_still_validates():
+    for index, record in enumerate(loop_formats.load_examples("iteration")):
+        stripped = copy.deepcopy(record)
+        if isinstance(stripped.get("canary"), dict):
+            stripped["canary"].pop("quality", None)
+        assert _errors("iteration", stripped) == [], f"iteration example line {index + 1}"
+    # the pre-quality shape, written out: samples and verdict only
+    legacy = _example("iteration", 3)
+    legacy["canary"] = {"traffic_pct": 5, "samples": {"stable": 412, "canary": 31}, "verdict": "OK"}
+    assert _errors("iteration", legacy) == []
+
+
+def test_iteration_example_quality_agrees_with_its_own_counts():
+    for quality in _quality_examples():
+        for bucket in ("stable", "canary"):
+            rated, negative = quality["rated"][bucket], quality["negative"][bucket]
+            assert negative <= rated, bucket
+            if rated == 0:
+                assert quality["share"][bucket] is None, bucket
+            else:
+                assert quality["share"][bucket] == pytest.approx(negative / rated, abs=1e-4)
+        shares = quality["share"]
+        if shares["stable"] is None or shares["canary"] is None:
+            assert quality["difference"] is None
+            assert quality["z"] is None
+            assert quality["p_value"] is None
+        else:
+            assert quality["difference"] == pytest.approx(
+                shares["canary"] - shares["stable"], abs=1e-4
+            )
+            assert (quality["z"] > 0) == (quality["difference"] > 0)
+        assert quality["rated"]["canary"] <= _canary_samples()["canary"]
+
+
+def _canary_samples() -> dict:
+    # the samples of the last canary line (the one that carries the OK evidence)
+    for record in reversed(loop_formats.load_examples("iteration")):
+        if isinstance(record.get("canary"), dict) and record["canary"].get("verdict") == "OK":
+            return record["canary"]["samples"]
+    raise AssertionError("no OK canary example")
+
+
+@pytest.mark.parametrize("field", sorted(QUALITY_FIELDS))
+def test_quality_without_any_one_field_is_refused(field):
+    record = _example("iteration", 3)
+    del record["canary"]["quality"][field]
+    assert _errors("iteration", record), f"quality accepted without {field}"
+
+
+@pytest.mark.parametrize(
+    ("verdict", "timed_out", "decided_on"),
+    [
+        ("OK", False, "errors_and_quality"),
+        ("MAJOR", False, "errors_and_quality"),
+        ("UNKNOWN", False, "errors_and_quality"),
+        ("INSUFFICIENT", True, "errors_only"),
+        ("INSUFFICIENT", True, "errors_and_quality"),
+    ],
+)
+def test_quality_accepts_every_verdict_and_decision_basis(verdict, timed_out, decided_on):
+    record = _example("iteration", 3)
+    record["canary"]["quality"].update(
+        {"verdict": verdict, "timed_out": timed_out, "decided_on": decided_on}
+    )
+    assert _errors("iteration", record) == []
+
+
+def test_quality_accepts_the_edges_of_every_range():
+    record = _example("iteration", 3)
+    record["canary"]["quality"].update(
+        {
+            "rated": {"stable": 0, "canary": 0},
+            "negative": {"stable": 0, "canary": 0},
+            "share": {"stable": 1, "canary": 0},
+            "difference": -1,
+            "z": -3.2,
+            "p_value": 1,
+            "min_rated": 1,
+            "threshold": 0,
+        }
+    )
+    assert _errors("iteration", record) == []
+    record["canary"]["quality"].update({"difference": 1, "p_value": 0, "threshold": 1})
+    assert _errors("iteration", record) == []
+
+
+def test_quality_with_nulls_where_the_test_is_undefined_validates():
+    record = _example("iteration", 3)
+    record["canary"]["quality"].update(
+        {"share": {"stable": 0.0, "canary": None}, "difference": None, "z": None, "p_value": None}
+    )
+    assert _errors("iteration", record) == []
+
+
 def test_version_and_progress_examples_reference_example_iterations():
     known = {record["iteration_id"] for record in loop_formats.load_examples("iteration")}
     for name in ("version", "progress"):
@@ -231,6 +368,37 @@ REFUSED = [
     ("iteration", 2, _set("verdict.baseline.kind", "prod"), "unknown baseline kind"),
     ("iteration", 2, _set("canary.traffic_pct", 101), "traffic above 100%"),
     ("iteration", 2, _set("canary.verdict", "GOOD"), "unknown canary verdict"),
+    ("iteration", 3, _set("canary.quality.verdict", "GOOD"), "unknown quality verdict"),
+    ("iteration", 3, _set("canary.quality.verdict", None), "null quality verdict"),
+    ("iteration", 3, _set("canary.quality.verdict", _DELETE), "quality without a verdict"),
+    ("iteration", 3, _set("canary.quality.share.canary", 1.2), "negative share above 1"),
+    ("iteration", 3, _set("canary.quality.share.stable", -0.1), "negative share below 0"),
+    ("iteration", 3, _set("canary.quality.share.stable", "0.15"), "share as a string"),
+    ("iteration", 3, _set("canary.quality.share.canary", _DELETE), "share without a bucket"),
+    ("iteration", 3, _set("canary.quality.negative.canary", -1), "negative count below 0"),
+    ("iteration", 3, _set("canary.quality.rated.stable", -5), "rated count below 0"),
+    ("iteration", 3, _set("canary.quality.rated.canary", 31.5), "fractional rated count"),
+    ("iteration", 3, _set("canary.quality.rated.canary", True), "rated count as a bool"),
+    ("iteration", 3, _set("canary.quality.rated.canary", _DELETE), "rated without a bucket"),
+    ("iteration", 3, _set("canary.quality.rated.extra", 1), "rated with a third bucket"),
+    ("iteration", 3, _set("canary.quality.difference", 1.5), "difference above 1"),
+    ("iteration", 3, _set("canary.quality.difference", -1.5), "difference below -1"),
+    ("iteration", 3, _set("canary.quality.difference", _DELETE), "quality without difference"),
+    ("iteration", 3, _set("canary.quality.z", "0.63"), "z as a string"),
+    ("iteration", 3, _set("canary.quality.z", _DELETE), "quality without z"),
+    ("iteration", 3, _set("canary.quality.p_value", 1.5), "p-value above 1"),
+    ("iteration", 3, _set("canary.quality.p_value", -0.01), "p-value below 0"),
+    ("iteration", 3, _set("canary.quality.min_rated", 0), "min_rated below 1"),
+    ("iteration", 3, _set("canary.quality.min_rated", 30.5), "fractional min_rated"),
+    ("iteration", 3, _set("canary.quality.threshold", 1.5), "threshold above 1"),
+    ("iteration", 3, _set("canary.quality.threshold", -0.05), "threshold below 0"),
+    ("iteration", 3, _set("canary.quality.timed_out", 0), "timed_out as an int"),
+    ("iteration", 3, _set("canary.quality.timed_out", _DELETE), "quality without timed_out"),
+    ("iteration", 3, _set("canary.quality.decided_on", "quality_only"), "unknown decided_on"),
+    ("iteration", 3, _set("canary.quality.decided_on", _DELETE), "quality without decided_on"),
+    ("iteration", 3, _set("canary.quality.unexpected", 1), "unknown field inside quality"),
+    ("iteration", 3, _set("canary.quality", "OK"), "quality as a bare string"),
+    ("iteration", 3, _set("canary.quality", None), "quality as null"),
     ("iteration", 1, _set("dataset.sha256", "abc123"), "short sha256"),
     ("iteration", 1, _set("train.base", _DELETE), "training without its start point"),
     ("iteration", 1, _set("data.feedback.edit", -1), "negative feedback count"),

@@ -120,11 +120,29 @@ why an iteration is not a single line.
 | `dataset` | object or null | `path`, `sha256`, `dpo_pairs`, `kto_rows`. |
 | `train` | object or null | `method` (`dpo`, `kto`, ...), `run_id`, `base` (what training actually loaded: a base model id or a merged earlier version), `root_base` (the original base model id when `base` is a merged version). |
 | `verdict` | object or null | `decision`: `SHIP` or `DON'T SHIP` (from `soup ship`), or `SKIPPED` / `ERROR` when no verdict was reached; `method`: `ship` or `eval_gate`; `baseline`: `{kind: base or version, ref, version}`, what the candidate was compared against (`version` is required when `kind` is `version`); `path` of the report; `reason`. |
-| `canary` | object or null | `traffic_pct` (0-100), `samples` per bucket (`stable`, `canary`), `verdict` (`OK`, `MAJOR`, `UNKNOWN` while samples are too few). |
+| `canary` | object or null | `traffic_pct` (0-100), `samples` per bucket (`stable`, `canary`), `verdict` (`OK`, `MAJOR`, `UNKNOWN` while samples are too few), and an optional `quality` object (below). |
 | `artifacts` | object or null | What serves this version again: `adapter`, `merged`, `gguf` paths, and `served_as` (the adapter name in `soup serve`, or an Ollama tag). |
 | `estimated_cost_usd` | number or null | The budget gate's estimate. |
 | `outcome` | enum | `running`, `canary`, `promoted`, `rolled_back` (the canary was withdrawn), `skipped` (nothing to train, or no verdict), `failed` (a stage errored). Required. |
 | `reason` | string or null | Why, in plain words. |
+
+**`canary.quality`** is optional (omit it when nothing judged answer quality; a line
+without it stays valid) and carries the evidence behind the answer-quality verdict. When
+it is present, all of its fields are present:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `verdict` | enum | `OK` (no significant regression was found, which is not the same as proven equal), `MAJOR`, `UNKNOWN` (a bucket is still below `min_rated`) or `INSUFFICIENT`. `INSUFFICIENT` means the maximum wait ran out below the minimum. |
+| `rated` | `{stable, canary}`, integers ≥ 0 | Answers that received feedback, per bucket. |
+| `negative` | `{stable, canary}`, integers ≥ 0 | Rated answers with negative feedback, per bucket. |
+| `share` | `{stable, canary}`, each a number in [0, 1] or null | `negative / rated`; null while a bucket has no rated answers. |
+| `difference` | number in [-1, 1] or null | Canary share minus stable share. |
+| `z` | number or null | Pooled two-proportion z statistic; positive means the canary is worse. null when it is undefined. |
+| `p_value` | number in [0, 1] or null | One-sided p-value of `z`. |
+| `min_rated` | integer ≥ 1 | Rated answers needed in each bucket before the verdict is anything but `UNKNOWN` or `INSUFFICIENT`. |
+| `threshold` | number in [0, 1] | The tolerated rise in the negative share (`0.05` = 5 percentage points). |
+| `timed_out` | boolean | True when the maximum wait ran out before `min_rated` was reached. |
+| `decided_on` | enum | `errors_and_quality`, or `errors_only` when the rollout was decided on the error rates alone. |
 
 **The first model** is a seed line: `parent_iteration_id` and `from_version` null,
 `to_version: 1`, `outcome: promoted`, `reason: "initial deploy"`, and a matching
