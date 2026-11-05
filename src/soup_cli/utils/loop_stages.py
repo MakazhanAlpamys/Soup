@@ -69,6 +69,9 @@ _GATE_GENERATE_FACTORY: Optional[Callable[[str], Callable[[str], str]]] = None
 _DEPLOY_POSTER: Optional[Callable[[str, str], bool]] = None
 _SHIP_RUNNER: Optional[Callable[..., object]] = None
 _LOAD_POSTER: Optional[Callable[[str, str, str], Tuple[int, str]]] = None
+#: Bytes of a /v1/adapters/load or /deactivate reply read (post_capped): the
+#: answer is a short status object, and a larger one counts as no answer.
+_SERVE_REPLY_LIMIT_BYTES = 64 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -954,9 +957,11 @@ def _post_activate(endpoint: str, name: str) -> bool:
 def _post_load(endpoint: str, name: str, path: str) -> Tuple[int, str]:
     """POST ``{name, path}`` to ``<endpoint>/v1/adapters/load``.
 
-    Returns ``(HTTP status, detail)``; status 0 when no response came back.
-    Same transport rules as ``_post_activate`` (the tool token as a Bearer
-    header, no environment proxy for plain http). ``_LOAD_POSTER`` replaces
+    Returns ``(HTTP status, detail)``; status 0 when no response came back,
+    or when the reply is longer than ``_SERVE_REPLY_LIMIT_BYTES`` (read
+    through ``post_capped``, never whole). Same transport rules as
+    ``_post_activate`` (the tool token as a Bearer header, no environment
+    proxy for plain http). ``_LOAD_POSTER`` replaces
     the call in tests; the older ``_DEPLOY_POSTER(endpoint, name) -> bool``
     hook still works (True = loaded).
     """
@@ -967,15 +972,19 @@ def _post_load(endpoint: str, name: str, path: str) -> Tuple[int, str]:
     if not _ADAPTER_NAME_RE.match(name):
         return 0, "invalid adapter name"
     try:
-        import httpx
+        import httpx  # noqa: F401 -- post_capped sends through it
     except ImportError:
         return 0, "httpx is not installed"
     url = endpoint.rstrip("/") + "/v1/adapters/load"
     token = os.environ.get(TOOL_AUTH_TOKEN_ENV)
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     try:
-        resp = httpx.post(
+        from soup_cli.utils.http_response import post_capped
+
+        resp = post_capped(
             url,
+            max_bytes=_SERVE_REPLY_LIMIT_BYTES,
+            endpoint_label="SOUP_LOOP_SERVE_ENDPOINT /v1/adapters/load",
             headers=headers,
             json={"name": name, "path": path},
             timeout=300.0,
@@ -1120,17 +1129,24 @@ def deploy_to_canary(
 
 
 def _post_deactivate(endpoint: str) -> bool:
-    """POST ``<endpoint>/v1/adapters/deactivate`` (back to the served model)."""
-    try:
-        import httpx
-    except ImportError:
-        return False
+    """POST ``<endpoint>/v1/adapters/deactivate`` (back to the served model).
+
+    True on 2xx. The reply is read through ``post_capped`` (at most
+    ``_SERVE_REPLY_LIMIT_BYTES``); a longer one counts as no answer.
+    """
+    from soup_cli.utils.http_response import post_capped
+
     url = endpoint.rstrip("/") + "/v1/adapters/deactivate"
     token = os.environ.get(TOOL_AUTH_TOKEN_ENV)
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     try:
-        resp = httpx.post(
-            url, headers=headers, timeout=5.0, trust_env=not url.lower().startswith("http://")
+        resp = post_capped(
+            url,
+            max_bytes=_SERVE_REPLY_LIMIT_BYTES,
+            endpoint_label="SOUP_LOOP_SERVE_ENDPOINT /v1/adapters/deactivate",
+            headers=headers,
+            timeout=5.0,
+            trust_env=not url.lower().startswith("http://"),
         )
     except Exception:  # noqa: BLE001 — a rollback reports, it never crashes
         return False

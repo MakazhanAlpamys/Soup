@@ -117,7 +117,7 @@ def loop(tmp_path, monkeypatch):
     )
     client = TestClient(app, base_url=ENDPOINT)
 
-    # The loop talks to the server over HTTP: route its httpx calls to the app.
+    # The loop talks to the server over HTTP: route its POSTs to the app.
     import httpx
 
     def post(url, headers=None, json=None, timeout=None, trust_env=None, **_):
@@ -126,6 +126,8 @@ def loop(tmp_path, monkeypatch):
                               headers={"content-type": resp.headers.get("content-type", "")})
 
     monkeypatch.setattr(httpx, "post", post)
+    # Loading and deactivating read the reply through post_capped.
+    monkeypatch.setattr("soup_cli.utils.http_response.post_capped", post)
 
     trained_on: list = []
     trained_with: list = []

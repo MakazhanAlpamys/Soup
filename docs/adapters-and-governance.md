@@ -215,8 +215,9 @@ soup serve --model ./base --adapter-dir .soup-loops/adapters --tool-auth-token "
 SOUP_LOOP_SERVE_ENDPOINT=http://127.0.0.1:8000 SOUP_TOOL_AUTH_TOKEN="$TOKEN" soup loop watch --detach
 
 # Go back to the version that was production before the last promotion (points
-# unkeyed traffic back and withdraws a running canary); refused when nothing was
-# promoted.
+# unkeyed traffic back and withdraws a running canary). With nothing promoted yet it
+# withdraws a running canary and the served model keeps all traffic; with no canary
+# either, it is refused.
 SOUP_LOOP_SERVE_ENDPOINT=http://127.0.0.1:8000 SOUP_TOOL_AUTH_TOKEN="$TOKEN" soup loop rollback
 
 # Start serve with the candidate loaded, then promote it at 5% traffic.
