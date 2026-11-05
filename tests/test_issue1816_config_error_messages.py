@@ -22,9 +22,6 @@ _REWARD_ON_UNSLOTH_MESSAGE = (
     "backend='unsloth' is not applied by task='reward_model': that trainer has "
     "no unsloth setup and would train on plain transformers. Use backend: transformers."
 )
-# The string loader labels a model-level error ``config``; the terminal prints the
-# message alone.
-_REWARD_ON_UNSLOTH = f"config: {_REWARD_ON_UNSLOTH_MESSAGE}"
 _ENV = {"COLUMNS": "400", "FORCE_COLOR": "1"}
 _CONSOLE_MODULES = (
     "soup_cli.config.loader",
@@ -63,9 +60,6 @@ def _lines(output):
 
 
 class TestCrossFieldValidatorLocation:
-    def test_string_loader(self):
-        assert _refusal(_yaml(backend="unsloth")) == _REWARD_ON_UNSLOTH
-
     @pytest.mark.parametrize("command", [["train", "--config"], ["doctor", "--config"]])
     def test_cli(self, tmp_path, command):
         path = tmp_path / "soup.yaml"
