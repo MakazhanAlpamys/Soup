@@ -55,7 +55,6 @@ EXEMPT: dict[str, str] = {
 }
 
 
-@memoized_scan
 def _needs_real_mlx(source: str) -> bool:
     """True when some test is gated on a real MLX package: `pytest.importorskip("mlx...")`.
 
