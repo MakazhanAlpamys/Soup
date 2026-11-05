@@ -247,10 +247,10 @@ class TestFreezeLayersRestrictsLoraAdapter:
         with pytest.raises(ValueError, match="leaving no layer"):
             wrapper.setup(dataset)
 
-    def test_freeze_layers_with_regex_target_modules_refuses(self, tmp_path, monkeypatch):
-        """peft's layers_to_transform only filters a LIST of target module
-        suffixes, never a regex target_modules string, so refuse loudly
-        instead of silently shipping the same #1432 bug for this shape."""
+    def test_freeze_layers_with_regex_target_modules_scopes_the_adapter(self, tmp_path, monkeypatch):
+        """A regex target is resolved to explicit module names and then kept to
+        the layers the freeze plan leaves trainable (#2201), instead of being
+        refused as it was in #1432."""
         _requires_train_extra()
         wrapper, dataset = _wrapper(
             tmp_path,
@@ -258,8 +258,12 @@ class TestFreezeLayersRestrictsLoraAdapter:
             freeze_layers=1,
             lora={"target_modules": r".*self_attn\.(q_proj|v_proj)"},
         )
-        with pytest.raises(ValueError, match="regex"):
-            wrapper.setup(dataset)
+        wrapper.setup(dataset)
+        adapted = [name for name, module in wrapper.model.named_modules()
+                   if hasattr(module, "lora_A")]
+        assert adapted, "no adapter was built at all"
+        assert not [n for n in adapted if ".layers.0." in n], adapted
+        assert all(n.endswith(("q_proj", "v_proj")) for n in adapted), adapted
 
     def test_freeze_layers_with_target_parameters_refuses(self, tmp_path, monkeypatch):
         """peft's target_parameters (per-parameter LoRA) matching has no
