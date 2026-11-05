@@ -316,6 +316,7 @@ class TestTheScanIsNotVacuous:
         [
             'import pytest\npytest.importorskip("trl")\n',
             'import pytest\npytest.importorskip("numpy")\n',
+            'import pytest\npytest.importorskip(modname="numpy")\n',
             'import pytest\npytest.importorskip("mlxfoo")\n',
             'import pytest\npytest.importorskip(name)\n',
             'import pytest\npytest.importorskip()\n',
