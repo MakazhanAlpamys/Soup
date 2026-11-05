@@ -42,6 +42,7 @@ from soup_cli.utils.paths import atomic_write_text, quote_path
 
 if TYPE_CHECKING:
     from soup_cli.data.traces.pair_builder import PreferencePair
+    from soup_cli.data.traces.parsers import Trace
     from soup_cli.utils.loop_daemon import WatchConfig
 
 _LOG = logging.getLogger(__name__)
@@ -183,28 +184,79 @@ def checked_thumbs_db(state: LoopState) -> Optional[str]:
     return path
 
 
-def _thumbs_pairs(state: LoopState) -> "list[PreferencePair]":
-    """Pairs from the ``soup serve --record-thumbs`` database (#1440)."""
+def _pair_key(pair: "PreferencePair") -> Tuple[str, str, str]:
+    return (pair.prompt, pair.chosen, pair.rejected)
+
+
+def _newer(left: Optional[float], right: Optional[float]) -> Optional[float]:
+    """The larger of two optional timestamps."""
+    if left is None:
+        return right
+    return left if right is None or left >= right else right
+
+
+def _thumbs_pairs(
+    state: LoopState,
+) -> "Tuple[list[PreferencePair], set[Tuple[str, str, str]], Optional[float]]":
+    """``(pairs, keys of the new ones, newest ts)`` from the ``--record-thumbs`` database (#1440).
+
+    New means newer than ``state.harvest_cursor_ts`` (``harvest_dpo_pairs_since``).
+    """
     path = checked_thumbs_db(state)
     if path is None:
-        return []
+        return [], set(), None
     from soup_cli.data.traces.pair_builder import PreferencePair
-    from soup_cli.utils.local_rl import harvest_dpo_pairs
+    from soup_cli.utils.local_rl import harvest_dpo_pairs_since
 
     try:
-        found = harvest_dpo_pairs(path)
+        found, new, newest = harvest_dpo_pairs_since(path, state.harvest_cursor_ts)
     except sqlite3.Error as exc:
         # Passed the check, then failed while reading (lock, corruption).
         raise ValueError(
             f"{_resolve_thumbs_db(state)[1]}: {quote_path(path)} could not be read "
             f"({type(exc).__name__}: {exc})"
         ) from exc
-    return [
+    pairs = [
         PreferencePair(
             prompt=p.prompt, chosen=p.chosen, rejected=p.rejected, source=_THUMBS_SOURCE
         )
         for p in found
     ]
+    new_keys = {(p.prompt, p.chosen, p.rejected) for p in new}
+    return pairs, new_keys, newest
+
+
+def _trace_pairs(
+    traces: "list[Trace]", cursor: Optional[float]
+) -> "Tuple[list[PreferencePair], set[Tuple[str, str, str]], Optional[float]]":
+    """``(pairs, keys of the new ones, newest ts)`` from serve-log traces.
+
+    Every trace builds pairs. A trace is NEW when its ``ts`` is later than
+    ``cursor``; a trace without a ``ts`` is new only while there is no cursor
+    (else it would count as new forever). A pair is new when a trace it was built
+    from is: the thumbs-up whose output is the chosen answer, or the thumbs-down
+    whose output is the rejected one, of the same prompt. The newest ts covers
+    those traces only, so a lone thumbs-up does not move the cursor.
+    """
+    from soup_cli.data.traces.pair_builder import build_pairs
+
+    pairs = list(build_pairs(traces, signal="thumbs_up"))
+    by_feedback: "dict[Tuple[str, str, str], list[Trace]]" = {}
+    for trace in traces:
+        if trace.signal in ("thumbs_up", "thumbs_down"):
+            by_feedback.setdefault((trace.prompt, trace.signal, trace.output), []).append(trace)
+    new_keys: "set[Tuple[str, str, str]]" = set()
+    newest: Optional[float] = None
+    for pair in pairs:
+        used = by_feedback.get((pair.prompt, "thumbs_up", pair.chosen), []) + by_feedback.get(
+            (pair.prompt, "thumbs_down", pair.rejected), []
+        )
+        for trace in used:
+            if trace.ts is not None:
+                newest = _newer(newest, trace.ts)
+            if cursor is None or (trace.ts is not None and trace.ts > cursor):
+                new_keys.add(_pair_key(pair))
+    return pairs, new_keys, newest
 
 
 def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
@@ -214,42 +266,61 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
     and, when one is configured, the ``soup serve --record-thumbs`` database
     (#1440); the two are unioned without exact duplicates. Writes the pairs to
     ``.soup-loops/pairs/<uuid>.jsonl`` (cwd-contained) and returns
-    ``{pairs_harvested, pairs_path, traces_collected, thumbs_pairs}``
-    (``thumbs_pairs`` counts the pairs READ from the database, before the union
-    drops any that a trace already supplied). Yields
-    zero pairs (no path) when neither source has any; a configured database
-    that is refused or missing raises (see ``checked_thumbs_db``).
+    ``{pairs_harvested, new_pairs, cursor_ts, pairs_path, traces_collected,
+    thumbs_pairs}`` (``thumbs_pairs`` counts the pairs READ from the database, before
+    the union drops any that a trace already supplied). Yields zero pairs (no path)
+    when neither source has any; a configured database that is refused or missing
+    raises (see ``checked_thumbs_db``).
+
+    The data cursor (``state.harvest_cursor_ts``) decides what is NEW, not what is
+    trained on: ``pairs_harvested`` and the pairs file hold ALL pairs, since every
+    iteration trains a fresh LoRA from the base model. ``new_pairs`` counts the pairs
+    that arrived after the cursor, which ``train_dpo_from_pairs`` compares with
+    ``min_new_pairs``. A database pair is new when the newer of its up and down rows is
+    later than the cursor; a trace pair, when a trace it is built from is (a trace
+    without a ts counts as new only while there is no cursor, see ``_trace_pairs``).
+    ``cursor_ts`` is the newest ts among the rows of the pairs, which ``run_once``
+    stores once a training run used them, or ``None``. The pairs file is not written
+    while ``new_pairs`` is below ``min_new_pairs``: that cycle trains nothing, and a
+    file per poll would pile up.
     """
-    from soup_cli.data.traces.pair_builder import build_pairs
     from soup_cli.data.traces.parsers import parse_soup_serve
 
     trace_dir = _resolve_trace_dir(state)
     traces = list(parse_soup_serve(trace_dir)) if trace_dir else []
-    pairs = list(build_pairs(traces, signal="thumbs_up"))
-    thumbs = _thumbs_pairs(state)
-    seen = {(p.prompt, p.chosen, p.rejected) for p in pairs}
+    pairs, new_keys, newest = _trace_pairs(traces, state.harvest_cursor_ts)
+    thumbs, thumbs_new_keys, thumbs_newest = _thumbs_pairs(state)
+    new_keys |= thumbs_new_keys
+    newest = _newer(newest, thumbs_newest)
+    seen = {_pair_key(p) for p in pairs}
     for p in thumbs:
-        key = (p.prompt, p.chosen, p.rejected)
-        if key not in seen:  # harvest_dpo_pairs yields one pair per prompt: no self-dupes
+        if _pair_key(p) not in seen:  # harvest_dpo_pairs yields one pair per prompt: no self-dupes
             pairs.append(p)
+    new_pairs = sum(1 for p in pairs if _pair_key(p) in new_keys)
     extra = {"thumbs_pairs": len(thumbs)}
     if not pairs:
         return {
             "pairs_harvested": 0,
+            "new_pairs": 0,
+            "cursor_ts": None,
             "pairs_path": None,
             "traces_collected": len(traces),
             **extra,
         }
 
-    pairs_dir = Path(_PAIRS_DIR)
-    pairs_dir.mkdir(parents=True, exist_ok=True)
-    pairs_path = str(pairs_dir / f"pairs-{uuid.uuid4().hex[:12]}.jsonl")
-    lines = "\n".join(json.dumps(p.to_jsonl_dict()) for p in pairs) + "\n"
-    # Atomic + cwd-contained + symlink-rejected (mirrors the rest of the
-    # changeset's write policy).
-    atomic_write_text(lines, pairs_path, field="pairs_path")
+    pairs_path = None
+    if new_pairs >= state.min_new_pairs:
+        pairs_dir = Path(_PAIRS_DIR)
+        pairs_dir.mkdir(parents=True, exist_ok=True)
+        pairs_path = str(pairs_dir / f"pairs-{uuid.uuid4().hex[:12]}.jsonl")
+        lines = "\n".join(json.dumps(p.to_jsonl_dict()) for p in pairs) + "\n"
+        # Atomic + cwd-contained + symlink-rejected (mirrors the rest of the
+        # changeset's write policy).
+        atomic_write_text(lines, pairs_path, field="pairs_path")
     return {
         "pairs_harvested": len(pairs),
+        "new_pairs": new_pairs,
+        "cursor_ts": newest,
         "pairs_path": pairs_path,
         "traces_collected": len(traces),
         **extra,
@@ -377,16 +448,26 @@ def train_dpo_from_pairs(
     """Train a DPO adapter from harvested pairs via a ``soup train`` subprocess.
 
     Returns ``{run_id, skipped, adapter_path}``. Skips (no run) when the
-    harvest produced no pairs, adding a ``notes`` reason (``no_preference_pairs``
-    with the count, or ``pairs_file_missing``) that the loop saves in the
-    iteration record (#1909). The subprocess is argv-list (no shell);
+    harvest produced no pairs, or fewer NEW pairs than ``state.min_new_pairs``
+    (the data cursor, see ``harvest_from_traces``), adding a ``notes`` reason
+    (``no_preference_pairs`` with the count, ``not_enough_new_data`` with the
+    counts, or ``pairs_file_missing``) that the loop saves in the iteration
+    record (#1909). A harvest that reports no ``new_pairs`` (a custom
+    ``harvest_fn``) has every pair counted as new. The subprocess is argv-list (no shell);
     ``_TRAIN_RUNNER`` injects a stand-in for tests.
     """
     pairs_path = ctx.get("pairs_path")
     pairs_n = int(ctx.get("pairs_harvested", 0) or 0)
+    new_n = int(ctx.get("new_pairs", pairs_n) or 0)
     skip = {"run_id": None, "skipped": True, "adapter_path": None}
     if pairs_n <= 0:
         return {**skip, "notes": "no_preference_pairs: 0 valid pairs harvested, training skipped"}
+    if new_n < state.min_new_pairs:
+        note = (
+            f"not_enough_new_data: {new_n} new preference pairs since the last training run, "
+            f"training needs {state.min_new_pairs} (soup loop init --min-new-pairs)"
+        )
+        return {**skip, "notes": note}
     if not pairs_path:
         return {**skip, "notes": "pairs_file_missing: no pairs path recorded, training skipped"}
     if not os.path.isfile(str(pairs_path)):

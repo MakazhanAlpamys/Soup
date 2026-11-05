@@ -45,7 +45,7 @@ from soup_cli.utils.loop_iteration import (
     new_iteration_id,
     write_iteration,
 )
-from soup_cli.utils.loop_state import LoopState, read_state, write_state
+from soup_cli.utils.loop_state import MAX_CURSOR_TS, LoopState, read_state, write_state
 
 _LOG = logging.getLogger(__name__)
 # BucketStats.verdict's default: canary answers needed before a verdict.
@@ -311,6 +311,7 @@ def run_once(
         last_iteration_id=iteration_id,
         last_run_date=today,
     )
+    new_state = _advance_cursor(new_state, harvest_out, train_out)
     if shipped and deploy_out.get("canary_active"):
         new_state = _state_with(
             new_state,
@@ -323,6 +324,29 @@ def run_once(
             canary_autoroll_on_regress=True,
         )
     return new_state, record, decision
+
+
+def _advance_cursor(
+    state: LoopState, harvest_out: Mapping[str, object], train_out: Mapping[str, object]
+) -> LoopState:
+    """Move the data cursor to what the harvest saw, after a training run.
+
+    Only a run counts: a skip (not enough new data, no pairs) or a failed training
+    leaves it, so the same feedback is picked up again and accumulates. The verdict
+    does not matter (a DON'T SHIP still consumed the data), and the cursor never
+    moves back. A harvest that reports none, or a value ``LoopState`` would refuse
+    (a custom ``harvest_fn``), is ignored.
+    """
+    cursor = harvest_out.get("cursor_ts")
+    if train_out.get("skipped") or not train_out.get("run_id"):
+        return state
+    if isinstance(cursor, bool) or not isinstance(cursor, (int, float)):
+        return state
+    if not (0 <= cursor <= MAX_CURSOR_TS):  # False for NaN too
+        return state
+    if state.harvest_cursor_ts is not None and cursor <= state.harvest_cursor_ts:
+        return state
+    return _state_with(state, harvest_cursor_ts=float(cursor))
 
 
 def _promote(state: LoopState, config: WatchConfig) -> "tuple[LoopState, str]":
