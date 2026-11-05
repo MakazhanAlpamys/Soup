@@ -600,15 +600,33 @@ def rollback_cmd() -> None:
     Points the server's unkeyed traffic back (SOUP_LOOP_SERVE_ENDPOINT, with
     --tool-auth-token / SOUP_TOOL_AUTH_TOKEN when the server needs it), then
     makes it the canary router's stable side again. A running canary is
-    withdrawn too. Refuses when nothing has been promoted.
+    withdrawn too. With nothing promoted yet, a running canary is withdrawn
+    and the served model keeps all traffic; with no canary either, refuses.
     """
     state = _safe_read()
     if state.production_name is None:
-        console.print(
-            "[red]nothing to roll back to:[/] no canary has been promoted; production is "
-            "still the served model"
+        if state.canary_active is None:
+            console.print(
+                "[red]nothing to roll back to:[/] no canary has been promoted and no canary "
+                "is running; production is still the served model"
+            )
+            raise typer.Exit(code=2)
+        # The server's unkeyed traffic already goes to the served model and its
+        # router reads the canary from loop.yaml: clearing the canary is the rollback.
+        write_state(
+            replace(
+                state,
+                canary_active=None,
+                canary_traffic_pct=None,
+                canary_rollout_id=None,
+                canary_adapter=None,
+            )
         )
-        raise typer.Exit(code=2)
+        console.print(
+            f"[green]canary withdrawn:[/] {escape(state.canary_active)}; the served model "
+            "keeps all traffic"
+        )
+        return
     from soup_cli.utils.loop_stages import switch_served_adapter
 
     target = state.previous_production_name
