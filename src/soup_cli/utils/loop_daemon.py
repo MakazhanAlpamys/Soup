@@ -297,9 +297,12 @@ def run_once(
             if n
         )[:4096],
     )
+    # The lifetime totals count what training used: an iteration that only waited for
+    # more feedback (or whose training failed) would otherwise add the whole pile again.
+    trained = _training_ran(train_out)
     new_state = state.bumped(
-        traces_collected=int(harvest_out.get("traces_collected", 0) or 0),
-        pairs_distilled=pairs,
+        traces_collected=int(harvest_out.get("traces_collected", 0) or 0) if trained else 0,
+        pairs_distilled=pairs if trained else 0,
         runs_gated=1 if record.gate_verdict in ("OK", "MAJOR") else 0,
         adapters_shipped=1 if shipped else 0,
         iteration_count=1,
@@ -326,6 +329,11 @@ def run_once(
     return new_state, record, decision
 
 
+def _training_ran(train_out: Mapping[str, object]) -> bool:
+    """True when the train stage produced a run (not skipped, not failed)."""
+    return bool(train_out.get("run_id")) and not train_out.get("skipped")
+
+
 def _advance_cursor(
     state: LoopState, harvest_out: Mapping[str, object], train_out: Mapping[str, object]
 ) -> LoopState:
@@ -338,7 +346,7 @@ def _advance_cursor(
     (a custom ``harvest_fn``), is ignored.
     """
     cursor = harvest_out.get("cursor_ts")
-    if train_out.get("skipped") or not train_out.get("run_id"):
+    if not _training_ran(train_out):
         return state
     if isinstance(cursor, bool) or not isinstance(cursor, (int, float)):
         return state

@@ -646,6 +646,46 @@ class TestCursorAdvance:
         assert new_state.harvest_cursor_ts is None
 
 
+class TestLifetimeCounters:
+    """traces_collected / pairs_distilled count what a training run used."""
+
+    @staticmethod
+    def _config(train):
+        return WatchConfig(
+            harvest_fn=lambda s: {"pairs_harvested": 4, "traces_collected": 9},
+            train_fn=lambda s, c: train,
+            gate_fn=lambda s, c: {"gate_verdict": "OK"},
+            deploy_fn=lambda s, c: {"deployed": False, "canary_verdict": None},
+            cost_fn=lambda s: 0.0,
+        )
+
+    def test_a_training_run_adds_its_pairs_and_traces(self, cwd):
+        new_state, _, _ = run_once(
+            _base_state(traces_collected=1, pairs_distilled=2),
+            self._config({"run_id": "r1", "skipped": False}),
+        )
+
+        assert (new_state.traces_collected, new_state.pairs_distilled) == (10, 6)
+
+    @pytest.mark.parametrize(
+        "train",
+        [
+            {"run_id": None, "skipped": True},   # waited for more feedback
+            {"run_id": None, "skipped": True, "notes": "failed"},
+            {"run_id": "r1", "skipped": True},
+            {"run_id": None, "skipped": False},
+        ],
+    )
+    def test_an_iteration_without_a_run_adds_nothing_but_still_counts_itself(self, cwd, train):
+        new_state, record, _ = run_once(
+            _base_state(traces_collected=1, pairs_distilled=2), self._config(train)
+        )
+
+        assert (new_state.traces_collected, new_state.pairs_distilled) == (1, 2)
+        assert record.pairs_harvested == 4  # the record still says what the harvest saw
+        assert (new_state.iteration_count, new_state.runs_today) == (1, 1)
+
+
 # ---------------------------------------------------------------------------
 # The pre-wired stages together (no server): the loop trains when there is news
 # ---------------------------------------------------------------------------
