@@ -1378,7 +1378,9 @@ When TRL no longer exposes `max_prompt_length`, Soup still enforces
 `data.max_length`: BCO, IPO, KTO, and SimPO cut prompts only when a row
 would exceed `max_length`. BCO, KTO, and SimPO keep the prompt end; IPO
 follows DPO's `truncation_mode` (`keep_start` by default). DPO/ORPO keep
-their legacy `max_length // 2` prompt cap.
+their legacy `max_length // 2` prompt cap. When BCO or KTO keeps the end of
+a prompt that starts with the tokenizer's BOS token, the BOS stays in front,
+followed by the last `max_length // 2 - 1` prompt tokens.
 
 ```yaml
 task: bco

@@ -153,15 +153,47 @@ def kl_penalty_kwargs(config_cls: type, kl_penalty: float) -> dict[str, float]:
     return {}
 
 
-def _truncate_tokens(tokens: list[int], limit: int, mode: str) -> list[int]:
-    """Truncate one token sequence using TRL's preference-side convention."""
+def _truncate_tokens(
+    tokens: list[int], limit: int, mode: str, *, keep_first: bool = False
+) -> list[int]:
+    """Truncate one token sequence using TRL's preference-side convention.
+
+    ``keep_first`` keeps the first token in front of a ``keep_end`` cut,
+    followed by the last ``limit - 1`` tokens, so the result is still ``limit``
+    long; ``keep_start`` already keeps it.
+    """
     if limit <= 0:
         return []
     if len(tokens) <= limit:
         return tokens
     if mode == "keep_end":
+        if keep_first:
+            return tokens[:1] + tokens[len(tokens) - limit + 1 :]
         return tokens[-limit:]
     return tokens[:limit]
+
+
+def _truncate_prompt(
+    prompt_ids: list[int],
+    prompt_mask: list[int],
+    limit: int,
+    mode: str,
+    bos_token_id: int | None,
+) -> tuple[list[int], list[int]]:
+    """Cut a prompt and its mask alike, keeping a leading BOS under ``keep_end``.
+
+    trl 0.29's KTO/BCO tokenizers put the tokenizer's BOS in front of the
+    prompt before the cap runs, and ``keep_end`` would cut it first (#2487).
+    The decision is made on the ids, so ids and mask stay the same length; a
+    prompt that does not start with ``bos_token_id`` gets the plain cut.
+    """
+    keep_first = (
+        bos_token_id is not None and len(prompt_ids) > 0 and prompt_ids[0] == bos_token_id
+    )
+    return (
+        _truncate_tokens(prompt_ids, limit, mode, keep_first=keep_first),
+        _truncate_tokens(prompt_mask, limit, mode, keep_first=keep_first),
+    )
 
 
 def _cap_combined_preference_sequence(
@@ -171,6 +203,7 @@ def _cap_combined_preference_sequence(
     max_length: int,
     max_prompt_length: int,
     truncation_mode: str,
+    bos_token_id: int | None = None,
 ) -> dict[str, list[int]]:
     """Cap a combined prompt/completion row split by the first trainable label."""
     input_ids = list(row[f"{prefix}_input_ids"])
@@ -180,11 +213,12 @@ def _cap_combined_preference_sequence(
         (index for index, label in enumerate(labels) if label != _IGNORE_INDEX),
         len(labels),
     )
-    prompt_ids = _truncate_tokens(
-        input_ids[:prompt_size], max_prompt_length, truncation_mode
-    )
-    prompt_mask = _truncate_tokens(
-        attention_mask[:prompt_size], max_prompt_length, truncation_mode
+    prompt_ids, prompt_mask = _truncate_prompt(
+        input_ids[:prompt_size],
+        attention_mask[:prompt_size],
+        max_prompt_length,
+        truncation_mode,
+        bos_token_id,
     )
     completion_limit = max(0, max_length - len(prompt_ids))
     completion_ids = input_ids[prompt_size:][:completion_limit]
@@ -207,10 +241,12 @@ def _rebuild_unpaired_sequence(
     max_length: int,
     max_prompt_length: int,
     truncation_mode: str,
+    bos_token_id: int | None = None,
 ) -> dict[str, list[int]]:
     """Build a capped KTO/BCO sequence while keeping EOS as the final token."""
-    capped_prompt_ids = _truncate_tokens(list(prompt_ids), max_prompt_length, truncation_mode)
-    capped_prompt_mask = _truncate_tokens(list(prompt_mask), max_prompt_length, truncation_mode)
+    capped_prompt_ids, capped_prompt_mask = _truncate_prompt(
+        list(prompt_ids), list(prompt_mask), max_prompt_length, truncation_mode, bos_token_id
+    )
     answer_ids = list(answer_ids)
     answer_mask = list(answer_mask)
     # TRL appends EOS to a completion only when it is absent, so an answer that
@@ -255,6 +291,7 @@ def _rebuild_unpaired_completion_row(
     max_length: int,
     max_prompt_length: int,
     truncation_mode: str,
+    bos_token_id: int | None = None,
 ) -> dict[str, list[int]]:
     """Reassemble the KTO/BCO completion from the untruncated answer tokens.
 
@@ -279,6 +316,7 @@ def _rebuild_unpaired_completion_row(
         max_length=max_length,
         max_prompt_length=max_prompt_length,
         truncation_mode=truncation_mode,
+        bos_token_id=bos_token_id,
     )
     return {
         "completion_input_ids": rebuilt["input_ids"],
@@ -295,6 +333,7 @@ def enforce_preference_sequence_limit(
     truncation_mode: str,
     only_when_overflow: bool = False,
     kl_chunk_size: int | None = None,
+    bos_token_id: int | None = None,
 ) -> Any:
     """Restore TRL's removed prompt cap on an already-tokenized dataset.
 
@@ -310,6 +349,11 @@ def enforce_preference_sequence_limit(
     ``only_when_overflow`` preserves rows whose TRL-built model inputs already
     fit inside ``max_length``; DPO and ORPO keep the legacy unconditional cap,
     while BCO, IPO, KTO and SimPO use the conditional path.
+
+    ``bos_token_id`` (KTO and BCO pass their tokenizer's) keeps a prompt's
+    leading BOS at index 0 when ``keep_end`` cuts it in the unpaired layout:
+    the cut prompt is the BOS followed by the last ``max_prompt_length - 1``
+    tokens. ``None`` keeps the plain cut; the DPO and ORPO layouts ignore it.
     """
     columns = set(getattr(dataset, "column_names", ()))
     dpo_columns = {"prompt_ids", "chosen_ids", "rejected_ids"}
@@ -411,11 +455,12 @@ def enforce_preference_sequence_limit(
             )
             if only_when_overflow and fits:
                 return {}
-            prompt_ids = _truncate_tokens(
-                list(row["prompt_input_ids"]), max_prompt_length, truncation_mode
-            )
-            prompt_mask = _truncate_tokens(
-                list(row["prompt_attention_mask"]), max_prompt_length, truncation_mode
+            prompt_ids, prompt_mask = _truncate_prompt(
+                list(row["prompt_input_ids"]),
+                list(row["prompt_attention_mask"]),
+                max_prompt_length,
+                truncation_mode,
+                bos_token_id,
             )
             # TRL already sliced the answer out of ``completion_input_ids`` when
             # the prompt overflowed; rebuild it from the untruncated answer
@@ -426,6 +471,7 @@ def enforce_preference_sequence_limit(
                     max_length=max_length,
                     max_prompt_length=max_prompt_length,
                     truncation_mode=truncation_mode,
+                    bos_token_id=bos_token_id,
                 )
                 if has_answer
                 else row
@@ -439,18 +485,19 @@ def enforce_preference_sequence_limit(
                     max_length=max_length,
                     max_prompt_length=max_prompt_length,
                     truncation_mode=truncation_mode,
+                    bos_token_id=bos_token_id,
                 ),
             }
             if {"KL_prompt_input_ids", "KL_prompt_attention_mask"} <= columns:
-                capped["KL_prompt_input_ids"] = _truncate_tokens(
+                (
+                    capped["KL_prompt_input_ids"],
+                    capped["KL_prompt_attention_mask"],
+                ) = _truncate_prompt(
                     list(row["KL_prompt_input_ids"]),
-                    max_prompt_length,
-                    truncation_mode,
-                )
-                capped["KL_prompt_attention_mask"] = _truncate_tokens(
                     list(row["KL_prompt_attention_mask"]),
                     max_prompt_length,
                     truncation_mode,
+                    bos_token_id,
                 )
             if {
                 "KL_completion_input_ids",
@@ -468,6 +515,7 @@ def enforce_preference_sequence_limit(
                         max_length=max_length,
                         max_prompt_length=max_prompt_length,
                         truncation_mode=truncation_mode,
+                        bos_token_id=bos_token_id,
                     )
                     capped["KL_completion_input_ids"] = kl["input_ids"]
                     capped["KL_completion_attention_mask"] = kl["attention_mask"]
@@ -480,6 +528,7 @@ def enforce_preference_sequence_limit(
                             max_length=max_length,
                             max_prompt_length=max_prompt_length,
                             truncation_mode=truncation_mode,
+                            bos_token_id=bos_token_id,
                         )
                     )
             return capped
