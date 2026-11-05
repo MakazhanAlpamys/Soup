@@ -41,6 +41,7 @@ OTHER_BACKENDS = ["vllm", "sglang", "mii"]
 TOKEN_SCOPE = "--tool-auth-token is checked on the tool, thumbs and adapter routes only"
 OPEN_ROUTES = "answer every client that can reach this port without a token"
 NO_HOST_CHECK = "the Host header is not compared"
+PLAIN_HTTP = "travel as plain HTTP (soup serve has no TLS): terminate TLS in a proxy in front"
 
 
 def _plain(text: str) -> str:
@@ -114,6 +115,16 @@ class TestNotices:
         assert OPEN_ROUTES in out
         assert TOKEN_SCOPE not in out
 
+    @pytest.mark.parametrize("backend", ["transformers", *OTHER_BACKENDS])
+    @pytest.mark.parametrize("host", NAMED + WILDCARD)
+    def test_every_non_loopback_bind_is_told_that_it_speaks_plain_http(self, host, backend):
+        out = _rendered(serve_cmd._non_loopback_notices(host, backend))
+
+        assert PLAIN_HTTP in out
+        # Only the transformers app checks a bearer token, so only its notice says the
+        # token travels the same way.
+        assert ("the bearer token included" in out) is (backend == "transformers")
+
     @pytest.mark.parametrize(
         "host",
         ["[bold]lan[/bold]", "[/]", "[red]x", "lan\x1b[31mred", "lan\x9b31m"],
@@ -143,6 +154,7 @@ class TestTheCommandPrintsThem:
         out = _plain(result.output)
         assert f"Note: bound to '{host}', not loopback" in out
         assert TOKEN_SCOPE in out
+        assert PLAIN_HTTP in out
         assert (NO_HOST_CHECK in out) is (host == "0.0.0.0")
         assert "s3cret-token-value" not in out
 
@@ -193,17 +205,27 @@ class TestHostHelp:
 
 
 class TestToolAuthTokenHelp:
-    def test_help_names_every_tool_route_the_token_gates(self, monkeypatch):
+    def test_help_names_every_route_the_token_gates(self, monkeypatch):
         monkeypatch.setenv("COLUMNS", "200")
         # Read the routes off the source so a fourth tool route cannot slip past; the
         # floor keeps a changed decorator spelling from turning the loop into a no-op.
-        routes = re.findall(r'@app\.post\("(/v1/tools/[a-z_]+)"', inspect.getsource(serve_cmd))
-        assert {"/v1/tools/python", "/v1/tools/bash", "/v1/tools/web_search"} <= set(routes)
+        source = inspect.getsource(serve_cmd)
+        tool_routes = re.findall(r'@app\.post\("(/v1/tools/[a-z_]+)"', source)
+        thumbs_routes = re.findall(r'@app\.post\("(/v1/thumbs)"', source)
+        adapter_routes = re.findall(r'@app\.(?:get|post)\("(/v1/adapters[^"]*)"', source)
+        assert {"/v1/tools/python", "/v1/tools/bash", "/v1/tools/web_search"} <= set(tool_routes)
+        assert {"/v1/thumbs"} <= set(thumbs_routes)
+        assert {
+            "/v1/adapters",
+            "/v1/adapters/activate/{name}",
+            "/v1/adapters/deactivate",
+        } <= set(adapter_routes)
 
         result = runner.invoke(app, ["serve", "--help"])
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
         out = _plain(result.output.replace("│", " "))
-        for route in routes:
-            assert route in out, f"{route} is gated by --tool-auth-token but not in --help"
+        for route in [*tool_routes, *thumbs_routes, *adapter_routes]:
+            expected = route.replace("{name}", "<name>")
+            assert expected in out, f"{expected} is gated by --tool-auth-token but not in --help"
         assert "(/v1/tools/python, /v1/tools/bash, /v1/tools/web_search)" in out

@@ -30,6 +30,12 @@ from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
+# #1818: the one sentence that says the fallback is only a character sanitiser.
+# Kept as a constant so the command and its test cannot drift apart.
+UNDETECTED_FORMAT_NOTE = (
+    "rows are not in a recognised format; nothing was cleaned beyond character sanitising"
+)
+
 
 @contextlib.contextmanager
 def _loader_warnings_to_stderr(enabled: bool) -> Iterator[None]:
@@ -65,6 +71,24 @@ def _render_summary_table(report: CleanReport) -> None:
             table.add_row(for_terminal(rule_name), f"[cyan]{count}[/]")
 
     console.print(table)
+
+
+def _report_undetected_format(exc: ValueError, *, json_output: bool) -> None:
+    """Say that detection failed and why, instead of carrying on as plaintext.
+
+    ``detect_format`` refuses rows that match no signature and files that mix
+    unrelated shapes. Falling through to the plaintext sanitiser silently made
+    such a file print "Cleaning N rows in plaintext format" and "No issues
+    found", which reads as "this file is fine". The detection error still
+    carries the first offending row's keys (or the shapes it saw), so print it
+    next to the warning instead of discarding it (#1818).
+
+    With ``--json`` the warning goes to stderr, because stdout is the summary
+    document that has to parse.
+    """
+    target = Console(stderr=True) if json_output else console
+    target.print(f"[yellow]Warning:[/] {UNDETECTED_FORMAT_NOTE}.")
+    target.print(f"[dim]{for_terminal(str(exc))}[/]")
 
 
 def clean(
@@ -154,8 +178,9 @@ def clean(
 
     try:
         fmt = detect_format(data)
-    except ValueError:
+    except ValueError as exc:
         fmt = "plaintext"
+        _report_undetected_format(exc, json_output=json_output)
 
     if not json_output:
         console.print(

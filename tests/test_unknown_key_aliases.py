@@ -175,6 +175,10 @@ def _both_levels(key: str) -> tuple[str, str]:
 class TestNearIdenticalTyposOnly:
     """"use X" is for the alias table's own spellings and one-edit typos of them (#2099)."""
 
+    def test_a_root_alias_typo_at_the_cutoff_still_says_use(self):
+        hint = _hint(_raw_with_root(batcj_size=4), path="batcj_size")
+        assert "use training.batch_size" in hint
+
     @pytest.mark.parametrize(
         ("typo", "target"),
         [

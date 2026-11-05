@@ -203,6 +203,42 @@ def resolve_finish_reason(output: Any, max_tokens: Optional[int]) -> str:
     return "stop"
 
 
+def eos_id_set(value: Any) -> frozenset:
+    """The end-of-sequence ids in ``value``: an int, a list of ints, or neither."""
+    if isinstance(value, bool):
+        return frozenset()
+    if isinstance(value, int):
+        return frozenset({value})
+    if isinstance(value, (list, tuple)):
+        return frozenset(v for v in value if isinstance(v, int) and not isinstance(v, bool))
+    return frozenset()
+
+
+def generation_eos_ids(model: Any, tokenizer: Any) -> frozenset:
+    """The ids ``generate`` stops on: the model's generation config, else the tokenizer's."""
+    config = getattr(model, "generation_config", None)
+    ids = eos_id_set(getattr(config, "eos_token_id", None))
+    if ids:
+        return ids
+    return eos_id_set(getattr(tokenizer, "eos_token_id", None))
+
+
+def token_finish_reason(new_tokens: Any, max_tokens: Optional[int], eos_ids: frozenset) -> str:
+    """Why in-process generation ended, from the raw generated ids (#2361).
+
+    ``"stop"`` when the last id is an end-of-sequence id, even one that landed
+    exactly on the budget. ``"length"`` when the run used the whole budget
+    without one. ``"stop"`` otherwise. Read before decoding, since decoding
+    drops the end token.
+    """
+    ids = new_tokens.tolist() if hasattr(new_tokens, "tolist") else list(new_tokens)
+    if ids and ids[-1] in eos_ids:
+        return "stop"
+    if max_tokens and len(ids) >= int(max_tokens):
+        return "length"
+    return "stop"
+
+
 def is_vllm_available() -> bool:
     """Check if vLLM is installed."""
     try:
@@ -331,6 +367,7 @@ def create_vllm_app(
     max_tokens_default: int = 512,
     tokenizer=None,
     enable_dashboard: bool = False,
+    host: str = "127.0.0.1",
 ):
     """Create a FastAPI app using vLLM engine for inference.
 
@@ -346,6 +383,9 @@ def create_vllm_app(
         enable_dashboard: Recorded on ``app.state`` for introspection.
             ``/metrics`` is served either way, mirroring the transformers
             backend (#333 — the flag used to no-op entirely here).
+        host: The address ``soup serve`` binds. ``/v1/chat/completions`` and
+            ``/v1/messages`` refuse a request whose ``Origin`` names another
+            site (403), as the transformers app's generation routes do.
 
     Returns:
         FastAPI application.
@@ -355,13 +395,14 @@ def create_vllm_app(
     import time
     import uuid
 
-    from fastapi import FastAPI, HTTPException
+    from fastapi import Depends, FastAPI, HTTPException
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import StreamingResponse
     from pydantic import BaseModel as PydanticBaseModel
     from pydantic import Field
     from vllm import SamplingParams
 
+    from soup_cli.utils.local_request_guard import browser_origin_dependency
     from soup_cli.utils.metrics import ServerMetrics
 
     app = FastAPI(title="Soup Inference Server (vLLM)", version="1.0.0")
@@ -380,6 +421,9 @@ def create_vllm_app(
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
     )
+    # Origin-only check on the generation routes; Host is not checked so a proxy
+    # can front them.
+    origin_check = Depends(browser_origin_dependency(host))
 
     class ChatMessage(PydanticBaseModel):
         role: str
@@ -415,7 +459,7 @@ def create_vllm_app(
             ],
         }
 
-    @app.post("/v1/chat/completions")
+    @app.post("/v1/chat/completions", dependencies=[origin_check])
     async def chat_completions(request: ChatCompletionRequest):
         max_tokens = request.max_tokens or max_tokens_default
         request_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
@@ -589,7 +633,7 @@ def create_vllm_app(
     # Mirrors the v0.53.6 transformers-backend route. Reuses the v0.45.0
     # Part B converter + the existing chat_completions handler; streaming
     # emits the Anthropic event shape.
-    @app.post("/v1/messages")
+    @app.post("/v1/messages", dependencies=[origin_check])
     async def anthropic_messages(payload: dict):
         from soup_cli.utils.anthropic_messages import (
             from_anthropic,

@@ -40,6 +40,28 @@ def _fmt_ratio(value: float) -> str:
     return f"{value:.1f}"
 
 
+def _json_record(record: dict) -> dict:
+    """One payload record with every non-finite float replaced by ``null``.
+
+    ``json.dumps`` writes NaN and Infinity as bare tokens that strict parsers
+    reject, and a run whose loss went non-finite is exactly the run ``soup
+    rewind`` exists for. The record keeps the information that the value was
+    non-finite with ``non_finite: true``, so a ``null`` here is not confused
+    with a field that was never measured (#1818).
+    """
+    out: dict = {}
+    non_finite = False
+    for key, value in record.items():
+        if isinstance(value, float) and not math.isfinite(value):
+            out[key] = None
+            non_finite = True
+        else:
+            out[key] = value
+    if non_finite:
+        out["non_finite"] = True
+    return out
+
+
 def rewind(
     run_id: Optional[str] = typer.Argument(
         None,
@@ -234,14 +256,14 @@ def rewind(
         payload = {
             "run_id": target["run_id"],
             "step": detail_step,
-            "spikes": [asdict(s) for s in spikes],
-            "rows": [asdict(r) for r in rows],
+            "spikes": [_json_record(asdict(s)) for s in spikes],
+            "rows": [_json_record(asdict(r)) for r in rows],
         }
         from soup_cli.utils.paths import atomic_write_text
 
         try:
             atomic_write_text(
-                json.dumps(payload, indent=2),
+                json.dumps(payload, indent=2, allow_nan=False),
                 json_path,
                 prefix=".rewind.",
                 suffix=".json.tmp",

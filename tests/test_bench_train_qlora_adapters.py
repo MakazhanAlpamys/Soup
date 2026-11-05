@@ -131,7 +131,13 @@ def _lora_dtypes(model):
 
 
 class TestThroughARealTrainer:
-    def test_a_run_with_bf16_adapters_is_measured_and_valid(self, tmp_path, monkeypatch):
+    # #382: PR #2321's windows 3.12 cell (run 40761798582) died here with
+    # ``0xc000001d`` in the bf16 LoRA ``Linear.forward`` of the first real step, and
+    # the cell then hung to its timeout. Only this case casts the adapters to bf16, so it
+    # requests aten_half_matmuls, which keeps that matmul off oneDNN and MKL (#2307).
+    def test_a_run_with_bf16_adapters_is_measured_and_valid(
+        self, tmp_path, monkeypatch, aten_half_matmuls
+    ):
         """The shape TRL leaves a QLoRA model in on a bf16 card: trainable adapters
         in bf16 when the first fingerprint is taken."""
         _workdir(tmp_path, monkeypatch)

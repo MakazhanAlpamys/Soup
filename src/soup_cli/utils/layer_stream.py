@@ -1322,6 +1322,53 @@ def estimate_loss_chunk_bytes(
     return 2 * hidden_size * seq_len * batch_size * dtype_bytes(dtype)
 
 
+def estimate_recompute_bytes(
+    *,
+    hidden_size: int,
+    intermediate_size: int,
+    kv_size: int,
+    n_heads: int,
+    seq_len: int,
+    batch_size: int = 1,
+    dtype: str = "bfloat16",
+    lora_targets: int = 0,
+    lora_dropout: float = 0.0,
+    dense_layer_elements: int = 0,
+) -> int:
+    """What the backward of the last decoder layer holds besides the checkpoint boundaries (#1693).
+
+    Measured on a card, a chunked step peaks there and not in the loss: at the
+    end of that layer's checkpoint recompute, when the chunked loss buffers are
+    already freed. ``dense_layer_elements`` is one layer's NF4 weights, which
+    the dequantise + linear path rebuilds in the stream dtype and ``F.linear``
+    keeps until the layer's backward; 0 for a bf16 base. The per-token terms are
+    those of the MLP backward, the larger of the layer's two peaks per token, so
+    the sum bounds both at any length. They assume separate q/k/v/o and
+    gate/up/down projections and LoRA on hidden-sized inputs (``lora_targets``
+    of them); a ``lora_dropout`` of 0 saves no mask.
+    """
+    for name, value in (
+        ("hidden_size", hidden_size),
+        ("intermediate_size", intermediate_size),
+        ("kv_size", kv_size),
+        ("n_heads", n_heads),
+        ("seq_len", seq_len),
+        ("batch_size", batch_size),
+    ):
+        if value <= 0:
+            raise ValueError(f"{name} must be positive; got {value}")
+    element = dtype_bytes(dtype)
+    mask = 1 if lora_dropout > 0 else 0
+    per_token = (
+        8 * hidden_size  # the two RMSNorm inputs, upcast to fp32
+        + element * (3 * hidden_size + 2 * kv_size)  # q, k, v, attention and layer outputs
+        + 4 * n_heads  # attention's fp32 log-sum-exp
+        + lora_targets * (mask + element) * hidden_size  # dropout mask, autocast input copy
+        + 6 * element * intermediate_size  # gate, up and silu outputs, three gradients
+    )
+    return element * dense_layer_elements + seq_len * batch_size * per_token
+
+
 def estimate_stream_peak_vram(
     *,
     layer_bytes: int,
@@ -1339,6 +1386,7 @@ def estimate_stream_peak_vram(
     large_layer_bytes: int = 0,
     persistent_bytes: int = 0,
     loss_chunk: Optional[int] = None,
+    recompute_bytes: int = 0,
 ) -> int:
     """Predicted ``torch.cuda.max_memory_allocated()`` for a streaming step.
 
@@ -1372,6 +1420,11 @@ def estimate_stream_peak_vram(
     charged on ``min(seq_len, loss_chunk)`` tokens, at the same bytes per
     element, and :func:`estimate_loss_chunk_bytes` is added. None of the runs
     this formula was fitted to used it.
+
+    ``recompute_bytes`` is :func:`estimate_recompute_bytes`. The step peaks
+    either in the loss (the transient, logits and chunk terms) or in the last
+    layer's backward, with the checkpoint boundaries live in both, so the larger
+    of the two is charged. 0 leaves the loss phase alone.
     """
     logits_tokens = seq_len
     chunk_bytes = 0
@@ -1382,21 +1435,18 @@ def estimate_stream_peak_vram(
         chunk_bytes = estimate_loss_chunk_bytes(
             hidden_size=hidden_size, seq_len=seq_len, batch_size=batch_size, dtype=dtype
         )
-    return (
-        layer_bytes * buffers
-        + large_layer_bytes
-        + persistent_bytes
-        + extras_bytes
-        + estimate_optimizer_bytes(adapter_params)
-        + STREAM_FIXED_SLACK_BYTES
-        + estimate_activation_bytes(
-            hidden_size=hidden_size,
-            intermediate_size=intermediate_size,
-            n_layers=n_layers,
-            seq_len=seq_len,
-            batch_size=batch_size,
-            dtype=dtype,
-        )
+    activations = estimate_activation_bytes(
+        hidden_size=hidden_size,
+        intermediate_size=intermediate_size,
+        n_layers=n_layers,
+        seq_len=seq_len,
+        batch_size=batch_size,
+        dtype=dtype,
+    )
+    boundaries = dtype_bytes(dtype) * n_layers * hidden_size * seq_len * batch_size
+    loss_phase = (
+        activations
+        - boundaries
         + estimate_logits_bytes(
             vocab_size=vocab_size,
             seq_len=logits_tokens,
@@ -1404,6 +1454,16 @@ def estimate_stream_peak_vram(
             bytes_per_element=logits_bytes_per_element,
         )
         + chunk_bytes
+    )
+    return (
+        layer_bytes * buffers
+        + large_layer_bytes
+        + persistent_bytes
+        + extras_bytes
+        + estimate_optimizer_bytes(adapter_params)
+        + STREAM_FIXED_SLACK_BYTES
+        + boundaries
+        + max(loss_phase, recompute_bytes)
     )
 
 

@@ -332,7 +332,7 @@ class PretrainTrainerWrapper:
         dev_map = resolve_device_map(self.device)
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
-            "torch_dtype": resolve_base_load_dtype(
+            "dtype": resolve_base_load_dtype(
                 self.device, full_finetune=tcfg.lisa_enabled
             ),
         }

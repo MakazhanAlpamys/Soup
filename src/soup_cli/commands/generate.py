@@ -171,6 +171,13 @@ def generate(
     ),
 ):
     """Generate synthetic training data using an LLM."""
+    from soup_cli.commands._common import refuse_output_over_input
+
+    inputs = [(field, path) for field, path in (
+        ("--seed", seed_file), ("--dedup-with", dedup_with), ("--context", template_context),
+    ) if path]
+    refuse_output_over_input(inputs, [("--output", output)], console=console)
+
     if fmt not in VALID_FORMATS:
         console.print(
             f"[red]Invalid format: {fmt}. Must be one of: {', '.join(VALID_FORMATS)}[/]"
@@ -803,7 +810,7 @@ def _generate_local(
         model_name,
         trust_remote_code=trc,
         device_map="auto",
-        torch_dtype=torch.float16,
+        dtype=torch.float16,
     )
     model.eval()
 

@@ -105,6 +105,27 @@ def get_unified_memory_bytes() -> Optional[int]:
     return None
 
 
+def get_mlx_working_set_bytes() -> Optional[int]:
+    """Metal's recommended working-set size in bytes, or None if it cannot be read.
+
+    The most the GPU should hold at once on Apple Silicon, below the total unified
+    memory; ``soup profile`` checks a run's fit against it (#2049). Newer mlx has
+    ``mlx.core.device_info``; older releases only ``mlx.core.metal.device_info``.
+    """
+    if not is_apple_silicon() or not detect_mlx():
+        return None
+    try:
+        import mlx.core as mx
+
+        reader = getattr(mx, "device_info", None) or mx.metal.device_info
+        value = reader().get("max_recommended_working_set_size")
+    except Exception:  # noqa: BLE001 - no Metal device, or an mlx without the call
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
+
+
 def get_mlx_info() -> dict[str, Any]:
     """Return a full MLX detection report suitable for ``soup doctor``."""
     available = detect_mlx()

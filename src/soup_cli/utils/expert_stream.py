@@ -516,9 +516,8 @@ class _TwoReadScope:
         stack.append(self)
         return self
 
-    def __exit__(self, *exc: Any) -> bool:
+    def __exit__(self, *exc: Any) -> None:
         _SCOPES.stack.pop()
-        return False
 
 
 def _active_scope() -> Optional[_TwoReadScope]:

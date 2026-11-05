@@ -101,19 +101,20 @@ def serve(
         False,
         "--allow-mutating",
         help=(
-            "Enable the plan-only mutating tools (train_start / export). Even "
-            "when enabled they only render the command that would run - v1 "
-            "never executes training or export. Off by default: those tools "
-            "refuse."
+            "Enable the plan-only mutating tools (train_start / export): they "
+            "only render the command that would run. They never execute training "
+            "or export unless --allow-execute is also given. Off by default: "
+            "those tools refuse."
         ),
     ),
     allow_execute: bool = typer.Option(
         False,
         "--allow-execute",
         help=(
-            "Reserve the execution gate for future MCP tools. Implies "
-            "--allow-mutating, but train_start and export remain plan-only "
-            "and never execute in this version."
+            "Enable the execution tools train_execute / export_execute, which "
+            "run a plan once the confirmation token from train_start / export "
+            "is sent back. Implies --allow-mutating. Refused with --transport "
+            "sse or http: execution is stdio only."
         ),
     ),
     transport: str = typer.Option(

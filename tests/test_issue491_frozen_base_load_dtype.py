@@ -186,7 +186,7 @@ class TestWrapperModelKwargsCarryDtype:
                 wrapper._setup_transformers(cfg, cfg.training)
 
         assert load_mock.call_args is not None, "from_pretrained was never called"
-        assert load_mock.call_args.kwargs.get("torch_dtype") is sentinel
+        assert load_mock.call_args.kwargs.get("dtype") is sentinel
 
 
 class TestRewardModelHeadUpcastToFp32:

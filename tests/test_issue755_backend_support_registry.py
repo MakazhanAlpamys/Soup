@@ -185,7 +185,8 @@ def test_registry_covers_every_field_the_mlx_trainer_warns_about():
     # #1752); doctor cannot list them.
     schema_refused = {
         "training.loss_watchdog", "training.loss_spike_recovery",
-        "training.grad_accum_auto_tune", "training.use_mod",
+        "training.grad_accum_auto_tune", "training.quantization_aware",
+        "training.use_lorafa", "training.use_mod",
     }
     missing = sorted(warned - registered - schema_refused)
     assert missing == [], (

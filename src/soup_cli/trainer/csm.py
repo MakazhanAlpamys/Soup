@@ -157,7 +157,7 @@ class CSMTrainerWrapper(SFTTrainerWrapper):
         self.tokenizer = self.processor
         self.model = CsmForConditionalGeneration.from_pretrained(
             cfg.base,
-            torch_dtype=resolve_base_load_dtype(self.device, full_finetune=tcfg.lora.r == 0),
+            dtype=resolve_base_load_dtype(self.device, full_finetune=tcfg.lora.r == 0),
             trust_remote_code=self._trust_remote_code,
             **base_revision_kwargs(cfg.base),
         )

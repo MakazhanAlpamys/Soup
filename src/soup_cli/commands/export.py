@@ -13,6 +13,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
 from soup_cli.config.deprecation import EXPORT_FORMATS_REMOVED_IN
 from soup_cli.utils.terminal import for_terminal, strip_control
@@ -508,7 +509,7 @@ def _merge_adapter(
         console.print("[dim]Base revision: unknown (legacy, local source or base override)[/]")
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
-        torch_dtype=torch.float16,
+        dtype=torch.float16,
         trust_remote_code=trc,
         device_map="cpu",
         **revision_kwargs,
@@ -613,7 +614,7 @@ def _existing_llama_cpp(user_path: Optional[str] = None) -> Optional[Path]:
         path = Path(user_path)
         if path.exists():
             return path
-        console.print(f"[red]llama.cpp not found at: {path}[/]")
+        console.print(Text(f"llama.cpp not found at: {strip_control(path)}", style="red"))
         raise typer.Exit(1)
 
     # 2. LLAMA_CPP_PATH env var

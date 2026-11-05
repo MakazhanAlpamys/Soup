@@ -1831,6 +1831,7 @@ class TestV025NewRecipes:
         Issue #1867 retires the unsupported vision-preference recipe -> 169.
         Task-variant for #275 added 1 (qwen3.5-4b-dpo) -> 170.
         Task-variant for #275 added 1 (qwen3.5-2b-dpo) -> 171.
+        Task-variant for #275 added 1 (qwen3.5-0.8b-dpo) -> 172.
         """
         from soup_cli.recipes.catalog import RECIPES
         from tests.recipe_count import EXPECTED_RECIPE_COUNT, recipe_count_hint

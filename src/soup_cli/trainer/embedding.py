@@ -288,7 +288,7 @@ class EmbeddingTrainerWrapper:
 
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
-            "torch_dtype": resolve_base_load_dtype(
+            "dtype": resolve_base_load_dtype(
                 self.device, full_finetune=is_full_finetune(tcfg)
             ),
         }

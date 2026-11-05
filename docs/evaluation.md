@@ -268,6 +268,10 @@ smoke generator are unchanged (#1798).
 Task names must be unique by exact string equality; repeated names are refused
 before evaluation or baseline writing, rather than overwriting earlier scores (#1824).
 
+The `run_gate` SDK refuses a non-finite `regression_threshold` with a named
+`ValueError` before generation. Finite tolerances retain their absolute-value
+handling and strict drop boundary; CLI and config bounds are unchanged (#1844).
+
 Baselines may be a registry reference (`registry://<name-or-id>`), a file path, or omitted for the first run. A registry baseline uses the newest eval row for each benchmark — re-measuring a benchmark replaces its baseline score — and warns, per benchmark, when that row's scorer stamp is missing or from a different scorer revision. A task whose evaluation raises (`ValueError`, `FileNotFoundError`, `OSError`, or a judge that stays unreachable) gets no score and fails the gate closed under `on_regression: stop`; the log line lists it as a task that could not be scored, with the error, rather than as a regression (#1447).
 
 A zero-byte or whitespace-only judge prompt file is an input error naming the
@@ -433,6 +437,15 @@ Exit codes are CI-gateable: **0 = SHIP, 2 = DON'T SHIP, 3 = usage/flag error, 1 
 single regressed benchmark, or a missing baseline all yield DON'T SHIP (a missing baseline
 *refuses* rather than silently shipping).
 
+With a local `--adapter`, ship reads the adapter weights before loading either model. If every
+`lora_B` tensor is zero (an untrained adapter, or a DPO run's `ref/` folder) and no other saved
+tensor is non-zero, the adapter adds nothing to the base model: the verdict is DON'T SHIP with
+failed rule `adapter_noop`, and no evidence is written. Adapters without `lora_B` keys (VeRA and
+other PEFT types) are not refused, and an `--adapter` that is not a local directory (a Hub id) is
+skipped without a message. Weights the reader refuses (`adapter_model.bin`, a symlink, a path
+outside the working directory, or a file over 2 GiB) print a warning and the live run continues
+(#2410).
+
 ```bash
 # Live: base vs a LoRA adapter, metric leg + default mini benchmarks
 soup ship --base HuggingFaceTB/SmolLM2-135M-Instruct --adapter ./out \
@@ -490,7 +503,11 @@ Countable task and bundled-suite groups start at `done: 0`, `total: null` until
 the scorer resolves its items. Each `progress` follows actual item scoring,
 including a generation/predicate failure recorded as a failed item, and reports
 the now-known total. Scalar generation reports before the next item is generated;
-batch generation reports scored items after the batch returns. `end` includes
+live batch generation reports scored items after each generation chunk returns,
+before the next chunk starts (eight prompts by default). A failed chunk retries
+its prompts individually without repeating completed chunks. Third-party batch
+generators can expose a positive integer `batch_size` to declare this boundary;
+without it, their results are reported after their whole batch returns. `end` includes
 the final count (zero for an empty item list). Metric and judge-score groups are
 per side; pairwise scoring reports one `tuned` comparison group, with the base
 reference implicit, and counts one completed swap-debiased pair per task.
@@ -510,6 +527,14 @@ item alone is not an error event. Exit 2 (DON'T SHIP) is a completed verdict wit
 `end`, while usage/runtime failures terminate the verdict with `error`. No clock
 or throughput field is promised. Suite names are the explicitly requested public
 benchmark identifiers; task text, responses, paths and credentials are not event fields.
+
+If an unexpected exception aborts `--progress jsonl`, stdout prints its type and
+message as `Error: <type>: <message>`, with terminal controls removed and markup
+shown literally, and the command exits 1. Stderr still contains only JSONL events
+with the fixed `execution_aborted` diagnostic. Ctrl+C also terminates the active
+groups with `error` events and exits 130. Errors the command already handles keep
+their existing output and exit codes; the behavior without `--progress jsonl` is
+unchanged.
 
 **`--evidence` shape** (no model load — the offline / CI path):
 
@@ -537,9 +562,11 @@ CPU-instant):
 
 Custom task evaluation and bundled suites accept an ordinary `gen(prompt) -> str`
 callable and also use its optional `gen.batch(prompts) -> list[str]` method. Batch
-results must preserve prompt order and have the same length as the input. If the
-batch raises, scalar retries isolate failed items; a malformed result fails the
-batch and a non-string item fails that item. Generation failures always score zero,
+results must preserve the original prompt order and count. Each batch receives its
+own list and may mutate or consume it without changing chunk membership. If a
+batch raises, scalar retries use that chunk's original prompts in their original
+order; a malformed result fails that chunk and a non-string item fails that item.
+Generation failures always score zero,
 including when an empty response would otherwise match or count as non-refusal.
 
 The shared live greedy generator used by `soup ship` exposes this method with left
@@ -551,8 +578,8 @@ configuration is not changed. Successful outputs retain the same scores and the 
 CLI output format is unchanged. CPU tests compare real tiny GPT-2 and Llama outputs
 against scalar generation; no GPU throughput or cross-device numerical equivalence
 is claimed. Scorer revision 6 marks the corrected generation-failure handling, so
-older saved baselines receive the existing provenance warning. Progress events are
-a separate follow-up to #1759.
+older saved baselines receive the existing provenance warning. Chunk boundaries and lazy scalar
+generation are preserved, so scoring and progress still precede the next chunk.
 
 Each suite is >20 items so a single-item flip (1/N < 0.05) trips the default threshold instead
 of being rounded away. The scorer is answer-**extraction** — a spurious substring inside a word
@@ -1045,7 +1072,7 @@ soup eval quant-check --before X --after Y --tasks t.jsonl --allow-stub
 - `MINOR` — score drop 2–5% (investigate)
 - `MAJOR` — score drop ≥ 5% (do NOT ship, exits code 2)
 
-Paths are containment-checked, and `registry://` refs are resolved with an optional `kinds` filter so you never pick the wrong artifact. Standalone `.gguf` file paths are refused up front; pass directory paths containing safetensors/HuggingFace weights or `registry://` references.
+Paths are containment-checked, and `registry://` refs are resolved with an optional `kinds` filter so you never pick the wrong artifact. Standalone `.gguf` file paths are refused up front; pass directory paths containing safetensors/HuggingFace weights or `registry://` references. An unparseable or unreadable `--tasks` file is refused as a usage error (exit 3) with the task loader's message before any model is loaded.
 
 ### Custom Eval Format
 

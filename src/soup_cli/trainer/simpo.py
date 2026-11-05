@@ -233,6 +233,7 @@ class SimPOTrainerWrapper(StreamingSetupMixin):
                 "max_length": cfg.data.max_length,
                 "max_prompt_length": cfg.data.max_length // 2,
                 "truncation_mode": cpo_config.truncation_mode,
+                "only_when_overflow": True,
             }
             self.trainer.train_dataset = enforce_preference_sequence_limit(
                 self.trainer.train_dataset, **cap_kwargs
@@ -305,7 +306,7 @@ class SimPOTrainerWrapper(StreamingSetupMixin):
         dev_map = resolve_device_map(self.device)
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
-            "torch_dtype": resolve_frozen_base_load_dtype(self.device),
+            "dtype": resolve_frozen_base_load_dtype(self.device),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj

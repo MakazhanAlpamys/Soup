@@ -1308,8 +1308,8 @@ class TestAdapterBisectEvalCommand:
         assert not run.calls
         output = _plain(result.output)
         assert (
-            "Eval failed for soup-eval-a: --eval-command program 'soup-eval-a' was not "
+            "--eval-command program 'soup-eval-a' was not "
             "found on PATH" in output
         )
-        assert "BROKEN_AT" in output
+        assert "BROKEN_AT" not in output
         assert result.exit_code == 2, (result.output, repr(result.exception))

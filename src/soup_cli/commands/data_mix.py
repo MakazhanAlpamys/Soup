@@ -22,6 +22,9 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
+
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
@@ -116,12 +119,17 @@ def mix(
         try:
             data_block = load_mix_recipe(apply_recipe)
         except (ValueError, FileNotFoundError, TypeError) as exc:
-            console.print(f"[red]apply failed: {escape(str(exc))}[/red]")
+            # Most messages name the path with repr(), but a YAML error quotes the
+            # source line as it is in the file, and PyYAML accepts U+202E there.
+            console.print(f"[red]apply failed: {for_terminal(exc)}[/red]", emoji=False)
             raise typer.Exit(code=2) from exc
         console.print(
             Panel.fit(
-                f"[bold]Loaded recipe:[/bold] {escape(apply_recipe)}\n"
-                f"[dim]Splice the following block into your soup.yaml[/dim]"
+                Text.from_markup(
+                    f"[bold]Loaded recipe:[/bold] {for_terminal(apply_recipe)}\n"
+                    f"[dim]Splice the following block into your soup.yaml[/dim]",
+                    emoji=False,
+                )
             )
         )
         # Round-trip via the renderer so the user sees the canonical shape.
@@ -141,7 +149,8 @@ def mix(
             # exactly one dataset): data.train is a single string. Quote it
             # the same way render_mix_recipe_yaml does — an unquoted path
             # like "odd: name.jsonl" is not valid YAML when pasted back.
-            console.print(f"  train: {escape(json.dumps(train_value))}")
+            # json.dumps writes control characters as uXXXX escapes (ensure_ascii).
+            console.print(f"  train: {escape(json.dumps(train_value))}", emoji=False)
         else:
             # #443 — current recipes: data.train is the full dataset list,
             # index-aligned with data.interleave.probs, now that soup train
@@ -149,7 +158,7 @@ def mix(
             # on disk, which happened to be list-shaped by accident.)
             console.print("  train:")
             for path in train_value or []:
-                console.print(f"    - {escape(str(path))}")
+                console.print(f"    - {for_terminal(path)}", emoji=False)
         return
 
     if not datasets:
@@ -158,12 +167,20 @@ def mix(
         )
         raise typer.Exit(code=2)
     raw = [p.strip() for p in datasets.split(",") if p.strip()]
+    from soup_cli.commands._common import refuse_output_over_input
+
+    inputs = [("--datasets", path) for path in raw]
+    if live and base_yaml:
+        inputs.append(("--base-yaml", base_yaml))
+    refuse_output_over_input(inputs, [("--output", output)], console=console)
     try:
         plan = build_optimization_plan(
             raw, budget=budget, num_probes=num_probes, seed=seed
         )
     except (ValueError, TypeError) as exc:
-        console.print(f"[red]plan validation failed: {escape(str(exc))}[/red]")
+        console.print(
+            f"[red]plan validation failed: {escape(str(exc))}[/red]", emoji=False
+        )
         raise typer.Exit(code=2) from exc
 
     console.print(
@@ -203,7 +220,7 @@ def mix(
     try:
         path = write_mix_recipe(report, output, overwrite=overwrite)
     except (ValueError, OSError) as exc:
-        console.print(f"[red]write failed: {escape(str(exc))}[/red]")
+        console.print(f"[red]write failed: {escape(str(exc))}[/red]", emoji=False)
         raise typer.Exit(code=2) from exc
 
     if math.isfinite(report.best_eval_loss):
@@ -211,8 +228,10 @@ def mix(
     else:
         loss_str = "n/a"
     console.print(
-        f"[green]wrote recipe:[/green] {escape(path)}  "
-        f"(best_loss={loss_str}, partial={report.partial})"
+        f"[green]wrote recipe:[/green] {for_terminal(path)}  "
+        f"(best_loss={loss_str}, partial={report.partial})",
+        emoji=False,
     )
     # Echo the recipe for grep-ability.
-    console.print(render_mix_recipe_yaml(report))
+    # The recipe is YAML text with the dataset paths in it, not markup.
+    console.print(strip_control(render_mix_recipe_yaml(report)), markup=False, emoji=False)

@@ -1703,6 +1703,16 @@
       "training.lr": 1e-05,
       "training.moe_lora": true
     },
+    "qwen3.5-0.8b-dpo": {
+      "base": "Qwen/Qwen3.5-0.8B",
+      "data.format": "dpo",
+      "data.max_length": 4096,
+      "data.train": "./data/preference_train.jsonl",
+      "task": "dpo",
+      "training.lora.alpha": 32,
+      "training.lora.r": 16,
+      "training.lr": 5e-06
+    },
     "qwen3.5-0.8b-grpo": {
       "base": "Qwen/Qwen3.5-0.8B",
       "data.format": "auto",

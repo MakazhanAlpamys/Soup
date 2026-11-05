@@ -247,7 +247,8 @@ class TestPythonToolDiagnostics:
         assert data["timed_out"] is False
         assert data["exit_code"] != 0
         assert "SyntaxError" in data["stderr"]
-        assert "line 7" in data["stderr"]
+        # The caller's own line number, under the file name the route compiles it as.
+        assert 'File "<code>", line 1' in data["stderr"]
 
 
 class TestWWWAuthenticateHeaderOn401:

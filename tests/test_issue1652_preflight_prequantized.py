@@ -223,7 +223,7 @@ class TestAnFp8BaseOnceLoaded:
         base, params = fp8_checkpoint
         model = transformers.AutoModelForCausalLM.from_pretrained(
             base,
-            torch_dtype="auto",  # what Soup passes for a frozen base
+            dtype="auto",  # what Soup passes for a frozen base
             quantization_config=build_quantization_config_for_loader(
                 tcfg=_cfg("fp8").training, base=base
             ),

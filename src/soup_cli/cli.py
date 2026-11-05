@@ -349,15 +349,16 @@ from soup_cli.commands import active_sample as _active_sample_cmd  # noqa: E402
 
 data.app.command(name="active-sample")(_active_sample_cmd.active_sample)
 
-# v0.63.0 Part D — mSPRT A/B harness.
+# v0.63.0 Part D — Bayes-factor A/B harness.
 from soup_cli.commands import ab as _ab_cmd  # noqa: E402
 
 app.command(
     name="ab",
     help=(
-        "Two-sided mSPRT sequential A/B harness on latency / judge_score / retry_rate: "
-        "reports whether the treatment is better or worse, valid under re-running after "
-        "every new row (v0.63.0)."
+        "Two-sided sequential A/B harness on latency / judge_score / retry_rate "
+        "(Bayes factor with a confidence-sequence accept rule): reports whether "
+        "the treatment is better or worse, valid under re-running after every "
+        "new row (v0.63.0)."
     ),
 )(_ab_cmd.ab)
 

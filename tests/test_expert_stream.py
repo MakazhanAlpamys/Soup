@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import pytest
 
-from tests._windows_ci import skip_on_windows_ci
-
 CUDA = pytest.mark.gpu(reason="NF4 dequantisation needs bitsandbytes on CUDA")
 #: ``StreamedExperts.two_reads``: off is the default node layout; on puts the routing
 #: multiply inside the expert's autograd node so a checkpoint recompute reads nothing.
@@ -155,19 +153,20 @@ def test_streamed_experts_routing_weight_gradient_when_the_input_needs_none(tmp_
 
 
 # The bf16 case runs a CPU bf16 matmul under autocast, and part of GitHub's windows-latest
-# fleet dies on it with 0xc000001d (illegal instruction) in the eager reference module's
-# forward; the crash kills the xdist worker and the cell later times out (#382, #1314).
-# Only that case is skipped, and only on a Windows CI runner: the fp32 control, a developer's
-# Windows box, ubuntu and macos all still run it.
+# fleet died on it with 0xc000001d (illegal instruction) in the eager reference module's
+# forward (run 40003126970; #382, #1314). The test requests aten_half_matmuls, which keeps
+# those matmuls off oneDNN and MKL, so the case runs on every cell (#2307).
 @TWO_READS
 @pytest.mark.parametrize(
     "autocast",
     [
         pytest.param(False, id="fp32-control"),
-        pytest.param(True, id="cpu-bf16-autocast", marks=skip_on_windows_ci),
+        pytest.param(True, id="cpu-bf16-autocast"),
     ],
 )
-def test_streamed_experts_backward_preserves_forward_autocast(tmp_path, autocast, two_reads):
+def test_streamed_experts_backward_preserves_forward_autocast(
+    tmp_path, autocast, two_reads, aten_half_matmuls
+):
     """Recomputation must differentiate the forward precision after its AMP region exits."""
     import torch
 
@@ -953,11 +952,13 @@ def _step_capturing(net, ids, autocast=False):
     "cell",
     [
         pytest.param("fp32", id="fp32"),
-        pytest.param("bf16", id="bf16", marks=skip_on_windows_ci),
-        pytest.param("bf16-autocast", id="bf16-autocast", marks=skip_on_windows_ci),
+        pytest.param("bf16", id="bf16"),
+        pytest.param("bf16-autocast", id="bf16-autocast"),
     ],
 )
-def test_two_read_experts_equal_the_resident_model_and_the_default_path(tmp_path, cell):
+def test_two_read_experts_equal_the_resident_model_and_the_default_path(
+    tmp_path, cell, aten_half_matmuls
+):
     """Logits, loss, dX, the router-output gradients, the router weight's gradient and
     every LoRA gradient of the resident eager model, the default streamed path and two
     reads, bit for bit. The bf16-autocast cell runs the forward under CPU autocast and
