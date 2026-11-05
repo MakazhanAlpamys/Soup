@@ -657,6 +657,10 @@ Soup's optimizer allowlist (`utils.optimizer_zoo`) is far wider than anything
 MLX ships, so most valid values have no MLX equivalent. Run those recipes on
 the transformers backend.
 
+Adafactor uses `relative_step=False` and `scale_parameter=False`, so the
+configured learning rate, warmup and schedule control its updates instead of
+MLX's default relative step size and parameter-RMS scaling.
+
 The schedule counts **optimizer updates**, not iterations: mlx-lm calls
 `optimizer.update()` once every `gradient_accumulation_steps`, so a warmup of
 `warmup_ratio × (iters // gradient_accumulation_steps)` is what actually runs.
