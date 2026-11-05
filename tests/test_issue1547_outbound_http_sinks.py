@@ -280,6 +280,22 @@ DECLARED_SINKS: dict[tuple[str, str], DeclaredSink] = {
             "validate_webhook_url and restricts target to local/LAN via _endpoint_is_local"
         ),
     ),
+    ("utils/loop_stages.py", "_post_load"): DeclaredSink(
+        calls=("soup_cli.utils.http_response.post_capped",),
+        gate=("deploy_to_canary", "validate_webhook_url"),
+        reason=(
+            "operator environment: deploy_to_canary validates endpoint via "
+            "validate_webhook_url and restricts target to local/LAN; reply capped"
+        ),
+    ),
+    ("utils/loop_stages.py", "_post_deactivate"): DeclaredSink(
+        calls=("soup_cli.utils.http_response.post_capped",),
+        gate=("_checked_endpoint", "validate_webhook_url"),
+        reason=(
+            "operator environment: switch_served_adapter takes the endpoint from "
+            "_checked_endpoint (validate_webhook_url + local/LAN only); reply capped"
+        ),
+    ),
     ("utils/sglang.py", "generate_with_runtime"): DeclaredSink(
         calls=("httpx.post",),
         gate=None,
