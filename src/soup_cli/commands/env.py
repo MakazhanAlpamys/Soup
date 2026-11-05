@@ -15,6 +15,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.env_lock import (
     DEFAULT_LOCK_FILE,
@@ -68,11 +69,14 @@ def env_lock_cmd(
 
     console.print(
         Panel(
-            f"[green]Locked {len(lock.entries)} packages to "
-            f"{for_terminal(output)}[/]\n"
-            f"Python: {for_terminal(lock.python_version)} | "
-            f"Platform: {for_terminal(lock.platform)} | "
-            f"CUDA: {for_terminal(lock.cuda_version or 'none')}",
+            Text.from_markup(
+                f"[green]Locked {len(lock.entries)} packages to "
+                f"{for_terminal(output)}[/]\n"
+                f"Python: {for_terminal(lock.python_version)} | "
+                f"Platform: {for_terminal(lock.platform)} | "
+                f"CUDA: {for_terminal(lock.cuda_version or 'none')}",
+                emoji=False,
+            ),
             title="env lock",
             border_style="green",
         )

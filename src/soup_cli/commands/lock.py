@@ -18,8 +18,10 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
 from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR, GateCommand
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
@@ -66,13 +68,14 @@ def write_lock_cmd(
             env_lock_obj = read_env_lock(env_lock)
         except FileNotFoundError as exc:
             console.print(
-                f"[red]--env-hash not provided and {escape(env_lock)!s} not found.[/]\n"
+                f"[red]--env-hash not provided and {for_terminal(env_lock)} not found.[/]\n"
                 "Either pass --env-hash <64-hex> explicitly, or run "
-                "`soup env lock` first to create soup-env.lock."
+                "`soup env lock` first to create soup-env.lock.",
+                emoji=False,
             )
             raise typer.Exit(2) from exc
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]{escape(str(exc))}[/]")
+            console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
             raise typer.Exit(2) from exc
         env_hash = compute_env_hash(env_lock_obj)
 
@@ -93,14 +96,17 @@ def write_lock_cmd(
         )
         write_lock(lock, output)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(2) from exc
 
     console.print(
         Panel(
-            f"Lock:        [bold]{escape(output)}[/]\n"
-            f"Base:        [bold]{escape(base_model)}[/]\n"
-            f"Closure SHA: [bold]{closure[:12]}…[/]",
+            Text.from_markup(
+                f"Lock:        [bold]{for_terminal(output)}[/]\n"
+                f"Base:        [bold]{for_terminal(base_model)}[/]\n"
+                f"Closure SHA: [bold]{closure[:12]}…[/]",
+                emoji=False,
+            ),
             title="soup.lock written",
         )
     )
@@ -116,19 +122,24 @@ def show_lock_cmd(
     try:
         lock = read_lock(path)
     except (FileNotFoundError, TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
+    # The version, the base model and the date come from the file; the shas are
+    # checked as 64 hex characters. The title is a Text so the path is not read as markup.
     console.print(
         Panel(
-            f"Soup version:    [bold]{escape(lock.soup_version)}[/]\n"
-            f"Base model:      [bold]{escape(lock.base_model)}[/]\n"
-            f"Base SHA:        [bold]{lock.base_model_sha[:16]}…[/]\n"
-            f"Dataset SHA:     [bold]{lock.dataset_sha[:16]}…[/]\n"
-            f"Env hash:        [bold]{lock.env_hash[:16]}…[/]\n"
-            f"Closure SHA:     [bold]{lock.closure_sha[:16]}…[/]\n"
-            f"Created at:      [bold]{escape(lock.created_at)}[/]",
-            title=f"soup.lock — {escape(path)}",
+            Text.from_markup(
+                f"Soup version:    [bold]{for_terminal(lock.soup_version)}[/]\n"
+                f"Base model:      [bold]{for_terminal(lock.base_model)}[/]\n"
+                f"Base SHA:        [bold]{lock.base_model_sha[:16]}…[/]\n"
+                f"Dataset SHA:     [bold]{lock.dataset_sha[:16]}…[/]\n"
+                f"Env hash:        [bold]{lock.env_hash[:16]}…[/]\n"
+                f"Closure SHA:     [bold]{lock.closure_sha[:16]}…[/]\n"
+                f"Created at:      [bold]{for_terminal(lock.created_at)}[/]",
+                emoji=False,
+            ),
+            title=Text(f"soup.lock — {strip_control(path)}"),
         )
     )
 
@@ -153,7 +164,7 @@ def check_lock_cmd(
     try:
         expected = read_lock(path)
     except (FileNotFoundError, TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     try:
@@ -175,15 +186,21 @@ def check_lock_cmd(
             created_at=expected.created_at,
         )
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     drift = check_lock_drift(expected, actual)
+    display_path = strip_control(path)
     if drift.ok:
         console.print(
             Panel(
-                f"Lock:        [bold]{escape(path)}[/]\n"
-                f"Status:      [green]OK[/] — closure matches",
+                Text.assemble(
+                    "Lock:        ",
+                    (display_path, "bold"),
+                    "\nStatus:      ",
+                    ("OK", "green"),
+                    " — closure matches",
+                ),
                 title="soup lock check",
             )
         )
@@ -191,8 +208,12 @@ def check_lock_cmd(
 
     console.print(
         Panel(
-            f"Lock:    [bold]{escape(path)}[/]\n"
-            f"Status:  [red]DRIFT[/]",
+            Text.assemble(
+                "Lock:    ",
+                (display_path, "bold"),
+                "\nStatus:  ",
+                ("DRIFT", "red"),
+            ),
             title="soup lock check",
         )
     )
@@ -201,6 +222,7 @@ def check_lock_cmd(
     if __version__ != expected.soup_version:
         console.print(
             f"[yellow]Note: soup version changed "
-            f"({escape(expected.soup_version)} -> {escape(__version__)})[/]"
+            f"({for_terminal(expected.soup_version)} -> {escape(__version__)})[/]",
+            emoji=False,
         )
     raise typer.Exit(EXIT_GATE_FAILED)

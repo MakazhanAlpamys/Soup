@@ -44,6 +44,13 @@ soup merge --adapter ./output --base meta-llama/Llama-3.1-8B --dtype bfloat16
 soup merge --adapter ./output --output ./merged --low-memory
 ```
 
+Both merge paths reuse the base commit recorded in the adapter's `soup_run.json`
+when its base ID matches and its revision source is `hub_commit`, and print
+`Base revision: <commit> (recorded run)`. A different `--base` override, a local
+base, a non-Hugging-Face source or a legacy adapter keeps its existing loading
+behavior and prints the revision as unknown; Soup does not query today's Hub
+head to fill missing training history.
+
 `--low-memory` reads the base `.safetensors` files and writes the merged files
 one tensor at a time, so peak RAM is about one shard (the largest `.safetensors`
 file; a single-file model is memory-mapped as a whole, so it saves little). The
@@ -448,6 +455,8 @@ response = client.chat.completions.create(
 )
 ```
 
+On the default Transformers backend, including a MoLE runtime, `finish_reason` is `"length"` when generation used the whole `max_tokens` budget without an end token and `"stop"` otherwise, even when the end token is the last one the budget allows. `/v1/messages` reports the same as `stop_reason` `max_tokens` / `end_turn`, in the reply and in the final `message_delta` event.
+
 ### KV Cache Quantization (`soup serve --kv-cache-type`)
 
 Shrink the inference-time KV cache on the transformers backend:
@@ -824,7 +833,7 @@ still records the URL it was given.
 
 **Pages:**
 - **Dashboard** — view all experiment runs, loss charts, system info, multi-run comparison
-- **New Training** — create configs from templates or 172 ready-made recipes, validate, start training with live SSE log streaming and progress bar
+- **New Training** — create configs from templates or 173 ready-made recipes, validate, start training with live SSE log streaming and progress bar
 - **Data Explorer** — browse and inspect datasets (JSONL, JSON, CSV, Parquet)
 - **Model Chat** — chat with streaming responses, configurable temperature/top_p/max_tokens, system prompt, adapter selection, markdown rendering, chat export
 
@@ -833,7 +842,7 @@ still records the URL it was given.
 - **Enhanced Metrics** — 2x2 chart grid (loss, LR, grad_norm, throughput) + GPU memory chart, eval results table
 - **Multi-Run Compare** — overlay loss curves from up to 5 runs side-by-side
 - **Chat Upgrade** — SSE streaming via proxy, typing indicator, cancel button, markdown renderer (bold, italic, code blocks), chat export as JSON
-- **Config Builder** — recipe dropdown (172 recipes), config schema API for dynamic form generation
+- **Config Builder** — recipe dropdown (173 recipes), config schema API for dynamic form generation
 
 Gradient norm is nullable: backends or steps that do not report it store and
 stream `null`, and the Web UI chart leaves a gap instead of drawing a false

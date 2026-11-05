@@ -1,5 +1,6 @@
 """Env lock contents and paths are data, never terminal control sequences."""
 
+import sys
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,7 +12,7 @@ from typer.testing import CliRunner
 from soup_cli.cli import app
 from soup_cli.commands import env
 from soup_cli.utils.env_lock import EnvEntry, EnvLock, read_lock, write_lock
-from tests.conftest import strip_ansi
+from tests.conftest import make_cli_runner, strip_ansi
 
 DIRTY = "[bold]value\x1b\x07\x9b\u202e[/]"
 CLEAN = "[bold]value[/]"
@@ -72,6 +73,31 @@ def test_lock_sanitizes_snapshot_and_success_path_but_keeps_file_contents(workdi
     assert CLEAN in output
     assert "[bold]lock[end].json" in output
     assert read_lock(name) == lock
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="':' is not valid in a Windows filename")
+def test_lock_receipt_keeps_alias_in_the_written_path(workdir, monkeypatch):
+    lock = _lock()
+    monkeypatch.setattr(env, "snapshot_env", lambda: lock)
+    name = "[bold]snapshot-:warning:\x9b\u202e.lock"
+
+    result = make_cli_runner().invoke(app, ["env", "lock", "--output", name])
+
+    assert "\x9b" not in result.stdout and "\u202e" not in result.stdout
+    assert "Locked 1 packages to [bold]snapshot-:warning:.lock" in _plain(result)
+    assert read_lock(name) == lock
+    assert not Path("[bold]snapshot-:warning:.lock").exists()
+
+
+def test_lock_receipt_keeps_alias_in_snapshot_metadata(workdir, monkeypatch):
+    lock = replace(_lock(), platform="[bold]platform-:warning:\x9b\u202e[/]")
+    monkeypatch.setattr(env, "snapshot_env", lambda: lock)
+
+    result = make_cli_runner().invoke(app, ["env", "lock"])
+
+    assert "\x9b" not in result.stdout and "\u202e" not in result.stdout
+    assert "Platform: [bold]platform-:warning:[/] | CUDA: 12.4" in _plain(result)
+    assert read_lock("soup-env.lock") == lock
 
 
 @pytest.mark.parametrize("command", ["status", "check", "fix"])

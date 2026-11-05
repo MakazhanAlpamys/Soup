@@ -23,6 +23,7 @@ from soup_cli.utils.ab_test import (
     retired_beta_message,
     validate_metric_name,
 )
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -74,7 +75,7 @@ def ab(
     try:
         canonical = validate_metric_name(metric)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(2) from exc
 
     slack_url, discord_url = validate_webhook_flags(
@@ -109,10 +110,10 @@ def ab(
         rows = read_msprt_rows(input_path, config=cfg)
         verdict = msprt_step(cfg, control=rows.control, treatment=rows.treatment)
     except FileNotFoundError:
-        console.print(f"[red]Input not found: {escape(input_path)}[/]")
+        console.print(f"[red]Input not found: {for_terminal(input_path)}[/]", emoji=False)
         raise typer.Exit(1) from None
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(1) from exc
 
     # The test is two-sided (#1227): a reject_h0 carries the direction, read
