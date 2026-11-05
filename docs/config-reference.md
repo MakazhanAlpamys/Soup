@@ -36,6 +36,8 @@ Sections:
 - [`data`](#data)
 - [`training`](#training)
 - [`training.lora`](#traininglora)
+- [`training.laya_reward`](#traininglaya_reward)
+- [`training.laya_reward.question`](#traininglaya_rewardquestion)
 - [`training.eval_gate`](#trainingeval_gate)
 - [`eval`](#eval)
 - [`eval.ship`](#evalship)
@@ -146,6 +148,7 @@ Sections:
 | `training.grpo_beta` | `float` | `0.1` | `>= 0.0`; finite | GRPO beta - KL penalty coefficient (default 0.1). Set to 0 to disable the KL penalty entirely (KL-free recipes like DAPO and Dr. GRPO, #1247). |
 | `training.num_generations` | `int` | `4` | `>= 2` | Number of generations per prompt for GRPO |
 | `training.reward_fn` | `str \| null` | `"accuracy"` |  | Reward function: 'accuracy', 'format', 'verifiable', 'judge_rank' (GRPO only, an LLM judge ranks each prompt's completions; see grpo_judge, #2047), a path to a custom .py file, or a comma-separated ensemble of the above (e.g. 'accuracy,format') — the comma form is GRPO-only (v0.71.40). |
+| `training.laya_reward` | `section \| null` | `null` |  | Optional Laya typed-decision reward. Mutually exclusive with an explicit reward_fn, prm_reward, and reward_model. See [`training.laya_reward`](#traininglaya_reward). |
 | `training.verifiable_domain` | `str \| null` | `null` | one of `"math"`, `"code"`, `"json_schema"` | RLVR verifiable reward domain: math \| code \| json_schema. Required when reward_fn='verifiable'. |
 | `training.prm_reward` | `str \| null` | `null` |  | Path (or HF id) to a Soup-trained PRM (task='prm') used as the GRPO per-step reward (v0.71.30). When set, the PRM replaces reward_fn. Requires task='grpo', backend='transformers', modality='text'. |
 | `training.prm_aggregate` | `str` | `"min"` | one of `"min"`, `"prod"`, `"last"` | How PRM per-step scores fold into one reward: min (weakest-link, default) \| prod \| last. Only meaningful when prm_reward is set. NOTE: 'prod' assumes per-step scores are bounded in \~\[0,1] (a probability of step-correctness). Soup's PRM head is trained with unconstrained MSE regression, so 'prod' can blow up / flip sign on unbounded labels — prefer the default 'min' unless your PRM labels are calibrated to \[0,1]. |
@@ -375,6 +378,23 @@ Sections:
 | `training.lora.init_strategy` | `str` | `"random"` | one of `"random"`, `"pissa"`, `"olora"`, `"loftq"` | LoRA init strategy. 'random' (default) is standard Kaiming init. 'pissa' (PiSSA) initializes A/B from the SVD of the base weight — faster early convergence but adds an SVD pass on the first epoch. 'olora' is equivalent to use_olora=True (orthogonal QR init). 'loftq' (v0.41.0) initialises A/B + a low-bit base together, useful with QLoRA. Cannot be combined with use_dora or use_vera. |
 | `training.lora.loftq_iter` | `int` | `1` | `>= 1`, `<= 10` | LoftQ iteration count (1-10). Higher = better quant-aware init at the cost of one-time setup latency. Used only when init_strategy='loftq'. |
 | `training.lora.loftq_bits` | `int` | `4` | one of `2`, `4`, `8` | LoftQ target bitwidth — must be one of {2, 4, 8}. Used only when init_strategy='loftq'. |
+
+## `training.laya_reward`
+
+| Key | Type | Default | Constraints | Description |
+|---|---|---|---|---|
+| `training.laya_reward.checkpoint` | `str` | **required** |  | Laya checkpoint path or Hugging Face ID |
+| `training.laya_reward.subfolder` | `str \| null` | `null` |  | Optional checkpoint subfolder |
+| `training.laya_reward.question` | `section` | **required** |  | Inline Laya question. See [`training.laya_reward.question`](#traininglaya_rewardquestion). |
+
+## `training.laya_reward.question`
+
+| Key | Type | Default | Constraints | Description |
+|---|---|---|---|---|
+| `training.laya_reward.question.id` | `str` | **required** |  | Answer key to extract from Laya's response |
+| `training.laya_reward.question.type` | `str` | **required** | one of `"score"`, `"noul"` | Numeric Laya answer primitive to use as the reward |
+| `training.laya_reward.question.instructions` | `str` | **required** |  | Instructions shown to Laya |
+| `training.laya_reward.question.criteria` | `list[str] \| dict[str, str] \| null` | `null` |  | Score criteria or optional Noul criteria |
 
 ## `training.eval_gate`
 
