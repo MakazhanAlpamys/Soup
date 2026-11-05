@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:soup-cli:loop:conversation:1",
   "title": "Soup loop conversation record",
-  "description": "One line per model answer, appended to a conversation log (default layout: .soup-loops/conversations/*.jsonl). `id` identifies the answer; feedback records point at it through `response_id`. Readers ignore unknown fields. Lines without `schema_version` are version 0 (the pre-loop `soup serve --trace-log` line) and are not described by this schema.",
+  "description": "One line per model answer, appended to a conversation log (default layout: .soup-loops/traces/*.jsonl, the directory soup loop harvests by default). `id` identifies the answer; feedback records point at it through `response_id`. Readers ignore unknown fields. Lines without `schema_version` are version 0 (the pre-loop `soup serve --trace-log` line) and are not described by this schema.",
   "type": "object",
   "required": ["schema_version", "id", "ts", "model", "messages", "response", "tokens", "source"],
   "properties": {

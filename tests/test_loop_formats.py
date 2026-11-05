@@ -77,7 +77,7 @@ def test_unknown_format_name_is_refused_by_name():
 def test_default_layout_keeps_every_log_under_soup_loops():
     for name, path in loop_formats.DEFAULT_LAYOUT.items():
         assert path.startswith(".soup-loops/"), name
-    assert loop_formats.DEFAULT_LAYOUT["conversation"].endswith("conversations")
+    assert loop_formats.DEFAULT_LAYOUT["conversation"] == ".soup-loops/traces"
 
 
 # ---------------------------------------------------------------------------

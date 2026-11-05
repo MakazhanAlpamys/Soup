@@ -13,7 +13,7 @@ package:
 
 | Format | One line per | Default path | Schema | Example |
 |---|---|---|---|---|
-| conversation | model answer | `.soup-loops/conversations/*.jsonl` | `soup_cli/schemas/loop/conversation.schema.json` | `soup_cli/schemas/loop/examples/conversation.jsonl` |
+| conversation | model answer | `.soup-loops/traces/*.jsonl` | `soup_cli/schemas/loop/conversation.schema.json` | `soup_cli/schemas/loop/examples/conversation.jsonl` |
 | feedback | feedback action on one answer | `.soup-loops/feedback.jsonl` | `.../feedback.schema.json` | `.../examples/feedback.jsonl` |
 | iteration | step of one loop iteration | `.soup-loops/iterations.jsonl` | `.../iteration.schema.json` | `.../examples/iteration.jsonl` |
 | version | change of the active version | `.soup-loops/versions.jsonl` | `.../version.schema.json` | `.../examples/version.jsonl` |

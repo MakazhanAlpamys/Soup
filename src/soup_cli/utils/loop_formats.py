@@ -22,7 +22,7 @@ SCHEMA_VERSION = 1
 #: ``conversation`` is a directory: every ``*.jsonl`` file in it is read.
 DEFAULT_LAYOUT: Mapping[str, str] = MappingProxyType(
     {
-        "conversation": ".soup-loops/conversations",
+        "conversation": ".soup-loops/traces",
         "feedback": ".soup-loops/feedback.jsonl",
         "iteration": ".soup-loops/iterations.jsonl",
         "version": ".soup-loops/versions.jsonl",
