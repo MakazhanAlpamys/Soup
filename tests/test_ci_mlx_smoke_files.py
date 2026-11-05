@@ -28,7 +28,7 @@ from typing import Any
 import pytest
 import yaml
 
-from tests._source_scan import parse_source, walk_nodes
+from tests._source_scan import memoized_scan, parse_source, walk_nodes
 
 ROOT = Path(__file__).resolve().parents[1]
 CI = ROOT / ".github" / "workflows" / "ci.yml"
@@ -55,6 +55,7 @@ EXEMPT: dict[str, str] = {
 }
 
 
+@memoized_scan
 def _needs_real_mlx(source: str) -> bool:
     """True when some test is gated on a real MLX package: `pytest.importorskip("mlx...")`.
 
@@ -62,6 +63,8 @@ def _needs_real_mlx(source: str) -> bool:
     gate would fail collection in the 3x3 matrix). The call may sit in a fixture, a method, a
     module-level line or an assignment, be imported bare, or pass the name as `modname=`.
     """
+    if "importorskip" not in source:
+        return False
     for node in walk_nodes(parse_source(source)):
         if not isinstance(node, ast.Call):
             continue
@@ -142,6 +145,7 @@ def _test_files() -> list[Path]:
     return sorted(TESTS.glob("test_*.py"))
 
 
+@memoized_scan
 def _needing_the_real_library() -> list[str]:
     return [
         path.name
