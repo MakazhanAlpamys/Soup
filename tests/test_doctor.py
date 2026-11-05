@@ -1206,10 +1206,11 @@ def test_doctor_disk_probes_configured_cache_dir_and_shows_path(tmp_path, monkey
 
     result = runner.invoke(app, ["doctor", "--disk"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert usage_paths == [expected_root]
+    assert usage_paths == [".", expected_root]
     assert probe_paths == [expected_root]
 
     plain = _plain(result.output)
+    assert f"400 GB free ({expected_root})" in plain
     assert f"NVMe (cache: {expected_root})" in plain
 
 
@@ -1244,10 +1245,11 @@ def test_doctor_disk_probes_default_cache_root_when_env_unset(tmp_path, monkeypa
 
     result = runner.invoke(app, ["doctor", "--disk"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert usage_paths == [str(tmp_path)]
+    assert usage_paths == [".", str(tmp_path)]
     assert probe_paths == [str(tmp_path)]
 
     plain = _plain(result.output)
+    assert f"400 GB free ({default_root})" in plain
     assert f"SATA SSD (cache: {default_root})" in plain
 
 
@@ -1283,10 +1285,11 @@ def test_doctor_disk_does_not_create_missing_cache_root(tmp_path, monkeypatch):
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert not missing_cache.exists()
     assert not missing_cache.parent.exists()
-    assert usage_paths == [expected_parent]
+    assert usage_paths == [".", expected_parent]
     assert probe_paths == [expected_parent]
 
     plain = _plain(result.output)
+    assert f"400 GB free ({expected_root})" in plain
     assert f"NVMe (cache: {expected_root})" in plain
 
 

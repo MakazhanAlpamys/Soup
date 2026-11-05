@@ -88,7 +88,8 @@ def doctor(
             "Detect the disk media type (NVMe / SSD / HDD). Layer streaming's "
             "disk overflow tier needs NVMe. Off by default: the probe costs ~9 s "
             "on Windows, and on Linux it WRITES a ~64 MiB scratch file "
-            "(.soup-diskprobe-*, git-ignored) into the layer cache folder "
+            "(.soup-diskprobe-*, git-ignored) into the layer cache folder, or its "
+            "nearest existing parent when it has not been created yet "
             "(SOUP_LAYER_STREAM_CACHE_DIR or ~/.soup/layer-stream) to "
             "measure sequential read throughput."
         ),
@@ -969,7 +970,7 @@ def _check_resources(probe_disk: bool = False, issues: list[str] | None = None):
     probe_path = _existing_probe_path(cache_root)
 
     try:
-        usage = shutil.disk_usage(probe_path)
+        usage = shutil.disk_usage(".")
         disk_str = f"{usage.free / _GB:.0f} GB free"
     except OSError:
         disk_str = "Unknown"
@@ -995,6 +996,11 @@ def _check_resources(probe_disk: bool = False, issues: list[str] | None = None):
         except Exception:  # noqa: BLE001 — a diagnostic must never crash the report
             kind = "unknown"
         cache_label = for_terminal(str(cache_root))
+        try:
+            cache_free = f"{shutil.disk_usage(probe_path).free / _GB:.0f} GB free"
+        except OSError:
+            cache_free = "Unknown"
+        table.add_row("Disk (layer cache)", f"{cache_free} ({cache_label})")
         verdict = {
             "nvme": (
                 f"[green]NVMe[/] (cache: {cache_label}) "
