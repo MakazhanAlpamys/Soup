@@ -144,7 +144,7 @@ appear in the order they were run, not in the order they would read best.
    correctness asserted in the same process. That is too expensive to be a
    silent automatic fallback.
 
-   > **CLARIFICATION 2026-11-04 — "asserted" in this item means checked and
+   > **CLARIFICATION 2026-11-05 — "asserted" in this item means checked and
    > reported, not required to pass.** In STEP 8 the `pin=True` arm was timed
    > while it was WRONG (8/256 gradients on all three repetitions) and the
    > `pin=False` arm was exact (256/256). The 6.56x is the ratio of those two
