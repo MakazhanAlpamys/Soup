@@ -712,3 +712,17 @@ class TestState:
 
         assert read_state().canary_started_ts is None
         assert read_state().canary_active is None
+
+    def test_withdrawing_a_first_canary_clears_it(self, cwd):
+        # Nothing promoted yet: rollback withdraws the canary that waits for ratings.
+        _cli(*_INIT)
+        write_state(replace(
+            read_state(), canary_active="v1", canary_traffic_pct=5.0, canary_started_ts=T0,
+        ))
+
+        result, text = _cli("rollback")
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+
+        assert "canary withdrawn: v1" in text
+        assert read_state().canary_started_ts is None
+        assert read_state().canary_active is None

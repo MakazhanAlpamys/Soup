@@ -620,6 +620,7 @@ def rollback_cmd() -> None:
                 canary_traffic_pct=None,
                 canary_rollout_id=None,
                 canary_adapter=None,
+                canary_started_ts=None,
             )
         )
         console.print(

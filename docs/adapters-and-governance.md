@@ -277,9 +277,9 @@ far each side is: `canary quality: 12/30 canary, 40/30 stable rated (UNKNOWN)`.
 
 So once a feedback log exists, a canary waits for ratings: it is promoted only after 30
 canary and 30 stable answers were rated, and `soup loop watch` starts no new iteration
-until then. `soup loop rollback` ends a wait (it withdraws the running canary together
-with returning to the previous version), but it refuses when no version was promoted yet;
-then `soup loop canary <adapter>` starts a new rollout instead. A loop without a feedback
+until then. `soup loop rollback` ends a wait: it withdraws the running canary, and after a
+promotion it also returns to the previous version. `soup loop canary <adapter>` starts a
+new rollout instead. A loop without a feedback
 log, or a canary that recorded no start (a `loop.yaml` from before the field), is judged by
 errors alone, as before.
 
