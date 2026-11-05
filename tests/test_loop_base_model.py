@@ -250,3 +250,55 @@ def test_base_model_field_is_validated():
         _state(base_model="")
     with pytest.raises(ValueError, match="base_model must not contain NUL"):
         _state(base_model="a\x00b")
+
+
+# ---------------------------------------------------------------------------
+# A served LoRA adapter directory trains from its own base
+# ---------------------------------------------------------------------------
+
+
+def _adapter_dir(root, config) -> str:
+    path = root / "adapters" / "chat"
+    path.mkdir(parents=True)
+    (path / "adapter_config.json").write_text(
+        config if isinstance(config, str) else json.dumps(config), encoding="utf-8"
+    )
+    return str(path)
+
+
+def test_adapter_dir_trains_from_its_base_model(cwd):
+    served = _adapter_dir(cwd, {"base_model_name_or_path": "Qwen/Qwen2.5-0.5B-Instruct"})
+    assert ls.resolve_base_model(served) == "Qwen/Qwen2.5-0.5B-Instruct"
+    assert ls.resolve_base_model_source(served)[1] == f"adapter_config.json in {served}"
+
+
+@pytest.mark.parametrize(
+    "config",
+    [{"base_model_name_or_path": ""}, {"r": 8}, ["not", "a", "mapping"], "{not json"],
+    ids=["empty", "missing", "not-a-mapping", "invalid-json"],
+)
+def test_adapter_dir_without_a_base_is_refused(cwd, config):
+    served = _adapter_dir(cwd, config)
+    with pytest.raises(ValueError, match="adapter_config.json") as info:
+        ls.resolve_base_model(served)
+    assert "--base-model" in str(info.value)
+
+
+def test_explicit_base_model_beats_the_adapter_config(cwd):
+    served = _adapter_dir(cwd, {"base_model_name_or_path": "Qwen/Qwen2.5-0.5B-Instruct"})
+    assert ls.resolve_base_model(served, "org/explicit") == "org/explicit"
+
+
+def test_init_names_where_the_base_came_from(cwd):
+    served = _adapter_dir(cwd, {"base_model_name_or_path": "Qwen/Qwen2.5-0.5B-Instruct"})
+    result, text = _invoke("init", served, "--eval", "suite.yaml", "--baseline", "b", "--pre-wired")
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert read_state().base_model == "Qwen/Qwen2.5-0.5B-Instruct"
+    assert "Qwen/Qwen2.5-0.5B-Instruct (from adapter_config.json in" in text
+
+
+def test_init_pre_wired_refuses_an_adapter_dir_without_a_base(cwd):
+    served = _adapter_dir(cwd, {"r": 8})
+    result, text = _invoke("init", served, "--eval", "suite.yaml", "--baseline", "b", "--pre-wired")
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    assert "names no base_model_name_or_path" in text

@@ -100,7 +100,8 @@ def init_cmd(
         None, "--base-model",
         help=(
             "Model the pre-wired train stage starts from. Default: the registry "
-            "entry's base model for a registry://<id> served model, otherwise the "
+            "entry's base model for a registry://<id> served model, the "
+            "base_model_name_or_path of a LoRA adapter directory, otherwise the "
             "served model itself."
         ),
     ),
@@ -130,11 +131,12 @@ def init_cmd(
     if base_model is not None and not base_model.strip():
         console.print("[red]--base-model must not be empty[/]")
         raise typer.Exit(code=2)
-    from soup_cli.utils.loop_stages import resolve_base_model
+    from soup_cli.utils.loop_stages import resolve_base_model_source
 
     resolved_base: Optional[str] = None
+    base_source = ""
     try:
-        resolved_base = resolve_base_model(served_model, base_model)
+        resolved_base, base_source = resolve_base_model_source(served_model, base_model)
     except ValueError as exc:
         if pre_wired:
             console.print(f"[red]cannot determine the base model:[/] {for_terminal(exc)}")
@@ -164,7 +166,8 @@ def init_cmd(
             f"served_model: [bold]{escape(state.served_model)}[/]\n"
             f"eval_suite:   [bold]{escape(state.eval_suite)}[/]\n"
             f"baseline:     [bold]{escape(state.baseline)}[/]\n"
-            f"base_model:   [bold]{escape(state.base_model or 'unknown')}[/]",
+            f"base_model:   [bold]{escape(state.base_model or 'unknown')}[/]"
+            + (f" (from {escape(base_source)})" if base_source else ""),
             title="soup loop init",
         )
     )

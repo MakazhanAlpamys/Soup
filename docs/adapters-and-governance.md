@@ -123,8 +123,9 @@ soup loop watch --poll-interval 300
 soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod --pre-wired
 soup loop watch --pre-wired --pack-cans --poll-interval 300
 
-# The train stage starts from the registry entry's base model (registry://<id>),
-# from --base-model, or from the served model itself. When none is known,
+# The train stage starts from --base-model, the registry entry's base model
+# (registry://<id>), the base_model_name_or_path of a served LoRA adapter
+# directory, or the served model itself. When none is known,
 # `init --pre-wired` and `watch --pre-wired` refuse instead of training a stand-in.
 soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod \
     --pre-wired --base-model Qwen/Qwen2.5-0.5B-Instruct
