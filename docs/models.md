@@ -71,12 +71,12 @@ whose `scatter` operator still requires `int64` indices, Soup widens only the
 QSA indexer's local index tensors before LoRA injection; Torch and the upstream
 Transformers class remain unchanged.
 
-`soup recipes use qwen3.5-2b-dpo` and `soup recipes use qwen3.5-4b-dpo` select
-the 2B and 4B language decoders for text preference pairs (`prompt`, `chosen`,
-`rejected`). Both inherit the shipped
+`soup recipes use qwen3.5-0.8b-dpo`, `qwen3.5-2b-dpo` and `qwen3.5-4b-dpo` select
+the 0.8B, 2B and 4B language decoders for text preference pairs (`prompt`, `chosen`,
+`rejected`). All three inherit the shipped
 Qwen3.5-9B DPO settings: `lr: 5e-6`, three epochs, LoRA rank 16 / alpha 32,
 4-bit quantization and a 4096-token limit. These are inherited starting values,
-not measured 2B or 4B tuning recommendations. The model's visual tower is excluded;
+not measured 0.8B, 2B or 4B tuning recommendations. The model's visual tower is excluded;
 image preference data is not supported by these recipes. The 2B config's native
 text architecture and LoRA attachment have been checked on the meta device, with
 a tiny random decoder's forward/backward pass checked on CPU. This does not
