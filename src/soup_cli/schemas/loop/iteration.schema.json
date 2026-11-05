@@ -1,0 +1,224 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:soup-cli:loop:iteration:1",
+  "title": "Soup loop iteration record",
+  "description": "A snapshot of one harvest -> train -> verdict -> canary cycle, appended to .soup-loops/iterations.jsonl (default layout) each time the iteration advances; the latest line per iteration_id wins. Which version is active is NOT read from here but from the version log (version.schema.json). The first deployed model is a seed line: parent_iteration_id and from_version null, to_version 1, outcome promoted. Readers ignore unknown fields.",
+  "type": "object",
+  "required": ["schema_version", "iteration_id", "started_at", "outcome"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "iteration_id": {"$ref": "#/$defs/iteration_id"},
+    "parent_iteration_id": {
+      "description": "The iteration whose version this one started from; null for the seed line.",
+      "oneOf": [{"$ref": "#/$defs/iteration_id"}, {"type": "null"}]
+    },
+    "from_version": {
+      "description": "The version that was active when the iteration started; null for the seed line.",
+      "oneOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]
+    },
+    "to_version": {
+      "description": "The version this iteration produces; null when it ended before producing one.",
+      "oneOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]
+    },
+    "started_at": {"$ref": "#/$defs/utc_timestamp"},
+    "finished_at": {
+      "description": "When the iteration reached a final outcome; null while it is still running or in canary.",
+      "oneOf": [{"$ref": "#/$defs/utc_timestamp"}, {"type": "null"}]
+    },
+    "data": {
+      "description": "What the harvest read.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["until"],
+          "properties": {
+            "until": {
+              "description": "Cursor: conversation and feedback lines with ts up to and including this moment were considered. The next iteration reads only newer lines.",
+              "oneOf": [{"$ref": "#/$defs/utc_timestamp"}, {"type": "null"}]
+            },
+            "conversations": {"$ref": "#/$defs/count"},
+            "feedback": {
+              "type": "object",
+              "description": "Feedback lines counted after the latest-wins rule.",
+              "properties": {
+                "thumb_up": {"$ref": "#/$defs/count"},
+                "thumb_down": {"$ref": "#/$defs/count"},
+                "rating": {"$ref": "#/$defs/count"},
+                "edit": {"$ref": "#/$defs/count"},
+                "comment": {"$ref": "#/$defs/count"}
+              }
+            }
+          }
+        },
+        {"type": "null"}
+      ]
+    },
+    "dataset": {
+      "description": "The training data built from the harvest.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "path": {"oneOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
+            "sha256": {
+              "oneOf": [{"type": "string", "pattern": "^[0-9a-f]{64}$"}, {"type": "null"}]
+            },
+            "dpo_pairs": {"$ref": "#/$defs/count"},
+            "kto_rows": {"$ref": "#/$defs/count"}
+          }
+        },
+        {"type": "null"}
+      ]
+    },
+    "train": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["method", "base"],
+          "properties": {
+            "method": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "description": "The Soup training task, e.g. dpo or kto."
+            },
+            "run_id": {"oneOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
+            "base": {
+              "type": "string",
+              "minLength": 1,
+              "description": "What training actually loaded as its starting point (a base model id, or a merged earlier version's directory)."
+            },
+            "root_base": {
+              "description": "The original base model id the version line descends from, when base is a merged earlier version.",
+              "oneOf": [{"type": "string", "minLength": 1}, {"type": "null"}]
+            }
+          }
+        },
+        {"type": "null"}
+      ]
+    },
+    "verdict": {
+      "description": "The check before rollout.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["decision", "method"],
+          "properties": {
+            "decision": {
+              "enum": ["SHIP", "DON'T SHIP", "SKIPPED", "ERROR"],
+              "description": "SHIP and DON'T SHIP are soup ship's decisions; SKIPPED and ERROR mean no verdict was reached, and the iteration does not roll out."
+            },
+            "method": {"enum": ["ship", "eval_gate"]},
+            "baseline": {
+              "description": "What the candidate was compared against.",
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": ["kind", "ref"],
+                  "properties": {
+                    "kind": {"enum": ["base", "version"]},
+                    "ref": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "What was loaded as the baseline: a base model id (kind base), or the served name or path of an earlier version (kind version)."
+                    },
+                    "version": {
+                      "description": "The baseline's version number; required when kind is version.",
+                      "oneOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]
+                    }
+                  },
+                  "if": {"properties": {"kind": {"const": "version"}}, "required": ["kind"]},
+                  "then": {
+                    "required": ["version"],
+                    "properties": {"version": {"type": "integer", "minimum": 1}}
+                  }
+                },
+                {"type": "null"}
+              ]
+            },
+            "path": {
+              "description": "The verdict report file.",
+              "oneOf": [{"type": "string", "minLength": 1}, {"type": "null"}]
+            },
+            "reason": {"oneOf": [{"type": "string", "maxLength": 4096}, {"type": "null"}]}
+          }
+        },
+        {"type": "null"}
+      ]
+    },
+    "canary": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["traffic_pct"],
+          "properties": {
+            "traffic_pct": {"type": "number", "minimum": 0, "maximum": 100},
+            "samples": {
+              "type": "object",
+              "description": "Answers observed per bucket during this canary.",
+              "properties": {
+                "stable": {"$ref": "#/$defs/count"},
+                "canary": {"$ref": "#/$defs/count"}
+              }
+            },
+            "verdict": {
+              "enum": ["OK", "MAJOR", "UNKNOWN", null],
+              "description": "UNKNOWN: too few samples so far."
+            }
+          }
+        },
+        {"type": "null"}
+      ]
+    },
+    "artifacts": {
+      "description": "What is needed to serve this iteration's version again.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "adapter": {"oneOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
+            "merged": {"oneOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
+            "gguf": {"oneOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
+            "served_as": {
+              "description": "The name the version is served under: a soup serve adapter name, or an Ollama tag such as myproj:v2.",
+              "oneOf": [{"type": "string", "minLength": 1, "maxLength": 256}, {"type": "null"}]
+            }
+          }
+        },
+        {"type": "null"}
+      ]
+    },
+    "estimated_cost_usd": {"oneOf": [{"type": "number", "minimum": 0}, {"type": "null"}]},
+    "outcome": {
+      "enum": ["running", "canary", "promoted", "rolled_back", "skipped", "failed"],
+      "description": "running: not past the verdict yet. canary: serving a share of traffic. promoted: to_version became the active version. rolled_back: the canary was withdrawn. skipped: nothing to train or no verdict reached. failed: a stage errored."
+    },
+    "reason": {
+      "description": "Why the iteration has this outcome, in plain words.",
+      "oneOf": [{"type": "string", "maxLength": 4096}, {"type": "null"}]
+    }
+  },
+  "patternProperties": {
+    "^x_[a-z][a-z0-9_]*$": {
+      "type": "object",
+      "description": "Producer extension namespace (x_<app>). Soup never reads or rewrites it."
+    }
+  },
+  "$defs": {
+    "iteration_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "not": {"pattern": "[.][.]"},
+      "description": "Unique, safe as a directory name. soup-cli writes iter-<UTC YYYYMMDDTHHMMSS>-<8 hex>."
+    },
+    "utc_timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,9})?(Z|[+]00:00)$",
+      "description": "ISO 8601 date-time in UTC, suffix Z or +00:00."
+    },
+    "count": {"type": "integer", "minimum": 0}
+  }
+}

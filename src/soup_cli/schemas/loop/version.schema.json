@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:soup-cli:loop:version:1",
+  "title": "Soup loop version change record",
+  "description": "One line each time the active version changes, appended to .soup-loops/versions.jsonl (default layout). The active version is the to_version of the last line. The first deployed model is cause initial; a canary that becomes the main version is cause promote; going back to an earlier version, automatic or by a person, is cause rollback. Readers ignore unknown fields.",
+  "type": "object",
+  "required": ["schema_version", "id", "ts", "from_version", "to_version", "cause", "actor"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "This line's own id, a UUID in canonical lowercase form."
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,9})?(Z|[+]00:00)$",
+      "description": "When the switch took effect, ISO 8601 UTC."
+    },
+    "from_version": {
+      "description": "The version that was active before; null only for cause initial.",
+      "oneOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]
+    },
+    "to_version": {"type": "integer", "minimum": 1, "description": "The version active from now on."},
+    "cause": {"enum": ["initial", "promote", "rollback"]},
+    "actor": {
+      "enum": ["loop", "user"],
+      "description": "loop: the automatic cycle decided (e.g. a canary regression). user: a person decided."
+    },
+    "iteration_id": {
+      "description": "The iteration that produced to_version (promote) or whose canary was withdrawn (rollback).",
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "not": {"pattern": "[.][.]"}
+        },
+        {"type": "null"}
+      ]
+    },
+    "served_as": {
+      "description": "The name to_version is served under: a soup serve adapter name, or an Ollama tag such as myproj:v1.",
+      "oneOf": [{"type": "string", "minLength": 1, "maxLength": 256}, {"type": "null"}]
+    },
+    "alias": {
+      "description": "The moving name that now points at to_version (e.g. the Ollama model myproj), if the producer keeps one.",
+      "oneOf": [{"type": "string", "minLength": 1, "maxLength": 256}, {"type": "null"}]
+    },
+    "reason": {"oneOf": [{"type": "string", "maxLength": 4096}, {"type": "null"}]},
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9_.-]*$",
+      "description": "Which program wrote the line (e.g. soup-loop, or the Soup Zero surface)."
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"cause": {"const": "initial"}}, "required": ["cause"]},
+      "then": {"properties": {"from_version": {"type": "null"}}},
+      "else": {"properties": {"from_version": {"type": "integer", "minimum": 1}}}
+    }
+  ],
+  "patternProperties": {
+    "^x_[a-z][a-z0-9_]*$": {
+      "type": "object",
+      "description": "Producer extension namespace (x_<app>). Soup never reads or rewrites it."
+    }
+  }
+}
