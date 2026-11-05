@@ -92,6 +92,8 @@ def test_the_loop_on_a_real_model(tmp_path, monkeypatch):
                               headers={"content-type": resp.headers.get("content-type", "")})
 
     monkeypatch.setattr(httpx, "post", post)
+    # Loading and deactivating read the reply through post_capped.
+    monkeypatch.setattr("soup_cli.utils.http_response.post_capped", post)
 
     def chat(content, conversation_id=None):
         body = {"messages": [{"role": "user", "content": content}], "max_tokens": 16}
