@@ -328,3 +328,38 @@ def test_successful_setup_does_not_close_runtime(
 
     assert mock_runtime.close.call_count == 0
     assert wrapper._stream_runtime is mock_runtime
+
+
+def test_a_close_error_with_markup_still_keeps_the_setup_error(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The close error is printed as typed and still never replaces the setup error."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+
+    buffer = io.StringIO()
+    monkeypatch.setattr(
+        sft_module, "console", Console(file=buffer, force_terminal=False, width=200)
+    )
+
+    mock_runtime = _MockStreamRuntime()
+    mock_runtime.close.side_effect = OSError(
+        "cannot unmap shard [/] in [bold]runs[/bold]\x1b[31m"
+    )
+    _install_mock_streaming(monkeypatch, mock_runtime)
+
+    def _failing_map(*args: Any, **kwargs: Any) -> None:
+        raise ValueError("Original dataset validation failed")
+
+    monkeypatch.setattr("soup_cli.trainer.sft._map_text_sft_rows", _failing_map)
+
+    cfg = _make_stream_sft_config(tiny_model_dir("llama"), stream_layers=True)
+    wrapper = SFTTrainerWrapper(cfg, device="cpu")
+
+    with pytest.raises(ValueError, match="Original dataset validation failed"):
+        wrapper.setup({"train": [{"messages": []}]})
+
+    printed = " ".join(buffer.getvalue().split())
+    assert "cannot unmap shard [/] in [bold]runs[/bold]" in printed
+    assert "\x1b" not in buffer.getvalue()
