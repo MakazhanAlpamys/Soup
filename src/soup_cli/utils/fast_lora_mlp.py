@@ -16,6 +16,7 @@ from soup_cli.utils.fast_lora import (
     _dense_weight,
     _flatten,
     _is_supported_lora_projection,
+    _projection_compute_dtype,
     _projection_state,
     _release_single_projection,
     _scaled_lora_add,
@@ -40,6 +41,15 @@ def _mlp_function() -> Any:
     import torch.nn.functional as functional
 
     class _FastLoraSwiGLU(torch.autograd.Function):
+        """Fused SwiGLU LoRA block with PEFT's dtype boundary.
+
+        Forward: each 4-bit base matmul runs in its own compute dtype, then
+        returns to the input dtype before the LoRA branch and SiLU. Backward:
+        the base ``dX`` terms run in the compute dtype, as bitsandbytes'
+        ``MatMul4Bit.backward`` does, then return to the input dtype for the
+        LoRA add and SwiGLU math.
+        """
+
         @staticmethod
         def forward(
             ctx, x, wg, bg, wu, bu, wd, bd,
@@ -53,34 +63,36 @@ def _mlp_function() -> Any:
                 list(qparts[starts[i] : starts[i] + counts[i]]) for i in range(3)
             ]
 
-            # Match PEFT's dtype boundary: the 4-bit base matmul runs in the
-            # bitsandbytes compute dtype, but its result returns to the input
-            # dtype before the LoRA branch (and the SwiGLU activations) run.
-            # Casting the whole block to the compute dtype first rounds the
-            # LoRA input to fp16 before its own bf16 cast (#792).
-            base_dtype = next(
-                (
-                    meta["_compute_dtype"]
-                    for meta in metas
-                    if meta is not None and meta.get("_compute_dtype") is not None
-                ),
-                x.dtype,
-            )
-            base_x = x if x.dtype == base_dtype else x.to(base_dtype)
-            dense_g = _dense_weight(wg, qg_meta, qlists[0], base_dtype)
-            dense_u = _dense_weight(wu, qu_meta, qlists[1], base_dtype)
+            # Match PEFT's dtype boundary: each 4-bit base matmul runs in its
+            # own bitsandbytes compute dtype, while a dense sibling stays in
+            # x.dtype. The base result returns to x.dtype before the LoRA
+            # branch (and the SwiGLU activations) run. Casting the whole block
+            # to the compute dtype first rounds the LoRA input (#792).
+            g_dtype = _projection_compute_dtype(qg_meta, x.dtype)
+            u_dtype = _projection_compute_dtype(qu_meta, x.dtype)
+            g_x = x if x.dtype == g_dtype else x.to(g_dtype)
+            u_x = x if x.dtype == u_dtype else x.to(u_dtype)
+            dense_g = _dense_weight(wg, qg_meta, qlists[0], g_dtype)
+            dense_u = _dense_weight(wu, qu_meta, qlists[1], u_dtype)
             base_g = functional.linear(
-                base_x, dense_g,
-                _as_dtype(bg, base_dtype) if bg is not None else None,
+                g_x, dense_g,
+                _as_dtype(bg, g_dtype) if bg is not None else None,
             )
             base_u = functional.linear(
-                base_x, dense_u,
-                _as_dtype(bu, base_dtype) if bu is not None else None,
+                u_x, dense_u,
+                _as_dtype(bu, u_dtype) if bu is not None else None,
             )
-            cast_base = base_x is not x
-            g = base_g.to(x.dtype) if qg_meta is not None or cast_base else base_g
-            u = base_u.to(x.dtype) if qu_meta is not None or cast_base else base_u
-            del base_x, base_g, base_u, dense_g, dense_u
+            g = (
+                base_g.to(x.dtype)
+                if qg_meta is not None or g_x is not x
+                else base_g
+            )
+            u = (
+                base_u.to(x.dtype)
+                if qu_meta is not None or u_x is not x
+                else base_u
+            )
+            del g_x, u_x, base_g, base_u, dense_g, dense_u
 
             has_g, has_u, has_d = ag.numel() != 0, au.numel() != 0, ad.numel() != 0
             gu_parts = []
@@ -107,12 +119,8 @@ def _mlp_function() -> Any:
                 h_gu = x.new_empty((*x.shape[:-1], 0))
 
             m = functional.silu(g) * u
-            if qd_meta is None:
-                base_m = m
-                down_dtype = m.dtype
-            else:
-                base_m = m if m.dtype == base_dtype else m.to(base_dtype)
-                down_dtype = base_dtype
+            down_dtype = _projection_compute_dtype(qd_meta, m.dtype)
+            base_m = m if m.dtype == down_dtype else m.to(down_dtype)
             dense_d = _dense_weight(wd, qd_meta, qlists[2], down_dtype)
             base_y = functional.linear(
                 base_m, dense_d,
@@ -157,8 +165,13 @@ def _mlp_function() -> Any:
             m = silu_g * u
             grad_ad = grad_bdl = None
 
-            dense_d = _dense_weight(wd, qd_meta, qd, grad_y.dtype)
-            grad_m = torch.matmul(grad_y, dense_d)
+            # As in PEFT's Linear4bit path, only the base dX term runs in
+            # the compute dtype; the grad that reaches the LoRA branch and the
+            # SwiGLU backward stays in the input dtype.
+            down_dtype = _projection_compute_dtype(qd_meta, grad_y.dtype)
+            dense_d = _dense_weight(wd, qd_meta, qd, down_dtype)
+            grad_m = torch.matmul(_as_dtype(grad_y, down_dtype), dense_d)
+            grad_m = _as_dtype(grad_m, grad_y.dtype)
             del dense_d
             if has_d:
                 hd = torch.matmul(_as_dtype(m, ad.dtype), ad.t())
@@ -187,12 +200,16 @@ def _mlp_function() -> Any:
 
             grad_x = None
             if ctx.needs_input_grad[0]:
-                dense_g = _dense_weight(wg, qg_meta, qg, grad_g.dtype)
-                grad_x = torch.matmul(grad_g, dense_g)
+                g_dtype = _projection_compute_dtype(qg_meta, grad_g.dtype)
+                dense_g = _dense_weight(wg, qg_meta, qg, g_dtype)
+                grad_x = torch.matmul(_as_dtype(grad_g, g_dtype), dense_g)
+                grad_x = _as_dtype(grad_x, grad_g.dtype)
                 del dense_g
-                dense_u = _dense_weight(wu, qu_meta, qu, grad_u.dtype)
-                grad_x = torch.add(grad_x, torch.matmul(grad_u, dense_u))
-                del dense_u
+                u_dtype = _projection_compute_dtype(qu_meta, grad_u.dtype)
+                dense_u = _dense_weight(wu, qu_meta, qu, u_dtype)
+                grad_u_base = torch.matmul(_as_dtype(grad_u, u_dtype), dense_u)
+                grad_x = torch.add(grad_x, _as_dtype(grad_u_base, grad_u.dtype))
+                del dense_u, grad_u_base
 
             grad_ag = grad_bgl = grad_au = grad_bul = None
             dh_parts = []
