@@ -46,7 +46,8 @@ _LOG = logging.getLogger(__name__)
 
 _PAIRS_DIR = ".soup-loops/pairs"
 _ADAPTERS_DIR = ".soup-loops/adapters"
-_DEFAULT_TRACE_DIR = ".soup-loops/traces"
+# Read without being configured before trace_dir existed; now only named in a warning.
+_LEGACY_TRACE_DIR = ".soup-loops/traces"
 # #1440 — `source` tag on pairs harvested from the `--record-thumbs` database.
 _THUMBS_SOURCE = "soup-serve-thumbs"
 
@@ -62,12 +63,28 @@ _DEPLOY_POSTER: Optional[Callable[[str, str], bool]] = None
 # ---------------------------------------------------------------------------
 
 
-def _resolve_trace_dir(state: LoopState) -> Optional[str]:
-    """Resolve the directory of ``*.jsonl`` serve logs to harvest from.
+def _configured_trace_dir(state: LoopState) -> Optional[Tuple[str, str]]:
+    """Return ``(path, field)`` of the configured trace directory, or ``None``.
 
-    Resolution order: ``SOUP_LOOP_TRACE_DIR`` env → ``served_model`` if it is
-    an existing local dir → ``.soup-loops/traces``. Returns ``None`` when no
-    usable directory exists.
+    ``SOUP_LOOP_TRACE_DIR`` overrides ``trace_dir`` from ``loop.yaml``
+    (``soup loop init --trace-dir``), as for the thumbs database.
+    """
+    env = os.environ.get("SOUP_LOOP_TRACE_DIR")
+    if env:
+        return env, "SOUP_LOOP_TRACE_DIR"
+    if state.trace_dir:
+        return state.trace_dir, "trace_dir"
+    return None
+
+
+def _resolve_trace_dir(state: LoopState) -> Optional[str]:
+    """Return the configured directory of ``*.jsonl`` serve logs, or ``None``.
+
+    Only an explicit setting counts (``_configured_trace_dir``). The served
+    model directory and ``.soup-loops/traces`` used to be tried as well, so a
+    model directory that happened to hold ``*.jsonl`` files was harvested as
+    serve logs. ``None`` when nothing is configured or the directory does not
+    exist yet.
 
     Note: this is the one read surface in this module that intentionally does
     NOT enforce cwd-containment — operators legitimately keep serve logs
@@ -77,17 +94,38 @@ def _resolve_trace_dir(state: LoopState) -> Optional[str]:
     """
     if _TRACE_DIR_RESOLVER is not None:
         return _TRACE_DIR_RESOLVER(state)
-    env = os.environ.get("SOUP_LOOP_TRACE_DIR")
-    candidates = []
-    if env:
-        candidates.append(env)
-    if state.served_model and not state.served_model.startswith("registry://"):
-        candidates.append(state.served_model)
-    candidates.append(_DEFAULT_TRACE_DIR)
-    for cand in candidates:
-        if cand and os.path.isdir(cand):
-            return cand
+    configured = _configured_trace_dir(state)
+    if configured is not None and os.path.isdir(configured[0]):
+        return configured[0]
     return None
+
+
+def trace_dir_notice(state: LoopState) -> Optional[str]:
+    """Check the trace directory setting before a pre-wired watch starts.
+
+    Raises ``ValueError`` naming the field when the configured path exists but
+    is not a directory. Returns a warning when the configured directory does
+    not exist yet, or when nothing is configured but the old implicit
+    ``.soup-loops/traces`` directory exists (it is no longer read); otherwise
+    ``None``.
+    """
+    configured = _configured_trace_dir(state)
+    if configured is None:
+        if os.path.isdir(_LEGACY_TRACE_DIR):
+            return (
+                f"{_LEGACY_TRACE_DIR} is not read unless it is configured; pass "
+                f"soup loop init --trace-dir {_LEGACY_TRACE_DIR} or set SOUP_LOOP_TRACE_DIR"
+            )
+        return None
+    path, field = configured
+    if os.path.isdir(path):
+        return None
+    if os.path.exists(path):
+        raise ValueError(f"{field}: {quote_path(path)} is not a directory")
+    return (
+        f"{field}: no conversation logs at {quote_path(path)} yet; "
+        f"soup serve --trace-log {quote_path(os.path.join(path, 'serve.jsonl'))} writes them"
+    )
 
 
 def _resolve_thumbs_db(state: LoopState) -> Optional[Tuple[str, str]]:
