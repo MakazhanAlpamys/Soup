@@ -129,7 +129,7 @@ def test_a_refused_load_names_why_and_deploys_nothing(cwd, monkeypatch, status, 
 def test_a_missing_token_is_named(cwd, monkeypatch):
     monkeypatch.delenv(ls.TOOL_AUTH_TOKEN_ENV)
     monkeypatch.setattr(ls, "_LOAD_POSTER", _loader(401))
-    assert "needs the serve tool token" in _deploy(_state())["notes"]
+    assert "the serve endpoint requires its tool token" in _deploy(_state())["notes"]
 
 
 def test_no_second_canary_while_one_runs(cwd, monkeypatch):

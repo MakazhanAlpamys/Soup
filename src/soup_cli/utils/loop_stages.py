@@ -791,10 +791,11 @@ def _load_refused_note(status: int, detail: str) -> str:
         if os.environ.get(TOOL_AUTH_TOKEN_ENV):
             return (
                 "adapter load refused (401): the serve endpoint rejected the tool token; "
-                "check soup loop watch --tool-auth-token against soup serve --tool-auth-token"
+                "check soup loop watch --tool-auth-token / SOUP_TOOL_AUTH_TOKEN against "
+                "soup serve --tool-auth-token"
             )
         return (
-            "adapter load refused (401): loading an adapter needs the serve tool token; "
+            "adapter load refused (401): the serve endpoint requires its tool token; "
             "pass soup loop watch --tool-auth-token or set SOUP_TOOL_AUTH_TOKEN"
         )
     if status == 404:
