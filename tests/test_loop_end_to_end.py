@@ -73,7 +73,7 @@ def loop(tmp_path, monkeypatch):
     monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(tmp_path / "registry.db"))
     monkeypatch.setenv("SOUP_LOOP_SERVE_ENDPOINT", ENDPOINT)
     monkeypatch.setenv(ls.TOOL_AUTH_TOKEN_ENV, TOKEN)
-    for name in ("SOUP_LOOP_TRACE_DIR", "SOUP_LOOP_THUMBS_DB"):
+    for name in ("SOUP_LOOP_TRACE_DIR", "SOUP_LOOP_THUMBS_DB", "SOUP_LOOP_FEEDBACK_LOG"):
         monkeypatch.delenv(name, raising=False)
     for name in ("_DEPLOY_POSTER", "_LOAD_POSTER", "_TRACE_DIR_RESOLVER"):
         monkeypatch.setattr(ls, name, None)
@@ -128,10 +128,12 @@ def loop(tmp_path, monkeypatch):
     monkeypatch.setattr(httpx, "post", post)
 
     trained_on: list = []
+    trained_with: list = []
 
     def train(argv, **kwargs):
         config = yaml.safe_load(open(argv[argv.index("--config") + 1], encoding="utf-8"))
         assert config["base"] == "org/base"
+        trained_with.append(config)
         with open(config["data"]["train"], encoding="utf-8") as fh:
             trained_on.append([json.loads(line) for line in fh if line.strip()])
         os.makedirs(config["output"], exist_ok=True)
@@ -195,7 +197,7 @@ def loop(tmp_path, monkeypatch):
         "client": client, "model": model, "failing": failing, "served_by": served_by,
         "cycle": cycle, "cli": cli, "headers": headers, "chat": chat,
         "users_give_feedback": users_give_feedback, "keyed_traffic": keyed_traffic,
-        "verdicts": verdicts, "trained_on": trained_on,
+        "verdicts": verdicts, "trained_on": trained_on, "trained_with": trained_with,
     }
 
 
@@ -353,3 +355,113 @@ def test_feedback_on_another_prompt_retrains_on_everything_so_far(loop):
     loop["cycle"]()
     assert read_state().production_name == second
     assert len(loop["trained_on"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Feedback in the loop's data formats: a correction trains a kto or an sft loop
+# ---------------------------------------------------------------------------
+
+_ROUTER = [
+    {"role": "system", "content": "Be brief."},
+    {"role": "user", "content": "How do I reset my router?"},
+]
+_HELLO = [{"role": "user", "content": "hello"}]
+_FIX = "Hold the reset button for ten seconds."
+
+
+def _uuid(number: int) -> str:
+    return f"00000000-0000-4000-8000-{number:012d}"
+
+
+def _jsonl(path: str, lines: list) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write("".join(json.dumps(line) + "\n" for line in lines))
+
+
+def _answer(number: int, messages: list, response: str) -> dict:
+    """A conversation record (version 1) as an application writes it."""
+    return {
+        "schema_version": 1, "id": _uuid(number), "conversation_id": f"chat-{number}",
+        "ts": "2026-11-05T10:00:00+00:00", "model": "base", "version": 1, "adapter": None,
+        "canary_bucket": None, "messages": messages, "response": response,
+        "finish_reason": "stop", "latency_ms": 12.0,
+        "tokens": {"prompt": 5, "completion": 3}, "source": "playground",
+    }
+
+
+def _feedback(number: int, kind: str, ts: str, **fields) -> dict:
+    return {
+        "schema_version": 1, "id": _uuid(900 + number), "response_id": _uuid(number),
+        "ts": ts, "kind": kind, "source": "playground", **fields,
+    }
+
+
+@pytest.mark.parametrize("method", ["kto", "sft"])
+def test_a_correction_given_as_feedback_trains_the_chosen_method_and_reaches_a_canary(
+    loop, method
+):
+    feedback_log = (
+        os.path.join("app-data", "feedback.jsonl")
+        if method == "sft"
+        else os.path.join(".soup-loops", "feedback.jsonl")
+    )
+    flags = ["--train-method", method]
+    if method == "sft":
+        flags += ["--feedback-log", feedback_log]
+    result, _ = loop["cli"](
+        "init", "./base", "--eval", "tasks.jsonl", "--baseline", "b", "--pre-wired",
+        "--base-model", "org/base", "--thumbs-db", "thumbs.db", "--canary-traffic", "20%",
+        "--force", *flags,
+    )
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    result, text = loop["cli"]("status")
+    assert re.search(rf"train_method\W+{method}", text), text
+
+    # The person corrected one answer and liked another, in the formats an application
+    # (or `soup serve --feedback-log`) writes; the thumbs database stays empty.
+    served = loop["chat"]("hello").json()["choices"][0]["message"]["content"]
+    _jsonl(os.path.join(".soup-loops", "traces", "conversations.jsonl"), [
+        _answer(1, _ROUTER, "Unplug it."), _answer(2, _HELLO, served),
+    ])
+    _jsonl(feedback_log, [
+        _feedback(1, "edit", "2026-11-05T10:05:00+00:00", edited_text=_FIX),
+        _feedback(2, "thumb", "2026-11-05T10:06:00+00:00", value=1),
+    ])
+
+    _, iterations = loop["cycle"]()
+    assert iterations == 1
+
+    (config,) = loop["trained_with"]
+    (rows,) = loop["trained_on"]
+    assert config["task"] == method
+    assert config["data"]["val_split"] == 0
+    if method == "kto":
+        assert config["data"]["format"] == "kto"
+        assert config["training"]["batch_size"] == 2  # TRL refuses a KTO batch of 1
+        assert rows == [
+            {"prompt": _ROUTER, "completion": _FIX, "label": True, "source": "feedback"},
+            {"prompt": _ROUTER, "completion": "Unplug it.", "label": False,
+             "source": "feedback"},
+            {"prompt": _HELLO, "completion": served, "label": True, "source": "feedback"},
+        ]
+    else:
+        assert config["data"]["format"] == "chatml"
+        assert rows == [{
+            "messages": [*_ROUTER, {"role": "assistant", "content": _FIX}],
+            "source": "feedback-edit",
+        }]
+    state = read_state()
+    name = state.canary_active
+    assert name and name.startswith("loop-train-"), state
+    assert state.harvest_cursor_ts is not None
+    record = read_iteration(list_iterations()[-1])
+    assert record.pairs_harvested == len(rows)
+    assert record.gate_verdict == "OK" and record.shipped is True
+    assert name in loop["model"].loaded
+
+    # The canary is healthy: the next cycle promotes it, and trains nothing new.
+    loop["keyed_traffic"]()
+    loop["cycle"]()
+    assert read_state().production_name == name
+    assert len(loop["trained_on"]) == 1 and len(loop["verdicts"]) == 1

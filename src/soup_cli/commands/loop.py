@@ -42,6 +42,7 @@ from soup_cli.utils.loop_budget import (
 from soup_cli.utils.loop_daemon import WatchConfig, watch
 from soup_cli.utils.loop_iteration import list_iterations, read_iteration
 from soup_cli.utils.loop_state import (
+    TRAIN_METHODS,
     VERIFY_METHODS,
     LoopState,
     init_state,
@@ -138,6 +139,21 @@ def init_cmd(
             "trains on all pairs. Default 1."
         ),
     ),
+    feedback_log: Optional[str] = typer.Option(
+        None, "--feedback-log",
+        help=(
+            "Feedback log (JSONL: thumbs, ratings, edits and comments on logged "
+            "answers) the pre-wired harvest reads. Default: .soup-loops/feedback.jsonl. "
+            "SOUP_LOOP_FEEDBACK_LOG overrides it."
+        ),
+    ),
+    train_method: str = typer.Option(
+        "dpo", "--train-method",
+        help=(
+            "What the pre-wired loop trains: dpo (preference pairs, the default), kto "
+            "(answers labelled good or bad) or sft (the answers people corrected)."
+        ),
+    ),
     force: bool = typer.Option(False, "--force", help="Overwrite existing loop.yaml."),
 ) -> None:
     """Create the .soup/loop.yaml control file (one-time setup)."""
@@ -183,6 +199,28 @@ def init_cmd(
                 f"[yellow]warning:[/] no conversation logs at {for_terminal(trace_dir)} yet; "
                 "soup serve --trace-log <dir>/<file>.jsonl writes them"
             )
+    method = train_method.strip().lower()
+    if method not in TRAIN_METHODS:
+        console.print(
+            f"[red]--train-method must be one of {', '.join(TRAIN_METHODS)}, "
+            f"got {for_terminal(repr(train_method))}[/]"
+        )
+        raise typer.Exit(code=2)
+    if feedback_log is not None:
+        if not feedback_log.strip():
+            console.print("[red]--feedback-log must not be empty[/]")
+            raise typer.Exit(code=2)
+        if os.path.exists(feedback_log) and not os.path.isfile(feedback_log):
+            what = "not a regular file"
+            if os.path.isdir(feedback_log):
+                what = "a directory, not a file"
+            console.print(f"[red]--feedback-log:[/] {for_terminal(feedback_log)} is {what}")
+            raise typer.Exit(code=2)
+        if not os.path.exists(feedback_log):
+            console.print(
+                f"[yellow]warning:[/] no feedback log at {for_terminal(feedback_log)} yet; "
+                "the loop reads it once feedback lines are written there"
+            )
     from soup_cli.utils.loop_stages import check_verify_eval, resolve_base_model_source
 
     verify_method = verify.strip().lower().replace("-", "_")
@@ -223,6 +261,8 @@ def init_cmd(
             verify=verify_method,
             deploy_traffic_pct=deploy_pct,
             min_new_pairs=min_new_pairs,
+            feedback_log=feedback_log,
+            train_method=method,
             production_adapter=(
                 served_model
                 if os.path.isfile(os.path.join(served_model, "adapter_config.json"))
@@ -241,6 +281,8 @@ def init_cmd(
             f" (verify: {escape(state.verify or 'eval_gate')})\n"
             f"baseline:     [bold]{escape(state.baseline)}[/]\n"
             f"trace_dir:    [bold]{escape(_trace_dir_label(state))}[/]\n"
+            f"feedback_log: [bold]{escape(_feedback_log_label(state))}[/]\n"
+            f"train_method: [bold]{escape(state.train_method)}[/]\n"
             f"base_model:   [bold]{escape(state.base_model or 'unknown')}[/]"
             + (f" (from {escape(base_source)})" if base_source else ""),
             title="soup loop init",
@@ -275,6 +317,8 @@ def status_cmd() -> None:
     table.add_row("baseline", escape(state.baseline))
     table.add_row("base_model", escape(state.base_model or "unknown"))
     table.add_row("trace_dir", escape(_trace_dir_label(state)))
+    table.add_row("feedback_log", escape(_feedback_log_label(state)))
+    table.add_row("train_method", escape(state.train_method))
     table.add_row("verify", escape(state.verify or "eval_gate"))
     table.add_row(
         "production",
@@ -392,6 +436,7 @@ def watch_cmd(
         from soup_cli.utils.loop_stages import (
             check_verify_eval,
             checked_thumbs_db,
+            feedback_log_notice,
             resolve_base_model,
             trace_dir_notice,
             verify_method,
@@ -406,6 +451,13 @@ def watch_cmd(
             notice = trace_dir_notice(state)
         except ValueError as exc:
             console.print(f"[red]invalid trace directory:[/] {for_terminal(exc)}")
+            raise typer.Exit(code=2)
+        if notice:
+            console.print(f"[yellow]warning:[/] {for_terminal(notice)}")
+        try:
+            notice = feedback_log_notice(state)
+        except ValueError as exc:
+            console.print(f"[red]invalid feedback log:[/] {for_terminal(exc)}")
             raise typer.Exit(code=2)
         if notice:
             console.print(f"[yellow]warning:[/] {for_terminal(notice)}")
@@ -642,6 +694,14 @@ def _trace_dir_label(state: LoopState) -> str:
 
     path, source = trace_dir_source(state)
     return f"{path} (from {'--trace-dir' if source == 'trace_dir' else source})"
+
+
+def _feedback_log_label(state: LoopState) -> str:
+    """The feedback log the pre-wired harvest reads, and where it came from."""
+    from soup_cli.utils.loop_stages import feedback_log_source
+
+    path, source = feedback_log_source(state)
+    return f"{path} (from {'--feedback-log' if source == 'feedback_log' else source})"
 
 
 def _cursor_label(state: LoopState) -> str:
