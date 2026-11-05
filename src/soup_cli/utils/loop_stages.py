@@ -18,6 +18,7 @@ and offline smokes inject behaviour without a GPU or a network:
 - ``_TRAIN_RUNNER(argv, ...)``               (a ``subprocess.run`` stand-in)
 - ``_GATE_GENERATE_FACTORY(adapter_dir) -> generate_fn``
 - ``_DEPLOY_POSTER(endpoint, name) -> bool``
+- ``_SHIP_RUNNER(argv, ...)``                (a ``subprocess.run`` stand-in)
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping, Optional, Tuple
 
-from soup_cli.utils.loop_state import LoopState
+from soup_cli.utils.loop_state import VERIFY_METHODS, LoopState
 from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
 from soup_cli.utils.net_guard import parse_ip_literal
 from soup_cli.utils.paths import atomic_write_text, quote_path
@@ -56,6 +57,7 @@ _TRACE_DIR_RESOLVER: Optional[Callable[[LoopState], Optional[str]]] = None
 _TRAIN_RUNNER: Optional[Callable[..., object]] = None
 _GATE_GENERATE_FACTORY: Optional[Callable[[str], Callable[[str], str]]] = None
 _DEPLOY_POSTER: Optional[Callable[[str, str], bool]] = None
+_SHIP_RUNNER: Optional[Callable[..., object]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -464,7 +466,7 @@ def gate_against_baseline(
         suite = load_suite(state.eval_suite)
     except (FileNotFoundError, ValueError, TypeError, OSError) as exc:
         _LOG.warning("gate suite load failed: %s", type(exc).__name__)
-        return {"gate_verdict": "SKIPPED"}
+        return _verdict_skipped(f"the eval-gate suite could not be loaded ({_short(exc)})")
     # An unresolvable baseline degrades to a threshold-only gate (no
     # regression check) rather than failing the whole stage — the baseline
     # may not exist yet on the first iteration.
@@ -477,9 +479,182 @@ def gate_against_baseline(
         result = run_gate(suite, generate_fn=generate_fn, baseline=baseline)
     except (FileNotFoundError, ValueError, TypeError, OSError) as exc:
         _LOG.warning("gate run failed: %s", type(exc).__name__)
-        return {"gate_verdict": "SKIPPED"}
+        return _verdict_skipped(f"the eval gate failed to run ({_short(exc)})")
     verdict = "OK" if result.passed else "MAJOR"
-    return {"gate_verdict": verdict}
+    return {"gate_verdict": verdict, "verdict_method": "eval_gate"}
+
+
+# ---------------------------------------------------------------------------
+# Verify — the check before rollout: a soup ship verdict (default) or the gate
+# ---------------------------------------------------------------------------
+
+_VERDICTS_DIR = ".soup-loops/verdicts"
+_MAX_VERDICT_BYTES = 1024 * 1024
+_MAX_LOCK_PROBE_BYTES = 16 * 1024 * 1024
+_SHIP_TIMEOUT_SEC = 6 * 3600
+_SHIP_DECISIONS = {"SHIP": "OK", "DON'T SHIP": "MAJOR"}
+
+
+def _printable(text: str, limit: int = 300) -> str:
+    """``text`` on one line with control characters removed, capped, for a note."""
+    return "".join(ch if ch.isprintable() else " " for ch in text)[:limit]
+
+
+def _short(exc: BaseException) -> str:
+    """One line naming an error, for a note."""
+    return _printable(f"{type(exc).__name__}: {exc}")
+
+
+def _verdict_skipped(reason: str) -> Mapping[str, object]:
+    """A SKIPPED verdict carrying its reason: the iteration does not roll out."""
+    return {"gate_verdict": "SKIPPED", "notes": f"verdict_skipped: {reason}"}
+
+
+def verify_method(state: LoopState) -> str:
+    """``ship`` or ``eval_gate``; a ``loop.yaml`` from before ``verify`` ran the gate."""
+    return state.verify or "eval_gate"
+
+
+def _lock_design_hint(path: str) -> Optional[str]:
+    """A refusal message when ``path`` is a ``soup eval lock`` design file."""
+    try:
+        if os.path.getsize(path) > _MAX_LOCK_PROBE_BYTES:
+            return None
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict) or "dimensions" not in data:
+        return None
+    return (
+        f"--eval {quote_path(path)} is a soup eval lock design file (dimensions), not "
+        "runnable tasks; give --verify ship a task-eval JSONL (one {\"prompt\", "
+        "\"expected\"} object per line) or --verify eval-gate an eval-gate suite YAML "
+        "(suite + tasks)"
+    )
+
+
+def check_verify_eval(method: str, path: str) -> None:
+    """Refuse an ``--eval`` file the chosen check cannot run, naming why.
+
+    ``ship`` needs a task-eval JSONL under cwd (what ``soup ship --task-eval``
+    accepts); ``eval_gate`` needs an eval-gate suite (``suite`` + ``tasks``).
+    A ``soup eval lock`` design file is neither and gets its own message:
+    the docs used to pass one, and the gate then skipped every iteration.
+    """
+    if method not in VERIFY_METHODS:
+        raise ValueError(f"--verify must be ship or eval-gate, got {method!r}")
+    if os.path.isfile(path):
+        hint = _lock_design_hint(path)
+        if hint is not None:
+            raise ValueError(hint)
+    if method == "ship":
+        from soup_cli.eval.custom import load_eval_tasks
+        from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+        try:
+            enforce_under_cwd_and_no_symlink(path, "--eval")
+            tasks = load_eval_tasks(path)
+        except (FileNotFoundError, ValueError, TypeError, OSError) as exc:
+            raise ValueError(
+                f"--eval {quote_path(path)} is not a soup ship task-eval JSONL ({_short(exc)})"
+            ) from exc
+        if not tasks:
+            raise ValueError(f"--eval {quote_path(path)} has no tasks")
+        return
+    from soup_cli.eval.gate import load_suite
+
+    try:
+        load_suite(path)
+    except (FileNotFoundError, ValueError, TypeError, OSError) as exc:
+        raise ValueError(
+            f"--eval {quote_path(path)} is not an eval-gate suite ({_short(exc)})"
+        ) from exc
+
+
+def _read_ship_decision(path: str) -> Optional[str]:
+    """The ``decision`` of a ``soup ship --output`` file, or ``None``."""
+    try:
+        if os.path.getsize(path) > _MAX_VERDICT_BYTES:
+            return None
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    decision = data.get("decision") if isinstance(data, dict) else None
+    return decision if decision in _SHIP_DECISIONS else None
+
+
+def verify_with_ship(
+    state: LoopState, ctx: Mapping[str, object]
+) -> Mapping[str, object]:
+    """Run ``soup ship`` for the trained adapter against the production version.
+
+    The "before" side is the base model plus ``production_adapter`` when one
+    is serving (``soup ship --base-adapter``), else the base model alone.
+    SHIP maps to ``OK``, DON'T SHIP to ``MAJOR``; when no verdict file is
+    written the result is ``SKIPPED`` with the reason, and nothing rolls out.
+    The decision is read from ``--output``, never from the exit code: a
+    usage error exits 2 like DON'T SHIP does.
+    """
+    adapter_path = ctx.get("adapter_path")
+    if ctx.get("skipped") or not adapter_path:
+        return {"gate_verdict": "SKIPPED", "verdict_method": "ship"}
+    if not os.path.isdir(str(adapter_path)):
+        return _verdict_skipped(f"the trained adapter {quote_path(str(adapter_path))} is missing")
+    try:
+        base = resolve_base_model(state.served_model, state.base_model)
+    except ValueError as exc:
+        return _verdict_skipped(f"base model unknown ({_short(exc)})")
+    run_id = str(ctx.get("run_id") or f"verify-{uuid.uuid4().hex[:8]}")
+    Path(_VERDICTS_DIR).mkdir(parents=True, exist_ok=True)
+    out_path = os.path.join(_VERDICTS_DIR, f"{run_id}.json")
+    argv = [
+        sys.executable, "-m", "soup_cli.cli", "ship",
+        "--base", base,
+        "--adapter", str(adapter_path),
+        "--task-eval", state.eval_suite,
+        "--output", out_path,
+    ]
+    if state.production_adapter:
+        argv.extend(["--base-adapter", state.production_adapter])
+    baseline = (
+        {"kind": "version", "ref": state.production_adapter}
+        if state.production_adapter
+        else {"kind": "base", "ref": base}
+    )
+    runner = _SHIP_RUNNER
+    if runner is None:
+        import subprocess  # noqa: S404 — argv list mode, no shell
+
+        runner = subprocess.run
+    common = {"verdict_method": "ship", "verdict_path": out_path, "verdict_baseline": baseline}
+    try:
+        result = runner(  # noqa: S603 — internal argv, no shell
+            argv, capture_output=True, timeout=_SHIP_TIMEOUT_SEC, check=False
+        )
+    except Exception as exc:  # noqa: BLE001 — a verdict failure must not crash the loop
+        return {**common, **_verdict_skipped(f"soup ship could not run ({_short(exc)})")}
+    decision = _read_ship_decision(out_path)
+    if decision is None:
+        rc = getattr(result, "returncode", None)
+        stderr = getattr(result, "stderr", b"") or b""
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", "replace")
+        lines = [line.strip() for line in str(stderr).splitlines() if line.strip()]
+        tail = f": {_printable(lines[-1])}" if lines else ""
+        reason = f"soup ship wrote no verdict (exit {rc}){tail}"
+        return {**common, **_verdict_skipped(reason)}
+    return {**common, "gate_verdict": _SHIP_DECISIONS[decision], "verdict_decision": decision}
+
+
+def verify_candidate(
+    state: LoopState, ctx: Mapping[str, object]
+) -> Mapping[str, object]:
+    """The pre-wired check before rollout: ``soup ship`` or the eval gate."""
+    if verify_method(state) == "ship":
+        return verify_with_ship(state, ctx)
+    return gate_against_baseline(state, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -718,7 +893,7 @@ def build_prewired_watch_config(
         iteration_dir=iteration_dir,
         harvest_fn=harvest_from_traces,
         train_fn=train_dpo_from_pairs,
-        gate_fn=gate_against_baseline,
+        gate_fn=verify_candidate,
         deploy_fn=deploy_to_canary,
         cost_fn=estimate_cost,
         pack_iterations=pack_iterations,

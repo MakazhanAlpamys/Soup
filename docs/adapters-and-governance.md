@@ -107,8 +107,18 @@ The full *production traces → preference pairs → Eval-Gated DPO → canary d
 
 ```bash
 # One-time setup
-soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod \
+soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
     --monthly-budget 50usd --max-runs-per-day 3
+
+# The check before rollout (--verify, default ship) is a soup ship verdict of
+# the newly trained adapter against the production version: the base model, or
+# base + the production adapter when the served model is one. --eval is then a
+# soup ship task-eval JSONL (one {"prompt", "expected"} object per line);
+# with --verify eval-gate it is an eval-gate suite YAML (suite + tasks).
+# init --pre-wired and watch --pre-wired refuse an --eval file the check cannot
+# run, a `soup eval lock` design file included. A verdict that could not be
+# reached is SKIPPED: nothing rolls out, and the reason is saved in the
+# iteration record (soup loop replay <iteration-id>).
 
 # Inspect counters + status
 soup loop status
@@ -120,14 +130,14 @@ soup loop watch --poll-interval 300
 # instead of the v0.58 no-op stubs. Opt in once via `loop init --pre-wired` or
 # per-run via --pre-wired. Pack each iteration as a shareable Soup Can with
 # Registry lineage via --pack-cans.
-soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod --pre-wired
+soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod --pre-wired
 soup loop watch --pre-wired --pack-cans --poll-interval 300
 
 # The train stage starts from --base-model, the registry entry's base model
 # (registry://<id>), the base_model_name_or_path of a served LoRA adapter
 # directory, or the served model itself. When none is known,
 # `init --pre-wired` and `watch --pre-wired` refuse instead of training a stand-in.
-soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod \
+soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
     --pre-wired --base-model Qwen/Qwen2.5-0.5B-Instruct
 
 # The harvest reads conversation logs from SOUP_LOOP_TRACE_DIR, else --trace-dir
@@ -136,7 +146,7 @@ soup loop init registry://abc12 --eval evals/lock.json --baseline registry://pro
 # A pair needs a thumbs-up and a thumbs-down answer to one prompt; serve trace lines
 # carry no feedback yet, so today the pairs come from --thumbs-db.
 soup serve --model ./base --trace-log .soup-loops/traces/serve.jsonl
-soup loop init ./base --eval evals/lock.json --baseline registry://prod --pre-wired
+soup loop init ./base --eval evals/tasks.jsonl --baseline registry://prod --pre-wired
 
 # Learn from Soup's own serving (#1440): the pre-wired harvest also reads the
 # thumbs `soup serve --record-thumbs` captures through POST /v1/thumbs, pairing
@@ -144,7 +154,7 @@ soup loop init ./base --eval evals/lock.json --baseline registry://prod --pre-wi
 # stay under cwd and exist as a thumbs database: start the serve first, or
 # `soup loop watch` refuses, naming the field.
 soup serve --model ./base --record-thumbs ./rl.db
-soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod \
+soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
     --pre-wired --thumbs-db ./rl.db
 # or per run, overriding loop.yaml:
 SOUP_LOOP_THUMBS_DB=./rl.db soup loop watch --pre-wired

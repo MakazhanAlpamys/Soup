@@ -247,7 +247,9 @@ def run_once(
         rolled_back=rolled_back,
         estimated_cost_usd=estimated,
         notes=" | ".join(
-            str(n) for n in (train_out.get("notes"), deploy_out.get("notes")) if n
+            str(n)
+            for n in (train_out.get("notes"), gate_out.get("notes"), deploy_out.get("notes"))
+            if n
         )[:4096],
     )
     new_state = state.bumped(

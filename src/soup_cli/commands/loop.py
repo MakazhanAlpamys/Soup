@@ -41,6 +41,7 @@ from soup_cli.utils.loop_budget import (
 from soup_cli.utils.loop_daemon import WatchConfig, watch
 from soup_cli.utils.loop_iteration import list_iterations, read_iteration
 from soup_cli.utils.loop_state import (
+    VERIFY_METHODS,
     LoopState,
     init_state,
     read_state,
@@ -113,6 +114,14 @@ def init_cmd(
             "SOUP_LOOP_TRACE_DIR overrides it."
         ),
     ),
+    verify: str = typer.Option(
+        "ship", "--verify",
+        help=(
+            "The check before rollout: ship (a soup ship verdict against the "
+            "production version; --eval is a task-eval JSONL) or eval-gate "
+            "(--eval is an eval-gate suite YAML)."
+        ),
+    ),
     force: bool = typer.Option(False, "--force", help="Overwrite existing loop.yaml."),
 ) -> None:
     """Create the .soup/loop.yaml control file (one-time setup)."""
@@ -151,7 +160,19 @@ def init_cmd(
                 f"[yellow]warning:[/] no conversation logs at {for_terminal(trace_dir)} yet; "
                 "soup serve --trace-log <dir>/<file>.jsonl writes them"
             )
-    from soup_cli.utils.loop_stages import resolve_base_model_source
+    from soup_cli.utils.loop_stages import check_verify_eval, resolve_base_model_source
+
+    verify_method = verify.strip().lower().replace("-", "_")
+    try:
+        check_verify_eval(verify_method, eval_suite)
+    except ValueError as exc:
+        if pre_wired or verify_method not in VERIFY_METHODS:
+            console.print(f"[red]invalid --eval / --verify:[/] {for_terminal(exc)}")
+            raise typer.Exit(code=2)
+        console.print(
+            f"[yellow]warning:[/] {for_terminal(exc)}; "
+            "soup loop watch --pre-wired refuses until it is fixed"
+        )
 
     resolved_base: Optional[str] = None
     base_source = ""
@@ -176,6 +197,12 @@ def init_cmd(
             thumbs_db=thumbs_db,
             base_model=resolved_base,
             trace_dir=trace_dir,
+            verify=verify_method,
+            production_adapter=(
+                served_model
+                if os.path.isfile(os.path.join(served_model, "adapter_config.json"))
+                else None
+            ),
             force=force,
         )
     except (FileExistsError, FileNotFoundError, TypeError, ValueError) as exc:
@@ -185,7 +212,8 @@ def init_cmd(
         Panel.fit(
             f"loop state created at [bold]{escape(os.path.relpath(path))}[/]\n"
             f"served_model: [bold]{escape(state.served_model)}[/]\n"
-            f"eval_suite:   [bold]{escape(state.eval_suite)}[/]\n"
+            f"eval_suite:   [bold]{escape(state.eval_suite)}[/]"
+            f" (verify: {escape(state.verify or 'eval_gate')})\n"
             f"baseline:     [bold]{escape(state.baseline)}[/]\n"
             f"trace_dir:    [bold]{escape(_trace_dir_label(state))}[/]\n"
             f"base_model:   [bold]{escape(state.base_model or 'unknown')}[/]"
@@ -222,6 +250,8 @@ def status_cmd() -> None:
     table.add_row("baseline", escape(state.baseline))
     table.add_row("base_model", escape(state.base_model or "unknown"))
     table.add_row("trace_dir", escape(_trace_dir_label(state)))
+    table.add_row("verify", escape(state.verify or "eval_gate"))
+    table.add_row("production", escape(state.production_adapter or "base model"))
     table.add_row("pre_wired", "yes" if state.pre_wired else "no")
     table.add_row("traces_collected", str(state.traces_collected))
     table.add_row("pairs_distilled", str(state.pairs_distilled))
@@ -326,9 +356,11 @@ def watch_cmd(
         # #1440: a configured thumbs database the harvest would refuse stops the
         # watch here, before it starts or detaches, instead of mid-iteration.
         from soup_cli.utils.loop_stages import (
+            check_verify_eval,
             checked_thumbs_db,
             resolve_base_model,
             trace_dir_notice,
+            verify_method,
         )
 
         try:
@@ -343,6 +375,12 @@ def watch_cmd(
             raise typer.Exit(code=2)
         if notice:
             console.print(f"[yellow]warning:[/] {for_terminal(notice)}")
+        # A check that cannot run skips every iteration's rollout: refuse now.
+        try:
+            check_verify_eval(verify_method(state), state.eval_suite)
+        except ValueError as exc:
+            console.print(f"[red]invalid --eval / --verify:[/] {for_terminal(exc)}")
+            raise typer.Exit(code=2)
         # The train stage would skip every iteration; say so before starting.
         try:
             resolve_base_model(state.served_model, state.base_model)

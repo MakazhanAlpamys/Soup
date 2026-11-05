@@ -54,6 +54,8 @@ def cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("SOUP_LOOP_TRACE_DIR", raising=False)
     monkeypatch.delenv("SOUP_LOOP_THUMBS_DB", raising=False)
+    # A pre-wired loop checks its --eval file at init (the soup ship task eval).
+    (tmp_path / "tasks.jsonl").write_text('{"prompt": "2+2", "expected": "4"}\n', encoding="utf-8")
     return tmp_path
 
 
@@ -241,7 +243,7 @@ def test_loop_init_persists_thumbs_db_and_an_old_state_file_still_loads(cwd):
 
     runner = CliRunner()
     result = runner.invoke(app, [
-        "loop", "init", "registry://m", "--eval", "suite.yaml", "--baseline", "b",
+        "loop", "init", "registry://m", "--eval", "tasks.jsonl", "--baseline", "b",
         "--base-model", "org/m",
         "--thumbs-db", "thumbs.db",
     ])
@@ -262,7 +264,7 @@ def test_loop_init_refuses_a_thumbs_db_outside_the_project(cwd, tmp_path_factory
 
     outside = tmp_path_factory.mktemp("elsewhere") / "thumbs.db"
     result = CliRunner().invoke(app, [
-        "loop", "init", "registry://m", "--eval", "suite.yaml", "--baseline", "b",
+        "loop", "init", "registry://m", "--eval", "tasks.jsonl", "--baseline", "b",
         "--base-model", "org/m",
         "--thumbs-db", str(outside),
     ])
@@ -412,7 +414,7 @@ def _init_loop(pre_wired: bool, *extra: str) -> None:
     from soup_cli.cli import app
 
     args = [
-        "loop", "init", "registry://m", "--eval", "suite.yaml", "--baseline", "b",
+        "loop", "init", "registry://m", "--eval", "tasks.jsonl", "--baseline", "b",
         "--base-model", "org/m",
     ]
     if pre_wired:
@@ -611,7 +613,7 @@ def test_init_does_not_let_a_control_sequence_in_the_path_reach_the_terminal(cwd
     from soup_cli.cli import app
 
     result = CliRunner().invoke(app, [
-        "loop", "init", "registry://m", "--eval", "suite.yaml", "--baseline", "b",
+        "loop", "init", "registry://m", "--eval", "tasks.jsonl", "--baseline", "b",
         "--base-model", "org/m",
         "--thumbs-db", "../a\x1b[2Jb.db",
     ])
@@ -655,7 +657,7 @@ def test_init_refusal_keeps_rich_tags_in_the_path_literal(cwd):
     from soup_cli.cli import app
 
     result = CliRunner().invoke(app, [
-        "loop", "init", "registry://m", "--eval", "suite.yaml", "--baseline", "b",
+        "loop", "init", "registry://m", "--eval", "tasks.jsonl", "--baseline", "b",
         "--base-model", "org/m",
         "--thumbs-db", "../db[bold]x.db",
     ])
