@@ -44,6 +44,13 @@ soup merge --adapter ./output --base meta-llama/Llama-3.1-8B --dtype bfloat16
 soup merge --adapter ./output --output ./merged --low-memory
 ```
 
+Both merge paths reuse the base commit recorded in the adapter's `soup_run.json`
+when its base ID matches and its revision source is `hub_commit`, and print
+`Base revision: <commit> (recorded run)`. A different `--base` override, a local
+base, a non-Hugging-Face source or a legacy adapter keeps its existing loading
+behavior and prints the revision as unknown; Soup does not query today's Hub
+head to fill missing training history.
+
 `--low-memory` reads the base `.safetensors` files and writes the merged files
 one tensor at a time, so peak RAM is about one shard (the largest `.safetensors`
 file; a single-file model is memory-mapped as a whole, so it saves little). The
