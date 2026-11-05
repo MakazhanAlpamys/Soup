@@ -28,6 +28,7 @@ from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 import soup_cli.commands.serve as serve
+import soup_cli.utils.loop_daemon as daemon
 import soup_cli.utils.loop_stages as ls
 from soup_cli.utils.loop_daemon import run_once, watch
 from soup_cli.utils.loop_iteration import list_iterations, read_iteration
@@ -584,3 +585,88 @@ def test_a_canary_waits_for_feedback_once_there_is_a_feedback_log(loop):
     _rate(logged, canary=1, stable=1)
     loop["cycle"]()
     assert read_state().production_name == name
+
+
+def _after_the_wait(monkeypatch, state, extra=60.0):
+    """The daemon's clock, ``--canary-max-wait`` (24h by default) and a minute after the start."""
+    moment = datetime.fromtimestamp(
+        state.canary_started_ts + state.canary_max_wait_sec + extra, timezone.utc
+    )
+    monkeypatch.setattr(daemon, "_now", lambda: moment)
+
+
+def test_ratings_that_never_come_end_in_a_promotion_on_errors_only(loop, monkeypatch):
+    name = _start_canary(loop)
+    logged = _log_keyed_answers(loop, name)
+    _rate(logged, canary=1, stable=1, limit=5)  # five thumbs per side: not enough
+    assert read_state().canary_max_wait_sec == 86400.0  # init's default
+
+    loop["cycle"]()  # inside the wait: it keeps waiting
+    state = read_state()
+    assert state.canary_active == name and state.production_name is None
+
+    _after_the_wait(monkeypatch, state)
+    loop["cycle"]()
+
+    state = read_state()
+    assert state.canary_active is None and state.production_name == name
+    assert _active_adapter(loop["client"]) == name
+    promoted = [r for r in _records() if "promoted to production" in r.notes]
+    assert len(promoted) == 1
+    assert (
+        "promoted on errors only - quality unverified: 5/30 canary, 5/30 stable rated in 24h"
+    ) in promoted[0].notes
+    assert "canary quality: 5/30 canary, 5/30 stable rated (INSUFFICIENT)" in promoted[0].notes
+    evidence = promoted[0].canary_quality
+    assert evidence["verdict"] == "INSUFFICIENT" and evidence["timed_out"] is True
+    assert evidence["decided_on"] == "errors_only"
+    assert evidence["rated"] == {"stable": 5, "canary": 5}
+    # and the loop is back to learning: the person can still undo it
+    result, text = loop["cli"]("rollback")
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert f"rolled back: {name} -> the served model" in text
+
+
+def test_ratings_that_never_come_withdraw_the_canary_when_asked_to(loop, monkeypatch):
+    from dataclasses import replace
+
+    from soup_cli.utils.loop_state import write_state
+
+    name = _start_canary(loop)
+    logged = _log_keyed_answers(loop, name)
+    _rate(logged, canary=1, stable=1, limit=5)
+    state = replace(read_state(), canary_on_timeout="rollback", canary_autoroll_on_regress=False)
+    write_state(state)
+
+    _after_the_wait(monkeypatch, state)
+    loop["cycle"]()
+
+    state = read_state()
+    assert state.canary_active is None and state.canary_adapter is None
+    assert state.production_name is None  # production never changed
+    assert _active_adapter(loop["client"]) is None
+    withdrawn = [r for r in _records() if "rolled back" in r.notes]
+    assert len(withdrawn) == 1 and withdrawn[0].rolled_back is True
+    assert f"canary {name} rolled back: 5/30 canary, 5/30 stable rated in 24h" in withdrawn[0].notes
+    assert "--canary-on-timeout rollback" in withdrawn[0].notes
+    assert withdrawn[0].canary_quality["verdict"] == "INSUFFICIENT"
+    assert len(loop["trained_on"]) == 1  # nothing retrained on it
+
+
+def test_with_on_timeout_wait_the_canary_keeps_waiting(loop, monkeypatch):
+    from dataclasses import replace
+
+    from soup_cli.utils.loop_state import write_state
+
+    name = _start_canary(loop)
+    logged = _log_keyed_answers(loop, name)
+    _rate(logged, canary=1, stable=1, limit=5)
+    state = replace(read_state(), canary_on_timeout="wait")
+    write_state(state)
+
+    _after_the_wait(monkeypatch, state, extra=30 * 86400.0)
+    loop["cycle"]()
+
+    state = read_state()
+    assert state.canary_active == name and state.production_name is None
+    assert _active_adapter(loop["client"]) is None
