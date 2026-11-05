@@ -60,7 +60,14 @@ def _nf4(torch, bnb, in_features, out_features):
     return layer
 
 
-def _adapt(torch, bnb, model, targets):
+def _plain(torch, in_features, out_features):
+    layer = torch.nn.Linear(in_features, out_features, bias=False)
+    with torch.no_grad():
+        layer.weight.mul_(4)  # keep the base term comparable to the LoRA term
+    return layer
+
+
+def _adapt(torch, bnb, model, targets, *, dense=()):
     from peft import LoraConfig, inject_adapter_in_model
 
     model = model.to("cpu")  # Params4bit quantizes on the move
@@ -86,7 +93,7 @@ def _adapt(torch, bnb, model, targets):
     quantized = [
         module for module in model.modules() if isinstance(module, bnb.nn.Linear4bit)
     ]
-    assert len(quantized) == len(targets)
+    assert len(quantized) == len(targets) - len(dense)
     assert all(module.weight.quant_state is not None for module in quantized)
     return model
 
@@ -99,6 +106,19 @@ def _reference(torch, bnb, layer, x):
     out = functional.linear(
         x.to(base.compute_dtype), dense.to(base.compute_dtype)
     ).to(x.dtype)
+    adapter = layer.active_adapters[0]
+    lora_a = layer.lora_A[adapter].weight
+    lora_b = layer.lora_B[adapter].weight
+    term = functional.linear(
+        functional.linear(x.to(lora_a.dtype), lora_a), lora_b
+    )
+    return out + (term * float(layer.scaling[adapter])).to(out.dtype)
+
+
+def _dense_reference(torch, layer, x):
+    """PEFT's ``lora.Linear`` forward for a plain sibling, in plain ops."""
+    functional = torch.nn.functional
+    out = functional.linear(x, layer.get_base_layer().weight)
     adapter = layer.active_adapters[0]
     lora_a = layer.lora_A[adapter].weight
     lora_b = layer.lora_B[adapter].weight
@@ -282,6 +302,129 @@ def test_shared_x_qkv_keeps_pefts_dtype_boundary(dtype_name, aten_half_matmuls):
     x = x0.clone().requires_grad_(True)
     got = model(x)
     assert all(part.dtype == dtype for part in got)
+    _probe_loss(got, probes).backward()
+    hits, grad_fns = getattr(model.attn, "_soup_fast_lora_qkv_last_cache_hits")
+    assert hits == 2
+    assert grad_fns == ("_FastLoraQKVBackward",) * 3
+
+    for part, wanted in zip(got, want):
+        assert _rel(part, wanted) <= _REL
+    _assert_adapter_grads_match(model, reference)
+    _assert_input_grad_matches(x, x_ref)
+
+
+def test_plain_sibling_in_a_4bit_swiglu_block_stays_in_the_input_dtype(
+    aten_half_matmuls,
+):
+    torch, bnb = _deps()
+    import torch.nn as nn
+
+    from soup_cli.utils.fast_lora_mlp import patch_fast_lora_mlp
+
+    class MLP(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.gate_proj = _nf4(torch, bnb, 16, 32)
+            self.up_proj = _plain(torch, 16, 32)
+            self.down_proj = _nf4(torch, bnb, 32, 16)
+            self.act_fn = nn.SiLU()
+
+        def forward(self, x):
+            return self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.config = SimpleNamespace(hidden_act="silu")
+            self.mlp = MLP()
+
+        def forward(self, x):
+            return self.mlp(x)
+
+    torch.manual_seed(0)
+    model = _adapt(
+        torch,
+        bnb,
+        Model(),
+        ["gate_proj", "up_proj", "down_proj"],
+        dense=("up_proj",),
+    )
+    reference = copy.deepcopy(model)
+    x0 = torch.randn(3, 5, 16) * _SCALE
+    probe = torch.randn(3, 5, 16, dtype=torch.float64)
+
+    x_ref = x0.clone().requires_grad_(True)
+    mlp = reference.mlp
+    gate = _reference(torch, bnb, mlp.gate_proj, x_ref)
+    up = _dense_reference(torch, mlp.up_proj, x_ref)
+    want = _reference(torch, bnb, mlp.down_proj, torch.nn.functional.silu(gate) * up)
+    _probe_loss([want], [probe]).backward()
+
+    assert patch_fast_lora_mlp(model) == 1
+    x = x0.clone().requires_grad_(True)
+    got = model(x)
+    assert type(got.grad_fn).__name__ == "_FastLoraSwiGLUBackward"
+    assert got.dtype == x.dtype
+    _probe_loss([got], [probe]).backward()
+
+    assert _rel(got, want) <= _REL
+    _assert_adapter_grads_match(model, reference)
+    _assert_input_grad_matches(x, x_ref)
+
+
+def test_plain_sibling_in_a_4bit_qkv_block_stays_in_the_input_dtype(
+    aten_half_matmuls,
+):
+    torch, bnb = _deps()
+    import torch.nn as nn
+
+    from soup_cli.utils.fast_lora_qkv import patch_fast_lora_qkv
+
+    class Attention(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.q_proj = _nf4(torch, bnb, 16, 16)
+            self.k_proj = _plain(torch, 16, 8)
+            self.v_proj = _nf4(torch, bnb, 16, 8)
+
+        def forward(self, x):
+            return self.q_proj(x), self.k_proj(x), self.v_proj(x)
+
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attn = Attention()
+
+        def forward(self, x):
+            return self.attn(x)
+
+    torch.manual_seed(0)
+    model = _adapt(
+        torch,
+        bnb,
+        Model(),
+        ["q_proj", "k_proj", "v_proj"],
+        dense=("k_proj",),
+    )
+    reference = copy.deepcopy(model)
+    x0 = torch.randn(3, 5, 16) * _SCALE
+    probes = [
+        torch.randn(3, 5, width, dtype=torch.float64) for width in (16, 8, 8)
+    ]
+
+    x_ref = x0.clone().requires_grad_(True)
+    attn = reference.attn
+    want = [
+        _reference(torch, bnb, attn.q_proj, x_ref),
+        _dense_reference(torch, attn.k_proj, x_ref),
+        _reference(torch, bnb, attn.v_proj, x_ref),
+    ]
+    _probe_loss(want, probes).backward()
+
+    assert patch_fast_lora_qkv(model) == 1
+    x = x0.clone().requires_grad_(True)
+    got = model(x)
+    assert all(part.dtype == x.dtype for part in got)
     _probe_loss(got, probes).backward()
     hits, grad_fns = getattr(model.attn, "_soup_fast_lora_qkv_last_cache_hits")
     assert hits == 2
