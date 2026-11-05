@@ -122,3 +122,30 @@ def test_ci_init_accepts_supported_python_versions(tmp_path, monkeypatch, versio
     assert workflow.is_file()
     content = workflow.read_text(encoding="utf-8")
     assert f'python-version: "{version}"' in content
+
+
+@pytest.mark.parametrize("version", ["03.11", "3.011", "3.00", "00.11"])
+def test_ci_init_rejects_leading_zero_python_versions(tmp_path, monkeypatch, version):
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(app, ["ci", "init", "--python", version])
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    workflow = tmp_path / ".github/workflows/soup-gate.yml"
+    assert not workflow.exists()
+    plain = " ".join(strip_ansi(result.output).split())
+    assert "python_version must look like '3.11'" in plain
+
+
+def test_ci_init_help_and_docs_name_supported_python_range():
+    from pathlib import Path
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["ci", "init", "--help"])
+    assert result.exit_code == 0
+    plain = " ".join(strip_ansi(result.output).split())
+    assert "3.11 to 3.13" in plain
+
+    root = Path(__file__).resolve().parents[1]
+    docs = (root / "docs/commands.md").read_text(encoding="utf-8")
+    assert "3.11 to 3.13" in docs
+

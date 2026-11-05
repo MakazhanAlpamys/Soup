@@ -235,7 +235,7 @@ soup ship ... --noise-floor N  Re-run base model N times; per-axis floor = max-m
 soup ship ... --chat-template-kwargs '{"enable_thinking":false}'  Pass template variables equally to base/tuned live generation; JSON object, live-only (#1758)
 soup card <registry-id> -o MODELCARD.md       HF model card from a registry entry: training config, evals, hashes, lineage, artifacts (v0.71.35)
 soup push --model ./out --repo you/m --card <registry-id>  Upload that registry-driven card as the README (HF only) (v0.71.35)
-soup ci init [--data d.jsonl --suite s.yaml --evidence ev.json] [--config soup.yaml] [--branch main --python 3.11] [--force]  Write .github/workflows/soup-gate.yml: data validate -> expect -> ship gate on every PR (v0.71.35); --config binds the gate to a committed config so it refuses stale evidence (v0.71.39)
+soup ci init [--data d.jsonl --suite s.yaml --evidence ev.json] [--config soup.yaml] [--branch main --python 3.11] [--force]  Write .github/workflows/soup-gate.yml: data validate -> expect -> ship gate on every PR (v0.71.35; --python range is 3.11 to 3.13); --config binds the gate to a committed config so it refuses stale evidence (v0.71.39)
 soup mcp serve                                MCP server over stdio (drive Soup from Claude Code / Cursor / Cline; requires [mcp] extra) (v0.71.28)
 soup mcp serve --allow-mutating               Also expose plan-only train_start / export tools (never execute) (v0.71.28)
 soup mcp serve --allow-execute                Implies --allow-mutating; enables train_execute / export_execute via server confirmation tokens

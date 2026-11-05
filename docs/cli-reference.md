@@ -865,7 +865,7 @@ Usage: `soup ci init [OPTIONS]`
 | `--data` | text | `./data/train.jsonl` |  | Training data path (repo-relative) |
 | `--suite` | text | `expectations.yaml` |  | Expectations suite YAML (repo-relative) |
 | `--evidence` | text | `ship_evidence.json` |  | Ship evidence JSON (repo-relative) |
-| `--python` | text | `3.11` |  | Python version for the CI runner (e.g. 3.11) |
+| `--python` | text | `3.11` |  | Python version for the CI runner (3.11 to 3.13, e.g. 3.11) |
 | `--branch` | text | `main` |  | Branch the workflow triggers on |
 | `--config` | text |  |  | Bind the ship gate to a committed soup.yaml (refuses stale evidence) |
 | `-o`, `--output` | text | `.github/workflows/soup-gate.yml` |  | Workflow output path |
