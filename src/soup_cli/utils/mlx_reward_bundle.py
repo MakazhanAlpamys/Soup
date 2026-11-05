@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import stat
+import tempfile
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -77,11 +78,25 @@ def _json(raw: bytes) -> dict:
     return value
 
 
+def _checked_dirs(path: Path) -> None:
+    """Inspect lexical prefixes even when the shared helper stops at a cwd alias."""
+    from soup_cli.utils.paths import refuse_linked_dirs
+
+    cwd = Path.cwd()
+    for prefix in (path, *path.parents):
+        refuse_linked_dirs(prefix)
+        # Only lexical equality is a trusted boundary. samefile may have reached
+        # cwd through a linked ancestor; abspath can also discard a link/.. pair.
+        if prefix == cwd or prefix == Path("."):
+            break
+
+
 @contextmanager
 def checked_file(path: Path) -> Iterator[Any]:
     from soup_cli.utils.paths import open_no_follow
 
     try:
+        _checked_dirs(path.parent)
         fd = open_no_follow(
             path,
             os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0),
@@ -131,8 +146,6 @@ def _version(value: dict, member: str) -> None:
 
 
 def contained(root: Path, name: str) -> Path:
-    from soup_cli.utils.paths import refuse_linked_dirs
-
     if (
         not isinstance(name, str)
         or not name
@@ -147,7 +160,7 @@ def contained(root: Path, name: str) -> Path:
     if os.path.commonpath([anchor, target]) != anchor:
         raise bad(name, "member escapes bundle")
     try:
-        refuse_linked_dirs(path.parent)
+        _checked_dirs(path.parent)
     except OSError as exc:
         raise bad(name, "linked parent directory") from exc
     return path
@@ -155,13 +168,11 @@ def contained(root: Path, name: str) -> Path:
 
 def inventory(root: Path) -> set[str]:
     """Walk without following links; every directory and file is checked."""
-    from soup_cli.utils.paths import refuse_linked_dirs
-
     result = set()
-    refuse_linked_dirs(root)
+    _checked_dirs(root)
     for parent, dirs, files in os.walk(root, followlinks=False):
         for directory in dirs:
-            refuse_linked_dirs(Path(parent) / directory)
+            _checked_dirs(Path(parent) / directory)
         for filename in files:
             path = Path(parent) / filename
             with checked_file(path):
@@ -356,31 +367,13 @@ def tensor_header(stream: Any, member: str) -> dict:
     return {key: value for key, value in header.items() if key != "__metadata__"}
 
 
-def base_identity(root: Path) -> dict:
-    """Hash the full MLX-LM glob, not just index-referenced shards."""
-    # Base snapshots can contain Hub-cache symlinks. Resolve only at this
-    # separate trusted-local-base boundary; bundle reads never do this.
+def _base_members(root: Path) -> list[Path]:
     config_path = root / "config.json"
     if not config_path.is_file():
         raise ValueError(
             "MLX reward: base member config.json is unavailable. "
             "Provide the identical local/cached base with base=."
         )
-    config = read_json(Path(os.path.realpath(config_path)))
-    if (
-        config.get("model_type") != "llama"
-        or "model_file" in config
-        or "auto_map" in config
-        or "quantization" in config
-        or "quantization_config" in config
-    ):
-        raise ValueError("MLX reward: dense Llama backbone required.")
-    for name in ("tokenizer_config.json", "config.json"):
-        candidate = root / name
-        if candidate.is_file():
-            obj = read_json(Path(os.path.realpath(candidate)))
-            if "auto_map" in obj or "model_file" in obj:
-                raise bad(name, "custom code is not supported")
     unsupported = [root / "hf_quant_config.json", *sorted(root.glob("*.bin")),
                    *sorted(root.glob("*.npz"))]
     for member in unsupported:
@@ -395,8 +388,32 @@ def base_identity(root: Path) -> dict:
             "MLX reward: base member model*.safetensors is unavailable. "
             "Provide the identical local/cached base with base=."
         )
+    index = root / "model.safetensors.index.json"
+    return [config_path, *weights, *([index] if index.exists() else [])]
+
+
+def base_identity(root: Path) -> dict:
+    """Hash the full MLX-LM glob, not just index-referenced shards."""
+    # Base snapshots can contain Hub-cache symlinks. Resolve only at this
+    # separate trusted-local-base boundary; bundle reads never do this.
+    members = _base_members(root)
+    config = read_json(Path(os.path.realpath(root / "config.json")))
+    if (
+        config.get("model_type") != "llama"
+        or "model_file" in config
+        or "auto_map" in config
+        or "quantization" in config
+        or "quantization_config" in config
+    ):
+        raise ValueError("MLX reward: dense Llama backbone required.")
+    for name in ("tokenizer_config.json", "config.json"):
+        candidate = root / name
+        if candidate.is_file():
+            obj = read_json(Path(os.path.realpath(candidate)))
+            if "auto_map" in obj or "model_file" in obj:
+                raise bad(name, "custom code is not supported")
     tensors = {}
-    for path in weights:
+    for path in (path for path in members if path.suffix == ".safetensors"):
         with open(os.path.realpath(path), "rb") as stream:
             if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
                 raise bad(path.name, "base weight is not regular")
@@ -404,13 +421,11 @@ def base_identity(root: Path) -> dict:
         if tensors.keys() & header.keys():
             raise bad(path.name, "duplicate base tensor keys across shards")
         tensors.update({key: path.name for key in header})
-    members = [config_path, *weights]
     index = root / "model.safetensors.index.json"
     if index.exists():
         mapping = read_json(Path(os.path.realpath(index))).get("weight_map")
         if mapping != tensors:
             raise bad(index.name, "index and actual globbed shard tensors differ")
-        members.append(index)
     result = {}
     for path in sorted(members):
         with open(os.path.realpath(path), "rb") as stream:
@@ -419,6 +434,74 @@ def base_identity(root: Path) -> dict:
                 "sha256": digest(stream),
             }
     return {"path": str(root.absolute()), "files": result}
+
+
+@contextmanager
+def _cache_file(path: Path) -> Iterator[Any]:
+    """A base may use Hub links; copy a regular resolved file, never a bundle link."""
+    from soup_cli.utils.paths import open_no_follow
+
+    source = Path(os.path.realpath(path))
+    fd = open_no_follow(
+        source, os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
+    )
+    with os.fdopen(fd, "rb") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise bad(path.name, "expected a regular base file")
+        yield stream
+
+
+def _copy_member(
+    source: Path, destination: Path, *, expected: dict | None = None,
+    limit: int | None = None, cache: bool = False,
+) -> None:
+    """Copy from one descriptor; verify those exact bytes before a loader sees them."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    total, sha = 0, hashlib.sha256()
+    with (_cache_file(source) if cache else checked_file(source)) as stream:
+        if limit is not None and os.fstat(stream.fileno()).st_size > limit:
+            raise bad(source.name, "size exceeds the declared byte bound")
+        with destination.open("xb") as output:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                total += len(chunk)
+                if limit is not None and total > limit:
+                    raise bad(source.name, "size exceeds the declared byte bound")
+                output.write(chunk)
+                if expected is not None:
+                    sha.update(chunk)
+    if expected is not None and {"size": total, "sha256": sha.hexdigest()} != expected:
+        raise bad(source.name, "size or SHA-256 mismatch")
+
+
+@contextmanager
+def _base_input(root: Path, expected: dict) -> Iterator[Path]:
+    """Keep ordinary MLX-LM loading, but bind it to the verified private contents."""
+    for member in expected["files"]:
+        if not (root / member).is_file():
+            raise ValueError(
+                f"MLX reward: base member {label(member)} is unavailable. "
+                "Provide the identical local/cached base with base=."
+            )
+    members = _base_members(root)
+    if {path.name for path in members} != set(expected["files"]):
+        raise bad("manifest.json", "base member inventory differs; provide matching base=")
+    with tempfile.TemporaryDirectory(prefix="soup-reward-base-") as temporary:
+        private = Path(os.path.realpath(temporary))
+        for path in members:
+            # Metadata is bounded even if an untrusted manifest claims a huge size.
+            limit = min(expected["files"][path.name]["size"], MAX_JSON) if (
+                path.suffix == ".json"
+            ) else expected["files"][path.name]["size"]
+            _copy_member(path, private / path.name, cache=True, limit=limit)
+        tokenizer_config = root / "tokenizer_config.json"
+        if tokenizer_config.is_file():
+            _copy_member(
+                tokenizer_config, private / tokenizer_config.name, cache=True, limit=MAX_JSON,
+            )
+        # Hash once on the same stable inputs the third-party loader will open.
+        # No unverified generation_config or architecture file enters this directory.
+        verify_base(private, expected)
+        yield private
 
 
 def verify_base(root: Path, expected: dict) -> None:
@@ -442,23 +525,66 @@ def verify_base(root: Path, expected: dict) -> None:
             )
 
 
-def load_tokenizer(root: Path, *, allow_cache_links: bool = False) -> Any:
+def _tokenizer_metadata(root: Path) -> None:
+    for name in ("tokenizer_config.json", "config.json"):
+        if (root / name).exists():
+            config = read_json(root / name)
+            if "auto_map" in config or "model_file" in config:
+                raise bad("tokenizer/" + name, "custom code is not supported")
+            for key, value in config.items():
+                if key == "name_or_path":  # Informational; from_pretrained replaces it.
+                    continue
+                file_argument = key.endswith(("_file", "_files", "_path", "_dir")) or (
+                    key in ("vocab", "merges") and isinstance(value, str)
+                )
+                if not file_argument or value is None:
+                    continue
+                # save_pretrained removes direct vocab-file overrides. Unlike its
+                # versioned-file list, arbitrary constructor file kwargs are not
+                # all resolved relative to the supplied tokenizer directory.
+                if key != "fast_tokenizer_files" or not isinstance(value, list):
+                    raise bad("tokenizer/" + name, "unsupported tokenizer file argument")
+                for member in value:
+                    path = contained(root, member)
+                    if not path.is_file():
+                        raise bad("tokenizer/" + name, "file argument names an unavailable member")
+
+
+def load_tokenizer(
+    root: Path, *, allow_cache_links: bool = False, expected_files: dict | None = None,
+) -> Any:
     from transformers import AutoTokenizer
 
     from soup_cli.utils.mlx_reward_data import check_tokenizer
 
-    for name in ("tokenizer_config.json", "config.json"):
-        if (root / name).exists():
-            path = root / name
-            config = read_json(Path(os.path.realpath(path)) if allow_cache_links else path)
-            if "auto_map" in config or "model_file" in config:
-                raise bad("tokenizer/" + name, "custom code is not supported")
-    tokenizer = AutoTokenizer.from_pretrained(
-        str(root),
-        use_fast=True,
-        trust_remote_code=False,
-        local_files_only=True,
-    )
+    if allow_cache_links:
+        # Training starts from the operator's chosen base, not artifact metadata.
+        for name in ("tokenizer_config.json", "config.json"):
+            if (root / name).is_file():
+                config = read_json(Path(os.path.realpath(root / name)))
+                if "auto_map" in config or "model_file" in config:
+                    raise bad("tokenizer/" + name, "custom code is not supported")
+        tokenizer = AutoTokenizer.from_pretrained(
+            str(root), use_fast=True, trust_remote_code=False, local_files_only=True,
+        )
+    else:
+        members = inventory(root)
+        identities = expected_files if expected_files is not None else {
+            name: record(contained(root, name)) for name in members
+        }
+        if members != set(identities):
+            raise bad("tokenizer/", "actual member inventory differs")
+        with tempfile.TemporaryDirectory(prefix="soup-reward-tokenizer-") as temporary:
+            private = Path(os.path.realpath(temporary))
+            for name, identity in identities.items():
+                _copy_member(
+                    contained(root, name), contained(private, name), expected=identity,
+                    limit=identity["size"],
+                )
+            _tokenizer_metadata(private)
+            tokenizer = AutoTokenizer.from_pretrained(
+                str(private), use_fast=True, trust_remote_code=False, local_files_only=True,
+            )
     check_tokenizer(tokenizer)
     return tokenizer
 
@@ -513,13 +639,13 @@ def load_scorer(artifact: str | Path, *, base: str | Path | None = None) -> Any:
     from soup_cli.utils.mlx_reward_native import check_dense_llama, make_reward_model
 
     root = Path(base if base is not None else manifest["base"]["path"])
-    verify_base(root, manifest["base"])
     kwargs = (
         {"trust_remote_code": False}
         if "trust_remote_code" in inspect.signature(load_model).parameters
         else {}
     )
-    backbone, _ = load_model(root, **kwargs)
+    with _base_input(root, manifest["base"]) as private:
+        backbone, _ = load_model(private, **kwargs)
     check_dense_llama(backbone)
     lora = manifest["lora"]
     allowed = {f"self_attn.{name}_proj" for name in ("q", "k", "v", "o")} | {
@@ -537,7 +663,10 @@ def load_scorer(artifact: str | Path, *, base: str | Path | None = None) -> Any:
         payload / "reward.safetensors", expected, manifest["files"]["reward.safetensors"]
     )
     model.load_weights(list(weights.items()), strict=False)
-    tokenizer = load_tokenizer(payload / "tokenizer")
+    tokenizer = load_tokenizer(payload / "tokenizer", expected_files={
+        name.removeprefix("tokenizer/"): identity for name, identity in manifest["files"].items()
+        if name.startswith("tokenizer/")
+    })
     if {"eos_id": tokenizer.eos_token_id, "vocab_size": len(tokenizer)} != manifest["tokenizer"]:
         raise bad("tokenizer/", "saved EOS/vocabulary contract differs")
     if len(tokenizer) > backbone.args.vocab_size:
@@ -547,9 +676,7 @@ def load_scorer(artifact: str | Path, *, base: str | Path | None = None) -> Any:
 
 
 def validate_output(root: Path) -> None:
-    from soup_cli.utils.paths import refuse_linked_dirs
-
-    refuse_linked_dirs(root)
+    _checked_dirs(root)
     legacy = {
         "adapter_config.json",
         "adapters.safetensors",
@@ -597,13 +724,11 @@ def _publish_bundle(root: Path, model: Any, tokenizer: Any, contract: dict) -> d
     import mlx.core as mx
     from mlx.utils import tree_flatten
 
-    from soup_cli.utils.paths import refuse_linked_dirs
-
     validate_output(root)
     root.mkdir(parents=True, exist_ok=True)
     bundles = root / "bundles"
     bundles.mkdir(exist_ok=True)
-    refuse_linked_dirs(bundles)
+    _checked_dirs(bundles)
     ident = uuid.uuid4().hex
     stage, final = bundles / (".staging-" + ident), bundles / ident
     stage.mkdir()

@@ -8978,7 +8978,7 @@ class SoupConfig(BaseModel):
         ``backend: mlx``. Stop-gap: delete this validator (and
         ``tests/test_mlx_lora_pattern_refusal.py``) when the MLX trainer honours them.
 
-        SFT, DPO, ORPO, SimPO, KTO and GRPO all build the adapter in
+        SFT, DPO, ORPO, SimPO, KTO, GRPO and reward_model all build the adapter in
         ``MLXSFTTrainerWrapper._apply_lora`` from one scalar ``lora.r`` and
         ``lora.alpha``, so a config that set a pattern trained a uniform-rank adapter
         without a word. Not part of

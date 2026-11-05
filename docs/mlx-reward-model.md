@@ -56,6 +56,9 @@ fallback. `base="/relocated/base"` can relocate an identical base: config and al
 weight bytes must match. A relocated base need not contain tokenizer files;
 scoring always uses the bundled tokenizer. Each load hashes the base once, an
 O(base bytes) read; each scoring call reuses the loaded model without rehashing.
+Loading also needs temporary disk space approximately equal to the base and
+tokenizer assets; it is released after loading, including on failure. Allow
+for this space when choosing the machine and temporary directory for scoring.
 
 ## Training and numerical contract
 

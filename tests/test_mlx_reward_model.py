@@ -1357,3 +1357,403 @@ def test_failed_payload_rename_cannot_publish_a_pointer(trained, monkeypatch):
     assert (root / 'reward_model.json').read_bytes() == before
     assert set((root / 'bundles').iterdir()) == generations
     assert score_completions(load_reward_scorer(root), [('Q', 'good')])
+
+
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize("entry", ["output", "contained", "json"])
+def test_directory_checks_refuse_a_link_before_a_parent_component(tmp_path, entry):
+    from soup_cli.utils.mlx_reward_bundle import contained, read_json, validate_output
+
+    work, outside = tmp_path / "work", tmp_path / "outside"
+    work.mkdir()
+    outside.mkdir()
+    (outside / "child").mkdir()
+    (outside / "bundle").mkdir()
+    (outside / "bundle" / "data.json").write_text('{"outside":true}')
+    (work / "child").mkdir()
+    (work / "bundle").mkdir()
+    (work / "bundle" / "data.json").write_text('{"outside":false}')
+    ordinary = work / "child" / ".." / "bundle"
+    validate_output(ordinary)
+    assert read_json(contained(ordinary, "data.json")) == {"outside": False}
+    (work / "linked").symlink_to(outside / "child", target_is_directory=True)
+    linked = work / "linked" / ".." / "bundle"
+    operations = {
+        "output": lambda: validate_output(linked),
+        "contained": lambda: contained(linked, "data.json"),
+        "json": lambda: read_json(linked / "data.json"),
+    }
+    with pytest.raises((OSError, ValueError), match="link|unreadable"):
+        operations[entry]()
+    assert list((outside / "bundle").iterdir()) == [outside / "bundle" / "data.json"]
+
+
+@pytest.mark.usefixtures("native_stack")
+@pytest.mark.requires_symlink
+def test_publication_refuses_a_link_before_parent_without_side_effects(trained, tmp_path):
+    trainer, _, root, _ = trained
+    _, manifest = read_bundle(root)
+    contract = {key: value for key, value in manifest.items()
+                if key not in ("files", "format_version", "artifact_type")}
+    work, outside = tmp_path / "work", tmp_path / "outside"
+    work.mkdir()
+    outside.mkdir()
+    (outside / "child").mkdir()
+    (work / "linked").symlink_to(outside / "child", target_is_directory=True)
+    output = work / "linked" / ".." / "output"
+    with pytest.raises((OSError, ValueError), match="link|unreadable"):
+        publish_bundle(output, trainer.model, trainer.tokenizer, contract)
+    assert not (outside / "output").exists()
+
+
+@pytest.mark.usefixtures("native_stack")
+@pytest.mark.parametrize("member", ["config.json", "model.safetensors"])
+def test_base_loader_uses_checked_contents_when_original_paths_change(trained, monkeypatch, member):
+    import hashlib
+
+    import mlx_lm.utils
+
+    _, _, root, base = trained
+    control = score_completions(load_reward_scorer(root), [("Q", "good")])
+    _, manifest = read_bundle(root)
+    original = mlx_lm.utils.load_model
+    observed = []
+
+    def replace_then_load(path, *args, **kwargs):
+        source = base / member
+        if member == "config.json":
+            config = json.loads(source.read_text())
+            config["model_file"] = "not-a-real-module.py"
+            source.write_text(json.dumps(config))
+        else:
+            source.write_bytes(b"not-the-verified-weights")
+        # No custom code executes: inspect the loader's actual input first.
+        actual = (Path(path) / member).read_bytes()
+        assert hashlib.sha256(actual).hexdigest() == manifest["base"]["files"][member]["sha256"]
+        observed.append(Path(path))
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(mlx_lm.utils, "load_model", replace_then_load)
+    scorer = load_reward_scorer(root)
+    assert observed
+    assert score_completions(scorer, [("Q", "good")]) == control
+    assert all(not path.exists() for path in observed)
+
+
+@pytest.mark.usefixtures("native_stack")
+def test_tokenizer_loader_uses_checked_contents_when_original_path_changes(trained, monkeypatch):
+    import hashlib
+
+    from transformers import AutoTokenizer
+
+    _, _, root, _ = trained
+    control = load_reward_scorer(root)
+    expected = control.tokenizer.encode("good", add_special_tokens=False)
+    payload, manifest = read_bundle(root)
+    original = AutoTokenizer.from_pretrained
+    observed = []
+
+    def replace_then_load(path, *args, **kwargs):
+        source = payload / "tokenizer" / "tokenizer.json"
+        content = json.loads(source.read_text())
+        vocab = content["model"]["vocab"]
+        vocab["good"], vocab["bad"] = vocab["bad"], vocab["good"]
+        source.write_text(json.dumps(content))
+        actual = (Path(path) / "tokenizer.json").read_bytes()
+        assert hashlib.sha256(actual).hexdigest() == manifest["files"]["tokenizer/tokenizer.json"][
+            "sha256"
+        ]
+        observed.append(Path(path))
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(AutoTokenizer, "from_pretrained", replace_then_load)
+    scorer = load_reward_scorer(root)
+    assert observed
+    assert scorer.tokenizer.encode("good", add_special_tokens=False) == expected
+    assert all(not path.exists() for path in observed)
+
+
+@pytest.mark.usefixtures("native_stack")
+@pytest.mark.parametrize("field", ["tokenizer_file", "vocab_file", "merges_file",
+                                    "fast_tokenizer_files"])
+def test_saved_tokenizer_refuses_external_file_arguments_before_loader(trained, monkeypatch, field):
+    from transformers import AutoTokenizer
+
+    _, _, root, _ = trained
+    assert load_reward_scorer(root)
+
+    def change(payload, manifest):
+        import hashlib
+
+        path = payload / "tokenizer" / "tokenizer_config.json"
+        config = json.loads(path.read_text())
+        value = "../../outside/tokenizer.0.0.0.json"
+        config[field] = [value] if field == "fast_tokenizer_files" else value
+        raw = json.dumps(config).encode()
+        path.write_bytes(raw)
+        manifest["files"]["tokenizer/tokenizer_config.json"] = {
+            "size": len(raw), "sha256": hashlib.sha256(raw).hexdigest(),
+        }
+
+    repoint(root, change)
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("external tokenizer file argument reached the loader")
+
+    monkeypatch.setattr(AutoTokenizer, "from_pretrained", refuse)
+    with pytest.raises(ValueError, match="tokenizer|relative member"):
+        load_reward_scorer(root)
+
+
+@pytest.mark.usefixtures("native_stack")
+@pytest.mark.parametrize("external", [False, True])
+def test_versioned_tokenizer_files_stay_inside_the_checked_inventory(trained, external):
+    import hashlib
+
+    _, _, root, _ = trained
+    expected = load_reward_scorer(root).tokenizer.encode("good", add_special_tokens=False)
+
+    def change(payload, manifest):
+        config_path = payload / "tokenizer" / "tokenizer_config.json"
+        config = json.loads(config_path.read_text())
+        version_name = "tokenizer.0.0.0.json"
+        if external:
+            version = payload.parent / "outside" / version_name
+            config["fast_tokenizer_files"] = ["../../outside/" + version_name]
+        else:
+            version = payload / "tokenizer" / version_name
+            config["fast_tokenizer_files"] = [version_name]
+        version.parent.mkdir(exist_ok=True)
+        raw = (payload / "tokenizer" / "tokenizer.json").read_bytes()
+        version.write_bytes(raw)
+        if not external:
+            manifest["files"]["tokenizer/" + version_name] = {
+                "size": len(raw), "sha256": hashlib.sha256(raw).hexdigest(),
+            }
+        raw = json.dumps(config).encode()
+        config_path.write_bytes(raw)
+        manifest["files"]["tokenizer/tokenizer_config.json"] = {
+            "size": len(raw), "sha256": hashlib.sha256(raw).hexdigest(),
+        }
+
+    repoint(root, change)
+    if external:
+        with pytest.raises(ValueError, match="tokenizer|relative member"):
+            load_reward_scorer(root)
+    else:
+        actual = load_reward_scorer(root).tokenizer.encode("good", add_special_tokens=False)
+        assert actual == expected
+
+
+@pytest.mark.usefixtures("native_stack")
+@pytest.mark.requires_symlink
+def test_private_base_loading_accepts_hub_cache_links(trained, tmp_path):
+    _, _, root, base = trained
+    expected = score_completions(load_reward_scorer(root), [("Q", "good")])
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    for member in ("config.json", "model.safetensors"):
+        (cache / member).symlink_to(base / member)
+    assert score_completions(load_reward_scorer(root, base=cache), [("Q", "good")]) == expected
+
+
+@pytest.mark.usefixtures("native_stack")
+@pytest.mark.parametrize("loader", ["model", "tokenizer"])
+def test_private_loader_inputs_are_cleaned_on_error_without_changing_sources(
+    trained, monkeypatch, loader,
+):
+    import mlx_lm.utils
+    from transformers import AutoTokenizer
+
+    _, _, root, base = trained
+    before = (root / "reward_model.json").read_bytes(), (base / "config.json").read_bytes()
+    inputs = []
+
+    def refuse(path, *args, **kwargs):
+        inputs.append(Path(path))
+        assert inputs[-1].is_dir()
+        raise ValueError("injected loader failure")
+
+    if loader == "model":
+        monkeypatch.setattr(mlx_lm.utils, "load_model", refuse)
+    else:
+        monkeypatch.setattr(AutoTokenizer, "from_pretrained", refuse)
+    with pytest.raises(ValueError, match="injected loader failure"):
+        load_reward_scorer(root)
+    assert inputs and all(not path.exists() for path in inputs)
+    after = (root / "reward_model.json").read_bytes(), (base / "config.json").read_bytes()
+    assert after == before
+
+
+@pytest.mark.usefixtures("native_stack")
+def test_tokenizer_copy_refuses_bytes_changed_after_bundle_validation(trained, monkeypatch):
+    import soup_cli.utils.mlx_reward_bundle as bundles
+
+    _, _, root, _ = trained
+    payload, _ = read_bundle(root)
+    original = bundles.load_tokenizer
+
+    def change_then_load(path, **kwargs):
+        source = payload / "tokenizer" / "tokenizer.json"
+        config = json.loads(source.read_text())
+        vocab = config["model"]["vocab"]
+        vocab["good"], vocab["bad"] = vocab["bad"], vocab["good"]
+        source.write_text(json.dumps(config))
+        return original(path, **kwargs)
+
+    monkeypatch.setattr(bundles, "load_tokenizer", change_then_load)
+    with pytest.raises(ValueError, match="size or SHA-256 mismatch"):
+        load_reward_scorer(root)
+
+
+@pytest.mark.usefixtures("native_stack")
+def test_private_base_loading_preserves_a_sharded_index(trained):
+    _, _, root, base = trained
+    expected = score_completions(load_reward_scorer(root), [("Q", "good")])
+
+    def change(payload, manifest):
+        weights = list(mx.load(str(base / "model.safetensors")).items())
+        (base / "model.safetensors").unlink()
+        mapping = {}
+        for index, shard in enumerate((weights[::2], weights[1::2]), 1):
+            name = f"model-{index:05d}-of-00002.safetensors"
+            mx.save_safetensors(str(base / name), dict(shard))
+            mapping.update({key: name for key, _ in shard})
+        (base / "model.safetensors.index.json").write_text(json.dumps({"weight_map": mapping}))
+        manifest["base"] = base_identity(base)
+
+    repoint(root, change)
+    assert score_completions(load_reward_scorer(root), [("Q", "good")]) == expected
+
+
+def test_private_member_copy_checks_the_bound_and_exact_identity(tmp_path):
+    import hashlib
+
+    from soup_cli.utils.mlx_reward_bundle import _copy_member
+
+    source = tmp_path / "source"
+    source.write_bytes(b"abc")
+    expected = {"size": 3, "sha256": hashlib.sha256(b"abc").hexdigest()}
+    destination = tmp_path / "valid"
+    _copy_member(source, destination, expected=expected, limit=3)
+    assert destination.read_bytes() == b"abc"
+    with pytest.raises(ValueError, match="size or SHA-256 mismatch"):
+        _copy_member(source, tmp_path / "bad-hash", expected={**expected, "sha256": "0" * 64})
+    destination = tmp_path / "too-large"
+    with pytest.raises(ValueError, match="byte bound"):
+        _copy_member(source, destination, limit=2)
+    assert not destination.exists()
+    assert source.read_bytes() == b"abc"
+
+
+def test_private_member_copy_checks_growth_after_open(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    import soup_cli.utils.mlx_reward_bundle as bundles
+
+    source = tmp_path / "source"
+    source.write_bytes(b"abc")
+    original = bundles.checked_file
+
+    @contextmanager
+    def grow_after_stat(path):
+        with original(path) as stream:
+            class Growing:
+                grown = False
+
+                def fileno(self):
+                    return stream.fileno()
+
+                def read(self, size):
+                    if not self.grown:
+                        self.grown = True
+                        with source.open("ab") as writer:
+                            writer.write(b"def")
+                    return stream.read(size)
+
+            yield Growing()
+
+    monkeypatch.setattr(bundles, "checked_file", grow_after_stat)
+    destination = tmp_path / "bounded"
+    with pytest.raises(ValueError, match="byte bound"):
+        bundles._copy_member(source, destination, limit=3)
+    assert destination.stat().st_size == 0
+
+
+@pytest.mark.requires_symlink
+def test_file_open_rechecks_parent_after_the_initial_directory_check(tmp_path, monkeypatch):
+    import soup_cli.utils.mlx_reward_bundle as bundles
+
+    parent, outside = tmp_path / "parent", tmp_path / "outside"
+    parent.mkdir()
+    outside.mkdir()
+    (parent / "data.json").write_text('{"outside":false}')
+    (outside / "data.json").write_text('{"outside":true}')
+    assert bundles.read_json(parent / "data.json") == {"outside": False}
+    original = bundles._checked_dirs
+
+    def check_then_replace(path):
+        original(path)
+        if path == parent:
+            parent.rename(tmp_path / "previous-parent")
+            parent.symlink_to(outside, target_is_directory=True)
+
+    monkeypatch.setattr(bundles, "_checked_dirs", check_then_replace)
+    with pytest.raises(ValueError, match="unreadable|linked"):
+        bundles.read_json(parent / "data.json")
+
+
+def test_tokenizer_version_metadata_requires_an_available_local_member(tmp_path):
+    from soup_cli.utils.mlx_reward_bundle import _tokenizer_metadata
+
+    config = tmp_path / "tokenizer_config.json"
+    (tmp_path / "tokenizer.json").write_text("{}")
+    config.write_text(json.dumps({"fast_tokenizer_files": ["tokenizer.json"]}))
+    _tokenizer_metadata(tmp_path)
+    config.write_text(json.dumps({"fast_tokenizer_files": ["missing-tokenizer.json"]}))
+    with pytest.raises(ValueError, match="unavailable member"):
+        _tokenizer_metadata(tmp_path)
+
+
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize("entry", ["output", "contained", "json"])
+def test_directory_checks_do_not_stop_at_a_cwd_alias(tmp_path, monkeypatch, entry):
+    from soup_cli.utils.mlx_reward_bundle import contained, read_json, validate_output
+
+    target = tmp_path / "target"
+    target.mkdir()
+    cwd = target / "child"
+    cwd.mkdir()
+    (cwd / "data.json").write_text('{"control":true}')
+    alias = tmp_path / "alias"
+    alias.symlink_to(target, target_is_directory=True)
+    monkeypatch.chdir(cwd)
+    validate_output(cwd)
+    assert read_json(contained(cwd, "data.json")) == {"control": True}
+    linked = alias / "child"
+    operations = {
+        "output": lambda: validate_output(linked),
+        "contained": lambda: contained(linked, "data.json"),
+        "json": lambda: read_json(linked / "data.json"),
+    }
+    with pytest.raises((OSError, ValueError), match="link|unreadable"):
+        operations[entry]()
+
+
+@pytest.mark.usefixtures("native_stack")
+@pytest.mark.requires_symlink
+def test_publication_refuses_a_cwd_alias_before_writing(trained, tmp_path, monkeypatch):
+    trainer, _, root, _ = trained
+    _, manifest = read_bundle(root)
+    contract = {key: value for key, value in manifest.items()
+                if key not in ("files", "format_version", "artifact_type")}
+    target = tmp_path / "target"
+    target.mkdir()
+    cwd = target / "child"
+    cwd.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(target, target_is_directory=True)
+    monkeypatch.chdir(cwd)
+    with pytest.raises((OSError, ValueError), match="link|unreadable"):
+        publish_bundle(alias / "child", trainer.model, trainer.tokenizer, contract)
+    assert list(cwd.iterdir()) == []
