@@ -194,6 +194,7 @@ the problem; restore the complete bundle instead of editing its metadata.
 |---|---|
 | Incompatible bundle version or contract | Use a compatible Soup version and an intact bundle. |
 | Missing, changed or linked bundle files | Restore the complete generation and its original files. |
+| A bundle or output path has a linked parent, including macOS `/tmp` or `/var` aliases | Pass its resolved path (for example `/private/tmp/...`) or choose a path without linked components under the working directory. |
 | Base unavailable or different | Supply `base=` with the identical local model snapshot. |
 | Unsupported base, tokenizer or weight format | Use a supported dense MLX safetensors base and fast tokenizer. |
 | Invalid or overlength scoring input | Correct the input and keep it within the saved maximum length. |
