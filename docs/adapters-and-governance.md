@@ -195,8 +195,20 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
 # Unpack a recorded iteration's Soup Can for what-if analysis (v0.71.4)
 soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 
-# Background subprocess (writes PID, no shell)
+# Background subprocess (no shell). It writes .soup/loop.pid, next to loop.yaml, as JSON:
+# {"pid": N, "started_at": "<UTC ISO 8601>", "log": ".soup/loop.log"}; read it with
+# `jq .pid .soup/loop.pid`. The child's stdout and stderr are appended to .soup/loop.log
+# (never truncated). While the PID file names a live process a second --detach is
+# refused (exit 2, naming the pid and the file); a stale file, whose process is gone or
+# that does not parse, is replaced with a notice. A recycled pid reads as alive, so if
+# the pid in the file is not a loop daemon, delete the file. The child removes the file
+# when it exits normally, but only if the file still holds its own pid; a killed child
+# leaves a stale file, which the next --detach replaces. There is no `stop` command yet.
 soup loop watch --detach
+
+# `soup loop status` has a daemon row: "running (pid N), log .soup/loop.log",
+# "not running", or "not running (stale pid file)". It only reads the file.
+soup loop status
 
 # The deploy stage loads a SHIP-verdict adapter into the running server
 # (POST /v1/adapters/load on SOUP_LOOP_SERVE_ENDPOINT, which needs soup serve
