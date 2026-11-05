@@ -164,6 +164,70 @@
             "verdict": {
               "enum": ["OK", "MAJOR", "UNKNOWN", null],
               "description": "UNKNOWN: too few samples so far."
+            },
+            "quality": {
+              "description": "Optional. The evidence behind the answer-quality part of the canary verdict: rated answers and negative feedback per bucket, and the significance test over them. Writers that do not judge quality omit it; readers ignore it when absent.",
+              "type": "object",
+              "required": [
+                "verdict", "rated", "negative", "share", "difference", "z", "p_value",
+                "min_rated", "threshold", "timed_out", "decided_on"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "verdict": {
+                  "enum": ["OK", "MAJOR", "UNKNOWN", "INSUFFICIENT"],
+                  "description": "OK: no significant regression (at the minimum this means none was detected, not that the models are equal). MAJOR: the canary's negative share is higher by more than the threshold and the difference is significant. UNKNOWN: fewer than min_rated rated answers in a bucket so far. INSUFFICIENT: the maximum wait ran out below the minimum."
+                },
+                "rated": {
+                  "description": "Answers that received feedback, per bucket.",
+                  "$ref": "#/$defs/bucket_counts"
+                },
+                "negative": {
+                  "description": "Rated answers that received negative feedback, per bucket.",
+                  "$ref": "#/$defs/bucket_counts"
+                },
+                "share": {
+                  "description": "negative / rated per bucket; null while the bucket has no rated answers.",
+                  "type": "object",
+                  "required": ["stable", "canary"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "stable": {"$ref": "#/$defs/fraction_or_null"},
+                    "canary": {"$ref": "#/$defs/fraction_or_null"}
+                  }
+                },
+                "difference": {
+                  "description": "Canary share minus stable share; null when either share is null.",
+                  "oneOf": [{"type": "number", "minimum": -1, "maximum": 1}, {"type": "null"}]
+                },
+                "z": {
+                  "description": "Pooled two-proportion z statistic; positive means the canary is worse. null when it is undefined (a bucket without rated answers, or all rated answers on the same side of negative / not negative).",
+                  "oneOf": [{"type": "number"}, {"type": "null"}]
+                },
+                "p_value": {
+                  "description": "One-sided p-value of z (the chance of a gap this large or larger if both buckets were equally good); null when z is null.",
+                  "$ref": "#/$defs/fraction_or_null"
+                },
+                "min_rated": {
+                  "description": "Rated answers required in each bucket before a verdict other than UNKNOWN or INSUFFICIENT is given.",
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "threshold": {
+                  "description": "The largest tolerated rise in the negative share (0.05 = 5 percentage points).",
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "timed_out": {
+                  "description": "True when the maximum wait for ratings ran out before min_rated was reached.",
+                  "type": "boolean"
+                },
+                "decided_on": {
+                  "enum": ["errors_and_quality", "errors_only"],
+                  "description": "errors_only: the rollout was decided on the error rates alone, because the quality evidence never reached the minimum in time."
+                }
+              }
             }
           }
         },
@@ -219,6 +283,18 @@
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,9})?(Z|[+]00:00)$",
       "description": "ISO 8601 date-time in UTC, suffix Z or +00:00."
     },
-    "count": {"type": "integer", "minimum": 0}
+    "count": {"type": "integer", "minimum": 0},
+    "bucket_counts": {
+      "type": "object",
+      "required": ["stable", "canary"],
+      "additionalProperties": false,
+      "properties": {
+        "stable": {"$ref": "#/$defs/count"},
+        "canary": {"$ref": "#/$defs/count"}
+      }
+    },
+    "fraction_or_null": {
+      "oneOf": [{"type": "number", "minimum": 0, "maximum": 1}, {"type": "null"}]
+    }
   }
 }
