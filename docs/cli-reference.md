@@ -2695,6 +2695,7 @@ Usage: `soup loop init [OPTIONS] SERVED_MODEL`
 | `--max-runs-per-day` | integer |  |  | Cap on iteration starts per UTC day. |
 | `--pre-wired` | flag | off |  | Use the pre-wired harvest/train/gate/deploy stages (utils/loop_stages.py) on watch instead of no-op stubs (v0.71.4). |
 | `--thumbs-db` | text |  |  | Local-RL SQLite written by `soup serve --record-thumbs`; the pre-wired harvest turns its thumbs into preference pairs. Must stay under cwd. SOUP_LOOP_THUMBS_DB overrides it. |
+| `--base-model` | text |  |  | Model the pre-wired train stage starts from. Default: the registry entry's base model for a registry://&lt;id> served model, otherwise the served model itself. |
 | `--force` | flag | off |  | Overwrite existing loop.yaml. |
 
 ### `soup loop pause`

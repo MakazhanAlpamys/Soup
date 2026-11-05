@@ -123,6 +123,12 @@ soup loop watch --poll-interval 300
 soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod --pre-wired
 soup loop watch --pre-wired --pack-cans --poll-interval 300
 
+# The train stage starts from the registry entry's base model (registry://<id>),
+# from --base-model, or from the served model itself. When none is known,
+# `init --pre-wired` and `watch --pre-wired` refuse instead of training a stand-in.
+soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod \
+    --pre-wired --base-model Qwen/Qwen2.5-0.5B-Instruct
+
 # Learn from Soup's own serving (#1440): the pre-wired harvest also reads the
 # thumbs `soup serve --record-thumbs` captures through POST /v1/thumbs, pairing
 # the latest thumbs-up and thumbs-down answer per prompt. The database must

@@ -96,6 +96,14 @@ def init_cmd(
             "stay under cwd. SOUP_LOOP_THUMBS_DB overrides it."
         ),
     ),
+    base_model: Optional[str] = typer.Option(
+        None, "--base-model",
+        help=(
+            "Model the pre-wired train stage starts from. Default: the registry "
+            "entry's base model for a registry://<id> served model, otherwise the "
+            "served model itself."
+        ),
+    ),
     force: bool = typer.Option(False, "--force", help="Overwrite existing loop.yaml."),
 ) -> None:
     """Create the .soup/loop.yaml control file (one-time setup)."""
@@ -119,6 +127,22 @@ def init_cmd(
         except (TypeError, ValueError) as exc:
             console.print(f"[red]invalid --thumbs-db:[/] {for_terminal(exc)}")
             raise typer.Exit(code=2)
+    if base_model is not None and not base_model.strip():
+        console.print("[red]--base-model must not be empty[/]")
+        raise typer.Exit(code=2)
+    from soup_cli.utils.loop_stages import resolve_base_model
+
+    resolved_base: Optional[str] = None
+    try:
+        resolved_base = resolve_base_model(served_model, base_model)
+    except ValueError as exc:
+        if pre_wired:
+            console.print(f"[red]cannot determine the base model:[/] {for_terminal(exc)}")
+            raise typer.Exit(code=2)
+        console.print(
+            f"[yellow]warning:[/] base model unknown ({for_terminal(exc)}); "
+            "soup loop watch --pre-wired refuses until it is known"
+        )
     try:
         state, path = init_state(
             served_model=served_model,
@@ -128,6 +152,7 @@ def init_cmd(
             max_runs_per_day=max_runs_per_day,
             pre_wired=pre_wired,
             thumbs_db=thumbs_db,
+            base_model=resolved_base,
             force=force,
         )
     except (FileExistsError, FileNotFoundError, TypeError, ValueError) as exc:
@@ -138,7 +163,8 @@ def init_cmd(
             f"loop state created at [bold]{escape(os.path.relpath(path))}[/]\n"
             f"served_model: [bold]{escape(state.served_model)}[/]\n"
             f"eval_suite:   [bold]{escape(state.eval_suite)}[/]\n"
-            f"baseline:     [bold]{escape(state.baseline)}[/]",
+            f"baseline:     [bold]{escape(state.baseline)}[/]\n"
+            f"base_model:   [bold]{escape(state.base_model or 'unknown')}[/]",
             title="soup loop init",
         )
     )
@@ -169,6 +195,7 @@ def status_cmd() -> None:
     table.add_row("served_model", escape(state.served_model))
     table.add_row("eval_suite", escape(state.eval_suite))
     table.add_row("baseline", escape(state.baseline))
+    table.add_row("base_model", escape(state.base_model or "unknown"))
     table.add_row("pre_wired", "yes" if state.pre_wired else "no")
     table.add_row("traces_collected", str(state.traces_collected))
     table.add_row("pairs_distilled", str(state.pairs_distilled))
@@ -272,12 +299,18 @@ def watch_cmd(
     if pre_wired or state.pre_wired:
         # #1440: a configured thumbs database the harvest would refuse stops the
         # watch here, before it starts or detaches, instead of mid-iteration.
-        from soup_cli.utils.loop_stages import checked_thumbs_db
+        from soup_cli.utils.loop_stages import checked_thumbs_db, resolve_base_model
 
         try:
             checked_thumbs_db(state)
         except ValueError as exc:
             console.print(f"[red]invalid thumbs database:[/] {for_terminal(exc)}")
+            raise typer.Exit(code=2)
+        # The train stage would skip every iteration; say so before starting.
+        try:
+            resolve_base_model(state.served_model, state.base_model)
+        except ValueError as exc:
+            console.print(f"[red]cannot determine the base model:[/] {for_terminal(exc)}")
             raise typer.Exit(code=2)
     elif os.environ.get("SOUP_LOOP_THUMBS_DB") or state.thumbs_db:
         console.print(
@@ -318,7 +351,7 @@ def watch_cmd(
         console.print(f"[green]watch detached[/] pid={proc.pid}")
         return
     use_prewired = pre_wired or state.pre_wired
-    base_model = (
+    base_model = state.base_model or (
         state.served_model
         if state.served_model and not state.served_model.startswith("registry://")
         else "unknown"
@@ -327,6 +360,8 @@ def watch_cmd(
         if use_prewired:
             from soup_cli.utils.loop_stages import build_prewired_watch_config
 
+            # Checked before the fork above, so it resolves here.
+            base_model = resolve_base_model(state.served_model, state.base_model)
             cfg = build_prewired_watch_config(
                 poll_interval_sec=float(poll_interval),
                 max_iterations=max_iterations,
