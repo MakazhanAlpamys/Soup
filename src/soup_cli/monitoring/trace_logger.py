@@ -1,8 +1,17 @@
 """Append-only JSONL request log for ``soup serve --trace-log``.
 
-One JSON object per request with shape::
+``soup serve`` writes one conversation record per answer in the version 1 format of
+``soup_cli/schemas/loop/conversation.schema.json`` (see ``docs/loop-formats.md``)::
 
-    {"prompt": ..., "response": ..., "latency_ms": ..., "tokens": ..., "ts": ...}
+    {"schema_version": 1, "id": <response id>, "conversation_id": ..., "ts": ...,
+     "model": ..., "version": null, "adapter": ..., "canary_bucket": ...,
+     "messages": [...], "response": ..., "finish_reason": ..., "latency_ms": ...,
+     "tokens": {"prompt": ..., "completion": ...}, "source": "soup-serve",
+     "prompt": <last user message>}
+
+``prompt`` is kept so readers of the version 0 line keep working.
+:meth:`TraceLogWriter.record` still writes the version 0 line
+``{"prompt", "response", "latency_ms", "tokens": <int>, "ts": <epoch>}``.
 
 Hard rotation cap of ``cap_mb`` (default 100 MB). When the active file
 exceeds the cap, it is renamed ``<path>.1`` (one backup retained) and a
@@ -19,15 +28,36 @@ Added in v0.40.3 (#33 (b)).
 from __future__ import annotations
 
 import json
+import logging
+import math
 import os
 import re
 import stat
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 from soup_cli.utils.paths import is_under_cwd
+
+logger = logging.getLogger(__name__)
+
+#: ``schema_version`` of the conversation record :meth:`TraceLogWriter.record_conversation` writes.
+CONVERSATION_SCHEMA_VERSION = 1
+
+#: ``source`` of every record ``soup serve`` writes.
+SERVE_SOURCE = "soup-serve"
+
+#: The message roles ``conversation.schema.json`` allows.
+CONVERSATION_ROLES: frozenset[str] = frozenset(
+    {"system", "developer", "user", "assistant", "tool"}
+)
+
+_MAX_MODEL_CHARS = 512
+_MAX_ADAPTER_CHARS = 256
+_MAX_FINISH_REASON_CHARS = 64
+_MAX_CONVERSATION_ID_CHARS = 512
 
 # Mirror v0.34.0 crash.py policy: redact common secret shapes BEFORE writing
 # request/response strings to disk. Operators frequently embed tokens in
@@ -69,6 +99,78 @@ _MIN_CAP_MB: int = 1
 _MAX_CAP_MB: int = 10_000
 
 
+def resolve_log_path(path: str, *, flag: str) -> Path:
+    """Validate a log path given to ``flag`` and return it resolved.
+
+    The path must be a non-empty string without null bytes and stay under the
+    current directory. Its parent directory is created. Shared by the trace and
+    feedback writers so both apply one containment rule.
+    """
+    if not isinstance(path, str) or not path or "\x00" in path:
+        raise ValueError("path must be a non-empty string with no null bytes")
+    if not is_under_cwd(path):
+        raise ValueError(f"{flag} path must stay under cwd: {path}")
+    resolved = Path(os.path.realpath(path))
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    return resolved
+
+
+def utc_timestamp() -> str:
+    """The current time as ISO 8601 UTC with a ``+00:00`` suffix, as the loop formats want."""
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+
+def _count_or_none(value: Any) -> Optional[int]:
+    """A token count as the engine reported it, or ``None`` when it did not."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _latency_or_none(value: Any) -> Optional[float]:
+    """Latency in ms, or ``None`` when it is not a finite non-negative number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if not math.isfinite(number) or number < 0:
+        return None
+    return round(number, 3)
+
+
+def _text_or_none(value: Any, *, max_chars: int) -> Optional[str]:
+    """``value`` when it is a non-empty string within ``max_chars``, else ``None``."""
+    if isinstance(value, str) and 0 < len(value) <= max_chars:
+        return value
+    return None
+
+
+def _last_user_message(messages: list[dict[str, Any]]) -> str:
+    return next(
+        (str(msg.get("content", "")) for msg in reversed(messages) if msg.get("role") == "user"),
+        "",
+    )
+
+
+def _conversation_problem(
+    model: Any, adapter: Any, messages: list[dict[str, Any]]
+) -> Optional[str]:
+    """Why a conversation record would not be schema-valid, or ``None`` when it would be."""
+    if _text_or_none(model, max_chars=_MAX_MODEL_CHARS) is None:
+        return "the model name is empty or longer than 512 characters"
+    if adapter is not None and _text_or_none(adapter, max_chars=_MAX_ADAPTER_CHARS) is None:
+        return "the adapter name is empty or longer than 256 characters"
+    if not messages:
+        return "the request has no messages"
+    for msg in messages:
+        role = msg.get("role")
+        if not isinstance(role, str) or role not in CONVERSATION_ROLES:
+            return (
+                f"message role {str(role)[:40]!r} is not one of "
+                f"{', '.join(sorted(CONVERSATION_ROLES))}"
+            )
+    return None
+
+
 class TraceLogWriter:
     """Thread-safe append-only JSONL writer with size-based rotation."""
 
@@ -79,13 +181,7 @@ class TraceLogWriter:
             raise ValueError(
                 f"cap_mb must be in [{_MIN_CAP_MB}, {_MAX_CAP_MB}], got {cap_mb}"
             )
-        if not isinstance(path, str) or not path or "\x00" in path:
-            raise ValueError("path must be a non-empty string with no null bytes")
-        if not is_under_cwd(path):
-            raise ValueError(f"--trace-log path must stay under cwd: {path}")
-        resolved = Path(os.path.realpath(path))
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        self._path = resolved
+        self._path = resolve_log_path(path, flag="--trace-log")
         self._cap_bytes = cap_mb * 1024 * 1024
         # Single-process lock: protects rotate + write within ONE serve
         # process. Multi-worker (e.g. `--workers 4`) deployments writing to
@@ -111,7 +207,7 @@ class TraceLogWriter:
         tokens: int,
         extra: Optional[dict[str, Any]] = None,
     ) -> None:
-        """Append one entry. Never raises on serialisation issues."""
+        """Append one version 0 entry. Never raises on serialisation issues."""
         entry: dict[str, Any] = {
             "ts": time.time(),
             "prompt": _redact_secrets(str(prompt)),
@@ -126,11 +222,88 @@ class TraceLogWriter:
                 # Defence in depth — redact secrets in caller-supplied
                 # extras too (e.g. `extra={"system_prompt": ...}`).
                 entry[str(key)] = _redact_value(value)
+        self._append(entry)
+
+    def record_conversation(
+        self,
+        *,
+        response_id: str,
+        model: str,
+        messages: list[dict[str, Any]],
+        response: str,
+        conversation_id: Optional[str] = None,
+        version: Optional[int] = None,
+        adapter: Optional[str] = None,
+        canary_bucket: Optional[str] = None,
+        finish_reason: Optional[str] = None,
+        latency_ms: Optional[float] = None,
+        prompt_tokens: Optional[int] = None,
+        completion_tokens: Optional[int] = None,
+    ) -> None:
+        """Append one version 1 conversation record (``conversation.schema.json``).
+
+        ``messages`` is the conversation the model saw, without the answer; its
+        contents and ``response`` are redacted before they reach disk. A value that
+        is unknown is written as ``null`` (never ``0``): token counts that are not
+        non-negative ints, a latency that is not finite, a ``finish_reason`` that is
+        not a short string, a ``conversation_id`` outside 1-512 characters.
+
+        Only schema-valid lines are written. A request the schema cannot describe
+        (a message role outside ``system``/``developer``/``user``/``assistant``/
+        ``tool``, an empty ``messages`` list, an empty model name) is answered
+        normally but not logged; the reason goes to the server log. Never raises.
+        """
+        problem = _conversation_problem(model, adapter, messages)
+        if problem is not None:
+            logger.warning("conversation record %s not written: %s", response_id, problem)
+            return
+        clean_messages = [
+            {
+                "role": msg["role"],
+                "content": _redact_secrets(str(msg.get("content", ""))),
+            }
+            for msg in messages
+        ]
+        entry: dict[str, Any] = {
+            "schema_version": CONVERSATION_SCHEMA_VERSION,
+            "id": response_id,
+            "conversation_id": _text_or_none(
+                conversation_id, max_chars=_MAX_CONVERSATION_ID_CHARS
+            ),
+            "ts": utc_timestamp(),
+            "model": model,
+            "version": _count_or_none(version) or None,
+            "adapter": adapter,
+            "canary_bucket": canary_bucket if canary_bucket in ("stable", "canary") else None,
+            "messages": clean_messages,
+            "response": _redact_secrets(str(response)),
+            "finish_reason": _text_or_none(finish_reason, max_chars=_MAX_FINISH_REASON_CHARS),
+            "latency_ms": _latency_or_none(latency_ms),
+            "tokens": {
+                "prompt": _count_or_none(prompt_tokens),
+                "completion": _count_or_none(completion_tokens),
+            },
+            "source": SERVE_SOURCE,
+            # Version 0 readers (soup data from-traces, soup loop) read this key.
+            "prompt": _last_user_message(clean_messages),
+        }
+        self._append(entry)
+
+    def _append(self, entry: dict[str, Any]) -> None:
+        """Serialise ``entry`` and append it, rotating first. Never raises."""
         try:
             line = json.dumps(entry, ensure_ascii=False, default=str)
         except (TypeError, ValueError):
             return  # drop unserialisable entries silently — passive log
-        line_bytes = (line + "\n").encode("utf-8")
+        try:
+            line_bytes = (line + "\n").encode("utf-8")
+        except UnicodeEncodeError:
+            # A lone surrogate cannot be written as UTF-8: \u-escape it instead.
+            try:
+                line = json.dumps(entry, ensure_ascii=True, default=str)
+            except (TypeError, ValueError):
+                return
+            line_bytes = (line + "\n").encode("ascii")
         with self._lock:
             self._maybe_rotate(extra=len(line_bytes))
             try:

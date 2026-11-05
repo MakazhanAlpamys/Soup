@@ -244,6 +244,8 @@ soup loop resume
 soup loop replay iter-20260515T120000-abcdef01
 ```
 
+The data formats the cycle passes between serving, feedback, training and rollout are defined in [Loop data formats](loop-formats.md).
+
 State lives in `.soup/loop.yaml` (atomic write, cwd-contained, symlink-rejected). Per-iteration manifests under `.soup-loops/<iter-id>/iteration.json` are laid out so a v0.26 Soup Can can wrap them directly.
 
 Canary routing is available on the transformers backend when the candidate name was
