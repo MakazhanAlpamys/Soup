@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 console = Console()
 
+#: Response header (and body field ``response_id``) carrying the id of an answer.
+_RESPONSE_ID_HEADER = "X-Response-Id"
 
 
 def _validate_adapter_name(name: str) -> bool:
@@ -234,6 +236,14 @@ def serve(
             "Auto-capture thumbs-up/down feedback into a local-rl SQLite at "
             "this path via POST /v1/thumbs. Path must stay under cwd. "
             "Transformers backend only. v0.71.1 (#230)."
+        ),
+    ),
+    feedback_log: Optional[str] = typer.Option(
+        None,
+        "--feedback-log",
+        help=(
+            "Append feedback (POST /v1/feedback) as JSONL records to this path; "
+            "must stay under cwd."
         ),
     ),
     reasoning_parser: Optional[str] = typer.Option(
@@ -520,6 +530,23 @@ def serve(
             "[bold]sglang[/], [bold]mii[/]"
         )
         raise typer.Exit(1)
+
+    # The conversation log, the thumbs database and the feedback log live in the
+    # transformers app. The vLLM, SGLang and MII apps never receive them, so the
+    # flags used to be accepted and then do nothing: refuse instead.
+    if backend != "transformers":
+        for _flag, _value in (
+            ("--trace-log", trace_log),
+            ("--record-thumbs", record_thumbs),
+            ("--feedback-log", feedback_log),
+        ):
+            if _value is not None:
+                console.print(
+                    f"[red]{_flag} requires --backend transformers[/] "
+                    f"(the {for_terminal(backend)} backend does not support it, so the "
+                    "flag would be silently ignored)."
+                )
+                raise typer.Exit(code=2)
 
     # #816 — the old path timed three calls to a constant-returning stub and
     # described the fastest few hundred nanoseconds as a quality-gated model
@@ -1101,6 +1128,20 @@ def serve(
             record_thumbs_db = record_thumbs
             console.print(f"[green]Thumbs feedback log:[/] {_escape(record_thumbs)}")
 
+        # POST /v1/feedback appends loop-format feedback records to this file.
+        feedback_log_writer = None
+        if feedback_log is not None:
+            from soup_cli.monitoring.feedback_log import FeedbackLogWriter
+
+            try:
+                feedback_log_writer = FeedbackLogWriter(feedback_log)
+            except (TypeError, ValueError) as exc:
+                from rich.markup import escape as _escape
+
+                console.print(f"[red]--feedback-log:[/] {_escape(str(exc))}")
+                raise typer.Exit(1) from exc
+            console.print(f"[green]Feedback log:[/] {for_terminal(str(feedback_log_writer.path))}")
+
         app = _create_app(
             model_obj=model_obj,
             tokenizer=tokenizer,
@@ -1118,6 +1159,7 @@ def serve(
             trace_log_writer=trace_log_writer,
             reasoning_parser=resolved_reasoning_parser,
             record_thumbs_db=record_thumbs_db,
+            feedback_log_writer=feedback_log_writer,
             auth_token=tool_auth_token,
             host=host,
             loaded_bank=loaded_bank,
@@ -1599,6 +1641,88 @@ def _adapter_scope(model, lock, names, requested, active):
             yield
 
 
+def _effective_adapter(model, names, requested, active) -> Optional[str]:
+    """The adapter :func:`_adapter_scope` runs a generation with, or ``None`` for the base.
+
+    Mirrors its selection (same arguments, same rule) so the trace record names what
+    produced the answer. ``None`` also when no named adapters were loaded.
+    """
+    if not names:
+        return None
+    name = active if requested is None else requested
+    if name and name in names and hasattr(model, "set_adapter"):
+        return name
+    return None
+
+
+def _write_conversation_record(
+    writer,
+    *,
+    response_id: str,
+    conversation_id: Optional[str],
+    model_name: str,
+    messages: List[Dict[str, Any]],
+    response_text: str,
+    finish_reason: Any,
+    started: Optional[float],
+    prompt_tokens: Any,
+    completion_tokens: Any,
+    adapter: Optional[str],
+    canary_bucket: Optional[str],
+) -> None:
+    """Append the version 1 conversation record of one answer; no-op without a writer.
+
+    ``started`` is the ``time.perf_counter()`` mark taken before generation. A passive
+    log: a failure is logged at debug level and never reaches the client.
+    """
+    if writer is None:
+        return
+    try:
+        writer.record_conversation(
+            response_id=response_id,
+            conversation_id=conversation_id,
+            model=model_name,
+            messages=messages,
+            response=response_text,
+            adapter=adapter,
+            canary_bucket=canary_bucket,
+            finish_reason=finish_reason,
+            latency_ms=(
+                (time.perf_counter() - started) * 1000 if started is not None else None
+            ),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+    except Exception:  # noqa: BLE001 — passive log never blocks an answer
+        logger.debug("conversation record %s failed", response_id, exc_info=True)
+
+
+async def _read_capped_body(request, limit: int) -> bytes:
+    """Read a request body of at most ``limit`` bytes; 413 as soon as it is larger.
+
+    The declared ``Content-Length`` is checked first, then the bytes actually received,
+    so a missing or understated header (chunked upload) cannot get past the cap.
+    """
+    from fastapi import HTTPException
+
+    too_large = HTTPException(status_code=413, detail="Request body too large")
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            if int(declared) > limit:
+                raise too_large
+        except ValueError:
+            pass  # not a number: the byte count below still enforces the cap
+    chunks: List[bytes] = []
+    received = 0
+    async for chunk in request.stream():
+        received += len(chunk)
+        if received > limit:
+            raise too_large
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def _load_draft_model(speculative_model: str, device: str):
     """Load a smaller draft model for speculative decoding."""
     import os
@@ -1799,23 +1923,31 @@ def _create_app(
     kv_cache_generate_kwargs: Optional[Dict[str, Any]] = None,
     canary_state_path: Optional[str] = None,
     canary_stats_path: Optional[str] = None,
+    feedback_log_writer=None,
 ):
     """Create the FastAPI application with OpenAI-compatible endpoints.
 
     Args:
         auth_token: Bearer token for the v0.53.7 tool endpoints
             (``/v1/tools/python``, ``/v1/tools/bash`` and
-            ``/v1/tools/web_search``), ``/v1/thumbs`` and the adapter routes.
+            ``/v1/tools/web_search``), ``/v1/thumbs``, ``/v1/feedback`` and the
+            adapter routes.
             When set, callers must supply ``Authorization: Bearer <token>``.
             When ``None`` (default), ``/v1/tools/python`` and ``/v1/tools/bash``
             answer 401 on every bind; the other routes take no token on a
             loopback bind and answer 401 on any other.
+        trace_log_writer: Writes one version 1 conversation record per answer
+            (see ``docs/loop-formats.md``); every answer carries a ``response_id``
+            whether or not it is set.
+        feedback_log_writer: Where ``POST /v1/feedback`` appends feedback records;
+            the route answers 404 when it is ``None``.
     """
     import secrets as _secrets
     import threading as _threading
 
-    from fastapi import Depends, FastAPI, Header, HTTPException, Request
+    from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
     from fastapi import Path as FPath
+    from fastapi.concurrency import run_in_threadpool
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import StreamingResponse
     from pydantic import BaseModel as PydanticBaseModel
@@ -1913,6 +2045,8 @@ def _create_app(
         allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
+        # A page on localhost can only read this response header if it is exposed.
+        expose_headers=[_RESPONSE_ID_HEADER],
     )
 
     # Shared metrics bucket — always created so /metrics works whether or
@@ -2098,11 +2232,30 @@ def _create_app(
     @app.post("/v1/chat/completions", dependencies=[Depends(_check_browser_origin)])
     def chat_completions(
         request: ChatCompletionRequest,
+        response: Response,
         x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
         x_conversation_id: Optional[str] = Header(
             default=None, alias="X-Conversation-Id"
         ),
     ):
+        # Every answer gets an id (docs/serving-and-export.md): the `id` field stays the
+        # OpenAI-style "chatcmpl-..." one; `response_id` (body) and X-Response-Id
+        # (header) carry the id the trace log and POST /v1/feedback use.
+        reply, response_id = _run_chat(request, x_user_id, x_conversation_id)
+        response.headers[_RESPONSE_ID_HEADER] = response_id
+        return reply
+
+    def _run_chat(
+        request: ChatCompletionRequest,
+        x_user_id: Optional[str],
+        x_conversation_id: Optional[str],
+    ):
+        """Answer one chat request; returns ``(reply, response_id)``.
+
+        ``reply`` is the response dict, or a ``StreamingResponse`` when the request
+        asked for a stream. ``/v1/messages`` calls this too, with no header values.
+        """
+        response_id = str(uuid.uuid4())
         # Check adapter selection (from request body)
         # Treat an empty public request value like an omitted adapter. The
         # empty string is reserved internally as the explicit base-model
@@ -2119,13 +2272,23 @@ def _create_app(
                 status_code=404,
                 detail="No adapters loaded.",
             )
+        conversation_id = request.conversation_id or x_conversation_id
         canary_tracking = None
         if requested_adapter is None:
-            routed_adapter, canary_tracking = _canary_adapter(
-                request.conversation_id or x_conversation_id
-            )
+            routed_adapter, canary_tracking = _canary_adapter(conversation_id)
             if canary_tracking is not None:
                 requested_adapter = routed_adapter
+        # What the trace record says produced the answer: the same selection
+        # `_adapter_scope` makes, from the same inputs (MoLE blends, it has no one adapter).
+        active_adapter = _active_snapshot()
+        used_adapter = (
+            None
+            if _mole_runtime is not None
+            else _effective_adapter(
+                model_obj, _peft_adapter_names, requested_adapter, active_adapter
+            )
+        )
+        canary_bucket = canary_tracking[1] if canary_tracking is not None else None
 
         # v0.71.12 #221 — select the active VeRA / VB-LoRA user for this
         # request. set_active_user(None) (or an unknown id) self-clears, so
@@ -2164,16 +2327,21 @@ def _create_app(
                     adapter_lock=_generation_lock,
                     adapter_names=_peft_adapter_names,
                     requested_adapter=requested_adapter,
-                    active_adapter=_active_snapshot(),
+                    active_adapter=active_adapter,
                     canary_outcome=(
                         lambda ok: _record_canary_outcome(canary_tracking, ok)
                     ),
                     logits_processor=processors or None,
                     ngram_config=ngram_config,
                     reasoning_parser=reasoning_parser,
+                    response_id=response_id,
+                    conversation_id=conversation_id,
+                    trace_adapter=used_adapter,
+                    canary_bucket=canary_bucket,
                 ),
                 media_type="text/event-stream",
-            )
+                headers={_RESPONSE_ID_HEADER: response_id},
+            ), response_id
 
         import contextlib as _contextlib
 
@@ -2215,7 +2383,7 @@ def _create_app(
                         # of generate().
                         with _adapter_scope(
                             model_obj, _generation_lock, _peft_adapter_names,
-                            requested_adapter, _active_snapshot(),
+                            requested_adapter, active_adapter,
                         ):
                             (
                                 response_text,
@@ -2256,19 +2424,22 @@ def _create_app(
                 pass
 
                 # v0.40.3 (#33 (b)) — passive request log; never breaks
-                # the request handler on disk / serialisation issues.
-                if trace_log_writer is not None:
-                    last_user = next(
-                        (m["content"] for m in reversed(messages)
-                         if m.get("role") == "user"),
-                        "",
-                    )
-                    trace_log_writer.record(
-                        prompt=str(last_user),
-                        response=response_text,
-                        latency_ms=(time.perf_counter() - started) * 1000,
-                        tokens=completion_tokens,
-                    )
+                # the request handler on disk / serialisation issues. One version 1
+                # conversation record per answer, under the id the client gets back.
+                _write_conversation_record(
+                    trace_log_writer,
+                    response_id=response_id,
+                    conversation_id=conversation_id,
+                    model_name=model_name,
+                    messages=messages,
+                    response_text=response_text,
+                    finish_reason=finish_reason,
+                    started=started,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    adapter=used_adapter,
+                    canary_bucket=canary_bucket,
+                )
 
                 result = {
                     "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
@@ -2290,9 +2461,10 @@ def _create_app(
                         "completion_tokens": completion_tokens,
                         "total_tokens": prompt_tokens + completion_tokens,
                     },
+                    "response_id": response_id,
                 }
                 _record_canary_outcome(canary_tracking, True)
-                return result
+                return result, response_id
             finally:
                 # Always record latency so tail-latency percentiles include
                 # error paths (prevents blind spots on the dashboard).
@@ -2303,7 +2475,7 @@ def _create_app(
     # chat_completions handler. Live on transformers backend only this
     # release (vLLM /v1/messages tracked for v0.53.7).
     @app.post("/v1/messages", dependencies=[Depends(_check_browser_origin)])
-    def anthropic_messages(payload: dict) -> dict:
+    def anthropic_messages(payload: dict, response: Response) -> dict:
         from soup_cli.utils.anthropic_messages import (
             from_anthropic,
             validate_anthropic_payload,
@@ -2328,7 +2500,8 @@ def _create_app(
             logger.debug("/v1/messages pydantic error: %s", exc)
             raise HTTPException(status_code=400, detail="Invalid request")
 
-        chat_response = chat_completions(request)
+        # No header values: /v1/messages takes neither X-Conversation-Id nor X-User-Id.
+        chat_response, response_id = _run_chat(request, None, None)
 
         # Map OpenAI chat response back to Anthropic shape.
         text = ""
@@ -2368,14 +2541,17 @@ def _create_app(
                     input_tokens=in_tokens,
                     output_tokens=out_tokens,
                     stop_reason=stop_reason,
+                    response_id=response_id,
                 ),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-store",
                     "X-Accel-Buffering": "no",
+                    _RESPONSE_ID_HEADER: response_id,
                 },
             )
 
+        response.headers[_RESPONSE_ID_HEADER] = response_id
         return {
             "id": msg_id,
             "type": "message",
@@ -2387,6 +2563,7 @@ def _create_app(
                 "input_tokens": in_tokens,
                 "output_tokens": out_tokens,
             },
+            "response_id": response_id,
         }
 
     # ----- v0.53.6 #103 / v0.53.7 — Server-side tool endpoints (live) -----
@@ -2588,10 +2765,57 @@ def _create_app(
             raise HTTPException(status_code=400, detail="Invalid request") from exc
         return {"status": "ok", "thumb": thumb}
 
+    @app.post("/v1/feedback", dependencies=[Depends(_check_local_request)])
+    async def record_feedback_endpoint(
+        request: Request,
+        authorization: Optional[str] = Header(default=None),
+    ) -> dict:
+        """Append one feedback record (docs/loop-formats.md) about an earlier answer.
+
+        ``response_id`` is the id the answer came back with (``response_id`` in the
+        body, ``X-Response-Id`` header). It is not checked against the trace log: the
+        record is stored as sent. Answers 404 when ``--feedback-log`` was not passed.
+        """
+        from soup_cli.monitoring.feedback_log import (
+            MAX_BODY_BYTES,
+            FeedbackValidationError,
+            build_record,
+            validate_feedback,
+        )
+
+        # Same order as /v1/thumbs: the token is checked before anything about the
+        # server (enabled or not) or the body is revealed.
+        _check_tool_auth(authorization)
+        writer = getattr(app.state, "feedback_log_writer", None)
+        if writer is None:
+            raise HTTPException(
+                status_code=404,
+                detail="feedback recording not enabled; start soup serve with --feedback-log",
+            )
+        body = await _read_capped_body(request, MAX_BODY_BYTES)
+        try:
+            payload = json.loads(body)
+        except (ValueError, RecursionError):
+            raise HTTPException(status_code=400, detail="Invalid request: body") from None
+        try:
+            fields = validate_feedback(payload)
+        except FeedbackValidationError as exc:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid request: {exc.field}"
+            ) from None
+        record = build_record(fields)
+        try:
+            await run_in_threadpool(writer.append, record)
+        except OSError:
+            logger.exception("feedback record could not be written")
+            raise HTTPException(status_code=500, detail="Internal server error") from None
+        return {"status": "ok", "id": record["id"]}
+
     # Expose dashboard intent + constraint on the app for tests + introspection
     app.state.enable_dashboard = enable_dashboard
     app.state.output_constraint = output_constraint
     app.state.trace_log_writer = trace_log_writer
+    app.state.feedback_log_writer = feedback_log_writer
     app.state.web_search_config = web_search_config
     app.state.web_search_backend = web_search_backend
     app.state.record_thumbs_db = record_thumbs_db
@@ -2619,11 +2843,13 @@ def _stream_anthropic_messages(
     input_tokens: int,
     output_tokens: int,
     stop_reason: str = "end_turn",
+    response_id: str = "",
 ) -> "Generator[str, None, None]":
     """v0.53.7 #102 — yield Anthropic event-shape SSE frames.
 
     Emits the canonical 4-event sequence:
-    - ``message_start``: opens the message envelope.
+    - ``message_start``: opens the message envelope (and, when ``response_id`` is set,
+      carries it as ``message.response_id``).
     - ``content_block_delta``: one frame per word (best-effort streaming;
       the underlying handler ran the full generation eagerly).
     - ``message_delta`` + ``message_stop``: closes the stream.
@@ -2637,24 +2863,21 @@ def _stream_anthropic_messages(
     def _frame(event_type: str, data: dict) -> str:
         return f"event: {event_type}\ndata: {_json.dumps(data)}\n\n"
 
-    yield _frame(
-        "message_start",
-        {
-            "type": "message_start",
-            "message": {
-                "id": msg_id,
-                "type": "message",
-                "role": "assistant",
-                "content": [],
-                "model": model,
-                "stop_reason": None,
-                "usage": {
-                    "input_tokens": int(input_tokens),
-                    "output_tokens": 0,
-                },
-            },
+    envelope: dict = {
+        "id": msg_id,
+        "type": "message",
+        "role": "assistant",
+        "content": [],
+        "model": model,
+        "stop_reason": None,
+        "usage": {
+            "input_tokens": int(input_tokens),
+            "output_tokens": 0,
         },
-    )
+    }
+    if response_id:
+        envelope["response_id"] = response_id
+    yield _frame("message_start", {"type": "message_start", "message": envelope})
 
     # Stream word-by-word so SSE consumers see incremental progress, even
     # though the underlying generation is already complete.
@@ -2695,13 +2918,24 @@ def _stream_response(
     logits_processor=None,
     ngram_config=None,
     reasoning_parser=None,
+    response_id=None, conversation_id=None,
+    trace_adapter=None, canary_bucket=None,
 ):
-    """Generator that yields SSE chunks for streaming responses."""
+    """Generator that yields SSE chunks for streaming responses.
+
+    ``response_id`` (a fresh uuid when not given) rides in every chunk next to the
+    OpenAI-style ``id``. The conversation record is written once the answer is
+    generated, before the first chunk goes out: a client that stops reading halfway
+    has still been given an id, and feedback on it must find its record.
+    """
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
     created = int(time.time())
+    if response_id is None:
+        response_id = str(uuid.uuid4())
 
     # Generate full response (true token-by-token streaming requires TextIteratorStreamer)
-    completion_tokens_for_log = 0
+    prompt_tokens_for_log = None
+    completion_tokens_for_log = None
     try:
         # v0.71.17 #260 — re-select the per-user bank inside the generator's own
         # context. set_active_user runs in the sync endpoint thread, but this
@@ -2716,7 +2950,8 @@ def _stream_response(
             # generate the full text then simulate streaming (same shape as the
             # transformers path, which also generates-then-streams).
             (
-                response_text, _, completion_tokens_for_log, finish_reason,
+                response_text, prompt_tokens_for_log, completion_tokens_for_log,
+                finish_reason,
             ) = mole_runtime.generate_text(
                 messages,
                 max_tokens=max_tokens,
@@ -2731,7 +2966,8 @@ def _stream_response(
                 requested_adapter, active_adapter,
             ):
                 (
-                    response_text, _, completion_tokens_for_log, finish_reason,
+                    response_text, prompt_tokens_for_log, completion_tokens_for_log,
+                    finish_reason,
                 ) = _generate_response(
                     model, tokenizer, messages,
                     max_tokens=max_tokens,
@@ -2762,6 +2998,27 @@ def _stream_response(
             response_text, reasoning_parser,
         )
 
+    # v0.40.3 (#33 (b)) — passive request log on the streaming path. Latency
+    # measured from the BEFORE-`_generate_response` mark passed in by the
+    # chat_completions handler. Skipped if writer is None or `started` is
+    # missing. Errors swallowed (passive log). Written before the first chunk so a
+    # client that disconnects mid-stream still leaves the record its id refers to.
+    if started is not None:
+        _write_conversation_record(
+            trace_log_writer,
+            response_id=response_id,
+            conversation_id=conversation_id,
+            model_name=model_name,
+            messages=messages,
+            response_text=response_text,
+            finish_reason=finish_reason,
+            started=started,
+            prompt_tokens=prompt_tokens_for_log,
+            completion_tokens=completion_tokens_for_log,
+            adapter=trace_adapter,
+            canary_bucket=canary_bucket,
+        )
+
     # Simulate streaming by sending word-by-word
     words = response_text.split(" ")
     for idx, word in enumerate(words):
@@ -2778,6 +3035,7 @@ def _stream_response(
                     "finish_reason": None,
                 }
             ],
+            "response_id": response_id,
         }
         yield f"data: {json.dumps(chunk)}\n\n"
 
@@ -2794,27 +3052,7 @@ def _stream_response(
                 "finish_reason": finish_reason,
             }
         ],
+        "response_id": response_id,
     }
     yield f"data: {json.dumps(final_chunk)}\n\n"
     yield "data: [DONE]\n\n"
-
-    # v0.40.3 (#33 (b)) — passive request log on the streaming path. Latency
-    # measured from the BEFORE-`_generate_response` mark passed in by the
-    # chat_completions handler. Skipped if writer is None or `started` is
-    # missing. Errors swallowed (passive log).
-    if trace_log_writer is not None and started is not None:
-        try:
-            last_user = next(
-                (m["content"] for m in reversed(messages)
-                 if m.get("role") == "user"),
-                "",
-            )
-            trace_log_writer.record(
-                prompt=str(last_user),
-                response=response_text,
-                latency_ms=(time.perf_counter() - started) * 1000,
-                tokens=int(completion_tokens_for_log),
-                extra={"stream": True},
-            )
-        except Exception:  # noqa: BLE001 — passive log never blocks SSE
-            logger.debug("trace_log streaming record failed", exc_info=True)

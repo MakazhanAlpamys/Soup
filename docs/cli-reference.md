@@ -3451,6 +3451,7 @@ Usage: `soup serve [OPTIONS]`
 | `--trace-log` | text |  |  | Append per-request {prompt, response, latency_ms, tokens, ts} to JSONL at this path. Path must stay under cwd. Rotates at 100 MB (one backup retained). Added in v0.40.3 (#33). |
 | `--trace-log-cap-mb` | integer | `100` |  | Rotation cap in MB for --trace-log (1 - 10000). Default 100. |
 | `--record-thumbs` | text |  |  | Auto-capture thumbs-up/down feedback into a local-rl SQLite at this path via POST /v1/thumbs. Path must stay under cwd. Transformers backend only. v0.71.1 (#230). |
+| `--feedback-log` | text |  |  | Append feedback (POST /v1/feedback) as JSONL records to this path; must stay under cwd. |
 | `--reasoning-parser` | text |  |  | Strip reasoning-trace blocks from responses. One of: deepseek-r1 \| qwen3 \| phi4 \| openthinker. v0.53.9 #98. |
 | `--steer` | text |  |  | Apply a stored activation-steering vector at decode time (CAA / ITI / RepE). Pass the name registered via `soup steer train`; the transformers backend installs the decode hook after loading the model. |
 | `--steer-strength` | float | `1.0` |  | Steering strength multiplier (\|s\| &lt;= 10.0). Ignored when --steer is unset. |
