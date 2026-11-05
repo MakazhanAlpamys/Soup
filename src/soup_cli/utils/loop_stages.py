@@ -19,6 +19,7 @@ and offline smokes inject behaviour without a GPU or a network:
 - ``_GATE_GENERATE_FACTORY(adapter_dir) -> generate_fn``
 - ``_DEPLOY_POSTER(endpoint, name) -> bool``
 - ``_SHIP_RUNNER(argv, ...)``                (a ``subprocess.run`` stand-in)
+- ``_LOAD_POSTER(endpoint, name, path) -> (status, detail)``
 """
 
 from __future__ import annotations
@@ -58,6 +59,7 @@ _TRAIN_RUNNER: Optional[Callable[..., object]] = None
 _GATE_GENERATE_FACTORY: Optional[Callable[[str], Callable[[str], str]]] = None
 _DEPLOY_POSTER: Optional[Callable[[str, str], bool]] = None
 _SHIP_RUNNER: Optional[Callable[..., object]] = None
+_LOAD_POSTER: Optional[Callable[[str, str, str], Tuple[int, str]]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -741,22 +743,116 @@ def _post_activate(endpoint: str, name: str) -> bool:
     return 200 <= resp.status_code < 300
 
 
+def _post_load(endpoint: str, name: str, path: str) -> Tuple[int, str]:
+    """POST ``{name, path}`` to ``<endpoint>/v1/adapters/load``.
+
+    Returns ``(HTTP status, detail)``; status 0 when no response came back.
+    Same transport rules as ``_post_activate`` (the tool token as a Bearer
+    header, no environment proxy for plain http). ``_LOAD_POSTER`` replaces
+    the call in tests; the older ``_DEPLOY_POSTER(endpoint, name) -> bool``
+    hook still works (True = loaded).
+    """
+    if _LOAD_POSTER is not None:
+        return _LOAD_POSTER(endpoint, name, path)
+    if _DEPLOY_POSTER is not None:
+        return (200, "") if _DEPLOY_POSTER(endpoint, name) else (0, "")
+    if not _ADAPTER_NAME_RE.match(name):
+        return 0, "invalid adapter name"
+    try:
+        import httpx
+    except ImportError:
+        return 0, "httpx is not installed"
+    url = endpoint.rstrip("/") + "/v1/adapters/load"
+    token = os.environ.get(TOOL_AUTH_TOKEN_ENV)
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    try:
+        resp = httpx.post(
+            url,
+            headers=headers,
+            json={"name": name, "path": path},
+            timeout=300.0,
+            trust_env=not url.lower().startswith("http://"),
+        )
+    except Exception as exc:  # noqa: BLE001 — deploy must never crash the loop
+        return 0, type(exc).__name__
+    detail = ""
+    try:
+        body = resp.json()
+        if isinstance(body, dict) and isinstance(body.get("detail"), str):
+            detail = _printable(body["detail"], 200)
+    except ValueError:
+        pass
+    return resp.status_code, detail
+
+
+def _load_refused_note(status: int, detail: str) -> str:
+    """Name why the serve endpoint did not load the adapter."""
+    if status == 401:
+        if os.environ.get(TOOL_AUTH_TOKEN_ENV):
+            return (
+                "adapter load refused (401): the serve endpoint rejected the tool token; "
+                "check soup loop watch --tool-auth-token against soup serve --tool-auth-token"
+            )
+        return (
+            "adapter load refused (401): loading an adapter needs the serve tool token; "
+            "pass soup loop watch --tool-auth-token or set SOUP_TOOL_AUTH_TOKEN"
+        )
+    if status == 404:
+        return (
+            "adapter load refused (404): the serve endpoint does not load adapters at "
+            "runtime; start soup serve with --adapter-dir .soup-loops/adapters"
+        )
+    if status == 403:
+        return "adapter load refused (403): the adapter is outside the server's --adapter-dir"
+    if status == 0:
+        return f"adapter load failed: no response from the serve endpoint ({detail or 'error'})"
+    return f"adapter load failed (HTTP {status}{': ' + detail if detail else ''})"
+
+
+def _checked_endpoint() -> Tuple[Optional[str], str]:
+    """``(SSRF-checked SOUP_LOOP_SERVE_ENDPOINT, "")`` or ``(None, why not)``."""
+    raw_endpoint = os.environ.get("SOUP_LOOP_SERVE_ENDPOINT")
+    if not raw_endpoint:
+        return None, "no SOUP_LOOP_SERVE_ENDPOINT configured"
+    from soup_cli.utils.drift_alarm import validate_webhook_url
+
+    try:
+        endpoint = validate_webhook_url(raw_endpoint, allow_private_hosts=True)
+    except (TypeError, ValueError):
+        _LOG.warning("SOUP_LOOP_SERVE_ENDPOINT rejected by SSRF guard")
+        return None, "SOUP_LOOP_SERVE_ENDPOINT rejected (SSRF guard)"
+    if not _endpoint_is_local(endpoint):
+        _LOG.warning("SOUP_LOOP_SERVE_ENDPOINT must be loopback/LAN (SSRF guard)")
+        return None, "SOUP_LOOP_SERVE_ENDPOINT must be loopback/LAN (SSRF guard)"
+    return endpoint, ""
+
+
 def deploy_to_canary(
     state: LoopState, ctx: Mapping[str, object]
 ) -> Mapping[str, object]:
-    """Promote the trained adapter as a canary when the gate verdict is OK.
+    """Load the trained adapter into the running server and start a canary.
 
-    Returns ``{deployed, canary_verdict}``. No-op (not deployed) unless the
-    gate passed, an adapter is available, and a serve endpoint is configured
-    via ``SOUP_LOOP_SERVE_ENDPOINT``. The endpoint is SSRF-validated
-    (loopback-only HTTP, scheme allowlist, private-IP rejection) via the
-    shared ``validate_webhook_url`` helper before any POST.
+    When the verdict is OK: POST the adapter to ``/v1/adapters/load`` on
+    ``SOUP_LOOP_SERVE_ENDPOINT`` (``soup serve --adapter-dir``, tool token
+    required), then return the canary fields the daemon writes to
+    ``loop.yaml``: the new adapter gets ``deploy_traffic_pct`` (default 5%)
+    of keyed traffic, everything else stays on production. Nothing is
+    activated for unkeyed traffic; that happens on promotion. Returns
+    ``{deployed, canary_verdict, notes}`` plus ``canary_active``,
+    ``canary_adapter``, ``canary_traffic_pct`` and ``canary_rollout_id`` on
+    success. The endpoint is SSRF-validated (loopback/LAN only) before any POST.
     """
     if ctx.get("gate_verdict") != "OK":
         return {"deployed": False, "canary_verdict": None}
     adapter_path = ctx.get("adapter_path")
     if not adapter_path:
         return {"deployed": False, "canary_verdict": None}
+    if state.canary_active:
+        return {
+            "deployed": False,
+            "canary_verdict": None,
+            "notes": f"canary {state.canary_active} is still running; not starting another",
+        }
     raw_endpoint = os.environ.get("SOUP_LOOP_SERVE_ENDPOINT")
     if not raw_endpoint:
         return {
@@ -795,30 +891,68 @@ def deploy_to_canary(
             "notes": "SOUP_LOOP_SERVE_ENDPOINT must be loopback/LAN (SSRF guard)",
         }
     name = os.path.basename(str(adapter_path).rstrip("/\\")) or "canary"
-    try:
-        ok = _post_activate(endpoint, name)
-    except _ActivateRefusedError:
-        if os.environ.get(TOOL_AUTH_TOKEN_ENV):
-            note = (
-                "activate POST refused (401): the serve endpoint rejected the tool "
-                "token; check soup loop watch --tool-auth-token / SOUP_TOOL_AUTH_TOKEN "
-                "against soup serve --tool-auth-token"
-            )
-        else:
-            note = (
-                "activate POST refused (401): the serve endpoint requires its tool "
-                "token; pass soup loop watch --tool-auth-token or set SOUP_TOOL_AUTH_TOKEN"
-            )
+    status, detail = _post_load(endpoint, name, os.path.abspath(str(adapter_path)))
+    # 409 "already loaded": a re-run of this deploy; the adapter is there.
+    if not (200 <= status < 300 or (status == 409 and "already loaded" in detail)):
+        note = _load_refused_note(status, detail)
         _LOG.warning(note)
         return {"deployed": False, "canary_verdict": None, "notes": note}
-    # activate_adapter is a full hot-swap (100% of traffic), not a canary
-    # split; canary_router.route()/BucketStats never ran, so there is no
-    # verdict to report here even when the POST itself succeeded.
+    pct = float(state.deploy_traffic_pct)
+    # The verdict comes later, from the bucket stats soup serve records.
     return {
-        "deployed": ok,
+        "deployed": True,
         "canary_verdict": None,
-        "notes": "" if ok else "activate POST failed",
+        "canary_active": name,
+        "canary_adapter": str(adapter_path),
+        "canary_traffic_pct": pct,
+        "canary_rollout_id": uuid.uuid4().hex,
+        "notes": f"canary {name}: {pct:g}% of keyed traffic",
     }
+
+
+def _post_deactivate(endpoint: str) -> bool:
+    """POST ``<endpoint>/v1/adapters/deactivate`` (back to the served model)."""
+    try:
+        import httpx
+    except ImportError:
+        return False
+    url = endpoint.rstrip("/") + "/v1/adapters/deactivate"
+    token = os.environ.get(TOOL_AUTH_TOKEN_ENV)
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    try:
+        resp = httpx.post(
+            url, headers=headers, timeout=5.0, trust_env=not url.lower().startswith("http://")
+        )
+    except Exception:  # noqa: BLE001 — a rollback reports, it never crashes
+        return False
+    if resp.status_code == 401:
+        raise _ActivateRefusedError()
+    return 200 <= resp.status_code < 300
+
+
+def switch_served_adapter(name: Optional[str]) -> Tuple[bool, str]:
+    """Point the server's unkeyed traffic at ``name`` (None = the served model).
+
+    ``(True, "")`` on success or when no ``SOUP_LOOP_SERVE_ENDPOINT`` is
+    configured (the note then says the server was not told);
+    ``(False, why)`` when the server refused or did not answer.
+    """
+    endpoint, why = _checked_endpoint()
+    if endpoint is None:
+        if why.startswith("no SOUP_LOOP_SERVE_ENDPOINT"):
+            return True, "the server was not told (no SOUP_LOOP_SERVE_ENDPOINT)"
+        return False, why
+    try:
+        ok = _post_activate(endpoint, name) if name else _post_deactivate(endpoint)
+    except _ActivateRefusedError:
+        return False, "the serve endpoint refused the tool token (401)"
+    return (True, "") if ok else (False, "the serve endpoint did not switch the adapter")
+
+
+def promote_canary(state: LoopState) -> Mapping[str, object]:
+    """Make the passing canary the production version for unkeyed traffic too."""
+    ok, note = switch_served_adapter(state.canary_active)
+    return {"promoted": ok, "notes": note}
 
 
 # ---------------------------------------------------------------------------
@@ -895,6 +1029,7 @@ def build_prewired_watch_config(
         train_fn=train_dpo_from_pairs,
         gate_fn=verify_candidate,
         deploy_fn=deploy_to_canary,
+        promote_fn=promote_canary,
         cost_fn=estimate_cost,
         pack_iterations=pack_iterations,
         served_model=served_model,

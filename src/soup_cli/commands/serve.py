@@ -1990,7 +1990,7 @@ def _create_app(
             if state is None or state.canary_active is None or not state.canary_traffic_pct:
                 return None, None
             policy = CanaryPolicy(
-                stable=state.served_model,
+                stable=state.stable_name(),
                 canary=state.canary_active,
                 traffic_pct=float(state.canary_traffic_pct),
             )

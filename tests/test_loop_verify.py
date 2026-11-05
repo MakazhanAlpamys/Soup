@@ -300,7 +300,7 @@ def test_init_defaults_to_ship_and_status_shows_it(cwd):
     assert "tasks.jsonl (verify: ship)" in text
     status, status_text = _invoke("status")
     assert re.search(r"verify\W+ship", status_text), status_text
-    assert re.search(r"production\W+base model", status_text), status_text
+    assert re.search(r"production\W+served model \(no adapter\)", status_text), status_text
 
 
 @pytest.mark.parametrize("spelling", ["eval-gate", "eval_gate", "EVAL-GATE"])

@@ -23,6 +23,7 @@ import logging
 import math
 import signal
 import threading
+import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Callable, Mapping, Optional
@@ -47,6 +48,8 @@ from soup_cli.utils.loop_iteration import (
 from soup_cli.utils.loop_state import LoopState, read_state, write_state
 
 _LOG = logging.getLogger(__name__)
+# BucketStats.verdict's default: canary answers needed before a verdict.
+CANARY_MIN_SAMPLES = 30
 
 # A per-stage callable returns a small dict; the orchestrator merges the
 # result dicts into one ``StageResult`` before recording the iteration.
@@ -56,6 +59,7 @@ TrainFn = Callable[[LoopState, Mapping[str, object]], Mapping[str, object]]
 GateFn = Callable[[LoopState, Mapping[str, object]], Mapping[str, object]]
 DeployFn = Callable[[LoopState, Mapping[str, object]], Mapping[str, object]]
 CostFn = Callable[[LoopState], float]
+PromoteFn = Callable[[LoopState], Mapping[str, object]]
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +96,11 @@ def default_deploy(state: LoopState, ctx: Mapping[str, object]) -> Mapping[str, 
     return {"deployed": False, "canary_verdict": None}
 
 
+def default_promote(state: LoopState) -> Mapping[str, object]:
+    """Stub promote stage — the state change alone, no server to tell."""
+    return {"promoted": True}
+
+
 def default_cost(state: LoopState) -> float:
     """Stub cost estimate — zero so the budget gate stays permissive."""
     return 0.0
@@ -111,6 +120,7 @@ class WatchConfig:
     gate_fn: GateFn = default_gate
     deploy_fn: DeployFn = default_deploy
     cost_fn: CostFn = default_cost
+    promote_fn: PromoteFn = default_promote
     on_iteration: Optional[Callable[[IterationRecord], None]] = None
     # v0.71.4 #177 — pack each successful iteration as a v0.26 Soup Can +
     # append a Registry entry (default off so existing tests / stub watchers
@@ -129,7 +139,7 @@ class WatchConfig:
             mi = self.max_iterations
             if isinstance(mi, bool) or not isinstance(mi, int) or mi < 0:
                 raise ValueError("max_iterations must be a non-negative int or None")
-        for fname in ("harvest_fn", "train_fn", "gate_fn", "deploy_fn", "cost_fn"):
+        for fname in ("harvest_fn", "train_fn", "gate_fn", "deploy_fn", "cost_fn", "promote_fn"):
             if not callable(getattr(self, fname)):
                 raise ValueError(f"{fname} must be callable")
         if self.on_iteration is not None and not callable(self.on_iteration):
@@ -184,14 +194,44 @@ def run_once(
         last_run_date=today,
         spent_this_month_usd=spent,
     )
-    canary_verdict, rollback_policy = _evaluate_active_canary(state, config)
+    canary_verdict, rollback_policy, canary_samples = _evaluate_active_canary(state, config)
     rolled_back = rollback_policy is not None
+    canary_notes = []
     if rollback_policy is not None:
+        canary_notes.append(f"canary {state.canary_active} rolled back ({canary_verdict})")
         state = _state_with(
             state,
             canary_active=rollback_policy.canary,
             canary_traffic_pct=rollback_policy.traffic_pct,
             canary_rollout_id=None,
+            canary_adapter=None,
+        )
+    elif canary_verdict == "OK" and state.canary_active:
+        state, note = _promote(state, config)
+        canary_notes.append(note)
+    elif state.canary_active:
+        # A canary is still collecting answers: no new iteration until it is decided.
+        record = IterationRecord(
+            iteration_id=new_iteration_id(),
+            started_at=_utc_iso(),
+            finished_at=_utc_iso(),
+            pairs_harvested=0,
+            run_id=None,
+            gate_verdict="SKIPPED",
+            canary_verdict=canary_verdict,
+            shipped=False,
+            rolled_back=False,
+            estimated_cost_usd=0.0,
+            notes=(
+                f"canary-wait: {state.canary_active} has {canary_samples} canary answers "
+                f"(verdict at {CANARY_MIN_SAMPLES})"
+            ),
+        )
+        return state, record, BudgetDecision(
+            proceed=False,
+            reason="canary in progress",
+            projected_total_usd=state.spent_this_month_usd,
+            runs_today=state.runs_today,
         )
     estimated = float(config.cost_fn(state))
     decision = check_budget(
@@ -215,7 +255,7 @@ def run_once(
             shipped=False,
             rolled_back=rolled_back,
             estimated_cost_usd=estimated,
-            notes=f"budget-skip: {decision.reason}",
+            notes=" | ".join([*canary_notes, f"budget-skip: {decision.reason}"])[:4096],
         )
         return state, record, decision
     harvest_out = dict(config.harvest_fn(state))
@@ -248,7 +288,12 @@ def run_once(
         estimated_cost_usd=estimated,
         notes=" | ".join(
             str(n)
-            for n in (train_out.get("notes"), gate_out.get("notes"), deploy_out.get("notes"))
+            for n in (
+                *canary_notes,
+                train_out.get("notes"),
+                gate_out.get("notes"),
+                deploy_out.get("notes"),
+            )
             if n
         )[:4096],
     )
@@ -266,19 +311,59 @@ def run_once(
         last_iteration_id=iteration_id,
         last_run_date=today,
     )
+    if shipped and deploy_out.get("canary_active"):
+        new_state = _state_with(
+            new_state,
+            canary_active=str(deploy_out["canary_active"]),
+            canary_adapter=(
+                str(deploy_out["canary_adapter"]) if deploy_out.get("canary_adapter") else None
+            ),
+            canary_traffic_pct=float(deploy_out.get("canary_traffic_pct") or 0.0),
+            canary_rollout_id=str(deploy_out.get("canary_rollout_id") or uuid.uuid4().hex),
+            canary_autoroll_on_regress=True,
+        )
     return new_state, record, decision
+
+
+def _promote(state: LoopState, config: WatchConfig) -> "tuple[LoopState, str]":
+    """Promote the active canary to production when the server agrees."""
+    name = state.canary_active
+    try:
+        out = dict(config.promote_fn(state))
+    except Exception as exc:  # noqa: BLE001 — the daemon must not crash
+        out = {"promoted": False, "notes": type(exc).__name__}
+    if not out.get("promoted"):
+        why = out.get("notes") or "the promote stage failed"
+        return state, f"canary {name} passed but was not promoted: {why}"
+    promoted = _state_with(
+        state,
+        previous_production_name=state.production_name,
+        previous_production_adapter=state.production_adapter,
+        production_name=name,
+        production_adapter=state.canary_adapter,
+        canary_active=None,
+        canary_traffic_pct=None,
+        canary_rollout_id=None,
+        canary_adapter=None,
+    )
+    note = f"canary {name} promoted to production"
+    if out.get("notes"):
+        note += f" ({out['notes']})"
+    if state.canary_adapter is None:
+        note += "; its adapter path is unknown, so the next verdict compares against the base"
+    return promoted, note
 
 
 def _evaluate_active_canary(
     state: LoopState, config: WatchConfig
-) -> "tuple[Optional[str], Optional[CanaryPolicy]]":
-    """Read live bucket outcomes and return a sticky rollback policy if needed."""
+) -> "tuple[Optional[str], Optional[CanaryPolicy], int]":
+    """Read live bucket outcomes: ``(verdict, rollback policy or None, canary samples)``."""
     active_canary = state.canary_active
     if active_canary is None:
-        return None, None
+        return None, None, 0
     try:
         policy = CanaryPolicy(
-            stable=state.served_model,
+            stable=state.stable_name(),
             canary=active_canary,
             traffic_pct=float(state.canary_traffic_pct or 0.0),
         )
@@ -289,12 +374,14 @@ def _evaluate_active_canary(
             path=config.canary_stats_path,
         )
         verdict = evaluate_canary_verdict(stats)
+        counts = stats.snapshot()
+        samples = counts["canary_ok"] + counts["canary_major"]
     except (OSError, TypeError, ValueError):
         _LOG.warning("canary stats read failed", exc_info=True)
-        return None, None
+        return None, None, 0
     if verdict == "MAJOR" and state.canary_autoroll_on_regress:
-        return verdict, maybe_rollback(policy, verdict)
-    return verdict, None
+        return verdict, maybe_rollback(policy, verdict), samples
+    return verdict, None, samples
 
 
 def watch(config: WatchConfig) -> "tuple[LoopState, int]":

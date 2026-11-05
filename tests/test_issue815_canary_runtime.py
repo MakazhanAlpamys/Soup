@@ -208,7 +208,9 @@ def test_watch_persists_rollback_for_major_live_stats(tmp_path, monkeypatch):
     assert persisted.canary_traffic_pct == 0.0
 
 
-@pytest.mark.parametrize("sample_count", [5, 30])
+# Below the 30-answer minimum the canary keeps running; at 30 healthy answers it is
+# promoted instead (tests/test_loop_canary_deploy.py).
+@pytest.mark.parametrize("sample_count", [5, 29])
 def test_watch_keeps_a_non_regressing_canary_active(tmp_path, monkeypatch, sample_count):
     monkeypatch.chdir(tmp_path)
     state_path = tmp_path / ".soup" / "loop.yaml"
