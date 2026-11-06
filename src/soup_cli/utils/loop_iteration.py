@@ -28,6 +28,7 @@ from soup_cli.utils.paths import is_under_cwd
 _DEFAULT_DIR = ".soup-loops"
 _MAX_MANIFEST_BYTES = 1 * 1024 * 1024  # 1 MiB
 _MAX_ID_LEN = 128
+_MAX_CANARY_QUALITY_BYTES = 4096  # the evidence is a dozen numbers
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,10 @@ class IterationRecord:
     rolled_back: bool
     estimated_cost_usd: float
     notes: str = ""
+    # The evidence behind the canary's quality verdict this cycle (counts, shares, z, p; the
+    # ``canary.quality`` object of the iteration format, see ``QualityStats.evidence``), or
+    # None when no quality verdict took part. Last, so older manifests load without it.
+    canary_quality: Optional[dict] = None
 
     def __post_init__(self) -> None:
         _check_id(self.iteration_id)
@@ -86,6 +91,23 @@ class IterationRecord:
             raise ValueError("notes must not contain NUL")
         if len(self.notes) > 4096:
             raise ValueError("notes exceeds 4096 chars")
+        if self.canary_quality is not None:
+            if not isinstance(self.canary_quality, dict):
+                raise ValueError("canary_quality must be a dict or None")
+            try:
+                body = json.dumps(self.canary_quality, allow_nan=False)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "canary_quality must hold plain finite JSON values with string keys"
+                ) from exc
+            if json.loads(body) != self.canary_quality:  # an int key, a tuple: not plain JSON
+                raise ValueError(
+                    "canary_quality must hold plain finite JSON values with string keys"
+                )
+            if len(body) > _MAX_CANARY_QUALITY_BYTES:
+                raise ValueError(
+                    f"canary_quality exceeds {_MAX_CANARY_QUALITY_BYTES} characters"
+                )
 
     def to_dict(self) -> Mapping[str, Any]:
         return MappingProxyType(asdict(self))

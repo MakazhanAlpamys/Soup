@@ -31,6 +31,7 @@ import os
 import re
 import sqlite3
 import sys
+import time
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping, Optional, Tuple
@@ -40,6 +41,7 @@ from soup_cli.utils.loop_feedback import (
     is_new,
     newest_ts,
     prompt_key,
+    read_quality_stats,
 )
 from soup_cli.utils.loop_state import VERIFY_METHODS, LoopState
 from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
@@ -49,6 +51,7 @@ from soup_cli.utils.paths import atomic_write_text, quote_path
 if TYPE_CHECKING:
     from soup_cli.data.traces.pair_builder import PreferencePair
     from soup_cli.data.traces.parsers import Trace
+    from soup_cli.utils.canary_router import QualityStats
     from soup_cli.utils.loop_daemon import WatchConfig
 
 _LOG = logging.getLogger(__name__)
@@ -1057,8 +1060,9 @@ def deploy_to_canary(
     of keyed traffic, everything else stays on production. Nothing is
     activated for unkeyed traffic; that happens on promotion. Returns
     ``{deployed, canary_verdict, notes}`` plus ``canary_active``,
-    ``canary_adapter``, ``canary_traffic_pct`` and ``canary_rollout_id`` on
-    success. The endpoint is SSRF-validated (loopback/LAN only) before any POST.
+    ``canary_adapter``, ``canary_traffic_pct``, ``canary_rollout_id`` and
+    ``canary_started_ts`` (epoch seconds) on success. The endpoint is SSRF-validated
+    (loopback/LAN only) before any POST.
     """
     if ctx.get("gate_verdict") != "OK":
         return {"deployed": False, "canary_verdict": None}
@@ -1124,8 +1128,37 @@ def deploy_to_canary(
         "canary_adapter": str(adapter_path),
         "canary_traffic_pct": pct,
         "canary_rollout_id": uuid.uuid4().hex,
+        # Answers given before this moment say nothing about the rollout (the quality
+        # verdict, ``canary_quality``).
+        "canary_started_ts": time.time(),
         "notes": f"canary {name}: {pct:g}% of keyed traffic",
     }
+
+
+def canary_quality(state: LoopState) -> "Optional[QualityStats]":
+    """The feedback-based side of a canary verdict, or ``None`` when it takes no part.
+
+    Counts, per bucket, the answers of the active rollout that people rated and the share
+    that got negative feedback (``loop_feedback.read_quality_stats``; the daemon turns it
+    into a verdict and combines it with the request-error verdict). It takes part only
+    when there is something to read and the rollout can be told from earlier ones: the
+    feedback log exists (a loop that gets no feedback keeps judging by errors alone, as
+    before it existed) and ``canary_started_ts`` was recorded with the canary (an older
+    ``loop.yaml``, or a canary started by hand before this field, has none).
+    """
+    if not state.canary_active or state.canary_started_ts is None:
+        return None
+    feedback_path = _resolve_feedback_log(state)
+    if feedback_path is None:
+        return None
+    return read_quality_stats(
+        _resolve_trace_dir(state),
+        feedback_path,
+        stable=state.stable_name(),
+        canary=state.canary_active,
+        started_ts=state.canary_started_ts,
+        stable_is_base=state.production_name is None,
+    )
 
 
 def _post_deactivate(endpoint: str) -> bool:
@@ -1256,6 +1289,7 @@ def build_prewired_watch_config(
         deploy_fn=deploy_to_canary,
         promote_fn=promote_canary,
         cost_fn=estimate_cost,
+        quality_fn=canary_quality,
         pack_iterations=pack_iterations,
         served_model=served_model,
         base_model=base_model,
