@@ -32,9 +32,11 @@ If the ratio comes out lower than 2.93x, the record says so in its first paragra
   downloaded file; `config.json`, `tokenizer.json`, `tokenizer_config.json` and
   `generation_config.json` (not LFS) are compared with the meta-llama revision by content.
 - Precision: bf16 base weights in every arm (no NF4 in any compared arm).
-- LoRA: r=8, alpha=16, dropout 0.05, target modules = Soup's default for Llama (recorded from the
-  resolved config), the same list in the HF script.
-- Optimizer: AdamW, lr 2e-4, linear warmup 0, weight decay 0 (recorded); in DeepSpeed arms where
+- LoRA: r=8, alpha=16, dropout 0.05, target modules = Soup's default for Llama (`q_proj`, `v_proj`;
+  every Soup run checks the saved adapter's targets against this list), the same list in the HF script.
+- Optimizer: AdamW, lr 2e-4, constant schedule with no warm-up (DeepSpeed's WarmupLR forces at least
+  two warm-up steps, so every arm uses a constant rate instead), weight decay 0 (recorded); in
+  DeepSpeed arms where
   DeepSpeed must own the optimizer and scheduler (torch strict-zip issue seen in STEP 3), its AdamW /
   WarmupLR with the same values.
 - Batch 1, gradient accumulation 1, seed 42, max_length 256.
@@ -137,7 +139,7 @@ If a streaming arm runs out of memory at Shape C (activations at 2,048 tokens), 
 ## 5. Void conditions (checked per run, before any ratio)
 
 A run is void and is repeated once if: another process is on the GPU; the median busy SM clock is more
-than 5% below the session median; the run exits non-zero for a reason other than out-of-memory under a
+than 5% below the running median of the session's busy SM clock so far; the run exits non-zero for a reason other than out-of-memory under a
 cap; or its final loss differs from the arm's other repeats by more than 20%. An arm with two void runs
 is reported as not measured.
 
@@ -147,7 +149,8 @@ is reported as not measured.
   tok/s(D1), Shape A, 80 GB. **CONFIRMED** if >= 2.64 (2.93 - 10%); **LOWER** otherwise, stated with the
   measured value. Also reported: S0/D1 (the old code on this box).
 - **G2 - against the best independent DeepSpeed.** Ratio = median tok/s(SB) / max median tok/s over the
-  DeepSpeed arms D1..D4 that fit, per budget (80, 24, 16 GB). No pass mark: these are the numbers to quote,
+  DeepSpeed arms D1..D4 that fit, per budget (80, 24, 16 GB); the prefetch variants D1PF / D2PF, when
+  run by the rule of section 2, count as DeepSpeed arms here too. No pass mark: these are the numbers to quote,
   each with its budget, its peak VRAM pair and its spread. At a budget where no DeepSpeed arm fits, the
   record says "DeepSpeed does not fit at N GB" instead of a ratio.
 - **G3 - resident reference, stated plainly.** Ratio = median tok/s(R1) / median tok/s(SB) at 80 GB,
