@@ -83,6 +83,8 @@ def test_the_output_is_named_as_typed(name):
 @pytest.mark.parametrize("name", _NAMES)
 def test_the_model_directory_is_named_as_typed(name):
     os.makedirs(name, exist_ok=True)
+    with open(os.path.join(name, "weights.bin"), "wb") as f:
+        f.write(b"")
     result = _bundle(model=name)
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -184,4 +186,16 @@ def test_a_missing_wheel_directory_is_refused():
     assert result.exit_code == 1
     text = _plain(result)
     assert "wheel directory not found: nope-wheel" in text
+    assert not os.path.exists(out_file)
+
+def test_a_model_path_that_is_a_file_is_refused():
+    file_path = "model_not_a_dir.bin"
+    with open(file_path, "wb") as f:
+        f.write(b"")
+    out_file = "out_model_file.tar"
+    result = _bundle(model=file_path, output=out_file)
+
+    assert result.exit_code == 1
+    text = _plain(result)
+    assert "model directory not found: model_not_a_dir.bin" in text
     assert not os.path.exists(out_file)
