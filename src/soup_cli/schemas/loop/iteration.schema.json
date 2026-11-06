@@ -64,7 +64,8 @@
               "oneOf": [{"type": "string", "pattern": "^[0-9a-f]{64}$"}, {"type": "null"}]
             },
             "dpo_pairs": {"$ref": "#/$defs/count"},
-            "kto_rows": {"$ref": "#/$defs/count"}
+            "kto_rows": {"$ref": "#/$defs/count"},
+            "sft_rows": {"$ref": "#/$defs/count"}
           }
         },
         {"type": "null"}
