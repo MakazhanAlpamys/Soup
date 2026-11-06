@@ -1091,8 +1091,11 @@ class TestTrainStage:
             ("dpo", "dpo", "dpo", {"epochs": 1, "batch_size": 1, "lr": 5.0e-5}),
             ("kto", "kto", "kto", {"epochs": 1, "batch_size": 2, "lr": 5.0e-5}),
             ("sft", "sft", "chatml", {
-                "epochs": 8, "batch_size": 1, "lr": 5.0e-4,
+                "epochs": 8, "batch_size": 2, "lr": 5.0e-4,
+                "gradient_accumulation_steps": 4, "seed": 42,
                 "lora": {"r": 64, "alpha": 128, "target_modules": "all-linear"},
+                # quantization auto with no measurable GPU (the test conftest): the safe side.
+                "quantization": "4bit",
             }),
         ],
     )
