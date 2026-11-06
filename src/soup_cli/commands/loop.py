@@ -9,6 +9,7 @@ Subcommands:
     soup loop resume
     soup loop canary <new-adapter> --traffic 5% [--autoroll-on-regress]
     soup loop replay <iteration-id>
+    soup loop rollback
 
 State lives in ``.soup/loop.yaml``; per-iteration artifacts under
 ``.soup-loops/<iteration-id>/iteration.json``. Both paths are cwd-
@@ -122,6 +123,13 @@ def init_cmd(
             "(--eval is an eval-gate suite YAML)."
         ),
     ),
+    canary_traffic: str = typer.Option(
+        "5%", "--canary-traffic",
+        help=(
+            "Share of keyed traffic a newly deployed adapter gets while its canary "
+            'runs, e.g. "5%" (the default) or "10".'
+        ),
+    ),
     force: bool = typer.Option(False, "--force", help="Overwrite existing loop.yaml."),
 ) -> None:
     """Create the .soup/loop.yaml control file (one-time setup)."""
@@ -145,6 +153,10 @@ def init_cmd(
         except (TypeError, ValueError) as exc:
             console.print(f"[red]invalid --thumbs-db:[/] {for_terminal(exc)}")
             raise typer.Exit(code=2)
+    deploy_pct = _parse_traffic(canary_traffic, flag="--canary-traffic")
+    if deploy_pct <= 0.0:
+        console.print("[red]--canary-traffic must be above 0%[/]")
+        raise typer.Exit(code=2)
     if base_model is not None and not base_model.strip():
         console.print("[red]--base-model must not be empty[/]")
         raise typer.Exit(code=2)
@@ -198,6 +210,7 @@ def init_cmd(
             base_model=resolved_base,
             trace_dir=trace_dir,
             verify=verify_method,
+            deploy_traffic_pct=deploy_pct,
             production_adapter=(
                 served_model
                 if os.path.isfile(os.path.join(served_model, "adapter_config.json"))
@@ -251,7 +264,14 @@ def status_cmd() -> None:
     table.add_row("base_model", escape(state.base_model or "unknown"))
     table.add_row("trace_dir", escape(_trace_dir_label(state)))
     table.add_row("verify", escape(state.verify or "eval_gate"))
-    table.add_row("production", escape(state.production_adapter or "base model"))
+    table.add_row(
+        "production",
+        escape(
+            f"{state.production_name or 'served model'} "
+            f"({state.production_adapter or 'no adapter'})"
+        ),
+    )
+    table.add_row("canary_traffic", f"{state.deploy_traffic_pct:g}% per new canary")
     table.add_row("pre_wired", "yes" if state.pre_wired else "no")
     table.add_row("traces_collected", str(state.traces_collected))
     table.add_row("pairs_distilled", str(state.pairs_distilled))
@@ -480,7 +500,7 @@ def canary_cmd(
     # state file can never disagree with the live router schema.
     try:
         policy = CanaryPolicy(
-            stable=state.served_model,
+            stable=state.stable_name(),
             canary=new_adapter,
             traffic_pct=pct,
         )
@@ -502,6 +522,67 @@ def canary_cmd(
     console.print(
         f"[green]canary set:[/] {escape(policy.canary or '')} @ "
         f"{policy.traffic_pct:.1f}% (autoroll={autoroll_on_regress})"
+    )
+
+
+@app.command("rollback")
+def rollback_cmd() -> None:
+    """Return to the version that was production before the last promotion.
+
+    Points the server's unkeyed traffic back (SOUP_LOOP_SERVE_ENDPOINT, with
+    --tool-auth-token / SOUP_TOOL_AUTH_TOKEN when the server needs it), then
+    makes it the canary router's stable side again. A running canary is
+    withdrawn too. With nothing promoted yet, a running canary is withdrawn
+    and the served model keeps all traffic; with no canary either, refuses.
+    """
+    state = _safe_read()
+    if state.production_name is None:
+        if state.canary_active is None:
+            console.print(
+                "[red]nothing to roll back to:[/] no canary has been promoted and no canary "
+                "is running; production is still the served model"
+            )
+            raise typer.Exit(code=2)
+        # The server's unkeyed traffic already goes to the served model and its
+        # router reads the canary from loop.yaml: clearing the canary is the rollback.
+        write_state(
+            replace(
+                state,
+                canary_active=None,
+                canary_traffic_pct=None,
+                canary_rollout_id=None,
+                canary_adapter=None,
+            )
+        )
+        console.print(
+            f"[green]canary withdrawn:[/] {escape(state.canary_active)}; the served model "
+            "keeps all traffic"
+        )
+        return
+    from soup_cli.utils.loop_stages import switch_served_adapter
+
+    target = state.previous_production_name
+    ok, note = switch_served_adapter(target)
+    if not ok:
+        console.print(f"[red]rollback failed:[/] {for_terminal(note)}; loop.yaml is unchanged")
+        raise typer.Exit(code=1)
+    write_state(
+        replace(
+            state,
+            production_name=target,
+            production_adapter=state.previous_production_adapter,
+            previous_production_name=None,
+            previous_production_adapter=None,
+            canary_active=None,
+            canary_traffic_pct=None,
+            canary_rollout_id=None,
+            canary_adapter=None,
+        )
+    )
+    label = target or "the served model"
+    console.print(
+        f"[green]rolled back:[/] {escape(state.production_name)} -> {escape(label)}"
+        + (f" ([yellow]{for_terminal(note)}[/])" if note else "")
     )
 
 
@@ -567,10 +648,10 @@ def _trace_dir_label(state: LoopState) -> str:
     return f"{path} (from {'--trace-dir' if source == 'trace_dir' else source})"
 
 
-def _parse_traffic(raw: str) -> float:
-    """Parse ``"5%"`` / ``"5"`` / ``"  5.5 %"`` into a percent float."""
+def _parse_traffic(raw: str, *, flag: str = "--traffic") -> float:
+    """Parse ``"5%"`` / ``"5"`` / ``"  5.5 %"`` into a percent float; messages name ``flag``."""
     if not isinstance(raw, str):
-        console.print(f"[red]--traffic must be a string, got {type(raw).__name__}[/]")
+        console.print(f"[red]{flag} must be a string, got {type(raw).__name__}[/]")
         raise typer.Exit(code=2)
     txt = raw.strip()
     if txt.endswith("%"):
@@ -578,9 +659,9 @@ def _parse_traffic(raw: str) -> float:
     try:
         pct = float(txt)
     except ValueError:
-        console.print(f"[red]invalid --traffic:[/] {escape(raw)}")
+        console.print(f"[red]invalid {flag}:[/] {escape(raw)}")
         raise typer.Exit(code=2)
     if not (0.0 <= pct <= 100.0):
-        console.print("[red]--traffic must be in [0, 100][/]")
+        console.print(f"[red]{flag} must be in [0, 100][/]")
         raise typer.Exit(code=2)
     return pct

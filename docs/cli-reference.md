@@ -2697,6 +2697,7 @@ Usage: `soup loop init [OPTIONS] SERVED_MODEL`
 | `--thumbs-db` | text |  |  | Local-RL SQLite written by `soup serve --record-thumbs`; the pre-wired harvest turns its thumbs into preference pairs. Must stay under cwd. SOUP_LOOP_THUMBS_DB overrides it. |
 | `--base-model` | text |  |  | Model the pre-wired train stage starts from. Default: the registry entry's base model for a registry://&lt;id> served model, the base_model_name_or_path of a LoRA adapter directory, otherwise the served model itself. |
 | `--trace-dir` | text |  |  | Directory of conversation logs (soup serve --trace-log files, *.jsonl) the pre-wired harvest reads. Default: .soup-loops/traces. SOUP_LOOP_TRACE_DIR overrides it. |
+| `--canary-traffic` | text | `5%` |  | Share of keyed traffic a newly deployed adapter gets while its canary runs, e.g. "5%" (the default) or "10". |
 | `--verify` | text | `ship` |  | The check before rollout: ship (a soup ship verdict against the production version; --eval is a task-eval JSONL) or eval-gate (--eval is an eval-gate suite YAML). |
 | `--force` | flag | off |  | Overwrite existing loop.yaml. |
 
@@ -2724,6 +2725,14 @@ Usage: `soup loop replay [OPTIONS] [ITERATION_ID]`
 Resume a paused loop (next watch iteration picks up automatically).
 
 Usage: `soup loop resume`
+
+Takes no options or arguments.
+
+### `soup loop rollback`
+
+Return to the version that was production before the last promotion.
+
+Usage: `soup loop rollback`
 
 Takes no options or arguments.
 
@@ -3441,6 +3450,7 @@ Usage: `soup serve [OPTIONS]`
 | `--speculative-decoding` | text |  |  | Draft model for speculative decoding (smaller/faster model ID or path) |
 | `--num-speculative-tokens` | integer | `5` |  | Number of tokens the draft model generates per step (speculative decoding) |
 | `--adapters` | text, repeatable |  |  | LoRA adapters as name=path pairs (repeatable). E.g. chat=./chat-adapter |
+| `--adapter-dir` | text |  |  | Directory runtime adapters may be loaded from through POST /v1/adapters/load (needs --tool-auth-token). Not set: the route is off. |
 | `--prefix-cache` | flag | off |  | Enable vLLM prefix caching for shared system prompts (RAG/agent workloads). |
 | `--auto-spec` | flag | off |  | Auto-pair draft model for speculative decoding based on target model. |
 | `--structured-output` | text | `off` |  | Constrain generation: off (default) \| json \| regex. |

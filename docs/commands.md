@@ -180,6 +180,7 @@ soup loop watch [--detach] [--max-iterations N] [--pre-wired] [--pack-cans] [--t
 soup loop pause                              Atomic status flip: pause watch daemon at next iteration boundary
 soup loop resume                             Atomic status flip: resume a paused loop
 soup loop canary <adapter> --traffic 5%      Route keyed serve traffic to a loaded adapter; watch auto-rolls back on MAJOR
+soup loop rollback                           Return to the production version before the last promotion (with none yet, withdraw a running canary)
 soup loop replay [<iter-id>] [--extract <dir>]  Replay / unpack a recorded iteration manifest
 soup serve --model m --adapters chat=./c --adapters code=./d  Multi-adapter serving
 soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
