@@ -61,7 +61,12 @@ def _is_number(value: Any) -> bool:
     # which refuses both -- ValueError for NaN, OverflowError for inf, raised
     # out of the command (#763 review). A number the arithmetic cannot use is
     # not a number for this purpose.
-    return math.isfinite(value)
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        # `isfinite` converts to float first, and an int past the double
+        # range raises here instead of returning False (#2370).
+        return False
 
 
 @dataclass(frozen=True)
