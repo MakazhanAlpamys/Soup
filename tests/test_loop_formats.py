@@ -534,6 +534,8 @@ REFUSED = [
     ("iteration", 0, _set("dataset", {"sft_rows": -1}), "negative sft row count"),
     ("iteration", 0, _set("dataset", {"sft_rows": "3"}), "sft row count as a string"),
     ("iteration", 0, _set("dataset", {"sft_rows": True}), "sft row count as a bool"),
+    ("iteration", 0, _set("dataset", {"graduated": -1}), "negative graduated count"),
+    ("iteration", 0, _set("dataset", {"graduated": 1.5}), "graduated count not an int"),
     ("conversation", 0, _set("id", _DELETE), "no answer id"),
     ("conversation", 0, _set("id", "3F2B8C1E-5D4A-4F6B-9C2D-1A7E8B9C0D11"), "uppercase uuid"),
     ("conversation", 0, _set("id", "chatcmpl-1a2b3c4d"), "id is not a uuid"),
@@ -740,7 +742,7 @@ def test_version_0_trace_line_is_not_a_version_1_record():
 def test_a_dataset_reports_the_rows_of_all_three_datasets():
     record = _example("iteration")
     record["dataset"] = {"path": ".soup-loops/pairs/sft-1.jsonl", "sha256": None,
-                         "dpo_pairs": 4, "kto_rows": 9, "sft_rows": 3}
+                         "dpo_pairs": 4, "kto_rows": 9, "sft_rows": 3, "graduated": 2}
     assert _errors("iteration", record) == []
 
 

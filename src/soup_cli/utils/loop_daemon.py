@@ -157,6 +157,10 @@ class WatchConfig:
     # Append the iteration, version and progress logs (docs/loop-formats.md) under
     # ``iteration_dir`` (default .soup-loops) as the loop runs. False = only the manifests.
     loop_logs: bool = True
+    # Called with no arguments at the start of every pass of the watch loop (also while the
+    # loop is paused, and when a budget skips the iteration), unlike ``on_iteration``. The
+    # detached child uses it to rotate its log; a plain foreground watch passes none.
+    on_cycle: Optional[Callable[[], None]] = None
 
     def __post_init__(self) -> None:
         v = self.poll_interval_sec
@@ -173,6 +177,8 @@ class WatchConfig:
                 raise ValueError(f"{fname} must be callable")
         if self.on_iteration is not None and not callable(self.on_iteration):
             raise ValueError("on_iteration must be callable or None")
+        if self.on_cycle is not None and not callable(self.on_cycle):
+            raise ValueError("on_cycle must be callable or None")
         if self.quality_fn is not None and not callable(self.quality_fn):
             raise ValueError("quality_fn must be callable or None")
         if not isinstance(self.pack_iterations, bool):
@@ -875,6 +881,11 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
         while not stop.is_set():
             if config.max_iterations is not None and iterations >= config.max_iterations:
                 break
+            if config.on_cycle is not None:
+                try:
+                    config.on_cycle()
+                except Exception:  # noqa: BLE001 — daemon must not crash
+                    _LOG.warning("on_cycle callback raised", exc_info=True)
             try:
                 state = read_state(config.state_path)
             except (FileNotFoundError, ValueError):

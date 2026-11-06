@@ -15,6 +15,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.env_lock import (
     DEFAULT_LOCK_FILE,
@@ -27,7 +28,7 @@ from soup_cli.utils.env_lock import (
     write_requirements_txt,
 )
 from soup_cli.utils.paths import is_under_cwd
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
@@ -68,11 +69,12 @@ def env_lock_cmd(
 
     console.print(
         Panel(
-            f"[green]Locked {len(lock.entries)} packages to "
-            f"{for_terminal(output)}[/]\n"
-            f"Python: {for_terminal(lock.python_version)} | "
-            f"Platform: {for_terminal(lock.platform)} | "
-            f"CUDA: {for_terminal(lock.cuda_version or 'none')}",
+            Text.assemble(
+                (f"Locked {len(lock.entries)} packages to {strip_control(output)}", "green"),
+                f"\nPython: {strip_control(lock.python_version)} | "
+                f"Platform: {strip_control(lock.platform)} | "
+                f"CUDA: {strip_control(lock.cuda_version or 'none')}",
+            ),
             title="env lock",
             border_style="green",
         )

@@ -53,6 +53,11 @@ DEFAULT_PROMPT_TRUNCATION_MODE = "keep_end"
 #: completion loss.
 _IGNORE_INDEX = -100
 
+#: Rows per batch of the unpaired (KTO/BCO) cap's ``map``: ``datasets``' own
+#: default, rounded down to whole KL chunks by ``_unpaired_cap_batch_size`` so
+#: every row's KL lender sits in the same batch (#2486).
+_UNPAIRED_CAP_BATCH_ROWS = 1000
+
 
 def _installed_trl_version() -> str:
     """Best-effort version string, for error messages only."""
@@ -235,6 +240,15 @@ def _rotated_answer_index(index: int, row_count: int, chunk_size: int) -> int:
     return index - 1 if index > chunk_start else chunk_end - 1
 
 
+def _unpaired_cap_batch_size(kl_chunk: int) -> int:
+    """``_UNPAIRED_CAP_BATCH_ROWS`` rounded down to whole KL chunks, at least one.
+
+    trl rotates KTO's KL answers inside each ``kl_chunk`` rows, so a batch made
+    of whole chunks holds every lender its rows borrow from.
+    """
+    return kl_chunk * max(1, _UNPAIRED_CAP_BATCH_ROWS // kl_chunk)
+
+
 def _rebuild_unpaired_completion_row(
     row: dict[str, Any],
     *,
@@ -382,11 +396,16 @@ def enforce_preference_sequence_limit(
             "KL_completion_labels",
         }
         has_kl = kl_columns <= columns
-        answers = list(dataset["answer_input_ids"]) if has_answer and has_kl else []
-        answer_masks = list(dataset["answer_attention_mask"]) if answers else []
+        # KTO's KL completion pairs each row's prompt with another row's answer.
+        # The lender is read from the row's own ``map`` batch, never from a whole
+        # column: a closure over the answer columns would hold every answer token
+        # of the split in Python lists and be pickled into the ``map``
+        # fingerprint (#2486).
+        borrows_answer = has_answer and has_kl
+        row_count = len(dataset)
         kl_chunk = max(1, int(kl_chunk_size or 1))
 
-        def cap_unpaired(row: dict[str, Any], index: int) -> dict[str, Any]:
+        def cap_unpaired(row: dict[str, Any], lender: dict[str, Any] | None) -> dict[str, Any]:
             fits = len(row["completion_input_ids"]) <= max_length and (
                 not has_kl or len(row["KL_completion_input_ids"]) <= max_length
             )
@@ -438,14 +457,13 @@ def enforce_preference_sequence_limit(
                 "KL_completion_attention_mask",
                 "KL_completion_labels",
             } <= columns:
-                if answers:
+                if lender is not None:
                     eos_id = list(row["KL_completion_input_ids"])[-1]
-                    lender = _rotated_answer_index(index, len(answers), kl_chunk)
                     kl = _rebuild_unpaired_sequence(
                         list(row["KL_prompt_input_ids"]),
                         list(row["KL_prompt_attention_mask"]),
-                        list(answers[lender]),
-                        list(answer_masks[lender]),
+                        list(lender["answer_input_ids"]),
+                        list(lender["answer_attention_mask"]),
                         eos_id,
                         max_length=max_length,
                         max_prompt_length=max_prompt_length,
@@ -466,7 +484,41 @@ def enforce_preference_sequence_limit(
                     )
             return capped
 
-        return dataset.map(cap_unpaired, with_indices=True)
+        def cap_unpaired_batch(
+            batch: dict[str, list[Any]], indices: list[int]
+        ) -> dict[str, list[Any]]:
+            rows = [{name: batch[name][offset] for name in batch} for offset in range(len(indices))]
+            capped_rows = []
+            for row, index in zip(rows, indices):
+                lender = None
+                if borrows_answer:
+                    lender_index = _rotated_answer_index(index, row_count, kl_chunk)
+                    offset = lender_index - indices[0]
+                    if not 0 <= offset < len(rows):
+                        raise RuntimeError(
+                            f"KTO KL lender row {lender_index} of row {index} is outside "
+                            f"its map batch (rows {indices[0]}-{indices[-1]}); the batch "
+                            f"size must be a multiple of the KL chunk ({kl_chunk})"
+                        )
+                    lender = rows[offset]
+                capped_rows.append(cap_unpaired(row, lender))
+            # A row that fits returns ``{}`` and keeps its values; a batch where
+            # every row fits changes no column.
+            changed = set().union(*capped_rows)
+            return {
+                name: [
+                    capped.get(name, batch[name][offset])
+                    for offset, capped in enumerate(capped_rows)
+                ]
+                for name in changed
+            }
+
+        return dataset.map(
+            cap_unpaired_batch,
+            with_indices=True,
+            batched=True,
+            batch_size=_unpaired_cap_batch_size(kl_chunk),
+        )
 
     raise ValueError(
         "TRL prepared a preference dataset with an unknown token layout; "
