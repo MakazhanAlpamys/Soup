@@ -9,7 +9,6 @@ from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from rich.panel import Panel
 from rich.text import Text
 
@@ -18,9 +17,14 @@ from soup_cli.utils.compile_tools import (
     build_tool_compile_plan,
     run_tool_compile,
 )
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import strip_control
 
 console = Console()
+
+
+def _detail(label: str, value: object) -> Text:
+    # A Text is not parsed as markup and has no emoji codes, so the value is shown as typed.
+    return Text.assemble(label, (strip_control(value), "bold"))
 
 
 def compile_tools_cmd(
@@ -61,25 +65,25 @@ def compile_tools_cmd(
             engine=engine,
         )
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
+        console.print(Text(strip_control(exc), style="red"))
         raise typer.Exit(2) from exc
 
     plan_details = [
-        f"Spec:      [bold]{for_terminal(plan.spec_path)}[/]",
-        f"Eval:      [bold]{for_terminal(plan.eval_suite_path)}[/]",
-        f"Optimizer: [bold]{escape(plan.optimizer)}[/]",
-        f"Output:    [bold]{for_terminal(plan.output_path)}[/]",
+        _detail("Spec:      ", plan.spec_path),
+        _detail("Eval:      ", plan.eval_suite_path),
+        _detail("Optimizer: ", plan.optimizer),
+        _detail("Output:    ", plan.output_path),
     ]
     if plan.task_lm:
-        plan_details.append(f"Task LM:     [bold]{for_terminal(plan.task_lm)}[/]")
+        plan_details.append(_detail("Task LM:     ", plan.task_lm))
     if plan.reflection_lm:
-        plan_details.append(f"Reflect LM:  [bold]{for_terminal(plan.reflection_lm)}[/]")
+        plan_details.append(_detail("Reflect LM:  ", plan.reflection_lm))
     if plan.engine:
-        plan_details.append(f"Engine:      [bold]{for_terminal(plan.engine)}[/]")
+        plan_details.append(_detail("Engine:      ", plan.engine))
 
     console.print(
         Panel(
-            Text.from_markup("\n".join(plan_details), emoji=False),
+            Text("\n").join(plan_details),
             title="soup compile-tools — plan",
         )
     )
@@ -92,24 +96,25 @@ def compile_tools_cmd(
     except ImportError as exc:
         console.print(
             Panel(
-                Text.from_markup(f"[yellow]{for_terminal(exc)}[/]", emoji=False),
+                Text(strip_control(exc), style="yellow"),
                 title="compile-tools — missing dependency",
             )
         )
         raise typer.Exit(2) from exc
     except (TypeError, ValueError, FileNotFoundError) as exc:
-        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
+        console.print(Text(strip_control(exc), style="red"))
         raise typer.Exit(2) from exc
     except Exception as exc:
-        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
+        console.print(Text(strip_control(exc), style="red"))
         raise typer.Exit(2) from exc
 
     console.print(
         Panel(
-            Text.from_markup(
-                f"Tools:  [bold]{n}[/]\n"
-                f"Output: [bold]{for_terminal(plan.output_path)}[/]",
-                emoji=False,
+            Text.assemble(
+                "Tools:  ",
+                (str(n), "bold"),
+                "\nOutput: ",
+                (strip_control(plan.output_path), "bold"),
             ),
             title="soup compile-tools — done",
         )

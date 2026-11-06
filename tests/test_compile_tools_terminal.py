@@ -23,19 +23,29 @@ _NO_COLON_ON_WINDOWS = pytest.mark.skipif(
     sys.platform == "win32", reason="':' is not valid in a Windows name"
 )
 
+# A backslash separates directories on Windows, so a name that holds one cannot be a file there.
+_NO_BACKSLASH_ON_WINDOWS = pytest.mark.skipif(
+    sys.platform == "win32", reason="a backslash separates directories on Windows"
+)
+
 # One spelling per way the old code went wrong: a tag, a closing tag with
 # nothing to close (a MarkupError), an emoji code, and a tag with control
-# characters, so the strip and the escape are pinned separately.
+# characters, so the strip and the escape are pinned separately. A backslash before
+# an unmatched bracket and a trailing pair of backslashes are what markup rewrites.
 _VALUES = [
     "x[red]n",
     "[/]n",
     pytest.param("n:warning:", id="emoji-code"),
+    pytest.param("x\\[n", id="backslash-bracket"),
+    pytest.param("n\\\\", id="trailing-backslashes"),
     f"x[bold]n{_CONTROLS}",
 ]
 # A file name cannot hold a slash, so no closing tag with nothing to close.
 _NAMES = [
     "x[red]n",
     pytest.param("n:warning:", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+    pytest.param("x\\[n", marks=_NO_BACKSLASH_ON_WINDOWS, id="backslash-bracket"),
+    pytest.param("n\\\\", marks=_NO_BACKSLASH_ON_WINDOWS, id="trailing-backslashes"),
     f"x[bold]n{_CONTROLS}",
 ]
 
@@ -211,3 +221,65 @@ def test_the_done_panel_names_the_output_as_typed(monkeypatch, name):
     assert _not_shown(text)
     written = json.loads(Path(f"{name}-out.json").read_text(encoding="utf-8"))
     assert [tool["tool"] for tool in written["tools"]] == ["listWidgets", "createWidget"]
+
+
+def _coloured(monkeypatch):
+    monkeypatch.setattr(
+        "soup_cli.commands.compile_tools.console",
+        Console(force_terminal=True, width=500, height=100, color_system="standard"),
+    )
+
+
+def test_the_plan_keeps_its_values_bold(monkeypatch):
+    _coloured(monkeypatch)
+
+    result = _compile("--plan-only", "--engine", "gpt")
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "Spec:      \x1b[1mspec.json\x1b[0m" in result.output
+    assert "Optimizer: \x1b[1mtextgrad\x1b[0m" in result.output
+    assert "Engine:      \x1b[1mgpt\x1b[0m" in result.output
+
+
+def test_the_done_panel_keeps_its_values_bold(monkeypatch):
+    _coloured(monkeypatch)
+    _fake_optimizer(monkeypatch)
+
+    result = _compile()
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "Tools:  \x1b[1m2\x1b[0m" in result.output
+    assert "Output: \x1b[1mcompiled_tools.json\x1b[0m" in result.output
+
+
+def test_an_error_is_red_and_a_missing_dependency_yellow(monkeypatch):
+    _coloured(monkeypatch)
+
+    refused = _compile("--optimizer", "nope")
+    _stub_run(monkeypatch, ImportError("dependency said no"))
+    missing = _compile()
+
+    assert refused.exit_code == 2
+    assert missing.exit_code == 2
+    assert "\x1b[31munknown optimizer" in refused.output
+    assert "\x1b[33mdependency said no" in missing.output
+
+
+@pytest.mark.parametrize("error", [ValueError, RuntimeError])
+def test_a_compile_error_is_red(monkeypatch, error):
+    _coloured(monkeypatch)
+    _stub_run(monkeypatch, error("compile said no"))
+
+    result = _compile()
+
+    assert result.exit_code == 2
+    assert "\x1b[31mcompile said no" in result.output
+
+
+def test_every_detail_of_the_plan_has_its_own_line():
+    result = _compile("--plan-only", "--task-lm", "a", "--reflection-lm", "b", "--engine", "c")
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    lines = strip_ansi(result.output).splitlines()
+    for label in ("Spec:", "Eval:", "Optimizer:", "Output:", "Task LM:", "Reflect LM:", "Engine:"):
+        assert [line for line in lines if re.match(r"\W*" + label, line)], label
