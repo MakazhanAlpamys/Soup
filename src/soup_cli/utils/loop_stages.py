@@ -35,6 +35,12 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping, Optional, Tuple
 
+from soup_cli.utils.loop_feedback import (
+    harvest_feedback,
+    is_new,
+    newest_ts,
+    prompt_key,
+)
 from soup_cli.utils.loop_state import VERIFY_METHODS, LoopState
 from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
 from soup_cli.utils.net_guard import parse_ip_literal
@@ -51,6 +57,8 @@ _PAIRS_DIR = ".soup-loops/pairs"
 _ADAPTERS_DIR = ".soup-loops/adapters"
 #: The trace directory read when neither SOUP_LOOP_TRACE_DIR nor trace_dir is set.
 DEFAULT_TRACE_DIR = ".soup-loops/traces"
+#: The feedback log read when neither SOUP_LOOP_FEEDBACK_LOG nor feedback_log is set.
+DEFAULT_FEEDBACK_LOG = ".soup-loops/feedback.jsonl"
 # #1440 — `source` tag on pairs harvested from the `--record-thumbs` database.
 _THUMBS_SOURCE = "soup-serve-thumbs"
 
@@ -126,6 +134,51 @@ def trace_dir_notice(state: LoopState) -> Optional[str]:
     return (
         f"{field}: no conversation logs at {quote_path(path)} yet; "
         f"soup serve --trace-log {quote_path(os.path.join(path, 'serve.jsonl'))} writes them"
+    )
+
+
+def feedback_log_source(state: LoopState) -> Tuple[str, str]:
+    """Return ``(feedback log path, where it came from)``.
+
+    ``SOUP_LOOP_FEEDBACK_LOG`` overrides ``feedback_log`` from ``loop.yaml``
+    (``soup loop init --feedback-log``), as for the trace directory; with neither,
+    ``DEFAULT_FEEDBACK_LOG``. The source is the env variable, the field name, or
+    ``"default"``.
+    """
+    env = os.environ.get("SOUP_LOOP_FEEDBACK_LOG")
+    if env:
+        return env, "SOUP_LOOP_FEEDBACK_LOG"
+    if state.feedback_log:
+        return state.feedback_log, "feedback_log"
+    return DEFAULT_FEEDBACK_LOG, "default"
+
+
+def _resolve_feedback_log(state: LoopState) -> Optional[str]:
+    """The feedback log to read, or ``None`` when it does not exist (yet)."""
+    path, _ = feedback_log_source(state)
+    return path if os.path.isfile(path) else None
+
+
+def feedback_log_notice(state: LoopState) -> Optional[str]:
+    """Check the feedback log before a pre-wired watch starts.
+
+    Raises ``ValueError`` naming where the path came from when it exists but is not a
+    file (a directory). Returns a warning when a configured file does not exist yet; the
+    default may be absent silently, since nothing has been given feedback then. Otherwise
+    ``None``.
+    """
+    path, field = feedback_log_source(state)
+    if os.path.isfile(path):
+        return None
+    if os.path.exists(path):
+        where = f"{DEFAULT_FEEDBACK_LOG} (the default)" if field == "default" else field
+        what = "a directory, not a file" if os.path.isdir(path) else "not a regular file"
+        raise ValueError(f"{where}: {quote_path(path)} is {what}")
+    if field == "default":
+        return None
+    return (
+        f"{field}: no feedback log at {quote_path(path)} yet; "
+        "the loop reads it once feedback lines are written there"
     )
 
 
@@ -262,36 +315,55 @@ def _trace_pairs(
     return pairs, new_keys, newest
 
 
-def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
-    """Serve traces and recorded thumbs → preference pairs.
+#: File name prefix of the harvested dataset, per training method.
+_DATASET_PREFIX = {"dpo": "pairs", "kto": "kto", "sft": "sft"}
 
-    Reads ``soup serve --trace-log`` directories (thumbs/regeneration signals)
-    and, when one is configured, the ``soup serve --record-thumbs`` database
-    (#1440); the two are unioned without exact duplicates. Writes the pairs to
-    ``.soup-loops/pairs/<uuid>.jsonl`` (cwd-contained) and returns
-    ``{pairs_harvested, new_pairs, cursor_ts, pairs_path, traces_collected,
-    thumbs_pairs}`` (``thumbs_pairs`` counts the pairs READ from the database, before
-    the union drops any that a trace already supplied). Yields zero pairs (no path)
-    when neither source has any; a configured database that is refused or missing
-    raises (see ``checked_thumbs_db``).
+
+def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
+    """Serve traces, recorded thumbs and the feedback log → the dataset of ``train_method``.
+
+    Three datasets come out of one harvest (see ``loop_feedback`` for their rows):
+
+    - ``dpo``: preference pairs from ``soup serve --trace-log`` directories
+      (thumbs/regeneration signals) and, when one is configured, the ``soup serve
+      --record-thumbs`` database (#1440), unioned without exact duplicates, plus a pair
+      for every answer a person corrected in the feedback log (chosen = the edited text);
+    - ``kto``: rows labelled good or bad from the feedback log's thumbs, ratings and edits;
+    - ``sft``: the corrected answers of the feedback log.
+
+    The feedback log (``feedback_log_source``) joins the conversation records of the
+    trace directory by id. The traces and the thumbs database feed ``dpo`` only.
+
+    Writes the dataset of ``state.train_method`` to ``.soup-loops/pairs/<uuid>.jsonl``
+    (cwd-contained) and returns ``{pairs_harvested, new_pairs, cursor_ts, pairs_path,
+    traces_collected, thumbs_pairs, train_method, dpo_pairs, kto_rows, sft_rows,
+    feedback_unknown_response, feedback_lines_skipped}``. ``thumbs_pairs`` counts the pairs
+    READ from the database, before the union drops any that a trace already supplied;
+    ``dpo_pairs`` / ``kto_rows`` / ``sft_rows`` are the sizes of the three datasets;
+    ``feedback_unknown_response`` counts feedback lines about an answer no conversation
+    record has (ignored); ``feedback_lines_skipped`` the log lines that could not be used.
+    ``traces_collected`` counts the serve-trace lines and the conversation records. Yields
+    zero rows (no path) when the selected dataset is empty; a configured database that is
+    refused or missing raises (see ``checked_thumbs_db``).
 
     The data cursor (``state.harvest_cursor_ts``) decides what is NEW, not what is
-    trained on: ``pairs_harvested`` and the pairs file hold ALL pairs, since every
-    iteration trains a fresh LoRA from the base model. ``new_pairs`` counts the pairs
+    trained on: ``pairs_harvested`` and the dataset file hold ALL rows of the method, since
+    every iteration trains a fresh LoRA from the base model. ``new_pairs`` counts the rows
     that arrived after the cursor, which ``train_dpo_from_pairs`` compares with
     ``min_new_pairs``. A database pair is new when the newer of its up and down rows is
     later than the cursor; a trace pair, when a trace it is built from is (a trace
-    without a ts counts as new only while there is no cursor, see ``_trace_pairs``).
-    ``cursor_ts`` is the newest ts among the rows of the pairs, which ``run_once``
-    stores once a training run used them, or ``None``. The pairs file is not written
-    while ``new_pairs`` is below ``min_new_pairs``: that cycle trains nothing, and a
-    file per poll would pile up.
+    without a ts counts as new only while there is no cursor, see ``_trace_pairs``); a
+    feedback row, when the newest feedback line it came from is. ``cursor_ts`` is the
+    newest ts among the rows of the dataset, which ``run_once`` stores once a training run
+    used them, or ``None``. The dataset file is not written while ``new_pairs`` is below
+    ``min_new_pairs``: that cycle trains nothing, and a file per poll would pile up.
     """
     from soup_cli.data.traces.parsers import parse_soup_serve
 
+    cursor = state.harvest_cursor_ts
     trace_dir = _resolve_trace_dir(state)
     traces = list(parse_soup_serve(trace_dir)) if trace_dir else []
-    pairs, new_keys, newest = _trace_pairs(traces, state.harvest_cursor_ts)
+    pairs, new_keys, newest = _trace_pairs(traces, cursor)
     thumbs, thumbs_new_keys, thumbs_newest = _thumbs_pairs(state)
     new_keys |= thumbs_new_keys
     newest = _newer(newest, thumbs_newest)
@@ -299,34 +371,61 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
     for p in thumbs:
         if _pair_key(p) not in seen:  # harvest_dpo_pairs yields one pair per prompt: no self-dupes
             pairs.append(p)
-    new_pairs = sum(1 for p in pairs if _pair_key(p) in new_keys)
-    extra = {"thumbs_pairs": len(thumbs)}
-    if not pairs:
+    # Every row as (the JSONL object, is it new).
+    dpo_rows = [(p.to_jsonl_dict(), _pair_key(p) in new_keys) for p in pairs]
+    dpo_newest = newest
+    taken = {_pair_key(p) for p in pairs}
+
+    feedback = harvest_feedback(trace_dir, _resolve_feedback_log(state))
+    found = feedback.datasets
+    for item in found.dpo:
+        key = (prompt_key(item.row["prompt"]), item.row["chosen"], item.row["rejected"])
+        if key in taken:  # the same pair, already supplied by a trace or the database
+            continue
+        dpo_rows.append((item.row, is_new(item.ts, cursor)))
+        dpo_newest = _newer(dpo_newest, item.ts)
+    by_method = {
+        "dpo": (dpo_rows, dpo_newest),
+        "kto": ([(r.row, is_new(r.ts, cursor)) for r in found.kto], newest_ts(found.kto)),
+        "sft": ([(r.row, is_new(r.ts, cursor)) for r in found.sft], newest_ts(found.sft)),
+    }
+    rows, selected_newest = by_method[state.train_method]
+    new_rows = sum(1 for _, new in rows if new)
+    common = {
+        "traces_collected": len(traces) + feedback.answers,
+        "thumbs_pairs": len(thumbs),
+        "train_method": state.train_method,
+        "dpo_pairs": len(dpo_rows),
+        "kto_rows": len(found.kto),
+        "sft_rows": len(found.sft),
+        "feedback_unknown_response": found.unknown_response,
+        "feedback_lines_skipped": feedback.skipped_lines,
+    }
+    if not rows:
         return {
             "pairs_harvested": 0,
             "new_pairs": 0,
             "cursor_ts": None,
             "pairs_path": None,
-            "traces_collected": len(traces),
-            **extra,
+            **common,
         }
 
     pairs_path = None
-    if new_pairs >= state.min_new_pairs:
+    if new_rows >= state.min_new_pairs:
         pairs_dir = Path(_PAIRS_DIR)
         pairs_dir.mkdir(parents=True, exist_ok=True)
-        pairs_path = str(pairs_dir / f"pairs-{uuid.uuid4().hex[:12]}.jsonl")
-        lines = "\n".join(json.dumps(p.to_jsonl_dict()) for p in pairs) + "\n"
+        prefix = _DATASET_PREFIX[state.train_method]
+        pairs_path = str(pairs_dir / f"{prefix}-{uuid.uuid4().hex[:12]}.jsonl")
+        lines = "\n".join(json.dumps(row) for row, _ in rows) + "\n"
         # Atomic + cwd-contained + symlink-rejected (mirrors the rest of the
         # changeset's write policy).
         atomic_write_text(lines, pairs_path, field="pairs_path")
     return {
-        "pairs_harvested": len(pairs),
-        "new_pairs": new_pairs,
-        "cursor_ts": newest,
+        "pairs_harvested": len(rows),
+        "new_pairs": new_rows,
+        "cursor_ts": selected_newest,
         "pairs_path": pairs_path,
-        "traces_collected": len(traces),
-        **extra,
+        **common,
     }
 
 
@@ -424,50 +523,78 @@ def resolve_base_model(served_model: str, base_model: Optional[str] = None) -> s
     return resolve_base_model_source(served_model, base_model)[0]
 
 
+#: The ``data.format`` of the soup train config, per training method.
+_TRAIN_FORMAT = {"dpo": "dpo", "kto": "kto", "sft": "chatml"}
+#: What a row of each method's dataset is called in a skip note.
+_ROW_NAME = {"dpo": "preference pairs", "kto": "kto rows", "sft": "sft rows"}
+
+
+def _render_train_yaml(
+    state: LoopState, data_path: str, output_dir: str, method: Optional[str] = None
+) -> str:
+    """Render a minimal ``soup.yaml`` for ``method`` (default: ``state.train_method``).
+
+    The task is the method, the data the harvested dataset in the format ``soup train``
+    reads for it (``dpo``, ``kto``, ``chatml`` for ``sft``). Raises ``ValueError`` when the
+    base model cannot be determined (``resolve_base_model``).
+    """
+    import yaml
+
+    method = method or state.train_method
+    base = resolve_base_model(state.served_model, state.base_model)
+    config = {
+        "base": base,
+        "task": method,
+        # val_split 0: a one- or two-row harvest would otherwise lose its only
+        # training rows to the schema default 0.1 (#1909).
+        "data": {"train": data_path, "format": _TRAIN_FORMAT[method], "val_split": 0},
+        # KTO needs a per-device batch of at least 2: TRL's KL term is degenerate at 1
+        # and the config is refused (#1420).
+        "training": {"epochs": 1, "batch_size": 2 if method == "kto" else 1, "lr": 5.0e-5},
+        "output": output_dir,
+    }
+    return yaml.safe_dump(config, sort_keys=False)
+
+
 def _render_dpo_yaml(state: LoopState, pairs_path: str, output_dir: str) -> str:
     """Render a minimal DPO ``soup.yaml`` referencing the harvested pairs.
 
     Raises ``ValueError`` when the base model cannot be determined
     (``resolve_base_model``).
     """
-    import yaml
-
-    base = resolve_base_model(state.served_model, state.base_model)
-    config = {
-        "base": base,
-        "task": "dpo",
-        # val_split 0: a one- or two-pair harvest would otherwise lose its only
-        # training rows to the schema default 0.1 (#1909).
-        "data": {"train": pairs_path, "format": "dpo", "val_split": 0},
-        "training": {"epochs": 1, "batch_size": 1, "lr": 5.0e-5},
-        "output": output_dir,
-    }
-    return yaml.safe_dump(config, sort_keys=False)
+    return _render_train_yaml(state, pairs_path, output_dir, "dpo")
 
 
 def train_dpo_from_pairs(
     state: LoopState, ctx: Mapping[str, object]
 ) -> Mapping[str, object]:
-    """Train a DPO adapter from harvested pairs via a ``soup train`` subprocess.
+    """Train an adapter on the harvested dataset via a ``soup train`` subprocess.
 
-    Returns ``{run_id, skipped, adapter_path}``. Skips (no run) when the
-    harvest produced no pairs, or fewer NEW pairs than ``state.min_new_pairs``
+    The method is ``state.train_method``: ``dpo`` (the default, hence the name), ``kto``
+    or ``sft``; ``_render_train_yaml`` writes the matching config. Returns ``{run_id,
+    skipped, adapter_path}``. Skips (no run) when the
+    harvest produced no rows, or fewer NEW rows than ``state.min_new_pairs``
     (the data cursor, see ``harvest_from_traces``), adding a ``notes`` reason
-    (``no_preference_pairs`` with the count, ``not_enough_new_data`` with the
-    counts, or ``pairs_file_missing``) that the loop saves in the iteration
-    record (#1909). A harvest that reports no ``new_pairs`` (a custom
-    ``harvest_fn``) has every pair counted as new. The subprocess is argv-list (no shell);
+    (``no_preference_pairs`` / ``no_kto_rows`` / ``no_sft_rows`` with the count,
+    ``not_enough_new_data`` with the counts, or ``pairs_file_missing``) that the loop saves
+    in the iteration record (#1909). A harvest that reports no ``new_pairs`` (a custom
+    ``harvest_fn``) has every row counted as new. The subprocess is argv-list (no shell);
     ``_TRAIN_RUNNER`` injects a stand-in for tests.
     """
     pairs_path = ctx.get("pairs_path")
     pairs_n = int(ctx.get("pairs_harvested", 0) or 0)
     new_n = int(ctx.get("new_pairs", pairs_n) or 0)
+    method = state.train_method
     skip = {"run_id": None, "skipped": True, "adapter_path": None}
     if pairs_n <= 0:
-        return {**skip, "notes": "no_preference_pairs: 0 valid pairs harvested, training skipped"}
+        if method == "dpo":
+            note = "no_preference_pairs: 0 valid pairs harvested, training skipped"
+        else:
+            note = f"no_{method}_rows: 0 valid {method} rows harvested, training skipped"
+        return {**skip, "notes": note}
     if new_n < state.min_new_pairs:
         note = (
-            f"not_enough_new_data: {new_n} new preference pairs since the last training run, "
+            f"not_enough_new_data: {new_n} new {_ROW_NAME[method]} since the last training run, "
             f"training needs {state.min_new_pairs} (soup loop init --min-new-pairs)"
         )
         return {**skip, "notes": note}
@@ -480,7 +607,7 @@ def train_dpo_from_pairs(
     run_id = f"loop-train-{uuid.uuid4().hex[:8]}"
     output_dir = os.path.join(_ADAPTERS_DIR, run_id)
     try:
-        rendered = _render_dpo_yaml(state, str(pairs_path), output_dir)
+        rendered = _render_train_yaml(state, str(pairs_path), output_dir)
     except ValueError as exc:
         return {**skip, "notes": f"base_model_unknown: {exc}; training skipped"}
     yaml_dir = Path(_ADAPTERS_DIR)

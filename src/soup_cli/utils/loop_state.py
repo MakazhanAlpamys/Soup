@@ -30,6 +30,8 @@ from soup_cli.utils.paths import is_under_cwd
 LOOP_STATUSES: frozenset = frozenset({"running", "paused", "stopped"})
 # The check before rollout (`soup loop init --verify`).
 VERIFY_METHODS: tuple = ("ship", "eval_gate")
+# The dataset the pre-wired loop trains on (`soup loop init --train-method`).
+TRAIN_METHODS: tuple = ("dpo", "kto", "sft")
 
 _MAX_PATH_LEN = 4096
 _MAX_STR_FIELD = 512
@@ -116,6 +118,14 @@ class LoopState:
     # Training waits until this many preference pairs are newer than the cursor
     # (`soup loop init --min-new-pairs`).
     min_new_pairs: int = 1
+    # The feedback log (feedback.jsonl lines: thumbs, ratings, edits, comments on logged
+    # answers) the pre-wired harvest reads: `soup loop init --feedback-log`. None =
+    # .soup-loops/feedback.jsonl; SOUP_LOOP_FEEDBACK_LOG overrides both.
+    feedback_log: Optional[str] = None
+    # What the pre-wired loop trains: "dpo" (preference pairs, the default), "kto"
+    # (rows labelled good or bad) or "sft" (the answers people corrected).
+    # `min_new_pairs` counts new rows of this method's dataset.
+    train_method: str = "dpo"
 
     def __post_init__(self) -> None:  # noqa: D401 — validator hook
         # Closed-allowlist enforcement + bool-as-int rejection mirror the
@@ -204,6 +214,12 @@ class LoopState:
         v = self.min_new_pairs
         if isinstance(v, bool) or not isinstance(v, int) or v < 1:
             raise ValueError(f"min_new_pairs must be a positive int, got {v!r}")
+        if self.feedback_log is not None:
+            _require_str("feedback_log", self.feedback_log, allow_empty=False)
+        if self.train_method not in TRAIN_METHODS:
+            raise ValueError(
+                f"train_method must be one of {list(TRAIN_METHODS)}, got {self.train_method!r}"
+            )
         if self.canary_rollout_id is not None:
             _require_str("canary_rollout_id", self.canary_rollout_id, allow_empty=False)
         if self.last_iteration_id is not None:
@@ -380,6 +396,8 @@ def init_state(
     deploy_traffic_pct: float = 5.0,
     harvest_cursor_ts: Optional[float] = None,
     min_new_pairs: int = 1,
+    feedback_log: Optional[str] = None,
+    train_method: str = "dpo",
     path: Optional[str] = None,
     force: bool = False,
 ) -> Tuple[LoopState, str]:
@@ -416,6 +434,8 @@ def init_state(
         deploy_traffic_pct=deploy_traffic_pct,
         harvest_cursor_ts=harvest_cursor_ts,
         min_new_pairs=min_new_pairs,
+        feedback_log=feedback_log,
+        train_method=train_method,
         monthly_budget_usd=monthly_budget_usd,
         max_runs_per_day=max_runs_per_day,
         created_at=now,

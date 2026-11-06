@@ -835,8 +835,12 @@ class TestLoopStateFields:
         assert state.min_new_pairs == 1
 
     def test_the_fields_come_last(self):
+        """Appended at the end when added; fields added after them (see
+        tests/test_loop_feedback_datasets.py) follow, so nothing else sits between."""
         names = list(LoopState.__dataclass_fields__)
-        assert names[-2:] == ["harvest_cursor_ts", "min_new_pairs"]
+        tail = names[names.index("harvest_cursor_ts"):]
+        assert tail[:2] == ["harvest_cursor_ts", "min_new_pairs"]
+        assert names.index("min_new_pairs") > names.index("previous_production_adapter")
 
     @pytest.mark.parametrize("value", [0, 0.0, 0.5, 1700000000, 1700000000.25])
     def test_a_cursor_is_a_finite_non_negative_number(self, value):
