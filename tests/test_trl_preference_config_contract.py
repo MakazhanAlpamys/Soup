@@ -1399,6 +1399,12 @@ def test_truncate_tokens_keeps_its_default_for_the_mlx_callers():
     assert _truncate_tokens(tokens, 3, "keep_start", keep_first=True) == [_UNPAIRED_BOS, 10, 11]
 
 
+def test_truncate_prompt_leaves_an_empty_prompt_empty():
+    from soup_cli.trainer._trl_compat import _truncate_prompt
+
+    assert _truncate_prompt([], [], 4, "keep_end", _UNPAIRED_BOS) == ([], [])
+
+
 def _prompt_prefixes(task):
     return ("", "KL_") if task == "kto" else ("",)
 

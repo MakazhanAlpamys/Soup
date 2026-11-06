@@ -187,9 +187,7 @@ def _truncate_prompt(
     The decision is made on the ids, so ids and mask stay the same length; a
     prompt that does not start with ``bos_token_id`` gets the plain cut.
     """
-    keep_first = (
-        bos_token_id is not None and len(prompt_ids) > 0 and prompt_ids[0] == bos_token_id
-    )
+    keep_first = bos_token_id is not None and prompt_ids[:1] == [bos_token_id]
     return (
         _truncate_tokens(prompt_ids, limit, mode, keep_first=keep_first),
         _truncate_tokens(prompt_mask, limit, mode, keep_first=keep_first),
