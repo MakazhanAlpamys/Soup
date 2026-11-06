@@ -611,6 +611,12 @@ class TestUnpairedRebuildPreservesAnExistingTerminalEos:
 _FITTING_PROMPT = " ".join(["hi"] * 40 + ["world"])
 #: An over-long prompt whose end is visible, so the kept side of the cut can be asserted.
 _OVERLONG_PROMPT_WITH_TAIL = " ".join(["hello"] * (_OVERLONG_PROMPT_WORDS - 1) + ["world"])
+#: An over-long prompt with a distinct word at each end, so a cut from either
+#: side leaves exactly one marker behind: ``world`` survives ``keep_start``,
+#: ``hi`` survives ``keep_end``.
+_OVERLONG_PROMPT_WITH_BOTH_ENDS = " ".join(
+    ["world"] + ["hello"] * (_OVERLONG_PROMPT_WORDS - 2) + ["hi"]
+)
 
 
 def _setup_rows(tmp_path, monkeypatch, task, rows, val_rows=None):
@@ -639,7 +645,7 @@ def _rows_with(task, prompt, completion, n=8):
 
 
 class TestTheCapTouchesOnlyRowsThatOverflow:
-    @pytest.mark.parametrize("task", ("bco", "ipo", "kto", "simpo"))
+    @pytest.mark.parametrize("task", _ALL_SIX)
     def test_a_row_that_fits_reaches_the_trainer_uncut(self, tmp_path, monkeypatch, task):
         rows = _rows_with(task, _FITTING_PROMPT, " good answer")
         wrapper = _setup_rows(tmp_path, monkeypatch, task, rows)
@@ -649,7 +655,7 @@ class TestTheCapTouchesOnlyRowsThatOverflow:
         assert len(prompt) > _MAX_PROMPT_LENGTH, (task, len(prompt), words[:2], words[-2:])
         assert words[-1] == "world", (task, words[-3:])
 
-    @pytest.mark.parametrize("task", ("bco", "ipo", "kto", "simpo"))
+    @pytest.mark.parametrize("task", _ALL_SIX)
     def test_a_validation_row_that_fits_reaches_the_trainer_uncut(
         self, tmp_path, monkeypatch, task
     ):
@@ -661,6 +667,36 @@ class TestTheCapTouchesOnlyRowsThatOverflow:
         words = wrapper.tokenizer.convert_ids_to_tokens(prompt)
         assert len(prompt) > _MAX_PROMPT_LENGTH, (task, len(prompt), words[:2], words[-2:])
         assert words[-1] == "world", (task, words[-3:])
+
+    @pytest.mark.parametrize(
+        ("task", "kept_end"), (("dpo", "start"), ("orpo", "end")), ids=("dpo", "orpo")
+    )
+    def test_an_overlong_prompt_is_still_cut_from_the_same_end_as_before(
+        self, tmp_path, monkeypatch, task, kept_end
+    ):
+        """#1209 — the cap becomes conditional, not a different cap.
+
+        A row that overflows ``max_length`` is still cut to the
+        ``max_length // 2`` prompt budget, from the end each trainer always
+        used: DPO keeps the start (trl's ``keep_start`` default), ORPO keeps
+        the end (``keep_end``). The markers show which side survived.
+        """
+        rows = _rows_with(task, _OVERLONG_PROMPT_WITH_BOTH_ENDS, " good answer")
+        wrapper = _setup_rows(tmp_path, monkeypatch, task, rows, val_rows=rows[:2])
+        tok = wrapper.tokenizer
+        for split in ("train_dataset", "eval_dataset"):
+            for index, row in enumerate(getattr(wrapper.trainer, split)):
+                key = "prompt_ids" if "prompt_ids" in row else "prompt_input_ids"
+                words = tok.convert_ids_to_tokens(list(row[key]))
+                assert len(words) == _MAX_PROMPT_LENGTH, (task, split, index, len(words))
+                expected = ["world", "hello"] if kept_end == "start" else ["hello", "hi"]
+                ends = [words[0], words[-1]]
+                assert ends == expected, (task, split, index, words[:2], words[-2:])
+                for side in ("chosen", "rejected"):
+                    ids_key = f"{side}_ids" if f"{side}_ids" in row else f"{side}_input_ids"
+                    assert len(row[ids_key]) + (
+                        len(words) if task == "dpo" else 0
+                    ) <= _MAX_SEQUENCE_LENGTH, (task, split, index, side)
 
     @pytest.mark.parametrize("task", ("bco", "kto"))
     def test_a_row_trl_already_fit_keeps_its_eos(self, tmp_path, monkeypatch, task):
