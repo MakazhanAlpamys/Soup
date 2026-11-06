@@ -2009,6 +2009,7 @@ Subcommands:
 - [`leaderboard`](#soup-eval-leaderboard)
 - [`lock`](#soup-eval-lock)
 - [`quant-check`](#soup-eval-quant-check)
+- [`retention`](#soup-eval-retention)
 - [`unlearning`](#soup-eval-unlearning)
 
 ### `soup eval against`
@@ -2301,6 +2302,24 @@ Usage: `soup eval quant-check [OPTIONS]`
 | `--tasks` | text |  | yes | JSONL eval tasks file (see 'soup eval custom') |
 | `--format` | text | `table` |  | Output format: table \| json \| markdown |
 | `--allow-stub` | flag | off |  | Allow deterministic stub generators if live model loading fails. |
+
+### `soup eval retention`
+
+Measure accumulated forgetting across a series of versions (exit 0 / 2 / 3 / 1).
+
+Usage: `soup eval retention [OPTIONS]`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `--model`, `-m` | text |  | yes | Base or merged model (HF id or path) to evaluate. |
+| `--label` | text |  | yes | Version label for this candidate (unique in the ledger), e.g. v3. |
+| `--ledger` | text | `retention.json` |  | Retention ledger JSON (cwd-contained; created by --add-task + --record). |
+| `--adapter` | text |  |  | LoRA adapter directory to evaluate on top of --model. |
+| `--add-task` | text, repeatable |  |  | Register a control task as NAME=PATH (a task-eval JSONL, the format of soup ship --task-eval). Repeatable. Its sha256 is pinned: a later change to the file is refused. |
+| `--record` | flag | off |  | Append this version's scores (and any new tasks) to the ledger. |
+| `--threshold` | float | `0.05` |  | A drop below the best earlier score larger than this regresses (0.0-1.0). |
+| `--output`, `-o` | text |  |  | Write the full task x version matrix and summary as JSON. |
+| `--device` | text |  |  | Device for the live run (cuda / cpu). |
 
 ### `soup eval unlearning`
 

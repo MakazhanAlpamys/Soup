@@ -16,6 +16,7 @@
 - [Drift Alarm (`soup drift-alarm`)](#drift-alarm-soup-drift-alarm)
 - [Diagnose (Post-Training Report Card)](#diagnose-post-training-report-card)
 - [Ship Verdict (`soup ship`)](#ship-verdict-soup-ship)
+- [Retention across versions: `soup eval retention`](#retention-across-versions-soup-eval-retention)
 - [NLG Evaluation Metrics (BLEU + ROUGE)](#nlg-evaluation-metrics-bleu--rouge)
 - [Quant Calibration (KL Divergence)](#quant-calibration-kl-divergence)
 - [Model Arena (Elo Tournament)](#model-arena-elo-tournament)
@@ -819,6 +820,91 @@ base run.
 Historical note: v0.73.2 changed three suite scorers (`mini_mmlu`,
 `mini_common_sense`, `mini_tool_call`) with measured jumps on an unchanged
 model far larger than the 0.05 gate. That is why unstamped files still warn.
+
+
+## Retention across versions: `soup eval retention`
+
+`soup ship` judges one candidate against one base on a fixed general suite, so a
+series of adapter updates can erode a task an earlier update taught while every step
+still looks fine against the one before it. `soup eval retention` measures that
+accumulated forgetting. It keeps a **ledger** of control tasks (held-out task-eval
+JSONL files, the same format `soup ship --task-eval` reads) and the accuracy every
+recorded version got on each, then scores a new candidate on **every** control task
+with one loaded model and compares each task with the **best** score any earlier
+version ever had.
+
+```bash
+# v1: register two control tasks and record the first point
+soup eval retention --model ./base --label v1 \
+  --add-task billing=evals/billing.jsonl --add-task tools=evals/tools.jsonl --record
+
+# v2 (an adapter trained afterwards): add a third task, judge, and record
+soup eval retention --model ./base --adapter ./out/v2 --label v2 \
+  --add-task invoices=evals/invoices.jsonl --record
+
+# v3: a dry run (nothing is written) with a JSON report
+soup eval retention --model ./base --adapter ./out/v3 --label v3 --output report.json
+```
+
+**Rules.**
+
+- `--add-task NAME=PATH` registers a control task. Names are 1-64 characters of
+  `A-Z a-z 0-9 _ . -`. The file's SHA-256 is pinned in the ledger; if a registered
+  file later changes, the run is refused (exit `3`) with a message naming the task and
+  both hashes, because a silently swapped control set would fake retention. Register
+  the new file under a new task name instead. The same name with the same bytes is a
+  no-op (or re-points the path if you moved the file).
+- For each task the reference is the **best** score over all recorded versions that
+  scored it, not the previous version: v1 0.90, v2 0.70 (shipped anyway), v3 0.75 is
+  still a 0.15 regression. `drop = best - current`; the task regressed when
+  `drop > --threshold` (default `0.05`, absolute accuracy points, like
+  `soup ship --forgetting-threshold`; a drop of exactly the threshold passes).
+- The first version that scores a task makes it a *new* task: its first point, with no
+  regression possible.
+- `--record` appends the version (label, `--model`, `--adapter`, UTC time, scores) and
+  any `--add-task` registrations to the ledger. Without it nothing is written. A
+  regressed version is still recorded (the series is history) and the run still exits
+  `2`. Labels are unique; a duplicate is refused before any model loads.
+
+**Output.** A Rich table (task rows x version columns, then the current score, the
+best earlier score, the drop and a status) and a summary:
+
+- *Regressions*: the tasks whose drop exceeded the threshold.
+- *Mean forgetting*: the mean over tasks an earlier version also scored of
+  `max(0, best - current)`.
+- *Backward transfer*: the mean over the same tasks of `current - first score`
+  (negative: the old tasks ended below where they started).
+
+New tasks are in neither mean. The table shows the last 8 earlier versions;
+`--output report.json` holds the full matrix, per-task example counts and the summary.
+
+Exit codes follow `soup ship`: `0` no regression, `2` a regression, `3` a usage or
+input error (bad flag, malformed ledger, changed control file), `1` a runtime error
+(model load, ledger write).
+
+**Ledger file** (`retention.json`, schema 1, written atomically):
+
+```json
+{"schema": 1,
+ "tasks": [{"name": "billing", "path": "evals/billing.jsonl", "sha256": "...",
+            "added_at": "2026-11-05T12:00:00Z", "added_with": "v1"}],
+ "versions": [{"label": "v1", "model": "./base", "adapter": null,
+               "evaluated_at": "2026-11-05T12:00:00Z", "scores": {"billing": 0.9}}]}
+```
+
+Every field is validated on read: an unknown key, a wrong type or a score outside
+[0, 1] is refused with a message naming the key and the type found. The ledger, control
+files and `--output` must stay under the working directory and not be symlinks, the
+ledger is capped at 4 MiB, 1000 tasks and 1000 versions, and `--output` may not be the
+ledger or a control file.
+
+**What it does not do.** It is not part of the `soup ship` verdict. The evidence file
+that `soup ship --evidence` reads needs a leg-1 task win, which a retention run does
+not produce, so there is no `--emit-evidence`; gate a pipeline on the exit code instead.
+Scores come from one greedy-decode pass at the precision `soup ship` uses without
+`--config` (bf16 on CUDA, fp32 elsewhere), so compare versions evaluated the same way
+and read a drop against the size of the control set: with 40 examples, `0.05` is two
+answers.
 
 
 ## NLG Evaluation Metrics (BLEU + ROUGE)
