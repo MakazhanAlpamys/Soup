@@ -103,7 +103,7 @@ def _no_model_load(monkeypatch):
     monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", must_not_run)
 
 
-@pytest.mark.parametrize("loss", ["triplet", "contrastive"])
+@pytest.mark.parametrize("loss", ["triplet", "contrastive", "cosine"])
 def test_setup_refuses_a_partial_train_mix_before_the_model_loads(tmp_path, monkeypatch, loss):
     wrapper = _wrapper(tmp_path, monkeypatch, loss=loss)
     _no_model_load(monkeypatch)
