@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 from rich.console import Console
 from typer.testing import CliRunner
 
@@ -125,9 +126,9 @@ def test_apply_lists_the_dataset_as_typed(value):
     result = _mix("--apply", recipe)
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    text = _plain(result)
-    assert f"- {_shown(value)}" in text
-    assert _not_shown(text)
+    output = strip_ansi(result.output)
+    assert yaml.safe_load(output[output.index("data:\n"):])["data"]["train"] == ["a.jsonl", value]
+    assert _not_shown(result.output)
 
 
 @pytest.mark.parametrize("value", _VALUES)
@@ -137,9 +138,9 @@ def test_apply_shows_a_single_train_string_as_typed(value):
     result = _mix("--apply", recipe)
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    text = _plain(result)
-    assert f"train: {json.dumps(value)}" in text
-    assert _not_shown(text)
+    output = strip_ansi(result.output)
+    assert yaml.safe_load(output[output.index("data:\n"):])["data"]["train"] == value
+    assert _not_shown(result.output)
 
 
 @pytest.mark.parametrize("name", _FILE_NAMES)

@@ -1100,9 +1100,9 @@ def list_registered() -> None:
     for entry in entries:
         rate = entry.get("acceptance_rate")
         table.add_row(
-            for_terminal(str(entry.get("target", "?"))),
-            for_terminal(str(entry.get("draft", "?"))),
+            Text(strip_control(entry.get("target", "?"))),
+            Text(strip_control(entry.get("draft", "?"))),
             "-" if rate is None else f"{float(rate) * 100:.1f}%",
-            for_terminal(str(entry.get("created", "?"))),
+            Text(strip_control(entry.get("created", "?"))),
         )
     console.print(table)
