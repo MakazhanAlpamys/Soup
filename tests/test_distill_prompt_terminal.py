@@ -256,7 +256,9 @@ def test_the_done_panel_names_the_output_as_typed(monkeypatch, name):
 def _coloured(monkeypatch):
     monkeypatch.setattr(
         "soup_cli.commands.distill_prompt.console",
-        Console(force_terminal=True, width=500, height=100, color_system="standard"),
+        Console(
+            force_terminal=True, no_color=False, width=500, height=100, color_system="standard"
+        ),
     )
 
 
