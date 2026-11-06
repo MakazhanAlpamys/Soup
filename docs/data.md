@@ -878,6 +878,8 @@ Or use `.txt` files directly (one document per line).
 {"anchor": "What is Python?", "positive": "A programming language.", "negative": "A type of snake."}
 ```
 
+The two lines show the two shapes, and a file uses one of them: a non-blank `negative` on every row, or on none. A mix is refused before the model loads, naming how many rows have a `negative` and how many do not; the validation set is checked on its own.
+
 With `embedding_loss: contrastive` (the default), each row's negatives are the other rows' positives in the same batch, so a batch needs at least two rows: `batch_size: 1` is refused at config load, `batch_size: auto` resolves to at least 2, and the last partial batch of each epoch is dropped. This also applies when `triplet` falls back to contrastive because the rows have no `negative`. Use `triplet` with a `negative` on every row, or `cosine`, to train at batch size 1.
 
 **Cross-Encoder (paired sequence classification - `data.format: cross_encoder`):**
