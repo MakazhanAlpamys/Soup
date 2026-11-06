@@ -23,19 +23,29 @@ _NO_COLON_ON_WINDOWS = pytest.mark.skipif(
     sys.platform == "win32", reason="':' is not valid in a Windows name"
 )
 
+# A backslash separates directories on Windows, so a name that holds one cannot be a file there.
+_NO_BACKSLASH_ON_WINDOWS = pytest.mark.skipif(
+    sys.platform == "win32", reason="a backslash separates directories on Windows"
+)
+
 # One spelling per way the old code went wrong: a tag, a closing tag with
 # nothing to close (a MarkupError), an emoji code, and a tag with control
-# characters, so the strip and the escape are pinned separately.
+# characters, so the strip and the escape are pinned separately. A backslash before
+# an unmatched bracket and a trailing pair of backslashes are what markup rewrites.
 _VALUES = [
     "x[red]n",
     "[/]n",
     pytest.param("n:warning:", id="emoji-code"),
+    pytest.param("x\\[n", id="backslash-bracket"),
+    pytest.param("n\\\\", id="trailing-backslashes"),
     f"x[bold]n{_CONTROLS}",
 ]
 # A file name cannot hold a slash, so no closing tag with nothing to close.
 _NAMES = [
     "x[red]n",
     pytest.param("n:warning:", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+    pytest.param("x\\[n", marks=_NO_BACKSLASH_ON_WINDOWS, id="backslash-bracket"),
+    pytest.param("n\\\\", marks=_NO_BACKSLASH_ON_WINDOWS, id="trailing-backslashes"),
     f"x[bold]n{_CONTROLS}",
 ]
 
@@ -241,3 +251,105 @@ def test_the_done_panel_names_the_output_as_typed(monkeypatch, name):
     assert _not_shown(text)
     rows = Path(f"{name}-out.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(rows) == 2
+
+
+def _coloured(monkeypatch):
+    monkeypatch.setattr(
+        "soup_cli.commands.distill_prompt.console",
+        Console(force_terminal=True, width=500, height=100, color_system="standard"),
+    )
+
+
+def test_the_plan_keeps_its_values_bold(monkeypatch):
+    _coloured(monkeypatch)
+
+    result = _distill("--plan-only")
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "Traces:    \x1b[1mtraces.jsonl\x1b[0m" in result.output
+    assert "Strategy:  \x1b[1msft\x1b[0m" in result.output
+    assert "Provider:  \x1b[1mollama\x1b[0m" in result.output
+
+
+def test_every_detail_of_the_plan_has_its_own_line():
+    result = _distill("--plan-only")
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    lines = strip_ansi(result.output).splitlines()
+    for label in ("Traces:", "Teacher:", "Student:", "Strategy:", "Provider:", "Output:"):
+        assert [line for line in lines if re.match(r"\W*" + label, line)], label
+
+
+def test_the_done_panel_keeps_its_values_bold(monkeypatch):
+    _coloured(monkeypatch)
+    _stub_provider(monkeypatch, {"text": "an answer"})
+
+    result = _distill()
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "Rows:   \x1b[1m2\x1b[0m" in result.output
+    assert "Output: \x1b[1mdistilled.jsonl\x1b[0m" in result.output
+
+
+def test_a_done_panel_with_failures_and_skipped_rows_is_yellow(monkeypatch):
+    _coloured(monkeypatch)
+    Path("traces.jsonl").write_text(
+        '{"prompt": "first"}\n{"prompt": "second"}\n{"nothing": 1}\n', encoding="utf-8"
+    )
+    calls = []
+
+    def build(*args, **kwargs):
+        def reply(prompt):
+            calls.append(prompt)
+            if len(calls) == 1:
+                raise RuntimeError("one call failed")
+            return {"text": "an answer"}
+
+        return reply
+
+    monkeypatch.setattr(distill_mod, "_build_provider_fn", build)
+
+    result = _distill()
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    plain = strip_ansi(result.output)
+    assert "done with provider failures" in plain
+    lines = plain.splitlines()
+    assert [line for line in lines if re.match(r"\W*Provider calls: 1 of 2 failed\W*$", line)]
+    assert [line for line in lines if re.match(r"\W*Rows: ", line)]
+    assert "Provider calls: \x1b[1;33m1 of 2 failed\x1b[0m" in result.output
+    skipped = "\x1b[33m(1 of 3 trace rows skipped: no prompt found)"
+    assert f"Rows:   \x1b[1m1\x1b[0m {skipped}" in result.output
+
+
+@pytest.mark.parametrize("error", [ValueError, TypeError])
+def test_errors_are_red_and_a_missing_dependency_yellow(monkeypatch, error):
+    _coloured(monkeypatch)
+    _stub_provider(monkeypatch, error("setup said no"))
+    failed = _distill()
+    _stub_provider(monkeypatch, ImportError("dependency said no"))
+    missing = _distill()
+
+    assert failed.exit_code == 2
+    assert missing.exit_code == 2
+    assert "\x1b[31msetup said no" in failed.output
+    assert "\x1b[33mdependency said no" in missing.output
+
+
+def test_failed_provider_calls_start_with_a_red_label(monkeypatch):
+    _coloured(monkeypatch)
+    _stub_failing_calls(monkeypatch, "call said no")
+
+    result = _distill()
+
+    assert result.exit_code == 1
+    assert "\x1b[31mNo usable rows produced:\x1b[0m" in result.output
+
+
+def test_a_refused_plan_is_red(monkeypatch):
+    _coloured(monkeypatch)
+
+    result = _distill("--strategy", "nope")
+
+    assert result.exit_code == 2
+    assert "\x1b[31munknown strategy" in result.output
