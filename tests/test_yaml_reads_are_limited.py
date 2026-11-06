@@ -43,6 +43,7 @@ YAML_USERS = {
     "cans/pack.py": ("safe_dump",),
     "cloud/runpod.py": ("YAMLError",),
     "commands/adapters.py": ("YAMLError",),
+    "commands/data_mix.py": ("safe_dump",),
     "commands/deploy.py": ("YAMLError",),
     "commands/plan.py": ("YAMLError",),
     "commands/push.py": ("YAMLError",),
