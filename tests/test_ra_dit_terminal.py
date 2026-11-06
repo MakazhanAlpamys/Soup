@@ -23,19 +23,29 @@ _NO_COLON_ON_WINDOWS = pytest.mark.skipif(
     sys.platform == "win32", reason="':' is not valid in a Windows name"
 )
 
+# A backslash separates directories on Windows, so a name that holds one cannot be a file there.
+_NO_BACKSLASH_ON_WINDOWS = pytest.mark.skipif(
+    sys.platform == "win32", reason="a backslash separates directories on Windows"
+)
+
 # One spelling per way the old code went wrong: a tag, a closing tag with
 # nothing to close (a MarkupError), an emoji code, and a tag with control
-# characters, so the strip and the escape are pinned separately.
+# characters, so the strip and the escape are pinned separately. A backslash before
+# an unmatched bracket and a trailing pair of backslashes are what markup rewrites.
 _VALUES = [
     "x[red]n",
     "[/]n",
     pytest.param("n:warning:", id="emoji-code"),
+    pytest.param("x\\[n", id="backslash-bracket"),
+    pytest.param("n\\\\", id="trailing-backslashes"),
     f"x[bold]n{_CONTROLS}",
 ]
 # A file name cannot hold a slash, so no closing tag with nothing to close.
 _NAMES = [
     "x[red]n",
     pytest.param("n:warning:", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+    pytest.param("x\\[n", marks=_NO_BACKSLASH_ON_WINDOWS, id="backslash-bracket"),
+    pytest.param("n\\\\", marks=_NO_BACKSLASH_ON_WINDOWS, id="trailing-backslashes"),
     f"x[bold]n{_CONTROLS}",
 ]
 
@@ -119,7 +129,7 @@ def test_overlapping_outputs_are_shown_as_typed(value):
     assert result.exit_code == 2
     text = _plain(result)
     quoted = quote_path(f"out/same-{value}").replace("\u202e", "")
-    assert f"--generator-config output {quoted} is the same file as" in text
+    assert f"Invalid ra-dit config: --generator-config output {quoted} is the same file as" in text
     assert f"--retriever-config output {quoted}" in text
     assert _not_shown(text)
 
@@ -207,3 +217,77 @@ def test_the_done_panel_names_a_manual_retriever_as_typed(monkeypatch, value):
     text = _plain(result)
     assert f"Retriever model used: {_shown(value)} (manual override)" in text
     assert _not_shown(text)
+
+
+def _coloured(monkeypatch):
+    monkeypatch.setattr(
+        "soup_cli.commands.ra_dit.console",
+        Console(force_terminal=True, width=500, height=100, color_system="standard"),
+    )
+
+
+def test_the_plan_keeps_its_labels_bold(monkeypatch):
+    _coloured(monkeypatch)
+    _configs()
+
+    result = _ra_dit("--plan-only")
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "\x1b[1mStage 1 (retriever):\x1b[0m retriever.yaml" in result.output
+    assert "\x1b[1mRetriever output:\x1b[0m out/r" in result.output
+    assert "\x1b[1mRetriever link:\x1b[0m auto-link to stage-1 output: out/r" in result.output
+    assert "\x1b[1mPer-stage timeout:\x1b[0m 21600s" in result.output
+
+
+def test_every_detail_of_the_plan_has_its_own_line():
+    _configs()
+
+    result = _ra_dit("--plan-only")
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    lines = strip_ansi(result.output).splitlines()
+    labels = (
+        "Stage 1 (retriever):", "Retriever output:", "Stage 2 (generator):",
+        "Generator output:", "Retriever link:", "Per-stage timeout:",
+    )
+    for label in labels:
+        assert [line for line in lines if re.match(r"\W*" + re.escape(label), line)], label
+
+
+def test_the_done_panel_keeps_its_labels_bold_and_has_one_detail_per_line(monkeypatch):
+    _coloured(monkeypatch)
+    _configs()
+    _stub_train(monkeypatch)
+
+    result = _ra_dit()
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "\x1b[1mRetriever output:\x1b[0m out/r" in result.output
+    assert "\x1b[1mGenerator output:\x1b[0m out/g" in result.output
+    assert "\x1b[1mRetriever model used:\x1b[0m out/r (auto-linked)" in result.output
+    lines = strip_ansi(result.output).splitlines()
+    for label in ("Retriever output:", "Generator output:", "Retriever model used:"):
+        assert [line for line in lines if re.match(r"\W*" + label, line)], label
+
+
+def test_errors_start_with_a_red_label(monkeypatch):
+    _coloured(monkeypatch)
+    _configs()
+    refused = _ra_dit(retriever="../missing.yaml")
+    _stub_train(monkeypatch, RuntimeError("stage said no"))
+    failed = _ra_dit()
+
+    assert refused.exit_code == 2
+    assert failed.exit_code == 2
+    assert "\x1b[31mInvalid ra-dit config:\x1b[0m" in refused.output
+    assert "\x1b[31mRA-DIT run failed:\x1b[0m" in failed.output
+
+
+def test_a_plan_only_config_error_starts_with_a_red_label(monkeypatch):
+    _coloured(monkeypatch)
+    _configs("out/same", "out/same")
+
+    result = _ra_dit("--plan-only")
+
+    assert result.exit_code == 2
+    assert "\x1b[31mInvalid ra-dit config:\x1b[0m" in result.output
