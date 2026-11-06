@@ -368,6 +368,10 @@ def harvest_dpo_pairs_since(
     newest: "float | None" = None
     for prompt in sorted(set(last_up) & set(last_down)):
         (chosen, up_ts), (rejected, down_ts) = last_up[prompt], last_down[prompt]
+        if chosen == rejected:
+            # The same rule as harvest_dpo_pairs (#2521): matching latest texts are no
+            # preference, and an older distinct answer is not used as a fallback.
+            continue
         pair = DpoPair(prompt=prompt, chosen=chosen, rejected=rejected)
         pair_ts = max(up_ts, down_ts)
         pairs.append(pair)
