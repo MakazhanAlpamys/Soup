@@ -1087,7 +1087,10 @@ def test_text_rules() -> None:
             assert word not in text, f"{path.name} contains {word!r}"
         import re
 
-        assert not re.search(r"\b(ai|agents?)\b", text), f"{path.name} contains a banned word"
+        # "vast.ai" is the rental site, not the word.
+        assert not re.search(r"\b(ai|agents?)\b", text.replace("vast.ai", "vast")), (
+            f"{path.name} contains a banned word"
+        )
         assert not re.search("[" + chr(0x400) + "-" + chr(0x4FF) + "]", text), (
             f"{path.name} contains Cyrillic"
         )
