@@ -14,12 +14,17 @@ file holds the part of that contract that fits what ``main`` already promises:
 * HF's final runtime-summary ``on_log`` event (``train_runtime``, ``train_loss``
   mean, throughput) writes no tracker row and no SSE event;
 * every metric row has a positive, strictly increasing integer ``id``, the row
-  identity Soup Zero's ``row_id`` / ``after_row_id`` metric API is built on.
+  identity Soup Zero's ``row_id`` / ``after_row_id`` metric API is built on;
+* two nullable, add-only ``kind`` columns say what a stored number is, so a reader
+  need not guess: ``runs.loss_summary_kind`` (``per_step`` / ``mean`` /
+  ``unavailable``) and ``metrics.kind`` (``train`` / ``eval`` / ``summary``). Their
+  value sets live in ``soup_cli.experiment.row_kinds``; old rows stay NULL.
 
-What is NOT here, because ``main`` pins the opposite: an evaluation row carries
-the last measured training loss/lr (``tests/test_issue23_mlx_val_loss_producer.py``),
-and a run-level ``train_loss`` mean is stored as the loss of a run too short to
-log a step (``loss_summary_kind == "mean"``, #908).
+What is NOT changed, because ``main`` pins it: an evaluation row carries the last
+measured training loss/lr (``tests/test_issue23_mlx_val_loss_producer.py``; it is
+now marked ``kind = "eval"``), and a run-level ``train_loss`` mean is stored as the
+loss of a run too short to log a step (#908; ``loss_summary_kind = "mean"`` now says
+so).
 """
 
 from __future__ import annotations
@@ -36,9 +41,10 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.commands.train import _format_training_complete_loss
+from soup_cli.experiment import row_kinds
 from soup_cli.experiment.tracker import ExperimentTracker
 from soup_cli.monitoring.callback import SoupTrainerCallback
-from soup_cli.trainer.loss_summary import stored_run_losses
+from soup_cli.trainer.loss_summary import stored_loss_summary_kind, stored_run_losses
 
 SRC = Path(__file__).resolve().parent.parent / "src" / "soup_cli"
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -225,6 +231,10 @@ def test_finish_run_callers_do_not_index_the_result_for_the_loss(relative):
             )
     source = (SRC / relative).read_text(encoding="utf-8")
     assert "stored_run_losses" in source, f"{relative} must use stored_run_losses"
+    for call in calls:
+        assert "loss_summary_kind" in {keyword.arg for keyword in call.keywords}, (
+            f"{relative}:{call.lineno} must pass loss_summary_kind to finish_run"
+        )
 
 
 def _sweep_config():
@@ -236,14 +246,20 @@ def _sweep_config():
 
 
 @pytest.mark.parametrize(
-    ("trainer_result", "expected"),
+    ("trainer_result", "expected", "kind"),
     [
         ({"initial_loss": 0.0, "final_loss": 0.0, "loss_summary_kind": "unavailable"},
-         (None, None)),
-        ({"initial_loss": 2.0, "final_loss": 0.5, "loss_summary_kind": "delta"}, (2.0, 0.5)),
+         (None, None), "unavailable"),
+        ({"initial_loss": 2.0, "final_loss": 0.5, "loss_summary_kind": "delta"},
+         (2.0, 0.5), "per_step"),
+        ({"initial_loss": 1.5, "final_loss": 1.5, "loss_summary_kind": "single"},
+         (1.5, 1.5), "per_step"),
+        # #908 stays: the mean is still the stored loss; the column says it is a mean.
+        ({"initial_loss": 3.8, "final_loss": 3.8, "loss_summary_kind": "mean"},
+         (3.8, 3.8), "mean"),
     ],
 )
-def test_sweep_persists_the_stored_losses(trainer_result, expected):
+def test_sweep_persists_the_stored_losses(trainer_result, expected, kind):
     from soup_cli.commands.sweep import _run_single
 
     result = {
@@ -272,6 +288,7 @@ def test_sweep_persists_the_stored_losses(trainer_result, expected):
 
     kwargs = mock_tracker.finish_run.call_args.kwargs
     assert (kwargs["initial_loss"], kwargs["final_loss"]) == expected
+    assert kwargs["loss_summary_kind"] == kind
     # The sweep ranks on the returned result: an arm with no loss must not carry the
     # trainer's 0.0 placeholder into the ranking.
     assert (outcome["initial_loss"], outcome["final_loss"]) == expected
@@ -456,3 +473,297 @@ def test_a_learning_rate_only_event_is_still_recorded(session):
     rows = tracker.get_metrics(run_id)
     assert len(rows) == 1
     assert rows[0]["lr"] == 2e-5
+
+
+# ---------------------------------------------------------------------------
+# the two nullable ``kind`` columns: names, validation, storage, migration
+# ---------------------------------------------------------------------------
+
+
+def test_the_kind_value_sets_are_exactly_these_names():
+    """Soup Zero's pin tests compare against these strings; renaming one is a break."""
+    assert row_kinds.LOSS_SUMMARY_KINDS == ("per_step", "mean", "unavailable")
+    assert (row_kinds.LOSS_SUMMARY_PER_STEP, row_kinds.LOSS_SUMMARY_MEAN,
+            row_kinds.LOSS_SUMMARY_UNAVAILABLE) == ("per_step", "mean", "unavailable")
+    assert row_kinds.METRIC_ROW_KINDS == ("train", "eval", "summary")
+    assert (row_kinds.ROW_KIND_TRAIN, row_kinds.ROW_KIND_EVAL,
+            row_kinds.ROW_KIND_SUMMARY) == ("train", "eval", "summary")
+
+
+def test_the_module_docstring_lists_every_value_exactly():
+    doc = row_kinds.__doc__ or ""
+    for value in (*row_kinds.LOSS_SUMMARY_KINDS, *row_kinds.METRIC_ROW_KINDS):
+        assert f"``{value}``" in doc, f"{value} is not listed in row_kinds' docstring"
+    assert "runs.loss_summary_kind" in doc and "metrics.kind" in doc
+
+
+def test_the_docs_list_every_value_exactly():
+    docs = (SRC.parent.parent / "docs" / "backends-and-ops.md").read_text(encoding="utf-8")
+    for value in (*row_kinds.LOSS_SUMMARY_KINDS, *row_kinds.METRIC_ROW_KINDS):
+        assert f"`{value}`" in docs, f"{value} is not documented in docs/backends-and-ops.md"
+    assert "runs.loss_summary_kind" in docs and "metrics.kind" in docs
+
+
+@pytest.mark.parametrize("value", [None, *row_kinds.LOSS_SUMMARY_KINDS])
+def test_check_loss_summary_kind_accepts_the_closed_set_and_none(value):
+    assert row_kinds.check_loss_summary_kind(value) == value
+
+
+@pytest.mark.parametrize("value", ["delta", "single", "PER_STEP", "", " mean", True, 1, ["mean"]])
+def test_check_loss_summary_kind_refuses_everything_else_by_name(value):
+    with pytest.raises(
+        ValueError, match=r"loss_summary_kind must be one of per_step, mean, unavailable"
+    ):
+        row_kinds.check_loss_summary_kind(value)
+
+
+@pytest.mark.parametrize("value", [None, *row_kinds.METRIC_ROW_KINDS])
+def test_check_metric_row_kind_accepts_the_closed_set_and_none(value):
+    assert row_kinds.check_metric_row_kind(value) == value
+
+
+@pytest.mark.parametrize("value", ["val", "training", "EVAL", "", True, 0, ("eval",)])
+def test_check_metric_row_kind_refuses_everything_else_by_name(value):
+    with pytest.raises(ValueError, match=r"kind must be one of train, eval, summary"):
+        row_kinds.check_metric_row_kind(value)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({}, "train"),
+        ({"val_loss": None, "val_reward": None}, "train"),
+        ({"val_loss": 2.5}, "eval"),
+        ({"val_loss": 0.0}, "eval"),   # a measured zero is a measurement
+        ({"val_reward": 15.25}, "eval"),
+        ({"val_loss": 2.5, "val_reward": 1.0}, "eval"),
+    ],
+)
+def test_metric_row_kind_says_eval_when_a_validation_number_is_present(kwargs, expected):
+    assert row_kinds.metric_row_kind(**kwargs) == expected
+
+
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        ({"initial_loss": 2.0, "final_loss": 1.0, "loss_summary_kind": "delta"}, "per_step"),
+        ({"initial_loss": 1.0, "final_loss": 1.0, "loss_summary_kind": "single"}, "per_step"),
+        ({"initial_loss": 3.8, "final_loss": 3.8, "loss_summary_kind": "mean"}, "mean"),
+        ({"initial_loss": 0.0, "final_loss": 0.0, "loss_summary_kind": "unavailable"},
+         "unavailable"),
+        # No kind from the trainer: absent numbers are "unavailable"; present ones are not
+        # claimed to be anything (NULL).
+        ({"initial_loss": None, "final_loss": None}, "unavailable"),
+        ({}, "unavailable"),
+        ({"initial_loss": 2.0, "final_loss": 1.0}, None),
+        ({"initial_loss": 2.0, "final_loss": 1.0, "loss_summary_kind": "bogus"}, None),
+        # A kind that claims numbers the result does not have is not believed.
+        ({"initial_loss": None, "final_loss": None, "loss_summary_kind": "delta"},
+         "unavailable"),
+    ],
+)
+def test_stored_loss_summary_kind_maps_the_trainers_kind_to_the_column(result, expected):
+    assert stored_loss_summary_kind(result) == expected
+
+
+@pytest.mark.parametrize("kind", row_kinds.LOSS_SUMMARY_KINDS)
+def test_finish_run_writes_each_loss_summary_kind(tracker, kind):
+    run_id = _start(tracker)
+    tracker.finish_run(run_id, 2.0, 1.0, 3, 1.0, "./out", loss_summary_kind=kind)
+    assert tracker.get_run(run_id)["loss_summary_kind"] == kind
+
+
+def test_finish_run_without_a_kind_leaves_the_column_null(tracker):
+    run_id = _start(tracker)
+    tracker.finish_run(run_id, 2.0, 1.0, 3, 1.0, "./out")
+    run = tracker.get_run(run_id)
+    assert "loss_summary_kind" in run and run["loss_summary_kind"] is None
+
+
+def test_finish_run_refuses_an_unknown_kind_and_leaves_the_run_unfinished(tracker):
+    run_id = _start(tracker)
+    with pytest.raises(ValueError, match="loss_summary_kind must be one of"):
+        tracker.finish_run(run_id, 2.0, 1.0, 3, 1.0, "./out", loss_summary_kind="delta")
+    assert tracker.get_run(run_id)["status"] != "completed"
+
+
+@pytest.mark.parametrize("kind", row_kinds.METRIC_ROW_KINDS)
+def test_log_metrics_writes_each_row_kind_and_get_metrics_returns_it(tracker, kind):
+    run_id = _start(tracker)
+    tracker.log_metrics(run_id, step=4, loss=1.0, lr=1e-4, kind=kind)
+    rows = tracker.get_metrics(run_id)
+    assert [row["kind"] for row in rows] == [kind]
+
+
+def test_log_metrics_without_a_kind_is_null_and_unknown_is_refused(tracker):
+    run_id = _start(tracker)
+    tracker.log_metrics(run_id, step=1, loss=1.0)
+    assert tracker.get_metrics(run_id)[0]["kind"] is None
+    with pytest.raises(ValueError, match="kind must be one of train, eval, summary"):
+        tracker.log_metrics(run_id, step=2, loss=1.0, kind="val")
+    assert len(tracker.get_metrics(run_id)) == 1   # the refused row was not written
+
+
+def _legacy_db(path: Path) -> None:
+    """A database from before both columns: the LIVE schema with them stripped."""
+    import sqlite3
+
+    from soup_cli.experiment import tracker as tracker_module
+
+    live = re.search(
+        r'_SCHEMA_SQL = """(.*?)"""',
+        Path(tracker_module.__file__).read_text(encoding="utf-8"), re.S,
+    ).group(1)
+    legacy = live.replace("    loss_summary_kind TEXT,\n", "").replace("    kind      TEXT,\n", "")
+    assert "loss_summary_kind" not in legacy and "    kind      TEXT" not in legacy, (
+        "the fixture must genuinely predate both columns"
+    )
+    conn = sqlite3.connect(str(path))
+    conn.executescript(legacy)
+    conn.execute(
+        "INSERT INTO runs (run_id, created_at, status, config_json, initial_loss, final_loss,"
+        " total_steps) VALUES ('old-run', '2026-01-01T00:00:00', 'completed', '{}', 3.0, 1.0, 3)"
+    )
+    for step in (1, 2, 3):
+        conn.execute(
+            "INSERT INTO metrics (run_id, step, epoch, loss, lr, timestamp)"
+            " VALUES ('old-run', ?, ?, ?, 1e-4, '2026-01-01T00:00:00')",
+            (step, step / 3, 4.0 - step),
+        )
+    conn.commit()
+    conn.close()
+
+
+def _columns(path: Path, table: str) -> set[str]:
+    import sqlite3
+
+    conn = sqlite3.connect(str(path))
+    try:
+        return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    finally:
+        conn.close()
+
+
+def test_an_existing_database_gains_both_columns_and_old_rows_read_null(tmp_path):
+    db = tmp_path / "legacy.db"
+    _legacy_db(db)
+    assert "kind" not in _columns(db, "metrics")
+    assert "loss_summary_kind" not in _columns(db, "runs")
+
+    old = ExperimentTracker(db_path=db)
+    try:
+        assert "kind" in _columns(db, "metrics")
+        assert "loss_summary_kind" in _columns(db, "runs")
+        # nothing is backfilled: NULL says "written before the column existed"
+        run = old.get_run("old-run")
+        assert run["loss_summary_kind"] is None
+        assert (run["initial_loss"], run["final_loss"]) == (3.0, 1.0)
+        rows = old.get_metrics("old-run")
+        assert len(rows) == 3 and all("kind" in row for row in rows)
+        assert [row["kind"] for row in rows] == [None, None, None]
+        assert [row["loss"] for row in rows] == [3.0, 2.0, 1.0]   # existing data survives
+        # new rows on the migrated file carry kinds; the second open is a no-op
+        old.log_metrics("old-run", step=4, loss=0.5, lr=1e-4, kind="train")
+        old.finish_run("old-run", 3.0, 0.5, 4, 1.0, "./out", loss_summary_kind="per_step")
+    finally:
+        old.close()
+    again = ExperimentTracker(db_path=db)
+    try:
+        again.init_db()
+        ordered = sorted(again.get_metrics("old-run"), key=lambda row: row["id"])
+        assert [row["kind"] for row in ordered] == [None, None, None, "train"]
+        assert again.get_run("old-run")["loss_summary_kind"] == "per_step"
+    finally:
+        again.close()
+
+
+def test_a_fresh_database_has_both_columns(tmp_path):
+    fresh = tmp_path / "fresh.db"
+    ExperimentTracker(db_path=fresh).close()
+    assert "kind" in _columns(fresh, "metrics")
+    assert "loss_summary_kind" in _columns(fresh, "runs")
+
+
+# ---------------------------------------------------------------------------
+# who writes which kind
+# ---------------------------------------------------------------------------
+
+
+def test_the_callback_marks_training_rows_train_and_evaluation_rows_eval(session):
+    callback, tracker, run_id, _ = session
+    _event(callback, 10, loss=3.0, learning_rate=1e-4)
+    _event(callback, 10, eval_loss=2.5)
+    _event(callback, 11, learning_rate=2e-5)
+    rows = sorted(tracker.get_metrics(run_id), key=lambda row: row["id"])
+    assert [row["kind"] for row in rows] == ["train", "eval", "train"]
+    # #23 is untouched: the eval row still carries the last measured training values.
+    assert (rows[1]["val_loss"], rows[1]["loss"], rows[1]["lr"]) == (2.5, 3.0, 1e-4)
+
+
+def test_the_callback_writes_no_summary_row_so_summary_is_never_written_by_it(session):
+    callback, tracker, run_id, _ = session
+    _event(callback, 10, loss=3.0, learning_rate=1e-4)
+    _event(callback, 10, train_runtime=3.38, train_loss=3.828)
+    assert [row["kind"] for row in tracker.get_metrics(run_id)] == ["train"]
+
+
+def test_the_live_event_carries_the_row_kind(session):
+    from soup_cli.utils.sse_train_stream import to_payload
+    from soup_cli.utils.train_event_buffer import get_global_buffer
+
+    callback, _, _, _ = session
+    _event(callback, 10, loss=3.0, learning_rate=1e-4)
+    _event(callback, 10, eval_loss=2.5)
+    events = get_global_buffer().snapshot()
+    assert [event.kind for event in events] == ["train", "eval"]
+    assert to_payload(events[1])["kind"] == "eval"
+
+
+def test_a_train_event_without_a_kind_omits_it_and_a_bad_kind_is_refused():
+    from soup_cli.utils.sse_train_stream import TrainEvent, to_payload
+
+    assert "kind" not in to_payload(TrainEvent(type="metric", step=1, loss=1.0))
+    assert to_payload(TrainEvent(type="metric", step=1, kind="summary"))["kind"] == "summary"
+    with pytest.raises(ValueError, match="kind must be one of train, eval, summary"):
+        TrainEvent(type="metric", step=1, kind="val")
+
+
+def test_every_in_repo_metric_row_writer_states_its_kind():
+    """A new ``log_metrics`` caller must say what its row is; NULL is for rows that
+    predate the column, not for code written after it."""
+    offenders = []
+    for path in sorted(SRC.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "log_metrics"
+                and "kind" not in {keyword.arg for keyword in node.keywords}
+            ):
+                offenders.append(f"{path.relative_to(SRC)}:{node.lineno}")
+    assert not offenders, f"log_metrics called without kind=: {offenders}"
+
+
+def test_the_http_metric_api_returns_the_row_kind_and_the_run_returns_its_summary_kind(
+    tmp_path, monkeypatch,
+):
+    pytest.importorskip("fastapi")
+    from soup_cli.ui.app import create_app, get_auth_token
+    from tests.ui_helpers import ui_client
+
+    db = tmp_path / "http.db"
+    monkeypatch.setenv("SOUP_DB_PATH", str(db))
+    store = ExperimentTracker(db_path=db)
+    run_id = _start(store, "run_http_kind")
+    store.log_metrics(run_id, step=1, loss=2.0, lr=1e-4, kind="train")
+    store.log_metrics(run_id, step=1, loss=2.0, lr=1e-4, val_loss=1.5, kind="eval")
+    store.finish_run(run_id, 2.0, 2.0, 1, 1.0, "./out", loss_summary_kind="per_step")
+    store.close()
+
+    client = ui_client(create_app())
+    headers = {"Authorization": f"Bearer {get_auth_token()}"}
+    metrics = client.get(f"/api/runs/{run_id}/metrics", headers=headers).json()["metrics"]
+    assert sorted(row["kind"] for row in metrics) == ["eval", "train"]
+    assert all(isinstance(row["id"], int) and row["id"] > 0 for row in metrics)
+    run = client.get(f"/api/runs/{run_id}", headers=headers).json()
+    assert run["loss_summary_kind"] == "per_step"

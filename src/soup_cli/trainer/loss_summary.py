@@ -6,6 +6,20 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from soup_cli.experiment.row_kinds import (
+    LOSS_SUMMARY_MEAN,
+    LOSS_SUMMARY_PER_STEP,
+    LOSS_SUMMARY_UNAVAILABLE,
+)
+
+#: The trainers' own ``loss_summary_kind`` -> the value ``runs.loss_summary_kind`` stores.
+_STORED_KIND = {
+    "delta": LOSS_SUMMARY_PER_STEP,
+    "single": LOSS_SUMMARY_PER_STEP,
+    "mean": LOSS_SUMMARY_MEAN,
+    "unavailable": LOSS_SUMMARY_UNAVAILABLE,
+}
+
 
 def _numeric_loss(value: object) -> float | None:
     if isinstance(value, bool):
@@ -131,3 +145,19 @@ def stored_run_losses(result: Mapping[str, Any]) -> tuple[float | None, float | 
     if result.get("loss_summary_kind") == "unavailable":
         return None, None
     return _stored_number(result.get("initial_loss")), _stored_number(result.get("final_loss"))
+
+
+def stored_loss_summary_kind(result: Mapping[str, Any]) -> str | None:
+    """The ``runs.loss_summary_kind`` value for a finished run: what its two losses are.
+
+    The trainers' ``delta`` and ``single`` kinds are both ``per_step`` (measured
+    per-step losses); ``mean`` and ``unavailable`` keep their names. A result with no
+    numeric loss at all is ``unavailable`` whatever its kind claims. A result whose
+    trainer named no (or an unknown) kind but does carry numbers is not guessed at:
+    None, the value of a run finished before the column existed.
+    """
+    stored_initial, stored_final = stored_run_losses(result)
+    if stored_initial is None and stored_final is None:
+        return LOSS_SUMMARY_UNAVAILABLE
+    kind = result.get("loss_summary_kind")
+    return _STORED_KIND.get(kind) if isinstance(kind, str) else None

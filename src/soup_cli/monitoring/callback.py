@@ -10,6 +10,7 @@ from rich.console import Console
 if TYPE_CHECKING:
     from transformers import TrainerControl, TrainerState, TrainingArguments
 
+from soup_cli.experiment.row_kinds import metric_row_kind
 from soup_cli.monitoring.display import TrainingDisplay
 
 logger = logging.getLogger(__name__)
@@ -364,6 +365,9 @@ class _SoupTrainerCallback_body:  # noqa: N801
             logs.get(key) is not None
             for key in ("loss", "learning_rate", "grad_norm", val_key)
         )
+        # What the row is (experiment/row_kinds.py): an event carrying the validation
+        # number is an evaluation, any other measured one a training log.
+        row_kind = metric_row_kind(**{val_field: measured_val_loss})
 
         self.display.update(
             step=step,
@@ -398,6 +402,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
                             if measured_grad_norm is not None
                             else None
                         ),
+                        kind=row_kind,
                         **{
                             val_field: (
                                 float(measured_val_loss)
@@ -488,6 +493,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
                 grad_norm=measured_grad_norm,
                 speed=speed,
                 gpu_mem=gpu_mem,
+                kind=row_kind,
                 **{val_field: measured_val_loss},
             )
 

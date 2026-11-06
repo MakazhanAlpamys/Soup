@@ -43,6 +43,7 @@ from typing import Any, Callable, Iterator, Optional
 
 from rich.console import Console
 
+from soup_cli.experiment.row_kinds import ROW_KIND_EVAL
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.trainer.mlx_dpo import (
     DEFAULT_LOGIT_CHUNK,
@@ -217,7 +218,7 @@ def log_val_reward(tracker: Any, run_id: Optional[str], *, step: int, epoch: flo
         return
     try:
         tracker.log_metrics(run_id=run_id, step=step, epoch=epoch, loss=None, lr=lr,
-                            val_reward=float(val_reward))
+                            val_reward=float(val_reward), kind=ROW_KIND_EVAL)
     except Exception:  # noqa: BLE001 — telemetry must not kill a run
         pass
 

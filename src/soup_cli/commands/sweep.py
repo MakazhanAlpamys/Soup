@@ -14,7 +14,7 @@ from rich.table import Table
 from rich.text import Text
 
 from soup_cli.config.loader import load_config
-from soup_cli.trainer.loss_summary import stored_run_losses
+from soup_cli.trainer.loss_summary import stored_loss_summary_kind, stored_run_losses
 from soup_cli.utils.sweep_config import load_sweep_yaml
 from soup_cli.utils.terminal import for_terminal, strip_control
 
@@ -601,6 +601,7 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
             total_steps=result["total_steps"],
             duration_secs=result["duration_secs"],
             output_dir=result["output_dir"],
+            loss_summary_kind=stored_loss_summary_kind(result),
         )
         # The sweep ranks on what the run stored: an arm that observed no loss has
         # none, and cannot win with the trainer's 0.0 placeholder.

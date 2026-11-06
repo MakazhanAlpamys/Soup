@@ -25,7 +25,7 @@ from soup_cli.data.loader import (
 )
 from soup_cli.monitoring.display import TrainingDisplay
 from soup_cli.trainer.classifier import CLASSIFICATION_TASKS
-from soup_cli.trainer.loss_summary import stored_run_losses
+from soup_cli.trainer.loss_summary import stored_loss_summary_kind, stored_run_losses
 from soup_cli.utils.gpu import (
     configure_cuda_alloc_hint,
     configure_mps_async_load,
@@ -2192,6 +2192,7 @@ def train(
             total_steps=result["total_steps"],
             duration_secs=result["duration_secs"],
             output_dir=result["output_dir"],
+            loss_summary_kind=stored_loss_summary_kind(result),
         )
 
         _run_auto_eval_after_training(

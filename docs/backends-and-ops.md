@@ -1454,8 +1454,8 @@ A run that observed no loss stores NULL, not `0.0`, in `runs.initial_loss` /
 `soup sweep` persist `None` through `ExperimentTracker.finish_run`, which takes
 `Optional[float]` for both. A measured `0.0` stays `0.0`, a diverged (`inf`) tail is
 kept, and a run-level `train_loss` mean on a run too short to log a step is stored as
-before (`loss_summary_kind: mean`). `soup runs` leaves the Loss cell empty for NULL and
-shows a measured zero; the completion panel prints `Loss: unavailable`; a `soup sweep` arm
+before (the trainer's `loss_summary_kind: mean`, stored as `runs.loss_summary_kind = mean`
+below). `soup runs` leaves the Loss cell empty for NULL and shows a measured zero; the completion panel prints `Loss: unavailable`; a `soup sweep` arm
 with no loss cannot be the best run.
 
 Per-step metric rows follow the same rule. `ExperimentTracker.log_metrics` leaves an
@@ -1467,6 +1467,28 @@ returns it, and `GET /api/runs/{run_id}/metrics` passes it through): ids grow wi
 row written, so a later measurement at the same or a lower step is a new row with a larger
 `id`, and a client can poll with "rows after id N" instead of "steps after step N" (rows
 come back ordered by step; sort by `id` for arrival order).
+
+Two nullable columns say what a stored number is, so a reader need not guess. Both are
+added in place to an existing `~/.soup/experiments.db` and are NULL on every row written
+before they existed; nothing is backfilled. Their values are module constants in
+`soup_cli.experiment.row_kinds` and are exactly these:
+
+- `runs.loss_summary_kind` is what `initial_loss` / `final_loss` are. `per_step`: the first
+  and last measured per-step loss (or the one logged step). `mean`: a run too short to log a
+  step, whose two columns hold the run-level `train_loss` mean, not a per-step loss.
+  `unavailable`: the run observed no loss and both columns are NULL. `soup train` and
+  `soup sweep` write it through `ExperimentTracker.finish_run(..., loss_summary_kind=...)`
+  from the trainer's summary (`delta` and `single` are `per_step`).
+- `metrics.kind` is what a metrics row is, and the live `metric` event beside it carries the
+  same `kind`. `train`: a training log, whose loss / lr / grad norm that log measured.
+  `eval`: an evaluation, carrying a `val_loss` or `val_reward`; its `loss` / `lr` are the
+  last measured training values carried into the row, not a measurement of the evaluation.
+  `summary`: a run-level summary row; the engine's own callback writes none for HF's final
+  runtime event, so the value is reserved for callers that choose to write one. Every
+  in-repo writer (the HF callback and the MLX and PPO loops) states its kind through
+  `ExperimentTracker.log_metrics(..., kind=...)`; `get_metrics`, `GET /api/runs/{run_id}`
+  and `GET /api/runs/{run_id}/metrics` return the columns, and an unknown value raises
+  `ValueError` before anything is written.
 
 As of v0.71.5, the metric-series lookup that powers replay (`ExperimentTracker.get_metric_series`)
 transparently falls back to the `eval_results` table when a metric has no per-step
