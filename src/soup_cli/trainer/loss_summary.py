@@ -97,3 +97,37 @@ def summarize_training_loss(
         "final_loss": 0.0,
         "loss_summary_kind": "unavailable",
     }
+
+
+def _stored_number(value: object) -> float | None:
+    """A number as a float; None for anything else (bool, str and bytes included).
+
+    Unlike :func:`_numeric_loss` this does not parse text: a ``"0"`` in a result dict
+    is not a measurement. Anything else that converts with ``float()`` (a numpy or
+    torch scalar a trainer left in its result) still counts, as it did when the
+    panel formatted the value directly.
+    """
+    if isinstance(value, (bool, str, bytes)):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def stored_run_losses(result: Mapping[str, Any]) -> tuple[float | None, float | None]:
+    """The ``(initial_loss, final_loss)`` pair the ``runs`` row keeps for a finished run.
+
+    :func:`summarize_training_loss` reports ``0.0`` / ``0.0`` with
+    ``loss_summary_kind == "unavailable"`` for a run that observed no loss. That
+    placeholder keeps the trainers' numeric result fields stable, but a database
+    row of ``0.0`` -> ``0.0`` reads as a run that reached a perfect loss, so the
+    row stores NULL instead. A genuine measured zero (any other kind, or no kind)
+    stays ``0.0``; a non-finite tail stays as it was measured; a ``"mean"`` or
+    ``"single"`` summary keeps its number as before (#908). A result that has no
+    numeric loss at all (a missing key, ``None``, a bool or a string) gives
+    ``None`` for that end instead of raising ``KeyError`` after the adapter is saved.
+    """
+    if result.get("loss_summary_kind") == "unavailable":
+        return None, None
+    return _stored_number(result.get("initial_loss")), _stored_number(result.get("final_loss"))

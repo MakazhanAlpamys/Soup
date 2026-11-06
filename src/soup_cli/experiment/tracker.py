@@ -381,8 +381,8 @@ class ExperimentTracker:
         run_id: str,
         step: int,
         epoch: float = 0.0,
-        loss: Optional[float] = 0.0,
-        lr: float = 0.0,
+        loss: Optional[float] = None,
+        lr: Optional[float] = None,
         grad_norm: Optional[float] = None,
         speed: float = 0.0,
         gpu_mem: str = "",
@@ -391,11 +391,13 @@ class ExperimentTracker:
     ) -> None:
         """Log a single metrics row for the given run.
 
-        ``val_loss``, ``val_reward`` and ``grad_norm`` default to ``None`` rather
-        than ``0.0``: an omitted measurement must not look like a genuinely
-        measured zero. ``loss`` is None for a training log that carried no loss
-        (#1225). ``val_reward`` is grpo's held-out reward (#1389); every other
-        task leaves it NULL.
+        ``loss``, ``lr``, ``val_loss``, ``val_reward`` and ``grad_norm`` default to
+        ``None`` rather than ``0.0``: an omitted measurement must not look like a
+        genuinely measured zero. ``loss`` is None for a training log that carried no
+        loss (#1225). ``val_reward`` is grpo's held-out reward (#1389); every other
+        task leaves it NULL. Each row gets its own ``id`` (``AUTOINCREMENT``), the
+        row identity ``get_metrics`` returns: a later measurement at the same or a
+        lower step is a new row with a larger id, never an overwrite.
         """
         now = datetime.now().isoformat()
         conn = self._get_conn()
@@ -412,13 +414,17 @@ class ExperimentTracker:
     def finish_run(
         self,
         run_id: str,
-        initial_loss: float,
-        final_loss: float,
+        initial_loss: Optional[float],
+        final_loss: Optional[float],
         total_steps: int,
         duration_secs: float,
         output_dir: str,
     ) -> None:
         """Mark run as completed and fill summary fields.
+
+        ``initial_loss`` / ``final_loss`` are ``None`` for a run that observed no
+        loss; the columns are NULL then, not 0.0, so a reader can tell "no
+        measurement" from a measured zero (see ``trainer.loss_summary.stored_run_losses``).
 
         Also computes an informational per-run cost estimate based on the
         device_name captured at start_run() and the elapsed duration.
