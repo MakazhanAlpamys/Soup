@@ -11,8 +11,8 @@ Harness: benchmarks/harness/stream_infer_throughput.py (re-runnable).
 Rule: benchmarks/protocol-2509-stream-inference-throughput.md, written and committed before
 the first timed run and not edited after it.
 Raw output: benchmarks/results/2509-stream-infer-throughput-m7.json and
-benchmarks/results/2509-stream-infer-throughput-q14.json, copied unchanged except for the
-final newline that the repository's end-of-file hook adds.
+benchmarks/results/2509-stream-infer-throughput-q14.json, the same JSON as the harness wrote
+it, with LF line ends and a final newline (see Files).
 -->
 
 # Gate record: forward-only throughput of the streamed inference mode (#2509)
@@ -72,7 +72,7 @@ python benchmarks/harness/stream_infer_throughput.py \
 ```
 
 `--out` pointed at a scratch folder outside the repository; the two JSON files were copied
-into `benchmarks/results/` unchanged except for a final newline added by the end-of-file hook. Settings the JSON records besides the flags: `pin`
+into `benchmarks/results/`; only the line ends and a final newline differ (see Files). Settings the JSON records besides the flags: `pin`
 auto, `read_ahead` and `dtype` at their defaults (null), vocabulary size 32768 (M7) and
 152064 (Q14). Both shard indexes report quant nf4 and dtype bfloat16: 32 layers and
 7,248,023,552 parameters (M7), 48 layers and 14,770,033,664 parameters (Q14).
@@ -257,9 +257,9 @@ VRAM.
 
 ## Files
 
-| file | bytes | sha256 |
-|---|---|---|
-| `benchmarks/results/2509-stream-infer-throughput-m7.json` | 5429 | `6c0072ac469469d0149bdc709e6051b20d614e6cbc1fef67d57c2e07a12c04db` |
-| `benchmarks/results/2509-stream-infer-throughput-q14.json` | 5399 | `37a38de5536b26f1c4f3aa883daab2f317f44e2b6c6558af89afee14a0f05a07` |
+| file | committed bytes | committed sha256 | harness output bytes | harness output sha256 |
+|---|---|---|---|---|
+| `benchmarks/results/2509-stream-infer-throughput-m7.json` | 5227 | `15681169bf8af33ae66b6bbe05a7b71a97c925015b65a709a550edfdb3622c74` | 5429 | `6c0072ac469469d0149bdc709e6051b20d614e6cbc1fef67d57c2e07a12c04db` |
+| `benchmarks/results/2509-stream-infer-throughput-q14.json` | 5197 | `cb9904ae6e2d45bb64dc269f587d2a22198f9f6421251f629a01dd570b0f1227` | 5399 | `37a38de5536b26f1c4f3aa883daab2f317f44e2b6c6558af89afee14a0f05a07` |
 
-Both are byte-for-byte copies of the harness output (CRLF line ends, no final newline).
+The harness wrote CRLF line ends and no final newline. The committed files hold the same JSON with LF line ends and a final newline (the repository's line-end normalisation and end-of-file hook); converting them back to CRLF and dropping the final newline reproduces the harness output hashes.
