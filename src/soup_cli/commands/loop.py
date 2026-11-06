@@ -53,6 +53,9 @@ from soup_cli.utils.loop_detach import (
     open_log,
     pid_file_path,
     remove_pid_file_if_own,
+    rotate_log_if_needed,
+    rotate_open_log,
+    rotated_log_path,
     write_pid_file,
 )
 from soup_cli.utils.loop_iteration import list_iterations, read_iteration
@@ -441,8 +444,8 @@ def watch_cmd(
         "--detach",
         help=(
             "Spawn a background subprocess running --foreground. Its pid goes to "
-            ".soup/loop.pid and its output to .soup/loop.log (appended); refused while "
-            "that pid is alive."
+            ".soup/loop.pid and its output to .soup/loop.log (appended; rotated at 10 MB, "
+            "one old file kept as .soup/loop.log.1); refused while that pid is alive."
         ),
     ),
     max_iterations: Optional[int] = typer.Option(
@@ -476,7 +479,8 @@ def watch_cmd(
     if detach and foreground:
         console.print("[red]--detach and --foreground are mutually exclusive[/]")
         raise typer.Exit(code=2)
-    if os.environ.get(DETACHED_ENV) == "1" and not detach:
+    detached_child = os.environ.get(DETACHED_ENV) == "1" and not detach
+    if detached_child:
         # The child of `--detach`: remove the PID file on the way out (any exit path),
         # but only if it still names this process. A plain foreground watch never gets
         # here, so it never touches the file.
@@ -584,6 +588,14 @@ def watch_cmd(
             )
         log_path = log_file_path()
         try:
+            # A log that reached the limit moves to loop.log.1 first, so the child starts
+            # on a fresh one; the running child rotates it from then on (rotate_open_log).
+            if rotate_log_if_needed(log_path):
+                console.print(
+                    f"[yellow]notice:[/] log rotated: {for_terminal(display_path(log_path))} "
+                    f"reached its size limit, moved to "
+                    f"{for_terminal(display_path(rotated_log_path(log_path)))}"
+                )
             log_handle = open_log(log_path)
         except (ValueError, OSError) as exc:
             console.print(f"[red]cannot detach:[/] {for_terminal(exc)}")
@@ -643,6 +655,10 @@ def watch_cmd(
     except (TypeError, ValueError) as exc:
         console.print(f"[red]invalid watch config:[/] {escape(str(exc))}")
         raise typer.Exit(code=2)
+    if detached_child:
+        # Only the --detach child writes to .soup/loop.log; a foreground watch may be
+        # writing to a terminal and rotates nothing.
+        cfg = replace(cfg, on_cycle=rotate_open_log)
     final_state, ran = watch(cfg)
     console.print(
         f"[green]watch exited[/] iterations={ran} status={escape(final_state.status)}"

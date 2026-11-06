@@ -531,3 +531,528 @@ def test_a_parent_with_the_marker_set_does_not_register_the_cleanup(
     result, _ = _detach()
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert _cleanup_calls(registered) == []
+
+
+# ---------------------------------------------------------------------------
+# The log is rotated at 10 MB; one old file is kept as loop.log.1
+# ---------------------------------------------------------------------------
+
+#: A small limit for the tests that pass ``max_bytes``.
+SMALL = 100
+
+
+def _log_path(root: Path) -> Path:
+    return root / ".soup" / "loop.log"
+
+
+def _old_log_path(root: Path) -> Path:
+    return root / ".soup" / "loop.log.1"
+
+
+def _filled(path: Path, size: int) -> None:
+    """A file of exactly ``size`` bytes (zeros), without writing them one by one."""
+    path.parent.mkdir(exist_ok=True)
+    with open(path, "wb") as handle:
+        handle.truncate(size)
+
+
+def test_the_limit_is_ten_megabytes_and_the_old_file_is_the_log_plus_dot_one():
+    assert loop_detach.MAX_LOG_BYTES == 10 * 1024 * 1024
+    assert loop_detach.rotated_log_path("x/loop.log") == "x/loop.log.1"
+    assert loop_detach.rotated_log_path() == loop_detach.log_file_path() + ".1"
+
+
+@pytest.mark.parametrize("bad", [0, -1, 1.5, True, "10"])
+def test_a_nonsense_limit_is_refused(initialised, bad):
+    with pytest.raises(ValueError, match="max_bytes must be a positive int"):
+        loop_detach.rotate_log_if_needed(max_bytes=bad)
+    with pytest.raises(ValueError, match="max_bytes must be a positive int"):
+        loop_detach.rotate_open_log(max_bytes=bad, fds=())
+
+
+# -- the parent, at detach time ------------------------------------------------
+
+
+@pytest.mark.parametrize("size", [SMALL, SMALL + 1], ids=["at-the-limit", "above-the-limit"])
+def test_a_log_at_or_above_the_limit_moves_to_the_old_file(initialised, size):
+    log = _log_path(initialised)
+    log.write_bytes(b"a" * size)
+
+    assert loop_detach.rotate_log_if_needed(max_bytes=SMALL) is True
+
+    assert not log.exists(), "the parent opens a fresh log afterwards"
+    assert _old_log_path(initialised).read_bytes() == b"a" * size
+
+
+def test_a_log_below_the_limit_is_left_alone(initialised):
+    log = _log_path(initialised)
+    log.write_bytes(b"a" * (SMALL - 1))
+
+    assert loop_detach.rotate_log_if_needed(max_bytes=SMALL) is False
+
+    assert log.read_bytes() == b"a" * (SMALL - 1)
+    assert not _old_log_path(initialised).exists()
+
+
+def test_a_missing_log_is_not_rotated_or_created(initialised):
+    assert loop_detach.rotate_log_if_needed(max_bytes=SMALL) is False
+    assert not _log_path(initialised).exists()
+    assert not _old_log_path(initialised).exists()
+
+
+def test_rotation_replaces_the_previous_old_file(initialised):
+    _old_log_path(initialised).write_bytes(b"older")
+    _log_path(initialised).write_bytes(b"n" * SMALL)
+
+    assert loop_detach.rotate_log_if_needed(max_bytes=SMALL) is True
+
+    assert _old_log_path(initialised).read_bytes() == b"n" * SMALL
+    left = sorted(entry.name for entry in (initialised / ".soup").iterdir())
+    assert left == ["loop.log.1", "loop.yaml"], "one old file is kept, not a series"
+
+
+@pytest.mark.requires_symlink
+def test_a_symlinked_old_file_is_refused(initialised):
+    elsewhere = initialised / "elsewhere.log"
+    elsewhere.write_text("keep me\n", encoding="utf-8")
+    _log_path(initialised).write_bytes(b"n" * SMALL)
+    _old_log_path(initialised).symlink_to(elsewhere)
+
+    with pytest.raises(ValueError, match="rotated log file must not be a symlink"):
+        loop_detach.rotate_log_if_needed(max_bytes=SMALL)
+
+    assert elsewhere.read_text("utf-8") == "keep me\n"
+    assert _log_path(initialised).read_bytes() == b"n" * SMALL
+
+
+def test_a_hard_linked_old_file_is_refused(initialised):
+    elsewhere = initialised / "elsewhere.log"
+    elsewhere.write_text("keep me\n", encoding="utf-8")
+    try:
+        os.link(elsewhere, _old_log_path(initialised))
+    except OSError:
+        pytest.skip("this filesystem cannot create hard links")
+    _log_path(initialised).write_bytes(b"n" * SMALL)
+
+    with pytest.raises(ValueError, match="rotated log file must not be a hard link"):
+        loop_detach.rotate_log_if_needed(max_bytes=SMALL)
+
+    assert elsewhere.read_text("utf-8") == "keep me\n"
+    assert _log_path(initialised).read_bytes() == b"n" * SMALL
+
+
+def test_a_directory_in_place_of_the_old_file_is_refused(initialised):
+    _old_log_path(initialised).mkdir()
+    _log_path(initialised).write_bytes(b"n" * SMALL)
+
+    with pytest.raises(ValueError, match="rotated log file must be a regular file"):
+        loop_detach.rotate_log_if_needed(max_bytes=SMALL)
+
+    assert _log_path(initialised).read_bytes() == b"n" * SMALL
+
+
+@pytest.mark.requires_symlink
+def test_a_symlinked_log_is_not_rotated(initialised):
+    elsewhere = initialised / "elsewhere.log"
+    elsewhere.write_bytes(b"n" * SMALL)
+    _log_path(initialised).symlink_to(elsewhere)
+
+    with pytest.raises(ValueError, match="log file must not be a symlink"):
+        loop_detach.rotate_log_if_needed(max_bytes=SMALL)
+
+    assert elsewhere.read_bytes() == b"n" * SMALL
+    assert not _old_log_path(initialised).exists()
+
+
+def test_a_hard_linked_log_is_not_rotated(initialised):
+    elsewhere = initialised / "elsewhere.log"
+    elsewhere.write_bytes(b"n" * SMALL)
+    try:
+        os.link(elsewhere, _log_path(initialised))
+    except OSError:
+        pytest.skip("this filesystem cannot create hard links")
+
+    with pytest.raises(ValueError, match="log file must not be a hard link"):
+        loop_detach.rotate_log_if_needed(max_bytes=SMALL)
+
+    assert elsewhere.read_bytes() == b"n" * SMALL
+    assert not _old_log_path(initialised).exists()
+
+
+def test_detach_rotates_a_log_that_reached_the_limit_before_it_spawns(initialised):
+    log = _log_path(initialised)
+    _filled(log, loop_detach.MAX_LOG_BYTES)
+    seen = {}
+
+    def fake_popen(argv, **kwargs):
+        seen["size_at_spawn"] = log.stat().st_size
+        handle = kwargs["stdout"]
+        handle.write(b"child output\n")
+        handle.flush()
+        return types.SimpleNamespace(pid=123)
+
+    result, _ = _detach(side_effect=fake_popen)
+    out = _clean(result.output)
+
+    assert result.exit_code == 0, (out, repr(result.exception))
+    assert seen["size_at_spawn"] == 0, "the child is handed a fresh log"
+    assert log.read_bytes() == b"child output\n"
+    assert _old_log_path(initialised).stat().st_size == loop_detach.MAX_LOG_BYTES
+    assert "log rotated" in out and ".soup/loop.log.1" in out
+
+
+def test_detach_keeps_appending_to_a_log_one_byte_below_the_limit(initialised):
+    log = _log_path(initialised)
+    _filled(log, loop_detach.MAX_LOG_BYTES - 1)
+
+    result, _ = _detach()
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert log.stat().st_size == loop_detach.MAX_LOG_BYTES - 1
+    assert not _old_log_path(initialised).exists()
+    assert "log rotated" not in _clean(result.output)
+
+
+@pytest.mark.requires_symlink
+def test_detach_is_refused_when_the_old_log_is_a_symlink(initialised):
+    elsewhere = initialised / "elsewhere.log"
+    elsewhere.write_text("keep me\n", encoding="utf-8")
+    log = _log_path(initialised)
+    _filled(log, loop_detach.MAX_LOG_BYTES)
+    _old_log_path(initialised).symlink_to(elsewhere)
+
+    result, popen = _detach()
+    out = _clean(result.output)
+
+    assert result.exit_code == 2, (out, repr(result.exception))
+    assert "cannot detach" in out and "rotated log file must not be a symlink" in out
+    popen.assert_not_called()
+    assert elsewhere.read_text("utf-8") == "keep me\n"
+    assert log.stat().st_size == loop_detach.MAX_LOG_BYTES
+    assert not (initialised / ".soup" / "loop.pid").exists()
+
+
+def test_a_refused_detach_does_not_rotate_the_live_daemons_log(initialised, liveness):
+    _write_pid_file(initialised, json.dumps({"pid": OTHER_PID}))
+    liveness.live.add(OTHER_PID)
+    log = _log_path(initialised)
+    _filled(log, loop_detach.MAX_LOG_BYTES)
+
+    result, popen = _detach()
+
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    popen.assert_not_called()
+    assert log.stat().st_size == loop_detach.MAX_LOG_BYTES
+    assert not _old_log_path(initialised).exists()
+
+
+# -- the running child, at each watch cycle -----------------------------------
+
+
+@pytest.fixture()
+def child_fds(initialised):
+    """Two duplicated descriptors on the real log: NOT this process's own 1 and 2."""
+    handle = loop_detach.open_log()
+    fds = (os.dup(handle.fileno()), os.dup(handle.fileno()))
+    handle.close()
+    try:
+        yield fds
+    finally:
+        for fd in fds:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def test_the_child_rotates_by_default_the_descriptors_one_and_two():
+    import inspect
+
+    assert inspect.signature(loop_detach.rotate_open_log).parameters["fds"].default == (1, 2)
+
+
+@pytest.mark.parametrize("size", [SMALL, SMALL + 20], ids=["at-the-limit", "above-the-limit"])
+def test_the_child_rotates_a_full_log_and_keeps_writing_to_a_new_one(
+    initialised, child_fds, size
+):
+    out_fd, err_fd = child_fds
+    os.write(out_fd, b"o" * (size - 10))
+    os.write(err_fd, b"e" * 10)
+
+    assert loop_detach.rotate_open_log(max_bytes=SMALL, fds=child_fds) is True
+
+    os.write(out_fd, b"after-out\n")
+    os.write(err_fd, b"after-err\n")
+    assert _old_log_path(initialised).read_bytes() == b"o" * (size - 10) + b"e" * 10
+    assert _log_path(initialised).read_bytes() == b"after-out\nafter-err\n", (
+        "both stdout and stderr must land in the new log"
+    )
+
+
+def test_the_child_leaves_a_log_below_the_limit_alone(initialised, child_fds):
+    out_fd, err_fd = child_fds
+    os.write(out_fd, b"o" * (SMALL - 1))
+
+    assert loop_detach.rotate_open_log(max_bytes=SMALL, fds=child_fds) is False
+
+    os.write(err_fd, b"more\n")
+    assert _log_path(initialised).read_bytes() == b"o" * (SMALL - 1) + b"more\n"
+    assert not _old_log_path(initialised).exists()
+
+
+def test_the_child_rotation_replaces_the_previous_old_file(initialised, child_fds):
+    _old_log_path(initialised).write_bytes(b"older")
+    os.write(child_fds[0], b"n" * SMALL)
+
+    assert loop_detach.rotate_open_log(max_bytes=SMALL, fds=child_fds) is True
+
+    assert _old_log_path(initialised).read_bytes() == b"n" * SMALL
+    left = sorted(entry.name for entry in (initialised / ".soup").iterdir())
+    assert left == ["loop.log", "loop.log.1", "loop.yaml"]
+
+
+def test_the_child_rotates_again_when_the_new_log_fills_up(initialised, child_fds):
+    out_fd, _ = child_fds
+    os.write(out_fd, b"1" * SMALL)
+    assert loop_detach.rotate_open_log(max_bytes=SMALL, fds=child_fds) is True
+    os.write(out_fd, b"2" * SMALL)
+    assert loop_detach.rotate_open_log(max_bytes=SMALL, fds=child_fds) is True
+    os.write(out_fd, b"3")
+
+    assert _old_log_path(initialised).read_bytes() == b"2" * SMALL, "only one old file is kept"
+    assert _log_path(initialised).read_bytes() == b"3"
+
+
+def test_a_failed_move_keeps_both_descriptors_on_a_working_log(
+    initialised, child_fds, monkeypatch
+):
+    out_fd, err_fd = child_fds
+    os.write(out_fd, b"x" * SMALL)
+
+    def refuse(src, dst):
+        raise PermissionError("in use by another process")
+
+    monkeypatch.setattr(loop_detach.os, "replace", refuse)
+
+    assert loop_detach.rotate_open_log(max_bytes=SMALL, fds=child_fds) is False
+
+    os.write(out_fd, b"after-out\n")
+    os.write(err_fd, b"after-err\n")
+    content = _log_path(initialised).read_bytes()
+    assert content.startswith(b"x" * SMALL), "nothing was lost"
+    assert content.endswith(b"after-out\nafter-err\n"), "both descriptors still write the log"
+    warning = content[SMALL:content.index(b"after-out")]
+    assert b"log rotation skipped" in warning and b"PermissionError" in warning, warning
+    assert not _old_log_path(initialised).exists()
+
+
+def test_a_failed_reopen_falls_back_to_the_old_file(initialised, child_fds, monkeypatch):
+    out_fd, err_fd = child_fds
+    os.write(out_fd, b"x" * SMALL)
+    real = loop_detach.open_log
+    asked = []
+
+    def flaky(path=None):
+        asked.append(path)
+        if len(asked) == 1:
+            raise OSError("disk full")
+        return real(path)
+
+    monkeypatch.setattr(loop_detach, "open_log", flaky)
+
+    assert loop_detach.rotate_open_log(max_bytes=SMALL, fds=child_fds) is True
+
+    os.write(out_fd, b"after-out\n")
+    os.write(err_fd, b"after-err\n")
+    assert not _log_path(initialised).exists()
+    content = _old_log_path(initialised).read_bytes()
+    assert content.startswith(b"x" * SMALL) and content.endswith(b"after-out\nafter-err\n")
+    assert b"log rotation" in content and b"disk full" in content
+
+
+def test_when_no_log_can_be_reopened_both_descriptors_stay_open(
+    initialised, child_fds, monkeypatch
+):
+    os.write(child_fds[0], b"x" * SMALL)
+
+    def refuse(path=None):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(loop_detach, "open_log", refuse)
+
+    assert loop_detach.rotate_open_log(max_bytes=SMALL, fds=child_fds) is True
+
+    for fd in child_fds:
+        os.fstat(fd)  # still open
+        assert os.write(fd, b"goes nowhere\n") == len(b"goes nowhere\n")
+
+
+@pytest.mark.parametrize("log_exists", [True, False], ids=["log-present", "log-missing"])
+def test_a_child_whose_output_is_not_the_log_is_left_alone(initialised, tmp_path, log_exists):
+    """An operator who redirected the output elsewhere must not have ``loop.log`` swapped in."""
+    log = _log_path(initialised)
+    if log_exists:
+        log.write_bytes(b"y" * SMALL)
+    other = tmp_path / "other.out"
+    out_fd = os.open(other, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0))
+    err_fd = os.dup(out_fd)
+    try:
+        os.write(out_fd, b"x" * SMALL)
+
+        assert loop_detach.rotate_open_log(max_bytes=SMALL, fds=(out_fd, err_fd)) is False
+
+        os.write(err_fd, b"more\n")
+    finally:
+        os.close(out_fd)
+        os.close(err_fd)
+    assert other.read_bytes() == b"x" * SMALL + b"more\n"
+    assert log.exists() is log_exists
+    if log_exists:
+        assert log.read_bytes() == b"y" * SMALL
+    assert not _old_log_path(initialised).exists()
+
+
+def test_a_closed_descriptor_is_not_an_error(initialised, child_fds):
+    closed = os.open(os.devnull, os.O_WRONLY)
+    os.close(closed)
+    os.write(child_fds[0], b"x" * SMALL)
+
+    assert loop_detach.rotate_open_log(max_bytes=SMALL, fds=(closed, closed)) is False
+    assert loop_detach.rotate_open_log(max_bytes=SMALL, fds=(child_fds[0], closed)) is False
+
+    assert _log_path(initialised).read_bytes() == b"x" * SMALL
+    assert not _old_log_path(initialised).exists()
+
+
+def test_the_child_flushes_its_streams_before_it_lets_go_of_the_log(
+    initialised, child_fds, monkeypatch
+):
+    """Text still buffered in ``sys.stdout`` belongs in the old log, not in the new one."""
+    events = []
+    stream = types.SimpleNamespace(flush=lambda: events.append("flush"))
+    monkeypatch.setattr(sys, "stdout", stream)
+    monkeypatch.setattr(sys, "stderr", stream)
+    real_replace = os.replace
+
+    def spy(src, dst):
+        events.append("replace")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(loop_detach.os, "replace", spy)
+    os.write(child_fds[0], b"x" * SMALL)
+
+    assert loop_detach.rotate_open_log(max_bytes=SMALL, fds=child_fds) is True
+
+    assert events == ["flush", "flush", "replace"], events
+
+
+# -- the hook in the watch loop and who gets it --------------------------------
+
+
+@pytest.fixture()
+def restore_signals():
+    """``watch`` installs SIGINT / SIGTERM handlers; put the test run's own back."""
+    import signal
+
+    saved = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    yield
+    for sig, handler in saved.items():
+        signal.signal(sig, handler)
+
+
+def test_watch_calls_the_cycle_hook_at_the_start_of_each_cycle(initialised, restore_signals):
+    from soup_cli.utils.loop_daemon import WatchConfig, watch
+
+    calls = []
+    config = WatchConfig(
+        poll_interval_sec=1.0, max_iterations=2, on_cycle=lambda: calls.append("cycle")
+    )
+
+    _, ran = watch(config)
+
+    assert ran == 2
+    assert calls == ["cycle", "cycle"]
+
+
+def test_a_cycle_hook_that_raises_does_not_stop_the_watch(initialised, restore_signals):
+    from soup_cli.utils.loop_daemon import WatchConfig, watch
+
+    def boom():
+        raise RuntimeError("rotation blew up")
+
+    _, ran = watch(WatchConfig(poll_interval_sec=1.0, max_iterations=1, on_cycle=boom))
+
+    assert ran == 1
+
+
+def test_the_cycle_hook_must_be_callable():
+    from soup_cli.utils.loop_daemon import WatchConfig
+
+    with pytest.raises(ValueError, match="on_cycle must be callable or None"):
+        WatchConfig(on_cycle="rotate")
+
+
+@pytest.fixture()
+def watched(monkeypatch: pytest.MonkeyPatch):
+    """The ``WatchConfig`` the command hands to ``watch``; the daemon itself does not run."""
+    configs = []
+
+    def fake_watch(config):
+        configs.append(config)
+        return read_state(), 0
+
+    monkeypatch.setattr("soup_cli.commands.loop.watch", fake_watch)
+    monkeypatch.setattr("soup_cli.commands.loop.atexit.register", lambda *a, **k: None)
+    return configs
+
+
+def test_a_foreground_watch_gets_no_rotation_hook(initialised, watched):
+    _foreground_watch()
+
+    assert len(watched) == 1
+    assert watched[0].on_cycle is None, "a foreground watch may be writing to a terminal"
+
+
+def test_a_detached_child_gets_the_rotation_hook(initialised, monkeypatch, watched):
+    monkeypatch.setenv(loop_detach.DETACHED_ENV, "1")
+
+    _foreground_watch()
+
+    assert len(watched) == 1
+    assert watched[0].on_cycle is loop_detach.rotate_open_log
+
+
+@pytest.mark.parametrize("detached", [True, False], ids=["detached-child", "foreground"])
+def test_a_real_watch_rotates_its_own_log_only_when_detached(initialised, detached):
+    """The whole path in a real process: only the detached child swaps its own log."""
+    log = _log_path(initialised)
+    _filled(log, loop_detach.MAX_LOG_BYTES)
+    env = {key: value for key, value in os.environ.items() if key != loop_detach.DETACHED_ENV}
+    if detached:
+        env[loop_detach.DETACHED_ENV] = "1"
+    handle = loop_detach.open_log()
+    try:
+        child = subprocess.Popen(
+            [
+                sys.executable, "-m", "soup_cli.cli", "loop", "watch", "--foreground",
+                "--max-iterations", "2", "--poll-interval", "1",
+            ],
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            env=env,
+        )
+    finally:
+        # As `--detach` does: the parent keeps no handle, and Windows cannot rename a log
+        # that any process still has open.
+        handle.close()
+    returncode = child.wait(timeout=180)
+
+    assert returncode == 0, log.read_bytes()[-2000:]
+    if detached:
+        assert _old_log_path(initialised).stat().st_size == loop_detach.MAX_LOG_BYTES
+        tail = log.read_bytes()
+        assert b"watch exited" in tail, "the output after the swap lands in the new log"
+        assert len(tail) < 4096
+    else:
+        assert not _old_log_path(initialised).exists()
+        assert log.stat().st_size > loop_detach.MAX_LOG_BYTES

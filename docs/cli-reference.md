@@ -2758,7 +2758,7 @@ Usage: `soup loop watch [OPTIONS]`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `--foreground` | flag | off |  | Run in foreground (default). |
-| `--detach` | flag | off |  | Spawn a background subprocess running --foreground. Its pid goes to .soup/loop.pid and its output to .soup/loop.log (appended); refused while that pid is alive. |
+| `--detach` | flag | off |  | Spawn a background subprocess running --foreground. Its pid goes to .soup/loop.pid and its output to .soup/loop.log (appended; rotated at 10 MB, one old file kept as .soup/loop.log.1); refused while that pid is alive. |
 | `--max-iterations` | integer |  |  | Stop after N iterations (test/demo use). |
 | `--poll-interval` | float | `60.0` |  | Seconds between iterations \[1, 3600]. |
 | `--pre-wired` | flag | off |  | Force the pre-wired production stages even if loop.yaml didn't set it. |
