@@ -39,6 +39,11 @@ JOB = "mlx-smoke"
 #: job, with the reason. Adding an entry is a decision a reviewer should see, so it carries a
 #: sentence, not a flag.
 EXEMPT: dict[str, str] = {
+    "test_mlx_harness_native.py": (
+        "Every test needs lm-eval and datasets; the mlx-smoke job installs only .[mlx] "
+        "and pytest and fails when datasets is installed, so hosted CI cannot run this file. "
+        "It is checked locally with the eval extra."
+    ),
     "test_mlx_max_grad_norm.py": (
         "three of its tests read the installed mlx-lm / mlx surface (TrainingArgs has no clipping "
         "field, mlx.optimizers.clip_grad_norm exists) as a tripwire for an upstream release; "
