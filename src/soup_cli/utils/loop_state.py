@@ -42,6 +42,35 @@ CANARY_ON_TIMEOUT: tuple = ("errors-only", "rollback", "wait")
 DEFAULT_CANARY_MAX_WAIT_SEC = 86400.0
 MAX_CANARY_MAX_WAIT_SEC = 30 * 86400.0
 
+# The keys of the sft recipe the pre-wired train stage renders (`soup loop init --sft-*`).
+SFT_RECIPE_KEYS: tuple = (
+    "target_modules", "lora_r", "lora_alpha", "lr", "epochs", "quantization"
+)
+# What `quantization` may say. "auto" writes no quantization line, so soup train's own
+# default applies (the config schema's, 4bit; soup train has no VRAM-fit rule of its own).
+SFT_QUANTIZATIONS: tuple = ("4bit", "none", "auto")
+# The sft recipe of a loop whose loop.yaml names none (or only some) of the keys.
+# target_modules None would write no line, so the config schema's default ("auto", peft decides)
+# applies.
+# PROVISIONAL: candidate B from the Soup Zero fit runs; the final values follow
+DEFAULT_SFT_RECIPE: Mapping[str, object] = MappingProxyType({
+    "target_modules": "all-linear",
+    "lora_r": 64,
+    "lora_alpha": 128,
+    "lr": 5.0e-4,
+    "epochs": 8,
+    "quantization": "auto",
+})
+# What peft calls every linear layer; a plain string in the config, never a list entry.
+ALL_LINEAR = "all-linear"
+_SFT_LORA_R_MAX = 1024
+_SFT_LORA_ALPHA_MAX = 4096
+_SFT_EPOCHS_MAX = 100
+_MAX_TARGET_MODULES = 64
+_MAX_MODULE_NAME_LEN = 128
+# A module name, or a dotted path to one: no pattern, no whitespace, no control characters.
+_MODULE_NAME_RE = re.compile(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*", re.ASCII)
+
 _MAX_PATH_LEN = 4096
 _MAX_STR_FIELD = 512
 _MAX_FILE_BYTES = 1 * 1024 * 1024  # 1 MiB cap on the state file
@@ -177,6 +206,11 @@ class LoopState:
     # Last, so adding them shifted no existing positional field.
     min_new_edits: int = 8
     min_new_rated: int = 30
+    # The sft recipe overrides (`soup loop init --sft-*`): None = DEFAULT_SFT_RECIPE; a dict
+    # names only the keys it overrides (SFT_RECIPE_KEYS), the rest keep the constant's value.
+    # Only the pre-wired train stage reads it, and only for train_method "sft". Last, so adding
+    # it shifted no existing positional field; a loop.yaml from before it loads with None.
+    sft_recipe: Optional[dict] = None
 
     def __post_init__(self) -> None:  # noqa: D401 — validator hook
         # Closed-allowlist enforcement + bool-as-int rejection mirror the
@@ -307,6 +341,7 @@ class LoopState:
             _require_str("last_iteration_id", self.last_iteration_id, allow_empty=False)
         if self.last_run_date is not None:
             _require_str("last_run_date", self.last_run_date, allow_empty=False)
+        validate_sft_recipe(self.sft_recipe)
         self._validate_versions()
 
     def _validate_versions(self) -> None:
@@ -339,6 +374,10 @@ class LoopState:
     def stable_name(self) -> str:
         """The canary router's stable side: the promoted adapter, else the served model."""
         return self.production_name or self.served_model
+
+    def effective_sft_recipe(self) -> dict:
+        """The sft recipe this loop trains with: ``DEFAULT_SFT_RECIPE`` under ``sft_recipe``."""
+        return effective_sft_recipe(self.sft_recipe)
 
     def to_dict(self) -> Mapping[str, object]:
         """Stable, JSON-serialisable view (returned as ``MappingProxyType``)."""
@@ -418,6 +457,116 @@ def _check_canary_iteration(snapshot: object) -> None:
     _require_iteration_id("canary_iteration iteration_id", snapshot["iteration_id"])
     if snapshot.get("outcome") != "canary":
         raise ValueError("canary_iteration must be an iteration whose outcome is canary")
+
+
+def _brief(value: object) -> str:
+    """``repr(value)`` cut to 60 characters, for a message that quotes untrusted input."""
+    text = repr(value)
+    return text if len(text) <= 60 else text[:57] + "..."
+
+
+def _check_target_modules(value: object) -> None:
+    rule = (
+        f'target_modules must be "{ALL_LINEAR}" or a non-empty list of up to '
+        f"{_MAX_TARGET_MODULES} module names (letters, digits, '_' and '.')"
+    )
+    if value is None or (isinstance(value, str) and value == ALL_LINEAR):
+        return
+    if not isinstance(value, list) or not value or len(value) > _MAX_TARGET_MODULES:
+        raise ValueError(f"{rule}, got {_brief(value)}")
+    for name in value:
+        if isinstance(name, str) and name == ALL_LINEAR:
+            # peft only expands the string; as a list entry it is a module that does not exist.
+            raise ValueError(f'{rule}; "{ALL_LINEAR}" is a string, not a list entry')
+        if (
+            not isinstance(name, str)
+            or len(name) > _MAX_MODULE_NAME_LEN
+            or _MODULE_NAME_RE.fullmatch(name) is None
+        ):
+            raise ValueError(f"{rule}, got the entry {_brief(name)}")
+
+
+def _check_sft_quantization(value: object) -> None:
+    if not isinstance(value, str) or value not in SFT_QUANTIZATIONS:
+        options = ", ".join(f'"{name}"' for name in SFT_QUANTIZATIONS)
+        raise ValueError(f"quantization must be one of {options}, got {_brief(value)}")
+
+
+def _check_sft_int(key: str, value: object, high: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or not (1 <= value <= high):
+        raise ValueError(f"{key} must be an int in [1, {high}], got {_brief(value)}")
+
+
+def _check_sft_lr(value: object) -> None:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not (0 < value <= 1)  # False for NaN too
+    ):
+        raise ValueError(f"lr must be a number in (0, 1], got {_brief(value)}")
+
+
+_SFT_RECIPE_CHECKS = {
+    "target_modules": _check_target_modules,
+    "lora_r": lambda value: _check_sft_int("lora_r", value, _SFT_LORA_R_MAX),
+    "lora_alpha": lambda value: _check_sft_int("lora_alpha", value, _SFT_LORA_ALPHA_MAX),
+    "lr": _check_sft_lr,
+    "epochs": lambda value: _check_sft_int("epochs", value, _SFT_EPOCHS_MAX),
+    "quantization": _check_sft_quantization,
+}
+
+
+def _unknown_recipe_keys(names: list) -> ValueError:
+    noun = "key" if len(names) == 1 else "keys"
+    return ValueError(
+        f"unknown sft_recipe {noun} {', '.join(_brief(name) for name in names)}; "
+        f"allowed: {', '.join(sorted(SFT_RECIPE_KEYS))}"
+    )
+
+
+def validate_sft_recipe_value(key: str, value: object) -> None:
+    """Raise ``ValueError`` unless ``value`` is valid for the sft recipe key ``key``.
+
+    ``target_modules``: ``None`` (the schema default), ``"all-linear"`` or a non-empty list of
+    module names; ``lora_r`` an int in 1..1024; ``lora_alpha`` an int in 1..4096; ``lr`` a
+    finite number above 0 and at most 1; ``epochs`` an int in 1..100; ``quantization`` one of
+    ``"4bit"``, ``"none"``, ``"auto"``. A bool is no int and no number. The message starts
+    with the key (the command adds the flag).
+    """
+    check = _SFT_RECIPE_CHECKS.get(key) if isinstance(key, str) else None
+    if check is None:
+        raise _unknown_recipe_keys([key])
+    check(value)
+
+
+def validate_sft_recipe(recipe: object) -> Optional[dict]:
+    """Return ``recipe`` if it is ``None`` or a dict of valid sft recipe keys, else raise.
+
+    Unknown keys are refused (all of them named), then each value is checked by
+    ``validate_sft_recipe_value``. A dict names only the keys it overrides.
+    """
+    if recipe is None:
+        return None
+    if not isinstance(recipe, dict):
+        raise ValueError(f"sft_recipe must be a dict or None, got {type(recipe).__name__}")
+    unknown = [key for key in recipe if key not in SFT_RECIPE_KEYS]
+    if unknown:
+        raise _unknown_recipe_keys(unknown)
+    for key, value in recipe.items():
+        validate_sft_recipe_value(key, value)
+    return recipe
+
+
+def effective_sft_recipe(recipe: Optional[Mapping[str, object]] = None) -> dict:
+    """``DEFAULT_SFT_RECIPE`` with the keys ``recipe`` names replaced; a fresh dict.
+
+    ``recipe`` is validated by ``LoopState`` already; a ``None`` there is the constant, a
+    partial dict overrides only its own keys (an explicit ``target_modules: None`` too).
+    """
+    merged = {**DEFAULT_SFT_RECIPE, **(recipe or {})}
+    if isinstance(merged["target_modules"], list):
+        merged["target_modules"] = list(merged["target_modules"])
+    return merged
 
 
 def _utc_now_iso() -> str:
@@ -611,6 +760,7 @@ def init_state(
     canary_on_timeout: str = "errors-only",
     min_new_edits: int = 8,
     min_new_rated: int = 30,
+    sft_recipe: Optional[dict] = None,
     path: Optional[str] = None,
     force: bool = False,
 ) -> Tuple[LoopState, str]:
@@ -653,6 +803,7 @@ def init_state(
         canary_on_timeout=canary_on_timeout,
         min_new_edits=min_new_edits,
         min_new_rated=min_new_rated,
+        sft_recipe=sft_recipe,
         monthly_budget_usd=monthly_budget_usd,
         max_runs_per_day=max_runs_per_day,
         created_at=now,

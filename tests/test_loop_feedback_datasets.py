@@ -1090,8 +1090,10 @@ class TestTrainStage:
         [
             ("dpo", "dpo", "dpo", {"epochs": 1, "batch_size": 1, "lr": 5.0e-5}),
             ("kto", "kto", "kto", {"epochs": 1, "batch_size": 2, "lr": 5.0e-5}),
-            ("sft", "sft", "chatml", {"epochs": 5, "batch_size": 1, "lr": 1.0e-4,
-                                      "lora": {"r": 64, "alpha": 16}}),
+            ("sft", "sft", "chatml", {
+                "epochs": 8, "batch_size": 1, "lr": 5.0e-4,
+                "lora": {"r": 64, "alpha": 128, "target_modules": "all-linear"},
+            }),
         ],
     )
     def test_the_config_names_the_task_the_format_and_the_safe_settings(

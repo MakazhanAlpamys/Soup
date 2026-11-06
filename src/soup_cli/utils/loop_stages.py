@@ -611,11 +611,6 @@ def resolve_base_model(served_model: str, base_model: Optional[str] = None) -> s
 _TRAIN_FORMAT = {"dpo": "dpo", "kto": "kto", "sft": "chatml"}
 #: What a row of each method's dataset is called in a skip note.
 _ROW_NAME = {"dpo": "preference pairs", "kto": "kto rows", "sft": "sft rows"}
-#: The sft recipe the loop trains with (dpo and kto keep 1 epoch at lr 5e-5).
-_SFT_EPOCHS = 5
-_SFT_LR = 1.0e-4
-_SFT_LORA_R = 64
-_SFT_LORA_ALPHA = 16
 
 
 def _render_train_yaml(
@@ -632,14 +627,23 @@ def _render_train_yaml(
     method = method or state.train_method
     base = resolve_base_model(state.served_model, state.base_model)
     if method == "sft":
-        # The recipe measured for the loop's sft: a higher lr, five passes over a small
-        # dataset, and LoRA rank 64 with alpha 16 (written out, not left to the schema).
+        # The loop's sft recipe: DEFAULT_SFT_RECIPE under what loop.yaml names (sft_recipe),
+        # written out, not left to the schema. A target_modules of None, and a quantization
+        # of "auto", write no line, so the schema default applies. (dpo and kto keep 1
+        # epoch at lr 5e-5.)
+        recipe = state.effective_sft_recipe()
+        lora: dict = {"r": recipe["lora_r"], "alpha": recipe["lora_alpha"]}
+        if recipe["target_modules"] is not None:
+            lora["target_modules"] = recipe["target_modules"]
         training: dict = {
-            "epochs": _SFT_EPOCHS,
+            "epochs": recipe["epochs"],
             "batch_size": 1,
-            "lr": _SFT_LR,
-            "lora": {"r": _SFT_LORA_R, "alpha": _SFT_LORA_ALPHA},
+            "lr": float(recipe["lr"]),
+            "lora": lora,
         }
+        if recipe["quantization"] != "auto":
+            # "auto" writes no line: soup train has no VRAM-fit rule, its own default applies.
+            training["quantization"] = recipe["quantization"]
     else:
         # KTO needs a per-device batch of at least 2: TRL's KL term is degenerate at 1
         # and the config is refused (#1420).

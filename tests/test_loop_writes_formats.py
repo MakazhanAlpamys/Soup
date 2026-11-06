@@ -379,9 +379,10 @@ class TestVersionFields:
     def test_the_fields_come_last_in_this_order_with_these_defaults(self):
         names = list(LoopState.__dataclass_fields__)
 
-        # The two trigger thresholds of the sft loop (tests/test_loop_sft_default.py) follow.
-        assert names[-2:] == ["min_new_edits", "min_new_rated"]
-        assert names[-len(NEW_FIELDS) - 2:-2] == NEW_FIELDS
+        # The two trigger thresholds of the sft loop (tests/test_loop_sft_default.py) follow,
+        # then the sft recipe (tests/test_loop_sft_recipe.py).
+        assert names[-3:-1] == ["min_new_edits", "min_new_rated"]
+        assert names[-len(NEW_FIELDS) - 3:-3] == NEW_FIELDS
         assert names.index("production_version") == names.index("canary_on_timeout") + 1
         state = _state()
         assert (state.production_version, state.latest_version) == (1, 1)

@@ -221,6 +221,37 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
 soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
     --pre-wired --feedback-log ./app-data/feedback.jsonl --min-new-edits 4 --min-new-rated 20
 
+# The sft training recipe is configurable. The pre-wired train stage renders it into the
+# soup.yaml it trains with (training.lora.target_modules, .r, .alpha, training.lr, .epochs,
+# training.quantization); dpo and kto keep their own fixed settings. Six keys, each set by a
+# flag at init and stored in .soup/loop.yaml under "sft_recipe" only when given:
+#   --sft-target-modules  all-linear, auto (the config schema's default: no target_modules
+#                         is written) or a comma-separated list of module names, for example
+#                         q_proj,v_proj (loop.yaml: "all-linear" or a list; null = auto)
+#   --sft-lora-r          LoRA rank, 1 to 1024            (loop.yaml: lora_r)
+#   --sft-lora-alpha      LoRA alpha, 1 to 4096           (loop.yaml: lora_alpha)
+#   --sft-lr              learning rate, above 0 and at most 1, for example 2e-4 (loop.yaml: lr)
+#   --sft-epochs          epochs, 1 to 100                (loop.yaml: epochs)
+#   --sft-quantization    4bit, none or auto              (loop.yaml: quantization)
+#                         auto writes no quantization line, so soup train's own default
+#                         applies: the config schema's default (4bit; on a CPU soup train
+#                         switches it to none with a warning). soup train has no rule that
+#                         picks none when the model fits in VRAM; write none to get that.
+# A key the loop.yaml does not name keeps the built-in value, so a partial recipe overrides only
+# what it names, and a loop.yaml from before the field loads with the built-in recipe. The
+# built-in defaults are PROVISIONAL: today they are candidate B of the Soup Zero fit runs
+# (all-linear, LoRA r 64 / alpha 128, lr 5e-4, 8 epochs, quantization auto), where the loop
+# used to train lr 1e-4, 5 epochs, LoRA r 64 / alpha 16 on the schema's default modules.
+# They will change again once the final recipe lands, so a loop that must not move with them
+# names every key. A value out of range, a bool where a number goes, or a key that is not one
+# of the six is refused (init exits 2 naming the flag; reading a loop.yaml with a bad
+# "sft_recipe" fails the command with the reason). The flags are refused for a loop that does
+# not train sft: they would change nothing. `soup loop status` shows the effective recipe in
+# one sft_recipe row and which keys come from loop.yaml.
+soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
+    --pre-wired --sft-target-modules all-linear --sft-lora-r 16 --sft-lora-alpha 32 \
+    --sft-lr 2e-4 --sft-epochs 5 --sft-quantization none
+
 # Unpack a recorded iteration's Soup Can for what-if analysis (v0.71.4)
 soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 

@@ -9,7 +9,9 @@ Decided from measured recipe experiments:
   gives no row;
 - an edit wins over thumbs and ratings for dpo, kto and sft alike: the latest real edit
   decides, before or after any thumb;
-- the sft config is lr 1e-4, 5 epochs, LoRA r 64 / alpha 16;
+- the sft config is the loop's sft recipe (tests/test_loop_sft_recipe.py): provisionally
+  candidate B of the Soup Zero fit runs, lr 5e-4, 8 epochs, LoRA r 64 / alpha 128 on
+  all-linear;
 - with an sft loop and a feedback log, training starts at ``min_new_edits`` (8) new edits or
   ``min_new_rated`` (30) new rated answers, whichever comes first.
 """
@@ -635,7 +637,7 @@ class TestEveryRowIsOneSoupTrainReads:
 
 
 class TestSftConfig:
-    def test_the_config_is_lr_1e4_five_epochs_and_lora_64_16(self, cwd):
+    def test_the_config_is_candidate_b_lr_5e4_eight_epochs_and_lora_64_128(self, cwd):
         rendered = yaml.safe_load(ls._render_train_yaml(_state(train_method="sft"), "d.jsonl", "o"))
 
         assert rendered == {
@@ -643,8 +645,8 @@ class TestSftConfig:
             "task": "sft",
             "data": {"train": "d.jsonl", "format": "chatml", "val_split": 0},
             "training": {
-                "epochs": 5, "batch_size": 1, "lr": 1.0e-4,
-                "lora": {"r": 64, "alpha": 16},
+                "epochs": 8, "batch_size": 1, "lr": 5.0e-4,
+                "lora": {"r": 64, "alpha": 128, "target_modules": "all-linear"},
             },
             "output": "o",
         }
@@ -660,8 +662,9 @@ class TestSftConfig:
 
         assert config.task == method
         if method == "sft":
-            assert (config.training.epochs, config.training.lr) == (5, 1.0e-4)
-            assert (config.training.lora.r, config.training.lora.alpha) == (64, 16)
+            assert (config.training.epochs, config.training.lr) == (8, 5.0e-4)
+            assert (config.training.lora.r, config.training.lora.alpha) == (64, 128)
+            assert config.training.lora.target_modules == "all-linear"
             assert config.data.val_split == 0
 
     @pytest.mark.parametrize(
@@ -939,7 +942,7 @@ class TestSftTrainStage:
 
         assert out["skipped"] is False and out["run_id"], out
         (config,) = trainer.configs
-        assert config["task"] == "sft" and config["training"]["epochs"] == 5
+        assert config["task"] == "sft" and config["training"]["epochs"] == 8
         assert len(trainer.trained_on[0]) == edits + likes
 
     def test_the_train_stage_applies_the_rule_the_harvest_reports(self, cwd, monkeypatch):
@@ -1080,8 +1083,9 @@ class TestLoopState:
     def test_the_two_fields_come_last_in_this_order(self):
         names = list(LoopState.__dataclass_fields__)
 
-        assert names[-2:] == ["min_new_edits", "min_new_rated"]
-        assert names[-3] == "version_log_started"
+        # The sft recipe (tests/test_loop_sft_recipe.py) follows them.
+        assert names[-3:-1] == ["min_new_edits", "min_new_rated"]
+        assert names[-4] == "version_log_started"
 
     def test_a_loop_yaml_without_the_fields_loads_with_their_defaults(self, cwd):
         legacy = {"served_model": "m", "eval_suite": "e", "baseline": "b", "status": "running",

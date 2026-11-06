@@ -556,7 +556,8 @@ def test_a_new_loop_trains_sft_on_corrections_and_liked_answers_then_canaries_it
     assert config["task"] == "sft" and config["data"]["format"] == "chatml"
     assert config["data"]["val_split"] == 0
     assert config["training"] == {
-        "epochs": 5, "batch_size": 1, "lr": 1.0e-4, "lora": {"r": 64, "alpha": 16},
+        "epochs": 8, "batch_size": 1, "lr": 5.0e-4,
+        "lora": {"r": 64, "alpha": 128, "target_modules": "all-linear"},
     }
     answers = [row["messages"][-1]["content"] for row in rows]
     assert answers == [

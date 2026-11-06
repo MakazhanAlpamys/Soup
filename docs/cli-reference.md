@@ -2706,6 +2706,12 @@ Usage: `soup loop init [OPTIONS] SERVED_MODEL`
 | `--min-new-rated` | integer | `30` |  | An sft loop with a feedback log trains once at least this many new rated answers (any thumb, rating or edit) have arrived, or --min-new-edits new edits, whichever comes first. Default 30. |
 | `--feedback-log` | text |  |  | Feedback log (JSONL: thumbs, ratings, edits and comments on logged answers) the pre-wired harvest reads. Default: .soup-loops/feedback.jsonl. SOUP_LOOP_FEEDBACK_LOG overrides it. |
 | `--train-method` | text | `sft` |  | What the pre-wired loop trains: sft (the default; corrected answers and answers rated good), dpo (preference pairs) or kto (answers labelled good or bad). A loop.yaml without this field keeps dpo. |
+| `--sft-target-modules` | text |  |  | sft only: the LoRA target modules of the training config: all-linear, auto (the config schema's default) or a comma-separated list such as q_proj,v_proj. Default: the loop's built-in sft recipe (soup loop status). |
+| `--sft-lora-r` | integer |  |  | sft only: LoRA rank of the training config, 1 to 1024. Default: the built-in recipe. |
+| `--sft-lora-alpha` | integer |  |  | sft only: LoRA alpha of the training config, 1 to 4096. Default: the built-in recipe. |
+| `--sft-lr` | float |  |  | sft only: learning rate of the training config, above 0 and at most 1 (for example 2e-4). Default: the built-in recipe. |
+| `--sft-epochs` | integer |  |  | sft only: epochs of the training config, 1 to 100. Default: the built-in recipe. |
+| `--sft-quantization` | text |  |  | sft only: quantization of the training config: 4bit, none or auto (writes no quantization line, so soup train's own default applies). Default: the built-in recipe. |
 | `--force` | flag | off |  | Overwrite existing loop.yaml. |
 
 ### `soup loop pause`
