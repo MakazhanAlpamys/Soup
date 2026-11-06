@@ -9,9 +9,9 @@ Decided from measured recipe experiments:
   gives no row;
 - an edit wins over thumbs and ratings for dpo, kto and sft alike: the latest real edit
   decides, before or after any thumb;
-- the sft config is the loop's sft recipe (tests/test_loop_sft_recipe.py): provisionally
-  candidate B of the Soup Zero fit runs, lr 5e-4, 8 epochs, LoRA r 64 / alpha 128 on
-  all-linear;
+- the sft config is the loop's sft recipe (tests/test_loop_sft_recipe.py): candidate B of the
+  Soup Zero fit runs, lr 5e-4, 8 epochs, LoRA r 64 / alpha 128 on all-linear, quantization
+  auto (4bit here: no CUDA device, unknown size; tests/test_loop_sft_quantization.py);
 - with an sft loop and a feedback log, training starts at ``min_new_edits`` (8) new edits or
   ``min_new_rated`` (30) new rated answers, whichever comes first.
 """
@@ -647,6 +647,7 @@ class TestSftConfig:
             "training": {
                 "epochs": 8, "batch_size": 1, "lr": 5.0e-4,
                 "lora": {"r": 64, "alpha": 128, "target_modules": "all-linear"},
+                "quantization": "4bit",
             },
             "output": "o",
         }

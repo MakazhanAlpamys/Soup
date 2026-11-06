@@ -233,17 +233,28 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
 #   --sft-lr              learning rate, above 0 and at most 1, for example 2e-4 (loop.yaml: lr)
 #   --sft-epochs          epochs, 1 to 100                (loop.yaml: epochs)
 #   --sft-quantization    4bit, none or auto              (loop.yaml: quantization)
-#                         auto writes no quantization line, so soup train's own default
-#                         applies: the config schema's default (4bit; on a CPU soup train
-#                         switches it to none with a warning). soup train has no rule that
-#                         picks none when the model fits in VRAM; write none to get that.
+#                         4bit and none are written as they are and never overridden. auto
+#                         is decided when training starts, right before the soup.yaml is
+#                         written: need = parameter count x 2 bytes x 5 (a bf16 base plus
+#                         its adapter, optimizer state, gradients and activations); free =
+#                         free VRAM of the CUDA device (torch.cuda.mem_get_info). With CUDA
+#                         and need <= free the config says quantization: none, otherwise
+#                         4bit. So auto picks none only when the model fits, and with none
+#                         soup train loads the frozen base in the checkpoint's own dtype.
+#                         The parameter count is read without loading weights: the
+#                         safetensors headers of a local model directory (a symlink is
+#                         refused), else the Hub's header-only metadata for a repo id (not
+#                         asked when HF_HUB_OFFLINE is set). An unknown count, no CUDA device
+#                         or no torch also gives 4bit. The iteration's notes say which, for
+#                         example "sft quantization auto: none (need 3.0 GB, free 7.1 GB)" or
+#                         "sft quantization auto: 4bit (parameter count unknown)".
 # A key the loop.yaml does not name keeps the built-in value, so a partial recipe overrides only
 # what it names, and a loop.yaml from before the field loads with the built-in recipe. The
-# built-in defaults are PROVISIONAL: today they are candidate B of the Soup Zero fit runs
-# (all-linear, LoRA r 64 / alpha 128, lr 5e-4, 8 epochs, quantization auto), where the loop
-# used to train lr 1e-4, 5 epochs, LoRA r 64 / alpha 16 on the schema's default modules.
-# They will change again once the final recipe lands, so a loop that must not move with them
-# names every key. A value out of range, a bool where a number goes, or a key that is not one
+# built-in recipe is the one the Soup Zero fit runs of 2026-11-06 chose (candidate B in bf16):
+# all-linear, LoRA r 64 / alpha 128, lr 5e-4, 8 epochs, quantization auto, where the loop used
+# to train lr 1e-4, 5 epochs, LoRA r 64 / alpha 16 on the schema's default modules. A loop that
+# must not move if a later release changes the built-in recipe names every key. A value out
+# of range, a bool where a number goes, or a key that is not one
 # of the six is refused (init exits 2 naming the flag; reading a loop.yaml with a bad
 # "sft_recipe" fails the command with the reason). The flags are refused for a loop that does
 # not train sft: they would change nothing. `soup loop status` shows the effective recipe in

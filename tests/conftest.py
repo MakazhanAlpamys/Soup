@@ -206,6 +206,20 @@ def _no_hub_model_shape(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_loop_vram_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the loop's ``quantization: auto`` off the GPU: no CUDA device is visible.
+
+    The sft recipe's ``auto`` measures free VRAM when the train stage renders its config
+    (``utils/loop_quantization.py``). Left alone it would answer differently on a machine
+    with a card, and create a CUDA context on it. A test of the rule patches
+    ``free_vram_bytes`` itself.
+    """
+    from soup_cli.utils import loop_quantization
+
+    monkeypatch.setattr(loop_quantization, "free_vram_bytes", lambda: None)
+
+
+@pytest.fixture(autouse=True)
 def _restore_working_directory():
     """Put the working directory back after every test.
 

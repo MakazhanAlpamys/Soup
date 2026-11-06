@@ -3,12 +3,12 @@ configurable in ``loop.yaml``.
 
 The recipe used to be five hard-coded numbers in ``_render_train_yaml``. Now:
 
-- ``DEFAULT_SFT_RECIPE`` (loop_state.py) holds the defaults, PROVISIONAL (candidate B of the
-  Soup Zero fit runs) until the final recipe lands; one test below pins its numbers
-  (TestConstant), the rest read the constant;
+- ``DEFAULT_SFT_RECIPE`` (loop_state.py) holds the defaults, final (candidate B in bf16, the
+  Soup Zero fit runs of 2026-11-06); one test below pins its numbers (TestConstant), the rest
+  read the constant;
 - the keys are ``target_modules``, ``lora_r``, ``lora_alpha``, ``lr``, ``epochs`` and
-  ``quantization`` (``4bit``, ``none`` or ``auto``; ``auto`` writes no quantization line, so
-  ``soup train``'s own default applies: it has no VRAM-fit rule);
+  ``quantization`` (``4bit``, ``none`` or ``auto``; ``auto`` is measured when the train stage
+  renders the config: tests/test_loop_sft_quantization.py);
 - ``LoopState.sft_recipe`` (last field) is ``None`` (the constant) or a dict that overrides
   only the keys it names; unknown keys, out-of-range values and bool-as-int are refused,
   by the state itself and so also when a hand-edited ``loop.yaml`` is read;
@@ -151,8 +151,8 @@ class TestConstant:
         assert config.training.lora.r == DEFAULT_SFT_RECIPE["lora_r"]
         assert config.training.lora.alpha == DEFAULT_SFT_RECIPE["lora_alpha"]
 
-    def test_the_provisional_values_are_candidate_b(self):
-        """The one pin: change it with the constant when the final recipe lands."""
+    def test_the_values_are_candidate_b(self):
+        """The one pin: change it together with the constant."""
         assert dict(DEFAULT_SFT_RECIPE) == {
             "target_modules": "all-linear",
             "lora_r": 64,
@@ -162,14 +162,12 @@ class TestConstant:
             "quantization": "auto",
         }
 
-    def test_the_provisional_status_is_marked_in_the_source(self):
+    def test_the_source_says_where_the_values_come_from_and_not_that_they_are_provisional(self):
         with open(loop_state.__file__, encoding="utf-8") as handle:
             source = handle.read()
 
-        assert (
-            "# PROVISIONAL: candidate B from the Soup Zero fit runs; the final values follow"
-            in source
-        )
+        assert "# Soup Zero fit runs, 2026-11-06: candidate B in bf16" in source
+        assert "provisional" not in source.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -480,7 +478,9 @@ class TestRender:
         assert ("target_modules" in training["lora"]) == (
             DEFAULT_SFT_RECIPE["target_modules"] is not None
         )
-        assert ("quantization" in training) == (DEFAULT_SFT_RECIPE["quantization"] != "auto")
+        # "auto" is resolved to a value; with no CUDA device (the suite's default) it is 4bit.
+        assert DEFAULT_SFT_RECIPE["quantization"] == "auto"
+        assert training["quantization"] == "4bit"
 
     def test_a_none_target_leaves_the_key_out_so_the_schema_default_applies(self, cwd):
         state = _state(sft_recipe={"target_modules": None})
@@ -521,12 +521,13 @@ class TestRender:
         assert (rendered["training"]["lr"], rendered["training"]["epochs"]) == (3e-4, 2)
         assert (config.training.lr, config.training.epochs) == (3e-4, 2)
 
-    def test_auto_quantization_writes_none_so_the_schema_default_applies(self, cwd):
+    def test_auto_quantization_is_resolved_not_left_for_the_schema(self, cwd):
+        """No CUDA device here, so ``auto`` is 4bit (the rule: test_loop_sft_quantization)."""
         rendered = _render(_state(sft_recipe={"quantization": "auto"}))
         config = SoupConfig(**rendered)
 
-        assert "quantization" not in rendered["training"]
-        assert config.training.quantization == "4bit"  # the schema default, not a VRAM probe
+        assert rendered["training"]["quantization"] == "4bit"
+        assert config.training.quantization == "4bit"
 
     @pytest.mark.parametrize("value", ["4bit", "none"])
     def test_an_explicit_quantization_is_written_and_accepted(self, cwd, value):
@@ -900,7 +901,7 @@ class TestStatus:
         assert f"lr {DEFAULT_SFT_RECIPE['lr']:g}" in row
         assert f"epochs {DEFAULT_SFT_RECIPE['epochs']}" in row
         assert "target_modules" in row
-        assert "quantization auto (schema default)" in row
+        assert "quantization auto (none if the base fits in free VRAM, else 4bit)" in row
         assert "all built-in defaults" in row
         assert "from loop.yaml" not in row
 

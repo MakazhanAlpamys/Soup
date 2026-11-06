@@ -121,7 +121,7 @@ def _sft_value_label(key: str, value: object) -> str:
     if key == "lr":
         return f"{value:g}"
     if key == "quantization" and value == "auto":
-        return "auto (schema default)"
+        return "auto (none if the base fits in free VRAM, else 4bit)"
     return str(value)
 
 
@@ -374,8 +374,8 @@ def init_cmd(
     sft_quantization: Optional[str] = typer.Option(
         None, "--sft-quantization",
         help=(
-            "sft only: quantization of the training config: 4bit, none or auto (writes no "
-            "quantization line, so soup train's own default applies). Default: the "
+            "sft only: quantization of the training config: 4bit, none or auto (none if the "
+            "base model fits in free VRAM when training starts, else 4bit). Default: the "
             "built-in recipe."
         ),
     ),

@@ -48,6 +48,7 @@ from soup_cli.utils.loop_feedback import (
     unique_sft,
     without_edited,
 )
+from soup_cli.utils.loop_quantization import resolve_sft_quantization
 from soup_cli.utils.loop_state import VERIFY_METHODS, LoopState
 from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
 from soup_cli.utils.net_guard import parse_ip_literal
@@ -614,13 +615,20 @@ _ROW_NAME = {"dpo": "preference pairs", "kto": "kto rows", "sft": "sft rows"}
 
 
 def _render_train_yaml(
-    state: LoopState, data_path: str, output_dir: str, method: Optional[str] = None
+    state: LoopState,
+    data_path: str,
+    output_dir: str,
+    method: Optional[str] = None,
+    *,
+    notes: Optional[list] = None,
 ) -> str:
     """Render a minimal ``soup.yaml`` for ``method`` (default: ``state.train_method``).
 
     The task is the method, the data the harvested dataset in the format ``soup train``
-    reads for it (``dpo``, ``kto``, ``chatml`` for ``sft``). Raises ``ValueError`` when the
-    base model cannot be determined (``resolve_base_model``).
+    reads for it (``dpo``, ``kto``, ``chatml`` for ``sft``). An sft recipe whose
+    ``quantization`` is ``auto`` is measured here (``resolve_sft_quantization``) and the
+    resolved value is written; its decision is appended to ``notes`` when given. Raises
+    ``ValueError`` when the base model cannot be determined (``resolve_base_model``).
     """
     import yaml
 
@@ -628,9 +636,10 @@ def _render_train_yaml(
     base = resolve_base_model(state.served_model, state.base_model)
     if method == "sft":
         # The loop's sft recipe: DEFAULT_SFT_RECIPE under what loop.yaml names (sft_recipe),
-        # written out, not left to the schema. A target_modules of None, and a quantization
-        # of "auto", write no line, so the schema default applies. (dpo and kto keep 1
-        # epoch at lr 5e-5.)
+        # written out, not left to the schema. A target_modules of None writes no line, so
+        # the schema default applies. A quantization of "auto" is measured now, just before
+        # soup train starts: none when the base fits in free VRAM, else 4bit. (dpo and kto
+        # keep 1 epoch at lr 5e-5.)
         recipe = state.effective_sft_recipe()
         lora: dict = {"r": recipe["lora_r"], "alpha": recipe["lora_alpha"]}
         if recipe["target_modules"] is not None:
@@ -641,9 +650,11 @@ def _render_train_yaml(
             "lr": float(recipe["lr"]),
             "lora": lora,
         }
-        if recipe["quantization"] != "auto":
-            # "auto" writes no line: soup train has no VRAM-fit rule, its own default applies.
-            training["quantization"] = recipe["quantization"]
+        training["quantization"], quantization_note = resolve_sft_quantization(
+            recipe["quantization"], base
+        )
+        if notes is not None and quantization_note:
+            notes.append(quantization_note)
     else:
         # KTO needs a per-device batch of at least 2: TRL's KL term is degenerate at 1
         # and the config is refused (#1420).
@@ -676,7 +687,9 @@ def train_dpo_from_pairs(
 
     The method is ``state.train_method``: ``dpo`` (the name is from when it was the only
     one), ``kto`` or ``sft``; ``_render_train_yaml`` writes the matching config. Returns
-    ``{run_id, skipped, adapter_path}``. Skips (no run) when the
+    ``{run_id, skipped, adapter_path}``, plus a ``notes`` entry when an sft recipe's
+    ``quantization: auto`` was resolved (``sft quantization auto: none (need 3.0 GB, free
+    7.1 GB)``). Skips (no run) when the
     harvest produced no rows, or not enough is NEW since the data cursor (see
     ``harvest_from_traces``): fewer new rows than ``state.min_new_pairs``, or, for an sft loop
     whose harvest reports the ``edits_or_rated`` rule (it has a feedback log), fewer than
@@ -724,10 +737,12 @@ def train_dpo_from_pairs(
 
     run_id = f"loop-train-{uuid.uuid4().hex[:8]}"
     output_dir = os.path.join(_ADAPTERS_DIR, run_id)
+    train_notes: list = []
     try:
-        rendered = _render_train_yaml(state, str(pairs_path), output_dir)
+        rendered = _render_train_yaml(state, str(pairs_path), output_dir, notes=train_notes)
     except ValueError as exc:
         return {**skip, "notes": f"base_model_unknown: {exc}; training skipped"}
+    decided = {"notes": "; ".join(train_notes)} if train_notes else {}
     yaml_dir = Path(_ADAPTERS_DIR)
     yaml_dir.mkdir(parents=True, exist_ok=True)
     yaml_path = str(yaml_dir / f"{run_id}.yaml")
@@ -753,13 +768,13 @@ def train_dpo_from_pairs(
         )
     except Exception as exc:  # noqa: BLE001 — train failure must not crash loop
         _LOG.warning("train subprocess failed: %s", type(exc).__name__)
-        return {"run_id": None, "skipped": True, "adapter_path": None, "failed": True}
+        return {"run_id": None, "skipped": True, "adapter_path": None, "failed": True, **decided}
 
     rc = getattr(result, "returncode", 1)
     if rc != 0:
         _LOG.warning("soup train exited rc=%s", rc)
-        return {"run_id": None, "skipped": True, "adapter_path": None, "failed": True}
-    return {"run_id": run_id, "skipped": False, "adapter_path": output_dir}
+        return {"run_id": None, "skipped": True, "adapter_path": None, "failed": True, **decided}
+    return {"run_id": run_id, "skipped": False, "adapter_path": output_dir, **decided}
 
 
 # ---------------------------------------------------------------------------

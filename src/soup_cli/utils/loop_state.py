@@ -46,13 +46,14 @@ MAX_CANARY_MAX_WAIT_SEC = 30 * 86400.0
 SFT_RECIPE_KEYS: tuple = (
     "target_modules", "lora_r", "lora_alpha", "lr", "epochs", "quantization"
 )
-# What `quantization` may say. "auto" writes no quantization line, so soup train's own
-# default applies (the config schema's, 4bit; soup train has no VRAM-fit rule of its own).
+# What `quantization` may say. "4bit" and "none" are written as they are. "auto" is measured
+# when the train stage renders the soup.yaml: "none" if the base fits in free VRAM
+# (parameters x 2 bytes x 5), else "4bit" (utils/loop_quantization.py).
 SFT_QUANTIZATIONS: tuple = ("4bit", "none", "auto")
 # The sft recipe of a loop whose loop.yaml names none (or only some) of the keys.
 # target_modules None would write no line, so the config schema's default ("auto", peft decides)
 # applies.
-# PROVISIONAL: candidate B from the Soup Zero fit runs; the final values follow
+# Soup Zero fit runs, 2026-11-06: candidate B in bf16.
 DEFAULT_SFT_RECIPE: Mapping[str, object] = MappingProxyType({
     "target_modules": "all-linear",
     "lora_r": 64,
