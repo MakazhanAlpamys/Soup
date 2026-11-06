@@ -182,8 +182,8 @@ def _truncate_prompt(
 ) -> tuple[list[int], list[int]]:
     """Cut a prompt and its mask alike, keeping a leading BOS under ``keep_end``.
 
-    trl 0.29's KTO/BCO tokenizers put the tokenizer's BOS in front of the
-    prompt before the cap runs, and ``keep_end`` would cut it first (#2487).
+    trl 0.29's KTO, BCO, ORPO and CPO tokenizers put the tokenizer's BOS in front of
+    the prompt before the cap runs, and ``keep_end`` would cut it first (#2487, #2545).
     The decision is made on the ids, so ids and mask stay the same length; a
     prompt that does not start with ``bos_token_id`` gets the plain cut.
     """
