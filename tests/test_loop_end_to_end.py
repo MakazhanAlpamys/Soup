@@ -530,7 +530,7 @@ def test_a_new_loop_trains_sft_on_corrections_and_liked_answers_then_canaries_it
     _, iterations = loop["cycle"]()
     assert iterations == 1
     assert loop["trained_on"] == [] and loop["verdicts"] == []
-    record = read_iteration(list_iterations()[-1])
+    record = read_iteration(loop["created"][-1])
     assert record.run_id is None and record.pairs_harvested == 4  # the rows are there, though
     assert (
         "not_enough_new_data: 1 new edits (needs 8) and 2 new rated answers (needs 30) "
@@ -572,7 +572,7 @@ def test_a_new_loop_trains_sft_on_corrections_and_liked_answers_then_canaries_it
     name = state.canary_active
     assert name and name.startswith("loop-train-"), state
     assert state.harvest_cursor_ts is not None
-    record = read_iteration(list_iterations()[-1])
+    record = read_iteration(loop["created"][-1])
     assert record.pairs_harvested == len(rows) == 11
     assert record.gate_verdict == "OK" and record.shipped is True
     assert name in loop["model"].loaded
