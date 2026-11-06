@@ -41,7 +41,7 @@ from soup_cli.utils.loop_budget import (
     reset_daily_counter_if_new_day,
     reset_monthly_spend_if_new_month,
 )
-from soup_cli.utils.loop_daemon import WatchConfig, watch
+from soup_cli.utils.loop_daemon import CANARY_MIN_SAMPLES, WatchConfig, watch
 from soup_cli.utils.loop_detach import (
     DETACHED_ENV,
     RUNNING,
@@ -56,6 +56,14 @@ from soup_cli.utils.loop_detach import (
     write_pid_file,
 )
 from soup_cli.utils.loop_iteration import list_iterations, read_iteration
+from soup_cli.utils.loop_log import (
+    LoopLog,
+    progress_line,
+    rollback_changes,
+    start_log,
+    version_line,
+    withdrawn_line,
+)
 from soup_cli.utils.loop_state import (
     CANARY_ON_TIMEOUT,
     TRAIN_METHODS,
@@ -89,6 +97,25 @@ def _safe_read() -> LoopState:
     except (ValueError, TypeError) as exc:
         console.print(f"[red]loop state invalid:[/] {escape(str(exc))}")
         raise typer.Exit(code=2)
+
+
+def _warn_log(log: LoopLog, *, hint: str = "") -> None:
+    """Say which log lines could not be written (the command went on without them)."""
+    for note in log.take_failures():
+        console.print(f"[yellow]warning:[/] {for_terminal(note)}{hint}")
+
+
+def _log_withdrawal(log: LoopLog, state: LoopState) -> None:
+    """``soup loop rollback`` withdrew the running canary: close its iteration, say so."""
+    if state.canary_active is None:
+        return
+    line = withdrawn_line(state, "withdrawn by soup loop rollback")
+    if line is not None:
+        log.iteration(line)
+    iteration_id = state.canary_iteration["iteration_id"] if state.canary_iteration else None
+    log.progress(progress_line(
+        iteration_id, "rollback", "end", message=f"canary {state.canary_active} withdrawn"
+    ))
 
 
 @app.command("init")
@@ -317,6 +344,14 @@ def init_cmd(
     except (FileExistsError, FileNotFoundError, TypeError, ValueError) as exc:
         console.print(f"[red]init failed:[/] {escape(str(exc))}")
         raise typer.Exit(code=2)
+    if pre_wired:
+        # The first version of the loop's version log (docs/loop-formats.md). A loop that is
+        # not pre-wired gets it on its first watch cycle, as does one whose lines failed here.
+        log = LoopLog()
+        started = start_log(state, log, actor="user")
+        if started is not state:
+            write_state(started, path)
+        _warn_log(log, hint="; soup loop watch tries again")
     console.print(
         Panel.fit(
             f"loop state created at [bold]{escape(os.path.relpath(path))}[/]\n"
@@ -684,7 +719,19 @@ def canary_cmd(
         canary_autoroll_on_regress=autoroll_on_regress,
         canary_rollout_id=uuid.uuid4().hex,
         canary_started_ts=time.time(),
+        canary_iteration=None,  # no iteration started this canary
     )
+    # The log lines come first, as the daemon's do. A canary started by hand changes no
+    # version; a running canary it replaces is withdrawn.
+    log = LoopLog()
+    line = withdrawn_line(state, f"replaced by soup loop canary {policy.canary}")
+    if line is not None:
+        log.iteration(line)
+    log.progress(progress_line(
+        None, "canary", "start", done=0, total=CANARY_MIN_SAMPLES,
+        message=f"{policy.traffic_pct:g}% of keyed traffic; verdict after "
+        f"{CANARY_MIN_SAMPLES} canary answers",
+    ))
     write_state(new_state)
     # Reload so the in-memory value reflects the persisted updated_at.
     new_state = read_state()
@@ -692,6 +739,7 @@ def canary_cmd(
         f"[green]canary set:[/] {escape(policy.canary or '')} @ "
         f"{policy.traffic_pct:.1f}% (autoroll={autoroll_on_regress})"
     )
+    _warn_log(log)
 
 
 @app.command("rollback")
@@ -714,6 +762,9 @@ def rollback_cmd() -> None:
             raise typer.Exit(code=2)
         # The server's unkeyed traffic already goes to the served model and its
         # router reads the canary from loop.yaml: clearing the canary is the rollback.
+        # No version changes; the canary's iteration, if one started it, ends rolled_back.
+        log = LoopLog()
+        _log_withdrawal(log, state)
         write_state(
             replace(
                 state,
@@ -722,12 +773,14 @@ def rollback_cmd() -> None:
                 canary_rollout_id=None,
                 canary_adapter=None,
                 canary_started_ts=None,
+                canary_iteration=None,
             )
         )
         console.print(
             f"[green]canary withdrawn:[/] {escape(state.canary_active)}; the served model "
             "keeps all traffic"
         )
+        _warn_log(log)
         return
     from soup_cli.utils.loop_stages import switch_served_adapter
 
@@ -736,6 +789,20 @@ def rollback_cmd() -> None:
     if not ok:
         console.print(f"[red]rollback failed:[/] {for_terminal(note)}; loop.yaml is unchanged")
         raise typer.Exit(code=1)
+    # The version log: a person went back a version (a running canary is withdrawn with it).
+    log = LoopLog()
+    state = start_log(state, log, actor="loop")  # an older loop.yaml: the log begins here
+    changes = rollback_changes(state)
+    _log_withdrawal(log, state)
+    log.version(version_line(
+        from_version=state.production_version, to_version=changes["production_version"],
+        cause="rollback", actor="user", iteration_id=state.production_iteration_id,
+        served_as=target, reason="soup loop rollback",
+    ))
+    log.progress(progress_line(
+        state.production_iteration_id, "rollback", "end",
+        message=f"production back to version {changes['production_version']}",
+    ))
     write_state(
         replace(
             state,
@@ -748,6 +815,7 @@ def rollback_cmd() -> None:
             canary_rollout_id=None,
             canary_adapter=None,
             canary_started_ts=None,
+            **changes,
         )
     )
     label = target or "the served model"
@@ -755,6 +823,7 @@ def rollback_cmd() -> None:
         f"[green]rolled back:[/] {escape(state.production_name)} -> {escape(label)}"
         + (f" ([yellow]{for_terminal(note)}[/])" if note else "")
     )
+    _warn_log(log)
 
 
 @app.command("replay")

@@ -248,6 +248,32 @@ The data formats the cycle passes between serving, feedback, training and rollou
 
 State lives in `.soup/loop.yaml` (atomic write, cwd-contained, symlink-rejected). Per-iteration manifests under `.soup-loops/<iter-id>/iteration.json` are laid out so a v0.26 Soup Can can wrap them directly.
 
+**What the loop writes.** Besides the manifests, `soup loop` appends to three logs in
+`.soup-loops/`, in the formats of [Loop data formats](loop-formats.md):
+
+- `iterations.jsonl`: one line when an iteration is recorded, and another for the same
+  `iteration_id` whenever its outcome changes later (canary, promoted, rolled back); the
+  latest line wins. The line and the manifest are built from the same record.
+- `versions.jsonl`: one line per change of the active version. `soup loop init --pre-wired`
+  (or the first `soup loop watch` cycle) writes the `initial` line; a promotion by the
+  watch daemon is `promote`, actor `loop`; `soup loop rollback` back to an earlier version
+  is `rollback`, actor `user`. A canary that is withdrawn, or started with `soup loop
+  canary`, changes no version and adds no line. The version number lives in `loop.yaml`
+  (`production_version`, `latest_version`).
+- `progress.jsonl`: stage events (`harvest`, `train`, `verdict`, `deploy`, `canary`,
+  `promote`, `rollback`). While a canary waits for ratings, each watch cycle adds one
+  `canary` line whose `done` is the rated canary answers and `total` the 30 the verdict
+  needs. An iteration with nothing to train adds no stage lines.
+
+The files are append only, each line written by one `write` call, so another program
+(a desktop application) can append to the same files. **Run one loop per project:** two
+`soup loop watch` processes on one `.soup/loop.yaml` would race on the version counter, and
+the loop takes no lock. A log that cannot be written (disk full, a symlink in the way) is a
+warning and a note on the iteration, and never stops the loop. Do not run two `soup`
+versions against one project: an older one drops the version counter when it saves
+`loop.yaml`. See [Loop data formats](loop-formats.md#what-soup-loop-writes) for how each
+file is filled.
+
 Canary routing is available on the transformers backend when the candidate name was
 loaded with `soup serve --adapters` or `POST /v1/adapters/load`. Send a stable key as the
 `conversation_id` field or `X-Conversation-Id` header on
