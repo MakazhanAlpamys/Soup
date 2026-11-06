@@ -47,6 +47,12 @@ from rich.panel import Panel
 from rich.table import Table
 
 from soup_cli import __version__
+from soup_cli.eval.judge_templates import (
+    JUDGE_MODE_PREFERENCE,
+    JUDGE_MODE_REFERENCE,
+    JUDGE_MODES,
+)
+from soup_cli.eval.judge_templates import judge_template as _judge_template_for
 
 # Declared in the dependency-free leaf so the schema can import the bound
 # without this module (#780); re-exported so there is only one object.
@@ -64,7 +70,7 @@ from soup_cli.utils.terminal import strip_control as for_terminal
 # part of the verdict schema.
 EVIDENCE_SCHEMA_FIELDS: Mapping[str, FrozenSet[str]] = MappingProxyType({
     "root": frozenset({"task", "benchmarks", "noise_floor", "provenance", "numerics"}),
-    "task": frozenset({"mode", "base", "tuned"}),
+    "task": frozenset({"mode", "base", "tuned", "judge_mode", "judge_template"}),
     "benchmark": frozenset({"base", "tuned"}),
     "noise_floor": frozenset({"runs", "floors", "judge_inclusive"}),
 })
@@ -73,6 +79,8 @@ EVIDENCE_SCHEMA_FIELDS: Mapping[str, FrozenSet[str]] = MappingProxyType({
 # a ``TaskWin(base=0.5 coin-flip, tuned=win-rate)`` where ``won = tuned > 0.5``.
 TASK_MODES: Tuple[str, ...] = ("metric", "judge_score", "pairwise")
 SUPPORTED_TASK_MODES: Tuple[str, ...] = ("metric", "judge_score", "pairwise")
+#: The leg-1 modes scored by an LLM judge, which carry a judge mode and template.
+JUDGE_TASK_MODES: Tuple[str, ...] = ("judge_score", "pairwise")
 
 DECISION_SHIP = "SHIP"
 DECISION_DONT_SHIP = "DON'T SHIP"
@@ -147,6 +155,14 @@ class TaskWin:
     base: float
     tuned: float
     won: bool  # tuned > base (STRICT)
+    #: #2520: how the judge modes were judged — ``"preference"`` (prompt and
+    #: responses only) or ``"reference"`` (``--judge-reference``: the task's
+    #: expected answer too). ``None`` for ``metric``, and for a judge-mode
+    #: ``TaskWin`` built without it, which reads as ``"preference"``.
+    judge_mode: Optional[str] = None
+    #: ``(id, version)`` of the ``eval/judge_templates`` template the score was
+    #: judged with; ``None`` reads as the current template for ``judge_mode``.
+    judge_template: Optional[Tuple[str, int]] = None
 
 
 @dataclass(frozen=True)
@@ -374,6 +390,8 @@ def build_task_win(
     tuned: object,
     *,
     noise_floor: Optional[NoiseFloor] = None,
+    judge_mode: Optional[str] = None,
+    judge_template: Optional[Tuple[str, int]] = None,
 ) -> TaskWin:
     """Build a leg-1 ``TaskWin``. ``won`` is the STRICT inequality tuned > base.
 
@@ -381,15 +399,49 @@ def build_task_win(
     resolve on ``TASK_AXIS``: a win of 0.004 measured on an instrument with a
     0.020 floor is not a win, it is the instrument. Without one the behaviour
     is byte-identical to v0.73.1.
+
+    For the judge modes ``judge_mode`` defaults to ``"preference"`` and
+    ``judge_template`` to that mode's current template (#2520); a replayed
+    evidence file passes the template it recorded. ``metric`` takes neither.
     """
     if mode not in TASK_MODES:
         raise ValueError(f"mode must be one of {TASK_MODES}, got {mode!r}")
     base_f = _validate_score(base, "task base")
     tuned_f = _validate_score(tuned, "task tuned")
     floor = _floor_of(noise_floor, TASK_AXIS)
+    if mode not in JUDGE_TASK_MODES:
+        if judge_mode is not None or judge_template is not None:
+            raise ValueError(
+                "judge_mode / judge_template apply only to task mode "
+                "judge_score or pairwise"
+            )
+    else:
+        judge_mode = JUDGE_MODE_PREFERENCE if judge_mode is None else judge_mode
+        if judge_mode not in JUDGE_MODES:
+            raise ValueError(f"judge_mode must be one of {JUDGE_MODES}")
+        if judge_template is None:
+            template = _judge_template_for(mode, judge_mode)
+            judge_template = (template.id, template.version)
     return TaskWin(
-        mode=mode, base=base_f, tuned=tuned_f, won=tuned_f > base_f + floor
+        mode=mode, base=base_f, tuned=tuned_f, won=tuned_f > base_f + floor,
+        judge_mode=judge_mode, judge_template=judge_template,
     )
+
+
+def _judge_descriptor(win: TaskWin) -> Optional[Tuple[str, Tuple[str, int]]]:
+    """``(judge_mode, (template id, version))`` for a judge-mode win, else ``None``.
+
+    A judge-mode ``TaskWin`` built without the fields (constructed directly, as
+    tests and older callers do) reads as today's preference judging.
+    """
+    if win.mode not in JUDGE_TASK_MODES:
+        return None
+    judge_mode = win.judge_mode if win.judge_mode is not None else JUDGE_MODE_PREFERENCE
+    template = win.judge_template
+    if template is None:
+        current = _judge_template_for(win.mode, judge_mode)
+        template = (current.id, current.version)
+    return judge_mode, template
 
 
 def compute_benchmark_deltas(
@@ -498,15 +550,12 @@ def decide_ship(
     # Canonicalise the task win for the SAME reason the deltas are canonicalised
     # above: the panel renders ``verdict.task_win.won``, so a TaskWin built
     # without the floor would print "won" beside a DON'T SHIP decided with it.
+    # ``replace`` (not a fresh ``TaskWin``) keeps every other field, so the
+    # judge mode and template survive a floor that flips ``won`` (#2520).
     canonical_win = (
         task_win
         if task_win.won == leg1_pass
-        else TaskWin(
-            mode=task_win.mode,
-            base=task_win.base,
-            tuned=task_win.tuned,
-            won=leg1_pass,
-        )
+        else replace(task_win, won=leg1_pass)
     )
     any_regressed = any(item.regressed for item in canonical)
 
@@ -796,8 +845,15 @@ def verdict_to_evidence(
     if not isinstance(verdict, ShipVerdict):
         raise TypeError("verdict must be a ShipVerdict instance")
     win = verdict.task_win
+    task: Dict[str, object] = {"mode": win.mode, "base": win.base, "tuned": win.tuned}
+    # Reference judging only (#2520): evidence written without --judge-reference
+    # stays byte-identical, and preference judging is what an absent key means.
+    descriptor = _judge_descriptor(win)
+    if descriptor is not None and descriptor[0] == JUDGE_MODE_REFERENCE:
+        task["judge_mode"] = descriptor[0]
+        task["judge_template"] = {"id": descriptor[1][0], "version": descriptor[1][1]}
     evidence: Dict[str, object] = {
-        "task": {"mode": win.mode, "base": win.base, "tuned": win.tuned},
+        "task": task,
         "benchmarks": {
             item.name: {"base": item.base, "tuned": item.tuned}
             for item in verdict.benchmark_deltas
@@ -884,6 +940,58 @@ def noise_floor_from_evidence(payload: object) -> Optional[NoiseFloor]:
     )
 
 
+def _judge_fields_from_evidence(
+    task: Mapping[object, object], mode: str
+) -> Tuple[Optional[str], Optional[Tuple[str, int]]]:
+    """Read ``evidence.task.judge_mode`` / ``judge_template`` (#2520).
+
+    Only reference judging is ever written, so both keys are absent (today's
+    preference judging) or both present with ``judge_mode: "reference"`` and the
+    reference template of the task's mode. The version must be one this Soup
+    knows (1 up to the current one): an evidence file is untrusted input, and a
+    verdict must not claim a template text that does not exist here. Values are
+    not echoed in the errors.
+    """
+    has_mode = "judge_mode" in task
+    has_template = "judge_template" in task
+    if not has_mode and not has_template:
+        return None, None
+    if has_mode != has_template:
+        raise ValueError(
+            "evidence.task.judge_mode and evidence.task.judge_template go together"
+        )
+    if mode not in JUDGE_TASK_MODES:
+        raise ValueError(
+            "evidence.task.judge_mode applies only to task mode judge_score or pairwise"
+        )
+    if task["judge_mode"] != JUDGE_MODE_REFERENCE:
+        raise ValueError(
+            "evidence.task.judge_mode must be 'reference'; preference judging is "
+            "recorded by leaving judge_mode and judge_template out"
+        )
+    raw = task["judge_template"]
+    if not isinstance(raw, Mapping) or set(raw) != {"id", "version"}:
+        raise ValueError(
+            "evidence.task.judge_template must be an object with exactly 'id' and 'version'"
+        )
+    current = _judge_template_for(mode, JUDGE_MODE_REFERENCE)
+    if raw["id"] != current.id:
+        raise ValueError(
+            f"evidence.task.judge_template.id must be {current.id!r} for task mode {mode}"
+        )
+    version = raw["version"]
+    if (
+        not isinstance(version, int)
+        or isinstance(version, bool)
+        or not 1 <= version <= current.version
+    ):
+        raise ValueError(
+            "evidence.task.judge_template.version must be an integer from 1 to "
+            f"{current.version}"
+        )
+    return JUDGE_MODE_REFERENCE, (current.id, version)
+
+
 def verdict_from_evidence(
     payload: Mapping[str, object],
     *,
@@ -917,9 +1025,11 @@ def verdict_from_evidence(
         stored_floor = noise_floor_from_evidence(payload.get("noise_floor"))
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"invalid evidence.noise_floor: {exc}") from exc
+    judge_mode, judge_template = _judge_fields_from_evidence(task, str(mode))
     try:
         task_win = build_task_win(
-            str(mode), task["base"], task["tuned"], noise_floor=stored_floor
+            str(mode), task["base"], task["tuned"], noise_floor=stored_floor,
+            judge_mode=judge_mode, judge_template=judge_template,
         )
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"invalid evidence.task: {exc}") from exc
@@ -990,14 +1100,22 @@ def verdict_to_dict(verdict: ShipVerdict) -> Dict[str, object]:
     if not isinstance(verdict, ShipVerdict):
         raise TypeError("verdict must be a ShipVerdict instance")
     win = verdict.task_win
+    task_win: Dict[str, object] = {
+        "mode": win.mode,
+        "base": win.base,
+        "tuned": win.tuned,
+        "won": win.won,
+    }
+    # Always present for the two judge modes, absent for metric (#2520), like
+    # noise_floor.judge_inclusive (#403): a reader names the judging without
+    # inferring it.
+    descriptor = _judge_descriptor(win)
+    if descriptor is not None:
+        task_win["judge_mode"] = descriptor[0]
+        task_win["judge_template"] = {"id": descriptor[1][0], "version": descriptor[1][1]}
     return {
         "decision": verdict.decision,
-        "task_win": {
-            "mode": win.mode,
-            "base": win.base,
-            "tuned": win.tuned,
-            "won": win.won,
-        },
+        "task_win": task_win,
         "benchmark_deltas": [
             {
                 "name": item.name,

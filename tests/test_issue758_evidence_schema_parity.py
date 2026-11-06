@@ -51,6 +51,15 @@ EVIDENCE_CORPUS = (
         "benchmarks": {"mini_mmlu": {"base": 0.70, "tuned": 0.72}},
         "numerics": "4bit",
     },
+    {
+        # #2520: a reference-judged leg records its judge mode and template.
+        "task": {
+            "mode": "pairwise", "base": 0.50, "tuned": 0.75,
+            "judge_mode": "reference",
+            "judge_template": {"id": "pairwise.reference", "version": 1},
+        },
+        "benchmarks": {"mini_mmlu": {"base": 0.70, "tuned": 0.71}},
+    },
 )
 
 
@@ -135,6 +144,19 @@ MALFORMED_CORPUS = (
         "task": {"mode": "metric", "base": 0.50, "tuned": 0.80},
         "benchmarks": {"mini_mmlu": {"base": 0.70, "tuned": 0.72}},
         "numerics": "nf4",
+    },
+    {
+        # #2520: judge_mode without judge_template.
+        "task": {"mode": "judge_score", "base": 0.5, "tuned": 0.6, "judge_mode": "reference"},
+        "benchmarks": {},
+    },
+    {
+        # #2520: a metric leg has no judge.
+        "task": {
+            "mode": "metric", "base": 0.5, "tuned": 0.6, "judge_mode": "reference",
+            "judge_template": {"id": "judge_score.reference", "version": 1},
+        },
+        "benchmarks": {},
     },
 )
 

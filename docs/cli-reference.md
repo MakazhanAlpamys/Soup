@@ -3490,6 +3490,7 @@ Usage: `soup ship [OPTIONS] [<command>] [ARGS]...`
 | `--push` | text |  |  | Post the verdict as a GitHub PR comment (owner/repo#N). Auth via GITHUB_TOKEN / GH_TOKEN; needs the `gh` CLI. |
 | `--device` | text |  |  | Device for the live run (cuda / cpu). |
 | `--chat-template-kwargs` | text |  |  | Live chat-template variables as a JSON object, e.g. {"enable_thinking":false}. |
+| `--judge-reference` | flag | off |  | Show the judge each task's `expected` answer as a reference (--task-mode judge_score or pairwise; live runs only). |
 
 ## `soup shrink`
 

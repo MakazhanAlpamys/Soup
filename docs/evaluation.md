@@ -490,6 +490,11 @@ soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
 # (honouring Retry-After) and a spent retry never scores as a 0.5 tie (#1447). A judge
 # that answers "tie" still scores 0.5. The error says how many pairs were not judged (#1522).
 
+# Reference-guided judging (#2520): the judge also sees each task row's `expected`
+# answer, in both judge modes. Off by default; without it the prompts are unchanged.
+soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
+  --task-mode pairwise --judge-model ollama://llama3.1 --judge-reference
+
 # Leg-2 via lm-eval benchmarks, base scores supplied by --baseline
 soup ship --base <m> --tuned ./out --task-eval tasks.jsonl \
   --general-suite mmlu,hellaswag --baseline registry://abc123
@@ -497,6 +502,35 @@ soup ship --base <m> --tuned ./out --task-eval tasks.jsonl \
 # Offline: decide from pre-computed scores, persist the verdict JSON
 soup ship --evidence evidence.json --output verdict.json
 ```
+
+### Reference-guided judging
+
+By default the judge sees only the prompt and the response(s), so it rewards the
+answer it likes, which may not be the one your task expects. `--judge-reference`
+also shows it the task row's `expected` answer and asks it to judge agreement in
+substance with that reference. It applies to `--task-mode judge_score` and
+`pairwise` on a live run.
+
+- Every task row needs a non-blank string `expected`. A missing, `null`,
+  non-string, empty or whitespace-only `expected` is a usage error (exit 3) that
+  names the field and the file's line number, and it is found before any model
+  loads. A `scoring: "regex"` row is refused too: its `expected` is a pattern,
+  not an answer.
+- `--judge-reference` with `--task-mode metric` (from the flag or
+  `eval.ship.task_mode`) or with `--evidence` is a usage error.
+- The reference is shown fenced as data, not as instructions to the judge. In
+  pairwise mode both swap orders get the same reference, and a disagreement
+  between the two orders still scores as a tie.
+- `--noise-floor` judges with the same template as the leg it guards.
+
+The judge prompts are versioned templates in `soup_cli.eval.judge_templates`:
+`judge_score.preference`, `judge_score.reference`, `pairwise.preference` and
+`pairwise.reference`, each with an integer version. In the `--output` verdict
+JSON, a judge-mode `task_win` carries `judge_mode` (`preference` or `reference`)
+and `judge_template` (`{"id", "version"}`); a metric `task_win` carries neither.
+`--emit-evidence` writes the two fields only for a reference-judged leg, so
+evidence from a default run is unchanged and older evidence still reads as
+preference judging.
 
 ### Opt-in progress
 

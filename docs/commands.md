@@ -225,6 +225,7 @@ soup ship --evidence ev.json [--output v.json]  Decide offline from pre-computed
 soup ship ... --progress jsonl  Emit versioned completion events on stderr; keep the verdict on stdout (#1759)
 soup ship ... --task-mode judge_score --judge-model ollama://llama3.1  Leg-1 via LLM-as-a-judge
 soup ship ... --task-mode pairwise --judge-model ollama://llama3.1  Leg-1 via swap-debiased judge win-rate (base=0.5) (v0.71.31)
+soup ship ... --task-mode judge_score|pairwise --judge-model <url> --judge-reference  Show the judge each task's `expected` answer as a reference; refused for metric mode, --evidence, regex rows and a missing / non-string / blank `expected` (#2520)
 soup ship ...  # leg-2 default = 8 bundled offline suites (MCQ/arithmetic/over_refusal + tool_call/format_json/safety, extraction scorer, ~40 items each) (v0.71.38; +mini_over_refusal v0.73.2)
 soup ship ... --general-suite mmlu,gsm8k --baseline base.json  lm-eval leg-2 override + recorded base scores
 soup ship ... --emit-evidence ev.json  Re-serialise the scores as replayable --evidence input (output-is-input, #312) (v0.71.39)
