@@ -8,6 +8,8 @@ the transformers backend behavior from #2545. A prompt without BOS or under
 
 from __future__ import annotations
 
+import pytest
+
 from soup_cli.trainer.mlx_orpo import build_orpo_example
 
 BOS, EOS = 1, 2
@@ -66,6 +68,7 @@ def test_overlong_prompt_keeps_leading_bos_under_keep_end():
     # The last 5 tokens of "0123456789" (i.e. '5', '6', '7', '8', '9')
     expected_tail = [3 + (ord(c) % 190) for c in "56789"]
     assert prompt_ids[1:] == expected_tail
+    assert ex.rejected_ids[: ex.rejected_prompt_len] == prompt_ids
 
 
 def test_overlong_prompt_without_bos_drops_start_under_keep_end():
@@ -95,3 +98,20 @@ def test_prompt_that_fits_is_untouched():
     prompt_ids = ex.chosen_ids[: ex.chosen_prompt_len]
     assert prompt_ids[0] == BOS
     assert len(prompt_ids) == 1 + len("hi")
+
+def test_a_simpo_batch_on_mlx_starts_every_row_with_the_bos():
+    pytest.importorskip("mlx.core")
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.trainer.mlx_simpo import MLXSimPOTrainerWrapper
+    from tests.test_mlx_simpo import _SIMPO_YAML
+
+    wrapper = MLXSimPOTrainerWrapper(load_config_from_string(_SIMPO_YAML))
+    wrapper.config.data.max_length = 12
+    wrapper.tokenizer = MockTokenizer()
+    (example,), _ = wrapper._examples(
+        [{"prompt": "0123456789", "chosen": " yes", "rejected": " no"}]
+    )
+    tokens, _completion = wrapper._batch_arrays([example])
+    assert tokens[:, 0].tolist() == [BOS, BOS]
+    assert tokens[0, 1:6].tolist() == [3 + (ord(c) % 190) for c in "56789"]
+
