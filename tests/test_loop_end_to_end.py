@@ -466,7 +466,7 @@ def test_a_correction_given_as_feedback_trains_the_chosen_method_and_reaches_a_c
     name = state.canary_active
     assert name and name.startswith("loop-train-"), state
     assert state.harvest_cursor_ts is not None
-    record = read_iteration(list_iterations()[-1])
+    record = read_iteration(loop["created"][-1])
     assert record.pairs_harvested == len(rows)
     assert record.gate_verdict == "OK" and record.shipped is True
     assert name in loop["model"].loaded
@@ -536,7 +536,7 @@ def test_a_canary_people_thumb_down_is_withdrawn_though_no_request_failed(loop):
     assert state.canary_started_ts is None
     assert state.production_name is None  # production never changed
     assert _active_adapter(loop["client"]) is None
-    record = read_iteration(list_iterations()[-1])
+    record = read_iteration(loop["created"][-1])
     assert record.rolled_back is True and record.canary_verdict == "MAJOR"
     assert f"canary {name} rolled back (MAJOR)" in record.notes
     assert "canary errors: OK" in record.notes  # every request was answered
