@@ -131,9 +131,11 @@ class LoopState:
     # answers) the pre-wired harvest reads: `soup loop init --feedback-log`. None =
     # .soup-loops/feedback.jsonl; SOUP_LOOP_FEEDBACK_LOG overrides both.
     feedback_log: Optional[str] = None
-    # What the pre-wired loop trains: "dpo" (preference pairs, the default), "kto"
-    # (rows labelled good or bad) or "sft" (the answers people corrected).
-    # `min_new_pairs` counts new rows of this method's dataset.
+    # What the pre-wired loop trains: "dpo" (preference pairs), "kto" (rows labelled good or
+    # bad) or "sft" (the answers people corrected and the ones they rated good).
+    # `min_new_pairs` counts new rows of this method's dataset. "dpo" stays the default HERE,
+    # so a loop.yaml without the field keeps the method it always had; `soup loop init`
+    # (new loops) defaults to "sft".
     train_method: str = "dpo"
     # When the active rollout started (epoch seconds): the deploy stage, or `soup loop
     # canary`, writes it with canary_active. The quality verdict counts only answers given
@@ -168,6 +170,13 @@ class LoopState:
     canary_iteration: Optional[dict] = None
     # True once the first version (the "initial" line) is in the version log.
     version_log_started: bool = False
+    # When the loop trains sft and a feedback log exists, training starts once this many new
+    # edits (real corrections newer than the data cursor) OR this many new rated answers
+    # (any label) have arrived, whichever comes first (`soup loop init --min-new-edits` /
+    # `--min-new-rated`). Without a feedback log, or for dpo / kto, `min_new_pairs` applies.
+    # Last, so adding them shifted no existing positional field.
+    min_new_edits: int = 8
+    min_new_rated: int = 30
 
     def __post_init__(self) -> None:  # noqa: D401 — validator hook
         # Closed-allowlist enforcement + bool-as-int rejection mirror the
@@ -256,6 +265,10 @@ class LoopState:
         v = self.min_new_pairs
         if isinstance(v, bool) or not isinstance(v, int) or v < 1:
             raise ValueError(f"min_new_pairs must be a positive int, got {v!r}")
+        for fname in ("min_new_edits", "min_new_rated"):
+            v = getattr(self, fname)
+            if isinstance(v, bool) or not isinstance(v, int) or v < 1:
+                raise ValueError(f"{fname} must be a positive int, got {v!r}")
         if self.feedback_log is not None:
             _require_str("feedback_log", self.feedback_log, allow_empty=False)
         if self.train_method not in TRAIN_METHODS:
@@ -596,6 +609,8 @@ def init_state(
     train_method: str = "dpo",
     canary_max_wait_sec: float = DEFAULT_CANARY_MAX_WAIT_SEC,
     canary_on_timeout: str = "errors-only",
+    min_new_edits: int = 8,
+    min_new_rated: int = 30,
     path: Optional[str] = None,
     force: bool = False,
 ) -> Tuple[LoopState, str]:
@@ -636,6 +651,8 @@ def init_state(
         train_method=train_method,
         canary_max_wait_sec=canary_max_wait_sec,
         canary_on_timeout=canary_on_timeout,
+        min_new_edits=min_new_edits,
+        min_new_rated=min_new_rated,
         monthly_budget_usd=monthly_budget_usd,
         max_runs_per_day=max_runs_per_day,
         created_at=now,

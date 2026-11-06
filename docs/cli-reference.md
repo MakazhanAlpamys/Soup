@@ -2701,9 +2701,11 @@ Usage: `soup loop init [OPTIONS] SERVED_MODEL`
 | `--canary-max-wait` | text | `24h` |  | How long after a canary started its ratings may stay short of the 30 per side the quality verdict needs: &lt;int>m, &lt;int>h or &lt;int>d, or plain seconds (at most 30d, default 24h). Then --canary-on-timeout applies. |
 | `--canary-on-timeout` | text | `errors-only` |  | What happens when --canary-max-wait runs out: errors-only (the request-error verdict alone decides; the default), rollback (withdraw the canary) or wait (keep waiting, no time limit). |
 | `--verify` | text | `ship` |  | The check before rollout: ship (a soup ship verdict against the production version; --eval is a task-eval JSONL) or eval-gate (--eval is an eval-gate suite YAML). |
-| `--min-new-pairs` | integer | `1` |  | Train only when at least this many preference pairs arrived since the last training run (the pre-wired harvest keeps a data cursor); the run still trains on all pairs. Default 1. |
+| `--min-new-pairs` | integer | `1` |  | Train only when at least this many preference pairs arrived since the last training run (the pre-wired harvest keeps a data cursor); the run still trains on all pairs. Default 1. An sft loop with a feedback log uses --min-new-edits and --min-new-rated instead. |
+| `--min-new-edits` | integer | `8` |  | An sft loop with a feedback log trains once at least this many new edits (corrected answers newer than the last training run) have arrived, or --min-new-rated new rated answers, whichever comes first. Default 8. |
+| `--min-new-rated` | integer | `30` |  | An sft loop with a feedback log trains once at least this many new rated answers (any thumb, rating or edit) have arrived, or --min-new-edits new edits, whichever comes first. Default 30. |
 | `--feedback-log` | text |  |  | Feedback log (JSONL: thumbs, ratings, edits and comments on logged answers) the pre-wired harvest reads. Default: .soup-loops/feedback.jsonl. SOUP_LOOP_FEEDBACK_LOG overrides it. |
-| `--train-method` | text | `dpo` |  | What the pre-wired loop trains: dpo (preference pairs, the default), kto (answers labelled good or bad) or sft (the answers people corrected). |
+| `--train-method` | text | `sft` |  | What the pre-wired loop trains: sft (the default; corrected answers and answers rated good), dpo (preference pairs) or kto (answers labelled good or bad). A loop.yaml without this field keeps dpo. |
 | `--force` | flag | off |  | Overwrite existing loop.yaml. |
 
 ### `soup loop pause`

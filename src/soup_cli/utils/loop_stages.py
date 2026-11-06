@@ -37,11 +37,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping, Optional, Tuple
 
 from soup_cli.utils.loop_feedback import (
+    count_new,
+    good_answer_row,
     harvest_feedback,
     is_new,
+    newest_rated_ts,
     newest_ts,
     prompt_key,
     read_quality_stats,
+    unique_sft,
+    without_edited,
 )
 from soup_cli.utils.loop_state import VERIFY_METHODS, LoopState
 from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
@@ -318,48 +323,101 @@ def _trace_pairs(
     return pairs, new_keys, newest
 
 
+def _trace_good_answers(
+    traces: "list[Trace]",
+) -> "list[Tuple[str, str, Optional[float]]]":
+    """``(prompt, answer, ts)`` of the serve-trace answers whose newest label is a thumbs-up.
+
+    Traces are labelled one line at a time: for one prompt and answer the newest
+    ``thumbs_up`` / ``thumbs_down`` line in file order decides, so an up followed by a down is
+    not good. A down alone gives nothing; lines with any other signal are not labels.
+    """
+    newest: "dict[Tuple[str, str], Tuple[str, Optional[float]]]" = {}
+    for trace in traces:
+        if trace.signal in ("thumbs_up", "thumbs_down"):
+            newest[(trace.prompt, trace.output)] = (trace.signal, trace.ts)
+    return [
+        (prompt, output, ts)
+        for (prompt, output), (signal, ts) in newest.items()
+        if signal == "thumbs_up"
+    ]
+
+
+def _thumbs_good_answers(state: LoopState) -> "list[Tuple[str, str, Optional[float]]]":
+    """``(prompt, answer, ts)`` of the answers whose newest thumb in the database is ``up``."""
+    path = checked_thumbs_db(state)
+    if path is None:
+        return []
+    from soup_cli.utils.local_rl import harvest_up_answers
+
+    try:
+        return list(harvest_up_answers(path))
+    except sqlite3.Error as exc:
+        raise ValueError(
+            f"{_resolve_thumbs_db(state)[1]}: {quote_path(path)} could not be read "
+            f"({type(exc).__name__}: {exc})"
+        ) from exc
+
+
 #: File name prefix of the harvested dataset, per training method.
 _DATASET_PREFIX = {"dpo": "pairs", "kto": "kto", "sft": "sft"}
+#: What ``harvest_from_traces`` reports as the rule that decides whether enough is new.
+_RULE_MIN_NEW_PAIRS = "min_new_pairs"
+_RULE_EDITS_OR_RATED = "edits_or_rated"
 
 
 def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
     """Serve traces, recorded thumbs and the feedback log → the dataset of ``train_method``.
 
-    Three datasets come out of one harvest (see ``loop_feedback`` for their rows):
+    Three datasets come out of one harvest (see ``loop_feedback`` for the feedback rows):
 
     - ``dpo``: preference pairs from ``soup serve --trace-log`` directories
       (thumbs/regeneration signals) and, when one is configured, the ``soup serve
       --record-thumbs`` database (#1440), unioned without exact duplicates, plus a pair
       for every answer a person corrected in the feedback log (chosen = the edited text);
     - ``kto``: rows labelled good or bad from the feedback log's thumbs, ratings and edits;
-    - ``sft``: the corrected answers of the feedback log.
+    - ``sft``: the corrected answers of the feedback log and every unedited answer whose
+      newest label is good: a thumb up or a rating of 4-5 in the feedback log, an ``up``
+      thumb in the database, a ``thumbs_up`` serve trace. An answer that was only rated bad
+      gives no row. The same prompt and answer count once, and an answer a person corrected
+      in the feedback log is never trained on as it was (an edit wins over every thumb).
 
     The feedback log (``feedback_log_source``) joins the conversation records of the
-    trace directory by id. The traces and the thumbs database feed ``dpo`` only.
+    trace directory by id. The traces and the thumbs database feed ``dpo`` and ``sft``.
 
     Writes the dataset of ``state.train_method`` to ``.soup-loops/pairs/<uuid>.jsonl``
     (cwd-contained) and returns ``{pairs_harvested, new_pairs, cursor_ts, pairs_path,
-    traces_collected, thumbs_pairs, train_method, dpo_pairs, kto_rows, sft_rows,
-    feedback_unknown_response, feedback_lines_skipped}``. ``thumbs_pairs`` counts the pairs
-    READ from the database, before the union drops any that a trace already supplied;
-    ``dpo_pairs`` / ``kto_rows`` / ``sft_rows`` are the sizes of the three datasets;
-    ``feedback_unknown_response`` counts feedback lines about an answer no conversation
-    record has (ignored); ``feedback_lines_skipped`` the log lines that could not be used.
-    ``traces_collected`` counts the answers in the trace directory (version 0 and 1 lines). Yields
-    zero rows (no path) when the selected dataset is empty; a configured database that is
-    refused or missing raises (see ``checked_thumbs_db``).
+    traces_collected, thumbs_pairs, train_method, dpo_pairs, kto_rows, sft_rows, new_edits,
+    new_rated, new_data_rule, feedback_unknown_response, feedback_lines_skipped}``.
+    ``thumbs_pairs`` counts the pairs READ from the database, before the union drops any that
+    a trace already supplied; ``dpo_pairs`` / ``kto_rows`` / ``sft_rows`` are the sizes of the
+    three datasets; ``feedback_unknown_response`` counts feedback lines about an answer no
+    conversation record has (ignored); ``feedback_lines_skipped`` the log lines that could not
+    be used. ``traces_collected`` counts the answers in the trace directory (version 0 and 1
+    lines). Yields zero rows (no path) when the selected dataset is empty; a configured
+    database that is refused or missing raises (see ``checked_thumbs_db``).
 
     The data cursor (``state.harvest_cursor_ts``) decides what is NEW, not what is
     trained on: ``pairs_harvested`` and the dataset file hold ALL rows of the method, since
     every iteration trains a fresh LoRA from the base model. ``new_pairs`` counts the rows
-    that arrived after the cursor, which ``train_dpo_from_pairs`` compares with
-    ``min_new_pairs``. A database pair is new when the newer of its up and down rows is
-    later than the cursor; a trace pair, when a trace it is built from is (a trace
+    that arrived after the cursor. A database pair is new when the newer of its up and down
+    rows is later than the cursor; a trace pair, when a trace it is built from is (a trace
     without a ts counts as new only while there is no cursor, see ``_trace_pairs``); a
     feedback row, when the newest feedback line it came from is. ``cursor_ts`` is the
     newest ts among the rows of the dataset, which ``run_once`` stores once a training run
-    used them, or ``None``. The dataset file is not written while ``new_pairs`` is below
-    ``min_new_pairs``: that cycle trains nothing, and a file per poll would pile up.
+    used them, or ``None``.
+
+    Whether enough is new depends on the loop. For ``dpo`` and ``kto``, and for ``sft``
+    without a feedback log, it is ``new_pairs >= state.min_new_pairs``
+    (``new_data_rule`` ``"min_new_pairs"``). For ``sft`` WITH a feedback log it is
+    ``new_edits >= state.min_new_edits`` OR ``new_rated >= state.min_new_rated``
+    (``new_data_rule`` ``"edits_or_rated"``): ``new_edits`` counts the answers with a real
+    edit newer than the cursor, ``new_rated`` the answers with any thumb, rating or real edit
+    newer than the cursor (``loop_feedback.count_new``; both are reported for every method).
+    Training consumes every rated answer, so ``cursor_ts`` then also covers answers that gave
+    no row (a thumb down), else they would count as new for ever. The dataset file is not
+    written while not enough is new: that cycle trains nothing, and a file per poll would
+    pile up.
     """
     from soup_cli.data.traces.parsers import parse_soup_serve
 
@@ -379,7 +437,8 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
     dpo_newest = newest
     taken = {_pair_key(p) for p in pairs}
 
-    feedback = harvest_feedback(trace_dir, _resolve_feedback_log(state))
+    feedback_path = _resolve_feedback_log(state)
+    feedback = harvest_feedback(trace_dir, feedback_path)
     found = feedback.datasets
     for item in found.dpo:
         key = (prompt_key(item.row["prompt"]), item.row["chosen"], item.row["rejected"])
@@ -387,10 +446,24 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
             continue
         dpo_rows.append((item.row, is_new(item.ts, cursor)))
         dpo_newest = _newer(dpo_newest, item.ts)
+    # sft: the answers rated good in the traces and the database, then the feedback log's rows;
+    # an answer the feedback log corrected is not an sft row from those stores.
+    rated_good = [
+        *(good_answer_row(prompt, answer, ts, "thumbs_up")
+          for prompt, answer, ts in _trace_good_answers(traces)),
+        *(good_answer_row(prompt, answer, ts, _THUMBS_SOURCE)
+          for prompt, answer, ts in _thumbs_good_answers(state)),
+    ]
+    sft_items = unique_sft([*without_edited(rated_good, found.edited_originals), *found.sft])
+    new_edits, new_rated = count_new(found.rated, cursor)
+    feedback_rule = state.train_method == "sft" and feedback_path is not None
+    sft_newest = newest_ts(sft_items)
+    if feedback_rule:
+        sft_newest = _newer(sft_newest, newest_rated_ts(found.rated))
     by_method = {
         "dpo": (dpo_rows, dpo_newest),
         "kto": ([(r.row, is_new(r.ts, cursor)) for r in found.kto], newest_ts(found.kto)),
-        "sft": ([(r.row, is_new(r.ts, cursor)) for r in found.sft], newest_ts(found.sft)),
+        "sft": ([(r.row, is_new(r.ts, cursor)) for r in sft_items], sft_newest),
     }
     rows, selected_newest = by_method[state.train_method]
     new_rows = sum(1 for _, new in rows if new)
@@ -401,7 +474,10 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
         "train_method": state.train_method,
         "dpo_pairs": len(dpo_rows),
         "kto_rows": len(found.kto),
-        "sft_rows": len(found.sft),
+        "sft_rows": len(sft_items),
+        "new_edits": new_edits,
+        "new_rated": new_rated,
+        "new_data_rule": _RULE_EDITS_OR_RATED if feedback_rule else _RULE_MIN_NEW_PAIRS,
         "feedback_unknown_response": found.unknown_response,
         "feedback_lines_skipped": feedback.skipped_lines,
     }
@@ -414,8 +490,12 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
             **common,
         }
 
+    if feedback_rule:
+        enough = new_edits >= state.min_new_edits or new_rated >= state.min_new_rated
+    else:
+        enough = new_rows >= state.min_new_pairs
     pairs_path = None
-    if new_rows >= state.min_new_pairs:
+    if enough:
         pairs_dir = Path(_PAIRS_DIR)
         pairs_dir.mkdir(parents=True, exist_ok=True)
         prefix = _DATASET_PREFIX[state.train_method]
@@ -531,6 +611,11 @@ def resolve_base_model(served_model: str, base_model: Optional[str] = None) -> s
 _TRAIN_FORMAT = {"dpo": "dpo", "kto": "kto", "sft": "chatml"}
 #: What a row of each method's dataset is called in a skip note.
 _ROW_NAME = {"dpo": "preference pairs", "kto": "kto rows", "sft": "sft rows"}
+#: The sft recipe the loop trains with (dpo and kto keep 1 epoch at lr 5e-5).
+_SFT_EPOCHS = 5
+_SFT_LR = 1.0e-4
+_SFT_LORA_R = 64
+_SFT_LORA_ALPHA = 16
 
 
 def _render_train_yaml(
@@ -546,15 +631,26 @@ def _render_train_yaml(
 
     method = method or state.train_method
     base = resolve_base_model(state.served_model, state.base_model)
+    if method == "sft":
+        # The recipe measured for the loop's sft: a higher lr, five passes over a small
+        # dataset, and LoRA rank 64 with alpha 16 (written out, not left to the schema).
+        training: dict = {
+            "epochs": _SFT_EPOCHS,
+            "batch_size": 1,
+            "lr": _SFT_LR,
+            "lora": {"r": _SFT_LORA_R, "alpha": _SFT_LORA_ALPHA},
+        }
+    else:
+        # KTO needs a per-device batch of at least 2: TRL's KL term is degenerate at 1
+        # and the config is refused (#1420).
+        training = {"epochs": 1, "batch_size": 2 if method == "kto" else 1, "lr": 5.0e-5}
     config = {
         "base": base,
         "task": method,
         # val_split 0: a one- or two-row harvest would otherwise lose its only
         # training rows to the schema default 0.1 (#1909).
         "data": {"train": data_path, "format": _TRAIN_FORMAT[method], "val_split": 0},
-        # KTO needs a per-device batch of at least 2: TRL's KL term is degenerate at 1
-        # and the config is refused (#1420).
-        "training": {"epochs": 1, "batch_size": 2 if method == "kto" else 1, "lr": 5.0e-5},
+        "training": training,
         "output": output_dir,
     }
     return yaml.safe_dump(config, sort_keys=False)
@@ -574,11 +670,14 @@ def train_dpo_from_pairs(
 ) -> Mapping[str, object]:
     """Train an adapter on the harvested dataset via a ``soup train`` subprocess.
 
-    The method is ``state.train_method``: ``dpo`` (the default, hence the name), ``kto``
-    or ``sft``; ``_render_train_yaml`` writes the matching config. Returns ``{run_id,
-    skipped, adapter_path}``. Skips (no run) when the
-    harvest produced no rows, or fewer NEW rows than ``state.min_new_pairs``
-    (the data cursor, see ``harvest_from_traces``), adding a ``notes`` reason
+    The method is ``state.train_method``: ``dpo`` (the name is from when it was the only
+    one), ``kto`` or ``sft``; ``_render_train_yaml`` writes the matching config. Returns
+    ``{run_id, skipped, adapter_path}``. Skips (no run) when the
+    harvest produced no rows, or not enough is NEW since the data cursor (see
+    ``harvest_from_traces``): fewer new rows than ``state.min_new_pairs``, or, for an sft loop
+    whose harvest reports the ``edits_or_rated`` rule (it has a feedback log), fewer than
+    ``state.min_new_edits`` new edits AND fewer than ``state.min_new_rated`` new rated
+    answers. It adds a ``notes`` reason
     (``no_preference_pairs`` / ``no_kto_rows`` / ``no_sft_rows`` with the count,
     ``not_enough_new_data`` with the counts, or ``pairs_file_missing``) that the loop saves
     in the iteration record (#1909). A harvest that reports no ``new_pairs`` (a custom
@@ -596,7 +695,18 @@ def train_dpo_from_pairs(
         else:
             note = f"no_{method}_rows: 0 valid {method} rows harvested, training skipped"
         return {**skip, "notes": note}
-    if new_n < state.min_new_pairs:
+    if method == "sft" and ctx.get("new_data_rule") == _RULE_EDITS_OR_RATED:
+        # An sft loop with a feedback log: new edits OR new rated answers, not new rows.
+        new_edits = int(ctx.get("new_edits", 0) or 0)
+        new_rated = int(ctx.get("new_rated", 0) or 0)
+        if new_edits < state.min_new_edits and new_rated < state.min_new_rated:
+            note = (
+                f"not_enough_new_data: {new_edits} new edits (needs {state.min_new_edits}) and "
+                f"{new_rated} new rated answers (needs {state.min_new_rated}) "
+                "since the last training run"
+            )
+            return {**skip, "notes": note}
+    elif new_n < state.min_new_pairs:
         note = (
             f"not_enough_new_data: {new_n} new {_ROW_NAME[method]} since the last training run, "
             f"training needs {state.min_new_pairs} (soup loop init --min-new-pairs)"

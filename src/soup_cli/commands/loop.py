@@ -99,6 +99,24 @@ def _safe_read() -> LoopState:
         raise typer.Exit(code=2)
 
 
+#: What an sft loop trains on, said at init (the default method, so it is spelled out).
+SFT_TRAINS_ON = (
+    "sft trains on corrected answers and on answers rated good; an answer that was only "
+    "rated bad gives no training row"
+)
+
+
+def _train_method_note(state: LoopState) -> str:
+    """The init panel lines under ``train_method`` (empty for dpo and kto), newline-ended."""
+    if state.train_method != "sft":
+        return ""
+    return (
+        f"{SFT_TRAINS_ON}\n"
+        f"with a feedback log, training starts at {state.min_new_edits} new edits "
+        f"or {state.min_new_rated} new rated answers\n"
+    )
+
+
 def _warn_log(log: LoopLog, *, hint: str = "") -> None:
     """Say which log lines could not be written (the command went on without them)."""
     for note in log.take_failures():
@@ -197,7 +215,24 @@ def init_cmd(
         help=(
             "Train only when at least this many preference pairs arrived since the last "
             "training run (the pre-wired harvest keeps a data cursor); the run still "
-            "trains on all pairs. Default 1."
+            "trains on all pairs. Default 1. An sft loop with a feedback log uses "
+            "--min-new-edits and --min-new-rated instead."
+        ),
+    ),
+    min_new_edits: int = typer.Option(
+        8, "--min-new-edits",
+        help=(
+            "An sft loop with a feedback log trains once at least this many new edits "
+            "(corrected answers newer than the last training run) have arrived, or "
+            "--min-new-rated new rated answers, whichever comes first. Default 8."
+        ),
+    ),
+    min_new_rated: int = typer.Option(
+        30, "--min-new-rated",
+        help=(
+            "An sft loop with a feedback log trains once at least this many new rated "
+            "answers (any thumb, rating or edit) have arrived, or --min-new-edits new "
+            "edits, whichever comes first. Default 30."
         ),
     ),
     feedback_log: Optional[str] = typer.Option(
@@ -209,10 +244,11 @@ def init_cmd(
         ),
     ),
     train_method: str = typer.Option(
-        "dpo", "--train-method",
+        "sft", "--train-method",
         help=(
-            "What the pre-wired loop trains: dpo (preference pairs, the default), kto "
-            "(answers labelled good or bad) or sft (the answers people corrected)."
+            "What the pre-wired loop trains: sft (the default; corrected answers and "
+            "answers rated good), dpo (preference pairs) or kto (answers labelled good "
+            "or bad). A loop.yaml without this field keeps dpo."
         ),
     ),
     force: bool = typer.Option(False, "--force", help="Overwrite existing loop.yaml."),
@@ -230,9 +266,14 @@ def init_cmd(
     ):
         console.print("[red]--max-runs-per-day must be a positive int[/]")
         raise typer.Exit(code=2)
-    if isinstance(min_new_pairs, bool) or min_new_pairs < 1:
-        console.print("[red]--min-new-pairs must be a positive int[/]")
-        raise typer.Exit(code=2)
+    for flag, value in (
+        ("--min-new-pairs", min_new_pairs),
+        ("--min-new-edits", min_new_edits),
+        ("--min-new-rated", min_new_rated),
+    ):
+        if isinstance(value, bool) or value < 1:
+            console.print(f"[red]{flag} must be a positive int[/]")
+            raise typer.Exit(code=2)
     if thumbs_db is not None:
         from soup_cli.utils.local_rl import validate_db_path
 
@@ -330,6 +371,8 @@ def init_cmd(
             verify=verify_method,
             deploy_traffic_pct=deploy_pct,
             min_new_pairs=min_new_pairs,
+            min_new_edits=min_new_edits,
+            min_new_rated=min_new_rated,
             feedback_log=feedback_log,
             train_method=method,
             canary_max_wait_sec=max_wait_sec,
@@ -362,6 +405,7 @@ def init_cmd(
             f"trace_dir:    [bold]{escape(_trace_dir_label(state))}[/]\n"
             f"feedback_log: [bold]{escape(_feedback_log_label(state))}[/]\n"
             f"train_method: [bold]{escape(state.train_method)}[/]\n"
+            f"{_train_method_note(state)}"
             f"canary_max_wait: [bold]{format_wait_duration(state.canary_max_wait_sec)}[/]\n"
             f"canary_on_timeout: [bold]{escape(state.canary_on_timeout)}[/]\n"
             f"base_model:   [bold]{escape(state.base_model or 'unknown')}[/]"
@@ -415,6 +459,8 @@ def status_cmd() -> None:
     table.add_row("canary_on_timeout", escape(state.canary_on_timeout))
     table.add_row("new_data_since", _cursor_label(state))
     table.add_row("min_new_pairs", str(state.min_new_pairs))
+    table.add_row("min_new_edits", str(state.min_new_edits))
+    table.add_row("min_new_rated", str(state.min_new_rated))
     table.add_row("pre_wired", "yes" if state.pre_wired else "no")
     table.add_row("traces_collected", str(state.traces_collected))
     table.add_row("pairs_distilled", str(state.pairs_distilled))

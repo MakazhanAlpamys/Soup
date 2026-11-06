@@ -126,7 +126,7 @@ soup loop status
 # Run the daemon (foreground)
 soup loop watch --poll-interval 300
 
-# Pre-wired production stages (v0.71.4): real traces → DPO → eval-gate → canary,
+# Pre-wired production stages (v0.71.4): real traces → training → eval-gate → canary,
 # instead of the v0.58 no-op stubs. Opt in once via `loop init --pre-wired` or
 # per-run via --pre-wired. Pack each iteration as a shareable Soup Can with
 # Registry lineage via --pack-cans.
@@ -163,7 +163,8 @@ SOUP_LOOP_THUMBS_DB=./rl.db soup loop watch --pre-wired
 # new_data_since), the newest feedback a training run has already seen. A pair is new
 # when the newer of its thumbs-up and thumbs-down is later than the cursor. An iteration
 # trains once at least --min-new-pairs (default 1) pairs are new, else it is skipped
-# (not_enough_new_data in its record); it then trains on ALL pairs, since every run starts
+# (not_enough_new_data in its record; an sft loop with a feedback log counts new edits and
+# new rated answers instead, see below); it then trains on ALL pairs, since every run starts
 # a fresh LoRA from the base model. The cursor moves after a training run, whatever its
 # verdict (DON'T SHIP used the data too), never after a skipped or failed one. Without it
 # the cycle after a promotion would retrain on the same feedback and start another canary.
@@ -178,19 +179,46 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
 # names another file. For thumb, rating and edit the latest line per answer wins; a null
 # value or a null edited_text clears it; comments accumulate; feedback about an answer that
 # is not logged is ignored (and counted); a line with an unknown schema_version is skipped.
-# One harvest builds three datasets, and --train-method (default dpo, which is unchanged)
-# picks the one the loop trains on. --min-new-pairs then counts new rows of that dataset.
+# One harvest builds three datasets, and --train-method picks the one the loop trains on:
+# sft for a NEW loop (a loop.yaml that has no train_method, or says dpo, keeps training dpo).
+# --min-new-pairs then counts new rows of that dataset, except for an sft loop with a
+# feedback log (below).
+#   sft  the edited text as the answer to the prompt, and every answer without a real edit
+#        whose newest label is good: a thumb up or a rating of 4-5 in the feedback log, an
+#        `up` thumb in the --thumbs-db database (the newest thumb per prompt and answer), a
+#        `thumbs_up` serve trace. An answer that was only rated bad gives no training row. The
+#        same prompt and answer count once. It trains with lr 1e-4, 5 epochs and LoRA rank 64
+#        (alpha 16);
 #   dpo  an edit is a pair (chosen = the edited text, rejected = the answer), next to the
 #        pairs from serve traces and the thumbs database;
-#   kto  the answer as given, labelled by thumbs (+1 good, -1 bad), ratings (4-5 good,
-#        1-2 bad, 3 nothing) and edits (bad); the newest of these decides, and an edit adds
-#        its text as a good row;
-#   sft  the edited text as the answer to the prompt.
-# A prompt is the logged conversation without the answer. Serve traces and the thumbs
-# database feed dpo only. A row is new when the newest feedback line it came from is
-# later than the data cursor. The kto config trains with batch_size 2: soup train refuses a KTO batch of 1 (#1420).
+#   kto  the answer as given, labelled by thumbs (+1 good, -1 bad) and ratings (4-5 good,
+#        1-2 bad, 3 nothing), the newest of them deciding, and an edit's text as a good row
+#        next to the original as a bad one.
+# An edit wins, for every method: for an answer with a real edit (one that differs from the
+# answer after trimming) the latest edit decides, whatever thumbs or ratings say before or
+# after it. sft trains on the edit and not on the original, dpo takes the edit as chosen and
+# the original as rejected, kto labels the edit good and the original bad; a later thumbs-up
+# never makes the original good, and an answer a person corrected is not trained on as it was
+# when a thumbs database or a serve trace liked it. Thumbs and ratings decide only for an
+# answer without a real edit, by the newest of them in file order. A prompt is the logged
+# conversation without the answer (a thumbs-database or serve-trace prompt is one user turn).
+# A row is new when the newest feedback line it came from is later than the data cursor. The
+# kto config trains with batch_size 2: soup train refuses a KTO batch of 1 (#1420).
 soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
     --pre-wired --feedback-log ./app-data/feedback.jsonl --train-method kto
+
+# When an sft loop has a feedback log (the file exists), training starts at --min-new-edits
+# (default 8) NEW edits or --min-new-rated (default 30) NEW rated answers, whichever comes
+# first; --min-new-pairs does not apply to it. A new edit is a real edit whose feedback is
+# later than the data cursor; a rated answer is one with any thumb, rating (a 3 too) or real
+# edit, in force. An answer with a real edit counts by its edit alone: a thumb added to it
+# later is not news. Both counts are in the harvest result as new_edits and new_rated. A
+# skipped iteration says: not_enough_new_data: 3 new edits (needs 8) and 12 new rated answers
+# (needs 30) since the last training run. A run consumes every rated answer, also the ones
+# that gave no sft row (a thumb down), so the cursor moves past them. `soup loop status` shows
+# both thresholds. Without a feedback log, and for dpo and kto, --min-new-pairs applies.
+soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
+    --pre-wired --feedback-log ./app-data/feedback.jsonl --min-new-edits 4 --min-new-rated 20
 
 # Unpack a recorded iteration's Soup Can for what-if analysis (v0.71.4)
 soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump

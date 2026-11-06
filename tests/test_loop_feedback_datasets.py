@@ -8,13 +8,13 @@ directory, a feedback record per action in the feedback log). One harvest turns 
   next to the pairs the serve traces and the thumbs database already gave;
 - ``kto`` rows: the answer as given, labelled good or bad by thumbs, ratings and edits, and
   an edit's text as a good one;
-- ``sft`` rows: the edited text as the answer to the prompt.
+- ``sft`` rows: the edited text as the answer to the prompt, and the answers rated good.
 
-``soup loop init --train-method dpo|kto|sft`` picks the one the loop trains on (the default
-stays dpo); ``--feedback-log`` says where the feedback is. The rules of the contract
-(latest line per kind wins, null clears, comments accumulate, unknown ids and unknown
-``schema_version`` lines are ignored, a version 0 line has no id) are read by
-``soup_cli.utils.loop_feedback``, whoever wrote the file.
+``soup loop init --train-method dpo|kto|sft`` picks the one the loop trains on (sft for a new
+loop; a loop.yaml without the field keeps dpo); ``--feedback-log`` says where the feedback
+is. The rules of the contract (latest line per kind wins, null clears, comments accumulate,
+unknown ids and unknown ``schema_version`` lines are ignored, a version 0 line has no id) are
+read by ``soup_cli.utils.loop_feedback``, whoever wrote the file.
 """
 
 from __future__ import annotations
@@ -163,6 +163,14 @@ def kto_row(completion, label, prompt=None):
     }
 
 
+def sft_good_row(answer, prompt=None):
+    return {
+        "messages": [*(prompt if prompt is not None else MESSAGES),
+                     {"role": "assistant", "content": answer}],
+        "source": "feedback-good",
+    }
+
+
 # ---------------------------------------------------------------------------
 # The rules of the contract
 # ---------------------------------------------------------------------------
@@ -256,7 +264,8 @@ class TestRules:
         out = harvest()
 
         assert rows(out.datasets.kto) == [kto_row(ANSWER, True)]
-        assert out.datasets.dpo == [] and out.datasets.sft == []
+        assert out.datasets.dpo == []
+        assert rows(out.datasets.sft) == [sft_good_row(ANSWER)]  # the thumb up on answer 1
         assert out.datasets.unknown_response == 3
 
     @pytest.mark.parametrize("version", [2, 0, 99, "1", 1.5, True, False, None, [1]])
@@ -517,7 +526,9 @@ class TestDatasets:
 
         assert rows(data.kto) == [kto_row(ANSWER, label)]
         assert stamps(data.kto) == [T0 + 7]
-        assert data.dpo == [] and data.sft == []
+        assert data.dpo == []
+        # a thumb up is an answer rated good: an sft row; a thumb down alone gives none
+        assert rows(data.sft) == ([sft_good_row(ANSWER)] if label else [])
 
     @pytest.mark.parametrize(
         ("value", "expected"),
@@ -531,7 +542,8 @@ class TestDatasets:
         data = harvest().datasets
 
         assert rows(data.kto) == ([] if expected is None else [kto_row(ANSWER, expected)])
-        assert data.dpo == [] and data.sft == []
+        assert data.dpo == []
+        assert rows(data.sft) == ([sft_good_row(ANSWER)] if expected else [])
 
     def test_the_newest_of_a_thumb_and_a_rating_labels_the_answer(self, cwd):
         logs([conv(1), conv(2)], [
@@ -552,13 +564,14 @@ class TestDatasets:
         assert rows(data.kto) == [kto_row(ANSWER, False)]
         assert stamps(data.kto) == [T0 + 1]
 
-    def test_a_thumb_after_an_edit_labels_the_original_good_again(self, cwd):
+    def test_a_thumb_after_an_edit_does_not_label_the_original_good_again(self, cwd):
+        """The edit wins (tests/test_loop_sft_default.py has the whole rule)."""
         logs([conv(1)], [edit(1, 1), thumb(1, 2, 1)])
 
         data = harvest().datasets
 
-        assert rows(data.kto) == [kto_row(EDIT, True), kto_row(ANSWER, True)]
-        assert stamps(data.kto) == [T0 + 1, T0 + 2]
+        assert rows(data.kto) == [kto_row(EDIT, True), kto_row(ANSWER, False)]
+        assert stamps(data.kto) == [T0 + 1, T0 + 1]
         assert len(data.dpo) == 1 and len(data.sft) == 1
 
     def test_an_edit_after_a_thumb_up_labels_the_original_bad(self, cwd):
@@ -597,8 +610,9 @@ class TestDatasets:
 
         data = harvest().datasets
 
-        assert data.dpo == [] and data.sft == []
+        assert data.dpo == []
         assert rows(data.kto) == [kto_row(ANSWER, True)]  # the thumb on answer 2
+        assert rows(data.sft) == [sft_good_row(ANSWER)]  # an edit that changes nothing is no edit
 
     def test_the_prompt_is_the_whole_conversation_without_the_answer(self, cwd):
         history = [
@@ -693,7 +707,7 @@ class TestDatasets:
         logs([conv(1, messages=messages, response="Выдерните.")],
              [edit(1, 1, "Нажмите reset — на 10 секунд.")])
 
-        out = ls.harvest_from_traces(_state(train_method="sft"))
+        out = ls.harvest_from_traces(_state(train_method="sft", min_new_edits=1))
 
         (row,) = _file_rows(out["pairs_path"])
         assert row["messages"][-1]["content"] == "Нажмите reset — на 10 секунд."
@@ -746,7 +760,7 @@ class TestHarvest:
 
         assert out["train_method"] == "dpo"
         assert (out["pairs_harvested"], out["new_pairs"], out["cursor_ts"]) == (1, 1, T0 + 10)
-        assert (out["dpo_pairs"], out["kto_rows"], out["sft_rows"]) == (1, 4, 1)
+        assert (out["dpo_pairs"], out["kto_rows"], out["sft_rows"]) == (1, 4, 2)
         assert os.path.basename(out["pairs_path"]).startswith("pairs-")
         assert _file_rows(out["pairs_path"]) == [
             {"prompt": MESSAGES, "chosen": EDIT, "rejected": ANSWER, "source": "feedback-edit"}
@@ -759,25 +773,28 @@ class TestHarvest:
 
         assert out["train_method"] == "kto"
         assert (out["pairs_harvested"], out["new_pairs"], out["cursor_ts"]) == (4, 4, T0 + 30)
-        assert (out["dpo_pairs"], out["kto_rows"], out["sft_rows"]) == (1, 4, 1)
+        assert (out["dpo_pairs"], out["kto_rows"], out["sft_rows"]) == (1, 4, 2)
         assert os.path.basename(out["pairs_path"]).startswith("kto-")
         assert _file_rows(out["pairs_path"]) == [
             kto_row(EDIT, True), kto_row(ANSWER, False),
             kto_row("B", True), kto_row("C", False),
         ]
 
-    def test_sft_writes_the_corrected_answers(self, cwd):
+    def test_sft_writes_the_corrected_answers_and_the_answers_rated_good(self, cwd):
         _three_answers()
 
-        out = ls.harvest_from_traces(_state(train_method="sft"))
+        # One new edit is enough here (the default is 8 edits or 30 rated answers).
+        out = ls.harvest_from_traces(_state(train_method="sft", min_new_edits=1))
 
         assert out["train_method"] == "sft"
-        assert (out["pairs_harvested"], out["new_pairs"], out["cursor_ts"]) == (1, 1, T0 + 10)
-        assert (out["dpo_pairs"], out["kto_rows"], out["sft_rows"]) == (1, 4, 1)
+        # The cursor also covers the thumb down at +30, which gives no row but was seen.
+        assert (out["pairs_harvested"], out["new_pairs"], out["cursor_ts"]) == (2, 2, T0 + 30)
+        assert (out["dpo_pairs"], out["kto_rows"], out["sft_rows"]) == (1, 4, 2)
         assert os.path.basename(out["pairs_path"]).startswith("sft-")
         assert _file_rows(out["pairs_path"]) == [
             {"messages": [*MESSAGES, {"role": "assistant", "content": EDIT}],
-             "source": "feedback-edit"}
+             "source": "feedback-edit"},
+            sft_good_row("B"),
         ]
 
     def test_the_old_keys_are_still_there(self, cwd):
@@ -791,7 +808,7 @@ class TestHarvest:
 
     @pytest.mark.parametrize(
         ("method", "total", "new", "cursor"),
-        [("dpo", 1, 0, T0 + 10), ("kto", 4, 2, T0 + 30), ("sft", 1, 0, T0 + 10)],
+        [("dpo", 1, 0, T0 + 10), ("kto", 4, 2, T0 + 30)],
     )
     def test_new_rows_are_those_after_the_cursor_and_all_rows_train(
         self, cwd, method, total, new, cursor
@@ -809,6 +826,19 @@ class TestHarvest:
             assert len(_file_rows(out["pairs_path"])) == total  # not just the new ones
         else:
             assert out["pairs_path"] is None
+
+    def test_sft_counts_new_rows_by_the_cursor_but_waits_for_edits_or_rated_answers(self, cwd):
+        _three_answers()
+
+        out = ls.harvest_from_traces(
+            _state(train_method="sft", harvest_cursor_ts=T0 + 15, min_new_pairs=1)
+        )
+
+        # Two sft rows (the edit at +10, the thumb up at +20), one of them new.
+        assert (out["pairs_harvested"], out["new_pairs"], out["cursor_ts"]) == (2, 1, T0 + 30)
+        assert (out["new_edits"], out["new_rated"]) == (0, 2)
+        # min_new_pairs is not the rule of an sft loop with a feedback log: 0 < 8, 2 < 30.
+        assert out["pairs_path"] is None
 
     def test_a_row_at_exactly_the_cursor_is_not_new(self, cwd):
         _three_answers()
@@ -843,7 +873,7 @@ class TestHarvest:
         assert (later["pairs_harvested"], later["new_pairs"], later["cursor_ts"]) == (1, 0, None)
 
     def test_no_rows_of_the_method_means_zero_everything(self, cwd):
-        logs([conv(1)], [thumb(1, 1, 1)])  # a kto row, but no edit
+        logs([conv(1)], [thumb(1, 1, -1)])  # a kto row, but no edit and no answer rated good
 
         out = ls.harvest_from_traces(_state(train_method="sft", harvest_cursor_ts=5.0))
 
@@ -927,14 +957,19 @@ class TestHarvest:
         assert (dpo["pairs_harvested"], dpo["thumbs_pairs"], dpo["dpo_pairs"]) == (2, 1, 2)
         assert (kto["pairs_harvested"], kto["thumbs_pairs"], kto["dpo_pairs"]) == (4, 1, 2)
 
-    def test_old_thumb_traces_do_not_feed_kto_or_sft(self, cwd):
+    def test_old_thumb_traces_feed_sft_but_not_kto(self, cwd):
         legacy = [{"id": "a", "prompt": "Q", "response": "good", "signal": "thumbs_up"},
                   {"id": "b", "prompt": "Q", "response": "bad", "signal": "thumbs_down"}]
         write_lines(TRACES, legacy)
 
-        for method in ("kto", "sft"):
-            out = ls.harvest_from_traces(_state(train_method=method))
-            assert out["pairs_harvested"] == 0 and out["dpo_pairs"] == 1, method
+        kto = ls.harvest_from_traces(_state(train_method="kto"))
+        sft = ls.harvest_from_traces(_state(train_method="sft"))
+
+        assert kto["pairs_harvested"] == 0 and kto["dpo_pairs"] == 1
+        assert sft["pairs_harvested"] == 1 and sft["dpo_pairs"] == 1  # the thumbs-up answer only
+        (row,) = _file_rows(sft["pairs_path"])
+        assert row["messages"] == [{"role": "user", "content": "Q"},
+                                   {"role": "assistant", "content": "good"}]
 
 
 class TestFeedbackLogResolution:
@@ -1051,11 +1086,16 @@ class _Trainer:
 
 class TestTrainStage:
     @pytest.mark.parametrize(
-        ("method", "task", "fmt", "batch"),
-        [("dpo", "dpo", "dpo", 1), ("kto", "kto", "kto", 2), ("sft", "sft", "chatml", 1)],
+        ("method", "task", "fmt", "training"),
+        [
+            ("dpo", "dpo", "dpo", {"epochs": 1, "batch_size": 1, "lr": 5.0e-5}),
+            ("kto", "kto", "kto", {"epochs": 1, "batch_size": 2, "lr": 5.0e-5}),
+            ("sft", "sft", "chatml", {"epochs": 5, "batch_size": 1, "lr": 1.0e-4,
+                                      "lora": {"r": 64, "alpha": 16}}),
+        ],
     )
     def test_the_config_names_the_task_the_format_and_the_safe_settings(
-        self, cwd, method, task, fmt, batch
+        self, cwd, method, task, fmt, training
     ):
         rendered = yaml.safe_load(
             ls._render_train_yaml(_state(train_method=method), "d.jsonl", "out")
@@ -1065,7 +1105,7 @@ class TestTrainStage:
             "base": "org/base",
             "task": task,
             "data": {"train": "d.jsonl", "format": fmt, "val_split": 0},
-            "training": {"epochs": 1, "batch_size": batch, "lr": 5.0e-5},
+            "training": training,
             "output": "out",
         }
 
@@ -1105,7 +1145,7 @@ class TestTrainStage:
 
     @pytest.mark.parametrize(
         ("method", "task", "fmt", "count"),
-        [("dpo", "dpo", "dpo", 1), ("kto", "kto", "kto", 4), ("sft", "sft", "chatml", 1)],
+        [("dpo", "dpo", "dpo", 1), ("kto", "kto", "kto", 4), ("sft", "sft", "chatml", 2)],
     )
     def test_harvest_then_train_runs_soup_train_on_the_chosen_dataset(
         self, cwd, monkeypatch, method, task, fmt, count
@@ -1113,7 +1153,7 @@ class TestTrainStage:
         _three_answers()
         trainer = _Trainer()
         monkeypatch.setattr(ls, "_TRAIN_RUNNER", trainer)
-        state = _state(train_method=method)
+        state = _state(train_method=method, min_new_edits=1)  # (only an sft loop reads it)
 
         out = ls.train_dpo_from_pairs(state, ls.harvest_from_traces(state))
 
@@ -1206,13 +1246,16 @@ class TestTheLoopOverFeedback:
         monkeypatch.setattr(ls, "_TRAIN_RUNNER", trainer)
         _three_answers()
 
-        state, failed, _ = run_once(_state(train_method="sft"), self._config())
+        state, failed, _ = run_once(
+            _state(train_method="sft", min_new_edits=1), self._config()
+        )
 
         assert failed.run_id is None
         assert state.harvest_cursor_ts is None
         trainer.returncode = 0
         state, retry, _ = run_once(state, self._config())
-        assert retry.run_id and state.harvest_cursor_ts == T0 + 10
+        # (+30 is the thumb down, which gives no sft row but was seen by the run.)
+        assert retry.run_id and state.harvest_cursor_ts == T0 + 30
 
     def test_min_new_pairs_counts_rows_of_the_chosen_method(self, cwd, monkeypatch):
         trainer = _Trainer()
@@ -1333,13 +1376,13 @@ _INIT = ("init", "./base", "--eval", "tasks.jsonl", "--baseline", "b", "--base-m
 
 
 class TestCli:
-    def test_the_defaults_are_dpo_and_the_default_log(self, cwd):
+    def test_the_defaults_are_sft_and_the_default_log(self, cwd):
         result, text = _cli(*_INIT)
         assert result.exit_code == 0, (result.output, repr(result.exception))
 
         state = read_state()
-        assert (state.train_method, state.feedback_log) == ("dpo", None)
-        assert "train_method: dpo" in text
+        assert (state.train_method, state.feedback_log) == ("sft", None)
+        assert "train_method: sft" in text
         assert "feedback_log: .soup-loops/feedback.jsonl (from default)" in text
 
     def test_the_flags_are_stored(self, cwd):
@@ -1416,7 +1459,7 @@ class TestCli:
         result, text = _cli("status")
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert re.search(r"train_method\W+dpo", text), text
+        assert re.search(r"train_method\W+sft", text), text
         assert re.search(r"feedback_log\W+\.soup-loops/feedback\.jsonl \(from default\)", text)
 
     def test_status_of_a_state_written_before_the_fields(self, cwd):
