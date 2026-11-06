@@ -21,19 +21,29 @@ _NO_COLON_ON_WINDOWS = pytest.mark.skipif(
     sys.platform == "win32", reason="':' is not valid in a Windows name"
 )
 
+# A backslash separates directories on Windows, so a name that holds one cannot be a file there.
+_NO_BACKSLASH_ON_WINDOWS = pytest.mark.skipif(
+    sys.platform == "win32", reason="a backslash separates directories on Windows"
+)
+
 # One spelling per way the old code went wrong: a tag, a closing tag with
 # nothing to close (a MarkupError), an emoji code, and a tag with control
-# characters, so the strip and the escape are pinned separately.
+# characters, so the strip and the escape are pinned separately. A backslash before
+# an unmatched bracket and a trailing pair of backslashes are what markup rewrites.
 _VALUES = [
     "x[red]n",
     "[/]n",
     pytest.param("n:warning:", id="emoji-code"),
+    pytest.param("x\\[n", id="backslash-bracket"),
+    pytest.param("n\\\\", id="trailing-backslashes"),
     f"x[bold]n{_CONTROLS}",
 ]
 # A file name cannot hold a slash, so no closing tag with nothing to close.
 _NAMES = [
     "x[red]n",
     pytest.param("n:warning:", marks=_NO_COLON_ON_WINDOWS, id="emoji-code"),
+    pytest.param("x\\[n", marks=_NO_BACKSLASH_ON_WINDOWS, id="backslash-bracket"),
+    pytest.param("n\\\\", marks=_NO_BACKSLASH_ON_WINDOWS, id="trailing-backslashes"),
     f"x[bold]n{_CONTROLS}",
 ]
 
@@ -262,3 +272,70 @@ def test_explain_shows_the_cached_verdict_as_typed(tmp_path, value):
     shown = _shown(value)
     assert f"Task category: task {shown} Reason: reason {shown} Reverses when: flip {shown}" in text
     assert _not_shown(text)
+
+
+def _coloured(monkeypatch):
+    monkeypatch.setattr(
+        "soup_cli.commands.advise.console",
+        Console(force_terminal=True, width=500, height=100, color_system="standard"),
+    )
+
+
+def test_errors_start_with_a_red_label_and_a_failed_record_with_a_yellow_one(monkeypatch):
+    _coloured(monkeypatch)
+    missing = _run(data="nope.jsonl")
+    monkeypatch.setattr(advise_cmd, "record_verdict", _raising(OSError("disk said no")))
+    failed = _run("--record")
+
+    assert missing.exit_code == 1
+    assert failed.exit_code == 0
+    assert "\x1b[31mDataset error:\x1b[0m dataset not found: nope.jsonl" in missing.output
+    assert "\x1b[33mHistory record failed:\x1b[0m disk said no" in failed.output
+
+
+def test_the_recorded_path_is_dim(monkeypatch):
+    _coloured(monkeypatch)
+
+    result = _run("--record")
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "\x1b[2mRecorded to " in result.output
+    assert "history.jsonl\x1b[0m" in result.output
+
+
+def test_the_history_table_keeps_the_column_styles(monkeypatch, tmp_path):
+    _coloured(monkeypatch)
+    (tmp_path / "history.jsonl").write_text(
+        _history_row("proj", "2026-01-02T03:04:05") + "\n", encoding="utf-8"
+    )
+
+    result = runner.invoke(advise_cmd.app, ["compare"])
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert re.search(r"\x1b\[2m2026-01-02T03:04\s*\x1b\[0m", result.output)
+    assert re.search(r"\x1b\[36mproj\s*\x1b\[0m", result.output)
+
+
+def test_explain_prints_one_detail_per_line(tmp_path):
+    cache = tmp_path / "home" / ".soup"
+    cache.mkdir()
+    (cache / "advise_last.json").write_text(
+        json.dumps(
+            {
+                "choice": "SFT",
+                "confidence": 0.5,
+                "reason": "a reason",
+                "reverse_when": "a flip",
+                "task_category": "summarization",
+                "roi": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(advise_cmd.app, ["explain"])
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    lines = strip_ansi(result.output).splitlines()
+    for label in ("Choice:", "Confidence:", "Task category:", "Reason:", "Reverses when:"):
+        assert [line for line in lines if line.startswith(label)], label
