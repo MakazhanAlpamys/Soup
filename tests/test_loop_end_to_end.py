@@ -164,10 +164,17 @@ def loop(tmp_path, monkeypatch):
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
 
+    created: list = []
+
     def cycle():
         config = ls.build_prewired_watch_config(max_iterations=1, poll_interval_sec=1.0)
+        before = set(list_iterations())
         # No experiment tracker in a test: the budget estimate is 0.
-        return watch(dataclasses.replace(config, cost_fn=lambda state: 0.0))
+        result = watch(dataclasses.replace(config, cost_fn=lambda state: 0.0))
+        # Iteration ids sort by their second-resolution timestamp, then a random suffix:
+        # two cycles in one second sort in random order, so remember what each cycle made.
+        created.extend(sorted(set(list_iterations()) - before))
+        return result
 
     headers = {"Authorization": f"Bearer {TOKEN}"}
 
@@ -195,7 +202,7 @@ def loop(tmp_path, monkeypatch):
 
     return {
         "client": client, "model": model, "failing": failing, "served_by": served_by,
-        "cycle": cycle, "cli": cli, "headers": headers, "chat": chat,
+        "cycle": cycle, "created": created, "cli": cli, "headers": headers, "chat": chat,
         "users_give_feedback": users_give_feedback, "keyed_traffic": keyed_traffic,
         "verdicts": verdicts, "trainable": trainable,
     }
@@ -219,7 +226,7 @@ def _start_canary(loop) -> str:
     assert name and name.startswith("loop-train-"), state
     assert state.canary_traffic_pct == 20.0
     assert _same_path(state.canary_adapter, os.path.join(".soup-loops", "adapters", name))
-    record = read_iteration(list_iterations()[-1])
+    record = read_iteration(loop["created"][-1])
     assert record.pairs_harvested == 1
     assert record.gate_verdict == "OK" and record.shipped is True
     assert f"canary {name}: 20% of keyed traffic" in record.notes
@@ -258,7 +265,7 @@ def test_feedback_reaches_a_canary_which_is_promoted_then_rolled_back(loop):
     assert _same_path(state.production_adapter, os.path.join(".soup-loops", "adapters", name))
     assert state.previous_production_name is None
     assert _active_adapter(loop["client"]) == name
-    assert "promoted to production" in read_iteration(list_iterations()[-1]).notes
+    assert "promoted to production" in read_iteration(loop["created"][-1]).notes
 
     # The person says no: back to the previous version (the served base model).
     result, text = loop["cli"]("rollback")
@@ -279,7 +286,7 @@ def test_a_regressing_canary_is_rolled_back_automatically(loop):
     assert state.canary_active is None and state.canary_adapter is None
     assert state.production_name is None
     assert _active_adapter(loop["client"]) is None
-    record = read_iteration(list_iterations()[-1])
+    record = read_iteration(loop["created"][-1])
     assert record.rolled_back is True
     assert f"canary {name} rolled back (MAJOR)" in record.notes
 
