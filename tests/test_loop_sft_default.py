@@ -1086,9 +1086,10 @@ class TestLoopState:
     def test_the_two_fields_come_last_in_this_order(self):
         names = list(LoopState.__dataclass_fields__)
 
-        # The sft recipe (tests/test_loop_sft_recipe.py) follows them.
-        assert names[-3:-1] == ["min_new_edits", "min_new_rated"]
-        assert names[-4] == "version_log_started"
+        # The sft recipe (tests/test_loop_sft_recipe.py) follows them, then the paraphraser
+        # fields (tests/test_loop_paraphrases.py).
+        assert names[-5:-3] == ["min_new_edits", "min_new_rated"]
+        assert names[-6] == "version_log_started"
 
     def test_a_loop_yaml_without_the_fields_loads_with_their_defaults(self, cwd):
         legacy = {"served_model": "m", "eval_suite": "e", "baseline": "b", "status": "running",

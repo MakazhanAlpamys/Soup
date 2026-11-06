@@ -398,6 +398,21 @@ class RatedAnswer:
     edited: bool
 
 
+@dataclass(frozen=True)
+class EditedAnswer:
+    """An answer a person corrected: what the paraphrase step needs to rewrite its prompt.
+
+    ``id`` is the conversation record's id (the ``response_id`` of the feedback line),
+    ``messages`` the prompt as logged (without the answer), ``original`` the answer the
+    model gave and ``edited`` the text the person put in its place.
+    """
+
+    id: str
+    messages: "tuple[dict, ...]"
+    original: str
+    edited: str
+
+
 @dataclass
 class FeedbackDatasets:
     dpo: "list[DatasetRow]" = field(default_factory=list)
@@ -410,6 +425,9 @@ class FeedbackDatasets:
     #: ``(prompt_key, answer)`` of every answer that has a real edit: the original must not be
     #: trained on as good by another source (a thumbs database, a serve trace) either.
     edited_originals: "set[tuple[str, str]]" = field(default_factory=set)
+    #: Every answer with a real edit, in the order its feedback first appeared. The edits are
+    #: what the loop writes paraphrases of (``loop_paraphrase``).
+    edits: "list[EditedAnswer]" = field(default_factory=list)
 
 
 def prompt_key(prompt: object) -> str:
@@ -472,6 +490,7 @@ def build_datasets(
     dpo, kto, sft = [], [], []
     rated: "list[RatedAnswer]" = []
     edited_originals: "set[tuple[str, str]]" = set()
+    edits: "list[EditedAnswer]" = []
     unknown = 0
     for answer_id, record in feedback.by_response.items():
         conversation = records.get(answer_id)
@@ -491,6 +510,9 @@ def build_datasets(
             ts = record.edit_ts
             rated.append(RatedAnswer(ts, True))
             edited_originals.add((asked, original))
+            edits.append(
+                EditedAnswer(answer_id, tuple(dict(m) for m in prompt), original, edited)
+            )
             if original.strip():
                 key = (asked, edited, original)
                 dpo.append((key, DatasetRow(_dpo_row(prompt, edited, original), ts)))
@@ -517,7 +539,7 @@ def build_datasets(
             )
     return FeedbackDatasets(
         dpo=_unique(dpo), kto=_unique(kto), sft=_unique(sft), unknown_response=unknown,
-        rated=rated, edited_originals=edited_originals,
+        rated=rated, edited_originals=edited_originals, edits=edits,
     )
 
 

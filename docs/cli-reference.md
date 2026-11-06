@@ -2715,6 +2715,8 @@ Usage: `soup loop init [OPTIONS] SERVED_MODEL`
 | `--sft-grad-accum` | integer |  |  | sft only: gradient accumulation steps of the training config, 1 to 1024 (micro-batch x accumulation = the batch per optimizer step). Default: the built-in recipe. |
 | `--sft-seed` | integer |  |  | sft only: training seed of the training config, 0 to 4294967295. Default: the built-in recipe. |
 | `--sft-quantization` | text |  |  | sft only: quantization of the training config: 4bit, none or auto (none if the base model fits in free VRAM when training starts, else 4bit). Default: the built-in recipe. |
+| `--paraphraser-endpoint` | text |  |  | OpenAI-compatible base URL (this machine or LAN) of the model that writes paraphrases of the prompts of corrected answers, which the loop's verdict asks the new version instead of the original prompts. Needs --paraphraser-model. Default: the loop's own serve endpoint (SOUP_LOOP_SERVE_ENDPOINT) with the tool token. |
+| `--paraphraser-model` | text |  |  | Model name sent to --paraphraser-endpoint, recorded as the generator of the paraphrases. A small served model paraphrases poorly: name a better one here. |
 | `--force` | flag | off |  | Overwrite existing loop.yaml. |
 
 ### `soup loop pause`

@@ -278,6 +278,48 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
     --sft-lr 2e-4 --sft-epochs 5 --sft-batch-size 2 --sft-grad-accum 4 --sft-seed 42 \
     --sft-quantization none
 
+# Paraphrases of the corrections (for the loop's verdict). Before it trains, the pre-wired
+# train stage asks a chat model for two paraphrases of the prompt (the last user message) of
+# every edit it trains on that has none yet, and appends them to
+# .soup-loops/paraphrases.jsonl (docs/loop-formats.md, paraphrase). A later check asks the NEW
+# version the paraphrases instead of the original prompt, to see whether it learned the
+# correction. An edit is asked once: its line is reused by every later iteration, so every
+# version is checked against the same questions (only an edit whose prompt changed is asked
+# again). They are never training data: no dataset reads that file. A paraphrase is dropped
+# when it is the prompt again apart from case, punctuation and spacing (same_as_prompt) or
+# holds at least half of the words the correction added (leaks_answer: the content words of
+# the edit that the answer it corrected lacked, all of its content words when that is fewer
+# than two). When fewer than two survive, the model is asked once more; an edit with none
+# left gets no line. The iteration's notes say what happened, for example
+#   paraphrases: 12 new for 6 edits, 3 dropped (same_as_prompt 1, leaks_answer 2)
+# and, when more than half of the paraphrases asked for were dropped,
+#   paraphrases mostly dropped: a small served model paraphrases poorly; set soup loop init
+#   --paraphraser-model
+# Who writes them:
+#   --paraphraser-endpoint <url> --paraphraser-model <name>
+#       an OpenAI-compatible chat endpoint (a base URL, with or without /v1) and the model
+#       name sent to it; both or neither, stored in loop.yaml. The URL is checked like
+#       SOUP_LOOP_SERVE_ENDPOINT: http on this machine, https on the LAN, no credentials, no
+#       query. It is sent no token. Name a larger model than the served one here: a small
+#       served model paraphrases poorly.
+#   neither flag
+#       the loop's own serve endpoint (SOUP_LOOP_SERVE_ENDPOINT), with the tool token
+#       (SOUP_TOOL_AUTH_TOKEN) and the header "X-Soup-Internal: loop-check". soup serve then
+#       answers as it answers unkeyed traffic (the stable side), writes no conversation record, writes no
+#       thumbs, never routes the request to a canary bucket and does not count it in the
+#       canary statistics (docs/serving-and-export.md). Without the header the questions the
+#       loop asks would be logged like a user's and could come back as training data.
+#       Naming the loop's own server as --paraphraser-endpoint is the same: the call is made
+#       the internal way. The response must echo the header: a soup serve older than the
+#       header ignores it and would record the call, so without the echo the step stops and
+#       the note says to restart soup serve from the same version.
+# With neither reachable (no endpoint, or no token), no paraphrases are written and the
+# note says so and names the flags. The step never stops training: an endpoint that does not
+# answer ends the step (the first failure is the note) and training goes on. Every request
+# reads at most 64 KiB of the reply and times out after 120 s.
+soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
+    --pre-wired --paraphraser-endpoint http://127.0.0.1:11434 --paraphraser-model qwen2.5:7b
+
 # Unpack a recorded iteration's Soup Can for what-if analysis (v0.71.4)
 soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 

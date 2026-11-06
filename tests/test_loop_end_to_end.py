@@ -124,8 +124,12 @@ def loop(tmp_path, monkeypatch):
 
     def post(url, headers=None, json=None, timeout=None, trust_env=None, **_):
         resp = client.post(urlparse(url).path, headers=headers or {}, json=json)
-        return httpx.Response(resp.status_code, content=resp.content,
-                              headers={"content-type": resp.headers.get("content-type", "")})
+        # (the loop's paraphrase step checks the echo of its internal header)
+        echo = {name: resp.headers[name] for name in ("X-Soup-Internal",) if name in resp.headers}
+        return httpx.Response(
+            resp.status_code, content=resp.content,
+            headers={"content-type": resp.headers.get("content-type", ""), **echo},
+        )
 
     monkeypatch.setattr(httpx, "post", post)
     # Loading and deactivating read the reply through post_capped.
