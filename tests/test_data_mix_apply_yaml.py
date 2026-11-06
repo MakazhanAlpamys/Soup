@@ -44,3 +44,27 @@ def test_apply_preserves_list_paths_in_spliceable_yaml(paths, width, tmp_path, m
     assert marker, result.stdout
     assert yaml.safe_load("data:\n" + snippet) == block
     assert recipe.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize(("path", "width"), [
+    ("a.jsonl", 80), ("odd: [train].jsonl", 80),
+    (r"C:\datasets\[unclosed.jsonl", 80),
+    ("snowman-☃-😀\x9b\u202e.jsonl", 80),
+    ("x" * 160 + ".jsonl", 48),
+])
+def test_apply_preserves_scalar_path_in_yaml(path, width, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(data_mix, "console", Console(width=width, height=100))
+    block = {"data": {"train": path, "interleave": {"strategy": "probs", "probs": [1.0]}}}
+    recipe = tmp_path / "recipe.yaml"
+    recipe.write_text(yaml.safe_dump(block), encoding="utf-8")
+    before = recipe.read_bytes()
+
+    result = make_cli_runner().invoke(app, ["data", "mix", "--apply", recipe.name])
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "\x9b" not in result.stdout and "\u202e" not in result.stdout
+    _, marker, snippet = strip_ansi(result.stdout).partition("\ndata:\n")
+    assert marker
+    assert yaml.safe_load("data:\n" + snippet) == block
+    assert recipe.read_bytes() == before
