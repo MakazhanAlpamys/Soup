@@ -65,7 +65,8 @@
             },
             "dpo_pairs": {"$ref": "#/$defs/count"},
             "kto_rows": {"$ref": "#/$defs/count"},
-            "sft_rows": {"$ref": "#/$defs/count"}
+            "sft_rows": {"$ref": "#/$defs/count"},
+            "graduated": {"$ref": "#/$defs/count"}
           }
         },
         {"type": "null"}

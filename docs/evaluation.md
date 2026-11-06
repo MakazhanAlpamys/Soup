@@ -278,6 +278,11 @@ A zero-byte or whitespace-only judge prompt file is an input error naming the
 task and file. It has no measured score, fails the gate even at threshold zero,
 and cannot create or replace a baseline when no other task was scored.
 
+Judge JSONL rows must be objects and an explicitly present `prompt` must be a
+string; invalid rows are refused before that row reaches generation, naming the
+task, file, physical line and field or row shape. Missing and empty-string
+prompts keep their existing behavior, as does the CLI's failed-gate exit (#1949).
+
 
 ## Sequential A/B Harness (`soup ab`)
 
@@ -1194,6 +1199,10 @@ judgements = [PairwiseJudgement(...) for _ in oracle_set]
 report = run_pairwise_calibration(judgements, scores=confidence_scores)
 ensure_judge_calibrated(report)  # raises RuntimeError if not calibrated
 ```
+
+The SDK recheck refuses non-finite `min_agreement` or `max_bias` (including
+integers beyond float range) with a named `ValueError` after existing report
+errors; finite custom limits and equality boundaries are unchanged (#2467).
 
 The report carries `position_bias` ∈ [-1, 1] (0 = no slot preference), a conformal abstention threshold from the score quantile, agreement-rate vs the oracle, and a `calibrated` bool. `ensure_judge_calibrated` refuses on missing report, low agreement, or extreme bias — so production scoring code can fail loud, not silent.
 
