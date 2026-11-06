@@ -476,6 +476,8 @@ training:
 soup train --config soup.yaml
 ```
 
+**Single process only, for now.** Under `torchrun`, `accelerate launch` or `deepspeed` (`WORLD_SIZE` above 1), `soup train` refuses a `stream_layers: true` config at startup with "distributed layer streaming is not supported yet" ([#2585](https://github.com/MakazhanAlpamys/Soup/issues/2585)); run it as one process, or set `stream_layers: false` to train resident across the cards.
+
 **Model and tokenizer code.** With `training.stream_layers: true`, Soup uses
 Transformers' own implementation for the model config, the meta skeleton used by
 setup probes, and the streamed model. `--trust-remote-code` still reaches the
