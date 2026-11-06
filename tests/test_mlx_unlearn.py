@@ -594,6 +594,26 @@ class TestTraining:
             np.testing.assert_array_equal(after[key], value, err_msg=name)
         assert np.isfinite(result["final_loss"]) and result["updates"] > 0
 
+    def test_the_seed_owns_the_adapter(self, tmp_path, monkeypatch):
+        """``training.seed`` seeds ``mx.random`` in ``train()``, before the LoRA
+        layers are built, so it alone decides the trained adapter. The global
+        stream is scrambled before each run and ``data_seed`` is fixed, so
+        nothing else can make two runs agree or differ."""
+        mx = _mlx()
+
+        def lora(path, seed):
+            wrapper = _wrapper(path, monkeypatch, seed=seed, data_seed=0)
+            mx.random.seed(int(path.name, 36))
+            wrapper.train()
+            return {k: v for k, v in _flat(wrapper.model.parameters()).items() if "lora" in k}
+
+        first, again, other = (lora(tmp_path / "a", 3), lora(tmp_path / "b", 3),
+                               lora(tmp_path / "c", 4))
+        assert first.keys() == again.keys() == other.keys()
+        for key in first:
+            np.testing.assert_array_equal(first[key], again[key], err_msg=key)
+        assert any(not np.array_equal(first[k], other[k]) for k in first)
+
     def test_the_last_partial_batch_and_accumulation_group_train(self, tmp_path, monkeypatch):
         """5 rows at batch_size 2 make 3 batches, 2 of them in the first group of 2:
         the third batch, of one row, is the second update."""
