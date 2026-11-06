@@ -2442,9 +2442,11 @@ def _refuse_trainable_streamed_boundary(model: Any, index: Any, lora_config: Any
     if isinstance(targets, str):
         targets = (targets,)
     boundaries = (model.get_input_embeddings(), model.get_output_embeddings())
-    for name, module in model.named_modules():
+    # Match the way PEFT's _set_trainable does: every registered name, aliases
+    # included, by plain suffix, so ["head"] names "lm_head" too (#2548).
+    for name, module in model.named_modules(remove_duplicate=False):
         if any(module is boundary for boundary in boundaries) and any(
-            name == target or name.endswith("." + target) for target in targets
+            name.endswith(target) for target in targets
         ):
             raise ValueError(
                 f"modules_to_save targets the frozen streamed boundary {name!r}; "
