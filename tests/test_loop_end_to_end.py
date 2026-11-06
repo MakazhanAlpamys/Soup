@@ -464,7 +464,7 @@ def test_a_correction_given_as_feedback_trains_the_chosen_method_and_reaches_a_c
     name = state.canary_active
     assert name and name.startswith("loop-train-"), state
     assert state.harvest_cursor_ts is not None
-    record = read_iteration(list_iterations()[-1])
+    record = read_iteration(loop["created"][-1])
     assert record.pairs_harvested == len(rows)
     assert record.gate_verdict == "OK" and record.shipped is True
     assert name in loop["model"].loaded
