@@ -445,6 +445,15 @@ Endpoints:
 - `GET /v1/models` — list available models
 - `GET /health` — health check
 
+On the Transformers backend, `"stream": true` on `/v1/chat/completions` sends the reply
+as the model generates it (word by word), so the first chunk arrives before generation
+ends. The chunk fields, final chunk, `[DONE]` and `finish_reason` are the same as for a
+reply generated in full. A request served with `--reasoning-parser`, a draft model
+(`--speculative-decoding`), n-gram lookup or MoLE routing is generated in full first and
+sent afterwards, and so is a request to a model whose generation config sets beam search
+(`num_beams` above 1) or several return sequences, and so is the `/v1/messages` stream.
+Use `--backend vllm` for token streaming with speculative decoding.
+
 Compatible with OpenAI SDK:
 ```python
 from openai import OpenAI
@@ -833,7 +842,7 @@ still records the URL it was given.
 
 **Pages:**
 - **Dashboard** — view all experiment runs, loss charts, system info, multi-run comparison
-- **New Training** — create configs from templates or 173 ready-made recipes, validate, start training with live SSE log streaming and progress bar
+- **New Training** — create configs from templates or 174 ready-made recipes, validate, start training with live SSE log streaming and progress bar
 - **Data Explorer** — browse and inspect datasets (JSONL, JSON, CSV, Parquet)
 - **Model Chat** — chat with streaming responses, configurable temperature/top_p/max_tokens, system prompt, adapter selection, markdown rendering, chat export
 
@@ -842,7 +851,7 @@ still records the URL it was given.
 - **Enhanced Metrics** — 2x2 chart grid (loss, LR, grad_norm, throughput) + GPU memory chart, eval results table
 - **Multi-Run Compare** — overlay loss curves from up to 5 runs side-by-side
 - **Chat Upgrade** — SSE streaming via proxy, typing indicator, cancel button, markdown renderer (bold, italic, code blocks), chat export as JSON
-- **Config Builder** — recipe dropdown (173 recipes), config schema API for dynamic form generation
+- **Config Builder** — recipe dropdown (174 recipes), config schema API for dynamic form generation
 
 Gradient norm is nullable: backends or steps that do not report it store and
 stream `null`, and the Web UI chart leaves a gap instead of drawing a false

@@ -344,3 +344,32 @@ def test_write_shows_a_refused_env_lock_entry_as_typed(value):
     text = _plain(result)
     assert f"got {value!r}" in text
     assert _not_shown(text)
+
+
+def test_write_preserves_backslashes_in_receipt_and_lock():
+    name = "nested\\[unclosed\x9b\u202e.lock"
+    base = "org\\[model\x9b\u202e"
+    Path(name).parent.mkdir(exist_ok=True)
+
+    result = _write(*_write_args(**{"--base-model": base}), "--output", name)
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert _not_shown(result.stdout)
+    expected = _two_lines(r"Lock: nested\[unclosed.lock", r"Base: org\[model")
+    assert re.search(expected, _plain(result))
+    assert json.loads(Path(name).read_text(encoding="utf-8"))["base_model"] == base
+
+
+def test_show_preserves_backslashes_in_stored_fields():
+    fields = {k: f"{k}\\[unclosed{_CONTROLS}" for k in ("soup_version", "base_model", "created_at")}
+    name = _lock_file("soup.lock", **fields)
+    before = Path(name).read_bytes()
+
+    result = runner.invoke(app, ["lock", "show", name])
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert _not_shown(result.stdout)
+    for key, label in (("soup_version", "Soup version:"), ("base_model", "Base model:"),
+                       ("created_at", "Created at:")):
+        assert f"{label} {key}\\[unclosed" in _plain(result)
+    assert Path(name).read_bytes() == before

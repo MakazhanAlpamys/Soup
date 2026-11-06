@@ -76,7 +76,7 @@ def prune_prompt_cmd(
             tokenizer=tokenizer,
         )
     except FileNotFoundError:
-        console.print(f"[red]Input not found: {escape(input_path)}[/]")
+        console.print(Text(f"Input not found: {strip_control(input_path)}", style="red"))
         raise typer.Exit(1) from None
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")

@@ -173,7 +173,7 @@ def ingest(
     output_path = Path(output) if output else Path("traces.jsonl")
     if not is_under_cwd(output_path):
         console.print(
-            f"[red]--output '{escape(str(output_path))}' is outside cwd — refusing[/]"
+            Text(f"--output '{strip_control(output_path)}' is outside cwd — refusing", style="red")
         )
         raise typer.Exit(1)
 
@@ -219,8 +219,10 @@ def ingest(
         raise typer.Exit(1) from exc
 
     console.print(
-        f"[green]Wrote {count} traces from {escape(canonical)} -> "
-        f"{escape(output_path.name)}[/]"
+        Text(
+            f"Wrote {count} traces from {canonical} -> {strip_control(output_path.name)}",
+            style="green",
+        )
     )
 
     emit_webhooks(
