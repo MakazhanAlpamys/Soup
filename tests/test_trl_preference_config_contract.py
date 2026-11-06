@@ -1453,7 +1453,7 @@ def _write_tiny_tokenizer_without_bos(directory):
     fast.save_pretrained(str(directory))
 
 
-@pytest.mark.parametrize("task", ("bco", "kto"))
+@pytest.mark.parametrize("task", ("bco", "kto", "orpo", "simpo"))
 def test_a_tokenizer_without_bos_gets_todays_rows(tmp_path, monkeypatch, task):
     import importlib
 
@@ -1483,3 +1483,97 @@ def test_a_tokenizer_without_bos_gets_todays_rows(tmp_path, monkeypatch, task):
     capped = wrapper.trainer.train_dataset
     for name in today.column_names:
         assert capped[name] == today[name], (task, name)
+
+
+# --------------------------------------------------------------------------
+# #2545 -- ORPO and SimPO keep the BOS the same way: their paired rows carry it
+# at index 0 of the prompt, chosen and rejected columns
+# --------------------------------------------------------------------------
+_PAIRED_COLUMNS = ("prompt_input_ids", "chosen_input_ids", "rejected_input_ids")
+_CAP_REJECTED = [210]
+
+
+def _overlong_paired_layout(prompt):
+    """One ORPO/CPO-layout row whose prompt overflows ``_CAP_MAX_LENGTH`` on its own."""
+    from datasets import Dataset
+
+    row = {
+        "prompt_input_ids": prompt,
+        "prompt_attention_mask": [1] * len(prompt),
+    }
+    for prefix, answer in (("chosen", _CAP_ANSWER), ("rejected", _CAP_REJECTED)):
+        ids = prompt + answer + [_UNPAIRED_EOS]
+        row[f"{prefix}_input_ids"] = ids
+        row[f"{prefix}_attention_mask"] = [1] * len(ids)
+        row[f"{prefix}_labels"] = [_IGNORE_LABEL] * len(prompt) + answer + [_UNPAIRED_EOS]
+    return Dataset.from_list([row])
+
+
+def _cap_one_paired_row(dataset, **overrides):
+    return _cap_one_row(dataset, **{"only_when_overflow": False, **overrides})
+
+
+def test_a_paired_keep_end_cut_keeps_the_leading_bos():
+    capped = _cap_one_paired_row(_overlong_paired_layout(_CAP_PROMPT))
+    assert list(capped["prompt_input_ids"]) == _CAP_PROMPT_WITH_BOS
+    for prefix, answer in (("chosen", _CAP_ANSWER), ("rejected", _CAP_REJECTED)):
+        ids = list(capped[f"{prefix}_input_ids"])
+        assert ids == _CAP_PROMPT_WITH_BOS + answer + [_UNPAIRED_EOS], prefix
+        assert list(capped[f"{prefix}_labels"]) == (
+            [_IGNORE_LABEL] * _CAP_MAX_PROMPT_LENGTH + answer + [_UNPAIRED_EOS]
+        ), prefix
+        assert len(capped[f"{prefix}_attention_mask"]) == len(ids), prefix
+    assert len(capped["prompt_attention_mask"]) == _CAP_MAX_PROMPT_LENGTH
+
+
+@pytest.mark.parametrize(
+    ("prompt", "overrides", "kept"),
+    (
+        (_CAP_PROMPT, {"bos_token_id": None}, _CAP_PROMPT[-_CAP_MAX_PROMPT_LENGTH:]),
+        (_CAP_PROMPT, {"truncation_mode": "keep_start"}, _CAP_PROMPT[:_CAP_MAX_PROMPT_LENGTH]),
+        ([100] + _CAP_PROMPT, {}, _CAP_PROMPT[-_CAP_MAX_PROMPT_LENGTH:]),
+    ),
+    ids=("no-bos-token-id", "keep-start", "prompt-without-a-leading-bos"),
+)
+def test_a_paired_cut_without_a_leading_bos_to_keep_is_unchanged(prompt, overrides, kept):
+    capped = _cap_one_paired_row(_overlong_paired_layout(prompt), **overrides)
+    for column in _PAIRED_COLUMNS:
+        assert list(capped[column])[:_CAP_MAX_PROMPT_LENGTH] == kept, column
+
+
+def test_a_simpo_row_that_fits_is_unchanged_by_the_bos_token_id():
+    dataset = _overlong_paired_layout(_CAP_PROMPT)
+    capped = _cap_one_row(dataset, max_length=64, max_prompt_length=2)
+    assert capped == dataset[0]
+
+
+@pytest.mark.parametrize("task", ("orpo", "simpo"))
+def test_an_overlong_paired_prompt_keeps_its_bos_on_train_and_validation(
+    tmp_path, monkeypatch, task
+):
+    rows = _rows_with(task, _OVERLONG_PROMPT_WITH_TAIL, " good answer")
+    val_rows = _rows_with(task, _OVERLONG_PROMPT_WITH_TAIL, " good answer", n=4)
+    wrapper = _setup_rows(tmp_path, monkeypatch, task, rows, val_rows=val_rows)
+    tok = wrapper.tokenizer
+    assert tok.bos_token_id is not None
+    for split, dataset in (
+        ("train", wrapper.trainer.train_dataset),
+        ("validation", wrapper.trainer.eval_dataset),
+    ):
+        assert len(dataset) > 0, split
+        for index, row in enumerate(dataset):
+            case = (task, split, index)
+            prompt = list(row["prompt_input_ids"])
+            assert prompt[0] == tok.bos_token_id, (*case, "prompt lost its BOS")
+            assert len(prompt) <= _MAX_PROMPT_LENGTH, (*case, len(prompt))
+            assert len(row["prompt_attention_mask"]) == len(prompt), case
+            assert tok.convert_ids_to_tokens(prompt[-1:]) == ["world"], case
+            for prefix in ("chosen", "rejected"):
+                ids = list(row[f"{prefix}_input_ids"])
+                labels = list(row[f"{prefix}_labels"])
+                assert ids[0] == tok.bos_token_id, (*case, prefix, "lost its BOS")
+                assert len(ids) <= _MAX_SEQUENCE_LENGTH, (*case, prefix, len(ids))
+                assert len(row[f"{prefix}_attention_mask"]) == len(ids), (*case, prefix)
+                masked = [token for token, label in zip(ids, labels) if label == _IGNORE_LABEL]
+                assert tok.convert_ids_to_tokens(masked[-1:]) == ["world"], (*case, prefix)
+                assert ids[-1] == tok.eos_token_id, (*case, prefix, "lost its EOS")
