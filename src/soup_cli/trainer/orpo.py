@@ -225,10 +225,13 @@ class ORPOTrainerWrapper(StreamingSetupMixin):
         if not config_accepts(orpo_config_cls, "max_prompt_length"):
             # TRL's experimental ORPO tokenizer still assumes the removed
             # prompt cap has already run. Restore it on the prepared token ids.
+            # #1209 — only rows that overflow max_length are cut; a row that
+            # fits reaches the trainer whole, as for BCO, IPO, KTO and SimPO.
             cap_kwargs = {
                 "max_length": cfg.data.max_length,
                 "max_prompt_length": cfg.data.max_length // 2,
                 "truncation_mode": orpo_config.truncation_mode,
+                "only_when_overflow": True,
             }
             self.trainer.train_dataset = enforce_preference_sequence_limit(
                 self.trainer.train_dataset, **cap_kwargs

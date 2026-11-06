@@ -308,8 +308,8 @@ def enforce_preference_sequence_limit(
     ``data.max_length``.
 
     ``only_when_overflow`` preserves rows whose TRL-built model inputs already
-    fit inside ``max_length``; DPO and ORPO keep the legacy unconditional cap,
-    while BCO, IPO, KTO and SimPO use the conditional path.
+    fit inside ``max_length``. All six transformers preference trainers (BCO,
+    DPO, IPO, KTO, ORPO and SimPO) pass it (#1209).
     """
     columns = set(getattr(dataset, "column_names", ()))
     dpo_columns = {"prompt_ids", "chosen_ids", "rejected_ids"}
