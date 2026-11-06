@@ -19,6 +19,7 @@ contained + symlink-rejected (TOCTOU defence — matches v0.33.0 / v0.43.0
 
 from __future__ import annotations
 
+import atexit
 import os
 import subprocess
 import sys
@@ -41,6 +42,22 @@ from soup_cli.utils.loop_budget import (
     reset_monthly_spend_if_new_month,
 )
 from soup_cli.utils.loop_daemon import WatchConfig, watch
+from soup_cli.utils.loop_detach import (
+    DETACHED_ENV,
+    RUNNING,
+    STALE,
+    describe_daemon,
+    display_path,
+    inspect_pid_file,
+    log_file_path,
+    open_log,
+    pid_file_path,
+    remove_pid_file_if_own,
+    rotate_log_if_needed,
+    rotate_open_log,
+    rotated_log_path,
+    write_pid_file,
+)
 from soup_cli.utils.loop_iteration import list_iterations, read_iteration
 from soup_cli.utils.loop_state import (
     CANARY_ON_TIMEOUT,
@@ -344,6 +361,8 @@ def status_cmd() -> None:
     table.add_column("field", style="bold")
     table.add_column("value")
     table.add_row("status", f"[bold]{escape(state.status)}[/]")
+    # The PID file is read, never written or removed; a stale one is only reported.
+    table.add_row("daemon", escape(describe_daemon()))
     table.add_row("served_model", escape(state.served_model))
     table.add_row("eval_suite", escape(state.eval_suite))
     table.add_row("baseline", escape(state.baseline))
@@ -423,7 +442,11 @@ def watch_cmd(
     detach: bool = typer.Option(
         False,
         "--detach",
-        help="Spawn a background subprocess running --foreground.",
+        help=(
+            "Spawn a background subprocess running --foreground. Its pid goes to "
+            ".soup/loop.pid and its output to .soup/loop.log (appended; rotated at 10 MB, "
+            "one old file kept as .soup/loop.log.1); refused while that pid is alive."
+        ),
     ),
     max_iterations: Optional[int] = typer.Option(
         None,
@@ -456,6 +479,12 @@ def watch_cmd(
     if detach and foreground:
         console.print("[red]--detach and --foreground are mutually exclusive[/]")
         raise typer.Exit(code=2)
+    detached_child = os.environ.get(DETACHED_ENV) == "1" and not detach
+    if detached_child:
+        # The child of `--detach`: remove the PID file on the way out (any exit path),
+        # but only if it still names this process. A plain foreground watch never gets
+        # here, so it never touches the file.
+        atexit.register(remove_pid_file_if_own, os.getpid(), pid_file_path())
     state = _safe_read()  # ensure state exists before forking
     if tool_auth_token:
         # The deploy stage reads the token from the environment, as it reads
@@ -537,13 +566,64 @@ def watch_cmd(
             argv.append("--pre-wired")
         if pack_cans:
             argv.append("--pack-cans")
-        proc = subprocess.Popen(  # noqa: S603 — argv is internal, no shell
-            argv,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=True,
-        )
+        # One daemon per loop.yaml: a PID file that names a live process refuses the
+        # spawn; a stale one (dead pid, unparsable) is replaced after the spawn.
+        pid_path = pid_file_path()
+        try:
+            daemon = inspect_pid_file(pid_path)
+        except ValueError as exc:
+            console.print(f"[red]cannot detach:[/] {for_terminal(exc)}")
+            raise typer.Exit(code=2)
+        if daemon.state == RUNNING:
+            console.print(
+                f"[red]a loop daemon is already running:[/] pid {daemon.pid}, "
+                f"PID file {for_terminal(display_path(pid_path))} "
+                "(delete the file if that pid is not a loop daemon)"
+            )
+            raise typer.Exit(code=2)
+        if daemon.state == STALE:
+            console.print(
+                f"[yellow]notice:[/] replacing stale PID file "
+                f"{for_terminal(display_path(pid_path))} ({for_terminal(daemon.reason)})"
+            )
+        log_path = log_file_path()
+        try:
+            # A log that reached the limit moves to loop.log.1 first, so the child starts
+            # on a fresh one; the running child rotates it from then on (rotate_open_log).
+            if rotate_log_if_needed(log_path):
+                console.print(
+                    f"[yellow]notice:[/] log rotated: {for_terminal(display_path(log_path))} "
+                    f"reached its size limit, moved to "
+                    f"{for_terminal(display_path(rotated_log_path(log_path)))}"
+                )
+            log_handle = open_log(log_path)
+        except (ValueError, OSError) as exc:
+            console.print(f"[red]cannot detach:[/] {for_terminal(exc)}")
+            raise typer.Exit(code=2)
+        try:
+            proc = subprocess.Popen(  # noqa: S603 — argv is internal, no shell
+                argv,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                close_fds=True,
+                env={**os.environ, DETACHED_ENV: "1"},
+            )
+        finally:
+            # Popen hands the child its own duplicate; the parent keeps none.
+            log_handle.close()
+        try:
+            write_pid_file(proc.pid, pid_path)
+        except (ValueError, OSError) as exc:
+            console.print(
+                f"[red]watch detached pid={proc.pid} but its PID file could not be "
+                f"written:[/] {for_terminal(exc)}"
+            )
+            raise typer.Exit(code=1)
         console.print(f"[green]watch detached[/] pid={proc.pid}")
+        console.print(
+            f"  PID file {for_terminal(display_path(pid_path))}, "
+            f"log {for_terminal(display_path(log_path))}"
+        )
         return
     use_prewired = pre_wired or state.pre_wired
     base_model = state.base_model or (
@@ -575,6 +655,10 @@ def watch_cmd(
     except (TypeError, ValueError) as exc:
         console.print(f"[red]invalid watch config:[/] {escape(str(exc))}")
         raise typer.Exit(code=2)
+    if detached_child:
+        # Only the --detach child writes to .soup/loop.log; a foreground watch may be
+        # writing to a terminal and rotates nothing.
+        cfg = replace(cfg, on_cycle=rotate_open_log)
     final_state, ran = watch(cfg)
     console.print(
         f"[green]watch exited[/] iterations={ran} status={escape(final_state.status)}"
