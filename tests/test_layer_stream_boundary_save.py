@@ -9,6 +9,7 @@ from __future__ import annotations
 import warnings
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
@@ -479,6 +480,56 @@ def test_modules_to_save_is_refused_before_peft_or_streaming(
             dtype="float32",
             pin=False,
         )
+
+
+def _tiny_boundaries(*, head_alias: str | None = None) -> Any:
+    """Embedding, norm and head under Llama's names; ``head_alias`` registers the head twice."""
+    from torch import nn
+
+    class Tiny(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.model = nn.Module()
+            self.model.embed_tokens = nn.Embedding(4, 2)
+            self.model.norm = nn.LayerNorm(2)
+            self.lm_head = nn.Linear(2, 4, bias=False)
+            if head_alias is not None:
+                setattr(self, head_alias, self.lm_head)
+
+        def get_input_embeddings(self) -> Any:
+            return self.model.embed_tokens
+
+        def get_output_embeddings(self) -> Any:
+            return self.lm_head
+
+    return Tiny()
+
+
+_STREAMED_HEAD = SimpleNamespace(large_keys=("lm_head.weight",))
+
+
+def test_a_name_that_is_not_a_suffix_of_a_boundary_is_not_refused() -> None:
+    _requires_train_extra()
+    from soup_cli.utils.layer_stream_runtime import _refuse_trainable_streamed_boundary
+
+    for target in ("embed", "lm", "model", "norm"):
+        lora = SimpleNamespace(modules_to_save=[target])
+        _refuse_trainable_streamed_boundary(_tiny_boundaries(), _STREAMED_HEAD, lora)
+    lora = SimpleNamespace(modules_to_save=["unrelated", "head"])
+    with pytest.raises(ValueError, match="frozen streamed boundary 'lm_head'"):
+        _refuse_trainable_streamed_boundary(_tiny_boundaries(), _STREAMED_HEAD, lora)
+
+
+def test_a_second_name_of_a_boundary_is_refused_too() -> None:
+    # PEFT's _set_trainable walks named_modules(remove_duplicate=False), so a
+    # suffix of a boundary's second registered name is wrapped as well.
+    _requires_train_extra()
+    from soup_cli.utils.layer_stream_runtime import _refuse_trainable_streamed_boundary
+
+    model = _tiny_boundaries(head_alias="output_proj")
+    lora = SimpleNamespace(modules_to_save=["output_proj"])
+    with pytest.raises(ValueError, match="frozen streamed boundary 'output_proj'"):
+        _refuse_trainable_streamed_boundary(model, _STREAMED_HEAD, lora)
 
 
 def test_a_tied_checkpoint_still_builds_with_a_suffix_modules_to_save(tmp_path: Path) -> None:
