@@ -26,12 +26,14 @@ From Python, `soup_cli.utils.loop_formats` returns them: `load_schema(name)`,
 `jsonschema` is not a runtime dependency of Soup; install it to validate lines yourself.
 
 > **Status.** This page defines the formats. The writers move to them in follow-up
-> changes: today `soup serve --trace-log` still writes the version 0 line described
-> below, and `soup loop watch` still writes one `.soup-loops/<iteration-id>/iteration.json`
-> manifest per iteration. Nothing in Soup writes `feedback.jsonl`, `paraphrases.jsonl`,
-> `iterations.jsonl`, `versions.jsonl` or `progress.jsonl` yet; `soup loop` and Soup Zero
-> will write `paraphrases.jsonl`, and the `verdict.corrections` / `verdict.held_out`
-> evidence of the iteration format.
+> changes: `soup serve --trace-log` writes version 1 conversation lines and
+> `soup serve --feedback-log` writes feedback lines (see
+> [Serving and Export](serving-and-export.md#response-ids-and-feedback)), while
+> `soup loop watch` still writes one `.soup-loops/<iteration-id>/iteration.json`
+> manifest per iteration. Nothing in Soup writes `paraphrases.jsonl`, `iterations.jsonl`,
+> `versions.jsonl` or `progress.jsonl` yet; `soup loop` and Soup Zero will write
+> `paraphrases.jsonl`, and the `verdict.corrections` / `verdict.held_out` evidence of the
+> iteration format.
 
 ## Rules shared by every format
 
@@ -81,7 +83,7 @@ One line per model answer. `id` is the answer's id: feedback refers to it.
 Secrets (`hf_...`, `sk-...`, `Bearer ...` shapes) are redacted by the writer before the
 line reaches disk, as `soup serve --trace-log` already does.
 
-**Version 0** is the line `soup serve --trace-log` writes today:
+**Version 0** is the line `soup serve --trace-log` wrote before it moved to version 1:
 `{"ts": <epoch seconds>, "prompt": <last user message>, "response": ..., "latency_ms": ..., "tokens": <completion tokens>}`.
 It has no id, so feedback cannot point at it. Readers that accept version 0 read
 `prompt` as a single user message.
