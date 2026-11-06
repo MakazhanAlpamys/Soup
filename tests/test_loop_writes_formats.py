@@ -141,6 +141,30 @@ class TestAppendWriter:
             "zero", "zero", "soup"
         ]
 
+    def test_a_line_another_writer_appends_just_before_our_write_is_not_overwritten(
+        self, cwd, monkeypatch
+    ):
+        # The position this process last saw is the end of the file; a desktop app appends
+        # a line before our write lands. Only append mode puts ours after it.
+        (cwd / "log.jsonl").write_bytes(b'{"from": "soup", "n": 0}\n')
+        real_write = os.write
+        done = []
+
+        def racing_write(fd, data):
+            if not done:
+                done.append(True)
+                with open(cwd / "log.jsonl", "ab") as other:
+                    other.write(b'{"from": "zero", "n": 1}\n')
+            return real_write(fd, data)
+
+        monkeypatch.setattr(os, "write", racing_write)
+
+        append_json_line("log.jsonl", {"from": "soup", "n": 2})
+
+        assert [(r["from"], r["n"]) for r in _lines(cwd / "log.jsonl")] == [
+            ("soup", 0), ("zero", 1), ("soup", 2)
+        ]
+
     def test_another_writer_between_two_appends_loses_nothing(self, cwd):
         append_json_line("log.jsonl", {"from": "soup", "n": 1})
         with open(cwd / "log.jsonl", "ab") as other:
@@ -1169,8 +1193,9 @@ class Pipeline:
             **kwargs,
         )
 
-    def rate(self, state, *, ok=30, major=0) -> None:
-        """Answer requests of the running canary: ``ok`` fine, ``major`` failed."""
+    def rate(self, state, *, ok=30, major=0, stable=None) -> None:
+        """Answer requests of the running canary: ``ok`` fine, ``major`` failed, ``stable``
+        answered by production (default: as many as the canary got)."""
         policy = CanaryPolicy(
             stable=state.stable_name(), canary=state.canary_active, traffic_pct=5.0
         )
@@ -1180,7 +1205,7 @@ class Pipeline:
                     policy, "canary", good, rollout_id=state.canary_rollout_id,
                     path=self.stats_path,
                 )
-        for _ in range(ok + major):
+        for _ in range(ok + major if stable is None else stable):
             record_bucket_outcome(
                 policy, "stable", True, rollout_id=state.canary_rollout_id, path=self.stats_path
             )
@@ -1377,7 +1402,7 @@ class TestCanaryResolved:
         pipeline = Pipeline(cwd)
         state, first, _ = _cycle(_running(), pipeline)
         name = state.canary_active
-        pipeline.rate(state, ok=40)
+        pipeline.rate(state, ok=40, stable=55)
         pipeline.train_runs = False  # the cycle that promotes trains nothing new
 
         state, second, _ = _cycle(state, pipeline)
@@ -1388,7 +1413,7 @@ class TestCanaryResolved:
         assert latest[first.iteration_id]["to_version"] == 2
         assert latest[first.iteration_id]["finished_at"] is not None
         assert latest[first.iteration_id]["canary"]["verdict"] == "OK"
-        assert latest[first.iteration_id]["canary"]["samples"] == {"stable": 40, "canary": 40}
+        assert latest[first.iteration_id]["canary"]["samples"] == {"stable": 55, "canary": 40}
         versions = _read(cwd, "version")
         promote = versions[-1]
         assert (promote["cause"], promote["actor"]) == ("promote", "loop")
