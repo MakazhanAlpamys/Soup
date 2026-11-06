@@ -101,6 +101,23 @@ The pinned public configuration builds on the meta device, and a tiny random
 decoder with both attention block kinds passes a CPU LoRA forward/backward check.
 Full 27B weights, NF4 execution, GPU memory use and training quality are unverified.
 
+`soup recipes use qwen3.5-122b-a10b-dpo` selects the 122B-A10B language decoder
+for `prompt`, `chosen` and `rejected` text preferences in
+`./data/preference_train.jsonl`. It inherits the 122B SFT recipe's one epoch,
+batch size 1, 16 accumulation steps, LoRA rank 32 / alpha 64, gradient
+checkpointing, 4-bit quantization and 4096-token limit, with the 35B MoE DPO
+recipe's `lr: 5e-6` and `dpo_beta: 0.1`. These are starting settings, not measured
+122B tuning recommendations. `moe_lora: true` includes the routed experts and
+`lora.dropout: 0.0` permits PEFT's fused-expert adapters. Model quantization is
+distinct from the SFT-only `moe_expert_quant` and `train_router_only` options;
+DPO does not apply Soup's `moe_aux_loss_coeff` setting.
+The pinned public configuration builds the complete native text MoE on the meta
+device with the recipe's LoRA attached, and a tiny random decoder retaining
+linear attention, full attention and expert routing passes a CPU forward/backward
+check with attention and expert adapter gradients. The visual tower is excluded.
+Full 122B weights, DPO training, NF4 execution, GPU memory fit and tuning quality
+remain unverified; meta tensors do not allocate the public checkpoint's weights.
+
 With `training.stream_layers: true`, the Qwen4-Exp text decoder is admitted by
 its own parity-tested path. Its very large frozen PLE N-gram table is excluded
 from the decoder-layer shard and can be served from the original safetensors
