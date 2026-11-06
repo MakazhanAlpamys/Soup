@@ -277,7 +277,9 @@ def test_explain_shows_the_cached_verdict_as_typed(tmp_path, value):
 def _coloured(monkeypatch):
     monkeypatch.setattr(
         "soup_cli.commands.advise.console",
-        Console(force_terminal=True, width=500, height=100, color_system="standard"),
+        Console(
+            force_terminal=True, no_color=False, width=500, height=100, color_system="standard"
+        ),
     )
 
 
