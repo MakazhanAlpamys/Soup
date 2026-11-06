@@ -169,10 +169,17 @@ def loop(tmp_path, monkeypatch):
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
 
+    created: list = []
+
     def cycle():
         config = ls.build_prewired_watch_config(max_iterations=1, poll_interval_sec=1.0)
+        before = set(list_iterations())
         # No experiment tracker in a test: the budget estimate is 0.
-        return watch(dataclasses.replace(config, cost_fn=lambda state: 0.0))
+        result = watch(dataclasses.replace(config, cost_fn=lambda state: 0.0))
+        # Iteration ids sort by their second-resolution timestamp, then a random suffix:
+        # two cycles in one second sort in random order, so remember what each cycle made.
+        created.extend(sorted(set(list_iterations()) - before))
+        return result
 
     headers = {"Authorization": f"Bearer {TOKEN}"}
 
@@ -200,7 +207,7 @@ def loop(tmp_path, monkeypatch):
 
     return {
         "client": client, "model": model, "failing": failing, "served_by": served_by,
-        "cycle": cycle, "cli": cli, "headers": headers, "chat": chat,
+        "cycle": cycle, "created": created, "cli": cli, "headers": headers, "chat": chat,
         "users_give_feedback": users_give_feedback, "keyed_traffic": keyed_traffic,
         "verdicts": verdicts, "trained_on": trained_on, "trained_with": trained_with,
     }
@@ -228,7 +235,7 @@ def _start_canary(loop) -> str:
     assert name and name.startswith("loop-train-"), state
     assert state.canary_traffic_pct == 20.0
     assert _same_path(state.canary_adapter, os.path.join(".soup-loops", "adapters", name))
-    record = read_iteration(list_iterations()[-1])
+    record = read_iteration(loop["created"][-1])
     assert record.pairs_harvested == 1
     assert record.gate_verdict == "OK" and record.shipped is True
     assert f"canary {name}: 20% of keyed traffic" in record.notes
@@ -291,7 +298,7 @@ def test_a_regressing_canary_is_rolled_back_automatically(loop):
     assert state.production_name is None
     assert len(loop["trained_on"]) == 1 and len(loop["verdicts"]) == 1
     assert _active_adapter(loop["client"]) is None
-    record = read_iteration(list_iterations()[-1])
+    record = read_iteration(loop["created"][-1])
     assert record.rolled_back is True
     assert f"canary {name} rolled back (MAJOR)" in record.notes
 
@@ -463,7 +470,7 @@ def test_a_correction_given_as_feedback_trains_the_chosen_method_and_reaches_a_c
     name = state.canary_active
     assert name and name.startswith("loop-train-"), state
     assert state.harvest_cursor_ts is not None
-    record = read_iteration(list_iterations()[-1])
+    record = read_iteration(loop["created"][-1])
     assert record.pairs_harvested == len(rows)
     assert record.gate_verdict == "OK" and record.shipped is True
     assert name in loop["model"].loaded
@@ -627,7 +634,7 @@ def test_a_canary_people_thumb_down_is_withdrawn_though_no_request_failed(loop):
     assert state.canary_started_ts is None
     assert state.production_name is None  # production never changed
     assert _active_adapter(loop["client"]) is None
-    record = read_iteration(list_iterations()[-1])
+    record = read_iteration(loop["created"][-1])
     assert record.rolled_back is True and record.canary_verdict == "MAJOR"
     assert f"canary {name} rolled back (MAJOR)" in record.notes
     assert "canary errors: OK" in record.notes  # every request was answered
