@@ -101,6 +101,20 @@ The pinned public configuration builds on the meta device, and a tiny random
 decoder with both attention block kinds passes a CPU LoRA forward/backward check.
 Full 27B weights, NF4 execution, GPU memory use and training quality are unverified.
 
+`soup recipes use qwen3.5-397b-a17b-dpo` selects the 397B-A17B language
+decoder for `prompt`, `chosen`, `rejected` preference rows. It keeps the 397B
+SFT sibling's one epoch, batch size 1, 32 accumulation steps, LoRA rank 32 /
+alpha 64, 4-bit quantization and gradient checkpointing. The learning rate
+`5e-6`, `dpo_beta: 0.1` and preference layout follow the shipped MoE DPO
+recipes. Fused expert LoRA is enabled with zero dropout; the SFT-only
+auxiliary-loss setting is omitted because DPO does not apply it. These are
+inherited starting values, not tuned settings or a hardware recommendation.
+The pinned public configuration builds the full text architecture and attaches
+LoRA on meta; a tiny random native MoE with both attention block kinds passes
+a CPU forward/backward check, including fused expert gradients. Full 397B
+weights, NF4 execution, distributed training, GPU memory fit and model quality
+remain unverified.
+
 With `training.stream_layers: true`, the Qwen4-Exp text decoder is admitted by
 its own parity-tested path. Its very large frozen PLE N-gram table is excluded
 from the decoder-layer shard and can be served from the original safetensors

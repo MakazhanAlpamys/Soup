@@ -1837,6 +1837,22 @@
       "training.lr": 0.0001,
       "training.moe_lora": true
     },
+    "qwen3.5-397b-a17b-dpo": {
+      "base": "Qwen/Qwen3.5-397B-A17B",
+      "data.format": "dpo",
+      "data.max_length": 4096,
+      "data.train": "./data/preference_train.jsonl",
+      "task": "dpo",
+      "training.batch_size": 1,
+      "training.epochs": 1,
+      "training.gradient_accumulation_steps": 32,
+      "training.gradient_checkpointing": true,
+      "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
+      "training.lora.r": 32,
+      "training.lr": 5e-06,
+      "training.moe_lora": true
+    },
     "qwen3.5-397b-a17b-sft": {
       "base": "Qwen/Qwen3.5-397B-A17B",
       "data.format": "auto",
