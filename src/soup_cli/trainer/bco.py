@@ -246,6 +246,7 @@ class BCOTrainerWrapper:
                 "max_prompt_length": cfg.data.max_length // 2,
                 "truncation_mode": bco_config.truncation_mode,
                 "only_when_overflow": True,
+                "bos_token_id": self.tokenizer.bos_token_id,
             }
             self.trainer.train_dataset = enforce_preference_sequence_limit(
                 self.trainer.train_dataset, **cap_kwargs

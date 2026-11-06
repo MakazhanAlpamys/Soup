@@ -1265,3 +1265,221 @@ def test_a_kl_lender_outside_its_batch_raises(monkeypatch):
             only_when_overflow=True,
             kl_chunk_size=4,
         )
+
+
+# --------------------------------------------------------------------------
+# #2487 -- a keep_end prompt cut keeps the tokenizer's BOS at index 0 for KTO
+# and BCO: BOS, then the last ``max_prompt_length - 1`` prompt tokens
+# --------------------------------------------------------------------------
+_CAP_PROMPT = [_UNPAIRED_BOS] + list(range(100, 116))  # 17 tokens, BOS first
+_CAP_ANSWER = [200, 201]
+_CAP_MAX_PROMPT_LENGTH = 4
+_CAP_MAX_LENGTH = 8
+#: BOS plus the last ``_CAP_MAX_PROMPT_LENGTH - 1`` prompt tokens.
+_CAP_PROMPT_WITH_BOS = [_UNPAIRED_BOS, 113, 114, 115]
+
+
+def _overlong_unpaired_layout(prompt, *, with_answer=True):
+    """One KTO-layout row whose prompt overflows ``_CAP_MAX_LENGTH`` on its own."""
+    from datasets import Dataset
+
+    ids = prompt + _CAP_ANSWER + [_UNPAIRED_EOS]
+    labels = [_IGNORE_LABEL] * len(prompt) + _CAP_ANSWER + [_UNPAIRED_EOS]
+    row = {
+        "prompt_input_ids": prompt,
+        "prompt_attention_mask": [1] * len(prompt),
+        "completion_input_ids": ids,
+        "completion_attention_mask": [1] * len(ids),
+        "completion_labels": labels,
+        "KL_prompt_input_ids": prompt,
+        "KL_prompt_attention_mask": [1] * len(prompt),
+        "KL_completion_input_ids": ids,
+        "KL_completion_attention_mask": [1] * len(ids),
+        "KL_completion_labels": labels,
+    }
+    if with_answer:
+        row["answer_input_ids"] = _CAP_ANSWER
+        row["answer_attention_mask"] = [1] * len(_CAP_ANSWER)
+    return Dataset.from_list([row])
+
+
+def _cap_one_row(dataset, **overrides):
+    from soup_cli.trainer._trl_compat import enforce_preference_sequence_limit
+
+    kwargs = {
+        "max_length": _CAP_MAX_LENGTH,
+        "max_prompt_length": _CAP_MAX_PROMPT_LENGTH,
+        "truncation_mode": "keep_end",
+        "only_when_overflow": True,
+        "kl_chunk_size": 1,
+        "bos_token_id": _UNPAIRED_BOS,
+    }
+    kwargs.update(overrides)
+    return enforce_preference_sequence_limit(dataset, **kwargs)[0]
+
+
+@pytest.mark.parametrize(
+    ("column", "expected"),
+    (
+        ("prompt_input_ids", _CAP_PROMPT_WITH_BOS),
+        ("KL_prompt_input_ids", _CAP_PROMPT_WITH_BOS),
+        ("completion_input_ids", _CAP_PROMPT_WITH_BOS + _CAP_ANSWER + [_UNPAIRED_EOS]),
+        ("KL_completion_input_ids", _CAP_PROMPT_WITH_BOS + _CAP_ANSWER + [_UNPAIRED_EOS]),
+    ),
+)
+def test_a_keep_end_cut_keeps_the_leading_bos(column, expected):
+    capped = _cap_one_row(_overlong_unpaired_layout(_CAP_PROMPT))
+    assert list(capped[column]) == expected, column
+    mask = column.replace("input_ids", "attention_mask")
+    assert len(capped[mask]) == len(capped[column]), mask
+
+
+@pytest.mark.parametrize("prefix", ("completion", "KL_completion"))
+def test_a_keep_end_cut_keeps_the_leading_bos_without_answer_columns(prefix):
+    """No ``answer_*`` columns: the combined sequence is cut as it stands."""
+    capped = _cap_one_row(_overlong_unpaired_layout(_CAP_PROMPT, with_answer=False))
+    ids = list(capped[f"{prefix}_input_ids"])
+    assert ids == _CAP_PROMPT_WITH_BOS + _CAP_ANSWER + [_UNPAIRED_EOS], prefix
+    assert list(capped[f"{prefix}_labels"]) == (
+        [_IGNORE_LABEL] * _CAP_MAX_PROMPT_LENGTH + _CAP_ANSWER + [_UNPAIRED_EOS]
+    ), prefix
+    assert len(capped[f"{prefix}_attention_mask"]) == len(ids), prefix
+
+
+_ALL_CAPPED_COLUMNS = (
+    "prompt_input_ids",
+    "KL_prompt_input_ids",
+    "completion_input_ids",
+    "KL_completion_input_ids",
+)
+
+
+def test_a_prompt_that_does_not_start_with_bos_gets_the_plain_keep_end_cut():
+    prompt = [100] + _CAP_PROMPT  # BOS is present, but not at index 0
+    capped = _cap_one_row(_overlong_unpaired_layout(prompt))
+    tail = prompt[-_CAP_MAX_PROMPT_LENGTH:]
+    for column in _ALL_CAPPED_COLUMNS:
+        assert list(capped[column])[:_CAP_MAX_PROMPT_LENGTH] == tail, column
+
+
+def test_without_a_bos_token_id_the_cut_is_unchanged():
+    tail = _CAP_PROMPT[-_CAP_MAX_PROMPT_LENGTH:]
+    capped = _cap_one_row(_overlong_unpaired_layout(_CAP_PROMPT), bos_token_id=None)
+    for column in _ALL_CAPPED_COLUMNS:
+        assert list(capped[column])[:_CAP_MAX_PROMPT_LENGTH] == tail, column
+
+
+def test_keep_start_is_unchanged_by_the_bos_token_id():
+    head = _CAP_PROMPT[:_CAP_MAX_PROMPT_LENGTH]
+    capped = _cap_one_row(_overlong_unpaired_layout(_CAP_PROMPT), truncation_mode="keep_start")
+    for column in _ALL_CAPPED_COLUMNS:
+        assert list(capped[column])[:_CAP_MAX_PROMPT_LENGTH] == head, column
+
+
+def test_a_row_that_fits_is_unchanged_by_the_bos_token_id():
+    dataset = _overlong_unpaired_layout(_CAP_PROMPT)
+    capped = _cap_one_row(dataset, max_length=64, max_prompt_length=2)
+    assert capped == dataset[0]
+
+
+def test_a_one_token_prompt_cap_keeps_only_the_bos():
+    capped = _cap_one_row(_overlong_unpaired_layout(_CAP_PROMPT), max_prompt_length=1)
+    for column in _ALL_CAPPED_COLUMNS:
+        assert list(capped[column])[:1] == [_UNPAIRED_BOS], column
+    assert list(capped["prompt_input_ids"]) == [_UNPAIRED_BOS]
+    assert list(capped["KL_prompt_input_ids"]) == [_UNPAIRED_BOS]
+
+
+def test_truncate_tokens_keeps_its_default_for_the_mlx_callers():
+    from soup_cli.trainer._trl_compat import _truncate_tokens
+
+    tokens = [_UNPAIRED_BOS, 10, 11, 12, 13]
+    assert _truncate_tokens(tokens, 3, "keep_end") == [11, 12, 13]
+    assert _truncate_tokens(tokens, 3, "keep_end", keep_first=True) == [_UNPAIRED_BOS, 12, 13]
+    assert _truncate_tokens(tokens, 3, "keep_start", keep_first=True) == [_UNPAIRED_BOS, 10, 11]
+
+
+def test_truncate_prompt_leaves_an_empty_prompt_empty():
+    from soup_cli.trainer._trl_compat import _truncate_prompt
+
+    assert _truncate_prompt([], [], 4, "keep_end", _UNPAIRED_BOS) == ([], [])
+
+
+def _prompt_prefixes(task):
+    return ("", "KL_") if task == "kto" else ("",)
+
+
+@pytest.mark.parametrize("task", ("bco", "kto"))
+def test_an_overlong_prompt_keeps_its_bos_on_train_and_validation(tmp_path, monkeypatch, task):
+    rows = _rows_with(task, _OVERLONG_PROMPT_WITH_TAIL, " good answer")
+    val_rows = _rows_with(task, _OVERLONG_PROMPT_WITH_TAIL, " good answer", n=4)
+    wrapper = _setup_rows(tmp_path, monkeypatch, task, rows, val_rows=val_rows)
+    tok = wrapper.tokenizer
+    assert tok.bos_token_id is not None
+    for split, dataset in (
+        ("train", wrapper.trainer.train_dataset),
+        ("validation", wrapper.trainer.eval_dataset),
+    ):
+        assert len(dataset) > 0, split
+        for index, row in enumerate(dataset):
+            for prefix in _prompt_prefixes(task):
+                case = (task, split, index, prefix)
+                prompt = list(row[f"{prefix}prompt_input_ids"])
+                ids = list(row[f"{prefix}completion_input_ids"])
+                labels = list(row[f"{prefix}completion_labels"])
+                assert prompt[0] == tok.bos_token_id, (*case, "prompt lost its BOS")
+                assert ids[0] == tok.bos_token_id, (*case, "completion lost its BOS")
+                assert len(prompt) <= _MAX_PROMPT_LENGTH, (*case, len(prompt))
+                assert len(ids) <= _MAX_SEQUENCE_LENGTH, (*case, len(ids))
+                assert len(row[f"{prefix}prompt_attention_mask"]) == len(prompt), case
+                assert len(row[f"{prefix}completion_attention_mask"]) == len(ids), case
+                masked = [token for token, label in zip(ids, labels) if label == _IGNORE_LABEL]
+                assert tok.convert_ids_to_tokens(masked[-1:]) == ["world"], case
+                assert ids[-1] == tok.eos_token_id, (*case, "the completion lost its EOS")
+
+
+def _write_tiny_tokenizer_without_bos(directory):
+    from tokenizers import Tokenizer, models, pre_tokenizers
+    from transformers import PreTrainedTokenizerFast
+
+    vocab = {"<unk>": 0, "<s>": 1, "</s>": 2, "<pad>": 3}
+    for word in ("hello", "world", "hi", "good", "answer", "bad"):
+        vocab[word] = len(vocab)
+    tok = Tokenizer(models.WordLevel(vocab=vocab, unk_token="<unk>"))
+    tok.pre_tokenizer = pre_tokenizers.Whitespace()
+    fast = PreTrainedTokenizerFast(
+        tokenizer_object=tok, unk_token="<unk>", eos_token="</s>", pad_token="<pad>"
+    )
+    fast.save_pretrained(str(directory))
+
+
+@pytest.mark.parametrize("task", ("bco", "kto"))
+def test_a_tokenizer_without_bos_gets_todays_rows(tmp_path, monkeypatch, task):
+    import importlib
+
+    from soup_cli.trainer import _trl_compat
+
+    module, cls_name, _ = _WRAPPERS[task]
+    trainer_module = importlib.import_module(module)
+    calls = []
+    original = _trl_compat.enforce_preference_sequence_limit
+
+    def spy(dataset, **kwargs):
+        calls.append((dataset, kwargs))
+        return original(dataset, **kwargs)
+
+    monkeypatch.setattr(_trl_compat, "enforce_preference_sequence_limit", spy)
+    weights = _tiny_llama_dir(tmp_path)
+    _write_tiny_tokenizer_without_bos(weights)
+    monkeypatch.chdir(tmp_path)
+    cfg = _cfg(weights, tmp_path / "out", task)
+    wrapper = getattr(trainer_module, cls_name)(cfg, device="cpu")
+    wrapper.setup({"train": _rows_with(task, _OVERLONG_PROMPT_WITH_TAIL, " good answer")})
+    assert wrapper.tokenizer.bos_token_id is None
+    assert len(calls) == 1, calls
+    prepared, kwargs = calls[0]
+    assert kwargs.get("bos_token_id") is None, kwargs
+    today = original(prepared, **{k: v for k, v in kwargs.items() if k != "bos_token_id"})
+    capped = wrapper.trainer.train_dataset
+    for name in today.column_names:
+        assert capped[name] == today[name], (task, name)
