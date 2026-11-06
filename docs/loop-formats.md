@@ -3,7 +3,7 @@
 [← Back to the docs index](README.md)
 
 The `soup loop` cycle (serve → feedback → training data → train → verdict → canary →
-promote or roll back) passes data between programs through five append-only JSONL logs.
+promote or roll back) passes data between programs through six append-only JSONL logs.
 This page defines them so that every producer (`soup serve`, `soup loop`, or an
 application built on Soup such as a desktop workbench) writes the same lines, and every
 reader can rely on them.
@@ -15,20 +15,24 @@ package:
 |---|---|---|---|---|
 | conversation | model answer | `.soup-loops/traces/*.jsonl` | `soup_cli/schemas/loop/conversation.schema.json` | `soup_cli/schemas/loop/examples/conversation.jsonl` |
 | feedback | feedback action on one answer | `.soup-loops/feedback.jsonl` | `.../feedback.schema.json` | `.../examples/feedback.jsonl` |
+| paraphrase | edited answer | `.soup-loops/paraphrases.jsonl` | `.../paraphrase.schema.json` | `.../examples/paraphrase.jsonl` |
 | iteration | step of one loop iteration | `.soup-loops/iterations.jsonl` | `.../iteration.schema.json` | `.../examples/iteration.jsonl` |
 | version | change of the active version | `.soup-loops/versions.jsonl` | `.../version.schema.json` | `.../examples/version.jsonl` |
 | progress | progress event | `.soup-loops/progress.jsonl` | `.../progress.schema.json` | `.../examples/progress.jsonl` |
 
 From Python, `soup_cli.utils.loop_formats` returns them: `load_schema(name)`,
-`load_examples(name)`, `schema_resource(name)`, `DEFAULT_LAYOUT`, `SCHEMA_VERSION`.
+`load_examples(name)`, `schema_resource(name)`, `FORMATS`, `DEFAULT_LAYOUT`,
+`SCHEMA_VERSION`, and `prompt_hash(messages)` (see [paraphrase](#paraphrase)).
 `jsonschema` is not a runtime dependency of Soup; install it to validate lines yourself.
 
-> **Status.** Soup writes all five formats. `soup serve --trace-log` writes version 1
+> **Status.** Soup writes five of the six formats. `soup serve --trace-log` writes version 1
 > conversation lines and `soup serve --feedback-log` writes feedback lines (see
 > [Serving and Export](serving-and-export.md#response-ids-and-feedback)). `soup loop`
 > writes `iterations.jsonl`, `versions.jsonl` and `progress.jsonl` (see
 > [What `soup loop` writes](#what-soup-loop-writes)), next to the
 > `.soup-loops/<iteration-id>/iteration.json` manifest it has always written per iteration.
+> Nothing in Soup writes `paraphrases.jsonl` or the `verdict.corrections` /
+> `verdict.held_out` evidence yet; `soup loop` and Soup Zero will.
 > **One active loop per project:** the files take no lock, and two `soup loop watch`
 > processes on one `.soup/loop.yaml` would race on the version counter. Other programs may
 > append to the same files; Soup never assumes it is the only writer.
@@ -106,6 +110,41 @@ One line per feedback action on one answer.
 `(response_id, kind)` wins: file order within one file, `ts` when a reader merges files.
 `comment` lines accumulate; every one counts.
 
+## paraphrase
+
+One line per edited answer: stable paraphrases of the prompt of an answer a person
+corrected. The loop and the Zero desktop app use them to check whether a new model
+version learned the correction (the version is asked the paraphrases, not the original
+prompt). They are generated once per answer and reused, so every version is checked
+against the same questions. **They are never training data.**
+
+| Field | Type | Meaning |
+|---|---|---|
+| `response_id` | UUID | The conversation line's `id`: the edited answer. Required. |
+| `prompt_hash` | 64 lowercase hex characters | SHA-256 of the normalised prompt (below). Required. |
+| `paraphrases` | array of non-empty strings, at least 1 | Rewordings of the prompt. Required. |
+| `generator` | `{model, template: {id, version}}` | The model that wrote the paraphrases and the instruction template it was given, all non-empty strings. Required. |
+| `created_at` | time | When the paraphrases were generated. Required. |
+| `dropped` | integer ≥ 0 | Optional. How many generated paraphrases the generator's filters dropped. |
+| `dropped_reasons` | array of `same_as_prompt`, `leaks_answer` | Optional. Why paraphrases were dropped. |
+
+**`prompt_hash`** is the lowercase SHA-256 hex digest of the *normalised prompt*: the
+conversation line's `messages` (the prompt without the answer), serialised as JSON with
+sorted keys and no extra whitespace (`json.dumps(messages, sort_keys=True,
+separators=(",", ":"), ensure_ascii=False)` in Python), encoded as UTF-8. Non-ASCII
+characters are written as themselves, not as `\uXXXX` escapes. Nothing is trimmed,
+case-folded or reordered. `soup_cli.utils.loop_formats.prompt_hash(messages)` computes
+it; a reader recomputes it to see whether the prompt of the answer is still the one that
+was paraphrased.
+
+**Which line counts.** The last line per `response_id` wins (file order). A writer that
+regenerates the paraphrases (a new template version, say) appends a new line.
+
+**What the generator drops.** It rejects a paraphrase that normalises to the original
+prompt (`same_as_prompt`) or contains the words the correction added (`leaks_answer`),
+regenerates once, and drops it if it fails again. `paraphrases` can therefore hold fewer
+items than were requested, but never none: if nothing survives, **no line is written**.
+
 ## iteration
 
 A snapshot of one harvest → train → verdict → canary iteration. A writer appends a line
@@ -123,7 +162,7 @@ why an iteration is not a single line.
 | `data` | object or null | `until`: the cursor (conversation and feedback lines up to and including this time were read; the next iteration reads only newer ones); `conversations`; `feedback` counts per kind (`thumb_up`, `thumb_down`, `rating`, `edit`, `comment`). |
 | `dataset` | object or null | `path`, `sha256`, `dpo_pairs`, `kto_rows`, `sft_rows` (row counts of the three datasets a harvest builds). |
 | `train` | object or null | `method` (`dpo`, `kto`, ...), `run_id`, `base` (what training actually loaded: a base model id or a merged earlier version), `root_base` (the original base model id when `base` is a merged version). |
-| `verdict` | object or null | `decision`: `SHIP` or `DON'T SHIP` (from `soup ship`), or `SKIPPED` / `ERROR` when no verdict was reached; `method`: `ship` or `eval_gate`; `baseline`: `{kind: base or version, ref, version}`, what the candidate was compared against (`version` is required when `kind` is `version`); `path` of the report; `reason`. |
+| `verdict` | object or null | `decision`: `SHIP` or `DON'T SHIP` (from `soup ship`), or `SKIPPED` / `ERROR` when no verdict was reached; `method`: `ship` or `eval_gate`; `baseline`: `{kind: base or version, ref, version}`, what the candidate was compared against (`version` is required when `kind` is `version`); `path` of the report; `reason`; and the optional evidence objects `corrections` and `held_out` (below). |
 | `canary` | object or null | `traffic_pct` (0-100), `samples` per bucket (`stable`, `canary`), `verdict` (`OK`, `MAJOR`, `UNKNOWN` while samples are too few), and an optional `quality` object (below). |
 | `artifacts` | object or null | What serves this version again: `adapter`, `merged`, `gguf` paths, and `served_as` (the adapter name in `soup serve`, or an Ollama tag). |
 | `estimated_cost_usd` | number or null | The budget gate's estimate. |
@@ -147,6 +186,49 @@ it is present, all of its fields are present:
 | `threshold` | number in [0, 1] | The tolerated rise in the negative share (`0.05` = 5 percentage points). |
 | `timed_out` | boolean | True when the maximum wait ran out before `min_rated` was reached. |
 | `decided_on` | enum | `errors_and_quality`, or `errors_only` when the rollout was decided on the error rates alone. |
+
+**`verdict.corrections`** (check 1, *corrections learned*) and **`verdict.held_out`**
+(check 2, *non-inferiority on held-out edits*) are optional and independent: absent means
+that check was not measured, and a line without them stays valid. When one is present, all
+of its fields are present.
+
+An edit is **fixed** when the new version's hits on its paraphrases (see
+[paraphrase](#paraphrase)) exceed the old version's, **broken** when they are lower, and a
+**tie** otherwise; `n_edits` counts the edits. A *hit* is decided by `scoring` (below).
+
+| `corrections` field | Type | Meaning |
+|---|---|---|
+| `fixed`, `broken`, `ties` | integers ≥ 0 | Edits by the rule above. |
+| `n_edits` | integer ≥ 0 | The edits checked: `fixed + broken + ties`. |
+| `n_paraphrases` | integer ≥ 0 | The paraphrases used, summed over the edits. |
+| `p_value` | number in [0, 1] or null | One-sided sign test over `fixed` vs `broken`: the chance of at least this many `fixed` if fixing and breaking were equally likely. null when `fixed + broken` is 0. |
+| `scoring` | object | How a hit was decided (below). |
+| `outcome` | enum | `pass`, `fail`, `insufficient` (the iteration had edits but fewer than 5 discordant ones, `fixed + broken`) or `not_applicable` (the training set held no edits, for example a thumbs-only loop, so there were no corrections to check; promotion is then decided by the canary's ratings). |
+
+`held_out` checks that learning the corrections did not cost anything else. The held-out
+edits are edits kept out of training; they are scored with the same metric against their
+corrected text and paired by prompt. **Non-inferiority** means the new version is not
+significantly below the old one on that metric.
+
+| `held_out` field | Type | Meaning |
+|---|---|---|
+| `better`, `worse`, `ties` | integers ≥ 0 | Held-out edits the new version scored higher on, lower on, or the same as the old version. |
+| `n` | integer ≥ 0 | The held-out edits scored: `better + worse + ties`. |
+| `p_value` | number in [0, 1] or null | One-sided sign test over `worse` vs `better`: the chance of at least this many `worse` if the two versions were equally good. null when `better + worse` is 0. |
+| `scoring` | object | The same shape as in `corrections`. Required. |
+| `outcome` | enum | `pass` (not significantly below the old version), `fail` (significantly below), `weak` (fewer than 10 held-out edits: too few to trust a pass) or `not_measured` (fewer than 5 held-out edits). |
+| `style` | object | Optional, information only: `preferred_new`, `preferred_old`, `n` (integers ≥ 0) and `p_value` (number in [0, 1] or null) of the pairwise style comparison. It is recorded but never part of the outcome. |
+
+**`scoring`** (in both objects) is `{method, threshold, template}`, all three present:
+`method` is `added_recall` or `reference_judge`; `threshold` is a number in [0, 1] or null;
+`template` is `{id, version}` or null.
+
+- `added_recall` scores what the correction *added*. The added words are the edit's
+  content words that the original answer lacked, and an answer is a hit when at least
+  `threshold` (0.5) of them are present in it. When an edit adds fewer than 2 content
+  words, all of its content words are used instead.
+- `reference_judge` asks a judge model to compare the answer with the corrected text;
+  `template` names the judge's instruction template.
 
 **The first model** is a seed line: `parent_iteration_id` and `from_version` null,
 `to_version: 1`, `outcome: promoted`, `reason: "initial deploy"`, and a matching
