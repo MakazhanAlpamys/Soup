@@ -230,7 +230,7 @@ training:
   only the prefix the prompt and `prompt + answer` renderings share), the
   answer located even when the tokenizer merges the last prompt token into it,
   BOS prepended and EOS appended when missing. Over-long rows are cut as on the
-  transformers backend (prompt to `max_length // 2`, keeping its end, answers to
+  transformers backend (prompt to `max_length // 2`, keeping its end, with the BOS in front, answers to
   the remaining room); TRL's own earlier answer cut, which can leave the shorter
   answer empty, is not reproduced. A pair the template cannot split is skipped
   with a count; a row with no room for an answer is refused.
