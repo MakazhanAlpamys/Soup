@@ -146,6 +146,28 @@ class LoopState:
     canary_max_wait_sec: float = DEFAULT_CANARY_MAX_WAIT_SEC
     # What happens then: "errors-only", "rollback" or "wait" (CANARY_ON_TIMEOUT).
     canary_on_timeout: str = "errors-only"
+    # The version counter of the loop's version log (.soup-loops/versions.jsonl, see
+    # docs/loop-formats.md): 1 is the served model, each promotion adds 1 and takes the next
+    # number after `latest_version`, so a number is never reused after a rollback. Last, so
+    # adding them shifted no existing positional field; a loop.yaml from before them is
+    # numbered by `read_state` from the names it remembers.
+    production_version: int = 1
+    # Production's version before the last promotion: what `soup loop rollback` returns to
+    # (None = nothing to go back to, or the served model when previous_production_name is None).
+    previous_production_version: Optional[int] = None
+    # The highest version ever promoted.
+    latest_version: int = 1
+    # The iteration that produced production_version, and the one before it (None = the
+    # served model, an iteration this log does not know, or no log yet).
+    production_iteration_id: Optional[str] = None
+    previous_production_iteration_id: Optional[str] = None
+    # The last line written to iterations.jsonl for the iteration whose canary is running (an
+    # iteration line, outcome "canary"): the promotion or withdrawal appends the same snapshot
+    # with its new outcome, so the later line is complete. None = no canary, or one that no
+    # iteration started (`soup loop canary`, or a rollout from before this field).
+    canary_iteration: Optional[dict] = None
+    # True once the first version (the "initial" line) is in the version log.
+    version_log_started: bool = False
 
     def __post_init__(self) -> None:  # noqa: D401 — validator hook
         # Closed-allowlist enforcement + bool-as-int rejection mirror the
@@ -272,6 +294,34 @@ class LoopState:
             _require_str("last_iteration_id", self.last_iteration_id, allow_empty=False)
         if self.last_run_date is not None:
             _require_str("last_run_date", self.last_run_date, allow_empty=False)
+        self._validate_versions()
+
+    def _validate_versions(self) -> None:
+        """The version counter, the iteration ids and the canary's iteration snapshot."""
+        for fname in ("production_version", "latest_version"):
+            v = getattr(self, fname)
+            if isinstance(v, bool) or not isinstance(v, int) or v < 1:
+                raise ValueError(f"{fname} must be a positive int, got {v!r}")
+        v = self.previous_production_version
+        if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < 1):
+            raise ValueError(
+                f"previous_production_version must be a positive int or None, got {v!r}"
+            )
+        behind = [self.production_version]
+        if self.previous_production_version is not None:
+            behind.append(self.previous_production_version)
+        if self.latest_version < max(behind):
+            raise ValueError(
+                f"latest_version must be at least {max(behind)} (the highest version in "
+                f"use), got {self.latest_version}"
+            )
+        for fname in ("production_iteration_id", "previous_production_iteration_id"):
+            if getattr(self, fname) is not None:
+                _require_iteration_id(fname, getattr(self, fname))
+        if not isinstance(self.version_log_started, bool):
+            raise ValueError("version_log_started must be bool")
+        if self.canary_iteration is not None:
+            _check_canary_iteration(self.canary_iteration)
 
     def stable_name(self) -> str:
         """The canary router's stable side: the promoted adapter, else the served model."""
@@ -319,6 +369,42 @@ def _require_str(field: str, value: object, *, allow_empty: bool = False) -> Non
         raise ValueError(f"{field} must not be empty")
     if len(value) > _MAX_STR_FIELD:
         raise ValueError(f"{field} exceeds {_MAX_STR_FIELD} characters")
+
+
+_ITERATION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", re.ASCII)
+#: The snapshot of a canary's iteration is one line of iterations.jsonl; far under this.
+_MAX_CANARY_ITERATION_CHARS = 32 * 1024
+
+
+def _require_iteration_id(field: str, value: object) -> None:
+    """``value`` is an iteration id: safe as a directory name, as the formats require."""
+    if not isinstance(value, str):
+        raise TypeError(f"{field} must be str, got {type(value).__name__}")
+    if _ITERATION_ID_RE.fullmatch(value) is None or ".." in value:
+        raise ValueError(
+            f"{field} must be 1-128 letters, digits, '.', '_' or '-' (not starting with a "
+            f"symbol, no '..'), got {value[:40]!r}"
+        )
+
+
+def _check_canary_iteration(snapshot: object) -> None:
+    """``canary_iteration`` is plain, small JSON: an iteration line whose outcome is canary."""
+    if not isinstance(snapshot, dict):
+        raise ValueError("canary_iteration must be a dict or None")
+    try:
+        body = json.dumps(snapshot, allow_nan=False)
+        plain = json.loads(body) == snapshot  # an int key or a tuple is not plain JSON
+    except (TypeError, ValueError) as exc:
+        raise ValueError("canary_iteration must hold plain finite JSON values") from exc
+    if not plain:
+        raise ValueError("canary_iteration must hold plain finite JSON values with string keys")
+    if len(body) > _MAX_CANARY_ITERATION_CHARS:
+        raise ValueError(f"canary_iteration exceeds {_MAX_CANARY_ITERATION_CHARS} characters")
+    if "iteration_id" not in snapshot:
+        raise ValueError("canary_iteration must name its iteration_id")
+    _require_iteration_id("canary_iteration iteration_id", snapshot["iteration_id"])
+    if snapshot.get("outcome") != "canary":
+        raise ValueError("canary_iteration must be an iteration whose outcome is canary")
 
 
 def _utc_now_iso() -> str:
@@ -465,10 +551,29 @@ def read_state(path: Optional[str] = None) -> LoopState:
     # backwards (the alternative is mass-rejecting on any unknown field).
     allowed = set(LoopState.__dataclass_fields__.keys())
     filtered = {k: v for k, v in data.items() if k in allowed}
+    if "production_version" not in data:
+        _number_versions_of_old_state(filtered)
     try:
         return LoopState(**filtered)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"state file has invalid contents: {exc}") from exc
+
+
+def _number_versions_of_old_state(fields: dict) -> None:
+    """Give a ``loop.yaml`` written before the version counter the numbers its names imply.
+
+    The served model is version 1; the production adapter, if any, is at least version 2,
+    and a remembered previous adapter means one more promotion before it. The file keeps no
+    count, so this is the lowest number consistent with what it remembers.
+    """
+    version = 1
+    if fields.get("production_name"):
+        version += 1
+        if fields.get("previous_production_name"):
+            version += 1
+        fields["previous_production_version"] = version - 1
+    fields["production_version"] = version
+    fields["latest_version"] = version
 
 
 def init_state(

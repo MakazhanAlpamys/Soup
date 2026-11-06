@@ -46,6 +46,20 @@ from soup_cli.utils.loop_iteration import (
     new_iteration_id,
     write_iteration,
 )
+from soup_cli.utils.loop_log import (
+    NO_LOG,
+    LoopLog,
+    StageEvents,
+    canary_result,
+    iteration_from_record,
+    progress_line,
+    promotion_changes,
+    resolved_line,
+    start_log,
+    utc_now_iso,
+    version_line,
+    withdrawn_line,
+)
 from soup_cli.utils.loop_state import (
     MAX_CURSOR_TS,
     LoopState,
@@ -140,6 +154,9 @@ class WatchConfig:
     # The feedback side of the canary verdict (loop_stages.canary_quality for the pre-wired
     # loop); None = judge by request errors alone, as the stub stages do.
     quality_fn: Optional[QualityFn] = None
+    # Append the iteration, version and progress logs (docs/loop-formats.md) under
+    # ``iteration_dir`` (default .soup-loops) as the loop runs. False = only the manifests.
+    loop_logs: bool = True
     # Called with no arguments at the start of every pass of the watch loop (also while the
     # loop is paused, and when a budget skips the iteration), unlike ``on_iteration``. The
     # detached child uses it to rotate its log; a plain foreground watch passes none.
@@ -166,6 +183,8 @@ class WatchConfig:
             raise ValueError("quality_fn must be callable or None")
         if not isinstance(self.pack_iterations, bool):
             raise ValueError("pack_iterations must be bool")
+        if not isinstance(self.loop_logs, bool):
+            raise ValueError("loop_logs must be bool")
         # Validate the #177 registry-packing identity fields like every other
         # field, so a NUL/oversize value fails at construction rather than deep
         # inside store.push (review LOW). They flow into registry_name_from /
@@ -191,20 +210,29 @@ def run_once(
     config: WatchConfig,
     *,
     now: Optional[datetime] = None,
+    log: Optional[LoopLog] = None,
 ) -> "tuple[LoopState, IterationRecord, BudgetDecision]":
     """Execute one full iteration synchronously. Pure with respect to time.
 
     ``now`` fixes the clock for the day and month rollovers and for how long a canary has
     waited for ratings (tests); None reads ``_now()``, the current UTC time.
+
+    ``log`` is where the cycle appends its lines to ``iterations.jsonl``, ``versions.jsonl``
+    and ``progress.jsonl`` (``soup loop watch`` passes one); None writes nothing and leaves
+    the version counter alone. A line that cannot be written is a note on the returned
+    record, never an error.
     """
     if not isinstance(state, LoopState):
         raise TypeError("state must be LoopState")
     if not isinstance(config, WatchConfig):
         raise TypeError("config must be WatchConfig")
+    log = NO_LOG if log is None else log
     # #2362: read the clock once, so the month and day rollovers agree even
     # when `soup loop watch` runs across midnight at the end of a month.
     if now is None:
         now = _now()
+    if log.enabled:
+        state = start_log(state, log, actor="loop")  # the first version, once
     # Read the month from the OLD last_run_date, before the daily reset
     # overwrites it.
     spent = reset_monthly_spend_if_new_month(
@@ -230,6 +258,7 @@ def run_once(
             or f"canary {state.canary_active} rolled back ({canary_verdict})"
         )
         canary_notes.extend(quality_notes)
+        _log_withdrawn(log, state, reading, canary_notes[0])
         state = _state_with(
             state,
             canary_active=rollback_policy.canary,
@@ -237,15 +266,23 @@ def run_once(
             canary_rollout_id=None,
             canary_adapter=None,
             canary_started_ts=None,
+            canary_iteration=None,
         )
     elif canary_verdict == "OK" and state.canary_active:
+        canary_before = state
+        log.progress(progress_line(
+            _canary_iteration_id(state), "promote", "start",
+            message=f"promoting {state.canary_active} to production",
+        ))
         state, note = _promote(state, config)
         canary_notes.append(note)
         if reading.promote_note and state.canary_active is None:
             canary_notes.append(reading.promote_note)  # (a refused promotion keeps the canary)
         canary_notes.extend(quality_notes)
+        _log_promotion(log, canary_before, state, reading, canary_notes, note)
     elif state.canary_active:
         # A canary is still collecting answers: no new iteration until it is decided.
+        _log_waiting(log, state, reading)
         record = IterationRecord(
             iteration_id=new_iteration_id(),
             started_at=_utc_iso(),
@@ -264,7 +301,7 @@ def run_once(
             ])[:4096],
             canary_quality=reading.evidence,
         )
-        return state, record, BudgetDecision(
+        return state, _noted(record, log), BudgetDecision(
             proceed=False,
             reason="canary in progress",
             projected_total_usd=state.spent_this_month_usd,
@@ -295,11 +332,31 @@ def run_once(
             notes=" | ".join([*canary_notes, f"budget-skip: {decision.reason}"])[:4096],
             canary_quality=reading.evidence,
         )
-        return state, record, decision
+        return state, _noted(record, log), decision
+    # Stage events: held back until the iteration has work to show (see StageEvents).
+    events = StageEvents(log, iteration_id)
+    events.emit("harvest", "start")
     harvest_out = dict(config.harvest_fn(state))
+    events.emit("harvest", "end", message=_harvest_message(harvest_out))
+    if harvest_out.get("pairs_path"):
+        events.go_live()  # a dataset was handed to training
+    events.emit("train", "start")
     train_out = dict(config.train_fn(state, harvest_out))
+    trained_run = _training_ran(train_out)
+    if trained_run:
+        events.go_live()  # (a custom stage can train without a dataset path)
+    _emit_train_end(events, train_out, trained_run)
+    if trained_run:
+        events.emit("verdict", "start")
     gate_out = dict(config.gate_fn(state, train_out))
+    if trained_run:
+        _emit_verdict_end(events, gate_out)
+    deploying = trained_run and gate_out.get("gate_verdict") == "OK"
+    if deploying:
+        events.emit("deploy", "start")
     deploy_out = dict(config.deploy_fn(state, {**train_out, **gate_out}))
+    if deploying:
+        _emit_deploy_end(events, deploy_out)
     gate_verdict = str(gate_out.get("gate_verdict", "SKIPPED"))
     deploy_verdict = deploy_out.get("canary_verdict")
     if canary_verdict is None and deploy_verdict is not None:
@@ -366,7 +423,188 @@ def run_once(
             canary_started_ts=_rollout_start(deploy_out),
             canary_autoroll_on_regress=True,
         )
-    return new_state, record, decision
+    new_state = _log_iteration(log, events, record, state, new_state, {
+        "harvest": harvest_out, "train": train_out, "gate": gate_out, "deploy": deploy_out,
+    })
+    return new_state, _noted(record, log), decision
+
+
+# ---------------------------------------------------------------------------
+# The cycle's log lines (docs/loop-formats.md). Each helper only appends: it decides
+# nothing, and a line that cannot be written is a note, never an error (LoopLog).
+# ---------------------------------------------------------------------------
+
+
+def _noted(record: IterationRecord, log: LoopLog) -> IterationRecord:
+    """``record`` with a note for each log line that could not be written this cycle."""
+    failures = log.take_failures()
+    if not failures:
+        return record
+    note = " | ".join(failures)
+    notes = f"{record.notes} | {note}" if record.notes else note
+    return replace(record, notes=notes[:4096])
+
+
+def _canary_iteration_id(state: LoopState) -> Optional[str]:
+    """The iteration the running canary belongs to, or None (a canary no iteration started)."""
+    snapshot = state.canary_iteration if state.canary_active else None
+    return snapshot["iteration_id"] if snapshot else None
+
+
+def _canary_of(state: LoopState, reading: "_CanaryReading") -> dict:
+    """The ``canary`` object of a resolved canary: what this cycle measured of it."""
+    measured = reading.stable_samples is not None
+    return canary_result(
+        traffic_pct=state.canary_traffic_pct,
+        verdict=reading.verdict,
+        stable_samples=reading.stable_samples,
+        canary_samples=reading.samples if measured else None,
+        quality=reading.evidence,
+    )
+
+
+def _log_withdrawn(
+    log: LoopLog, state: LoopState, reading: "_CanaryReading", reason: str
+) -> None:
+    """The canary was withdrawn: its iteration ends ``rolled_back``. Production is unchanged."""
+    line = withdrawn_line(state, reason, canary=_canary_of(state, reading))
+    if line is not None:
+        log.iteration(line)
+    log.progress(progress_line(
+        _canary_iteration_id(state), "rollback", "end", message=reason
+    ))
+
+
+def _log_promotion(
+    log: LoopLog,
+    before: LoopState,
+    after: LoopState,
+    reading: "_CanaryReading",
+    canary_notes: "list[str]",
+    note: str,
+) -> None:
+    """The canary became production (or the server refused): the iteration, version, event."""
+    iteration_id = _canary_iteration_id(before)
+    if after.canary_active is not None:  # refused: nothing changed
+        log.progress(progress_line(
+            iteration_id, "promote", "error", error="promote_refused", message=note
+        ))
+        return
+    now_iso = utc_now_iso()
+    reason = " | ".join(canary_notes)[:4096]
+    snapshot = before.canary_iteration
+    if snapshot is not None:
+        log.iteration(resolved_line(
+            snapshot, outcome="promoted", reason=reason, finished_at=now_iso,
+            to_version=after.production_version, canary=_canary_of(before, reading),
+        ))
+    log.version(version_line(
+        from_version=before.production_version, to_version=after.production_version,
+        cause="promote", actor="loop", iteration_id=iteration_id,
+        served_as=before.canary_active, reason=reason, ts=now_iso,
+    ))
+    log.progress(progress_line(iteration_id, "promote", "end", message=note, ts=now_iso))
+
+
+def _log_waiting(log: LoopLog, state: LoopState, reading: "_CanaryReading") -> None:
+    """A canary still collecting answers: one ``canary`` progress line for this cycle.
+
+    The numbers are the canary's rated answers out of the minimum the quality verdict needs
+    when people rate them, else its answers out of ``CANARY_MIN_SAMPLES``; None when the
+    statistics could not be read.
+    """
+    evidence = reading.evidence
+    if evidence is not None:
+        rated, total = evidence["rated"], evidence["min_rated"]
+        done = rated["canary"]
+        message = (
+            f"{rated['canary']}/{total} canary and {rated['stable']}/{total} stable answers rated"
+        )
+    elif reading.verdict is not None:
+        done, total = reading.samples, CANARY_MIN_SAMPLES
+        message = f"{done}/{total} canary answers"
+    else:
+        done = total = None
+        message = "canary statistics unavailable"
+    log.progress(progress_line(
+        _canary_iteration_id(state), "canary", "progress", done=done, total=total, message=message
+    ))
+
+
+def _harvest_message(harvest_out: Mapping[str, object]) -> str:
+    pairs, new = harvest_out.get("pairs_harvested"), harvest_out.get("new_pairs")
+    text = f"{pairs} rows harvested" if isinstance(pairs, int) else "harvested"
+    return f"{text} ({new} new)" if isinstance(new, int) and not isinstance(new, bool) else text
+
+
+def _emit_train_end(
+    events: StageEvents, train_out: Mapping[str, object], trained: bool
+) -> None:
+    if trained:
+        events.emit("train", "end", message=f"trained {train_out.get('run_id')}")
+    elif train_out.get("failed"):
+        events.emit("train", "error", error="train_failed", message="training failed")
+    else:
+        events.emit("train", "end", message="training skipped")
+
+
+def _emit_verdict_end(events: StageEvents, gate_out: Mapping[str, object]) -> None:
+    verdict = gate_out.get("gate_verdict")
+    notes = str(gate_out.get("notes") or "")
+    if verdict == "OK":
+        events.emit("verdict", "end", message="SHIP")
+    elif verdict == "MAJOR":
+        events.emit("verdict", "end", message="DON'T SHIP")
+    elif notes.startswith("verdict_skipped:"):
+        events.emit("verdict", "error", error="verdict_not_reached", message=notes[:300])
+    else:
+        events.emit("verdict", "end", message="no verdict")
+
+
+def _emit_deploy_end(events: StageEvents, deploy_out: Mapping[str, object]) -> None:
+    notes = str(deploy_out.get("notes") or "")
+    if deploy_out.get("deployed"):
+        events.emit("deploy", "end", message=notes or "deployed")
+    elif deploy_out.get("failed"):
+        events.emit("deploy", "error", error="deploy_failed", message=notes or "deploy failed")
+    else:
+        events.emit("deploy", "end", message=notes or "not deployed")
+
+
+def _log_iteration(
+    log: LoopLog,
+    events: StageEvents,
+    record: IterationRecord,
+    state: LoopState,
+    new_state: LoopState,
+    stages: "Mapping[str, Mapping[str, object]]",
+) -> LoopState:
+    """Append the iteration's line; a canary keeps its line in ``loop.yaml`` for later.
+
+    Returns ``new_state``, with ``canary_iteration`` set when the iteration started a canary.
+    """
+    if not log.enabled:
+        return new_state
+    line = iteration_from_record(
+        record, state=state, new_state=new_state, harvest=stages["harvest"],
+        train=stages["train"], gate=stages["gate"], deploy=stages["deploy"],
+    )
+    log.iteration(line)
+    if line["outcome"] != "canary":
+        return new_state
+    try:
+        new_state = _state_with(new_state, canary_iteration=line)
+    except (TypeError, ValueError):
+        # (a stage reported something the snapshot cannot hold): the canary still runs,
+        # but its promotion will not be able to complete this line.
+        _LOG.warning("canary iteration snapshot not kept", exc_info=True)
+    events.go_live()  # (a canary started: that is work, whatever the stages reported)
+    events.emit(
+        "canary", "start", done=0, total=CANARY_MIN_SAMPLES,
+        message=f"{new_state.canary_traffic_pct:g}% of keyed traffic; verdict after "
+        f"{CANARY_MIN_SAMPLES} canary answers",
+    )
+    return new_state
 
 
 def _rollout_start(deploy_out: Mapping[str, object]) -> float:
@@ -434,6 +672,7 @@ def _promote(state: LoopState, config: WatchConfig) -> "tuple[LoopState, str]":
         canary_rollout_id=None,
         canary_adapter=None,
         canary_started_ts=None,
+        **promotion_changes(state),
     )
     note = f"canary {name} promoted to production"
     if out.get("notes"):
@@ -450,6 +689,9 @@ class _CanaryReading:
     verdict: Optional[str] = None
     rollback: Optional[CanaryPolicy] = None  # set when the canary is to be withdrawn
     samples: int = 0
+    # The stable bucket's answers, measured the same way; None when the statistics could not
+    # be read (so the iteration line leaves the samples out instead of saying 0).
+    stable_samples: Optional[int] = None
     notes: "tuple[str, ...]" = ()
     # The numbers behind the quality verdict (QualityStats.evidence), None without one.
     evidence: "Optional[dict[str, object]]" = None
@@ -498,6 +740,7 @@ def _evaluate_active_canary(
         verdict = evaluate_canary_verdict(stats)
         counts = stats.snapshot()
         samples = counts["canary_ok"] + counts["canary_major"]
+        stable_samples = counts["stable_ok"] + counts["stable_major"]
     except (OSError, TypeError, ValueError):
         _LOG.warning("canary stats read failed", exc_info=True)
         return _CanaryReading()
@@ -508,6 +751,7 @@ def _evaluate_active_canary(
             verdict=verdict,
             rollback=maybe_rollback(policy, verdict) if regressed else None,
             samples=samples,
+            stable_samples=stable_samples,
         )
     quality_verdict = quality.verdict(min_samples=CANARY_MIN_SAMPLES)
     timed_out = (
@@ -552,6 +796,7 @@ def _evaluate_active_canary(
         verdict=verdict,
         rollback=withdraw,
         samples=samples,
+        stable_samples=stable_samples,
         notes=notes,
         evidence=quality.evidence(
             min_samples=CANARY_MIN_SAMPLES,
@@ -621,6 +866,7 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
         pass
 
     iterations = 0
+    log = LoopLog(config.iteration_dir) if config.loop_logs else None
     # v0.71.4 #177 — chain Registry entries across iterations so the loop
     # forms a real lineage DAG (parent links to the prior iteration's entry).
     prev_registry_id: Optional[str] = None
@@ -650,7 +896,7 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
                 continue
             if state.status == "stopped":
                 break
-            state, record, decision = run_once(state, config)
+            state, record, decision = run_once(state, config, log=log)
             write_state(state, config.state_path)
             # Budget-skipped iterations DO NOT produce a manifest — the
             # cycle didn't actually run, so cluttering .soup-loops/ with

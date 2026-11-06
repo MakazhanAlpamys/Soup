@@ -236,10 +236,13 @@ class TestParsing:
 
 class TestState:
     def test_the_fields_come_last_in_this_order_with_these_defaults(self):
+        """Appended last when added; the version-log fields added after them are in
+        tests/test_loop_writes_formats.py."""
         names = list(LoopState.__dataclass_fields__)
 
-        assert names[-2:] == ["canary_max_wait_sec", "canary_on_timeout"]
-        assert names[-3] == "canary_started_ts"
+        start = names.index("canary_max_wait_sec")
+        assert names[start:start + 2] == ["canary_max_wait_sec", "canary_on_timeout"]
+        assert names[start - 1] == "canary_started_ts"
         state = _state()
         assert state.canary_max_wait_sec == 86400.0
         assert state.canary_on_timeout == "errors-only"
