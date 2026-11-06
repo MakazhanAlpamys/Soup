@@ -5245,9 +5245,12 @@ def _unsloth_flag_clause(training: "TrainingConfig") -> str:
 
 #: The tasks with a trainer on ``backend: mlx``: SFT through mlx-lm's tuner;
 #: DPO, ORPO, SimPO, KTO and GRPO through Soup's own loops (``trainer/mlx_dpo.py``,
-#: ``trainer/mlx_orpo.py``, ``trainer/mlx_grpo.py``). Validators that defer
-#: to :meth:`SoupConfig._validate_mlx_task_support` read this, not ``"sft"``.
-MLX_TASKS: frozenset[str] = frozenset({"sft", "dpo", "orpo", "simpo", "kto", "grpo"})
+#: ``trainer/mlx_orpo.py``, ``trainer/mlx_grpo.py``), and unlearning with
+#: ``unlearn_method: simnpo`` only (``trainer/mlx_unlearn.py``). Validators that
+#: defer to :meth:`SoupConfig._validate_mlx_task_support` read this, not ``"sft"``.
+MLX_TASKS: frozenset[str] = frozenset(
+    {"sft", "dpo", "orpo", "simpo", "kto", "grpo", "unlearn"}
+)
 
 
 def resolve_mlx_task(task: str, preference_loss: str | None = None) -> str:
@@ -5303,6 +5306,28 @@ _MLX_GRPO_UNAPPLIED_PREFIXES: dict[str, str] = {
     "only (MLX GRPO saves adapters every training.save_steps updates)",
     "curriculum_": "curriculum ordering runs on the transformers path only",
 }
+
+
+def _refuse_mlx_unlearn_scope(cfg: Any) -> None:
+    """#2005: MLX SimNPO trains standard LoRA on an unquantized text base.
+
+    Refused elsewhere, before this runs: ``unlearn_method`` other than
+    ``simnpo`` (``validate_unlearn_compat``), any ``quantization`` but ``none``
+    (every unlearn config) and DoRA (every MLX task but SFT). The Llama-only
+    architecture check needs the loaded model, so ``trainer/mlx_unlearn.py``
+    makes it before training.
+    """
+    scope = "MLX SimNPO trains standard LoRA on an unquantized text base"
+    if cfg.modality != "text":
+        raise ValueError(
+            f"modality='{cfg.modality}' is not supported by task='unlearn' on "
+            f"backend='mlx': {scope}. Use backend: transformers, or modality: text."
+        )
+    if int(cfg.training.lora.r) < 1:
+        raise ValueError(
+            "training.lora.r must be at least 1 for task='unlearn' on "
+            f"backend='mlx': {scope}; full fine-tuning is not implemented there."
+        )
 
 
 def _refuse_mlx_grpo_scope(cfg: Any) -> None:
@@ -5398,6 +5423,12 @@ def _refused_backend_clause(backend: str, task: str, training: "TrainingConfig")
         )
     elif backend == "mlx" and resolve_mlx_task(task, training.preference_loss) not in MLX_TASKS:
         reason = f"task={task!r} has no trainer on backend='mlx'."
+    elif backend == "mlx" and task == "unlearn" and training.unlearn_method != "simnpo":
+        # #2005: MLX unlearns with SimNPO only; validate_unlearn_compat refuses the rest.
+        reason = (
+            f"task='unlearn' with unlearn_method={training.unlearn_method!r} has no "
+            "trainer on backend='mlx'."
+        )
     else:
         return ""
     return f"Also, {reason} Use backend: transformers{_unsloth_flag_clause(training)}."
@@ -8577,7 +8608,8 @@ class SoupConfig(BaseModel):
         - ``unlearn_method`` is rejected on any other task (silent no-op
           footgun — mirrors v0.52.0 distill / classifier task-gate).
         - ``data.forget_set`` is present when ``task='unlearn'``.
-        - Backend != mlx (there is no MLX unlearning path).
+        - On ``backend: mlx``, ``unlearn_method: simnpo`` only (#2005); the
+          rest of the MLX scope is refused in :meth:`_validate_mlx_task_support`.
         - ``loraplus_lr_ratio`` is refused (#745): unlearn drives its own
           ``torch.optim.AdamW`` loop, not a ``Trainer``, so there is nothing
           for ``attach_loraplus_optimizer`` to attach to and LoRA+ would be
@@ -8640,7 +8672,9 @@ class SoupConfig(BaseModel):
         from soup_cli.utils.unlearning import validate_unlearn_compat
 
         try:
-            validate_unlearn_compat(task=self.task, backend=self.backend)
+            validate_unlearn_compat(
+                task=self.task, backend=self.backend, method=tcfg.unlearn_method
+            )
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
         return self
@@ -8885,11 +8919,12 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_mlx_task_support(self) -> "SoupConfig":
-        """MLX backend supports sft, dpo, orpo, simpo, kto and grpo.
+        """MLX backend supports sft, dpo, orpo, simpo, kto, grpo and unlearn.
 
         SFT runs through mlx-lm's tuner; DPO, ORPO, SimPO, KTO and GRPO through
         Soup's own loops in ``trainer/mlx_dpo.py`` / ``trainer/mlx_orpo.py`` /
-        ``trainer/mlx_simpo.py`` / ``trainer/mlx_kto.py`` / ``trainer/mlx_grpo.py``.
+        ``trainer/mlx_simpo.py`` / ``trainer/mlx_kto.py`` / ``trainer/mlx_grpo.py``,
+        and unlearning (SimNPO only, #2005) in ``trainer/mlx_unlearn.py``.
         Scalar preference aliases share their native task's scope restrictions.
         Every other task is refused here rather than at ``train()`` time.
         """
@@ -8901,6 +8936,9 @@ class SoupConfig(BaseModel):
             task_label += f" with preference_loss={self.training.preference_loss!r}"
         if task == "grpo":
             _refuse_mlx_grpo_scope(self)
+            return self
+        if task == "unlearn":
+            _refuse_mlx_unlearn_scope(self)
             return self
         if task in ("dpo", "orpo", "simpo", "kto"):
             # The native preference loops tokenize text and chat rows only and
@@ -8937,7 +8975,8 @@ class SoupConfig(BaseModel):
         if task in MLX_TASKS:
             return self
         raise ValueError(
-            f"MLX backend only ships SFT, DPO, ORPO, SimPO, KTO and GRPO; "
+            f"MLX backend only ships SFT, DPO, ORPO, SimPO, KTO and GRPO, plus "
+            "SimNPO unlearning; "
             f"task='{self.task}' has "
             "no trainer on backend='mlx'."
             f" Use backend=transformers for task={self.task}."

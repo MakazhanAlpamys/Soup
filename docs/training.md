@@ -603,6 +603,11 @@ soup eval unlearning <run-id> --benchmark tofu --evidence evidence.json --output
 
 `task: unlearn` is live (v0.71.9): it loads a LoRA-wrapped policy, a frozen reference copy (NPO / RMU), and the forget / retain JSONL sets, then optimises the per-method loss — NPO's `(2/β)·mean(-logσ(-β·(π_logp − ref_logp)))` drives the policy's forget-set log-prob below the reference (= forgetting), while the retain set anchors capability. Run NPO/SimNPO **with** a `retain_set` — without one the policy has no utility anchor and Soup warns loudly. A `forget_set` or a `retain_set` that is set but yields no usable row is refused, naming the file, before any model loads.
 
+On `backend: mlx`, `unlearn_method: simnpo` runs natively on Apple Silicon, on a
+Llama-architecture base with standard LoRA and `quantization: none`; NPO and RMU
+stay on `backend: transformers`. See [SimNPO unlearning on
+MLX](backends-and-ops.md#simnpo-unlearning-on-mlx).
+
 Unlearning honors `training.optimizer`, `scheduler`, `warmup_ratio`, `weight_decay`,
 `max_grad_norm`, `batch_size`, `gradient_accumulation_steps` and
 `gradient_checkpointing` (any enabled tier checkpoints the whole policy model). The default
