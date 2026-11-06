@@ -21,8 +21,10 @@ from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
+
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -74,7 +76,9 @@ def main(
         retr_path = validate_ra_dit_config_path("--retriever-config", retriever_config)
         gen_path = validate_ra_dit_config_path("--generator-config", generator_config)
     except (TypeError, ValueError, FileNotFoundError) as exc:
-        console.print(f"[red]Invalid ra-dit config:[/] {escape(str(exc))}")
+        console.print(
+            f"[red]Invalid ra-dit config:[/] {for_terminal(exc)}", emoji=False
+        )
         raise typer.Exit(2) from exc
 
     if plan_only:
@@ -84,25 +88,30 @@ def main(
                 gen_path,
             )
         except (TypeError, ValueError, FileNotFoundError) as exc:
-            console.print(f"[red]Invalid ra-dit config:[/] {escape(str(exc))}")
+            console.print(
+            f"[red]Invalid ra-dit config:[/] {for_terminal(exc)}", emoji=False
+        )
             raise typer.Exit(2) from exc
 
         if retriever_model is not None:
-            link_preview = f"manual override: {escape(retriever_model)}"
+            link_preview = f"manual override: {for_terminal(retriever_model)}"
         else:
             link_preview = (
                 "auto-link to stage-1 output: "
-                f"{escape(retriever_output)}"
+                f"{for_terminal(retriever_output)}"
             )
 
         console.print(
             Panel(
-                f"[bold]Stage 1 (retriever):[/] {escape(retr_path)}\n"
-                f"[bold]Retriever output:[/] {escape(retriever_output)}\n"
-                f"[bold]Stage 2 (generator):[/] {escape(gen_path)}\n"
-                f"[bold]Generator output:[/] {escape(generator_output)}\n"
-                f"[bold]Retriever link:[/] {link_preview}\n"
-                f"[bold]Per-stage timeout:[/] {timeout}s",
+                Text.from_markup(
+                    f"[bold]Stage 1 (retriever):[/] {for_terminal(retr_path)}\n"
+                    f"[bold]Retriever output:[/] {for_terminal(retriever_output)}\n"
+                    f"[bold]Stage 2 (generator):[/] {for_terminal(gen_path)}\n"
+                    f"[bold]Generator output:[/] {for_terminal(generator_output)}\n"
+                    f"[bold]Retriever link:[/] {link_preview}\n"
+                    f"[bold]Per-stage timeout:[/] {timeout}s",
+                    emoji=False,
+                ),
                 title="soup ra-dit (plan-only)",
                 border_style="cyan",
             )
@@ -121,16 +130,19 @@ def main(
             timeout_seconds=timeout,
         )
     except (TypeError, ValueError, FileNotFoundError, RuntimeError) as exc:
-        console.print(f"[red]RA-DIT run failed:[/] {escape(str(exc))}")
+        console.print(f"[red]RA-DIT run failed:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(2) from exc
 
     link_note = "auto-linked" if result.autolinked else "manual override"
     console.print(
         Panel(
-            f"[bold]Retriever output:[/] {escape(result.retriever_output)}\n"
-            f"[bold]Generator output:[/] {escape(result.generator_output)}\n"
-            f"[bold]Retriever model used:[/] "
-            f"{escape(result.retriever_model_used)} ({link_note})",
+            Text.from_markup(
+                f"[bold]Retriever output:[/] {for_terminal(result.retriever_output)}\n"
+                f"[bold]Generator output:[/] {for_terminal(result.generator_output)}\n"
+                f"[bold]Retriever model used:[/] "
+                f"{for_terminal(result.retriever_model_used)} ({link_note})",
+                emoji=False,
+            ),
             title="RA-DIT pipeline complete",
             border_style="green",
         )
