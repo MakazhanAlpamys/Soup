@@ -389,6 +389,17 @@ def test_every_detail_of_the_train_panels_has_its_own_line(monkeypatch):
         "Intervention:": 1, "Hidden dim:": 1, "Saved:": 1,
     }
     assert _line_counts(result.output, expected) == expected
+    text = _plain(result)
+    assert re.search(
+        r"Base: tiny-model (?:\W )+Method: caa (?:\W )+Name: vec (?:\W )+Pairs: pairs\.jsonl "
+        r"(?:\W )+Layer: auto \(middle\) (?:\W )+Description:",
+        text,
+    )
+    assert re.search(
+        r"Method: caa (?:\W )+Name: vec (?:\W )+Layer: 3 (?:\W )+Intervention: residual "
+        r"(?:\W )+Hidden dim: 8 (?:\W )+Pairs: 1 (?:\W )+Saved: out",
+        text,
+    )
 
 
 def test_every_detail_of_the_apply_panel_has_its_own_line(monkeypatch):
@@ -405,3 +416,8 @@ def test_every_detail_of_the_apply_panel_has_its_own_line(monkeypatch):
         ("Vector:", "Method:", "Layer:", "Intervention:", "Dim:", "Strength:", "Dir:"), 1
     )
     assert _line_counts(result.output, expected) == expected
+    assert re.search(
+        r"Vector: vec (?:\W )+Method: caa (?:\W )+Layer: 3 (?:\W )+Intervention: residual "
+        r"(?:\W )+Dim: 8 (?:\W )+Strength: 1\.0 (?:\W )+Dir: some-dir",
+        _plain(result),
+    )
