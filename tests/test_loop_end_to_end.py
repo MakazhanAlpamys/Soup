@@ -536,7 +536,7 @@ def test_a_canary_people_thumb_down_is_withdrawn_though_no_request_failed(loop):
     assert state.canary_started_ts is None
     assert state.production_name is None  # production never changed
     assert _active_adapter(loop["client"]) is None
-    record = read_iteration(list_iterations()[-1])
+    record = read_iteration(loop["created"][-1])
     assert record.rolled_back is True and record.canary_verdict == "MAJOR"
     assert f"canary {name} rolled back (MAJOR)" in record.notes
     assert "canary errors: OK" in record.notes  # every request was answered
