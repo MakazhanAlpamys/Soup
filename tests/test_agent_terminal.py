@@ -386,3 +386,8 @@ def test_every_detail_of_the_panels_has_its_own_line():
     labels = ("Spec:", "Endpoints:", "Dataset:", "Base:", "Output:", "Planned recipe", "Run:")
     for label in labels:
         assert [line for line in train_lines if re.match(r"\W*" + label, line)], label
+    at = next(i for i, line in enumerate(train_lines) if re.match(r"\W*Planned recipe", line))
+    assert re.fullmatch(r"\W*", train_lines[at - 1])
+    assert re.match(r"\W*base: ", train_lines[at + 1])
+    run_at = next(i for i, line in enumerate(train_lines) if re.match(r"\W*Run:", line))
+    assert re.fullmatch(r"\W*", train_lines[run_at - 1])
