@@ -92,6 +92,18 @@ class LoopState:
     # Adapter of the version serving as production: the "before" side of the
     # ship verdict. None = the base model itself.
     production_adapter: Optional[str] = None
+    # Share of keyed traffic a newly deployed canary gets (`soup loop init
+    # --canary-traffic`, default 5%).
+    deploy_traffic_pct: float = 5.0
+    # Path of the adapter now in canary; it becomes production_adapter on promotion.
+    canary_adapter: Optional[str] = None
+    # Served adapter name of the production version: the canary router's stable
+    # side. None = the served model itself (nothing promoted yet).
+    production_name: Optional[str] = None
+    # Production before the last promotion; `soup loop rollback` returns to it
+    # (previous_production_name None = the served model itself).
+    previous_production_name: Optional[str] = None
+    previous_production_adapter: Optional[str] = None
 
     def __post_init__(self) -> None:  # noqa: D401 — validator hook
         # Closed-allowlist enforcement + bool-as-int rejection mirror the
@@ -151,12 +163,31 @@ class LoopState:
             )
         if self.production_adapter is not None:
             _require_str("production_adapter", self.production_adapter, allow_empty=False)
+        v = self.deploy_traffic_pct
+        if (
+            isinstance(v, bool)
+            or not isinstance(v, (int, float))
+            or not (0.0 < float(v) <= 100.0)
+        ):
+            raise ValueError("deploy_traffic_pct must be in (0, 100]")
+        for fname in (
+            "canary_adapter",
+            "production_name",
+            "previous_production_name",
+            "previous_production_adapter",
+        ):
+            if getattr(self, fname) is not None:
+                _require_str(fname, getattr(self, fname), allow_empty=False)
         if self.canary_rollout_id is not None:
             _require_str("canary_rollout_id", self.canary_rollout_id, allow_empty=False)
         if self.last_iteration_id is not None:
             _require_str("last_iteration_id", self.last_iteration_id, allow_empty=False)
         if self.last_run_date is not None:
             _require_str("last_run_date", self.last_run_date, allow_empty=False)
+
+    def stable_name(self) -> str:
+        """The canary router's stable side: the promoted adapter, else the served model."""
+        return self.production_name or self.served_model
 
     def to_dict(self) -> Mapping[str, object]:
         """Stable, JSON-serialisable view (returned as ``MappingProxyType``)."""
@@ -320,6 +351,7 @@ def init_state(
     trace_dir: Optional[str] = None,
     verify: Optional[str] = None,
     production_adapter: Optional[str] = None,
+    deploy_traffic_pct: float = 5.0,
     path: Optional[str] = None,
     force: bool = False,
 ) -> Tuple[LoopState, str]:
@@ -353,6 +385,7 @@ def init_state(
         trace_dir=trace_dir,
         verify=verify,
         production_adapter=production_adapter,
+        deploy_traffic_pct=deploy_traffic_pct,
         monthly_budget_usd=monthly_budget_usd,
         max_runs_per_day=max_runs_per_day,
         created_at=now,

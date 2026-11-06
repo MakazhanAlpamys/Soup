@@ -106,6 +106,12 @@ def deploy_env(tmp_path, monkeypatch):
     from soup_cli.utils.loop_state import LoopState
 
     monkeypatch.chdir(tmp_path)
+    # The deploy stage loads adapters/chat through POST /v1/adapters/load (no PEFT here).
+    (tmp_path / "adapters" / "chat").mkdir(parents=True)
+    (tmp_path / "adapters" / "chat" / "adapter_config.json").write_text("{}", encoding="utf-8")
+    import soup_cli.commands.serve as serve_cmd
+
+    monkeypatch.setattr(serve_cmd, "_load_runtime_adapter", lambda model, path, name: model)
     monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(tmp_path / "registry.db"))
     monkeypatch.setenv("SOUP_LOOP_SERVE_ENDPOINT", f"https://{LAN_HOST}:8000")
     monkeypatch.delenv(ls.TOOL_AUTH_TOKEN_ENV, raising=False)
@@ -123,23 +129,51 @@ def deploy_env(tmp_path, monkeypatch):
 
 
 def _route_httpx_to(monkeypatch, client: TestClient) -> list:
-    """Send the deploy stage's ``httpx.post`` to a real app through ``client``."""
+    """Send the deploy stage's POSTs to a real app through ``client``.
+
+    Activation goes through ``httpx.post``, loading and deactivation through
+    ``post_capped``: both are routed.
+    """
     import httpx
+
+    from soup_cli.utils import http_response
 
     sent = []
 
-    def post(url, headers=None, timeout=None, **_options):
+    def post(url, headers=None, timeout=None, json=None, **_options):
         sent.append(dict(headers or {}))
-        return client.post(url, headers=headers or {})
+        return client.post(url, headers=headers or {}, json=json)
 
     monkeypatch.setattr(httpx, "post", post)
+    monkeypatch.setattr(http_response, "post_capped", post)
     return sent
+
+
+def _load_client(host: str, auth_token: str | None) -> TestClient:
+    """A server with runtime adapter loading on (``--adapter-dir adapters``), as the loop needs."""
+    import os
+
+    from soup_cli.commands.serve import _create_app
+
+    app = _create_app(
+        model_obj=MagicMock(),
+        tokenizer=MagicMock(),
+        device="cpu",
+        model_name="test",
+        max_tokens_default=512,
+        adapter_map={},
+        peft_adapter_names=set(),
+        auth_token=auth_token,
+        host=host,
+        adapter_dir=os.path.realpath("adapters"),
+    )
+    return TestClient(app, base_url=f"http://{host}")
 
 
 def test_the_loop_token_reaches_a_server_started_with_it(deploy_env, monkeypatch):
     import soup_cli.utils.loop_stages as ls
 
-    sent = _route_httpx_to(monkeypatch, _client(LAN_HOST, TOKEN))
+    sent = _route_httpx_to(monkeypatch, _load_client(LAN_HOST, TOKEN))
     monkeypatch.setenv(ls.TOOL_AUTH_TOKEN_ENV, TOKEN)
 
     out = deploy_env()
@@ -152,7 +186,7 @@ def test_the_loop_token_reaches_a_server_started_with_it(deploy_env, monkeypatch
 def test_a_refused_activate_names_the_credential(deploy_env, monkeypatch, caplog, token):
     import soup_cli.utils.loop_stages as ls
 
-    _route_httpx_to(monkeypatch, _client(LAN_HOST, TOKEN))
+    _route_httpx_to(monkeypatch, _load_client(LAN_HOST, TOKEN))
     if token:
         monkeypatch.setenv(ls.TOOL_AUTH_TOKEN_ENV, token)
 
@@ -170,12 +204,14 @@ def test_a_refused_activate_names_the_credential(deploy_env, monkeypatch, caplog
 
 
 def test_no_token_sends_no_authorization_header(deploy_env, monkeypatch):
-    sent = _route_httpx_to(monkeypatch, _client("127.0.0.1", None))
+    sent = _route_httpx_to(monkeypatch, _load_client("127.0.0.1", None))
     monkeypatch.setenv("SOUP_LOOP_SERVE_ENDPOINT", "http://127.0.0.1:8000")
 
     out = deploy_env()
 
-    assert out["deployed"] is True
+    # Loading an adapter needs a token on every bind, loopback included (#2516).
+    assert out["deployed"] is False
+    assert "requires its tool token" in out["notes"]
     assert sent == [{}]
 
 

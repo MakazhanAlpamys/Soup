@@ -108,7 +108,7 @@ class CanaryStateCache:
         """Whether these observations still belong to the active promotion."""
         state = self.get()
         return state is not None and (
-            state.served_model, state.canary_active, state.canary_rollout_id
+            state.stable_name(), state.canary_active, state.canary_rollout_id
         ) == (policy.stable, policy.canary, rollout_id)
 
 
