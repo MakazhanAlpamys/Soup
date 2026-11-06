@@ -243,6 +243,37 @@ def _edited_output(event: dict[str, Any]) -> Optional[str]:
     return None
 
 
+#: The conversation-record ``schema_version`` this reader understands. A line without
+#: one is version 0 (``soup serve --trace-log`` before the loop formats).
+_KNOWN_SCHEMA_VERSION = 1
+
+
+def _serve_prompt(event: dict[str, Any]) -> str:
+    """The prompt of a ``soup serve`` line.
+
+    Version 0 and version 1 lines both carry a top-level ``prompt`` (the last user
+    message). A version 1 line from another writer may carry only ``messages``; its
+    prompt is then the last user message there.
+    """
+    prompt = event.get("prompt")
+    if isinstance(prompt, str) and prompt:
+        return prompt
+    messages = event.get("messages")
+    if isinstance(messages, list):
+        for message in reversed(messages):
+            if isinstance(message, dict) and message.get("role") == "user":
+                return content_text(message.get("content"))
+    return ""
+
+
+def _known_schema_version(event: dict[str, Any]) -> bool:
+    """Whether this reader understands the line's ``schema_version`` (absent = version 0)."""
+    if "schema_version" not in event:
+        return True
+    version = event["schema_version"]
+    return type(version) is int and version == _KNOWN_SCHEMA_VERSION
+
+
 def parse_soup_serve(path: str) -> Iterator[Trace]:
     """Traces from a directory of ``soup serve --trace-log`` JSONL files (``Trace.ts`` per line)."""
     dir_path = Path(path)
@@ -261,7 +292,10 @@ def parse_soup_serve(path: str) -> Iterator[Trace]:
                 continue
             if not isinstance(event, dict):
                 continue
-            prompt = str(event.get("prompt") or "")
+            # A line written by a newer schema is not guessed at (docs/loop-formats.md).
+            if not _known_schema_version(event):
+                continue
+            prompt = _serve_prompt(event)
             output = str(event.get("response") or event.get("output") or "")
             if not prompt or not output:
                 continue

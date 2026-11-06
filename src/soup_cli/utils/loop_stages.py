@@ -345,7 +345,7 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
     ``dpo_pairs`` / ``kto_rows`` / ``sft_rows`` are the sizes of the three datasets;
     ``feedback_unknown_response`` counts feedback lines about an answer no conversation
     record has (ignored); ``feedback_lines_skipped`` the log lines that could not be used.
-    ``traces_collected`` counts the serve-trace lines and the conversation records. Yields
+    ``traces_collected`` counts the answers in the trace directory (version 0 and 1 lines). Yields
     zero rows (no path) when the selected dataset is empty; a configured database that is
     refused or missing raises (see ``checked_thumbs_db``).
 
@@ -395,7 +395,8 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
     rows, selected_newest = by_method[state.train_method]
     new_rows = sum(1 for _, new in rows if new)
     common = {
-        "traces_collected": len(traces) + feedback.answers,
+        # parse_soup_serve reads version 0 and version 1 lines: each answer once.
+        "traces_collected": len(traces),
         "thumbs_pairs": len(thumbs),
         "train_method": state.train_method,
         "dpo_pairs": len(dpo_rows),
