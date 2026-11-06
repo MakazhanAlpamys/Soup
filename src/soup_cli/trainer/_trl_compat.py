@@ -348,10 +348,11 @@ def enforce_preference_sequence_limit(
     fit inside ``max_length``; DPO and ORPO keep the legacy unconditional cap,
     while BCO, IPO, KTO and SimPO use the conditional path.
 
-    ``bos_token_id`` (KTO and BCO pass their tokenizer's) keeps a prompt's
-    leading BOS at index 0 when ``keep_end`` cuts it in the unpaired layout:
-    the cut prompt is the BOS followed by the last ``max_prompt_length - 1``
-    tokens. ``None`` keeps the plain cut; the DPO and ORPO layouts ignore it.
+    ``bos_token_id`` (KTO, BCO, ORPO and SimPO pass their tokenizer's) keeps a
+    prompt's leading BOS at index 0 when ``keep_end`` cuts it in the unpaired
+    and ORPO layouts: the cut prompt is the BOS followed by the last
+    ``max_prompt_length - 1`` tokens. ``None`` keeps the plain cut; the DPO
+    layout ignores it.
     """
     columns = set(getattr(dataset, "column_names", ()))
     dpo_columns = {"prompt_ids", "chosen_ids", "rejected_ids"}
@@ -400,11 +401,12 @@ def enforce_preference_sequence_limit(
                 and len(row["rejected_input_ids"]) <= max_length
             ):
                 return {}
-            prompt_ids = _truncate_tokens(
-                list(row["prompt_input_ids"]), max_prompt_length, truncation_mode
-            )
-            prompt_mask = _truncate_tokens(
-                list(row["prompt_attention_mask"]), max_prompt_length, truncation_mode
+            prompt_ids, prompt_mask = _truncate_prompt(
+                list(row["prompt_input_ids"]),
+                list(row["prompt_attention_mask"]),
+                max_prompt_length,
+                truncation_mode,
+                bos_token_id,
             )
             return {
                 "prompt_input_ids": prompt_ids,
@@ -415,6 +417,7 @@ def enforce_preference_sequence_limit(
                     max_length=max_length,
                     max_prompt_length=max_prompt_length,
                     truncation_mode=truncation_mode,
+                    bos_token_id=bos_token_id,
                 ),
                 **_cap_combined_preference_sequence(
                     row,
@@ -422,6 +425,7 @@ def enforce_preference_sequence_limit(
                     max_length=max_length,
                     max_prompt_length=max_prompt_length,
                     truncation_mode=truncation_mode,
+                    bos_token_id=bos_token_id,
                 ),
             }
 
