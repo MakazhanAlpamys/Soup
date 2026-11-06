@@ -3,6 +3,7 @@
 Top-level CLI command (NOT a sub-group) — operators type::
 
     soup ship --base <m> --adapter <lora> --task-eval tasks.jsonl
+    soup ship --base <m> --base-adapter <prod-lora> --adapter <new-lora> --task-eval t.jsonl
     soup ship --evidence ev.json            # offline, pre-computed scores
     soup ship ... --output verdict.json
     soup ship ... --config soup.yaml        # read eval.ship defaults + bind provenance
@@ -164,6 +165,71 @@ def _validate_noise_floor_flag(value: Optional[int]) -> Optional[int]:
             _EXIT_USAGE,
         )
     return value
+
+
+def _validate_base_adapter(
+    base_adapter: str,
+    *,
+    adapter: Optional[str],
+    base_only_flags: Mapping[str, bool],
+    suite_names: Optional[List[str]] = None,
+) -> None:
+    """Refuse every ``--base-adapter`` combination whose meaning would be wrong (exit 3).
+
+    ``--base-adapter`` makes the BEFORE side ``base + adapter`` (the version in
+    production) for a live run against ``base + --adapter``. Everything that
+    describes the base model alone, or scores it through a path that cannot load an
+    adapter, would silently compare against the wrong "before":
+
+    * ``--evidence`` / ``--require-provenance`` / ``--emit-evidence`` / ``--baseline``
+      carry or store the scores of the bare base (``base_only_flags``);
+    * a non-bundled benchmark goes through lm-eval, which would score the bare base;
+    * without ``--adapter`` there is no second adapter to compare (``--tuned`` is a
+      separate model, not ``base + adapter``);
+    * the same path on both sides compares an adapter with itself.
+
+    Called from ``ship()`` first (the flags that never reach ``_verdict_live``, and a
+    ``--base-adapter`` with no live run at all) and again from ``_verdict_live`` with the
+    baseline and suite it sees, which ``--config`` may have filled in. ``_verdict_live``
+    is also reachable without ``ship()``.
+    """
+    for flag, given in base_only_flags.items():
+        if given:
+            _fail(
+                f"--base-adapter cannot be used with {flag}: {flag} describes the base "
+                "model alone, but --base-adapter makes the before side base + adapter "
+                "(live run only)",
+                _EXIT_USAGE,
+            )
+    if not adapter:
+        _fail(
+            "--base-adapter needs --adapter (it compares two adapters on one base "
+            "model; it cannot be used with --tuned or alone)",
+            _EXIT_USAGE,
+        )
+    if suite_names:
+        from soup_cli.eval.gate_suites import is_bundled_suite
+
+        lm_eval_names = sorted({name for name in suite_names if not is_bundled_suite(name)})
+        if lm_eval_names:
+            shown = ", ".join(lm_eval_names[:5]) + (" ..." if len(lm_eval_names) > 5 else "")
+            _fail(
+                f"--base-adapter cannot score non-bundled benchmark(s) {shown}: lm-eval "
+                "would run on the bare base model, not base + adapter. Name only bundled "
+                "suites in --general-suite",
+                _EXIT_USAGE,
+            )
+    if not os.path.isdir(base_adapter):
+        _fail(
+            f"--base-adapter must be an existing directory; got '{base_adapter}'",
+            _EXIT_USAGE,
+        )
+    if os.path.realpath(base_adapter) == os.path.realpath(adapter):
+        _fail(
+            "--base-adapter and --adapter are the same path; the comparison would be "
+            "an adapter against itself",
+            _EXIT_USAGE,
+        )
 
 
 def _parse_chat_template_kwargs(value: Optional[str]) -> Optional[dict]:
@@ -582,8 +648,15 @@ def _resolve_generators(
     device: Optional[str],
     quantization: Optional[str] = None,
     chat_template_kwargs: Optional[dict] = None,
+    base_adapter: Optional[str] = None,
 ) -> Tuple[Callable[[str], str], Callable[[str], str]]:
-    """Build ``(base_gen, tuned_gen)`` from live_eval (greedy decode)."""
+    """Build ``(base_gen, tuned_gen)`` from live_eval (greedy decode).
+
+    With ``base_adapter`` the base side is ``base + base_adapter`` (``--base-adapter``).
+    Every consumer of the base side (leg 1, leg 2 and the ``--noise-floor`` repeats)
+    uses this one generator, so there is no second place that could fall back to the
+    bare base.
+    """
     # #316 — the behavioural suites need a budget that fits a real tool call.
     # At make_generator's default of 64, 31 of 40 tool calls and 15 of 40 JSON
     # fences were truncated ONE CLOSING BRACE short and scored 0.000 on a model
@@ -611,10 +684,19 @@ def _resolve_generators(
     template_options = (
         {"chat_template_kwargs": chat_template_kwargs} if chat_template_kwargs is not None else {}
     )
+    # Passed only when set, so a run without --base-adapter builds the base side
+    # exactly as before (no ``adapter`` keyword at all).
+    base_adapter_options = {"adapter": base_adapter} if base_adapter is not None else {}
+    if base_adapter is not None:
+        console.print(
+            f"[dim]Live eval: base side = base + --base-adapter "
+            f"{escape(for_terminal(base_adapter))}.[/]"
+        )
     with group("load", side="base"):
         base_gen = live_eval.make_generator(
             base, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
             dtype=dtype, quantization=quantization,
+            **base_adapter_options,
             **template_options,
         )
     if adapter:
@@ -1100,6 +1182,7 @@ def _verdict_live(
     noise_floor_runs: Optional[int] = None,
     quantization: Optional[str] = None,
     chat_template_kwargs: Optional[dict] = None,
+    base_adapter: Optional[str] = None,
 ) -> ShipVerdict:
     """Run a live verdict — validate flags (exit 2), then evaluate (exit 1)."""
     if not base:
@@ -1130,6 +1213,15 @@ def _verdict_live(
                 f"< {_MAX_BENCHMARK_NAME_CHARS} chars",
                 _EXIT_USAGE,
             )
+
+    # Before --baseline is resolved: a stored base score describes the bare base.
+    if base_adapter is not None:
+        _validate_base_adapter(
+            base_adapter,
+            adapter=adapter,
+            base_only_flags={"--baseline": bool(baseline_spec)},
+            suite_names=suite_names,
+        )
 
     # Resolve --baseline up front so a bad spec (outside cwd / missing file /
     # unknown registry id) is a USAGE error (exit 2), not a runtime error (1).
@@ -1167,7 +1259,9 @@ def _verdict_live(
 
     # Read the adapter before either model loads: an all-zero lora_B adds
     # nothing, and the live eval would only reach "task did not improve" (#2410).
-    if adapter and _adapter_is_noop(adapter):
+    # Not with --base-adapter: "tuned == base" no longer holds there (the before side
+    # is base + base_adapter), so a zero adapter is a real comparison.
+    if adapter and base_adapter is None and _adapter_is_noop(adapter):
         return ShipVerdict(
             decision=DECISION_DONT_SHIP,
             task_win=TaskWin(mode=task_mode, base=0.0, tuned=0.0, won=False),
@@ -1184,7 +1278,8 @@ def _verdict_live(
             if chat_template_kwargs is not None else {}
         )
         base_gen, tuned_gen = _resolve_generators(
-            base, tuned, adapter, device, quantization, **template_options
+            base, tuned, adapter, device, quantization, **template_options,
+            **({"base_adapter": base_adapter} if base_adapter is not None else {}),
         )
 
         measured_floor: Optional[NoiseFloor] = None
@@ -1228,7 +1323,9 @@ def _verdict_live(
             noise_floor=measured_floor,
         )
         return replace(
-            verdict, numerics=_live_eval_numerics(quantization, device)
+            verdict,
+            numerics=_live_eval_numerics(quantization, device),
+            base_adapter=base_adapter,
         )
     except typer.Exit:
         # typer.Exit subclasses RuntimeError — re-raise so in-try _fail() usage
@@ -1329,6 +1426,12 @@ def ship(
     adapter: Optional[str] = typer.Option(
         None, "--adapter", help="LoRA adapter path (tuned = base + this adapter)."
     ),
+    base_adapter: Optional[str] = typer.Option(
+        None,
+        "--base-adapter",
+        help="LoRA adapter applied to the base side (before = base + this adapter), "
+        "e.g. the current production version. Live run with --adapter only.",
+    ),
     task_eval: Optional[str] = typer.Option(
         None, "--task-eval", help="JSONL of leg-1 task-win eval tasks."
     ),
@@ -1422,6 +1525,18 @@ def ship(
     """Decide SHIP / DON'T SHIP for a fine-tune (exit 0 = SHIP, 2 = DON'T)."""
     if progress is not None and progress != "jsonl":
         _fail("--progress must be jsonl", _EXIT_USAGE)
+    if base_adapter is not None:
+        # The flags that never reach _verdict_live (it re-runs this check with the
+        # config-resolved --baseline and --general-suite, which only it sees).
+        _validate_base_adapter(
+            base_adapter,
+            adapter=adapter,
+            base_only_flags={
+                "--evidence": bool(evidence),
+                "--require-provenance": require_provenance,
+                "--emit-evidence": bool(emit_evidence),
+            },
+        )
     soup_config = None
     from soup_cli.utils.ship_provenance import check_binding, validate_data_identity
 
@@ -1553,6 +1668,7 @@ def ship(
             noise_floor_runs=noise_floor,
             quantization=_live_eval_quantization_from_config(soup_config),
             **({"chat_template_kwargs": template_kwargs} if template_kwargs is not None else {}),
+            **({"base_adapter": base_adapter} if base_adapter is not None else {}),
         )
         if emit_evidence and binding != capture_binding(
             task_mode, _parse_suite(general_suite), noise_floor,

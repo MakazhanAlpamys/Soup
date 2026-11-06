@@ -452,10 +452,27 @@ skipped without a message. Weights the reader refuses (`adapter_model.bin`, a sy
 outside the working directory, or a file over 2 GiB) print a warning and the live run continues
 (#2410).
 
+`--base-adapter <path>` swaps the *before* side from the bare base to `base + that LoRA adapter`,
+so a continual-learning loop can compare a candidate (`base + --adapter`) with the version
+already in production (`base + --base-adapter`), both trained from the same base. It is a live
+run with `--adapter` only. `soup ship` refuses it, with exit code 3 and a message naming both
+flags, when `--adapter` is missing (alone, or with `--tuned`); together with `--evidence`,
+`--require-provenance`, `--emit-evidence` or `--baseline`, which all describe the bare base;
+when `--general-suite` names a non-bundled benchmark, which lm-eval would score on the bare
+base; when the path is not an existing directory; and when it is the same path as `--adapter`.
+The `adapter_noop` check above is skipped: an all-zero `--adapter` equals the bare base, which is
+no longer the before side. The `--output` JSON gains a `base_adapter` key (the path, or `null`), the
+terminal panel prints a `Base adapter:` line, and `--noise-floor` repeats run on the
+`base + --base-adapter` model.
+
 ```bash
 # Live: base vs a LoRA adapter, metric leg + default mini benchmarks
 soup ship --base HuggingFaceTB/SmolLM2-135M-Instruct --adapter ./out \
   --task-eval tasks.jsonl --device cuda
+
+# Live: the candidate adapter vs the adapter in production (same base)
+soup ship --base <base> --base-adapter ./adapters/v1 --adapter ./adapters/v2 \
+  --task-eval tasks.jsonl
 
 # Live: disable thinking when the model's chat template supports that variable
 soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
