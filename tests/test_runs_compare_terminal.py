@@ -147,7 +147,10 @@ def test_compare_names_a_run_id_column_as_typed(db, value, position):
 def test_compare_still_highlights_only_the_differing_rows(db, monkeypatch):
     monkeypatch.setattr(
         "soup_cli.commands.runs.console",
-        Console(width=500, force_terminal=True, color_system="standard", legacy_windows=False),
+        Console(
+            width=500, force_terminal=True, color_system="standard", legacy_windows=False,
+            no_color=False,
+        ),
     )
     _start(db, _A, base="org/one")
     _start(db, _B, base="org/two")
