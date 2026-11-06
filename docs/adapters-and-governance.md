@@ -223,8 +223,9 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
 
 # The sft training recipe is configurable. The pre-wired train stage renders it into the
 # soup.yaml it trains with (training.lora.target_modules, .r, .alpha, training.lr, .epochs,
-# training.quantization); dpo and kto keep their own fixed settings. Six keys, each set by a
-# flag at init and stored in .soup/loop.yaml under "sft_recipe" only when given:
+# .batch_size, .gradient_accumulation_steps, .seed, .quantization); dpo and kto keep their own
+# fixed settings. Nine keys, each set by a flag at init and stored in .soup/loop.yaml under
+# "sft_recipe" only when given:
 #   --sft-target-modules  all-linear, auto (the config schema's default: no target_modules
 #                         is written) or a comma-separated list of module names, for example
 #                         q_proj,v_proj (loop.yaml: "all-linear" or a list; null = auto)
@@ -232,6 +233,16 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
 #   --sft-lora-alpha      LoRA alpha, 1 to 4096           (loop.yaml: lora_alpha)
 #   --sft-lr              learning rate, above 0 and at most 1, for example 2e-4 (loop.yaml: lr)
 #   --sft-epochs          epochs, 1 to 100                (loop.yaml: epochs)
+#   --sft-batch-size      per-device micro-batch, 1 to 1024 (loop.yaml: batch_size)
+#   --sft-grad-accum      gradient accumulation steps, 1 to 1024
+#                         (loop.yaml: gradient_accumulation_steps)
+#   --sft-seed            training seed, 0 to 4294967295  (loop.yaml: seed)
+#                         The last three are always written into the config, so a run
+#                         inherits none of them from the schema (batch "auto", no seed): the
+#                         built-in recipe is micro-batch 2 x accumulation 4 (8 rows per
+#                         optimizer step) and seed 42. A run that inherited batch 1 trained
+#                         the same rows for 152 optimizer steps instead of 80 at lr 5e-4, and
+#                         its quality fell (format_json 1.00 to 0.775).
 #   --sft-quantization    4bit, none or auto              (loop.yaml: quantization)
 #                         4bit and none are written as they are and never overridden. auto
 #                         is decided when training starts, right before the soup.yaml is
@@ -254,17 +265,18 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
 # A key the loop.yaml does not name keeps the built-in value, so a partial recipe overrides only
 # what it names, and a loop.yaml from before the field loads with the built-in recipe. The
 # built-in recipe is the one the Soup Zero fit runs of 2026-11-06 chose (candidate B in bf16):
-# all-linear, LoRA r 64 / alpha 128, lr 5e-4, 8 epochs, quantization auto, where the loop used
-# to train lr 1e-4, 5 epochs, LoRA r 64 / alpha 16 on the schema's default modules. A loop that
-# must not move if a later release changes the built-in recipe names every key. A value out
-# of range, a bool where a number goes, or a key that is not one
-# of the six is refused (init exits 2 naming the flag; reading a loop.yaml with a bad
-# "sft_recipe" fails the command with the reason). The flags are refused for a loop that does
-# not train sft: they would change nothing. `soup loop status` shows the effective recipe in
-# one sft_recipe row and which keys come from loop.yaml.
+# all-linear, LoRA r 64 / alpha 128, lr 5e-4, 8 epochs, micro-batch 2 x accumulation 4, seed
+# 42, quantization auto, where the loop used to train lr 1e-4, 5 epochs, LoRA r 64 / alpha 16
+# on the schema's default modules. A loop that must not move if a later release changes the
+# built-in recipe names every key. A value out of range, a bool where a number goes, or a key
+# that is not one of the nine is refused (init exits 2 naming the flag; reading a loop.yaml
+# with a bad "sft_recipe" fails the command with the reason). The flags are refused for a
+# loop that does not train sft: they would change nothing. `soup loop status` shows the
+# effective recipe in one sft_recipe row and which keys come from loop.yaml.
 soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
     --pre-wired --sft-target-modules all-linear --sft-lora-r 16 --sft-lora-alpha 32 \
-    --sft-lr 2e-4 --sft-epochs 5 --sft-quantization none
+    --sft-lr 2e-4 --sft-epochs 5 --sft-batch-size 2 --sft-grad-accum 4 --sft-seed 42 \
+    --sft-quantization none
 
 # Unpack a recorded iteration's Soup Can for what-if analysis (v0.71.4)
 soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump

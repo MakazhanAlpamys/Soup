@@ -371,6 +371,28 @@ def init_cmd(
         None, "--sft-epochs",
         help="sft only: epochs of the training config, 1 to 100. Default: the built-in recipe.",
     ),
+    sft_batch_size: Optional[int] = typer.Option(
+        None, "--sft-batch-size",
+        help=(
+            "sft only: per-device micro-batch of the training config, 1 to 1024. Default: "
+            "the built-in recipe."
+        ),
+    ),
+    sft_grad_accum: Optional[int] = typer.Option(
+        None, "--sft-grad-accum",
+        help=(
+            "sft only: gradient accumulation steps of the training config, 1 to 1024 "
+            "(micro-batch x accumulation = the batch per optimizer step). Default: the "
+            "built-in recipe."
+        ),
+    ),
+    sft_seed: Optional[int] = typer.Option(
+        None, "--sft-seed",
+        help=(
+            "sft only: training seed of the training config, 0 to 4294967295. Default: "
+            "the built-in recipe."
+        ),
+    ),
     sft_quantization: Optional[str] = typer.Option(
         None, "--sft-quantization",
         help=(
@@ -452,6 +474,9 @@ def init_cmd(
             ("--sft-lora-alpha", "lora_alpha", sft_lora_alpha),
             ("--sft-lr", "lr", sft_lr),
             ("--sft-epochs", "epochs", sft_epochs),
+            ("--sft-batch-size", "batch_size", sft_batch_size),
+            ("--sft-grad-accum", "gradient_accumulation_steps", sft_grad_accum),
+            ("--sft-seed", "seed", sft_seed),
             ("--sft-quantization", "quantization", sft_quantization),
         ),
     )

@@ -44,7 +44,8 @@ MAX_CANARY_MAX_WAIT_SEC = 30 * 86400.0
 
 # The keys of the sft recipe the pre-wired train stage renders (`soup loop init --sft-*`).
 SFT_RECIPE_KEYS: tuple = (
-    "target_modules", "lora_r", "lora_alpha", "lr", "epochs", "quantization"
+    "target_modules", "lora_r", "lora_alpha", "lr", "epochs",
+    "batch_size", "gradient_accumulation_steps", "seed", "quantization",
 )
 # What `quantization` may say. "4bit" and "none" are written as they are. "auto" is measured
 # when the train stage renders the soup.yaml: "none" if the base fits in free VRAM
@@ -54,12 +55,18 @@ SFT_QUANTIZATIONS: tuple = ("4bit", "none", "auto")
 # target_modules None would write no line, so the config schema's default ("auto", peft decides)
 # applies.
 # Soup Zero fit runs, 2026-11-06: candidate B in bf16.
+# batch_size, gradient_accumulation_steps and seed are the config's own fields, pinned so a
+# run inherits nothing: a live run on the same rows inherited batch 1 and no seed, made 152
+# optimizer steps instead of 80 at lr 5e-4, and its quality fell (format_json 1.00 to 0.775).
 DEFAULT_SFT_RECIPE: Mapping[str, object] = MappingProxyType({
     "target_modules": "all-linear",
     "lora_r": 64,
     "lora_alpha": 128,
     "lr": 5.0e-4,
     "epochs": 8,
+    "batch_size": 2,
+    "gradient_accumulation_steps": 4,
+    "seed": 42,
     "quantization": "auto",
 })
 # What peft calls every linear layer; a plain string in the config, never a list entry.
@@ -67,6 +74,10 @@ ALL_LINEAR = "all-linear"
 _SFT_LORA_R_MAX = 1024
 _SFT_LORA_ALPHA_MAX = 4096
 _SFT_EPOCHS_MAX = 100
+_SFT_BATCH_MAX = 1024
+_SFT_ACCUM_MAX = 1024
+#: numpy.random.seed, which transformers.set_seed feeds, takes 0 to 2**32 - 1: the schema's bound.
+_SFT_SEED_MAX = 2**32 - 1
 _MAX_TARGET_MODULES = 64
 _MAX_MODULE_NAME_LEN = 128
 # A module name, or a dotted path to one: no pattern, no whitespace, no control characters.
@@ -498,6 +509,11 @@ def _check_sft_int(key: str, value: object, high: int) -> None:
         raise ValueError(f"{key} must be an int in [1, {high}], got {_brief(value)}")
 
 
+def _check_sft_seed(value: object) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or not (0 <= value <= _SFT_SEED_MAX):
+        raise ValueError(f"seed must be an int in [0, {_SFT_SEED_MAX}], got {_brief(value)}")
+
+
 def _check_sft_lr(value: object) -> None:
     if (
         isinstance(value, bool)
@@ -513,6 +529,11 @@ _SFT_RECIPE_CHECKS = {
     "lora_alpha": lambda value: _check_sft_int("lora_alpha", value, _SFT_LORA_ALPHA_MAX),
     "lr": _check_sft_lr,
     "epochs": lambda value: _check_sft_int("epochs", value, _SFT_EPOCHS_MAX),
+    "batch_size": lambda value: _check_sft_int("batch_size", value, _SFT_BATCH_MAX),
+    "gradient_accumulation_steps": lambda value: _check_sft_int(
+        "gradient_accumulation_steps", value, _SFT_ACCUM_MAX
+    ),
+    "seed": _check_sft_seed,
     "quantization": _check_sft_quantization,
 }
 
@@ -530,9 +551,10 @@ def validate_sft_recipe_value(key: str, value: object) -> None:
 
     ``target_modules``: ``None`` (the schema default), ``"all-linear"`` or a non-empty list of
     module names; ``lora_r`` an int in 1..1024; ``lora_alpha`` an int in 1..4096; ``lr`` a
-    finite number above 0 and at most 1; ``epochs`` an int in 1..100; ``quantization`` one of
-    ``"4bit"``, ``"none"``, ``"auto"``. A bool is no int and no number. The message starts
-    with the key (the command adds the flag).
+    finite number above 0 and at most 1; ``epochs`` an int in 1..100; ``batch_size`` and
+    ``gradient_accumulation_steps`` an int in 1..1024; ``seed`` an int in 0..2**32-1;
+    ``quantization`` one of ``"4bit"``, ``"none"``, ``"auto"``. A bool is no int and no number.
+    The message starts with the key (the command adds the flag).
     """
     check = _SFT_RECIPE_CHECKS.get(key) if isinstance(key, str) else None
     if check is None:

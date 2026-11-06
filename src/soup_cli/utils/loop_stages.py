@@ -644,9 +644,14 @@ def _render_train_yaml(
         lora: dict = {"r": recipe["lora_r"], "alpha": recipe["lora_alpha"]}
         if recipe["target_modules"] is not None:
             lora["target_modules"] = recipe["target_modules"]
+        # batch_size, gradient_accumulation_steps and seed are always written: a run that
+        # inherits them trains a different number of optimizer steps (the schema's own
+        # defaults are batch "auto" and no seed).
         training: dict = {
             "epochs": recipe["epochs"],
-            "batch_size": 1,
+            "batch_size": recipe["batch_size"],
+            "gradient_accumulation_steps": recipe["gradient_accumulation_steps"],
+            "seed": recipe["seed"],
             "lr": float(recipe["lr"]),
             "lora": lora,
         }

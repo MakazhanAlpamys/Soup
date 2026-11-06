@@ -556,7 +556,8 @@ def test_a_new_loop_trains_sft_on_corrections_and_liked_answers_then_canaries_it
     assert config["task"] == "sft" and config["data"]["format"] == "chatml"
     assert config["data"]["val_split"] == 0
     assert config["training"] == {
-        "epochs": 8, "batch_size": 1, "lr": 5.0e-4,
+        "epochs": 8, "batch_size": 2, "gradient_accumulation_steps": 4, "seed": 42,
+        "lr": 5.0e-4,
         "lora": {"r": 64, "alpha": 128, "target_modules": "all-linear"},
         "quantization": "4bit",  # recipe "auto", measured: no CUDA device, base size unknown
     }

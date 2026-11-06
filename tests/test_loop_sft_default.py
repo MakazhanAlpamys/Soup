@@ -10,8 +10,9 @@ Decided from measured recipe experiments:
 - an edit wins over thumbs and ratings for dpo, kto and sft alike: the latest real edit
   decides, before or after any thumb;
 - the sft config is the loop's sft recipe (tests/test_loop_sft_recipe.py): candidate B of the
-  Soup Zero fit runs, lr 5e-4, 8 epochs, LoRA r 64 / alpha 128 on all-linear, quantization
-  auto (4bit here: no CUDA device, unknown size; tests/test_loop_sft_quantization.py);
+  Soup Zero fit runs, lr 5e-4, 8 epochs, micro-batch 2 x accumulation 4, seed 42, LoRA r 64 /
+  alpha 128 on all-linear, quantization auto (4bit here: no CUDA device, unknown size;
+  tests/test_loop_sft_quantization.py);
 - with an sft loop and a feedback log, training starts at ``min_new_edits`` (8) new edits or
   ``min_new_rated`` (30) new rated answers, whichever comes first.
 """
@@ -645,7 +646,8 @@ class TestSftConfig:
             "task": "sft",
             "data": {"train": "d.jsonl", "format": "chatml", "val_split": 0},
             "training": {
-                "epochs": 8, "batch_size": 1, "lr": 5.0e-4,
+                "epochs": 8, "batch_size": 2, "gradient_accumulation_steps": 4, "seed": 42,
+                "lr": 5.0e-4,
                 "lora": {"r": 64, "alpha": 128, "target_modules": "all-linear"},
                 "quantization": "4bit",
             },

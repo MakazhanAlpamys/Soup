@@ -6,9 +6,11 @@ The recipe used to be five hard-coded numbers in ``_render_train_yaml``. Now:
 - ``DEFAULT_SFT_RECIPE`` (loop_state.py) holds the defaults, final (candidate B in bf16, the
   Soup Zero fit runs of 2026-11-06); one test below pins its numbers (TestConstant), the rest
   read the constant;
-- the keys are ``target_modules``, ``lora_r``, ``lora_alpha``, ``lr``, ``epochs`` and
-  ``quantization`` (``4bit``, ``none`` or ``auto``; ``auto`` is measured when the train stage
-  renders the config: tests/test_loop_sft_quantization.py);
+- the keys are ``target_modules``, ``lora_r``, ``lora_alpha``, ``lr``, ``epochs``,
+  ``batch_size``, ``gradient_accumulation_steps``, ``seed`` (the last three are pinned:
+  tests/test_loop_sft_batch_and_seed.py) and ``quantization`` (``4bit``, ``none`` or ``auto``;
+  ``auto`` is measured when the train stage renders the config:
+  tests/test_loop_sft_quantization.py);
 - ``LoopState.sft_recipe`` (last field) is ``None`` (the constant) or a dict that overrides
   only the keys it names; unknown keys, out-of-range values and bool-as-int are refused,
   by the state itself and so also when a hand-edited ``loop.yaml`` is read;
@@ -128,9 +130,10 @@ def _recipe_row(panel: str) -> str:
 
 
 class TestConstant:
-    def test_it_holds_exactly_the_five_keys(self):
+    def test_it_holds_exactly_the_nine_keys(self):
         assert set(DEFAULT_SFT_RECIPE) == {
-            "target_modules", "lora_r", "lora_alpha", "lr", "epochs", "quantization"
+            "target_modules", "lora_r", "lora_alpha", "lr", "epochs", "batch_size",
+            "gradient_accumulation_steps", "seed", "quantization",
         }
         assert set(SFT_RECIPE_KEYS) == set(DEFAULT_SFT_RECIPE)
 
@@ -159,6 +162,9 @@ class TestConstant:
             "lora_alpha": 128,
             "lr": 5e-4,
             "epochs": 8,
+            "batch_size": 2,
+            "gradient_accumulation_steps": 4,
+            "seed": 42,
             "quantization": "auto",
         }
 
@@ -219,7 +225,8 @@ class TestValidator:
 
         assert repr(name) in str(err.value)
         assert (
-            "allowed: epochs, lora_alpha, lora_r, lr, quantization, target_modules"
+            "allowed: batch_size, epochs, gradient_accumulation_steps, lora_alpha, lora_r, lr, "
+            "quantization, seed, target_modules"
             in str(err.value)
         )
 
@@ -420,7 +427,16 @@ class TestEffectiveRecipe:
             assert merged[key] == DEFAULT_SFT_RECIPE[key], key
 
     def test_a_full_dict_overrides_everything(self):
-        assert _state(sft_recipe=FULL_RECIPE).effective_sft_recipe() == FULL_RECIPE
+        full = {**FULL_RECIPE, "batch_size": 3, "gradient_accumulation_steps": 2, "seed": 7}
+
+        assert _state(sft_recipe=full).effective_sft_recipe() == full
+
+    def test_a_dict_without_the_pinned_keys_keeps_the_pinned_values(self):
+        merged = _state(sft_recipe=FULL_RECIPE).effective_sft_recipe()
+
+        assert merged == {
+            **FULL_RECIPE, "batch_size": 2, "gradient_accumulation_steps": 4, "seed": 42,
+        }
 
     def test_a_recipe_without_quantization_keeps_the_constants(self):
         merged = _state(sft_recipe=RECIPE_A).effective_sft_recipe()
@@ -472,7 +488,9 @@ class TestRender:
 
         assert training["lr"] == DEFAULT_SFT_RECIPE["lr"]
         assert training["epochs"] == DEFAULT_SFT_RECIPE["epochs"]
-        assert training["batch_size"] == 1
+        assert training["batch_size"] == DEFAULT_SFT_RECIPE["batch_size"] == 2
+        assert training["gradient_accumulation_steps"] == 4
+        assert training["seed"] == 42
         assert training["lora"]["r"] == DEFAULT_SFT_RECIPE["lora_r"]
         assert training["lora"]["alpha"] == DEFAULT_SFT_RECIPE["lora_alpha"]
         assert ("target_modules" in training["lora"]) == (
@@ -927,7 +945,10 @@ class TestStatus:
         assert "all built-in defaults" not in row
 
     def test_a_recipe_naming_every_key_says_so(self, cwd):
-        _cli(*_INIT, *FLAGS_B, "--sft-quantization", "4bit")
+        _cli(
+            *_INIT, *FLAGS_B, "--sft-batch-size", "2", "--sft-grad-accum", "4",
+            "--sft-seed", "42", "--sft-quantization", "4bit",
+        )
 
         _, _, panel = _cli("status")
 
@@ -935,6 +956,8 @@ class TestStatus:
         assert "target_modules all-linear" in row
         assert "lora_r 64" in row and "lora_alpha 128" in row
         assert "lr 0.0005" in row and "epochs 8" in row
+        assert "batch_size 2" in row and "gradient_accumulation_steps 4" in row
+        assert "seed 42" in row
         assert "quantization 4bit" in row
         assert "all from loop.yaml" in row
 
