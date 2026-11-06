@@ -105,6 +105,14 @@ def init_cmd(
             "served model itself."
         ),
     ),
+    trace_dir: Optional[str] = typer.Option(
+        None, "--trace-dir",
+        help=(
+            "Directory of conversation logs (soup serve --trace-log files, *.jsonl) "
+            "the pre-wired harvest reads. Default: .soup-loops/traces. "
+            "SOUP_LOOP_TRACE_DIR overrides it."
+        ),
+    ),
     force: bool = typer.Option(False, "--force", help="Overwrite existing loop.yaml."),
 ) -> None:
     """Create the .soup/loop.yaml control file (one-time setup)."""
@@ -131,6 +139,18 @@ def init_cmd(
     if base_model is not None and not base_model.strip():
         console.print("[red]--base-model must not be empty[/]")
         raise typer.Exit(code=2)
+    if trace_dir is not None:
+        if not trace_dir.strip():
+            console.print("[red]--trace-dir must not be empty[/]")
+            raise typer.Exit(code=2)
+        if os.path.exists(trace_dir) and not os.path.isdir(trace_dir):
+            console.print(f"[red]--trace-dir:[/] {for_terminal(trace_dir)} is not a directory")
+            raise typer.Exit(code=2)
+        if not os.path.isdir(trace_dir):
+            console.print(
+                f"[yellow]warning:[/] no conversation logs at {for_terminal(trace_dir)} yet; "
+                "soup serve --trace-log <dir>/<file>.jsonl writes them"
+            )
     from soup_cli.utils.loop_stages import resolve_base_model_source
 
     resolved_base: Optional[str] = None
@@ -155,6 +175,7 @@ def init_cmd(
             pre_wired=pre_wired,
             thumbs_db=thumbs_db,
             base_model=resolved_base,
+            trace_dir=trace_dir,
             force=force,
         )
     except (FileExistsError, FileNotFoundError, TypeError, ValueError) as exc:
@@ -166,6 +187,7 @@ def init_cmd(
             f"served_model: [bold]{escape(state.served_model)}[/]\n"
             f"eval_suite:   [bold]{escape(state.eval_suite)}[/]\n"
             f"baseline:     [bold]{escape(state.baseline)}[/]\n"
+            f"trace_dir:    [bold]{escape(_trace_dir_label(state))}[/]\n"
             f"base_model:   [bold]{escape(state.base_model or 'unknown')}[/]"
             + (f" (from {escape(base_source)})" if base_source else ""),
             title="soup loop init",
@@ -199,6 +221,7 @@ def status_cmd() -> None:
     table.add_row("eval_suite", escape(state.eval_suite))
     table.add_row("baseline", escape(state.baseline))
     table.add_row("base_model", escape(state.base_model or "unknown"))
+    table.add_row("trace_dir", escape(_trace_dir_label(state)))
     table.add_row("pre_wired", "yes" if state.pre_wired else "no")
     table.add_row("traces_collected", str(state.traces_collected))
     table.add_row("pairs_distilled", str(state.pairs_distilled))
@@ -302,13 +325,24 @@ def watch_cmd(
     if pre_wired or state.pre_wired:
         # #1440: a configured thumbs database the harvest would refuse stops the
         # watch here, before it starts or detaches, instead of mid-iteration.
-        from soup_cli.utils.loop_stages import checked_thumbs_db, resolve_base_model
+        from soup_cli.utils.loop_stages import (
+            checked_thumbs_db,
+            resolve_base_model,
+            trace_dir_notice,
+        )
 
         try:
             checked_thumbs_db(state)
         except ValueError as exc:
             console.print(f"[red]invalid thumbs database:[/] {for_terminal(exc)}")
             raise typer.Exit(code=2)
+        try:
+            notice = trace_dir_notice(state)
+        except ValueError as exc:
+            console.print(f"[red]invalid trace directory:[/] {for_terminal(exc)}")
+            raise typer.Exit(code=2)
+        if notice:
+            console.print(f"[yellow]warning:[/] {for_terminal(notice)}")
         # The train stage would skip every iteration; say so before starting.
         try:
             resolve_base_model(state.served_model, state.base_model)
@@ -485,6 +519,14 @@ def replay_cmd(
     for k, v in record.to_dict().items():
         table.add_row(escape(str(k)), escape(str(v)))
     console.print(table)
+
+
+def _trace_dir_label(state: LoopState) -> str:
+    """The trace directory the pre-wired harvest reads, and where it came from."""
+    from soup_cli.utils.loop_stages import trace_dir_source
+
+    path, source = trace_dir_source(state)
+    return f"{path} (from {'--trace-dir' if source == 'trace_dir' else source})"
 
 
 def _parse_traffic(raw: str) -> float:

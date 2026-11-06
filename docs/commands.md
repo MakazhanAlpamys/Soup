@@ -175,7 +175,7 @@ soup adapters audit <adapter> --config soup.yaml [--json]   Compare a finished r
 soup adapters branches                        List snapshotted branches
 soup adapters checkout <name>                   Restore a snapshotted branch's config
 soup adapters diff <a> <b>                      Per-layer ΔW Frobenius diff + effective-rank drift
-soup loop init <model> --eval <s> --baseline <b> [--pre-wired] [--thumbs-db <db>] [--base-model <m>]  Create .soup/loop.yaml (data flywheel; --pre-wired = real stages; --thumbs-db = harvest `serve --record-thumbs` thumbs; --base-model = what the train stage starts from)
+soup loop init <model> --eval <s> --baseline <b> [--pre-wired] [--thumbs-db <db>] [--base-model <m>] [--trace-dir <dir>]  Create .soup/loop.yaml (data flywheel; --pre-wired = real stages; --thumbs-db = harvest `serve --record-thumbs` thumbs; --base-model = what the train stage starts from; --trace-dir = the `serve --trace-log` directory to harvest, default .soup-loops/traces)
 soup loop status                              Counters + status + pre_wired flag
 soup loop watch [--detach] [--max-iterations N] [--pre-wired] [--pack-cans] [--tool-auth-token T]  Harvest → train → gate → deploy daemon (pre-wired stages + Soup Can packing)
 soup loop pause                              Atomic status flip: pause watch daemon at next iteration boundary
