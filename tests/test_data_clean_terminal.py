@@ -2,7 +2,7 @@
 
 import json
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 from rich.console import Console
@@ -49,13 +49,14 @@ def test_missing_input_is_named_as_typed(value):
 @pytest.mark.parametrize("kind", ["input-outside", "output-outside", "same", "exists", "saved"])
 def test_real_paths_preserve_input_and_output_bytes(value, kind):
     source = Path("input.jsonl")
-    target = Path(f"out-{value}.jsonl")
+    target = Path(f"out-{value}-rows.jsonl")
     if kind == "input-outside":
         source = Path("..") / target
     elif kind == "output-outside":
         target = Path("..") / target
     elif kind == "same":
         source = target
+    assert PureWindowsPath(str(source)).suffix == ".jsonl"
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text(json.dumps(ROW) + "\n", encoding="utf-8")
     target.parent.mkdir(parents=True, exist_ok=True)
