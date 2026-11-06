@@ -14,7 +14,6 @@ optimiser surface, and the recipe writer end-to-end without GPUs.
 
 from __future__ import annotations
 
-import json
 import math
 from typing import Optional, Tuple
 
@@ -144,13 +143,16 @@ def mix(
         console.print("    probs:")
         for p in probs:
             console.print(f"      - {float(p):.6f}")
+        import yaml
+
         if isinstance(train_value, str):
-            # Legacy single-string recipes (#330/#442-era, or a search over
-            # exactly one dataset): data.train is a single string. Quote it
-            # the same way render_mix_recipe_yaml does — an unquoted path
-            # like "odd: name.jsonl" is not valid YAML when pasted back.
-            # json.dumps writes control characters as uXXXX escapes (ensure_ascii).
-            console.print(f"  train: {escape(json.dumps(train_value))}", emoji=False)
+            # Quote the legacy single-string shape as YAML, like the list below.
+            scalar = yaml.safe_dump(
+                train_value, default_style='"', allow_unicode=False, width=float("inf")
+            ).removesuffix("\n")
+            console.print(
+                f"  train: {scalar}", markup=False, emoji=False, highlight=False, soft_wrap=True
+            )
         else:
             # #443 — current recipes: data.train is the full dataset list,
             # index-aligned with data.interleave.probs, now that soup train
@@ -158,7 +160,14 @@ def mix(
             # on disk, which happened to be list-shaped by accident.)
             console.print("  train:")
             for path in train_value or []:
-                console.print(f"    - {for_terminal(path)}", emoji=False)
+                # Quote every path and escape non-ASCII on the terminal while
+                # keeping the original value when the snippet is parsed.
+                scalar = yaml.safe_dump(
+                    str(path), default_style='"', allow_unicode=False, width=float("inf")
+                ).removesuffix("\n")
+                console.print(
+                    f"    - {scalar}", markup=False, emoji=False, highlight=False, soft_wrap=True
+                )
         return
 
     if not datasets:
