@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:soup-cli:loop:feedback:1",
+  "title": "Soup loop feedback record",
+  "description": "One line per feedback action on one answer, appended to .soup-loops/feedback.jsonl (default layout). A change is a new line: for kind thumb, rating and edit the latest line per (response_id, kind) wins; comment lines accumulate. A thumb or rating with value null, or an edit with edited_text null, clears the earlier one. Readers ignore unknown fields.",
+  "type": "object",
+  "required": ["schema_version", "id", "response_id", "ts", "kind", "source"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "id": {"$ref": "#/$defs/uuid", "description": "This feedback line's own id."},
+    "response_id": {
+      "$ref": "#/$defs/uuid",
+      "description": "The `id` of the conversation record (the answer) this feedback is about."
+    },
+    "ts": {"$ref": "#/$defs/utc_timestamp", "description": "When the feedback was given."},
+    "kind": {"enum": ["thumb", "rating", "edit", "comment"]},
+    "value": {
+      "description": "thumb: 1 (up), -1 (down) or null (cleared). rating: integer 1-5 or null (cleared). Ignored for edit and comment."
+    },
+    "edited_text": {
+      "description": "kind edit: the answer as the user corrected it; null withdraws an earlier edit.",
+      "oneOf": [{"type": "string", "minLength": 1}, {"type": "null"}]
+    },
+    "comment": {
+      "description": "Free text. Required for kind comment; optional next to any other kind.",
+      "oneOf": [{"type": "string", "minLength": 1, "maxLength": 10000}, {"type": "null"}]
+    },
+    "user_ref": {
+      "description": "Opaque reference the application chose for the person (a single desktop user writes local). Soup stores no other author data.",
+      "oneOf": [{"type": "string", "minLength": 1, "maxLength": 256}, {"type": "null"}]
+    },
+    "source": {"$ref": "#/$defs/source"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"kind": {"const": "thumb"}}, "required": ["kind"]},
+      "then": {"required": ["value"], "properties": {"value": {"enum": [1, -1, null]}}}
+    },
+    {
+      "if": {"properties": {"kind": {"const": "rating"}}, "required": ["kind"]},
+      "then": {
+        "required": ["value"],
+        "properties": {
+          "value": {"oneOf": [{"type": "integer", "minimum": 1, "maximum": 5}, {"type": "null"}]}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"kind": {"const": "edit"}}, "required": ["kind"]},
+      "then": {"required": ["edited_text"]}
+    },
+    {
+      "if": {"properties": {"kind": {"const": "comment"}}, "required": ["kind"]},
+      "then": {
+        "required": ["comment"],
+        "properties": {"comment": {"type": "string", "minLength": 1, "maxLength": 10000}}
+      }
+    }
+  ],
+  "patternProperties": {
+    "^x_[a-z][a-z0-9_]*$": {
+      "type": "object",
+      "description": "Producer extension namespace (x_<app>). Soup never reads or rewrites it."
+    }
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "A UUID in canonical lowercase form."
+    },
+    "utc_timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,9})?(Z|[+]00:00)$",
+      "description": "ISO 8601 date-time in UTC, suffix Z or +00:00."
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9_.-]*$",
+      "description": "Which surface produced the record. Known values: soup-serve (soup serve), playground, try_it, proxy (Soup Zero). Other lowercase names are accepted."
+    }
+  }
+}
