@@ -1010,7 +1010,8 @@ PEFT placement overrides must stay consistent with the runtime's own buffers;
 automatic redistribution cannot relocate those buffers.
 Loading an included frozen boundary weight that differs from that cache is refused with a base/cache
 diagnostic rather than silently ignoring it. The lower-level streaming builder also
-refuses `modules_to_save` on these frozen boundaries; Soup does not expose that PEFT field.
+refuses `modules_to_save` on these frozen boundaries, under any name PEFT matches by suffix
+(so `["head"]` is refused like `["lm_head"]`); Soup does not expose that PEFT field.
 CPU tests with PEFT 0.20.0 and 0.21.0 cover exact default-adapter reloads and SFT/DPO
 checkpoint continuation, including DPO's frozen `ref` adapter. Creating that reference
 uses a model-scoped injection bridge that restores streaming wrappers even if PEFT fails.
