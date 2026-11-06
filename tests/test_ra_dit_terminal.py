@@ -222,7 +222,9 @@ def test_the_done_panel_names_a_manual_retriever_as_typed(monkeypatch, value):
 def _coloured(monkeypatch):
     monkeypatch.setattr(
         "soup_cli.commands.ra_dit.console",
-        Console(force_terminal=True, width=500, height=100, color_system="standard"),
+        Console(
+            force_terminal=True, no_color=False, width=500, height=100, color_system="standard"
+        ),
     )
 
 
