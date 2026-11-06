@@ -172,6 +172,27 @@ SOUP_LOOP_THUMBS_DB=./rl.db soup loop watch --pre-wired
 soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
     --pre-wired --thumbs-db ./rl.db --min-new-pairs 20
 
+# Learn from feedback, with any method. An application writes one conversation record per
+# answer to the trace directory (id, ts, messages, response, adapter, ...) and one feedback
+# record per action to .soup-loops/feedback.jsonl (response_id = the answer's id; kind thumb,
+# rating, edit or comment). --feedback-log (saved in loop.yaml) or SOUP_LOOP_FEEDBACK_LOG
+# names another file. For thumb, rating and edit the latest line per answer wins; a null
+# value or a null edited_text clears it; comments accumulate; feedback about an answer that
+# is not logged is ignored (and counted); a line with an unknown schema_version is skipped.
+# One harvest builds three datasets, and --train-method (default dpo, which is unchanged)
+# picks the one the loop trains on. --min-new-pairs then counts new rows of that dataset.
+#   dpo  an edit is a pair (chosen = the edited text, rejected = the answer), next to the
+#        pairs from serve traces and the thumbs database;
+#   kto  the answer as given, labelled by thumbs (+1 good, -1 bad), ratings (4-5 good,
+#        1-2 bad, 3 nothing) and edits (bad); the newest of these decides, and an edit adds
+#        its text as a good row;
+#   sft  the edited text as the answer to the prompt.
+# A prompt is the logged conversation without the answer. Serve traces and the thumbs
+# database feed dpo only. A row is new when the newest feedback line it came from is
+# later than the data cursor. The kto config trains with batch_size 2: soup train refuses a KTO batch of 1 (#1420).
+soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
+    --pre-wired --feedback-log ./app-data/feedback.jsonl --train-method kto
+
 # Unpack a recorded iteration's Soup Can for what-if analysis (v0.71.4)
 soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 
