@@ -167,13 +167,16 @@ def export(
                 f"\n[yellow]--format {fmt} was removed in v{EXPORT_FORMATS_REMOVED_IN}.[/]"
             )
         console.print(
-            f"[red]Unsupported format: {fmt}[/]{removed_notice}\n"
-            f"Supported: {', '.join(SUPPORTED_FORMATS)}"
+            Text.assemble(
+                (f"Unsupported format: {strip_control(fmt)}", "red"),
+                Text.from_markup(removed_notice),
+                f"\nSupported: {', '.join(SUPPORTED_FORMATS)}",
+            )
         )
         raise typer.Exit(1)
 
     if not model_path.exists():
-        console.print(f"[red]Model path not found: {model_path}[/]")
+        console.print(Text(f"Model path not found: {strip_control(model_path)}", style="red"))
         raise typer.Exit(1)
 
     if (verbose or no_install_deps) and fmt != "gguf":
@@ -195,8 +198,10 @@ def export(
             raise typer.Exit(1)
         if deploy != "ollama":
             console.print(
-                f"[red]Unsupported deploy target: {deploy}[/]\n"
-                "Supported: ollama"
+                Text.assemble(
+                    (f"Unsupported deploy target: {strip_control(deploy)}", "red"),
+                    "\nSupported: ollama",
+                )
             )
             raise typer.Exit(1)
 
