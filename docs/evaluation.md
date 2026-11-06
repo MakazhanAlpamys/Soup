@@ -268,11 +268,20 @@ smoke generator are unchanged (#1798).
 Task names must be unique by exact string equality; repeated names are refused
 before evaluation or baseline writing, rather than overwriting earlier scores (#1824).
 
+The `run_gate` SDK refuses a non-finite `regression_threshold` with a named
+`ValueError` before generation. Finite tolerances retain their absolute-value
+handling and strict drop boundary; CLI and config bounds are unchanged (#1844).
+
 Baselines may be a registry reference (`registry://<name-or-id>`), a file path, or omitted for the first run. A registry baseline uses the newest eval row for each benchmark — re-measuring a benchmark replaces its baseline score — and warns, per benchmark, when that row's scorer stamp is missing or from a different scorer revision. A task whose evaluation raises (`ValueError`, `FileNotFoundError`, `OSError`, or a judge that stays unreachable) gets no score and fails the gate closed under `on_regression: stop`; the log line lists it as a task that could not be scored, with the error, rather than as a regression (#1447).
 
 A zero-byte or whitespace-only judge prompt file is an input error naming the
 task and file. It has no measured score, fails the gate even at threshold zero,
 and cannot create or replace a baseline when no other task was scored.
+
+Judge JSONL rows must be objects and an explicitly present `prompt` must be a
+string; invalid rows are refused before that row reaches generation, naming the
+task, file, physical line and field or row shape. Missing and empty-string
+prompts keep their existing behavior, as does the CLI's failed-gate exit (#1949).
 
 
 ## Sequential A/B Harness (`soup ab`)
@@ -433,6 +442,15 @@ Exit codes are CI-gateable: **0 = SHIP, 2 = DON'T SHIP, 3 = usage/flag error, 1 
 single regressed benchmark, or a missing baseline all yield DON'T SHIP (a missing baseline
 *refuses* rather than silently shipping).
 
+With a local `--adapter`, ship reads the adapter weights before loading either model. If every
+`lora_B` tensor is zero (an untrained adapter, or a DPO run's `ref/` folder) and no other saved
+tensor is non-zero, the adapter adds nothing to the base model: the verdict is DON'T SHIP with
+failed rule `adapter_noop`, and no evidence is written. Adapters without `lora_B` keys (VeRA and
+other PEFT types) are not refused, and an `--adapter` that is not a local directory (a Hub id) is
+skipped without a message. Weights the reader refuses (`adapter_model.bin`, a symlink, a path
+outside the working directory, or a file over 2 GiB) print a warning and the live run continues
+(#2410).
+
 ```bash
 # Live: base vs a LoRA adapter, metric leg + default mini benchmarks
 soup ship --base HuggingFaceTB/SmolLM2-135M-Instruct --adapter ./out \
@@ -490,7 +508,11 @@ Countable task and bundled-suite groups start at `done: 0`, `total: null` until
 the scorer resolves its items. Each `progress` follows actual item scoring,
 including a generation/predicate failure recorded as a failed item, and reports
 the now-known total. Scalar generation reports before the next item is generated;
-batch generation reports scored items after the batch returns. `end` includes
+live batch generation reports scored items after each generation chunk returns,
+before the next chunk starts (eight prompts by default). A failed chunk retries
+its prompts individually without repeating completed chunks. Third-party batch
+generators can expose a positive integer `batch_size` to declare this boundary;
+without it, their results are reported after their whole batch returns. `end` includes
 the final count (zero for an empty item list). Metric and judge-score groups are
 per side; pairwise scoring reports one `tuned` comparison group, with the base
 reference implicit, and counts one completed swap-debiased pair per task.
@@ -545,9 +567,11 @@ CPU-instant):
 
 Custom task evaluation and bundled suites accept an ordinary `gen(prompt) -> str`
 callable and also use its optional `gen.batch(prompts) -> list[str]` method. Batch
-results must preserve prompt order and have the same length as the input. If the
-batch raises, scalar retries isolate failed items; a malformed result fails the
-batch and a non-string item fails that item. Generation failures always score zero,
+results must preserve the original prompt order and count. Each batch receives its
+own list and may mutate or consume it without changing chunk membership. If a
+batch raises, scalar retries use that chunk's original prompts in their original
+order; a malformed result fails that chunk and a non-string item fails that item.
+Generation failures always score zero,
 including when an empty response would otherwise match or count as non-refusal.
 
 The shared live greedy generator used by `soup ship` exposes this method with left
@@ -559,8 +583,8 @@ configuration is not changed. Successful outputs retain the same scores and the 
 CLI output format is unchanged. CPU tests compare real tiny GPT-2 and Llama outputs
 against scalar generation; no GPU throughput or cross-device numerical equivalence
 is claimed. Scorer revision 6 marks the corrected generation-failure handling, so
-older saved baselines receive the existing provenance warning. Progress events are
-a separate follow-up to #1759.
+older saved baselines receive the existing provenance warning. Chunk boundaries and lazy scalar
+generation are preserved, so scoring and progress still precede the next chunk.
 
 Each suite is >20 items so a single-item flip (1/N < 0.05) trips the default threshold instead
 of being rounded away. The scorer is answer-**extraction** — a spurious substring inside a word
@@ -969,6 +993,10 @@ numeric entry in `results`; this command does not save its sub-task rows automat
 
 soup eval compare and soup eval leaderboard use the newest eval row for each benchmark (on the leaderboard, for each model and benchmark), so re-running a benchmark replaces its score; rows with the same created_at resolve to the later insert. soup registry diff compares eval scores the same way.
 
+`soup eval compare` and all `soup eval leaderboard` formats refuse a selected
+non-finite stored score with a named diagnostic and exit `1` before any output;
+they do not fall back to an older finite score (#2466).
+
 ### Aider Polyglot
 
 The `aider-chat` wheel does not include Aider's benchmark harness. The
@@ -1171,6 +1199,10 @@ judgements = [PairwiseJudgement(...) for _ in oracle_set]
 report = run_pairwise_calibration(judgements, scores=confidence_scores)
 ensure_judge_calibrated(report)  # raises RuntimeError if not calibrated
 ```
+
+The SDK recheck refuses non-finite `min_agreement` or `max_bias` (including
+integers beyond float range) with a named `ValueError` after existing report
+errors; finite custom limits and equality boundaries are unchanged (#2467).
 
 The report carries `position_bias` ∈ [-1, 1] (0 = no slot preference), a conformal abstention threshold from the score quantile, agreement-rate vs the oracle, and a `calibrated` bool. `ensure_judge_calibrated` refuses on missing report, low agreement, or extreme bias — so production scoring code can fail loud, not silent.
 

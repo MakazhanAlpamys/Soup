@@ -11,6 +11,8 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
+from soup_cli.utils.terminal import for_terminal
+
 console = Console()
 
 _SEVERITY_COLOR = {"critical": "red", "warning": "yellow", "info": "cyan"}
@@ -40,7 +42,7 @@ def why(
     else:
         target = tracker.get_run(run_id)
         if target is None:
-            console.print(f"[red]Run not found:[/] {escape(run_id)}")
+            console.print(f"[red]Run not found:[/] {for_terminal(run_id)}", emoji=False)
             raise typer.Exit(1)
 
     metrics = tracker.get_metrics(target["run_id"])

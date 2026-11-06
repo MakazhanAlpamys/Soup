@@ -181,11 +181,12 @@ def show(
         minutes = int((secs % 3600) // 60)
         duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
-    # Build info panel — config-derived fields escaped (mirrors registry.py).
-    _esc = markup_escape
+    # Build info panel — config-derived fields go through for_terminal and the
+    # panel text is parsed with emoji codes off: escape() alone leaves ":name:"
+    # codes and control characters in the text.
     info_lines = [
-        f"Run ID:     [bold]{_esc(str(run['run_id']))}[/]",
-        f"Name:       {_esc(str(run.get('experiment_name') or '-'))}",
+        f"Run ID:     [bold]{for_terminal(run['run_id'])}[/]",
+        f"Name:       {for_terminal(run.get('experiment_name') or '-')}",
         f"Status:     {status_str}",
         f"Date:       {run['created_at'][:19].replace('T', ' ')}",
     ]
@@ -199,21 +200,23 @@ def show(
         info_lines.append(f"Error:      {for_terminal(run['error_message'])}")
     info_lines.extend([
         "",
-        f"Model:      [bold]{_esc(str(run.get('base_model') or '-'))}[/]",
+        f"Model:      [bold]{for_terminal(run.get('base_model') or '-')}[/]",
         f"Revision:   {for_terminal(run.get('base_revision') or 'unknown')}",
         f"Identity:   {for_terminal(run.get('base_revision_source') or 'unknown')}",
-        f"Task:       {_esc(str(run.get('task') or '-'))}",
-        f"Device:     {_esc(str(run.get('device_name') or '-'))} "
-        f"({_esc(str(run.get('device') or '-'))})",
-        f"GPU Memory: {_esc(str(run.get('gpu_memory') or '-'))}",
+        f"Task:       {for_terminal(run.get('task') or '-')}",
+        f"Device:     {for_terminal(run.get('device_name') or '-')} "
+        f"({for_terminal(run.get('device') or '-')})",
+        f"GPU Memory: {for_terminal(run.get('gpu_memory') or '-')}",
         "",
         f"Loss:       {_fmt_loss(run)}",
         f"Steps:      {run.get('total_steps') or '-'}",
         f"Duration:   {duration_str}",
         f"Cost:       {_fmt_cost(run)}",
-        f"Output:     {_esc(str(run.get('output_dir') or '-'))}",
+        f"Output:     {for_terminal(run.get('output_dir') or '-')}",
     ])
-    console.print(Panel("\n".join(info_lines), title="Run Details"))
+    console.print(
+        Panel(Text.from_markup("\n".join(info_lines), emoji=False), title="Run Details")
+    )
 
     # Config section
     if run.get("config_json"):
@@ -223,7 +226,9 @@ def show(
             # Truncate long configs
             if len(config_str) > 1500:
                 config_str = config_str[:1500] + "\n..."
-            console.print(Panel(config_str, title="Config"))
+            # json.dumps already escapes control characters, so Text only has to
+            # stop Rich from reading the JSON as markup or emoji codes.
+            console.print(Panel(Text(config_str), title="Config"))
         except json.JSONDecodeError:
             pass
 
@@ -234,7 +239,9 @@ def show(
         eval_table.add_column("Benchmark", style="bold")
         eval_table.add_column("Score", justify="right")
         for result in eval_results:
-            eval_table.add_row(result["benchmark"], f"{result['score']:.4f}")
+            eval_table.add_row(
+                Text(strip_control(str(result["benchmark"]))), f"{result['score']:.4f}"
+            )
         console.print(eval_table)
 
     # Loss curve
@@ -263,10 +270,12 @@ def compare(
         console.print(f"[red]Run not found: {for_terminal(run_2)}[/]", emoji=False)
         raise typer.Exit(1)
 
+    # Run ids, names, models and config values are stored text: every cell is a
+    # Text, so none is parsed as markup or turned into an emoji.
     table = Table(title="Run Comparison")
     table.add_column("Metric", style="bold")
-    table.add_column(r1["run_id"][:20], justify="right")
-    table.add_column(r2["run_id"][:20], justify="right")
+    table.add_column(Text(strip_control(r1["run_id"][:20])), justify="right")
+    table.add_column(Text(strip_control(r2["run_id"][:20])), justify="right")
 
     rows = [
         ("Name", r1.get("experiment_name") or "-", r2.get("experiment_name") or "-"),
@@ -312,10 +321,12 @@ def compare(
 
     for label, val1, val2 in rows:
         # Highlight differences
-        if val1 != val2:
-            table.add_row(label, f"[yellow]{val1}[/]", f"[yellow]{val2}[/]")
-        else:
-            table.add_row(label, val1, val2)
+        style = "yellow" if val1 != val2 else ""
+        table.add_row(
+            label,
+            Text(strip_control(val1), style=style),
+            Text(strip_control(val2), style=style),
+        )
 
     console.print(table)
 
@@ -336,11 +347,12 @@ def delete(
         raise typer.Exit(1)
 
     if not force:
-        if not typer.confirm(f"Delete run {run['run_id']}?"):
+        # typer.confirm prints through click, not Rich: only the strip applies.
+        if not typer.confirm(f"Delete run {strip_control(run['run_id'])}?"):
             raise typer.Exit()
 
     tracker.delete_run(run["run_id"])
-    console.print(f"[green]Deleted run: {run['run_id']}[/]")
+    console.print(f"[green]Deleted run: {for_terminal(run['run_id'])}[/]", emoji=False)
 
 
 def _checkpoint_step(checkpoint: Path) -> Optional[int]:
@@ -458,7 +470,8 @@ def clean(
         if fallback:
             console.print(
                 f"[dim]{for_terminal(run['run_id'])}: no checkpoint has a recorded loss; "
-                f"keeping the latest, checkpoint-{keep_step}, whole.[/]"
+                f"keeping the latest, checkpoint-{keep_step}, whole.[/]",
+                emoji=False,
             )
         for ckpt in checkpoints:
             if keep_step is not None and _checkpoint_step(ckpt) == keep_step:
@@ -559,8 +572,8 @@ def replay(
     summary = summarise(metrics)
 
     rendered = [
-        f"Run ID:     [bold]{run['run_id']}[/]",
-        f"Status:     {run.get('status') or '-'}",
+        f"Run ID:     [bold]{for_terminal(run['run_id'])}[/]",
+        f"Status:     {for_terminal(run.get('status') or '-')}",
         f"Steps:      {summary.first_step or '-'} → {summary.last_step or '-'}"
         f" ({summary.total_rows} rows)",
     ]
@@ -571,7 +584,9 @@ def replay(
             f"Best:       {summary.min_loss:.4f} @ step {summary.min_loss_step}"
         )
     rendered.append(f"Cost:       {_fmt_cost(run)}")
-    console.print(Panel("\n".join(rendered), title="Replay"))
+    console.print(
+        Panel(Text.from_markup("\n".join(rendered), emoji=False), title="Replay")
+    )
 
     if plot and metrics:
         sampled = downsample(metrics)
