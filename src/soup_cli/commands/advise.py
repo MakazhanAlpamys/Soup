@@ -25,6 +25,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.advise import (
     CHOICES,
@@ -46,6 +47,7 @@ from soup_cli.utils.advise_history import (
     record_verdict,
     summarise_history,
 )
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
@@ -259,7 +261,7 @@ def advise_run(
     try:
         rows = load_advise_dataset(data)
     except (ValueError, TypeError, FileNotFoundError) as exc:
-        console.print(f"[red]Dataset error:[/] {escape(str(exc))}")
+        console.print(f"[red]Dataset error:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
 
     # --probe-model implies --probe.
@@ -275,14 +277,14 @@ def advise_run(
                 rows, model=probe_model, device=probe_device
             )
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]Proximity probe failed:[/] {escape(str(exc))}")
+            console.print(f"[red]Proximity probe failed:[/] {for_terminal(exc)}", emoji=False)
             raise typer.Exit(1) from exc
 
     try:
         task_category = classify_task(rows, goal=goal)
         profile = compute_dataset_profile(rows, base_model_proximity=proximity)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]Analysis failed:[/] {escape(str(exc))}")
+        console.print(f"[red]Analysis failed:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
 
     roi = ROIEstimate()
@@ -293,7 +295,7 @@ def advise_run(
                 rows, model=probe_model, device=probe_device
             )
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]Probe failed:[/] {escape(str(exc))}")
+            console.print(f"[red]Probe failed:[/] {for_terminal(exc)}", emoji=False)
             raise typer.Exit(1) from exc
         # Pick the best of zero-shot vs few-shot as the "prompt_eng" baseline.
         prompt_eng = max(baselines["zero_shot"], baselines["few_shot"])
@@ -326,7 +328,7 @@ def advise_run(
             project=project,
         )
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]Verdict build failed:[/] {escape(str(exc))}")
+        console.print(f"[red]Verdict build failed:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
 
     console.print(_render_verdict_panel(verdict, profile_row_count=profile.row_count))
@@ -339,11 +341,11 @@ def advise_run(
         try:
             record_verdict(verdict, accepted=True, notes=notes)
             console.print(
-                f"[dim]Recorded to {escape(history_path())}[/]"
+                f"[dim]Recorded to {for_terminal(history_path())}[/]", emoji=False
             )
         except (TypeError, ValueError, OSError) as exc:
             console.print(
-                f"[yellow]History record failed:[/] {escape(str(exc))}"
+                f"[yellow]History record failed:[/] {for_terminal(exc)}", emoji=False
             )
 
     console.print(
@@ -371,7 +373,7 @@ def explain() -> None:
             "[red]Cached verdict is malformed[/] — re-run `soup advise`."
         )
         raise typer.Exit(1)
-    console.print(escape(format_verdict_rubric(verdict)))
+    console.print(for_terminal(format_verdict_rubric(verdict)), emoji=False)
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +394,7 @@ def compare(
     try:
         entries = load_history(limit=limit)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]History error:[/] {escape(str(exc))}")
+        console.print(f"[red]History error:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
 
     if not entries:
@@ -423,8 +425,8 @@ def compare(
             f"{entry.outcome:+.2f}" if entry.outcome is not None else "—"
         )
         table.add_row(
-            escape(when_short),
-            escape(entry.project),
+            Text(strip_control(when_short)),
+            Text(strip_control(entry.project)),
             escape(entry.choice),
             escape(entry.task_category),
             f"{entry.confidence:.2f}",
