@@ -4,6 +4,7 @@ Top-level CLI command (NOT a sub-group) — operators type::
 
     soup ship --base <m> --adapter <lora> --task-eval tasks.jsonl
     soup ship --base <m> --base-adapter <prod-lora> --adapter <new-lora> --task-eval t.jsonl
+    soup ship ... --gate loop-v2 --corrections c.jsonl --held-out h.jsonl   # the loop's gate
     soup ship --evidence ev.json            # offline, pre-computed scores
     soup ship ... --output verdict.json
     soup ship ... --config soup.yaml        # read eval.ship defaults + bind provenance
@@ -36,6 +37,7 @@ import json
 import os
 import re
 from dataclasses import replace
+from functools import partial
 from typing import (
     TYPE_CHECKING,
     Callable,
@@ -64,7 +66,22 @@ from soup_cli.utils.exit_codes import (
 from soup_cli.utils.exit_codes import (
     GateGroup,
 )
-from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
+from soup_cli.utils.paths import (
+    atomic_write_text,
+    enforce_under_cwd_and_no_symlink,
+    quote_path,
+)
+from soup_cli.utils.ship_loop_gate import (
+    GATE_LOOP_V2,
+    GATES,
+    GateInputError,
+    GateInputs,
+    check_corrections,
+    check_held_out,
+    parse_corrections,
+    parse_held_out,
+    unmeasured_loop_gate,
+)
 from soup_cli.utils.ship_progress import group, jsonl_command
 
 if TYPE_CHECKING:  # pydantic models — import for typing only (no eager cost)
@@ -82,6 +99,7 @@ from soup_cli.utils.ship_verdict import (
     NoiseFloor,
     ShipVerdict,
     TaskWin,
+    apply_loop_gate,
     build_task_win,
     compute_benchmark_deltas,
     compute_noise_floor,
@@ -106,6 +124,9 @@ _MAX_EVIDENCE_BYTES = 16 * 1024 * 1024
 
 # 4 MiB cap on a soup.yaml passed via --config (configs are small).
 _MAX_CONFIG_BYTES = 4 * 1024 * 1024
+
+# 16 MiB cap on a --corrections / --held-out JSONL (at most MAX_ROWS rows of bounded text).
+_MAX_GATE_FILE_BYTES = 16 * 1024 * 1024
 
 # 8 GiB cap on the training file we fingerprint for provenance.data_sha
 # (best-effort — skipped above this, never fatal).
@@ -531,6 +552,77 @@ def _flag_is_default(ctx: typer.Context, name: str) -> bool:
     except (ImportError, AttributeError):  # pragma: no cover — defensive
         return False
     return source == ParameterSource.DEFAULT
+
+
+# ---------------------------------------------------------------------------
+# --gate loop-v2 — the corrections and held-out files
+# ---------------------------------------------------------------------------
+
+# What each offline flag cannot do with the gate. The gate asks the two models its own questions, so
+# it is a live run; evidence replays scores, and a replay of a gated run would be the plain verdict.
+_GATE_OFFLINE_FLAGS = {
+    "--evidence": "offline evidence has no models to ask the corrections and held-out questions",
+    "--emit-evidence": (
+        "evidence holds the scores only and replays as the plain verdict, not the gate's"
+    ),
+    "--require-provenance": "it checks offline evidence",
+}
+
+
+def _read_gate_file(path: str, flag: str) -> str:
+    """Read a ``--corrections`` / ``--held-out`` file: cwd-contained, not a symlink, size-capped."""
+    try:
+        enforce_under_cwd_and_no_symlink(path, f"{flag} path")
+    except (ValueError, TypeError) as exc:
+        _fail(str(exc), _EXIT_USAGE)
+    if not os.path.isfile(path):
+        _fail(f"{flag} {quote_path(path)} is not a file", _EXIT_USAGE)
+    try:
+        return _safe_read_text(path, f"{flag} path", _MAX_GATE_FILE_BYTES)
+    except UnicodeDecodeError:
+        _fail(f"{flag} {quote_path(path)} is not valid UTF-8 text", _EXIT_USAGE)
+    except (ValueError, TypeError, OSError) as exc:
+        _fail(str(exc), _EXIT_USAGE)
+
+
+def _prepare_loop_gate(
+    gate: Optional[str],
+    corrections: Optional[str],
+    held_out: Optional[str],
+    *,
+    offline_flags: Mapping[str, bool],
+) -> Optional[GateInputs]:
+    """Validate ``--gate`` and read its two files; every refusal is exit 3, before any model loads.
+
+    Returns ``None`` without ``--gate`` (a ``--corrections`` / ``--held-out`` file without the gate
+    is refused rather than silently ignored). An absent file is an empty one: no corrections means
+    check 1 is ``not_applicable``, no held-out edits means check 2 is ``not_measured``.
+    """
+    if gate is None:
+        for flag, given in (("--corrections", corrections), ("--held-out", held_out)):
+            if given is not None:
+                _fail(f"{flag} needs --gate {GATE_LOOP_V2}", _EXIT_USAGE)
+        return None
+    if gate not in GATES:
+        _fail(f"--gate must be {', '.join(GATES)}; got {gate!r}", _EXIT_USAGE)
+    for flag, why in _GATE_OFFLINE_FLAGS.items():
+        if offline_flags.get(flag):
+            _fail(f"--gate {gate} cannot be used with {flag}: {why} (live run only)", _EXIT_USAGE)
+    parsed_corrections: tuple = ()
+    parsed_held_out: tuple = ()
+    try:
+        if corrections is not None:
+            parsed_corrections = parse_corrections(
+                _read_gate_file(corrections, "--corrections"),
+                f"--corrections {quote_path(corrections)}",
+            )
+        if held_out is not None:
+            parsed_held_out = parse_held_out(
+                _read_gate_file(held_out, "--held-out"), f"--held-out {quote_path(held_out)}",
+            )
+    except GateInputError as exc:
+        _fail(str(exc), _EXIT_USAGE)
+    return GateInputs(corrections=parsed_corrections, held_out=parsed_held_out)
 
 
 # ---------------------------------------------------------------------------
@@ -1167,6 +1259,44 @@ def _adapter_is_noop(adapter: str) -> bool:
     )
 
 
+def _held_out_win_rate(judge_model: str, pairs: List[Tuple[str, str, str]]) -> float:
+    """The new version's pairwise win rate over ``(prompt, old answer, new answer)`` triples."""
+    from soup_cli.eval.gate import _parse_judge_url
+    from soup_cli.eval.judge import JudgeEvaluator, pairwise_winrate
+
+    provider, model, api_base = _parse_judge_url(judge_model)
+    evaluator = JudgeEvaluator(provider=provider, model=model, api_base=api_base)
+    return pairwise_winrate(pairs, evaluator)
+
+
+def _apply_loop_gate(
+    verdict: ShipVerdict,
+    inputs: GateInputs,
+    old_gen: Callable[[str], str],
+    new_gen: Callable[[str], str],
+    *,
+    task_mode: str,
+    judge_model: Optional[str],
+) -> ShipVerdict:
+    """Run the corrections and held-out checks and let them decide (``--gate loop-v2``).
+
+    The old version is ``old_gen`` (the base, or base + ``--base-adapter``) and the new one
+    ``new_gen`` (the candidate). A pairwise judge, when ``--task-mode pairwise`` has one, also rates
+    the held-out answers; that note is information and never decides.
+    """
+    console.print(
+        f"[dim]Gate {GATE_LOOP_V2}: asking both versions "
+        f"{sum(len(edit.paraphrases) for edit in inputs.corrections)} correction question(s) and "
+        f"{len(inputs.held_out)} held-out question(s).[/]"
+    )
+    corrections = check_corrections(old_gen, new_gen, inputs.corrections)
+    judge_rate = None
+    if task_mode == "pairwise" and judge_model:
+        judge_rate = partial(_held_out_win_rate, judge_model)
+    held_out = check_held_out(old_gen, new_gen, inputs.held_out, judge_rate=judge_rate)
+    return apply_loop_gate(verdict, corrections, held_out)
+
+
 def _verdict_live(
     *,
     base: Optional[str],
@@ -1183,6 +1313,7 @@ def _verdict_live(
     quantization: Optional[str] = None,
     chat_template_kwargs: Optional[dict] = None,
     base_adapter: Optional[str] = None,
+    gate_inputs: Optional[GateInputs] = None,
 ) -> ShipVerdict:
     """Run a live verdict — validate flags (exit 2), then evaluate (exit 1)."""
     if not base:
@@ -1269,6 +1400,7 @@ def _verdict_live(
             failed_rule=FAILED_ADAPTER_NOOP,
             forgetting_threshold=forgetting_threshold,
             soup_version=__version__,
+            loop_gate=unmeasured_loop_gate(gate_inputs) if gate_inputs is not None else None,
         )
 
     tuned_id = tuned if tuned else base
@@ -1322,6 +1454,13 @@ def _verdict_live(
             forgetting_threshold=forgetting_threshold,
             noise_floor=measured_floor,
         )
+        if gate_inputs is not None:
+            # base_gen is base (+ --base-adapter): the same generator that scored the old side
+            # of the task eval and the suites, so there is no second place to fall back to the base.
+            verdict = _apply_loop_gate(
+                verdict, gate_inputs, base_gen, tuned_gen,
+                task_mode=task_mode, judge_model=judge_model,
+            )
         return replace(
             verdict,
             numerics=_live_eval_numerics(quantization, device),
@@ -1521,6 +1660,25 @@ def ship(
         None, "--chat-template-kwargs",
         help='Live chat-template variables as a JSON object, e.g. {"enable_thinking":false}.',
     ),
+    gate: Optional[str] = typer.Option(
+        None,
+        "--gate",
+        help="Decision gate: loop-v2 = SHIP needs the --corrections learned, the --held-out edits "
+        "not significantly worse and the suites holding; the task win is information only. "
+        "Live run only.",
+    ),
+    corrections: Optional[str] = typer.Option(
+        None,
+        "--corrections",
+        help="JSONL of corrections for --gate loop-v2: {edit_id, expected, original, "
+        "paraphrases}. Check 1 asks both versions every paraphrase.",
+    ),
+    held_out: Optional[str] = typer.Option(
+        None,
+        "--held-out",
+        help="JSONL of held-out edits for --gate loop-v2: {edit_id, prompt, expected, original}. "
+        "Check 2: the new version must not be significantly worse on them.",
+    ),
 ) -> None:
     """Decide SHIP / DON'T SHIP for a fine-tune (exit 0 = SHIP, 2 = DON'T)."""
     if progress is not None and progress != "jsonl":
@@ -1537,6 +1695,14 @@ def ship(
                 "--emit-evidence": bool(emit_evidence),
             },
         )
+    gate_inputs = _prepare_loop_gate(
+        gate, corrections, held_out,
+        offline_flags={
+            "--evidence": bool(evidence),
+            "--emit-evidence": bool(emit_evidence),
+            "--require-provenance": require_provenance,
+        },
+    )
     soup_config = None
     from soup_cli.utils.ship_provenance import check_binding, validate_data_identity
 
@@ -1669,6 +1835,7 @@ def ship(
             quantization=_live_eval_quantization_from_config(soup_config),
             **({"chat_template_kwargs": template_kwargs} if template_kwargs is not None else {}),
             **({"base_adapter": base_adapter} if base_adapter is not None else {}),
+            **({"gate_inputs": gate_inputs} if gate_inputs is not None else {}),
         )
         if emit_evidence and binding != capture_binding(
             task_mode, _parse_suite(general_suite), noise_floor,
