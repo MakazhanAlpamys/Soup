@@ -35,6 +35,7 @@ def cwd(tmp_path, monkeypatch):
     monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(tmp_path / "registry.db"))
     for name in ("SOUP_LOOP_TRACE_DIR", "SOUP_LOOP_THUMBS_DB", "SOUP_LOOP_SERVE_ENDPOINT"):
         monkeypatch.delenv(name, raising=False)
+    (tmp_path / "tasks.jsonl").write_text('{"prompt": "2+2", "expected": "4"}\n', encoding="utf-8")
     return tmp_path
 
 
@@ -167,7 +168,7 @@ def test_train_stage_passes_the_resolved_base_to_soup_train(cwd, monkeypatch):
 def test_init_records_the_registry_entry_base(cwd):
     entry_id = _push("Qwen/Qwen2.5-0.5B-Instruct")
     result, text = _invoke(
-        "init", f"registry://{entry_id}", "--eval", "suite.yaml", "--baseline", "b", "--pre-wired"
+        "init", f"registry://{entry_id}", "--eval", "tasks.jsonl", "--baseline", "b", "--pre-wired"
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert read_state().base_model == "Qwen/Qwen2.5-0.5B-Instruct"
@@ -180,7 +181,7 @@ def test_init_records_the_registry_entry_base(cwd):
 
 def test_init_pre_wired_refuses_an_unknown_base(cwd):
     result, text = _invoke(
-        "init", "registry://abc12", "--eval", "suite.yaml", "--baseline", "b", "--pre-wired"
+        "init", "registry://abc12", "--eval", "tasks.jsonl", "--baseline", "b", "--pre-wired"
     )
     assert result.exit_code == 2, (result.output, repr(result.exception))
     assert "cannot determine the base model" in text
@@ -189,7 +190,7 @@ def test_init_pre_wired_refuses_an_unknown_base(cwd):
 
 
 def test_init_without_pre_wired_warns_and_keeps_going(cwd):
-    result, text = _invoke("init", "registry://abc12", "--eval", "suite.yaml", "--baseline", "b")
+    result, text = _invoke("init", "registry://abc12", "--eval", "tasks.jsonl", "--baseline", "b")
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert "base model unknown" in text
     assert "soup loop watch --pre-wired refuses" in text
@@ -198,7 +199,7 @@ def test_init_without_pre_wired_warns_and_keeps_going(cwd):
 
 def test_init_base_model_flag_overrides_the_registry(cwd):
     result, _ = _invoke(
-        "init", "registry://abc12", "--eval", "suite.yaml", "--baseline", "b",
+        "init", "registry://abc12", "--eval", "tasks.jsonl", "--baseline", "b",
         "--pre-wired", "--base-model", "org/explicit",
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -207,21 +208,21 @@ def test_init_base_model_flag_overrides_the_registry(cwd):
 
 def test_init_refuses_an_empty_base_model(cwd):
     result, text = _invoke(
-        "init", "./base", "--eval", "suite.yaml", "--baseline", "b", "--base-model", "  "
+        "init", "./base", "--eval", "tasks.jsonl", "--baseline", "b", "--base-model", "  "
     )
     assert result.exit_code == 2, (result.output, repr(result.exception))
     assert "--base-model must not be empty" in text
 
 
 def test_init_plain_served_model_records_it_as_base(cwd):
-    result, _ = _invoke("init", "./base", "--eval", "suite.yaml", "--baseline", "b", "--pre-wired")
+    result, _ = _invoke("init", "./base", "--eval", "tasks.jsonl", "--baseline", "b", "--pre-wired")
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert read_state().base_model == "./base"
 
 
 @pytest.mark.parametrize("detach", [False, True])
 def test_watch_pre_wired_refuses_an_unknown_base_before_starting(cwd, monkeypatch, detach):
-    _invoke("init", "registry://abc12", "--eval", "suite.yaml", "--baseline", "b")
+    _invoke("init", "registry://abc12", "--eval", "tasks.jsonl", "--baseline", "b")
     import subprocess
 
     def no_spawn(*args, **kwargs):
@@ -291,7 +292,9 @@ def test_explicit_base_model_beats_the_adapter_config(cwd):
 
 def test_init_names_where_the_base_came_from(cwd):
     served = _adapter_dir(cwd, {"base_model_name_or_path": "Qwen/Qwen2.5-0.5B-Instruct"})
-    result, text = _invoke("init", served, "--eval", "suite.yaml", "--baseline", "b", "--pre-wired")
+    result, text = _invoke(
+        "init", served, "--eval", "tasks.jsonl", "--baseline", "b", "--pre-wired"
+    )
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert read_state().base_model == "Qwen/Qwen2.5-0.5B-Instruct"
     assert "Qwen/Qwen2.5-0.5B-Instruct (from adapter_config.json in" in text
@@ -299,6 +302,8 @@ def test_init_names_where_the_base_came_from(cwd):
 
 def test_init_pre_wired_refuses_an_adapter_dir_without_a_base(cwd):
     served = _adapter_dir(cwd, {"r": 8})
-    result, text = _invoke("init", served, "--eval", "suite.yaml", "--baseline", "b", "--pre-wired")
+    result, text = _invoke(
+        "init", served, "--eval", "tasks.jsonl", "--baseline", "b", "--pre-wired"
+    )
     assert result.exit_code == 2, (result.output, repr(result.exception))
     assert "names no base_model_name_or_path" in text
