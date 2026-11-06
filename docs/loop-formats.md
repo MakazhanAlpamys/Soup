@@ -226,9 +226,8 @@ manifest is not rewritten.
 
 ### `iterations.jsonl`
 
-A line is appended when an iteration is recorded (a cycle that starts no iteration, such as
-one only waiting for ratings or one skipped by the budget, writes none) and again when its
-outcome changes:
+A line is appended when an iteration is recorded (a cycle that only waits for ratings, or
+that the budget skips, records no iteration of its own) and again when its outcome changes:
 
 | Outcome | When |
 |---|---|

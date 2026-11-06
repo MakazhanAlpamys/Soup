@@ -754,6 +754,15 @@ class TestIterationLine:
             assert key not in line["dataset"], key
         assert line["dataset"]["sft_rows"] == 0  # the one that was counted stays
 
+    def test_the_sft_row_count_is_written_next_to_the_other_two(self, cwd):
+        stages = _stages(cwd, harvest={"dpo_pairs": 0, "kto_rows": 2, "sft_rows": 5})
+
+        line = _line(_record(), stages)  # (the schema knows dataset.sft_rows)
+
+        assert {k: line["dataset"][k] for k in ("dpo_pairs", "kto_rows", "sft_rows")} == {
+            "dpo_pairs": 0, "kto_rows": 2, "sft_rows": 5
+        }
+
     def test_a_dataset_file_that_vanished_has_a_null_hash(self, cwd):
         stages = _stages(cwd, harvest={"pairs_path": ".soup-loops/pairs/gone.jsonl"})
 
