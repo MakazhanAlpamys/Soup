@@ -82,6 +82,15 @@ text architecture and LoRA attachment have been checked on the meta device, with
 a tiny random decoder's forward/backward pass checked on CPU. This does not
 establish full-checkpoint 2B training quality, NF4 execution, or GPU memory use.
 
+`soup recipes use qwen3.5-4b-grpo` selects the 4B language decoder for text
+reasoning data in `./data/reasoning_train.jsonl`. It inherits the 0.8B, 2B and
+9B GRPO starting settings, including four generations, the `accuracy` reward,
+eight accumulation steps and gradient checkpointing. Supply a reference answer
+for each prompt, either as an `answer` column or as the final assistant message.
+The native decoder and LoRA path are checked with the public configuration on
+meta and a tiny random model on CPU. Full 4B GRPO training, NF4 execution,
+GPU memory use and reward quality need separate validation.
+
 `soup recipes use qwen3.5-27b-dpo` selects `Qwen/Qwen3.5-27B`'s language
 decoder for the same text preference layout. It inherits the 9B DPO recipe's
 4096-token limit, learning rate, epochs, LoRA and quantization settings. It uses
