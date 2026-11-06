@@ -129,6 +129,7 @@ Sections:
 | `training.load_in_16bit` | `bool \| null` | `null` |  | Friendly alias: when True, sets quantization='none' (full bf16/fp16 LoRA). Conflicts with load_in_8bit. (v0.41.0) |
 | `training.scheduler` | `str` | `"cosine"` |  | LR scheduler type |
 | `training.save_steps` | `int` | `100` |  | Save checkpoint every N steps |
+| `training.save_strategy` | `str` | `"steps"` | one of `"steps"`, `"epoch"`, `"no"` | When to write intermediate checkpoint-N folders: 'steps' (every save_steps steps, and once more at the last step; the default), 'epoch' (at the end of each epoch) or 'no' (never; the final adapter or model is still saved). Quote it in YAML: an unquoted no is a bool. 'epoch' and 'no' are refused together with an explicit save_steps, on backend: mlx and on task: unlearn (#2575). |
 | `training.logging_steps` | `int` | `10` |  | Log metrics every N steps |
 | `training.eval_steps` | `int \| null` | `null` | `>= 1` | Evaluate the validation split every N optimizer steps (counted after gradient accumulation, like save_steps). Unset = evaluate at the end of every epoch. grpo evaluates only when this is set, because an evaluation there generates completions. (#1223) |
 | `training.dpo_beta` | `float` | `0.1` | `> 0` | DPO beta — KL penalty coefficient |

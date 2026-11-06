@@ -19,6 +19,7 @@ from rich.markup import escape
 from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -75,7 +76,6 @@ def _set_ppo_training_kwargs(
             "optim": tcfg.optimizer,
             "lr_scheduler_type": tcfg.scheduler,
             "logging_steps": tcfg.logging_steps,
-            "save_steps": tcfg.save_steps,
             "bf16": use_bf16,
             "fp16": use_fp16,
             "gradient_checkpointing": should_enable_hf_gradient_checkpointing(
@@ -87,6 +87,27 @@ def _set_ppo_training_kwargs(
                 ppo_kwargs[name] = value
 
     return applied
+
+
+def _set_ppo_save_kwargs(
+    ppo_kwargs: dict[str, object], ppo_config_cls: type, tcfg: Any
+) -> None:
+    """Forward ``training.save_strategy`` / ``save_steps`` to the PPO config (#2575).
+
+    The keywords come from the shared :func:`save_kwargs`, each passed only when the
+    installed trl config takes it, as every other PPO setting is. A config class without
+    ``save_strategy`` is an old trl whose PPO trainer saves on its own schedule, so
+    ``epoch`` / ``no`` cannot be honoured there and is refused rather than ignored.
+    """
+    from soup_cli.trainer._trl_compat import config_accepts
+
+    ppo_kwargs.update(
+        save_kwargs(
+            tcfg,
+            accepts=lambda name: config_accepts(ppo_config_cls, name),
+            config_name=f"the installed {ppo_config_cls.__name__}",
+        )
+    )
 
 
 def _effective_ppo_setting(
@@ -329,8 +350,7 @@ class PPOTrainerWrapper:
         if config_accepts(ppo_config_cls, "response_length"):
             ppo_kwargs["response_length"] = cfg.data.max_length
 
-        if config_accepts(ppo_config_cls, "save_total_limit"):
-            ppo_kwargs["save_total_limit"] = 3
+        _set_ppo_save_kwargs(ppo_kwargs, ppo_config_cls, tcfg)
 
         # Optional params that may not exist in all trl versions
         if "log_with" in ppo_params:

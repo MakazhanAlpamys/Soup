@@ -1384,6 +1384,20 @@ class TrainingConfig(BaseModel):
     )
     scheduler: str = Field(default="cosine", description="LR scheduler type")
     save_steps: int = Field(default=100, description="Save checkpoint every N steps")
+    # #2575 — transformers also saves at the LAST step whenever the strategy is "steps"
+    # (its default, which no wrapper overrode), so every run left a checkpoint-N folder
+    # and nothing turned that off. The default here keeps that exactly.
+    save_strategy: Literal["steps", "epoch", "no"] = Field(
+        default="steps",
+        description=(
+            "When to write intermediate checkpoint-N folders: 'steps' (every save_steps "
+            "steps, and once more at the last step; the default), 'epoch' (at the end of "
+            "each epoch) or 'no' (never; the final adapter or model is still saved). "
+            "Quote it in YAML: an unquoted no is a bool. 'epoch' and 'no' are refused "
+            "together with an explicit save_steps, on backend: mlx and on task: unlearn "
+            "(#2575)."
+        ),
+    )
     logging_steps: int = Field(default=10, description="Log metrics every N steps")
     # #1223 — the validation split is evaluated at the end of every epoch by
     # default; this switches to a step schedule. Unset rather than defaulted so
@@ -1408,6 +1422,54 @@ class TrainingConfig(BaseModel):
         if isinstance(v, bool):
             raise ValueError("training.eval_steps must be an int, not a bool")
         return v
+
+    @field_validator("save_strategy", mode="before")
+    @classmethod
+    def _validate_save_strategy_type(cls, v: Any) -> Any:
+        """#2575 — only a string can name a strategy.
+
+        YAML 1.1 reads an unquoted ``no`` (and ``off``, ``false``) as ``False``, so the
+        natural spelling of the third choice arrives as a bool. It is refused, with the
+        fix in the message, rather than coerced: a bool says nothing about ``epoch`` or
+        ``steps``, and ``save_strategy: true`` must not mean anything.
+        """
+        if isinstance(v, bool):
+            raise ValueError(
+                "training.save_strategy must be a string, not a bool: YAML reads an "
+                "unquoted no, off or false as a bool. Quote it: save_strategy: \"no\" "
+                "(or 'steps' / 'epoch')."
+            )
+        if not isinstance(v, str):
+            raise ValueError(
+                "training.save_strategy must be one of 'steps', 'epoch', 'no'; "
+                f"got {type(v).__name__}"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _validate_save_steps_needs_the_steps_strategy(self) -> "TrainingConfig":
+        """#2575 — ``save_steps`` only counts under ``save_strategy: steps``.
+
+        A tunable set while its feature is off is refused. "Set" means set to something
+        other than the default, not merely present in ``model_fields_set``:
+        ``model_dump()`` writes ``save_steps: 100`` for every config, and ``sweep``
+        (``SoupConfig(**config_dict)``), the unsloth probe, ``soup rewind`` and the cloud
+        hand-off all validate a dump, so a guard on presence alone would refuse its own
+        output (the lesson of #321, ``bnb_4bit_use_double_quant``). The one miss is an
+        explicit ``save_steps: 100`` beside ``epoch`` / ``no``, which is indistinguishable
+        from a dump and harmless: it is the value the default carries and nothing reads it.
+        """
+        if self.save_strategy == "steps" or "save_steps" not in self.model_fields_set:
+            return self
+        default = type(self).model_fields["save_steps"].default
+        if self.save_steps != default:
+            raise ValueError(
+                f"training.save_steps is {self.save_steps} but training.save_strategy is "
+                f"{self.save_strategy!r}: save_steps only counts under save_strategy: "
+                "steps, so it would be ignored. Remove training.save_steps, or set "
+                "training.save_strategy: steps."
+            )
+        return self
 
     # DPO-specific
     dpo_beta: float = Field(
@@ -9029,6 +9091,40 @@ class SoupConfig(BaseModel):
         )
         if message is not None:
             raise ValueError(message)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_save_strategy_is_honoured(self) -> "SoupConfig":
+        """#2575 - ``training.save_strategy: epoch`` / ``no`` needs a trainer that writes
+        ``checkpoint-N`` through the HF ``Trainer``.
+
+        * ``backend: mlx`` runs its own loops (``mlx_sft`` / ``mlx_dpo`` / ``mlx_grpo``),
+          which write a numbered adapter file every ``save_steps`` iterations and have no
+          epoch or off setting. Wiring one into three loops that cannot run off Apple
+          Silicon is a separate change; until then it is refused rather than ignored.
+        * ``task: unlearn`` trains in its own loop and writes only the final model, so
+          there is no checkpoint for a strategy to control.
+
+        Defined after :meth:`_validate_mlx_task_support`, so a task MLX cannot run is
+        refused for that reason first and "use backend: transformers" leads to a config
+        that loads. ``steps`` (the default) is always accepted.
+        """
+        strategy = self.training.save_strategy
+        if strategy == "steps":
+            return self
+        if self.backend == "mlx":
+            raise ValueError(
+                f"Refused: training.save_strategy={strategy!r} is not implemented on "
+                "backend: mlx (the MLX loops write an adapter file every "
+                "training.save_steps iterations themselves, with no epoch or off "
+                "setting). Remove training.save_strategy, or use backend: transformers."
+            )
+        if self.task == "unlearn":
+            raise ValueError(
+                f"Refused: training.save_strategy={strategy!r} has nothing to control on "
+                "task: unlearn, which trains in its own loop and writes no checkpoint, "
+                "only the final model. Remove training.save_strategy."
+            )
         return self
 
     @model_validator(mode="after")

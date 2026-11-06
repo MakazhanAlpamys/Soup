@@ -16,6 +16,7 @@ from rich.console import Console
 from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
@@ -160,8 +161,7 @@ class RewardModelTrainerWrapper:
             optim=tcfg.optimizer,
             lr_scheduler_type=tcfg.scheduler,
             logging_steps=tcfg.logging_steps,
-            save_steps=tcfg.save_steps,
-            save_total_limit=3,
+            **save_kwargs(tcfg),
             bf16=_bf16,
             fp16=_fp16,
             report_to=self.report_to,

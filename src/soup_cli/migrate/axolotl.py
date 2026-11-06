@@ -4,7 +4,12 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from soup_cli.config.schema import SFT_KERNEL_AWARE_TASKS
-from soup_cli.migrate.common import to_number, unmapped_keys_warning, validation_split
+from soup_cli.migrate.common import (
+    save_strategy_setting,
+    to_number,
+    unmapped_keys_warning,
+    validation_split,
+)
 from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_file_limited
 
 # Axolotl rl → Soup task mapping
@@ -38,7 +43,7 @@ _HANDLED_KEYS = frozenset({
     "lora_alpha", "lora_dropout", "lora_target_linear", "lora_target_modules",
     "micro_batch_size", "gradient_accumulation_steps", "num_epochs", "learning_rate",
     "optimizer", "lr_scheduler", "warmup_ratio", "load_in_4bit", "load_in_8bit",
-    "flash_attention", "output_dir", "sample_packing", "wandb_project",
+    "flash_attention", "output_dir", "sample_packing", "wandb_project", "save_strategy",
 })
 
 # Task → default data format
@@ -173,6 +178,10 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
         training["scheduler"] = raw["lr_scheduler"]
     if "warmup_ratio" in raw:
         training["warmup_ratio"] = raw["warmup_ratio"]
+    if "save_strategy" in raw:
+        strategy = save_strategy_setting(raw["save_strategy"], "save_strategy", warnings)
+        if strategy is not None:
+            training["save_strategy"] = strategy
 
     # Quantization
     if lora_section.get("r") == 0:

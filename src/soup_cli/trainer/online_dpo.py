@@ -49,6 +49,7 @@ from soup_cli.trainer.online_dpo_ranking import (
     make_ranked_pairs_trainer,
     report_unranked_pairs,
 )
+from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -307,8 +308,7 @@ class OnlineDPOTrainerWrapper:
             optim=tcfg.optimizer,
             lr_scheduler_type=tcfg.scheduler,
             logging_steps=tcfg.logging_steps,
-            save_steps=tcfg.save_steps,
-            save_total_limit=3,
+            **save_kwargs(tcfg),
             bf16=_bf16,
             fp16=_fp16,
             report_to=self.report_to,
