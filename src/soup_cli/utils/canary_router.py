@@ -21,6 +21,7 @@ import math
 import os
 import threading
 from dataclasses import dataclass, field
+from fractions import Fraction
 from types import MappingProxyType
 from typing import Mapping, Optional
 
@@ -239,6 +240,190 @@ class BucketStats:
                     "canary_major": self.canary_major,
                 }
             )
+
+
+#: A canary's rise in negative feedback counts as a regression only when a one-sided pooled
+#: two-proportion z-test puts z above this (a 5% false-alarm rate against a canary that is
+#: not worse). See ``QualityStats.verdict``.
+QUALITY_Z_THRESHOLD = 1.645
+#: The quality verdicts. ``INSUFFICIENT`` is given by the daemon when the maximum wait for
+#: ratings ran out below the minimum (``LoopState.canary_max_wait_sec``).
+QUALITY_VERDICTS = ("OK", "MAJOR", "UNKNOWN", "INSUFFICIENT")
+#: What a rollout was decided on: both verdicts, or (after a timeout) the error rates alone.
+QUALITY_DECIDED_ON = ("errors_and_quality", "errors_only")
+
+
+def _check_verdict_arguments(min_samples: object, regression_threshold: object) -> None:
+    if isinstance(min_samples, bool) or not isinstance(min_samples, int) or min_samples < 1:
+        raise ValueError("min_samples must be a positive int")
+    v = regression_threshold
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+        raise ValueError("regression_threshold must be a finite number")
+    if not (0.0 <= float(v) <= 1.0):
+        raise ValueError("regression_threshold must be in [0, 1]")
+
+
+def _display(value: float) -> float:
+    """Round for a record; ``+ 0.0`` turns a rounded ``-0.0`` into ``0.0``."""
+    return round(value, 4) + 0.0
+
+
+@dataclass(frozen=True)
+class QualityStats:
+    """Rated answers and negative feedback per bucket of one rollout: the quality verdict.
+
+    ``BucketStats`` counts only whether a request failed; a canary whose answers all arrive
+    but are bad passes it. Here an answer is *rated* when a person gave it a thumb, a rating
+    or an edit, and *negative* when that was a thumb down, a rating of 1-2 or an edit
+    (``loop_feedback.read_quality_stats`` counts them from the feedback log).
+    """
+
+    stable_rated: int = 0
+    stable_negative: int = 0
+    canary_rated: int = 0
+    canary_negative: int = 0
+
+    def __post_init__(self) -> None:
+        for name in ("stable_rated", "stable_negative", "canary_rated", "canary_negative"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} must be a non-negative int, got {value!r}")
+        if self.stable_negative > self.stable_rated:
+            raise ValueError("stable_negative cannot exceed stable_rated")
+        if self.canary_negative > self.canary_rated:
+            raise ValueError("canary_negative cannot exceed canary_rated")
+
+    def verdict(self, *, min_samples: int = 30, regression_threshold: float = 0.05) -> str:
+        """Return ``"OK"`` / ``"MAJOR"`` / ``"UNKNOWN"``.
+
+        - ``UNKNOWN``: fewer than ``min_samples`` rated answers in the canary bucket OR in
+          the stable bucket. A comparison needs both sides: with no stable ratings there is
+          nothing to hold the canary against, and a canary that is not worse could be
+          withdrawn.
+        - ``MAJOR``: the canary's share of negative answers exceeds stable's by more than
+          ``regression_threshold`` (default 5 percentage points) AND a one-sided pooled
+          two-proportion z-test calls that gap significant (``z > QUALITY_Z_THRESHOLD``).
+          A gap that size is common by chance on a few dozen ratings.
+        - ``OK``: otherwise. At the minimum that means no significant regression was found,
+          not that the canary is as good as stable.
+
+        The threshold comparison is exact (fractions), so a canary exactly five points worse
+        is OK and not a rounding accident. The z-test runs on the unrounded statistic; where
+        it is undefined (no variance in the ratings) the verdict is not ``MAJOR``.
+        """
+        _check_verdict_arguments(min_samples, regression_threshold)
+        if self.canary_rated < min_samples or self.stable_rated < min_samples:
+            return "UNKNOWN"
+        if self._difference() > Fraction(repr(float(regression_threshold))):
+            z_score, _ = self.significance()
+            if z_score is not None and z_score > QUALITY_Z_THRESHOLD:
+                return "MAJOR"
+        return "OK"
+
+    def _difference(self) -> Fraction:
+        """Canary negative share minus stable negative share (both buckets must be rated)."""
+        return Fraction(self.canary_negative, self.canary_rated) - Fraction(
+            self.stable_negative, self.stable_rated
+        )
+
+    def significance(self) -> "tuple[Optional[float], Optional[float]]":
+        """``(z, one-sided p-value)`` of the canary being worse; ``(None, None)`` if undefined.
+
+        Pooled two-proportion z-test: with ``p = (neg_canary + neg_stable) / (n_canary +
+        n_stable)`` and ``se = sqrt(p (1 - p) (1 / n_canary + 1 / n_stable))``, ``z =
+        (share_canary - share_stable) / se``: positive means the canary is worse, and
+        ``p_value = 0.5 * erfc(z / sqrt(2))`` is the chance of a gap that large if the two
+        buckets were equally good. Undefined without ratings on both sides and when ``se``
+        is 0 (every rated answer negative, or none).
+        """
+        if self.canary_rated == 0 or self.stable_rated == 0:
+            return None, None
+        pooled = (self.canary_negative + self.stable_negative) / (
+            self.canary_rated + self.stable_rated
+        )
+        standard_error = math.sqrt(
+            pooled * (1.0 - pooled) * (1.0 / self.canary_rated + 1.0 / self.stable_rated)
+        )
+        if standard_error == 0.0:
+            return None, None
+        z_score = float(self._difference()) / standard_error
+        return z_score, 0.5 * math.erfc(z_score / math.sqrt(2.0))
+
+    def evidence(
+        self,
+        *,
+        min_samples: int = 30,
+        regression_threshold: float = 0.05,
+        verdict: Optional[str] = None,
+        timed_out: bool = False,
+        decided_on: str = "errors_and_quality",
+    ) -> "dict[str, object]":
+        """The numbers behind the verdict: the ``canary.quality`` object of the iteration format.
+
+        Keys: ``verdict``, ``rated``, ``negative`` and ``share`` (each ``{stable, canary}``),
+        ``difference`` (canary share minus stable share), ``z``, ``p_value``, ``min_rated``,
+        ``threshold``, ``timed_out`` and ``decided_on``. Shares, difference, z and p are
+        rounded to four places for display (the verdict itself used the unrounded values) and
+        are ``None`` where undefined, so the dict is plain JSON. ``verdict`` defaults to
+        :meth:`verdict`; the daemon passes ``INSUFFICIENT`` for a wait that ran out.
+        """
+        _check_verdict_arguments(min_samples, regression_threshold)
+        if verdict is None:
+            verdict = self.verdict(
+                min_samples=min_samples, regression_threshold=regression_threshold
+            )
+        if verdict not in QUALITY_VERDICTS:
+            raise ValueError(f"verdict must be one of {list(QUALITY_VERDICTS)}, got {verdict!r}")
+        if not isinstance(timed_out, bool):
+            raise ValueError("timed_out must be a bool")
+        if decided_on not in QUALITY_DECIDED_ON:
+            raise ValueError(
+                f"decided_on must be one of {list(QUALITY_DECIDED_ON)}, got {decided_on!r}"
+            )
+        stable_share = (
+            _display(self.stable_negative / self.stable_rated) if self.stable_rated else None
+        )
+        canary_share = (
+            _display(self.canary_negative / self.canary_rated) if self.canary_rated else None
+        )
+        both_rated = bool(self.stable_rated and self.canary_rated)
+        z_score, p_value = self.significance()
+        return {
+            "verdict": verdict,
+            "rated": {"stable": self.stable_rated, "canary": self.canary_rated},
+            "negative": {"stable": self.stable_negative, "canary": self.canary_negative},
+            "share": {"stable": stable_share, "canary": canary_share},
+            "difference": _display(float(self._difference())) if both_rated else None,
+            "z": None if z_score is None else _display(z_score),
+            "p_value": None if p_value is None else _display(p_value),
+            "min_rated": min_samples,
+            "threshold": float(regression_threshold),
+            "timed_out": timed_out,
+            "decided_on": decided_on,
+        }
+
+    def summary(self) -> str:
+        """``3/31 negative vs 2/40 stable``: the shares a verdict was made from."""
+        return (
+            f"{self.canary_negative}/{self.canary_rated} negative vs "
+            f"{self.stable_negative}/{self.stable_rated} stable"
+        )
+
+    def progress(self, min_samples: int = 30) -> str:
+        """``12/30 canary, 40/30 stable rated``: how far each side is from a verdict."""
+        return (
+            f"{self.canary_rated}/{min_samples} canary, "
+            f"{self.stable_rated}/{min_samples} stable rated"
+        )
+
+    def shortfall(self, min_samples: int = 30) -> str:
+        """``7/30 canary rated``: only the sides still below ``min_samples`` rated answers."""
+        short = []
+        if self.canary_rated < min_samples:
+            short.append(f"{self.canary_rated}/{min_samples} canary")
+        if self.stable_rated < min_samples:
+            short.append(f"{self.stable_rated}/{min_samples} stable")
+        return ", ".join(short) + " rated"
 
 
 def default_stats_path() -> str:

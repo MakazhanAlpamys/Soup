@@ -259,6 +259,55 @@ directory containing `.soup/`, because the loop state and canary statistics path
 resolved from the working directory. Clients choose their own stable key, so a client
 can deliberately select a key that hashes into the canary bucket.
 
+Failed requests are not the only way a canary can be worse: its answers can all arrive
+and still be bad. When the loop has a feedback log (`.soup-loops/feedback.jsonl`, or
+`--feedback-log` / `SOUP_LOOP_FEEDBACK_LOG`; see the feedback datasets above) and the canary
+recorded its start (`canary_started_ts` in `loop.yaml`, written when the deploy stage or
+`soup loop canary` starts it), `soup loop watch` also reads what people said about the
+rollout's answers. It takes the conversation records whose `canary_bucket` is `stable` or
+`canary`, whose `adapter` is that side's adapter (the base model has none while nothing
+is promoted) and that were answered after the rollout started, and counts per bucket the
+rated answers (a thumb, a rating or an edit) and the share of them with negative feedback:
+a thumb down, a rating of 1-2, or an edit. Once 30 answers are rated in EACH bucket, the
+quality verdict is `MAJOR` when the canary's negative share exceeds stable's by more than
+five percentage points AND a one-sided pooled two-proportion z-test (z > 1.645, about 5%
+false alarms against a canary that is not worse) says the gap is not chance, else `OK`:
+`OK` at the minimum means no significant regression was found, not that the canary is
+proven equal, and a gap of five points on a few dozen ratings is often chance. With fewer
+ratings on either side it is `UNKNOWN` (without stable ratings there is nothing to hold the
+canary against). The two verdicts
+combine strictly: `MAJOR` if either is `MAJOR` (with `--autoroll-on-regress` the canary is
+withdrawn although every request succeeded), `OK` only when both are `OK`, `UNKNOWN`
+otherwise. The iteration record notes both verdicts: `canary errors: OK` and
+`canary quality: 3/31 negative vs 2/40 stable (OK)`, or, while it is still `UNKNOWN`, how
+far each side is: `canary quality: 12/30 canary, 40/30 stable rated (UNKNOWN)`.
+
+So once a feedback log exists, a canary waits for ratings: it is promoted only after 30
+canary and 30 stable answers were rated, and `soup loop watch` starts no new iteration
+until then, but not for ever. `soup loop init --canary-max-wait` (default `24h`; `<int>m`,
+`<int>h`, `<int>d` or plain seconds, at most `30d`) says how long after the rollout started
+the ratings may stay short; past it the quality verdict is `INSUFFICIENT` (not `UNKNOWN`)
+and `--canary-on-timeout` (default `errors-only`) decides:
+
+- `errors-only`: the request-error verdict decides alone. A canary whose requests succeeded
+  is promoted, and the iteration notes say so: `promoted on errors only - quality
+  unverified: 7/30 canary rated in 24h`. One whose requests failed is withdrawn as ever,
+  and one with too few answers for the error verdict keeps waiting.
+- `rollback`: the canary is withdrawn and production is untouched, even without
+  `--autoroll-on-regress`. The notes name the timeout and `--canary-on-timeout rollback`.
+- `wait`: no time limit; the quality verdict stays `UNKNOWN`.
+
+Both settings are in `loop.yaml` and `soup loop status`. The time counts from the rollout
+start (`canary_started_ts`); a rollout without one is never timed out. The iteration
+record (`.soup-loops/<iteration-id>/iteration.json`) keeps the numbers behind the quality
+verdict in `canary_quality`: the rated and negative counts and shares per bucket, the
+difference, `z`, `p_value`, `min_rated`, `threshold`, `timed_out` and `decided_on`.
+`soup loop rollback` ends a wait at once: it withdraws the running
+canary, and after a promotion it also returns to the previous version. `soup loop canary
+<adapter>` starts a new rollout instead. A loop without a feedback
+log, or a canary that recorded no start (a `loop.yaml` from before the field), is judged by
+errors alone, as before.
+
 The serving process caches the parsed policy using the state file's
 `(st_mtime_ns, st_size, st_ino)` identity. Atomic replacement invalidates it,
 so a rollback written by `soup loop watch` affects the next keyed request.

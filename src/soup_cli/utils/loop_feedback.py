@@ -54,6 +54,7 @@ from dataclasses import dataclass, field
 from typing import Collection, Iterator, Mapping, Optional
 
 from soup_cli.data.traces.parsers import parse_ts
+from soup_cli.utils.canary_router import QualityStats
 
 SCHEMA_VERSION = 1
 #: A line longer than this many bytes is skipped (a chat history with a long document fits).
@@ -558,3 +559,73 @@ def newest_ts(rows: "Collection[DatasetRow]") -> Optional[float]:
     for row in rows:
         newest = _newer(newest, row.ts)
     return newest
+
+
+# ---------------------------------------------------------------------------
+# The quality of a canary
+# ---------------------------------------------------------------------------
+
+
+def answer_negative(record: ResponseFeedback, response: str) -> Optional[bool]:
+    """Whether the feedback in force on an answer is negative; ``None`` if it is not rated.
+
+    An answer is rated when it has a thumb, a rating or an edit that changed it (an edit
+    equal to the answer, apart from surrounding whitespace, corrected nothing; comments
+    alone do not rate). It is negative when any of them is: a thumb down, a rating of 1-2,
+    or such an edit. A rating of 3 or more and a thumb up are rated and not negative.
+    """
+    edited = record.edit is not None and record.edit.strip() != response.strip()
+    rated = record.thumb is not None or record.rating is not None or edited
+    if not rated:
+        return None
+    return record.thumb == -1 or (record.rating is not None and record.rating <= 2) or edited
+
+
+def read_quality_stats(
+    trace_dir: Optional[str],
+    feedback_path: Optional[str],
+    *,
+    stable: str,
+    canary: str,
+    started_ts: float,
+    stable_is_base: bool = False,
+) -> QualityStats:
+    """Count rated and negative answers per bucket of one rollout.
+
+    An answer counts when its conversation record has ``canary_bucket`` ``canary`` and the
+    ``adapter`` ``canary``, or ``stable`` and the ``adapter`` ``stable`` (with
+    ``stable_is_base``, nothing was promoted yet and the base model is the stable side:
+    its answers carry no adapter, or the served model's name), and a ``ts`` that is not
+    before ``started_ts``: answers of an earlier rollout and answers outside any split say
+    nothing about this one. A record without a usable ``ts`` cannot be placed after the
+    start, so it does not count. Feedback is read by the contract's rules (latest line per
+    kind wins; unknown ids, version 0 lines and bad lines are ignored).
+    """
+    feedback = read_feedback(feedback_path)
+    conversations = read_conversations(trace_dir, wanted=set(feedback.by_response))
+    rated = {"stable": 0, "canary": 0}
+    negative = {"stable": 0, "canary": 0}
+    for answer_id, record in feedback.by_response.items():
+        conversation = conversations.records.get(answer_id)
+        if conversation is None or conversation.ts is None or conversation.ts < started_ts:
+            continue
+        adapter = conversation.adapter
+        if conversation.canary_bucket == "canary" and adapter == canary:
+            side = "canary"
+        elif conversation.canary_bucket == "stable" and (
+            adapter == stable or (stable_is_base and adapter is None)
+        ):
+            side = "stable"
+        else:
+            continue
+        verdict = answer_negative(record, conversation.response)
+        if verdict is None:
+            continue
+        rated[side] += 1
+        negative[side] += int(verdict)
+    return QualityStats(
+        stable_rated=rated["stable"],
+        stable_negative=negative["stable"],
+        canary_rated=rated["canary"],
+        canary_negative=negative["canary"],
+    )
