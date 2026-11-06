@@ -1660,17 +1660,22 @@ def _split_windows_command(command: str) -> list[str]:
             i += 1
             continue
 
+        if not in_dquote:
+            if in_squote:
+                if c == "'":
+                    in_squote = False
+                    i += 1
+                    continue
+                current.append(c)
+                i += 1
+                continue
+            elif c == "'" and not has_token:
+                in_squote = True
+                has_token = True
+                i += 1
+                continue
+
         has_token = True
-
-        if c == "'" and not in_dquote:
-            in_squote = not in_squote
-            i += 1
-            continue
-
-        if in_squote:
-            current.append(c)
-            i += 1
-            continue
 
         if c == "\\":
             num_bs = 0
