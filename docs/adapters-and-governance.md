@@ -237,17 +237,20 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
 #                         is decided when training starts, right before the soup.yaml is
 #                         written: need = parameter count x 2 bytes x 5 (a bf16 base plus
 #                         its adapter, optimizer state, gradients and activations); free =
-#                         free VRAM of the CUDA device (torch.cuda.mem_get_info). With CUDA
-#                         and need <= free the config says quantization: none, otherwise
-#                         4bit. So auto picks none only when the model fits, and with none
-#                         soup train loads the frozen base in the checkpoint's own dtype.
+#                         free VRAM of the CUDA device, asked of torch (mem_get_info) in a
+#                         short-lived subprocess with a 60 s timeout, so the loop process
+#                         itself never imports torch or holds a CUDA context. With CUDA and
+#                         need <= free the config says quantization: none, otherwise 4bit.
+#                         So auto picks none only when the model fits, and with none soup
+#                         train loads the frozen base in the checkpoint's own dtype.
 #                         The parameter count is read without loading weights: the
 #                         safetensors headers of a local model directory (a symlink is
 #                         refused), else the Hub's header-only metadata for a repo id (not
-#                         asked when HF_HUB_OFFLINE is set). An unknown count, no CUDA device
-#                         or no torch also gives 4bit. The iteration's notes say which, for
-#                         example "sft quantization auto: none (need 3.0 GB, free 7.1 GB)" or
-#                         "sft quantization auto: 4bit (parameter count unknown)".
+#                         asked when HF_HUB_OFFLINE is set). An unknown count, no CUDA device,
+#                         no torch, or a probe that fails or times out also gives 4bit. The
+#                         iteration's notes say which, for example "sft quantization auto:
+#                         none (need 3.0 GB, free 7.1 GB)" or "sft quantization auto: 4bit
+#                         (parameter count unknown)".
 # A key the loop.yaml does not name keeps the built-in value, so a partial recipe overrides only
 # what it names, and a loop.yaml from before the field loads with the built-in recipe. The
 # built-in recipe is the one the Soup Zero fit runs of 2026-11-06 chose (candidate B in bf16):

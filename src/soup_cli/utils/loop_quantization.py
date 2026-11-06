@@ -5,7 +5,8 @@ it writes the soup.yaml and starts ``soup train``, so the figure is the card's f
 that moment:
 
 - need = parameter count x 2 bytes (bf16) x 5 (weights, LoRA, optimizer, gradients and
-  activations, with room to spare); free = free VRAM of the CUDA device;
+  activations, with room to spare); free = free VRAM of the CUDA device, measured in a
+  short-lived subprocess (``free_vram_bytes``);
 - CUDA available and need <= free: ``none``; otherwise ``4bit`` (the safe side);
 - ``4bit`` and ``none`` written in the recipe are explicit and never measured or overridden.
 
@@ -13,12 +14,17 @@ The parameter count is read without loading weights: the safetensors headers of 
 directory, else the Hub's header-only metadata (skipped when ``HF_HUB_OFFLINE`` or
 ``TRANSFORMERS_OFFLINE`` is set), else unknown, which is also ``4bit``.
 
-torch is imported inside ``free_vram_bytes`` only, so the CLI stays torch-free.
+The loop's watch daemon never imports torch for this: a CUDA context held by a process that
+lives for days would cost the card's memory for good (and ``soup serve`` often shares the card).
+The probe subprocess imports torch, asks, prints one JSON line and exits, which frees the context.
 """
 
 from __future__ import annotations
 
+import json
 import os
+import subprocess
+import sys
 from typing import Optional
 
 #: bf16: two bytes per parameter.
@@ -26,6 +32,26 @@ BYTES_PER_PARAM = 2
 #: What a bf16 LoRA run holds per byte of base weights: the weights, the adapter and its
 #: optimizer state, gradients and activations, with room to spare.
 WORKING_SET_FACTOR = 5
+
+#: Seconds the probe subprocess may take (importing torch and opening the card).
+PROBE_TIMEOUT_S = 60
+#: What the probe subprocess runs. It drops the working directory from ``sys.path`` first, so a
+#: ``torch.py`` or ``json.py`` next to the loop cannot be imported in its place. One JSON line
+#: on stdout: ``{"free": <bytes>, "total": <bytes>}``, or ``{"free": null}`` without a card.
+PROBE_SCRIPT = (
+    "import sys\n"
+    "sys.path[:] = [entry for entry in sys.path if entry not in ('', '.')]\n"
+    "import json\n"
+    "try:\n"
+    "    import torch\n"
+    "    if torch.cuda.is_available():\n"
+    "        free, total = torch.cuda.mem_get_info()\n"
+    "        print(json.dumps({'free': int(free), 'total': int(total)}))\n"
+    "    else:\n"
+    "        print(json.dumps({'free': None}))\n"
+    "except Exception:\n"
+    "    print(json.dumps({'free': None}))\n"
+)
 
 _GB = 1024**3
 _PREFIX = "sft quantization auto"
@@ -57,16 +83,35 @@ def parameter_count(base: str) -> Optional[int]:
 
 
 def free_vram_bytes() -> Optional[int]:
-    """Free memory of the CUDA device in bytes, or None without torch, without CUDA, or on
-    any error. torch is imported here, not at module level."""
-    try:
-        import torch
+    """Free memory of the CUDA device in bytes, or None when it cannot be told.
 
-        if not torch.cuda.is_available():
-            return None
-        free, _total = torch.cuda.mem_get_info()
-    except Exception:  # noqa: BLE001 - no torch, no CUDA or a driver error: unknown
+    Measured in a short-lived subprocess (``PROBE_SCRIPT``, argv list, no shell, killed after
+    ``PROBE_TIMEOUT_S``): this process never imports torch, so it never holds a CUDA context.
+    A timeout, a failure to start, a non-zero exit, output that is not one JSON line with an
+    int ``free`` of at least 0, no CUDA device and no torch are all None.
+    """
+    argv = [sys.executable, "-c", PROBE_SCRIPT]
+    try:
+        result = subprocess.run(  # noqa: S603 - fixed argv, no shell, no user input
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=PROBE_TIMEOUT_S,
+            stdin=subprocess.DEVNULL,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):  # a timeout is a SubprocessError
         return None
+    if result.returncode != 0:
+        return None
+    lines = [line for line in str(result.stdout or "").splitlines() if line.strip()]
+    if not lines:
+        return None
+    try:
+        answer = json.loads(lines[-1])
+    except (ValueError, RecursionError):
+        return None
+    free = answer.get("free") if isinstance(answer, dict) else None
     if isinstance(free, bool) or not isinstance(free, int) or free < 0:
         return None
     return free

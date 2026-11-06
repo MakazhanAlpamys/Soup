@@ -4,7 +4,8 @@ The recipe constant is final (candidate B in bf16, Soup Zero fit runs, 2026-11-0
 ``quantization`` is ``auto``. ``auto`` used to write no line, so ``soup train``'s own default
 (``4bit``) applied. Now the train stage measures, right before it writes the soup.yaml:
 
-- need = parameter count x 2 bytes x 5; free = free VRAM of the CUDA device;
+- need = parameter count x 2 bytes x 5; free = free VRAM of the CUDA device, measured in a
+  short-lived subprocess so the long-running loop process never holds a CUDA context;
 - CUDA available and need <= free: ``quantization: none``; anything else: ``quantization: 4bit``;
 - ``4bit`` and ``none`` in the recipe are explicit and never overridden;
 - the parameter count is read without loading weights: the safetensors headers of a local model
@@ -12,7 +13,8 @@ The recipe constant is final (candidate B in bf16, Soup Zero fit runs, 2026-11-0
 - the decision is a note of the train stage.
 
 Nothing here touches a GPU or the network: the VRAM and parameter-count functions are replaced,
-and the hub and torch lookups are faked.
+the hub lookup is faked, and the VRAM probe's ``subprocess.run`` is replaced (the one real probe
+runs with ``CUDA_VISIBLE_DEVICES=-1``, so it sees no card).
 """
 
 from __future__ import annotations
@@ -176,60 +178,165 @@ class TestNote:
 
 
 # ---------------------------------------------------------------------------
-# Free VRAM (torch is faked: no GPU)
+# Free VRAM: measured in a short-lived subprocess, never in this process
 # ---------------------------------------------------------------------------
 
 
-def _fake_torch(available=True, mem=(7 * GIB, 8 * GIB), raises=None):
-    def mem_get_info(*args):
-        if raises is not None:
-            raise raises
-        return mem
+@pytest.fixture
+def probe(monkeypatch):
+    """Replace ``subprocess.run`` for the probe.
 
-    return SimpleNamespace(
-        cuda=SimpleNamespace(is_available=lambda: available, mem_get_info=mem_get_info)
-    )
+    ``probe(stdout, returncode=0, raises=None)`` sets the answer; ``probe.calls`` holds the
+    ``(argv, kwargs)`` of every call. No process starts and no GPU is touched.
+    """
+    calls: list = []
+    state: dict = {"stdout": "", "returncode": 0, "raises": None}
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        if state["raises"] is not None:
+            raise state["raises"]
+        return SimpleNamespace(
+            returncode=state["returncode"], stdout=state["stdout"], stderr=""
+        )
+
+    def answer(stdout="", returncode=0, raises=None):
+        state.update(stdout=stdout, returncode=returncode, raises=raises)
+
+    monkeypatch.setattr(lq.subprocess, "run", fake_run)
+    answer.calls = calls
+    return answer
 
 
 class TestFreeVram:
-    def test_it_is_the_free_figure_of_mem_get_info(self, monkeypatch):
-        monkeypatch.setitem(sys.modules, "torch", _fake_torch(mem=(7 * GIB, 8 * GIB)))
+    def test_it_is_the_free_figure_the_probe_prints(self, probe):
+        probe(f'{{"free": {7 * GIB}, "total": {8 * GIB}}}\n')
 
         assert _REAL_FREE_VRAM() == 7 * GIB
 
-    def test_no_cuda_is_unknown_even_if_mem_get_info_would_answer(self, monkeypatch):
-        monkeypatch.setitem(sys.modules, "torch", _fake_torch(available=False))
+    def test_zero_free_is_a_figure_not_unknown(self, probe):
+        probe('{"free": 0, "total": 5}\n')
 
-        assert _REAL_FREE_VRAM() is None
+        assert _REAL_FREE_VRAM() == 0
 
-    def test_a_missing_torch_is_unknown(self, monkeypatch):
-        monkeypatch.setitem(sys.modules, "torch", None)  # import torch raises ImportError
+    def test_the_last_line_is_the_answer_when_a_library_printed_before_it(self, probe):
+        probe('warning: something noisy\n\n{"free": 42, "total": 99}\n')
 
-        assert _REAL_FREE_VRAM() is None
+        assert _REAL_FREE_VRAM() == 42
 
-    @pytest.mark.parametrize("error", [RuntimeError("CUDA error"), OSError("driver"), ValueError])
-    def test_any_error_is_unknown(self, monkeypatch, error):
-        monkeypatch.setitem(sys.modules, "torch", _fake_torch(raises=error))
+    def test_a_probe_that_found_no_cuda_is_unknown(self, probe):
+        probe('{"free": null}\n')
 
         assert _REAL_FREE_VRAM() is None
 
     @pytest.mark.parametrize(
-        ("mem", "expected"),
+        "raises",
         [
-            ((0, 8 * GIB), 0),
-            ((-1, 8 * GIB), None),
-            (("x", 1), None),
-            ((True, 1), None),
-            ((None, None), None),
-            (7, None),
+            subprocess.TimeoutExpired(cmd="probe", timeout=60),
+            FileNotFoundError("no interpreter"),
+            PermissionError("denied"),
+            OSError("cannot fork"),
+        ],
+        ids=["timeout", "missing", "denied", "oserror"],
+    )
+    def test_a_probe_that_cannot_run_or_times_out_is_unknown(self, probe, raises):
+        probe(raises=raises)
+
+        assert _REAL_FREE_VRAM() is None
+
+    def test_a_probe_that_exits_non_zero_is_unknown_whatever_it_printed(self, probe):
+        probe('{"free": 7, "total": 9}\n', returncode=1)
+
+        assert _REAL_FREE_VRAM() is None
+
+    @pytest.mark.parametrize(
+        "stdout",
+        [
+            "",
+            "\n\n",
+            "not json",
+            "{",
+            "[1, 2]",
+            "7",
+            '"free"',
+            "null",
+            "{}",
+            '{"total": 9}',
+            '{"free": "7"}',
+            '{"free": 7.0}',
+            '{"free": 1.5}',
+            '{"free": -1}',
+            '{"free": true}',
+            '{"free": false}',
+            '{"free": [7]}',
+            '{"free": {"a": 1}}',
+            '{"free": NaN}',
+            '{"free": Infinity}',
         ],
     )
-    def test_a_free_figure_that_is_not_a_non_negative_int_is_unknown(
-        self, monkeypatch, mem, expected
-    ):
-        monkeypatch.setitem(sys.modules, "torch", _fake_torch(mem=mem))
+    def test_anything_but_a_non_negative_int_free_figure_is_unknown(self, probe, stdout):
+        probe(stdout + "\n")
 
-        assert _REAL_FREE_VRAM() == expected
+        assert _REAL_FREE_VRAM() is None
+
+    def test_the_probe_is_an_argv_list_without_a_shell_and_with_the_timeout(self, probe):
+        probe('{"free": 7, "total": 9}\n')
+
+        _REAL_FREE_VRAM()
+
+        ((argv, kwargs),) = probe.calls
+        assert isinstance(argv, list)
+        assert argv == [sys.executable, "-c", lq.PROBE_SCRIPT]
+        assert not kwargs.get("shell", False)
+        assert kwargs["timeout"] == lq.PROBE_TIMEOUT_S == 60
+        assert kwargs["capture_output"] is True
+        assert kwargs["stdin"] == subprocess.DEVNULL
+
+    def test_the_probe_script_asks_torch_for_cuda_and_prints_one_json_line(self):
+        assert "import torch" in lq.PROBE_SCRIPT
+        assert "torch.cuda.is_available()" in lq.PROBE_SCRIPT
+        assert "torch.cuda.mem_get_info()" in lq.PROBE_SCRIPT
+        assert lq.PROBE_SCRIPT.count("print(") >= 1
+        compile(lq.PROBE_SCRIPT, "<probe>", "exec")
+
+    def test_this_process_never_imports_torch_for_a_measurement(self):
+        """A fresh interpreter, so a torch loaded by an earlier test cannot hide an import."""
+        code = (
+            "import subprocess, sys\n"
+            "from types import SimpleNamespace\n"
+            "subprocess.run = lambda *a, **k: SimpleNamespace(\n"
+            "    returncode=0, stdout='{\"free\": 7, \"total\": 9}\\n', stderr='')\n"
+            "from soup_cli.utils import loop_quantization as lq\n"
+            "assert 'torch' not in sys.modules, 'torch imported with the module'\n"
+            "assert lq.free_vram_bytes() == 7\n"
+            "assert 'torch' not in sys.modules, 'torch imported by the measurement'\n"
+        )
+
+        result = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, timeout=120
+        )
+
+        assert result.returncode == 0, (result.stdout, result.stderr)
+
+    def test_the_real_probe_script_runs_and_sees_no_card_when_none_is_visible(
+        self, monkeypatch
+    ):
+        """The one real subprocess: CUDA_VISIBLE_DEVICES=-1 hides every card from it."""
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "-1")
+
+        assert _REAL_FREE_VRAM() is None
+
+    def test_a_torch_py_in_the_working_directory_is_never_imported(
+        self, tmp_path, monkeypatch
+    ):
+        (tmp_path / "torch.py").write_text(
+            "open('imported-marker', 'w').write('x')\n", "utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "-1")
+
+        assert _REAL_FREE_VRAM() is None
+        assert not (tmp_path / "imported-marker").exists()
 
 
 # ---------------------------------------------------------------------------
