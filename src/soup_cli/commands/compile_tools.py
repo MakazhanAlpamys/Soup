@@ -11,12 +11,14 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
 from soup_cli.utils.compile_tools import (
     SUPPORTED_TOOL_OPTIMIZERS,
     build_tool_compile_plan,
     run_tool_compile,
 )
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -59,25 +61,25 @@ def compile_tools_cmd(
             engine=engine,
         )
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(2) from exc
 
     plan_details = [
-        f"Spec:      [bold]{escape(plan.spec_path)}[/]",
-        f"Eval:      [bold]{escape(plan.eval_suite_path)}[/]",
+        f"Spec:      [bold]{for_terminal(plan.spec_path)}[/]",
+        f"Eval:      [bold]{for_terminal(plan.eval_suite_path)}[/]",
         f"Optimizer: [bold]{escape(plan.optimizer)}[/]",
-        f"Output:    [bold]{escape(plan.output_path)}[/]",
+        f"Output:    [bold]{for_terminal(plan.output_path)}[/]",
     ]
     if plan.task_lm:
-        plan_details.append(f"Task LM:     [bold]{escape(plan.task_lm)}[/]")
+        plan_details.append(f"Task LM:     [bold]{for_terminal(plan.task_lm)}[/]")
     if plan.reflection_lm:
-        plan_details.append(f"Reflect LM:  [bold]{escape(plan.reflection_lm)}[/]")
+        plan_details.append(f"Reflect LM:  [bold]{for_terminal(plan.reflection_lm)}[/]")
     if plan.engine:
-        plan_details.append(f"Engine:      [bold]{escape(plan.engine)}[/]")
+        plan_details.append(f"Engine:      [bold]{for_terminal(plan.engine)}[/]")
 
     console.print(
         Panel(
-            "\n".join(plan_details),
+            Text.from_markup("\n".join(plan_details), emoji=False),
             title="soup compile-tools — plan",
         )
     )
@@ -90,22 +92,25 @@ def compile_tools_cmd(
     except ImportError as exc:
         console.print(
             Panel(
-                f"[yellow]{escape(str(exc))}[/]",
+                Text.from_markup(f"[yellow]{for_terminal(exc)}[/]", emoji=False),
                 title="compile-tools — missing dependency",
             )
         )
         raise typer.Exit(2) from exc
     except (TypeError, ValueError, FileNotFoundError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(2) from exc
     except Exception as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(2) from exc
 
     console.print(
         Panel(
-            f"Tools:  [bold]{n}[/]\n"
-            f"Output: [bold]{escape(plan.output_path)}[/]",
+            Text.from_markup(
+                f"Tools:  [bold]{n}[/]\n"
+                f"Output: [bold]{for_terminal(plan.output_path)}[/]",
+                emoji=False,
+            ),
             title="soup compile-tools — done",
         )
     )
