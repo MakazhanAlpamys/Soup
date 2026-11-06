@@ -151,3 +151,27 @@ def test_check_sanitizes_declared_bound_metadata(workdir, monkeypatch):
     output = strip_ansi(result.output)
     assert output.count(CLEAN) == 3
     assert not any(c in output for c in ("\x1b", "\x07", "\x9b", "\u202e"))
+
+
+def test_lock_receipt_preserves_backslash_in_written_path(workdir, monkeypatch):
+    lock = _lock()
+    monkeypatch.setattr(env, "snapshot_env", lambda: lock)
+    name = "nested\\[unclosed\x9b\u202e.lock"
+    Path(name).parent.mkdir(exist_ok=True)
+
+    result = make_cli_runner().invoke(app, ["env", "lock", "--output", name])
+
+    assert "\x9b" not in result.stdout and "\u202e" not in result.stdout
+    assert r"Locked 1 packages to nested\[unclosed.lock" in _plain(result)
+    assert read_lock(name) == lock
+
+
+def test_lock_receipt_preserves_backslash_in_metadata(workdir, monkeypatch):
+    lock = replace(_lock(), platform="host\\[unclosed\x9b\u202e")
+    monkeypatch.setattr(env, "snapshot_env", lambda: lock)
+
+    result = make_cli_runner().invoke(app, ["env", "lock"])
+
+    assert "\x9b" not in result.stdout and "\u202e" not in result.stdout
+    assert r"Platform: host\[unclosed | CUDA: 12.4" in _plain(result)
+    assert read_lock("soup-env.lock") == lock
