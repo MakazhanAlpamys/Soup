@@ -25,15 +25,17 @@ From Python, `soup_cli.utils.loop_formats` returns them: `load_schema(name)`,
 `SCHEMA_VERSION`, and `prompt_hash(messages)` (see [paraphrase](#paraphrase)).
 `jsonschema` is not a runtime dependency of Soup; install it to validate lines yourself.
 
-> **Status.** This page defines the formats. The writers move to them in follow-up
-> changes: `soup serve --trace-log` writes version 1 conversation lines and
-> `soup serve --feedback-log` writes feedback lines (see
-> [Serving and Export](serving-and-export.md#response-ids-and-feedback)), while
-> `soup loop watch` still writes one `.soup-loops/<iteration-id>/iteration.json`
-> manifest per iteration. Nothing in Soup writes `paraphrases.jsonl`, `iterations.jsonl`,
-> `versions.jsonl` or `progress.jsonl` yet; `soup loop` and Soup Zero will write
-> `paraphrases.jsonl`, and the `verdict.corrections` / `verdict.held_out` evidence of the
-> iteration format.
+> **Status.** Soup writes five of the six formats. `soup serve --trace-log` writes version 1
+> conversation lines and `soup serve --feedback-log` writes feedback lines (see
+> [Serving and Export](serving-and-export.md#response-ids-and-feedback)). `soup loop`
+> writes `iterations.jsonl`, `versions.jsonl` and `progress.jsonl` (see
+> [What `soup loop` writes](#what-soup-loop-writes)), next to the
+> `.soup-loops/<iteration-id>/iteration.json` manifest it has always written per iteration.
+> Nothing in Soup writes `paraphrases.jsonl` or the `verdict.corrections` /
+> `verdict.held_out` evidence yet; `soup loop` and Soup Zero will.
+> **One active loop per project:** the files take no lock, and two `soup loop watch`
+> processes on one `.soup/loop.yaml` would race on the version counter. Other programs may
+> append to the same files; Soup never assumes it is the only writer.
 
 ## Rules shared by every format
 
@@ -270,3 +272,111 @@ One line per progress event. The shape is that of `soup ship --progress jsonl` (
 | `error` | string or null | A short code on `error` (`soup ship` writes `execution_aborted`). |
 | `job_id` | string or null | The producer's job id, to link a job log. |
 | `phase`, `side`, `suite`, `repeat` | | Forwarded from `soup ship --progress jsonl`. |
+
+## What `soup loop` writes
+
+`soup loop` appends to `iterations.jsonl`, `versions.jsonl` and `progress.jsonl` under
+`.soup-loops/` (under `WatchConfig.iteration_dir` when a program embeds the daemon with
+another directory). Every line has `source: soup-loop` where the format has a source.
+
+**How a line is written.** One JSON object, UTF-8 without a BOM, `\n` ending, emitted by a
+single `write` call on a file opened in append mode (a short write is continued). An
+earlier line is never rewritten: a correction is a new line, and the last line for a key
+wins. If the file ends in a line another writer left unfinished, a newline is written
+first so the new line stays readable. A path outside the project directory, a symlink, a
+junction or a hard link in the way is refused. A line that cannot be written is a warning
+and a note on the iteration, and never stops the loop.
+
+**Several writers, no lock.** A desktop application may append to the same files. Soup
+decides everything from `.soup/loop.yaml` and never reads a line back, so it cannot be
+confused by lines it did not write; but two `soup loop watch` processes on one project
+would both change the version counter, and nothing prevents that. Run one.
+
+**Iteration ids.** `soup loop` already names an iteration
+`iter-<UTC YYYYMMDDTHHMMSS>-<8 hex>`, the contract's form. That id is the directory of the
+manifest `.soup-loops/<id>/iteration.json` and the `iteration_id` of every line, so
+`soup loop replay <id>` and the log refer to the same iteration. The first model's seed
+line has an id of the same form and no manifest.
+
+**One source per iteration.** The `iterations.jsonl` line and the manifest are built from
+the same `IterationRecord` in the same cycle (the record, plus the state the iteration
+started from and what the stages returned), so they cannot disagree. The line is also
+what the loop keeps in `loop.yaml` (`canary_iteration`) while the iteration's canary runs,
+so that the line written when the canary is promoted or withdrawn is a complete snapshot
+and not a fragment; it then replaces the first line, because the latest line wins. The
+manifest is not rewritten.
+
+### `iterations.jsonl`
+
+A line is appended when an iteration is recorded (a cycle that only waits for ratings, or
+that the budget skips, records no iteration of its own) and again when its outcome changes:
+
+| Outcome | When |
+|---|---|
+| `canary` | The adapter was trained, passed the check and its canary started (`to_version` is the version it will take if promoted; `finished_at` is null). |
+| `promoted` | A later cycle promoted the canary; `to_version` is now a version. |
+| `rolled_back` | The canary was withdrawn by a regression, by `--canary-on-timeout rollback`, by `soup loop rollback`, or because `soup loop canary` replaced it. `to_version` becomes null. |
+| `skipped` | Nothing to train, no new data, a `DON'T SHIP` verdict (`verdict.decision` says so), no verdict reached (`ERROR` or `SKIPPED`), or a deploy that was not attempted (no serve endpoint). |
+| `failed` | The training run died, or the deploy was attempted and refused. |
+
+A promotion or a rollback after the iteration was promoted (a person going back the next
+day) is a line in `versions.jsonl`, not a change to the iteration. The seed line written by
+`soup loop init --pre-wired` (or the first watch cycle) is a promoted iteration with
+`reason: "initial deploy"`.
+
+What the stages returned fills the other fields, and what they did not report is null or
+left out, never invented: `dataset` has the `path`, its `sha256` and the row counts the
+harvest reported (`dpo_pairs`, `kto_rows`, `sft_rows`); `train` the method, `run_id` and
+base model, only when a training run happened; `verdict` the decision, the method, the
+baseline (`version` is the production version at the start, for a `soup ship` against the
+production adapter) and the verdict file; `artifacts.adapter` the trained adapter's path;
+`data.until` the data cursor and `data.conversations` the answers in the trace directory
+(the per-kind feedback counts are not reported by the harvest and are left out).
+`canary.quality` is the evidence of the quality verdict, copied from the record's
+`canary_quality`, on the line written when the canary is promoted or withdrawn; the first
+`canary` line has none because nothing was rated yet. Paths are written with `/`.
+
+### `versions.jsonl`
+
+| Line | `cause` | `actor` | Written by |
+|---|---|---|---|
+| The first version | `initial` | `user` | `soup loop init --pre-wired` |
+| The first version of a loop whose init wrote none | `initial` | `loop` | the first watch cycle (also the first `soup loop rollback` of a `loop.yaml` from before the log) |
+| A canary became production | `promote` | `loop` | the watch daemon |
+| Production went back | `rollback` | `user` | `soup loop rollback` |
+
+Only a change of the active version is a line. A canary that is withdrawn (by a regression,
+a timeout or `soup loop rollback` with nothing promoted) leaves production where it was,
+and so does `soup loop canary`, so neither writes a version line; the withdrawn iteration
+ends `rolled_back` in `iterations.jsonl`. The loop never changes production on its own
+except by promotion, so there is no `rollback` line with actor `loop`.
+
+Version numbers are integers from 1, kept in `loop.yaml`: `production_version` (the active
+one), `previous_production_version` (what `soup loop rollback` returns to) and
+`latest_version` (the highest ever promoted). The served model is version 1; a promotion
+takes `latest_version + 1`, so a number is never reused after a rollback (v1, v2, back to
+v1, then the next promotion is v3). A canary started with `soup loop canary` was started by
+no iteration: its promotion is a `promote` line with `iteration_id` null. A `loop.yaml`
+written before the counter existed is numbered by the names it remembers: version 2 once
+an adapter was promoted, one more when a previous adapter is remembered (the lowest number
+consistent with the file; the file kept no count). `iteration_id` is the iteration that
+produced `to_version` for a `promote`, and the iteration that produced the version being
+left for a `rollback`.
+
+### `progress.jsonl`
+
+Stages `harvest`, `train`, `verdict` (the check before rollout), `deploy`, `canary`,
+`promote` and `rollback`, each with `start` and `end` (or `error`, with the code
+`train_failed`, `verdict_not_reached`, `deploy_failed` or `promote_refused`). The harvest
+and train events are written only for an iteration that has something to train on or a
+canary to start; an idle poll adds only its `skipped` iteration line. `done` and `total`
+are null for stages that cannot count.
+
+The `canary` stage is the one a person watches: a `start` line with `done: 0` and
+`total: 30` when the canary starts (also for `soup loop canary`, with a null
+`iteration_id`), then one `progress` line per watch cycle while it waits, then the
+`promote` or `rollback` events. `done` is the number of canary answers that were rated and
+`total` the minimum the quality verdict needs (both taken from `canary.quality`); when
+nobody rates the answers (no feedback log) `done` counts the canary's answers out of 30,
+and both are null when the canary's statistics could not be read. At most one `canary` line
+is written per cycle while waiting.

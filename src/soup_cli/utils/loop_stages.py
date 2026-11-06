@@ -639,12 +639,12 @@ def train_dpo_from_pairs(
         )
     except Exception as exc:  # noqa: BLE001 — train failure must not crash loop
         _LOG.warning("train subprocess failed: %s", type(exc).__name__)
-        return {"run_id": None, "skipped": True, "adapter_path": None}
+        return {"run_id": None, "skipped": True, "adapter_path": None, "failed": True}
 
     rc = getattr(result, "returncode", 1)
     if rc != 0:
         _LOG.warning("soup train exited rc=%s", rc)
-        return {"run_id": None, "skipped": True, "adapter_path": None}
+        return {"run_id": None, "skipped": True, "adapter_path": None, "failed": True}
     return {"run_id": run_id, "skipped": False, "adapter_path": output_dir}
 
 
@@ -1097,6 +1097,7 @@ def deploy_to_canary(
         return {
             "deployed": False,
             "canary_verdict": None,
+            "failed": True,
             "notes": "SOUP_LOOP_SERVE_ENDPOINT rejected (SSRF guard)",
         }
     # A serve endpoint is the operator's own box / LAN, never an arbitrary
@@ -1111,6 +1112,7 @@ def deploy_to_canary(
         return {
             "deployed": False,
             "canary_verdict": None,
+            "failed": True,
             "notes": "SOUP_LOOP_SERVE_ENDPOINT must be loopback/LAN (SSRF guard)",
         }
     name = os.path.basename(str(adapter_path).rstrip("/\\")) or "canary"
@@ -1119,7 +1121,7 @@ def deploy_to_canary(
     if not (200 <= status < 300 or (status == 409 and "already loaded" in detail)):
         note = _load_refused_note(status, detail)
         _LOG.warning(note)
-        return {"deployed": False, "canary_verdict": None, "notes": note}
+        return {"deployed": False, "canary_verdict": None, "failed": True, "notes": note}
     pct = float(state.deploy_traffic_pct)
     # The verdict comes later, from the bucket stats soup serve records.
     return {

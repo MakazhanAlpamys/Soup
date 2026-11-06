@@ -20,6 +20,7 @@ import sqlite3
 import pytest
 from typer.testing import CliRunner
 
+from soup_cli.utils.loop_iteration import list_iterations
 from tests.conftest import strip_ansi
 
 
@@ -446,7 +447,7 @@ def test_watch_refuses_a_missing_database_before_any_iteration(cwd, monkeypatch,
     assert "invalid thumbs database" in text, text
     assert "SOUP_LOOP_THUMBS_DB: no database file at 'not-yet.db'" in text, text
     assert "Traceback" not in text, text
-    assert not os.path.exists(".soup-loops"), "no iteration may run"
+    assert not list_iterations(), "no iteration may run"
     assert read_state().status == "stopped"
 
 
@@ -525,7 +526,7 @@ def test_watch_refuses_a_file_that_is_not_a_thumbs_database(cwd, monkeypatch, ki
     assert "invalid thumbs database" in text, text
     assert "SOUP_LOOP_THUMBS_DB: 'thumbs.db' is not a readable thumbs database" in text, text
     assert "Traceback" not in text, text
-    assert not os.path.exists(".soup-loops"), "no iteration may run"
+    assert not list_iterations(), "no iteration may run"
     assert read_state().status == "stopped"
 
 
@@ -566,7 +567,7 @@ def test_watch_refuses_a_thumbs_table_without_the_harvest_columns(cwd, monkeypat
     assert result.exit_code == 2, text
     assert "is not a readable thumbs database" in text, text
     assert "Traceback" not in text, text
-    assert not os.path.exists(".soup-loops"), "no iteration may run"
+    assert not list_iterations(), "no iteration may run"
 
 
 def test_watch_detach_refuses_a_thumbs_table_without_the_harvest_columns(cwd, monkeypatch):
