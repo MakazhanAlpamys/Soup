@@ -679,7 +679,8 @@ class TestTheCapTouchesOnlyRowsThatOverflow:
         A row that overflows ``max_length`` is still cut to the
         ``max_length // 2`` prompt budget, from the end each trainer always
         used: DPO keeps the start (trl's ``keep_start`` default), ORPO keeps
-        the end (``keep_end``). The markers show which side survived.
+        the end (``keep_end``) behind its BOS (#2561). The markers show which
+        side survived.
         """
         rows = _rows_with(task, _OVERLONG_PROMPT_WITH_BOTH_ENDS, " good answer")
         wrapper = _setup_rows(tmp_path, monkeypatch, task, rows, val_rows=rows[:2])
@@ -689,8 +690,11 @@ class TestTheCapTouchesOnlyRowsThatOverflow:
                 key = "prompt_ids" if "prompt_ids" in row else "prompt_input_ids"
                 words = tok.convert_ids_to_tokens(list(row[key]))
                 assert len(words) == _MAX_PROMPT_LENGTH, (task, split, index, len(words))
-                expected = ["world", "hello"] if kept_end == "start" else ["hello", "hi"]
-                ends = [words[0], words[-1]]
+                if kept_end == "start":
+                    ends, expected = [words[0], words[-1]], ["world", "hello"]
+                else:
+                    ends = [words[0], words[1], words[-1]]
+                    expected = [tok.bos_token, "hello", "hi"]
                 assert ends == expected, (task, split, index, words[:2], words[-2:])
                 for side in ("chosen", "rejected"):
                     ids_key = f"{side}_ids" if f"{side}_ids" in row else f"{side}_input_ids"
