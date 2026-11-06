@@ -130,6 +130,14 @@ def init_cmd(
             'runs, e.g. "5%" (the default) or "10".'
         ),
     ),
+    min_new_pairs: int = typer.Option(
+        1, "--min-new-pairs",
+        help=(
+            "Train only when at least this many preference pairs arrived since the last "
+            "training run (the pre-wired harvest keeps a data cursor); the run still "
+            "trains on all pairs. Default 1."
+        ),
+    ),
     force: bool = typer.Option(False, "--force", help="Overwrite existing loop.yaml."),
 ) -> None:
     """Create the .soup/loop.yaml control file (one-time setup)."""
@@ -144,6 +152,9 @@ def init_cmd(
         isinstance(max_runs_per_day, bool) or max_runs_per_day < 1
     ):
         console.print("[red]--max-runs-per-day must be a positive int[/]")
+        raise typer.Exit(code=2)
+    if isinstance(min_new_pairs, bool) or min_new_pairs < 1:
+        console.print("[red]--min-new-pairs must be a positive int[/]")
         raise typer.Exit(code=2)
     if thumbs_db is not None:
         from soup_cli.utils.local_rl import validate_db_path
@@ -211,6 +222,7 @@ def init_cmd(
             trace_dir=trace_dir,
             verify=verify_method,
             deploy_traffic_pct=deploy_pct,
+            min_new_pairs=min_new_pairs,
             production_adapter=(
                 served_model
                 if os.path.isfile(os.path.join(served_model, "adapter_config.json"))
@@ -272,6 +284,8 @@ def status_cmd() -> None:
         ),
     )
     table.add_row("canary_traffic", f"{state.deploy_traffic_pct:g}% per new canary")
+    table.add_row("new_data_since", _cursor_label(state))
+    table.add_row("min_new_pairs", str(state.min_new_pairs))
     table.add_row("pre_wired", "yes" if state.pre_wired else "no")
     table.add_row("traces_collected", str(state.traces_collected))
     table.add_row("pairs_distilled", str(state.pairs_distilled))
@@ -646,6 +660,14 @@ def _trace_dir_label(state: LoopState) -> str:
 
     path, source = trace_dir_source(state)
     return f"{path} (from {'--trace-dir' if source == 'trace_dir' else source})"
+
+
+def _cursor_label(state: LoopState) -> str:
+    """When the feedback the last training run saw ends (UTC), or "the start"."""
+    if state.harvest_cursor_ts is None:
+        return "the start"
+    moment = datetime.fromtimestamp(state.harvest_cursor_ts, timezone.utc)
+    return moment.replace(microsecond=0).isoformat()
 
 
 def _parse_traffic(raw: str, *, flag: str = "--traffic") -> float:

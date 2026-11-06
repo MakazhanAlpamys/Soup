@@ -129,13 +129,13 @@ def loop(tmp_path, monkeypatch):
     # Loading and deactivating read the reply through post_capped.
     monkeypatch.setattr("soup_cli.utils.http_response.post_capped", post)
 
-    trainable = [True]
+    trained_on: list = []
 
     def train(argv, **kwargs):
-        if not trainable[0]:
-            return _Done(1)
         config = yaml.safe_load(open(argv[argv.index("--config") + 1], encoding="utf-8"))
         assert config["base"] == "org/base"
+        with open(config["data"]["train"], encoding="utf-8") as fh:
+            trained_on.append([json.loads(line) for line in fh if line.strip()])
         os.makedirs(config["output"], exist_ok=True)
         with open(os.path.join(config["output"], "adapter_config.json"), "w") as fh:
             json.dump({"base_model_name_or_path": config["base"]}, fh)
@@ -204,12 +204,16 @@ def loop(tmp_path, monkeypatch):
         "client": client, "model": model, "failing": failing, "served_by": served_by,
         "cycle": cycle, "created": created, "cli": cli, "headers": headers, "chat": chat,
         "users_give_feedback": users_give_feedback, "keyed_traffic": keyed_traffic,
-        "verdicts": verdicts, "trainable": trainable,
+        "verdicts": verdicts, "trained_on": trained_on,
     }
 
 
 def _same_path(left, right) -> bool:
     return os.path.normpath(left) == os.path.normpath(right)
+
+
+def _records() -> list:
+    return [read_iteration(iteration_id) for iteration_id in list_iterations()]
 
 
 def _active_adapter(client) -> str | None:
@@ -255,17 +259,20 @@ def test_feedback_reaches_a_canary_which_is_promoted_then_rolled_back(loop):
     assert loop["served_by"] == [None]
 
     # Next cycle: 30+ healthy canary answers -> promoted, unkeyed traffic switched.
-    # The same cycle then harvests again; with no data cursor yet it would retrain on
-    # the same feedback, so training is off here: this cycle only decides the canary.
-    loop["trainable"][0] = False
+    # Training is on, but no feedback arrived since the last run: it trains nothing and
+    # no second canary starts.
     loop["cycle"]()
     state = read_state()
     assert state.canary_active is None
+    assert len(loop["trained_on"]) == 1 and len(loop["verdicts"]) == 1
     assert state.production_name == name
     assert _same_path(state.production_adapter, os.path.join(".soup-loops", "adapters", name))
     assert state.previous_production_name is None
     assert _active_adapter(loop["client"]) == name
-    assert "promoted to production" in read_iteration(loop["created"][-1]).notes
+    # (Found by content: two iterations in one second sort by a random suffix.)
+    promoted = [r for r in _records() if "promoted to production" in r.notes]
+    assert len(promoted) == 1
+    assert "not_enough_new_data: 0 new preference pairs" in promoted[0].notes
 
     # The person says no: back to the previous version (the served base model).
     result, text = loop["cli"]("rollback")
@@ -280,11 +287,11 @@ def test_a_regressing_canary_is_rolled_back_automatically(loop):
     loop["failing"].add(name)
     loop["keyed_traffic"]()
 
-    loop["trainable"][0] = False  # this cycle only decides the canary (see above)
-    loop["cycle"]()
+    loop["cycle"]()  # rolls the canary back; no new feedback, so no new training
     state = read_state()
     assert state.canary_active is None and state.canary_adapter is None
     assert state.production_name is None
+    assert len(loop["trained_on"]) == 1 and len(loop["verdicts"]) == 1
     assert _active_adapter(loop["client"]) is None
     record = read_iteration(loop["created"][-1])
     assert record.rolled_back is True
@@ -325,3 +332,33 @@ def test_no_new_iteration_while_a_canary_collects_answers(loop):
     loop["cycle"]()
     assert read_state().canary_active == name
     assert len(list_iterations()) == before
+
+
+def test_feedback_on_another_prompt_retrains_on_everything_so_far(loop):
+    first = _start_canary(loop)
+    loop["keyed_traffic"]()
+    loop["cycle"]()  # promote; nothing new, nothing trained
+    assert read_state().production_name == first
+    assert len(loop["trained_on"]) == 1
+
+    # One new pair on a prompt the loop has not seen: the next run trains a fresh LoRA
+    # from the base on the old pair AND the new one, and canaries it.
+    for thumb, answer in (("up", "Hold the reset button."), ("down", "Unplug it.")):
+        response = loop["client"].post(
+            "/v1/thumbs", headers=loop["headers"],
+            json={"prompt": "How do I update the firmware?", "response": answer, "thumb": thumb},
+        )
+        assert response.status_code == 200, response.text
+    loop["cycle"]()
+
+    second = read_state().canary_active
+    assert second and second != first
+    prompts = sorted(row["prompt"] for row in loop["trained_on"][-1])
+    assert prompts == ["How do I reset my router?", "How do I update the firmware?"]
+    (record,) = [r for r in _records() if r.run_id == second]
+    assert record.pairs_harvested == 2
+    # And once that is promoted too, a quiet cycle starts nothing again.
+    loop["keyed_traffic"]()
+    loop["cycle"]()
+    assert read_state().production_name == second
+    assert len(loop["trained_on"]) == 2
