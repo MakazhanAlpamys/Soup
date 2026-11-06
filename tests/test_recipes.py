@@ -1832,6 +1832,7 @@ class TestV025NewRecipes:
         Task-variant for #275 added 1 (qwen3.5-4b-dpo) -> 170.
         Task-variant for #275 added 1 (qwen3.5-2b-dpo) -> 171.
         Task-variant for #275 added 1 (qwen3.5-0.8b-dpo) -> 172.
+        Task-variant for #275 added 1 (qwen3.5-27b-dpo) -> 173.
         """
         from soup_cli.recipes.catalog import RECIPES
         from tests.recipe_count import EXPECTED_RECIPE_COUNT, recipe_count_hint

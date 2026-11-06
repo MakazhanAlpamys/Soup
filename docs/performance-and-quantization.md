@@ -1734,7 +1734,7 @@ The `ScatterMoE LoRA:` setup line says which happened: `keeping target_modules '
 
 ## KV Cache Types (v0.53.0)
 
-`training.kv_cache_type: q8_0 | bf16 | f16 | fp8` controls the inference-time KV cache element type. `fp8` is Hopper-only; the MLX backend is rejected at config load.
+`training.kv_cache_type: q8_0 | bf16 | f16 | fp8` is recorded in `soup.yaml` only: neither `soup train` nor `soup serve` reads it (`fp8` is refused with `backend: mlx`). To apply a type, pass `soup serve --kv-cache-type <type>` (transformers backend); `fp8` is Hopper-only.
 
 The **live serve runtime shipped in v0.71.14** for the transformers backend:
 
