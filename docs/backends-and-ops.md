@@ -369,6 +369,13 @@ number of them scored:
   model), loadable with `mlx_lm.load(base, adapter_path=output)`.
 - **What it shows:** a lower measured likelihood of the forget rows. It does not
   establish erasure, privacy protection or compliance.
+- **Qualified on an Apple M6** with `HuggingFaceTB/SmolLM2-360M-Instruct`
+  ([record](../benchmarks/run-2005-mlx-simnpo-m6.md)), on three seeds: the
+  trained forget rows' per-token NLL rose by 0.27 to 0.34 nats, and the adapter
+  reloaded exactly in a fresh process. The record's rule **failed** on its
+  held-out check: held-out rows on the forget topic became more likely, as
+  unrelated held-out rows did, under the retain term. Do not read the run as
+  forgetting a topic beyond the rows trained on.
 
 #### KTO on MLX
 

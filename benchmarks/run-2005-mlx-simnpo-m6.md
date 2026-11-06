@@ -84,4 +84,69 @@ would be a new record with a rule of its own.
 
 ## Results
 
-Not yet run.
+**Verdict: FAIL**, on check 5 on all three seeds. Every other check holds on
+every seed. Run once, on source `75eda51e` (the commit that added this rule,
+with a clean `src/`), from the command under *Reproducing*. Every value is in
+[`evidence/run-2005-mlx-simnpo-m6.json`](evidence/run-2005-mlx-simnpo-m6.json).
+LoRA went on `self_attn.q_proj` and `self_attn.v_proj`, the modules MLX resolves
+`target_modules: auto` to here.
+
+Per-token NLL (nats); `base` and `untrained` are the same for every seed:
+
+| set | `base` | `untrained` | seed 0 | seed 1 | seed 2 |
+|---|---|---|---|---|---|
+| `forget_train` | 1.5853 | 1.5853 | 1.9295 | 1.8583 | 1.8983 |
+| `forget_heldout` | 2.4215 | 2.4215 | 1.3933 | 1.4159 | 1.3842 |
+| `retain_train` | 2.2962 | 2.2962 | 0.7096 | 0.7035 | 0.7086 |
+| `retain_heldout` | 2.5070 | 2.5070 | 0.4444 | 0.4558 | 0.4599 |
+
+| check | seed 0 | seed 1 | seed 2 |
+|---|---|---|---|
+| 1. dispatch | pass | pass | pass |
+| 2. 36 updates | pass | pass | pass |
+| 3. control, largest gap | pass, 0.0 | pass, 0.0 | pass, 0.0 |
+| 4. reload, largest gap | pass, 0.0 | pass, 0.0 | pass, 0.0 |
+| 5. `ΔNLL(forget_heldout) ≥ +0.5` | **fail, −1.028** | **fail, −1.006** | **fail, −1.037** |
+| 6. selectivity `≥ 0.5` | pass, 1.034 | pass, 1.046 | pass, 1.010 |
+| 7. `ΔNLL(retain_heldout) ≤ +0.25` | pass, −2.063 | pass, −2.051 | pass, −2.047 |
+
+Each run trained in 3-6 s with an MLX peak of 1.10-1.13 GB, and reported 72
+forget and 72 retain rows scored and no row without a target token.
+
+**What the numbers say:**
+
+- **The trained forget rows became less likely**, by 0.27 to 0.34 nats a token
+  across the seeds, with 17 or 18 of the 24 rows rising on their own.
+- **The held-out rows on the same topic became more likely**: all 12 of them on
+  every seed, by about 1.0 nats a token. The unrelated held-out rows became more
+  likely still, by about 2.05.
+- **The retain term moved everything held out.** The `retain_set`'s targets
+  are short answers ("Rome.", "Eight."), and so are the held-out targets of both
+  kinds ("Phobos and Deimos.", "Madrid."). The `retain_train` NLL fell from about 2.3 to
+  0.7, and the held-out NLL fell with it. The forget term's push on the 24
+  trained rows did not carry over to other questions on the topic strongly
+  enough to offset that.
+- **Check 6 passed for a reason that does not show selectivity:** both held-out
+  sets became more likely, the retain one more so. Check 5 is what the run
+  fails on, and it fails on every seed.
+
+## What this does not establish
+
+- That the forget term generalizes past the rows it trains on. Under this
+  protocol it did not overcome the retain term on held-out rows of the same
+  topic. Whether it does with another retain set, other settings or a control
+  trained on the retain rows alone was not run, and this record does not test
+  it.
+- Anything about erasure, privacy protection or compliance, other
+  architectures, quantized bases, larger models or longer runs.
+
+## Reproducing
+
+```bash
+HF_HUB_OFFLINE=1 PYTHONPATH=src python benchmarks/harness/mlx_simnpo_qualify.py run \
+  --model <local snapshot of HuggingFaceTB/SmolLM2-360M-Instruct at a10cc151> \
+  --revision a10cc1512eabd3dde888204e902eca88bddb4951 --out <new empty dir>
+```
+
+`model.safetensors` SHA-256:
+`e6bffe7435d7ddc10fd3b9a9efd429dafbacb1cb17015fb5562664e7532bf86e`.
