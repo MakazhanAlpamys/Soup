@@ -242,6 +242,7 @@ def test_loop_init_persists_thumbs_db_and_an_old_state_file_still_loads(cwd):
     runner = CliRunner()
     result = runner.invoke(app, [
         "loop", "init", "registry://m", "--eval", "suite.yaml", "--baseline", "b",
+        "--base-model", "org/m",
         "--thumbs-db", "thumbs.db",
     ])
     assert result.exit_code == 0, strip_ansi(result.output)
@@ -262,6 +263,7 @@ def test_loop_init_refuses_a_thumbs_db_outside_the_project(cwd, tmp_path_factory
     outside = tmp_path_factory.mktemp("elsewhere") / "thumbs.db"
     result = CliRunner().invoke(app, [
         "loop", "init", "registry://m", "--eval", "suite.yaml", "--baseline", "b",
+        "--base-model", "org/m",
         "--thumbs-db", str(outside),
     ])
     text = " ".join(strip_ansi(result.output).split())
@@ -279,7 +281,8 @@ def test_thumbs_db_is_the_last_field_so_positional_fields_keep_their_meaning():
     from soup_cli.utils.loop_state import LoopState
 
     names = [f.name for f in dataclasses.fields(LoopState)]
-    assert names[-1] == "thumbs_db", names
+    # Fields added later (base_model, ...) go after it, never before.
+    assert names.index("thumbs_db") == names.index("updated_at") + 1, names
     state = LoopState("m", "e", "b", "stopped", False, 7)
     assert state.traces_collected == 7
     assert state.thumbs_db is None
@@ -408,7 +411,10 @@ def test_an_empty_environment_variable_is_treated_as_unset(cwd, monkeypatch):
 def _init_loop(pre_wired: bool, *extra: str) -> None:
     from soup_cli.cli import app
 
-    args = ["loop", "init", "registry://m", "--eval", "suite.yaml", "--baseline", "b"]
+    args = [
+        "loop", "init", "registry://m", "--eval", "suite.yaml", "--baseline", "b",
+        "--base-model", "org/m",
+    ]
     if pre_wired:
         args.append("--pre-wired")
     result = CliRunner().invoke(app, args + list(extra))
@@ -606,6 +612,7 @@ def test_init_does_not_let_a_control_sequence_in_the_path_reach_the_terminal(cwd
 
     result = CliRunner().invoke(app, [
         "loop", "init", "registry://m", "--eval", "suite.yaml", "--baseline", "b",
+        "--base-model", "org/m",
         "--thumbs-db", "../a\x1b[2Jb.db",
     ])
 
@@ -649,6 +656,7 @@ def test_init_refusal_keeps_rich_tags_in_the_path_literal(cwd):
 
     result = CliRunner().invoke(app, [
         "loop", "init", "registry://m", "--eval", "suite.yaml", "--baseline", "b",
+        "--base-model", "org/m",
         "--thumbs-db", "../db[bold]x.db",
     ])
     plain = " ".join(strip_ansi(result.output).split())
