@@ -298,7 +298,8 @@ def harvest_dpo_pairs(db_path: str) -> Tuple[DpoPair, ...]:
 
     For each prompt that has at least one ``up`` AND at least one ``down``
     thumb, emit a single (chosen, rejected) tuple using the most recent
-    up + most recent down. Subsequent up/down pairs for the same prompt
+    up + most recent down, provided their response texts differ. A prompt
+    whose latest responses match is skipped. Subsequent up/down pairs for the same prompt
     are skipped (one row per prompt, last writes win) — keeps the harvest
     deterministic without exploding into a Cartesian product.
     """
@@ -317,6 +318,8 @@ def harvest_dpo_pairs(db_path: str) -> Tuple[DpoPair, ...]:
             last_down[prompt] = response
     pairs = []
     for prompt in sorted(set(last_up) & set(last_down)):
+        if last_up[prompt] == last_down[prompt]:
+            continue
         pairs.append(
             DpoPair(
                 prompt=prompt,

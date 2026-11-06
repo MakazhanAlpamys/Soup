@@ -71,16 +71,35 @@ whose `scatter` operator still requires `int64` indices, Soup widens only the
 QSA indexer's local index tensors before LoRA injection; Torch and the upstream
 Transformers class remain unchanged.
 
-`soup recipes use qwen3.5-2b-dpo` and `soup recipes use qwen3.5-4b-dpo` select
-the 2B and 4B language decoders for text preference pairs (`prompt`, `chosen`,
-`rejected`). Both inherit the shipped
+`soup recipes use qwen3.5-0.8b-dpo`, `qwen3.5-2b-dpo` and `qwen3.5-4b-dpo` select
+the 0.8B, 2B and 4B language decoders for text preference pairs (`prompt`, `chosen`,
+`rejected`). All three inherit the shipped
 Qwen3.5-9B DPO settings: `lr: 5e-6`, three epochs, LoRA rank 16 / alpha 32,
 4-bit quantization and a 4096-token limit. These are inherited starting values,
-not measured 2B or 4B tuning recommendations. The model's visual tower is excluded;
+not measured 0.8B, 2B or 4B tuning recommendations. The model's visual tower is excluded;
 image preference data is not supported by these recipes. The 2B config's native
 text architecture and LoRA attachment have been checked on the meta device, with
 a tiny random decoder's forward/backward pass checked on CPU. This does not
 establish full-checkpoint 2B training quality, NF4 execution, or GPU memory use.
+
+`soup recipes use qwen3.5-4b-grpo` selects the 4B language decoder for text
+reasoning data in `./data/reasoning_train.jsonl`. It inherits the 0.8B, 2B and
+9B GRPO starting settings, including four generations, the `accuracy` reward,
+eight accumulation steps and gradient checkpointing. Supply a reference answer
+for each prompt, either as an `answer` column or as the final assistant message.
+The native decoder and LoRA path are checked with the public configuration on
+meta and a tiny random model on CPU. Full 4B GRPO training, NF4 execution,
+GPU memory use and reward quality need separate validation.
+
+`soup recipes use qwen3.5-27b-dpo` selects `Qwen/Qwen3.5-27B`'s language
+decoder for the same text preference layout. It inherits the 9B DPO recipe's
+4096-token limit, learning rate, epochs, LoRA and quantization settings. It uses
+eight accumulation steps, matching the Qwen3.5 27B SFT, Qwen3.6 27B DPO and
+Gemma 3 27B DPO recipes. These settings are starting values. Full-size tuning
+and memory fit have not been measured.
+The pinned public configuration builds on the meta device, and a tiny random
+decoder with both attention block kinds passes a CPU LoRA forward/backward check.
+Full 27B weights, NF4 execution, GPU memory use and training quality are unverified.
 
 With `training.stream_layers: true`, the Qwen4-Exp text decoder is admitted by
 its own parity-tested path. Its very large frozen PLE N-gram table is excluded

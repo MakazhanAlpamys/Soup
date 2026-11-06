@@ -1,19 +1,22 @@
 """The data formats of the `soup loop` cycle: names, default layout, schemas.
 
-Five append-only JSONL formats connect serving, feedback, training and rollout
+Six append-only JSONL formats connect serving, feedback, training and rollout
 (described in ``docs/loop-formats.md``). Their JSON Schemas and one example
 file each ship as package data under ``soup_cli/schemas/loop/``. This module
-only locates and reads them: it imports nothing heavy and does not validate
+locates and reads them and computes the one value a reader needs to build
+itself, ``prompt_hash``: it imports nothing heavy and does not validate
 (``jsonschema`` is a test dependency, not a runtime one).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+from collections.abc import Mapping, Sequence
 from importlib import resources
 from importlib.resources.abc import Traversable
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any
 
 #: The ``schema_version`` every format is currently at.
 SCHEMA_VERSION = 1
@@ -24,6 +27,7 @@ DEFAULT_LAYOUT: Mapping[str, str] = MappingProxyType(
     {
         "conversation": ".soup-loops/traces",
         "feedback": ".soup-loops/feedback.jsonl",
+        "paraphrase": ".soup-loops/paraphrases.jsonl",
         "iteration": ".soup-loops/iterations.jsonl",
         "version": ".soup-loops/versions.jsonl",
         "progress": ".soup-loops/progress.jsonl",
@@ -61,3 +65,32 @@ def load_examples(name: str) -> list[dict[str, Any]]:
     """Parse and return the example records of format ``name``, one per line."""
     text = example_resource(name).read_text(encoding="utf-8")
     return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
+def prompt_hash(messages: Sequence[Mapping[str, Any]]) -> str:
+    """The ``prompt_hash`` of a prompt: the key that ties paraphrases to an answer's prompt.
+
+    ``messages`` is the conversation record's ``messages`` array: what the model
+    saw, without the answer. The hash is the lowercase SHA-256 hex digest of that
+    array serialised as JSON with sorted keys, no whitespace (``separators=(",",
+    ":")``) and non-ASCII characters written as themselves, encoded as UTF-8.
+    Nothing is trimmed, case-folded or reordered, so equal messages hash equal and
+    a one-character change gives another hash.
+    """
+    if not isinstance(messages, (list, tuple)):
+        raise ValueError(f"messages must be a list of messages, not {type(messages).__name__}")
+    if not messages:
+        raise ValueError("messages must hold at least one message")
+    for position, message in enumerate(messages):
+        if not isinstance(message, Mapping):
+            raise ValueError(
+                f"message {position} must be a mapping with a role and a content, "
+                f"not {type(message).__name__}"
+            )
+    text = json.dumps(
+        [dict(message) for message in messages],
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()

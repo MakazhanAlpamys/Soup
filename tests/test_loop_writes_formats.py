@@ -2167,7 +2167,8 @@ def _all_five_files_validate(cwd) -> dict:
         "version": cwd / ".soup-loops" / "versions.jsonl",
         "progress": cwd / ".soup-loops" / "progress.jsonl",
     }
-    assert set(layout) == set(loop_formats.FORMATS)
+    # paraphrases.jsonl is not written by the loop yet (the verdict PR will write it).
+    assert set(layout) == set(loop_formats.FORMATS) - {"paraphrase"}
     lines = {}
     for name, path in layout.items():
         assert path.is_file(), name

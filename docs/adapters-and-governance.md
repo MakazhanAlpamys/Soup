@@ -150,7 +150,8 @@ soup loop init ./base --eval evals/tasks.jsonl --baseline registry://prod --pre-
 
 # Learn from Soup's own serving (#1440): the pre-wired harvest also reads the
 # thumbs `soup serve --record-thumbs` captures through POST /v1/thumbs, pairing
-# the latest thumbs-up and thumbs-down answer per prompt. The database must
+# the latest thumbs-up and thumbs-down answer per prompt. Matching answer
+# texts yield no pair, even when older distinct answers exist. The database must
 # stay under cwd and exist as a thumbs database: start the serve first, or
 # `soup loop watch` refuses, naming the field.
 soup serve --model ./base --record-thumbs ./rl.db
@@ -226,7 +227,10 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # Background subprocess (no shell). It writes .soup/loop.pid, next to loop.yaml, as JSON:
 # {"pid": N, "started_at": "<UTC ISO 8601>", "log": ".soup/loop.log"}; read it with
 # `jq .pid .soup/loop.pid`. The child's stdout and stderr are appended to .soup/loop.log
-# (never truncated). While the PID file names a live process a second --detach is
+# (never truncated). The log is rotated at 10 MB, and one old file is kept as
+# .soup/loop.log.1 (an older one is replaced): when --detach starts, and by the running
+# daemon itself at each watch cycle, without stopping. A foreground watch rotates
+# nothing. While the PID file names a live process a second --detach is
 # refused (exit 2, naming the pid and the file); a stale file, whose process is gone or
 # that does not parse, is replaced with a notice. A recycled pid reads as alive, so if
 # the pid in the file is not a loop daemon, delete the file. The child removes the file
