@@ -9,6 +9,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
 from soup_cli.utils.prompt_distill import (
     SUPPORTED_DISTILL_STRATEGIES,
@@ -17,6 +18,7 @@ from soup_cli.utils.prompt_distill import (
     build_distill_prompt_plan,
     prepare_distill_dataset,
 )
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -62,17 +64,20 @@ def distill_prompt_cmd(
             output_path=output,
         )
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(2) from exc
 
     console.print(
         Panel(
-            f"Traces:    [bold]{escape(plan.traces_path)}[/]\n"
-            f"Teacher:   [bold]{escape(plan.teacher)}[/]\n"
-            f"Student:   [bold]{escape(plan.student)}[/]\n"
-            f"Strategy:  [bold]{escape(plan.strategy)}[/]\n"
-            f"Provider:  [bold]{escape(provider)}[/]\n"
-            f"Output:    [bold]{escape(plan.output_path)}[/]",
+            Text.from_markup(
+                f"Traces:    [bold]{for_terminal(plan.traces_path)}[/]\n"
+                f"Teacher:   [bold]{for_terminal(plan.teacher)}[/]\n"
+                f"Student:   [bold]{for_terminal(plan.student)}[/]\n"
+                f"Strategy:  [bold]{escape(plan.strategy)}[/]\n"
+                f"Provider:  [bold]{for_terminal(provider)}[/]\n"
+                f"Output:    [bold]{for_terminal(plan.output_path)}[/]",
+                emoji=False,
+            ),
             title="soup distill-prompt — plan",
         )
     )
@@ -102,15 +107,17 @@ def distill_prompt_cmd(
     except ProviderCallError as exc:
         # #1274: every teacher/student call failed — fail loudly instead of
         # writing an empty dataset and reporting "done" (mirrors #1221).
-        console.print(f"[red]No usable rows produced:[/] {escape(str(exc))}")
+        console.print(
+            f"[red]No usable rows produced:[/] {for_terminal(exc)}", emoji=False
+        )
         raise typer.Exit(1) from exc
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(2) from exc
     except ImportError as exc:
         console.print(
             Panel(
-                f"[yellow]{escape(str(exc))}[/]",
+                Text.from_markup(f"[yellow]{for_terminal(exc)}[/]", emoji=False),
                 title="distill-prompt — missing dependency",
             )
         )
@@ -132,9 +139,12 @@ def distill_prompt_cmd(
         )
     console.print(
         Panel(
-            f"{call_line}"
-            f"Rows:   [bold]{n}[/]{skipped_note}\n"
-            f"Output: [bold]{escape(plan.output_path)}[/]",
+            Text.from_markup(
+                f"{call_line}"
+                f"Rows:   [bold]{n}[/]{skipped_note}\n"
+                f"Output: [bold]{for_terminal(plan.output_path)}[/]",
+                emoji=False,
+            ),
             title=title,
         )
     )
