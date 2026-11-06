@@ -24,6 +24,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
 from soup_cli.commands._common import refuse_output_over_input
 from soup_cli.commands._webhook_cli import emit_webhooks, validate_webhook_flags
@@ -35,7 +36,7 @@ from soup_cli.utils.ingest_sources import (
     validate_source_name,
 )
 from soup_cli.utils.paths import atomic_write_lines, is_under_cwd
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
@@ -155,20 +156,24 @@ def ingest(
         raise typer.Exit(2)
 
     if not is_under_cwd(logs):
-        console.print(f"[red]--logs '{escape(logs)}' is outside cwd — refusing[/]")
+        console.print(
+            Text(f"--logs '{strip_control(logs)}' is outside cwd — refusing", style="red")
+        )
         raise typer.Exit(1)
     logs_path = Path(logs)
     if not logs_path.exists():
-        console.print(f"[red]--logs not found: {escape(logs)}[/]")
+        console.print(Text(f"--logs not found: {strip_control(logs)}", style="red"))
         raise typer.Exit(1)
     if logs_path.is_dir():
-        console.print(f"[red]--logs '{escape(logs)}' is a directory, not an export file[/]")
+        console.print(
+            Text(f"--logs '{strip_control(logs)}' is a directory, not an export file", style="red")
+        )
         raise typer.Exit(1)
 
     output_path = Path(output) if output else Path("traces.jsonl")
     if not is_under_cwd(output_path):
         console.print(
-            f"[red]--output '{escape(str(output_path))}' is outside cwd — refusing[/]"
+            Text(f"--output '{strip_control(output_path)}' is outside cwd — refusing", style="red")
         )
         raise typer.Exit(1)
 
@@ -210,12 +215,14 @@ def ingest(
     try:
         atomic_write_lines(_lines(), str(output_path), field="--output")
     except _LogsUnreadableError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(Text(strip_control(exc), style="red"))
         raise typer.Exit(1) from exc
 
     console.print(
-        f"[green]Wrote {count} traces from {escape(canonical)} -> "
-        f"{escape(output_path.name)}[/]"
+        Text(
+            f"Wrote {count} traces from {canonical} -> {strip_control(output_path.name)}",
+            style="green",
+        )
     )
 
     emit_webhooks(
