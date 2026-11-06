@@ -156,7 +156,7 @@ why an iteration is not a single line.
 | `started_at` | time | Required. |
 | `finished_at` | time or null | Set when the outcome is final. |
 | `data` | object or null | `until`: the cursor (conversation and feedback lines up to and including this time were read; the next iteration reads only newer ones); `conversations`; `feedback` counts per kind (`thumb_up`, `thumb_down`, `rating`, `edit`, `comment`). |
-| `dataset` | object or null | `path`, `sha256`, `dpo_pairs`, `kto_rows`, `sft_rows` (row counts of the three datasets a harvest builds). |
+| `dataset` | object or null | `path`, `sha256`, `dpo_pairs`, `kto_rows`, `sft_rows` (row counts of the three datasets a harvest builds), `graduated` (edits that moved from the held-out set into training in this iteration: an edit whose prompt hash puts it in the held-out 30% is kept aside for exactly its first iteration, then trained on). |
 | `train` | object or null | `method` (`dpo`, `kto`, ...), `run_id`, `base` (what training actually loaded: a base model id or a merged earlier version), `root_base` (the original base model id when `base` is a merged version). |
 | `verdict` | object or null | `decision`: `SHIP` or `DON'T SHIP` (from `soup ship`), or `SKIPPED` / `ERROR` when no verdict was reached; `method`: `ship` or `eval_gate`; `baseline`: `{kind: base or version, ref, version}`, what the candidate was compared against (`version` is required when `kind` is `version`); `path` of the report; `reason`; and the optional evidence objects `corrections` and `held_out` (below). |
 | `canary` | object or null | `traffic_pct` (0-100), `samples` per bucket (`stable`, `canary`), `verdict` (`OK`, `MAJOR`, `UNKNOWN` while samples are too few), and an optional `quality` object (below). |
