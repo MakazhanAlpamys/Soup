@@ -975,6 +975,39 @@ curl http://localhost:8000/v1/feedback -H "Content-Type: application/json" -d '{
 `--trace-log`, `--record-thumbs` and `--feedback-log` belong to the Transformers backend. With `--backend vllm`, `sglang` or `mii` they are refused at startup (exit 2, naming the flag) instead of being ignored.
 
 
+## Internal Calls (`X-Soup-Internal`)
+
+`soup loop` sometimes asks the model it serves a question of its own: before it trains, the pre-wired train stage has the served model write [paraphrases](loop-formats.md#paraphrase) of the prompts people corrected. Such a call must not look like a user's: logged as a conversation it would come back as training data in the next run, and counted against a canary it would skew the quality verdict. So `POST /v1/chat/completions` honours one extra request header:
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Authorization: Bearer $SOUP_TOOL_AUTH_TOKEN" \
+  -H "X-Soup-Internal: loop-check" \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "..."}]}'
+```
+
+With `X-Soup-Internal: loop-check` and a valid tool token the request is answered as usual, except that it:
+
+- writes **no conversation record** (nothing in `--trace-log`, a streamed answer included);
+- writes **no thumbs** (it never could: thumbs arrive through `POST /v1/thumbs`);
+- is **never routed to a canary bucket**: `conversation_id` and `X-Conversation-Id` are ignored for routing, and the answer comes from the same side unkeyed traffic gets (the active adapter, else the base model);
+- is **not counted** in the canary statistics, whether it succeeds or fails;
+- is **echoed**: the response carries `X-Soup-Internal: loop-check` too. That is how the loop tells a server that honours the header from an older `soup serve` that ignores it and would have recorded the call: without the echo the loop stops asking and says so in the iteration's notes (restart `soup serve` from the same version).
+
+The header is honoured only together with the token, on every bind, loopback included:
+
+| Request | Answer |
+|---|---|
+| header, valid `Authorization: Bearer <token>` | `200`, not recorded, header echoed |
+| header, no or wrong token | `401` `Invalid or missing bearer token: X-Soup-Internal is honoured only with a valid tool token...` |
+| header, server started without `--tool-auth-token` | `401` `Authentication required: X-Soup-Internal is honoured only with a valid tool token. Start soup serve with --tool-auth-token ...` |
+| header with a value other than `loop-check`, valid token | `400` `Unknown X-Soup-Internal value: the only one is 'loop-check'.` |
+| no header | unchanged: recorded and routed as before |
+
+Nothing is generated for a refused request. `/v1/messages` and the other routes ignore the header. The loop sends it with `SOUP_TOOL_AUTH_TOKEN` (set by `soup loop watch --tool-auth-token`) to `SOUP_LOOP_SERVE_ENDPOINT`; see [Adapters, Registry & Governance](adapters-and-governance.md#data-flywheel-soup-loop) for the paraphrase step and `soup loop init --paraphraser-endpoint`.
+
+
 ## Soup Quantize — Ergonomic Export Alias
 
 ```bash

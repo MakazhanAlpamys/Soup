@@ -296,6 +296,15 @@ DECLARED_SINKS: dict[tuple[str, str], DeclaredSink] = {
             "_checked_endpoint (validate_webhook_url + local/LAN only); reply capped"
         ),
     ),
+    ("utils/loop_paraphrase.py", "_post_chat"): DeclaredSink(
+        calls=("soup_cli.utils.http_response.post_capped",),
+        gate=("checked_endpoint", "validate_webhook_url"),
+        reason=(
+            "operator environment: the paraphraser URL comes from resolve_paraphraser, which "
+            "takes every endpoint through checked_endpoint (validate_webhook_url + local/LAN "
+            "only, no credentials in the URL); reply capped"
+        ),
+    ),
     ("utils/sglang.py", "generate_with_runtime"): DeclaredSink(
         calls=("httpx.post",),
         gate=None,

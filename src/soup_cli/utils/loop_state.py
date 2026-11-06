@@ -223,6 +223,14 @@ class LoopState:
     # Only the pre-wired train stage reads it, and only for train_method "sft". Last, so adding
     # it shifted no existing positional field; a loop.yaml from before it loads with None.
     sft_recipe: Optional[dict] = None
+    # Where the pre-wired train stage asks for paraphrases of the prompts of the edits it
+    # trains on (`soup loop init --paraphraser-endpoint` / `--paraphraser-model`): an
+    # OpenAI-compatible base URL (loopback or LAN) and the model name sent to it. Both set or
+    # both None; None = the loop's own serve endpoint (SOUP_LOOP_SERVE_ENDPOINT). Last, so
+    # adding them shifted no existing positional field; a loop.yaml from before them loads
+    # with None.
+    paraphraser_endpoint: Optional[str] = None
+    paraphraser_model: Optional[str] = None
 
     def __post_init__(self) -> None:  # noqa: D401 — validator hook
         # Closed-allowlist enforcement + bool-as-int rejection mirror the
@@ -354,6 +362,11 @@ class LoopState:
         if self.last_run_date is not None:
             _require_str("last_run_date", self.last_run_date, allow_empty=False)
         validate_sft_recipe(self.sft_recipe)
+        for fname in ("paraphraser_endpoint", "paraphraser_model"):
+            if getattr(self, fname) is not None:
+                _require_str(fname, getattr(self, fname), allow_empty=False)
+                if any(ord(char) < 0x20 or ord(char) == 0x7F for char in getattr(self, fname)):
+                    raise ValueError(f"{fname} must not contain control characters")
         self._validate_versions()
 
     def _validate_versions(self) -> None:
@@ -784,6 +797,8 @@ def init_state(
     min_new_edits: int = 8,
     min_new_rated: int = 30,
     sft_recipe: Optional[dict] = None,
+    paraphraser_endpoint: Optional[str] = None,
+    paraphraser_model: Optional[str] = None,
     path: Optional[str] = None,
     force: bool = False,
 ) -> Tuple[LoopState, str]:
@@ -827,6 +842,8 @@ def init_state(
         min_new_edits=min_new_edits,
         min_new_rated=min_new_rated,
         sft_recipe=sft_recipe,
+        paraphraser_endpoint=paraphraser_endpoint,
+        paraphraser_model=paraphraser_model,
         monthly_budget_usd=monthly_budget_usd,
         max_runs_per_day=max_runs_per_day,
         created_at=now,

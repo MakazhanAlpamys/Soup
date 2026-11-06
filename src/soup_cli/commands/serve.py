@@ -1352,6 +1352,28 @@ _ADAPTER_LOAD_TOKEN_REQUIRED = (
     "Start soup serve with --tool-auth-token <secret> (or set SOUP_TOOL_AUTH_TOKEN) "
     "and send 'Authorization: Bearer <secret>'."
 )
+# The request header with which the loop asks for an answer that is not recorded: the
+# paraphrase step of `soup loop` (docs/serving-and-export.md). Honoured only with a valid tool
+# token, on every bind, and echoed in the response so that the caller can tell a server that
+# honours it from an older one that would have recorded the call.
+# soup_cli.utils.loop_paraphrase sends and checks the same two strings.
+_INTERNAL_HEADER = "X-Soup-Internal"
+_INTERNAL_LOOP_CHECK = "loop-check"
+# What a chat request carrying that header answers (401) when the server was started without
+# --tool-auth-token: there is no token to check it against, so the header is refused.
+_INTERNAL_TOKEN_REQUIRED = (
+    "Authentication required: X-Soup-Internal is honoured only with a valid tool token. "
+    "Start soup serve with --tool-auth-token <secret> (or set SOUP_TOOL_AUTH_TOKEN) and send "
+    "'Authorization: Bearer <secret>', or leave the header out."
+)
+# ... and when the token sent is missing or wrong.
+_INTERNAL_TOKEN_INVALID = (
+    "Invalid or missing bearer token: X-Soup-Internal is honoured only with a valid tool "
+    "token. Send 'Authorization: Bearer <secret>' (soup serve --tool-auth-token), or leave "
+    "the header out."
+)
+# What a chat request answers (400) for a value of that header other than "loop-check".
+_INTERNAL_VALUE_UNKNOWN = "Unknown X-Soup-Internal value: the only one is 'loop-check'."
 # What /v1/tools/python and /v1/tools/bash answer (501) when their sandbox is not
 # available or cannot start, whatever the cause; the cause goes to the debug log.
 _PYTHON_SANDBOX_UNAVAILABLE = "python sandbox requires OS-level isolation"
@@ -2192,6 +2214,34 @@ def _create_app(
             )
         _check_tool_auth(authorization)
 
+    def _check_internal_request(value: Optional[str], authorization: Optional[str]) -> bool:
+        """Whether this chat request is the loop's own check (``X-Soup-Internal: loop-check``).
+
+        ``False`` without the header. With it, a valid tool token is required on every bind,
+        loopback included: otherwise any caller could ask for an answer that is not recorded.
+        A server without ``--tool-auth-token`` therefore refuses the header.
+        """
+        if value is None:
+            return False
+        if not auth_token:
+            raise HTTPException(
+                status_code=401,
+                detail=_INTERNAL_TOKEN_REQUIRED,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        expected = f"Bearer {auth_token}"
+        if not authorization or not _secrets.compare_digest(
+            authorization.encode("utf-8"), expected.encode("utf-8")
+        ):
+            raise HTTPException(
+                status_code=401,
+                detail=_INTERNAL_TOKEN_INVALID,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        if value.strip() != _INTERNAL_LOOP_CHECK:
+            raise HTTPException(status_code=400, detail=_INTERNAL_VALUE_UNKNOWN)
+        return True
+
     from collections.abc import AsyncIterator
     from contextlib import asynccontextmanager
 
@@ -2514,25 +2564,40 @@ def _create_app(
         x_conversation_id: Optional[str] = Header(
             default=None, alias="X-Conversation-Id"
         ),
+        x_soup_internal: Optional[str] = Header(default=None, alias=_INTERNAL_HEADER),
+        authorization: Optional[str] = Header(default=None),
     ):
         # Every answer gets an id (docs/serving-and-export.md): the `id` field stays the
         # OpenAI-style "chatcmpl-..." one; `response_id` (body) and X-Response-Id
         # (header) carry the id the trace log and POST /v1/feedback use.
-        reply, response_id = _run_chat(request, x_user_id, x_conversation_id)
+        # The loop's own check (X-Soup-Internal, with a valid tool token) is answered but
+        # not recorded: no conversation record, no canary routing, no canary statistics.
+        internal = _check_internal_request(x_soup_internal, authorization)
+        reply, response_id = _run_chat(
+            request, x_user_id, x_conversation_id, internal=internal
+        )
         response.headers[_RESPONSE_ID_HEADER] = response_id
+        if internal:
+            response.headers[_INTERNAL_HEADER] = _INTERNAL_LOOP_CHECK
         return reply
 
     def _run_chat(
         request: ChatCompletionRequest,
         x_user_id: Optional[str],
         x_conversation_id: Optional[str],
+        internal: bool = False,
     ):
         """Answer one chat request; returns ``(reply, response_id)``.
 
         ``reply`` is the response dict, or a ``StreamingResponse`` when the request
         asked for a stream. ``/v1/messages`` calls this too, with no header values.
+        ``internal`` marks the loop's own check (``chat_completions`` has verified the
+        token): the answer is not written to the trace log and the request is never routed
+        to a canary bucket, so it is not counted in the canary statistics either; it is
+        answered as unkeyed traffic is, by the stable side.
         """
         response_id = str(uuid.uuid4())
+        record_writer = None if internal else trace_log_writer
         # Check adapter selection (from request body)
         # Treat an empty public request value like an omitted adapter. The
         # empty string is reserved internally as the explicit base-model
@@ -2551,7 +2616,7 @@ def _create_app(
             )
         conversation_id = request.conversation_id or x_conversation_id
         canary_tracking = None
-        if requested_adapter is None:
+        if requested_adapter is None and not internal:
             routed_adapter, canary_tracking = _canary_adapter(conversation_id)
             if canary_tracking is not None:
                 requested_adapter = routed_adapter
@@ -2595,7 +2660,7 @@ def _create_app(
                     assistant_model=draft_model,
                     assistant_tokenizer=draft_tokenizer,
                     num_assistant_tokens=num_speculative_tokens,
-                    trace_log_writer=trace_log_writer,
+                    trace_log_writer=record_writer,
                     started=stream_started,
                     kv_cache_generate_kwargs=kv_cache_generate_kwargs,
                     mole_runtime=_mole_runtime,
@@ -2618,7 +2683,10 @@ def _create_app(
                     canary_bucket=canary_bucket,
                 ),
                 media_type="text/event-stream",
-                headers={_RESPONSE_ID_HEADER: response_id},
+                headers={
+                    _RESPONSE_ID_HEADER: response_id,
+                    **({_INTERNAL_HEADER: _INTERNAL_LOOP_CHECK} if internal else {}),
+                },
             ), response_id
 
         import contextlib as _contextlib
@@ -2707,7 +2775,7 @@ def _create_app(
                 # the request handler on disk / serialisation issues. One version 1
                 # conversation record per answer, under the id the client gets back.
                 _write_conversation_record(
-                    trace_log_writer,
+                    record_writer,
                     response_id=response_id,
                     conversation_id=conversation_id,
                     model_name=model_name,

@@ -305,8 +305,9 @@ class TestValidator:
 
 
 class TestStateField:
-    def test_it_is_the_last_field_and_defaults_to_none(self):
-        assert list(LoopState.__dataclass_fields__)[-1] == "sft_recipe"
+    def test_it_follows_the_thresholds_and_defaults_to_none(self):
+        # The paraphraser fields (tests/test_loop_paraphrases.py) are the two after it.
+        assert list(LoopState.__dataclass_fields__)[-3] == "sft_recipe"
         assert _state().sft_recipe is None
 
     def test_a_valid_recipe_is_kept(self):

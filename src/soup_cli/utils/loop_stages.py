@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping, Optional, Tuple
 
 from soup_cli.utils.loop_feedback import (
+    EditedAnswer,
     count_new,
     good_answer_row,
     harvest_feedback,
@@ -389,13 +390,17 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
     Writes the dataset of ``state.train_method`` to ``.soup-loops/pairs/<uuid>.jsonl``
     (cwd-contained) and returns ``{pairs_harvested, new_pairs, cursor_ts, pairs_path,
     traces_collected, thumbs_pairs, train_method, dpo_pairs, kto_rows, sft_rows, new_edits,
-    new_rated, new_data_rule, feedback_unknown_response, feedback_lines_skipped}``.
+    new_rated, new_data_rule, feedback_unknown_response, feedback_lines_skipped,
+    edited_answers}``.
     ``thumbs_pairs`` counts the pairs READ from the database, before the union drops any that
     a trace already supplied; ``dpo_pairs`` / ``kto_rows`` / ``sft_rows`` are the sizes of the
     three datasets; ``feedback_unknown_response`` counts feedback lines about an answer no
     conversation record has (ignored); ``feedback_lines_skipped`` the log lines that could not
     be used. ``traces_collected`` counts the answers in the trace directory (version 0 and 1
-    lines). Yields zero rows (no path) when the selected dataset is empty; a configured
+    lines). ``edited_answers`` lists the corrected answers (``loop_feedback.EditedAnswer``)
+    that are rows of the selected dataset: the train stage writes paraphrases of their prompts
+    (``loop_paraphrase``); they are never rows themselves. Yields zero rows (no path) when the
+    selected dataset is empty; a configured
     database that is refused or missing raises (see ``checked_thumbs_db``).
 
     The data cursor (``state.harvest_cursor_ts``) decides what is NEW, not what is
@@ -457,6 +462,11 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
     ]
     sft_items = unique_sft([*without_edited(rated_good, found.edited_originals), *found.sft])
     new_edits, new_rated = count_new(found.rated, cursor)
+    # The corrected answers that are rows of the selected dataset: the train stage writes
+    # paraphrases of their prompts. A dpo pair needs an original answer to reject.
+    edited_answers = [
+        edit for edit in found.edits if state.train_method != "dpo" or edit.original.strip()
+    ]
     feedback_rule = state.train_method == "sft" and feedback_path is not None
     sft_newest = newest_ts(sft_items)
     if feedback_rule:
@@ -481,6 +491,7 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
         "new_data_rule": _RULE_EDITS_OR_RATED if feedback_rule else _RULE_MIN_NEW_PAIRS,
         "feedback_unknown_response": found.unknown_response,
         "feedback_lines_skipped": feedback.skipped_lines,
+        "edited_answers": edited_answers,
     }
     if not rows:
         return {
@@ -685,6 +696,26 @@ def _render_dpo_yaml(state: LoopState, pairs_path: str, output_dir: str) -> str:
     return _render_train_yaml(state, pairs_path, output_dir, "dpo")
 
 
+def _paraphrase_step(state: LoopState, ctx: Mapping[str, object]) -> list:
+    """Paraphrases of the prompts of the edits this run trains on, as notes.
+
+    For every edit in ``ctx["edited_answers"]`` (the harvest's) that has no paraphrase record
+    yet, ask for paraphrases and append them to ``.soup-loops/paraphrases.jsonl``; an edit that
+    has one is not asked again. Paraphrases are only read by the verdict, never trained on.
+    Whatever goes wrong is a note: this step never stops training.
+    """
+    edits = ctx.get("edited_answers")
+    if not isinstance(edits, (list, tuple)) or not edits:
+        return []
+    try:
+        from soup_cli.utils.loop_paraphrase import paraphrase_edits
+
+        return paraphrase_edits(state, [edit for edit in edits if isinstance(edit, EditedAnswer)])
+    except Exception as exc:  # noqa: BLE001 — the paraphrases are a preview: never stop training
+        _LOG.warning("paraphrase step failed: %s", type(exc).__name__)
+        return [f"paraphrases: not written ({type(exc).__name__})"]
+
+
 def train_dpo_from_pairs(
     state: LoopState, ctx: Mapping[str, object]
 ) -> Mapping[str, object]:
@@ -694,7 +725,8 @@ def train_dpo_from_pairs(
     one), ``kto`` or ``sft``; ``_render_train_yaml`` writes the matching config. Returns
     ``{run_id, skipped, adapter_path}``, plus a ``notes`` entry when an sft recipe's
     ``quantization: auto`` was resolved (``sft quantization auto: none (need 3.0 GB, free
-    7.1 GB)``). Skips (no run) when the
+    7.1 GB)``) and, before training starts, a ``paraphrases: 12 new for 6 edits, 3 dropped
+    (...)`` entry (see ``_paraphrase_step``). Skips (no run) when the
     harvest produced no rows, or not enough is NEW since the data cursor (see
     ``harvest_from_traces``): fewer new rows than ``state.min_new_pairs``, or, for an sft loop
     whose harvest reports the ``edits_or_rated`` rule (it has a feedback log), fewer than
@@ -747,6 +779,7 @@ def train_dpo_from_pairs(
         rendered = _render_train_yaml(state, str(pairs_path), output_dir, notes=train_notes)
     except ValueError as exc:
         return {**skip, "notes": f"base_model_unknown: {exc}; training skipped"}
+    train_notes.extend(_paraphrase_step(state, ctx))
     decided = {"notes": "; ".join(train_notes)} if train_notes else {}
     yaml_dir = Path(_ADAPTERS_DIR)
     yaml_dir.mkdir(parents=True, exist_ok=True)
