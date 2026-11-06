@@ -381,9 +381,11 @@ class TestVersionFields:
 
         # The two trigger thresholds of the sft loop (tests/test_loop_sft_default.py) follow,
         # then the sft recipe (tests/test_loop_sft_recipe.py), then the paraphraser fields
-        # (tests/test_loop_paraphrases.py).
-        assert names[-5:-3] == ["min_new_edits", "min_new_rated"]
-        assert names[-len(NEW_FIELDS) - 5:-5] == NEW_FIELDS
+        # (tests/test_loop_paraphrases.py), then the cursors and the wait note
+        # (tests/test_loop_verdict_v2.py).
+        start = names.index("min_new_edits")
+        assert names[start:start + 2] == ["min_new_edits", "min_new_rated"]
+        assert names[start - len(NEW_FIELDS):start] == NEW_FIELDS
         assert names.index("production_version") == names.index("canary_on_timeout") + 1
         state = _state()
         assert (state.production_version, state.latest_version) == (1, 1)
@@ -2150,10 +2152,23 @@ def _thumbs(served, answers, *, limit=None, value=1) -> dict:
     return given
 
 
+# Five questions that hash onto the training side of the holdout split (bucket 30 or more).
+QUESTIONS = (
+    "How do I reset my router?", "How do I update the firmware?",
+    "How do I change the wifi password?", "Where do I find the admin page?",
+    "How do I set up a guest network?",
+)
+
+
 def _start_canary(served) -> str:
-    """One answer, corrected through POST /v1/feedback: an iteration trains on it and canaries."""
-    answer = served["chat"]("How do I reset my router?")
-    served["feedback"](answer["response_id"], "edit", edited_text=FIX)
+    """Five answers, corrected through POST /v1/feedback: an iteration trains and canaries.
+
+    The loop's verdict (soup ship --gate loop-v2) needs five trainable corrections before the
+    loop spends a training run on them (tests/test_loop_verdict_v2.py).
+    """
+    for question in QUESTIONS:
+        answer = served["chat"](question)
+        served["feedback"](answer["response_id"], "edit", edited_text=FIX)
     served["cycle"]()
     state = read_state()
     assert state.canary_active and state.canary_active.startswith("loop-train-"), state
@@ -2196,7 +2211,7 @@ def test_a_loop_that_trains_canaries_promotes_and_rolls_back_leaves_five_valid_l
         seed["iteration_id"]
     )
     assert (canary_line["from_version"], canary_line["to_version"]) == (1, 2)
-    assert canary_line["dataset"]["dpo_pairs"] == 1 and canary_line["train"]["run_id"] == name
+    assert canary_line["dataset"]["dpo_pairs"] == 5 and canary_line["train"]["run_id"] == name
     assert [(p["stage"], p["event"]) for p in lines["progress"]] == [
         ("harvest", "start"), ("harvest", "end"), ("train", "start"), ("train", "end"),
         ("verdict", "start"), ("verdict", "end"), ("deploy", "start"), ("deploy", "end"),

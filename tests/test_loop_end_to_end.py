@@ -15,6 +15,7 @@ same cycle on a real model is ``tests/test_loop_end_to_end_smoke.py``.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import os
 import re
@@ -30,6 +31,7 @@ from typer.testing import CliRunner
 import soup_cli.commands.serve as serve
 import soup_cli.utils.loop_daemon as daemon
 import soup_cli.utils.loop_stages as ls
+from soup_cli.utils import loop_formats
 from soup_cli.utils.loop_daemon import run_once, watch
 from soup_cli.utils.loop_iteration import list_iterations, read_iteration
 from soup_cli.utils.loop_state import read_state
@@ -437,12 +439,19 @@ def test_a_correction_given_as_feedback_trains_the_chosen_method_and_reaches_a_c
     # The person corrected one answer and liked another, in the formats an application
     # (or `soup serve --feedback-log`) writes; the thumbs database stays empty.
     served = loop["chat"]("hello").json()["choices"][0]["message"]["content"]
+    # Four more corrections to other questions: the loop's verdict (soup ship --gate loop-v2) needs
+    # five trainable corrections before it spends a training run (tests/test_loop_verdict_v2.py).
+    others = _split_prompts(False, 4)
+    other_prompts = [[{"role": "user", "content": prompt}] for prompt in others]
     _jsonl(os.path.join(".soup-loops", "traces", "conversations.jsonl"), [
         _answer(1, _ROUTER, "Unplug it."), _answer(2, _HELLO, served),
+        *(_answer(3 + n, other_prompts[n], f"Old {n}") for n in range(4)),
     ])
     _jsonl(feedback_log, [
         _feedback(1, "edit", "2026-11-05T10:05:00+00:00", edited_text=_FIX),
         _feedback(2, "thumb", "2026-11-05T10:06:00+00:00", value=1),
+        *(_feedback(3 + n, "edit", f"2026-11-05T10:{10 + n}:00+00:00",
+                    edited_text=f"Fixed {n}") for n in range(4)),
     ])
 
     _, iterations = loop["cycle"]()
@@ -460,6 +469,12 @@ def test_a_correction_given_as_feedback_trains_the_chosen_method_and_reaches_a_c
             {"prompt": _ROUTER, "completion": "Unplug it.", "label": False,
              "source": "feedback"},
             {"prompt": _HELLO, "completion": served, "label": True, "source": "feedback"},
+            *(row for n in range(4) for row in (
+                {"prompt": other_prompts[n], "completion": f"Fixed {n}", "label": True,
+                 "source": "feedback"},
+                {"prompt": other_prompts[n], "completion": f"Old {n}", "label": False,
+                 "source": "feedback"},
+            )),
         ]
     else:
         assert config["data"]["format"] == "chatml"
@@ -469,11 +484,15 @@ def test_a_correction_given_as_feedback_trains_the_chosen_method_and_reaches_a_c
              "source": "feedback-edit"},
             {"messages": [*_HELLO, {"role": "assistant", "content": served}],
              "source": "feedback-good"},
+            *({"messages": [*other_prompts[n], {"role": "assistant", "content": f"Fixed {n}"}],
+               "source": "feedback-edit"} for n in range(4)),
         ]
     state = read_state()
     name = state.canary_active
     assert name and name.startswith("loop-train-"), state
-    assert state.harvest_cursor_ts is not None
+    # (the data cursor follows production: it moves when this canary is promoted)
+    assert state.attempt_cursor_ts is not None and state.canary_cursor_ts is not None
+    assert state.harvest_cursor_ts is None
     record = read_iteration(loop["created"][-1])
     assert record.pairs_harvested == len(rows)
     assert record.gate_verdict == "OK" and record.shipped is True
@@ -582,7 +601,8 @@ def test_a_new_loop_trains_sft_on_corrections_and_liked_answers_then_canaries_it
     state = read_state()
     name = state.canary_active
     assert name and name.startswith("loop-train-"), state
-    assert state.harvest_cursor_ts is not None
+    assert state.attempt_cursor_ts is not None and state.canary_cursor_ts is not None
+    assert state.harvest_cursor_ts is None
     record = read_iteration(loop["created"][-1])
     assert record.pairs_harvested == len(rows) == 11
     assert record.gate_verdict == "OK" and record.shipped is True
@@ -786,3 +806,182 @@ def test_with_on_timeout_wait_the_canary_keeps_waiting(loop, monkeypatch):
     state = read_state()
     assert state.canary_active == name and state.production_name is None
     assert _active_adapter(loop["client"]) is None
+
+
+# ---------------------------------------------------------------------------
+# The loop's verdict v2: a held-out edit is kept aside for one iteration, then trains
+# ---------------------------------------------------------------------------
+
+
+def _split_prompts(held: bool, count: int) -> list:
+    """Prompts on one side of the holdout split (sha256 of the casefolded text, mod 100, < 30)."""
+    found, number = [], 0
+    while len(found) < count:
+        text = f"Edit question {number}: how do I tune setting {number}?"
+        digest = hashlib.sha256(text.strip().casefold().encode("utf-8")).hexdigest()
+        if (int(digest, 16) % 100 < 30) == held:
+            found.append(text)
+        number += 1
+    return found
+
+
+def _correct(number: int, prompt: str, minute: int) -> None:
+    """A person corrects the answer ``number`` (a conversation record, an edit, paraphrases)."""
+    messages = [{"role": "user", "content": prompt}]
+    _jsonl(os.path.join(".soup-loops", "traces", "conversations.jsonl"), [
+        _answer(number, messages, f"Wrong answer {number}."),
+    ])
+    _jsonl(os.path.join(".soup-loops", "feedback.jsonl"), [
+        _feedback(number, "edit", f"2026-11-05T10:{minute:02d}:00+00:00",
+                  edited_text=f"Fix {number}: alpha{number} bravo{number} charlie{number}."),
+    ])
+    _jsonl(os.path.join(".soup-loops", "paraphrases.jsonl"), [{
+        "schema_version": 1, "response_id": _uuid(number),
+        "prompt_hash": loop_formats.prompt_hash(messages),
+        "paraphrases": [f"Reworded {number}: {prompt}", f"Another way to ask {number}: {prompt}"],
+        "generator": {"model": "m", "template": {"id": "loop-paraphrase", "version": "1"}},
+        "created_at": "2026-11-06T09:00:00+00:00",
+    }])
+
+
+def _gate_ship(calls: list):
+    """A ``soup ship --gate loop-v2`` stand-in: records the two files, answers SHIP."""
+
+    def ship(argv, **kwargs):
+        files = {}
+        for flag in ("--corrections", "--held-out"):
+            with open(argv[argv.index(flag) + 1], encoding="utf-8") as handle:
+                files[flag] = [json.loads(line) for line in handle if line.strip()]
+        calls.append({"argv": argv, **files})
+        scoring = {"method": "added_recall", "threshold": 0.5, "template": None}
+        edits, held = len(files["--corrections"]), len(files["--held-out"])
+        with open(argv[argv.index("--output") + 1], "w", encoding="utf-8") as handle:
+            json.dump({
+                "decision": "SHIP", "gate": "loop-v2", "canary_decides": False, "reason": None,
+                "corrections": {
+                    "fixed": edits, "broken": 0, "ties": 0, "n_edits": edits,
+                    "n_paraphrases": 2 * edits, "p_value": 0.5 ** edits if edits else None,
+                    "scoring": scoring, "outcome": "pass",
+                },
+                "held_out": {
+                    "better": 0, "worse": 0, "ties": held, "n": held, "p_value": None,
+                    "scoring": scoring, "outcome": "not_measured",
+                },
+            }, handle)
+        return _Done()
+
+    return ship
+
+
+def test_a_held_out_edit_is_kept_aside_for_one_iteration_then_graduates(loop, monkeypatch):
+    jsonschema = pytest.importorskip("jsonschema")
+    free, held = _split_prompts(False, 9), _split_prompts(True, 1)[0]
+    calls: list = []
+    monkeypatch.setattr(ls, "_SHIP_RUNNER", _gate_ship(calls))
+    result, _ = loop["cli"](
+        "init", "./base", "--eval", "tasks.jsonl", "--baseline", "b", "--pre-wired",
+        "--base-model", "org/base", "--thumbs-db", "thumbs.db", "--canary-traffic", "20%",
+        "--force", "--train-method", "sft", "--min-new-edits", "1",
+    )
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+
+    def fixed(number):
+        return f"Fix {number}: alpha{number} bravo{number} charlie{number}."
+
+    # Iteration 1: five corrections, and one on a prompt that hashes into the held-out 30%.
+    for number in range(1, 6):
+        _correct(2000 + number, free[number - 1], number)
+    _correct(2006, held, 6)
+    _, iterations = loop["cycle"]()
+    assert iterations == 1
+    first_iteration = loop["created"][-1]
+    first_rows = [row["messages"][-1]["content"] for row in loop["trained_on"][0]]
+    # (the held-out one is aside)
+    assert first_rows == [fixed(2000 + number) for number in range(1, 6)]
+    (first_call,) = calls
+    assert [row["edit_id"] for row in first_call["--corrections"]] == [
+        _uuid(2000 + number) for number in range(1, 6)
+    ]
+    assert first_call["--held-out"] == [{
+        "edit_id": _uuid(2006), "prompt": held, "expected": fixed(2006),
+        "original": "Wrong answer 2006.",
+    }]
+    state = read_state()
+    name = state.canary_active
+    assert name and name.startswith("loop-train-"), state
+    # The data cursor follows production: a canary is not production yet.
+    assert state.harvest_cursor_ts is None
+    first_cursor = state.canary_cursor_ts
+    assert first_cursor is not None and state.attempt_cursor_ts == first_cursor
+    record = read_iteration(first_iteration)
+    assert record.verdict_gate == "loop-v2" and record.verdict_corrections["outcome"] == "pass"
+    assert record.graduated == 0
+
+    # The canary is rated well and promoted: the cursor moves, and the 300-odd thumbs that
+    # arrived trigger the loop again, but only one correction (the one kept aside) is trainable.
+    logged = _log_keyed_answers(loop, name)
+    _rate(logged, canary=1, stable=1)
+    loop["cycle"]()
+    state = read_state()
+    assert state.production_name == name and state.canary_active is None
+    assert state.harvest_cursor_ts == first_cursor and state.canary_cursor_ts is None
+    assert state.previous_harvest_cursor_ts is None  # production was the served model before
+    assert len(loop["trained_on"]) == 1 and len(calls) == 1
+    assert re.fullmatch(
+        r"Waiting: 1/5 trainable corrections · \d+ new ratings", state.waiting_note or ""
+    ), state.waiting_note
+    _, status = loop["cli"]("status")
+    flat = " ".join(status.replace(chr(0x2502), " ").split())
+    assert "Waiting: 1/5 trainable corrections" in flat
+
+    # Iteration 2: four new corrections. With the graduating one that is five: it trains.
+    for number in range(7, 11):
+        _correct(2000 + number, free[number - 2], 20 + number)
+    loop["cycle"]()
+    second_iteration = loop["created"][-1]
+    second_rows = [row["messages"][-1]["content"] for row in loop["trained_on"][1]]
+    assert fixed(2006) in second_rows  # it graduated into training
+    assert all(fixed(2000 + number) in second_rows for number in range(1, 11))
+    second_call = calls[1]
+    assert [row["edit_id"] for row in second_call["--corrections"]] == [
+        _uuid(2006), *(_uuid(2000 + number) for number in range(7, 11))
+    ]
+    assert second_call["--held-out"] == []  # nothing new is kept aside, and 2006 never again
+    argv = second_call["argv"]
+    assert argv[argv.index("--gate") + 1] == "loop-v2" and "--base-adapter" in argv
+    state = read_state()
+    assert state.canary_active and state.waiting_note is None
+
+    # The ledger, the lines and the manifests.
+    ledger = [json.loads(line) for line in open(
+        os.path.join(".soup-loops", "holdout.jsonl"), encoding="utf-8")]
+    assert [(row["event"], row["edit_id"], row["iteration_id"]) for row in ledger] == [
+        ("kept_aside", _uuid(2006), first_iteration), ("graduated", _uuid(2006), second_iteration),
+    ]
+    lines = {}
+    for kind in ("iteration", "progress", "version"):
+        path = os.path.join(".soup-loops", {"iteration": "iterations.jsonl",
+                                            "progress": "progress.jsonl",
+                                            "version": "versions.jsonl"}[kind])
+        validator = jsonschema.Draft202012Validator(
+            loop_formats.load_schema(kind),
+            format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER,
+        )
+        for line in (json.loads(raw) for raw in open(path, encoding="utf-8") if raw.strip()):
+            assert [error.message for error in validator.iter_errors(line)] == [], (kind, line)
+            if kind == "iteration":
+                lines[line["iteration_id"]] = line
+    second_line = lines[second_iteration]
+    assert second_line["dataset"]["graduated"] == 1
+    assert second_line["verdict"]["gate"] == "loop-v2"
+    assert second_line["verdict"]["corrections"]["n_edits"] == 5
+    assert second_line["verdict"]["held_out"]["n"] == 0
+    manifest = read_iteration(second_iteration)
+    assert manifest.verdict_corrections == second_line["verdict"]["corrections"]
+    assert manifest.graduated == 1
+    progress = [json.loads(raw) for raw in open(
+        os.path.join(".soup-loops", "progress.jsonl"), encoding="utf-8") if raw.strip()]
+    (waiting,) = [
+        line for line in progress if (line["stage"], line["event"]) == ("harvest", "progress")
+    ]
+    assert (waiting["done"], waiting["total"]) == (1, 5)

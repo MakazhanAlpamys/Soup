@@ -1891,11 +1891,13 @@ class TestInitFlags:
 
 
 class TestLoopStateFields:
-    def test_they_are_the_last_two_fields_and_default_to_none(self):
+    def test_they_follow_the_sft_recipe_and_default_to_none(self):
         names = list(LoopState.__dataclass_fields__)
 
-        assert names[-2:] == ["paraphraser_endpoint", "paraphraser_model"]
-        assert names[-3] == "sft_recipe"
+        # (the cursors and the wait note, tests/test_loop_verdict_v2.py, come after them)
+        start = names.index("paraphraser_endpoint")
+        assert names[start:start + 2] == ["paraphraser_endpoint", "paraphraser_model"]
+        assert names[start - 1] == "sft_recipe"
         state = _state()
         assert (state.paraphraser_endpoint, state.paraphraser_model) == (None, None)
 

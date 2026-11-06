@@ -991,7 +991,11 @@ class TestSftTrainStage:
 
 
 class TestSftLoop:
-    """The pre-wired stages through run_once: the cursor of an sft loop."""
+    """The pre-wired stages through run_once: the attempt cursor of an sft loop.
+
+    A training run moves ``attempt_cursor_ts``; the data cursor follows the version in
+    production (tests/test_loop_verdict_v2.py).
+    """
 
     @staticmethod
     def _config():
@@ -1014,7 +1018,7 @@ class TestSftLoop:
         assert "not_enough_new_data: 3 new edits (needs 8) and 12 new rated answers (needs 30)" in (
             waiting.notes
         )
-        assert state.harvest_cursor_ts is None and trainer.configs == []
+        assert state.attempt_cursor_ts is None and trainer.configs == []
 
         conversations, lines = _edits(5, first=200, start=60, tag="more")
         append_lines(TRACES, conversations)
@@ -1023,7 +1027,7 @@ class TestSftLoop:
 
         assert trained.run_id
         assert len(trainer.trained_on[-1]) == 3 + 9 + 5  # everything, not only the news
-        assert state.harvest_cursor_ts == T0 + 64
+        assert state.attempt_cursor_ts == T0 + 64
 
         state, quiet, _ = run_once(state, self._config())
         assert quiet.run_id is None
@@ -1043,7 +1047,7 @@ class TestSftLoop:
 
         state, first, _ = run_once(state, self._config())
 
-        assert first.run_id and state.harvest_cursor_ts == T0 + 104
+        assert first.run_id and state.attempt_cursor_ts == T0 + 104
         state, second, _ = run_once(state, self._config())
         assert second.run_id is None
         assert "0 new edits (needs 8) and 0 new rated answers (needs 30)" in second.notes
@@ -1055,10 +1059,10 @@ class TestSftLoop:
 
         state, failed, _ = run_once(_state(train_method="sft"), self._config())
 
-        assert failed.run_id is None and state.harvest_cursor_ts is None
+        assert failed.run_id is None and state.attempt_cursor_ts is None
         trainer.returncode = 0
         state, retry, _ = run_once(state, self._config())
-        assert retry.run_id and state.harvest_cursor_ts == T0 + 8
+        assert retry.run_id and state.attempt_cursor_ts == T0 + 8
 
     def test_a_thumbs_up_after_a_trained_edit_does_not_ask_for_a_new_run(self, cwd, monkeypatch):
         trainer = _Trainer()
@@ -1087,9 +1091,10 @@ class TestLoopState:
         names = list(LoopState.__dataclass_fields__)
 
         # The sft recipe (tests/test_loop_sft_recipe.py) follows them, then the paraphraser
-        # fields (tests/test_loop_paraphrases.py).
-        assert names[-5:-3] == ["min_new_edits", "min_new_rated"]
-        assert names[-6] == "version_log_started"
+        # fields (tests/test_loop_paraphrases.py), then the cursors (tests/test_loop_verdict_v2.py).
+        start = names.index("min_new_edits")
+        assert names[start:start + 2] == ["min_new_edits", "min_new_rated"]
+        assert names[start - 1] == "version_log_started"
 
     def test_a_loop_yaml_without_the_fields_loads_with_their_defaults(self, cwd):
         legacy = {"served_model": "m", "eval_suite": "e", "baseline": "b", "status": "running",

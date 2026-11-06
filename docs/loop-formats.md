@@ -32,8 +32,9 @@ From Python, `soup_cli.utils.loop_formats` returns them: `load_schema(name)`,
 > [What `soup loop` writes](#what-soup-loop-writes)), next to the
 > `.soup-loops/<iteration-id>/iteration.json` manifest it has always written per iteration,
 > and, before it trains, `paraphrases.jsonl` (see [Who writes it](#who-writes-it)).
-> Nothing in Soup writes the `verdict.corrections` / `verdict.held_out` evidence yet;
-> `soup ship` and Soup Zero will.
+> The `verdict.corrections` / `verdict.held_out` evidence is measured by
+> `soup ship --gate loop-v2` and written into the iteration line by `soup loop` (see
+> [The loop-v2 verdict](#the-loop-v2-verdict)); Soup Zero writes the same objects.
 > **One active loop per project:** the files take no lock, and two `soup loop watch`
 > processes on one `.soup/loop.yaml` would race on the version counter. Other programs may
 > append to the same files; Soup never assumes it is the only writer.
@@ -183,7 +184,7 @@ why an iteration is not a single line.
 | `data` | object or null | `until`: the cursor (conversation and feedback lines up to and including this time were read; the next iteration reads only newer ones); `conversations`; `feedback` counts per kind (`thumb_up`, `thumb_down`, `rating`, `edit`, `comment`). |
 | `dataset` | object or null | `path`, `sha256`, `dpo_pairs`, `kto_rows`, `sft_rows` (row counts of the three datasets a harvest builds), `graduated` (edits that moved from the held-out set into training in this iteration: an edit whose prompt hash puts it in the held-out 30% is kept aside for exactly its first iteration, then trained on). |
 | `train` | object or null | `method` (`dpo`, `kto`, ...), `run_id`, `base` (what training actually loaded: a base model id or a merged earlier version), `root_base` (the original base model id when `base` is a merged version). |
-| `verdict` | object or null | `decision`: `SHIP` or `DON'T SHIP` (from `soup ship`), or `SKIPPED` / `ERROR` when no verdict was reached; `method`: `ship` or `eval_gate`; `baseline`: `{kind: base or version, ref, version}`, what the candidate was compared against (`version` is required when `kind` is `version`); `path` of the report; `reason`; and the optional evidence objects `corrections` and `held_out` (below). |
+| `verdict` | object or null | `decision`: `SHIP` or `DON'T SHIP` (from `soup ship`), or `SKIPPED` / `ERROR` when no verdict was reached; `method`: `ship` or `eval_gate`; `gate`: optional, `loop-v2` when `soup ship --gate loop-v2` made the decision (absent = the plain verdict); `baseline`: `{kind: base or version, ref, version}`, what the candidate was compared against (`version` is required when `kind` is `version`); `path` of the report; `reason`; and the optional evidence objects `corrections` and `held_out` (below). |
 | `canary` | object or null | `traffic_pct` (0-100), `samples` per bucket (`stable`, `canary`), `verdict` (`OK`, `MAJOR`, `UNKNOWN` while samples are too few), and an optional `quality` object (below). |
 | `artifacts` | object or null | What serves this version again: `adapter`, `merged`, `gguf` paths, and `served_as` (the adapter name in `soup serve`, or an Ollama tag). |
 | `estimated_cost_usd` | number or null | The budget gate's estimate. |
@@ -347,12 +348,18 @@ day) is a line in `versions.jsonl`, not a change to the iteration. The seed line
 
 What the stages returned fills the other fields, and what they did not report is null or
 left out, never invented: `dataset` has the `path`, its `sha256` and the row counts the
-harvest reported (`dpo_pairs`, `kto_rows`, `sft_rows`); `train` the method, `run_id` and
+harvest reported (`dpo_pairs`, `kto_rows`, `sft_rows`) and, for a loop whose check is
+`soup ship`, `graduated` (below); `train` the method, `run_id` and
 base model, only when a training run happened; `verdict` the decision, the method, the
 baseline (`version` is the production version at the start, for a `soup ship` against the
-production adapter) and the verdict file; `artifacts.adapter` the trained adapter's path;
+production adapter), the verdict file and, for `soup ship --gate loop-v2`, `gate`,
+`corrections`, `held_out` and the gate's `reason` for a `DON'T SHIP`; `artifacts.adapter` the
+trained adapter's path;
 `data.until` the data cursor and `data.conversations` the answers in the trace directory
-(the per-kind feedback counts are not reported by the harvest and are left out).
+(the per-kind feedback counts are not reported by the harvest and are left out). For an
+iteration that trained, `data.until` is the newest feedback it read, which is the cursor the
+data cursor moves to if its canary is promoted; for one that trained nothing it is the data
+cursor (below).
 `canary.quality` is the evidence of the quality verdict, copied from the record's
 `canary_quality`, on the line written when the canary is promoted or withdrawn; the first
 `canary` line has none because nothing was rated yet. Paths are written with `/`.
@@ -401,3 +408,70 @@ The `canary` stage is the one a person watches: a `start` line with `done: 0` an
 nobody rates the answers (no feedback log) `done` counts the canary's answers out of 30,
 and both are null when the canary's statistics could not be read. At most one `canary` line
 is written per cycle while waiting.
+
+A loop whose check is `soup ship` can also wait for corrections before it trains: a
+`harvest` line with the event `progress`, `done` the trainable corrections and `total` the 5
+needed, and the words in `message` (see [The loop-v2 verdict](#the-loop-v2-verdict)). It is
+written once per change of the message, not once per poll.
+
+### The loop-v2 verdict
+
+A loop whose check is `soup ship` (`soup loop init --verify ship`, the default) calls
+`soup ship --gate loop-v2 --corrections FILE --held-out FILE` (docs/evaluation.md), so
+the verdict asks whether the new version **learned the corrections** people made and **kept
+the edits held out of training**. `verdict.gate` is `loop-v2`, `verdict.corrections` and
+`verdict.held_out` are what `soup ship` measured (`--output` writes them in these exact
+shapes; a field that does not follow this page is left out of the line, never trusted), and a
+`DON'T SHIP` carries the gate's reason in `verdict.reason`. The rules are Soup Zero's
+(`zero_server/loop/harvest.py`), so both programs split the same edits:
+
+- **The split.** The key of an edit is the content of the last user message of the corrected
+  answer's conversation, `text.strip().casefold()`; the edit is held out iff
+  `int(sha256(key.encode("utf-8")).hexdigest(), 16) % 100 < 30`. Fixtures (text, value):
+  `How do I reset my password?` 87, `  How do I RESET my password?  ` 87, `Straße öffnen – wie?`
+  12, `Line one\nline two\twith tab` 5, `Привет, как сбросить пароль?` 83. An answer with no
+  user message that has text has no key and is never held out. Thumbs and ratings without an
+  edit are never held out: they train as they always did.
+- **One iteration aside, then graduation.** A held-out prompt is kept out of training in
+  exactly one iteration, the first one that trains; every edit on it then is that iteration's
+  held-out check (`--held-out`: `edit_id`, `prompt`, the last user message as written,
+  `expected`, `original`; identical corrections count once). From the next iteration on it
+  trains and joins the corrections check, and is never kept aside again, whatever the verdict
+  of the iteration that checked it was. An iteration that trained nothing (it waited for more
+  corrections) or whose training failed does not use the keep-aside up. `dataset.graduated`
+  counts the edits that moved from the held-out set into training in the iteration.
+  Which edit was kept aside and which graduated, in which iteration, is
+  `.soup-loops/holdout.jsonl`, written by the iteration that trained (it is the loop's own
+  small log, not one of the six formats): `schema_version`, `ts`, `iteration_id`, `event`
+  (`kept_aside` or `graduated`), `edit_id`, `prompt_key` (the SHA-256 of the key, not the
+  prompt) and `until` (the cursor the iteration would set). Append only; the last row per
+  `edit_id` wins.
+- **The corrections check** (`--corrections`: `edit_id`, `expected`, `original`,
+  `paraphrases`) covers the edits trained in the iteration, the new ones and the graduated
+  ones, that have a current line in `paraphrases.jsonl`; a trained edit without one is left out
+  and the iteration's notes count it.
+- **The lineage cursor.** The data cursor (`harvest_cursor_ts` in `.soup/loop.yaml`; the `data.until`
+  of an iteration is what that iteration read up to) follows the version in production: it moves
+  when the canary that used the rows is promoted, and `soup loop rollback` returns it to the
+  previous production's. The rows
+  of a rejected candidate (a `DON'T SHIP`, a withdrawn or rolled-back canary, a canary that
+  never started) are new again, so they are trained and counted again. What triggers training
+  still counts feedback newer than the later of that cursor and the newest feedback a training
+  run read (`attempt_cursor_ts`), so a rejected run is not repeated on its own rows. A
+  `loop.yaml` from before takes its cursor as production's.
+- **The plan-time wait.** The edits that would train in a cycle are the new ones (newer than the
+  lineage cursor) left after the keep-aside, plus the graduated ones. With none, there are no
+  corrections to check and the usual trigger (8 new edits or 30 new rated answers) decides. With
+  one to four the cycle trains nothing and spends no GPU: `Waiting: 4/5 trainable corrections
+  (2 more kept aside for checking) · 41 new ratings`. That is the iteration's note, a
+  `harvest` progress line and a `waiting` row of `soup loop status`; the edits keep
+  accumulating. With five or more it trains, as long as the usual trigger allows it.
+- **When nothing is left to check.** With no corrections to check and the general suites
+  holding, `soup ship` answers `DON'T SHIP` with `canary_decides: true`. The loop still
+  deploys the candidate to a canary and its ratings decide (note: `No corrections to check - the
+  canary's ratings decide`); the iteration line says `decision: "DON'T SHIP"`, `outcome:
+  "canary"`. A loop without a feedback log has no ratings, so such a canary is judged by request
+  errors alone. Any other `DON'T SHIP` stops the rollout.
+
+A loop whose check is the eval gate (`--verify eval-gate`) keeps no edit aside and does not
+wait for corrections; only the lineage cursor applies to it.

@@ -58,6 +58,7 @@ from soup_cli.utils.loop_detach import (
     rotated_log_path,
     write_pid_file,
 )
+from soup_cli.utils.loop_holdout import rollback_cursor_changes
 from soup_cli.utils.loop_iteration import list_iterations, read_iteration
 from soup_cli.utils.loop_log import (
     LoopLog,
@@ -700,6 +701,9 @@ def status_cmd() -> None:
     table.add_row("canary_max_wait", format_wait_duration(state.canary_max_wait_sec))
     table.add_row("canary_on_timeout", escape(state.canary_on_timeout))
     table.add_row("new_data_since", _cursor_label(state))
+    if state.waiting_note:
+        # The last cycle that waited for corrections said this (not a live count).
+        table.add_row("waiting", for_terminal(state.waiting_note))
     table.add_row("min_new_pairs", str(state.min_new_pairs))
     table.add_row("min_new_edits", str(state.min_new_edits))
     table.add_row("min_new_rated", str(state.min_new_rated))
@@ -1020,6 +1024,7 @@ def canary_cmd(
         canary_autoroll_on_regress=autoroll_on_regress,
         canary_rollout_id=uuid.uuid4().hex,
         canary_started_ts=time.time(),
+        canary_cursor_ts=None,  # no iteration started it: its promotion leaves the data cursor
         canary_iteration=None,  # no iteration started this canary
     )
     # The log lines come first, as the daemon's do. A canary started by hand changes no
@@ -1074,6 +1079,7 @@ def rollback_cmd() -> None:
                 canary_rollout_id=None,
                 canary_adapter=None,
                 canary_started_ts=None,
+                canary_cursor_ts=None,
                 canary_iteration=None,
             )
         )
@@ -1117,6 +1123,8 @@ def rollback_cmd() -> None:
             canary_adapter=None,
             canary_started_ts=None,
             **changes,
+            # the data cursor goes back with production (a running canary's own is withdrawn)
+            **rollback_cursor_changes(state),
         )
     )
     label = target or "the served model"
@@ -1198,7 +1206,7 @@ def _feedback_log_label(state: LoopState) -> str:
 
 
 def _cursor_label(state: LoopState) -> str:
-    """When the feedback the last training run saw ends (UTC), or "the start"."""
+    """When the feedback the version in production was trained on ends (UTC), or "the start"."""
     if state.harvest_cursor_ts is None:
         return "the start"
     moment = datetime.fromtimestamp(state.harvest_cursor_ts, timezone.utc)

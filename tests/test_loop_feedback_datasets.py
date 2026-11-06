@@ -1205,7 +1205,12 @@ class TestTrainStage:
 
 
 class TestTheLoopOverFeedback:
-    """The pre-wired stages through run_once: the cursor, per method."""
+    """The pre-wired stages through run_once: the attempt cursor, per method.
+
+    A training run moves ``attempt_cursor_ts`` (the newest feedback it read); the data cursor
+    ``harvest_cursor_ts`` follows the version in production and moves on a promotion
+    (tests/test_loop_verdict_v2.py).
+    """
 
     @staticmethod
     def _config():
@@ -1227,12 +1232,12 @@ class TestTheLoopOverFeedback:
 
         state, first, _ = run_once(state, self._config())
         assert first.run_id and first.pairs_harvested == 4
-        assert state.harvest_cursor_ts == T0 + 30
+        assert state.attempt_cursor_ts == T0 + 30
 
         state, quiet, _ = run_once(state, self._config())
         assert quiet.run_id is None
         assert "not_enough_new_data: 0 new kto rows since the last training run" in quiet.notes
-        assert state.harvest_cursor_ts == T0 + 30
+        assert state.attempt_cursor_ts == T0 + 30
 
         with open(FEEDBACK, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(thumb(2, 50, -1)) + "\n")  # B was bad after all
@@ -1241,10 +1246,10 @@ class TestTheLoopOverFeedback:
         assert third.run_id
         labels = [(row["completion"], row["label"]) for row in trainer.trained_on[-1]]
         assert labels == [(EDIT, True), (ANSWER, False), ("B", False), ("C", False)]
-        assert state.harvest_cursor_ts == T0 + 50
+        assert state.attempt_cursor_ts == T0 + 50
         assert len(trainer.trained_on) == 2
 
-    def test_a_failed_training_leaves_the_cursor_so_the_feedback_is_tried_again(
+    def test_a_failed_training_leaves_the_cursors_so_the_feedback_is_tried_again(
         self, cwd, monkeypatch
     ):
         trainer = _Trainer(returncode=1)
@@ -1256,11 +1261,11 @@ class TestTheLoopOverFeedback:
         )
 
         assert failed.run_id is None
-        assert state.harvest_cursor_ts is None
+        assert state.attempt_cursor_ts is None
         trainer.returncode = 0
         state, retry, _ = run_once(state, self._config())
         # (+30 is the thumb down, which gives no sft row but was seen by the run.)
-        assert retry.run_id and state.harvest_cursor_ts == T0 + 30
+        assert retry.run_id and state.attempt_cursor_ts == T0 + 30
 
     def test_min_new_pairs_counts_rows_of_the_chosen_method(self, cwd, monkeypatch):
         trainer = _Trainer()
@@ -1272,7 +1277,7 @@ class TestTheLoopOverFeedback:
         )
         assert waiting.run_id is None
         assert "not_enough_new_data: 2 new kto rows since the last training run" in waiting.notes
-        assert state.harvest_cursor_ts is None
+        assert state.attempt_cursor_ts is None
         assert trainer.configs == []
 
         with open(FEEDBACK, "a", encoding="utf-8") as handle:
@@ -1281,7 +1286,7 @@ class TestTheLoopOverFeedback:
 
         assert trained.run_id
         assert len(trainer.trained_on[-1]) == 3
-        assert state.harvest_cursor_ts == T0 + 4
+        assert state.attempt_cursor_ts == T0 + 4
 
 
 # ---------------------------------------------------------------------------

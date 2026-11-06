@@ -159,11 +159,15 @@ class LoopState:
     # (previous_production_name None = the served model itself).
     previous_production_name: Optional[str] = None
     previous_production_adapter: Optional[str] = None
-    # The data cursor: the newest feedback timestamp (epoch seconds) a training run
-    # has already seen; None = no training run yet, so every pair is new. It is a
-    # trigger only (training waits for `min_new_pairs` pairs newer than it); the
-    # run still trains on all the pairs, as each iteration trains a fresh LoRA from
-    # the base model. The daemon advances it after a training run, never on a skip.
+    # The data cursor: the newest feedback timestamp (epoch seconds) that the version in
+    # PRODUCTION was trained on (its lineage); None = nothing promoted yet, so every row is new.
+    # It moves when the canary that used the rows is promoted, never on a training run alone, so
+    # the rows of a rejected candidate are new again (``canary_cursor_ts`` and
+    # ``previous_harvest_cursor_ts``, at the end, carry it through a canary and a rollback).
+    # With ``attempt_cursor_ts`` it is also the trigger: training waits for `min_new_pairs` pairs
+    # newer than the later of the two; the run still trains on all the pairs, as each iteration
+    # trains a fresh LoRA from the base model. A loop.yaml from before the lineage cursor holds
+    # the cursor of its last training run: that is taken as production's.
     harvest_cursor_ts: Optional[float] = None
     # Training waits until this many preference pairs are newer than the cursor
     # (`soup loop init --min-new-pairs`).
@@ -231,6 +235,23 @@ class LoopState:
     # with None.
     paraphraser_endpoint: Optional[str] = None
     paraphraser_model: Optional[str] = None
+    # The data cursor above (``harvest_cursor_ts``) follows the version in PRODUCTION: it moves
+    # when the candidate that used the rows is promoted, and ``soup loop rollback`` returns to the
+    # previous production's. A candidate that is thrown away (DON'T SHIP, a withdrawn or rolled
+    # back canary) leaves its rows new. A loop.yaml from before takes its cursor as production's.
+    # Three more cursors and a note complete it. All last, so adding them shifted no existing
+    # positional field; a loop.yaml from before them loads with None.
+    # The newest feedback a training run has read, promoted or not: the trigger counts what is new
+    # since the later of this and the data cursor, so a rejected run is not retrained every poll.
+    attempt_cursor_ts: Optional[float] = None
+    # The cursor of the candidate now in canary: it becomes the data cursor when it is promoted
+    # (None = no canary, or one no iteration started: its promotion leaves the cursor alone).
+    canary_cursor_ts: Optional[float] = None
+    # The data cursor before the last promotion; what ``soup loop rollback`` returns to.
+    previous_harvest_cursor_ts: Optional[float] = None
+    # The plan-time wait of the latest cycle that waited ("Waiting: 4/5 trainable corrections
+    # ..."), for ``soup loop status``; None once the loop trains or has nothing to wait for.
+    waiting_note: Optional[str] = None
 
     def __post_init__(self) -> None:  # noqa: D401 — validator hook
         # Closed-allowlist enforcement + bool-as-int rejection mirror the
@@ -316,6 +337,23 @@ class LoopState:
                     "harvest_cursor_ts must be epoch seconds in "
                     f"[0, {int(MAX_CURSOR_TS)}] or None, got {v!r}"
                 )
+        for fname in ("attempt_cursor_ts", "canary_cursor_ts", "previous_harvest_cursor_ts"):
+            v = getattr(self, fname)
+            if v is None:
+                continue
+            if (
+                isinstance(v, bool)
+                or not isinstance(v, (int, float))
+                or not (0 <= v <= MAX_CURSOR_TS)  # False for NaN too
+            ):
+                raise ValueError(
+                    f"{fname} must be epoch seconds in [0, {int(MAX_CURSOR_TS)}] or None, "
+                    f"got {v!r}"
+                )
+        if self.waiting_note is not None:
+            _require_str("waiting_note", self.waiting_note, allow_empty=False)
+            if any(ord(char) < 0x20 or ord(char) == 0x7F for char in self.waiting_note):
+                raise ValueError("waiting_note must not contain control characters")
         v = self.min_new_pairs
         if isinstance(v, bool) or not isinstance(v, int) or v < 1:
             raise ValueError(f"min_new_pairs must be a positive int, got {v!r}")

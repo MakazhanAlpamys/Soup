@@ -4,13 +4,14 @@ Before this, `soup loop watch --pre-wired` harvested every preference pair ever
 recorded in each iteration. A promoted canary was followed by a cycle that
 trained on the same feedback again and started another canary.
 
-The cursor (`harvest_cursor_ts` in loop.yaml) is a TRIGGER only: the newest feedback
-timestamp that a training run has already seen. A pair is new when the newer of its
-two rows is later than the cursor. Training runs once at least `min_new_pairs`
-(`soup loop init --min-new-pairs`, default 1) pairs are new, and it trains on ALL
+The cursor that a training run moves (`attempt_cursor_ts` in loop.yaml) is a TRIGGER only: the
+newest feedback timestamp that a training run has already read. A pair is new when the newer of
+its two rows is later than the later of that and the data cursor (`harvest_cursor_ts`, which
+follows the version in production: tests/test_loop_verdict_v2.py). Training runs once at least
+`min_new_pairs` (`soup loop init --min-new-pairs`, default 1) pairs are new, and it trains on ALL
 accumulated pairs, not just the new ones: every iteration trains a fresh LoRA from
 the base model, so a version trained on the new pairs alone would forget the last.
-The cursor advances after a training run, whatever the verdict was, and never
+The attempt cursor advances after a training run, whatever the verdict was, and never
 after a skip or a failed training.
 """
 
@@ -573,10 +574,19 @@ def _base_state(**kwargs) -> LoopState:
 
 
 class TestCursorAdvance:
+    """What a training run moves is ``attempt_cursor_ts``, the newest feedback it read.
+
+    ``harvest_cursor_ts`` used to be this; it now follows production (a promotion moves it, a
+    rollback returns it), and the trigger counts what is new after the later of the two.
+    """
+
     def test_it_advances_after_a_training_run(self, cwd):
         new_state, _, _ = run_once(_base_state(), _config({"run_id": "r1", "skipped": False}))
 
-        assert new_state.harvest_cursor_ts == 500.0
+        assert new_state.attempt_cursor_ts == 500.0
+        # The data cursor follows the version in production, not the last training run: it
+        # moves when the candidate is promoted (tests/test_loop_verdict_v2.py).
+        assert new_state.harvest_cursor_ts is None
 
     @pytest.mark.parametrize("gate", ["OK", "MAJOR", "SKIPPED"])
     def test_the_verdict_does_not_matter(self, cwd, gate):
@@ -586,7 +596,7 @@ class TestCursorAdvance:
         )
 
         assert record.gate_verdict == gate
-        assert new_state.harvest_cursor_ts == 500.0
+        assert new_state.attempt_cursor_ts == 500.0
 
     @pytest.mark.parametrize(
         "train",
@@ -601,29 +611,29 @@ class TestCursorAdvance:
     def test_it_stays_when_training_did_not_run(self, cwd, train):
         new_state, _, _ = run_once(_base_state(), _config(train))
 
-        assert new_state.harvest_cursor_ts is None
+        assert new_state.attempt_cursor_ts is None
 
     def test_it_never_moves_back(self, cwd):
         new_state, _, _ = run_once(
-            _base_state(harvest_cursor_ts=600.0), _config({"run_id": "r1", "skipped": False})
+            _base_state(attempt_cursor_ts=600.0), _config({"run_id": "r1", "skipped": False})
         )
 
-        assert new_state.harvest_cursor_ts == 600.0
+        assert new_state.attempt_cursor_ts == 600.0
 
     def test_it_moves_forward_from_an_earlier_value(self, cwd):
         new_state, _, _ = run_once(
-            _base_state(harvest_cursor_ts=100.0), _config({"run_id": "r1", "skipped": False})
+            _base_state(attempt_cursor_ts=100.0), _config({"run_id": "r1", "skipped": False})
         )
 
-        assert new_state.harvest_cursor_ts == 500.0
+        assert new_state.attempt_cursor_ts == 500.0
 
     def test_a_harvest_without_a_cursor_leaves_it_alone(self, cwd):
         new_state, _, _ = run_once(
-            _base_state(harvest_cursor_ts=100.0),
+            _base_state(attempt_cursor_ts=100.0),
             _config({"run_id": "r1", "skipped": False}, cursor=None),
         )
 
-        assert new_state.harvest_cursor_ts == 100.0
+        assert new_state.attempt_cursor_ts == 100.0
 
     @pytest.mark.parametrize("bad", ["500", float("nan"), float("inf"), -5.0, True, 1e300, [1]])
     def test_a_garbage_cursor_from_a_custom_harvest_is_ignored(self, cwd, bad):
@@ -631,19 +641,19 @@ class TestCursorAdvance:
             _base_state(), _config({"run_id": "r1", "skipped": False}, cursor=bad)
         )
 
-        assert new_state.harvest_cursor_ts is None
+        assert new_state.attempt_cursor_ts is None
 
     def test_an_integer_cursor_is_stored_as_a_number(self, cwd):
         new_state, _, _ = run_once(
             _base_state(), _config({"run_id": "r1", "skipped": False}, cursor=500)
         )
 
-        assert new_state.harvest_cursor_ts == 500.0
+        assert new_state.attempt_cursor_ts == 500.0
 
     def test_the_default_stub_stages_never_move_it(self, cwd):
         new_state, _, _ = run_once(_base_state(), WatchConfig(cost_fn=lambda s: 0.0))
 
-        assert new_state.harvest_cursor_ts is None
+        assert new_state.attempt_cursor_ts is None
 
 
 class TestLifetimeCounters:
@@ -730,7 +740,7 @@ class TestTheLoop:
         _pair_in_db("t.db", "Q1", T0 + 1, T0 + 2)
         first = loop.cycle()
         assert first.run_id and first.pairs_harvested == 1
-        assert loop.state.harvest_cursor_ts == T0 + 2
+        assert loop.state.attempt_cursor_ts == T0 + 2
 
         quiet = loop.cycle()
         assert quiet.run_id is None
@@ -738,14 +748,14 @@ class TestTheLoop:
             quiet.notes
         )
         assert loop.trainer.calls == 1
-        assert loop.state.harvest_cursor_ts == T0 + 2
+        assert loop.state.attempt_cursor_ts == T0 + 2
 
         _pair_in_db("t.db", "Q2", T0 + 10, T0 + 11)
         third = loop.cycle()
         assert third.run_id and third.pairs_harvested == 2
         # The fresh LoRA trains on everything so far, not on the one new pair.
         assert sorted(row["prompt"] for row in loop.trainer.trained_on[-1]) == ["Q1", "Q2"]
-        assert loop.state.harvest_cursor_ts == T0 + 11
+        assert loop.state.attempt_cursor_ts == T0 + 11
         assert loop.cycle().run_id is None
         assert loop.trainer.calls == 2
 
@@ -778,7 +788,7 @@ class TestTheLoop:
         first = loop.cycle()
 
         assert first.run_id and first.gate_verdict == "MAJOR"
-        assert loop.state.harvest_cursor_ts == T0 + 2
+        assert loop.state.attempt_cursor_ts == T0 + 2
         assert loop.cycle().run_id is None
         assert loop.trainer.calls == 1
 
@@ -788,13 +798,13 @@ class TestTheLoop:
 
         failed = loop.cycle()
         assert failed.run_id is None
-        assert loop.state.harvest_cursor_ts is None
+        assert loop.state.attempt_cursor_ts is None
 
         loop.trainer.returncode = 0
         retry = loop.cycle()
         assert retry.run_id
         assert loop.trainer.calls == 2
-        assert loop.state.harvest_cursor_ts == T0 + 2
+        assert loop.state.attempt_cursor_ts == T0 + 2
 
     def test_feedback_accumulates_until_min_new_pairs(self, cwd, monkeypatch):
         loop = _Loop(cwd, monkeypatch, min_new_pairs=2)
@@ -806,21 +816,21 @@ class TestTheLoop:
             "not_enough_new_data: 1 new preference pairs since the last training run, "
             "training needs 2 (soup loop init --min-new-pairs)"
         ) in waiting.notes
-        assert loop.state.harvest_cursor_ts is None
+        assert loop.state.attempt_cursor_ts is None
 
         _pair_in_db("t.db", "Q2", T0 + 3, T0 + 4)
         enough = loop.cycle()
 
         assert enough.run_id
         assert sorted(row["prompt"] for row in loop.trainer.trained_on[-1]) == ["Q1", "Q2"]
-        assert loop.state.harvest_cursor_ts == T0 + 4
+        assert loop.state.attempt_cursor_ts == T0 + 4
 
     def test_the_cursor_survives_a_restart(self, loop):
         _pair_in_db("t.db", "Q1", T0 + 1, T0 + 2)
         loop.cycle()
         write_state(loop.state)
 
-        assert read_state().harvest_cursor_ts == T0 + 2
+        assert read_state().attempt_cursor_ts == T0 + 2
 
 
 # ---------------------------------------------------------------------------
