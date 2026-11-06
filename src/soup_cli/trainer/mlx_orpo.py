@@ -36,7 +36,7 @@ from typing import Any
 
 from rich.console import Console
 
-from soup_cli.trainer._trl_compat import _truncate_tokens
+from soup_cli.trainer._trl_compat import _truncate_prompt
 from soup_cli.trainer.mlx_dpo import (
     DEFAULT_LOGIT_CHUNK,
     MLXDPOTrainerWrapper,
@@ -159,7 +159,9 @@ def build_orpo_example(
         if eos is not None and (not answer_ids or answer_ids[-1] != eos):
             answer_ids = answer_ids + [eos]
         # Soup's cap (enforce_preference_sequence_limit's ORPO branch).
-        prompt_ids = _truncate_tokens(prompt_ids, max_prompt_length, truncation_mode)
+        prompt_ids, _ = _truncate_prompt(
+            prompt_ids, [1] * len(prompt_ids), max_prompt_length, truncation_mode, bos
+        )
         answer_ids = answer_ids[: max(0, max_length - len(prompt_ids))]
         if not answer_ids:
             raise PreferenceRowError(
