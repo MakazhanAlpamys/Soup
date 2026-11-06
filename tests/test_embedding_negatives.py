@@ -11,6 +11,7 @@ import yaml
 
 from soup_cli.config.loader import load_config_from_string
 from soup_cli.data.formats import split_embedding_negatives
+from tests.conftest import strip_ansi
 from tests.test_issue1234_embedding_contrastive_batch_size import _tiny_bert_dir
 
 
@@ -134,7 +135,7 @@ def test_setup_keeps_the_contrastive_fallback_when_no_row_has_one(tmp_path, monk
     wrapper = _wrapper(tmp_path, monkeypatch)
     wrapper.setup({"train": [_with(), _with(""), _with(), _with()]})
     assert wrapper.trainer._loss_type == "contrastive"
-    out = " ".join(capsys.readouterr().out.split())
+    out = " ".join(strip_ansi(capsys.readouterr().out).split())
     assert "triplet loss requires 'negative' field" in out
     assert "Falling back to contrastive loss" in out
 
