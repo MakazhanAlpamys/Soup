@@ -101,11 +101,13 @@ def write_lock_cmd(
 
     console.print(
         Panel(
-            Text.from_markup(
-                f"Lock:        [bold]{for_terminal(output)}[/]\n"
-                f"Base:        [bold]{for_terminal(base_model)}[/]\n"
-                f"Closure SHA: [bold]{closure[:12]}…[/]",
-                emoji=False,
+            Text.assemble(
+                "Lock:        ",
+                (strip_control(output), "bold"),
+                "\nBase:        ",
+                (strip_control(base_model), "bold"),
+                "\nClosure SHA: ",
+                (f"{closure[:12]}…", "bold"),
             ),
             title="soup.lock written",
         )
@@ -129,15 +131,21 @@ def show_lock_cmd(
     # checked as 64 hex characters. The title is a Text so the path is not read as markup.
     console.print(
         Panel(
-            Text.from_markup(
-                f"Soup version:    [bold]{for_terminal(lock.soup_version)}[/]\n"
-                f"Base model:      [bold]{for_terminal(lock.base_model)}[/]\n"
-                f"Base SHA:        [bold]{lock.base_model_sha[:16]}…[/]\n"
-                f"Dataset SHA:     [bold]{lock.dataset_sha[:16]}…[/]\n"
-                f"Env hash:        [bold]{lock.env_hash[:16]}…[/]\n"
-                f"Closure SHA:     [bold]{lock.closure_sha[:16]}…[/]\n"
-                f"Created at:      [bold]{for_terminal(lock.created_at)}[/]",
-                emoji=False,
+            Text.assemble(
+                "Soup version:    ",
+                (strip_control(lock.soup_version), "bold"),
+                "\nBase model:      ",
+                (strip_control(lock.base_model), "bold"),
+                "\nBase SHA:        ",
+                (f"{lock.base_model_sha[:16]}…", "bold"),
+                "\nDataset SHA:     ",
+                (f"{lock.dataset_sha[:16]}…", "bold"),
+                "\nEnv hash:        ",
+                (f"{lock.env_hash[:16]}…", "bold"),
+                "\nClosure SHA:     ",
+                (f"{lock.closure_sha[:16]}…", "bold"),
+                "\nCreated at:      ",
+                (strip_control(lock.created_at), "bold"),
             ),
             title=Text(f"soup.lock — {strip_control(path)}"),
         )
