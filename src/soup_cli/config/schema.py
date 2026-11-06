@@ -1453,7 +1453,7 @@ class TrainingConfig(BaseModel):
         A tunable set while its feature is off is refused. "Set" means set to something
         other than the default, not merely present in ``model_fields_set``:
         ``model_dump()`` writes ``save_steps: 100`` for every config, and ``sweep``
-        (``SoupConfig(**config_dict)``), the unsloth probe, ``soup rewind`` and the cloud
+        (which rebuilds the config from a dict), the unsloth probe, ``soup rewind`` and the cloud
         hand-off all validate a dump, so a guard on presence alone would refuse its own
         output (the lesson of #321, ``bnb_4bit_use_double_quant``). The one miss is an
         explicit ``save_steps: 100`` beside ``epoch`` / ``no``, which is indistinguishable
