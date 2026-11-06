@@ -3,8 +3,8 @@
 A non-loopback ``--host`` is refused without ``--tool-auth-token``, which
 reads as if the token put the whole server behind a credential. It does not:
 
-* on the transformers backend the token is checked on the tool, thumbs and
-  adapter routes only; the generation routes take none;
+* on the transformers backend the token is checked on the tool, thumbs, feedback
+  and adapter routes only; the generation routes take none;
 * the vLLM, SGLang and MII apps have no such routes and are never handed the
   token, so no route checks it there;
 * on a wildcard bind there is no single name to compare ``Host`` against, so
@@ -38,7 +38,9 @@ NAMED = ["192.168.1.20", "10.0.0.5", "gpu-box.internal", "fe80::1", "[fe80::1]"]
 WILDCARD = ["0.0.0.0", "::", "[::]", "*", ""]
 OTHER_BACKENDS = ["vllm", "sglang", "mii"]
 
-TOKEN_SCOPE = "--tool-auth-token is checked on the tool, thumbs and adapter routes only"
+TOKEN_SCOPE = (
+    "--tool-auth-token is checked on the tool, thumbs, feedback and adapter routes only"
+)
 OPEN_ROUTES = "answer every client that can reach this port without a token"
 NO_HOST_CHECK = "the Host header is not compared"
 PLAIN_HTTP = "travel as plain HTTP (soup serve has no TLS): terminate TLS in a proxy in front"
@@ -100,6 +102,7 @@ class TestNotices:
         assert OPEN_ROUTES in out
         assert NO_HOST_CHECK in out
         assert "check only that an Origin header, when sent, names the same host as Host" in out
+        assert "the tool, thumbs, feedback and adapter routes check only that an Origin" in out
 
     @pytest.mark.parametrize("backend", OTHER_BACKENDS + ["VLLM", "SGLang"])
     @pytest.mark.parametrize("host", ["192.168.1.20", "0.0.0.0"])
@@ -200,7 +203,7 @@ class TestHostHelp:
         # The help table wraps a long description; drop its borders before joining.
         out = _plain(result.output.replace("│", " "))
         assert "Any other host needs --tool-auth-token" in out
-        assert "checked on the tool, thumbs and adapter routes only" in out
+        assert "checked on the tool, thumbs, feedback and adapter routes only" in out
         assert "should be paired with" not in out
 
 
@@ -211,10 +214,10 @@ class TestToolAuthTokenHelp:
         # floor keeps a changed decorator spelling from turning the loop into a no-op.
         source = inspect.getsource(serve_cmd)
         tool_routes = re.findall(r'@app\.post\("(/v1/tools/[a-z_]+)"', source)
-        thumbs_routes = re.findall(r'@app\.post\("(/v1/thumbs)"', source)
+        thumbs_routes = re.findall(r'@app\.post\("(/v1/(?:thumbs|feedback))"', source)
         adapter_routes = re.findall(r'@app\.(?:get|post)\("(/v1/adapters[^"]*)"', source)
         assert {"/v1/tools/python", "/v1/tools/bash", "/v1/tools/web_search"} <= set(tool_routes)
-        assert {"/v1/thumbs"} <= set(thumbs_routes)
+        assert {"/v1/thumbs", "/v1/feedback"} <= set(thumbs_routes)
         assert {
             "/v1/adapters",
             "/v1/adapters/activate/{name}",
