@@ -195,6 +195,11 @@ def _attach(task: str, monkeypatch, *, moe_lora: bool, dense: bool = False):
         lambda *_a, **_k: build(auto_class),
     )
 
+    if task == "unlearn":
+        # #2574: unlearn reads its rows before any model loads, so give it one.
+        monkeypatch.setattr(
+            "soup_cli.trainer.unlearn._load_unlearn_rows", lambda _path: [("p", "t")]
+        )
     cfg = _config(task, moe_lora=moe_lora)
     wrapper = object.__new__(wrapper_cls)
     wrapper.config = cfg
@@ -209,8 +214,9 @@ def _attach(task: str, monkeypatch, *, moe_lora: bool, dense: bool = False):
         if hasattr(wrapper, "_setup_transformers"):
             wrapper._setup_transformers(cfg, cfg.training)
         else:
-            # classifier / distill / unlearn: setup(dataset) attaches LoRA first
-            # and only then reads the rows, which we do not supply.
+            # classifier / distill: setup(dataset) attaches LoRA first and only
+            # then reads the rows, which we do not supply. unlearn reads its
+            # (stubbed) rows first and stops past the attach.
             wrapper.setup({})
     except Exception as exc:  # noqa: BLE001 — setup continues past the LoRA attach
         # Only setup(dataset) reads rows after the attach (classifier / distill /
