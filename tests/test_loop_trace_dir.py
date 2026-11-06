@@ -33,6 +33,7 @@ def cwd(tmp_path, monkeypatch):
     monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(tmp_path / "registry.db"))
     for name in ("SOUP_LOOP_TRACE_DIR", "SOUP_LOOP_THUMBS_DB", "SOUP_LOOP_SERVE_ENDPOINT"):
         monkeypatch.delenv(name, raising=False)
+    (tmp_path / "tasks.jsonl").write_text('{"prompt": "2+2", "expected": "4"}\n', encoding="utf-8")
     return tmp_path
 
 
@@ -147,7 +148,7 @@ def test_notice_is_silent_for_a_missing_default_directory(cwd):
 def test_init_saves_trace_dir_and_status_shows_it(cwd):
     os.makedirs("logs")
     result, text = _invoke(
-        "init", "./model", "--eval", "e", "--baseline", "b", "--trace-dir", "logs"
+        "init", "./model", "--eval", "tasks.jsonl", "--baseline", "b", "--trace-dir", "logs"
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert read_state().trace_dir == "logs"
@@ -158,7 +159,7 @@ def test_init_saves_trace_dir_and_status_shows_it(cwd):
 
 
 def test_init_without_trace_dir_names_the_default(cwd):
-    result, text = _invoke("init", "./model", "--eval", "e", "--baseline", "b")
+    result, text = _invoke("init", "./model", "--eval", "tasks.jsonl", "--baseline", "b")
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert read_state().trace_dir is None
     assert "trace_dir: .soup-loops/traces (from default)" in text
@@ -166,7 +167,7 @@ def test_init_without_trace_dir_names_the_default(cwd):
 
 def test_init_warns_for_a_directory_that_does_not_exist_yet(cwd):
     result, text = _invoke(
-        "init", "./model", "--eval", "e", "--baseline", "b", "--trace-dir", "logs"
+        "init", "./model", "--eval", "tasks.jsonl", "--baseline", "b", "--trace-dir", "logs"
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert "no conversation logs at logs yet" in text
@@ -180,7 +181,7 @@ def test_init_warns_for_a_directory_that_does_not_exist_yet(cwd):
 def test_init_refuses_a_bad_trace_dir(cwd, value, message):
     open("logs.jsonl", "w").close()
     result, text = _invoke(
-        "init", "./model", "--eval", "e", "--baseline", "b", "--trace-dir", value
+        "init", "./model", "--eval", "tasks.jsonl", "--baseline", "b", "--trace-dir", value
     )
     assert result.exit_code == 2, (result.output, repr(result.exception))
     assert message in text
@@ -188,7 +189,7 @@ def test_init_refuses_a_bad_trace_dir(cwd, value, message):
 
 
 def test_watch_pre_wired_refuses_a_trace_dir_that_is_a_file(cwd, monkeypatch):
-    _invoke("init", "./model", "--eval", "e", "--baseline", "b", "--base-model", "org/b")
+    _invoke("init", "./model", "--eval", "tasks.jsonl", "--baseline", "b", "--base-model", "org/b")
     open("logs.jsonl", "w").close()
     monkeypatch.setenv("SOUP_LOOP_TRACE_DIR", "logs.jsonl")
     result, text = _invoke("watch", "--pre-wired", "--max-iterations", "1", "--poll-interval", "1")
@@ -198,7 +199,7 @@ def test_watch_pre_wired_refuses_a_trace_dir_that_is_a_file(cwd, monkeypatch):
 
 
 def test_watch_pre_wired_starts_quietly_with_the_default_directory(cwd, monkeypatch):
-    _invoke("init", "./model", "--eval", "e", "--baseline", "b", "--base-model", "org/b")
+    _invoke("init", "./model", "--eval", "tasks.jsonl", "--baseline", "b", "--base-model", "org/b")
     os.makedirs(os.path.join(".soup-loops", "traces"))
     calls = []
     monkeypatch.setattr("soup_cli.commands.loop.watch", lambda cfg: calls.append(cfg) or (
@@ -211,7 +212,7 @@ def test_watch_pre_wired_starts_quietly_with_the_default_directory(cwd, monkeypa
 
 
 def test_watch_pre_wired_warns_for_a_configured_directory_not_there_yet(cwd, monkeypatch):
-    _invoke("init", "./model", "--eval", "e", "--baseline", "b", "--base-model", "org/b",
+    _invoke("init", "./model", "--eval", "tasks.jsonl", "--baseline", "b", "--base-model", "org/b",
             "--trace-dir", "logs")
     monkeypatch.setattr("soup_cli.commands.loop.watch", lambda cfg: (read_state(), 0))
     result, text = _invoke("watch", "--pre-wired", "--max-iterations", "1", "--poll-interval", "1")

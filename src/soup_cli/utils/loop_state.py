@@ -28,6 +28,8 @@ from soup_cli.utils.paths import is_under_cwd
 # Status values are deliberately closed — every state machine transition
 # below must remain auditable.
 LOOP_STATUSES: frozenset = frozenset({"running", "paused", "stopped"})
+# The check before rollout (`soup loop init --verify`).
+VERIFY_METHODS: tuple = ("ship", "eval_gate")
 
 _MAX_PATH_LEN = 4096
 _MAX_STR_FIELD = 512
@@ -83,6 +85,13 @@ class LoopState:
     # *.jsonl) the pre-wired harvest reads: `soup loop init --trace-dir`.
     # None = .soup-loops/traces. The served model path is never read as one.
     trace_dir: Optional[str] = None
+    # The check before rollout: "ship" (a soup ship verdict against the
+    # production version) or "eval_gate". None = a loop.yaml written before
+    # this field existed; those loops ran the eval gate and still do.
+    verify: Optional[str] = None
+    # Adapter of the version serving as production: the "before" side of the
+    # ship verdict. None = the base model itself.
+    production_adapter: Optional[str] = None
 
     def __post_init__(self) -> None:  # noqa: D401 — validator hook
         # Closed-allowlist enforcement + bool-as-int rejection mirror the
@@ -136,6 +145,12 @@ class LoopState:
             _require_str("base_model", self.base_model, allow_empty=False)
         if self.trace_dir is not None:
             _require_str("trace_dir", self.trace_dir, allow_empty=False)
+        if self.verify is not None and self.verify not in VERIFY_METHODS:
+            raise ValueError(
+                f"verify must be one of {list(VERIFY_METHODS)}, got {self.verify!r}"
+            )
+        if self.production_adapter is not None:
+            _require_str("production_adapter", self.production_adapter, allow_empty=False)
         if self.canary_rollout_id is not None:
             _require_str("canary_rollout_id", self.canary_rollout_id, allow_empty=False)
         if self.last_iteration_id is not None:
@@ -303,6 +318,8 @@ def init_state(
     thumbs_db: Optional[str] = None,
     base_model: Optional[str] = None,
     trace_dir: Optional[str] = None,
+    verify: Optional[str] = None,
+    production_adapter: Optional[str] = None,
     path: Optional[str] = None,
     force: bool = False,
 ) -> Tuple[LoopState, str]:
@@ -334,6 +351,8 @@ def init_state(
         thumbs_db=thumbs_db,
         base_model=base_model,
         trace_dir=trace_dir,
+        verify=verify,
+        production_adapter=production_adapter,
         monthly_budget_usd=monthly_budget_usd,
         max_runs_per_day=max_runs_per_day,
         created_at=now,
