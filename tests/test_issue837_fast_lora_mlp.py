@@ -83,6 +83,22 @@ def _adapter_grads(model):
 
 
 class TestMath:
+    def test_the_lora_dx_add_rounds_once(self):
+        torch = _deps()
+        from soup_cli.utils.fast_lora_mlp import _lora_dx_add
+
+        base = torch.full((1, 1), 1.0, dtype=torch.bfloat16)
+        grad_h = torch.ones((1, 1), dtype=torch.float32)
+        lora_a = torch.full((1, 1), 2.0**-8 + 2.0**-17, dtype=torch.float32)
+        # One rounding of 1 + 2**-8 + 2**-17 lands above the bf16 tie, on
+        # 1 + 2**-7. Rounding the LoRA term to bf16 first leaves exactly
+        # 2**-8: a tie, so 1.0.
+        old = base + torch.matmul(
+            grad_h.to(torch.bfloat16), lora_a.to(torch.bfloat16)
+        )
+        assert old.item() == 1.0
+        assert _lora_dx_add(base, grad_h, lora_a).item() == 1.0 + 2.0**-7
+
     def test_float64_gradcheck_all_six_adapter_matrices_unequal_ranks(self):
         torch = _deps()
         from soup_cli.utils.fast_lora_mlp import _mlp_function
