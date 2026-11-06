@@ -166,6 +166,9 @@ def build_airgap_bundle(plan: AirgapBundlePlan) -> BundleManifest:
     - output / model_dir / dataset_dir outside cwd (containment)
     - aggregate bytes > ``bundle_size_cap_bytes``
     - any symlink encountered (refused at the boundary)
+
+    Raises ``FileNotFoundError`` when ``model_dir`` or any dataset, wheel or kernel
+    directory does not exist or is not a directory.
     """
     if not isinstance(plan, AirgapBundlePlan):
         raise TypeError("plan must be AirgapBundlePlan")
@@ -179,17 +182,25 @@ def build_airgap_bundle(plan: AirgapBundlePlan) -> BundleManifest:
     for entry in plan.kernel_dirs:
         enforce_under_cwd_and_no_symlink(entry, "kernel_dir")
 
-    if not os.path.isdir(plan.model_dir):
+    if not os.path.exists(plan.model_dir):
         raise FileNotFoundError(f"model directory not found: {plan.model_dir}")
+    if not os.path.isdir(plan.model_dir):
+        raise FileNotFoundError(f"model path is not a directory: {plan.model_dir}")
     for entry in plan.dataset_dirs:
-        if not os.path.isdir(entry):
+        if not os.path.exists(entry):
             raise FileNotFoundError(f"dataset directory not found: {entry}")
+        if not os.path.isdir(entry):
+            raise FileNotFoundError(f"dataset path is not a directory: {entry}")
     for entry in plan.wheel_dirs:
-        if not os.path.isdir(entry):
+        if not os.path.exists(entry):
             raise FileNotFoundError(f"wheel directory not found: {entry}")
-    for entry in plan.kernel_dirs:
         if not os.path.isdir(entry):
+            raise FileNotFoundError(f"wheel path is not a directory: {entry}")
+    for entry in plan.kernel_dirs:
+        if not os.path.exists(entry):
             raise FileNotFoundError(f"kernel directory not found: {entry}")
+        if not os.path.isdir(entry):
+            raise FileNotFoundError(f"kernel path is not a directory: {entry}")
 
     members: list[tuple[str, str]] = []
     members.extend(_enumerate_dir(plan.model_dir, label="model"))

@@ -188,6 +188,26 @@ def test_a_missing_wheel_directory_is_refused():
     assert "wheel directory not found: nope-wheel" in text
     assert not os.path.exists(out_file)
 
+
+def test_a_missing_kernel_directory_is_refused():
+    out_file = "out_missing_kernel.tar"
+    result = _bundle("--kernel", "nope-kernel", output=out_file)
+
+    assert result.exit_code == 1
+    text = _plain(result)
+    assert "kernel directory not found: nope-kernel" in text
+    assert not os.path.exists(out_file)
+
+
+def test_a_missing_second_dataset_directory_is_refused():
+    out_file = "out_missing_second.tar"
+    result = _bundle("--dataset", "model", "--dataset", "nope-dataset", output=out_file)
+
+    assert result.exit_code == 1
+    assert "dataset directory not found: nope-dataset" in _plain(result)
+    assert not os.path.exists(out_file)
+
+
 def test_a_model_path_that_is_a_file_is_refused():
     file_path = "model_not_a_dir.bin"
     with open(file_path, "wb") as f:
@@ -197,5 +217,5 @@ def test_a_model_path_that_is_a_file_is_refused():
 
     assert result.exit_code == 1
     text = _plain(result)
-    assert "model directory not found: model_not_a_dir.bin" in text
+    assert "model path is not a directory: model_not_a_dir.bin" in text
     assert not os.path.exists(out_file)
