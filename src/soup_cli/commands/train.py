@@ -1282,8 +1282,14 @@ def train(
 
     # --- Eval-gate shortcut: --gate <path> sets training.eval_gate ---
     if gate:
+        from soup_cli.config.eval_gate_support import eval_gate_refusal
         from soup_cli.config.schema import EvalGateConfig
         from soup_cli.eval.gate import load_suite
+
+        refusal = eval_gate_refusal(task=cfg.task, backend=cfg.backend)
+        if refusal is not None:
+            console.print(f"[red]{for_terminal(refusal)}[/]")
+            raise typer.Exit(1)
 
         try:
             # Validate the suite path up-front (path containment + parse).
