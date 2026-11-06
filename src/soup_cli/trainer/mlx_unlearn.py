@@ -48,7 +48,7 @@ console = Console()
 #: The SimNPO temperature and margin the transformers path trains with.
 SIMNPO_BETA = _DEFAULT_BETA
 SIMNPO_GAMMA = 0.0
-#: The one architecture this path is qualified on (``mlx_lm.models.llama``).
+#: The one architecture this path supports (``mlx_lm.models.llama``).
 SUPPORTED_MODEL_TYPES = ("llama",)
 
 
@@ -191,7 +191,7 @@ class MLXSimNPOTrainerWrapper(MLXDPOTrainerWrapper):
         model_type = getattr(model, "model_type", None)
         if model_type not in SUPPORTED_MODEL_TYPES:
             raise ValueError(
-                f"MLX SimNPO is qualified on Llama-architecture bases only "
+                f"MLX SimNPO supports Llama-architecture bases only "
                 f"(model_type 'llama'); this base is {model_type!r}. Use "
                 "backend: transformers for it."
             )
