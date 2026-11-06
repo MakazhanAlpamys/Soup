@@ -142,7 +142,7 @@ class TestMainWithoutCuda:
         monkeypatch.setattr(sys, "argv", ["bnb_nf4_path_divergence.py"])
 
         assert harness.main() == 0
-        assert "SKIP: CUDA is required" in capsys.readouterr().out  # ansi-ok: print() output
+        assert "SKIP: CUDA is required" in capsys.readouterr().out
 
     def test_bnb_path_goes_first_on_sys_path_as_an_absolute_path(self, monkeypatch, tmp_path):
         import torch
