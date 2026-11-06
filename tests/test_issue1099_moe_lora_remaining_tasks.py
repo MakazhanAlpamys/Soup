@@ -219,8 +219,9 @@ def _attach(task: str, monkeypatch, *, moe_lora: bool, dense: bool = False):
             # (stubbed) rows first and stops past the attach.
             wrapper.setup({})
     except Exception as exc:  # noqa: BLE001 — setup continues past the LoRA attach
-        # Only setup(dataset) reads rows after the attach (classifier / distill /
-        # unlearn, fed no rows here). A ValueError out of _setup_transformers is
+        # Only setup(dataset) reads rows after the attach (classifier / distill, fed no
+        # rows here; unlearn reads its stubbed rows before any model loads). A
+        # ValueError out of _setup_transformers is
         # still the trainer's own refusal and must surface (#1179 review: the
         # tolerance was first applied to #1148's six trainers too).
         reads_rows_after_attach = not hasattr(wrapper, "_setup_transformers")

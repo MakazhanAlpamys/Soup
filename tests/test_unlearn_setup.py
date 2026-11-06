@@ -153,6 +153,32 @@ def test_an_absent_retain_set_still_warns_and_sets_up(
     assert wrapper._retain == []
 
 
+def test_an_absent_retain_set_still_sets_up_for_rmu_without_a_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from tests._tiny_hf_models import tiny_model_dir
+
+    wrapper = _wrapper(tmp_path, monkeypatch, "rmu", retain=None, base=tiny_model_dir("llama"))
+
+    wrapper.setup()
+
+    assert "no retain_set" not in " ".join(strip_ansi(capsys.readouterr().out).split())
+    assert wrapper._retain == []
+    assert wrapper.ref_model is not None
+
+
+@pytest.mark.usefixtures("no_model_load")
+def test_the_method_is_validated_before_the_rows_are_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The config already refuses an unknown method, so set it after construction.
+    wrapper = _wrapper(tmp_path, monkeypatch, "npo", forget=_UNUSABLE["all-blank"])
+    wrapper.method = "bogus"
+
+    with pytest.raises(ValueError, match="unknown unlearn method 'bogus'"):
+        wrapper.setup()
+
+
 @pytest.mark.parametrize("method", _METHODS)
 def test_a_usable_retain_set_sets_up_with_its_rows_and_no_warning(
     tmp_path: Path,
