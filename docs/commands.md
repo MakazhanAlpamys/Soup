@@ -69,7 +69,7 @@ soup eval leaderboard                         Local model leaderboard
 soup eval human --model-a ./a --model-b ./b --input p.jsonl   Human A/B evaluation
 soup eval gate --suite gate.yaml              Run eval-gate suite standalone
 soup eval quant-check --before X --after Y --tasks t.jsonl  Before/after quantization eval (OK/MINOR/MAJOR verdict)
-soup eval retention --model <m> --label v3 [--adapter <dir>] [--add-task NAME=PATH ...] [--record] [--threshold 0.05] [--ledger retention.json] [--output r.json]  Accumulated forgetting across a series of versions: every control task vs its best-ever score (exit 0=no regression / 2=regression / 3=usage / 1=runtime)
+soup eval retention --model <m> --label v3 [--adapter <dir>] [--add-task NAME=PATH ...] [--record] [--threshold 0.05] [--ledger retention.json] [--output r.json] [--config soup.yaml] [--chat-template-kwargs JSON] [--require-history]  Accumulated forgetting across a series of versions: every control task vs its best-ever score (exit 0=no regression / 2=regression / 3=usage / 1=runtime)
 soup eval design <data> --goal "..."          Draft an eval suite from training data + goal
 soup eval discover <data>                       Discover a held-out canary set
 soup eval lock <design>                         Freeze a design as a checksummed suite

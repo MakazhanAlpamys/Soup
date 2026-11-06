@@ -17,7 +17,14 @@ Ledger file (JSON, ``retention.json`` by default)::
     {"schema": 1,
      "tasks": [{"name", "path", "sha256", "added_at", "added_with"}, ...],
      "versions": [{"label", "model", "adapter", "evaluated_at",
-                   "scores": {task_name: accuracy}}, ...]}
+                   "scores": {task_name: accuracy},
+                   "numerics": {"dtype", "device", "quantization",
+                                "chat_template_kwargs"}}, ...]}
+
+``numerics`` is how the version was loaded and decoded. Two scores are only
+comparable when those are equal (bf16 on a GPU and fp32 on a CPU, a 4-bit load, a
+Qwen3 chat template with thinking on or off all move accuracy), so a run whose
+numerics differ from any recorded version is refused (:func:`check_numerics`).
 
 Everything read from a ledger is untrusted (it can arrive in a pull request):
 unknown keys are refused, every field is type- and bound-checked, and a message
@@ -46,7 +53,8 @@ from soup_cli.utils.terminal import strip_control
 
 SCHEMA_VERSION = 1
 DEFAULT_LEDGER_PATH = "retention.json"
-#: Same default as ``soup ship --forgetting-threshold``: absolute accuracy points.
+#: Same default as ``soup ship --forgetting-threshold``: an absolute accuracy
+#: difference, as a fraction (0.05 = 5%).
 DEFAULT_THRESHOLD = 0.05
 
 MAX_LEDGER_BYTES = 4 * 1024 * 1024
@@ -57,6 +65,8 @@ MAX_LABEL_CHARS = 128
 MAX_PATH_CHARS = 1024
 MAX_MODEL_CHARS = 1024
 MAX_STAMP_CHARS = 64
+#: Bound on the canonical JSON text of the chat-template kwargs stamped on a version.
+MAX_NUMERICS_CHARS = 512
 #: A control task file is a few hundred JSONL rows; this bounds the hash read.
 MAX_CONTROL_FILE_BYTES = 64 * 1024 * 1024
 
@@ -74,7 +84,10 @@ _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 _ROOT_KEYS = frozenset({"schema", "tasks", "versions"})
 _TASK_KEYS = frozenset({"name", "path", "sha256", "added_at", "added_with"})
-_VERSION_KEYS = frozenset({"label", "model", "adapter", "evaluated_at", "scores"})
+_VERSION_KEYS = frozenset({"label", "model", "adapter", "evaluated_at", "scores", "numerics"})
+#: Declaration order is the order a message names the keys in.
+_NUMERICS_FIELDS = ("dtype", "device", "quantization", "chat_template_kwargs")
+_NUMERICS_KEYS = frozenset(_NUMERICS_FIELDS)
 
 
 class LedgerError(ValueError):
@@ -83,6 +96,14 @@ class LedgerError(ValueError):
 
 class LedgerNotFoundError(LedgerError):
     """The ledger file does not exist."""
+
+
+class LedgerChangedError(LedgerError):
+    """The ledger file changed between this run reading it and writing it."""
+
+
+class NumericsMismatchError(LedgerError):
+    """This run's numerics differ from a recorded version's: the scores are not comparable."""
 
 
 # ---------------------------------------------------------------------------
@@ -144,12 +165,32 @@ def validate_model_ref(value: object, field: str) -> str:
     return validate_text(value, field, max_chars=MAX_MODEL_CHARS)
 
 
+def _unit_float(value: object) -> Optional[float]:
+    """``value`` as a float if it is a finite number in [0, 1], else ``None``.
+
+    An integer is range-checked BEFORE it is converted: ``float(10**400)`` raises
+    ``OverflowError``, which a ledger with a 400-digit score would otherwise turn into
+    a traceback instead of a refusal.
+    """
+    if isinstance(value, int):
+        return float(value) if 0 <= value <= 1 else None
+    out = float(value)
+    return out if math.isfinite(out) and 0.0 <= out <= 1.0 else None
+
+
+def _number_text(value: object) -> str:
+    """A number for a message, never 400 digits of it."""
+    if isinstance(value, int) and value.bit_length() > 64:
+        return f"an integer of {value.bit_length()} bits"
+    return repr(value)
+
+
 def validate_threshold(value: object) -> float:
-    """The regression threshold: a finite number in [0, 1] (absolute accuracy points)."""
+    """The regression threshold: a finite number in [0, 1] (an accuracy difference)."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise LedgerError(f"threshold must be a number, got {_kind(value)}")
-    out = float(value)
-    if not math.isfinite(out) or not 0.0 <= out <= 1.0:
+    out = _unit_float(value)
+    if out is None:
         raise LedgerError("threshold must be between 0.0 and 1.0")
     return out
 
@@ -158,9 +199,9 @@ def validate_score(value: object, where: str) -> float:
     """An accuracy: a finite number in [0, 1]; bool is refused."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise LedgerError(f"{where} must be a number, got {_kind(value)}")
-    out = float(value)
-    if not math.isfinite(out) or not 0.0 <= out <= 1.0:
-        raise LedgerError(f"{where} must be between 0.0 and 1.0, got {out!r}")
+    out = _unit_float(value)
+    if out is None:
+        raise LedgerError(f"{where} must be between 0.0 and 1.0, got {_number_text(value)}")
     return out
 
 
@@ -205,6 +246,35 @@ class RetentionTask:
 
 
 @dataclass(frozen=True)
+class Numerics:
+    """How a version was loaded and decoded; scores are only comparable under equal numerics.
+
+    ``dtype`` is ``None`` for a quantized load (the quantization names the precision),
+    ``device`` is the device family (``cuda``, not ``cuda:1``) and
+    ``chat_template_kwargs`` is the canonical JSON text of the template variables, or
+    ``None`` when there are none.
+    """
+
+    dtype: Optional[str]
+    device: str
+    quantization: Optional[str]
+    chat_template_kwargs: Optional[str]
+
+    def to_dict(self) -> Dict[str, Optional[str]]:
+        return {name: getattr(self, name) for name in _NUMERICS_FIELDS}
+
+    def differences(
+        self, other: "Numerics"
+    ) -> Tuple[Tuple[str, Optional[str], Optional[str]], ...]:
+        """``(key, this value, other value)`` for every key that is not equal."""
+        return tuple(
+            (name, getattr(self, name), getattr(other, name))
+            for name in _NUMERICS_FIELDS
+            if getattr(self, name) != getattr(other, name)
+        )
+
+
+@dataclass(frozen=True)
 class RetentionVersion:
     """One recorded version: the candidate and its accuracy on every task it saw."""
 
@@ -213,6 +283,7 @@ class RetentionVersion:
     adapter: Optional[str]
     evaluated_at: str
     scores: Dict[str, float]
+    numerics: Numerics
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -221,6 +292,7 @@ class RetentionVersion:
             "adapter": self.adapter,
             "evaluated_at": self.evaluated_at,
             "scores": dict(self.scores),
+            "numerics": self.numerics.to_dict(),
         }
 
 
@@ -270,6 +342,89 @@ def _parse_task(raw: object, index: int) -> RetentionTask:
     return RetentionTask(name, path, sha, added_at, added_with)
 
 
+def _optional_text(value: object, field: str, *, max_chars: int) -> Optional[str]:
+    return None if value is None else validate_text(value, field, max_chars=max_chars)
+
+
+def _checked_numerics(
+    dtype: object,
+    device: object,
+    quantization: object,
+    chat_template_kwargs: object,
+    where: str,
+) -> Numerics:
+    """A ``Numerics`` whose every field is type- and bound-checked."""
+    return Numerics(
+        dtype=_optional_text(dtype, f"{where}.dtype", max_chars=MAX_STAMP_CHARS),
+        device=validate_text(device, f"{where}.device", max_chars=MAX_STAMP_CHARS),
+        quantization=_optional_text(
+            quantization, f"{where}.quantization", max_chars=MAX_STAMP_CHARS
+        ),
+        chat_template_kwargs=_optional_text(
+            chat_template_kwargs, f"{where}.chat_template_kwargs", max_chars=MAX_NUMERICS_CHARS
+        ),
+    )
+
+
+def _parse_numerics(raw: object, where: str) -> Numerics:
+    if not isinstance(raw, dict):
+        raise LedgerError(f"{where} must be an object, got {_kind(raw)}")
+    _require_keys(raw, _NUMERICS_KEYS, where)
+    return _checked_numerics(
+        raw["dtype"], raw["device"], raw["quantization"], raw["chat_template_kwargs"], where
+    )
+
+
+def make_numerics(
+    *,
+    dtype: Optional[str],
+    device: str,
+    quantization: Optional[str],
+    chat_template_kwargs: Optional[dict] = None,
+) -> Numerics:
+    """The stamp of a live run. Template kwargs become canonical JSON (sorted keys)."""
+    text: Optional[str] = None
+    if chat_template_kwargs:
+        try:
+            text = json.dumps(
+                chat_template_kwargs, sort_keys=True, separators=(",", ":"), allow_nan=False
+            )
+        except (TypeError, ValueError) as exc:
+            raise LedgerError(f"--chat-template-kwargs cannot be recorded: {exc}") from exc
+        if len(text) > MAX_NUMERICS_CHARS:
+            raise LedgerError(
+                f"--chat-template-kwargs is too long to record ({len(text)} characters, "
+                f"max {MAX_NUMERICS_CHARS})"
+            )
+    return _checked_numerics(dtype, device, quantization, text, "numerics")
+
+
+def _numerics_text(value: Optional[str]) -> str:
+    return "None" if value is None else _show(value)
+
+
+def check_numerics(ledger: "Ledger", numerics: Numerics) -> None:
+    """Refuse a run whose numerics differ from ANY recorded version's.
+
+    Raises :class:`NumericsMismatchError` naming every differing key with this run's
+    value and the recorded one. An empty ledger accepts anything.
+    """
+    for version in ledger.versions:
+        differences = version.numerics.differences(numerics)
+        if not differences:
+            continue
+        parts = "; ".join(
+            f"{key} {_numerics_text(mine)} (this run) vs {_numerics_text(theirs)} "
+            f"(version {_show(version.label)})"
+            for key, theirs, mine in differences
+        )
+        raise NumericsMismatchError(
+            f"this run's numerics differ from the ledger's: {parts}. Scores measured under "
+            "different numerics are not comparable; re-run with the recorded settings, or "
+            "start a new ledger (--ledger NEW.json) for the new ones."
+        )
+
+
 def _parse_version(raw: object, index: int, task_names: frozenset) -> RetentionVersion:
     where = f"ledger versions[{index}]"
     if not isinstance(raw, dict):
@@ -294,7 +449,8 @@ def _parse_version(raw: object, index: int, task_names: frozenset) -> RetentionV
                 "every scored task must be listed in the ledger's tasks"
             )
         scores[task] = validate_score(value, f"{where}.scores[{_show(task)}]")
-    return RetentionVersion(label, model, adapter, evaluated_at, scores)
+    numerics = _parse_numerics(raw["numerics"], f"{where}.numerics")
+    return RetentionVersion(label, model, adapter, evaluated_at, scores, numerics)
 
 
 def parse_ledger(payload: object) -> Ledger:
@@ -426,26 +582,59 @@ def save_ledger(ledger: Ledger, path: str) -> str:
         raise LedgerError(str(exc)) from exc
 
 
+def save_ledger_if_unchanged(
+    ledger: Ledger, path: str, loaded: Optional[Ledger], *, label: str
+) -> str:
+    """Write ``ledger`` unless the file at ``path`` is no longer what this run read.
+
+    ``loaded`` is the ledger as this run read it (``None`` when the file did not exist).
+    A run takes minutes; another run may have recorded a version meanwhile, and writing
+    the stale copy back would drop that version or let a duplicate label through. The
+    file is re-read right before the write and compared. Two writers that both pass this
+    check inside the same few milliseconds can still race: that window is documented
+    as a known limitation rather than closed with a lock file a crash would leave behind.
+    """
+    try:
+        current: Optional[Ledger] = load_ledger(path)
+    except LedgerNotFoundError:
+        current = None
+    if current != loaded:
+        if current is not None and current.has_label(label):
+            raise LedgerChangedError(
+                f"version label {_show(label)} was recorded by another run while this one "
+                "was evaluating; nothing was recorded here (re-run with a new label)"
+            )
+        raise LedgerChangedError(
+            f"--ledger {quote_path(path)} changed since this run read it (another run "
+            "recorded a version or edited the file); nothing was recorded here. Re-run to "
+            "compare against the current ledger."
+        )
+    return save_ledger(ledger, path)
+
+
 # ---------------------------------------------------------------------------
 # Control tasks
 # ---------------------------------------------------------------------------
 
-def file_sha256(path: str, field: str) -> str:
-    """SHA-256 of a cwd-contained, symlink-refused, size-capped regular file."""
+def read_control_bytes(path: str, field: str) -> bytes:
+    """The bytes of a cwd-contained, symlink-refused, size-capped regular file, read once.
+
+    A caller that must hash a file AND parse it hashes and parses these same bytes: a
+    second open by path could see a different file (a swap and swap back in between).
+    """
     _enforce(path, field)
     if not os.path.lexists(path):
         raise LedgerError(f"{field} {quote_path(path)} does not exist")
-    digest = hashlib.sha256()
-    total = 0
     with _open_regular(path, field) as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            total += len(chunk)
-            if total > MAX_CONTROL_FILE_BYTES:
-                raise LedgerError(
-                    f"{field} {quote_path(path)} exceeds {MAX_CONTROL_FILE_BYTES} bytes"
-                )
-            digest.update(chunk)
-    return digest.hexdigest()
+        data = handle.read(MAX_CONTROL_FILE_BYTES + 1)
+    if len(data) > MAX_CONTROL_FILE_BYTES:
+        raise LedgerError(f"{field} {quote_path(path)} exceeds {MAX_CONTROL_FILE_BYTES} bytes")
+    return data
+
+
+def file_sha256(path: str, field: str) -> str:
+    """SHA-256 of a cwd-contained, symlink-refused, size-capped regular file."""
+    return hashlib.sha256(read_control_bytes(path, field)).hexdigest()
 
 
 def relative_to_cwd(path: str) -> str:
@@ -517,7 +706,8 @@ def verify_ledger_files(ledger: Ledger) -> None:
         _enforce(task.path, field)
         if not os.path.lexists(task.path):
             raise LedgerError(
-                f"control task {_show(task.name)} file {quote_path(task.path)} is missing"
+                f"control task {_show(task.name)} file {quote_path(task.path)} is missing; "
+                f"if it moved, pass --add-task {task.name}=NEWPATH to update the stored path"
             )
         actual = file_sha256(task.path, field)
         if actual != task.sha256:
@@ -642,7 +832,7 @@ def compute_retention(
     For each task: ``best_previous`` is the maximum over ALL recorded versions that
     scored it (not just the latest), ``drop = best_previous - current``, and the task
     regressed when ``drop > threshold``. A task no earlier version scored is ``new``:
-    it becomes its first point and cannot regress.
+    this run is its baseline entry and it cannot regress.
     """
     threshold = validate_threshold(threshold)
     label = validate_label(label)
@@ -699,6 +889,7 @@ def new_version(
     adapter: Optional[str],
     scores: Mapping[str, float],
     now: str,
+    numerics: Numerics,
 ) -> RetentionVersion:
     """A ``RetentionVersion`` with its scores rounded the way the report shows them."""
     return RetentionVersion(
@@ -707,4 +898,5 @@ def new_version(
         adapter=validate_model_ref(adapter, "--adapter") if adapter is not None else None,
         evaluated_at=now,
         scores={name: _round(validate_score(value, name)) for name, value in scores.items()},
+        numerics=numerics,
     )
