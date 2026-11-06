@@ -128,10 +128,17 @@ def _mlp_function() -> Any:
                 grad_bdl = _flatten(_as_dtype(grad_y, hd.dtype)).t() @ _flatten(hd) * sd
                 grad_hd = torch.matmul(_as_dtype(grad_y, bdl.dtype), bdl) * sd
                 grad_ad = _flatten(grad_hd).t() @ _as_dtype(_flatten(m), grad_hd.dtype)
-                grad_m = torch.add(
-                    grad_m,
-                    torch.matmul(_as_dtype(grad_hd, grad_m.dtype), _as_dtype(ad, grad_m.dtype)),
+                # PEFT adds the LoRA branch to the base output in fp32 and
+                # casts once at the layer boundary.  Rounding the LoRA dX
+                # product to the input dtype before the add loses an ulp in
+                # bf16 and doubles it in the SwiGLU backward (#2187).
+                lora_opmath = torch.promote_types(
+                    grad_m.dtype, torch.promote_types(grad_hd.dtype, ad.dtype)
                 )
+                grad_m = (
+                    grad_m.to(lora_opmath)
+                    + torch.matmul(grad_hd.to(lora_opmath), ad.to(lora_opmath))
+                ).to(grad_m.dtype)
 
             grad_u = grad_m * silu_g
             # Match autograd's opmath rule for SiLU backward: bf16/fp16
