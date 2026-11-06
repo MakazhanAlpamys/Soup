@@ -594,6 +594,11 @@ soup data review prefs.jsonl --sample 10
 **Supported log formats:** `langchain`, `openai`, `soup-serve`
 **Supported signals:** `thumbs_up` (rating-based), `regenerations` (latest wins), `user_edit` (edited wins)
 
+For `thumbs_up`, each prompt yields at most one pair. Soup selects the first
+upvoted response with a different downvoted response, then the first such
+downvoted response. Prompts without two distinct responses across the ratings
+yield no pair.
+
 **The `soup-serve` record shape.** The parser reads a top-level `signal` in the
 canonical vocabulary, falling back to a nested `feedback.rating` (`up` / `down`)
 for older logs:
