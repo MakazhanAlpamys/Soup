@@ -25,6 +25,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.advise import (
     CHOICES,
@@ -46,6 +47,7 @@ from soup_cli.utils.advise_history import (
     record_verdict,
     summarise_history,
 )
+from soup_cli.utils.terminal import strip_control
 
 console = Console()
 
@@ -62,6 +64,11 @@ app = typer.Typer(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _print_error(label: str, exc: BaseException, style: str = "red") -> None:
+    # A Text is not parsed as markup and has no emoji codes, so the message is shown as typed.
+    console.print(Text.assemble((label, style), " ", strip_control(exc)))
+
 
 def _last_verdict_path() -> str:
     """Path to the per-user last-verdict scratch file used by `explain`.
@@ -259,7 +266,7 @@ def advise_run(
     try:
         rows = load_advise_dataset(data)
     except (ValueError, TypeError, FileNotFoundError) as exc:
-        console.print(f"[red]Dataset error:[/] {escape(str(exc))}")
+        _print_error("Dataset error:", exc)
         raise typer.Exit(1) from exc
 
     # --probe-model implies --probe.
@@ -275,14 +282,14 @@ def advise_run(
                 rows, model=probe_model, device=probe_device
             )
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]Proximity probe failed:[/] {escape(str(exc))}")
+            _print_error("Proximity probe failed:", exc)
             raise typer.Exit(1) from exc
 
     try:
         task_category = classify_task(rows, goal=goal)
         profile = compute_dataset_profile(rows, base_model_proximity=proximity)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]Analysis failed:[/] {escape(str(exc))}")
+        _print_error("Analysis failed:", exc)
         raise typer.Exit(1) from exc
 
     roi = ROIEstimate()
@@ -293,7 +300,7 @@ def advise_run(
                 rows, model=probe_model, device=probe_device
             )
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]Probe failed:[/] {escape(str(exc))}")
+            _print_error("Probe failed:", exc)
             raise typer.Exit(1) from exc
         # Pick the best of zero-shot vs few-shot as the "prompt_eng" baseline.
         prompt_eng = max(baselines["zero_shot"], baselines["few_shot"])
@@ -326,7 +333,7 @@ def advise_run(
             project=project,
         )
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]Verdict build failed:[/] {escape(str(exc))}")
+        _print_error("Verdict build failed:", exc)
         raise typer.Exit(1) from exc
 
     console.print(_render_verdict_panel(verdict, profile_row_count=profile.row_count))
@@ -339,12 +346,10 @@ def advise_run(
         try:
             record_verdict(verdict, accepted=True, notes=notes)
             console.print(
-                f"[dim]Recorded to {escape(history_path())}[/]"
+                Text(f"Recorded to {strip_control(history_path())}", style="dim")
             )
         except (TypeError, ValueError, OSError) as exc:
-            console.print(
-                f"[yellow]History record failed:[/] {escape(str(exc))}"
-            )
+            _print_error("History record failed:", exc, style="yellow")
 
     console.print(
         "[dim]Next: `soup advise explain` for the rubric, "
@@ -371,7 +376,7 @@ def explain() -> None:
             "[red]Cached verdict is malformed[/] — re-run `soup advise`."
         )
         raise typer.Exit(1)
-    console.print(escape(format_verdict_rubric(verdict)))
+    console.print(Text(strip_control(format_verdict_rubric(verdict))))
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +397,7 @@ def compare(
     try:
         entries = load_history(limit=limit)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]History error:[/] {escape(str(exc))}")
+        _print_error("History error:", exc)
         raise typer.Exit(1) from exc
 
     if not entries:
@@ -423,8 +428,8 @@ def compare(
             f"{entry.outcome:+.2f}" if entry.outcome is not None else "—"
         )
         table.add_row(
-            escape(when_short),
-            escape(entry.project),
+            Text(strip_control(when_short)),
+            Text(strip_control(entry.project)),
             escape(entry.choice),
             escape(entry.task_category),
             f"{entry.confidence:.2f}",
