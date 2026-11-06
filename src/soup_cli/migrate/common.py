@@ -75,6 +75,33 @@ def validation_split(value: Any, key: str, warnings: List[str]) -> Optional[floa
     return None
 
 
+#: The values ``training.save_strategy`` takes; ``transformers`` also has ``"best"``.
+_SAVE_STRATEGIES = ("steps", "epoch", "no")
+
+
+def save_strategy_setting(value: Any, key: str, warnings: List[str]) -> Optional[str]:
+    """Map a source tool's ``save_strategy`` to ``training.save_strategy`` (#2575).
+
+    axolotl, LLaMA-Factory and the Hugging Face ``TrainingArguments`` an Unsloth
+    notebook builds all take ``steps`` / ``epoch`` / ``no`` (the last of them also
+    ``best``, which Soup has no setting for). An unquoted ``no`` in a YAML source is
+    read as ``False``, so ``False`` is the third choice rather than a bad value; any
+    other value Soup cannot express is named in ``warnings`` and ``None`` is returned,
+    which leaves the key out and Soup's default (``steps``) in force, with the warning
+    saying so.
+    """
+    if value is False:
+        return "no"
+    if isinstance(value, str) and value in _SAVE_STRATEGIES:
+        return value
+    warnings.append(
+        f"{key}: {value!r} has no Soup equivalent (training.save_strategy takes "
+        f"{', '.join(repr(choice) for choice in _SAVE_STRATEGIES)}), so it was not "
+        "written. Soup's default 'steps' applies until you set it."
+    )
+    return None
+
+
 def unmapped_keys_warning(
     raw: Dict[str, Any], handled: Iterable[str], source: str
 ) -> Optional[str]:
