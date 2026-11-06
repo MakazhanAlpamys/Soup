@@ -1095,6 +1095,7 @@ Q_B = "base_model.model.layers.0.self_attn.q_proj.lora_B.weight"
 TASK_PROMPT = "task"
 HIT = "alpha bravo"  # holds two of the three added words of ``expected`` below
 MISS = "I do not know."
+VERBOSE = "Well, to answer that properly I would first have to explain how the whole thing works,"
 
 
 def _plain(text: str) -> str:
@@ -1135,6 +1136,11 @@ class Lab:
     answers to a corrections or held-out prompt comes from ``table``; every other prompt (the task
     eval and the bundled suites) gets ``B``, except from a label in ``regressed``, which answers
     nothing and so drops on the suites. ``cand`` solves the task prompt, everything else does not.
+
+    A generator built with a ``max_new_tokens`` under the gate's answer budget cuts a corrections or
+    held-out answer short (``VERBOSE``), as a model that talks for 300 tokens before the fact does.
+    A generator built on an already loaded model (``loaded=``) is recorded in ``rebuilt``, not in
+    ``calls``: ``calls`` is the model loads.
     """
 
     def __init__(self, root: Path) -> None:
@@ -1144,7 +1150,9 @@ class Lab:
         self.corrections: List[dict] = []
         self.held_out: List[dict] = []
         self.calls: List[tuple] = []
+        self.rebuilt: List[tuple] = []
         self.asked: Dict[str, List[str]] = {"bare": [], "prod": [], "cand": []}
+        self.budgets: Dict[str, set] = {}  # prompt -> the token budgets that answered it
         self.task_wins = True
 
     # -- the input files ------------------------------------------------------------------
@@ -1204,17 +1212,28 @@ class Lab:
 
     # -- the fake model loader ------------------------------------------------------------
     def make_generator(self, model_id, **kwargs):
-        label = kwargs.get("adapter") or "bare"
-        self.calls.append((model_id, kwargs))
+        loaded = kwargs.get("loaded")
+        if loaded is not None:
+            label = loaded[0]
+            self.rebuilt.append((model_id, kwargs))
+        else:
+            label = kwargs.get("adapter") or "bare"
+            self.calls.append((model_id, kwargs))
+        budget = kwargs.get("max_new_tokens")
 
         def generate(prompt: str) -> str:
             self.asked.setdefault(label, []).append(prompt)
+            self.budgets.setdefault(prompt, set()).add(budget)
             if prompt in self.table.get(label, {}):
+                if budget is not None and budget < gate.ANSWER_MAX_NEW_TOKENS:
+                    return VERBOSE
                 return self.table[label][prompt]
             if prompt == TASK_PROMPT:
                 return "answer" if (label == "cand" and self.task_wins) else "wrong"
             return "" if label in self.regressed else "B"
 
+        # what the real ``live_eval.make_generator`` exposes: the loaded model, for a rebuild
+        generate.loaded = (label, f"tokenizer of {label}", "cpu")
         return generate
 
     def adapters(self) -> list:
@@ -1550,6 +1569,130 @@ def test_the_suites_run_when_neither_file_is_given(lab):
     assert out["corrections"]["outcome"] == "not_applicable"
     assert out["held_out"]["outcome"] == "not_measured"
     assert out["canary_decides"] is True
+
+
+# -- how many tokens the gate's questions get ------------------------------------------------
+
+
+def test_the_answer_budget_is_zeros_512_and_the_live_eval_budget_is_still_256():
+    from soup_cli.eval.gate_suites import BEHAVIOURAL_MAX_NEW_TOKENS
+
+    assert gate.ANSWER_MAX_NEW_TOKENS == 512
+    assert BEHAVIOURAL_MAX_NEW_TOKENS == 256  # the task eval and the suites are not touched
+
+
+def test_the_gate_asks_its_questions_with_512_new_tokens_and_the_rest_keeps_256(lab):
+    _healthy(lab)
+    _ok(_gated(lab), 0)
+    # the two model loads are the same two as without the gate, at the live eval's budget
+    assert [kwargs["max_new_tokens"] for _model, kwargs in lab.calls] == [256, 256]
+    # and the gate's generators are rebuilt on them at the answer budget
+    assert [kwargs["max_new_tokens"] for _model, kwargs in lab.rebuilt] == [512, 512]
+    gate_prompts = {row["prompt"] for row in lab.held_out}
+    gate_prompts |= {text for row in lab.corrections for text in row["paraphrases"]}
+    assert gate_prompts and all(lab.budgets[prompt] == {512} for prompt in gate_prompts)
+    assert lab.budgets[TASK_PROMPT] == {256}
+    suite_prompts = set(lab.budgets) - gate_prompts - {TASK_PROMPT}
+    assert suite_prompts and all(lab.budgets[prompt] == {256} for prompt in suite_prompts)
+
+
+def test_a_verbose_answer_is_not_a_false_miss(lab):
+    """The new version states the corrected fact only after a long preamble: at 256 tokens that
+    answer is cut and scored as a miss. With the answer budget the gate sees the fact."""
+    lab.corrections_pattern(fixed=5)
+    lab.held_out_pattern(better=5)
+    _ok(_gated(lab), 0)
+    out = _out(lab)
+    assert (out["corrections"]["fixed"], out["corrections"]["outcome"]) == (5, "pass")
+    assert out["held_out"]["better"] == 5
+
+
+def test_the_gate_reuses_the_models_that_are_already_loaded(lab):
+    _healthy(lab)
+    _ok(_gated(lab, "--base-adapter", "prod"), 0)
+    assert lab.adapters() == ["prod", "cand"]  # two loads, no third and no fourth
+    assert [kwargs["loaded"][0] for _model, kwargs in lab.rebuilt] == ["prod", "cand"]
+    assert [model for model, _kwargs in lab.rebuilt] == ["m", "m"]
+
+
+def test_a_separate_tuned_model_is_rebuilt_under_its_own_id(lab):
+    lab.corrections_pattern(fixed=5)
+    lab.write()
+    _ship("--base", "m", "--tuned", "t", "--task-eval", "task.jsonl", "--device", "cpu",
+          "--gate", "loop-v2", "--corrections", "corrections.jsonl", "--output", "out.json")
+    assert [model for model, _kwargs in lab.calls] == ["m", "t"]
+    assert [model for model, _kwargs in lab.rebuilt] == ["m", "t"]
+
+
+def test_the_chat_template_options_reach_the_gate_generators_too(lab):
+    _healthy(lab)
+    _ok(_gated(lab, "--chat-template-kwargs", '{"enable_thinking": false}'), 0)
+    options = {"enable_thinking": False}
+    assert [kwargs["chat_template_kwargs"] for _model, kwargs in lab.calls] == [options, options]
+    assert [kwargs["chat_template_kwargs"] for _model, kwargs in lab.rebuilt] == [options, options]
+
+
+def test_without_chat_template_options_the_rebuild_passes_none(lab):
+    _healthy(lab)
+    _ok(_gated(lab), 0)
+    assert all("chat_template_kwargs" not in kwargs for _model, kwargs in lab.rebuilt)
+
+
+def test_a_generator_that_hides_its_loaded_model_is_a_clear_error():
+    with pytest.raises(ValueError, match="does not expose its loaded model"):
+        ship_cmd._answer_generators("m", "m", lambda prompt: "", lambda prompt: "")
+
+
+def test_the_gate_runs_no_wider_generation_without_the_flag(lab):
+    result = _ship(*LIVE, "--output", "out.json")
+    _ok(result, 0)
+    assert lab.rebuilt == []
+    assert [kwargs["max_new_tokens"] for _model, kwargs in lab.calls] == [256, 256]
+
+
+def _tiny_tokenizer():
+    from tokenizers import Tokenizer, models, pre_tokenizers, processors
+    from transformers import PreTrainedTokenizerFast
+
+    vocab = {word: index for index, word in enumerate(
+        ["<unk>", "<bos>", "<eos>", "hello", "world"]
+    )}
+    backend = Tokenizer(models.WordLevel(vocab, unk_token="<unk>"))
+    backend.pre_tokenizer = pre_tokenizers.Whitespace()
+    backend.post_processor = processors.TemplateProcessing(
+        single="<bos> $A", special_tokens=[("<bos>", 1)]
+    )
+    return PreTrainedTokenizerFast(
+        tokenizer_object=backend, bos_token="<bos>", eos_token="<eos>", pad_token="<eos>",
+        unk_token="<unk>",
+    )
+
+
+def test_a_live_generator_exposes_its_loaded_model_and_a_rebuild_has_its_own_budget(monkeypatch):
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+
+    class Recorder:
+        budgets: list = []
+
+        def generate(self, input_ids, **kwargs):
+            self.budgets.append(kwargs["max_new_tokens"])
+            return torch.cat([input_ids, input_ids[:, -1:]], dim=1)
+
+    model, tokenizer = Recorder(), _tiny_tokenizer()
+
+    def never(*args, **kwargs):
+        pytest.fail("the weights were loaded a second time")
+
+    monkeypatch.setattr(live_eval, "load_model_and_tokenizer", never)
+    loaded = (model, tokenizer, "cpu")
+    narrow = live_eval.make_generator("unused", loaded=loaded, max_new_tokens=256)
+    assert narrow.loaded == loaded
+    wide = live_eval.make_generator("unused", loaded=narrow.loaded, max_new_tokens=512)
+    narrow("hello")
+    wide("hello")
+    assert model.budgets == [256, 512]
+    assert wide.loaded == narrow.loaded
 
 
 # -- an all-zero adapter ---------------------------------------------------------------------

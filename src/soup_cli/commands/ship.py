@@ -72,6 +72,7 @@ from soup_cli.utils.paths import (
     quote_path,
 )
 from soup_cli.utils.ship_loop_gate import (
+    ANSWER_MAX_NEW_TOKENS,
     GATE_LOOP_V2,
     GATES,
     GateInputError,
@@ -1269,6 +1270,39 @@ def _held_out_win_rate(judge_model: str, pairs: List[Tuple[str, str, str]]) -> f
     return pairwise_winrate(pairs, evaluator)
 
 
+def _answer_generators(
+    base_id: str,
+    tuned_id: str,
+    base_gen: Callable[[str], str],
+    tuned_gen: Callable[[str], str],
+    *,
+    chat_template_kwargs: Optional[dict] = None,
+) -> Tuple[Callable[[str], str], Callable[[str], str]]:
+    """The two versions again for the gate's questions: the same loaded models, a bigger budget.
+
+    The task eval and the suites generate up to ``BEHAVIOURAL_MAX_NEW_TOKENS`` (256) and keep doing
+    so. A corrections or held-out answer may need more to reach the corrected fact, so those
+    questions get ``ANSWER_MAX_NEW_TOKENS`` (512, as Soup Zero), still greedy. The generators are
+    rebuilt on the models ``_resolve_generators`` already loaded (``loaded=``), so no weights are
+    read twice and ``--base-adapter`` and the chat-template options carry over unchanged.
+    """
+    from soup_cli.utils import live_eval
+
+    template_options = (
+        {"chat_template_kwargs": chat_template_kwargs} if chat_template_kwargs is not None else {}
+    )
+
+    def widen(model_id: str, generator: Callable[[str], str]) -> Callable[[str], str]:
+        loaded = getattr(generator, "loaded", None)
+        if loaded is None:
+            raise ValueError("the live generator does not expose its loaded model")
+        return live_eval.make_generator(
+            model_id, loaded=loaded, max_new_tokens=ANSWER_MAX_NEW_TOKENS, **template_options,
+        )
+
+    return widen(base_id, base_gen), widen(tuned_id, tuned_gen)
+
+
 def _apply_loop_gate(
     verdict: ShipVerdict,
     inputs: GateInputs,
@@ -1287,7 +1321,8 @@ def _apply_loop_gate(
     console.print(
         f"[dim]Gate {GATE_LOOP_V2}: asking both versions "
         f"{sum(len(edit.paraphrases) for edit in inputs.corrections)} correction question(s) and "
-        f"{len(inputs.held_out)} held-out question(s).[/]"
+        f"{len(inputs.held_out)} held-out question(s) (up to {ANSWER_MAX_NEW_TOKENS} new tokens "
+        "each).[/]"
     )
     corrections = check_corrections(old_gen, new_gen, inputs.corrections)
     judge_rate = None
@@ -1455,10 +1490,15 @@ def _verdict_live(
             noise_floor=measured_floor,
         )
         if gate_inputs is not None:
-            # base_gen is base (+ --base-adapter): the same generator that scored the old side
-            # of the task eval and the suites, so there is no second place to fall back to the base.
+            # The old side is built from base_gen (base, + --base-adapter when given): the same
+            # models that scored the task eval and the suites, so there is no second place to
+            # fall back to the bare base. Only the token budget differs.
+            old_answers, new_answers = _answer_generators(
+                base, tuned_id, base_gen, tuned_gen,
+                chat_template_kwargs=chat_template_kwargs,
+            )
             verdict = _apply_loop_gate(
-                verdict, gate_inputs, base_gen, tuned_gen,
+                verdict, gate_inputs, old_answers, new_answers,
                 task_mode=task_mode, judge_model=judge_model,
             )
         return replace(

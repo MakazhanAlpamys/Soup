@@ -47,6 +47,10 @@ FAILED_NO_CORRECTIONS = "no_corrections"  # check 1: there is nothing to check
 # ---------------------------------------------------------------------------
 
 THRESHOLD = 0.5  # the share of the added words an answer must hold to be a hit
+# New tokens an answer to a corrections or held-out question may run to, as Soup Zero's
+# ``ANSWER_TOKENS``. The live eval's 256 (``BEHAVIOURAL_MAX_NEW_TOKENS``) can cut a verbose answer
+# before it reaches the corrected fact, which scores as a miss the model did not earn.
+ANSWER_MAX_NEW_TOKENS = 512
 MIN_ADDED = 2  # an edit that adds fewer content words than this is scored on all of them
 MIN_DISCORDANT = 5  # check 1: fewer edits than this that changed either way is not enough evidence
 MIN_HELD_OUT = 5  # check 2: fewer held-out edits than this is not measured
