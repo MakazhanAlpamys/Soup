@@ -160,6 +160,18 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
 # or per run, overriding loop.yaml:
 SOUP_LOOP_THUMBS_DB=./rl.db soup loop watch --pre-wired
 
+# Train only on news: loop.yaml keeps a data cursor (`soup loop status` shows it as
+# new_data_since), the newest feedback a training run has already seen. A pair is new
+# when the newer of its thumbs-up and thumbs-down is later than the cursor. An iteration
+# trains once at least --min-new-pairs (default 1) pairs are new, else it is skipped
+# (not_enough_new_data in its record); it then trains on ALL pairs, since every run starts
+# a fresh LoRA from the base model. The cursor moves after a training run, whatever its
+# verdict (DON'T SHIP used the data too), never after a skipped or failed one. Without it
+# the cycle after a promotion would retrain on the same feedback and start another canary.
+# A serve log line without a usable "ts" counts as new only until the cursor is first set.
+soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
+    --pre-wired --thumbs-db ./rl.db --min-new-pairs 20
+
 # Unpack a recorded iteration's Soup Can for what-if analysis (v0.71.4)
 soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 

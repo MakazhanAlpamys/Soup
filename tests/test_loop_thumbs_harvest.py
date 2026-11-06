@@ -352,10 +352,11 @@ def test_a_sqlite_failure_mid_harvest_names_the_field(cwd, monkeypatch, via):
     else:
         state, field = _state(thumbs_db="thumbs.db"), "thumbs_db"
 
-    def _boom(_path):
+    def _boom(_path, _since):
         raise sqlite3.OperationalError("database is locked")
 
-    monkeypatch.setattr(local_rl, "harvest_dpo_pairs", _boom)
+    # The loop harvest reads through the cursor-aware variant (harvest_dpo_pairs_since).
+    monkeypatch.setattr(local_rl, "harvest_dpo_pairs_since", _boom)
 
     with pytest.raises(
         ValueError,

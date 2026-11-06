@@ -2699,6 +2699,7 @@ Usage: `soup loop init [OPTIONS] SERVED_MODEL`
 | `--trace-dir` | text |  |  | Directory of conversation logs (soup serve --trace-log files, *.jsonl) the pre-wired harvest reads. Default: .soup-loops/traces. SOUP_LOOP_TRACE_DIR overrides it. |
 | `--canary-traffic` | text | `5%` |  | Share of keyed traffic a newly deployed adapter gets while its canary runs, e.g. "5%" (the default) or "10". |
 | `--verify` | text | `ship` |  | The check before rollout: ship (a soup ship verdict against the production version; --eval is a task-eval JSONL) or eval-gate (--eval is an eval-gate suite YAML). |
+| `--min-new-pairs` | integer | `1` |  | Train only when at least this many preference pairs arrived since the last training run (the pre-wired harvest keeps a data cursor); the run still trains on all pairs. Default 1. |
 | `--force` | flag | off |  | Overwrite existing loop.yaml. |
 
 ### `soup loop pause`

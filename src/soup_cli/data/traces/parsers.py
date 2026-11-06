@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
@@ -33,6 +34,41 @@ class Trace:
     regen_order: Optional[int] = None
     edited_output: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # When the exchange was logged, as epoch seconds; None when the log gives none
+    # (see ``parse_ts``). ``soup loop`` compares it with its data cursor: a trace is
+    # new when its ts is later; one without a ts counts as new only while the cursor
+    # is unset, else it would be new forever (``loop_stages._trace_pairs``).
+    ts: Optional[float] = None
+
+
+# Epoch seconds up to the year 9999 (datetime.max). Larger numbers are not seconds (a
+# millisecond clock gives ~1.7e12) and would pin a data cursor in the far future.
+_MAX_TS = 253402300799.0
+_UTC_SUFFIXES = ("Z", "+00:00")
+
+
+def parse_ts(value: Any) -> Optional[float]:
+    """A log line's ``ts`` as epoch seconds, or ``None`` when it has none.
+
+    A number is epoch seconds (what ``soup serve --trace-log`` writes). An
+    ISO-8601 string ending ``Z`` or ``+00:00`` is converted. Anything else is
+    ``None``: a bool, NaN or infinity, a negative or beyond-year-9999 number, an
+    ISO string in another zone or with none, other text, or a missing field.
+    """
+    if isinstance(value, bool):
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            seconds = float(value)
+        elif isinstance(value, str) and value.endswith(_UTC_SUFFIXES):
+            seconds = datetime.fromisoformat(value).timestamp()  # aware: a UTC suffix
+        else:
+            return None
+    except (ValueError, OverflowError):  # unparsable text, or an int too large for a float
+        return None
+    if not 0.0 <= seconds <= _MAX_TS:  # False for NaN too
+        return None
+    return seconds
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +244,7 @@ def _edited_output(event: dict[str, Any]) -> Optional[str]:
 
 
 def parse_soup_serve(path: str) -> Iterator[Trace]:
+    """Traces from a directory of ``soup serve --trace-log`` JSONL files (``Trace.ts`` per line)."""
     dir_path = Path(path)
     if not dir_path.is_dir():
         return
@@ -233,4 +270,5 @@ def parse_soup_serve(path: str) -> Iterator[Trace]:
                 trace_id=str(event.get("id") or file_path.stem),
                 prompt=prompt, output=output, signal=signal,
                 edited_output=_edited_output(event),
+                ts=parse_ts(event.get("ts")),
             )

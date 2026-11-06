@@ -34,6 +34,9 @@ VERIFY_METHODS: tuple = ("ship", "eval_gate")
 _MAX_PATH_LEN = 4096
 _MAX_STR_FIELD = 512
 _MAX_FILE_BYTES = 1 * 1024 * 1024  # 1 MiB cap on the state file
+# The data cursor is epoch seconds up to the year 9999 (datetime.max): `soup loop status`
+# prints it as a date, and a larger value is a typo that would stop all learning.
+MAX_CURSOR_TS = 253402300799.0
 _DEFAULT_STATE_DIR = ".soup"
 _DEFAULT_STATE_FILENAME = "loop.yaml"
 
@@ -104,6 +107,15 @@ class LoopState:
     # (previous_production_name None = the served model itself).
     previous_production_name: Optional[str] = None
     previous_production_adapter: Optional[str] = None
+    # The data cursor: the newest feedback timestamp (epoch seconds) a training run
+    # has already seen; None = no training run yet, so every pair is new. It is a
+    # trigger only (training waits for `min_new_pairs` pairs newer than it); the
+    # run still trains on all the pairs, as each iteration trains a fresh LoRA from
+    # the base model. The daemon advances it after a training run, never on a skip.
+    harvest_cursor_ts: Optional[float] = None
+    # Training waits until this many preference pairs are newer than the cursor
+    # (`soup loop init --min-new-pairs`).
+    min_new_pairs: int = 1
 
     def __post_init__(self) -> None:  # noqa: D401 — validator hook
         # Closed-allowlist enforcement + bool-as-int rejection mirror the
@@ -178,6 +190,20 @@ class LoopState:
         ):
             if getattr(self, fname) is not None:
                 _require_str(fname, getattr(self, fname), allow_empty=False)
+        if self.harvest_cursor_ts is not None:
+            v = self.harvest_cursor_ts
+            if (
+                isinstance(v, bool)
+                or not isinstance(v, (int, float))
+                or not (0 <= v <= MAX_CURSOR_TS)  # False for NaN too
+            ):
+                raise ValueError(
+                    "harvest_cursor_ts must be epoch seconds in "
+                    f"[0, {int(MAX_CURSOR_TS)}] or None, got {v!r}"
+                )
+        v = self.min_new_pairs
+        if isinstance(v, bool) or not isinstance(v, int) or v < 1:
+            raise ValueError(f"min_new_pairs must be a positive int, got {v!r}")
         if self.canary_rollout_id is not None:
             _require_str("canary_rollout_id", self.canary_rollout_id, allow_empty=False)
         if self.last_iteration_id is not None:
@@ -352,6 +378,8 @@ def init_state(
     verify: Optional[str] = None,
     production_adapter: Optional[str] = None,
     deploy_traffic_pct: float = 5.0,
+    harvest_cursor_ts: Optional[float] = None,
+    min_new_pairs: int = 1,
     path: Optional[str] = None,
     force: bool = False,
 ) -> Tuple[LoopState, str]:
@@ -386,6 +414,8 @@ def init_state(
         verify=verify,
         production_adapter=production_adapter,
         deploy_traffic_pct=deploy_traffic_pct,
+        harvest_cursor_ts=harvest_cursor_ts,
+        min_new_pairs=min_new_pairs,
         monthly_budget_usd=monthly_budget_usd,
         max_runs_per_day=max_runs_per_day,
         created_at=now,
