@@ -113,6 +113,7 @@ def test_the_loop_on_a_real_model(tmp_path, monkeypatch):
     result = CliRunner().invoke(loop_app, [
         "init", "./served", "--eval", "tasks.jsonl", "--baseline", "b", "--pre-wired",
         "--base-model", MODEL, "--thumbs-db", "thumbs.db", "--canary-traffic", "50%",
+        "--train-method", "dpo",
     ])
     assert result.exit_code == 0, (result.output, repr(result.exception))
 

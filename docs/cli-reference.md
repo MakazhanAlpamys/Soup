@@ -2701,9 +2701,20 @@ Usage: `soup loop init [OPTIONS] SERVED_MODEL`
 | `--canary-max-wait` | text | `24h` |  | How long after a canary started its ratings may stay short of the 30 per side the quality verdict needs: &lt;int>m, &lt;int>h or &lt;int>d, or plain seconds (at most 30d, default 24h). Then --canary-on-timeout applies. |
 | `--canary-on-timeout` | text | `errors-only` |  | What happens when --canary-max-wait runs out: errors-only (the request-error verdict alone decides; the default), rollback (withdraw the canary) or wait (keep waiting, no time limit). |
 | `--verify` | text | `ship` |  | The check before rollout: ship (a soup ship verdict against the production version; --eval is a task-eval JSONL) or eval-gate (--eval is an eval-gate suite YAML). |
-| `--min-new-pairs` | integer | `1` |  | Train only when at least this many preference pairs arrived since the last training run (the pre-wired harvest keeps a data cursor); the run still trains on all pairs. Default 1. |
+| `--min-new-pairs` | integer | `1` |  | Train only when at least this many preference pairs arrived since the last training run (the pre-wired harvest keeps a data cursor); the run still trains on all pairs. Default 1. An sft loop with a feedback log uses --min-new-edits and --min-new-rated instead. |
+| `--min-new-edits` | integer | `8` |  | An sft loop with a feedback log trains once at least this many new edits (corrected answers newer than the last training run) have arrived, or --min-new-rated new rated answers, whichever comes first. Default 8. |
+| `--min-new-rated` | integer | `30` |  | An sft loop with a feedback log trains once at least this many new rated answers (any thumb, rating or edit) have arrived, or --min-new-edits new edits, whichever comes first. Default 30. |
 | `--feedback-log` | text |  |  | Feedback log (JSONL: thumbs, ratings, edits and comments on logged answers) the pre-wired harvest reads. Default: .soup-loops/feedback.jsonl. SOUP_LOOP_FEEDBACK_LOG overrides it. |
-| `--train-method` | text | `dpo` |  | What the pre-wired loop trains: dpo (preference pairs, the default), kto (answers labelled good or bad) or sft (the answers people corrected). |
+| `--train-method` | text | `sft` |  | What the pre-wired loop trains: sft (the default; corrected answers and answers rated good), dpo (preference pairs) or kto (answers labelled good or bad). A loop.yaml without this field keeps dpo. |
+| `--sft-target-modules` | text |  |  | sft only: the LoRA target modules of the training config: all-linear, auto (the config schema's default) or a comma-separated list such as q_proj,v_proj. Default: the loop's built-in sft recipe (soup loop status). |
+| `--sft-lora-r` | integer |  |  | sft only: LoRA rank of the training config, 1 to 1024. Default: the built-in recipe. |
+| `--sft-lora-alpha` | integer |  |  | sft only: LoRA alpha of the training config, 1 to 4096. Default: the built-in recipe. |
+| `--sft-lr` | float |  |  | sft only: learning rate of the training config, above 0 and at most 1 (for example 2e-4). Default: the built-in recipe. |
+| `--sft-epochs` | integer |  |  | sft only: epochs of the training config, 1 to 100. Default: the built-in recipe. |
+| `--sft-batch-size` | integer |  |  | sft only: per-device micro-batch of the training config, 1 to 1024. Default: the built-in recipe. |
+| `--sft-grad-accum` | integer |  |  | sft only: gradient accumulation steps of the training config, 1 to 1024 (micro-batch x accumulation = the batch per optimizer step). Default: the built-in recipe. |
+| `--sft-seed` | integer |  |  | sft only: training seed of the training config, 0 to 4294967295. Default: the built-in recipe. |
+| `--sft-quantization` | text |  |  | sft only: quantization of the training config: 4bit, none or auto (none if the base model fits in free VRAM when training starts, else 4bit). Default: the built-in recipe. |
 | `--force` | flag | off |  | Overwrite existing loop.yaml. |
 
 ### `soup loop pause`

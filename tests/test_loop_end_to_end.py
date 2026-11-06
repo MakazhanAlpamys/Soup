@@ -165,6 +165,7 @@ def loop(tmp_path, monkeypatch):
     result, _ = cli(
         "init", "./base", "--eval", "tasks.jsonl", "--baseline", "b", "--pre-wired",
         "--base-model", "org/base", "--thumbs-db", "thumbs.db", "--canary-traffic", "20%",
+        "--train-method", "dpo",
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
 
@@ -419,7 +420,7 @@ def test_a_correction_given_as_feedback_trains_the_chosen_method_and_reaches_a_c
     )
     flags = ["--train-method", method]
     if method == "sft":
-        flags += ["--feedback-log", feedback_log]
+        flags += ["--feedback-log", feedback_log, "--min-new-edits", "1"]
     result, _ = loop["cli"](
         "init", "./base", "--eval", "tasks.jsonl", "--baseline", "b", "--pre-wired",
         "--base-model", "org/base", "--thumbs-db", "thumbs.db", "--canary-traffic", "20%",
@@ -458,10 +459,13 @@ def test_a_correction_given_as_feedback_trains_the_chosen_method_and_reaches_a_c
         ]
     else:
         assert config["data"]["format"] == "chatml"
-        assert rows == [{
-            "messages": [*_ROUTER, {"role": "assistant", "content": _FIX}],
-            "source": "feedback-edit",
-        }]
+        # The correction, and the answer the person liked (rated good, as it was).
+        assert rows == [
+            {"messages": [*_ROUTER, {"role": "assistant", "content": _FIX}],
+             "source": "feedback-edit"},
+            {"messages": [*_HELLO, {"role": "assistant", "content": served}],
+             "source": "feedback-good"},
+        ]
     state = read_state()
     name = state.canary_active
     assert name and name.startswith("loop-train-"), state
@@ -478,6 +482,107 @@ def test_a_correction_given_as_feedback_trains_the_chosen_method_and_reaches_a_c
     state = read_state()
     assert state.canary_active == name and state.production_name is None
     assert len(loop["trained_on"]) == 1 and len(loop["verdicts"]) == 1
+
+
+def test_a_new_loop_trains_sft_on_corrections_and_liked_answers_then_canaries_it(loop):
+    """No --train-method: a new loop trains sft, and waits for 8 edits or 30 rated answers."""
+    result, text = loop["cli"](
+        "init", "./base", "--eval", "tasks.jsonl", "--baseline", "b", "--pre-wired",
+        "--base-model", "org/base", "--thumbs-db", "thumbs.db", "--canary-traffic", "20%",
+        "--force",
+    )
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    panel = " ".join(text.replace("\u2502", " ").split())
+    assert "sft trains on corrected answers and on answers rated good; an answer that was " in panel
+    assert "only rated bad gives no training row" in panel
+    state = read_state()
+    assert (state.train_method, state.min_new_edits, state.min_new_rated) == ("sft", 8, 30)
+    _, status = loop["cli"]("status")
+    assert re.search(r"train_method\W+sft", status), status
+    assert re.search(r"min_new_edits\W+8\b", status), status
+    assert re.search(r"min_new_rated\W+30\b", status), status
+
+    # The running server recorded two liked answers and a disliked one (the thumbs database).
+    for prompt, answer, thumb in (
+        ("What is a LoRA?", "A small trainable adapter.", "up"),
+        ("What is an epoch?", "One pass over the data.", "up"),
+        ("What is a token?", "Never mind.", "down"),
+    ):
+        response = loop["client"].post(
+            "/v1/thumbs", headers=loop["headers"],
+            json={"prompt": prompt, "response": answer, "thumb": thumb},
+        )
+        assert response.status_code == 200, response.text
+    # A real served answer, liked in the feedback log through the id the server gave it,
+    # and one answer an application logged and a person corrected.
+    reply = loop["chat"]("hello").json()
+    served = reply["choices"][0]["message"]["content"]
+    _jsonl(os.path.join(".soup-loops", "traces", "conversations.jsonl"), [
+        _answer(1, _ROUTER, "Unplug it."),
+    ])
+    _jsonl(os.path.join(".soup-loops", "feedback.jsonl"), [
+        _feedback(1, "edit", "2026-11-05T10:05:00+00:00", edited_text=_FIX),
+        {**_feedback(2, "thumb", "2026-11-05T10:06:00+00:00", value=1),
+         "response_id": reply["response_id"]},
+    ])
+
+    # One correction and two rated answers are far from 8 and 30: the iteration trains nothing.
+    _, iterations = loop["cycle"]()
+    assert iterations == 1
+    assert loop["trained_on"] == [] and loop["verdicts"] == []
+    record = read_iteration(loop["created"][-1])
+    assert record.run_id is None and record.pairs_harvested == 4  # the rows are there, though
+    assert (
+        "not_enough_new_data: 1 new edits (needs 8) and 2 new rated answers (needs 30) "
+        "since the last training run"
+    ) in record.notes
+    state = read_state()
+    assert state.harvest_cursor_ts is None and state.canary_active is None
+
+    # Seven more corrections make eight: the next cycle trains.
+    _jsonl(os.path.join(".soup-loops", "traces", "conversations.jsonl"), [
+        _answer(10 + n, _ROUTER, f"Old answer {n}") for n in range(7)
+    ])
+    _jsonl(os.path.join(".soup-loops", "feedback.jsonl"), [
+        _feedback(10 + n, "edit", f"2026-11-05T10:{10 + n}:00+00:00",
+                  edited_text=f"Fixed answer {n}")
+        for n in range(7)
+    ])
+    _, iterations = loop["cycle"]()
+    assert iterations == 1
+
+    (config,) = loop["trained_with"]
+    (rows,) = loop["trained_on"]
+    assert config["task"] == "sft" and config["data"]["format"] == "chatml"
+    assert config["data"]["val_split"] == 0
+    assert config["training"] == {
+        "epochs": 8, "batch_size": 2, "gradient_accumulation_steps": 4, "seed": 42,
+        "lr": 5.0e-4,
+        "lora": {"r": 64, "alpha": 128, "target_modules": "all-linear"},
+        "quantization": "4bit",  # recipe "auto", measured: no CUDA device, base size unknown
+    }
+    assert (
+        "sft quantization auto: 4bit (parameter count unknown)"
+        in read_iteration(loop["created"][-1]).notes
+    )
+    answers = [row["messages"][-1]["content"] for row in rows]
+    assert answers == [
+        "A small trainable adapter.", "One pass over the data.",  # liked in the thumbs database
+        _FIX, served,  # the correction, the liked answer
+        *(f"Fixed answer {n}" for n in range(7)),
+    ]
+    assert "Never mind." not in answers and "Unplug it." not in answers
+    assert [row["source"] for row in rows[:4]] == [
+        "soup-serve-thumbs", "soup-serve-thumbs", "feedback-edit", "feedback-good"
+    ]
+    state = read_state()
+    name = state.canary_active
+    assert name and name.startswith("loop-train-"), state
+    assert state.harvest_cursor_ts is not None
+    record = read_iteration(loop["created"][-1])
+    assert record.pairs_harvested == len(rows) == 11
+    assert record.gate_verdict == "OK" and record.shipped is True
+    assert name in loop["model"].loaded
 
 
 # ---------------------------------------------------------------------------
