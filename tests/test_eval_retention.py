@@ -446,6 +446,22 @@ class TestLedgerValidation:
         with pytest.raises(rl.LedgerError, match="must be a regular file"):
             rl.load_ledger("retention.json")
 
+    def test_a_non_regular_file_is_refused_before_a_file_object_is_made(self, monkeypatch):
+        """On Linux a directory opens as a descriptor and only ``os.fdopen`` raises.
+
+        That ``IsADirectoryError`` would escape as a traceback, so the type check runs on the
+        bare descriptor; Windows refuses the open itself, so the Linux order is simulated.
+        """
+        Path("retention.json").write_text(json.dumps(_valid_payload()), encoding="utf-8")
+        monkeypatch.setattr(rl.stat, "S_ISREG", lambda mode: False)
+
+        def _fdopen_of_a_directory(*_args, **_kwargs):
+            raise IsADirectoryError(21, "Is a directory")
+
+        monkeypatch.setattr(rl.os, "fdopen", _fdopen_of_a_directory)
+        with pytest.raises(rl.LedgerError, match="must be a regular file"):
+            rl.load_ledger("retention.json")
+
     @pytest.mark.requires_symlink
     def test_a_symlinked_ledger_is_refused_for_reading_and_writing(self):
         Path("real.json").write_text(json.dumps(_valid_payload()), encoding="utf-8")

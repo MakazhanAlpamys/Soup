@@ -522,15 +522,16 @@ def _open_regular(path: str, field: str):
         raise LedgerError(
             f"{field} {quote_path(path)} cannot be opened: {type(exc).__name__}"
         ) from exc
-    handle = os.fdopen(fd, "rb")
+    # Check the bare descriptor: on Linux a directory opens, and ``os.fdopen`` itself raises
+    # IsADirectoryError, which would escape as a traceback instead of this message.
     try:
-        info = os.fstat(handle.fileno())
+        info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
             raise LedgerError(f"{field} {quote_path(path)} must be a regular file")
     except BaseException:
-        handle.close()
+        os.close(fd)
         raise
-    return handle
+    return os.fdopen(fd, "rb")
 
 
 def read_ledger_text(path: str) -> str:
