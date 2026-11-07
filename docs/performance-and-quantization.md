@@ -453,7 +453,7 @@ The VRAM estimate (`soup train`'s pre-flight, `soup profile`, `soup plan` and th
 
 ## Layer Streaming (BETA, v0.72.0; NF4 v0.72.2; disk + wider archs v0.72.3; preference losses v0.72.4)
 
-Stream frozen base-model decoder layers ONE at a time from CPU RAM into small VRAM buffers instead of keeping the whole base resident. Peak VRAM is bounded by the size of a single layer, not the entire model — so models that don't fit resident on your GPU can now train at all.
+Stream frozen base-model decoder layers ONE at a time from CPU RAM, or from an NVMe disk tier when the base does not fit in RAM, into small VRAM buffers instead of keeping the whole base resident. Peak VRAM is bounded by the size of a single layer, not the entire model — so models that don't fit resident on your GPU can now train at all.
 
 ```yaml
 training:
@@ -990,6 +990,28 @@ accum 1→4, where raising batch cost 0.842 → 2.28 GB). So the rule is: **rais
 `batch_size` until the VRAM pre-flight refuses, then accumulate for the rest.** Soup
 prints this advice when it sees you accumulating.
 
+
+**Refused at config load:**
+- `batch_size: "auto"` → OOM-probes a resident model that streaming never loads; explicit batch sizes are required
+- `quantization` other than `none` or `4bit` → other formats cannot be streamed into a pooled buffer
+- `backend: unsloth` / `backend: mlx` → streaming replaces the model-load path those backends own
+- `modality` other than text → streaming supports text models only
+- `task` other than `sft` / `dpo` / `orpo` / `simpo` / `kto` → named explicitly; `grpo` and `ppo` are refused **permanently**, not pending: generation rollouts re-read every layer once per generated token, which destroys the amortisation streaming depends on
+- `task: kto` with `batch_size: 1` → TRL's KL term is degenerate at batch 1; refused when the config is read (this applies to every KTO run, not only to streaming) rather than minutes later after sharding
+- `lora.r: 0` → LoRA is required for layer streaming
+- `lora.use_dora` / `lora.use_vera` / `lora.init_strategy` other than `random` → these initialise from the real base weight, which is on the meta device under streaming
+- `moe_expert_quant` / `quantization_aware` / `fp8_attention` / `nvfp4` → mutually exclusive with layer streaming
+- `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers` → each independently rewrites or re-freezes the same layers
+- `use_cut_ce` is refused with `stream_layers` (#1206): streamed setup does not install the resident CCE patch
+- `stream_*` fields set while `stream_layers: false` → stream configuration requires layer streaming enabled
+- Non-default `stream_read_ahead` beside `stream_source: ram` → read-ahead is only applicable to disk tier
+- `stream_vram_probe` on any task other than sft → VRAM probe is only supported on SFT
+
+**Refused at setup, before the first training step:**
+- Unsupported model architecture -> model architecture not in the supported streaming allowlist.
+- More than 8 distinct layer shapes -> layer shapes exceed pooled buffer uniformity limits.
+- Disk-tier host-staging fit -> free RAM does not fit the required host staging buffer.
+
 **Saving and resuming boundary adapters (#1048 item 1).** LoRA targets on the
 streamed `embed_tokens` or `lm_head` of an untied checkpoint support names, regexes
 and dotted paths, default PEFT saves, Trainer checkpoints and resume. Adapter-only
@@ -1047,6 +1069,7 @@ establish CPU correctness, not CUDA performance or memory measurements.
 - `stream_loss_chunk` beside `use_cut_ce` → each replaces how the loss over the logits is computed. Refused before the `use_cut_ce` refusal above, with a message that names both fields (#1693)
 - an architecture outside the supported list (llama / qwen2 / qwen3, including qwen3_5_moe text aliases / qwen4_exp text / mistral / gemma / gemma2 / gemma3_text / phi / phi3 / deepseek_v3) → named explicitly. `deepseek_v3` is the DeepSeek-V3 family (MLA attention, routed experts plus a shared expert); a Kimi K2 checkpoint uses the same decoder under `model_type: kimi_k2` and is admitted through the guard in "Kimi K2" above. Under `quantization: 4bit` its attention, shared-expert and dense-MLP projections are NF4 while the routed experts stay at the stream dtype: they are 3-D parameters, not `nn.Linear` modules, so a DeepSeek-V3 layer streams most of its bytes unquantised
 - a Kimi K2 config (`model_type: kimi_k2`) that transformers' DeepSeek-V3 class would compute differently from K2's own code → refused before any weight is resolved, naming every such field and its value (Kimi-K2-Thinking: `quantization_config.quant_method='compressed-tensors'`). The fields, and why each matters, are under "Kimi K2" above
+
 
 **Config example:**
 
