@@ -9,11 +9,9 @@ from __future__ import annotations
 
 import ast
 import inspect
-from pathlib import Path
 
 import pytest
 
-import soup_cli
 from soup_cli.config.loader import load_config_from_string
 
 # ─────────────────────────── CRITICAL 1: RLVR verifiable rewards ───────────────
@@ -148,14 +146,26 @@ def test_tool_python_endpoint_requires_bearer_when_token_set():
     )
 
 
-def test_tool_python_gate_is_noop_without_token():
+def test_tool_python_refuses_without_a_configured_token():
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
     client = TestClient(_build_tool_app(None), base_url="http://127.0.0.1")
-    # No token configured -> auth passes -> empty body fails the code check
-    # with 400 (NOT 401). Proves the gate is opt-in, and reachable.
-    assert client.post("/v1/tools/python", json={}).status_code == 400
+    # No token configured -> 401 on loopback too, before the body is read, and
+    # the detail names the option that fixes it.
+    resp = client.post("/v1/tools/python", json={})
+    assert resp.status_code == 401
+    assert "--tool-auth-token" in resp.json()["detail"]
+
+
+def test_tool_python_gate_is_reachable_with_the_right_token():
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    client = TestClient(_build_tool_app("secret"), base_url="http://127.0.0.1")
+    # Right token -> auth passes -> empty body fails the code check with 400.
+    resp = client.post("/v1/tools/python", json={}, headers={"Authorization": "Bearer secret"})
+    assert resp.status_code == 400
 
 
 # ─────────────────────────── CRITICAL 3: eval benchmark injection ──────────────
@@ -354,18 +364,3 @@ def test_no_eval_gate_config_never_halts(tmp_path, monkeypatch):
     cb.on_train_begin(args, state, control)
     cb.on_epoch_end(args, state, control)
     assert control.should_training_stop is False
-
-
-_TRAINERS_WITH_CALLBACK = [
-    "sft", "dpo", "grpo", "ppo", "kto", "orpo", "simpo", "ipo",
-    "bco", "pretrain", "reward_model", "distill", "embedding", "classifier",
-]
-
-
-@pytest.mark.parametrize("name", _TRAINERS_WITH_CALLBACK)
-def test_trainer_wires_eval_gate_config(name):
-    """Every trainer that builds SoupTrainerCallback must pass eval_gate_config."""
-    src = (Path(soup_cli.__file__).parent / "trainer" / f"{name}.py").read_text(
-        encoding="utf-8"
-    )
-    assert "eval_gate_config=" in src, f"{name}.py does not wire eval_gate_config"

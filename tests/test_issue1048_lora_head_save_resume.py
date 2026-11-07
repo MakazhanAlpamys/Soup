@@ -73,7 +73,7 @@ def _lora(target_modules):
     )
 
 
-def _build_streamed(tmp_path, *, tie, target_modules, seed):
+def _build_streamed(tmp_path, *, tie, target_modules, seed, tier="ram"):
     from soup_cli.utils.layer_shard import shard_checkpoint
     from soup_cli.utils.layer_stream_runtime import build_streamed_model
 
@@ -90,6 +90,7 @@ def _build_streamed(tmp_path, *, tie, target_modules, seed):
         buffers=2,
         pin=False,
         seed=seed,
+        tier=tier,
     )
     return model, runtime
 
@@ -132,9 +133,8 @@ class TestSaveResumeLandsEveryLoraTensor:
 
             ckpt_dir = tmp_path / "ckpt"
             ckpt_dir.mkdir()
-            # save_embedding_layers=False sidesteps the separate
-            # save_pretrained meta-tensor crash (#1048 section 1, part 1),
-            # which is out of scope for this fix.
+            # Explicit adapter-only export remains supported alongside the
+            # default save covered in test_layer_stream_boundary_save.py.
             model.save_pretrained(str(ckpt_dir), save_embedding_layers=False)
         finally:
             runtime.close()

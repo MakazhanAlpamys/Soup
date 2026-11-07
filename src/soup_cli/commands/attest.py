@@ -145,7 +145,9 @@ def emit_cmd(
         raise typer.Exit(1)
 
     if output is None:
-        console.print(text)
+        # Verbatim: Rich would parse `[...]` in the invocation as markup and fold
+        # long lines, so the JSON on stdout no longer parsed (#1569 review; #1470).
+        typer.echo(text)
         console.print(f"[dim]signature backend: {escape(sig['backend'])}[/]")
         if sig.get("signature"):
             console.print(f"[dim]signature: {escape(sig['signature'][:32])}...[/]")
@@ -263,9 +265,9 @@ def verify_cmd(
         raise typer.Exit(2)
 
     try:
-        with open(statement, encoding="utf-8") as fh:
+        with open(statement, encoding="utf-8-sig") as fh:
             raw_text = fh.read()
-        with open(signature, encoding="utf-8") as fh:
+        with open(signature, encoding="utf-8-sig") as fh:
             sig_doc = json.load(fh)
     except (OSError, ValueError) as exc:
         console.print(f"[red]Could not read inputs: {escape(str(exc))}[/]")

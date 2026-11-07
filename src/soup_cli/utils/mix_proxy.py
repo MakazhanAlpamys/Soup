@@ -170,7 +170,8 @@ def _render_overlay_yaml(
 ) -> str:
     """Splice ``data.interleave`` + ``data.train`` into a base YAML.
 
-    We round-trip via ``yaml.safe_load`` / ``yaml.safe_dump`` to defeat any
+    We round-trip via ``load_yaml_limited`` (``yaml.safe_load`` under the shared
+    size, nesting and expansion limits) and ``yaml.safe_dump`` to defeat any
     accidental key collisions; weights + datasets are sanitised above so the
     output cannot inject keys (the renderer emits scalars only).
 
@@ -183,7 +184,12 @@ def _render_overlay_yaml(
     """
     import yaml  # noqa: PLC0415
 
-    raw = yaml.safe_load(base_yaml_text)
+    from soup_cli.utils.yaml_limits import (  # noqa: PLC0415
+        MAX_CONFIG_BYTES,
+        load_yaml_limited,
+    )
+
+    raw = load_yaml_limited(base_yaml_text, "base YAML", max_bytes=MAX_CONFIG_BYTES)
     if not isinstance(raw, dict):
         raise ValueError("base YAML must be a top-level mapping")
     data_block = raw.get("data")

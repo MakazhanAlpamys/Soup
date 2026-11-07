@@ -10,8 +10,30 @@ import sys
 from types import MappingProxyType, ModuleType
 
 import pytest
+from yaml import safe_load
 
 from soup_cli.config.loader import load_config_from_string
+from soup_cli.config.schema import SoupConfig
+from soup_cli.config.staged_fields import STAGED_FIELD_REJECTION_VERSION
+
+
+def _loader_refuses_as_staged(text: str, path: str) -> dict:
+    """The loader refuses the staged field ``path`` in ``text`` with its one line and
+    nothing else, before the field's own validator (#808, refused as of v0.77).
+    Returns the mapping, for a check of the schema itself."""
+    with pytest.raises(ValueError) as excinfo:
+        load_config_from_string(text)
+    assert str(excinfo.value) == (
+        f"{path} is accepted but read by nothing; "
+        f"refused as of v{STAGED_FIELD_REJECTION_VERSION}. Delete the line."
+    )
+    return safe_load(text)
+
+
+def _staged_but_schema_valid(text: str, path: str) -> SoupConfig:
+    """``text`` built through the schema, which still accepts the staged field ``path``,
+    after checking that the loader refuses it (#808, refused as of v0.77)."""
+    return SoupConfig(**_loader_refuses_as_staged(text, path))
 
 
 def _tiny_linear_model(with_attention: bool = True):
@@ -704,22 +726,25 @@ class TestLFParity:
         assert cfg.training.llm_int8 is True
 
     def test_quantize_ref_model_happy_dpo(self):
-        cfg = load_config_from_string(
+        cfg = _staged_but_schema_valid(
             "base: a/b\n"
             "task: dpo\n"
             "data: {train: x.jsonl, format: dpo}\n"
-            "training: {quantize_ref_model: true}\n"
+            "training: {quantize_ref_model: true}\n",
+            "training.quantize_ref_model",
         )
         assert cfg.training.quantize_ref_model is True
 
     def test_quantize_ref_model_rejects_sft(self):
+        raw = _loader_refuses_as_staged(
+            "base: a/b\n"
+            "task: sft\n"
+            "data: {train: x.jsonl}\n"
+            "training: {quantize_ref_model: true}\n",
+            "training.quantize_ref_model",
+        )
         with pytest.raises(ValueError, match="reference model"):
-            load_config_from_string(
-                "base: a/b\n"
-                "task: sft\n"
-                "data: {train: x.jsonl}\n"
-                "training: {quantize_ref_model: true}\n"
-            )
+            SoupConfig(**raw)
 
     def test_quantize_reward_model_happy_ppo(self):
         cfg = load_config_from_string(
@@ -760,31 +785,35 @@ class TestLFParity:
     def test_quantize_ref_model_happy_grpo(self):
         # Code-review HIGH fix — GRPO has a KL-to-ref policy so
         # quantize_ref_model is meaningful on grpo.
-        cfg = load_config_from_string(
+        cfg = _staged_but_schema_valid(
             "base: a/b\n"
             "task: grpo\n"
             "data: {train: x.jsonl}\n"
-            "training: {quantize_ref_model: true, reward_fn: accuracy}\n"
+            "training: {quantize_ref_model: true, reward_fn: accuracy}\n",
+            "training.quantize_ref_model",
         )
         assert cfg.training.quantize_ref_model is True
 
     def test_quantize_ref_model_happy_kto(self):
-        cfg = load_config_from_string(
+        cfg = _staged_but_schema_valid(
             "base: a/b\n"
             "task: kto\n"
             "data: {train: x.jsonl, format: kto}\n"
-            "training: {quantize_ref_model: true}\n"
+            "training: {quantize_ref_model: true}\n",
+            "training.quantize_ref_model",
         )
         assert cfg.training.quantize_ref_model is True
 
     def test_quantize_ref_model_rejects_pretrain(self):
+        raw = _loader_refuses_as_staged(
+            "base: a/b\n"
+            "task: pretrain\n"
+            "data: {train: x.txt, format: plaintext}\n"
+            "training: {quantize_ref_model: true}\n",
+            "training.quantize_ref_model",
+        )
         with pytest.raises(ValueError, match="reference model"):
-            load_config_from_string(
-                "base: a/b\n"
-                "task: pretrain\n"
-                "data: {train: x.txt, format: plaintext}\n"
-                "training: {quantize_ref_model: true}\n"
-            )
+            SoupConfig(**raw)
 
     @pytest.mark.parametrize("quant", ["none", "8bit", "gptq"])
     def test_double_quant_rejects_non_4bit(self, quant):
@@ -956,13 +985,15 @@ class TestSaveFormats:
         assert off["load_in_4bit"] is True
         assert off["bnb_4bit_quant_type"] == "nf4"
         assert "bnb_4bit_skip_modules" not in off
+        assert "llm_int8_skip_modules" not in off
 
         on = _build_merge_4bit_bnb_kwargs(
             compute_dtype="bfloat16", forced=True, double_quant=True
         )
         assert on["bnb_4bit_use_double_quant"] is True
         # ``forced`` still quantizes every Linear (empty skip list) — unchanged.
-        assert on["bnb_4bit_skip_modules"] == []
+        assert "bnb_4bit_skip_modules" not in on
+        assert on["llm_int8_skip_modules"] == []
 
     def test_merge_4bit_rejects_non_bool_double_quant(self):
         """Matches the existing ``forced``/``dtype`` type guards."""

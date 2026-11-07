@@ -585,13 +585,25 @@ def _capture_attn_heads(model, tokenizer, prompts, layer_idx, num_heads, device)
     return flat.reshape(flat.shape[0], num_heads, head_dim)
 
 
+def steering_vector_path(dir_path: str) -> str:
+    """Path of the vector file inside a steering directory.
+
+    This is the file ``soup steer train --registry-id`` records: the Registry
+    stores one hashed file per artifact row, never a directory.
+    """
+    import os
+
+    return os.path.join(dir_path, _VECTOR_NAME)
+
+
 def resolve_steering_dir(name: str) -> str:
     """Resolve a steering-vector NAME to its on-disk directory.
 
     Resolution order: (1) the default ``./steering/<name>`` directory if it
     holds a ``steering_config.json``; (2) the most recent Registry entry named
-    ``<name>`` carrying a ``steering_vector`` artifact. Raises ``ValueError``
-    when neither resolves.
+    ``<name>`` carrying a ``steering_vector`` artifact, whose row is the vector
+    file and whose directory is what gets loaded. Raises ``ValueError`` when
+    neither resolves.
     """
     import os
 
@@ -611,6 +623,10 @@ def resolve_steering_dir(name: str) -> str:
                 for art in store.get_artifacts(entry["id"]):
                     if art.get("kind") == "steering_vector":
                         art_path = str(art.get("path", ""))
+                        # The row is the vector FILE (the store refuses a
+                        # directory); the config sits next to it.
+                        if os.path.basename(art_path) == _VECTOR_NAME:
+                            art_path = os.path.dirname(art_path)
                         # Only trust a Registry-supplied path that is still
                         # under cwd (a shared/copied Registry DB could hold an
                         # absolute out-of-tree path) — SEC LOW-2.

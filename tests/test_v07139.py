@@ -21,7 +21,6 @@ import json
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
 from soup_cli.utils.ship_verdict import (
     TASK_MODES,
@@ -30,6 +29,7 @@ from soup_cli.utils.ship_verdict import (
     decide_ship,
     verdict_to_evidence,
 )
+from tests.cli_runner import CliRunner
 
 _SRC = Path(__file__).resolve().parent.parent / "src" / "soup_cli"
 

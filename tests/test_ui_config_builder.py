@@ -2,6 +2,8 @@
 
 import pytest
 
+from tests.ui_helpers import ui_client
+
 
 def _auth_headers():
     """Return auth headers with the current UI token."""
@@ -27,14 +29,11 @@ class TestConfigSchemaEndpoint:
 
     def test_schema_returns_json(self):
         """Schema endpoint should return valid JSON."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.get("/api/config/schema", headers=_auth_headers())
         assert response.status_code == 200
         data = response.json()
@@ -42,14 +41,11 @@ class TestConfigSchemaEndpoint:
 
     def test_schema_includes_base_field(self):
         """Schema should include 'base' as a required string field."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.get("/api/config/schema", headers=_auth_headers())
         data = response.json()
         assert "base" in data
@@ -58,14 +54,11 @@ class TestConfigSchemaEndpoint:
 
     def test_schema_includes_task_enum(self):
         """Schema should include 'task' with enum options."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.get("/api/config/schema", headers=_auth_headers())
         data = response.json()
         assert "task" in data
@@ -75,14 +68,11 @@ class TestConfigSchemaEndpoint:
 
     def test_schema_includes_training_fields(self):
         """Schema should include nested training fields."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.get("/api/config/schema", headers=_auth_headers())
         data = response.json()
         assert "training" in data
@@ -92,14 +82,11 @@ class TestConfigSchemaEndpoint:
 
     def test_schema_includes_constraints(self):
         """Schema should include ge/le constraints for bounded fields."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.get("/api/config/schema", headers=_auth_headers())
         data = response.json()
         # Check that training.epochs has constraints or type info
@@ -126,14 +113,11 @@ class TestRecipesEndpoint:
 
     def test_recipes_returns_catalog(self):
         """Recipes endpoint should return all recipes."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.get("/api/recipes", headers=_auth_headers())
         assert response.status_code == 200
         data = response.json()
@@ -142,14 +126,11 @@ class TestRecipesEndpoint:
 
     def test_recipes_have_required_fields(self):
         """Each recipe should have name, model, task fields."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.get("/api/recipes", headers=_auth_headers())
         recipes = response.json()["recipes"]
         for recipe in recipes:
@@ -177,14 +158,11 @@ class TestFormToYamlEndpoint:
 
     def test_form_to_yaml_produces_valid_config(self):
         """Form-to-YAML should produce a valid config string."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.post(
             "/api/config/from-form",
             json={
@@ -203,14 +181,11 @@ class TestFormToYamlEndpoint:
 
     def test_form_to_yaml_validates(self):
         """Form-to-YAML should validate via load_config_from_string."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.post(
             "/api/config/from-form",
             json={
@@ -225,14 +200,11 @@ class TestFormToYamlEndpoint:
 
     def test_form_to_yaml_invalid_returns_error(self):
         """Invalid form values should return error."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         # Missing base — should fail validation
         response = client.post(
             "/api/config/from-form",
@@ -246,14 +218,11 @@ class TestFormToYamlEndpoint:
 
     def test_form_to_yaml_requires_auth(self):
         """Form-to-YAML (POST) should require auth."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.post(
             "/api/config/from-form",
             json={"base": "test"},
@@ -262,14 +231,11 @@ class TestFormToYamlEndpoint:
 
     def test_form_to_yaml_special_chars_in_keys(self):
         """Form values with special YAML characters should be handled safely."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.post(
             "/api/config/from-form",
             json={
@@ -290,14 +256,11 @@ class TestFormToYamlEndpoint:
 
     def test_form_to_yaml_with_lora(self):
         """Form-to-YAML should handle nested lora config."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.post(
             "/api/config/from-form",
             json={

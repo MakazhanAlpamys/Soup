@@ -48,7 +48,9 @@ class TestTheF16IntermediateCannotEatAUsersFile:
     def _model_dir(self, tmp_path):
         model = tmp_path / "mymodel"
         model.mkdir()
-        (model / "config.json").write_text('{"model_type": "llama"}', encoding="utf-8")
+        (model / "config.json").write_text(
+            '{"model_type":"llama","architectures":["LlamaForCausalLM"]}', encoding="utf-8",
+        )
         return model
 
     def test_a_quantised_export_does_not_delete_an_existing_f16_gguf(
@@ -124,7 +126,9 @@ class TestConvertDepsAreInstalledOnEveryPath:
 
         model = tmp_path / "mymodel"
         model.mkdir()
-        (model / "config.json").write_text('{"model_type": "llama"}', encoding="utf-8")
+        (model / "config.json").write_text(
+            '{"model_type":"llama","architectures":["LlamaForCausalLM"]}', encoding="utf-8",
+        )
         llama = tmp_path / "llama.cpp"
         llama.mkdir()
         (llama / "convert_hf_to_gguf.py").write_text("# stub", encoding="utf-8")

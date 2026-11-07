@@ -3,7 +3,7 @@
 ``soup ci init`` writes ``.github/workflows/soup-gate.yml`` — a CI job that
 gates every PR on three Soup checks:
 
-    soup data validate <data>      # dataset format compliance
+    soup data validate <data> --min-valid-fraction 1.0  # every row must convert
     soup expect <data> <suite>     # expectations suite (PII / length / refusal)
     soup ship --evidence <ev.json> # SHIP / DON'T-SHIP verdict (exit 2 = block)
 
@@ -28,6 +28,8 @@ from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, is_under_cwd
 # also cannot break the YAML scalar or a shell step.
 _BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$")
 _PY_RE = re.compile(r"^\d+\.\d+$")
+_MIN_SUPPORTED_PYTHON = (3, 11)
+_MAX_SUPPORTED_PYTHON = (3, 13)
 _MAX_PATH_LEN = 4096
 _MAX_FILE_BYTES = 64 * 1024
 
@@ -43,6 +45,7 @@ _WORKFLOW_TEMPLATE = """\
 # Gates every PR on: data validate -> expectations -> SHIP verdict.
 # Edit the paths below to match your repo. The `soup ship` step needs a
 # committed evidence JSON (see `soup ship --evidence`); remove it if unused.
+# Data validation requires every row; edit --min-valid-fraction to allow drops.
 name: Soup Fine-tuning Gate
 
 on:
@@ -69,7 +72,7 @@ jobs:
       - name: Validate training data
         run: |
           set +e
-          soup data validate {data}
+          soup data validate {data} --min-valid-fraction 1.0
           rc=$?
           set -e
           if [ "$rc" -eq 2 ]; then
@@ -169,6 +172,16 @@ def render_soup_gate_workflow(
 
     if not isinstance(python_version, str) or not _PY_RE.match(python_version):
         raise ValueError("python_version must look like '3.11'")
+    py_tuple = tuple(int(part) for part in python_version.split("."))
+    if py_tuple < _MIN_SUPPORTED_PYTHON or py_tuple > _MAX_SUPPORTED_PYTHON:
+        from soup_cli import __version__
+
+        min_s = f"{_MIN_SUPPORTED_PYTHON[0]}.{_MIN_SUPPORTED_PYTHON[1]}"
+        max_s = f"{_MAX_SUPPORTED_PYTHON[0]}.{_MAX_SUPPORTED_PYTHON[1]}"
+        raise ValueError(
+            f"python_version {python_version} is not supported by soup-cli {__version__} "
+            f"(needs Python {min_s} to {max_s})"
+        )
     if not isinstance(branch, str) or not _BRANCH_RE.match(branch):
         raise ValueError("branch has an unsupported name")
 

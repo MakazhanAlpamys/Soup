@@ -861,7 +861,7 @@ class TestLaunchRolloutOpenenv:
 class TestLaunchRolloutExternal:
     @pytest.mark.parametrize(
         ("name", "pkg"),
-        [("art", "openpipe-art"), ("ruler", "ruler-eval"), ("nemo_gym", "nemo-gym")],
+        [("art", "openpipe-art"), ("ruler", "openpipe-art"), ("nemo_gym", "nemo-gym")],
     )
     def test_missing_package_friendly(self, monkeypatch, name, pkg):
         from soup_cli.utils import agent_rollout

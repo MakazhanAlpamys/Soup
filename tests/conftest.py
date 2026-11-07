@@ -9,6 +9,15 @@ from pathlib import Path
 
 import pytest
 
+from tests import _source_scan
+
+# MLX runs float32 matmuls at TF32 precision by default (``MLX_ENABLE_TF32``,
+# ml-explore/mlx#3860). On an Apple M6 GPU that puts a float32 matmul about 1e-2
+# off, so the native MLX tests' float32 oracles fail there (#2385). MLX reads the
+# variable once, at its first matmul, so it is set here, before any test runs one;
+# an explicit MLX_ENABLE_TF32=1 is left alone.
+os.environ.setdefault("MLX_ENABLE_TF32", "0")
+
 #: The skip message for a ``gpu``-marked test on a machine without CUDA (#833).
 GPU_SKIP_REASON = "needs a CUDA device (run the GPU subset with: pytest -m gpu --no-cov)"
 
@@ -169,6 +178,61 @@ def _isolate_experiments_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "experiments.db"))
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_tool_auth_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start every test without ``SOUP_TOOL_AUTH_TOKEN`` from the developer's shell.
+
+    ``soup serve --tool-auth-token`` reads it, so an exported token would turn a test
+    of a refused bind, or of a route without a token, into one that passes the check.
+    A test that needs it sets it itself.
+    """
+    monkeypatch.delenv("SOUP_TOOL_AUTH_TOKEN", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_hub_model_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the VRAM estimate's model-shape reader off the Hugging Face cache and Hub.
+
+    ``model_shape.read_model_shape`` (#2049) reads ``config.json`` from a local
+    directory, then the Hugging Face cache, then the Hub. A test that names a Hub
+    model would otherwise get a different shape on a machine that has it cached, and
+    reach the network on one that does not. A local model directory is still read.
+    A test of the cache or Hub path patches these two functions back itself.
+    """
+    from soup_cli.utils import model_shape
+
+    monkeypatch.setattr(model_shape, "_hub_lookup", lambda repo, **_kw: (None, None))
+    monkeypatch.setattr(model_shape, "_hub_param_count", lambda repo, **_kw: None)
+
+
+@pytest.fixture(autouse=True)
+def _restore_working_directory():
+    """Put the working directory back after every test.
+
+    Some tests call ``os.chdir(tmp_path)`` and never return, and others open
+    ``src/soup_cli/...`` by a path relative to the repository root. In file
+    order the first kind happens to run after the second, so nothing fails.
+    A pytest-xdist worker can run them the other way round, and the relative
+    opens then raise ``FileNotFoundError``.
+    """
+    before = os.getcwd()
+    yield
+    os.chdir(before)
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _release_scanned_sources():
+    """Drop what a source-scanning guard parsed once its module is done.
+
+    ``tests/_source_scan.py`` lets a guard keep the parsed trees of the files it walked,
+    so that the module's next test does not parse them again. Every tree of
+    ``src/soup_cli`` is 283 MB of private bytes, and while they are alive every
+    ``gc.collect()`` in the worker walks them, so they go when the module goes.
+    """
+    yield
+    _source_scan.release()
+
+
 @pytest.fixture
 def aten_half_matmuls(monkeypatch: pytest.MonkeyPatch):
     """Keep a CPU bf16/fp16 step off oneDNN and off MKL's half-precision GEMMs.
@@ -264,3 +328,22 @@ output: {tmp_path / 'output'}
         encoding="utf-8",
     )
     return config_path
+
+
+def make_cli_runner(**extra_kwargs):
+    """Return a CliRunner that keeps stderr separated from stdout on Click 8.1 and 8.2+ (#1551).
+
+    On Click 8.1, CliRunner interleaves stderr into result.output unless created with
+    mix_stderr=False. On Click 8.2+, mix_stderr was removed from CliRunner.__init__ and
+    result.stdout is separated by default while result.output contains interleaved streams.
+    Inspect Typer's runner rather than Click's version because Typer can vendor Click.
+    The signature allows both versions to produce a clean result.stdout.
+    """
+    import inspect
+
+    from typer.testing import CliRunner
+
+    kwargs = dict(extra_kwargs)
+    if "mix_stderr" in inspect.signature(CliRunner).parameters and "mix_stderr" not in kwargs:
+        kwargs["mix_stderr"] = False
+    return CliRunner(**kwargs)

@@ -22,7 +22,7 @@ def validate_vllm_url(base_url: str) -> None:
 
     Raises ValueError if validation fails.
     """
-    from soup_cli.utils.net_guard import refuse_private_ip_literal
+    from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
 
     parsed = urlparse(base_url)
     if parsed.scheme not in ("http", "https"):
@@ -32,8 +32,7 @@ def validate_vllm_url(base_url: str) -> None:
     # 0.0.0.0 is the bind-any wildcard, NOT loopback (v0.71.6 #232 hardening,
     # matching the newer SSRF validators). It drops out of the local set, so
     # http://0.0.0.0 is now rejected (remote needs HTTPS).
-    local_hosts = ("localhost", "127.0.0.1", "::1")
-    is_local = parsed.hostname in local_hosts
+    is_local = parsed.hostname in LOOPBACK_HOSTS
     if not is_local and parsed.scheme != "https":
         raise ValueError(
             f"vLLM URL must use HTTPS for remote servers (got {parsed.scheme}://). "
@@ -68,7 +67,7 @@ def generate_vllm(
         List of generated example dicts.
     """
     try:
-        import httpx
+        import httpx  # noqa: F401 -- retain the optional-dependency diagnostic
     except ImportError:
         raise ImportError(
             "httpx is required for vLLM generation. Install: pip install httpx"
@@ -81,7 +80,9 @@ def generate_vllm(
     if not api_base.endswith("/v1"):
         api_base = api_base + "/v1"
 
-    response = httpx.post(
+    from soup_cli.utils.http_response import GENERATION_RESPONSE_LIMIT_BYTES, post_capped
+
+    response = post_capped(
         f"{api_base}/chat/completions",
         headers={"Content-Type": "application/json"},
         json={
@@ -93,11 +94,12 @@ def generate_vllm(
             "temperature": temperature,
             "max_tokens": 4096,
         },
+        max_bytes=GENERATION_RESPONSE_LIMIT_BYTES,
+        endpoint_label="vllm --api-base / --base-url",
         timeout=300.0,
     )
 
     if response.status_code != 200:
-        logger.debug("vLLM error response: %s", response.text)
         raise ValueError(
             f"vLLM server returned {response.status_code}. "
             "Check that the server is running and the model is loaded."

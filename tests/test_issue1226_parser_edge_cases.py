@@ -3,9 +3,10 @@ r"""Edge cases of the #1226 final-answer parser, found while reviewing the fix.
 1. **A time or a ratio is one value.** "3:45" and "1:1,000" are one answer, like "4/5", so an
    answer phrase that states one is compared as text instead of being read as a hedge between
    its numbers (or, for "3:45pm", as the value 3).
-2. **A justification inside the answer clause is a hedge.** This pins the ruling in
-   ``test_issue1226_reward_gold_parsing.py``: every stand-alone number in the clause counts. A
-   comma or a period before the justification ends the clause.
+2. **Parenthetical justifications hedge the answer clause, while connectives end it.** Parenthetical
+   justifications belong to the clause and make it a hedge if numbers conflict. The justification
+   connectives "because" or "since" (case-insensitive, requiring whitespace on both sides), or
+   punctuation, end the clause before the justification.
 3. **A later answer phrase supersedes a "####" line**, chatter included ("I hope this answer is
    helpful!"): it cannot be told apart from a heading followed by its answer.
 4. **A "####" heading is not a gold.** A reference whose "####" line is not a number and has more
@@ -116,37 +117,125 @@ class TestATimeOrARatioIsOneValue:
 
 
 # ===========================================================================
-# 2. a justification inside the answer clause is a hedge (the ruling)
+# 2. parenthetical justifications hedge, while connectives end the clause
 # ===========================================================================
 
-# (completion, every number in its clause). Each scores 0.0 against every one of them.
-JUSTIFIED_IN_THE_CLAUSE = [
-    ("The answer is 42 because 6*7=42.", ["42", "6", "7"]),
-    ("The answer is 42 because 6 times 7 is 42.", ["42", "6", "7"]),
+# (completion, every number in its clause). Parenthetical justifications belong to the clause
+# and make it a hedge, scoring 0.0 against every one of them.
+JUSTIFIED_IN_A_PARENTHESIS = [
     ("The answer is 42 (6*7=42).", ["42", "6", "7"]),
     ("The answer is 42 (option 3).", ["42", "3"]),
 ]
-# A comma, a period or a line end before the justification ends the clause.
+# A connective ("because", "since"), a comma, a period or a line end before the justification ends
+# the clause, so the number before it is the answer.
 JUSTIFIED_AFTER_THE_CLAUSE = [
-    "The answer is 42, because 6*7=42.",
-    "The answer is 42. Because 6*7=42.",
-    "The answer is 42\n6*7=42",
+    ("The answer is 42 because 6*7=42.", Decimal(42), "42"),
+    ("The answer is 42 because 6 times 7 is 42.", Decimal(42), "42"),
+    ("The answer is 42 since 6*7=42.", Decimal(42), "42"),
+    ("So the answer is 18 dollars since 9 * 2 = 18.", Decimal(18), "18"),
+    ("The answer is 42, because 6*7=42.", Decimal(42), "42"),
+    ("The answer is 42. Because 6*7=42.", Decimal(42), "42"),
+    ("The answer is 42\n6*7=42", Decimal(42), "42"),
+]
+# A hedge before the connective remains a hedge; a wrong answer before the connective is not paid.
+HEDGED_OR_WRONG_WITH_A_CONNECTIVE = [
+    ("The answer is 41 or 42 because I am not sure.", ["41", "42"]),
 ]
 
 
 class TestAJustificationInsideTheClause:
-    @pytest.mark.parametrize(("completion", "numbers"), JUSTIFIED_IN_THE_CLAUSE)
-    def test_is_a_hedge_and_pays_none_of_its_numbers(self, completion, numbers):
+    @pytest.mark.parametrize(("completion", "numbers"), JUSTIFIED_IN_A_PARENTHESIS)
+    def test_parenthetical_justification_is_a_hedge_and_pays_none_of_its_numbers(
+        self, completion, numbers
+    ):
         assert parse_completion(completion) is None
         assert parse_reference(completion) is None  # as a gold, it is refused
         for number in numbers:
             assert _scores(completion, number) == (0.0, 0.0), number
 
-    @pytest.mark.parametrize("completion", JUSTIFIED_AFTER_THE_CLAUSE)
-    def test_after_the_clause_it_is_not_part_of_the_answer(self, completion):
+    @pytest.mark.parametrize(("completion", "expected_number", "gold"), JUSTIFIED_AFTER_THE_CLAUSE)
+    def test_after_the_clause_it_is_not_part_of_the_answer(self, completion, expected_number, gold):
+        assert parse_completion(completion).number == expected_number
+        ref = parse_reference(completion)
+        assert ref is not None
+        if ref.number is not None:
+            assert ref.number == expected_number
+        assert _scores(completion, gold) == (1.0, 1.0)
+
+    @pytest.mark.parametrize(("completion", "numbers"), HEDGED_OR_WRONG_WITH_A_CONNECTIVE)
+    def test_hedge_before_connective_remains_a_hedge(self, completion, numbers):
+        assert parse_completion(completion) is None
+        assert parse_reference(completion) is None
+        for number in numbers:
+            assert _scores(completion, number) == (0.0, 0.0), number
+
+    def test_wrong_answer_before_connective_scores_zero(self):
+        completion = "The answer is 41 because 6*7=42."
+        assert parse_completion(completion).number == Decimal(41)
+        assert _scores(completion, "42") == (0.0, 0.0)
+
+
+class TestTheConnectiveBoundaryItself:
+    @pytest.mark.parametrize(
+        "connective", ["because", "Because", "BECAUSE", "bEcAuSe", "since", "Since", "SINCE"]
+    )
+    def test_any_case_ends_the_clause(self, connective):
+        completion = f"The answer is 42 {connective} 6*7=42."
         assert parse_completion(completion).number == Decimal(42)
-        assert parse_reference(completion).number == Decimal(42)
         assert _scores(completion, "42") == (1.0, 1.0)
+
+    @pytest.mark.parametrize("separator", ["\t", "\u00a0", "  ", "\n"])
+    def test_any_whitespace_on_both_sides(self, separator):
+        completion = f"The answer is 42{separator}because{separator}6*7=42."
+        assert parse_completion(completion).number == Decimal(42)
+        assert _scores(completion, "42") == (1.0, 1.0)
+
+    @pytest.mark.parametrize(
+        "completion",
+        [
+            "The answer is 42 because-6*7=42.",  # glued to what follows
+            "The answer is 42 because6*7=42.",
+            "The answer is 42-because 6*7=42.",  # glued to what came before
+            "The answer is 42 sincerely 6*7=42.",  # a longer word
+            "The answer is 42 (which is right since 6*7=42).",  # inside a bracket: an aside
+        ],
+    )
+    def test_only_a_stand_alone_connective_outside_brackets_ends_the_clause(self, completion):
+        # Without a cut the clause keeps 6 and 7 next to 42: still a hedge, as before the rule.
+        assert parse_completion(completion) is None
+        assert _scores(completion, "42") == (0.0, 0.0)
+
+    def test_the_connective_is_not_part_of_a_text_answer(self):
+        completion = "The answer is Paris because it is the capital."
+        assert parse_completion(completion).text == "Paris"
+        assert _scores(completion, "Paris") == (1.0, 1.0)
+
+    @pytest.mark.parametrize("word", ["as", "As", "AS"])
+    def test_as_does_not_end_the_clause(self, word):
+        # The ruling on #1328: not `as`, which appears inside answers. Without a cut the clause
+        # keeps 6 and 7 next to 42: still a hedge.
+        completion = f"The answer is 42 {word} 6*7=42."
+        assert parse_completion(completion) is None
+        assert _scores(completion, "42") == (0.0, 0.0)
+
+    @pytest.mark.parametrize("connective", ["because", "Because", "since", "SINCE"])
+    def test_a_connective_that_ends_the_text_ends_the_clause(self, connective):
+        # A completion cut off at max_tokens right after the connective: no character follows it,
+        # which must neither crash the reward nor stop it reading 42.
+        completion = f"The answer is 42 {connective}"
+        assert parse_completion(completion).number == Decimal(42)
+        assert _scores(completion, "42") == (1.0, 1.0)
+        assert parse_completion(completion + "\n6*7=42").number == Decimal(42)
+
+
+class TestAnAnswerThatBeginsWithAConnective:
+    """The connective ends a clause that has an answer in it; it never empties one."""
+
+    @pytest.mark.parametrize(
+        "gold", ["Answer: Because it rains.", "Answer: since 1990", "The answer is Since then."]
+    )
+    def test_a_text_gold_that_starts_with_one_is_still_a_gold(self, gold):
+        assert parse_reference(gold) is not None
 
 
 # ===========================================================================
@@ -155,8 +244,13 @@ class TestAJustificationInsideTheClause:
 
 
 class TestALaterAnswerPhraseAfterAMarker:
-    def test_a_justification_in_the_later_phrase_makes_it_a_hedge(self):
+    def test_a_justification_with_connective_in_the_later_phrase_reads_the_answer(self):
         completion = "6*7=42\n#### 42\nThe answer is 42 because 6 x 7 = 42."
+        assert parse_completion(completion).number == Decimal(42)
+        assert _scores(completion, "42") == (1.0, 1.0)
+
+    def test_a_hedge_in_the_later_phrase_makes_it_a_hedge(self):
+        completion = "6*7=42\n#### 42\nThe answer is 41 or 42 because I am not sure."
         assert parse_completion(completion) is None
         assert _scores(completion, "42") == (0.0, 0.0)
 

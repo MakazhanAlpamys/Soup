@@ -1056,17 +1056,12 @@ class TestReLoRATaskGate:
     @pytest.mark.parametrize(
         "task",
         [
-            "dpo",
-            "grpo",
-            "kto",
             "orpo",
             "simpo",
-            "ipo",
             "ppo",
             "reward_model",
             "pretrain",
             "embedding",
-            "bco",
         ],
     )
     def test_other_tasks_accepted(self, task):
@@ -1077,6 +1072,17 @@ class TestReLoRATaskGate:
         cfg = load_config_from_string(yaml.safe_dump(self._base_cfg(task)))
         assert cfg.training.relora_steps == 100
         assert cfg.task == task
+
+    @pytest.mark.parametrize("task", ["dpo", "grpo", "kto", "ipo", "bco"])
+    def test_tasks_with_a_frozen_reference_rejected(self, task):
+        """#1835: a restart merges the adapter into the weights the frozen
+        reference is read from (``tests/test_relora_reference.py``)."""
+        import yaml
+
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="frozen reference"):
+            load_config_from_string(yaml.safe_dump(self._base_cfg(task)))
 
     def test_mlx_backend_rejected(self):
         import yaml

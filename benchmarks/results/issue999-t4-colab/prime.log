@@ -1,0 +1,83 @@
+[issue999] applied fixes from #2215: fingerprint, fp16-adapter-alignment
+Auto-detected format: chatml
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading tokenizer: NousResearch/Meta-Llama-3.1-8B-Instruct
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+
+Fetching 11 files:   0%|          | 0/11 [00:00<?, ?it/s]
+Fetching 11 files:  45%|████▌     | 5/11 [00:00<00:00, 44.12it/s]
+Fetching 11 files:  64%|██████▎   | 7/11 [00:17<00:00, 44.12it/s]
+Fetching 11 files:  73%|███████▎  | 8/11 [00:33<00:15,  5.10s/it]
+Fetching 11 files:  82%|████████▏ | 9/11 [01:44<00:34, 17.09s/it]
+Fetching 11 files:  91%|█████████ | 10/11 [02:18<00:20, 20.48s/it]
+Fetching 11 files: 100%|██████████| 11/11 [02:33<00:00, 19.32s/it]
+Fetching 11 files: 100%|██████████| 11/11 [02:33<00:00, 13.99s/it]
+╭────────────────────────────────────────────────────────────────────────────────── Layer streaming disk pre-flight ───────────────────────────────────────────────────────────────────────────────────╮
+│ HF/local source: 16.06 GB                                                                                                                                                                            │
+│ Soup materialized copy: 16.06 GB (write required)                                                                                                                                                    │
+│ Layer-shard cache: 5.70 GB (write required)                                                                                                                                                          │
+│ Projected total on disk: 37.82 GB                                                                                                                                                                    │
+│ Additional writes before training: 21.76 GB                                                                                                                                                          │
+│ Free on target volume (materialized weight copy + layer-shard cache): 58.95 GB                                                                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+Preparing layer shards -> /root/.soup/layer-stream/NousResearch__Meta-Llama-3.1-8B-Instruct
+Re-sharding layer cache: cache index is missing or unreadable.
+╭─────────────────────────────────────────────────────────────────────────────────────── training.stream_layers ───────────────────────────────────────────────────────────────────────────────────────╮
+│ Layer streaming BETA — arch llama, tier ram                                                                                                                                                          │
+│   base store   5.70 GB across 32 layers (pinned)                                                                                                                                                     │
+│   VRAM buffers 2 x 113 MB + 1 x 1051 MB large-layer slot = 1276 MB                                                                                                                                   │
+│   resident     0 MB extras + adapters                                                                                                                                                                │
+│   peak VRAM    ~1.97 GB at batch 1 x seq 256 (logits 0.46 GB)                                                                                                                                        │
+│   free VRAM    15.51 GB                                                                                                                                                                              │
+│   forecast     338-497 tok/s — a compute-bound bound, not a promise                                                                                                                                  │
+│                (from 23.93 TFLOPS measured on this card now using float16 @ 840 MHz)                                                                                                                 │
+│   ! accumulating 4x at batch 1: the base is re-read once per micro-batch. Per token that is free, but reaching effective batch 4 by raising training.batch_size instead measured ~2.5x faster.       │
+│ Accumulation holds peak VRAM flat, so raise batch_size while the budget above allows, then accumulate for the rest.                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+Layer streaming is BETA: slower than resident training, but this model may not run resident on this card at all.
+expandable_segments allocator hint not enabled: CUDA was already initialised before Soup could set it — the allocator reads PYTORCH_CUDA_ALLOC_CONF once, at context creation
+Layer streaming ready: 32 layers, 5.70 GB pinned RAM store (6.44 GB page-locked), 2 x 113 MB decoder buffers + 1 x 1051 MB large-layer slot
+LoRA applied: 3,407,872 trainable / 8,030,261,248 total (0.04%)
+
+Map:   0%|          | 0/28 [00:00<?, ? examples/s][transformers] return_assistant_tokens_mask==True but chat template does not contain `{% generation %}` keyword.
+
+Map: 100%|██████████| 28/28 [00:00<00:00, 313.10 examples/s]
+
+Map:   0%|          | 0/4 [00:00<?, ? examples/s]
+Map: 100%|██████████| 4/4 [00:00<00:00, 468.76 examples/s]
+
+Map:   0%|          | 0/28 [00:00<?, ? examples/s]
+Map: 100%|██████████| 28/28 [00:00<00:00, 4983.90 examples/s]
+
+Map:   0%|          | 0/4 [00:00<?, ? examples/s]
+Map: 100%|██████████| 4/4 [00:00<00:00, 1107.92 examples/s]
+
+Truncating train dataset:   0%|          | 0/28 [00:00<?, ? examples/s]
+Truncating train dataset: 100%|██████████| 28/28 [00:00<00:00, 4885.62 examples/s]
+
+Truncating eval dataset:   0%|          | 0/4 [00:00<?, ? examples/s]
+Truncating eval dataset: 100%|██████████| 4/4 [00:00<00:00, 1317.51 examples/s]
+Rewind log: /tmp/soup-bench-7mklkroj/rewind.jsonl
+[transformers] The tokenizer has new PAD/BOS/EOS tokens that differ from the model config and generation config. The model config and generation config were aligned accordingly, being updated with the tokenizer's values. Updated tokens: {'pad_token_id': 128009}.
+
+  0%|          | 0/2 [00:00<?, ?it/s]
+ 50%|█████     | 1/2 [00:05<00:05,  5.13s/it]
+                                             
+{'loss': '4.486', 'grad_norm': '3.663', 'learning_rate': '0', 'entropy': '2.243', 'num_tokens': '148', 'mean_token_accuracy': '0.415', 'epoch': '0.1429'}
+
+ 50%|█████     | 1/2 [00:05<00:05,  5.13s/it]
+100%|██████████| 2/2 [00:08<00:00,  4.00s/it]
+                                             
+{'loss': '3.997', 'grad_norm': 'nan', 'learning_rate': '0.0002', 'entropy': '2.304', 'num_tokens': '300', 'mean_token_accuracy': '0.3889', 'epoch': '0.2857'}
+
+100%|██████████| 2/2 [00:08<00:00,  4.00s/it]
+                                             
+{'train_runtime': '9.026', 'train_samples_per_second': '0.886', 'train_steps_per_second': '0.222', 'train_loss': '4.242', 'epoch': '0.2857'}
+
+100%|██████████| 2/2 [00:09<00:00,  4.00s/it]
+100%|██████████| 2/2 [00:09<00:00,  4.51s/it]
+2 steps (1 warm-up discarded): median 3.2670s, p95 3.2670s, 72 supervised of 152 tokens, 22.0 supervised tok/s
+Report: /content/issue999/prime.json
+FAILED grad_norm: step 1 logged a non-finite grad_norm (nan); the run diverged.
+FAILED parameters_changed: trainable parameters are bit-identical between the first and last measured step: nothing trained, whatever the logs said.
+The report is written but NOT valid: this run was not training.

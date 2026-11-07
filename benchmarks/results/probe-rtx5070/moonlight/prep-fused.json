@@ -1,0 +1,42 @@
+{
+  "label": "real weights (moonshotai/Moonlight-16B-A3B), random token ids",
+  "args": {
+    "store": "D:/soup-bench/moonlight-fused",
+    "weights": "D:/soup-bench/models/Moonlight-16B-A3B",
+    "model": null,
+    "expert_layout": "fused",
+    "out": "C:/Users/user/projects/soup-wt/moe-moonlight/benchmarks/results/probe-rtx5070/moonlight/prep-fused.json",
+    "seq": 512,
+    "batch": 1,
+    "steps": 0,
+    "lora_r": 8,
+    "buffers": 2,
+    "tier": "disk",
+    "no_pin": false,
+    "seed": 3,
+    "label": "real weights (moonshotai/Moonlight-16B-A3B), random token ids"
+  },
+  "steps": [],
+  "shard_seconds": 61.7,
+  "store_bytes": 30598520590,
+  "build_seconds": 2.08,
+  "trainable_params": 3552768,
+  "stats": {
+    "n_layers": 27,
+    "buffers": 2,
+    "buffer_bytes": 2989676432,
+    "large_buffer_bytes": 671088640,
+    "store_bytes": 3632172724,
+    "pinned": true,
+    "pinned_bytes": 4294967296,
+    "tier": "disk",
+    "read_ahead": 2,
+    "disk_bytes": 30598395988,
+    "layer_loads": 0,
+    "large_loads": 0,
+    "device": "cuda",
+    "total_params": 15960111936,
+    "expert_fetches": 0,
+    "expert_bytes_read": 0
+  }
+}

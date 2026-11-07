@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
+from soup_cli.data.traces.messages import content_text, conversation_prompt
+
 SUPPORTED_FORMATS: tuple[str, ...] = ("langchain", "openai", "soup-serve")
 
 # The per-trace signal vocabulary a producer may write. Distinct from
@@ -40,16 +42,13 @@ class Trace:
 
 def _langchain_prompt(inputs: Any) -> str:
     """Flatten LangChain ``inputs`` into a string prompt."""
+    if isinstance(inputs, list):
+        return conversation_prompt(inputs)
     if not isinstance(inputs, dict):
         return ""
     messages = inputs.get("messages")
     if isinstance(messages, list):
-        parts: list[str] = []
-        for msg in messages:
-            if isinstance(msg, dict):
-                content = msg.get("content") or ""
-                parts.append(str(content))
-        return "\n".join(parts).strip()
+        return conversation_prompt(messages)
     for key in ("prompt", "input", "query"):
         value = inputs.get(key)
         if isinstance(value, str):
@@ -70,11 +69,11 @@ def _langchain_output(outputs: Any) -> str:
             item = first
         if isinstance(item, dict):
             text = item.get("text") or item.get("content") or ""
-            return str(text)
+            return content_text(text)
     for key in ("output", "response", "text", "content"):
         value = outputs.get(key)
-        if isinstance(value, str):
-            return value
+        if isinstance(value, (str, list)):
+            return content_text(value)
     return ""
 
 
@@ -118,12 +117,7 @@ def parse_langchain(events: Iterable[Any]) -> Iterator[Trace]:
 
 
 def _openai_prompt(messages: Any) -> str:
-    if not isinstance(messages, list):
-        return ""
-    for msg in messages:
-        if isinstance(msg, dict) and msg.get("role") == "user":
-            return str(msg.get("content") or "")
-    return ""
+    return conversation_prompt(messages)
 
 
 def _openai_output(choices: Any) -> str:
@@ -134,8 +128,8 @@ def _openai_output(choices: Any) -> str:
         return ""
     msg = first.get("message")
     if isinstance(msg, dict):
-        return str(msg.get("content") or "")
-    return str(first.get("text") or "")
+        return content_text(msg.get("content"))
+    return content_text(first.get("text"))
 
 
 def _openai_signal(feedback: Any) -> str:

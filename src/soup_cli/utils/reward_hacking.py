@@ -32,6 +32,7 @@ Security:
 
 from __future__ import annotations
 
+import logging
 import math
 import types
 from dataclasses import dataclass
@@ -40,9 +41,18 @@ from typing import TYPE_CHECKING, Any, Optional, Sequence
 if TYPE_CHECKING:
     from soup_cli.utils.reward_hacking import RewardHackCallback
 
+logger = logging.getLogger(__name__)
+
 _MAX_DETECTOR_NAME_LEN = 32
 _MAX_RM_ENSEMBLE_SIZE = 32
 _EPS = 1e-9
+#: Floor on the pooled variance in :func:`compute_cluster_separation`,
+#: expressed as a fraction of the observed reward range. A constant
+#: (``1e-9``) floor let a split into two constant halves return a
+#: separation of ~31623 for a 0/1 reward — four orders of magnitude
+#: above every later value, so it was recorded as the baseline and any
+#: subsequent step read as a collapse (#1438).
+_SEPARATION_VARIANCE_FLOOR_FRAC = 0.01
 
 SUPPORTED_HACK_DETECTORS: frozenset[str] = frozenset({"info_rm", "rm_ensemble"})
 
@@ -175,7 +185,9 @@ def compute_cluster_separation(
     good = _check_finite_float_sequence(good_scores, "good_scores")
     bad = _check_finite_float_sequence(bad_scores, "bad_scores")
     delta = _mean(good) - _mean(bad)
-    pooled = _variance(good) + _variance(bad) + _EPS
+    spread = max(*good, *bad) - min(*good, *bad)
+    floor = max(_EPS, (_SEPARATION_VARIANCE_FLOOR_FRAC * spread) ** 2)
+    pooled = _variance(good) + _variance(bad) + floor
     return delta / math.sqrt(pooled)
 
 
@@ -431,6 +443,8 @@ class _RewardHackCallback_body:  # type: ignore[misc, valid-type]  # noqa: N801
         # v0.71.26 — the numeric relative drop from the last observe_signal,
         # consumed by the closed-loop mitigation controller.
         self._last_drop_pct = 0.0
+        # #1438 — warn at most once per run when info_rm has no signal.
+        self._warned_discrete_reward = False
 
     # --- pure signal computation (testable without transformers) ---
 
@@ -481,7 +495,39 @@ class _RewardHackCallback_body:  # type: ignore[misc, valid-type]  # noqa: N801
         good = ordered[half:]
         if not bad or not good:
             return None
+        # #1438 — a median split carries information only when each half
+        # can vary. A two-valued reward (e.g. reward_fn: accuracy's 0/1)
+        # always leaves at least one constant half, so its "separation" is
+        # a function of the success rate alone, not of reward-model
+        # health; a first step at exactly 50% would otherwise record a
+        # ~31623 baseline and classify every later, healthier step as
+        # HACK. Skip the step instead of voting — unless every reward in
+        # the step is identical AND a baseline already exists: a 0/1 run
+        # never records one (every step is silent), so reaching the check
+        # means a continuous reward collapsed to a constant, which is a
+        # genuine HACK signal (main reported 0.0 there too).
+        if _variance(bad) == 0.0 or _variance(good) == 0.0:
+            if self._baseline_health is not None and ordered[0] == ordered[-1]:
+                return 0.0
+            self._warn_discrete_reward()
+            return None
         return compute_cluster_separation(good, bad)
+
+    def _warn_discrete_reward(self) -> None:
+        """Warn once per run that info_rm has nothing to vote with (#1438)."""
+        if self._warned_discrete_reward:
+            return
+        self._warned_discrete_reward = True
+        logger.warning(
+            "reward_hack_detector=info_rm has no signal for this reward: a "
+            "median split of the step's rewards leaves a constant half (a "
+            "two-valued reward such as the 0/1 reward_fn: accuracy), so the "
+            "cluster separation cannot measure reward-model health. The "
+            "detector stays silent for those steps. Alternatives: "
+            "reward_hack_detector=rm_ensemble (needs at least two reward "
+            "functions), or the length and repetition signals via "
+            "reward_hack_signals."
+        )
 
     def observe_signal(self, raw_signal: float, step: int) -> RewardHackReport:
         """Fold a raw signal into the running baseline + classify.

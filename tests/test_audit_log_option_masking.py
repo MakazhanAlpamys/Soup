@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 
-import click
 import pytest
 import typer
+
+from soup_cli.utils.typer_compat import is_group, is_option
 
 
 @pytest.fixture
@@ -91,7 +92,7 @@ def test_mask_secret_args_forms():
 
 def _all_commands(cmd, path=()):
     yield path, cmd
-    if isinstance(cmd, click.Group):
+    if is_group(cmd):
         for name, sub in cmd.commands.items():
             yield from _all_commands(sub, path + (name,))
 
@@ -105,7 +106,7 @@ def test_every_secret_looking_option_is_masked(audit_path):
     checked = 0
     for path, cmd in _all_commands(root):
         for param in getattr(cmd, "params", []):
-            if not isinstance(param, click.Option) or param.is_flag:
+            if not is_option(param) or param.is_flag:
                 continue
             longs = [o for o in param.opts if o.startswith("--")]
             if not any(SECRET_NAME_RE.search(o[2:]) for o in longs):
@@ -129,7 +130,7 @@ def test_not_secret_list_only_names_real_options():
         o
         for _path, cmd in _all_commands(root)
         for p in getattr(cmd, "params", [])
-        if isinstance(p, click.Option)
+        if is_option(p)
         for o in p.opts
     }
     assert NOT_SECRET_OPTIONS <= names, NOT_SECRET_OPTIONS - names

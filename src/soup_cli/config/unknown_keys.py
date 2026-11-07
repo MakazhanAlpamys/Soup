@@ -40,6 +40,7 @@ from dataclasses import dataclass
 
 import pydantic
 
+from soup_cli.config.aliases import CONFIG_ALIASES, CONFIG_NOTES
 from soup_cli.config.schema import (
     ROOT_LEVEL_MISPLACED_KEYS,
     SoupConfig,
@@ -71,9 +72,10 @@ __all__ = [
 #: exists to avoid. One minor of notice: warn in 0.74, refuse in 0.75.
 UNKNOWN_KEY_REJECTION_VERSION = "0.75"
 
-#: difflib cutoff. 0.6 resolves every case reported in #627 on the first
-#: suggestion while leaving an unrelated key (``zzzzzzzz``) with none.
-_SUGGESTION_CUTOFF = 0.6
+#: difflib cutoff for declared fields. 0.65 resolves every case reported in #627
+#: and rejects false-positive near matches such as lerning_rate -> use_ring_attention
+#: (which has similarity 0.600) (#2099).
+_SUGGESTION_CUTOFF = 0.65
 
 #: Findings are capped, and so is the work: every unknown key costs a difflib
 #: pass over the ~240 declared field names, and a config string reaches this
@@ -91,6 +93,13 @@ _MAX_REPORTED_UNKNOWN_KEYS = 100
 _MAX_KEY_LEN = 256
 _MAX_SUGGESTIONS = 2
 
+#: A key says "use X" for an alias only when it is a typo of that alias: one edit away
+#: as a whole string and word by word. Anything fuzzier is left to the "did you mean"
+#: ranking over the declared fields, because a near-looking name is often another
+#: setting (``per_device_eval_batch_size`` is not the training batch size).
+_ALIAS_TYPO_RATIO = 0.9
+_ALIAS_WORD_RATIO = 0.8
+
 
 @dataclass(frozen=True)
 class UnknownKey:
@@ -99,6 +108,21 @@ class UnknownKey:
     path: str
     key: str
     suggestions: tuple[str, ...]
+    alias: str | None = None
+    #: A sentence for a name that looks like a Soup setting and is not one (CONFIG_NOTES).
+    note: str | None = None
+
+
+def _is_typo_of(key: str, alias: str) -> bool:
+    """Whether ``key`` is a one-edit misspelling of ``alias``: same words, spelled alike."""
+    if difflib.SequenceMatcher(None, key, alias).ratio() < _ALIAS_TYPO_RATIO:
+        return False
+    words, alias_words = key.split("_"), alias.split("_")
+    return len(words) == len(alias_words) and all(
+        word == other
+        or difflib.SequenceMatcher(None, word, other).ratio() >= _ALIAS_WORD_RATIO
+        for word, other in zip(words, alias_words)
+    )
 
 
 def _nested_models(model: type[pydantic.BaseModel], field: str) -> list[type]:
@@ -112,8 +136,9 @@ def _nested_models(model: type[pydantic.BaseModel], field: str) -> list[type]:
         # must be filtered before issubclass: on Python 3.10 a GenericAlias
         # like list[str] passes isinstance(c, type) and then raises
         # TypeError from issubclass (3.11 made isinstance return False).
-        # The repo supports 3.10, and any walk of a full model_dump() — what
-        # sweep's pre-flight feeds this — visits list[...]/dict[...] fields.
+        # Kept from when the floor was 3.10 (3.11 since #1805): any walk of a full
+        # model_dump() — what sweep's pre-flight feeds this — visits list[...] and
+        # dict[...] fields.
         if isinstance(c, type)
         and typing.get_origin(c) is None
         and issubclass(c, pydantic.BaseModel)
@@ -139,9 +164,65 @@ def _walk(
             return
         if not isinstance(key, str):
             continue
-        shown = key if len(key) <= _MAX_KEY_LEN else key[:_MAX_KEY_LEN] + "..."
+        # On one line, whitespace collapsed: the report prints one line per key,
+        # so a line break in a key would print a second line that reads as a
+        # report line of its own. Cut first, so a huge key costs no more work.
+        shown = " ".join(key[:_MAX_KEY_LEN].split())
+        if len(key) > _MAX_KEY_LEN:
+            shown += "..."
         path = f"{prefix}{shown}"
         if key not in declared:
+            # 0. A name from another tool that Soup has no setting for: say so, and
+            # name no replacement (CONFIG_NOTES).
+            if path in CONFIG_NOTES:
+                found.append(
+                    UnknownKey(path=path, key=shown, suggestions=(), note=CONFIG_NOTES[path])
+                )
+                continue
+            # 1. Alias lookup (#2099): the alias table's exact path, or a one-edit typo
+            # of an alias key under the same prefix, ahead of declared field difflib
+            # suggestions. A typo must not hide a closer match to a declared field.
+            alias_target = None
+            if path in CONFIG_ALIASES:
+                alias_target = CONFIG_ALIASES[path]
+            else:
+                prefix_aliases = [
+                    k[len(prefix):]
+                    for k in CONFIG_ALIASES
+                    if k.startswith(prefix) and "." not in k[len(prefix):]
+                ]
+                close_aliases = [
+                    candidate
+                    for candidate in difflib.get_close_matches(
+                        key, prefix_aliases, n=3, cutoff=_ALIAS_TYPO_RATIO
+                    )
+                    if _is_typo_of(key, candidate)
+                ]
+                if close_aliases:
+                    closest_alias = close_aliases[0]
+                    closest_declared = difflib.get_close_matches(
+                        key, list(declared), n=1, cutoff=_SUGGESTION_CUTOFF
+                    )
+                    alias_score = difflib.SequenceMatcher(None, key, closest_alias).ratio()
+                    declared_score = (
+                        difflib.SequenceMatcher(None, key, closest_declared[0]).ratio()
+                        if closest_declared else 0.0
+                    )
+                    if alias_score > declared_score:
+                        alias_target = CONFIG_ALIASES[f"{prefix}{closest_alias}"]
+
+            if alias_target is not None:
+                short_field = alias_target.split(".")[-1]
+                found.append(
+                    UnknownKey(
+                        path=path,
+                        key=shown,
+                        suggestions=(short_field,),
+                        alias=alias_target,
+                    )
+                )
+                continue
+
             suggestions = tuple(
                 difflib.get_close_matches(
                     key, list(declared), n=_MAX_SUGGESTIONS, cutoff=_SUGGESTION_CUTOFF
@@ -221,7 +302,11 @@ def format_unknown_keys(
     overflow = len(unknown) > _MAX_REPORTED_UNKNOWN_KEYS
     lines = []
     for item in unknown[:_MAX_REPORTED_UNKNOWN_KEYS]:
-        if item.suggestions:
+        if item.note:
+            lines.append(f"unknown config key '{item.path}' - {item.note} {suffix}")
+        elif item.alias:
+            lines.append(f"unknown config key '{item.path}' - use {item.alias}. {suffix}")
+        elif item.suggestions:
             # After the question mark the suffix starts a new sentence.
             hint = " or ".join(f"'{s}'" for s in item.suggestions)
             lines.append(f"unknown config key '{item.path}' - did you mean {hint}? {suffix}")

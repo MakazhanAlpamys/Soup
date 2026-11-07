@@ -19,6 +19,31 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The image installs exactly this soup-cli release from PyPI (Dockerfile build arg
+      # SOUP_VERSION). It comes from the git tag the run was started for: a `release`
+      # event always runs on its tag, and a manual re-run has to say so with
+      # `gh workflow run docker.yml --ref vX.Y.Z`. Any other ref has no release version,
+      # so the run stops here instead of pushing an unpinned image under `latest`.
+      - name: Resolve the release version
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "${REF_TYPE}" != "tag" ] || ! printf '%s' "${REF_NAME}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::docker.yml builds a release: run it on a vX.Y.Z tag (got ${REF_TYPE} '${REF_NAME}'). Dispatch it with --ref vX.Y.Z."
+            exit 1
+          fi
+          echo "version=${REF_NAME#v}" >> "${GITHUB_OUTPUT}"
+
+      - name: Decide whether this release updates latest
+        id: latest
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: python scripts/docker_release_tags.py "${REF_NAME}"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -38,16 +63,20 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # Semver rules otherwise add latest automatically, even for an older release.
+          flavor: latest=false
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            latest
+            type=raw,value=latest,enable=${{ steps.latest.outputs.latest == 'true' }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
+          build-args: |
+            SOUP_VERSION=${{ steps.version.outputs.version }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

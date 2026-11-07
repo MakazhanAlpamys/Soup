@@ -1,5 +1,5 @@
-<!-- synced-from: README.md sha256:4dfed787f12e9d2a94ba6cf97d76b25aa4151095125c9eae65628bfe63e86d0f -->
-<p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong></p>
+<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
+<p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
   <img src="soup.png" alt="Soup" width="280">
@@ -27,7 +27,7 @@
 <p align="center">
   <a href="https://pypi.org/project/soup-cli/"><img src="https://img.shields.io/pypi/v/soup-cli?color=blue" alt="PyPI"></a>
   <a href="https://pepy.tech/project/soup-cli"><img src="https://img.shields.io/pepy/dt/soup-cli?color=blue" alt="ダウンロード数"></a>
-  <img src="https://img.shields.io/badge/python-3.10--3.12-blue" alt="Python 3.10-3.12">
+  <img src="https://img.shields.io/badge/python-3.11--3.13-blue" alt="Python 3.11-3.13">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0 ライセンス">
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/MakazhanAlpamys/65fdc943f85f3b2c46ecddb415c2b779/raw/soup_tests.json" alt="テスト"></a>
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://github.com/MakazhanAlpamys/Soup/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -61,11 +61,14 @@ soup train
 
 **4 GB のノート PC 用 GPU で、8B モデルをファインチューニングできます。** レイヤーストリーミングは、凍結したベースモデルを
 VRAM の外に置き、デコーダー層を一層ずつ GPU に送り込みます。RTX 3050 Laptop 4 GB での実測値:
-Llama-3.1-8B-Instruct + NF4 で **119.6 tok/s、ピーク 3.32 GB** — 全体をメモリに常駐させた通常の実行とビット単位で
+Llama-3.1-8B-Instruct + NF4 で **952 MHz 時に 119.6 tok/s、ピーク 3.32 GB**（修正前）— 全体をメモリに常駐させた通常の実行とビット単位で
 完全に一致し、H100 でも同じ 3.32 GB で 113.00 tok/s と独立に再現されました。
-（どちらの数値も v0.72.2 で、v0.73.0 の正確性修正（32B で −4.8% のコスト）より前に測定したもので、
-それ以降 4 GB のカードでは再実行していません — 再測定は issue
-[#361](https://github.com/MakazhanAlpamys/Soup/issues/361) で保留中です。）オプトイン方式（`stream_layers: true`）で、
+（どちらの数値も v0.72.2 で、v0.73.0 の正確性修正（32B で −4.8% のコスト）より前に測定したものです。
+修正後の実行は、別の RTX 3050 Laptop 4 GB（@umran666、#1103）で
+**1935–1957 MHz 時に 208.6 tok/s、ピーク 2.40 GB** でした。これは同一セッションでの GEMM 上限の 59% にあたり、
+修正前の 68% に対して、クロックあたりでは約 14% 遅いことになります。つまり、見かけの 1.74x の向上は高速化ではなく
+クロックの差です。大きなレイヤーのストリーミングによって両行のあいだでメモリの使われ方も変わっているため、この割合でさえ
+同じ条件での比較ではありません — [記録](benchmarks/gate-v0.72.2-nf4.md)。）オプトイン方式（`stream_layers: true`）で、
 まだ BETA です —
 [仕組み](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724) ·
 [すべての測定結果](benchmarks/) · [論文](https://doi.org/10.5281/zenodo.21771064) ·
@@ -73,8 +76,8 @@ Llama-3.1-8B-Instruct + NF4 で **119.6 tok/s、ピーク 3.32 GB** — 全体�
 ストリーミングしたモデルが通常のモデルとビット単位で同一であることを検証します）
 
 <p align="center">
-  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="4 GB のカードでの Llama-3.1-8B 向け soup train の事前チェック: 32 層にわたって RAM 上に固定された 3.60 GB のベースストアと、113 MB の VRAM バッファ 2 つ。その後、119.6 tok/s で測定されたピークは 3.32 GB で、4 GB のラインの手前に収まっています（v0.72.2 で測定、#331 の修正前。再測定は issue #361 で保留中）"></a><br>
-  <sub>Llama-3.1-8B-Instruct + NF4、LoRA、バッチサイズ 1、シーケンス長 512、RTX 3050 Laptop 4 GB — <b>ピーク 3.32 GB、119.6 tok/s</b>（v0.72.2 で測定、#331 の修正前。再測定は issue #361 で保留中）。 <a href="https://youtu.be/T1LCErE943E">動画（90 秒）</a></sub>
+  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="4 GB のカードでの Llama-3.1-8B 向け soup train の事前チェック: 32 層にわたって RAM 上に固定された 3.60 GB のベースストアと、113 MB の VRAM バッファ 2 つ。その後、119.6 tok/s で測定されたピークは 3.32 GB で、4 GB のラインの手前に収まっています（修正前の行。v0.72.2、952 MHz で測定。#331 修正後の行は下のキャプションを参照）"></a><br>
+  <sub>Llama-3.1-8B-Instruct + NF4、LoRA、バッチサイズ 1、シーケンス長 512、RTX 3050 Laptop 4 GB — <b>ピーク 3.32 GB、119.6 tok/s</b>、952 MHz 時（修正前、v0.72.2。#331 修正後: 1935 MHz 時に 208.6 tok/s、2.40 GB。直接の比較はできません。@umran666、#1103）。 <a href="https://youtu.be/T1LCErE943E">動画（90 秒）</a></sub>
 </p>
 
 ## なぜSoupなのか
@@ -89,38 +92,40 @@ LLM の学習は、今でも骨の折れる作業です。経験豊富なチー�
 
 ## 新着情報
 
-**v0.75.0 — 同じ `soup.yaml` が、MLX では transformers とは異なるレシピで、黙って学習されていました。**
-六つの学習オプションが、検証され、文書化され、受け入れられていながら、そのバックエンドでは何にも読み取られて
-いませんでした。**このリリースの 60 件のプルリクエストはすべてメンテナー以外から寄せられたもので**、22 人によるものです。
+**v0.77.2 — v0.77.1 以降の `main` をそのまま切り出したリリース：プルリクエスト 159 件、うち 153 件は
+メンテナー以外の 30 人によるものです。** 大半は修正ですが、新機能と、v0.77.1 が受け入れていたものを
+拒否することがある 2 つの規則も含みます。サーバーや `task: sft` の設定をアップグレードする前に
+[v0.77.2 のリリースノート](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.2)を読んでください。0.76.x から移行する場合は、まず
+`soup doctor --config soup.yaml` を実行し、[v0.77.0 のリリースノート](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0)を読んでください。
 
-- **破壊的変更: 未知の設定キーは、読み込み時に拒否されるようになりました。** v0.74 は警告を出し、このリリースを
-  期限として示していました。`quantizaton` のようなタイプミスや、より新しい Soup にしか存在しないキーは、以前は
-  破棄され、その設定が適用されないまま実行が続きました。今後は CLI（終了コード 1）でも API（`ValueError`）でも
-  失敗し、おそらく意図したフィールド名を示します。検出器は、スキーマが v0.40.1 から受け付けてきたルート階層の
-  `lora:` の読み替えを適用するため、その書き方は拒否されず受け入れられます。それを使っていた二つの
-  `soup fetch examples` ファイルは、正式な `training.lora` に移行しました。すべてのレシピとテンプレートは問題なく
-  読み込め、キー名は端末に出力される前にエスケープされ、スキャンには上限があります。
-- **MLX は、受け入れた設定に従うようになりました。** `train_on_responses_only`、`warmup_ratio` / `scheduler` /
-  `weight_decay` / `optimizer`、`max_grad_norm`、`gradient_accumulation_steps`、`gradient_checkpointing` は、
-  `backend: mlx` ではそれぞれ検証された後に捨てられていました。MLX に対応するものがあるオプティマイザー名は
-  32 個中 8 個だけで、残りの 24 個は、黙って AdamW になるのではなく、名前を挙げて拒否されます。MLX はライブ
-  ダッシュボード、トラッカー、`soup ui` も駆動し、`soup doctor --config` はバックエンドが読み取らない設定を
-  一覧表示します。
-- **検証損失はどこにも存在しませんでした。** すべてのバックエンドで計算されながら捨てられていました。
-  メトリクス列も、イベントフィールドも、パネルへの表示もありませんでした。今は記録され、ストリーミングされ、
-  表示されます。
-- **破壊的変更: `grpo_variant: gspo` は、公開されているシーケンスレベルの目的関数になりました**
-  （arXiv:2507.18071）。以前は列の中心化というヒューリスティックで、パディングトークンが同じ列を共有する
-  すべての行の勾配もずらしていました。既存の gspo 設定では、以前の実行を再現できません。
-- **Web UI の読み取りエンドポイントと SSE は認証が必須になりました。** クエリ文字列のトークンではなく、
-  有効期間の短い使い捨てチケットを使います。`--public` は `/docs` と `/openapi.json` を LAN に公開しなくなり、
-  学習サブプロセスは、出力を誰も読まなくてもハングしなくなりました。
-- **`torch>=2.6.0`** により、v0.74.0 の既知の制限が解消されます。2.5.1 では `trl>=0.29` をインポートできず、
-  すべての選好トレーナーが動作しませんでした。あわせて、`training.loraplus_lr_ratio` を設定したすべての実行が
-  クラッシュする問題と、`packing: true` が TRL 0.29 で例外を送出する問題も修正されました。
+- **`soup profile --model <id>` は `soup.yaml` なしで「収まるか」に答えます。** モデルの
+  `config.json` から実行の見積もりを出し、`--seq`、`--batch`、`--method`、`--lora-r`、`--optimizer`、
+  `--gradient-checkpointing` で形が決まります。Apple Silicon では Metal のワーキングセットと比較します。
+  `soup plan` と `soup apply` は `--minillm-on-policy` を受け付けます。
+- **Apple Silicon での学習が増えました。** `preference_loss: dpo`、`orpo`、`simpo` を指定した
+  `task: preference` はネイティブ MLX トレーナーで動き、MLX GRPO は 4 ビットの `mlx-community`
+  ベースで学習でき、MLX Adafactor は設定された学習率とスケジュールに従います。
+- **新しい DPO レシピが 2 つ：** `qwen3.5-0.8b-dpo` と `qwen3.5-27b-dpo`。
+- **VRAM の見積もりが実測に近づきました。** optimizer ステップを独立したフェーズとして扱い、
+  PRM ステップには 1 位置分の logits を計上し、分割された FSDP / ZeRO の実行はカードごとに見積もり、
+  `stream_loss_chunk` のステップには最終層の再計算を計上し、Unsloth の LoRA ターゲットはそのローダーが
+  選ぶとおりに扱います。
+- **黙った上書きと空の結果が減りました。** より多くのコマンドが、入力を指す `--output` を拒否します
+  （`soup data ingest`、`persona-mix`、`generate` など）。`soup ship --adapter` は何も変えないアダプターを
+  拒否し、`soup distill-prompt`、`soup data evolve`、`gen-magpie`、`filter --perplexity` は空または
+  未フィルターのファイルを書く代わりに失敗します。
+- **選好学習と RL の修正。** `data.max_length` が SimPO と KTO で再び効くようになり、PPO は要求されると方策に
+  gradient checkpointing を適用し（4 ビット・8 ビットでもクラッシュしなくなり）、`soup merge` は
+  アダプターを学習したときのベースのコミットを読み込みます。
+- **テキストを入力どおりに表示。** 数十のコマンドが、パス・名前・メッセージを、角括弧と `:name:` の
+  テキストを保ったまま、端末制御文字を取り除いて表示します。
 
-> Python は **3.10–3.12** のみ対応です。3.13 以降では、pip がテストされていない PyTorch の wheel を解決し、
-> Soup が動き出す前にネイティブ拡張の中でクラッシュしていました。
+**知っておくべき挙動の変更。** `soup serve --tool-auth-token` は `A-Z`、`a-z`、`0-9`、`_`、`-` からなる
+16〜128 文字でなければなりません（そうでなければ終了コード 2）。`task: sft` は、`reasoning_effort`、
+`train_on_eot`、`use_flash_attn`、`use_liger` を、それらを一度も適用していなかった画像・音声・MLX・
+Unsloth・RAFT・事前トークナイズ済みの経路で拒否します。`soup completions` のスクリプトは再生成が必要です。
+`soup data from-traces --signal thumbs_up`、MLX Adafactor、`soup merge`、VRAM の事前チェックは、
+v0.77.1 と異なる結果になることがあります。
 
 過去のハイライトは [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) ページにあります。
 
@@ -198,7 +203,7 @@ soup merge  --adapter ./output                              # LoRA をベース�
 soup export --model ./output --format gguf --quant q4_k_m   # Ollama / llama.cpp 向けの GGUF
 ```
 
-その他のエクスポート先（ONNX、TensorRT、AWQ、GPTQ、BitNet）とデプロイのオプションは、
+その他のエクスポート先（ONNX、TensorRT、BitNet）とデプロイのオプションは、
 [`docs/serving-and-export.md`](docs/serving-and-export.md) にあります。
 
 ## Web UI
@@ -209,7 +214,7 @@ soup export --model ./output --format gguf --quant q4_k_m   # Ollama / llama.cpp
 ```bash
 pip install "soup-cli[ui]"
 soup ui
-# http://127.0.0.1:7860 を開きます
+# http://127.0.0.1:7860/?token=<token> を開きます
 ```
 
 ![Soup Web UI — 新規学習](docs/assets/web-ui-new-training.png)
@@ -276,13 +281,13 @@ Alpaca、ShareGPT、ChatML、選好ペア（DPO / ORPO / SimPO / IPO / KTO）、
 埋め込み、RAFT など — すべて JSONL、JSON、CSV、Parquet、TXT から自動検出されるため、ほとんどの場合は
 `data.train` をファイルに向けるだけで、他は何も変わりません。各形式の実例つきスキーマと、データパイプライン
 （リモート URI、ストリーミング、シャーディング、インターリーブ、語彙拡張、ドキュメント取り込み）は、
-[`docs/data.md`](docs/data.md#data-formats) にあります。
+[`docs/data.md`](docs/data.md#data-formats) にあり、[Sesame CSM のネイティブ音声学習](docs/training.md#native-sesame-csm)は別途説明されています。
 
 ## よく使うコマンド
 
 ```bash
 soup train  --config soup.yaml        # 学習（SFT/DPO/GRPO/PPO/KTO/ORPO/SimPO/IPO/...）
-soup infer  --model ./output --input prompts.jsonl   # バッチ推論
+soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # バッチ推論
 soup chat   --model ./output          # 対話型チャット
 soup serve  --model ./output          # OpenAI 互換 API サーバー
 soup ui                               # ローカルのブラウザダッシュボード
@@ -320,14 +325,14 @@ CUDA や PyTorch をローカルにインストールせずに Soup を実行で
 
 ```bash
 docker pull ghcr.io/makazhanalpamys/soup:latest
-docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml
+docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml --yes
 docker compose up   # またはローカルでビルド
 ```
 
 ## 動作要件
 
-- Python 3.10、3.11、または 3.12（CI がテストしているバージョンです。PyTorch スタックがまだ検証されて
-  いないため、3.13 以降は未サポートです）
+- Python 3.11、3.12、または 3.13（CI がテストしているバージョンです。PyTorch スタックがまだ検証されて
+  いないため、3.14 以降は未サポートです）
 - CUDA 対応 GPU（推奨）、Apple Silicon（MPS）、または CPU（実験的 — 非常に遅い）
 - QLoRA で 7B モデルを扱うには 8 GB 以上の VRAM
 
@@ -431,9 +436,12 @@ Soup に関するあらゆる件の正しい連絡先です。**makazanalpamys@g
   レイヤーごとの NF4 逆量子化で、9.8% です
   （[記録](benchmarks/probe-v0.73.0-what-bounds-streaming.md)）。すべての測定値は有効なままです。再現は弱い形で
   残ります — この制約は両方のマシンに共通であり、GPU の計算能力ではありません。
-- **元とはまったく異なるハードウェアでの再現**（v2 で追加）: RTX 3050 で 119.6 tok/s、H100 で中央値
-  113.00 tok/s、ピークはどちらも 3.32 GB です。どちらも #331 の修正より前のもので、4 GB での再測定は
-  issue #361 で保留中です。
+- **元とはまったく異なるハードウェアでの再現**（v2 で追加）: RTX 3050 で 119.6 tok/s（952 MHz 時）、H100 で中央値
+  113.00 tok/s、ピークはどちらも 3.32 GB です。どちらも #331 の修正より前のもので、論文が報告しているのはこの数値です。
+  #331 修正後の行（@umran666、#1103）は、1935–1957 MHz 時に 208.6 tok/s、ピーク 2.40 GB で、同一セッションでの
+  GEMM 上限に対する割合は 59%（修正前は 68%）です。見かけの 1.74x の向上は高速化ではなくクロックの差であり、
+  両行のあいだでメモリの使われ方も変わっているため、この割合でさえ同じ条件での比較ではありません
+  （[記録](benchmarks/gate-v0.72.2-nf4.md)）。
 - **サイレントな勾配誤りの欠陥を発見し、修正しました。** レイヤーあたり約 165 MiB を超える NF4 では、
   順伝播はビット単位で一致したままで、損失曲線も健全に見えましたが、勾配が誤っていました。原因は上流
   ライブラリで特定され、そこに報告されています。修正は、実際の 32B と 72B でのコントロールに対して
@@ -467,4 +475,4 @@ Soup に関するあらゆる件の正しい連絡先です。**makazanalpamys@g
 
 ## ライセンス
 
-[Apache-2.0](LICENSE)。Copyright © Soup コントリビューター。
+[Apache-2.0](LICENSE)。Copyright 2026 Makazhan Alpamys and the Soup contributors。Soup またはその改変コピーを再配布する場合は、ライセンスの第4条と第6条が適用されます。コピーごとに `LICENSE` と `NOTICE` を保持し、変更したファイルにその旨を明記し、作品の出所を述べる範囲を超えて Soup の名称を使用しないでください。

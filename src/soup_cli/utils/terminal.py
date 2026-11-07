@@ -29,9 +29,31 @@ _CONTROL_STRIP_TABLE = {i: None for i in range(0x20) if i not in (0x09, 0x0A, 0x
 _CONTROL_STRIP_TABLE[0x7F] = None
 _CONTROL_STRIP_TABLE.update(dict.fromkeys(range(0x80, 0xA0)))
 
+#: Unicode format characters that reorder or hide the text around them (the
+#: "Trojan Source" class, CVE-2021-42574): the bidi embeddings, overrides and
+#: isolates, the LRM / RLM / ALM marks, zero-width space, the line and
+#: paragraph separators, and the byte-order mark. ZWJ (U+200D) and ZWNJ
+#: (U+200C) are deliberately NOT here: Arabic, Persian, Indic and emoji
+#: sequences need them to render correctly.
+_INVISIBLE_FORMAT_CODES = (
+    0x061C,
+    0x200B,
+    0x200E,
+    0x200F,
+    0x2028,
+    0x2029,
+    *range(0x202A, 0x202F),
+    *range(0x2066, 0x206A),
+    0xFEFF,
+)
+_CONTROL_STRIP_TABLE.update(dict.fromkeys(_INVISIBLE_FORMAT_CODES))
+
 
 def strip_control(text: object) -> str:
-    """Strip C0 (except TAB/LF/CR), DEL and C1 controls; leave Rich markup alone."""
+    """Strip C0 (except TAB/LF/CR), DEL, C1 and bidi/invisible format characters.
+
+    ZWJ and ZWNJ are kept. Rich markup is left alone.
+    """
     return str(text).translate(_CONTROL_STRIP_TABLE)
 
 

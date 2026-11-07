@@ -62,6 +62,35 @@ def reset_daily_counter_if_new_day(
     return runs_today, today
 
 
+def reset_monthly_spend_if_new_month(
+    spent_this_month_usd: float,
+    last_run_date: Optional[str],
+    *,
+    now: Optional[datetime] = None,
+) -> float:
+    """Reset ``spent_this_month_usd`` to 0 when the UTC month rolls over.
+
+    ``last_run_date`` must be the value from BEFORE this iteration, since
+    the daily reset overwrites it with today. Comparing the ``YYYY-MM``
+    prefix also covers the year change. A state that has never run
+    (``None``) keeps its spend.
+    """
+    if (
+        isinstance(spent_this_month_usd, bool)
+        or not isinstance(spent_this_month_usd, (int, float))
+        or not math.isfinite(spent_this_month_usd)
+        or spent_this_month_usd < 0
+    ):
+        raise ValueError("spent_this_month_usd must be a non-negative finite number")
+    if last_run_date is not None and not isinstance(last_run_date, str):
+        raise ValueError("last_run_date must be a str or None")
+    if last_run_date is None:
+        return spent_this_month_usd
+    if last_run_date[:7] != _utc_date_str(now)[:7]:
+        return 0.0
+    return spent_this_month_usd
+
+
 def check_budget(
     *,
     estimated_run_usd: float,

@@ -100,7 +100,7 @@ def test_get_rollout_backend_spec_frozen():
 
 @pytest.mark.parametrize("name,pkg", [
     ("art", "openpipe-art"),
-    ("ruler", "ruler-eval"),
+    ("ruler", "openpipe-art"),
     ("nemo_gym", "nemo-gym"),
     ("openenv", None),
 ])

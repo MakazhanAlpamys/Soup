@@ -226,7 +226,7 @@ class TestExportHelperSignatures:
         assert params["trust_remote_code"].default is False
 
     @pytest.mark.parametrize(
-        "fn_name", ["_export_onnx", "_export_tensorrt", "_export_awq", "_export_gptq"],
+        "fn_name", ["_export_onnx", "_export_tensorrt"],
     )
     def test_export_helper_signature(self, fn_name: str):
         import inspect

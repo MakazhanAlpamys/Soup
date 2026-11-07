@@ -24,7 +24,9 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
+from soup_cli.commands._common import refuse_output_over_input
 from soup_cli.commands._webhook_cli import emit_webhooks, validate_webhook_flags
 from soup_cli.utils import ingest_sources as _ingest_sources
 from soup_cli.utils.ingest_sources import (
@@ -33,12 +35,16 @@ from soup_cli.utils.ingest_sources import (
     resolve_auth_env,
     validate_source_name,
 )
-from soup_cli.utils.paths import is_under_cwd
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.paths import atomic_write_lines, is_under_cwd
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
 _DEFAULT_SINCE = "7d"
+
+
+class _LogsUnreadableError(Exception):
+    """The --logs export could not be read; the message names it and why."""
 
 
 def ingest(
@@ -150,19 +156,34 @@ def ingest(
         raise typer.Exit(2)
 
     if not is_under_cwd(logs):
-        console.print(f"[red]--logs '{escape(logs)}' is outside cwd — refusing[/]")
+        console.print(
+            Text(f"--logs '{strip_control(logs)}' is outside cwd — refusing", style="red")
+        )
         raise typer.Exit(1)
     logs_path = Path(logs)
     if not logs_path.exists():
-        console.print(f"[red]--logs not found: {escape(logs)}[/]")
+        console.print(Text(f"--logs not found: {strip_control(logs)}", style="red"))
+        raise typer.Exit(1)
+    if logs_path.is_dir():
+        console.print(
+            Text(f"--logs '{strip_control(logs)}' is a directory, not an export file", style="red")
+        )
         raise typer.Exit(1)
 
     output_path = Path(output) if output else Path("traces.jsonl")
     if not is_under_cwd(output_path):
         console.print(
-            f"[red]--output '{escape(str(output_path))}' is outside cwd — refusing[/]"
+            Text(f"--output '{strip_control(output_path)}' is outside cwd — refusing", style="red")
         )
         raise typer.Exit(1)
+
+    # Refuse before anything is opened for writing: the default --output
+    # (traces.jsonl) is also a plausible --logs, and the write would empty it.
+    refuse_output_over_input(
+        [("--logs", str(logs_path))],
+        [("--output", str(output_path))],
+        console=console,
+    )
 
     _print_pii_reminder(canonical)
 
@@ -174,14 +195,34 @@ def ingest(
         )
 
     count = 0
-    with open(output_path, "w", encoding="utf-8") as out_fh:
-        for record in ingest_traces(source=canonical, path=str(logs_path)):
-            out_fh.write(json.dumps(record.to_dict(), ensure_ascii=False) + "\n")
-            count += 1
+
+    def _lines():
+        nonlocal count
+        try:
+            for record in ingest_traces(source=canonical, path=str(logs_path)):
+                count += 1
+                yield json.dumps(record.to_dict(), ensure_ascii=False) + "\n"
+        except UnicodeDecodeError as exc:
+            raise _LogsUnreadableError(
+                f"--logs '{logs}' is not valid UTF-8 (byte {exc.start})"
+            ) from exc
+        except OSError as exc:
+            reason = exc.strerror or type(exc).__name__
+            raise _LogsUnreadableError(f"--logs '{logs}' cannot be read: {reason}") from exc
+
+    # Streamed into a staging file; the target is replaced only after the export
+    # has been read completely, so a failed read leaves an earlier output intact.
+    try:
+        atomic_write_lines(_lines(), str(output_path), field="--output")
+    except _LogsUnreadableError as exc:
+        console.print(Text(strip_control(exc), style="red"))
+        raise typer.Exit(1) from exc
 
     console.print(
-        f"[green]Wrote {count} traces from {escape(canonical)} -> "
-        f"{escape(output_path.name)}[/]"
+        Text(
+            f"Wrote {count} traces from {canonical} -> {strip_control(output_path.name)}",
+            style="green",
+        )
     )
 
     emit_webhooks(

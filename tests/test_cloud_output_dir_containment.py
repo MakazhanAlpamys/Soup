@@ -140,6 +140,24 @@ class TestLambdaOutputDirContainment:
         with pytest.raises(ValueError, match="output_dir"):
             self._plan_lambda("../escape")
 
+    @pytest.mark.parametrize(
+        "output_dir", ["-out", "-", "--out", "./-out", "runs/-v/out", "-S./x/out", "out/-"]
+    )
+    def test_a_part_starting_with_a_dash_is_refused(self, project, output_dir):
+        from soup_cli.cloud.lambda_labs import render_lambda_stub
+
+        with pytest.raises(ValueError, match="Lambda output_dir parts must not start with '-'"):
+            self._plan_lambda(output_dir)
+        with pytest.raises(ValueError, match="Lambda output_dir parts must not start with '-'"):
+            render_lambda_stub(
+                _SOUP_YAML, gpu="a100", output_dir=output_dir, soup_version="0.75.1"
+            )
+        assert not (project / "soup_lambda_app.py").exists()
+
+    @pytest.mark.parametrize("output_dir", ["out-1", "runs/exp-1/out", "./out-"])
+    def test_a_dash_inside_a_part_still_plans(self, project, output_dir):
+        assert self._plan_lambda(output_dir).output_dir == output_dir
+
     @pytest.mark.requires_symlink
     def test_symlinked_output_dir_is_refused(self, project, tmp_path):
         target = tmp_path.parent / "lambda-link-target"

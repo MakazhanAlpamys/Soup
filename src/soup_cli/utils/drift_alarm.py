@@ -227,6 +227,17 @@ def run_drift_check(
 
     ref_rows = _read_jsonl_outputs(reference_path)
     live_rows = _read_jsonl_outputs(live_path)
+    # #1808: with nothing on one side the KL is 0.0 by construction, which read
+    # as a green OK with n_live 0. Nothing was compared, so refuse by name: the
+    # file, and the keys the reader takes a row's text from.
+    for label, path, rows in (("reference", reference_path, ref_rows),
+                              ("live", live_path, live_rows)):
+        if not rows:
+            raise ValueError(
+                f"{label} file {os.path.basename(path)!r} has 0 readable rows: each line "
+                f"must be a JSON object with its text under 'output', 'response' or "
+                f"'text'. Nothing was compared, so no drift verdict is possible."
+            )
     ref_dist = compute_token_distribution(ref_rows)
     live_dist = compute_token_distribution(live_rows)
     kl = rolling_kl(live_dist, ref_dist) if (ref_dist and live_dist) else 0.0

@@ -128,29 +128,27 @@ class TestCodeExecIsolationStrategy:
         # separate "linux_unshare_unavailable" test.
         assert strategy == "namespaces"
 
-    def test_isolation_strategy_macos_with_sandbox_exec(self, monkeypatch):
-        import shutil as shutil_mod
-
+    def test_isolation_strategy_macos_with_sandbox_exec(self, monkeypatch, tmp_path):
         from soup_cli.trainer import rewards
 
         # Force fresh evaluation
         monkeypatch.setattr(sys, "platform", "darwin")
-        monkeypatch.setattr(shutil_mod, "which", lambda name: (
-            "/usr/bin/sandbox-exec" if name == "sandbox-exec" else None
-        ))
+        # sandbox-exec is looked for at its fixed macOS location only.
+        sandbox_exec = tmp_path / "sandbox-exec"
+        sandbox_exec.write_text("#!/bin/sh\n", encoding="utf-8")
+        sandbox_exec.chmod(0o755)
+        monkeypatch.setattr(rewards, "_MACOS_SANDBOX_EXEC", str(sandbox_exec))
         # Bypass any module-level cache
         if hasattr(rewards, "_ISOLATION_STRATEGY_CACHE"):
             rewards._ISOLATION_STRATEGY_CACHE = None
         strategy = rewards._compute_isolation_strategy()
         assert strategy == "sandbox-exec"
 
-    def test_isolation_strategy_macos_without_sandbox_exec(self, monkeypatch):
-        import shutil as shutil_mod
-
+    def test_isolation_strategy_macos_without_sandbox_exec(self, monkeypatch, tmp_path):
         from soup_cli.trainer import rewards
 
         monkeypatch.setattr(sys, "platform", "darwin")
-        monkeypatch.setattr(shutil_mod, "which", lambda _name: None)
+        monkeypatch.setattr(rewards, "_MACOS_SANDBOX_EXEC", str(tmp_path / "missing"))
         if hasattr(rewards, "_ISOLATION_STRATEGY_CACHE"):
             rewards._ISOLATION_STRATEGY_CACHE = None
         strategy = rewards._compute_isolation_strategy()

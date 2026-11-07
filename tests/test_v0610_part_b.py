@@ -17,9 +17,9 @@ import os
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests.cli_runner import CliRunner
 
 # ---------- Module surface ----------
 

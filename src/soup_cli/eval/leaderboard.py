@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
+import math
 from dataclasses import dataclass, field
 from typing import Optional
 
 from soup_cli.eval.results import newest_eval_rows
+from soup_cli.utils.csv_safe import spreadsheet_safe
 
 
 @dataclass
@@ -58,6 +62,12 @@ class Leaderboard:
         return result
 
 
+def _require_finite_score(score: float, context: str) -> float:
+    if not math.isfinite(score):
+        raise ValueError(f"{context}: stored score {score!r} must be finite")
+    return score
+
+
 def build_leaderboard_from_tracker(
     tracker: object,
     run_id: Optional[str] = None,
@@ -72,7 +82,10 @@ def build_leaderboard_from_tracker(
         entries.append(LeaderboardEntry(
             model_path=row.get("model_path", ""),
             benchmark=row.get("benchmark", ""),
-            score=row.get("score", 0.0),
+            score=_require_finite_score(
+                row["score"],
+                f"model {row.get('model_path', '')!r}, benchmark {row['benchmark']!r}",
+            ),
             run_id=row.get("run_id"),
             created_at=row.get("created_at", ""),
         ))
@@ -96,11 +109,15 @@ def compare_runs(
 
     scores_1: dict[str, float] = {}
     for row in newest_eval_rows(results_1):
-        scores_1[row["benchmark"]] = row["score"]
+        scores_1[row["benchmark"]] = _require_finite_score(
+            row["score"], f"run {run_id_1!r}, benchmark {row['benchmark']!r}",
+        )
 
     scores_2: dict[str, float] = {}
     for row in newest_eval_rows(results_2):
-        scores_2[row["benchmark"]] = row["score"]
+        scores_2[row["benchmark"]] = _require_finite_score(
+            row["score"], f"run {run_id_2!r}, benchmark {row['benchmark']!r}",
+        )
 
     all_benchmarks = sorted(set(scores_1.keys()) | set(scores_2.keys()))
 
@@ -131,6 +148,13 @@ def compare_runs(
     }
 
 
+def _csv_line(values: list[str]) -> str:
+    output = io.StringIO(newline="")
+    # Legacy csv writers quote CR only when it is in the record terminator.
+    csv.writer(output, lineterminator="\r\n").writerow(values)
+    return output.getvalue()[:-2]
+
+
 def export_leaderboard(
     leaderboard: Leaderboard,
     fmt: str = "json",
@@ -143,12 +167,15 @@ def export_leaderboard(
         all_benchmarks = set()
         for _, scores, _ in sorted_models:
             all_benchmarks.update(scores.keys())
-        benchmarks = sorted(all_benchmarks)
+        # Preserve the existing empty benchmark column for an empty export.
+        benchmarks = sorted(all_benchmarks) or [""]
 
-        lines = ["model," + ",".join(benchmarks) + ",average"]
+        # Names are free text; scores and the average are numbers and stay as they are.
+        header = ["model", *(spreadsheet_safe(name) for name in benchmarks), "average"]
+        lines = [_csv_line(header)]
         for model, scores, avg in sorted_models:
             vals = [str(scores.get(bench, "")) for bench in benchmarks]
-            lines.append(f"{model},{','.join(vals)},{avg:.4f}")
+            lines.append(_csv_line([spreadsheet_safe(model), *vals, f"{avg:.4f}"]))
         return "\n".join(lines)
 
     # Default: JSON

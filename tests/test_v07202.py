@@ -1512,7 +1512,13 @@ class TestNF4StoreEstimate:
 class TestPreflightUsesTheStreamedSize:
     """The estimate exists to stop the pre-flight refusing an 8B run because
     its bf16 files are 16 GB on disk. Unit-testing the arithmetic alone would
-    not catch a regression that simply stops passing ``quant=`` through."""
+    not catch a regression that simply stops passing ``quant=`` through.
+
+    The early RAM check now charges the source headers' estimate
+    (tests/test_stream_ram_preflight_estimate.py); this flat rate on the size on
+    disk is its fallback for headers that cannot be read. So `_run` makes the
+    estimator's header read fail (the sharder reads the tensors its own way), and
+    the faked on-disk size drives the check as it did before."""
 
     def _run(
         self, tmp_path, monkeypatch, *, quantization, free_ram, on_disk,
@@ -1534,6 +1540,13 @@ class TestPreflightUsesTheStreamedSize:
         monkeypatch.setattr(
             "soup_cli.utils.layer_shard.source_weight_bytes", lambda *_a, **_k: on_disk
         )
+
+        def _unreadable(_paths):
+            from soup_cli.utils.layer_shard import SourceHeaderError
+
+            raise SourceHeaderError("header unreadable (test)")
+
+        monkeypatch.setattr("soup_cli.utils.layer_shard._read_source_tensors", _unreadable)
         # Pinned, not probed: the real media type differs between the dev box
         # (NVMe) and a CI runner (often "unknown"), and an environment-dependent
         # tier decision would make these assertions flaky rather than wrong.

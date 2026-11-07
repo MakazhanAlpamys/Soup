@@ -501,15 +501,35 @@ def stage_offline_datasets(
             dpo_count=dpo_count,
         )
     except Exception:
-        for path in (sft_temp, dpo_temp):
-            if path and os.path.exists(path):
-                os.unlink(path)
+        try:
+            if sft_fd >= 0:
+                try:
+                    os.close(sft_fd)
+                finally:
+                    sft_fd = -1
+        finally:
+            try:
+                if dpo_fd >= 0:
+                    try:
+                        os.close(dpo_fd)
+                    finally:
+                        dpo_fd = -1
+            finally:
+                for path in (sft_temp, dpo_temp):
+                    if path and os.path.exists(path):
+                        os.unlink(path)
         raise
     finally:
         if sft_fd >= 0:
-            os.close(sft_fd)
+            try:
+                os.close(sft_fd)
+            except OSError:
+                pass
         if dpo_fd >= 0:
-            os.close(dpo_fd)
+            try:
+                os.close(dpo_fd)
+            except OSError:
+                pass
 
 
 def publish_staged_datasets(

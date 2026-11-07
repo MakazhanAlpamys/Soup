@@ -258,12 +258,9 @@ def test_attach_relora_callback_rejects_zero_via_policy() -> None:
 class TestPreferenceTaskGate:
     """Review-fix: cover the dispatcher task ('preference') with `relora_steps`."""
 
-    def test_preference_task_accepts_relora(self) -> None:
-        import yaml
-
-        from soup_cli.config.loader import load_config_from_string
-
-        cfg = load_config_from_string(yaml.safe_dump({
+    @staticmethod
+    def _cfg(preference_loss: str) -> dict:
+        return {
             "base": "meta-llama/Llama-3.1-8B",
             "task": "preference",
             "backend": "transformers",
@@ -271,16 +268,34 @@ class TestPreferenceTaskGate:
             "training": {
                 "relora_steps": 100,
                 "quantization": "none",
-                "preference_loss": "dpo",
+                "preference_loss": preference_loss,
             },
-        }))
+        }
+
+    def test_preference_task_accepts_relora(self) -> None:
+        """With a loss that has no frozen reference; ``dpo`` was the example
+        here until #1835."""
+        import yaml
+
+        from soup_cli.config.loader import load_config_from_string
+
+        cfg = load_config_from_string(yaml.safe_dump(self._cfg("simpo")))
         assert cfg.training.relora_steps == 100
         assert cfg.task == "preference"
+
+    def test_preference_task_with_a_reference_loss_rejects_relora(self) -> None:
+        import yaml
+
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="frozen reference"):
+            load_config_from_string(yaml.safe_dump(self._cfg("dpo")))
 
 
 class TestReLoRASchemaGateWidened:
     """v0.40.6 lifts the `task != 'sft'` rejection. Every transformer-backend
-    task now accepts `relora_steps`; MLX backend still rejected.
+    task without a frozen reference accepts `relora_steps` (#1835 took out
+    dpo / ipo / kto / bco / grpo); MLX backend still rejected.
     """
 
     def _base_cfg(
@@ -298,17 +313,12 @@ class TestReLoRASchemaGateWidened:
         "task",
         [
             "sft",
-            "dpo",
-            "grpo",
-            "kto",
             "orpo",
             "simpo",
-            "ipo",
             "ppo",
             "reward_model",
             "pretrain",
             "embedding",
-            "bco",
         ],
     )
     def test_all_transformer_tasks_accepted(self, task: str) -> None:
@@ -319,6 +329,15 @@ class TestReLoRASchemaGateWidened:
         cfg = load_config_from_string(yaml.safe_dump(self._base_cfg(task)))
         assert cfg.training.relora_steps == 100
         assert cfg.task == task
+
+    @pytest.mark.parametrize("task", ["dpo", "grpo", "kto", "ipo", "bco"])
+    def test_tasks_with_a_frozen_reference_rejected(self, task: str) -> None:
+        import yaml
+
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="frozen reference"):
+            load_config_from_string(yaml.safe_dump(self._base_cfg(task)))
 
     def test_mlx_backend_still_rejected(self) -> None:
         import yaml

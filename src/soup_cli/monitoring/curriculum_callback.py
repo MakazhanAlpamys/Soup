@@ -6,7 +6,7 @@ schema into a real HF `TrainerCallback` that:
 1. Accumulates per-step loss + grad_norm fingerprints into N difficulty buckets.
 2. Every ``policy.recompute_every_n_steps`` global steps, calls
    :func:`soup_cli.utils.curriculum_dynamic.compute_bucket_weights` to refresh
-   the sampler weights.
+   the tracked bucket weights (#808).
 3. Coordinates per-bucket stats across DDP ranks via ``all_reduce(SUM)`` BEFORE
    computing weights — defends against the per-rank divergence footgun
    documented in v0.48.0 ``validate_distributed_curriculum``.
@@ -141,13 +141,12 @@ def _try_import_callback_base():
 
 
 class _DynamicCurriculumCallback_body:  # type: ignore[misc]  # noqa: N801
-    """HF TrainerCallback emitting dynamic curriculum bucket-weight history.
+    """HF TrainerCallback emitting dynamic curriculum bucket-weight history (#808).
 
-    BETA: the callback is live in v0.53.5 but the sampler-side consumer
-    (live re-weighting of an HF Dataset sampler) is still wired through the
-    existing v0.48.0 schema gate. This callback's primary deliverable is the
-    ``curriculum_history.jsonl`` record so ``soup runs curriculum-curve``
-    can render the BO trajectory.
+    BETA: this callback's primary deliverable is the ``curriculum_history.jsonl``
+    record for online uncertainty telemetry and curve inspection (``soup runs
+    curriculum-curve``). The weights are only written to curriculum_history.jsonl;
+    they do not change which samples a batch contains (#808).
 
     Args:
         policy: A frozen :class:`DynamicCurriculumPolicy`.
@@ -181,14 +180,14 @@ class _DynamicCurriculumCallback_body:  # type: ignore[misc]  # noqa: N801
         self._signal_window: Deque[float] = deque(maxlen=_SIGNAL_WINDOW)
         # Per-bucket accumulator: bucket_id -> {num_samples, loss_sum, grad_norm_sum}
         self._stats: Dict[int, Dict[str, float]] = {}
-        # Most recently computed weights (read by external sampler hook).
+        # Most recently computed weights (for telemetry tracking, #808).
         self._current_weights: Tuple[float, ...] = tuple(
             [1.0 / policy.num_buckets] * policy.num_buckets
         )
         self._history_path = os.path.join(self._output_dir, _HISTORY_FILENAME)
 
     # ------------------------------------------------------------------
-    # Public accessors (sampler hook + tests)
+    # Public accessors (telemetry + tests, #808)
     # ------------------------------------------------------------------
 
     @property
@@ -205,7 +204,7 @@ class _DynamicCurriculumCallback_body:  # type: ignore[misc]  # noqa: N801
 
     @property
     def current_weights(self) -> Tuple[float, ...]:
-        """Defensive copy of the latest computed weights."""
+        """Defensive copy of the latest computed telemetry weights (#808)."""
         return tuple(self._current_weights)
 
     @property

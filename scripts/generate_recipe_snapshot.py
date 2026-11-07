@@ -90,13 +90,18 @@ def build_snapshot() -> dict[str, dict]:
     from soup_cli.recipes.catalog import RECIPES
 
     baseline = build_baseline()
-    recipes = {
-        name: delta(
-            flatten(load_config_from_string(recipe.yaml_str).model_dump(mode="json")),
-            baseline,
-        )
-        for name, recipe in sorted(RECIPES.items())
-    }
+    recipes = {}
+    for name, recipe in sorted(RECIPES.items()):
+        try:
+            config = load_config_from_string(recipe.yaml_str)
+        except ValueError as exc:
+            if not recipe.unavailable_reason or recipe.unavailable_reason not in str(exc):
+                raise
+            recipes[name] = {"$unavailable": recipe.unavailable_reason}
+        else:
+            if recipe.unavailable_reason:
+                raise ValueError(f"{name} is marked unavailable but its config loads")
+            recipes[name] = delta(flatten(config.model_dump(mode="json")), baseline)
     return {"baseline": baseline, "recipes": recipes}
 
 

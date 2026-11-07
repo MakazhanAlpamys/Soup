@@ -213,3 +213,92 @@ class TestManifestAuthorRefusesControlCharacters:
         out = buffer.getvalue()
         assert "Cannot inspect can" in out and "author" in out, out
         assert _c1_found(out) == [], repr(out)
+
+
+BIDI_AND_INVISIBLE_CODES = (
+    0x061C,
+    0x200B,
+    0x200E,
+    0x200F,
+    0x2028,
+    0x2029,
+    0x202A,
+    0x202B,
+    0x202C,
+    0x202D,
+    0x202E,
+    0x2066,
+    0x2067,
+    0x2068,
+    0x2069,
+    0xFEFF,
+)
+
+
+class TestTheHelpersStripBidiAndInvisibleFormatCharacters:
+    """Bidi controls and invisible separators reorder or hide what a preview shows."""
+
+    @pytest.mark.parametrize(
+        "code", BIDI_AND_INVISIBLE_CODES, ids=[f"{code:#06x}" for code in BIDI_AND_INVISIBLE_CODES]
+    )
+    def test_every_listed_code_point_is_stripped(self, code: int) -> None:
+        from soup_cli.utils.terminal import for_terminal, strip_control
+
+        assert strip_control(f"a{chr(code)}b") == "ab"
+        assert for_terminal(f"a{chr(code)}b") == "ab"
+
+    def test_a_right_to_left_override_cannot_reorder_the_text(self) -> None:
+        from soup_cli.utils.terminal import for_terminal
+
+        assert for_terminal("say " + chr(0x202E) + "evil" + chr(0x202C)) == "say evil"
+
+    @pytest.mark.parametrize("code", [0x200C, 0x200D], ids=["zwnj", "zwj"])
+    def test_zero_width_joiners_are_kept(self, code: int) -> None:
+        from soup_cli.utils.terminal import for_terminal, strip_control
+
+        assert strip_control(f"a{chr(code)}b") == f"a{chr(code)}b"
+        assert for_terminal(f"a{chr(code)}b") == f"a{chr(code)}b"
+
+    def test_a_zwj_emoji_sequence_is_left_intact(self) -> None:
+        from soup_cli.utils.terminal import for_terminal
+
+        family = chr(0x1F468) + chr(0x200D) + chr(0x1F469) + chr(0x200D) + chr(0x1F467)
+        assert for_terminal(family) == family
+
+    def test_a_persian_word_with_zwnj_is_left_intact(self) -> None:
+        from soup_cli.utils.terminal import for_terminal
+
+        codes = (0x645, 0x6CC, 0x200C, 0x62E, 0x648, 0x627, 0x647, 0x645)
+        word = "".join(chr(code) for code in codes)
+        assert for_terminal(word) == word
+
+    @pytest.mark.parametrize(
+        "code", BIDI_AND_INVISIBLE_CODES, ids=[f"{code:#06x}" for code in BIDI_AND_INVISIBLE_CODES]
+    )
+    def test_the_strip_runs_before_the_escape(self, code: int) -> None:
+        # Escaping first would leave the backslash before the format character,
+        # not before ``[``; stripping afterwards would then turn the escaped
+        # tag back into live markup.
+        from soup_cli.utils.terminal import for_terminal
+
+        buffer = StringIO()
+        _plain_console(buffer).print(for_terminal(BACKSLASH + chr(code) + "[bold]x[/bold]"))
+        assert buffer.getvalue().rstrip("\n") == BACKSLASH + "[bold]x[/bold]"
+
+    def test_plain_right_to_left_text_is_left_intact(self) -> None:
+        from soup_cli.utils.terminal import for_terminal, strip_control
+
+        hebrew = "".join(chr(code) for code in (0x5E9, 0x5DC, 0x5D5, 0x5DD))
+        arabic = "".join(chr(code) for code in (0x645, 0x631, 0x62D, 0x628, 0x627))
+        text = f"{hebrew} {arabic}"
+        assert strip_control(text) == text
+        assert for_terminal(text) == text
+        buffer = StringIO()
+        _plain_console(buffer).print(for_terminal(text))
+        assert buffer.getvalue().rstrip("\n") == text
+
+    @pytest.mark.parametrize("code", [0x200A, 0x2030, 0x2060, 0x2065, 0x206A], ids=hex)
+    def test_neighbouring_code_points_are_not_swept_up(self, code: int) -> None:
+        from soup_cli.utils.terminal import strip_control
+
+        assert strip_control(f"a{chr(code)}b") == f"a{chr(code)}b"

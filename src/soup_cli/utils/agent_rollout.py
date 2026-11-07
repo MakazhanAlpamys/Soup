@@ -4,7 +4,7 @@ Closed allowlist for multi-turn agent RL rollout backends shipped for
 unsloth + axolotl parity:
 
 - ``art``      — OpenPipe ART (multi-turn agent rollouts; unsloth)
-- ``ruler``    — RULER agent eval framework (unsloth)
+- ``ruler``    — OpenPipe RULER judge scorer, shipped in ``openpipe-art`` (unsloth)
 - ``nemo_gym`` — NVIDIA NeMo Gym (unsloth, axolotl)
 - ``openenv``  — Generic ``rollout_func`` protocol (unsloth, axolotl)
 
@@ -55,10 +55,11 @@ _ROLLOUT_FUNC_RE = re.compile(
 )
 
 # Import names per external backend (pip name differs — see
-# ``required_package`` on the spec).
+# ``required_package`` on the spec). RULER ships inside ``openpipe-art``,
+# so it probes ``art``: PyPI's ``ruler`` is an unrelated grammar library.
 _EXTERNAL_IMPORT_NAMES = types.MappingProxyType({
     "art": "art",
-    "ruler": "ruler",
+    "ruler": "art",
     "nemo_gym": "nemo_gym",
 })
 
@@ -94,8 +95,8 @@ _BACKEND_METADATA = types.MappingProxyType({
     ),
     "ruler": RolloutBackendSpec(
         name="ruler",
-        description="RULER agent evaluation framework",
-        required_package="ruler-eval",
+        description="OpenPipe RULER — ART's relative LLM-judge scorer",
+        required_package="openpipe-art",
         live_wired=False,
     ),
     "nemo_gym": RolloutBackendSpec(

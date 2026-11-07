@@ -23,6 +23,7 @@ import subprocess
 import sys
 import uuid
 from dataclasses import replace
+from datetime import datetime, timezone
 from typing import Optional
 
 import typer
@@ -32,7 +33,11 @@ from rich.panel import Panel
 from rich.table import Table
 
 from soup_cli.utils.canary_router import CanaryPolicy
-from soup_cli.utils.loop_budget import parse_budget_string
+from soup_cli.utils.loop_budget import (
+    parse_budget_string,
+    reset_daily_counter_if_new_day,
+    reset_monthly_spend_if_new_month,
+)
 from soup_cli.utils.loop_daemon import WatchConfig, watch
 from soup_cli.utils.loop_iteration import list_iterations, read_iteration
 from soup_cli.utils.loop_state import (
@@ -41,6 +46,7 @@ from soup_cli.utils.loop_state import (
     read_state,
     write_state,
 )
+from soup_cli.utils.terminal import for_terminal
 
 app = typer.Typer(
     name="loop",
@@ -82,6 +88,14 @@ def init_cmd(
             "(utils/loop_stages.py) on watch instead of no-op stubs (v0.71.4)."
         ),
     ),
+    thumbs_db: Optional[str] = typer.Option(
+        None, "--thumbs-db",
+        help=(
+            "Local-RL SQLite written by `soup serve --record-thumbs`; the "
+            "pre-wired harvest turns its thumbs into preference pairs. Must "
+            "stay under cwd. SOUP_LOOP_THUMBS_DB overrides it."
+        ),
+    ),
     force: bool = typer.Option(False, "--force", help="Overwrite existing loop.yaml."),
 ) -> None:
     """Create the .soup/loop.yaml control file (one-time setup)."""
@@ -97,6 +111,14 @@ def init_cmd(
     ):
         console.print("[red]--max-runs-per-day must be a positive int[/]")
         raise typer.Exit(code=2)
+    if thumbs_db is not None:
+        from soup_cli.utils.local_rl import validate_db_path
+
+        try:
+            validate_db_path(thumbs_db)
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]invalid --thumbs-db:[/] {for_terminal(exc)}")
+            raise typer.Exit(code=2)
     try:
         state, path = init_state(
             served_model=served_model,
@@ -105,6 +127,7 @@ def init_cmd(
             monthly_budget_usd=budget_usd,
             max_runs_per_day=max_runs_per_day,
             pre_wired=pre_wired,
+            thumbs_db=thumbs_db,
             force=force,
         )
     except (FileExistsError, FileNotFoundError, TypeError, ValueError) as exc:
@@ -125,6 +148,20 @@ def init_cmd(
 def status_cmd() -> None:
     """Show counters and current status."""
     state = _safe_read()
+    # Show the spend and run count the next iteration will see (#2390): run_once resets both
+    # from the saved last_run_date, so between iterations the stored values can be a past
+    # month's or day's. One clock read for both, as in run_once; loop.yaml is not written.
+    now = datetime.now(timezone.utc)
+    try:
+        spent = reset_monthly_spend_if_new_month(
+            state.spent_this_month_usd, state.last_run_date, now=now
+        )
+        runs_today, _ = reset_daily_counter_if_new_day(
+            state.runs_today, state.last_run_date, now=now
+        )
+    except ValueError as exc:
+        console.print(f"[red]loop state invalid:[/] {escape(str(exc))}")
+        raise typer.Exit(code=2)
     table = Table(title="soup loop status", show_header=False)
     table.add_column("field", style="bold")
     table.add_column("value")
@@ -147,12 +184,12 @@ def status_cmd() -> None:
     if state.monthly_budget_usd is not None:
         table.add_row(
             "budget",
-            f"${state.spent_this_month_usd:.2f} / ${state.monthly_budget_usd:.2f}",
+            f"${spent:.2f} / ${state.monthly_budget_usd:.2f}",
         )
     if state.max_runs_per_day is not None:
         table.add_row(
             "runs_today",
-            f"{state.runs_today} / {state.max_runs_per_day}",
+            f"{runs_today} / {state.max_runs_per_day}",
         )
     console.print(table)
 
@@ -209,13 +246,53 @@ def watch_cmd(
         False, "--pack-cans",
         help="Pack each iteration as a v0.26 Soup Can + Registry entry (v0.71.4).",
     ),
+    tool_auth_token: Optional[str] = typer.Option(
+        None,
+        "--tool-auth-token",
+        envvar="SOUP_TOOL_AUTH_TOKEN",
+        help=(
+            "The soup serve --tool-auth-token value, sent as a Bearer token when the "
+            "deploy stage activates an adapter. Defaults to $SOUP_TOOL_AUTH_TOKEN, "
+            "which keeps it out of the shell history."
+        ),
+    ),
 ) -> None:
     """Run the harvest → train → gate → deploy daemon."""
     if detach and foreground:
         console.print("[red]--detach and --foreground are mutually exclusive[/]")
         raise typer.Exit(code=2)
     state = _safe_read()  # ensure state exists before forking
+    if tool_auth_token:
+        # The deploy stage reads the token from the environment, as it reads
+        # SOUP_LOOP_SERVE_ENDPOINT; a --detach child inherits it from there
+        # rather than from argv, where any local user could read it (#1139).
+        from soup_cli.utils.loop_stages import TOOL_AUTH_TOKEN_ENV
+
+        os.environ[TOOL_AUTH_TOKEN_ENV] = tool_auth_token
+    if pre_wired or state.pre_wired:
+        # #1440: a configured thumbs database the harvest would refuse stops the
+        # watch here, before it starts or detaches, instead of mid-iteration.
+        from soup_cli.utils.loop_stages import checked_thumbs_db
+
+        try:
+            checked_thumbs_db(state)
+        except ValueError as exc:
+            console.print(f"[red]invalid thumbs database:[/] {for_terminal(exc)}")
+            raise typer.Exit(code=2)
+    elif os.environ.get("SOUP_LOOP_THUMBS_DB") or state.thumbs_db:
+        console.print(
+            "[yellow]warning:[/] a thumbs database is configured but the stub stages "
+            "never read it; run `soup loop watch --pre-wired` to harvest it"
+        )
     if detach:
+        # #1808: the child validates these in WatchConfig.__post_init__ and exits
+        # 2 with its output on /dev/null, while the parent printed "watch
+        # detached". Run the same checks here, before anything is spawned.
+        try:
+            WatchConfig(poll_interval_sec=poll_interval, max_iterations=max_iterations)
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]invalid watch config:[/] {escape(str(exc))}")
+            raise typer.Exit(code=2)
         argv = [
             sys.executable,
             "-m",

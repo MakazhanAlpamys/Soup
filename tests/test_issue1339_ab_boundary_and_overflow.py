@@ -10,6 +10,14 @@ gap between them rejects. ``--alpha 0.6 --beta 0.5`` rejected on two identical
 arms, and ``--alpha 0.05 --beta 0.95`` (a power of 0.95 typed as beta) put both
 boundaries at 0 and rejected a true H0 in 255 of 1000 single looks.
 
+Since #1418 ``beta`` is retired: the accept rule is a confidence sequence at
+level ``alpha`` and the reject boundary is ``log(1 / alpha) > 0``, so there is
+no pair of boundaries left to cross, and the check went with ``beta``. A passed
+``beta`` was ignored with a warning in v0.76 and is refused as of v0.77 (the
+warning path stays behind ``DEPRECATED_VALUE_SEVERITY``). The symptom stays
+pinned below: two identical arms never reject, at any ``alpha`` in the old
+example.
+
 **The statistic overflows.** ``drift = 0.5 * mu_h1**2 * n_ratio`` raises
 ``OverflowError`` rather than returning ``inf``, and ``commands/ab.py`` catches
 only ``FileNotFoundError`` / ``TypeError`` / ``ValueError``, so the run ended on
@@ -53,78 +61,99 @@ def _run_cli(tmp_path, monkeypatch, control, treatment, extra=()):
     )
 
 
+_ONCE_CROSSED = pytest.mark.parametrize(
+    ("alpha", "beta"),
+    [
+        (0.6, 0.5),  # reject at -0.182, accept at +0.223: the gap rejected
+        (0.05, 0.95),  # a power of 0.95 typed as beta: both boundaries at 0
+        (0.5, 0.5),  # exactly 1.0, the degenerate edge
+    ],
+)
+
+
+@pytest.fixture
+def warn(monkeypatch):
+    """The v0.76 setting, kept behind the switch (``config/deprecation.py``)."""
+    from soup_cli.config import deprecation
+
+    monkeypatch.setattr(deprecation, "DEPRECATED_VALUE_SEVERITY", "warn")
+
+
 class TestAlphaPlusBeta:
-    @pytest.mark.parametrize(
-        ("alpha", "beta"),
-        [
-            (0.6, 0.5),  # reject at -0.182, accept at +0.223: the gap rejects
-            (0.05, 0.95),  # a power of 0.95 typed as beta: both boundaries at 0
-            (0.5, 0.5),  # exactly 1.0, the degenerate edge
-        ],
-    )
-    def test_config_refuses_a_crossed_pair(self, alpha, beta):
-        with pytest.raises(ValueError) as exc:
+    """Retired with beta in #1418: the pairs once refused for crossing are refused
+    for beta alone as of v0.77 (v0.76 loaded them, beta unused)."""
+
+    @_ONCE_CROSSED
+    def test_a_once_crossed_pair_is_refused_for_beta_alone(self, alpha, beta):
+        with pytest.raises(ValueError) as excinfo:
             MsprtConfig(metric="judge_score", alpha=alpha, beta=beta)
-        message = str(exc.value)
-        assert "alpha + beta" in message
-        # Both values named, so the operator sees which one to move.
-        assert str(alpha) in message and str(beta) in message
+        assert str(excinfo.value).startswith("beta no longer does anything (#1418)")
 
-    @pytest.mark.parametrize(
-        ("alpha", "beta"),
-        [
-            (0.05, 0.20),  # the defaults
-            (0.01, 0.10),  # the docs/evaluation.md example
-            (0.6, 0.39),  # just below 1.0: still allowed
-        ],
-    )
-    def test_config_accepts_a_usable_pair(self, alpha, beta):
-        cfg = MsprtConfig(metric="judge_score", alpha=alpha, beta=beta)
-        assert (cfg.alpha, cfg.beta) == (alpha, beta)
-        # The band the refusal is about: reject stays strictly above accept.
-        upper = math.log((1.0 - cfg.beta) / cfg.alpha)
-        lower = math.log(cfg.beta / (1.0 - cfg.alpha))
-        assert upper > lower
+    @_ONCE_CROSSED
+    def test_a_once_crossed_pair_loads_with_beta_ignored_under_warn(self, alpha, beta, warn):
+        from soup_cli.config.deprecation import SoupConfigDeprecationWarning
 
-    def test_identical_arms_no_longer_reject_at_alpha_0_6_beta_0_5(self):
-        """The reported symptom, now unreachable: refused before the step runs.
+        with pytest.warns(SoupConfigDeprecationWarning, match="beta no longer does anything"):
+            cfg = MsprtConfig(metric="judge_score", alpha=alpha, beta=beta)
+        assert cfg.alpha == alpha
 
-        On main this pair reaches ``msprt_step`` and returns ``reject_h0`` with
-        ``direction worse`` on two byte-identical arms.
-        """
-        with pytest.raises(ValueError):
-            msprt_step(
-                MsprtConfig(
-                    metric="judge_score", alpha=0.6, beta=0.5, effect_size=0.01
-                ),
-                control=_WIDE_CONTROL,
-                treatment=_WIDE_CONTROL,
+    @pytest.mark.parametrize("alpha", [0.6, 0.5, 0.05])
+    def test_identical_arms_never_reject(self, alpha):
+        """The reported symptom, now unreachable by construction: on main before
+        #1339, alpha 0.6 / beta 0.5 returned ``reject_h0`` with ``direction worse``
+        on two byte-identical arms. A Bayes factor at t = 0 is below 1, and the
+        reject boundary ``1 / alpha`` is above it."""
+        config = MsprtConfig(metric="judge_score", alpha=alpha, effect_size=0.01)
+        for n in range(7, len(_WIDE_CONTROL) + 1):
+            verdict = msprt_step(
+                config, control=_WIDE_CONTROL[:n], treatment=_WIDE_CONTROL[:n]
             )
+            assert verdict.decision != "reject_h0", (alpha, n)
 
-    def test_cli_exits_2_naming_alpha_and_beta(self, tmp_path, monkeypatch):
+    def test_cli_warns_on_beta_and_still_decides_under_warn(self, tmp_path, monkeypatch, warn):
         result = _run_cli(
             tmp_path, monkeypatch, _H0_CONTROL, _H0_CONTROL,
             extra=["--alpha", "0.05", "--beta", "0.95"],
         )
-        assert result.exit_code == 2, (result.output, repr(result.exception))
+        assert result.exit_code == 0, (result.output, repr(result.exception))
         out = _plain(result.output)
-        assert "alpha + beta" in out
-        assert "0.95" in out
+        assert "--beta no longer does anything" in out
+        assert "decision reject_h0" not in out
 
-    def test_cli_still_runs_the_documented_pair(self, tmp_path, monkeypatch):
+    def test_cli_refuses_the_documented_pair_naming_beta(self, tmp_path, monkeypatch):
+        from soup_cli.config.deprecation import DEPRECATED_VALUE_REJECTION_VERSION
+
         result = _run_cli(
             tmp_path, monkeypatch, _H0_CONTROL, _H0_CONTROL,
             extra=["--alpha", "0.01", "--beta", "0.10"],
         )
-        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        out = _plain(result.output)
+        assert "Error: --beta no longer does anything (#1418)" in out
+        assert (
+            "Remove --beta; to make accept_h0 stricter, lower --alpha. "
+            f"Refused as of Soup v{DEPRECATED_VALUE_REJECTION_VERSION}."
+        ) in out
+        assert "decision" not in out
 
-    def test_beta_help_states_the_bound(self):
+    def test_cli_still_runs_the_documented_alpha_alone(self, tmp_path, monkeypatch):
+        """Control: what the user is told to do instead runs."""
+        result = _run_cli(
+            tmp_path, monkeypatch, _H0_CONTROL, _H0_CONTROL, extra=["--alpha", "0.01"],
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "no longer does anything" not in _plain(result.output)
+
+    def test_beta_help_says_it_is_retired(self):
         from soup_cli.cli import app
 
         result = runner.invoke(app, ["ab", "--help"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
         out = _plain(result.output)
-        assert "alpha + beta" in out
+        assert "Retired (#1418)" in out
+        # v0.77: the help says what happens now, not v0.76's "ignored, with a warning".
+        assert "refused with a usage error" in out, out
+        assert "ignored, with a warning" not in out
 
 
 class TestStandardisedEffectOverflow:

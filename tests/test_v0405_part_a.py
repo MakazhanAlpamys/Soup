@@ -140,22 +140,24 @@ class TestTrainerSourceWiring:
         )
 
     @pytest.mark.parametrize("filename", _TRAINER_FILES)
-    def test_trainer_handles_mxfp4_in_kbit_prep(self, filename: str) -> None:
-        # mxfp4 is a BNB 4-bit variant — must run through
-        # prepare_model_for_kbit_training. Strict regex match on the literal
-        # tuple so a stray comment containing "mxfp4" cannot pass the guard.
+    def test_trainer_keeps_mxfp4_out_of_kbit_prep(self, filename: str) -> None:
+        # #1466: mxfp4 is dequantized on load (transformers Mxfp4Config), so
+        # the model is plain bf16 and prepare_model_for_kbit_training would
+        # cast it to fp32. Strict regex match on the literal tuple so a stray
+        # comment containing "mxfp4" cannot pass the guard.
         import re
 
         src = (_TRAINER_DIR / filename).read_text(encoding="utf-8")
         if "prepare_model_for_kbit_training" not in src:
             pytest.skip(f"{filename} doesn't use kbit prep")
-        # Match: ("4bit", "8bit", "mxfp4")  with arbitrary whitespace.
-        pattern = re.compile(
-            r'\(\s*"4bit"\s*,\s*"8bit"\s*,\s*"mxfp4"\s*\)'
-        )
+        # Match: ("4bit", "8bit")  with arbitrary whitespace.
+        pattern = re.compile(r'\(\s*"4bit"\s*,\s*"8bit"\s*\)')
         assert pattern.search(src), (
-            f"{filename} kbit-prep tuple must be (\"4bit\", \"8bit\", \"mxfp4\")"
+            f"{filename} kbit-prep tuple must be (\"4bit\", \"8bit\")"
         )
+        assert not re.search(
+            r'\(\s*"4bit"\s*,\s*"8bit"\s*,\s*"mxfp4"\s*\)', src
+        ), f"{filename} must not run mxfp4 through kbit prep"
 
 
 # ---------------------------------------------------------------------------

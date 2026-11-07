@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -495,3 +496,299 @@ class TestTheMessagesPeopleSee:
                 None, _make_mock_state(global_step=4), _make_mock_control(), model=model
             )
         assert "step 5:" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Group 7 — Parameter attribution in watchdog warning and trainer_state
+# ---------------------------------------------------------------------------
+# Concrete test doubles (NOT MagicMock) so missing attributes surface as
+# AttributeError rather than silently auto-generating child mocks (Rule 1).
+# ---------------------------------------------------------------------------
+
+
+class _NamedParamDouble:
+    def __init__(self, grad: Any):
+        self.grad = grad
+
+
+class _NamedModelDouble:
+    def __init__(self, named_grads: dict[str, Any]):
+        self._named = [(name, _NamedParamDouble(g)) for name, g in named_grads.items()]
+        self.zero_grad_called = False
+
+    def named_parameters(self):
+        return iter(self._named)
+
+    def parameters(self):
+        return (p for _, p in self._named)
+
+    def zero_grad(self):
+        self.zero_grad_called = True
+        for _, p in self._named:
+            p.grad = None
+
+
+def _make_mock_named_model_with_grads(named_grads: dict[str, torch.Tensor]) -> _NamedModelDouble:
+    """Create a test double model whose named_parameters() yields the given name/grad pairs."""
+    return _NamedModelDouble(named_grads)
+
+
+class TestParameterAttribution:
+    """Group 7 — Watchdog names non-finite parameters and counts."""
+
+    def test_warning_names_specific_parameters_and_count(self, caplog):
+        """Warning identifies exact non-finite parameter names and count."""
+        cb = _get_callback_instance()
+        named_grads = {
+            "model.layers.0.self_attn.q_proj.lora_B.weight": torch.tensor([float("nan")]),
+            "model.layers.1.self_attn.v_proj.lora_B.weight": torch.tensor([float("nan")]),
+            "model.layers.2.self_attn.k_proj.lora_B.weight": torch.tensor([1.0, 2.0]),
+        }
+        model = _make_mock_named_model_with_grads(named_grads)
+        state = _make_mock_state(global_step=0)
+        control = _make_mock_control()
+
+        with caplog.at_level(logging.WARNING):
+            cb.on_pre_optimizer_step(None, state, control, model=model)
+
+        assert "non-finite gradients detected in 2 parameter(s)" in caplog.text
+        assert "model.layers.0.self_attn.q_proj.lora_B.weight" in caplog.text
+        assert "model.layers.1.self_attn.v_proj.lora_B.weight" in caplog.text
+        assert "model.layers.2.self_attn.k_proj" not in caplog.text
+        assert model.zero_grad_called is True
+
+    def test_warning_truncates_when_many_parameters_non_finite(self, caplog):
+        """Display first 3 names plus (+N more) when >3 parameters are non-finite."""
+        cb = _get_callback_instance()
+        named_grads = {
+            f"layer.{i}.weight": torch.tensor([float("nan")])
+            for i in range(5)
+        }
+        model = _make_mock_named_model_with_grads(named_grads)
+        state = _make_mock_state(global_step=9)
+        control = _make_mock_control()
+
+        with caplog.at_level(logging.WARNING):
+            cb.on_pre_optimizer_step(None, state, control, model=model)
+
+        assert "non-finite gradients detected in 5 parameter(s)" in caplog.text
+        assert "layer.0.weight, layer.1.weight, layer.2.weight (+2 more)" in caplog.text
+        assert model.zero_grad_called is True
+
+    def test_per_step_nan_event_recorded_in_log_history(self):
+        """Watchdog logs per-step event in state.log_history with parameter names and count."""
+        cb = _get_callback_instance()
+        named_grads = {
+            "model.layers.0.lora_B.weight": torch.tensor([float("nan")]),
+        }
+        model = _make_mock_named_model_with_grads(named_grads)
+        state = _make_mock_state(global_step=4)
+        control = _make_mock_control()
+
+        cb.on_pre_optimizer_step(None, state, control, model=model)
+
+        assert len(state.log_history) == 1
+        event = state.log_history[0]
+        assert event["step"] == 5
+        assert event["nan_skip_step"] == 5
+        assert event["nan_param_count"] == 1
+        assert event["nan_param_names"] == ["model.layers.0.lora_B.weight"]
+
+    def test_per_step_nan_event_truncates_parameter_names_when_many(self):
+        """Per-step parameter names truncate to 5 while count records total."""
+        cb = _get_callback_instance()
+        named_grads = {
+            f"layer.{i}.weight": torch.tensor([float("nan")])
+            for i in range(7)
+        }
+        model = _make_mock_named_model_with_grads(named_grads)
+        state = _make_mock_state(global_step=4)
+        control = _make_mock_control()
+
+        cb.on_pre_optimizer_step(None, state, control, model=model)
+
+        assert len(state.log_history) == 1
+        event = state.log_history[0]
+        assert event["step"] == 5
+        assert event["nan_skip_step"] == 5
+        assert event["nan_param_count"] == 7
+        assert len(event["nan_param_names"]) == 5
+        assert event["nan_param_names"] == [f"layer.{i}.weight" for i in range(5)]
+
+    def test_train_end_records_cumulative_non_finite_parameter_names_and_count(self):
+        """Cumulative unique parameter names and count are preserved in final log record."""
+        cb = _get_callback_instance()
+        state = _make_mock_state(global_step=10)
+        control = _make_mock_control()
+
+        # Step 1: parameter A is NaN
+        model1 = _make_mock_named_model_with_grads({
+            "param_A": torch.tensor([float("nan")]),
+            "param_B": torch.tensor([1.0]),
+        })
+        cb.on_pre_optimizer_step(None, state, control, model=model1)
+
+        # Step 2: parameter B and C are NaN
+        model2 = _make_mock_named_model_with_grads({
+            "param_B": torch.tensor([float("nan")]),
+            "param_C": torch.tensor([float("nan")]),
+        })
+        cb.on_pre_optimizer_step(None, state, control, model=model2)
+
+        cb.on_train_end(None, state, control)
+
+        final_record = state.log_history[-1]
+        assert final_record["nan_skip_count"] == 2
+        assert final_record["nan_param_count"] == 3
+        assert final_record["nan_param_names"] == ["param_A", "param_B", "param_C"]
+
+    def test_train_end_truncates_cumulative_parameter_names_when_many(self):
+        """Cumulative parameter names truncate to 5 while count records total."""
+        cb = _get_callback_instance()
+        state = _make_mock_state(global_step=10)
+        control = _make_mock_control()
+
+        named_grads = {
+            f"param_{i:02d}": torch.tensor([float("nan")])
+            for i in range(10)
+        }
+        model = _make_mock_named_model_with_grads(named_grads)
+        cb.on_pre_optimizer_step(None, state, control, model=model)
+        cb.on_train_end(None, state, control)
+
+        final_record = state.log_history[-1]
+        assert final_record["nan_param_count"] == 10
+        assert len(final_record["nan_param_names"]) == 5
+        assert final_record["nan_param_names"] == [
+            "param_00", "param_01", "param_02", "param_03", "param_04"
+        ]
+
+    def test_fallback_to_parameters_when_named_parameters_missing(self, caplog):
+        """Fallback to param_{idx} when named_parameters() is not supported."""
+        class _ModelWithoutNamedParams:
+            def __init__(self, grads):
+                self._params = [_NamedParamDouble(g) for g in grads]
+                self.zero_grad_called = False
+
+            def parameters(self):
+                return iter(self._params)
+
+            def zero_grad(self):
+                self.zero_grad_called = True
+                for p in self._params:
+                    p.grad = None
+
+        cb = _get_callback_instance()
+        model = _ModelWithoutNamedParams([
+            torch.tensor([float("nan")]),
+            torch.tensor([1.0]),
+        ])
+        state = _make_mock_state(global_step=2)
+        control = _make_mock_control()
+
+        with caplog.at_level(logging.WARNING):
+            cb.on_pre_optimizer_step(None, state, control, model=model)
+
+        assert "non-finite gradients detected in 1 parameter(s) [param_0]" in caplog.text
+        assert model.zero_grad_called is True
+        assert cb._nan_skip_count == 1
+
+    def test_named_parameters_exception_fails_open_safely(self, caplog):
+        """Broken model reflection fails open with a one-shot warning without crashing."""
+        class _CrashingModel:
+            def named_parameters(self):
+                raise RuntimeError("Corrupted graph iteration")
+
+        cb = _get_callback_instance()
+        model = _CrashingModel()
+        state = _make_mock_state(global_step=0)
+        control = _make_mock_control()
+
+        with caplog.at_level(logging.WARNING):
+            res = cb.on_pre_optimizer_step(None, state, control, model=model)
+            assert res is control
+
+        assert "gradient watchdog parameter scan failed (Corrupted graph iteration)" in caplog.text
+        assert cb._nan_scan_warned is True
+
+        # Second call must not emit another warning (one-shot verification)
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            res2 = cb.on_pre_optimizer_step(None, state, control, model=model)
+            assert res2 is control
+        assert len(caplog.records) == 0
+
+    def test_warning_strips_control_characters_from_parameter_names(self, caplog):
+        """Watchdog warning sanitizes control / ANSI escape characters from parameter names."""
+        cb = _get_callback_instance()
+        named_grads = {
+            "model.\x1b[31mlayers\x1b[0m.0.weight": torch.tensor([float("nan")]),
+        }
+        model = _make_mock_named_model_with_grads(named_grads)
+        state = _make_mock_state(global_step=0)
+        control = _make_mock_control()
+
+        with caplog.at_level(logging.WARNING):
+            cb.on_pre_optimizer_step(None, state, control, model=model)
+
+        assert "\x1b" not in caplog.text
+        assert "model.[31mlayers[0m.0.weight" in caplog.text
+        assert model.zero_grad_called is True
+
+    def test_cpu_real_module_nan_injection_attribution(self, caplog):
+        """CPU end-to-end: real torch.nn.Module with injected NaN gradient is zeroed and named."""
+        import torch.nn as nn
+
+        class TinyModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.fc1 = nn.Linear(4, 4)
+                self.lora_B = nn.Linear(4, 4, bias=False)
+
+            def forward(self, x):
+                return self.fc1(x) + self.lora_B(x)
+
+        model = TinyModel()
+        x = torch.randn(2, 4)
+        out = model(x).sum()
+        out.backward()
+
+        # Inject NaN into lora_B.weight.grad
+        model.lora_B.weight.grad[0, 0] = float("nan")
+
+        cb = _get_callback_instance()
+        state = _make_mock_state(global_step=12)
+        control = _make_mock_control()
+
+        with caplog.at_level(logging.WARNING):
+            cb.on_pre_optimizer_step(None, state, control, model=model)
+
+        assert "non-finite gradients detected in 1 parameter(s) [lora_B.weight]" in caplog.text
+        # Gradients must be zeroed / None
+        assert model.lora_B.weight.grad is None or (model.lora_B.weight.grad == 0).all()
+        assert cb._nan_skip_count == 1
+
+    def test_resume_from_checkpoint_restores_attribution_state(self):
+        """When training resumes from checkpoint, cumulative counts and names are restored."""
+        cb = _get_callback_instance()
+        state = _make_mock_state(global_step=50)
+        state.log_history = [
+            {
+                "step": 10,
+                "nan_skip_step": 10,
+                "nan_param_count": 1,
+                "nan_param_names": ["layer.0.weight", 123, None, ["nested"]],
+            },
+            {
+                "step": 20,
+                "nan_skip_step": 20,
+                "nan_param_count": 1,
+                "nan_param_names": ["layer.1.weight"],
+            },
+        ]
+        control = _make_mock_control()
+
+        cb.on_train_begin(None, state, control)
+
+        assert cb._nan_skip_count == 2
+        assert cb._nan_param_names == {"layer.0.weight", "layer.1.weight"}

@@ -1,8 +1,16 @@
 """Tests for NEFTune (neftune_alpha) and rsLoRA (use_rslora) support."""
 
-import pytest
+import typing
 
-from soup_cli.config.schema import LoraConfig, SoupConfig, TrainingConfig
+import pytest
+from pydantic import ValidationError
+
+from soup_cli.config.schema import (
+    NEFTUNE_APPLYING_TASKS,
+    LoraConfig,
+    SoupConfig,
+    TrainingConfig,
+)
 
 # ---------------------------------------------------------------------------
 # NEFTune config tests
@@ -238,3 +246,107 @@ class TestRsLoRASweep:
         }
         _set_nested_param(config_dict, "use_rslora", True)
         assert config_dict["training"]["lora"]["use_rslora"] is True
+
+
+# ---------------------------------------------------------------------------
+# NEFTune task-gate (issue #1820)
+# ---------------------------------------------------------------------------
+
+#: All tasks declared in the ``task`` Literal of SoupConfig, derived via
+#: ``typing.get_args`` so adding a task to the schema Literal updates this.
+ALL_TASKS: frozenset[str] = frozenset(
+    typing.get_args(SoupConfig.model_fields["task"].annotation),
+)
+
+#: NEFTUNE_APPLYING_TASKS must be a subset of ALL_TASKS.
+assert NEFTUNE_APPLYING_TASKS.issubset(ALL_TASKS)
+
+
+class TestNEFTuneTaskGate:
+    """#1820: neftune_alpha is refused on tasks whose trainer never reads it."""
+
+    def _make_cfg(
+        self,
+        task: str,
+        neftune_alpha: float = 5.0,
+        **extra_training,
+    ) -> SoupConfig:
+        """Build a minimal SoupConfig with a given task and neftune_alpha.
+
+        Some tasks need extra fields to pass validation (tts needs modality,
+        preference needs preference_loss, classifier/reranker/cross_encoder
+        need num_labels, distill needs teacher_model).  Those are passed via
+        *extra_training* so the caller can satisfy those preconditions.
+        """
+        training_kw = {"neftune_alpha": neftune_alpha}
+        training_kw.update(extra_training)
+        modality = "text"
+        if task == "tts":
+            modality = "audio_out"
+        return SoupConfig(
+            base="test-model",
+            task=task,
+            modality=modality,
+            data={"train": "./data.jsonl"},
+            training=training_kw,
+        )
+
+    @pytest.mark.parametrize("task", sorted(NEFTUNE_APPLYING_TASKS))
+    def test_applying_tasks_accept_neftune_alpha(self, task):
+        """Tasks in NEFTUNE_APPLYING_TASKS accept neftune_alpha without error."""
+        # preference needs preference_loss; tts needs audio_out modality
+        # and a tts_family.
+        extra: dict = {}
+        if task == "preference":
+            extra["preference_loss"] = "dpo"
+        if task == "tts":
+            extra["tts_family"] = "orpheus"
+        cfg = self._make_cfg(task, 5.0, **extra)
+        assert cfg.training.neftune_alpha == 5.0
+
+    @pytest.mark.parametrize("task", sorted(ALL_TASKS - NEFTUNE_APPLYING_TASKS))
+    def test_non_applying_tasks_reject_neftune_alpha(self, task):
+        """Tasks NOT in NEFTUNE_APPLYING_TASKS reject neftune_alpha at load."""
+        # Some tasks need extra fields to reach the neftune gate.
+        extra: dict = {}
+        if task in ("classifier", "reranker", "cross_encoder"):
+            extra["num_labels"] = 2
+        if task == "distill":
+            extra["teacher_model"] = "teacher"
+        with pytest.raises(
+            ValidationError, match=rf"training\.neftune_alpha.*task='{task}'"
+        ):
+            self._make_cfg(task, 5.0, **extra)
+
+    def test_mutation_check_drop_one_task(self, monkeypatch):
+        """Mutation test: removing a task from NEFTUNE_APPLYING_TASKS fails.
+
+        Verifies that the validator uses the NEFTUNE_APPLYING_TASKS constant
+        (not a hardcoded set) by dropping one task and checking that the
+        config is then rejected for that task.
+        """
+        import soup_cli.config.schema as schema_module
+
+        monkeypatch.setattr(
+            schema_module,
+            "NEFTUNE_APPLYING_TASKS",
+            NEFTUNE_APPLYING_TASKS - {"dpo"},
+        )
+        # dpo is no longer in the set, so neftune_alpha=5.0 should be refused.
+        with pytest.raises(
+            ValidationError, match=r"training\.neftune_alpha.*task='dpo'"
+        ):
+            self._make_cfg("dpo", 5.0)
+
+    def test_neftune_alpha_zero_is_refused(self):
+        """neftune_alpha=0.0 is refused on non-applying tasks (gate checks is not None)."""
+        with pytest.raises(
+            ValidationError, match=r"training\.neftune_alpha.*task='grpo'"
+        ):
+            self._make_cfg("grpo", 0.0)
+
+    def test_applying_tasks_pinned(self):
+        """NEFTUNE_APPLYING_TASKS is pinned literally — removing any task fails."""
+        assert NEFTUNE_APPLYING_TASKS == frozenset({
+            "sft", "tts", "dpo", "ipo", "kto", "orpo", "simpo", "bco", "preference",
+        })

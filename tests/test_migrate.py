@@ -546,13 +546,17 @@ class TestLlamaFactoryMigration:
         assert result["output"] == "./output"
 
     def test_sft_lora_target_all(self, tmp_path):
-        """lora_target: all → auto (Soup auto-detects)."""
+        """lora_target: all → all-linear (every linear layer, as LLaMA-Factory trains it).
+
+        #1807: ``auto`` resolved to q_proj / v_proj on Llama, two of the seven
+        projections ``all`` names.
+        """
         from soup_cli.migrate.llamafactory import migrate_llamafactory
 
         cfg_file = tmp_path / "config.yaml"
         cfg_file.write_text(LLAMA_FACTORY_SFT, encoding="utf-8")
         result = migrate_llamafactory(cfg_file)
-        assert result["training"]["lora"]["target_modules"] == "auto"
+        assert result["training"]["lora"]["target_modules"] == "all-linear"
 
     def test_dpo_config(self, tmp_path):
         """DPO stage maps to task: dpo with dpo_beta."""
@@ -818,13 +822,14 @@ class TestAxolotlMigration:
         assert result["training"]["quantization"] == "4bit"
 
     def test_lora_target_linear(self, tmp_path):
-        """lora_target_linear: true → target_modules: auto."""
+        """lora_target_linear: true → target_modules: all-linear (#1807; ``auto`` wrapped
+        q_proj / v_proj only on Llama)."""
         from soup_cli.migrate.axolotl import migrate_axolotl
 
         cfg_file = tmp_path / "config.yaml"
         cfg_file.write_text(AXOLOTL_LORA_TARGET_LINEAR, encoding="utf-8")
         result = migrate_axolotl(cfg_file)
-        assert result["training"]["lora"]["target_modules"] == "auto"
+        assert result["training"]["lora"]["target_modules"] == "all-linear"
 
     def test_adamw_8bit_mapping(self, tmp_path):
         """adamw_8bit → adamw_bnb_8bit."""

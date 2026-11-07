@@ -3,6 +3,7 @@
 from importlib.metadata import version as distribution_version
 from io import StringIO
 
+import pytest
 from packaging.version import Version
 from rich.console import Console
 
@@ -97,8 +98,12 @@ class _Plotext6:
         self.figure = _Figure6()
 
 
-def test_plotext5_module_api_remains_supported() -> None:
+@pytest.mark.parametrize("figure", [None, lambda: None, object()])
+def test_plotext5_module_api_remains_supported(figure) -> None:
     plotext = _Plotext5()
+    # 5.2.2 exposes a non-callable private figure object with no v6 clear/draw API;
+    # later 5.x releases expose a callable figure factory. Both use module methods.
+    plotext.figure = figure
     console = _Console()
     render_histogram(
         plotext,

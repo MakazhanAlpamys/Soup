@@ -99,7 +99,7 @@ def _load_calib(path: str) -> list[str]:
         fd = os.open(path, flags)
     except OSError as exc:
         raise typer.BadParameter(f"calib path unreadable: {exc}") from exc
-    with os.fdopen(fd, "r", encoding="utf-8") as handle:
+    with os.fdopen(fd, "r", encoding="utf-8-sig") as handle:
         if os.fstat(handle.fileno()).st_size > _MAX_INPUT_BYTES:
             raise typer.BadParameter(
                 f"calib file exceeds {_MAX_INPUT_BYTES} bytes"
@@ -278,7 +278,7 @@ def shrink(
     except typer.Exit:
         raise
     except (typer.BadParameter, ValueError, RuntimeError, OSError, ImportError) as exc:
-        console.print(f"[red]Error:[/] {escape(str(exc))}")
+        console.print(f"[red]Error:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
 
 
@@ -439,7 +439,10 @@ def _attach_to_registry(registry_id: str, report_path: str) -> None:
             f"[green]Attached[/] shrink_report to registry entry [bold]{escape(registry_id)}[/]"
         )
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[yellow]Warning:[/] could not attach to registry: {escape(str(exc))}")
+        console.print(
+            f"[yellow]Warning:[/] could not attach to registry: {for_terminal(exc)}",
+            emoji=False,
+        )
 
 
 # ---------------------------------------------------------------------------

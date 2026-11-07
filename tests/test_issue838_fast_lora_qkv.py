@@ -378,7 +378,7 @@ class TestCoordinator:
         assert unpatch_fast_lora_qkv(model) == 1
         assert model.attn.q_proj.forward.__func__ is replacement
 
-    def test_qkv_refuses_projections_already_owned_by_single_projection(self):
+    def test_qkv_takes_projections_over_from_single_projection(self):
         _deps()
         from soup_cli.utils.fast_lora import (
             patch_fast_lora_single_projection,
@@ -388,8 +388,8 @@ class TestCoordinator:
 
         model = _make_model(("q_proj", "k_proj", "v_proj"))
         assert patch_fast_lora_single_projection(model) == 3
-        assert patch_fast_lora_qkv(model) == 0
-        assert unpatch_fast_lora_single_projection(model) == 3
+        assert patch_fast_lora_qkv(model) == 1
+        assert unpatch_fast_lora_single_projection(model) == 0
 
     def test_real_peft_8bit_layers_are_not_patched(self):
         _deps()

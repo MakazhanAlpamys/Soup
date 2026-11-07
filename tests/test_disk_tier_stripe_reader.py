@@ -1,10 +1,12 @@
 """R4 — every drive keeps a read in flight; one drive still reads one layer at a time."""
 
+import io
 import threading
 import time
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 
 torch = pytest.importorskip("torch")
 pytest.importorskip("safetensors")
@@ -14,7 +16,14 @@ from safetensors.torch import save_file  # noqa: E402
 import soup_cli.utils.async_disk_source as mod  # noqa: E402
 from soup_cli.utils.async_disk_source import AsyncDiskSource, _RangeReaders  # noqa: E402
 from soup_cli.utils.layer_shard import layer_shard_path  # noqa: E402
-from soup_cli.utils.layer_stream_runtime import DiskSource, RamSource  # noqa: E402
+from soup_cli.utils.layer_stream_runtime import (  # noqa: E402
+    DiskSource,
+    RamSource,
+    StreamRuntime,
+    _build_source,
+    _say_page_cache_roots,
+)
+from tests.conftest import strip_ansi  # noqa: E402
 
 N = 8
 
@@ -106,58 +115,82 @@ def _source(tmp_path, *, striped=True, n=N, **kwargs):
     return source, spec, shard_dir, paths
 
 
-#: The steady-state walk: layers, one read (R), consumer compute per layer (C), and the
-#: boundaries (k, k+1) it counts — 3..14, i.e. everything after the cold start.
+#: The steady-state walk: 16 layers over two drives, read_ahead 3. Gated, not timed.
 STEADY_LAYERS = 16
-STEADY_READ_S = 0.1
-STEADY_COMPUTE_S = 0.05
-STEADY_COUNTED = range(3, STEADY_LAYERS - 1)
-STEADY_THRESHOLD = 6
+GATE_WAIT_S = 30.0
+START_WAIT_S = 10.0
 
 
-def _steady_state_overlaps(tmp_path, monkeypatch):
-    """Walk the striped layers forward once; return the counted boundaries k whose reads of
-    k and k+1 overlapped in time, and the spans. The test's whole measurement, kept apart so
-    the numbers in its docstring can be re-measured exactly (against mutants too)."""
-    log = _timed_reads(monkeypatch, delay=STEADY_READ_S)
-    source, spec, _, _ = _source(tmp_path, n=STEADY_LAYERS, read_ahead=3, read_ranges=1)
-    try:
-        _walk(source, spec, range(STEADY_LAYERS), compute=STEADY_COMPUTE_S)
-    finally:
-        source.close()
-    spans = _per_layer(log)
-    return [k for k in STEADY_COUNTED if _overlap(spans[k], spans[k + 1])], spans
+def _gated_reads(monkeypatch, gates, started):
+    """Every range read of layer ``idx`` sets ``started[idx]`` on entry, then blocks until
+    ``gates[idx]`` is set. The test, not the clock, decides when a read lands."""
+    real = AsyncDiskSource._range_works
+
+    def wrapped(self, idx, region):
+        works = real(self, idx, region)
+
+        def gated(work):
+            def run():
+                started[idx].set()
+                gates[idx].wait(timeout=GATE_WAIT_S)
+                work()
+
+            return run
+
+        return [gated(work) for work in works]
+
+    monkeypatch.setattr(AsyncDiskSource, "_range_works", wrapped)
 
 
 def test_every_drive_stays_busy_in_steady_state(tmp_path, monkeypatch):
-    """The test a synchronous-batch reader fails. Consecutive layers live on different drives,
-    so in steady state layer k+1 must already be reading while layer k still is — not only
-    in the first batch after a cold start.
+    """The test a synchronous-batch reader fails, with no clock in it.
 
-    Shape: 16 layers over two drives, read_ahead 3, one 100 ms read per layer (R) and 50 ms
-    of consumer compute per layer (C). The consumer MUST compute: with C = 0 the drives run
-    in phase (k and k+1 start and land together), so k+1 overlaps k only for every other k
-    and no threshold tells this reader from a batch reader. Counted: the 12 boundaries
-    k = 3..14. Boundaries 1 and 2 are left out because both readers agree there. The cold
-    start claims layers 1 and 2 together, which is a free overlap for any reader, and
-    boundary 2 then never overlaps.
-
-    Expected, this reader: 12 of 12. Consecutive reads start either C apart or R - C + wake
-    latency apart, because each drive restarts once its read lands and the consumer has
-    asked for the layer before it. A boundary overlaps while that gap is under R, so its
-    margin is min(R - C, C - latency), about 50 ms. Python 3.10 on Windows sleeps at the
-    15.6 ms system-timer tick (high-resolution sleep arrived in 3.11). R and C can then each
-    overrun by a tick, and the margin is still about 32 ms. A stall has to be that long AND
-    land on a boundary to flip it.
-
-    Expected, a batch reader (claims nothing while any read is pending): 0 of 12. After the
-    cold start it reads one layer at a time, and reads from different batches never overlap.
-
-    Threshold 6 of 12: this reader has to lose 7 boundaries to fail, and the batch reader
-    would have to gain 6 that its structure does not have.
+    The reader plans its lookahead on every HIT: once the consumer has layer k, the queue
+    becomes k+1.. and every idle drive claims its next layer. Consecutive layers live on
+    different drives, so with layer k landed BOTH k+1 and k+2 must be in flight at once, one
+    per drive, while their reads are still open. The main thread lands layers one at a time
+    (opening gate k), then requires started[k+1] and started[k+2] with both gates still
+    closed. A batch reader claims nothing while any read is pending, so it starts k+1 and
+    never k+2 until k+1 lands: the wait times out. Scheduling cannot change the answer: the
+    waits are on events the reader sets, so a late thread only delays, and the gates keep
+    both reads in flight however long that takes.
     """
-    overlapping, spans = _steady_state_overlaps(tmp_path, monkeypatch)
-    assert len(overlapping) >= STEADY_THRESHOLD, (overlapping, spans)
+    gates = [threading.Event() for _ in range(STEADY_LAYERS)]
+    started = [threading.Event() for _ in range(STEADY_LAYERS)]
+    _gated_reads(monkeypatch, gates, started)
+    source, spec, _, _ = _source(tmp_path, n=STEADY_LAYERS, read_ahead=3, read_ranges=1)
+    errors = []
+
+    def consume():
+        try:
+            _walk(source, spec, range(STEADY_LAYERS))
+        except BaseException as exc:  # noqa: BLE001 - surfaced by the assert below
+            errors.append(exc)
+
+    consumer = threading.Thread(target=consume, daemon=True)
+    consumer.start()
+    stalled = None
+    try:
+        for idx in range(STEADY_LAYERS - 2):
+            gates[idx].set()
+            for ahead in (idx + 1, idx + 2):
+                if not started[ahead].wait(timeout=START_WAIT_S):
+                    stalled = (idx, ahead)
+                    break
+            if stalled:
+                break
+    finally:
+        for gate in gates:
+            gate.set()
+        consumer.join(timeout=GATE_WAIT_S)
+        source.close()
+    assert stalled is None, (
+        f"after the consumer took layer {stalled[0]}, layer {stalled[1]} never started "
+        f"although the reads already in flight were held open: a drive sat idle"
+        if stalled
+        else ""
+    )
+    assert errors == [], errors
 
 
 def test_one_drive_never_has_two_layers_in_flight(tmp_path, monkeypatch):
@@ -276,6 +309,72 @@ def test_direct_io_is_decided_per_drive(tmp_path, monkeypatch):
         _walk(source, spec, range(N))
     finally:
         source.close()
+
+
+def test_build_source_reports_each_drive_mode_and_page_cache_reason(tmp_path, monkeypatch):
+    """The console and runtime stats expose the same per-drive decision."""
+    def refuse_root1(path):
+        if Path(path).parent.name == "root1":
+            raise OSError("no direct I/O on this volume")
+        return open(path, "rb", buffering=0)
+
+    monkeypatch.setattr(mod, "open_direct", refuse_root1)
+    shard_dir, paths, roots = _striped_shards(tmp_path)
+    spec = RamSource.layer_specs_from_paths(paths)
+    output = io.StringIO()
+    source, pinned = _build_source(
+        shard_dir,
+        N,
+        spec,
+        pin=False,
+        console=Console(file=output, width=200, color_system=None),
+        tier="disk",
+        shard_paths=paths,
+        layer_roots=roots,
+        read_ahead=3,
+    )
+    try:
+        assert source._open_of[0] is refuse_root1
+        assert source._open_of[1] == source._open_buffered
+        pool = type("Pool", (), {"n": 2, "nbytes": 0, "loads": 0})()
+        stats = StreamRuntime(
+            pool=pool,
+            source=source,
+            prefetcher=None,
+            n_layers=N,
+            pinned=pinned,
+            device="cpu",
+            tier="disk",
+        ).stats()
+        assert stats["drive_count"] == 2
+        assert stats["direct_io_drives"] == 1
+        assert sorted(stats["direct_io_roots"].values()) == [False, True]
+        said = " ".join(strip_ansi(output.getvalue()).split())
+        assert "root1" in said
+        assert "page cache" in said
+        assert "no direct I/O on this volume" in said
+    finally:
+        source.close()
+
+
+def test_page_cache_warning_sanitizes_external_root_and_reason():
+    output = io.StringIO()
+    source = type(
+        "Source",
+        (),
+        {"page_cache_reasons": {"[/]root\x1b": "[bold]refused[/]\x07"}},
+    )()
+
+    _say_page_cache_roots(
+        source,
+        Console(file=output, width=200, color_system=None),
+    )
+
+    said = strip_ansi(output.getvalue())
+    assert "[/]root" in said
+    assert "[bold]refused[/]" in said
+    assert "\x1b" not in said
+    assert "\x07" not in said
 
 
 def test_submit_calls_on_done_once_per_job_after_its_outcome_is_set():

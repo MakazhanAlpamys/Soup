@@ -25,6 +25,7 @@ from soup_cli.utils.mixed_precision import (
     align_trainable_dtype_for_fp16,
     keep_trainable_dtype_on_resume,
 )
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 from soup_cli.utils.terminal import for_terminal
 
@@ -729,9 +730,6 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def setup(self, dataset: dict):
         """Load model, tokenizer, apply LoRA, create trainer."""
-        from transformers import TrainingArguments
-        from trl import SFTTrainer
-
         # Enable Rich progress bar for HuggingFace downloads
         _enable_hf_transfer_progress()
 
@@ -764,6 +762,26 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             self._setup_unsloth(cfg, tcfg)
         else:
             self._setup_transformers(cfg, tcfg)
+
+        # #1464: a streamed run holds its runtime from here on, and training's
+        # cleanup context does not exist until train(). The streamed load above
+        # releases the runtime on its own failures; this covers everything after it.
+        try:
+            self._finish_setup(dataset, cfg, tcfg, use_vision=use_vision, use_audio=use_audio)
+        except BaseException:
+            try:
+                self._close_stream_runtime()
+            except Exception as close_error:
+                console.print(
+                    "[yellow]Could not release the layer-streaming runtime: "
+                    f"{for_terminal(str(close_error))}[/]"
+                )
+            raise
+
+    def _finish_setup(self, dataset: dict, cfg, tcfg, *, use_vision: bool, use_audio: bool):
+        """The rest of setup(), once the model is loaded (#1464)."""
+        from transformers import TrainingArguments
+        from trl import SFTTrainer
 
         # v0.71.23 #266 — the Spectrum full-FT branch leaves a raw (non-PEFT)
         # model, which has no get_nb_trainable_parameters(); fall back to a
@@ -935,14 +953,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         if tcfg.quantization_aware == "quest":
             self._setup_quest(train_ds)
 
-        # --- Calculate warmup steps from ratio ---
-        import math
+        # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
 
-        total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
-        )
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
 
         # --- Training args ---
         # v0.33.0 #58: auto_mixed_precision wires pick_mixed_precision()
@@ -1112,6 +1126,18 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         # so two ``multipack: true`` runs against the same base class share
         # the same subclass.
         use_multipack = bool(getattr(tcfg, "multipack", False))
+        # #1693 -- with `stream_loss_chunk` the model returns no logits, which
+        # TRL's `compute_loss` reads for its metrics. The schema keeps the
+        # option to the two branches below that build `sft_cls`.
+        sft_cls = SFTTrainer
+        chunk_hook = getattr(self, "_stream_loss_chunk_hook", None)
+        if chunk_hook is not None:
+            from soup_cli.utils.stream_loss_chunk import (
+                HOOK_ATTR,
+                make_chunked_loss_trainer_class,
+            )
+
+            sft_cls = make_chunked_loss_trainer_class(SFTTrainer)
         if self._is_raft:
             # v0.71.10 #199 — RAFT uses a plain Trainer + weighted-CE loss
             # (answer-only mask via loss_weights; citation-span boost when
@@ -1215,7 +1241,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             and not use_audio
         ):
             self.trainer = self._build_rewind_trainer(
-                SFTTrainer,
+                sft_cls,
                 trainer_kwargs,
                 rows=dataset["train"],
                 output_dir=output_dir,
@@ -1223,7 +1249,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 grad_accum=int(tcfg.gradient_accumulation_steps),
             )
         else:
-            self.trainer = SFTTrainer(**trainer_kwargs)
+            self.trainer = sft_cls(**trainer_kwargs)
+        if chunk_hook is not None:
+            setattr(self.trainer, HOOK_ATTR, chunk_hook)
 
         # The recording trainer is the last branch above, so RAFT, multipack,
         # vision, audio and a pre-tokenised dataset all skip it -- silently,
@@ -1286,6 +1314,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def _setup_quest(self, train_ds: Any) -> None:
         """Calibrate and install #674's explicit mixed fake-quant route."""
+        from pathlib import Path
+
         from soup_cli.trainer.stream_setup import _distributed_launch
 
         if self.deepspeed_config or self.fsdp_config or _distributed_launch():
@@ -1295,14 +1325,38 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
         from soup_cli.utils.quest import (
             CALIBRATION_EXAMPLES,
+            METADATA_NAME,
             calibrate_activation_scales,
             calibration_rows_sha256,
             install_mixed_quest,
+            load_metadata,
             resolve_base_model_identity,
+            restore_mixed_quest,
             validate_cuda_hardware,
         )
 
         gpu_name, capability = validate_cuda_hardware()
+        declaration = getattr(self.model.config, "soup_quest", None)
+        source = Path(self.config.base)
+        if declaration is not None or (source / METADATA_NAME).is_file():
+            if not source.is_dir():
+                raise ValueError(
+                    "QuEST continuation requires a local artifact with its metadata sidecar"
+                )
+            base_identity = resolve_base_model_identity(self.config.base)
+            before = getattr(self, "_quest_base_identity_before", None)
+            if before is not None and before != base_identity:
+                raise ValueError("QuEST local base changed while the model was loading")
+            metadata = load_metadata(source)
+            if declaration != metadata:
+                raise ValueError("QuEST config declaration does not match the mandatory sidecar")
+            restore_mixed_quest(self.model, metadata)
+            self._quest_metadata = metadata
+            console.print(
+                "[green]QuEST continuation:[/] restored the artifact's fixed calibration "
+                "and 168 W4 / 161 A4 + 7 A16 route"
+            )
+            return
         console.print(
             "[cyan]QuEST calibration:[/] selecting fixed activation clips on "
             "the first 32 tokenized training rows"
@@ -1502,7 +1556,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         return (mode == "bf16", mode == "fp16")
 
     def _resolve_load_dtype(self, tcfg):
-        """Decide the ``torch_dtype`` kwarg for ``from_pretrained`` (#339, #471, #492).
+        """Decide the ``dtype`` kwarg for ``from_pretrained`` (#339, #471, #492).
 
         Two cases, told apart by the module-level ``is_full_finetune`` (also
         used by ``commands/train.py``'s VRAM pre-flight, so the two cannot
@@ -1532,12 +1586,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
           implementations (#492 review) — this was itself the finding that
           produced #492's helper.
 
-        #492 review — the kwarg name is ``torch_dtype``, not ``dtype``: the
-        latter only exists in transformers>=4.56, and this project's declared
-        floor is >=4.36.0, so ``dtype=`` was a hard ``TypeError`` at model
-        load on every version from the floor to 4.55 (measured live on
-        4.46.1) — not a silent no-op, since transformers only forwards a
-        kwarg into the config if the config already ``hasattr`` it.
+        The loader uses ``dtype`` consistently with the declared Transformers
+        5.16.1 floor (#2200); the former ``torch_dtype`` spelling is deprecated.
+        This changes the argument name, not the precision decision above.
         """
         return resolve_base_load_dtype(
             self.device, full_finetune=is_full_finetune(tcfg)
@@ -1621,7 +1672,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -1641,7 +1693,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code,
             "device_map": dev_map,
-            "torch_dtype": self._resolve_load_dtype(tcfg),
+            "dtype": self._resolve_load_dtype(tcfg),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -1662,7 +1714,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             from soup_cli.utils.long_context import apply_long_context_config
 
             model_config = AutoConfig.from_pretrained(
-                cfg.base, trust_remote_code=self._trust_remote_code
+                cfg.base, trust_remote_code=self._trust_remote_code,
+                **base_revision_kwargs(cfg.base),
             )
             rope_config = apply_long_context_config(
                 model_config,
@@ -1677,7 +1730,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             if rope_config:
                 model_kwargs["config"] = model_config
 
-        self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
         apply_vocab_expansion(
@@ -1702,7 +1758,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 f"[green]MoE detected:[/] aux_loss_coeff={tcfg.moe_aux_loss_coeff}"
             )
 
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantization in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
             self.model = prepare_model_for_kbit_training(
@@ -1713,8 +1769,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
 
         # Freeze training — freeze bottom layers before LoRA
+        # #1432: cutoff re-read below to scope the LoRA adapter to it too.
+        lora_layers_to_transform = None
         if tcfg.freeze_layers is not None or tcfg.freeze_ratio is not None:
-            from soup_cli.utils.freeze import freeze_model_layers
+            from soup_cli.utils.freeze import freeze_layer_cutoff, freeze_model_layers
 
             frozen = freeze_model_layers(
                 self.model,
@@ -1724,6 +1782,20 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             console.print(
                 f"[green]Freeze training:[/] {frozen} parameters frozen"
             )
+            plan = freeze_layer_cutoff(
+                self.model,
+                freeze_layers=tcfg.freeze_layers,
+                freeze_ratio=tcfg.freeze_ratio,
+            )
+            if plan is not None:
+                cutoff, total_layers = plan
+                # #1432: a zero cutoff freezes nothing, but peft still reads
+                # any layers_to_transform list as "restrict to these numbered
+                # layers only", which silently drops a target outside a
+                # numbered layer (embed_tokens) even though nothing was
+                # frozen. Leave it unset rather than pass a no-op range.
+                if cutoff:
+                    lora_layers_to_transform = list(range(cutoff, total_layers))
 
         # v0.53.4 #83 — LLaMA Pro block expansion. Run BEFORE LoRA so PEFT's
         # target-module matcher sees the new blocks. Centralised in
@@ -1833,20 +1905,98 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 self.model, tcfg, target_modules, console
             )
 
+            # #1432: an empty range means every layer is frozen, refuse
+            # rather than silently build an adapter matching nothing.
+            if lora_layers_to_transform is not None and not lora_layers_to_transform:
+                raise ValueError(
+                    "training.freeze_layers / training.freeze_ratio freezes "
+                    "every decoder layer, leaving no layer for the LoRA "
+                    "adapter to attach to. Reduce freeze_layers/freeze_ratio."
+                )
+
+            # #1432: peft only applies layers_to_transform when
+            # target_modules is a list, never a string (a regex or
+            # all-linear), so refuse rather than silently ship the same bug
+            # for that shape.
+            if lora_layers_to_transform is not None and isinstance(target_modules, str):
+                raise ValueError(
+                    "training.freeze_layers / training.freeze_ratio cannot "
+                    "currently be combined with a string "
+                    f"training.lora.target_modules ({target_modules!r}, a regex "
+                    "or all-linear): peft only restricts layers_to_transform "
+                    "when target_modules is a list of module-name suffixes. "
+                    "Give an explicit training.lora.target_modules list (the "
+                    "module names are in model.named_modules()) instead, or "
+                    "drop freeze_layers/freeze_ratio."
+                )
+
+            # #1432: peft only applies layers_to_transform to a list target
+            # that lives inside a numbered decoder layer, or to an exact
+            # module name (a top-level lm_head keeps its adapter). embed_tokens,
+            # or any other target outside the stack, silently gets no adapter
+            # otherwise. Refuse by name rather than drop it.
+            if lora_layers_to_transform is not None and isinstance(target_modules, list):
+                from soup_cli.utils.peft_wiring import find_layer_unscoped_targets
+
+                unscoped = find_layer_unscoped_targets(self.model, target_modules)
+                if unscoped:
+                    raise ValueError(
+                        "training.freeze_layers / training.freeze_ratio cannot "
+                        "currently be combined with training.lora.target_modules "
+                        f"naming {unscoped!r}: peft's layers_to_transform only "
+                        "restricts targets that live inside a numbered decoder "
+                        f"layer, so {unscoped!r} would silently get no LoRA "
+                        "adapter. Drop freeze_layers/freeze_ratio, or remove "
+                        f"{unscoped!r} from training.lora.target_modules."
+                    )
+
+            # #1432: target_parameters matching is a separate, layer-unaware
+            # peft path with no layers_to_transform check, same refusal.
+            if lora_layers_to_transform is not None and target_parameters:
+                raise ValueError(
+                    "training.freeze_layers / training.freeze_ratio cannot "
+                    "currently be combined with training.lora.target_parameters "
+                    "(per-parameter LoRA, e.g. fused MoE experts): peft's "
+                    "target_parameters matching does not apply "
+                    "layers_to_transform. Drop freeze_layers/freeze_ratio, or "
+                    "drop target_parameters and use training.lora.target_modules "
+                    "instead."
+                )
+
+            # #1432: VeRA is a separate peft tuner (build_peft_config_spec's
+            # own branch, not the LoraConfig path layers_to_transform is
+            # wired into below), so refuse rather than silently reproduce
+            # the same bug for it.
+            if lora_layers_to_transform is not None and getattr(tcfg.lora, "use_vera", False):
+                raise ValueError(
+                    "training.freeze_layers / training.freeze_ratio cannot "
+                    "currently be combined with training.lora.use_vera: the "
+                    "freeze plan is not wired into the VeRA config path. Drop "
+                    "freeze_layers/freeze_ratio, or drop use_vera and use "
+                    "ordinary LoRA instead."
+                )
+
             lora_config = build_lora_config(
                 tcfg.lora,
                 target_modules=target_modules,
                 target_parameters=target_parameters,
                 task_type=TaskType.CAUSAL_LM,
+                layers_to_transform=lora_layers_to_transform,
             )
             # v0.39.0 Part D / v0.40.6 #67 — surgical PEFT patches via shared helpers.
             from soup_cli.utils.peft_wiring import (
+                apply_fast_lora_patches,
                 apply_post_lora_patches,
                 apply_pre_lora_patches,
+                fast_lora_summary,
             )
             apply_pre_lora_patches(self.model, cfg.base)
             self.model = get_peft_model(self.model, lora_config)
             apply_post_lora_patches(self.model)
+            # #792 — after every other LoRA patch, so the kernels see the final modules.
+            fast_lora_counts = apply_fast_lora_patches(self.model, tcfg)
+            if fast_lora_counts is not None:
+                console.print(f"[green]{fast_lora_summary(fast_lora_counts)}[/]")
 
             # v0.71.12 #84 — Mixture-of-Depths selective-token routing. Applied
             # AFTER get_peft_model so the freshly-added routers are trainable.
@@ -1899,7 +2049,13 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def _setup_unsloth(self, cfg, tcfg):
         """Load model via unsloth FastLanguageModel (2-5x faster)."""
+        from soup_cli.utils import unsloth
         from soup_cli.utils.unsloth import load_model_and_tokenizer
+        # #797: resolve training.gradient_checkpointing for the Unsloth path
+        # (streaming layers already checkpoint every layer, so it stays off).
+        use_gradient_checkpointing = unsloth.resolve_unsloth_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=getattr(tcfg, "stream_layers", False)
+        )
 
         console.print(f"[dim]Loading model via [bold]unsloth[/]: {cfg.base}[/]")
         self.model, self.tokenizer = load_model_and_tokenizer(
@@ -1910,6 +2066,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             lora_alpha=tcfg.lora.alpha,
             lora_dropout=tcfg.lora.dropout,
             target_modules=tcfg.lora.target_modules,
+            use_rslora=tcfg.lora.use_rslora,
+            use_gradient_checkpointing=use_gradient_checkpointing,
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -1921,7 +2079,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
         console.print(f"[dim]Loading vision processor: {cfg.base}[/]")
         self.processor = AutoProcessor.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         # Idefics3/SmolVLM (and other) processors keep the text tokenizer nested
         # and don't forward pad_token/eos_token — mirror them onto the processor
@@ -1955,12 +2114,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # mismatch risk as the text path). Routed through the shared
             # method anyway rather than hardcoding a string, so this stays
             # correct by construction if a vision full-FT branch is ever added.
-            "torch_dtype": self._resolve_load_dtype(tcfg),
+            "dtype": self._resolve_load_dtype(tcfg),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
 
-        self.model = AutoModelForImageTextToText.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModelForImageTextToText.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
         apply_vocab_expansion(
@@ -1968,7 +2130,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             self.model,
             cfg.data,
         )
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantization in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
             self.model = prepare_model_for_kbit_training(
@@ -1997,27 +2159,60 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def _prepare_vision_dataset(self, dataset: dict):
         """Keep messages + PIL images raw for processor-aware collation."""
+        import io
+        import os
+
         from datasets import Dataset
+        from PIL import Image as PILImage
+
+        def _to_rgb_image(image_raw):
+            if image_raw is None or image_raw == "":
+                return None
+            if isinstance(image_raw, PILImage.Image):
+                try:
+                    return image_raw.convert("RGB")
+                except (OSError, ValueError):
+                    return None
+            if isinstance(image_raw, dict):
+                img_bytes = image_raw.get("bytes")
+                if img_bytes:
+                    try:
+                        return PILImage.open(io.BytesIO(img_bytes)).convert("RGB")
+                    except (OSError, ValueError):
+                        return None
+                img_path = image_raw.get("path")
+                if img_path:
+                    try:
+                        if isinstance(img_path, (str, bytes, os.PathLike)):
+                            require_regular_file(os.fsdecode(img_path))
+                        return PILImage.open(img_path).convert("RGB")
+                    except (FileNotFoundError, OSError, ValueError):
+                        return None
+                return None
+            if isinstance(image_raw, (str, bytes, os.PathLike)):
+                try:
+                    require_regular_file(os.fsdecode(image_raw))
+                    return PILImage.open(image_raw).convert("RGB")
+                except (FileNotFoundError, OSError, ValueError):
+                    return None
+            return None
 
         from soup_cli.utils.paths import require_regular_file
 
         def load_and_format_vision(example):
-            from PIL import Image as PILImage
-
-            image_path = example.get("image", "")
-            image = None
-            if image_path:
-                try:
-                    # Open a file name only when it is a regular file: a FIFO
-                    # or a device would stall the reader.
-                    if isinstance(image_path, (str, bytes, os.PathLike)):
-                        require_regular_file(os.fsdecode(image_path))
-                    image = PILImage.open(image_path).convert("RGB")
-                except (FileNotFoundError, OSError):
-                    console.print(
-                        "[yellow]Warning: cannot open image: "
-                        f"{for_terminal(image_path)}[/]"
-                    )
+            image_raw = example.get("image")
+            image = _to_rgb_image(image_raw)
+            if image is None and image_raw:
+                if isinstance(image_raw, (str, bytes, os.PathLike)):
+                    err_label = str(image_raw)
+                elif isinstance(image_raw, dict) and image_raw.get("path"):
+                    err_label = str(image_raw["path"])
+                else:
+                    err_label = type(image_raw).__name__
+                console.print(
+                    "[yellow]Warning: cannot open image: "
+                    f"{for_terminal(err_label)}[/]"
+                )
 
             result = {"images": []}
             if image is not None:
@@ -2059,7 +2254,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         )
         console.print(f"[dim]Loading audio processor: {cfg.base}[/]")
         self.processor = AutoProcessor.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         self.tokenizer = self.processor  # SFTTrainer uses processing_class
 
@@ -2084,14 +2280,17 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # schema gates unfrozen_parameters / lisa_enabled / lora.r==0 to
             # modality='text'); still routed through the shared method since
             # #471's pre-Ampere torch.float16 override can still apply here.
-            "torch_dtype": self._resolve_load_dtype(tcfg),
+            "dtype": self._resolve_load_dtype(tcfg),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
 
         # Use AutoModel for audio models — AutoModelForCausalLM doesn't handle
         # audio-language architectures (Qwen2-Audio, Whisper, etc.)
-        self.model = AutoModel.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModel.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
         apply_vocab_expansion(
@@ -2099,7 +2298,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             self.model,
             cfg.data,
         )
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantization in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
             self.model = prepare_model_for_kbit_training(
@@ -2212,24 +2411,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
         # Add callback for live display and experiment tracking
         if display:
-            from soup_cli.monitoring.callback import (
-                SoupTrainerCallback,
-                soup_callback_kwargs,
-            )
-
-            tcfg_local = self.config.training
+            from soup_cli.monitoring.callback import build_soup_trainer_callback
             self.trainer.add_callback(
-                SoupTrainerCallback(
+                build_soup_trainer_callback(
                     display,
+                    config=self.config,
                     tracker=tracker,
                     run_id=run_id,
-                    eval_gate_config=tcfg_local.eval_gate,
-                    **soup_callback_kwargs(
-                        tcfg_local,
-                        batch_size=self._batch_size,
-                        output_dir=self._output_dir,
-                        include_eval_gate=False,
-                    ),
+                    batch_size=self._batch_size,
+                    output_dir=self._output_dir,
                 )
             )
 
@@ -2271,10 +2461,31 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             from soup_cli.utils.quest import validate_resume_metadata, write_metadata
 
             if resume_from_checkpoint is not None:
+                # #1199 fix 2 — `validate_resume_metadata` re-resolved
+                # `legacy_base_model` (= `self.config.base`) to compare against
+                # `current["base_model"]`, re-reading and re-hashing the base a third
+                # time. `_quest_base_identity_before` IS that identity: resolved from
+                # `cfg.base` before the load, and both setup paths already refuse when
+                # it disagrees with a fresh resolve after the load, so at resume time it
+                # is the hash the extra pass would recompute.
+                #
+                # NOT `self._quest_metadata["base_model"]`. Those two are equal only on
+                # the calibration path. On the continuation path the metadata is the
+                # artifact's sidecar, whose `base_model` is the ORIGINAL base recorded
+                # at calibration, while `self.config.base` is the artifact directory —
+                # so passing it would make the check compare `current["base_model"]`
+                # with itself, which can never refuse, turning the keyword from
+                # "compared" into "trusted" and silently accepting a resume that is
+                # refused today.
+                #
+                # Read with `getattr`, the same way the two setup paths read it, so a
+                # wrapper that never resolved one falls back to resolving instead of
+                # raising. `None` means "resolve as before".
                 validate_resume_metadata(
                     resume_from_checkpoint,
                     self._quest_metadata,
                     legacy_base_model=self.config.base,
+                    legacy_base_identity=getattr(self, "_quest_base_identity_before", None),
                 )
             # Write only after a resumed checkpoint has proved compatible. A
             # rejected resume must not overwrite the root artifact's previous
@@ -2298,6 +2509,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         with self._training_context(
             offload_context(tcfg.activation_offloading, save_dir=offload_save_dir)
         ) as train_ctx:
+            # #1693: also when training raises.
+            train_ctx.callback(self._remove_stream_loss_chunk_hook)
             # LongLoRA S² shifted-sparse attention (v0.49.0 schema). The override
             # monkeypatches attention.forward for the duration of training and
             # was previously never installed (use_longlora validated but shipped

@@ -9,8 +9,3648 @@ Detailed, per-release notes for every published version live on the
 [GitHub Releases page](https://github.com/MakazhanAlpamys/Soup/releases). This
 file tracks unreleased changes and links out for historical detail rather than
 reproducing 70+ versions of notes.
-## [0.75.1] - 2026-09-21
 
+## [Unreleased]
+
+## [0.77.2] - 2026-11-05
+
+### Upgrade notes
+
+A `soup.yaml` that loads on 0.77.1 loads on 0.77.2, unless it is a `task: sft` config that sets
+one of four settings on a path that never applied it (second item). Coming from 0.76.x or older,
+read the 0.77.0 upgrade notes below first and run `soup doctor --config soup.yaml` before the
+first run of an existing config.
+
+- **`soup serve --tool-auth-token` follows the token rule of `soup ui` and `soup mcp serve`:**
+  16 to 128 characters from `A-Z`, `a-z`, `0-9`, `_` and `-`. 0.77.1 accepted any non-empty
+  value; 0.77.2 exits 2 before the model loads, on every bind, whether the value comes from the
+  option or from `SOUP_TOOL_AUTH_TOKEN`, and the message names the rule, never the value. All
+  three commands now match the whole value, so a token with a trailing newline is refused too.
+  Generate one with `python -c "import secrets; print(secrets.token_urlsafe(32))"` and send the
+  same value as `Authorization: Bearer <token>` (#2329).
+- **`task: sft` refuses four settings on the paths that never applied them** (#2278). 0.77.1
+  loaded them and trained without them; 0.77.2 refuses the config at load and names the field,
+  the setting that selects the path and what to change. A value of `false` or `null` loads.
+
+  | Path | Refused when set |
+  |---|---|
+  | `modality: vision` or `modality: audio` | `reasoning_effort`, `train_on_eot`, `use_flash_attn`, `use_liger` |
+  | `backend: mlx` | `reasoning_effort`, `train_on_eot` (`use_flash_attn` / `use_liger` keep their ignore warning) |
+  | `backend: unsloth` | `use_flash_attn`, `use_liger` |
+  | `data.format: raft` | `reasoning_effort`, `train_on_eot` |
+  | `data.format: pre_tokenized` | `reasoning_effort` (`train_on_eot` loads: the cache is keyed on it) |
+
+  Remove the key, or move the run to the path the message names. `stream_layers: true` and the
+  other tasks are unchanged.
+- **More commands refuse an output that names one of their inputs**, before reading (exit 1).
+  `soup data ingest <document> --output <same document>` replaced the document with JSONL;
+  `soup data persona-mix`, `generate`, `canary check`, `mix --optimize`, `forge` and
+  `recipe --execute`, and `soup adapters arithmetic` and `merge` with an `--output` that is an
+  input adapter, overwrote their input. Write to a new path. The shared refusal no longer starts
+  with `Error:` (`soup data doctor`, `lint`) or `Plan failed:` (`soup data forge`); exit codes
+  are unchanged (#2274, #2349, #2379).
+- **MLX: two refusals are lifted, one is added (Apple Silicon only).** `backend: mlx` with
+  `task: preference` and `training.preference_loss: dpo`, `orpo` or `simpo` was refused at load;
+  it now runs the native trainer, the config keeps `task: preference`, and `adapter_config.json`
+  records the native task, so a resume matches whichever of the two spellings the config uses.
+  `ipo`, `bco` and `preference_loss_weights` blends stay refused (#2333). `task: grpo` now trains
+  on a base pre-quantized by mlx-lm at 4 bits in `affine` mode (`mlx-community/...-4bit`,
+  `mlx_lm.convert -q`); any other quantized base is refused right after the load, naming the
+  first layer outside the rule; `quantization: 8bit` stays refused at load, reworded; and
+  `adapter_config.json` gains `base_quantization` (#2386). MLX DPO `--resume` now refuses an
+  adapter of another task or base, an MLX SFT adapter included (#2321).
+- **Exit codes that changed:**
+
+  | Command and case | 0.77.1 | 0.77.2 |
+  |---|---|---|
+  | `soup eval quant-check`, unparseable `--tasks` file | 1, after loading both models | 3, before (#2185) |
+  | `soup distill-prompt`, no trace row has a prompt | 0, empty output written | 3, output untouched (#2209) |
+  | `soup data evolve` / `gen-magpie`, every provider call failed, no row | 0, output emptied | 1, output kept (#2348) |
+  | `soup data filter --perplexity` / `--score-only` without torch or transformers | 0, unfiltered or partial | 1 (#2377) |
+  | `soup data dedup --field <key>` absent from every row | 0, distinct rows dropped | 1 (#2336) |
+  | `soup registry push --run-id` on a run that is not `completed` | 0, entry registered | 1 (#2248) |
+  | `soup plan` / `soup apply`, malformed YAML or a config that cannot be read | 1, with the raw parser or OS error | 2, naming the config and the YAML location (#2323) |
+  | `soup quantize --to "[/]"` (a value Rich read as markup) | 1 | 2 (#2217) |
+  | `soup ship --progress jsonl`, Ctrl+C | 1 | 130 (#2417) |
+  | `soup loop status`, stored spend `NaN` or `Infinity` | 0, printed `$nan` | 2 (#2424) |
+
+- **The VRAM pre-flight prices some runs differently.** A short full fine-tune with
+  `adamw_torch` is priced higher (the optimizer step is its own phase), so inside the fitted range
+  the pre-flight can now refuse one it let through; `--allow-oom-attempt` still launches it
+  (#2338). A run sharded with `--fsdp full_shard`, `full_offload`, `shard_grad` or DeepSpeed
+  ZeRO-2/3 is priced per card and only warned about (#2313). A `task: prm` step is priced lower
+  (#2337, #2372); a `stream_loss_chunk` step higher (#2290); `backend: unsloth` is priced with its
+  seven automatic LoRA targets and 16-bit embeddings and output head (#2376).
+- **Server replies.** On the transformers backend and MoLE, a reply cut at `max_tokens` without
+  an end token now ends with `finish_reason: "length"` (`/v1/chat/completions`) or
+  `stop_reason: "max_tokens"` (`/v1/messages`) (#2380). `/v1/messages` applies the request's
+  `temperature` and `top_p`; a value out of range or `null` is 400 instead of the default (#2388).
+  The vLLM, SGLang and MII servers answer a generation request whose `Origin` names another site
+  with 403, as the transformers server did (#2329).
+- **Shell completion:** scripts written by `soup completions bash|zsh|fish` before 0.77.2 do not
+  complete; run the command again and replace the installed script (#2283).
+- **Python API:** `soup_cli.utils.profiler` no longer has `estimate_model_memory`,
+  `estimate_trainable_params`, `estimate_lora_memory`, `estimate_optimizer_memory`,
+  `estimate_activation_memory` or `estimate_total` (no caller since #2146 in 0.77.1, so their
+  numbers were not what `soup profile` printed). Use `soup profile --json`; the estimate itself is
+  `soup_cli.utils.vram_estimate.estimate_vram` (#2369).
+- **Smaller changes that alter a result:**
+  - `soup data from-traces --signal thumbs_up`, and the harvest stage of `soup loop`, pair a
+    thumbs-up and a thumbs-down answer that differ, and skip a prompt whose answers are all the
+    same text; 0.77.1 could write a pair whose `chosen` and `rejected` were identical, so the
+    number of pairs from the same logs can change (#2495).
+  - MLX Adafactor (`backend: mlx`, `training.optimizer: adafactor`) applies the configured learning
+    rate, warmup and schedule, so an existing run trains differently (#2484).
+  - Both `soup merge` paths load the base at the Hub commit recorded in the adapter's training
+    provenance, not the latest one. With `HF_HUB_OFFLINE` set and that commit not cached, the
+    merge now fails where 0.77.1 merged whatever was cached (#2485).
+  - `soup ci init --python` refuses a version outside 3.11 to 3.13 with exit 1 (#2249).
+  - `soup eval compare` and `soup eval leaderboard` refuse a stored score that is not finite, with
+    exit 1 (#2477); `ensure_judge_calibrated` (Python API) refuses a non-finite `min_agreement` or
+    `max_bias` (#2493); a judge task refuses a JSONL row that is not an object or whose `prompt` is
+    not a string, naming the file and line (#2494).
+  - `soup ship --adapter` returns DON'T SHIP with the rule `adapter_noop` for an adapter whose
+    `lora_B` tensors are all zero (#2434).
+  - On Windows, `soup adapters bisect --eval-command` splits the template without POSIX quoting:
+    single quotes and a quote inside a word no longer group words, so write `"{ckpt}"` in double
+    quotes (#2314).
+
+### Added
+
+- Add the `qwen3.5-0.8b-dpo` text-preference recipe for `Qwen/Qwen3.5-0.8B`, using inherited Qwen3.5 DPO settings rather than hyperparameters tuned for 0.8B. (#275 by @kok-o in #2184)
+
+- **`soup profile --model` answers whether a model fits without a `soup.yaml`, and Apple Silicon is checked against Metal's working set (#2049 by @abdulwaarith0 in #2285).** `soup profile --model <id or directory>` prices the run set by `--seq`, `--batch`, `--method lora|qlora|full`, `--lora-r`, `--optimizer` and `--gradient-checkpointing`, with the same estimate and the same bytes as a `soup.yaml` describing that run. It reads the model's `config.json` from a local directory, the Hugging Face cache or the Hub, so it works offline once the config is cached; when none can be read it exits 1 with the reason instead of pricing a shape guessed from the name. `--model` with `--config`, the run flags without `--model`, and `--lora-r` with `--method full` are refused. `soup profile --json` and the MCP `profile` tool now return a `lora_r` field on every platform: the LoRA rank priced, or `null` for a full fine-tune (including Spectrum and LISA). On Apple Silicon, `soup profile` and the MCP `profile` tool now compare the estimate to Metal's recommended working-set size from mlx, not the whole unified memory, and report the memory as assumed when mlx cannot read it. The `soup train` pre-flight still skips `backend: mlx`.
+
+- **On-policy MiniLLM planning.** Add `--minillm-on-policy` to `soup plan` and `soup apply`, validating and hashing the effective configuration without rewriting YAML. Apply preserves the supplied flag in its suggested train command and states that it records the plan without starting training. (#2303 by @Nari-Ab in #2315)
+
+- MLX accepts `task: preference` with `training.preference_loss: dpo`, `orpo` or `simpo`, using the corresponding native trainer, config restrictions and doctor support report while keeping the native task in saved adapter metadata (#2202 by @vaputa in #2333).
+
+- **MLX GRPO trains on pre-quantized 4-bit bases (#1976 by @ybai08 in #2386).** `task: grpo` with
+  `backend: mlx` refused any base that loaded quantized. It now also trains on a base
+  pre-quantized by mlx-lm at 4 bits in `affine` mode, as `mlx_lm.convert -q` and the
+  `mlx-community/...-4bit` repos write it, with the same loop and objective as on a dense
+  base. The quantized `QuantizedLinear` and `QuantizedEmbedding` layers (a tied output head
+  included) stay frozen and only the LoRA adapter trains; a quantized tensor left trainable is
+  refused before the first update, and the reference is the same quantized base with the
+  adapter off. Any other quantized base is refused right after the load, naming the first
+  layer outside the rule with its bits and mode: 8-bit and mixed-bit recipes, `mxfp4`,
+  `mxfp8`, `nvfp4`, quantized MoE layers and BitNet `BitLinear` layers. `quantization: 8bit` stays refused at load.
+  `adapter_config.json` records the base's quantization as `base_quantization` (bits, group
+  size, mode and the number of quantized linear and embedding layers; `null` for a dense
+  base). Try: `soup train --config soup.yaml` with `task: grpo`, `backend: mlx`,
+  `quantization: 4bit` and a `mlx-community/...-4bit` base.
+
+- Add `qwen3.5-27b-dpo`, a text-only preference-training starting configuration for `Qwen/Qwen3.5-27B`, with inherited Qwen3.5 DPO settings, LoRA and 4-bit quantization. Register it in the language-decoder family audit and synchronize the catalog count and configuration snapshot (#275 by @kok-o in #2445).
+
+### Changed
+
+- Use the supported `dtype` argument throughout Transformers model loading instead of deprecated `torch_dtype`, preserving existing precision and quantization choices (#2200 by @Nari-Ab in #2257).
+
+- **`benchmarks/gate-h100-validation.md` now says under finding 9 that the pinned arm in the 6.56x comparison was the WRONG one.** The item read "measured with correctness asserted in the same process", which reads as both arms having passed; STEP 8 records `pin=True` as WRONG 8/256 on all three repetitions against an exact 256/256 for `pin=False`, so the 6.56x is a defective fast arm over a correct slow one. The sentence and every number are unchanged; the note is added in the record's existing dated-clarification form, and a CPU test pins the table rows, the two medians and the note. (#2224 by @xiemocun in #2271)
+
+- **`soup serve` checks `--tool-auth-token` with the rule `soup ui` and `soup mcp serve` use**:
+  16 to 128 characters from `A-Z`, `a-z`, `0-9`, `_` and `-`. A value from the option or from
+  `SOUP_TOOL_AUTH_TOKEN` that does not match stops the command with exit 2 before the model
+  loads, on every bind; the message names the rule, never the value. The shared check now
+  matches the whole value, so a valid token followed by a newline is refused by all three
+  commands. Upgrade note: a token shorter than 16 or longer than 128 characters, or with other
+  characters, now stops `soup serve` at start; generate one with
+  `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+  The notice `soup serve` prints for a non-loopback bind now also says that requests travel as
+  plain HTTP and that TLS belongs in a proxy in front. The `--backend vllm`, `sglang` and `mii`
+  servers answer a generation request whose `Origin` names another site with 403, as the
+  transformers server already did, so on a LAN or wildcard bind a browser page from another
+  origin now gets 403 from these apps too; requests without an `Origin` header are served as
+  before. `/v1/tools/python` compiles the caller's code under the file name `<code>`, so
+  tracebacks give the caller's own line numbers (the first line was reported as line 7). When
+  the sandbox cannot start, `/v1/tools/bash` answers 501 with
+  `bash sandbox requires OS-level isolation`, as `/v1/tools/python` answers with its own fixed
+  sentence (#2329).
+
+- Data commands share one terminal-safe refusal for outputs that alias an input, including links and alternate path spellings, while preserving each command's exit code; the refusal no longer starts with `Error:` in `soup data doctor` and `lint` or `Plan failed:` in `soup data forge`. `soup data ingest` also refuses an output that names its source document before reading or writing it (#2298 by @kok-o in #2349; #2359 reported by @Batyrkhantzy111, fixed by @kok-o in #2349).
+
+- `soup ship --progress jsonl` reports live evaluation items after each generation chunk, before generating the next chunk, instead of waiting for the whole suite. Failed chunks retry only their own items; scores and event schema are unchanged. `soup eval custom` and the forgetting probe use the same path and also generate in chunks of the generator's `batch_size` when it has one, with unchanged results (#2288 reported by @abdulwaarith0, fixed by @kok-o in #2421).
+
+### Removed
+
+- Remove `utils/profiler.py`'s unused `estimate_model_memory`, `estimate_trainable_params`, `estimate_lora_memory`, `estimate_optimizer_memory`, `estimate_activation_memory` and `estimate_total`, along with their tests; they had had no caller in `src/` since #2146 moved every estimate onto `utils/vram_estimate.py`, and `soup profile` output is unchanged (#2305 by @qwist1233-cpu in #2369).
+
+- Remove the unreachable `minillm_enabled` check and redundant assignment in `soup train` when `--minillm-on-policy` is supplied, as the prerequisite is enforced at config load time (#2367 by @Shubham-dev-stack in #2422).
+
+### Fixed
+
+- Restored `data.max_length` enforcement for SimPO and KTO on TRL releases that removed `max_prompt_length`, rebuilding the KTO/BCO completion from the untruncated `answer_input_ids` so an over-length prompt no longer discards it, and covering the same measured over-length path for IPO and BCO. For SimPO, KTO, IPO and BCO a prompt is cut only when the row does not fit in `data.max_length`, which replaces the unconditional cut that #2116 introduced (#1185 by @ousamabenyounes in #1196).
+
+- User paths and flags in `soup data` are rendered as text, so a `[/]` in a path or `--format` / `--to` no longer raises `MarkupError` (#1859 by @mvanhorn in #1882).
+
+- `soup infer --cuda-graphs` and `soup bench infer --cuda-graphs` on a local
+  adapter given without `--base` now inspect the base its `adapter_config.json`
+  records, when that names a local directory, and refuse a non-Qwen2/Llama or
+  quantized base before the model loads; an explicit `--base` still wins, and a
+  Hub id or an unreadable value is left to the loader (#1817 by @Nick-800 in #1942).
+
+- **`soup eval quant-check` now reports an unparseable `--tasks` file as the usage error 3, before any model is loaded (#2053 by @Faisal-Fayaz in #2185).** The command validated the `--tasks` path up front but parsed the file only inside `run_quant_check`, after both models had been loaded, and the loader's `ValueError` then escaped as `Error: ValueError: ...` with exit 1 — while the command's docstring, `docs/commands.md` and the `[0.76.0]` entry already promise exit 3 for unparseable inputs. The input check now pre-parses the file: every loader failure — a suffix that is not `.jsonl`, an invalid JSON line, a row without `prompt`, a file with no tasks, and a file over `MAX_EVAL_TASKS`, plus any `OSError` or `ValueError` edge (`FileNotFoundError`, a path that exists but cannot be read, a decoding failure) — prints the loader's own message through `for_terminal` and exits 3, exactly like the already-refused missing file, so the mistake no longer costs the full model load. The pre-parsed list is also handed to `run_quant_check`, whose command path no longer reads the file once per model; its existing `tasks_file` parameter keeps working for other callers and `soup eval custom` is deliberately untouched, as the issue scopes.
+
+- Report when `CUDA_VISIBLE_DEVICES=-1` or an invalid device list hides every detected NVIDIA GPU in `soup doctor`, with the actual setting safely displayed and advice to unset it instead of reinstalling PyTorch (#2191 by @Nari-Ab in #2206).
+
+- `soup distill-prompt` now exits 3 when no trace row has a prompt it recognises, before any
+  provider call and without touching the output, and names the row count and the keys it
+  looked for. It used to print "done" with `Rows: 0`, exit 0 and replace an existing output
+  with an empty file. When only some rows have no prompt, the done panel shows how many were
+  skipped (#1854 by @akkupratap323 in #2209).
+
+- Keep the Docker image's `latest` tag on the highest stable release when publishing an older release line. Full-version and major/minor image tags are still published for every release. Maintenance lines need `docker.yml` and `scripts/docker_release_tags.py` backported before their next tag (#2195 by @Nari-Ab in #2214).
+
+- **`soup bench train` could not measure any 4-bit or 8-bit config: it crashed before the first step with `TypeError: Got unsupported ScalarType BFloat16`, and on a T4 or V100 it then failed in the GradScaler (#2215 by @VanshSharmaPES in #2216).**
+  TRL 0.29 casts the adapters of every 4-bit and 8-bit model to bf16, on every card. The bench fingerprint hashed parameters through numpy, which has no bf16; it now hashes their raw bytes, unchanged for every other dtype. On fp16 cards `soup train` casts those adapters back to fp32 before training, and `bench train` now does the same, so it measures the run `soup train` makes. `soup train` itself was not affected.
+
+- `soup quantize --to awq` and `--to gptq` (any case) now add `--to awq was removed in v0.77.0.` (or `gptq`) after the "must be one of" line, as `soup export --format` already does, and a rejected `--to` value is printed as typed instead of being read as Rich markup, so `--to "[/]"` exits 2 with the usage message rather than 1 with a `MarkupError` (#2210 by @ColumbusLabs in #2217).
+
+- In `soup registry push --run-id`, refuse runs whose status is not `completed` (such as `failed`, `running`, `terminated`, or `launching`) with exit 1 instead of registering an unusable entry (#2236 by @Guts1005 in #2248).
+
+- In `soup ci init --python`, validate the Python version against the supported range (3.11 to 3.13) with exit 1 and a diagnostic naming the running Soup version instead of writing a workflow that fails or installs an older release in CI (#2233 by @Guts1005 in #2249).
+
+- In `soup train --gpus N` without `--yes`, ask the `Start training?` confirmation once in the parent launcher process before spawning `accelerate launch` and forward `--yes` to the child ranks so they do not re-prompt (#2239 by @CG-5228 in #2250).
+
+- `soup adapters audit` rebuilds an MLX rsLoRA alpha as `scale * sqrt(rank)` when `lora.use_rslora` is set. A run that wrote `scale = alpha / sqrt(rank)` now agrees. The old `scale * rank` reading reported that run DIVERGED (rank 8, alpha 16 came back as about 45.25). A plain scale checked against an rsLoRA config still diverges (#2228 by @MbappeWU in #2255).
+
+- Preserve the last 50 lines, at most 50 KB, of failed RunPod remote stderr and training logs before verified Pod deletion, strip unsafe terminal controls, redact URL credentials and common token patterns, and distinguish SSH-readiness timeouts from remote training-command timeouts (#2193 by @Nari-Ab in #2256).
+
+- `soup doctor --config` now excludes MLX support-table settings that config loading refuses, so its all-clear counts include only settings that can reach the doctor (#2238 by @Samearth17 in #2258).
+
+- `soup mcp serve`, `soup ab`, `soup train --gpu` and `soup serve --tool-auth-token` help, and the `training.kv_cache_type` description, now say what each does today (#2221 by @TejasS1233 in #2268).
+
+- Refuse input/output aliases in `soup data persona-mix`, `generate`,
+  `canary check`, `mix --optimize`, `forge` and `recipe --execute` before
+  destructive writes. Protect optional persona/style/context files, live mix
+  configuration, forge provenance and recipe seed/checkpoint/sidecar targets;
+  keep distinct outputs working (#2226 by @kok-o in #2274).
+
+- **`task: sft` now refuses `reasoning_effort`, `train_on_eot`, `use_flash_attn` and
+  `use_liger` on the paths that never read them.**
+  `task: sft` is several code paths. The vision and audio setups, `data.format: raft`,
+  a pre-tokenised cache, `backend: mlx` and `backend: unsloth` loaded these fields and
+  applied none or only some of them, so a run trained with a setting that was silently
+  dropped. Each refused config names the field, the path and what to change, from one
+  table of the sft dispatch that the `freeze_layers` / `freeze_ratio` refusal reads too.
+  `train_on_eot` still loads with `data.format: pre_tokenized`, where
+  `soup data preprocess` keys the cache on it. Streaming keeps the kernel flags refused
+  by #1692 and MLX keeps its own ignore warning. (#1698 by @abdulwaarith0 in #2278)
+
+- Stop and remove the Aider benchmark Docker container on timeout or Ctrl-C (#1464 by @ShivanshShukla in #2280).
+
+- **A row Soup cannot interpret is named, not silently dropped.** `soup data clean` now warns that the rows are in no recognised format and prints the detection error with the first offending key set (on stderr under `--json`) before it sanitises them as plaintext; it used to fall back without a word, so its `No issues found` read as a checked file; `soup ab` counts the rows it could not use by reason (invalid JSON, not an object, arm missing or not control/treatment, metric missing or non-numeric, metric not finite) and prints them when the usable total is below the threshold; and `soup rewind --json` writes a non-finite loss, baseline or ratio as `null` with `non_finite: true`, so the file parses as strict JSON instead of carrying bare `NaN` / `Infinity` (#1818 by @EtherealMelon in #2281).
+
+- **`soup train --cloud lambda` shows the install steps when they fail.** The generated cloud-init script now creates `/home/ubuntu/soup/train.log` before the first step that can fail and appends the `apt-get` and `pip install` output to it, so a failure before training starts (for example a `Requires-Python` mismatch) appears in the tail the controller prints instead of `Could not fetch remote log tail` (#2234 by @EtherealMelon in #2282).
+
+- Restored command and option completion in scripts emitted by `soup completions bash|zsh|fish` by using the installed Typer's matching completion protocol and response format. Regenerate previously installed completion scripts after upgrading. (#2283 by @Nari-Ab)
+
+- `soup init` now displays bracketed output paths literally instead of failing after writing the config or hiding part of the path; unknown template names are escaped and stripped of terminal controls. (#2284 by @Nari-Ab)
+
+- **The layer-streaming VRAM pre-flight no longer under-predicts a `training.stream_loss_chunk`
+  step.** Such a step peaks in the backward of the last decoder layer, at the end of its
+  checkpoint recompute, not in the loss: on the NF4 dequantise + linear path all seven of that
+  layer's weights are live as dense bf16 copies (436 MB on Llama-3.1-8B), beside its recomputed
+  activations. The pre-flight now charges the larger of the loss and that recompute phase, on top
+  of the resident weights and the checkpoint boundaries. On the measured Llama-3.1-8B NF4 rows
+  (RTX 3060 Laptop) the chunked predictions go from 0.848-0.890 to 1.037-1.050 of the real peak
+  at 512, 1024 and 2048 tokens; the unchunked ones do not move. A short NF4 run without the
+  option can be predicted higher. Separate q/k/v/o and gate/up/down projections only: fused
+  `gate_up`, MoE layers and LoRA on MLP modules are not covered (#1693 by @ybai08 in #2290).
+
+- The `soup train` VRAM pre-flight now prices a run sharded across more than one process per card, so FSDP-QLoRA of a 70B model in 4-bit on two 24 GB cards is no longer refused before it starts (#2300 by @ybai08 in #2313).
+  Under `--fsdp full_shard` / `full_offload` and DeepSpeed ZeRO-3 the weights and the adapters in the floor are divided by the process count, and under those and `--fsdp shard_grad` / ZeRO-2 the gradients and optimizer state; the CUDA context is not. The DeepSpeed stage is read from the resolved preset or JSON, and the process count is `WORLD_SIZE` in a launched rank, otherwise `--gpus` times `--nodes`. The estimate is fitted on one card, so for a sharded run it only warns, and the panel says the run is sharded and that the floor is per card. Data-parallel `--gpus N` without sharding, and every single-process run, are checked as before.
+
+- **Reliable adapter-bisect commands.** Preserve Windows paths and checkpoint argument boundaries in `--eval-command`, including Windows executable paths that omit `.exe`. Refuse missing or unstartable programs without reporting a broken checkpoint or writing a result; actual failed evaluations and timeouts still count as failed probes. (#2293 by @Nari-Ab in #2314)
+
+- `task: ppo` no longer crashes at the first rollout with `AttributeError: 'PolicyAndValueWrapper' object has no attribute 'gradient_checkpointing_disable'` when the policy has gradient checkpointing on, as `quantization: 4bit` / `8bit` with `gradient_checkpointing: true` sets it. trl's wrapper copies `is_gradient_checkpointing` from the policy but has neither method its rollout calls, so Soup gives the trainer's own wrapper instance both, forwarding to the policy, and keeps the checkpoint kwargs the policy had before the rollout instead of letting transformers reset them (#2311 by @ybai08 in #2319).
+
+- MLX DPO `--resume` now refuses an adapter of another task or another base
+  model, or one without `adapter_config.json`, before any tensor loads, as ORPO,
+  SimPO and KTO already did. This means a DPO run can no longer resume from an
+  MLX SFT adapter: its `adapter_config.json` has no `task` key, so it is refused
+  with `was trained with task=None, not 'dpo'` (#2232 by @mayuriphad in #2321).
+
+- **Terminal-safe environment reports.** Strip terminal controls and bidi marks from `soup env` metadata, package versions, drift descriptions, displayed install plans and paths while keeping markup literal. Lock files and generated requirements keep their original contents. (#2322 by @Nari-Ab)
+
+- **Actionable plan/apply read errors.** Report the config path and YAML location, UTF-8 byte offset or OS read failure before changing state. Invalid inputs exit 2 with terminal-safe diagnostics; a missing config retains exit 1. (#2323 by @Nari-Ab)
+
+- `training.activation_offloading` now reaches the VRAM estimate: the `soup train`
+  pre-flight, `soup profile` (text and `--json`), `soup plan` and the layer-streaming
+  plan panel say, when it is set, that the activation term is still charged as if every
+  saved tensor stayed on the card, since what `cpu` or `disk` offloading moves off it
+  is not modelled. The estimate and the pre-flight's refuse or warn decision are
+  unchanged (#2327 by @ybai08 in #2331).
+
+- Ship the corrected DPO and chat preference demo pairs in package data, keeping their quality signal independent of response length. (#2324 by @kok-o in #2335)
+
+- Refuse `soup data dedup --field` when a nonempty selected key is absent from every row, before either backend runs or an output is written; an empty field keeps the all-text default. (#2325 by @kok-o in #2336)
+
+- The VRAM estimate behind the `soup train` pre-flight, `soup profile`, `soup plan` and the MCP `profile` tool no longer charges a `task: prm` step the cross-entropy chain it never builds: the PRM trainer runs the causal-LM forward without labels and takes its loss from the reward head, so its `logits` term is now the logits alone, 6 bytes an element (`LOGITS_TENSOR_BYTES_PER_ELEMENT`: the half-precision output and the fp32 copy Accelerate makes of it), where it was 12. With #2372 below, most bases are charged that on one position; the model types without `logits_to_keep` and remote-code bases keep every position: at 2,048 tokens, batch 4 and a 32,000-token vocabulary, 1.57 GB in place of 3.15 GB. Every other task with an LM head is charged as before (#2332 by @ybai08 in #2337).
+
+- **The VRAM estimate prices the optimizer step as its own phase of the peak.**
+  On a short full fine-tune with `adamw_torch` the step, not the forward and backward
+  pass, sets the peak: the weights, gradients and AdamW state stay resident while the
+  foreach update allocates one fp32 copy of `exp_avg_sq`. The estimate now takes the
+  larger of the two phases, through a new `optimizer_step` term shown by the train
+  pre-flight and `soup profile` (`optimizer_step_memory_gb`); a 64-token SmolLM2-135M
+  full fine-tune went from 0.810 of its measured peak to 0.976. (#2277 by
+  @abdulwaarith0 in #2338)
+
+- `task: ppo` now switches gradient checkpointing on for the policy when `training.gradient_checkpointing` asks for it. trl's PPO trainer runs its own loop instead of `Trainer.train()`, so outside `quantization: 4bit` / `8bit`, where `prepare_model_for_kbit_training` already turned it on, the setting reached `PPOConfig` and nothing else and the policy trained without checkpointing. Soup now calls `gradient_checkpointing_enable()` on the policy after LoRA is attached; 4-bit and 8-bit runs keep what kbit prep set, with its own kwargs, and the value and reward models are unchanged (#2197 by @ybai08 in #2340).
+
+- `soup recipes show` and `use` display recipe names and output paths literally, strip terminal controls from diagnostics and overwrite prompts, keep the requested filenames, and write the recipe's YAML unchanged (#2343 by @Nari-Ab).
+
+- `soup why` preserves recorded zero losses and step counts in its run summary; only absent measurements display as `-` (#2344 by @Nari-Ab).
+
+- `soup cost --json` sends configuration and GPU-filter diagnostics to stderr, leaving stdout for successful JSON estimates while preserving refusal exit codes and human-readable output (#2345 by @Nari-Ab).
+
+- `soup data evolve` and `soup data gen-magpie` now exit 1 and preserve their output when no rows survive failed provider calls. Empty completions count as failed calls. Partial failures report counts and the first error while retaining usable rows (#2294 by @kok-o in #2348).
+
+- RunPod jobs create a virtual environment with access to the image's system packages, install Soup with its Python and run the environment's `soup` by absolute path, avoiding system-pip restrictions and SSH PATH dependence (#2352 by @kok-o).
+
+- A `task: prm` step no longer builds full-vocabulary logits that nothing reads: the PRM trainer's forward and the two forwards of the GRPO PRM reward (`prm_reward`) pass `logits_to_keep=1` where the model's `forward` takes it, so the LM head runs on the last position only and the `[batch, seq_len, vocab]` tensor (and Accelerate's fp32 copy of it) shrinks to `[batch, 1, vocab]`; the hidden states the reward head reads, the loss and every gradient are unchanged. A forward without the argument keeps the old call. The VRAM estimate behind the `soup train` pre-flight, `soup profile`, `soup plan` and the MCP `profile` tool charges a PRM step's `logits` term on one position, `vocab × batch × 6` bytes, except for the eight causal-LM model types whose forward has no `logits_to_keep` (`gemma4_assistant`, `gemma4_unified_assistant`, `musicgen`, `musicgen_melody`, `prophetnet`, `trocr`, `whisper`, `xlstm`) and remote-code bases (`auto_map` in `config.json`), which keep the full-sequence charge. At 2,048 tokens, batch 4 and a 32,000-token vocabulary the term drops from 3.15 GB in 0.77.1 to 0.77 MB (#2368 by @ybai08 in #2372).
+
+- `task: ppo`, `grpo` and `online_dpo` with `gradient_checkpointing` on no longer add a forward hook to the policy's input embedding at every step. The trl loops switch checkpointing off and back on around generation, and each switch registered one more input-gradient hook that transformers never removed, so every generated token ran one more hook per step already taken. Soup now makes each registration remove the previous hook first, so the count stays at its value after the first step and the embedding output still requires grad (#2365 by @ybai08 in #2373).
+
+- Price Unsloth's automatic LoRA targets with the same seven projections as its
+  loader, and its 4-bit embeddings and output head at the measured 16-bit precision.
+  This corrects the hardware-fit floor and charges saved activation inputs for all
+  seven projections when checkpointing is off or medium, while preserving
+  Transformers estimates (#2301 by @ryznren in #2376).
+
+- `soup data filter --perplexity` and `--score-only` now exit 1 with installation instructions if torch or transformers cannot be imported, preserving any existing output instead of silently writing unfiltered rows or incomplete scores. Coherence-only filtering still works without those dependencies (#2360 reported by @Batyrkhantzy111, fixed by @kok-o in #2377).
+
+- Refuse `soup adapters arithmetic` and `soup adapters merge` runs whose `--output` names one of the input adapters, instead of overwriting that adapter's weights and config in place (#2358 by @ShryukGrandhi in #2379).
+
+- Report why Transformers-backend generation stopped: a reply cut off at `max_tokens` without an end token now ends with `finish_reason` `length` on `/v1/chat/completions` and `stop_reason` `max_tokens` on `/v1/messages`, in the reply and the last stream frame, and the MoLE runtime does the same; an end token, even the last one the budget allows, still reports `stop` / `end_turn` (#2361 by @abdulwaarith0 in #2380).
+
+- **`soup loop watch` resets the monthly spend when the UTC month changes.** The
+  spend kept growing across month ends, so a loop that reached its
+  `monthly_budget_usd` stayed skipped for good. The reset reads the previous
+  `last_run_date` in the same step as the daily counter reset, so the year change
+  is covered too. (#2362 by @abdulwaarith0 in #2387)
+
+- `/v1/messages` forwards `temperature` and `top_p` from the request (defaults only when omitted), matching `/v1/chat/completions`; out-of-range or `null` values now return 400 instead of being served with defaults (#2381 by @MbappeWU in #2388).
+
+- **`soup train --resume` says which path it searched when it finds no checkpoint.** The message now names the path and the reason: an explicit `--resume` path that does not exist or is not a directory, an `auto` output directory that does not exist or holds no `checkpoint-N` directory (with `experiment_name` applied), and the MLX adapter-file variants. The successful path is unchanged (#2296 by @EtherealMelon in #2389).
+
+- In `resolve_device`, resolve `"auto"` to `"cuda"` when available else `"cpu"` instead of returning `"auto"` verbatim, preventing PyTorch `RuntimeError` on `nn.Module.to("auto")` in `embed_texts` and default-device commands (`soup data topics`, `soup data dedup --semantic`) (#2279 by @harshitthek in #2396).
+
+- `soup profile --json` sends configuration, flag and model refusals to stderr, leaving stdout for the JSON estimate while preserving exit codes and human-readable output (#2398 by @Nari-Ab).
+
+- `soup migrate` now shows the paths in its success, refusal, JSONL and overwrite-prompt messages as typed: brackets and `:name:` text are kept, and terminal control characters are stripped from the display only (#2399 by @Nari-Ab).
+
+- `soup push` now shows the model path in the upload plan and refusals, repo id, hub, collection slug and upload errors as typed: brackets, `:name:` text and `[/]` in an error no longer change or break the message, and terminal control characters are stripped from the display only (#2400 by @Nari-Ab).
+
+- `soup runs delete`, `clean` and `compare` now show run ids and checkpoint paths as typed: brackets and `:name:` text are kept, and terminal control characters are stripped from the display only (#2401 by @Nari-Ab).
+
+- `soup quickstart` now shows the directory and the data and config paths as typed: brackets and `:name:` text are kept, and terminal control characters are stripped from the display only (#2402 by @Nari-Ab).
+
+- `soup sweep` now shows the config path, parameters and run names as typed in its plan, per-run lines, errors and result tables: brackets, `[/]` and `:name:` text are kept, and terminal control characters are stripped from the display only (#2403 by @Nari-Ab).
+
+- `soup deploy ollama` now shows the model name, GGUF path, system prompt, parameters and Ollama messages as typed: a system prompt with `[/INST]` no longer breaks the deploy plan, brackets and `:name:` text are kept, and terminal control characters are stripped from the display only (#2404 by @Nari-Ab).
+
+- **`soup data lint` no longer reports a check that never ran as `OK` (#2408 by @harryc295 in #2411).** When `datasketch` is not installed, the near-duplicate check now reports `SKIPPED` (yellow) and the summary line says how many checks were skipped. A skipped check does not change the overall verdict or the exit code.
+
+- `soup ship --progress jsonl` now prints an unexpected exception's sanitized type and message on stdout while keeping stderr exclusively JSONL, and Ctrl+C now exits 130 instead of 1, after the same `error` progress events (#2297 by @vaputa in #2417).
+
+- **`soup loop status` shows the spend and run count the next iteration will
+  see.** After a UTC month or day change it showed the stored values until the
+  loop next ran; it now applies the same resets as `soup loop watch` from the
+  saved `last_run_date`, without writing `loop.yaml`. A hand-edited state with an
+  `Infinity` or `NaN` spend is reported as invalid (exit 2). (#2390 by
+  @abdulwaarith0 in #2424)
+
+- `soup deploy ollama --list` and the "Ollama v... detected" line now show what `ollama list` and `ollama --version` printed as typed: brackets and `:name:` text are kept, and terminal control characters are stripped from the display only (#2425 by @Nari-Ab).
+
+- `soup push --card` now shows an unknown or ambiguous registry reference as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2426 by @Nari-Ab).
+
+- `soup migrate` now shows an unknown `--from` value, a failed migration, a schema-validation failure and the migration warnings as typed: `:name:` text is kept instead of becoming an emoji, a warning in the panel no longer turns into an emoji, and terminal control characters are stripped from the display only (#2427 by @Nari-Ab).
+
+- `soup runs show`, `soup runs replay` and `soup runs curriculum-curve` now name a missing run as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2428 by @Nari-Ab).
+
+- `soup runs` now shows run ids, names, base models and tasks in the table, and a curriculum-history file name in `runs curriculum-curve` errors, as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2429 by @Nari-Ab).
+
+- `soup bom emit` now shows the `--format` value, energy-file and output paths, energy-file errors and the registry reference as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2430 by @Nari-Ab).
+
+- `soup fetch` now shows an unknown namespace or entry name and the output path as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2431 by @Nari-Ab).
+
+- `soup data topics` now shows the dataset path, the embedding model, an embedding error and the report path as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2432 by @Nari-Ab).
+
+- **`soup ship --adapter` refuses an adapter whose `lora_B` tensors are all zero.** Ship now reads a local adapter's weights before loading either model; an adapter that adds nothing to the base (an untrained one, or a DPO run's `ref/` folder) is DON'T SHIP with its own failed rule, `adapter_noop`, instead of failing later as "task did not improve". Adapters with no `lora_B` keys are left alone, and unreadable weights print a warning (#2410 by @ShryukGrandhi in #2434).
+
+- `soup runs show` now prints a run's stored name, model, task, device, GPU memory, output directory, error, config and benchmark names as typed: `:name:` text is kept instead of becoming an emoji, `[...]` in the config JSON is no longer read as markup, and terminal control characters are stripped from the display only (#2436 by @Nari-Ab).
+
+- `soup runs compare` now prints the run ids, names, models, tasks, devices and config values it compares as typed: a model name with `[/]` no longer crashes the command with a markup error, `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2437 by @Nari-Ab).
+
+- `soup plugins install` now names the typed plugin as typed, and `soup plugins` lists a plugin's description, its version (for an installed plugin that is not enabled yet, it comes from package metadata) and its template and model-group names as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2438 by @Nari-Ab).
+
+- The output-over-input refusal shared by `soup data` and `soup ingest` commands now keeps `:name:` text in the refused file name instead of turning it into an emoji (#2439 by @Nari-Ab).
+
+- `soup deploy hf-space` now shows the unknown template, a refused `--space` or `--model` id, the `--template-dir` path (in the error and in the plan panel) and the Hub's error text as typed: `[...]` in a value no longer breaks or hides the message, `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2440 by @Nari-Ab).
+
+- `soup data mix` now shows the dataset paths in the echoed recipe, the recipe and output paths it names, the dataset list of `--apply` and its error messages as typed: `[...]` in a path no longer hides part of the recipe, `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2441 by @Nari-Ab).
+
+- `soup runs delete`, `soup runs replay` and the fallback note of `soup runs clean` now show a run id and a stored status as typed: `[...]` in an id no longer hides part of the line or stops the command with a markup error, `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only, delete's confirmation prompt included (#2442 by @Nari-Ab).
+
+- `soup lock write`, `soup lock show` and `soup lock check` now show the typed paths and base model, the text read from a lock file (soup version, base model, date) and their error messages as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2446 by @Nari-Ab).
+
+- `soup expect` now shows the dataset path in its table title and the text of its loader, suite, `--judge` and judge errors (a YAML error quoting a line of the suite, the judge's own reply) as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2447 by @Nari-Ab).
+
+- `soup card` now shows the registry reference it could not find, the output path it names in its panel and its write errors as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2448 by @Nari-Ab).
+
+- `soup airgap-bundle` now shows the output and model paths of its summary panel, the `--repro-receipt` path and the build and receipt errors as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2449 by @Nari-Ab).
+
+- `soup ab` now shows an unknown `--metric` and the `--input` path it cannot read as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2450 by @Nari-Ab).
+
+- `soup registry` now shows a reference, run id, name, tag, `--data` path and search query that you typed, and the messages that quote them, as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2451 by @Nari-Ab).
+
+- `soup history` now shows a name that it refuses and the file name of an attached branch as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2452 by @Nari-Ab).
+
+- `soup reward synth` and `soup reward stress` now show the typed `--kind`, attack names, paths and verifier target, the text induced from the references (schema keys, rejected references) and the errors of the reward file as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2454 by @Nari-Ab).
+
+- `soup license-advisor` now shows an unknown `--target`, and the `--license` you typed in the title and the reason of its risk check, as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2455 by @Nari-Ab).
+
+- `soup registry list`, `show`, `search` and `diff` now show the stored base model, task, run id, notes, artifact paths, config keys and values and benchmark names as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2456 by @Nari-Ab).
+
+- `soup audit-log tail` now shows the timestamp, command, exit code, operator and host of each record, and `soup audit-log rotate` the path it rotated, as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2457 by @Nari-Ab).
+
+- `soup apple-adapter` now shows a direction it refuses, the source and output paths of its plan and summary panels, and the errors of the conversion as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2458 by @Nari-Ab).
+
+- `soup compile` now shows an optimizer it refuses, the program, eval-suite and output paths of its plan and result panels, and the errors of the compile and the write as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2459 by @Nari-Ab).
+
+- `soup spectrum scan` now shows the model in its table title, the layer groups of the table, the layer names of the YAML block, the `--output` path and the errors of the scan as typed: `:name:` text is kept instead of becoming an emoji, and terminal control characters are stripped from the display only (#2461 by @Nari-Ab).
+
+- Keep evaluation task counts and scalar retry order intact when a custom batch callable mutates or consumes its input list, including chunked batches (#2009 by @taljeon in #2463).
+
+- The `run_gate` SDK refuses NaN, infinite and out-of-float-range integer `regression_threshold` values before generation, preserving baseline/suite validation priority, finite tolerance semantics, and CLI/config bounds (#1844 by @taljeon in #2464).
+
+- `soup cost` shows missing config paths and unmatched GPU filters literally, keeps emoji aliases as typed, and strips terminal control characters from these diagnostics while preserving exit codes and JSON-mode stderr routing (#2468 by @Nari-Ab).
+
+- `soup why` keeps emoji aliases literal and strips terminal controls when reporting a refused run reference, preserving the lookup and exit code (#2469 by @Nari-Ab).
+
+- `soup init` strips terminal controls only from the overwrite confirmation, keeping literal brackets and the original file target (#2472 by @Nari-Ab).
+
+- `soup shrink` keeps emoji aliases literal and strips terminal controls from friendly validation errors without changing exit codes (#2473 by @Nari-Ab).
+
+- `soup draft` keeps emoji aliases literal and strips terminal controls from early refusals while preserving exit codes and avoiding model work (#2474 by @Nari-Ab).
+
+- `soup drift-alarm` keeps emoji aliases literal and strips terminal controls in external diagnostics and displayed drift tokens, preserving drift results, exit codes and original webhook payloads (#2475 by @Nari-Ab).
+
+- Refuse selected non-finite stored scores before eval comparison or leaderboard output, with a named diagnostic and CLI exit 1 instead of a NaN delta or invalid JSON (#2466 by @taljeon in #2477).
+
+- `soup init` preserves typed emoji aliases in link refusals, unknown-template errors, and saved-config paths (#2478 by @Nari-Ab).
+
+- `soup shrink` keeps typed emoji aliases and strips terminal controls in registry attachment warnings (#2479 by @Nari-Ab).
+
+- `soup draft distill --plan-only` strips terminal controls from distillation preview headers and preserves emoji aliases and backslashes in preview YAML (#2480 by @Nari-Ab).
+
+- `soup doctor --config` shows missing config paths literally while stripping terminal control characters from the diagnostic (#2481 by @Nari-Ab).
+
+- `soup export` preserves brackets, backslashes and emoji aliases in missing explicit `--llama-cpp` paths while stripping terminal controls (#2482 by @Nari-Ab).
+
+- `soup prune-prompt` shows emoji aliases and a backslash before an unmatched `[` literally in the detected prefix preview, and strips terminal controls from it (#2483 by @Nari-Ab).
+
+- MLX Adafactor now applies the configured learning rate, warmup and schedule instead of its default relative steps and parameter scaling (#1811 by @vaputa in #2484).
+
+- Both `soup merge` paths now load a matching base at the Hub commit recorded in the adapter's training provenance, while preserving legacy, local and differing-base override behavior (#1902 by @vaputa in #2485).
+
+- Refuse non-finite judge calibration SDK recheck limits, including integers beyond float range, while preserving report-error priority, finite custom limits and equality boundaries (#2467 by @taljeon in #2493).
+
+- Refuse non-object judge JSONL rows and non-string prompt fields before that row is generated, with task, file and physical-line diagnostics while preserving existing fail-closed CLI behavior (#1949 by @taljeon in #2494).
+
+- `soup data from-traces --signal thumbs_up` now pairs distinct responses and skips prompts with no distinct pair. (#2495 by @kok-o)
+
+- `soup env lock` keeps emoji aliases literal in the lock receipt (#2497 by @Nari-Ab).
+
+- `soup lock check` preserves a backslash before an unmatched `[` in the displayed lock path (#2498 by @Nari-Ab).
+
+- `soup draft list` keeps emoji aliases and backslashes before unmatched opening brackets in the registry table (#2499 by @Nari-Ab).
+
+- `soup ingest --logs` keeps emoji aliases and backslashes before unmatched opening brackets and strips terminal controls when reporting refused or unreadable offline paths (#2500 by @Nari-Ab).
+
+- `soup export` preserves brackets, backslashes and emoji aliases in the missing `--model` diagnostic while stripping terminal controls (#2501 by @Nari-Ab).
+
+- `soup data mix --apply` quotes list-form `data.train` paths so pasted YAML preserves punctuation, Unicode and long paths (#2502 by @Nari-Ab).
+
+## [0.77.1] - 2026-10-28
+
+### Upgrade notes
+
+A valid `soup.yaml` that loads on 0.77.0 needs no change. Coming from 0.76.x or older, read the
+0.77.0 upgrade notes below first and run `soup doctor --config soup.yaml` before the first run of
+an existing config.
+
+- **A `soup data` command that wrote its result over its own input now fails** before it reads
+  anything. Eighteen commands refuse an output that names one of their inputs, under any spelling
+  and through a default output name; the entries under Fixed list them (#2245, #2261). For an
+  in-place edit, write to a new file and rename it. `soup data clean` already refused this.
+- **`soup plan` and `soup apply` refuse what `soup train` refuses** (exit 1, no plan written), so a
+  pipeline that planned a config with a staged field, a refused deprecated value or any other
+  schema error now stops at `soup plan` (#2242).
+- **External programs run by an absolute path found on `PATH`.** The current directory and empty
+  or relative `PATH` entries are not searched, and on Windows `soup` leaves the current directory
+  out of the program search for itself and the programs it starts. A tool found only there needs
+  its directory on `PATH` as an absolute path, or its own path (#2205, #2213).
+- **The VRAM pre-flight prices runs with the shared estimate.** Inside the range the estimate
+  was fitted on (dense models of 3B and below on one 6 GB card) it refuses some long-sequence,
+  large-vocabulary runs and some runs without gradient checkpointing that it let through, and
+  `--allow-oom-attempt` still launches them. Outside that range (a larger model, a
+  mixture-of-experts model, `medium` or `selective` checkpointing, `use_liger` or `use_cut_ce`,
+  `backend: unsloth`) a run that does not fit gets the estimate as a warning and starts, unless
+  its weights, the CUDA context and the LoRA adapters, gradients and optimizer state of the
+  parameters it trains alone are more than the card holds: that run is refused there too. The
+  optimizer state counts only for `adamw_torch`, `adamw_torch_fused`, `schedule_free_adamw` and
+  `adamw_bnb_8bit`, and not with `use_galore` on `sft`, `tts` or `pretrain`, whose trainers
+  replace the optimizer. Reading a Hub model's shape can reach the Hub unless
+  `HF_HUB_OFFLINE` or `TRANSFORMERS_OFFLINE` is set (#2146 by @abdulwaarith0).
+- **`/v1/tools/python` answers `timed_out: false` for a failure that is not a timeout**, with the
+  process output (#2204 by @Nari-Ab).
+
+### Added
+
+- **Native MLX inference** — `soup infer` accepts `--backend mlx` for local native text LoRA adapters and MLX base models. A shared loader resolves native base metadata, strictly validates adapter tensors and refuses unsupported controls/variants. Dense and genuine 4-bit update/save/fresh-process generation are covered without Torch or PEFT. (#2121 by @Amix29)
+
+- Add alias table and ranking for foreign parameter names (e.g. `learning_rate` -> `lr`, `num_train_epochs` -> `epochs`) in unknown config key reporting, and set the declared-field suggestion cutoff to 0.65 in every section (#2099 by @Nari-Ab in #2138).
+
+- **Two reads of a streamed routed expert per step instead of three (experimental, off by
+  default).** `build_streamed_model(..., two_read_experts=True)` keeps the decoder checkpoint
+  but no longer fetches routed experts during its replay: the forward and the expert's own
+  backward each read it once, and the router reuses the forward's top-k choice while its
+  scores stay differentiable. It needs the `per_expert` layout and reaches DeepSeek-V3-family
+  bases; there is no config field or default change. A forward hook on a two-read decoder
+  layer, its MoE block or its routed experts is refused with an error instead of receiving
+  the replay's different output. On CPU the losses and gradients equal the resident model's
+  bit for bit with two reads per expert visit. (#2158 by @Batyrkhantzy111)
+
+- Add opt-in `soup ship --progress jsonl` with versioned completion events, explicit noise-floor repeat groups, content-free abort diagnostics and an exclusive JSONL stderr channel; ordinary output stays unchanged. (#2171 by @kok-o)
+
+- **GRPO runs natively on Apple Silicon: `task: grpo` with `backend: mlx` (#1976 by @dryn85-max in
+  #2182).** It was refused at config load. Soup's own MLX loop now generates `num_generations`
+  completions per prompt from the current policy, scores them with the built-in `accuracy` or
+  `format` reward and takes one policy-gradient step per update. The objective is the one Soup's
+  transformers path trains on TRL 0.29.1 (`loss_type: dapo`, group-scaled rewards, `epsilon`
+  0.2, one iteration, token-level importance sampling, k3 KL against the base model with
+  `training.grpo_beta`), and every setting is recorded in `adapter_config.json`. Held-out prompts
+  are scored once after training as `val_reward`. A nonfinite loss or gradient skips the update.
+  Settings the native loop does not apply, `quantization: 8bit`, `lora.r: 0`, custom or ensemble
+  rewards and non-text modalities are refused at load; `--resume` is refused because only the
+  adapter is saved. Try: `soup train --config soup.yaml` with `task: grpo`, `backend: mlx` and
+  `reward_fn: accuracy`.
+
+### Changed
+
+- Clarify that training.curriculum_dynamic and its tuning fields track online uncertainty telemetry for curve inspection without modifying batch sample composition (Refs #808 by @Nari-Ab in #2142).
+
+- **One peak-VRAM estimate for `soup train`'s pre-flight, `soup profile`, the MCP `profile` tool and `soup plan` (#2049 by @abdulwaarith0 in #2146).** The pre-flight and `soup profile` priced the same run with two formulas in two units, and neither charged the logits and loss chain, which decides long, large-vocabulary runs. All four now use `utils/vram_estimate.py`, which reads the model's `config.json` and safetensors headers (never the weights) and prices weights, adapters, gradients, optimizer state, activations, logits, the 4-bit dequantization copy and overhead, calibrated on 39 measured runs (`benchmarks/gate-2049-resident-vram.md`). Inside the range the estimate was fitted on (dense models of 3B and below on one 6 GB card), the pre-flight now refuses some long-sequence, large-vocabulary runs and some runs without gradient checkpointing that it let through, and `--allow-oom-attempt` still launches them; outside it (a larger model, a mixture-of-experts model, `medium` or `selective` checkpointing, `use_liger` or `use_cut_ce`, `backend: unsloth`) a run that does not fit gets the estimate as a warning, with a footnote saying the estimate may overstate the peak, and starts, unless its weights, the CUDA context and the LoRA adapters, gradients and optimizer state of the parameters it trains alone are more than the card holds, which is refused there too (`--allow-oom-attempt` launches it); the optimizer state counts only for `adamw_torch`, `adamw_torch_fused`, `schedule_free_adamw` and `adamw_bnb_8bit`, and not with `use_galore` on `sft`, `tts` or `pretrain`, whose trainers replace the optimizer. Tasks without an LM head (`classifier`, `reranker`, `cross_encoder`, `embedding`, `reward_model`) are charged no logits; with `use_liger` or `use_cut_ce` the logits are still charged and the output says the fused loss may not build them. `gradient_checkpointing` is priced as the trainer applies it: `auto` resolves on the card as the `sft` trainer does, `selective` is priced as no checkpointing (an upper bound), and tasks other than `sft` and `tts` checkpoint fully. `soup profile`'s numbers change, and its JSON gains the exact bytes per term, the fit verdict and where the model's shape came from. `gradient_checkpointing` in that JSON (and in the MCP `profile` result) stays the config's own value (`true`, `false`, `"auto"` or a tier name), and the new `gradient_checkpointing_tier` (`off`, `full`, `medium` or `selective`) is the tier the estimate priced. Reading a Hub model's shape can now reach the Hub from the pre-flight, `soup profile` and `soup plan` (which prints a dim line before it does; `soup apply` compares hashes only and does not read the model), and writes its `config.json` into the Hugging Face cache, unless `HF_HUB_OFFLINE` or `TRANSFORMERS_OFFLINE` is set; the MCP `profile` tool reads only a local directory or the local cache. A Hub model with no readable `config.json` is priced from a shape guessed from its name. `soup plan` records `peak_vram_gb: null` with a `peak_vram_reason` when it cannot price the run, instead of a fixed 8.0 GB; a state file written before this still loads.
+
+- External programs that Soup starts (`nvidia-smi`, `sysctl`, the disk-probe tools, `git`, `ollama`,
+  the llama.cpp binaries, `trtllm-build`, `docker`, the Modal CLI, `gh`, `ssh` / `scp` in the RunPod
+  and Lambda controllers, the code-sandbox tools, `accelerate` for `soup train --gpus`, and the
+  `soup adapters bisect --eval-command` program) now run by the absolute path found in an absolute
+  `PATH` directory. Empty and relative `PATH` entries (`.`, `bin`, and on Windows `\bin` or `C:bin`)
+  are not searched, and neither is the current directory, so a program found only through such an
+  entry is no longer found: put its directory on `PATH` as an absolute path, or give the program's
+  path. On Windows a set but empty `PATHEXT` falls back to `.COM;.EXE;.BAT;.CMD`. `soup adapters
+  bisect` refuses with exit 2, before the first probe, an `--eval-command` program that is not on
+  `PATH`; when the checkpoint id fills in the program name, each probe resolves it the same way and
+  a name not on `PATH` counts as a failed probe. The macOS code sandbox runs `sandbox-exec` from
+  `/usr/bin/sandbox-exec` only. A llama.cpp checkout given as `--llama-cpp .` runs its binaries by
+  absolute path. `soup train --cloud lambda` now refuses an `output` with a part that starts with
+  `-`, as `--cloud runpod` already did, and its checkpoint copy passes `--` before the source; both
+  controllers stop before launching with "OpenSSH ssh and scp must be installed and on PATH".
+  (#2205)
+
+- On Windows a program that is only in the current directory is no longer started by bare name,
+  by `soup` or by the programs it starts (eval and reward scripts included), so that the program
+  that runs is the one on `PATH`: `soup` sets `NoDefaultCurrentDirectoryInExePath=1` for itself
+  when it is not set. A value already set is kept, and any non-empty value, `0` included, already
+  leaves the current directory out, so no setting brings the old search back: to run a program
+  from the current directory, give its path (`./tool.exe`, or an absolute path in quotes) or put
+  the directory on `PATH` as an absolute path. `soup adapters bisect --eval-command` is split with
+  POSIX shell rules, so a Windows path there takes forward slashes or quotes: `.\tool.exe` reaches
+  the program as `.tool.exe`. (#2213)
+
+- The VRAM pre-flight refuses a run that does not fit inside the range its estimate was fitted on (dense models of 3B and below on one 6 GB card), and outside it a run whose weights, CUDA context and trained-parameter state (gradients and optimizer) alone are more than the card holds (Llama-3.1-70B in 4-bit on a 24 GB card, or a 7B full fine-tune on 80 GB). Any other run outside it, such as the shipped `longcontext` template (an 8B model) on a 24 GB card, gets the estimate as a warning and starts; a refusal names `--allow-oom-attempt`. The `longcontext` template's header says what the pre-flight does and how to turn on `use_liger` (release fix)
+
+- `soup apply` no longer reads the model, since it compares hashes only, so it makes no request to the Hub; `soup plan` prints a dim line before the first request it sends (release fix)
+
+### Fixed
+
+- **Langfuse ingestion retains zero-valued negative feedback for `soup ingest --source langfuse --logs`.** Scores of `0`, `0.0` and `false` now reach the thumbs-down signal and preference-pair construction. Only a missing or null score falls back to `rating`; explicit scores retain precedence. (#1856 by @akkupratap323 in #1871)
+
+- In `soup eval gate`, normalize malformed YAML and non-mapping roots (including `[]`, `false`, `0`, and `""`) in suite loading to ValueError so the command exits with usage error 3 and a `Cannot load suite:` message that names the file, where malformed YAML and a list or scalar root exited 1 with a bare `Error: TypeError` / `ParserError` line (an empty root such as `[]` already exited 3 with a generic validation message), while `soup train --gate` exits with code 1 and training callbacks preserve their fatal failure policy for malformed suites (#1878 reported by @taljeon, fixed by @Nari-Ab in #1895).
+
+- Report missing dependencies accurately for adapter commands instead of reporting corrupt weights: read-only operations require numpy, while merge and arithmetic require numpy and safetensors (#2056 by @Nari-Ab in #2141).
+
+- **`soup profile --gpu` and the MCP `profile` tool know the RTX 30-series laptop GPUs (#2049 by @abdulwaarith0 in #2144).** `--gpu "rtx3060 laptop"` was "Unknown GPU", and the laptop 3060 has 6 GB, not the desktop card's 12. Each 30-series laptop part now has its own entry with the memory from NVIDIA's specification, and the names the NVIDIA driver reports resolve to it, including the size-named "RTX 3050 6GB Laptop GPU" and "RTX 3050 4GB Laptop GPU". A size written as a word ("A100 40GB") now reaches the matching `_<N>gb` entry, and a size the plain entry already holds reaches that entry ("A100 80GB", "rtx 3080 laptop 16gb").
+
+- **Building a streamed fused-expert MoE no longer asks the CPU for each full expert tensor
+  (#2154 by @ybai08 in #2157).** The layer-streaming skeleton is built on `meta`, but each MoE
+  layer first created its fused expert tensor on the CPU, `num_experts x 2 x
+  moe_intermediate_size x hidden_size` (15 GB for DeepSeek-V3, 22.5 GB for Kimi K2 in bf16),
+  before moving it to `meta`. The pages were never touched, but the commit was charged, and on
+  Linux with strict overcommit, on a small machine, or on Windows with too little page file,
+  the request was refused with `DefaultCPUAllocator: can't allocate memory` (Linux,
+  macOS) or `DefaultCPUAllocator: not enough memory` (Windows). Every CPU request of
+  1 MiB or more is now made on `meta` while the skeleton is built. If a model registers a
+  buffer that large, its skeleton is built the old way and the buffer is named in a warning.
+  A refused CPU allocation now gets a short message and a fix hint.
+
+- Streamed LoRA targets on an untied input embedding or output head now save with PEFT's
+  defaults and resume through Trainer or `load_adapter`, preserving every adapter tensor.
+  Adapter reloads keep the runtime's device and device map instead of automatically
+  redistributing a CPU runtime onto another accelerator.
+  Only boundaries with a LoRA target export independent CPU shard snapshots; untargeted
+  boundaries are not read and base parameters stay on meta. DPO's reference adapter can
+  attach through the streaming wrappers. Embedding adapter initialization and reference
+  copies follow PEFT's embedding parameter layout.
+  (#1048 item 1 by @kok-o in #2159, following the build-time guard in #2082 by @ybai08)
+
+- `soup export` now removes the temporary `.soup_merge_tmp_<adapter>/` directory when a later
+  step fails (llama.cpp not found, a failed clone or dependency install, or a merge that dies
+  while saving the model or tokenizer), for the gguf, onnx, tensorrt, bitnet and gguf-ud
+  paths, instead of leaving a multi-gigabyte directory next to the adapter (#1464 by @ShivanshShukla in #2164).
+
+- Spike recovery hints now refuse symbolic-link targets and use atomic replacement, preserving other hard links and the previous hint on write failure without consuming an attempt (Refs #808 by @Nari-Ab in #2169).
+
+- In `soup serve`, `/v1/tools/python` now returns `timed_out: true` and `exit_code: 124` with no output for a timeout, and `timed_out: false` with the process stdout and stderr for other process failures (with `exit_code: 1` for output overflow). Tool authentication failures carry `WWW-Authenticate: Bearer` on every HTTP 401 response (#2194 by @Nari-Ab in #2204).
+
+- **`soup plan` and `soup apply` refuse the configs `soup train` refuses.** They checked only for unknown keys, so a config with a staged field set (`training.early_stop_patience: 5`), a refused deprecated value (`data.remove_unused_columns: true`) or any other schema error got a plan (exit 0), and `soup apply` / `apply --dry-run` accepted it. Both commands now exit 1 with the `Config validation error:` lines `soup train` prints, write no plan and leave an existing state file unchanged. (#2242)
+
+- The README's Docker example passes `--yes`, which `soup train` needs since v0.77.0 when stdin is not a terminal; the four translations follow (#2229, #2244).
+
+- `soup data decontaminate`, `toxicity`, `langdetect`, `pii` and `educational` now refuse, before
+  reading or writing anything, an `--output` that is the same file as `--input` (or as
+  `--benchmark-file` for `decontaminate`), under any spelling: `./`, absolute, `sub/..`, a case
+  variant, a trailing space or dot or `::$DATA` on Windows, a junction or a hard link. They exit 1
+  with `--output '<path>' is the same file as --input '<path>'; choose a different --output`.
+  Before, their default output names (`clean.jsonl`, `toxicity.jsonl`, `langdetect.jsonl`,
+  `pii.jsonl`, `educational.jsonl`) replaced an input of the same name and the run exited 0. The
+  default names are unchanged. (#2225, #2245)
+
+- `soup data lint`, `doctor`, `topics`, `from-traces`, `canary insert`, `sample`, `dedup`, `filter`, `convert`, `merge`, `active-sample`, `augment` and `evolve` refuse an output that names one of their inputs, before anything is read, instead of writing over it and exiting 0. The input can be named by `-o` under any spelling (`./x`, `sub/../x`, the absolute path, a case variant on Windows, a hard link or a symlink) or by a default output name the input already has (`merged.jsonl`, `prefs.jsonl`, `active_samples.jsonl`, `augmented.jsonl`). The message names both paths, for example `--output './d.jsonl' is the same file as the input 'd.jsonl'; choose a different --output`. `canary insert` also refuses a `--manifest` that is the dataset or the `--output` (#2226, #2261).
+
+- An unknown config key says `use X` only for a known foreign name and one-edit typos of it. `per_device_eval_batch_size`, `per_gpu_eval_batch_size`, `eval_batch_size`, `warmup_steps`, `warmup_step` and `learning_rate_decay` are no longer sent to a different setting: the first five get a sentence saying Soup has no such setting, and the top level and `training:` answer alike (release fix)
+
+- `gradient_checkpointing` in `soup profile --json` and in the MCP `profile` result is the config's own value again, and the new `gradient_checkpointing_tier` (`off`, `full`, `medium` or `selective`) is the tier the estimate priced (release fix)
+
+- A malformed model `config.json`, or a figure no model has, is treated as an unreadable `config.json` by the VRAM pre-flight, `soup plan`, `soup profile` and the MCP `profile` tool (`soup profile` prices a guessed shape and says so; `soup plan` records that it could not price the run); a malformed `.safetensors` header is skipped and the parameter count comes from `config.json` (approximate); and a malformed native adapter `adapter_config.json` is refused by `soup infer --backend mlx` with a message naming the file (release fix)
+
+- A mixture-of-experts model known only by its cached `config.json` is priced with all its experts instead of as a dense model of a few billion parameters; the estimate's note says the count is approximate (release fix)
+
+- `soup export` removes the temporary `.soup_merge_tmp_<adapter>/` directory only when that export created it, and says it left one that was already there (release fix)
+
+- `soup profile` prints the LoRA target modules, and `soup adapters bisect` the checkpoint ids, with control characters and bidi marks removed (release fix)
+
+- `soup infer --backend mlx` names the option it refuses (`--task`, `--batch-size` or `--cuda-graphs`) instead of listing all three (release fix)
+
+- The test suite passes under pytest 9.2.0: a test of the Windows branch of `open_no_follow` faked `os.fstat` and `os.name` for the whole process, and pytest 9.2 reads its capture file through `os.fstat` before the fake is undone. The test now fakes Windows inside `soup_cli.utils.paths` only (#2286, reported by @abdulwaarith0; the test change comes from #2284 by @Nari-Ab)
+
+## [0.77.0] - 2026-10-26
+
+### Upgrade notes
+
+Before the first run of an existing config on 0.77.0, run `soup doctor --config soup.yaml`.
+
+- **What v0.76 warned about is refused at load.** Thirty-one staged fields set away from their
+  default, `data.remove_unused_columns: true`, `training.quantization` / `load_in_8bit` on a task
+  that never quantises, and `soup ab --beta` stop the load or the command; each refusal names the
+  line to delete. The first entry under Changed lists them (#808).
+- **Settings v0.76 accepted silently and never applied are refused too.** Each refusal names the
+  setting and the fix; the entries under Fixed give the details:
+  `training.use_mod: true` on a route without a Mixture-of-Depths router (#1752);
+  a non-default `training.moe_aux_loss_coeff` on `backend: unsloth` or with `stream_layers` (#1749);
+  `training.expand_layers` with a LoRA rank (#1783) or on `task: pretrain`, and `task: pretrain`
+  with `lora.r: 0` (#1875); `training.citation_faithful` on `pretrain` (#1843);
+  `training.neftune_alpha` on the 14 tasks that never forward it (#1883);
+  `training.relora_steps` where the loss has a frozen reference (#1891);
+  `quantization: 8bit` with `backend: unsloth` (#1946); vision or audio distillation (#2014) and
+  Unsloth vision or audio SFT (#2015); `training.stream_layers` with `use_cut_ce` (#2023);
+  vision row formats (`llava`, `sharegpt4v`) on preference tasks (#2064); and
+  `training.lora.rank_pattern` / `alpha_pattern` with `backend: mlx` (#1996) or `backend: unsloth`
+  (#2153).
+- **A malformed KTO label drops its row.** A row whose label is not a boolean, a
+  `true`/`false`-style string or -1, 0, 1 is dropped with a warning instead of trained (v0.76
+  trained `null` as undesirable and `0.5` or `2` as desirable); a file with no row left is
+  refused, and `soup data validate --min-valid-fraction 1.0` exits 2 on any such row (#2126).
+- **A LoRA target on a streamed embedding or head is refused when the model is built.** Under
+  `training.stream_layers`, v0.76 checked only the literal names `lm_head` and `embed_tokens` at
+  load, so a regex or dotted spelling loaded (a regex then failed at its first save, or in peft
+  under `task: dpo`). On an untied checkpoint any spelling is now refused before a streaming buffer
+  is allocated; on a tied checkpoint, where v0.76 refused the literal names too, it now trains and
+  saves (#2082).
+- **Python 3.11-3.13.** `requires-python` is `>=3.11,<3.14`; pip on Python 3.10 keeps installing
+  0.76.x (#1805, in #2089).
+- **AWQ and GPTQ export are removed:** `soup export --format awq` / `gptq`,
+  `soup quantize --to awq` / `gptq` and the `[awq]` / `[gptq]` extras. Stay on 0.76.x if you need
+  them (#1951).
+- **`soup serve` tool routes.** `POST /v1/tools/python` answers HTTP 501 unless the host provides
+  OS-level isolation, as `POST /v1/tools/bash` already did (#2166). Both routes now require
+  `--tool-auth-token` (or `SOUP_TOOL_AUTH_TOKEN`) on every bind, loopback included, and answer
+  401 without it: start the server with the token and send `Authorization: Bearer <token>` with
+  each request (#2174). The other routes are unchanged. The isolation cuts the network; the code
+  still runs as the server's user, so use a long random token and see
+  `docs/serving-and-export.md` for running the server for callers you do not fully trust.
+- **`training.gradient_checkpointing` now reaches the trainer.** With the default `false`,
+  `grpo`, `ipo`, `bco`, `reward_model` and `online_dpo` train with checkpointing off (TRL's own
+  default used to apply), and `false` now turns Unsloth's checkpointing off; set `true` to keep
+  the memory you had (#1778, #1981).
+- **Settings that were ignored now apply, so results change:** `lora.use_rslora` on MLX and
+  Unsloth (#1899), and `training.freeze_layers` / `freeze_ratio` with LoRA (#2145).
+- **Docker:** the image is Ubuntu 24.04 with Python 3.12 on a CUDA 12.8 runtime; the host needs a
+  driver that supports CUDA 12.8 (#2092).
+
+### Added
+
+- Add native Sesame CSM training for raw-audio transcript rows through Transformers
+  CSM/Mimi, with backbone and depth-decoder losses, a frozen codec, standard LoRA or
+  full fine-tuning, validation, checkpoint resume and processor saving. Pre-encoded
+  CSM codec-string data and unsupported SFT options remain refused.
+  Spark/Oute raw-audio support remains outside this change. (#265 by @Amix29 in #1769)
+
+- **`soup_cli.mcp_server.registry.call_tool` runs a registry tool without an MCP server (#1761 by @Faisal-Fayaz in #1770).** The three guarantees a tool call gets — stray stdout diverted to stderr for the duration of the handler so it cannot corrupt a caller's channel, the result passed through C0/ESC/DEL sanitization, and every failure from the lookup or the handler mapped to a message carrying neither a path nor a traceback — lived in `mcp_server/server.py::_dispatch_tool`, which is private. A caller running the registry tools directly had to reimplement all three and import the private `_sanitize`, whose name could change without notice. `call_tool(name, arguments, *, allow_mutating=False)` is the helper the MCP server calls, so the two cannot drift apart; it is not promised as a stable in-process API. It returns the Python value rather than pretty-printed JSON, so a caller does not re-parse what it just called; serialization stays with the transport. `_sanitize` is public as `sanitize`, following #896, and the old private name remains as an alias so a downstream import is not broken. `allow_mutating` is a second gate for callers rather than a duplicate of the one `build_registry` applies: a table built permissively still needs the flag per call, so it cannot run a mutating tool by accident. A `name` that is not hashable raises `TypeError` rather than `McpToolError`: that is a caller bug, not a tool failure. The stdout guard is process-wide, so a threaded caller's other threads have their prints diverted for the duration of a call. No behaviour changes for `soup mcp serve`.
+
+- **Remote log tail on Lambda Cloud training failure (`soup train --cloud lambda`).**
+  When remote training on a Lambda instance exits with a non-zero status, the controller
+  fetches the last lines of `/home/ubuntu/soup/train.log` over SSH (bounded to 50 lines and
+  50 KB, with C0/C1 and ESC control characters stripped inline) and prints them before
+  terminating the instance, preserving failure diagnostics without delaying instance cleanup.
+  (#1705 by @Areen-09 in #1774)
+
+- Live evaluation exposes `encode_prompt` and `MAX_PROMPT_TOKENS`, with shared prompt preparation for both generators; `chat_template_kwargs` and `soup ship --chat-template-kwargs` let callers pass model-specific template variables without duplicating special tokens. (#1758 reported by @abdulwaarith0, fixed by @Amix29 in #1776)
+
+- `patch_fast_lora_single_projection` accepts an `allow_dropout` opt-in: the fast-LoRA single-projection kernel then models non-zero LoRA dropout itself (keep-mask drawn and saved, dropped adapter input rebuilt in the backward) instead of delegating the call to peft (#839 by @sloemo01 in #1784)
+
+- **A `preference_loss_weights` blend whose largest weight is `dpo` or `ipo` now trains (#1425 by
+  @ybai08 in #1785).** Both losses build trl's `DPOTrainer`, which keeps only the means of its
+  log-probs, so any blend naming them stopped at the first step. The blend now takes the policy
+  log-probs from the trainer's own forward pass and the reference log-probs from the trainer's
+  `compute_ref_log_probs`; the `ipo` term divides each log-ratio by its response length, as trl's
+  IPO loss does, so it is the loss `task: ipo` trains. The reference is run twice per step. A `dpo`
+  or `ipo` term under a `simpo` / `orpo` primary trains too (see #1828 below); with full
+  fine-tuning (no LoRA adapter to switch off) it still stops at the first step, and the message
+  says why (those trainers run no reference) and what to do (give `dpo` or `ipo` the largest
+  weight). Try: `soup train --config soup.yaml` with `task: preference` and
+  `training.preference_loss_weights: {dpo: 0.7, simpo: 0.3}`.
+
+- **Two reference pages generated from the code: `docs/config-reference.md` lists every
+  `soup.yaml` key with its type, default, constraints and description, and
+  `docs/cli-reference.md` lists every command, option and argument with its type, default,
+  whether it is required, and its help (#1799).** `python scripts/gen_reference_docs.py` renders
+  both from `SoupConfig` and the live command tree. The test suite checks that the pages still
+  state what the code does (keys, types, defaults and constraints; commands and their
+  parameters) and names each one that differs. Rewording a help string or a description needs
+  no regeneration; `SOUP_DOCS_EXACT=1` adds the byte-exact check that a release runs.
+  `CONTRIBUTING.md` says when to regenerate. Found on the way: the help of `soup eval against`
+  sent the reader to `soup runs list`, a subcommand that does not exist. It now names
+  `soup runs`, and a test resolves every `soup ...` invocation written in a help string or a
+  field description against the live CLI.
+
+- **A `dpo` or `ipo` term in a `preference_loss_weights` blend now also trains when the largest
+  weight is `simpo` or `orpo`.** Those primaries build trl's CPO and
+  ORPO trainers, which run no frozen reference, so a blend such as `{simpo: 0.6, dpo: 0.4}`
+  stopped at the first step. The blend now makes the reference itself: the trainer's own forward
+  once more per step, without gradients and with the LoRA adapter switched off, which is the base
+  model the adapter started from. A blend that names neither `dpo` nor `ipo` runs no extra
+  forward. With `init_strategy: pissa` / `olora` / `loftq` or `relora_steps` the adapter-off model
+  is not the starting model, so that combination is refused before the model is loaded, with
+  the reason. The terms are computed on the primary trainer's batch, and the CPO / ORPO batches start
+  with the BOS token where the `DPOTrainer`'s need not, so the same `dpo` term differs a little
+  between a `simpo` and a `dpo` primary; `docs/training.md` says which reference and which tokens
+  each primary uses. Try: `soup train --config soup.yaml` with `task: preference` and
+  `training.preference_loss_weights: {simpo: 0.6, dpo: 0.4}`. (#1425 by @ybai08 in #1828)
+
+- **DPO runs natively on Apple Silicon: `task: dpo` with `backend: mlx` (#1846 by @dryn85-max).**
+  It was refused at config load because the MLX wrapper was scaffolding. Soup now runs its own
+  MLX loop with TRL's default sigmoid loss and `training.dpo_beta`. Rows are read by the same
+  `format: dpo` converter as on the transformers backend and tokenized the way TRL 0.29 does,
+  except that ties and rows the chat template cannot slice are skipped with a count, and per-row
+  `tools` are not applied. No second model is loaded: reference log-probs are precomputed from
+  the base model. `training.seed` and `training.data_seed` are honoured, and the vocabulary head
+  runs in checkpointed chunks to keep long pairs in memory. Measured once on an M4 Pro,
+  Qwen2.5-0.5B-Instruct trained faster than TRL on MPS with the same bf16 weights and less
+  process memory. Try: `soup train --config soup.yaml` with `task: dpo`, `backend: mlx` and
+  `base: mlx-community/Qwen2.5-0.5B-Instruct-4bit`.
+
+- **`training.stream_loss_chunk: N` runs the output head and the loss `N` tokens at a time under
+  layer streaming, so the logits no longer grow with the context length.** Unset, the head builds
+  the full `[batch, seq, vocab]` logits and the loss works on all of them, which is what ran a
+  4 GB card out of memory from about 1024 tokens. Set, each chunk runs the head, takes its
+  cross-entropy and the gradient on its own hidden states, and drops its logits; one
+  `[batch, seq, hidden]` tensor carries the gradient to the backward pass. The loss and the
+  gradients match the unchunked step within `1e-5` of the largest value, not bit for bit. The
+  `entropy`, `mean_token_accuracy` and `num_tokens` columns and `rewind.jsonl` are written as
+  before; a labelled forward returns no logits. `task: sft` only; refused without
+  `stream_layers`, beside `use_cut_ce`, with `data.format: raft`, with a trainable output head,
+  and for a model that changes its logits after the head (Gemma 2's soft-capping). The pre-flight
+  charges the logits on `min(seq, N)` tokens plus two hidden-sized tensors. **Not measured on a
+  GPU**: the peak-VRAM table #1693 asks for is still open. Try: `soup train --config soup.yaml`
+  with `training.stream_layers: true` and `training.stream_loss_chunk: 128` (#1693 by @ybai08 in
+  #1880).
+
+- Layer streaming: new opt-in `training.stream_nf4_scale_cache` keeps each streamed double-quantised NF4 weight's expanded fp32 block scales on the compute device after its first use, so bitsandbytes' dequantise + linear path stops re-expanding them on every forward and checkpoint recompute (about 0.38 ms per Mistral-7B layer visit in an isolated RTX 5070 measurement). Results are bit-identical; the fused 4-bit GEMM path is unchanged. Costs 4 bytes per 64-element block of VRAM for the run (416 MiB on Mistral-7B), charged by the pre-flight. Off by default; needs `quantization: 4bit` with double quantization (#1892).
+
+- **`soup registry push --data <file>` records a training data file's SHA-256 as the entry's `data_hash` (#1764 by @abdulwaarith0 in #1907).**
+  Registering a run used to leave `data_hash` empty. The file must be under the current
+  directory and is refused before anything is written if it is missing, not a regular file
+  or outside it. The hash records the file registered as the training input, not proof of
+  what the run trained on. `soup registry show` now prints `data_hash`, or `-` when there
+  is none.
+
+- **Layer streaming supports the DeepSeek-V3 architecture** (`model_type: deepseek_v3`: MLA
+  attention, routed plus shared experts, dense first layers), gated on resident-vs-streamed parity
+  forward and backward. The sharder stacks per-expert keys into the fused expert tensors, drops the
+  MTP layers stored past `num_hidden_layers`, and keeps the router's `e_score_correction_bias` at
+  fp32; the runtime loads that buffer from the shard (the streamed skeleton would otherwise run it
+  at zero). FP8 checkpoints (`F8_*` tensors or `*_scale_inv` block scales) are refused by the
+  sharder instead of being cast without their scales. Kimi K2's `kimi_k2` model type stayed
+  refused in this change; #2107 (below) admits Kimi-K2-Base and Kimi-K2-Instruct. (#1914)
+
+- A claim board, the pinned issue #1945 regenerated daily by `scripts/claim_board.py`, shows which `help wanted` issues are free, claimed or blocked (#1917)
+
+- Native DoRA for MLX text SFT on dense unquantized and pre-quantized 4-bit linear targets, with reloadable adapter metadata, compatible-weight warm-start checks, explicit unsupported-target refusals and Apple Silicon lifecycle regression coverage (#1918 by @Amix29 in #1920).
+
+- Task and bundled-suite eval scorers support optional batch generation with scalar fallback; live greedy generators use bounded left-padded batches, and scorer revision 6 prevents generation failures from earning credit (#1759 by @kok-o in #1958).
+
+- **`soup registry push --idempotency-key` and `RegistryStore.push(idempotency_key=...)` make a registration safe to retry (#1763 by @abdulwaarith0 in #1964).**
+  A repeated push with the same key returns the existing entry instead of creating a twin, as
+  long as it repeats the entry's name, tag, base model, task, run, config and data hash; anything
+  else under that key is refused with an error naming the entry. Two writers pushing the same key
+  at once end up with one entry. Existing registry databases gain the nullable column in place.
+  Pushes without a key are unchanged.
+
+- Record nullable run base revisions and portable final-artifact provenance, bind supported resident Transformers base loads to one Hub commit, preserve unknown/offline/legacy flows, and transfer historical identities into registry entries without re-reading training files; keep cache-path hints explicitly unverified and training-hash capture separate (#1902 by @kok-o in #1972).
+
+- **`training.fast_lora: true` runs a LoRA's projections through Soup's own Fast-LoRA autograd functions** (q/k/v with one shared input, gate/up/down as one SwiGLU block, every other adapted Linear as a single projection) instead of peft's modules, on the resident and the layer-streamed SFT paths. Setup prints what each kernel took over and refuses the run when none did. Off by default; `task: sft`, `transformers`, text, quantization `none` or `4bit`, and `lora.dropout: 0` (Soup's default is 0.05); refused with the reason beside `use_liger`, DoRA, VeRA, `target_parameters`, Spectrum (`unfrozen_parameters`), LISA and `quantization_aware: fp8`. Verified on CPU in float32 and float64 against peft's modules; the bf16/fp16, NF4 and streamed-CUDA checks have not been run, and no speedup is claimed. Try: `soup train --config soup.yaml` with `training.fast_lora: true` and `training.lora.dropout: 0` (#792 by @ybai08 in #1973).
+
+- Add `soup merge --low-memory`, which merges a plain LoRA adapter into a safetensors base one
+  tensor at a time instead of loading the whole model into RAM. The tensor values are identical to
+  the regular merge for float32, float16 and bfloat16; adapters it cannot reproduce exactly
+  (DoRA, `modules_to_save`, rank or alpha patterns, embedding adapters) are refused with a
+  pointer back to the regular merge (#2006 by @kuanysh228).
+
+- **Expert-granularity streaming for DeepSeek-V3 MoE layers.** `shard_checkpoint(...,
+  expert_layout="per_expert")` writes each MoE layer's routed experts to their own file, one pair of
+  matrices per expert (NF4 under `quant="nf4"`), and the streamed model reads an expert only when
+  the router picks it, so the VRAM bound no longer grows with the expert count. It is bit-exact
+  against transformers' eager experts on real OLMoE-1B-7B layers, forward and backward, in fp32,
+  bf16 and NF4. In a measurement harness (not `soup train`) on one RTX 5070 Laptop, a LoRA step
+  through a model built in Kimi K2's shape with random weights (shape only; nothing was trained on
+  K2) peaked at 4,723 MiB of VRAM and took 14.5-18.5 minutes
+  (`benchmarks/probe-rtx5070-giant-moe-step.md`). Reachable from the sharder API and the benchmark
+  harnesses, and from `soup train` through `training.stream_expert_layout: per_expert` (#2029).
+  Backward recomputation preserves the forward autocast settings. (#2008)
+
+- Capture a bounded complete local text-training source SHA-256 at `soup train` startup, retain unknown identities for unsupported/incomplete inputs, and preserve the historical digest through final artifacts and registry registration. (#1764 part 2 by @kok-o in #2024)
+
+- Bind emitted ship evidence to adapter/task/source bytes, suite versions and effective policy; add opt-in `--require-provenance` drift checks and an explicitly caller-asserted `--data-sha256` identity while preserving legacy replay. (#1765 by @kok-o in #2025)
+
+- **`training.stream_expert_layout: per_expert` streams a DeepSeek-V3-family MoE one routed expert
+  at a time from `soup train`** (default `fused`). The layer buffers then hold only the dense part, so
+  the VRAM bound no longer grows with the expert count. In `soup train` on an 8 GB laptop card,
+  the same Moonlight-16B LoRA config peaked at 1.0 GB of GPU memory against 3.1 GB fused (NF4
+  experts against bf16, different cache tiers), at about 2.7x the step time
+  (`benchmarks/probe-rtx5070-moonlight-16b.md`). Other architectures are refused at setup, `moe_lora` is refused with it, the VRAM pre-flight
+  charges the expert in flight, and a cache volume that is not NVMe is warned about. (#2029)
+
+- **Layer streaming shards a DeepSeek-V3 FP8 block-quantised checkpoint by dequantising it**
+  (the format DeepSeek-V3 is published in: `float8_e4m3fn` weights with a float32
+  `weight_scale_inv` per 128 x 128 block, declared in `config.json`). It used to be refused. Each
+  FP8 weight is multiplied by its block scales in fp32 at shard time, ragged edges cropped, cast to
+  the stream dtype and then stored as before (NF4 under `quantization: 4bit`); routed experts are
+  dequantised before they are stacked or written per expert, and the scales are never stored. The
+  work goes one band of rows at a time into an output at the stream dtype, so a tensor costs its
+  output plus a small band. No config key: the format is detected from the checkpoint, and the
+  streamed model is built at the stream dtype. A tiny DeepSeek-V3 streamed from its FP8 copy
+  matches a resident model holding the same dequantised weights bit for bit (logits, loss, LoRA
+  gradients, both expert layouts), and its cache holds the same tensors, bit for bit, as one
+  sharded from those weights, NF4 included (`benchmarks/gate-fp8-shard.md`). The disk pre-flight
+  charges each FP8 weight at its stored rate and nothing for the scales: on Moonlight-16B-A3B
+  converted to this format, CPU only, the 27-layer NF4 cache (30.60 GB, sharded in 93 s) came
+  within 0.0002% of the estimate, and every checked FP8-derived tensor equals an independent
+  dequant of the source. Refused, naming the supported format: every other FP8 spelling
+  (per-tensor scales, e5m2, compressed-tensors, ue8m0 scales, static activation scales, an
+  out-of-range `weight_block_size`, a missing or misshapen scale, an FP8 tensor without a scale,
+  a scale without its tensor), damaged values (a NaN byte, a negative or non-finite scale, a
+  float16 overflow) and an FP8 base that is not `model_type: deepseek_v3`. Kimi K2
+  (`model_type: kimi_k2`) was still refused by name in this change; #2107 (below) admits
+  Kimi-K2-Base and Kimi-K2-Instruct. (#2061)
+
+- **ORPO runs natively on Apple Silicon: `task: orpo` with `backend: mlx` (#2004 by @dryn85-max
+  in #2073).** It was refused at config load. Soup's own MLX loop now trains TRL 0.29.1's ORPO
+  objective with `training.orpo_beta`: the stable odds-ratio term on mean completion
+  log-probabilities, plus the chosen-sequence NLL over prompt and answer. No reference model is
+  needed. Rows are tokenized the way TRL's ORPO trainer does, so rows that fit in `max_length`
+  train on the same tokens on either backend; over-long rows are cut with Soup's usual cap, and
+  ties train as they do in TRL. The adapter loads with `mlx_lm.load`. `--resume` refuses a
+  checkpoint from another task or base. A nonfinite loss stops the run. `quantization: 8bit`,
+  `lora.r: 0` and non-text modalities are refused on MLX, and `task: preference` stays refused
+  there. Measured once on an M4 Pro: one epoch on 600 UltraFeedback pairs took about four minutes
+  with Qwen2.5-0.5B-Instruct. Try: `soup train --config soup.yaml` with `task: orpo`,
+  `backend: mlx` and `base: mlx-community/Qwen2.5-0.5B-Instruct-4bit`.
+
+- **`training.eval_steps` works on `backend: mlx` for SFT, counted in optimizer updates (#1990 by
+  @dryn85-max in #2074).** The field was refused on MLX. MLX SFT now evaluates after every
+  N completed optimizer updates (after gradient accumulation, as on transformers) and once after
+  the last one. Every validation row counts, including a tail smaller than one batch, weighted by
+  supervised tokens. The evaluations do not move the training order or take a step. A validation
+  split smaller than one batch is evaluated rather than skipped when the field is set, and an
+  empty split is refused before the model loads. Unset, MLX keeps mlx-lm's own cadence. The run
+  result reports `val_loss`, and `adapter_config.json` records the interval. Try:
+  `soup train --config soup.yaml` with `backend: mlx` and `training.eval_steps: 10`.
+
+- Add a RunPod cloud-training controller with plan-only rendering, bounded YAML validation, isolated credential-gated submission, SSH identity isolation, per-run host files and confirmed Pod deletion with transient-error retries. Preserve proxy, temporary-directory, Windows and SSH-agent settings while filtering other parent variables, and replace unencodable log characters under isolated Python. Report safe failure reasons and distinguish rejected creates from ambiguous launches; not yet live-validated. (#2081 by @kok-o) Before the release, the controller was changed to run `ssh` and `scp` by the absolute path found on `PATH` (never the current directory) without `RUNPOD_API_KEY` in their environment, to keep `PATHEXT` and `NoDefaultCurrentDirectoryInExePath`, and to fetch results into a dedicated new directory, moving only the expected output directory into place. A failed or timed-out copy removes that directory when nothing was written to it and otherwise names it.
+
+- Add the `documents` extra (`pypdf>=6.21.2` and `python-docx>=1.2.0`) for PDF/DOCX ingestion, and point missing-reader errors to its install command; Markdown and TXT need no extra (#2057 by @kok-o in #2096). Try: `pip install "soup-cli[documents]"`, then `soup data ingest <file>` on a PDF or DOCX file.
+
+- **SimPO runs natively on Apple Silicon: `task: simpo` with `backend: mlx` (#1999 by @dryn85-max
+  in #2097).** It was refused at config load. Soup's own MLX loop now trains TRL 0.29.1's CPO
+  `simpo` objective: `-logsigmoid(0.1 * (a - b) - simpo_gamma)` on mean completion
+  log-probabilities, with beta fixed at `CPOConfig`'s default 0.1 as on the transformers backend,
+  plus `cpo_alpha` times the chosen-completion NLL. No reference model is needed. Rows are
+  tokenized as TRL's CPO trainer does, so rows that fit in `max_length` train on the same tokens on
+  either backend; ties train as in TRL. The adapter loads with `mlx_lm.load`. `--resume` refuses
+  a checkpoint from another task or base. A nonfinite loss stops the run. `quantization: 8bit`,
+  `lora.r: 0`, non-text modalities and LoRA+ are refused on MLX, and `task: preference` stays
+  refused there, now naming `task: simpo` / `task: orpo` / `task: dpo`. Try:
+  `soup train --config soup.yaml` with `task: simpo`, `backend: mlx` and
+  `base: mlx-community/Qwen2.5-0.5B-Instruct-4bit`.
+
+- Add eager `--version` option to the root CLI, printing package version and repository URL without importing heavy dependencies (#2101 by @Nari-Ab in #2105).
+
+- **Layer streaming admits Kimi K2 (`model_type: kimi_k2`).** Kimi-K2-Base and Kimi-K2-Instruct are
+  DeepSeek-V3's decoder in DeepSeek-V3's FP8 block format, but their `config.json` declares
+  `model_type: kimi_k2` with an `auto_map` onto the repository's own code, so `AutoConfig` refused
+  them as custom code before the architecture list was reached (layer streaming never runs a
+  repository's model code). The streamed model's config is now read from that file as plain data
+  into transformers' own `DeepseekV3Config` (`model_type` set to `deepseek_v3`, `auto_map` dropped),
+  after a guard that admits a K2 config only where that class computes what K2's own code computes:
+  `noaux_tc` sigmoid routing with one expert group, top-k of at least 2 under renormalisation, every
+  layer past `first_k_dense_replace` an MoE layer, `num_key_value_heads` equal to the head count,
+  only the yarn rope keys K2 reads, unquantised or DeepSeek-V3 block FP8 weights, every top-level
+  field of the published K2-Base / K2-Instruct `config.json` present (only `auto_map` and
+  `quantization_config` may be left out: a missing `rope_theta` would otherwise take the native
+  default 10000.0), and no field outside it (besides three metadata keys). A config that fails
+  any of them is refused before the tokenizer or any weight is loaded, naming every such field and
+  its value and saying that other K2 releases are out of scope for now; Kimi-K2-Thinking
+  (compressed-tensors INT4) is refused as `quantization_config.quant_method='compressed-tensors'`,
+  and Kimi-K2-Instruct-0905 for the fields its file adds (`ep_size`, `pad_token_id` and serialised
+  defaults).
+  In the gate (`benchmarks/gate-kimi-k2-admission.md`) the field-by-field config check fails as
+  registered on one field: transformers adds `rope_theta` and `rope_type` to `rope_scaling`, as it
+  does for any DeepSeek-V3 config. The other checks pass. A tiny K2-like checkpoint (the published
+  config with tiny dimensions) streams bit for bit like a resident `DeepseekV3ForCausalLM` on the
+  same weights (logits, loss, LoRA gradients; `fused` and `per_expert`; bf16 and FP8 block), and the
+  disk pre-flight sizes the published Base layout exactly:
+  533.2 GB per_expert and 2.04 TB fused under `quantization: 4bit`
+  (`benchmarks/gate-kimi-k2-admission.md`; CPU only, no K2 weights downloaded, nothing trained on
+  K2). K2's tokenizer is repository code: it needs `--trust-remote-code`, which reaches the tokenizer
+  only, and `pip install tiktoken`, which Soup does not install; a failed tokenizer load on a K2
+  base now says so. The streamed tokenizer load is handed the config already loaded: before, with
+  `--trust-remote-code`, `AutoTokenizer` read the config again with that flag and, for a repository
+  with an `auto_map`, imported and ran its configuration module (`configuration_deepseek.py` on K2,
+  and on Moonlight-16B since #1933). Known differences from K2's own code remain: the MoE combine's
+  rounding and eager versus sdpa attention. Known limit: on a full-size K2, transformers'
+  `DeepseekV3NaiveMoe` briefly allocates `torch.empty(384, 4096, 7168)` bf16 on the CPU per MoE
+  layer (about 22.5 GB of commit) before accelerate moves it to meta, in the setup's NF4 /
+  `moe_lora` probe and in `build_streamed_model`; RSS barely moves, but a box without that commit
+  headroom fails with a raw `DefaultCPUAllocator` error (DeepSeek-V3 had the same before, at about
+  15 GB). (#2107)
+
+- **KTO runs natively on Apple Silicon: `task: kto` with `backend: mlx` (#2000 requested by
+  @Amix29, built by @dryn85-max in #2111).** It was refused at config load. Soup's own MLX
+  loop now trains TRL 0.29.1's KTO
+  objective with `training.kto_beta`: summed completion log-ratios against a reference
+  precomputed once from the base model, and a detached KL estimate built from TRL's own
+  mismatched rows. Batches run in dataset order, as in TRL. Rows that fit in `max_length` train
+  on the same tokens on either backend. Labels are read by the loader's KTO converter, exactly
+  as on the transformers backend. An empty completion, or a prompt that leaves no completion
+  room, is refused before training. `batch_size` stays at least 2, and a run whose gradient
+  accumulation cuts the last batches warns naming them. `--resume` refuses another task or
+  base, and a nonfinite loss stops the run. `quantization: 8bit`, `lora.r: 0`, non-text
+  modalities, DoRA and LoRA+ are refused on MLX. Try: `soup train --config soup.yaml` with
+  `task: kto`, `backend: mlx` and `format: kto` data.
+
+- MLX text SFT supports the loss watchdog: consecutive high-loss reports stop at a completed optimizer update, save the last loadable adapter and record the stop reason and actual completed work (#1989 by @Amix29 in #2115).
+
+- **GRPO can use an LLM judge as its reward: `training.reward_fn: judge_rank` (#2047 by @ybai08
+  in #2117).** One judge call sees all `num_generations` completions of a prompt together and
+  scores each from 0 to 1 against the others, in a fresh order on every call; it also runs in an
+  ensemble such as `format,judge_rank`. The judge is set with `training.grpo_judge` (the URL form
+  of `online_dpo_judge`, checked at load) and the run must state `training.grpo_judge_max_calls`:
+  after the data loads and before the model does, a run that could make more judge calls than that
+  is refused with the count. `grpo_judge_rubric`, `grpo_judge_max_tokens` and
+  `grpo_judge_max_failure_rate` are optional. A reply that is not a JSON object with one score
+  in [0, 1] per completion is asked for once more; a group that still has none scores `None`
+  instead of 0.0, is logged as `judge/failed_group_rate` (and groups scored all equal as
+  `judge/equal_score_group_rate`), and training stops with an error naming the judge once too
+  many training groups failed. A judge that cannot be reached ends the run. Prompts and
+  completions are sent to the judge host. A request the judge answers with 429 or a 5xx, or
+  that times out or loses its connection, is retried up to twice inside each counted call, so the
+  judge host can see up to three requests per counted call. `training.reward_fn: judge_rank` on
+  any task other than `grpo`, or with `modality: vision`, is now refused at load. Every new field is off by default and no
+  existing default changes; other judge requests keep `max_tokens: 1024`.
+
+- Add `qwen3.5-4b-dpo`, a text preference-training recipe for `Qwen/Qwen3.5-4B`,
+  with independently tested metadata/YAML identities and the explicit language-tower
+  contract. Settings inherit the existing 9B DPO sibling; no full-4B training or
+  performance result is claimed (#275 by @kok-o in #2129).
+
+- Add `training.stream_recompute: on | off | auto` for layer streaming (SFT). `off` keeps each
+  streamed layer's activations instead of re-running its forward as the checkpoint recompute;
+  `auto` measures one step at the configured shape at setup and keeps activations for as many of
+  the last layers as fit in VRAM (RAM tier only). Gradients are bit-identical to the recompute
+  path; on an RTX 5070 Laptop 8 GB a streamed Mistral-7B NF4 step is 22% / 17% / 8.5% faster at
+  512 / 1024 / 2048 tokens. The default `on` keeps the shipped behaviour. (#2152)
+
+- Add `qwen3.5-2b-dpo`, a text preference-training recipe for `Qwen/Qwen3.5-2B`,
+  with independent metadata/YAML identity tests, language-tower and preference-pair
+  checks, and CPU/meta architecture qualification. Settings inherit the existing
+  Qwen3.5 DPO siblings; full-2B training and NF4 performance remain unmeasured
+  (#275 by @kok-o in #2160).
+
+### Changed
+
+- **Config values that v0.76 loaded with a "Soup v0.77 will refuse it" warning are now refused at load (#808, #759, #795, #1418).**
+  v0.76 gave one release of notice; v0.77.0 flips both switches (`STAGED_FIELD_SEVERITY` and
+  `DEPRECATED_VALUE_SEVERITY`) to `"error"` in the release commit. A config that sets one of the
+  items below no longer loads: `soup train` exits `1` with `Config validation error:` and one
+  indented line per refused setting, `soup doctor --config` exits `2` with the same lines,
+  `soup recipes verify --config` and `soup ship --config` exit `3`, and
+  `load_config_from_string` (API / UI) raises `ValueError` with the same refusals (a value refusal
+  keeps Pydantic's `Value error, ` prefix there). `soup plan` and `soup apply` read the YAML
+  without building the config, so they write and accept a plan for a config that `soup train`
+  refuses; check it with `soup train --dry-run` or `soup doctor --config`. A config that sets
+  both kinds gets both in one report, the staged-field lines first. When a staged field's own
+  check fails as well (for example `grace_codebook: true` without a size and a dimension,
+  `long_context_grpo: true` on `sft`, or `video_fps` with a non-video format), only the staged
+  line is shown, so no message asks for a line that the next load refuses.
+  Nothing else changes, and a config that leaves these items unset, or writes them at their
+  defaults, loads as before.
+
+  - **Staged fields (#808, #761).** Thirty-one fields that are validated but read by nothing are
+    refused when set away from their default, each on its own line ending
+    `is accepted but read by nothing; refused as of v0.77. Delete the line.`:
+    `training.long_context_grpo`, `vision_grpo`, `quantize_ref_model`, `grace_codebook`,
+    `grace_codebook_size`, `grace_codebook_dim`, `lr_groups`, `early_stop_patience`,
+    `citation_recall_threshold`, `forgetting_eval_steps`, `forgetting_benchmark`,
+    `forgetting_stop`, `checkpoint_eval_steps`, `checkpoint_eval_metric`,
+    `checkpoint_eval_tasks`, `checkpoint_keep_top`, `convergence_window`, `convergence_rel_tol`,
+    `rl_checkpoint_include_ref_model`, `rl_checkpoint_include_rollout_buffer`, and
+    `data.video_dir`, `video_fps`, `video_maxlen`, `image_min_pixels`, `image_max_pixels`,
+    `image_resize_algorithm`, `split_thinking`, `eval_on_each_dataset`, `resize_vocab`,
+    `extend_conversation`, `skip_prepare_dataset`. **What to do:** delete each named line. None of
+    them changed what a run did, so removing them changes no result. For regression gating and
+    early stopping, use `soup train --gate <suite.yaml>`. A `soup sweep --param` that sets one of
+    them in any arm is refused the same way: the command exits `1` before the first arm starts.
+  - **`data.remove_unused_columns: true` (#759).** No trainer ever read it. `soup autopilot` and
+    run-config dumps from v0.75 and earlier wrote it into every config, so such files now stop at
+    load. **What to do:** delete the line (or set it to `false`).
+  - **`training.quantization: 4bit` or `8bit`, or `training.load_in_8bit: true`, on a task that
+    never quantises the base (#795)**: `distill`, `classifier`, `reranker`, `cross_encoder`, `prm`,
+    `moe_lora_routing`, `unlearn` and `asr`. v0.76 resolved these to `none` with a warning. Run
+    configs dumped while `4bit` was the default carry the line literally. **What to do:** delete the
+    line or set `quantization: none`; for `load_in_8bit: true`, delete that line and any
+    `quantization` line. Leaving `quantization` unset still resolves to `none`. On these tasks with
+    `backend: unsloth` (no unsloth setup) or `backend: mlx` (no MLX trainer), the same refusal
+    ends with the backend's fix too (`Also, ... Use backend: transformers.`), so one edit makes the
+    config load.
+  - **`soup ab --beta` and `MsprtConfig(beta=...)` (#1418).** `--beta` has done nothing since
+    #1418. `soup ab --beta ...` now exits `2` before reading any rows, like its other flag errors,
+    and `MsprtConfig(beta=...)` raises `ValueError`. **What to do:** remove `--beta`; for a stricter
+    `accept_h0`, lower `--alpha`.
+
+  The `--beta` help text, the `data.remove_unused_columns` description in
+  `docs/config-reference.md`, and `docs/training.md`, `docs/evaluation.md` and
+  `docs/peft-and-efficiency.md` now describe the refusal, not the warning. The warning path stays
+  in the code, behind the two switches, for the next value that needs a release of notice.
+
+- **`LICENSE` is the published Apache-2.0 text again, the holder line is spelled once, and `license-files` is pinned (#1677 reported by @Ercaner1988, in #1742).**
+  `LICENSE` had drifted from the text on apache.org: section 6 lacked "reasonable and customary
+  use in" and section 9 read "Warranty or Support" where the published wording is "Warranty or
+  Additional Liability". It is now byte-identical to the published file, with the appendix left
+  as the standard template. `NOTICE`, the five READMEs, the package `authors` and one stray test
+  header now carry the same holder line, `Copyright 2026 Makazhan Alpamys and the Soup
+  contributors`, and `NOTICE` is reduced to the product name and that line. `pyproject.toml`
+  names `license-files = ["LICENSE", "NOTICE"]` instead of relying on hatchling's default globs;
+  `tests/test_issue1677_licence_files.py` fails if the key, either file, the two restored
+  passages or the holder line goes. The README points redistributors to sections 4 and 6 of the
+  licence, `CONTRIBUTING.md` and the PR template say that contributions are accepted under
+  Apache-2.0 (no CLA, no DCO), and `tests/fixtures/cyclonedx/README.md` records the sha256 of the
+  three vendored CycloneDX schemas.
+
+- **Polished the Simplified Chinese wording for the post-#331 8B NF4 README figures.** `README.zh.md` now uses clearer wording for the clock-adjusted comparison and the two measurement rows; all numbers, links and code spans are unchanged. (#1836 by @Momoyeyu)
+
+- **Polished the Simplified Chinese wording of the v0.76.0 "What's New" translation (#1837 by @Momoyeyu).** `README.zh.md` now states that `data.val_split` holds rows out for validation, names the disk/RAM tiers as storage tiers, and renders `unpinned` as not bound to CPU cores; all numbers, links and code spans are unchanged.
+
+- Layer streaming: each streamed decoder layer now calls `functional_call` with `tie_weights=False` when none of its substituted weights is tied, skipping a walk over every parameter and buffer on each forward and checkpoint recompute (~0.1 ms per call, ~6.7 ms per 32-layer step on a PEFT Mistral layer); results are unchanged by construction (#1890).
+
+- Verify core dependency floors in a dedicated, isolated CI cell, including real CLI help/startup and Plotext 5.2.2 rendering, without conflicts from preinstalled runner tooling (#1802 by @kok-o in #1927).
+
+- Support Typer's standalone and vendored Click implementations while preserving CLI usage exit codes, option precedence, filesystem isolation and complete help/reference traversal; admit Typer through 0.27.x while retaining the standalone Click dependency for older supported releases. (#1803 by @kok-o in #2013)
+
+- Polish literal phrasing and punctuation in the Simplified Chinese README while preserving its structure, figures, links, code and sync stamp (#1838 by @Momoyeyu in #2067).
+
+- **The Docker image now builds on Ubuntu 24.04 with Python 3.12 and installs exactly the tagged soup-cli release (#2092).**
+  The image was `nvidia/cuda:12.1.0-runtime-ubuntu22.04` with Python 3.10 and an unpinned
+  `pip install "soup-cli[...]"`, so once `requires-python` moved to 3.11 pip would have resolved
+  the previous release on Python 3.10 and an image tagged with the new version would have held
+  it. The base is now `nvidia/cuda:12.8.2-runtime-ubuntu24.04` with Python 3.12 in a venv at
+  `/opt/venv`, and `docker.yml` passes the version of the git tag to the build as `SOUP_VERSION`.
+  The build stops if the Python is outside 3.11 to 3.13, if `SOUP_VERSION` is not `X.Y.Z`, or if
+  the installed soup-cli is not that version. A local build must name the release
+  (`docker build --build-arg SOUP_VERSION=0.77.0 .`, or set `SOUP_VERSION` for
+  `docker compose build`), and a manual run of `docker.yml` must be started on a tag
+  (`gh workflow run docker.yml --ref v0.77.0`): on a branch it now stops instead of pushing
+  `latest`. The entrypoint, working directory and extras (`train`, `serve`, `data`, `eval`) are
+  unchanged. The container runtime now asks the host for a driver that supports CUDA 12.8 (570
+  or newer on GeForce cards) where the 12.1 base accepted 525 and 530 or newer.
+
+- **Bind base revisions in single-process HF layer streaming
+  (#1902 by @kok-o in #2094).** Streamed config/skeleton and checkpoint downloads
+  share the run's resolved commit, with revision-specific shard and weight-copy
+  cache slots. The first pinned streamed run after upgrading re-shards and
+  re-copies the base into the new `<slug>@<commit>` slots, costing disk space and
+  time; old slots are left in place. Local/cache-path hints remain unverified;
+  Unsloth, MLX and distributed loads remain unbound.
+
+- Document accepted and refused preference row layouts for DPO and KTO in `docs/data.md`, backed by doc-driven test verification in `tests/test_data_docs_preference_layouts.py` (#2086 by @Areen-09 in #2120).
+
+- Coordinate the base-model commit across distributed Hugging Face Transformers
+  `soup train` workers: rank zero resolves once, broadcasts nullable identity before
+  setup and compares rank receipts before recording final provenance. Offline
+  resolution remains unknown; collective errors stop independent per-rank binding.
+  This changes distributed Transformers runs from `unsupported_backend` to a bound
+  identity with `revision=<sha>` on every rank when resolution succeeds. Initialize
+  the shared group with Trainer's 1800-second collective timeout; malformed/stale
+  distributed launch declarations fail instead of silently running unbound.
+  This is a separate distributed slice of #1902, not universal backend coverage
+  (#1902 by @kok-o in #2127).
+
+- `soup serve`: `POST /v1/tools/python` now answers HTTP 501 without running the code where
+  the host has no OS-level isolation (Windows, Linux with Python 3.11) and where the Linux
+  namespaces cannot be created for the run (a kernel or container that refuses them), the
+  same as `POST /v1/tools/bash`. It runs where `os.unshare` creates the namespaces (Linux,
+  Python 3.12+) or `sandbox-exec` is available (macOS). `code_exec_reward` and the recipe
+  `code` node are unchanged (#2166).
+
+- **`soup serve`: `/v1/tools/python` and `/v1/tools/bash` require `--tool-auth-token` on every bind, as they already did beyond loopback.** A server started without a token now answers both routes with 401 on a loopback bind too, before the request's content is used; the reply names the fix (start `soup serve` with `--tool-auth-token <secret>` or set `SOUP_TOOL_AUTH_TOKEN`, and send `Authorization: Bearer <secret>`). `--tool-auth-token` now also reads `SOUP_TOOL_AUTH_TOKEN`, which keeps the token off the command line. `/v1/tools/web_search`, `/v1/thumbs`, the adapter routes and the generation routes are unchanged, and `soup serve` still starts without a token on loopback. To keep calling the two routes after upgrading, pass the token to the server and send it with each request (#2174)
+
+- `soup deploy autopilot --target rtx-4090-24gb` now plans 4bit QLoRA + vLLM: it wrote `quantization: awq` (load a pre-quantized AWQ base) for an ordinary base, a route Soup no longer sets up since the AWQ export and extra are gone (#1951). The profile's notes say to point vLLM at a pre-quantized AWQ checkpoint directly; the `--measure-candidates` examples now read `4bit,8bit,fp8`.
+
+- `soup ingest --logs` names a directory or a non-UTF-8 export ("is a directory, not an export file", "is not valid UTF-8 (byte N)") and exits `1`, instead of stopping on an uncaught `FileNotFoundError` / `UnicodeDecodeError`; an existing output is still left untouched (#2018 follow-up).
+
+### Removed
+
+- **Removed deprecated `awq` and `gptq` export and quantize formats and extras (#1710 by @Nari-Ab in #1951; see #338, #1690).** Both upstream projects (`autoawq` and `auto-gptq`) are archived and incompatible with `[train]`. `soup export --format awq` / `--format gptq` and `soup quantize --to awq` / `--to gptq` are now refused at the CLI with non-zero exit codes naming the remaining supported formats (`gguf`, `onnx`, `tensorrt`, `bitnet`, `tq1_0`, `torchao`, `gguf-ud`). `soup export` also lost `--bits`, `--group-size`, and `--calibration-samples`, so scripts passing them now exit 2 with `No such option`; `--calibration-data` is now read only by `--format gguf-ud`. The `[awq]` and `[gptq]` extras and related export helpers are removed in v0.77; users who still need AWQ or GPTQ export should remain on 0.76.x.
+
+- **Breaking: Python 3.10 is no longer supported (#1805, in #2089).** From 0.77 the package declares `requires-python = ">=3.11,<3.14"` (it was `">=3.10,<3.13"`): Python 3.10 reached end of life on 2026-10-01, and pip on 3.10 keeps installing 0.76. Python 3.13 is now supported and tested in CI, on Ubuntu, Windows and macOS in every nightly and release run; pull-request runs stay on 3.11 and 3.12.
+
+### Fixed
+
+- **`soup loop watch` can now present the `soup serve` tool token (#1139 by @dchaudhari7177 in #1184).** Since 0.75.1 `soup serve` requires its `--tool-auth-token` on the adapter routes, so the loop's deploy stage, which activates the adapter over HTTP, was refused on any server started with a token, and reported only a bare `activate POST failed`. Pass the new `--tool-auth-token` or set `SOUP_TOOL_AUTH_TOKEN`; a `--detach` child gets the token through its environment, never its argv, and the audit log records it as `<redacted>`. A refused activation now says whether the endpoint wanted a token that was not sent or rejected the one that was, and names both ways to supply it. Without a token the loop sends no `Authorization` header, as before. The activate POST to a plain-http (loopback) endpoint now ignores `HTTP_PROXY` / `ALL_PROXY`, so a proxy never sees the token in clear text; an https endpoint still reads the environment, including `SSL_CERT_FILE` / `SSL_CERT_DIR`.
+
+- **`training.reasoning_effort` and `training.train_on_eot` now load only on the tasks that read them (#806 by @dchaudhari7177 in #1587).**
+  Both are applied by the SFT formatter, which runs on `sft`, `tts` and
+  `distill`. Before, the gate refused `tts`, where both flags take effect,
+  and accepted `pretrain`, `classifier`, `reranker` and `cross_encoder`,
+  where they loaded and changed nothing. Such a config now fails at load.
+  On `pretrain`, `train_on_eot` changed only the `soup data preprocess`
+  cache key, never the cached rows; a pretrain cache built with the flag
+  has to be rebuilt without it.
+
+- Square-bracket text in model replies and names/paths (`soup chat`, `soup diff`, `soup eval human`)
+  and dataset keys/issues (`soup data inspect`, `soup data validate`) is escaped through
+  `for_terminal` instead of parsed as Rich markup, preventing `MarkupError` crashes on
+  closing tags like `[/INST]` or `[/b]` and preserving literal text (#1596 by @Nari-Ab in #1602).
+
+- Suggest lowering `data.max_length` alongside `--batch-size` in the
+  friendly error hints for `CUDA out of memory` and `OutOfMemoryError`
+  (#1694 by @Nick-800 in #1708).
+
+- **The layer-streaming disk pre-flight reported a reusable cache at the size it
+  would have if it were rewritten, not at the size of the files it keeps (#1703).**
+  When the cache is reusable, `Layer-shard cache: ... GB (reusable)` and the
+  projected total now add up the cache's own files (`index.json`, the extras shard,
+  the large shards and every layer file, wherever it is striped), and a measured
+  size is not labelled "approximately". Other files in the folder are not counted,
+  and a cache file that cannot be measured keeps the estimate (#1703 by @drakeo338
+  in #1709).
+
+- `soup serve --backend sglang` now applies a LoRA adapter passed as `--model`. SGLang
+  applies an adapter only to the requests that name it in `lora_path` and runs every other
+  request on the base weights. The backend registered the adapter at startup but never
+  named it, so every answer came from the base model while `/v1/models` and each response
+  reported the adapter. The adapter is now registered under the name `adapter`
+  (`adapter=<path>`, which also keeps a path holding `=` from being split there), and every
+  request names it, on the token-ids and the string route, streaming or not. A full
+  model's requests name no adapter and are unchanged. The `[sglang]` extra and
+  `soup doctor` now require `sglang>=0.5.1` (was `>=0.2.0`): older releases refuse to
+  start an engine with a LoRA adapter unless its radix cache is turned off, which Soup
+  does not do (#1724 by @Batyrkhantzy111 in #1732).
+
+- `training.moe_aux_loss_coeff` set to a non-default value on `backend: unsloth` (sft, pretrain) or with `training.stream_layers: true` is now refused at config load instead of loading and being ignored: neither setup applies the MoE auxiliary loss (#1412 reported by @maximilianfeix, fixed by @kok-o in #1749).
+
+- Layer streaming `StreamPrefetcher.prime` skips reloading decoder layer 0 when the slot already holds it from the preceding backward pass, avoiding redundant H2D copies at step boundaries (#1354 by @kok-o in #1750).
+
+- **Tool-call eval scorers no longer credit a JSON number as a boolean (#1755 by @Faisal-Fayaz in #1756).** `tool_call_match` and `tool_call_args_subset` compared parsed `arguments` with Python `==`, and Python has `bool` as a subclass of `int`: a model that answered `{"enabled": 1}` where the task expected `{"enabled": true}` scored `1.0` — full credit for a wrong answer, through `score_task` and `run_eval` alike. Both are valid JSON, and they are different arguments. Arguments are now compared with a `_json_equal` that rules on `bool` before anything else, so a boolean and a number never match at any depth, while numbers stay equal across forms (`1 == 1.0` still matches, as before). It walks nested arguments through an explicit worklist rather than recursion, so an argument nested as deeply as `json.loads` accepts is still scored instead of raising. `tool_call_match` scores such a call `0.0`; `tool_call_args_subset` keeps its `0.5` function-name credit and gives no argument credit, so `0.5`, and its `0.5` `matched` threshold is unchanged. Scores recorded before this change can be higher than the same outputs score now, because a boolean/number substitution used to count as correct.
+
+- **`training.use_mod: true` is refused at config load on routes that never install a Mixture-of-Depths router (#1752).** The flag was accepted on every task. Only the resident LoRA arm of the transformers SFT setup (which `tts` reaches) and the transformers pretrain setup (after its LISA/LoRA split, so LISA is included) call the router. Full fine-tuning, LISA and Spectrum on SFT, vision, audio, layer streaming, unsloth and MLX SFT all trained without one. Those requests now fail at load, naming `training.use_mod`, the task, the settings that leave the applying path, and a valid change or `use_mod: false`. Transformers SFT LoRA, TTS LoRA, pretrain LoRA and pretrain LISA still apply it. Pretrain does not inherit SFT's modality or streaming restrictions. The MLX SFT trainer keeps its own warning for the field, but a config can no longer reach it, so `soup doctor --config` lists no row for it. **This is a breaking change** for configs that set `use_mod: true` on a route that never applied it — that run was already training a different model than requested. `use_mod: false` and an omitted flag are unchanged, and an out-of-range `mod_capacity_factor` is still rejected by its own check (#1752 by @mvanhorn in #1757).
+
+- `copy_bundle_to` now accepts an explicit keyword-only `root` argument so callers with their own workspace can safely import demo fixtures under that root without changing the process working directory or bypassing containment checks (#1762 by @Nari-Ab in #1767).
+
+- **PRM and RAFT divide each accumulated micro-batch mean by `gradient_accumulation_steps` (#1444 by @Momoyeyu in #1771).** Both trainers return a per-micro-batch mean and cannot honour HF's label-count `num_items_in_batch`; they now decline loss kwargs so `Trainer.training_step` applies its standard `1 / gradient_accumulation_steps` normalisation. Logged `loss`, `train_loss` and `grad_norm` match a `gradient_accumulation_steps: 1` run instead of reading G times too large, and `max_grad_norm` clips the gradient for the stated loss. RAFT's `loss_weights` weighted mean, including citation boosts, is unchanged.
+
+- Dynamic warmup for PRM, MoLE routing, and PPO wrappers via resolve_trainer_warmup_steps, and wire PPO deepspeed, response_length, and save_total_limit settings (#805 by @Tanmay9223 in #1775).
+
+- GGUF export reports pipeline phases and streams converter/quantizer logs with `--verbose`; `--no-install-deps` refuses missing conversion packages before merge/toolchain work without invoking pip. (#1760 reported by @abdulwaarith0, fixed by @Amix29 in #1777)
+
+- Honor `training.gradient_checkpointing` in the TRL/HF arguments for GRPO, IPO, BCO, reward-model, online-DPO, pretrain and embedding, including unquantized runs. Preserve the full-checkpointing fallback for enabled tiers. Behaviour change: with the default `gradient_checkpointing: false`, GRPO, IPO, BCO, reward-model and online-DPO now train with checkpointing off, where TRL's own default (`true`) used to apply; set `gradient_checkpointing: true` to keep it. (#797 by @Amix29 in #1778)
+
+- **Non-finite eval-gate baselines are now refused at read, write, and gate boundaries instead of silently passing (#1773 reported by @taljeon, fixed by @here-2007 in #1779).** `resolve_baseline`, `stamp_baseline_scores`, `write_baseline_file`, and `run_gate` now require scores to be finite numbers; `NaN`, `+inf`, and `-inf` (including JSON numeric overflows such as `1e999` and `-1e999`) raise a `ValueError` naming the offending task. In `soup eval gate`, invalid baselines exit with code 3 (`EXIT_USAGE_ERROR`) before evaluating tasks or reporting a verdict, rather than printing `GATE PASSED` or misdiagnosing positive overflow as a regression.
+
+- **KL calibration probability calculation now uses numerically stable log-softmax without artificial flooring (#1772 reported by @taljeon, fixed by @here-2007 in #1780).** `eval.calibrate.kl_divergence` previously floored candidate probabilities at `1e-12` before taking logarithms, which truncated large logit divergences (gaps > ~27.6) and caused `run_calibration` to return `MINOR` when the actual divergence exceeded the documented `MAJOR` threshold (>= 0.20). KL divergence is now evaluated directly using stable log-probabilities via `_log_softmax`, preserving monotonic scaling for large divergence gaps without underestimating quant-calibration deltas.
+
+- **`training.expand_layers` (LLaMA Pro) is refused at config load together with a LoRA rank (#1326 by @abdulwaarith0 in #1783).**
+  The block expansion runs before `get_peft_model`, which froze the appended
+  blocks again, so only adapters on the original layers trained while the
+  appended blocks stayed the identity. The error names `expand_layers`,
+  `freeze_trainable_layers` and `lora.r` and points to `lora.r: 0` with
+  `quantization: none`; `task: pretrain`, which has no `lora.r: 0`, gets the
+  `expand_layers` scope refusal instead (#1813). The LLaMA Pro examples in
+  `docs/peft-and-efficiency.md` and `docs/training.md` now set `lora.r: 0`, and
+  `docs/training.md` now says the expansion runs before `get_peft_model`.
+
+- **`docs/backends-and-ops.md`: the contents entry for the telemetry section reaches its heading
+  again, and the shell-completions section says what completes today (#1788).** The entry linked
+  `#telemetry-opt-in-hardware-info-only`, an anchor that stopped existing when the heading became
+  "Telemetry (opt-in)". The completions paragraph promised recipe-name completion, named a
+  `--target-modules` flag that no command has, and said config introspection "lands in v0.64.1".
+  What `soup completions` gives is command names and option names; no option or argument has a
+  value completer attached, and the two completers in `soup_cli/utils/completions.py` are helpers
+  that nothing calls yet.
+
+- **`soup doctor --config` ignores explicitly written schema defaults (#1330).** Minimal configs and full YAML dumps now produce the same support report, including vision/audio defaults; `seed: 0` remains active. Removed unreachable MLX/Unsloth rejection rows and multimodal response-mask rows, retaining documentation of their limitations and load-time refusals. Round-trip regressions now pass without xfails. Follow-up to #1336 by @Yi-111-a. (#1330 by @akkupratap323 in #1791)
+
+- CLI help now includes descriptions for the remaining plugin, data, registry, `.can`, and agent command entries, with a regression test preventing new blank help text (#1793 by @KeuqS in #1795).
+
+- **A resumed `dpo`, `ipo` or `grpo` run continues from the checkpoint's adapter (#1768 reported by
+  @bobbonauta, fixed by @ybai08 in #1797).** TRL adds a frozen `ref` adapter for these tasks, so their
+  checkpoints hold the trained adapter at the root and `ref` in `checkpoint-N/ref/`, and
+  `Trainer._load_from_checkpoint` then loads only the subfolder. `--resume` restored the optimizer
+  and the step counter and trained a freshly initialised adapter: on a 4-step run resumed at step 2,
+  the result was two steps from zero. The trained adapter is now loaded right after the Trainer's
+  own load. `task: preference` with `dpo` or `ipo` is covered; `grpo` with `grpo_beta: 0`, `orpo`,
+  `simpo`, `bco`, `kto`, `sft` and `reward_model` write no `ref/` and were not affected. **Re-run
+  any dpo, ipo or grpo training that was resumed from a checkpoint.**
+
+- Refuse empty, missing, or misspelled eval-gate task lists before reporting a verdict; direct `run_gate` calls also reject a suite emptied after loading. Nonempty gate scores, thresholds, baselines, the no-model smoke generator, and unknown-key handling are unchanged (#1798 by @taljeon in #1821).
+
+- Sanitize dataset previews, review panels, paths, and image format labels before terminal rendering. (#1812 by @kocaemre in #1822)
+
+- Seven fields in `soup.yaml` without schema descriptions (`data`, `training`, `training.gradient_accumulation_steps`, `training.warmup_ratio`, `training.weight_decay`, `training.max_grad_norm`, and `training.lora`) now carry descriptions in `SoupConfig` (#1794 by @Nari-Ab in #1831).
+
+- `soup loop watch` with the pre-wired stages now learns from `soup serve --record-thumbs`: the harvest reads the thumbs database named by `SOUP_LOOP_THUMBS_DB` or `soup loop init --thumbs-db PATH` and unions its preference pairs (tagged `source: "soup-serve-thumbs"`) with the trace pairs. Before, it read only `--trace-log` directories, which carry no thumbs signal, so a loop next to a serve that recorded thumbs harvested nothing. A configured database outside cwd, a symlink, a missing file, or a file that is not a thumbs database stops `soup loop watch` with exit 2, naming the field (#1440 by @Srinivasan8888 in #1832).
+
+- Gate-style commands now name the problem in their error text instead of printing a bare value: `soup expect` reports `data file not found: <path>` / `suite file not found: <path>` for a missing input, `soup lock check`/`soup lock show` name a corrupt lock file and say its JSON is invalid, and `soup draft measure`/`soup draft distill` point at the missing `[train]` extra when `transformers` is absent. `soup expect`'s module docstring is also corrected (a suite failure exits 2, not 3). Exit codes are unchanged (#1830 by @abhinyaay in #1833).
+
+- **`soup ui` validates the served Host names on a loopback bind.** Requests must name the bound host or `localhost` / `127.0.0.1` / `[::1]` with the bound port; an omitted port means HTTP port 80. Foreign names, wrong ports and missing, malformed or duplicate headers get `403 {"detail": "Host not allowed"}` before authentication, body reads or routes, with the normal security response headers. This closes the Host/Origin hardening gap in the session-cookie check. `--public` keeps its Bearer gate, and the startup login URL is unchanged (#1829 by @vaputa in #1839).
+
+- Bracketed text in seven CLI help strings (`[deprecated]`, `[doc-id]`, `[doc-N]`, `soup-cli[sigstore]`, `[data-pro]`) is now escaped so Rich markup does not drop it (#1792 by @Nari-Ab in #1840).
+
+- Early CLI validation and device preflight checks for `soup bench train` (`--steps <= --warmup`), `soup recipes verify` (missing or unparseable `--config`), and `soup infer` / `soup bench infer` (`--cuda-graphs` on non-CUDA setups) now refuse in well under a second before torch is imported or a model is loaded (#1817 by @Nari-Ab in #1841).
+
+- Remove outdated unlearning release promises and guard exception messages across the source tree against expired promises. (#1405 by @kok-o in #1842)
+
+- Refuse training.citation_faithful on pretrain, whose trainer does not apply citation span weights; use task: sft with data.format: raft. (#1406 by @kok-o in #1843)
+
+- Attribute Linux streaming disk detection to the cache volume, resolving partitions and stacked-device members instead of accepting an unrelated NVMe disk; retain the path-based throughput fallback. (#1800 by @kok-o in #1847)
+
+- Share text-only conversation prompt extraction across trace and ingest parsers, retaining context through the last user turn so unrelated answers do not form preference pairs; keep system-plus-one-user prompts as plain user text, use role/content JSON only when an earlier user or assistant turn exists, normalize LangChain human/ai/system message types, omit blank context turns and non-text content parts, and select assistant output explicitly. (#1809 by @kok-o in #1848)
+
+- **MLX SFT runs are reproducible: `training.seed` and `training.data_seed` are applied
+  (#1850 by @dryn85-max in #1855).** mlx-lm's batch shuffle draws from numpy's global RNG, and
+  LoRA init and dropout draw from `mx.random`. Soup seeded neither, so every run of one
+  `soup.yaml` trained on a different batch order, even with the seed left at the 42 the panel
+  prints. `mx.random` is now seeded before the adapter is built and numpy right before training,
+  and the `MLX backend ignores: training.seed` warning is gone. Runs started before this change
+  cannot be reproduced. Try: run `soup train --config soup.yaml` twice with `backend: mlx` and
+  compare the losses.
+
+- **`backend: mlx` no longer crashes when a split is smaller than one batch (#1851 by
+  @dryn85-max in #1857).** mlx-lm trains and evaluates in whole batches. A one-row validation
+  split, which the default `val_split: 0.1` gives on the bundled 10-row `alpaca_tiny.jsonl`,
+  crashed at the first evaluation with `Dataset must have at least batch_size=2 examples`, after
+  the model had loaded. Such a split is now skipped with a warning that names both numbers and
+  says `val_loss` will be absent, and the run trains. A training split smaller than one batch is
+  refused before the model loads. Try: `soup train --config soup.yaml` with `backend: mlx`,
+  `data.train: examples/data/alpaca_tiny.jsonl` and `batch_size: 2`.
+
+- Quote leaderboard CSV model and benchmark fields without changing ordinary output bytes. (#1834 by @taljeon in #1863)
+
+- Model and output paths printed in `soup chat`, `soup diff`, and `soup eval` (`benchmark`, `custom`, `human`, Elo table, leaderboard) are escaped through `for_terminal` instead of raw Rich markup, preventing `MarkupError` crashes on bracketed paths like `models/[/x]` and stripping terminal control characters (#1864 by @Nari-Ab in #1868).
+
+- **`soup ship` error messages no longer pass control bytes to the terminal (#1869 by @bernalalexis-try in #1872).** `_fail` escaped Rich markup but let ESC and C1 bytes through, including in exception text forwarded from rendering a Hub model's chat template. It now strips control characters before escaping.
+
+- **Dataset commands warn and skip non-object JSON rows instead of crashing.** JSONL warnings identify the physical line and JSON-array warnings identify the row; validation lists these as issues, and review checks objects before accessing pair fields. Rejected contents are not printed. Canary insertion still refuses a non-object first row and preserves later rows. (#1860 by @akkupratap323 in #1873)
+
+- **`task: pretrain` with `lora.r: 0` is refused at config load, and so is `training.expand_layers` (LLaMA Pro) on `task: pretrain` (#1813 by @abdulwaarith0 in #1875).**
+  The pretrain trainer always attaches a LoRA adapter, so a rank of 0 loaded
+  and then failed inside peft (or unsloth) when training started, with an error
+  that named neither Soup nor the field. The refusal names `lora.r` and the
+  task, and points to `lora.r >= 1`, LISA or `task: sft`. LISA keeps accepting
+  `lora.r: 0` on pretrain, since it attaches no adapter and trains as before.
+  LLaMA Pro had no pretrain route that trained the appended blocks (a rank
+  freezes them again, #1326), so the `expand_layers` scope check now refuses
+  `task: pretrain` with the `task: sft` recipe. `docs/peft-and-efficiency.md`
+  and `docs/training.md` say so.
+
+- `soup serve --help` names `/v1/tools/bash` among the endpoints `--tool-auth-token` protects, next to `/v1/tools/python` and `/v1/tools/web_search`, and a test checks every registered `/v1/tools/*` route against the help text. The generated reference pages are regenerated after #1795 and #1783 left them stale (#1879).
+
+- `training.neftune_alpha` is now refused at config load on the 14 tasks whose trainer never forwards it to `TrainingArguments.neftune_noise_alpha` (it was silently dropped); `docs/peft-and-efficiency.md` now lists the 9 tasks that apply it (#1820 by @DBVamsi in #1883)
+
+- `soup export --help` names every accepted `--format`: `torchao` and `gguf-ud` were missing from the list although both have worked since v0.53.1; a test keeps the list equal to `SUPPORTED_FORMATS`. Stale "schema-only" / "deferred" statements in the GGUF, BitNet and save-format module docstrings, a dead TTS anchor in `docs/training.md`, a dead energy anchor in `docs/adapters-and-governance.md` and the "planned PTQ export surface" sentence in `docs/performance-and-quantization.md` now describe what is live (#1886).
+
+- **`training.relora_steps` is refused where the loss has a frozen reference.** trl reads the reference of `dpo`, `ipo`, `kto`, `bco` and `grpo` with `grpo_beta` above 0 from the policy's own base weights, and every ReLoRA restart merges the trained adapter into those weights, so from the first restart on the reference was the policy as of that step, without an error. Those tasks, and a `preference` run whose loss or blend names `dpo`, `ipo` or `bco`, now stop when the config is loaded, with the reason. `sft`, `orpo`, `simpo`, `grpo` with `grpo_beta: 0` and a `simpo` / `orpo` preference run keep ReLoRA (#1835 by @ybai08 in #1891).
+
+- Refuse eval-gate suites with repeated task names that previously loaded, so distinct task scores cannot overwrite name-keyed baseline evidence. (#1824 by @taljeon in #1893)
+
+- `training.lora.use_rslora` is now applied on `backend: mlx` and `backend: unsloth`: MLX receives the rank-stabilised scale `alpha / sqrt(r)` in both `adapter_config.json` and at training time, and the Unsloth loader forwards `use_rslora` to `get_peft_model` from every trainer. Before, the flag loaded on both backends and was never read, so an rsLoRA run trained plain-LoRA scaling (`alpha / r`, an 8x smaller update at the default `r: 64, alpha: 16`) with nothing said. Existing configs with `use_rslora: true` on mlx or Unsloth now train at the rank-stabilised scale, so their results change; drop the flag to keep the old `alpha / r` behaviour (#1853 by @ndablizov in #1899)
+
+- `soup migrate` now writes what the source trained instead of Soup's defaults, and names what it cannot carry: axolotl `val_set_size` and LLaMA-Factory `val_size` map to `data.val_split` (`0` when absent, as both tools default); a LLaMA-Factory config without `lora_rank` / `lora_alpha` gets LLaMA-Factory's `r: 8, alpha: 2 * r`, a comma-separated `lora_target` becomes a list, and `lora_target: all` / axolotl `lora_target_linear: true` become `all-linear` rather than `auto` (two of seven projections on Llama); `pref_beta` under `pref_loss: ipo` maps to `training.ipo_tau` and `simpo_gamma` to `training.simpo_gamma`; the Unsloth migrator takes `base` from the training load, skipping the stock notebook's `if False:` reload, and reads `gradient_accumulation_steps`, `warmup_ratio`, `weight_decay` and `seed` from the final trainer's config. Every source key or trainer keyword a migrator does not map is listed in one "not migrated" warning (#1807 by @ndablizov in #1901)
+
+- Oversized integer baseline scores now raise `ValueError` instead of leaking `OverflowError` (#1865 by @dipesh-singh07 in #1903)
+
+- Five commands no longer exit 0 when nothing succeeded or nothing was compared: `soup sweep` exits 1 when every arm failed (one completed arm still exits 0); a CMA-ES merge in which every evaluation failed raises instead of writing a "converged" merge of the first sample, `converged` requires a real score, and `soup adapters merge --strategy cmaes` exits non-zero and writes no adapter (its missing-`--eval` message now says `.jsonl`); `soup drift-alarm` exits 1 and shows no OK panel when it could read no live or reference row, naming the file and the keys it reads (`output`, `response`, `text`); `soup eval auto` exits 1 when no leg evaluated anything, with the same code whichever leg failed; `soup loop watch --detach` validates `--poll-interval` / `--max-iterations` in the parent and spawns no child when they are invalid (#1808 by @ndablizov in #1905)
+
+- A Hugging Face checkpoint is the files `model.safetensors.index.json` names, not every `*.safetensors` in the directory: a `consolidated.safetensors` beside the shards (the mistral-inference copy Mistral's repositories ship, which transformers never loads) is no longer counted by the hardware-fit pre-flight, `soup profile`, `soup cost` and batch estimation, no longer downloaded for layer streaming and `soup spectrum scan` (29.0 GB for a 14.5 GB model), no longer copied out of the HF cache, no longer scored by the spectrum scan (which emitted `unfrozen_parameters` matching no parameter) and no longer kept resident by the layer-stream sharder. Without an index the checkpoint is `model.safetensors`, else the `model-*-of-*.safetensors` shards, else every `*.safetensors` except `consolidated*`, and the Hub download fetches by the same rule; a directory holding only a consolidated file is refused with its name (#1806 by @ndablizov in #1906)
+
+- `soup data validate` counts every row the loader skipped (not a JSON object, or not valid JSON) as an invalid row in its `N/M rows valid` line, in `--min-valid-fraction` and in the exit code: a file of only junk rows exits 2 ("no usable rows remain") with `--format` and 3 without one, and `[good, 42]` is `1/2 rows valid` and fails `--min-valid-fraction 1.0`. A file that is not empty but has no object row says how many rows were skipped instead of "Dataset is empty" (#1887 by @ndablizov in #1908)
+
+- The 30 shipped grpo, ipo, bco, reward-model and online-DPO recipes, templates and example configs now set `training.gradient_checkpointing: true`: since #1778 passes the key to TRL, leaving it unset fell back to the schema default `false` instead of TRL's `true` and used more activation memory (#1923 by @VincentTLe).
+
+- **Fixed MCQ forgetting scoring for unboxed letter spellings (#1442 by @Momoyeyu in #1924).** `extract_mcq_letter` now accepts a lone option letter wrapped in markdown emphasis, quotes, backticks or square brackets, and a standalone uppercase letter that leads the output before an explanation; boxed values and prose openers such as `A cat ...` still earn no credit.
+
+- Custom eval task loading now reports invalid non-string `scoring` values with
+  the field and physical JSONL line instead of an unhashable-type error, before
+  model loading or result writes (#1926 by @kok-o).
+
+- Empty judge prompt files now fail eval gates with a task/file diagnostic and no measured score, preventing an unmeasured zero baseline (#1928 by @kok-o).
+
+- **Dataset loading no longer prints one warning per skipped row.** The JSON/JSONL loader and `soup data review` print the first three warnings per kind (non-object rows, invalid-JSON lines), then one `... and N more` line; `soup data validate` still reports the exact skipped count. (#1888 by @george07-t in #1930)
+
+- **Layer streaming builds the streamed model from transformers' own class, even under
+  `--trust-remote-code`.** The flag still reaches the tokenizer, which is where a repo like
+  Moonlight-16B (remote-code tokenizer only) needs it; its remote modelling code lays the experts out
+  differently from the stacked shards and could not be streamed. The dated 2026-10-15 Moonlight-16B
+  LoRA run on an 8 GB card is recorded in `benchmarks/probe-rtx5070-moonlight-16b.md`. (#1933)
+
+- **A registry `name:tag` that matches more than one entry is refused instead of resolving to the newest, and `RegistryStore.list()` filters by `run_id` (#1763 by @abdulwaarith0 in #1934).**
+  `push` keeps every entry, so pushing the same name and tag twice left twins, and any
+  command given that `name:tag` silently used the newest. The error now names the
+  candidates and asks for the full id, as an ambiguous id prefix already did.
+  `soup eval quant-check` reports either kind of ambiguity as a usage error instead of a
+  traceback. `RegistryStore.list(run_id=...)` finds the entries registered from one run.
+
+- `quantization: 8bit` with `backend: unsloth` is refused at config load, naming `4bit`, `none` and `backend: transformers` for 8-bit: Soup's Unsloth loader passes `load_in_4bit` only, so `8bit` loaded the model in 16-bit with no word (#1811 by @ndablizov in #1946)
+
+- `use_liger: true` is reported as applied only when the model's `config.model_type` is in liger's own kernel table: for a type liger has no kernels for (`gpt_neox`, `phi`, `gpt2`, ...) SFT printed "Liger Kernel enabled" and set `use_liger_kernel=True` with no kernel applied, and a `phi` model could be "patched" as Phi-3 by its name; it now prints "no matching architecture found" and trains without Liger (#1811 by @ndablizov in #1947)
+
+- Leaderboard CSV exports prefix a model or benchmark name that a spreadsheet would read as a formula with a quote. (#1950)
+
+- The Web UI now deletes the temporary `soup_ui_config_*.yaml` it writes for each
+  `/api/train/start` once the training process exits, and when the process fails to
+  start, instead of leaving one file per run in the system temp directory
+  (#1464 by @ShivanshShukla in #1952).
+
+- Accept a leading UTF-8 BOM in local JSON, CSV and TXT datasets, matching JSONL, so Excel/Windows exports parse and detect their format correctly while embedded U+FEFF characters are preserved. Thanks to @VincentTLe for the report and proposed fix. (#1922 by @kok-o in #1954)
+
+- Diagnose unsupported text architectures before a fresh default GGUF converter clone or dependency/conversion work, using generated capabilities from the exact llama.cpp pin; probe explicit, environment-selected and cached converters independently, preserve inconclusive probe behavior, validate nested text metadata and clean temporary adapter merges on refusal. The shared b5270 pin is unchanged. (#1911 by @kok-o in #1955)
+
+- `soup compile` and `soup compile-tools` pass eval suite signal, metric derivation, and iteration bounds to DSPy, TextGrad, and GEPA optimizer runs, TextGrad now refuses without a configured engine and its panel can print `Score: unmeasured`, and add `--task-lm`, `--reflection-lm`, and `--engine` options to `soup compile-tools` (#1810 by @Nari-Ab in #1956).
+
+- GGUF export inspects safetensors headers and passes --no-mtp when declared MTP tensors are absent, refusing unsupported converters before conversion while preserving real MTP weights (#1912 reported by @feloau, fixed by @kok-o in #1957).
+
+- `soup can run` now removes the directory it extracted a can into when a later step
+  fails (env capture outside cwd or into a missing directory, a deploy target with no
+  `*.gguf`, a training subprocess error), instead of leaving it in the system temp
+  directory. A caller-supplied `--extract-dir` and a run that ends with a nonzero
+  training exit are left in place (#1464 by @ShivanshShukla in #1960).
+
+- **Layer streaming now reports mixed direct-I/O stripes accurately.** The ready line shows direct-I/O drives as `k/N`, runtime stats expose each root's mode, page-cache fallbacks name the affected root and operating-system reason, and RAM-tier runs no longer print disk read-ahead guidance (#1615 by @Samearth17 in #1962)
+
+- `soup loop watch` now refuses a thumbs database whose `thumbs` table lacks a column the harvest reads (`prompt`, `response`, `thumb` or `ts`) before the loop starts, with the same exit 2 as a missing or unreadable database. Before, the pre-flight only checked that the table existed, so a hand-made table with other columns passed it and the first iteration failed, which under `--detach` ends without a message (#1440 by @Srinivasan8888 in #1966).
+
+- `soup loop watch --pre-wired` now trains on a harvest of one or two preference pairs: the generated loop DPO config sets `data.val_split: 0`, where the schema default 0.1 used to leave a one-pair harvest with no training rows and `soup train` exited 1. When training is skipped, the saved iteration record now says why, with `no_preference_pairs` and the count, or `pairs_file_missing` when the pairs file is absent. Before, the iteration only recorded a skip (#1909 by @Srinivasan8888 in #1968).
+
+- `training.loss_spike_recovery_max_attempts`: persist and enforce attempt counts across re-launches via `spike_recovery.json`, capping recovery when the budget is reached (part of #808 by @Nari-Ab in #1971).
+
+- Repository tooling, not part of the package: the issue claim board respects completed and
+  released claims, keeps active scoped owners across unrelated edits to old comments, and
+  recognises leading Taking requests when it links ready or draft pull requests. A completion
+  in the same paragraph also clears an uncertain repeated acceptance (#1974).
+
+- The RL checkpoint manifest now reports `has_ref_model: false` and `has_rollout_buffer: false`, because no save writes reference-model or rollout-buffer state. Before, it copied `training.rl_checkpoint_include_ref_model` and `training.rl_checkpoint_include_rollout_buffer` from the config, so a checkpoint holding only the adapter and optimizer claimed both. Setting either flag to `true` is now refused at load as a staged field ("Delete the line."); the two flags were staged after v0.76.0, so no release warned about them first (#808 by @Srinivasan8888 in #1980).
+
+- **The Unsloth backend now honours `training.gradient_checkpointing` instead of silently ignoring it.** It was hardcoded to Unsloth's checkpointing kernel, so `training.gradient_checkpointing: false` changed nothing on the Unsloth path. The flag now resolves through the same rule as the HF path: `false` (the schema default) disables checkpointing entirely, `true` (or a tier) enables Unsloth's optimized kernel, and layer streaming keeps it off since it already checkpoints every layer. Set `training.gradient_checkpointing: true` to keep the optimized Unsloth checkpointing (#1981 by @SpinachDigital).
+
+- `soup sweep --strategy random` no longer hangs when a `--param` list or a `--sweep-config` value list names the same value twice (`lr=1e-5,2e-5,1e-5`, or `1e-5,0.00001`): it now draws from each list's distinct values, plans each distinct arm once, and always finishes, `--dry-run` included (#2007 by @MohammadHijjawi97).
+
+- **Keep the claim board with the accepted owner when a competing take is declined (#2010).**
+  A maintainer's explicit reaffirmation is checked against the matching open pull request,
+  preserving that author's claim date and PR link. Declined requests no longer appear as
+  unconfirmed owners; quoted or withdrawn decline instructions do not reject a request.
+
+- Refuse vision/audio distillation at config load and in `soup doctor` instead of accepting modalities the text-only trainer ignores; preserve supported token/sequence text distillation and document the boundary. (#1186 item 1 by @kok-o in #2014)
+
+- Refuse Unsloth vision/audio SFT at config load instead of silently using transformers, report the supported backend in `soup doctor`, and correct both inline and file-backed multimodal templates. (#1186 item 2 by @kok-o in #2015)
+
+- Prevent `soup ingest`, `soup prune-prompt`, and `soup data best-of-n` from writing outputs that alias their input files, including hard-link aliases. (#1422 by @Martini147 in #2018)
+- Reject overlapping effective RA-DIT stage output directories before training starts.
+- Publish prune-prompt output atomically and validate best-of-n checkpoints before truncating incomplete journal tails.
+
+- Refuse `training.stream_layers` with `training.use_cut_ce` because streamed setup never installs the resident CCE patch; preserve the conservative full-logits budget. (#1206 by @kok-o in #2023)
+
+- Quality scans share the multi-format expectations extractor, see Alpaca/preference/ShareGPT text and prompt benchmark rows, and report unscanned rows instead of silently reporting them clean (#1427 by @kok-o in #2037; following @abdulbasit-ogunrinu's agreed plan).
+
+- Canonicalize ship provenance suite order so re-stamped evidence passes strict replay for non-alphabetical and default suite selections (#2035, reported by @abdulwaarith0, fixed by @kok-o in #2038).
+
+- **The layer-streaming disk pre-flight no longer under-counts a fused MoE cache under `quantization: 4bit`.** It charged the NF4 rate to every parameter, but the default `fused` expert layout keeps the stacked routed experts at the stream dtype, so for Moonlight-16B-A3B (`deepseek_v3`) it charged 8.23 GB and the sharder then wrote 30.60 GB: a disk could pass the check and fill mid-shard. The cache is now sized from the source safetensors headers (no weight is loaded), tensor by tensor, by the same storage rules the sharder writes with, including the exact NF4 sidecar bytes; for Moonlight it lands within 0.01% of the cache written in both `fused` and `per_expert`. A striped cache splits that same figure over its drives. A dense base under `quantization: 4bit` is now charged more, because its embeddings, head and norms stay at the stream dtype (Llama-3.1-8B 4.14 GB -> 5.70 GB, Llama-3.2-1B 0.64 GB -> 1.03 GB), so a run that passed by less than that margin is now refused. A checkpoint the sharder would refuse is refused before anything is copied. When the files cannot be listed or a header cannot be read, the old rate is charged and the panel says "approximately", as it now also does for a qwen4_exp base that is not an oQ checkpoint. (#2039)
+
+- Prevent Transformers threaded weight-loading SIGABRT crash on Apple Silicon MPS by setting default `HF_DEACTIVATE_ASYNC_LOAD=1` in `soup train`, `soup sweep` and training benchmarks, and surface status in `soup doctor` (#2076 reported by @feloau, fixed by @Nari-Ab in #2040).
+
+- `soup profile` and the MCP `tool_profile` now correctly recognize full fine-tuning runs (`lora.r: 0`, Spectrum, LISA, PRM, and classifiers without LoRA), budgeting the whole model parameter count, optimizer state, and gradients instead of reporting 0 trainable parameters and 0 GB optimizer memory (#1423 by @Nari-Ab in #2041).
+
+- `backend: mlx` no longer silently ignores `data.chat_template` on SFT, DPO or ORPO: the MLX
+  trainer renders the model's shipped template only, so a prefix-stable
+  override was dropped and the run failed the mask's prefix-stability check
+  deep inside training. The combination is now refused at config load
+  (#2075 reported by @feloau, fixed by @vaputa in #2051).
+
+- `soup train` no longer stalls on the interactive `Start training?` confirm
+  when stdin is not a TTY (pipes, CI, services): the run now refuses up front
+  with a message naming `--yes`. Answering the confirm by piping `y` into
+  stdin is replaced by that same refusal — pass `--yes` instead
+  (#2077 reported by @feloau, fixed by @vaputa in #2052).
+
+- `rollout_backend: ruler` now names `openpipe-art`, the package RULER ships in, instead of
+  `ruler-eval`, which is not on PyPI, and no longer treats PyPI's unrelated `ruler` grammar
+  library as the backend being installed (#2046 by @Rahul-cs50 in #2059).
+
+- **GRPO gradient watchdog now identifies which parameters went non-finite in warning logs and trainer state (#342 by @here-2007 with @harshitthek in #2060).** `GRPOStabilityCallback` inspects `named_parameters()` (falling back to `parameters()`) when a non-finite gradient step is detected, reporting the count and first few offending parameter names in the console/logger warning. Persists per-step non-finite parameter records and the cumulative run summary (`nan_param_count`, `nan_param_names`) in `state.log_history` and `trainer_state.json`. Tested on CPU with NaN injection on a real module.
+
+- **`soup adapters check` and `soup adapters diff` no longer crash on a bfloat16 adapter.** Both read the weights through `safe_open(framework="numpy")`, which cannot return bfloat16 (numpy has no such dtype), so an adapter saved from a bf16 run failed with `data type 'bfloat16' not understood`, or with "Corrupt or unreadable safetensors weights" in `check`. They now share one reader that parses the header with `read_header` and widens bfloat16 to float32 exactly (it is the top 16 bits of a float32); the other dtypes adapters store are read as before, a dtype numpy cannot hold (FP8, and the U16/U32/U64 tags `read_header` does not map) is refused as an unsupported dtype naming the tensor, and the size cap, tensor-count cap and symlink checks are unchanged (#2058 by @drakeo338 in #2063).
+
+- Refuse vision row formats (llava, sharegpt4v) on preference tasks at config load, with "has no vision-preference row path; use a text preference format instead", and drop the unsupported pixtral-dpo recipe (#1867 by @Vishalkumarsingh6428 in #2064).
+
+- Audit-log lines written by older versions now get the same webhook URL masking as new lines, applied once when the log is next written. A pass that fails is not repeated by every command (the next attempt waits a day), and temp files an interrupted pass left behind are removed by the next one (#2065).
+
+- **The layer-streaming RAM check that runs before sharding (`stream_source: ram`) now charges what the RAM tier will hold.** It charged the flat NF4 rate on the source files' size on disk. That under-counted a fused MoE base under `quantization: 4bit` (Moonlight-16B-A3B: about 8.2 GB against a 30.6 GB cache, whose stacked routed experts stay at the stream dtype) and an FP8 block source about 2x (one byte per weight on disk, dequantised in the cache). Such a base was refused only by the exact check after sharding, after minutes of work and about 30 GB of disk writes. The check now reuses the disk pre-flight's estimate from the source safetensors headers, so the headers are read once. It charges what the check after sharding measures: the decoder-layer files, the embedding and head and the resident extras (not the `per_expert` experts files, which stay on disk on every tier). It refuses by that check's rule, 70% of free RAM or 55% of physical RAM, so a base the exact check would refuse is refused before anything is sharded. When the headers cannot be listed or read, it charges the old rate and the refusal says "approximately". `stream_source: auto` is unchanged: nothing before sharding decides or warns on a RAM figure. (#2068)
+
+- **`target_modules: auto` now adapts the query projection of a DeepSeek-V3 base with `q_lora_rank: null`, such as Moonlight-16B-A3B.** DeepSeek-V3's attention builds a single `q_proj` when the config's `q_lora_rank` is `null` and the low-rank pair `q_a_proj` / `q_b_proj` otherwise, but the `deepseek_v3` entry named only the pair. peft refuses an attach only when no target matches, so on such a base the key/value and output projections took the adapter and the query path trained none, without a warning. The `deepseek_v3` and `kimi_k2` entries now follow `q_lora_rank`, read from the config the model or the layer-streaming setup has. A base whose config sets an integer, as DeepSeek-V3 and Kimi K2 do, or does not carry the field, gets the same targets as before. `glm_moe_dsa` is unchanged: its config does not accept `q_lora_rank: null`. `kimi_k25` is unchanged too, so a Kimi K2.5 base with `q_lora_rank: null` would still get no adapter on `q_proj`. No shipped K2.5 or K2.6 config sets it, and because the vision tower has its own `q_proj` the entry would have to be a regex, which `moe_lora: true` discards. (#2071)
+
+- **Layer streaming with `moe_lora: true` now keeps list attention targets, as resident training does, and its VRAM forecast charges what attaches.** The streaming setup handed the `moe_lora` helper no targets and then replaced the resolved `target_modules` list with its answer (`q_proj`, `k_proj`, `v_proj`, `o_proj`, the expert FFN names and the fused expert parameters). Every name that list does not repeat lost its adapter: on DeepSeek-V3, whose attention has no `k_proj` / `v_proj`, attention kept only `o_proj` and lost `q_a_proj`, `q_b_proj`, `kv_a_proj_with_mqa` and `kv_b_proj`; on Qwen3.5-MoE the linear-attention `in_proj_qkv` / `out_proj` were dropped; and an explicit `lora.target_modules` list was dropped entirely. The setup now resolves the targets before its meta-skeleton probe and passes them to the same helper the resident trainers use, so when the targets are a list (an explicit list, or what `auto` resolves to on DeepSeek-V3 and Qwen3.5-MoE) a streamed run adapts their union with the MoE targets, in the same order as a resident run of the same config. A string target (`auto` on qwen4_exp resolves to `"all-linear"`, or a regex) reaches the same helper on both paths, where it keeps its meaning without the MoE routers. The pre-flight VRAM forecast now counts that union and one adapter per routed expert for each fused expert tensor, instead of the configured value: `target_modules: ['o_proj']` was charged one target per layer while the union and every routed expert attached. Runs without `moe_lora` are unchanged. (#2072)
+
+- Generated fine-tuning gates require every training-data row to convert by passing `--min-valid-fraction 1.0`; standalone validation and existing workflows are unchanged. (#2079 by @kok-o)
+
+- **Under `training.stream_layers`, a LoRA target on the streamed embedding or head is refused
+  while the streamed model is built, whatever `target_modules` spelling matched it, and a tied
+  checkpoint is no longer refused (#1048 by @ybai08 in #2082).** The old check ran when the
+  config was read and matched only the literal names `lm_head` and `embed_tokens`. On an untied
+  checkpoint a regex such as `'.*(q_proj|lm_head)'` or a dotted name such as
+  `model.embed_tokens` loaded; the regex then failed at its first default save
+  (`Cannot copy out of meta tensor`), and under `task: dpo` it failed in peft during setup
+  (`Target module StreamedLargeLayer(...) is not supported`). A tied checkpoint streams neither
+  module, and its adapter saves and loads back unchanged, but it was refused anyway. The check
+  now runs after the adapter is attached and before any streaming buffer is allocated. On an
+  untied checkpoint it names the module or modules and the current `target_modules`, and says to
+  change them or train without `stream_layers`. A tied checkpoint trains and saves with the
+  defaults. Saving or resuming an adapter on an untied checkpoint's streamed embedding or head
+  is still not supported.
+
+- `soup train --cloud lambda --cloud-submit` now starts the local controller with an isolated Python interpreter (`-I`) and only the environment it needs: the Lambda settings, the variables `ssh`/`scp` use, and the proxy, certificate, SSH-agent and library-path settings. The controller replaces output characters its encoding cannot show instead of stopping, and the printed manual command is `python -I <stub>`. (#2091)
+
+- **Preserve preference pairs with `data.format: auto` (#2090 by @kok-o in #2093).**
+  DPO, IPO, SimPO, ORPO, BCO, preference and reward-model tasks resolve auto to
+  the pair converter, including `messages` prompts and mixed answer layouts.
+  Training and `--dry-run` reject missing pair columns before constructing a
+  trainer, with the loaded format and a `data.format: dpo` hint. SFT ChatML
+  and KTO's unpaired layout keep their existing behavior.
+
+- **`moe_lora: true` keeps a string `target_modules` and adds the MoE targets on top of it, as it already did for a list.** `resolve_moe_lora_targets` merged the MoE names into a list target (#1590) but replaced a string with the MoE list (`q_proj`, `k_proj`, `v_proj`, `o_proj` and the expert FFN names) plus the fused expert parameters, and a string means something to peft. `"all-linear"`, which `target_modules: auto` resolves to on qwen4_exp, adapts every linear layer but the output head, so a qwen4_exp base with `moe_lora` lost the Gated DeltaNet `in_proj_qkv` / `in_proj_z` / `in_proj_a` / `in_proj_b` / `out_proj`, the QSA indexer's `index_qk_proj`, the hyper-connection mixers and the PLE `key_proj` / `value_proj`: 10 adapted modules on a tiny two-layer model, where 32 now attach. Any other string is a regex peft full-matches against each module name, and it was dropped outright. Now `"all-linear"` (in any casing peft accepts) is kept as it is, since it already reaches every module the MoE names reach, and only the fused expert parameters are added. A regex becomes one regex, `(?:<your regex>)|(?:<the MoE names>)`, so peft adapts exactly what either half matches; a leading global flag such as `(?i)` stays with your half, and a regex that does not compile is refused at setup, naming `training.lora.target_modules`. Under `moe_lora` a string never adapts a MoE router or shared-expert gate (a module whose output is routing logits, found from the model's structure, DBRX's and JetMoE's wrapped routers included), even one your regex names: they go to peft's `exclude_modules`. Only where peft would still adapt a router weight with them excluded does the string become an explicit list of what it means without them: `all-linear` on the families peft converts from the transformers-4 layout (qwen3_moe, deepseek_v3, ...), where peft adds the router to it as a parameter `exclude_modules` does not reach, a regex reaching a non-router named `gate` there, and VeRA, whose config has no `exclude_modules`. To adapt a router, name it in an explicit list. A regex that matches no module is warned about. The `ScatterMoE LoRA:` setup line says which of these happened. Lists are unchanged, and so is every run without `moe_lora`. This applies to every resident trainer and, since #2072 hands it the streaming setup's resolved targets, to layer streaming. (#2095)
+
+- **Layer streaming refuses a quantised checkpoint it cannot dequantise, by name, before a byte of
+  the layer cache is written.** A Kimi-K2-Thinking-shaped `deepseek_v3` checkpoint
+  (compressed-tensors `pack-quantized` INT4: int32 `weight_packed`, `weight_scale`, int64
+  `weight_shape`) used to be accepted: the sharder cast every int32 word and int64 shape to the
+  stream dtype, wrote the whole cache, and the streamed build then failed with "shard is missing
+  decoder weights". A source whose names still matched, such as bitsandbytes LLM.int8() (an int8
+  `weight` beside its `SCB`), did not fail at all: the int8 codes were streamed as weights. Now
+  refused, by the sharder, the disk pre-flight and the trainer setup in the same words: a
+  `quantization_config` whose `quant_method` is anything but `fp8` (compressed-tensors in any
+  format, GPTQ, AWQ, bitsandbytes, HQQ, AQLM, EETQ, torchao, quanto and every other quantiser
+  transformers registers, or `load_in_4bit`/`load_in_8bit` alone), refused from `config.json`
+  before any weight is resolved; and any tensor stored as an integer or packed type (I8, I16, I32,
+  I64, U8, U16, U32, U64, BOOL, F4), or named like a quantiser's companion (`weight_packed`,
+  `weight_scale`, `qweight`, `qzeros`, `g_idx`, `SCB`, `absmax`, `quant_map`, `W_q`, ...). The
+  message names the format, says layer streaming cannot dequantise it, and points to a bf16 or
+  FP8-block copy. Still read: plain floating point, DeepSeek-V3's block FP8, qwen4_exp's oMLX/oQ
+  affine bundles, and the integer buffers a supported model really has (qwen4_exp's PLE n-gram
+  hashing tables, `position_ids`). A pre-flight that met a stored type its header reader has no
+  spelling for (U32, U16, F4, ...) now refuses that tensor instead of sizing the cache at a guess.
+  The sharder checks the source before it creates the cache folder, looks a cache up or
+  quarantines an index, so a refusal leaves an existing cache untouched and a cache an older Soup
+  sharded from such a source is not reused. A `quantization_config` that is not a mapping is
+  refused as malformed, and one under `text_config` is read too. (#2103)
+
+- `soup doctor --config` checks the config before the `All checks passed!` line, so a refused,
+  missing or unreadable config no longer gets that line before doctor exits 2; the System, GPU,
+  Resources and Dependencies tables still print first (#2100 by @Nari-Ab in #2106).
+
+- `soup ui --public`, `--host 0.0.0.0` and `--host ::` now print and open a loopback URL
+  (`http://127.0.0.1:<port>` or `http://[::1]:<port>`) instead of the bind address, which
+  Windows cannot connect to; the server still binds to all interfaces and the `--public`
+  phone URL keeps the LAN address. An IPv6 host such as `--host ::1` is now bracketed in the
+  URL (#2054 by @Rahul-cs50 in #2110).
+
+- **`mini_mmlu` no longer sits at a 1.000 ceiling (#1192 by @AaronProbha18 in #2113).**
+  The suite grows from 26 to 40 rows with 14 four-option questions, many with a
+  common misconception as a distractor; Qwen2.5-1.5B-Instruct measures 0.850
+  against 0.350 on SmolLM2-135M-Instruct. The answer key no longer favours one
+  letter, so a model that always answers "B" drops from 0.462 to 0.300, and the
+  bundled scorer provenance revision moves to 7 so pre-change baselines are not
+  silently compared on the new scale.
+
+- Respect explicit `training.unlearn_alpha: 0.0` for pure forget loss in unlearn training (NPO, SimNPO, and RMU) instead of silently falling back to 1.0 (#2108 by @Nari-Ab in #2114).
+
+- **`task: simpo` on the transformers backend caps the prompt as DPO and ORPO do (#2112 by
+  @dryn85-max in #2116).** TRL 0.29.1's CPO tokenizer cuts only the answers, so a long prompt
+  reached the model whole, beyond `data.max_length`. After TRL tokenizes, the prompt is now cut to
+  `data.max_length // 2` tokens, keeping its end, and the answers to the room left, so no sequence
+  exceeds `data.max_length`. A prompt longer than `data.max_length // 2` tokens is cut even when
+  the whole row would fit; a row whose prompt is at most `data.max_length // 2` tokens and which
+  fits is unchanged.
+
+- Drop KTO rows with a malformed label, with a warning, instead of silently training nulls,
+floats or containers as desirable or undesirable rows. Accept booleans, the documented normalized
+true/1/yes and false/0/no strings, and exactly the integers -1, 0 and 1. Validation
+and training report the offending label through the shared converter; `soup train` warns with
+the first such row and its count and refuses only an empty result (#2119 by @kok-o in #2126).
+
+- **Resident Kimi K2 configs are refused at config load instead of failing after the
+  model's remote code and weights start loading (#2104 by @kok-o in #2130).** The four
+  known Hugging Face Kimi K2 bases (Kimi-K2-Base, -Instruct, -Instruct-0905 and
+  -Thinking), loaded resident on the transformers backend, passed validation and then
+  failed at model loading. They now stop at load with `Resident Kimi K2 is unsupported on
+  Transformers 5.x`. For Base and Instruct the message names the supported route,
+  `training.stream_layers: true` (#2107), its tokenizer prerequisites
+  (`--trust-remote-code` and `pip install tiktoken`) and the streaming guide; that route
+  is verified on CPU against a tiny K2-shaped checkpoint only, not by full K2 or GPU
+  training. Thinking and Instruct-0905 have no supported route yet, and K2.5 / K2.6 are
+  outside this check. The two affected recipes are marked unavailable: `soup recipes
+  show` still prints them, and `soup recipes use` refuses before writing a config, with
+  exit code 3.
+
+- Honor `training.gradient_checkpointing` in distill, classifier (`classifier`, `reranker`, `cross_encoder`), ASR and unlearn, which ignored it and always trained with checkpointing off. Distill, classifier and ASR now pass it to their HF training arguments; unlearn, which has its own training loop, turns checkpointing on for its policy model. Every enabled tier is full checkpointing on these tasks, and the default `false` is unchanged. (#797 by @ybai08 in #2140)
+
+- **`training.freeze_layers` / `training.freeze_ratio` did nothing on a LoRA run: the freeze was set before `get_peft_model`, which then attached a fresh trainable adapter to every targeted module in every layer, the frozen ones included (#1432 by @AmirF194 and @VanshSharmaPES in #2145).**
+  The SFT trainer now passes the layers the freeze plan left trainable to peft as `layers_to_transform`, so a frozen layer gets no adapter. On a 2-layer Llama with LoRA on `q_proj` / `v_proj`, `freeze_layers: 1` (or `freeze_ratio: 0.5`) takes the trainable LoRA parameters from 1,024 to 512 and layer 0 no longer changes. A config that sets `freeze_layers` / `freeze_ratio` together with LoRA now trains fewer layers than it did before, which is what the option always documented.
+  Shapes peft cannot restrict by layer are refused when the model is built rather than ignoring the freeze: a string `lora.target_modules` (a regex, or `all-linear`, including the value `auto` resolves to for some architectures), a list target that resolves only outside a numbered decoder layer (such as `embed_tokens`), `lora.target_parameters`, `lora.use_vera`, and a plan that freezes every layer. A top-level `lm_head` target is accepted and keeps its adapter. Full fine-tuning (`lora.r: 0`) is unchanged.
+
+- **`training.lora.rank_pattern` and `alpha_pattern` are refused with `backend: mlx` instead of being silently ignored (#1996).** The MLX trainer builds every adapter, for SFT, DPO, ORPO and SimPO alike, from the one scalar `lora.r` and `lora.alpha`, so a config that asked for a per-module rank or alpha loaded, passed `soup train --dry-run` and trained a uniform adapter, and `soup doctor --config` listed nothing for it. Now refused at config load, naming each field the config set, `backend: mlx`, and the two ways out: remove the pattern, or use `backend: transformers`, which applies it. A task MLX cannot run, `lora.r: 0` and MLX DoRA keep their own, earlier refusals. An empty `{}` or `null` sets nothing and still loads, and `transformers` configs are unchanged. This is a stop-gap: it goes away when the MLX trainer honours the patterns. (#2150)
+
+- Accept UTF-8 BOMs in user-supplied command inputs (#2136 reported by @yunaremaia, fixed
+  by @vaputa in #2155), preserving the first
+  JSONL record and prompt text. Covers agent predictions, tokenizer corpora,
+  benchmark prompts, draft inputs, edit and shrink calibration data, diagnose
+  evidence, Can attestations, generation context and Autopilot's local model
+  config probe. Attestation verification accepts BOM-prefixed statements and
+  signature sidecars while retaining canonical signing and trusted-key checks;
+  embedded U+FEFF and UTF-8 output encoding are unchanged.
+
+- **A streamed `soup train` on Linux (WSL2 included) now gets the `expandable_segments` allocator
+  hint (#2149 by @ybai08 in #2156).** The hint is set only while CUDA is not yet initialised,
+  and `soup train` initialised CUDA when it detected the device, before the streamed setup set
+  the hint, so every streamed CUDA run printed "expandable_segments allocator hint not enabled:
+  CUDA was already initialised before Soup could set it". `soup train` now sets
+  `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` before it detects the device, for streamed
+  runs on Linux. A value you exported is kept, and if that value is why the hint is not on, the
+  line now says `PYTORCH_CUDA_ALLOC_CONF is set to something else`. Runs without
+  `stream_layers`, macOS and Windows are unchanged.
+
+- **`training.lora.rank_pattern` and `alpha_pattern` are refused with `backend: unsloth` instead of being silently ignored (#2153).** Every unsloth setup, for SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, BCO, preference, pretrain, embedding and TTS alike, goes through one loader that gives `FastLanguageModel.get_peft_model` a single scalar `lora.r` and `lora.alpha` and has no parameter for a pattern, so a config that asked for a per-module rank or alpha loaded, passed `soup train --dry-run` and trained a uniform adapter. Now refused at config load, naming each field the config set, `backend: unsloth`, and the two ways out: remove the pattern, or use `backend: transformers`, which applies it. A task with no unsloth setup, SFT with a vision or audio modality, and `lora.r: 0` keep their own refusals. An empty `{}` or `null` sets nothing and still loads, and `transformers` configs are unchanged. This is a stop-gap: it goes away when the unsloth loader honours the patterns. (#2165)
+
+### Security
+
+- Raise the pypdf floor for the `documents` extra to 6.21.2 (`pypdf>=6.21.2`).
+
+- Bound judge replies to 1 MiB and HTTP generation/Magpie replies to 8 MiB while
+  streaming decoded bytes, including gzip expansion. Oversized replies are
+  refused before JSON parsing, close the response stream, and do not log the
+  response body. Generation/judge errors identify the endpoint setting and cap;
+  Magpie drops the affected sample and continues within its attempt limit
+  (#1819 by @kok-o in #1929).
+
+- `for_terminal` and `strip_control` now also remove bidi controls (U+202A-U+202E, U+2066-U+2069, U+061C, U+200E, U+200F) and invisible separators (U+200B, U+2028, U+2029, U+FEFF) from dataset, adapter and evidence text before it is printed, so a crafted row can no longer reorder or hide what a preview shows; ZWJ and ZWNJ are kept for Arabic, Persian, Indic and emoji text (#1861 by @aadityad12 in #1953, reproduction by @akkupratap323).
+
+## [0.76.1] - 2026-10-14
+
+### Changed
+
+- **The README and the performance docs now state the 8B NF4 figure with its SM clock and give the post-#331 row, and no longer say the re-measurement is pending (#1207, in #1699).** Llama-3.1-8B-Instruct NF4 on an RTX 3050 Laptop 4 GB reads **119.6 tok/s at 952 MHz in a 3.32 GB peak** before the #331 repair and **208.6 tok/s at 1935–1957 MHz in a 2.40 GB peak** after it, the second row measured by @umran666 (#1103). The two are not directly comparable: 59% against 68% of the same-session GEMM ceiling is about 14% slower per unit clock, so the raw 1.74x gain is the clock, not a speedup, and large-layer streaming changed the memory pattern between the rows, so even the fraction is not like-for-like. Changed: the headline, the GIF alt text and caption and the preprint bullet (Citing Soup) in `README.md`, and the table row, the headline and the large-layer paragraph in `docs/performance-and-quantization.md`. The four README translations (`README.tr.md`, `README.ar.md`, `README.ja.md`, `README.zh.md`) carry the same sentences, with every number, link and code span kept identical, and are re-stamped; their prose is a machine-assisted draft for the translation maintainers to polish. The preprint (DOI 10.5281/zenodo.21771064) is not edited in place; #1207 tracks its amendment as a new version.
+
+- **The "What's New" block of `README.tr.md`, `README.ar.md`, `README.ja.md` and `README.zh.md`
+  now describes v0.76.0 (#1825).** All four still described v0.75.0. The new text follows the
+  block in `README.md` bullet by bullet, with every inline code span, command, flag, config key,
+  URL, link target, number and benchmark file name kept identical; the prose is a machine-assisted
+  draft for the translation maintainers to polish. This change moves no `synced-from` stamp,
+  because the section is exempt from them; the stamps of the four files were re-taken by #1699 in
+  the same release.
+
+- soup.yaml and every other YAML file Soup reads go through one loader that applies the same nesting and expansion limits (100 levels of nesting; one node per source byte plus 10,000 for anchors, aliases and merge keys, with merge keys chained at most 100 levels), and each reader keeps its own size cap: 1 MiB for the training-config readers and for readers that had no cap before, 256 KiB for recipes, `export --quant-config` files, RA-DIT configs and sweep files, 5 MiB for agent specs, 16 MiB for can manifests, 64 KiB for README frontmatter, 4 MiB for the config read by `soup ship`. A soup.yaml that is over a limit, cannot be read or is not valid YAML is refused with one line naming the file and the problem; the other readers report through their own handlers. The audit log now finds credential options from the command tree and also masks long options by name, so the values of `--slack-url` and `--discord-url` are masked and `--min-tokens`, a length threshold, is no longer masked (#1827).
+
+- **The Typer floor is `typer>=0.15.4`, and one CI cell now starts the CLI on the declared Typer
+  and Click floors (#1858).** `typer>=0.9.0` was declared while no command could run below Typer
+  0.12.4: the command tree did not build (`RuntimeError: Type not yet supported: int | None`), so
+  `soup --help` and `soup version` failed with everything else. Typer 0.12.4 - 0.15.3 start the
+  CLI only next to Click 8.1 or older and do not ask for it, so a resolver paired them with a
+  Click on which every help page raised. 0.15.4 is the lowest Typer that works with any Click it
+  can be installed with; `click>=8.0.0` was measured again and holds. A fresh install is
+  unchanged, since a resolver already picks the newest Typer. An environment that holds an older
+  Typer now has it upgraded, or the conflict named, at install time, where before the install
+  succeeded and the first command failed; `soup doctor` reports such a Typer as outdated. The
+  `transformers-floor` CI job installs exactly the two declared floors, builds the command tree,
+  renders every help page and runs `soup version` under them, and a test fails when a declared
+  floor and that job's pin differ (#1802).
+
+### Fixed
+
+- **`task: dpo`, `ipo`, `bco` and `preference` train on the bundled DPO examples again.** Both files (`examples/data/dpo_sample.jsonl`, `examples/data/chat_preferences.jsonl`) and any dataset written the same way, a string `prompt` beside `chosen` / `rejected` message lists that repeat the user turn, failed inside trl after the model had loaded, with an error that changed with `PYTHONHASHSEED` (`'list' object has no attribute 'endswith'`, or a `TypeError`). The `dpo` and `kto` converters now hand the trainer every preference row in one layout: all strings, or all message lists with the prompt turns in `prompt` only. `reward_model` no longer trains on a text with the question in it twice, and `orpo` and `simpo` prepare the same tokens as before. A row that cannot be written that way (one answer a string and the other a message list, a malformed message, no prompt to be found) is dropped at load with a reason that names the field, and a dataset that mixes text rows with conversational ones loads as conversations, with a note. A string `prompt` beside message-list answers is not read when the two answers share leading turns: those turns are the prompt, as `orpo` and `simpo` already read such a row, so a question written only in that string has to be in the conversations as well (#1849 by @dryn85-max in #1866).
+
+- A single-string `data.train` that names a Hub dataset with a dot in its name (`teknium/OpenHermes-2.5`, `org/name.v1`) is now loaded from the Hub instead of failing with `Data file not found`: the loader read the dot as a file extension. A single string now takes the same route as the same name inside a `data.train` list: a supported file extension (`.jsonl`, `.json`, `.csv`, `.parquet`, `.txt`) means a local file, a `://` string a remote URI, anything else a Hub id. A path with an unsupported suffix that does not exist (a typo such as `data/train.jsnol`) therefore goes to the Hub lookup too, instead of `Data file not found`, while an existing file with an unsupported suffix (`data.tsv`) still gets `Unsupported file format` (#1889).
+
+## [0.76.0] - 2026-10-12
+
+### Added
+
+- **Added `soup data clean` for automated dataset sanitization and repair (#718 by @Deadpool2000).**
+  Provides deterministic, non-destructive cleaning of fine-tuning datasets across all supported formats (`chatml`, `alpaca`, `sharegpt`, `dpo`, `kto`, `tool-calling`). Runs safe character sanitization (C0 controls, zero-width spaces `\u200b-\u200d`, BOM) and empty assistant turn pruning by default, while placing heuristic transformations behind explicit opt-in flags (`--strip-boilerplate`, `--repair-code`, `--repair-json`, `--prune-echo`). Accurately tracks all modifications, strictly preserves unknown metadata keys and custom roles non-destructively, guarantees input file immutability, refuses unsafe in-place or unforced overwrites, and supports dry-run inspection and structured machine-readable JSON output.
+
+- **Token-chunked checkpointed KL distillation (#722 by @kok-o in #743).** Added
+  `training.distill_chunk_size` and `training.distill_checkpoint` knobs for `task: distill`.
+  Response-only token selection (`labels != -100`) eliminates unmasked prompt and padding
+  tokens from retained autograd memory, while token chunking and optional non-reentrant
+  activation checkpointing (`torch.utils.checkpoint.checkpoint(..., use_reentrant=False)`)
+  discard intermediate `log_softmax` and divergence tensors during forward and recompute
+  them in backward, reducing retained autograd tensor bytes and bounding transient peak
+  activations on long sequences and large vocabularies. The divergence kernel computes
+  and accumulates in FP32 precision, shifting baseline bf16 distillation loss by up to ~1 ULP (~0.4%).
+
+- **A test now fails when any typer command is called as a plain function with a parameter left unfilled (#752 by @dchaudhari7177 in #757).** Called directly rather than through typer, an unfilled parameter keeps its `typer.Option`/`typer.Argument` default, a truthy `OptionInfo`. That is how `soup eval auto` crashed after saving its results in #752, fixed at its two call sites by #754. `tests/test_typer_defaults_do_not_leak.py` walks the whole `soup_cli` package, resolves each call through `from X import name` to the command it names, and matches positional arguments to parameters by declaration order, so the *next* unfilled parameter anywhere fails the suite and the report names only the parameters actually left unfilled. A synthetic command proves the reporter can still report, so the guard cannot be silenced unnoticed.
+
+- **`soup adapters audit` checks whether a finished run did what its config asked (#762 by @Srinivasan8888 in #763).** The MLX path records its effective settings in `adapter_config.json` — optimizer, scheduler, warmup and total updates, weight decay, gradient clipping, accumulation, checkpointing and the response-only mask — because each of those was once accepted and silently dropped (#683, #684, #685, #686, #749). Nothing read that record back, so answering "did my run do what I asked?" meant opening two files and comparing by eye. `soup adapters audit ./out --config soup.yaml` prints a per-setting table of asked-versus-ran, explains each divergence, and exits `2` when any is found -- `0` on agreement and `1` on a usage or read error, so a CI gate can tell a verdict from a mistyped path (matching `soup ship` and `soup shrink`); `--json` emits the same result for machine consumption. A setting the record cannot speak to is reported `unknown` and never as agreeing — a false clean bill is worse than no audit — and `unknown` does not fail the command, since an older adapter simply predates the keys. The motivating case is a warmup that rounds away: `warmup_ratio: 0.03` over twelve optimizer updates is zero warmup steps, which the trainer warns about once and the adapter records permanently. Response-only masking is audited by its recorded *effect* (`mask_prompt` / `response_token_mask`) rather than by the request the record echoes back, so a plain-text run that asked for masking and silently got none — #683 itself — is reported as a divergence instead of a clean bill. On the transformers path only LoRA shape can be checked, because PEFT writes its own `adapter_config.json`, and the command says so rather than implying a clean bill it cannot give.
+
+- `soup train` accepts `--nodes`, `--node-rank`, `--master-addr`, and `--master-port`
+  for multi-node Accelerate launches. `--gpus` is the per-node count, so eight GPUs
+  on two nodes launches 16 workers. Launch settings are validated before training:
+  `--master-addr` must parse as an IPv4/IPv6 literal or an RFC 1123 hostname, so a
+  host with the port glued on (`head:29500`) is refused rather than exported as
+  `MASTER_ADDR` on every node. Multi-node NCCL defaults allow InfiniBand and preserve
+  user overrides. `--no-reexec` and `--dry-run` show the command without starting
+  workers. (#40 by @tristangrech in #853)
+
+- **Added ready-made `kimi-k2.5-dpo` and `kimi-k2.5-grpo` recipes for moonshotai/Kimi-K2.5
+  (#275 by @Areen-09 in #872).** Completes the task trio for the base model,
+  mirroring the Kimi-K2.6 DPO and GRPO architectures over the ~1T MoE geometry
+  (LoRA r32/a64 for DPO, r16/a32 for GRPO, 4-bit quantization, `moe_lora`,
+  `gradient_checkpointing`, `max_length: 8192`). The recipes are not trained — ~1T MoE
+  requires multi-node DeepSpeed — so hyperparameters are inherited from K2.6 templates
+  rather than tuned for K2.5. Catalog count 167 -> 169.
+
+- **Added ready-made `minimax-m3-dpo` and `mistral-large-3-dpo` recipes
+  (#849 by @akkupratap323 in #933).**
+  Both mirror their giant-MoE SFT siblings with the catalog's DPO preference-data
+  shape, LoRA r32/a64, 4-bit quantization, `moe_lora`, gradient checkpointing, and
+  one training epoch. These inherited configurations are intended for multi-node
+  use and have not been validated by training the 428B and 675B base models.
+
+- **`soup doctor` now reports GPU architecture and precision capability diagnostics (#829 by @Samearth17 in #947).** GPU diagnostics show the detected NVIDIA compute capability and architecture, whether the installed Torch build includes native/PTX support for that GPU, and hardware/software support for BF16, FP8, and NVFP4. Unsupported GPU architectures now include a CUDA-enabled PyTorch reinstall hint.
+
+- Add the `qwen3.5-35b-a3b-grpo` recipe, completing the Qwen 3.5 35B-A3B SFT, DPO, and GRPO trio. (#847 by @Amix29 in #956)
+
+- **Added optional PEFT LoRA-FA optimizer support (#725 by @webdevsamran in #962).** Freezes LoRA A matrices and trains only B matrices via PEFT's create_lorafa_optimizer, reducing adapter activation memory retention and cutting optimizer state size by 50% during training. Supported for sft, pretrain, and embedding tasks on the Transformers backend.
+
+- **LoRA `rank_pattern` and `alpha_pattern` are now held by a test on every trainer that builds an adapter (#959 by @dchaudhari7177 in #963).** #923 routed all eighteen `build_lora_config` callers through the shared builder, but ten had a behavioural test. `asr`, `classifier`, `distill`, `embedding`, `ppo`, `unlearn` and layer streaming are now driven on CPU with a tiny model and checked for the configured per-module rank (streaming, which never materialises the base, is checked on the `LoraConfig` it streams with), and a scan of `trainer/` fails when a new caller of the builder has no pattern test.
+
+- **Added ready-made `qwen3.6-35b-a3b-dpo` and `qwen3.6-35b-a3b-grpo` recipes for Qwen/Qwen3.6-35B-A3B
+  (#275 / #846 by @Areen-09 in #978).** Completes the task trio with the existing SFT sibling
+  over the ~35B MoE geometry (3B active, LoRA r16/a32, 4-bit quantization, `moe_lora`,
+  `moe_aux_loss_coeff: 0.01`). DPO adopts the `qwen3.5-35b-a3b-dpo` template (`max_length: 4096`),
+  and GRPO adopts the `qwen3-30b-a3b-reasoning-grpo` template (`max_length: 8192`,
+  `gradient_checkpointing`). Both recipes declare explicit `modality: text`.
+  Catalog count 172 -> 174.
+
+- **Added ready-made `qwen3.6-27b-dpo` and `qwen3.6-27b-grpo` recipes
+  (#845 by @akkupratap323 in #1015).** Both preserve the dense SFT sibling's explicit
+  text modality, LoRA r16/a32, 4-bit quantization, and `auto` batch size with gradient
+  accumulation 8. DPO uses preference JSONL data with `lr: 5e-6`; GRPO uses reasoning
+  JSONL data with four generations and the accuracy reward. These inherited 27B
+  configurations were schema- and CLI-validated but were not trained locally.
+  Catalog count 174 -> 176.
+
+- **`soup rewind` names the dataset rows a training loss spike came from (#1000 by @Srinivasan8888 in #1018).** An SFT run now writes `<output>/rewind.jsonl`: one line per micro-batch holding the dataset rows in it, each row's mean supervised-token loss and its supervised-token count. `soup rewind` lists the steps whose loss went non-finite or past twice the median of the previous twenty measured steps, then ranks that step's rows by their share of its summed token loss, so one long malformed row stands out even when its per-token mean is ordinary. On an 8 GB M1 it flagged step 58 of a Qwen2.5-0.5B run and put the poisoned row at 100% of that step's loss. Both backends, controlled by `training.rewind_log` (default on); the recorder switches itself off with one warning rather than record rows it cannot attribute, including on resumed runs and under packing.
+
+- **`soup draft measure` reports the break-even acceptance rate and the best draft length (#843 by @Srinivasan8888 in #1042).** It now also times the draft on its own and reports the latency ratio, the acceptance at which assisted generation stops being slower at the `--num-assistant-tokens` in use, and the modelled best k, all labelled as a ceiling that assumes independent acceptance and excludes framework overhead. A draft no faster than its target is reported as "no acceptance rate pays". `--sweep-k 1,2,3,5,8` measures assisted throughput at each draft length and names the measured best k. The docs no longer say a 70% acceptance rate is where speculative decoding pays: the one pair measured at scale was 81% and ran at 0.48x.
+
+- **`pytest -m gpu` selects the CUDA-dependent tests, and `CONTRIBUTING.md` says how to run and report them (#833 by @Srinivasan8888 in #1050).** Fifteen test modules had their own `torch.cuda.is_available()` probe, and nine had an identical `requires_cuda` skip, so the GPU subset couldn't be selected and was only ever run by accident. `tests/conftest.py` now holds the one probe and skips `@pytest.mark.gpu` tests without CUDA; `tests/test_issue833_gpu_marker.py` fails on a private probe. Runs on real cards are recorded in `benchmarks/gpu-test-runs.md`, seeded with the H100 and RTX 5070 Laptop runs already published.
+
+- **`soup infer` supports opt-in batched causal-LM inference with `--batch-size`; the default remains 1 so existing inference behavior is preserved. fp16/bf16 batching may not be bit-exact with batch size 1.** (#765 by @Samearth17 in #1083)
+
+- **Arabic and Japanese READMEs (#1100 by @Ercaner1988).** `README.ar.md` and
+  `README.ja.md` are full translations of the current `README.md`, linked from the language
+  banner and registered in `MAINTAINERS` behind the same sync gate as `README.tr.md`. The Arabic
+  tables sit in a right-to-left block, and the 13 Latin identifiers that GitHub's bidi
+  algorithm rendered reversed inside Arabic text (the concept DOI showed as
+  `zenodo.21771064/10.5281`) are wrapped in `<span dir="ltr">`, found by running the algorithm
+  over every code span rather than by eye. Spanish, Russian and Chinese are not included until
+  someone can verify them.
+
+- **`data.mask_history` now does what it says (#761 by @Srinivasan8888 in #1101).** The
+  field was declared, validated and documented with a worked example, and read by no
+  module outside the schema, so a config asking to train on the last turn trained on
+  every turn. With `train_on_responses_only: true` it now keeps only the **last**
+  assistant turn in the loss; earlier assistant turns are masked alongside the user
+  and system turns that path already excludes, so it only ever removes tokens from
+  the loss. It applies to `task: sft` and `task: distill`, the two trainers that
+  build their labels through the shared chat formatter.
+- **`data.mask_history` requires `data.train_on_responses_only: true` (#761 by @Srinivasan8888 in #1101).**
+  Without it every token trains, including the history the field asks to exclude, so
+  the combination is refused at config load with a message naming both. That also
+  rules out `train_on_messages_with_train_field`, which is already exclusive with
+  `train_on_responses_only`.
+- **`backend: mlx` says it ignores `data.mask_history` (#761 by @Srinivasan8888 in #1101).**
+  MLX SFT builds its own mask and supervises every assistant turn, so the field has
+  no effect there. `soup train` now lists it on its "MLX backend ignores:" line, and
+  `soup doctor --config` reports it instead of an all-clear.
+
+- **Added the measured mixed QuEST route as an experimental SFT path (#674 by
+  @Shutaru in #1105).** `training.quantization_aware: quest` reconstructs the
+  confirmed 168-W4 / 161-A4 / seven-A16 route on its exact 24-block Llama
+  topology, calibrates fixed activation clips from the first 32 tokenized
+  training rows, and records the full route in a mandatory sidecar on final and
+  checkpoint saves. Resume and the Soup-aware loader reject metadata drift.
+  The retained result is evaluation-only on one model: this is not strict W4A4,
+  packed INT4, upstream QuEST parity, an efficiency claim, or evidence that
+  training through the route preserves quality.
+
+- Warn on unconsumed staged config fields with a v0.77 refusal deadline (#808 by @Guts1005 in #1106)
+
+- **Adapter manifests can now be signed and verified with Sigstore keyless OIDC (#185 by @Amix29 in #1114).**
+  Install `soup-cli[sigstore]`; `soup adapters sign --backend sigstore` records
+  the Fulcio/Rekor bundle, and verification requires an out-of-band certificate
+  identity and OIDC issuer instead of trusting the bundle's own identity.
+
+- **In-toto/SLSA attestations can now use Sigstore keyless OIDC signing (#179 by @Amix29 in #1115).**
+  `soup attest emit --sign sigstore` writes a modern Sigstore Bundle into the
+  existing `.sig` sidecar, and verification requires an out-of-band certificate
+  identity and OIDC issuer; install `soup-cli[sigstore]` to sign or verify. An
+  explicit Sigstore request can no longer degrade to unsigned.
+
+- **`soup recipes verify` checks that a config can attach a LoRA adapter, without downloading weights (#1116 by @Srinivasan8888 in #1117).**
+  It builds each base's architecture on the meta device from `config.json` alone, with the
+  model class that config's trainer loads (only SFT chooses it by `modality`), then builds
+  the adapter config the way the trainer does — `training.moe_lora` included — and runs
+  the real peft attach with the config's own LoRA settings. `soup recipes verify` checks
+  every shipped recipe, template and example (`--no-templates` limits it to the recipes);
+  `--config soup.yaml` checks one before a long download; `--json` emits machine-readable
+  rows. Exit codes follow the gate/verdict contract: 0 when everything checkable attaches,
+  2 when a config cannot attach, 3 for a bad flag or a missing or unparseable `--config`,
+  and 1 for a crash or a missing or broken `torch` / `transformers` / `peft` (it names
+  `pip install "soup-cli[train]"`). Text from a config is printed safely: markup prints
+  literally and control bytes are stripped. `task: asr` without `asr_lora` reports no
+  adapter, as that trainer full-fine-tunes, and the target resolver's advisories go to
+  stderr, so `--json` stdout stays a document. A gated repo, one needing
+  `trust_remote_code`, or a config this `transformers` cannot read is reported as
+  unverified rather than broken, and remote code is never executed.
+
+- **`soup bench train` measures a short SFT run and fails when the model was not training (#836 by @Srinivasan8888 in #1146).**
+  `soup bench train --config soup.yaml --steps N --warmup W -o report.json` trains for
+  exactly N optimizer steps in a scratch directory and writes a JSON report. The report
+  holds median and p95 step time after warm-up, supervised and total tokens, allocated
+  and reserved peak memory kept separate, provenance, and a hash of the resolved config.
+  It exits 1, and still writes the report, when there are no trainable parameters, a
+  step logged `grad_norm == 0` or a non-finite norm, the trainable parameters did not
+  change, or fewer steps ran than requested. An absent `grad_norm` is recorded as not
+  reported, never as `0.0`. It covers `task: sft` on the transformers backend.
+- **`soup bench` is now a group with `infer` and `train` (#836 by @Srinivasan8888 in #1146).**
+  `soup bench <model>` still runs the inference benchmark, which is now also
+  `soup bench infer <model>`. `soup bench --help` lists the two subcommands; the
+  inference flags are under `soup bench infer --help`.
+
+- **Added ready-made `deepseek-v4-pro-dpo` and `deepseek-v4-pro-grpo` recipes for deepseek-ai/DeepSeek-V4-Pro (#850 by @kok-o in #1297).** Completes the task trio with the existing SFT sibling over the 1.6T-class flagship MoE architecture (LoRA r32/a64, 4-bit quantization, `moe_lora: true`, `moe_aux_loss_coeff: 0.01`, `gradient_checkpointing: true`). DPO uses `max_length: 4096`, `epochs: 1`, `lr: 5e-6`, and `gradient_accumulation_steps: 32`. GRPO uses `max_length: 8192`, `epochs: 3`, `lr: 1e-5`, and `gradient_accumulation_steps: 16`.
+
+- **`soup infer` and `soup bench infer` accept an experimental `--cuda-graphs` flag (#1322).**
+  On a resident Qwen2 or Llama model, optionally under one unmerged LoRA adapter from
+  `soup train`, generation replays CUDA graphs instead of launching every kernel from Python;
+  without the flag nothing changes. Measured on an RTX 5070 Laptop (Windows, unpinned) with
+  Qwen2.5-1.5B-Instruct in FP16 and 128 greedy tokens per request, the slowest run with the
+  flag was 2.9x the fastest run without it (2.8x under an unmerged LoRA), with identical token
+  IDs on every request and at most +42 MiB of reserved VRAM, and `soup infer` over 24 prompts
+  of varied length, model load and compile included, took 96-102 s against 131-282 s with
+  identical responses. Before the first row Soup runs one greedy warm-up on the longest
+  prompt, so a one-prompt run can take longer overall; the summary's `Duration` and
+  `Throughput` start after it. The flag needs PyTorch >= 2.14 and accepts plain LoRA only:
+  quantization, CPU or disk offload, layer streaming, flash attention, DoRA and other LoRA
+  variants, several adapters, a non-CUDA device or more than one GPU, and `--task asr` are
+  refused before any output is written, and every refusal ends with an `Omit --cuda-graphs`
+  sentence. It is not available in `soup chat` or `soup serve`. Record:
+  `benchmarks/gate-v0.76.0-cuda-graph-decode.md`.
+
+- **`soup ui` keeps the session across reloads with an HttpOnly cookie on a loopback bind (#1191 by @mohdUwaish59 in #1474).** Opening `/?token=<TOKEN>` checks the token, sets an `HttpOnly; SameSite=Strict; Path=/` session cookie named after the port (`soup_ui_session_<PORT>`) and redirects to the same URL without `token`, keeping the other query parameters. The cookie holds a random session id that the server keeps only in memory, never the token, so a reload or a new tab stays signed in without the token being readable from page script, and every restart ends every session. A cookie-authenticated request other than `GET`/`HEAD` must carry an `Origin` naming this exact server (scheme, host and port), because every port of `127.0.0.1` is one site and `SameSite=Strict` alone would not stop a page from another local app; a missing or `null` `Origin` is refused with 403. The `Authorization: Bearer` header is unchanged and needs no `Origin`, SSE streams accept the cookie while Bearer clients keep the ticket exchange, and CORS still sends no `Access-Control-Allow-Credentials`. On `--public` or any non-loopback bind no cookie is set or accepted, and the phone page keeps the token in page memory as before.
+
+- **Layer streaming can stripe its disk-tier cache across two or more NVMe drives (#1536).**
+  Set `SOUP_LAYER_STREAM_STRIPE_DIRS` to extra folders on other NVMe drives (`;` on Windows,
+  `:` elsewhere): decoder layer `i` is stored on drive `i mod N`, and the reader keeps one layer
+  in flight per drive. Each folder must already exist, be absolute and not a link, sit on its own
+  volume and classify as NVMe; anything else refuses the run and names the entry. Soup makes its
+  own folder inside each root owner-only. `training.stream_read_ahead` defaults to drives + 1.
+  On a cold 70B-shaped NF4 store at seq 512 the training step went from 17.4 s to 9.97 s (1.75x)
+  on two drives from a rested box (`benchmarks/gate-two-drive-striping.md`); under sustained
+  back-to-back load both drives throttled and the speed-up measured 1.28-1.41x
+  (`benchmarks/probe-rtx5070-two-drive-sustained.md`, no formal verdict yet). Unset, nothing
+  changes.
+
+- **`soup autopilot` asks for a missing `--model`, `--data` or `--goal` when run in a terminal (#1576 by @Deadpool2000 in #1577).** When it is not run in a terminal it fails as before.
+
+- **Added a Simplified Chinese (`zh-Hans`) README translation (#1632 by @Momoyeyu in #1733).**
+  `README.zh.md` mirrors the English README section-by-section, while the shared
+  language banner, code blocks, URLs, link targets, numbers, and inline code stay
+  synchronized by the translation ratchet.
+
+- **Single-adapter health and silent-failure diagnostic scan (`soup adapters check`).**
+  Audits a LoRA adapter for Frobenius weight delta ||ΔW||_F with float64 accumulation
+  and rsLoRA scaling awareness, live layer fraction, all-zero lora_B initialisation traps,
+  orphaned projections, and legacy .inner. wrapper namespace leaks without a PyTorch dependency,
+  ending in a single contract line (`alive` vs `inactive: <reason>`).
+  (#1721 by @harshitthek in #1738)
+
+### Changed
+
+- **`soup ship` evidence decoding is now shared by the CLI and MCP surfaces (#758 by @ousamabenyounes in [#768](https://github.com/MakazhanAlpamys/Soup/pull/768)).** A single strict schema reader now keeps verdict fields, refusal behavior, warning semantics, and the default forgetting threshold in lockstep; unknown verdict-affecting fields are rejected until both surfaces support them.
+
+  Reviewing that reader found a second defect and it is fixed in the same release: the MCP
+  error redactor paired on bare quotes, so when an evidence value held **both** quote
+  characters -- where `repr()` delimits with single quotes and backslash-escapes the internal
+  ones -- the pairing slipped by one and the evidence text between them reached the transport.
+  Each alternative now consumes an escaped character inside the run, so an escaped quote
+  cannot end it.
+
+- **Unify exit codes across gate and verdict commands under a single 0/2/3 taxonomy (#813 by @kok-o in #921).**
+  Gate and verdict commands now consistently exit `0` on pass / OK / minor / ship, exit `2` on gate failure / regression / drift / don't ship / suite failure (`EXIT_GATE_FAILED`), and exit `3` on usage or input errors (missing or unparseable input files, bad flags, invalid schema) (`EXIT_USAGE_ERROR`). Shared constants are centralized in `soup_cli.utils.exit_codes`.
+
+  **Breaking changes in command exit codes:**
+  - `soup eval gate`: exit on gate failure changed from `1` to `2`.
+  - `soup eval against`: exit on regression changed from `1` to `2`; exit on unsupported metric/tracker changed to `EXIT_RUNTIME_ERROR` (`1`) / `EXIT_USAGE_ERROR` (`3`).
+  - `soup eval quant-check`: aligns `MAJOR` regression exit code with `EXIT_GATE_FAILED` (`2`); unparseable inputs exit `3`.
+  - `soup lock check`: drift exit code changed from `3` to `2` (`EXIT_GATE_FAILED`); missing/unparseable lock file exits `3`.
+  - `soup lock show`: missing lock file exit code changed from `2` to `3` (`EXIT_USAGE_ERROR`), aligning with documentation.
+  - `soup expect`: suite failure exit code changed from `3` to `2` (`EXIT_GATE_FAILED`); input/schema errors exit `3`.
+  - `soup data validate`: input errors exit `3` (previously `1`).
+  - `soup data lint`: unsupported format / input errors exit `3` (previously `2`).
+  - `soup ship`: offline `--evidence` parse and malformed evidence errors exit `3` (previously `1`).
+  - Click / Typer CLI usage errors (such as `--bogus` or missing required options) on gate and verdict commands now exit `3` (`EXIT_USAGE_ERROR`), avoiding collision with `EXIT_GATE_FAILED` (`2`).
+
+- Changed `soup data recipe --execute` and the Python `run_recipe` API to refuse
+  silent placeholder generation by default; pass a live provider or explicitly select
+  offline mode (#817 by @Amix29 in #922).
+
+- **The v0.72.2 8B NF4 throughput protocol is now re-runnable on repaired code, and the post-repair row is recorded (#361 by @umran666 in #1014, measured in #1103).**
+  The RTX 3050 run has happened: Llama-3.1-8B-Instruct NF4 streamed at
+  **208.6 tok/s** in a 2.40 GB peak (5.70 GB pinned store) at 1935 MHz / 59 C,
+  100% util, 59% of the same-session GEMM ceiling against 68% pre-repair — the
+  row and its clock in `benchmarks/gate-v0.72.2-nf4.md`, the raw numbers in
+  `benchmarks/results/issue361-post-repair-8b-nf4.json`. It ran at roughly twice
+  the pre-repair row's 952 MHz, so its 208.6 tok/s and the published 119.6 are
+  not comparable directly and the record says so. `benchmarks/harness/
+  issue361_nf4_throughput.py` repeats the step-6 protocol unchanged (batch 1,
+  S=512, 50 steps after 10 warm-up, `PagedAdamW8bit`, same-session GEMM
+  ceiling) with `require_pin=True` so a pageable fallback refuses instead of
+  recording the lower-bound shape, and the 119.6 tok/s / 3.32 GB copies in the
+  README, the benchmarks index and the perf docs are now labelled pre-repair,
+  with the reserved row in `benchmarks/gate-v0.72.2-nf4.md` now filled rather
+  than pending. CPU-tested protocol guards live in
+  `tests/test_issue361_nf4_throughput.py`.
+
+- **Adding a recipe is now one number plus one command (#1016 by @harryc295 in #1051).**
+  `tests/recipe_count.py` already pins `EXPECTED_RECIPE_COUNT`; `scripts/sync_recipe_count.py`
+  rewrites the documentation sites that state the count from `len(RECIPES)`, so the second
+  half of the edit stops being manual. It imports `DOC_SITES` from
+  `tests/test_recipe_count_is_synced.py` rather than duplicating it, so the checker and the
+  fixer cannot disagree about which sites exist or what their patterns are, and it rebuilds
+  each match around the captured number so the surrounding wording survives byte for byte.
+  `--check` reports what is out of sync and exits 1 without writing. File I/O is byte-level
+  rather than text-level so a one-number edit stays a one-line diff on Windows checkouts.
+  It deliberately leaves `EXPECTED_RECIPE_COUNT` alone: the milestone stays a decision
+  rather than a side effect of running a script. Tooling and tests only; no runtime
+  behaviour changes.
+
+- **`training.nvfp4` and three of the four `soup export --format torchao` schemes asked torchao for classes it does not have (#826 by @Srinivasan8888 in #1066).** `NVFP4Config`, `Int8DynActInt4Config` and `Float8DynActFloat8Config` are not exported by torchao 0.18.0, the newest release, so a Blackwell user who set `nvfp4: true` got a yellow advisory and a bf16 run, three export schemes could not build a config at all, and both refusals said "upgrade torchao" when there was nothing newer to upgrade to. Every class is now resolved through the module that defines it, so a rename fails naming the path; `training.nvfp4` uses `NVFP4TrainingConfig`, which quantises the forward and backward GEMMs, rather than an inference config that would only quantise weights after training. The four disagreeing torchao floors (`0.4.0`, `0.5.0`, `0.7.0`, `0.5`) become one constant, `inner_k_tiles` leaves the export allowlist because `Int4WeightOnlyConfig` raises `TypeError` for it, and a new `torchao-contract` CI job installs `.[qat]` so the names are checked against the real package instead of a stub that defined them. **Breaking for `[qat]` users:** that one floor is `torchao>=0.18.0`, up from `0.4.0`, because 0.18.0 is the release these module paths were verified against; an older torchao is no longer accepted by the extra. Also narrowed: `soup export --format torchao` used to find `quantize_` at the torchao top level *or* in `torchao.quantization`, and now resolves it from `torchao.quantization` only — the path that exists in 0.18.0, so nothing at the new floor loses it. Scope: this makes `nvfp4: true` reach NVFP4 training (the linears become `NVFP4Linear`), which the maintainer confirmed on a Blackwell GPU; a training step additionally needs triton and M, K, N all divisible by 128, which are torchao's constraints and are not checked by Soup.
+
+- **`training.loraplus_lr_ratio` was silently ignored on every LoRA task except
+  sft, pretrain and embedding (#745 by @abdulwaarith0 in #1080).**
+  #724 wired LoRA+ into the SFT family only. The other trainers that build a LoRA
+  adapter (asr, bco, classifier, distill, dpo, grpo, ipo, kto, online_dpo, orpo,
+  ppo, reward_model, simpo) accepted the ratio and trained the LoRA B matrices at
+  the base learning rate. They now attach the LoRA+ optimizer, so B trains at
+  `lr * loraplus_lr_ratio` and A at `lr`, and runs that set the ratio produce
+  different weights than before. PPO builds its optimizer and scheduler eagerly,
+  so the LoRA+ optimizer is passed to its constructor instead, and it also carries
+  the value model at the base learning rate, as trl's default optimizer does.
+  The ratio is now refused at config parse where it cannot apply: `unlearn` (no
+  `Trainer` optimizer), `prm` (full fine-tune), `moe_lora_routing` (only the
+  routing gate trains), `classifier` / `reranker` / `cross_encoder` / `asr`
+  without their `classifier_lora` / `asr_lora` flag and `lora.r > 0`, and
+  `lora.use_vera` (VeRA trains scaling vectors, not A/B matrices, so every
+  tensor would train at `lr * ratio`). A source scan fails if a new LoRA
+  trainer ships without wiring LoRA+ or a documented exemption.
+
+- **Sesame CSM is now refused at config load until Soup has a native multimodal trainer (#265 by @Amix29 in #1112).** The unrunnable `sesame-csm-tts` recipe is removed because CSM trains text plus 32 Mimi codebooks as parallel frames rather than a codec-token assistant turn.
+- **Llasa can now encode raw audio with Transformers-native XCodec2 during TTS training (#265 by @Amix29 in #1112).** The live path resamples to 16 kHz, emits Llasa speech tokens, requires the matching `[audio]` / `torchaudio` dependency, and releases the temporary XCodec2 model after dataset encoding instead of holding it through the training run.
+
+- `soup eval behavior` and `soup eval checklist` now exit with a usage error when required evidence is omitted instead of reporting a neutral successful gate (#1123 by @taljeon in #1129).
+
+- ReLoRA restarts now follow the paper contract (#693 by @jagadeepmamidi in #1133): each fire merges the PEFT-scaled LoRA update into the base weight, reinitializes `lora_A`/`lora_B`, clears optimizer state when `relora_reset_optimizer` is set, and re-warms the learning rate from `1/(W+1)` without an exact-zero step. Behaviour break: `relora_steps` requires explicit `quantization: none` because the schema default is `4bit`. Embedding adapters with an empty `lora_A` are skipped; Linear LoRA is still merged. The final active adapter is merged into the accumulated in-memory base and saved as a standalone dense output; `--resume` and `--hf-resume` are refused for ReLoRA because intermediate checkpoints do not encode restart history. Distributed/sharded execution remains explicitly refused, and `relora_prune_ratio` remains ignored with a warning for backward-compatible YAML.
+
+- **Streamed CUDA NF4 now follows bitsandbytes' own fused-versus-dequantized dispatch,
+  so it runs the same kernels as resident NF4 (#842 by @Amix29 in #1143).** Pooled
+  weight aliases stay checkpoint-visible and backward verifies stream-slot ownership.
+
+- **An explicitly requested FP8 run now stops when torchao is missing, and says how to fix it (#835 by @Srinivasan8888 in #1154).**
+  With `quantization_aware: fp8` or `fp8_attention: true` on a card that can run
+  FP8, the trainers used to print a yellow advisory and train in bf16 under a config
+  that said FP8; that is what `soup sweep`, `soup bench train` and the Python API
+  reached. They now stop at setup with `FP8DependencyMissingError`, naming
+  `pip install "soup-cli[qat]"`, the same way an unsupported card already stops. A
+  box with transformer-engine but no torchao stops too, because the converter is
+  torchao's. A config that does not ask for FP8 is unaffected. If your runs relied
+  on the old fallback, remove the FP8 setting or install the extra.
+- **`soup train` checks an FP8 request before loading the model (#835 by @Srinivasan8888 in #1154).**
+  It used to run the int8 QAT check for `quantization_aware: fp8` too, so a missing
+  torchao stopped the run with the int8 hint `pip install torchao`, even on a card
+  that cannot run FP8, where installing it would not help. It now asks the FP8
+  questions in the trainers' order: a card that cannot run FP8 is named as the reason,
+  and on a card that can, a missing torchao names `pip install "soup-cli[qat]"`. It
+  asks for torchao's float8 converter itself, so a box with only transformer-engine
+  stops here too instead of after the model loads. On `backend: unsloth` only the
+  unsloth refusal is printed. Under `--dry-run` the local card is reported as a note
+  and the dry run exits 0, since FP8 configs are often written on one machine for
+  another; a missing torchao and schema errors still fail it (a missing torchao prints
+  the card note too), and the real run still stops on the card.
+
+- **FP8 now applies on SFT's audio path, and `stream_layers: true` and `backend: unsloth` refuse FP8 and NVFP4 at config load (#1124 by @kok-o in #1155).** `quantization_aware: fp8` and `fp8_attention: true` loaded on audio SFT and were never applied; `SFTTrainerWrapper._setup_audio_transformers` now converts the model after the LoRA adapter is attached, as the text and vision setups do, so a card that cannot run FP8, or a missing torchao, stops the run at setup instead of training in bf16. `stream_layers: true` (on every task it supports) and `backend: unsloth` (on every task) now refuse `quantization_aware: fp8`, `fp8_attention` and `nvfp4` at config load, because neither path calls the converters: these configs loaded before and trained without the precision they asked for, except the `fp8` combinations on unsloth, which `soup train` already refused before training. The unsloth `fp8` message says to switch to `backend: transformers`.
+
+- **`soup bench train` samples the SM clock while the counted steps run, and keeps every step time (#1166 by @AaronProbha18 in #1177).**
+  **Breaking (report schema):** `provenance.sm_clock_mhz_after_run` is removed. That value
+  was one `nvidia-smi` read taken after training returned, on a card that was already idle.
+  The gate-836 record measured it at mostly 180 MHz, and never above 1417, against a busy median of 2370–2557 MHz, and
+  it could not tell apart two runs whose throughput differed 1.83x. The replacement,
+  `provenance.sm_clock_mhz_busy`, has `min`, `median`, `max` and `sample_count` over samples
+  kept only from the post-warm-up steps. Queries start on a 100 ms schedule, a query slower than
+  that skips ticks, and each sample is timestamped at the midpoint of its query. `unavailable_reason` says why no clock was reported: not a CUDA run,
+  no `nvidia-smi`, no readable clock, or no sample inside the counted steps. The clock is
+  queried for torch's own device by PCI bus id, and a failing or unparseable driver-version
+  query is now `null` rather than the tool's error text. `timing.step_seconds` (new) lists
+  every counted step in run order, so a mid-run mode change can be located from one report.
+  The docs now say that pre-flight refusals (unsupported task or backend, `--steps <= --warmup`,
+  zero trainable parameters) write no report, and that only post-run check failures leave a
+  `valid: false` one.
+
+- **An untied streamed checkpoint reloads the embedding at the tail of the previous step's backward instead of at the start of the next forward (#975 by @VanshSharmaPES in #1178).** `embed_tokens` and an untied `lm_head` share one device slot, so every step swapped the slot back to the embedding right as the forward began, a full head-sized copy with nothing to overlap it. The reload now happens once layer 0's backward recompute is reached, so it overlaps the rest of the backward, and the forward-start load becomes a same-owner no-op from the second step on. The refill is ordered after the head's still-queued backward by the `wait_stream` in `LargeLayerBufferPool.load_async`, which a new GPU test pins. On an untied Llama with hidden 2048, vocab 128256 and a 501 MiB slot, on an RTX 5070 Laptop GPU, the embedding's compute-stream wait fell from about 19-23 ms to about 0.15 ms per step; that is still about 0.1% of a cold 70B step, and the step-time change (2-6.5%) is close to that fixture's noise floor. Preference losses get part of it: DPO's no-grad reference forward and KTO's extra forwards still load the embedding at the start of their forward. Tied checkpoints have no shared slot and are unchanged, and each `train()` now ends with one extra large-layer load that no later forward consumes.
+
+- **Every non-standard `grpo_variant` now applies the `grpo_beta` KL penalty, so existing variant configs will not reproduce prior runs (#1232 in #1249).**
+  `gspo`, `dapo`, `dr_grpo`, `bnpo`, `two_sided` and `rft` now train with a KL
+  penalty of `grpo_beta` (default `0.1`) against the
+  reference policy, so their losses, gradients and trajectories change. Before,
+  they validated `grpo_beta` and dropped it. The variant loss replaces trl's
+  `_compute_loss`, the one place on Soup's path where trl adds the KL term, so
+  neither `grpo_beta` nor the β that the reward-hack controller
+  (`kl_control` / `pid_lagrangian`) sets at runtime changed the loss or the
+  gradient, while trl still ran the reference forward on every step. Each
+  variant now adds trl 0.29's per-token estimator
+  `exp(ref - logp) - (ref - logp) - 1`, weighted by `grpo_beta`, to its
+  per-token loss before its own reduction, which is where trl's loss adds it.
+  `rft` applies it only to the accepted completions it trains on. On a real
+  trainer, the `dapo` loss and gradient now equal trl's stock `dapo` ones at
+  β 0.1, 1 and 10 on the same generated batch.
+
+- **An untied streamed checkpoint issues the head's load right after the embedding lookup instead of at the last decoder layer (#1174 by @VanshSharmaPES in #1258).** The embedding's bytes in the shared large-layer slot are dead once the lookup has run, so `StreamPrefetcher` now fires `tail_prefetch` from layer 0's `advance()` (`head_prefetch_layer`, default 0) rather than the last layer's, giving the head's copy every decoder layer's forward to hide behind instead of one. `head_prefetch_layer = None` restores the old timing. Loss, gradients and adapter weights are bit-identical between the two timings, and the sequence and count of real large-layer loads are unchanged; the refill is ordered after the queued lookup by the `wait_stream` in `LargeLayerBufferPool.load_async`, which a new GPU test pins. On an RTX 5070 Laptop GPU, with an 8-layer untied checkpoint (hidden 2048, a 501 MiB shared slot, NF4, sequence 512), the step's median total `wait()` fell from 11.96 to 4.50 ms on the RAM tier, from 15.83 to 1.42 ms on the disk tier, and from 57.29 to 29.16 ms on the disk tier at `stream_read_ahead: 3` for a step that runs a no-grad forward first. A decoder layer's copy now queues behind the head's on the shared copy stream, so the other decoder layers wait longer (0.78 to 4.06 ms on the RAM tier), which gives back part of the saving; layer 0 was the best of layers 0 to 3. Tied checkpoints have no shared slot and are unchanged.
+
+- **`training.quantization_aware: true` is now refused at config load, on every task and backend (#1222 in #1275).** It never ran quantization-aware training. Where it was applied, which is the transformers model setup of the `sft`, `dpo`, `kto`, `orpo`, `ipo`, `bco`, `simpo`, `grpo`, `ppo` and `pretrain` trainers (also run by `task: tts` and `task: preference`), it ran torchao's post-training int8 weight-only quantization over every Linear layer after LoRA, adapter included: a LoRA run had zero trainable parameters, and none of the runs tried (SFT, SFT with gradient checkpointing, full fine-tuning, DPO) completed. Everywhere else it was not applied at all. `backend: mlx` ignored it with a warning. `backend: unsloth` never applied it: `soup train` refused the combination, and `soup sweep` and `soup bench train` trained without it (#1248, superseded by this change). The trainers for `reward_model`, `embedding`, `prm`, `online_dpo`, `asr`, `classifier`, `reranker`, `cross_encoder`, `distill`, `unlearn` and `moe_lora_routing` never read it, and neither did layer streaming or SFT's audio path, so those runs trained without QAT. **Breaking for both groups:** a config that sets it loaded before and now stops at load. `soup train` exits 1, the Web UI and API return the message, and `soup doctor --config` exits 2. Every spelling the field reads as true is refused (`yes`, `on`, `1`, `"true"` ...), with a message that names `training.quantization_aware` and #1222. Remove the key or set it to `false`. `quantization_aware: fp8` and `quantization_aware: quest` are unaffected, because they use their own code paths; the one visible change for `fp8` is that `soup train`'s refusal of `fp8` on `backend: unsloth` now says `Use backend: transformers.` instead of recommending `quantization_aware: true`. Real int8 QAT is a separate feature and is not available yet.
+
+- **`training.use_longlora: true` is now refused at config load (#1240 in #1278).** It never trained correctly: the LongLoRA override rolled the query/key projections of half the attention heads along the sequence with wrap-around, under full causal attention, so earlier positions could read keys computed from the last tokens of each sequence (future tokens leaked into the training loss), and no S² grouped attention ran at all. **Breaking for configs that set it:** a config that loaded before now stops at load, even though it never trained correctly. `soup train` exits 1, the Web UI and API return the message, and `soup doctor --config` exits 2. Every spelling the field reads as true is refused (`yes`, `on`, `1`, `"t"` ...), with a message that names `training.use_longlora`, says why, and points at `training.rope_scaling_type` with plain LoRA for context extension. Remove the key or set it to `false`. It stays refused until real S² attention is implemented; no shipped recipe, template or example set it.
+
+- **`training.ebft_variant` is now refused at config load (#1230 in #1279).** It never trained correctly: the EBFT term it added to the SFT loss scored each position's logits against that position's own input token, with no causal shift, so it rewarded copying the input over predicting the next token (on the real trainer the added term was exactly the unshifted cross-entropy). Shifting it would not help: shifted, the term is the model's own cross-entropy, so the loss would count cross-entropy twice. EBFT is not yet a distinct objective, and it stays refused until the intended objective is implemented from its reference. **Breaking for configs that set it:** a config with `ebft_variant: structured` or `strided` loaded before and now stops at load. `soup train` exits 1, the Web UI and API return the message, and `soup doctor --config` exits 2. Every non-null value gets the same message, which names `training.ebft_variant`, says why and names #1230; `ebft_temperature` on its own now points at the refusal instead of asking for `ebft_variant`. Remove both keys to train plain SFT. GDPO (`gdpo_variant`) is unchanged (its own problem on trl 0.29 is #1309), and no shipped recipe, template or example used EBFT.
+
+- Refuse ten optimizer names at config load instead of crashing inside the trainer: transformers 5.x rejects `adam_mini`, `adamw_apex_fused`, `adamw_hf`, `ao_adamw_fp8`, `ao_adamw_4bit`, `ao_adamw_8bit`, `badam`, `came_pytorch`, `dion` and `muon` in `TrainingArguments`, so each used to pass config load and fail after the model had loaded. They are removed from the allowlist with a message naming working alternatives, the LoRA-FA validator no longer recommends `adamw_hf`, and a new test builds `TrainingArguments(optim=name)` for every allowlisted name so a rejected name fails the suite instead of a user's run. `muon` and `adamw_hf` still work on `backend: mlx` (the MLX backend builds them itself); every other backend refuses them with a message that names the backend (#1269 by @wanjinhao1 in #1283).
+
+- Allow `training.grpo_beta: 0` to configure KL-free GRPO recipes (DAPO, Dr. GRPO), skipping the reference-model forward pass; refuse `grpo_beta: 0` with beta-adjusting reward-hack mitigation modes (`kl_control`, `pid_lagrangian`) at config load (#1247 by @kok-o in #1295).
+
+- **`soup ab` now runs a two-sided test, says whether the treatment is better or worse, and gives no verdict before 30 rows per arm (40 below `--alpha 0.05`) (#1227 in #1310).** The mSPRT tested only `mean_t - mean_c = +effect_size`, so a treatment that moved the other way crossed the accept boundary: a `judge_score` regression of any size was reported as "No significant difference" (exit 0, webhook `accept_h0`), and on `latency` and `retry_rate`, where lower is better, so was a real improvement. The log-likelihood ratio is now the log of the average of the likelihood ratios for `+effect_size` and `-effect_size` (a symmetric two-point mixture, computed with logsumexp), with the same `log((1 - beta) / alpha)` boundary. A `reject_h0` carries a `direction`, `better` or `worse`, read through the metric's polarity (`judge_score` higher is better; `latency` and `retry_rate` lower is better). The verdict table and the webhook payload show it (`null` on `accept_h0`), and the panel recommends a rollback only for `worse`. `MsprtVerdict` gains the field and requires it on a `reject_h0`. **Fewer than 30 rows in either arm now always gives `continue`, or fewer than 40 when `--alpha` is below 0.05** (`min_rows_per_arm(alpha)`), and the verdict table and panel show the value in use. `soup ab` estimates the variance from the rows, and from a handful of them the estimate is too noisy: without a burn-in, re-running after every new pair would reject a true H0 up to 16% of the time at `--alpha 0.05` (the one-sided test it replaces: 11%). A Monte-Carlo sweep over effect sizes from 0.1 to 5 standard deviations, with runs followed to 1000 rows per arm, picked the burn-ins: at `--alpha 0.05`, 30 rows keep the worst case at 0.051, within Monte-Carlo error; at `--alpha 0.01` the worst case stays near 0.0108, about 8% above the nominal level whatever the burn-in, because the variance is estimated from the rows (a variance-robust statistic is #1265). The issue's own 20-row reproduction now returns `continue` at the default `--alpha`, because 20 rows fall inside the burn-in. The calibration holds up to 1000 rows per arm and for `--alpha` of 0.01 and above, and `soup ab` prints a warning past either limit. The sweep is committed under `benchmarks/` (`gate-1227-ab-burn-in.md`). Because one boundary now covers both directions, the log-likelihood ratio for an effect in one direction is about `log 2` lower than before. The exit code is unchanged, 0 on every decision, so read `direction` to gate on a regression.
+
+- **Training now evaluates the validation split it holds out, and generation tasks stop holding one out (#1223 in #1313).**
+  `data.val_split` (default `0.1`) kept that share of the rows out of training on every run, but no trainer on the
+  transformers backend scheduled an evaluation, so those rows were never used and `val_loss` stayed empty. Every
+  task that receives a split now evaluates it at the end of each epoch, at the per-device train batch (not
+  Hugging Face's 8), and records `eval_loss` on the Val loss row, in the tracker's `val_loss` and in
+  `TrainEvent.val_loss`; `prm` and `moe_lora_routing`, which attach no live callback, keep it in the trainer's log
+  history. Runs take a few percent longer. The new `training.eval_steps: N` evaluates every N optimizer steps
+  instead. `grpo`, `ppo` and `online_dpo` evaluate by generating, so by default they neither evaluate nor withhold
+  rows: `data.val_split` is ignored with a one-line note and every row trains, which changes the rows a default
+  config trains on. `grpo` holds out and evaluates when `training.eval_steps` is set. It evaluates at the largest
+  multiple of `num_generations` that fits in the train batch, since TRL scores whole groups, and a note says so
+  when that differs from the train batch. Its evaluation rewards never reach the reward-hack detector, the
+  mitigation controller or the echo-trap detector. `ppo`, `online_dpo`, `unlearn` and `backend: mlx` refuse the
+  setting, and each refusal says why. The embedding trainer gains the evaluation step that Hugging Face's default
+  could not run on its anchor/positive batches.
+
+- **An explicitly requested FP8 conversion that fails now stops the run instead of training on (#1152 by @Srinivasan8888 in #1333).**
+  With `quantization_aware: fp8`, a float8 conversion that raised used to print a yellow line and train in bf16; it now stops at setup and quotes torchao's error. With `fp8_attention: true`, a conversion that fails partway, or a model with no attention projections, used to print its own "PARTIALLY converted" or "refusing the silent no-op" message as a yellow line and train on anyway; both now stop the run, as those messages say. This follows #835's rule for a card that cannot run FP8 and for a missing torchao. `utils/fp8.py::validate_fp8_config`, which nothing called, is removed.
+
+- **`training.lr_groups`, `training.early_stop_patience` and `training.citation_recall_threshold` now warn at load, and v0.77 refuses them (#761 by @Srinivasan8888 in #1337).**
+  All three were documented and validated but read by nothing: `lr_groups` never set a per-module learning rate, `citation_recall_threshold` never gated a save, and `early_stop_patience` never stopped a run. Setting one away from its default now prints "accepted but read by nothing; v0.77 will refuse it", as the #808 fields do. `early_stop_patience` moves from `soup train`'s "set but not enforced" note to that warning, so it is reported once, with the date. The docs no longer show `lr_groups` or `citation_recall_threshold` doing what they never did.
+
+- **Nine training-intelligence and convergence knobs warn at load and v0.77 refuses them (#808 by @Guts1005 in #1379).**
+  `forgetting_eval_steps`, `forgetting_benchmark`, `forgetting_stop`, `checkpoint_eval_steps`, `checkpoint_eval_metric`, `checkpoint_eval_tasks`, `checkpoint_keep_top`, `convergence_window`, and `convergence_rel_tol` were accepted and validated, but none of the nine ever changed a run. Setting any of them away from its default now prints "accepted but read by nothing; v0.77 will refuse it". They move from `soup train`'s "set but not enforced" advisory note to the loader's warning so each knob is reported once, with the refusal date. Deleting the key keeps configs loading after v0.77, and schema defaults stay silent.
+
+- **`soup ab` now decides with a variance-robust statistic, with no burn-in, and `accept_h0` can take longer to reach when there is no difference (#1265 by @abdulwaarith0 in #1419).** The two-sided mSPRT from #1227 estimated the variance from the rows, so it needed a burn-in of 30 or 40 rows per arm, was calibrated only up to 1000 rows and down to `--alpha 0.01`, and still sat near 0.011 at 0.01. The normal-inverse-gamma Bayes factor that replaces it depends on the rows only through the t statistic, so its false-positive rate stays at most `--alpha` however often you re-run it, from 7 rows per arm and at any number of rows: the worst simulated rate is 0.033 at `--alpha 0.05` and 0.0066 at 0.01. The first 5 rows per arm set the scale for `--effect-size` and show in the table as `prior_scale`; the burn-in table, the 1000-row limit and both calibration warnings are gone. This is not a pure speed-up. When the arms are the same, `accept_h0` takes several times as many rows as before (about 281 pairs against 43 at an `--effect-size` of 0.5 standard deviations), and at small effect sizes it may not arrive within 1000; `docs/evaluation.md` has the full table, and #1575 in this release replaces the accept rule, which brings that down to 117 pairs. Part of the old speed was wrong answers: under a real difference of 0.3 standard deviations, the old test ended about 18% of runs in `accept_h0`, against under 0.4% now on simulated Gaussian rows. When the first rows barely vary (a warm cache, or a judge that gives 1.0 early), `accept_h0` waits as `continue` while the tested rows spread more than 3 times as much as the held-out ones, since that start made nearly every run accept H0 with or without a difference; a `reject_h0` is never held back, so the false-positive bound is unchanged. The `--alpha` + `--beta` < 1 check from #1339 does not ship: #1575 retires `--beta` in the same release. The #1339 and #1384 refusals of values a float cannot carry cover the new statistic too: it is never compared with the boundaries unless it is finite.
+
+- **`soup diagnose` no longer scores a probe that never ran as OK 1.00 (#1435 by @bakdauletbaktygaliyev in [#1489](https://github.com/MakazhanAlpamys/Soup/pull/1489)).** A live probe that was requested but produced no measurement, such as a `--dataset` with no usable rows or a probe that raised, now reports the new `NOT_RUN` verdict (grey in the badge and the table, ranked between MINOR and MAJOR) and keeps the exception text in its evidence. `soup diagnose` exits `3` when the overall verdict is `NOT_RUN`; pass `--allow-not-run` to keep exit `0` for runs that knowingly skip probes. MAJOR still exits `2`. `soup train --diagnose-gate` now also refuses a `NOT_RUN` report (exit `3`), and a bad `--tokenizer` is an input error (exit `3`) raised before any model loads. Probes that do not apply, and modes omitted from an `--evidence` file, stay a neutral OK.
+
+- **Breaking: `training.gdpo_variant` is now refused at config load.** Every non-null value is refused, including `standard`, `length_normalized` and `margin`; unset and null still load. On supported TRL versions (0.29 and later) the setting previously loaded but silently changed nothing because `DPOTrainer.dpo_loss` no longer exists. Remove `gdpo_variant` and use plain `task: dpo` for `standard`; `task: simpo` is the nearest, not identical, objective for `length_normalized`; `margin` has no equivalent. GDPO metadata no longer advertises live wiring, and the retained legacy helper raises instead of silently ignoring a missing loss hook. No new loss implementation is added; no shipped recipe, template or example sets this field. (#1309 by @taljeon in #1515)
+
+- **Breaking for `soup data score --benchmarks` / `-b` without comparison texts:** benchmark names are labels, not bundled corpora; the command now refuses labels alone by name and asks for `--benchmark-file`. With a file, labels are validated only, not corpus selectors; help, docs and an execution note state that all file texts are compared. Plain scoring reports decontamination as not run instead of a misleading zero. The new cwd-contained operator JSONL option passes actual text and `--threshold` to the existing 8-gram scorecard kernel, without benchmark downloads or a new scoring algorithm. Invalid, empty, truncated or unusable benchmark evidence fails before a scorecard is printed. The shared loader's strict mode is opt-in; other callers retain their previous behavior. This covers only the data-score item, not the remaining command paths. (#1448 by @taljeon in #1518)
+
+- **A `simpo` + `orpo` blend now trains instead of refusing (#1425 by @umran666 in #1556).** #1513 made every blend refuse, because no trl 0.29 trainer puts per-sequence log-probs on the batch. The CPO (SimPO) and ORPO trainers both return theirs from `concatenated_forward`, so the wrapper now captures them there: a blend naming only `simpo` and `orpo` runs. Blends naming `dpo` or `ipo` still stop and name the terms — those trainers compute log-probs inline, publish only means, and need a frozen reference model this path does not build.
+
+  **Behaviour changes:**
+  - `{simpo: 0.7, orpo: 0.3}` is live on trl 0.29 where it previously stopped at step 0. `bco` mixed with anything is still rejected at config load.
+  - Each blended loss now reads its hyperparameters from the config rather than off the primary trainer, which is whichever loss has the larger weight. `training.simpo_gamma` and `training.orpo_beta` now reach their own term either way; before, `orpo_beta` could feed SimPO's beta and ORPO's odds-ratio weight was always `1.0`, so the same weights written in a different YAML order trained a different objective.
+  - In a blend, `simpo` and `orpo` are their preference terms only — without the likelihood term the standalone `preference_loss: simpo` / `orpo` runs carry. A `{simpo: 1.0}` blend is not the standalone SimPO loss, and `training.cpo_alpha` does not affect it. Use `training.preference_loss` for a full standalone loss.
+  - With `val_split` set, trl's `prediction_step` calls `get_batch_loss_metrics` directly, so eval reports the primary loss's own trl loss rather than the blend's value.
+
+- **`soup ab` reaches `accept_h0` about twice as soon when there is no difference, for every user and at the defaults, and `--beta` is retired (#1418 by @abdulwaarith0 in #1575).** The statistic and the `reject_h0` rule from #1265 are unchanged. `accept_h0` used to wait for the Bayes factor to fall to `log(beta / (1 - alpha))`, which took 621 pairs per arm at an `--effect-size` of 0.3 standard deviations (`--alpha 0.05`). It now comes once a confidence sequence for the difference, built from the same mixture at level `--alpha` and valid however often you re-run `soup ab`, lies inside `(-effect_size, +effect_size)`: 307 pairs at 0.3, 117 at 0.5 (was 281). This changes when every `soup ab` run says `accept_h0`, with no flag to opt out, and so when the `--slack-url` and `--discord-url` webhooks fire with `"decision": "accept_h0"`; a pipeline that waits on that message will hear it sooner. The accept panel now says what it means: any difference is smaller than `--effect-size`, at confidence `1 - --alpha`. A true difference of exactly `--effect-size` ends in `accept_h0` in at most 0.0083 of simulated runs at `--alpha 0.05` (was 0.0042) and 0.0019 at 0.01 (was 0.0032), so the chance of detecting it stays within 0.005 of before; the false-positive rate can only fall, and does. The `log_likelihood_ratio` reported next to an `accept_h0`, in the table and the webhook payload, is still the reject rule's statistic and can be positive. `--alpha` now bounds both wrong verdicts, so `--beta` no longer does anything: for this release `soup ab --beta X` prints that, says a stricter accept means a lower `--alpha`, and runs exactly as without it, and `MsprtConfig(beta=...)` raises the same message as a `SoupConfigDeprecationWarning`; Soup v0.77 refuses it. The `--alpha` + `--beta` < 1 check from #1339 went with it. The record is `benchmarks/gate-1418-ab-cs-accept.md`, and `docs/evaluation.md` has the new time-to-accept table.
+
+- Changed the private-address refusal on outbound endpoints to say what to do: it now
+  ends with "address the server by its hostname". `http://0.0.0.0` in `soup data generate
+  --api-base` and the chat proxy now says "0.0.0.0 is ambiguous; use 127.0.0.1 or
+  localhost", the same hint `HF_ENDPOINT`, hub endpoints and webhook URLs give, from one
+  shared constant (#1549 by @PranavD2905 in #1582).
+
+- `soup ab` now says when the accept hold is what is keeping a run at `continue`. #1419 holds `accept_h0` back while the tested rows spread more than `ACCEPT_HOLD_SPREAD_RATIO` (3) times the held-out ones, and the held-out rows are fixed — so once that hold fires on a saturated warm-up (a warm cache, or a judge that gives the same score for the first rows), no amount of extra data of the same kind releases it. The run sat at `continue` for the whole dataset with the accept rule already satisfied, while the panel printed "Insufficient evidence. Collect more samples and re-run.", advice that cannot help. A `continue` now carries `accept_held` plus the two spreads that decided it (`held_out_spread`, `tested_spread`, and `held_out_rows`), and the panel prints one line naming the ratio and what to do about it. The four keys are not added to the webhook payload: a held run is a `continue` and the webhook fires only on a terminal decision, so they could only ever be `false` / `null` there — the panel and the `MsprtVerdict` are where the facts live. These are new keys only: nothing is renamed or removed, and a run that is not held carries no note at all. The accept rule itself is unchanged (#1524 by @yunaremaia in #1585).
+
+- QuEST: refuse a local base whose `config.json` cannot satisfy the route before any weight file is read, instead of after the model loads. The 24-block count and the group-128 / power-of-two widths are now checked from the config the fingerprint already parses, so a base that was going to be refused is no longer loaded and no longer has every byte of its weights read and SHA-256-hashed — on `main` that was once per run, and it is now none. The refusal message is unchanged and the post-load topology gate still runs; a width that cannot be read from the config is left to that gate rather than guessed at. (#1199 by @yunaremaia in #1588)
+
+- **Refuse `training.lora.use_dora` on unsloth and mlx backends (#1651 by @kok-o in #1657).** Reject `use_dora: true` at config load time when `backend` is `unsloth` or `mlx`, which do not implement DoRA adapter constructors.
+
+- **Reworded `README.tr.md` and `README.ar.md` (#1681 by @Ercaner1988).** LLM reviewers, each prompted to
+  read as a native speaker of one language and with no shared context, flagged false
+  friends and calques in the shipped translations (for example "issue", "Serving",
+  "gated" and "wheels" rendered with words that mean something else). The findings were
+  applied with LLMs and vouched for by the files' maintainer, who reads Turkish natively
+  and Arabic at an upper-intermediate level. `README.md` and the sync stamps are unchanged.
+
+- `soup serve` says what `--tool-auth-token` covers when it binds beyond loopback. A
+  non-loopback `--host` is refused without the token, which reads as if the token put the
+  whole server behind a credential; it is checked on the tool, thumbs and adapter routes
+  only, the generation routes take none, the vLLM / SGLang / MII backends have no route
+  that checks it, and on a wildcard bind (`0.0.0.0`, `::`) the `Host` header is not
+  compared. None of that changes. The command now prints it as a `Note:` at startup on
+  such a bind, the `--host` help says that the token is required there (it said "should be
+  paired with") and what it is checked on, and `docs/serving-and-export.md` has a paragraph
+  on what the token does not cover (#1689).
+
+- **Cache live canary policy and batch outcome writes**: keyed serving requests refresh the parsed policy when its file identity changes, and stats flush after 64 outcomes or two seconds, including an orderly-shutdown flush. Watch rollback takes effect on the next keyed request; superseded promotions cannot overwrite newer statistics. On-disk `canary-stats.json` and watch verdicts now lag traffic by the buffered window (normally up to 64 outcomes or two seconds); a crash can lose that window. Disk outages retain one pending batch but refuse additional outcomes, so outage losses can exceed one batch. Process-killing failures never reach recording. (#1320 by @akkupratap323 in #1712)
+
+- **Layer streaming page-locks less memory for a pinned RAM store whose largest tensors come last (#1702 in #1713).** The store is pinned in power-of-two arenas (#901), and the planner filled them in allocation order, looking only at the arena it opened last. A Qwen3-8B NF4 store is 3.58 GB of decoder tensors followed by two 1.24 GB vocabulary matrices; neither matrix fit behind the decoder, so each opened a 2 GiB arena of its own and 8 GiB was page-locked for a 6.07 GB store. `plan_pinned_arenas` now also plans the arenas largest tensor first and uses that layout only when it page-locks strictly fewer bytes: the same store takes 6 GiB (8,589,934,592 -> 6,442,450,944 bytes, measured on an RTX 5070 Laptop), and peak process RSS in a three-step run went from 10.85 GB to 8.71 GB. A store that gains nothing, including the disk tier's staging on the measured geometries, is laid out exactly as before, and there is no new config field. Three deterministic optimizer steps are byte-identical between the two layouts (logits, loss, 144 gradients, 144 updated adapter tensors). This is a memory change, not a speed claim: a 40-run A/B on the same box (old and new layout alternating, the disk tier as the control) found no difference in step speed at its resolution of +/-15%. The record is `benchmarks/gate-1702-arena-packing.md`.
+
+- **The `soup train` VRAM pre-flight now checks the pre-quantized formats
+  (#1652 by @ybai08 in #1729).** It used to build its estimate only for
+  `none`, `4bit`, `8bit` and `mxfp4`; twelve other formats started without a
+  check and without a word. `gptq`, `awq`, `aqlm` and `eetq` are now checked
+  at the figures the predictor already had (0.55, 0.55, 0.5 and 1.0 bytes per
+  parameter). `fp8` is checked as well, and its figure is corrected from 1.0
+  to 2.0: an FP8 base is loaded with `dequantize=True` and trains in bf16, so
+  the old figure promised half the memory the run needs. A refused `fp8` run
+  gets the sentence an `mxfp4` run gets. `hqq:*` has no figure yet, so the run
+  starts and the pre-flight prints `Pre-flight skipped: no memory model for
+  quantization: hqq:4bit`. This refuses configs in those five formats that
+  used to start on a card too small for the estimate; `--allow-oom-attempt`
+  launches them anyway.
+
+### Deprecated
+
+- **`soup export --format awq` and `--format gptq` are deprecated and will be removed in Soup v0.77.** Both upstream projects (AutoAWQ and AutoGPTQ) are archived, neither extra can be installed next to `[train]`, and `auto-gptq` has no Python 3.12 wheel, so the two formats could not be reached from a normal install. Until the removal they work as before. The command now starts with a `Deprecated:` notice that names the formats to move to (`gguf`, `onnx`, `tensorrt`, `bitnet`, `tq1_0`), so it is there whatever stops the run, the missing extra included; `soup quantize --to awq` and `--to gptq` print the same notice after the command they hand you; and the `--format` and `--to` help texts mark both formats (#1690).
+
+### Removed
+
+- Remove unreachable kernel auto-compose production helpers and validator branches after schema-level rejection of kernel_auto_compose: true (#976 by @kok-o in #1006).
+
+- Remove orphaned `build_bitnet_trainer` and `validate_bitnet_compat` from `utils/bitnet.py`, unreachable after schema-level rejection of `quantization: bitnet_1.58` training (#1004 by @VanshSharmaPES in #1034).
+
+- Removed the dormant `auto_quant` compatibility module (`soup_cli/utils/auto_quant.py`) that `soup serve --auto-quant` stopped using when it began refusing with exit 2 in #816; the refusal itself is unchanged and still covered by regression tests. `import soup_cli.utils.auto_quant` now raises `ModuleNotFoundError` with nothing replacing it (#1131 by @wanjinhao1 in #1262).
+
+- The Web UI plugin registry, `soup_cli.ui.plugins` (`register_tab`, `list_tabs`, `get_tab`, `clear_tabs`, `load_plugins`, `TabSpec`), is removed, and with it the "Web UI Plugin Registry + Env Knobs" section of `docs/serving-and-export.md`. The module has been importable since v0.44.0, so `from soup_cli.ui.plugins import ...` stops working; no rendered feature is lost, because `create_app` never read the registry and a registered tab was never shown. `soup plugins` (`soup_cli.plugins`) is a different feature and is unchanged (#1465 by @Srinivasan8888 in #1608).
+
+- **Drop unused `eval_config` from `SoupTrainerCallback` (#1643 by @kok-o in #1654).** Remove unused `eval_config` parameter and attribute from `build_soup_trainer_callback` and `SoupTrainerCallback` after auto-eval migration to `soup train`.
+
+### Fixed
+
+- **`soup doctor` now reports the MLX backend (#659 by @ump45nose in #660).**
+  The MLX panel had been written but never wired into the report, so Apple Silicon
+  users saw no MLX section at all. `doctor` now renders an MLX panel showing the
+  installed version, chip, and unified memory when MLX is present, says plainly
+  when it is missing on Apple Silicon, and stays quiet elsewhere. `get_mlx_version()`
+  reads `mlx.core.__version__` (falling back to distribution metadata) instead of
+  `mlx.__version__`, which the `mlx` package does not export and which therefore
+  always reported "unknown".
+
+- **The MLX benchmark harness now pins, and verifies, every field that moves its step counts (#716 by @dchaudhari7177 in #727).** `benchmarks/harness/mlx_sft_smoke.py` inherited `gradient_accumulation_steps` from the schema default, so the published M1 record depended on a value the harness never mentioned: at the default of 4 the record's 48 iterations are 12 optimizer updates, and because the wrapper rounds `iters` down to a whole accumulation group (#696), a row count such as 50 silently drops rows. The harness now pins `batch_size`, `gradient_accumulation_steps`, `epochs` and `lr` with the reason for each, resolves iterations and optimizer updates from the *loaded* config the same way `MLXSFTTrainerWrapper` does, and exits non-zero before training when either is not `rows * epochs`, naming both counts and any dropped rows. No published figure changes: @Srinivasan8888 re-ran the branch on the M1 8 GB the record was measured on and reproduced `Trained Tokens 2130` exactly. `tests/test_issue716_harness_step_guard.py` checks the resolution against the `TrainingArgs` the real wrapper builds and drives the abort path through `main()`.
+
+- **`streaming: true` with `interleave: over` and `val_split` no longer puts a row on both sides of the split (#702 by @dchaudhari7177 in #729).** `over` streams with `stopping_strategy="all_exhausted"`, which recycles the shorter source, and the positional tail slice then put a row in val and its recycled copy in train, so validation loss on that source measured memorisation: 10 of 20 val rows leaked on the issue's 100-against-10 shape. The streaming `over` split is now sized over distinct rows and draws val from content that occurs once, so train keeps every row and its oversampling. It falls back to repeated content only when it must, and then withholds that content's other copies from train with a warning giving the count. A split that would leave train empty raises the same kind of error the eager path's per-source carve-out does. Streaming val comes from distinct rows in stream order, so unlike the eager path it is not balanced across sources, and `docs/data.md` now says so. @AmirF194 found that the first version silently dropped a genuinely repeated source row.
+
+- `soup migrate` now recognizes multi-record JSONL by structure even when the
+  filename does not end in `.jsonl`, so a data file such as `data.json` gets the
+  existing friendly wrong-file error instead of a raw YAML `ParserError`.
+  Single JSON objects and Unsloth notebooks still reach their selected migrator,
+  and the structural sniff remains bounded to 64 KiB per line (#730 by @be-student,
+  finding by @swalla02 and @AmirF194, closes #699).
+
+- Stabilize distillation loss and gradients in log space (#719 by @be-student).
+  All three divergences, including forward-KL, now compute and return FP32
+  scalars for FP16/BF16 inputs. Non-finite logits propagate for AMP step skipping;
+  no per-step finite-value guard synchronizes the device. The FP32 trade-off is
+  documented in `docs/training.md`: the maintainer measured 1.71x time and 1.24x
+  peak memory for the original guarded kernel, and removing the guards reduced
+  time from 10.91 ms to 9.40 ms (main: 6.39 ms). This revision also avoids unused
+  probability tensors. Two FP32 logits copies use about 7.8 GiB at
+  B=4/S=2048/V=128256. These measurements are hardware-specific and were not
+  rerun for this revision (PR #736).
+
+- **Distillation no longer multiplies its gradient by `gradient_accumulation_steps` (#720 by @dchaudhari7177 in #742).** `_DistillTrainer.compute_loss` returns a mean over its own microbatch, so the same effective batch split four ways previously produced four times the gradient and changed the effective learning rate. The trainer now sets `model_accepts_loss_kwargs = True` after `Trainer.__init__`, consumes Transformers' full-window `num_items_in_batch`, and weights each microbatch by its share of trained tokens as completed in #943. `tests/test_issue720_distill_grad_accum.py` runs the real `_DistillTrainer` body through `Trainer.training_step` on a one-layer Llama and asserts the accumulated gradient matches the unaccumulated one at 4 and 8 steps.
+
+- **`soup ship` stamps the judge's actual load numerics into the verdict and `--emit-evidence`, and refuses a replay under a different family (#746 by @jagadeepmamidi, Closes #367).** Live evaluation already reused `training.quantization` for the load (#570); the absolute leg-1 / leg-2 numbers for a 4-bit run were still recorded as if the judge's precision were implicit. `--emit-evidence` now writes a top-level `numerics` stamp (`4bit` / `8bit` / `bfloat16` / `float32`), the panel and `--output` report it, and `--config` plus `--evidence` refuse a family mismatch (`4bit` vs full precision, `4bit` vs `8bit`) the same way `config_sha` refuses a drifted recipe. Pre-#367 evidence without a stamp warns rather than failing closed. This is a correctness-of-absolute-numbers fix: paired NF4 vs bf16 comparisons that judged both arms the same way remain valid.
+
+- **`soup train` left a run at `status='running'` forever when setup failed (#764 by
+  @SID-6921 in #767).**
+  The tracker registered a run before loading the model, but the only `except` that marked
+  a run failed wrapped the training call alone — a tokenizer/model load, quantization, LoRA
+  attach, or dataset mapping failure in the ~250 lines before it left the row stuck at
+  `running` with no way to tell it apart from a live run. On a real database this was 220 of
+  432 rows, the oldest since 2026-03-04. The failure boundary now wraps everything from right
+  after the run is registered through the end of the command, and `fail_run` records the
+  exception type and message on the row (`runs.error_message`, added via the existing lazy
+  migration). Separately, `soup train` now records its own pid via `mark_running` the way the
+  MCP execution path already does, so `_reconcile_orphaned_run` (#401) can rescue a
+  SIGKILL'd or Ctrl+C'd run on the next `soup runs` instead of leaving it invisible to a
+  mechanism this project already built for exactly that purpose. `error_message` is
+  redacted and length-capped before storage, and `soup runs show` now surfaces it and
+  reports `terminated`/`launching` correctly instead of falling back to `running` for
+  every non-completed, non-failed status.
+
+- **`train_on_responses_only: false` trained on a doubled BOS, one token off from
+  inference after #782 (#788 by @abdulwaarith0).**
+  The default SFT path (`train_on_responses_only: true`) builds its ids with
+  `add_special_tokens=False` in `data/loss_mask.py`, so it never doubled the BOS. The
+  opt-out text path did: `data/sft_format.py` handed TRL a `{"text"}` column, and TRL's
+  language-modeling `tokenize_fn` re-tokenised it with the tokenizer's default
+  `add_special_tokens=True`. A chat template that renders `{{ bos_token }}` (Llama-3,
+  Gemma, Mistral) on a tokenizer whose post-processor also prepends BOS therefore trained
+  on `[bos, bos, ...]`. Before #782 that matched inference by accident; after #782 inference
+  sends one BOS, so adapters trained on the text path were off by one token from how they
+  are prompted. `soup data preprocess` tokenised the same way. The text path now
+  pre-tokenises with `add_special_tokens=False` (via `build_full_sequence_labels`), so the
+  chat template is the single source of special tokens, matching inference and HF's own
+  `apply_chat_template(tokenize=True)`: one BOS for a `{{ bos_token }}` template, and zero
+  for a template that renders no BOS at all — both Soup's `data.chat_template` presets and
+  native templates of that shape (TinyLlama, Zephyr). The stop token is preserved rather
+  than lost. TRL's language-modeling path also appended `eos_token` as a string to every
+  text row that did not already end with it (`add_eos`), independent of the tokenizer's
+  post-processor, so the pre-tokenised row reproduces that rule: the EOS id is appended
+  when the sequence does not already end on it. A `{{ bos_token }}` template on a BOS-only
+  or EOS-less (Qwen-shaped) tokenizer therefore keeps the single trailing stop token it
+  trained on before. This changes training results in two ways on configs that hit the
+  affected shapes: a template that renders no BOS (TinyLlama / Zephyr, not only Soup's
+  presets) now trains with zero leading BOS rather than the tokenizer's default one, and a
+  row that used to end on two trailing EOS tokens — a template or post-processor that
+  appended one on top of `add_eos`'s — now trains on exactly one. The rule applies only to
+  text a chat template rendered; pretrain-style raw text with no template keeps the
+  tokenizer's own special tokens unchanged. `soup data doctor --show-mask` now renders
+  through the same builder, so the X-ray matches training. Adapters trained with
+  `train_on_responses_only: false` before this change carry one extra leading BOS in
+  training compared with inference. `soup data preprocess` de-duplicates the same leading
+  BOS but stays pinned to the old cache contents otherwise: it tokenises as before
+  (`add_special_tokens=True`) and drops only the one duplicated leading BOS, so every other
+  token is unchanged — including the post-processor's EOS and the room HF truncation
+  reserves for it, so a truncated row still ends on its stop token. Its EOS therefore
+  remains whatever the post-processor added (never TRL's `add_eos`), so a Qwen-shaped
+  tokenizer's cache and live path can still differ on the EOS — that pre-existing mismatch
+  is tracked separately in #791 rather than changed here. The cache also keeps `main`'s
+  single leading BOS where the live path now yields none for a `data.chat_template` preset;
+  that BOS divergence is tracked in #876. The `soup data preprocess` cache
+  key changes so datasets cached under the old encoding are re-tokenised rather than reused.
+
+- **`docs/commands.md` covers every registered leaf — including `soup mcp runs reconcile` — behind a Typer-walking coverage ratchet (#822 by @MrBeldum in #855).** The matcher requires a real entry row (token-bounded, no prose-only hits, one `|`/`/`-connected `a|b|c` shorthand group) so deleting a command's own rows fails the guard.
+
+- **Require both models and valid probe keys in edit diff (#818 by @kok-o in #863).**
+  `soup edit diff` previously allowed probes without models to fall through to a
+  placeholder path that reported `changed: false` for each unmeasured probe and exited 0.
+  Now, specifying `--probes` requires both `--before-model` and `--after-model` (exiting 2
+  naming missing flags if omitted), asymmetric model flags are rejected naming the partner
+  flag, and probe files with zero valid rows or missing the `'prompt'` key exit 2 with an
+  explicit diagnostic rather than silently producing placeholder claims.
+
+- **`soup serve --backend vllm` no longer sends the engine a doubled BOS (#785 part 2 by @abdulwaarith0 in #867).**
+  #782 fixed every path that tokenizes in process, and left the engines that
+  tokenize the prompt string themselves for someone with the hardware to check.
+  Measured on vLLM 0.29.0 with `unsloth/Llama-3.2-1B-Instruct`, whose Llama-3
+  template renders `{{ bos_token }}` (id 128000): for the string Soup sent, the
+  engine reported `prompt_token_ids[:2] == [128000, 128000]` over 37 ids, against
+  the 36 ids `apply_chat_template(tokenize=True)` returns. The vLLM backend now
+  hands the engine `{"prompt_token_ids": [...]}` built with no tokenizer special
+  tokens whenever the chat template rendered the prompt, which reproduced the
+  36-id encoding exactly (`[128000, 128006]`), so the model is prompted with the
+  prefix Soup trains on. `usage.prompt_tokens` drops by one on such templates.
+  The change is wider than removing a duplicate: for a model whose chat template
+  renders no BOS but whose tokenizer post-processor would add one, the engine
+  previously received one BOS and now receives zero, matching Soup's training
+  path and the in-process fix #782 already shipped for the transformers backend.
+  Models without a chat template, and templates that fail to render, still send
+  the legacy string and are tokenized by the engine exactly as before. The
+  SGLang and DeepSpeed-MII backends were measured through their own tokenizer
+  paths and are tracked separately in #785.
+
+- **The README translation ratchet no longer passes a re-stamp without a re-translation (#870 by @Ercaner1988, follow-up to #852).** The sync stamp proves when a translation was synced, and the structure check proved headings, code-block languages, URLs and inline code survived — but a command changed inside a fence (`soup train` → `soup trainx`) or a figure changed in prose (`119.6` → `999.9`) stayed green behind a valid stamp. Each `## ` section of a translation is now also compared with `README.md` on its code-block contents with `#` comments dropped (comments being the only part of a code block a translation may change), its relative link targets, and its numbers in prose; in-page anchors, which are translated with their headings, must resolve to a heading of the same file. Measured figures therefore keep `README.md`'s digits in every language: `README.tr.md` had 10 figures written with Turkish separators (`119,6`, `3,32 GB`), now converted. Each translation names its maintainer in the test, and a red run says whom to ping.
+
+- Fixed `soup doctor` exiting 0 after reporting a `[train]` package as INCOMPATIBLE: an installed package beyond its declared ceiling (`transformers`, `peft`, `trl`) now makes the command exit non-zero, while a missing or outdated `[train]` member stays advisory (#874 by @chiliec in #877).
+
+- **`soup ingest --source langfuse --pull` is bounded in time and filtered on the answer,
+  not only on the request (#865 by @Konuktor in #881).** Three findings from the #859
+  review. The timeout reached the socket rather than the call, so a server sending a byte
+  before every timeout expired kept the pull alive indefinitely — a 0.4 s timeout allowed a
+  2.01 s call against a drip server; each request now carries a wall-clock deadline covering
+  the connect and the whole response, and the body is read in chunks so the deadline is
+  checked while bytes are still arriving. `type=GENERATION` was only a query parameter, so a
+  server that ignored it would have written spans and tool calls out as training rows; each
+  observation's own type is now checked before it becomes a row, the parameter is still sent,
+  and skipped observations are counted in the summary. A pagination cursor the server repeats
+  used to run until `--max-pages` — 100 identical requests by default — and now stops on the
+  first repeat. No change to the default (no `--pull`) path, which still imports no HTTP code
+  and opens no connection.
+
+- **`soup mcp serve`'s `data_validate` no longer reports every row valid for a format it does not recognise (#878 by @Srinivasan8888 in #882).** `validate_and_stats` enables its format check only when the requested format is in `VALID_FORMATS`, so an unrecognised value silently turned the check off and a missing one never turned it on — both answered "every row valid" for a reason unrelated to the data. `soup data validate` was guarded against that in #869, so the same file got two different verdicts depending on whether the CLI or the MCP tool asked. The handler now resolves `format` the way `data_doctor` beside it already did: anything outside `VALID_FORMATS` raises a tool error naming the accepted values, an omitted or `auto` format is auto-detected as the tool schema always promised, and the resolved format is returned in the report so a caller can see which one was checked. The allowlist is `VALID_FORMATS` itself rather than a copy, since a hand-written second tuple is how the two surfaces drifted apart to begin with.
+
+- **`soup doctor` now handles modern NVIDIA CUDA driver headers and supported PyTorch wheel indexes (#827 by @Samearth17 in #883).** CUDA detection accepts both `CUDA Version: X.Y` and `CUDA UMD Version: X.Y` headers with flexible whitespace, and PyTorch wheel selection now uses only indexes that provide releases compatible with Soup's `torch>=2.6.0` floor. An unknown driver version now returns `None` instead of defaulting to `cu121`, and drivers reporting CUDA 12.1–12.3 now map to `cu118` because `cu121` is not in the supported wheel table. When no supported CUDA wheel can be selected, `soup doctor` falls back to `pip install "soup-cli[train]"` instead of generating an invalid `whl/None` index. The GPU diagnostic also distinguishes a CUDA-enabled Torch build that cannot initialise CUDA from a genuine CPU-only Torch build.
+
+- **`soup doctor` names missing `[train]` packages on a partial stack (#875 by @HarshRajSinghania in #884).**
+  A six-of-seven install no longer prints "Training stack not installed".
+
+- **The `serve-fast` extra now floors `vllm>=0.4.3`, up from `0.4.0` (#892 by @abdulwaarith0).**
+  Since #867 the vLLM backend hands the engine a `{"prompt_token_ids": [...]}` mapping as the
+  first positional argument to `AsyncLLMEngine.generate`. vLLM only accepts a mapping there from
+  0.4.3 on, when `generate`'s first parameter became `inputs: str | TextPrompt | TokensPrompt |
+  TextTokensPrompt`; 0.4.2 and earlier take a `prompt` string plus a separate `prompt_token_ids`
+  keyword, so on those versions the mapping lands on the string parameter and is mis-handled. The
+  old `0.4.0` floor therefore advertised support the backend no longer has.
+
+- **`soup ingest --source langfuse --pull` printed the server's error body to the terminal
+  with its raw ANSI escapes intact, letting a hostile Langfuse response inject terminal
+  control sequences (#885 by @wangzhengzhuo05 in #893).**
+  `commands/ingest.py` rendered `PullError` through bare `rich.markup.escape`, which
+  neutralises `[...]` markup but passes C0 control bytes (ESC, NUL, BEL) straight through, so a
+  crafted response body could reach the terminal as live escape sequences. The user-facing
+  path now routes the message through the shared `utils/terminal.py:for_terminal` helper (C0
+  strip + markup escape) at both `PullError` print sites, so the server's text is still shown
+  but its control bytes are not. Added by @wangzhengzhuo05.
+
+- **`soup draft distill` and `soup shrink` report a validation failure in their own rendered config as a CLI error rather than a traceback (#895 by @1cbyc in #904).** Both commands validate the YAML they generate before starting a training subprocess and sanitize the validation message for terminal output.
+
+- **`soup train --config` on a YAML document that is a list or a scalar now exits 1 with
+  `Config must be a YAML mapping, got list` instead of a `TypeError` traceback (#905).**
+  `load_config_from_string` had refused that shape for releases; the file call site never
+  did. The unknown-config-key report also no longer claims to be capped when a config has
+  exactly the cap's worth (100) of unknown keys and nothing was dropped.
+
+- **The config-field consumer guard no longer counts a read inside a function nothing calls (#807 by @Srinivasan8888 in #906).** The guard added in #748 treated a field as wired if its name was read anywhere under `src/`, so `training.warmup_auto` passed on one line in `autopilot.generate_config` — a function with no caller, whose line reads the autopilot decisions dict and writes the value *into* a config rather than reading the field. The file already refused exactly this for `schema.py` `@property` resolvers and did not apply the same reasoning to ordinary functions. A read now counts only when the function enclosing it is referenced somewhere in `src/`; one live read still rescues a field that also has dead ones, and a module-scope read always counts because module scope runs on import. `LoraConfig` is also in scope for the first time, which surfaces `lora.loftq_iter` and `lora.loftq_bits` as having no read at all. Six fields are allowlisted with their issue references rather than left failing, so the number can only shrink as #794 and #808 are answered.
+
+- **Six command modules, `utils/ship_verdict.py`, `mcp_server/registry.py`, and `commands/serve.py` carried a private copy of the terminal control-byte sanitizer instead of importing the shared one (#896 by @VanshSharmaPES in #907).** v0.75.0 added `soup_cli.utils.terminal.for_terminal` (strip C0/DEL control bytes, then escape Rich markup) for the config loader's unknown-key report, but nine other call sites — `commands/adapters.py`, `data_canary.py`, `data_doctor.py`, `draft.py`, `infer.py`, `shrink.py`, `serve.py`'s `--auto-spec` pairing message, `utils/ship_verdict.py`, and `mcp_server/registry.py` — still carried a byte-identical `_CONTROL_STRIP_TABLE` under their own name, which is exactly how the config loader got missed for a release. All nine now import `for_terminal` (or the new strip-only `strip_control`, for the handful of call sites that feed non-markup contexts like `Text.append(..., style=...)` or an exception message escaped later downstream) from the shared module, and a new repo-wide test (`test_issue896_no_duplicate_terminal_sanitizer.py`) fails CI if a module besides `utils/terminal.py` ever defines `_CONTROL_STRIP_TABLE` again.
+
+- **Short training runs no longer show a fabricated `0.0000 -> 0.0000` loss delta (#899 by @taljeon in #908).**
+  All Hugging Face-style trainer wrappers now share one loss-history summary: two or more
+  per-step measurements produce a delta, one measurement or a run-level `train_loss` mean
+  produces one value without an arrow, and missing data is shown as unavailable. The
+  completion panel therefore never claims a before/after comparison it did not measure,
+  while non-finite per-step values remain visible instead of being replaced by the last
+  healthy loss.
+
+- **`soup plan` and `soup apply` now refuse a config carrying an unknown key (#894 by @wangzhengzhuo05 in #909).**
+  `_load_yaml_config` read the YAML with `yaml.safe_load` and handed the raw mapping to
+  `build_plan`, so it never built a `SoupConfig` and never ran `find_unknown_config_keys`:
+  a typo'd key planned cleanly and was refused one command later by `soup train`. Both
+  commands now exit 1 with the loader's message and suggestion.
+
+- Repinned `notebooks/proof-4gb.ipynb` from an unreproducible `git+...@main` install to
+  the released `soup-cli[train]==0.75.0`, corrected its "0.73.0 is published" and
+  "#347 is open" claims (#347 shipped `training.stream_vram_override` in v0.73.1), added
+  that override to the section 5 config so the pre-flight checks against the same 4 GB
+  cap the allocator enforces, and added a cell printing `torch`/`transformers`/`peft`/
+  `bitsandbytes`/`soup_cli` versions. Colab's free-tier T4 runtime now defaults to
+  Python 3.13, ahead of soup-cli's `<3.13` ceiling, so the install cell falls back to
+  `pip install --ignore-requires-python` when it detects that. Re-ran the notebook end
+  to end on a free Colab T4 and committed it with outputs: section 4's streamed-vs-
+  resident forward comparison is bit-exact (`torch.equal = True`), and section 5 trained
+  Llama-3.1-8B under the 4 GB cap with a measured peak of 1.83 GB. Added
+  `tests/test_issue844_notebook_pin_guard.py` so a future stale pin, an unreleased
+  version, or a renamed `soup_cli` import fails CI instead of surfacing on the next
+  Colab run (#844 by @VanshSharmaPES in #910).
+
+- Fixed `soup eval against` so it can compare results written by Soup's own eval
+  commands, rejects unknown metrics before database access, distinguishes unavailable
+  comparisons from regressions in generated hooks, and reports single aggregate scores
+  without pretending they form a confidence interval (#812 by @Amix29 in #914).
+
+- **The Web UI now rejects oversized YAML-entry request bodies before parsing
+  (#897 by @Amix29 in #915).** `/api/config/validate`, `/api/train/start`, and
+  `/api/config/from-form` return HTTP 413 above 1 MiB. The limit checks both the
+  declared `Content-Length` and the bytes actually received, so chunked requests
+  and understated headers cannot bypass it; all 171 shipped recipes remain valid.
+
+- **`soup data lint` no longer fails correct conversational DPO data on `prompt_leak`, and `length_bias` needs a real size difference (#810 by @dchaudhari7177 in #916).** A conversational `chosen` / `rejected` carries its prompt as the leading user turn, and the linter flattened every turn, so `prompt_leak` flagged every row whose prompt was 40+ characters, including both shipped DPO examples, and `length_bias` measured prompt plus answer. Both checks now read only the assistant turns. `length_bias` also requires the mean lengths to differ by at least 10% for MAJOR and 5% for MINOR, on top of Cohen's d, so a consistent one-word gap between near-constant lengths (or the zero-variance fallback) is no longer MAJOR on its own.
+
+- **`soup eval quant-check` now exits with code 2 on a `MAJOR` accuracy regression verdict, rejects standalone `.gguf` paths up front (exit code 3), and requires `--allow-stub` for stub scoring (#809 by @kok-o in #917).** A model load failure on either side now reports which side failed and exits with code 1 instead of silently falling back to deterministic stubs and reporting a false `OK`. Breaking: a run that previously passed on stubs now needs `--allow-stub`. When `--allow-stub` is explicitly provided, stub outputs are marked with `"stub": true` in JSON and display visible warning banners in table/markdown output.
+
+- **`soup reward stress` now detects structure-preserving attacks that game built-in format and substring verifiers (#814 by @kok-o in #918).** `reward_stress` previously checked four classic junk strings (`empty`, `length`, `repetition`, `sentinel`), none of which exercised the structure rewarded by reasoning scaffolds. Consequently, the built-in `format` reward was reported as "robust (not gameable)" despite awarding 1.0 to `<think></think>a`, and `accuracy` missed distractor answer-sprays. `soup reward stress` now adds two structure-preserving attack families (`wrapped_junk` and `answer_spray`), expands each family into multiple distinct variant attempts, determines verdicts per-family to prevent denominator dilution, tests `answer_spray` against real gold substitutions with non-collapsing distractor generation, and ensures `verifiable` math checks remain robust (exit 0).
+
+- Apply `data.chat_template` consistently to conversational preference, reward-model,
+  GRPO, and Online DPO trainers, and reject it on non-chat tasks
+  (#804 by @Amix29 in #919).
+
+- **`soup profile` no longer reports an assumed GPU as a measured fit, and knows newer and laptop cards (#830 by @dchaudhari7177 in #920).** With no GPU detected and no `--gpu`, it printed "OK Fits in 24 GB VRAM" and a batch size as if it had measured a 24 GB card; it now says no GPU was detected, shows the would-fit result against the assumed size, and asks for `--gpu`, and `--json` and the MCP `profile` tool report `gpu_memory_source` (`flag`, `detected` or `assumed`). `--gpu` now accepts the RTX 3050, 5060 through 5080 (including Ti variants), B200 and laptop parts whose memory differs from the desktop card, as well as device names as torch reports them ("NVIDIA GeForce RTX 5070 Laptop GPU"). The speed estimate is labelled as a typical A100 figure.
+
+- Build PEFT LoRA configs through one shared helper so `rank_pattern` and
+  `alpha_pattern` work consistently outside SFT and pretraining
+  (#803 by @Amix29 in #923).
+
+- Label the legacy `soup data toxicity` scorer honestly as an abuse-keyword heuristic,
+  stop treating ambiguous technical terms as safety signals, preserve legacy output
+  keys, and remove it from Magpie's default quality filter
+  (#821 by @Amix29 in #925).
+
+- Stop Autopilot from enabling or advertising unwired forgetting and checkpoint-quality
+  gates, and warn when any staged sibling setting differs from its default. (#927 by @Amix29)
+
+- Configure Transformers RoPE before text SFT and pretrain model construction, because changing
+  the config after construction left the rotary frequencies unchanged (#793 by @Amix29 in #931).
+  Preserve only type-independent native parameters when changing algorithms, forward YaRN
+  tunables, and refuse nested per-layer RoPE configurations rather than reporting a partial
+  extension as enabled.
+
+- **Sharding a large checkpoint no longer dies on Windows.** `shard_checkpoint` held every
+  source `*.safetensors` mapping open for the whole of pass 2, and `safe_open` maps a file
+  privately on Windows, so each live handle charged commit for that file's entire size —
+  measured, 48.99 GB mapped raised the commit charge 46.17 GB while free physical memory never
+  moved. A real Llama-3.1-70B (30 files, ~141 GB) therefore charged the whole checkpoint and
+  died with an access violation (no traceback, exit 139), so it could not be sharded for layer
+  streaming at all. At most two source handles are now alive at once, and the tensor readers
+  return tensors that own their memory: a `get_tensor` view keeps its whole file mapped, and
+  charged, for as long as it lives, which would otherwise defeat the cap. (#934, fixes #926)
+
+- Discover installed Soup plugins lazily, persist explicit opt-in state across processes, and
+  connect enabled hooks to training (#819 by @Amix29 in #935). Third-party entry points are now
+  listed from package metadata without importing their code; `soup plugins enable <name>` is the
+  explicit code-loading boundary. Malformed recursive state and Rich-markup resource names are
+  handled safely. **BREAKING:** the non-installing `soup plugins install` advisory now exits 2
+  instead of reporting success with exit 0.
+
+- **`soup data preprocess` cached chat rows without the EOS the live path trains on,
+  so a cached run could train with no stop token (#938 by @abdulwaarith0).**
+  The live SFT path (`train_on_responses_only: false`) reproduces TRL's `add_eos` rule
+  in `data/loss_mask.py`: a chat row that does not already end on `eos_token` gets one
+  appended. `soup data preprocess` tokenised the rendered template directly, with no such
+  step, so a cached row carried an EOS only when the template or the tokenizer's
+  post-processor supplied one. On a template that renders no EOS and a tokenizer whose
+  post-processor appends none (the Qwen shape), the live path trained on one stop token
+  and the cached path on zero. It was silent: the loss curve looks normal and
+  `soup data doctor --show-mask` renders the live path, not the cache. The preprocess
+  cache now applies the same `add_eos` rule for chat rows, appending the EOS id when the
+  row does not already end on it, and only while the row is under the length budget so a
+  truncated row is not pushed past `max_length` (the live path, which appends then
+  truncates, keeps no trailing EOS there either). Pretrain rows never go through a chat
+  template and are unchanged. The leading BOS still differs between the cache and the live
+  path by design and is tracked in #876. The `soup data preprocess` cache key changes, so a
+  dataset cached under the old encoding is re-tokenised rather than silently reused. Models
+  trained from a `soup data preprocess` cache before this change may have trained without a
+  stop token on templates that render none, which teaches run-on generation; re-run
+  `soup data preprocess` and retrain to pick up the stop token.
+
+- Rewrite the shipped DPO and chat-preference examples so rejected responses retain a clear quality contrast without teaching a response-length shortcut, and regression-test both files with `soup data lint` (#929 by @taljeon in #940).
+
+- **`soup reward stress verifiable --verifiable-domain json_schema` now forwards supplied
+  references as `schema` metadata instead of reporting that `--references` is missing (#937 by
+  @Amix29 in #941).** JSON-object schema fields are decoded before scoring, and a verifier that
+  returns the wrong number of scores after receiving references now gets a distinct contract
+  diagnostic. The built-in attacks remain non-JSON and therefore cannot yet discriminate schema
+  strictness; `reference_accept` is not a meaningful control for this metadata-based domain.
+
+- **Distillation gradient accumulation now weights microbatches by their shifted, non-masked
+  training-token counts (#932 by @Amix29 in #943).** This supersedes #742's fixed-per-microbatch
+  compensation: the trainer now accepts Transformers' accumulation count and normalizes each
+  microbatch by its share of the window's trained tokens. Unequal-length microbatches therefore
+  produce the same gradient as the equivalent full batch instead of giving short and long
+  microbatches equal influence.
+
+- **CLI help, config descriptions, and feature guides now describe shipped behaviour instead
+  of expired release plans (#823 by @Amix29 in #945).** Removed stale `schema-only`, `deferred`, and
+  `lands in` claims from live features, removed internal release-phase labels from command
+  help, and stopped `soup advise run --help` from recommending the nonexistent `--no-record`
+  flag. Descriptions for genuinely incomplete surfaces now state their current limitation
+  without promising a past release. A version-aware source-level ratchet scans every Typer help
+  string and Pydantic field description while allowing documented future release notices and
+  explicitly allowlisted schema-only fields.
+
+- **Sweep leaderboards now keep diverged arms visible but sort them after finite losses (#944 by @taljeon in #946).** Non-finite losses are labelled `diverged`, never selected as the best run, and explicitly count as worse than an early-stop threshold instead of relying on NaN comparison behavior.
+
+- **The Web UI now caps `/api/chat/send` and `/api/data/inspect` request bodies before they are parsed (#939 by @AmirF194 in #948).** Both routes let FastAPI read and parse the whole body before the handler's own checks ran, so `chat/send` forwarded an unbounded body upstream and `inspect` paid a full read even on a path that was always going to be rejected. `chat/send` now caps at 1 MiB, `inspect` at 8 KiB; both check `Content-Length` and the bytes actually received, so a missing or understated header cannot bypass the limit.
+
+- **`autodistill`'s MLX teacher worker verification failed under a venv on Windows,
+  where `Scripts/python.exe` is a launcher that spawns the real interpreter as a
+  grandchild (#898 by @SID-6921 in #950).**
+  `run_mlx_teacher_capture_process` compared `receipt.worker_pid` (the child's own
+  `os.getpid()`) against `subprocess.Popen(...).pid`. Under a real venv those are two
+  different processes, so the comparison always failed even on a successful capture.
+  The parent now generates a nonce and hands it to the child in the request; the child
+  echoes it back into the worker receipt, and the parent verifies the nonce instead of
+  the PID. `worker_pid` still appears on both models -- the receipt's own value
+  (`os.getpid()`) is the useful one; the result's mirrors whatever `Popen` reported,
+  which is the launcher's PID on exactly the platform this fixes, so it is informational
+  only, not proof of anything.
+
+- **The control-strip ratchet skipped a file it could not parse, so a broken module could
+  hide behind a green run (#949 by @jarik2014 in #951).**
+  `tests/test_issue896_no_duplicate_terminal_sanitizer.py` walks every tracked file under
+  `src/soup_cli/` with `ast.parse` and a `SyntaxError` was caught and skipped, which made the
+  guard's clean answer mean "zero offenders among the files I could read" rather than "zero
+  offenders" — and a module that does not parse is a worse problem than the duplicate table
+  the ratchet exists to find, since it would surface later as an `ImportError` somewhere
+  unrelated. The guard now fails naming the file and the error, and a test proves it by
+  writing a real unparseable file inside the scanned tree (registered with `git add -N` so it
+  is part of the `git ls-files` walk) and asserting the guard goes red.
+
+- **`soup mcp serve`'s `data_doctor` now refuses blank and unknown formats instead of treating blank as auto-detect or falling through to unrelated tokenizer/doctor errors (#889 by @Rayan-and-beyond in #952).** The handler now mirrors `data_validate`'s #882 behavior: omitted `format` still auto-detects, explicit values must come from the shared `VALID_FORMATS` allowlist, and an invalid value raises the same bounded error naming the rejected value and accepted formats. Tests pin blank and near-miss rejection, message parity, every current valid format, allowlist extension without a handler change, and the omitted-format control.
+
+- MCP export and profile errors now name the rejected format or GPU and list the
+current accepted values. Error formatting is shared with data validation, and
+control characters in rejected values are escaped (#953 by @shubhambhar007 in #954).
+
+- Reject `training.kernel_auto_compose: true` instead of timing one unchanged model and falsely reporting that the fastest kernel combination was applied. Use `use_liger` or `use_flash_attn` explicitly. (#801 by @Amix29 in #955)
+
+- Narrow the MLX backend-support table to the four reachable CUDA-only fields (`use_mod`, `moe_lora`, `quantization_aware`, `use_fsdp2_compile`); the other five from #958 are refused by schema validation before MLX ever sees them (#958 by @ege-arhan in #961).
+
+- **Data recipes no longer report an unreachable provider as a successful run (#930 by @taljeon in #969).** Live `llm_text` and `judge` nodes now count transport, non-2xx, and malformed-response failures; a node whose every provider call fails exits non-zero and names the endpoint. Partial runs keep their successful rows and report the failure count, while a legitimate empty completion remains a successful response rather than being mistaken for an outage.
+
+- **Layer streaming's disk tier no longer reads on the compute thread (#971 in #973).** `stream_source: disk` (and `auto` when the base does not fit RAM) used to call a synchronous, memory-mapped read from the thread that was supposed to be feeding the GPU, so every byte arrived through page faults while the card idled. The base now streams through a background reader that parses each shard's header itself — no memory map, so nothing charges commit for the whole file — and stages layers into host memory that is page-locked when the box allows it, with a loud pageable fallback rather than a silent one when it cannot; setting `training.stream_pin: true` on this tier now REFUSES a run the box cannot page-lock, where it previously announced that pinning does not apply and went on regardless. Measured on one box (RTX 5070 Laptop, Windows, NVMe; [record](benchmarks/gate-971-async-nvme-source.md)) against a **same-day control of the source it replaces**, cold on a 36 GB 70B-shaped NF4 store larger than RAM at batch 1 × seq 512: **92–100 s per step became 30–48 s (2.1–3.1×)**, each pair position-matched — 5.1–5.6 → 10.6–16.9 tok/s, 0.70–0.76 → 1.46–2.32 GB/s at the source — with peak VRAM unchanged at 4.38 GB. It is still bound by the read: per-layer read brackets are 82.6–84.9% of the step. **Warm, with the whole store in the page cache, it is a REGRESSION of 1.03–1.20×** (the two figures are the two run orders; the direction survives reversing the order, the magnitude does not) — with the store cached a synchronous read is close to a `memcpy`, so there is nothing for a reader to hide; if the store fits RAM the RAM tier is 1.8–2.3× faster than either disk arm and is what `auto` already picks. A shard that changes on disk while a run holds it is refused by name rather than read at stale offsets, and a reader that wedges mid-read now surfaces as an error instead of a hang. New `training.stream_read_ahead` (default 2, range 1–8) sets the reader's depth, where **a setting of N stages N−1 layers ahead** because one slot is always held by the layer being consumed, and each level costs one layer of pinned host RAM (1.5 GB at depth 1, 2.0 at 2, 2.8 at 4 on a 70B) — which the pre-flight now charges, prints and refuses the run over if it will not fit free RAM, instead of predicting zero host residency for this tier. No depth was distinguishable on throughput in that record once run order was controlled for, so treat it as a host-memory knob. A non-default `stream_read_ahead` beside `stream_source: ram` is **refused** rather than accepted and ignored: the reader belongs to the NVMe tier and `ram` never falls back to it. The default is accepted, because a default is not a decision.
+
+- **Enabling MiniLLM with the default offline settings is now a config error instead of a silent no-op (#692 by @jagadeepmamidi in #977).** `minillm_enabled: true` plus `minillm_on_policy: false` plus `minillm_teacher_mix_ratio: 0.0` used to load and forward the teacher, then blend it at weight zero so the MiniLLM term was `KL(student || stopgrad(student))`. Ordinary cross-entropy kept the loss curve healthy. That combination is rejected at parse and names the three fields; ratio 0 stays legal on the on-policy path, where it only means student-only sampling and the loss is still `KL(student || teacher)`.
+
+- **BitNet 1.58 training configs now fail at config load instead of falling through to the ordinary trainer and later reporting `unknown quantization` (#825 by @Rayan-and-beyond in #981).** The error states that BitNet training is not implemented yet and points to the still-working `soup export --format tq1_0` path. The unusable `falcon-e-bitnet-sft` recipe and the docs that advertised training as live are removed, with recipe snapshots and catalog counts kept in sync.
+
+- **`soup loop watch`'s canary deploy stage no longer reports a canary verdict of OK when nothing evaluated a canary (#815 by @AmirF194 in #982).** `deploy_to_canary` activates the trained adapter at 100% traffic and recorded `canary_verdict: "OK"` from that activation's bare 2xx; the actual per-request traffic split and verdict machinery in `canary_router` never ran. The stage now reports `canary_verdict: None` on that path, matching every other exit in the function.
+
+- `training.use_flash_attn` and `training.use_liger` are now rejected at config load for any task outside `sft`/`tts`, the only trainers that read either flag. `soup autopilot` stops auto-enabling both for DPO/GRPO/pretrain on Ampere or newer, where they previously built a config the CLI's own validation would then refuse for a package that task never used. `soup migrate --from axolotl` and the `generate_config` autopilot emitter got the same scoping, so neither hands back a config the loader then rejects (#806 by @AmirF194 in #983).
+
+- **Five tests that passed with colour off and failed with colour forced now answer the same way in every shell (#886 by @Srinivasan8888 in #984).** Under `FORCE_COLOR=1` they failed for reasons unrelated to what they assert, through three distinct mechanisms. A test fixture built its Rich `Console` without pinning `force_terminal`, so it colourised into the buffer and `"\x1b" not in out` became unsatisfiable; that fixture is now pinned, which keeps the broad assertion rather than narrowing it to hand-picked escape sequences. Two banner checks and two `soup doctor` NCCL checks matched raw output that colour splits with SGR codes, and now match ANSI-stripped output, as the newer tests in those files already did. The control-byte test also gained an assertion that the stripped payload stays visible as inert text, so a sanitiser that swallowed it entirely would no longer pass. None of the five was red in CI, where no workflow forces colour, but this class has turned CI red four times before when something upstream changed.
+
+- **`soup edit diff` refuses both models with no `--probes` instead of writing an empty diff (#880 by @Srinivasan8888 in #985).** Given `--before-model` and `--after-model` but no probe file, it exited 0 and wrote a report with `total_probes: 0`, which reads as "the edit changed nothing" when nothing was measured. It now exits 2 without writing a file, and the message names `--probes`. The three combinations #818 and #863 already refuse are unchanged, and running with neither model and no probes still succeeds.
+
+- Report unavailable training loss for MLX SFT and unlearn runs that capture no loss, instead of inventing 0.0000 (#960 by @Rayan-and-beyond in #986).
+
+- **Layer streaming's pageable fallback no longer poisons the run, and the RAM store page-locks at its own size (#901 in #989).** A Qwen2.5-14B NF4 run on an 8 GB card with 32 GB of RAM predicted a 3.39 GB peak against 7.41 GB free, printed "could not page-lock the base … falling back to a PAGEABLE RAM store", and died with `AcceleratorError: CUDA error: out of memory` inside `SFTTrainer.__init__`. Memory was never the problem: a failed `pin_memory=True` allocation leaves the CUDA runtime's last error set, and the run's first kernel launch reported it as an out-of-memory with gigabytes free (`cudaMalloc`, `synchronize` and memcpy all pass; a kernel's launch check reads it). `_build_source` now drains that error and releases the page-locked blocks the abandoned attempt left in torch's host cache before it builds the pageable store, on both tiers. The page-lock itself failed because torch's caching host allocator rounds every pinned request up to the next power of two, so pinning the store one tensor at a time cost 1.73x its bytes (measured on the real 14B shard cache: 6.82 GB requested, 11.83 GB page-locked); `RamSource` now pins the store in power-of-two arenas with every tensor a view, so the same 9.93 GB store page-locks as 10 GiB and the ready line prints the real figure. The VRAM probe also calls an out-of-memory `AcceleratorError` an OOM verdict rather than an instrument failure. Measured on the dev box with a synthetic 14B shape: the reporter's config now trains end to end with the store pinned, peak 2.944 GB allocated / 3.244 GB reserved — the pre-flight's prediction was right. Record: `benchmarks/gate-901-14b-on-8gb.md`; the shape generator (`synth_checkpoint.py --shape qwen2.5-14b --arch qwen2`) and the step probe (`issue901_stream_step_probe.py`) ship under `benchmarks/harness/`.
+
+- **The layer-streaming disk tier reads each layer through direct I/O in sector-aligned ranges, into arena-packed staging (#974 in #991).** Cold, on a 36 GB 70B-shaped NF4 store larger than RAM, every buffered read primitive topped out at 1.2–2.9 GB/s on the dev box's NVMe whatever the request shape — the cache manager, not the drive, was the ceiling gate-971's async source sat at (1.46–2.32 GB/s, 84.7% of the step) — while unbuffered reads of the same fresh layers reached 3.5–5.65 GB/s. The reader now reads each layer's data section as sector-aligned byte ranges through `FILE_FLAG_NO_BUFFERING` on Windows, `O_DIRECT` on Linux and `F_NOCACHE` on macOS (a buffered `open` where a filesystem refuses, e.g. tmpfs), four ranges in parallel through per-worker handles, into ONE staging region per slot with tensors as views, and packs the pinned regions into #901's power-of-two arenas so the disk tier's staging stops paying the per-tensor 1.7–1.9x rounding. Measured position-matched in both run orders on the dev box (RTX 5070 Laptop 8 GB, Windows 11): a cold 70B-shaped step went from 110.5 s on the synchronous path in the same slot to **16.2–17.3 s** (6.4x), against 34.8–45.6 s for the reader this replaces (2.0–2.8x), with the read share down from 84.7% to 62–64% at 6.0–7.0 GB/s and the two run positions within 1.07x of each other; peak VRAM unchanged at 4.38 GB. Warm, with the store in the page cache, the async source had been reported 1.03–1.20x slower than the synchronous one (gate-971 §5); position-matched it was 0.91–0.97x before this change — the bracket was run order — and after it, in one session with the reader it replaces imported from `origin/main`, the new reader is 0.76x of the old one warm on the plain point (1.582 vs 2.091 s; 0.94x on the instrumented points) and 2.25x faster right after a page-cache eviction (1.788 vs 4.024 s), with the RAM tier (1.13–1.20 s) still the floor for a store that fits. Two consequences worth knowing: a disk-tier run no longer warms the page cache for whatever runs after it, and a store that fits RAM still belongs on the RAM tier (`stream_source: auto`). The ready line prints the page-locked figure on this tier too; `direct_io`, `pinned_bytes` and `staging_bytes` are reported. Record: `benchmarks/gate-974-disk-tier-direct-io.md`; the read-primitive probes ship under `benchmarks/harness/issue974_*.py`.
+
+- **CLI escape-hygiene tests no longer answer differently depending on the shell they run in (#987 by @AaronProbha18 in #993).**
+  Seven tests assert that an untrusted field — an exception message, a filename, a
+  manifest secret, a config digest — is sanitised before it reaches the terminal,
+  spelled `assert "\x1b" not in result.output`. Each command prints through an
+  unpinned module-level `Console()`, so under `FORCE_COLOR=1 TERM=xterm-256color`
+  Rich styled the *surrounding* panel markup and the assertion failed even when the
+  field itself had been sanitised correctly — the test was measuring the ambient
+  terminal, not the code under test. Each now pins its console with
+  `Console(force_terminal=False)`; `no_color=True` alone is not sufficient, because
+  it suppresses colour without pinning tty detection, which is the exact bug
+  `test_replay.py` carried. No assertion was weakened, narrowed, or routed through
+  an ANSI strip: all seven keep the broad `"\x1b" not in` form, and six are
+  demonstrably falsifiable by a real sanitiser regression. `tests/test_cli_help_assertions_are_ansi_safe.py`
+  records why this class is left to per-test pinning rather than added to the
+  repo-wide ratchet — telling "asserts on console output" from "asserts on a
+  pure-function return" is about an even split, and a guard that false-positives on
+  half of what it sees gets deleted. Test-only; no runtime behaviour changes.
+
+- **`soup serve --backend sglang` no longer sends the engine a doubled BOS (#890 by @abdulwaarith0 in #995).**
+  The same defect #867 fixed for vLLM, on the backend that was split out because
+  `sgl.Runtime.generate` only ever posts `{"text": prompt}` and the server then
+  tokenizes that string with `add_special_tokens=True`; neither the request nor
+  `ServerArgs` has a flag to turn that off. Measured end to end on SGLang 0.5.9
+  with `unsloth/Llama-3.2-1B-Instruct`, whose Llama-3 template renders
+  `{{ bos_token }}` (id 128000): for the string Soup sent, the engine ran on
+  `[128000, 128000, ...]` over 37 ids (`meta_info.prompt_tokens` 37), against
+  the 36 ids `apply_chat_template(tokenize=True)` returns. The same `/generate`
+  endpoint takes `input_ids` and uses them verbatim, so the backend now posts the
+  ids built with no tokenizer special tokens to it whenever the chat template
+  rendered the prompt, which reproduced the 36-id encoding exactly
+  (`[128000, 128006]`, `prompt_tokens` 36). Both the streaming and the
+  non-streaming route go through it, and the response is the same
+  `{"text", "meta_info"}` dict the app already parsed, so `usage`,
+  `finish_reason` and the streamed chunks are unchanged apart from
+  `usage.prompt_tokens` dropping by one on such templates. As with #867, a model
+  whose template renders no BOS but whose tokenizer post-processor would add one
+  now receives zero, matching Soup's training path. Models without a chat
+  template, and templates that fail to render, still go through
+  `Runtime.generate` as the legacy string and are tokenized by the engine
+  exactly as before. The MII backend is fixed separately in #891.
+  Packaging note: the ids POST is now bounded by a 300s timeout and issued
+  through `httpx`, so `httpx>=0.24.0` joins the `[sglang]` extra; anyone
+  installing `soup-cli[sglang]` picks it up automatically.
+
+- **`soup serve --backend mii` no longer sends the engine a doubled BOS (#891 by @abdulwaarith0 in #996).**
+  The same defect #867 fixed for vLLM, on the backend that was split out because
+  `MIIPipeline.__call__` takes strings only and encodes each one through
+  `HFTokenizer.encode`, which is `tokenizer.encode(input, return_tensors="pt")`
+  with no way to say the special tokens are already there. On a BOS-prepending
+  tokenizer whose template renders `{{ bos_token }}` (`unsloth/Llama-3.2-1B-Instruct`,
+  `bos_token_id` 128000), that is `add_special_tokens=True` over a string that
+  already starts with the BOS text, so the prompt tokenizes to
+  `[128000, 128000, ...]`, 37 ids, against the 36 ids
+  `apply_chat_template(tokenize=True)` returns. MII's seam is
+  `ModelConfig.tokenizer`: `mii.pipeline(tokenizer=...)` accepts a wrapper, which
+  `load_tokenizer` wraps once more and calls `encode(input, return_tensors="pt")`
+  on, with the prompt object the pipeline was given, untouched. `soup serve` now
+  builds the pipeline with such a wrapper around the same tokenizer whose chat
+  template it applies, and hands a templated prompt over as a `TokenizedPrompt`:
+  still a `str`, so the pipeline's contract holds, but carrying the ids built with
+  no tokenizer special tokens, which the wrapper returns verbatim, so the engine
+  runs on the 36-id encoding (`[128000, 128006, ...]`). If the engine ever reports
+  a prompt length other than the one Soup encoded, the server logs a warning naming
+  both rather than doubling in silence. As with #867, a model whose template renders
+  no BOS but whose tokenizer post-processor would add one now receives zero,
+  matching Soup's training path. Models without a chat template, and templates that
+  fail to render, still hand the pipeline a plain string, which the wrapper encodes
+  with the very call MII's `HFTokenizer` makes, so the engine tokenizes it exactly
+  as before; a pipeline built without a tokenizer keeps MII loading its own, as it
+  did. The wrapper is covered against MII 0.3.3's real `HFTokenizer.encode` contract
+  in `tests/test_issue891_mii_engine_bos.py`. The SGLang backend is fixed separately
+  in #890.
+
+- **`docs/commands.md` and `docs/training.md` documented four `soup train
+  --minillm-*` flags that were never wired as CLI options, so copying the
+  documented command raised `No such option` and exit 2 (#979 by @SID-6921 in #998).**
+  Only `--minillm-on-policy` was ever a real flag; `minillm_enabled`,
+  `minillm_teacher_mix_ratio`, `minillm_pretrain_anchor_weight` and
+  `minillm_pretrain_anchor_path` are `soup.yaml` fields with no CLI
+  counterpart. Both doc sites now show the YAML config instead. Added a
+  guard (`tests/test_issue979_documented_cli_flags_exist.py`) that walks
+  `soup train`'s live Typer tree and fails when a doc names a `--flag` with
+  no counterpart, so the next one fails a test instead of a support ticket.
+  Building it turned up eight more pre-existing mismatches in unrelated
+  subsystems (ULD strategy, RL mid-epoch checkpointing, echo-trap
+  detection); those are tracked separately in #997 rather than folded into
+  this fix.
+
+- The distill ``_DistillTrainer`` test harness now derives ``compute_loss``
+  closure bindings from the factory and ``TrainingConfig`` defaults, and fails
+  with the missing name if a new free variable cannot be resolved. Nested
+  functions such as ``_token_weighted_accumulation`` are not reported as
+  missing, and the recompiled class is compiled under
+  ``<compiled _DistillTrainer>`` so a ``NameError`` can no longer masquerade as
+  ``distill.py`` (#990 by @jagadeepmamidi in #1008).
+
+- **A LoRA target on `lm_head` or `embed_tokens` crashed the first forward pass on an untied streamed checkpoint (#1012 by @AmirF194 in #1019).** `build_streamed_model` runs `get_peft_model` before `install_streaming`, so peft wraps the boundary module in a LoRA tuner layer first and exposes its `weight` as a read-only property; `StreamedLargeLayer`'s substitution used a plain `{"weight": ...}` `functional_call`, which cannot set that property, and raised `AttributeError` at the first forward. `_large_layer_weight_param_name` now resolves the same indirection `_layer_name_map` already resolves for decoder-layer projections, substituting onto `base_layer.weight` when the boundary module is peft-wrapped. Verified bit-exact (`torch.equal`, not an approximate tolerance) against a resident LoRA-on-head model for logits, loss and every LoRA gradient. This fixes the forward crash only; saving and resuming a checkpoint with a LoRA-wrapped head or embedding still needs separate work, tracked on #1012.
+- **`training.stream_layers` now refuses a LoRA target on `lm_head`/`embed_tokens` at config parse time (#1012 by @AmirF194 in #1019).** The forward pass above is correct, but `save_pretrained()`/`load_adapter()` on the streamed head/embedding boundary is not implemented yet, so a run with that config trained for hours and died at its first `save_steps`. Drop the boundary module from `training.lora.target_modules`, or train without `stream_layers`, until the save/resume follow-up lands.
+
+- Apply `data.chat_template` to conversational PPO prompts, pass `answer`
+  through in PPO `messages` format, and reject `data.chat_template` on non-chat
+  tasks `prm`, `asr`, `moe_lora_routing`, and `unlearn`
+  (#936 by @kok-o in #1021).
+
+- **`training.nvfp4` and `training.fp8_attention` are now applied on `task: sft` post-LoRA (#800 by @kok-o in #1022).** `SFTTrainerWrapper._apply_quantization_aware` now delegates to `apply_v028_speed_memory` with `skip_cut_ce=True` so NVFP4, FP8 attention projections, and FP8 training now reach their converters on SFT runs without double-patching Cut-CE. Both flags are also gated at schema time against non-v028 tasks and the MLX backend to prevent silent no-ops.
+
+- **Unify `SoupTrainerCallback` construction across all trainers and reject unsupported monitoring on tasks without callbacks (#802).** `training.loss_spike_recovery` and `training.grad_accum_auto_tune` previously reached the live callback only in `trainer/sft.py`; fifteen other trainers instantiated `SoupTrainerCallback` with watchdog settings only, causing spike recovery hint generation and grad-accum advisory monitors to default to `False`. All trainers now build callback arguments through `soup_callback_kwargs(tcfg, batch_size=..., output_dir=...)` in `monitoring/callback.py`. Tasks without a live callback (`prm`, `moe_lora_routing`, `unlearn`) explicitly refuse `loss_watchdog`, `loss_spike_recovery`, and `grad_accum_auto_tune` at config load time (#802 by @kok-o in #1023).
+
+- **Refuse symlinks on Windows when reading the draft registry and writing the audit log (#820).** On Windows, `os.O_NOFOLLOW` does not exist and evaluates to `0`, allowing `os.open` to follow symbolic links. Three sites under `$HOME` (`~/.soup/`) relied on `O_NOFOLLOW` alone without `cwd` containment: `utils/draft.py:_read_registry`, `utils/draft.py:_registry_lock`, and `utils/audit_log.py:append_audit_event`. As a result, symlinks placed at `drafts.json` could leak arbitrary JSON into speculative decoding, a symlink at `drafts.json.lock` would follow and create its target via `O_CREAT`, and `append_audit_event` would append audit logs to arbitrary symlinked targets. Introduced `utils.paths.open_no_follow(path, flags, mode)` which combines `lstat` inspection (detecting `S_ISLNK` and Windows reparse points) with post-open `fstat` cross-validation on Windows to detect a TOCTOU swap. Migrated the three vulnerable sites, enabled symlink tests on Windows when privileges permit, and added a repo-wide ratchet preventing new bare `getattr(os, "O_NOFOLLOW", 0)` usages (#820 by @kok-o in #1024).
+
+- Warn once when distillation teacher produces persistently non-finite logits.
+  Consecutive non-finite distillation terms are accumulated directly on device using
+  asynchronous PyTorch operations with zero host synchronization on the per-step path.
+  A single diagnostic warning is emitted naming the teacher model, the consecutive step
+  count, and likely root causes (unsupported dtype underflow, mismatched tokenizer, or
+  overly small distillation temperature). Transient non-finite steps (such as standard
+  GradScaler overflow recovery) reset the on-device counter with no sync and emit no
+  warning (#887 by @kok-o in #1026).
+
+- **`data.remove_unused_columns` now defaults to `false`, and an explicit `true` loads with a warning and is ignored; Soup v0.77 will refuse it (#759 by @Srinivasan8888 in #1027).** No trainer reads the field. The trainers that set the Hugging Face argument pass `False`, so a custom collator still receives the columns the model's `forward()` does not name, and the old declared default of `true` misdescribed every run. `true` is not refused yet, because `soup autopilot` writes the whole config, so every file it generated on the old default contains `remove_unused_columns: true`; those keep loading, and no run changes behaviour, because the effective value was always `False`. Loading one prints `data.remove_unused_columns: true has no effect and is ignored`, once per load; delete the line before v0.77. The field is not deleted, since an unknown key is now a hard error.
+
+- **The config-field guard no longer reports a broken checkout when one directory is reached by two spellings (#988 by @Srinivasan8888 in #1029).** Its scan/import check compared paths with `==`, so on macOS, where the filesystem is case-insensitive but keeps the case you type, running the test file by a lowercased path failed six tests with a message telling you to fix `PYTHONPATH` or reinstall. The check now compares the two directories with `os.path.samefile`, which asks whether they are the same directory on disk. It checks both exist first, so a missing tree is still reported instead of crashing, and genuinely different trees are still caught. Test-only.
+
+- **A streamed save that writes an adapter holding nothing now raises instead of reporting success (#1011 by @dchaudhari7177 in #1031).** Twice a `stream_layers: true` run wrote an `adapter_model.safetensors` that reloads as nothing (v0.72.0's `.inner.` keys, #1005's 0-tensor file under peft 0.21) and the only signal was a `UserWarning` at a later load. After the final save and on every `save_steps` checkpoint, the streamed trainers (`sft`, `dpo`, `orpo`, `simpo`, `kto`) now read the file's keys back and raise, naming the file and both counts, when it holds no LoRA tensors, a different number than the model trained, or any key carrying the wrapper's `.inner.` segment. Resident runs are unaffected.
+
+- **`soup doctor --config` no longer prints an unverified source line for `training.use_fsdp2_compile` on MLX (#1001 by @dchaudhari7177 in #1032).** The reason cited `commands/train.py:1235`, which nothing pinned and which had already drifted once. It now names `validate_fsdp2_compile_config`, which `soup train` runs before resolving the trainer, and a test fails if any backend-support reason cites a `file.py:NNN` location again.
+
+- **`soup serve --auto-quant` now refuses instead of selecting a format from timer noise (#816 by @Amix29 in #1035).** The pre-bind path timed three calls to a constant-returning stub, called the fastest few hundred nanoseconds a quality-gated evaluation, and could then force AWQ, GPTQ, or FP8 on a plain checkpoint through vLLM. The flag now exits 2 with an explicit explanation until Soup can load and evaluate each candidate; vLLM receives `quantization=None` and therefore follows the checkpoint's own metadata. Transformers and SGLang no longer print a selection they never apply, and the help plus serving guide state the current boundary.
+
+- **SFT gradient-checkpointing tiers now make the distinct trade-offs they print (#796 by @Amix29 in #1036).** `medium` reaches Transformers as `every_n_layers=2` instead of checkpointing every block, while `selective` wraps only each decoder block's direct attention child and leaves HuggingFace full-model checkpointing off, including after PEFT enables it for a k-bit model. Consequently, `quantization: 4bit` plus `gradient_checkpointing: selective` can now use more peak memory than before because it no longer inherits PEFT's full-block checkpointing; this is the intended selective speed/memory trade-off. Architectures without a selectable attention child report and apply a full fallback instead of claiming an inactive tier. A four-layer tiny Llama now measures 4/4 checkpointed blocks under `full`, 2/4 under `medium`, and four attention-only wrappers under `selective`, with a real CPU training step and finite non-zero gradient norm in the selective arm.
+
+- Wire PiSSA, OLoRA, LoftQ, and VeRA through the shared PEFT constructor used by
+  every Transformers trainer. Unsupported backend combinations and pre-quantized
+  PiSSA or integrated LoftQ runs now fail at config load instead of silently
+  training a different adapter (#794 by @Amix29 in #1037).
+
+- **A `format: pre_tokenized` run now accepts the cache `soup data preprocess` wrote (#1038 by @Srinivasan8888 in #1040).** Preprocess hashed the source format into the cache key while the training gate hashed `pre_tokenized`, so every cache was refused with "cache hash mismatch; re-run `soup data preprocess`", and re-running changed nothing; a list `data.train` raised `ValueError` instead. The gate now recomputes the key from the format preprocess recorded, and both sides hash a list the same way. A cache built from a different tokenizer, `max_length`, dataset or interleave strategy is still refused, and existing cache keys are unchanged. `metadata.json` also records the installed Soup version instead of a hardcoded `0.53.7`.
+
+- **The FP8 and NVFP4 gate tests give the same answer on every machine (#834 by @Srinivasan8888 in #1041).** Two tests called the real hardware and torchao gates with a placeholder model, so they passed only while a gate refused on the test machine; on a Hopper or Blackwell card with torchao installed they failed with `AttributeError`. Each gate now has its own test with the gate patched both ways and a small real module, and the FP8 torchao check uses a model without attention projections so removing that gate can no longer go unnoticed.
+
+- **Tasks that never apply `training.quantization` no longer record a quantised run, and an explicit `4bit` or `8bit` on them is deprecated; Soup v0.77 will refuse it (#795 by @Srinivasan8888 in #1043).** `distill`, `classifier`, `reranker`, `cross_encoder`, `prm`, `moe_lora_routing`, `unlearn` and `asr` never quantise their models, yet accepted the default `4bit`, stored it in the run's config, and let the VRAM pre-flight budget them as QLoRA jobs. For these tasks the default changes: an unset `quantization` now resolves to `none`. An explicit `4bit`, `8bit` or `load_in_8bit: true` still loads, because every config Soup dumped on the old default carries `quantization: 4bit` literally, but it prints a warning naming the task, resolves to `none`, and will be refused in v0.77; set `quantization: none`. A Quant Menu value or a 4-bit-only setting such as `bnb_4bit_quant_storage` is refused at config load, naming the task. PRM also refuses a `lora` block it never reads (`lora.r: 0` is allowed), and the pre-flight budgets PRM, and the classifier family and ASR without their LoRA opt-in, as full fine-tunes. `docs/training.md` lists which tasks honour the field.
+
+- **Both FP8 training paths ask one hardware gate, with torch's own floors, and a request the card cannot run stops the run (#835 by @Srinivasan8888 in #1044).** `training.fp8_attention` refused Ada (sm_89) cards such as the RTX 40-series, L4 and L40S, which `torch._scaled_mm` supports, while `training.quantization_aware: fp8` converted the model on any card, Ampere included. Both now require compute capability 8.9 or newer. The `rowwise` recipes also need a torch that dispatches their kernel on the card (Ada 2.7, RTX 50-series 2.8, 11.x 2.10), are never available on Windows, and before torch 2.11 need a CUDA 12 build. When FP8 is requested and cannot run, the run now stops at setup on every trainer that reaches the converter (the eleven that call `apply_v028_speed_memory`, plus SFT's own call), naming the reason, instead of warning and training without FP8.
+
+- `training.gradient_checkpointing: false` now reaches the model on a 4-bit/8-bit/mxfp4
+  run (#797 by @AmirF194 in #1045). All 15 `prepare_model_for_kbit_training(...)` call sites across the
+  trainers called it with no `use_gradient_checkpointing` kwarg, so peft's own `True`
+  default silently overrode the config; `transformers.Trainer` only ever enables
+  checkpointing and has no disable branch, so nothing downstream could turn it back off
+  once k-bit prep had switched it on. Every call site now threads the resolved value
+  through. This covers the k-bit-prep mechanism only; the TRL-config-default and unsloth
+  mechanisms the issue also names are unchanged.
+
+- **The AcceleratorError-as-OOM probe classification is now reachable and covered without a GPU (#1002 by @Areen-09 in #1047).** #989 classified an OOM arriving as `AcceleratorError` as a result (`oom=True`) rather than an instrument failure (`failed=True`), but its only coverage sat under `@requires_cuda` and skipped across all CI cells without a GPU runner. `measure_step_peak_bytes` now delegates its failure mapping to a pure helper `_classify_probe_exception` whose three-outcome mapping is reachable without CUDA while keeping the early return intact, and a dedicated test suite pins the classifier, the outcome mapping, and predicate identity with `batch_probe._is_cuda_oom`.
+
+- **The `soup draft` panel now safely renders target and draft model names (#1052 by @MugdhoAI in #1053).** Model names containing Rich markup or terminal control bytes are escaped and stripped before being displayed.
+
+- **Resuming a LoRA adapter targeting a streamed `lm_head`/`embed_tokens` silently dropped the head's own tensors (#1048 by @AmirF194 in #1055).** `StreamedLargeLayer._redirect_canonical_weight` only redirected the literal `"weight"` key into `inner.`, which is all a bare `inner` ever contributes. `get_peft_model()` runs before `install_streaming()` (#1012), so a LoRA target on one of these boundary modules makes `inner` a peft tuner layer whose own keys are `lora_A`/`lora_B` (or `lora_embedding_A`/`lora_embedding_B`) instead, none of which matched the old check. Generalized the hook to redirect every key under its own prefix, same as the decoder-layer version already does. The `save_pretrained()` meta-tensor crash and the parse-time refusal gaps from the same issue are separate, still open.
+
+- **An untied streamed checkpoint takes a preference step again (#1049 by @dchaudhari7177 in #1061).** `embed_tokens` and an untied `lm_head` share one device slot, and the streamed layer passed autograd a view of it, so the reference forward of `dpo` or `kto` refilled those bytes in place and the policy backward raised `one of the variables needed for gradient computation has been modified by an inplace operation`. The projection now takes a private copy of its weight, one head-sized buffer per step, only for `dpo` and `kto` (the losses whose reference forward runs before the backward) and only when the slot is shared; `sft`, `orpo` and `simpo` keep the view (that scoping came from @VanshSharmaPES in #1174), and so does the embedding, because its backward reads the indices rather than the weight values. The VRAM pre-flight charges the copy as a second large-layer slot for exactly the runs that take it, so its prediction still never under-counts. Llama-3-8B-class checkpoints are untied, so this is the common shape; tied runs and `sft` were unaffected.
+
+- **Refuse a stale-green PR merge without forcing a rebase on every push to main (#1017 by @jagadeepmamidi in #1071).** A `pull_request` run pins `refs/pull/N/merge` at creation, so GitHub's green marks describe a `main` that may no longer exist (`strict` is off). `merge-freshness` rebuilds the merge with `git merge-tree --write-tree` (no write to the fork), fails on ruff F821 or a conflict (the #763 `NameError` class), reports lag as a neutral check rather than a rebase demand, and re-posts that check on every push to `main`. It does not flip `required_status_checks.strict` and does not re-run the 13-job matrix; `gh run rerun` still cannot refresh a frozen merge SHA, which CONTRIBUTING now says.
+
+- **`training.moe_lora` did nothing on DPO, KTO, ORPO, SimPO and GRPO, so 15 shipped MoE recipes trained something other than what they said (#798 by @Srinivasan8888 in #1074).** Only `sft.py`, `pretrain.py` and `stream_setup.py` ever read the flag; the 8 DPO and 7 GRPO recipes that set it got attention-only LoRA. Target selection now lives in one helper, `utils/moe.resolve_moe_lora_targets`, which every one of those trainers calls — as do `sft` and `pretrain`, which each kept their own copy of the block. `training.moe_expert_quant` and `training.train_router_only` are refused outside `sft`/`tts`, and a non-default `training.moe_aux_loss_coeff` outside `sft`/`tts`/`pretrain`, because no other task's trainer reads them.
+- **All 15 of those recipes could not attach LoRA at all on transformers 5.x, not merely train the wrong modules (#798 by @Srinivasan8888 in #1074).** `resolve_lora_target_modules` returns `None` for `qwen3_moe`, and peft then refuses outright: `No target_modules passed but also no target_parameters found.` The MoE-aware targets close it for the architectures these recipes name; the general gap for other MoE architectures is #1070.
+- **`moe_lora` with a non-zero `lora.dropout` now stops at the LoRA attach instead of failing inside peft (#798 by @Srinivasan8888 in #1074).** transformers 5.x keeps a Qwen3-MoE's experts as fused 3-D parameters, which peft adapts through `lora.ParamWrapper`, and that refuses dropout: `lora.ParamWrapper does not work with lora_dropout != 0.` At the schema default of `0.05` the attach failed on every task, including `sft`. The check runs against the loaded model rather than at config load, because whether the experts are fused depends on the checkpoint and the transformers version; a dense base is untouched. All 31 shipped MoE recipes now pin `lora.dropout: 0.0`, and a guard fails if a new one arrives without it. The check asks peft whether it would route these targets onto fused parameters, rather than scanning the model: Mixtral and MiniMax have the same fused 3-D expert parameters but peft attaches to them without complaint, and refusing those would be wrong. Measured on tiny random stand-ins on CPU, never on a real 30B+ checkpoint.
+- **`moe_lora` does not reach every MoE family, and two shipped recipes are still attention-only (#798 by @Srinivasan8888 in #1074).** Expert adapters attach on `qwen3_moe` (11 recipes), `deepseek_v3` (6) and `glm4_moe` (3); on `minimax` they do not, so `minimax-m3-sft` and `minimax-m3-dpo` still train attention-only LoRA after this change, because peft has no v4->v5 conversion mapping for that model type and its experts are never targeted. The seven `kimi-k2.x` and two `mistral-large-3` recipes are untested rather than known-good: no tiny stand-in for those configs builds in the installed transformers. Per-architecture target resolution is #1070.
+
+- `run_cost` no longer prices an RTX A4000 as an A40 or an `NVIDIA A100-SXM4-80GB` as a 40 GB A100. GPU-name patterns are now word-boundary anchored and ordered most-specific first, and the rate table gains L4, A10G, H200, B200, RTX A4000/A4500, RTX 6000 Ada, RTX PRO 6000 and the RTX 40/50-series (#831 by @rishcx in #1081). **Cost figures and the `soup loop` budget gate change for these cards:** L4, H200, B200, RTX 40/50-series and RTX PRO 6000 used to be unpriced and counted as $0, so their budget gate never fired; they now have a rate and it does. Names the old unanchored patterns mispriced (`A100X`, `A1000` and `RTX A1000 Laptop GPU` as an A100, `T400` as a T4) now resolve to unknown instead. Laptop parts (for example `RTX 4090 Laptop GPU`) still price as the desktop card, which overstates a laptop run. Existing rows keep their labels and rates.
+
+- **`soup data preprocess` ignored `data.chat_template` and left it out of the cache key (#1067 by @Blizzeq in #1082).**
+  Rows were rendered with the tokenizer's shipped template whatever the config
+  said, and two configs differing only in the template shared one cache. Preprocess
+  now renders with the resolved template and hashes it into the key. The
+  `pre_tokenized` training config must name the same template, and a cache written
+  before this change is refused with `cache hash mismatch`; re-run
+  `soup data preprocess` to rebuild it.
+
+- **GRPO training now skips non-finite optimizer steps instead of corrupting adapter weights.**
+  A pre-step gradient watchdog detects NaN or Inf gradients and zeros them before
+  `optimizer.step()`, so the update is skipped and the adapter is preserved. The
+  skipped-step count and fraction are persisted in `trainer_state.json` and reported
+  by `soup adapters audit`. (#342 by @harshitthek in #1084)
+
+- **Reject and report `loss_watchdog`, `loss_spike_recovery`, and `grad_accum_auto_tune` on `backend: mlx` (#1069).** All three callback-monitoring settings are now rejected at schema validation time naming `backend='mlx'` with their exact technical reasons (watchdog stop control, spike recovery watchdog requirement, and unified memory VRAM pressure), declared as rejected in `backend_support.py`'s `_MLX_SFT` registry table, and warned about at runtime in `trainer/mlx_sft.py::_check_unsupported` (#1069 by @kok-o in #1088).
+
+- **The `commands.md` coverage guard now matches against the command column rather than whole entry rows (#1046 by @Areen-09 in #1094).** Previously, mentioning a command inside another row's description prose allowed commands whose own rows were deleted (such as `soup serve`, `soup export`, `soup train`, or `soup bom emit`) to falsely count as documented. The guard now isolates the command column before description whitespace and inline comments, anchors leaf matching, updates token lookahead to include dots (`gate.v2`), and explicitly documents `soup loop resume`, `soup lock check`, and `soup steer list` in their own rows.
+
+- **The `soup data preprocess` cache kept a leading BOS the live path never trains on (#876 by @Srinivasan8888 in #1096).**
+  The cache tokenised the rendered chat template with `add_special_tokens=True` and
+  dropped a leading BOS only when it was doubled, so a `data.chat_template` preset on
+  a tokenizer whose post-processor prepends one cached a BOS the live path
+  (`add_special_tokens=False`) does not have. It now drops exactly the BOS the
+  post-processor contributed, keeping the template's own.
+- **A truncated row no longer gains a stop token the live path lacks (#876 by @Srinivasan8888 in #1096).**
+  #791's "append the training EOS when the row is under `max_length`" check ran after
+  a BOS was removed, so a row truncated to the budget read as one token short of it.
+  Truncation is decided before the strip now.
+- The preprocess cache schema is `v5` (#876 by @Srinivasan8888 in #1096). Re-running
+  `soup data preprocess` writes a new cache directory and orphans the old one; pointing
+  training at the old directory is refused with `cache hash mismatch`.
+
+- **`target_modules: auto` now resolves on every MoE architecture Soup ships a recipe for (#1070 by @Srinivasan8888 in #1102).**
+  peft has no LoRA mapping for any of them, so `auto` reached it as `None` and the
+  attach failed with `No target_modules passed but also no target_parameters found`.
+  Each now resolves to the attention projections that architecture defines —
+  `qwen3_moe`, `deepseek_v3`, `deepseek_v4`, `glm_moe_dsa`, `kimi_k25`, `gpt_oss`,
+  `minimax_m2` and `minimax_m3_vl`, plus `kimi_k2` (the text tower of K2.5/K2.6 and
+  the outer type of Kimi-K2-Thinking) and, defensively, `minimax_m3_vl_text`
+  (MiniMax-M3's text tower when its config loads without the wrapper; no shipped
+  base reports it) — including the three MoE recipes that set no MoE flag
+  (`gpt-oss-20b-sft`, `gpt-oss-120b-sft`, `minimax-m2-sft`). MiniMax-M3 resolves to
+  a regex scoped to its language tower, so a text fine-tune no longer adapts the
+  vision encoder. DeepSeek-OCR is deliberately not covered: its architecture needs
+  `trust_remote_code` to build, so its module names cannot be measured.
+- **`target_modules: auto` on an architecture neither Soup nor peft maps is refused by name (#1070 by @Srinivasan8888 in #1102).**
+  peft refused these before too, as `No target_modules passed`, naming neither the
+  architecture nor the fix; the message now names the `model_type` and the fix.
+  It is decided at the last step before the attach, so `training.moe_lora: true` and
+  `training.lora.target_parameters` are both honoured first. Scope, stated so it is
+  not a surprise: it reaches dense architectures too (`phi3`, `smollm3`, `lfm2` and
+  several vision and audio architectures in the catalogue), every one of which
+  already failed at attach with peft's message.
+
+- **`soup loop canary` now routes keyed transformers requests at the configured traffic share and automatically clears a regressing canary (#815 by @akkupratap323 in #1104).** Serve records rollout-scoped generation outcomes for stable and canary buckets; `soup loop watch` evaluates those observations and persists a rollback after a `MAJOR` verdict, while explicit adapter selection keeps its existing behavior and the 100% activation endpoint still applies to requests without a conversation key.
+
+- **`soup adapters audit` now verifies the effective MLX learning rate (#942 by @Amix29 in #1109).**
+  MLX runs compare `training.lr` with the optimizer plan's recorded `peak_lr`;
+  transformers/PEFT reports that the effective learning rate was not checked rather
+  than presenting missing optimizer metadata as a clean audit.
+
+- **The training docs no longer advertise eight nonexistent `soup train` flags (#997 by @Amix29 in #1110).**
+  ULD, RL checkpointing, echo-trap settings, and `output` now use their real
+  YAML fields, and the live Typer-tree guard has no remaining grandfathered
+  exceptions for these spellings.
+
+- **`mini_tool_call` no longer sits at a 1.000 ceiling on the measured strong reference (#405 by @Amix29 in #1111).**
+  The 40-row suite now mixes tool selection with exact `NO_TOOL` decisions and
+  semantically close distractors; the measured reference moves to 0.850 versus
+  0.050 on the weak model, and the bundled scorer provenance revision changes
+  so pre-change baselines are not silently compared on the new scale.
+
+- Spark-TTS and OuteTTS raw-audio live-codec configs now fail closed at config parse with the real upstream compatibility reason; the unrunnable Spark recipe is removed, while Oute keeps the pre-encoded `chatml` recipe path (#265 by @Amix29 in #1113).
+
+- **HuggingFace repo IDs are now preserved without Windows path separator corruption in `soup infer` and `soup bench` (#1097 by @Guts1005 in #1118).** When resolving a HuggingFace repo identifier on Windows, the repo string was previously converted to a `pathlib.Path`, turning forward slashes into backslashes and causing HuggingFace Hub to reject the repository name with `HFValidationError` before loading. The repo ID is now maintained as a string and forwarded byte-identical to model and tokenizer loaders across all platforms.
+
+- **`soup data preprocess` cached rows with no `labels`, so a `pre_tokenized` run trained on the prompt (#1054).** The cache carried only `{input_ids, attention_mask}`; with no `labels` column TRL's collator falls back to `labels = input_ids`, so the same rows optimised a different objective depending only on whether they had been preprocessed first — full-sequence loss instead of the live path's assistant-only mask, with a normal-looking loss curve and no error. Cached rows now carry a `labels` column built by the same `data/loss_mask.py` helpers the live path uses, honouring `data.train_on_responses_only`, `data.train_on_messages_with_train_field`, `data.mask_history` and `training.train_on_eot`. That loss-mask mode is now a cache-key input (tokenizer schema `v6`), so a cache built under one masking setting is refused by name under another, and a cache with no `labels` is refused outright rather than silently trained on. `soup train` also reports the real cached row count for a `pre_tokenized` config instead of `0` (#1054 by @AaronProbha18 in #1120).
+
+- **Fix invalid Hugging Face base model IDs in shipped recipes (#1122).** Updated `devstral-sft` to `mistralai/Devstral-Small-2507`, `glm-4.6-sft` to `zai-org/GLM-4.6`, `granite-4-sft` to `ibm-granite/granite-4.0-h-tiny-base`, `internvl-3-5-sft` to `OpenGVLab/InternVL3_5-8B`, `kimi-k2-sft` to `moonshotai/Kimi-K2-Base`, `mistral-medium-3-5-sft` to `mistralai/Mistral-Medium-3.5-128B`, and `voxtral-sft` to `mistralai/Voxtral-Mini-3B-2507`. Removed `cogito-v2-sft` and `gemma3-9b-sft` because no compatible replacement base exists for their shipped recipe definitions. (#1122 by @parnika0110 in #1132)
+
+- Reject structurally unsafe regex patterns in custom eval, diagnose format probes, and Data Recipe validators before matching, replacing the diagnostic canary search with a field-named error (#1137 by @taljeon in #1142).
+
+- **`training.moe_lora` now works on `ipo`, `bco`, `reward_model`, `ppo`, `embedding` and `online_dpo` (#1099 by @Srinivasan8888 in #1148).**
+  These tasks accepted `moe_lora: true` and never read it, so the flag silently did
+  nothing. Each now picks the expert targets through the same helper as the other
+  MoE-wired trainers, including its `lora.dropout` refusal on fused experts. On
+  `embedding` it applies only with `lora.r >= 1`. The flag still loads unread on
+  `classifier`, `reranker`, `cross_encoder`, `distill`, `unlearn`, `asr`,
+  `moe_lora_routing` and `prm`; #1151 tracks wiring the first five and refusing the
+  rest.
+
+- Preserve absent gradient norms as `NULL` in training records and charts instead of fabricating `0.0` or carrying the previous measurement into a new step (#1147 by @taljeon in #1149).
+
+- `ExecutionManager.execute()` now opens the MCP run log with `open_no_follow` (#820), refusing a file symlink planted at `.soup/mcp-runs/<run_id>.log` before the child spawns; previously the plain append followed the link and redirected every byte the child wrote to its target (#1138 by @xiechimon in #1150).
+
+- **`target_modules: auto` now resolves on GLM-4.6 and Granite 4.0 (#1122 by @MakazhanAlpamys in #1164).**
+  Both recipes named a Hugging Face id that 404s, so the #1102 completeness ratchet
+  recorded their bases as unresolvable and never asked whether their architectures
+  were covered. Repointing them (#1132) makes `glm4_moe` and `granitemoehybrid` real
+  entries in the catalogue, and neither was in `MOE_TEXT_LORA_TARGETS`. Both now
+  resolve to the four attention projections enumerated from the architecture on the
+  meta device, the same policy as every other row of that table.
+- **Granite 4.0 says at setup that `auto` adapts only part of the decoder (#1122 by @MakazhanAlpamys in #1164).**
+  `granitemoehybrid` is a hybrid: on `granite-4.0-h-tiny-base` only 4 of the 40
+  decoder layers define a `self_attn` at all — the other 36 are Mamba-2 blocks — so
+  the attention-projection entry reaches a tenth of the model. Training now prints a
+  yellow `Partial LoRA coverage:` line naming the model type, the counted fraction
+  and what was skipped (the Mamba projections, the shared-expert linears and the
+  fused routed experts), instead of leaving a surprisingly small adapter to be
+  discovered at merge time. The fraction is counted off the loaded model, so a
+  different Granite depth reports its own numbers.
+
+- **Recipe size labels are the base's total parameter count, and a test now keeps them so.** Nine labels were wrong and moved: `llama4-scout-17b-sft`, `-dpo`, `-grpo` and `llama4-scout-tools` 17B -> 109B, `deepseek-v3-7b-sft` 7B -> 685B, `voxtral-sft` 3B -> 4.7B, `glm-4.6-sft` 9B -> 357B, `glm-5-sft` 9B -> 754B, `minimax-m2-sft` 9B -> 230B. `tests/test_recipe_sizes.py` compares every recipe's label with the Hub's recorded parameter count (0.70x to 1.15x) and names a recipe whose base has no count unless it is excluded with a reason (#1161 by @kok-o in #1168).
+
+- **Added modality axis to `backend_support` and made `soup doctor --config` report unread `train_on_responses_only` and `mask_history` on vision and audio configs (#1156 by @kok-o in #1169).**
+  Multimodal vision and audio collators supervise all sequence tokens rather than performing assistant-only masking. `backend_support.REGISTRY` previously only tracked `(task, backend)` pairs with no modality axis, causing `soup doctor --config` to print an affirmative all-clear on multimodal configs that set these flags. `REGISTRY` now accepts `(task, backend, modality)` and flags both settings as ignored when running vision or audio SFT.
+
+- **Refuse `.soup` and `.soup/mcp-runs` directory symlinks and pre-planted hard links during MCP execution (#1158 by @kok-o in #1171).**
+  Following #1138, `soup mcp serve` now refuses execution if `.soup` or `.soup/mcp-runs` is a symbolic link or junction, or if a pre-planted hard link exists at the run log path, closing directory redirection and hard link overwrite attacks (with a residual TOCTOU window if an attacker has concurrent write access inside `.soup`).
+
+- **An unregistered `data.chat_template` name is refused before any model loads (#1175 by @Blizzeq).**
+  `soup train` checks the name right after loading the config, so a typo exits 1
+  at once instead of after the model has been downloaded and loaded. `soup train
+  --dry-run` and `soup train --cloud` now refuse it as well, where they used to
+  exit 0. Both `soup train` and `soup data preprocess` print `Invalid
+  data.chat_template` with the known template names.
+
+- QuEST artifacts now store a content-derived identity for local base models instead of the machine's absolute path in route metadata, while keeping format-v1 sidecars readable and resumable under their original path-based rule. (#1176 by @Shutaru)
+
+- **`training.moe_lora` now works on `classifier`, `reranker`, `cross_encoder`, `distill` and `unlearn`, and is refused where no trainer reads it (#1151 by @Srinivasan8888 in #1179).**
+  These tasks accepted `moe_lora: true` and never read it. `distill` and `unlearn`,
+  and the classifier family with `classifier_lora: true`, now pick the expert targets
+  through the same helper as every other MoE-wired trainer. Refused at config load,
+  naming the task: the classifier family without `classifier_lora: true` and
+  `lora.r > 0` (that trainer then full-fine-tunes and builds no adapter), `asr` (it
+  trains only Whisper, which has no experts), `moe_lora_routing` (it builds no LoRA
+  adapter) and `prm` (it fine-tunes every base parameter). It is also refused on
+  `backend: unsloth` for every task, and on `task: sft` with `modality: vision` or
+  `audio`, whose setup skips the MoE step. Every path now either reads the flag or refuses it, except `backend: mlx`,
+  where it loads and `soup doctor` reports it as ignored. Because
+  `training.train_router_only` and `training.moe_expert_quant` require
+  `moe_lora: true`, a config setting either on `backend: unsloth` now fails to load
+  too, with the unsloth message; the unsloth path reads neither.
+
+- **`soup data preprocess` stops on a chat row it cannot tokenize, instead of dropping it (#1180 by @Srinivasan8888 in #1182).**
+  **This is a behaviour change: a dataset that `soup data preprocess` used to cache
+  partially, with exit 0, now makes it exit 1.** A row the chat template rejected (for
+  example `Conversation roles must alternate` on a Llama-2- or Gemma-style template), an
+  empty `messages` list, a row rendered as empty text, or a tokenizer error (on a pretrain
+  text row too, which live pretraining refuses the same way) was skipped without a word,
+  and a `pre_tokenized` run then trained on fewer rows than the live run of the same
+  `soup.yaml`, which stops on those rows. The command now stops before writing anything
+  and names the row, numbered from 1 as live training numbers it, with the start of its
+  first message. Fix or remove the row and re-run. A tokenizer with no chat template is
+  reported once and points at `data.chat_template`. The rows are checked when the command
+  builds a cache: if one with the same key already exists it stops at
+  `Target already exists` (exit 0) without reading them, so rebuild a cache written before
+  this change with `--yes`.
+
+- **Training reports the dataset rows its format converter drops (#1181 by @Srinivasan8888 in #1183).**
+  A row the converter rejects, such as a misspelled `messages` key, is still dropped so one
+  bad line does not abort a load, but it is no longer silent. Every load now prints
+  `Warning: N of M rows dropped` with the first row's index and the converter's reason,
+  and for a local file the `soup data validate` command that lists them all. The count
+  agrees with `soup data validate`. A clean file prints nothing.
+
+- **`task: distill` with `backend: unsloth` is refused at config load instead of silently training on transformers (#1186 by @chiliec in #1193).** The distill trainer never reads the backend, so the unsloth request was dropped without a word. `validate_distill_compat` now rejects it the same way it rejects `backend: mlx`, with a message naming `backend: transformers`, and `soup doctor --config` reports the config as unloadable (exit 2) instead of clean.
+
+- The friendly error handler no longer parses exception text as Rich markup, so install hints keep their extra (`soup-cli[audio]` was printed as `soup-cli`), and control bytes in an exception message are stripped before they reach the terminal (#1200 by @chiliec in #1202).
+
+- `distill_mode: sequence` runs on transformers 5: teacher generation no longer fails with a bare `AttributeError` on the first prompt, because the chat-template encoding is read as a mapping and its attention mask is passed to `generate` (#1238 by @MugdhoAI in #1243).
+
+- **`soup train --find-lr` no longer fails when the training set is smaller than `--find-lr-steps`, or blames `--find-lr-output` for it (#1189 by @mohdUwaish59 in #1244).** The live sweep takes one row per step; it stopped when the rows ran out (or when the loss went non-finite), but the report was written against the full schedule, so the run ended with `Invalid --find-lr-output: lrs and losses must have equal length`. The sweep is now sized to the rows over the same `--find-lr-start` → `--find-lr-end` range, with a line naming both numbers, and a divergence mid-sweep writes a report for the steps before it. The recommendation needs 4 points, so `--find-lr-steps` below 4 is rejected up front (the minimum was 2, which always failed), and a training set with fewer than 4 rows is refused before the model loads instead of falling back to a synthetic curve. An empty training set is refused the same way; it previously wrote a synthetic report and exited 0. `Invalid --find-lr-output` is now reported only for a problem with the output path.
+
+- **Web UI returns 401 rather than 500 when Authorization header contains non-ASCII bytes (#1195 by @Areen-09 in #1246).** Starlette decodes header bytes >= 0x80 as Latin-1 strings; `secrets.compare_digest` rejected non-ASCII strings with `TypeError`, causing an unhandled 500 that printed a full traceback on the server console for every such request and dropped security headers. Token comparisons now encode to UTF-8 bytes before comparing, aligning with `soup serve` and `soup mcp serve`.
+
+- **`task: prm` on CUDA trains every base parameter and the reward head on fp32 master weights (#1235 in #1250).** PRM loaded the base and the head in bf16 whenever the device was `"cuda"`, with no fp32 copy for the optimizer. Since v0.74.0 that made the first step fail with `mat1 and mat2 must have the same dtype` (outside DeepSpeed), because the bf16 head ran on the fp32 outputs of the autocast forward. Before that the base trained in pure bf16, where most AdamW steps at PRM learning rates round away: an RMSNorm weight at 1.0 never moves at `lr` 1e-5 or 2e-5. PRM now loads fp32 on every device string, `"cuda"` and `"cuda:0"` alike, and leaves bf16 to autocast (fp16 plus the GradScaler on pre-Ampere cards, which now receives fp32 gradients). With the default optimizer, expect about 16 bytes per parameter before activations instead of about 8, which is what the VRAM pre-flight already budgeted for `task: prm` (the pre-flight runs only when `batch_size` is an integer, not with the default `auto`). Without DeepSpeed the saved checkpoint is now fp32, and loading needs about twice the host RAM of a bf16 load. Under DeepSpeed only host RAM at load grows, since the engine still trains and saves in 16-bit on its own fp32 master copy. The `training.quantization` warning and refusal for the eight tasks that ignore that field now say the trainer never quantises the base, not that it loads "at checkpoint precision".
+
+- Reject `training.quantization_aware: quest` with `training.auto_mixed_precision: true` at config load, preventing auto-selection of unmeasured FP16 for QuEST (#1245 by @Shutaru in #1252).
+
+- **The `soup data preprocess` cache key now covers every setting that changes the cached rows (#1127 by @Blizzeq in #1253).**
+  `data.val_split`, `data.replay`, `data.replay_ratio`, `data.replay_seed`, the
+  streaming settings (`data.streaming`, `data.buffer_size`), the media
+  directories (`data.image_dir`, `data.audio_dir`) and the top-level `task` all decide
+  which rows are cached, but none was part of the key, so a `pre_tokenized` run under a
+  different value reused the cache without a mismatch. They are now key inputs
+  (tokenizer schema `v7`), and every other `data` field is declared out of the key with
+  a reason, so a new field cannot be left unclassified. Caches from `v6` and earlier are
+  refused; re-run `soup data preprocess`.
+
+- **`soup migrate --from axolotl` no longer turns `rl: orpo`, `rl: ipo`, and
+  `rl: simpo` into `task: sft` with no warning (#1254).** The rl-to-task
+  mapping only covered `dpo`, `kto`, `grpo`, and `gdpo`; every other `rl`
+  value fell through to `sft` silently, so a preference config loaded with
+  the wrong task and the wrong data format and later failed training with
+  an error that never named `rl`. The mapping now covers `orpo`, `ipo`, and
+  `simpo`, each resolving to its matching Soup task and the `dpo` data
+  format. An `rl` value with no Soup task, such as axolotl's `ebft`, is
+  refused instead of silently falling back to `task: sft`, naming the
+  unknown value and listing the supported ones. `soup migrate` exits
+  non-zero for it instead of writing a config (#1214 by @jamalkamaladdin in
+  #1254).
+
+- **`training.loraplus_lr_ratio` with `optimizer: apollo_adamw`, `lomo` or `adalomo`, or with `use_galore`, is now refused at config load (#1210 by @mohdUwaish59 in #1255).** LoRA+ asks transformers for its optimizer without the model, and transformers can only build those three optimizers from one, so such a config passed `soup train`'s config load and failed only after the base model had been downloaded and loaded. LoRA+ with GaLore was likewise refused only at setup. Both now fail at load with a message that names the two fields.
+
+- **`soup shrink` saves pruned Qwen2, Qwen3, Qwen2-MoE and SmolLM3 models (#1241 by @drakeo338 in #1256).**
+  The prune dropped the decoder layers but left `layer_types` (and SmolLM3's
+  `no_rope_layers`) at the old length, so transformers 5 refused to save the
+  model after scoring and the run exited 1 with an empty `model/` directory.
+  Those lists are now sliced with the same kept indices as the layers, so a
+  mixed sliding/full-attention list keeps the right entry for each surviving
+  layer.
+  A config that places its MoE layers by layer index (a non-default
+  `mlp_only_layers`, `decoder_sparse_step`, `moe_layers` or
+  `interleave_moe_layer_step`) is refused before the prune, since the kept
+  layers would reload with their MoE and dense MLPs on the wrong layers.
+
+- **`soup autopilot` no longer writes a config that `soup train` refuses on an Ampere or newer GPU (#1212 by @wanjinhao1 in #1257).** For the SFT goals, autopilot turned on `use_flash_attn` and `use_liger` on every GPU with compute capability 8.0 or higher without checking that `flash-attn` or `liger-kernel` was installed. Neither ships with a standard install, so `soup train`, even with `--dry-run`, refused the file autopilot had just written. Each flag is now turned on only when its package is installed, checked the same way `soup train` checks it, and when the GPU qualifies but a package is missing, the Autopilot Decisions panel names it and the command that installs it. The Liger refusal in `soup train` also told users to run `pip install "soup-cli"`, because `[liger]` was read as Rich markup; it now prints `pip install "soup-cli[liger]"`.
+
+- **`soup data doctor` gains `--mask-history/--no-mask-history` (default off), so the compat report and the `--show-mask` preview train only the last assistant turn, as a `data.mask_history: true` run does (#1251 by @wanjinhao1 in #1259).** `--mask-history` is refused together with `--no-train-on-responses-only` or `--train-on-messages-with-train-field`, the same combinations `soup.yaml` refuses.
+
+- `--baseline registry://` now takes each benchmark's score and provenance from its newest eval row, so re-measuring a baseline replaces the stale score instead of only silencing the scorer-revision warning; the warning names the benchmarks that are still stale, and ties on `created_at` resolve by insertion order (#1224 by @anyingiit in #1260).
+
+- **`soup data forge --judge-provider` wrote an empty-answer row for every failed judge call and still reported "synth complete" (#1221 by @anyingiit in #1261).** The forge judge was built without `raise_on_error`, so a connection error, HTTP 404/429/500 or malformed response came back as empty text; `score_uncertainty` rates an empty reply 1.0, so no `--uncertainty-threshold` could prune it, and the command exited 0 with a dataset that teaches a model to answer with nothing. The forge judge is now built with `raise_on_error=True` (as `soup data recipe` has been since #969); a call that fails, returns a malformed reply or returns empty text is counted and never becomes a row, whatever the threshold. The summary reports `N of M judge calls failed` with the provider, endpoint and first error; a run whose judge produced no usable row exits 1 without writing the dataset or provenance files, and a partial outage keeps the successful rows under a yellow "synth complete with judge failures" panel.
+
+- **`401`/`403` digits inside an error message no longer masquerade as an auth failure (#1267 by @sup3dev in #1268).**
+  A row number (`train row 401:`), tensor size (`(4013)`), checkpoint path
+  (`checkpoint-4010`), date, or hash slice printed "Authentication failed." /
+  "Access denied." and hid the real error. Auth status is now read from the
+  exception object (`response.status_code`, `.code`, walking wrapped
+  `__cause__`/`__context__`), with a text fallback only for explicit HTTP
+  phrasing (`401 Unauthorized`, `HTTP Error 401`, `Error code: 401`); the
+  bare-digit ERROR_MAP entries are gone. Genuine 401/403 from requests, urllib
+  and huggingface_hub now get the specific hint instead of the generic
+  "HTTP request failed.", and gated-repo hints still win for
+  `GatedRepoError` / `RepositoryNotFoundError`.
+
+- Show QuEST task, backend and modality errors before the auto mixed-precision refusal when a config violates both, and link the BF16 evidence boundary from the auto mixed-precision guide (#1276 by @Shutaru).
+
+- **A refused `pre_tokenized` cache now says why (#1272 by @Blizzeq in #1281).**
+  `soup data preprocess` records the key generation and the row-set inputs in
+  `metadata.json`. When training refuses a cache, the message says it predates
+  row-set keying (#1127), or names the `data.*` fields whose values differ, such as
+  `data.val_split`, instead of showing two bare hashes. `docs/data.md` lists the
+  fields a `pre_tokenized` config must keep as they were at preprocess time.
+
+- **Online DPO no longer trains a pair its judge could not rank as "the second completion
+  wins" (#1225 in #1282).**
+  Soup's pairwise judge answers `-1` for a tie, a failed or unreadable judge call, or a
+  verdict that changes when the two completions are swapped. trl 0.29's `OnlineDPOTrainer`
+  builds `mask = rank == 0`, so every such pair trained as a win for the second completion,
+  and the loss was averaged over all pairs. With the judge server down, a whole run learned
+  arbitrary labels and finished normally. On the `training.online_dpo_judge` path those pairs
+  now add exactly zero gradient, and the loss is the mean over the pairs the judge did rank
+  in each batch (each micro-batch, under gradient accumulation). `judge/invalid_rate` logs
+  the share it could not rank, with a WARNING the first time and on every step in which it
+  ranked nothing. The logged `loss` and `train_loss` average only the batches that ranked a
+  pair, and a logging window with none logs no `loss`, so an unranked stretch can no longer
+  produce the run's lowest or final loss. For every trainer, the run tracker now stores no
+  loss, rather than a fabricated 0.0, for a log that arrives before the run's first measured
+  loss (later ones still repeat the last measured loss). That includes the row of the MLX SFT
+  trainer's first validation pass, which runs before any training step, and the live panel
+  shows `Loss: -` instead of `0.0000` until a loss is measured. `soup runs clean` therefore
+  picks the checkpoint to keep whole among the checkpoints: the one with the lowest loss
+  recorded at its step, or the latest one, with a note, when none has a recorded loss.
+  Before, it could strip or delete every checkpoint of a run shorter than `logging_steps`, or
+  of any run whose lowest loss was logged between two checkpoints. A step that ranked nothing
+  still takes an optimizer step, so AdamW momentum and weight decay keep moving the weights
+  and the learning-rate schedule advances. That drift is bounded: training stops with an
+  error naming the judge once 32 pairs in a row went unranked, and a shorter run that ranked
+  no pair fails the same way instead of saving an adapter. trl's `logps/*` and `rewards/*`
+  statistics now describe the ranked pairs only. With clean 0/1 verdicts, training is
+  bit-identical to before, and the `reward_model` path is unchanged.
+
+- **Hardware-fit gate correctly infers Hub model sizes using boundary-safe regex and MoE parsing (#1198 by @Areen-09 in #1285).** `utils/gpu.py:model_size_from_name` previously relied on a static scan of hardcoded substring markers and fell back to 7.0B, causing VRAM under-prediction up to ~58x–96x on large models (such as 72B, 32B, 14B, 405B, 675B) and substring collision bugs (e.g., `11b` matching `1b`, `17b`/`27b` matching `7b`, `0.8b` matching `8b`, and `8x7b` matching `7b`). Model sizes are now dynamically parsed with boundary-safe regex, active-parameter tokens (`-aNNb`) are filtered to retain total parameters, and MoE architectures (`8x7B`, `8x22B`, generic `NxMb`, and Llama 4 `17B-16E`) are supported. The same parameter estimate also drives `batch_size: auto`, `soup cost`, and `soup profile`, while Hub IDs carrying no size marker (`DeepSeek-V3`, `Kimi-K2`, `GLM-5`, `MiniMax-M2`) still fall back to 7.0B, an under-estimate for those models.
+
+- **`soup registry diff`, `soup eval compare` and `soup eval leaderboard` now use the newest eval row per benchmark instead of the oldest (#1270 by @Ru0k3 in #1291).**
+  Each built its score map by overwriting in the order the experiment tracker returns rows, which is newest first, so the oldest score won and a re-measurement was ignored: with run A logging 0.30 and then 0.45, and run B logging 0.50 and then 0.40, `soup registry diff` and `soup eval compare` reported +0.20 and no regression instead of the -0.05 regression. All three commands and the eval gate's `registry://` baseline now pick rows through one helper, `soup_cli.eval.results.newest_eval_rows` (newest `created_at` first, then insertion order for equal timestamps); the leaderboard keeps the newest row for each model and benchmark.
+
+- **Parquet datasets preserve nested Python values (#1218 by @commit-msuyog in #1292).**
+  Parquet loading now uses PyArrow to preserve nested lists and dictionaries instead of
+  converting them to NumPy arrays, preventing valid rows from being dropped by format
+  validation.
+
+- GRPO variant runs (`grpo_variant` other than `standard`) with a non-zero
+  `grpo_beta` log the `kl` metric again, as trl's stock loss does: the masked
+  batch mean of the per-token KL, averaged over the accepted tokens for `rft`
+  (#1263 by @MohammadHijjawi97 in #1293).
+
+- **Fix DPO / IPO / preference beta schedule callback crashes and refuse un-wired reference regeneration (#1229 by @kok-o in #1294).** DPO, IPO, and `preference` runs configured with `dpo_beta_schedule` crashed at step 0 with `AttributeError: 'BetaScheduleCallback' object has no attribute 'on_epoch_begin'` because custom callbacks were plain Python classes rather than Hugging Face `TrainerCallback` subclasses. Converted callbacks to lazily subclass `TrainerCallback` without introducing import-time dependencies on heavy ML packages, verified beta annealing behavior under IPO and preference training, and enforced a load-time refusal for `dpo_ref_regen_epochs` as the feature is not wired yet.
+
+- `task: embedding` with `embedding_loss: contrastive` (the default) no longer trains on one-row batches, where the loss and gradient are exactly 0 and the adapter never moves: `batch_size: 1` is refused at config load, `batch_size: auto` resolves to at least 2 (also when `triplet` falls back to contrastive for rows without `negative`), the last partial batch of an epoch is dropped, and a batch larger than the training set is lowered to its size. Auto batch sizing and the hardware-fit estimate also stop guessing 7B for BGE / E5 / GTE / BERT / RoBERTa / MiniLM checkpoints named `-small` / `-base` / `-large` (#1234 by @kok-o in #1296).
+
+- Refuse rows with no causal-loss target at setup in `task: distill` with human-facing row number and `data.max_length`, matching SFT behavior, and return finite 0.0 CE loss in `compute_loss` if a microbatch contains zero targets (#1242 by @kok-o in #1298).
+
+- **`soup expect` scans all dataset formats for PII, token length, and refusals (#1231 by @kok-o in #1300).** The dataset expectation gate previously only inspected a few field names (`text`, `instruction`, `output`, string `messages`), missing ShareGPT, DPO (string and conversational `chosen`/`rejected`), KTO (`completion`), Alpaca `input`/`system`, multimodal content parts, tool calling, and sentence embedding fields. The text extractors now cover all format signatures declared in `FORMAT_SIGNATURES`, verify assistant-side refusal patterns across formats, and fail closed when rows lack extractable text.
+
+- **Tokenize non-Latin scripts, non-spaced languages, and digits in `soup diagnose` and `live_eval` (#1233 by @kok-o in #1301).** The previous regex discarded non-ASCII characters and standalone digits, causing healthy models responding in non-Latin scripts (Cyrillic, Greek, Arabic, Hebrew, Hindi, CJK, etc.) to falsely read as MAJOR mode collapse, and causing forgetting probes using `token_f1` to evaluate to zero retention. Tokenization now performs stream-safe NFC Unicode normalization (capping combining mark runs at 30 to prevent quadratic reordering), preserves non-Latin word boundaries, generates bigrams for non-spaced scripts (CJK, Kana, Thai), and ignores mark-only tokens. `token_f1` splits joiners (`-` and `_`) to preserve baseline English scores. Downstream consumers (`soup data topics`, canary discovery, and eval design) now tokenize digits and non-Latin words. When `--tokenizer` is passed, the memorization probe computes sub-word bigram overlap via tuples, avoiding key collisions.
+
+- **`soup migrate` explicitly writes `quantization: none` and emits `lora.r: 0` for full fine-tuning (#1215 by @kok-o in #1302).** Previously, unquantized Axolotl, LLaMA-Factory, and Unsloth configurations omitted the quantization field, causing Soup to default them to 4-bit QLoRA upon loading, while full fine-tunes defaulted to LoRA `r=64`. Migrators now explicitly set `quantization: none` for unquantized sources, support HQQ/EETQ methods, map full fine-tunes to `lora.r: 0`, refuse full fine-tuning for unsupported tasks (e.g. DPO/PT/RM), resolve notebook variable assignments in Unsloth, and validate output with `load_config_from_string` before writing.
+
+- **`soup train --resume` properly resumes `task: prm` and `task: moe_lora_routing` rather than retraining from step 0 and overwriting checkpoints (#1220).** Both `PRMTrainerWrapper` and `MoleRoutingTrainerWrapper` now accept and forward `resume_from_checkpoint` to `self.trainer.train()`. In MoLE training, the trained router gate weights (`mole_gate.pt`) are now saved into each periodic `checkpoint-N` directory via `_save_checkpoint`, and restored on resume via `_load_from_checkpoint` alongside adapter re-freezing prior to continuing optimization, ensuring step counts, optimizer momentum, and gate weights continue consistently. Tasks that do not support resume (such as `task: unlearn`) cleanly exit non-zero on `--resume` / `--hf-resume` with a descriptive message naming the task (#1220 by @kok-o in #1303).
+
+- **`training.packing: true` preserves assistant-only loss mask during SFT instead of training prompt/system tokens (#1236).** In TRL 0.29.1, dataset packing drops the unpreserved `labels` column and falls back to training all input tokens except the first. SFT datasets now ensure an `assistant_masks` column alongside `labels`, which TRL packs alongside `input_ids` and uses to mask prompt/system tokens with `-100` during collation (and prevents label dropping under `use_liger: true`). Pre-tokenized caches carrying `labels` are also augmented with `assistant_masks` automatically (#1236 by @kok-o in #1304).
+
+- **Fix classifier, reranker, and cross_encoder data loading and row validation (#1219 by @kok-o in #1306).** Sequence classification tasks (`classifier`, `reranker`, `cross_encoder`) were losing dataset columns such as `label`, `text_a`, `text_b`, `question`, and `answer` during dataset normalization because `preserve_source_columns` was restricted to `task == "grpo"`, causing crashes with `TypeError: label must be int / str / list, got NoneType` after model loading. Centralized source column retention in `task_preserves_source_columns` shared across `soup train` and `soup sweep`, added task-scoped `cross_encoder` format handling for `text_a`/`text_b` and `question`/`answer` pairs, gated `data.format: cross_encoder` to `task: cross_encoder` at schema validation, and added upfront dataset label and shape validation that fails immediately at data load and on `--dry-run` with specific row indices before model weights are loaded.
+
+- **`soup ui` opens and prints a login URL that already carries the auth token (#1194 by @Faisal-Fayaz in #1307).** The first browser tab was `http://host:port` with no `?token=`, so every `/api/*` route except `/api/health` returned 401 and the dashboard rendered `Unauthorized`. The startup panel and `webbrowser.open` now use `http://host:port/?token=<token>`, including under `--no-browser`. `app.js` already reads that query parameter, and on a loopback bind the server exchanges it for an HttpOnly session cookie (#1191).
+
+- **`training.expand_layers` is refused at config load unless `training.quantization` is `none` (#1237 by @chiliec in #1308).** Under the default `4bit`, the "zeroed" residual projections of the appended LLaMA Pro blocks decoded to `-absmax` instead of 0 (NF4 code 0 is `-1.0`), so the new blocks were not identity, and a positive `freeze_trainable_layers` crashed at setup on `4bit` and `8bit` because torch cannot set `requires_grad` on integer weights. The error now names both fields and asks for `quantization: none`.
+
+- **`rope_scaling_type: llama3` on a checkpoint that already ships Llama 3.1 RoPE scaling now composes with that scaling instead of replacing it (#1239 in #1311).** Llama-3.1 checkpoints ship `max_position_embeddings: 131072` with a native `llama3` block (factor 8 over an original 8192 tokens). Extending one to 262144 tokens rebuilt the block as factor 2 over 131072, so 35 of the 64 frequency pairs of an 8B head rotated up to 8x faster than in pretraining, and the run printed only "Long-context enabled". `llama3` on a native `llama3` block now keeps the checkpoint's `original_max_position_embeddings`, `low_freq_factor` and `high_freq_factor`, and multiplies its `factor` by `data.max_length / max_position_embeddings` (factor 16 over 8192 in that example), so no pair rotates faster than in the checkpoint. **New refusals:** extending a checkpoint whose RoPE block is already scaled in any other way is refused before the model is built, with an error that names the checkpoint's `rope_type` and `factor`. That covers `linear`, `dynamic` or `yarn` on a native `llama3` block, and any `rope_scaling_type` on a native `yarn`, `longrope`, `linear` or `dynamic` block. `rope_scaling_type: longrope` is now refused at config load, in any spelling. Its per-dimension factors exist only on checkpoints already scaled with LongRoPE, and extending those is refused, so it cannot extend any checkpoint; the error names the types that extend a checkpoint without RoPE scaling (`linear`, `dynamic`, `yarn` or `llama3`). Fine-tuning a LongRoPE checkpoint such as Phi-3-mini-128k at its native length, with `rope_scaling_type` unset, is unchanged. A `data.max_length` at or below the checkpoint's `max_position_embeddings` still changes nothing, and checkpoints without RoPE scaling (Llama 2, Mistral, the 8k Llama 3) extend exactly as before. `task: sft` and `task: pretrain`, the two tasks that apply RoPE scaling, both get the new behaviour.
+
+- **`task: moe_lora_routing` on CUDA trains its router gate on an fp32 master weight (#1266 in #1312).** The gate is the only tensor MoLE trains, and on the device `"cuda"` it was cast to bf16 with no fp32 copy for the optimizer, so its gradient and AdamW moments were bf16 as well and most AdamW steps rounded away: after 8 steps at the default `lr` (2e-5), 82.6-91.4% of the gate's weights had never moved. `"cuda:0"` kept it fp32. The gate is now fp32 on every device string and is created on the base model's device, so it moves with the base; the frozen base and the task LoRAs load as before. `mole_gate.pt` is saved in fp32 (`4 x hidden x adapters` bytes), and `soup serve --mole` loads it and a bf16 file from an earlier run alike. A gate trained on CUDA before this fix kept most of its initial weights, so retrain it.
+
+- **GRPO's `accuracy` and verifiable `math` rewards now read the gold answer the way they read the completion (#1226 in #1316).** An Alpaca `output` or a ShareGPT/ChatML reference turn such as `6*7=42\n#### 42` was compared raw, so every correct completion scored 0.0, every group had zero reward variance and GRPO got no signal, with no warning. Both sides now go through one parser: the text after the last `####`, the last `\boxed{}` (a space before the brace and nested braces allowed), or the text after `The answer is` / `Answer:` (also `**Answer**:`, and on the next line), whose number is read from its own clause, so `The answer is 41 apples, not 42.` is 41. An answer phrase that names more than one distinct value is a hedge and states no answer: `The answer is either 41 or 42.` scores 0.0 in both rewards whatever the gold, and a gold written that way is refused (the same value twice, as in `42 (i.e. 42.0)`, is not a hedge). Parenthetical justifications belong to the clause and hedge it (`The answer is 42 (6*7=42).`), while a connective ends the clause, so `The answer is 42 because 6*7=42.` and `The answer is 42, because 6*7=42.` both read 42; a time or a ratio such as `3:45` or `1:1,000` is one answer, compared as text. `$`, `\(...\)`, trailing punctuation, thousands separators such as `1,000` and `1{,}000`, and the Unicode minus are normalised. A numeric gold is compared by value; any other gold, such as `\frac{14}{3}`, is compared as normalised text (case, whitespace, `\left` / `\right` and `\dfrac` ignored), now by `math` as well, so a dataset that mixes numeric and LaTeX golds, such as MATH-500, loads under `math`, and validation prints how many golds are compared as text. `accuracy` no longer pays 0.5 when the gold merely appears in the completion (that paid `#### 420` for a gold of 42) and scores only 0.0 or 1.0; a completion with no marked answer is scored by its last number, so `Six times seven is 42.`, and also `Not 42.`, now score 1.0 instead of 0.5. `math`'s 0.6 near-miss band is unchanged. A row whose gold states no single final answer, such as a multi-line reference with no marked answer, a hedge, or a `#### Solution` heading over a worked solution (a `####` line that is not a number and has more text after it), is refused before generation with its split, row and field and a count of the other such rows. PPO's `accuracy` and `math` rewards use the same scoring, but PPO's data is not validated this way (on the supported trl, PPO scores rollouts with its reward model).
+
+- **`soup data canary insert` wrote chatml canaries into every dataset, so on any other format the loader dropped all of them and `check` could only report OK (#1216 by @abdulwaarith0 in #1317).** `insert` now writes the canaries in the dataset's own format (`--format`, default `auto`): alpaca, sharegpt and chatml, with the carrier as the prompt and the secret as the trained response. Every other format is refused before anything is written, naming the format, as is an explicit `--format` that is not the file's own. The manifest records the format; a manifest without one reads as chatml, and `check` refuses a format it does not know rather than scoring it as chat. `-o canaried.json` now writes a JSON array that loads back, and suffixes the loader would misread are refused.
+  (#1216 by @abdulwaarith0 in #1317)
+
+- **`format: tool-calling` dropped every row `soup agent synth` writes, and `soup train --dry-run` still said "Ready to train!" on 0 rows (#1217 by @abdulwaarith0 in #1321).** The converter now reads calls where agent data puts them: assistant turns keep their own `tool_calls` and `tool` turns their `tool_call_id`, in source order, so a trajectory is no longer rewritten as "answer, then call". A top-level `tool_calls` list still works as the single-call form. `tools` is optional, `format: auto` detects `{messages, tools}` as tool-calling, and synthesised rows carry the schema of the tool they call. `soup train` now exits 1, on `--dry-run` and on a real run, when the data loads zero training rows, naming the format and the first dropped row's reason.
+  (#1217 by @abdulwaarith0 in #1321)
+
+- **`training.moe_lora` with `backend: unsloth` is refused with a reason that is true for the task (#1264 by @Srinivasan8888 in #1323).**
+  The refusal said "unsloth attaches its own fixed attention targets" on every task, but ten tasks have no unsloth setup at all (`reward_model`, `prm`, `classifier`, `reranker`, `cross_encoder`, `distill`, `unlearn`, `moe_lora_routing`, `online_dpo`, `asr`): there it is `backend: unsloth` that goes unapplied, and seven of them now say so. The other three (`asr`, `prm`, `moe_lora_routing`), and `task: sft` with `modality: vision` or `audio`, now get their own refusal first, which is the same on every backend, so switching to `backend: transformers` no longer surfaces a second, different refusal for the same config. Nothing that loaded before stops loading.
+
+- **GRPO's `accuracy` and verifiable `math` rewards now match a LaTeX matrix however its rows are spaced (#1226, follow-up to #1316 in #1332).** Answer normalisation read the second backslash of a row break followed by a space (`\\ `) as the LaTeX control space `\ ` and deleted it, so a gold such as MATH-500's `\begin{pmatrix} -2 \\ -14 \\ -7 \end{pmatrix}` scored 1.0 only against a completion that spaced its rows the same way, and 0.0 against the same matrix written `\begin{pmatrix}-2\\-14\\-7\end{pmatrix}`. A row break is now kept whole, while `\,`, `\!`, `\;`, `\:` and `\ ` are still dropped. After an answer phrase (`The answer is $...$.`), a LaTeX environment such as a matrix is now one answer, like `(3, 4)`: its entries used to count as separate values, so a matrix whose entries stood apart read as a hedge and scored 0.0 (and a gold written that way was refused), while one with a single stand-alone entry was read as that number and could pay a numeric gold equal to it. All 7 MATH-500 golds with a space after a row break are matrices, and each now matches its other spacings; across the 9,792 GSM8K and MATH-500 gold texts, only those 7 answers and their 7 solutions read differently, and no numeric reading changes.
+
+- **`soup train --find-lr` refuses instead of writing a synthetic LR curve when the live sweep cannot run (#1203 reported by @mohdUwaish59, fixed by @umran666 in #1334).** When the config did not load (a YAML syntax error) or the sweep could not run (a base model id that does not exist, a model or dataset that cannot be loaded, or an install without `torch`), the command printed one yellow line, wrote a report whose `recommended_lr` came from the LR schedule alone, and exited 0, so two different nonexistent ids reported the identical number. It now names the cause, exits 1 and writes no report. The refusals added in #1189, for fewer than 4 rows or a loss that turns non-finite before 4 steps have run, are unchanged.
+
+- `soup eval behavior --base-model` now scores each live generation by whether it refuses, not by whether it contains the probe's oracle label, so a healthy model no longer reads MAJOR and a regression no longer reads delta 0.00. `elephant` and `syceval` are refused with `--base-model` before a model loads (exit `3`) and point to `--evidence`, and `looks_like_refusal` recognises `I'm unable` and `I'm not able`. The same classifier scores the `mini_safety` and `mini_over_refusal` suites of `soup eval gate` and `soup ship`, the refusal probe of `soup diagnose` and `soup expect`'s `expect_no_refusal_pattern`, so those now count the contracted forms as refusals; `BUNDLED_SCORER_REVISION` moves to 3, so a `--baseline` recorded before this change warns (#1228 by @developerjillur in #1335).
+
+- **`soup doctor --config` no longer reports a setting written in its off position (#1330 by @Yi-111-a in #1336).** A config that wrote `loss_watchdog: false` or `use_liger: false` on `backend: mlx` was listed as ignored or rejected, so a config written out in full by `soup autopilot` got 15 rows where the same values written minimally got none. A setting is now reported only when its value is switched on; `seed: 0` still counts as set.
+
+- Keep the default email PII fallback linear for long near-miss local parts
+  under the existing 50 KB per-row scan cap, covering `soup expect`,
+  `soup data pii` and `soup data score` (#1329 by @taljeon in #1360).
+- Email snippets now follow the bounded local-part match, so leading punctuation
+  and punctuation-adjacent addresses may produce different snippet spans; row-level
+  detection remains unchanged (#1329 by @taljeon in #1360).
+
+- **Refuse incompatible pre-tokenized data transformations.** Soup data preprocessing does not apply non-text modality transforms (vision/audio/audio_out), `data.add_new_tokens`, `data.new_special_tokens`, or `data.prompt_strategy` to cached ids, so those combinations are refused at config load (#1273 by @Samearth17 in #1363)
+
+- **The eval gate's MCQ scorer read `\boxed{B.}` and `\boxed{**B**}` as C on a completion that echoes the option list, while the reward parser read B (#1347 by @putramkti in #1365).** The letter tier kept its own boxed regex after #1316 replaced the parser's with a normalising, brace-balancing read, so the two readers disagreed on the same box: the right answer scored wrong and the echoed option scored right. Both now read the boxes through one shared scan in `utils/final_answer.py`, and a test pins the tier to it so they cannot drift apart again.
+
+- **The friendly error reads a 401/403 out of the whole exception chain, not just the outer message (#1361 by @putramkti in #1366).** The status-phrase check (`401 Client Error`, `HTTP Error 403`, ...) searched only the outermost message, so a wrapper that says nothing about status, such as `RuntimeError("Failed to load adapter")` around a text-only `401 Client Error: Unauthorized`, printed the wrapper's message instead of `Authentication failed.` It now reads every exception in the `__cause__`/`__context__` chain, outermost first, so a 403 wrapper of a text-only 401 still reads as the 403 it says. An exception whose own `__str__` raises no longer turns the friendly error into a second traceback either.
+
+- **A failed Anthropic judge/provider call blamed `--judge-base-url` /
+  `--base-url` for the failure, though Anthropic ignores that flag entirely
+  (#1340 by @SID-6921 in #1370).** `soup data forge --judge-provider
+  anthropic --judge-base-url <x>` and `soup data recipe --provider anthropic
+  --base-url <x>` both named `<x>` in the terminal error and, for the recipe
+  path, in `.checkpoint.json`'s `failed_reason` -- but the API key comes from
+  `ANTHROPIC_API_KEY` only, and every call actually goes to
+  `https://api.anthropic.com/v1/messages` regardless of what `base_url` was,
+  so the message pointed at a host that was never contacted. Both callers
+  route through one shared label helper, which now returns the real
+  Anthropic origin whenever the provider is Anthropic, ignoring `base_url`;
+  `ollama` / `vllm` labels are unaffected since those providers do forward
+  `base_url` to the request.
+
+- **`accuracy` and `verifiable/math` scored 0.0 on common MATH answer spellings (#1346 by @AmirF194 in #1371).** `normalize_answer` had no rule for `\text{}` / `\textbf{}` / `\mathrm{}` / `\mbox{}` wrappers, degree marks, or the compact `\frac12` / `\frac1{2}` / `\frac{1}2` spellings, and a phrase answer's one-letter variable prefix (`x = 7`) was read on the completion side but not the reference side. A correct completion in any of those spellings scored 0.0 against a gold in the other. All four are now handled the same way on both sides, though the variable split runs in the two parsers rather than inside the shared normaliser. A variable name is kept rather than discarded: when both sides name one and the names differ (`x = 3` against `y = 3`), the pair still scores 0.0, since a directrix or an asymptote's variable is part of its answer, and its case is part of its name (`x = 5` does not match `\boxed{X = 5}`). A gold with a variable prefix and nothing after it (`\boxed{x =}`, `x =`) states no answer and is now refused before generation (it was compared as the text `x =`). A side effect of running the degree and `\text{}` rewrites before the hedge scan: a clause such as `30^\circ, 60^\circ` now reads as two distinct values and hedges, where it previously read as one: a gold such as `The answer is 30^\circ, 60^\circ.` is now refused before generation, as `The answer is 30, 60.` already is. Units are still not stripped and nothing is evaluated (`\frac{1}{2}` does not equal `0.5`); see `docs/training.md`.
+
+- **`backend: unsloth` is refused at load on the tasks that have no unsloth setup (#1357 by @Srinivasan8888 in #1372).**
+  `reward_model`, `prm`, `classifier`, `reranker`, `cross_encoder`, `unlearn` and `moe_lora_routing` accepted `backend: unsloth`, but their trainers never read it: the run trained on plain transformers while `soup train` printed "unsloth (fast mode)", and `soup doctor --config` exited 0. The config now stops at load, naming the task and pointing to `backend: transformers` (and naming `training.unsloth_bnb_4bit` too when it is set, since only unsloth reads it), and `soup doctor --config` exits 2. **This is a breaking change for such a config**, but a one-line one: those runs always trained on plain transformers, so switching to `backend: transformers` changes nothing about what trains. `distill`, `asr` and `online_dpo` keep their own existing refusals, and the docs no longer say unsloth works with every task.
+
+- **`soup ab` no longer rejects H0 on two identical arms when `--alpha` + `--beta` is 1 or more (#1339 by @qwist1233-cpu in #1378).** Each rate was checked in (0, 1) on its own, but the reject boundary `log((1 - beta) / alpha)` stays above the accept boundary `log(beta / (1 - alpha))` only while their sum is below 1. Past that there is no `continue` band left, and because reject is tested first, every verdict in the gap rejected: `--alpha 0.6 --beta 0.5` reported `reject_h0` with `direction worse` on two byte-identical arms, and `--beta 0.95` (a power of 0.95 typed as beta) rejected a true H0 in a quarter of single looks. #1378 refused those pairs, but that refusal does not ship: #1575 retires `--beta` in the same release. The reject boundary is now `log(1 / alpha)` and the accept rule no longer uses `beta`, so there are no boundaries left to cross: two identical arms never reject, and a passed `--beta` is ignored with a warning.
+- **`soup ab` names `--effect-size` instead of exiting on a bare `OverflowError` (#1339 by @qwist1233-cpu in #1378).** The drift term squares the standardised effect `--effect-size / pooled standard error`, and `**` raises `OverflowError` where `*` would return infinity, so a huge `--effect-size` ended the run on `Error: OverflowError: (34, 'Result too large')` with no flag named. The ratio is now bounded before it is squared, and the message carries the flag, the ratio and the standard error measured. Because it is the ratio that overflows, a near-constant metric column reached this at the default `--effect-size` too, and is named as well.
+
+- **`training.loraplus_lr_ratio` is now refused at config load on `backend: mlx` (#1324 by @wanjinhao1 in #1383).** The MLX optimizer trains every LoRA tensor at one learning rate, so the ratio was accepted by validation, `soup train --dry-run` and `soup doctor --config`, and then never applied. An MLX config that sets it and loaded before now fails with an error naming the field, the backend and the way out: remove the key, which trains exactly what those runs trained, or use `backend: transformers`. `transformers` and `unsloth` are unaffected.
+
+- `soup data canary insert` spreads the canaries through the file instead of appending
+  them, and records each canary's row in the manifest. The loader holds out the file's
+  tail as validation (`data.val_split`, 0.1 by default), so from 135 rows on every appended
+  canary was held out, no model trained on it, and `soup data canary check` could only
+  report OK. `insert` now prints how many canaries the default split trains on
+  (#1331 by @MohammadHijjawi97 in #1386).
+
+- **`training.expand_layers` (LLaMA Pro) is refused at config load outside `task: sft` / `task: pretrain` on `backend: transformers` with `modality: text` (#1325 by @wanjinhao1 in #1390).** Block expansion is applied only by those two trainers' text setup, so every other task, `backend: unsloth` or `mlx`, and SFT with `modality: vision` or `audio` accepted the setting and trained the model without the new blocks, with no message. `task: pretrain` with a `modality` other than `text`, and `task: sft` with `modality: audio_out`, are refused too: those trainers ignore that `modality` and did expand the model, so set `modality: text` there. The error names the task, backend and modality it got; `task: sft` and `task: pretrain` on `backend: transformers` with `modality: text` load as before.
+
+- **`soup ab` names a metric column whose spread a float cannot carry, instead of
+  exiting on a bare `ZeroDivisionError` or `OverflowError` (#1384 by @MohammadHijjawi97 in #1392).**
+  A near-constant column (`0` and `1e-161`) has a positive pooled variance that still
+  underflows to a standard error of `0.0` once divided by the row counts, and the
+  z-statistic divided by it. A column spread past about `1.3e154` (`0` and `1e200`)
+  overflowed while its variance was squared, and an arm whose values summed past the
+  largest float gave an infinite mean and a silent `continue` with a `nan`
+  log-likelihood ratio. All three now exit 1 with a message that names the column,
+  says whether its spread is below or above what the statistic can represent or its
+  values are so large that an arm's sum overflows (an arm of `1e308` values), and
+  says to rescale the metric.
+
+- **`soup sweep` builds the trainer `soup train` builds, for every task and for `backend: mlx` (#1213 by @putramkti in #1397).** The command carried its own `if/elif` chain over `task`, last extended in v0.40.0. Ten values (`distill`, `tts`, `classifier`, `reranker`, `cross_encoder`, `prm`, `unlearn`, `moe_lora_routing`, `online_dpo`, `asr`) reached the SFT wrapper, and `backend: mlx` was never read at all, so an arm trained next-token cross-entropy while the run registry recorded the configured task and the sweep ranked those numbers as the configured objective. Both commands now resolve through `soup_cli/trainer/dispatch.py::build_trainer`, which refuses a task it has no wrapper for instead of falling back to SFT.
+
+- **Recipes that could not load their model are fixed or removed (#1145 by @Srinivasan8888 in #1398).**
+  `mistral-large-3-sft` and `mistral-large-3-dpo` are removed: `mistralai` publishes Mistral-Large-3 in the native `params.json` + `consolidated-*` layout with no `config.json`, which `AutoConfig` cannot read (`docs/models.md` names the Hugging Face-format conversion that exists on the Hub). `minimax-m3-sft` now sets `modality: vision`, so SFT builds its vision-language wrapper and LoRA stays on the language tower; its processor is custom code, so it needs `soup train --trust-remote-code`. `minimax-m3-dpo` is removed, since the DPO trainer cannot load that wrapper (#1393). The catalog loses three recipes.
+
+- **`training.freeze_trainable_layers` without `training.expand_layers` is now refused at config load (#1396 by @wanjinhao1 in #1399).** The field was accepted on its own but read by nothing: without `expand_layers`, `utils/block_expansion.py` returned before looking at it, so a config that set `freeze_trainable_layers: 2` to train only the top two layers trained the whole model (or every LoRA target), with no message. The error names both fields and the remedy (remove it, or set `expand_layers`); the field description and `docs/peft-and-efficiency.md` now say it applies only together with `expand_layers`.
+
+- The refusal for `training.citation_faithful` on a task other than `sft`/`pretrain` no longer says its span-mask runtime "ships in v0.62.1"; that runtime has run in the SFT trainer since v0.71.10. The streaming docs now state that `dpo` and `kto` hold a copy of an untied output head per step, which the VRAM pre-flight already charges (#1353 by @maximilianfeix in #1402).
+
+- `training.moe_aux_loss_coeff` set to a non-default value on `task: sft` with `modality: vision` or `audio` is now refused at config load instead of loading and being ignored: only the text setup applies the MoE auxiliary loss (#1394 by @maximilianfeix in #1404).
+
+- `task: ppo` runs again on trl 0.29: the dataset handed to trl's `PPOTrainer` carries only `input_ids` / `attention_mask`, so its padding collator no longer crashes on the `prompt_text` strings before the first step. A train set with fewer than `batch_size` x `gradient_accumulation_steps` x the number of processes rows is refused before any model loads, instead of hanging (#1391 by @maximilianfeix in #1410).
+
+- **A completed PPO run no longer reports "Loss: unavailable" (#1413 by @Ashutosh-Panda2004 in #1416).** `summarize_training_loss` now takes the per-step loss key from the caller instead of only reading `loss`: the PPO trainer passes `loss/policy_avg`, which is what trl's PPO trainer (0.29) logs. A non-default key is recorded in the result as `loss_key`, so a PPO policy loss is never mistaken for an SFT cross-entropy. SFT/DPO summaries are unchanged.
+
+- `--fsdp` now reaches `task: prm` and `task: moe_lora_routing`, and both `--fsdp` and `--deepspeed` reach `task: online_dpo`; the wrappers stored them and never passed them to their trainer arguments (#1204 by @Oxygen56 in #1417; online_dpo half by @maximilianfeix in #1417).
+
+- **`soup data clean --repair-json` and `--drop-invalid-json` missed nested tool calls and dropped valid documented-shape rows (#1338 by @abdulwaarith0 in #1453).** Both flags read only a flat `arguments` key on the row's top-level `tool_calls`, so calls inside an assistant turn (what `soup agent synth` writes, and the OpenAI fine-tuning shape) were never repaired or checked, and a valid `{"function": {"arguments": ...}}` call read as `""` and got its row dropped. They now read every call the tool-calling loader reads, in both shapes, and leave dict arguments alone. A `tool-calling` row with no top-level `tool_calls` no longer gets an empty list added, so the report stops counting it under "Format Normalization".
+
+- **A failed adapter merge or reward-verifier replace could destroy the only
+  good copy on disk (#1450 by @drakeo338 in #1454).** `merge_adapter_to_dense` (shared
+  by `soup shrink` and `soup draft distill`) deleted `out_dir` before swapping
+  the newly merged model in, so a failure between the two steps — a lock held
+  on the staging dir, disk full — left neither the old nor the new model.
+  `soup reward synth -o reward.py --force` had the same shape: it overwrote
+  the existing verifier with the candidate before calibrating it, then deleted
+  the file outright on refusal or error, destroying a previously working
+  verifier. `merge_adapter_to_dense` now moves the previous artifact aside
+  instead of deleting it, and restores it if the replacement does not make it
+  all the way to accepted. `soup reward synth` instead writes the candidate to
+  a temp sibling and never touches `-o` until it is accepted, so there is
+  nothing to move aside or restore on a refusal or error — the previous
+  verifier is simply never disturbed.
+
+- `soup tokenizer train` now saves a complete byte-level BPE: a matching `ByteLevel` decoder (so `decode(encode(x)) == x`, no more `Ġ` for spaces), the 256-byte initial alphabet (so unseen characters never become `<unk>`), no hard-coded `unk_token`, and a `--vocab-size` floor that accounts for the byte alphabet plus special tokens (#1429 by @wanjinhao1 in #1455).
+
+- **`--trust-remote-code` is now threaded through on the five paths that dropped it (#1449 by @drakeo338 in #1456).**
+  `soup data download` forwards the flag to `load_dataset` and only prints the
+  "Remote Code Warning" panel when it is set. `soup eval auto` forwards it to
+  both `benchmark()` (appended to the lm-eval `model_args` from the resolved
+  flag only, never from `adapter_config.json`) and `custom()`, which now
+  passes it to the `pipeline(...)` load. `soup train --find-lr`'s live sweep
+  loads the tokenizer and model with the resolved flag instead of a hardcoded
+  `False`. `soup draft distill` and `soup shrink` (heal step) now append
+  `--trust-remote-code` to the child `soup train` argv when it was resolved
+  true, instead of asking the user to re-run with a flag they already passed.
+  On `datasets>=4`, which dropped `trust_remote_code` support upstream and
+  now just logs an error and ignores it, `soup data download
+  --trust-remote-code` is refused outright instead of silently forwarding a
+  flag that would do nothing.
+  `soup eval benchmark` and `soup eval custom` gain their own
+  `--trust-remote-code` option (off by default).
+
+- **`soup expect` fails closed on unreadable JSONL input (#1434 by @wanjinhao1 in #1457).** The gate now reads the dataset as `utf-8-sig` like the training loader, so a UTF-8 BOM no longer hides the first row from PII and other checks. Malformed JSON lines and valid JSON that is not an object are refused as an input error (exit 3) with their line numbers instead of being silently skipped, and a file with no checkable rows is refused rather than passing with `Rows 0`.
+
+- `soup card` now shows the newest score of a benchmark that was evaluated more than once, not the oldest: the scorecard walked the tracker's newest-first rows and kept the last one, and rows with an identical timestamp now resolve to the later insert. It uses the same newest-row helper as `soup registry diff` and `soup eval compare` (#1315 by @Ru0k3 in #1459).
+
+- `soup infer`, `soup chat` and `soup diff` now honor `--device` when loading
+  models instead of always passing `device_map="auto"` and
+  `torch_dtype=torch.float16` to `from_pretrained` (#1443 by @drakeo338 in
+  #1460). `cpu` (and `mlx` on this path) is pinned to the CPU in `float32`;
+  `cuda:N` and `mps` are pinned to that device; plain `cuda` keeps
+  `device_map="auto"`. GPUs keep `float16`. Values are case-insensitive, and
+  an unknown `--device` (`gpu`, `auto`, `cuda:0,1`, ...) now raises an error
+  instead of being printed and ignored.
+- Default-path change: the CLIs always auto-detect a device when `--device` is
+  not given, so these rules apply without the flag too, and to `soup bench`,
+  which loads through `soup infer`. On a CPU-only host the model now loads in
+  `float32` pinned to the CPU instead of `"auto"`/`float16`, which doubles its
+  RAM use (a 7B model needs about 28 GB instead of 14 GB) (#1443 by @drakeo338 in
+  #1460).
+
+- **`soup expect` refuses suite keys and argument names an expectation does not take, instead of running it on its defaults (#1428 by @Srinivasan8888 in #1461).**
+  `parse_suite_spec` read only `name` and `args` and dropped every other key, and the dispatcher read arguments with `args.get(key, default)`, so the `min_tokens` / `max_tokens` example in `docs/compliance.md` (written beside `name` instead of under `args:`) and a misspelled argument such as `max_token` both ran `expect_token_length_between` on its defaults of 1 and 1,048,576 tokens and passed a 5000-token row with exit 0. A key beside `name` or an argument the expectation does not take is now refused when the suite loads (exit 3, before the data file is opened), with the key named and either "belongs under `args:`" or the nearest valid name; `min_tokens` / `max_tokens` / `threshold` are validated at parse time too. The `docs/compliance.md` example moves to the `args:` form. A suite that carried one of these keys now exits 3 on its next run, which is the point.
+
+- **`mini_arithmetic` no longer sits at a 1.000 ceiling (#1192 by @AaronProbha18 in #1462).**
+  The 40-row suite replaces 12 single-step rows with 16 multi-step and
+  large-operand ones; Qwen2.5-1.5B-Instruct measures 0.800 against 0.375 on
+  SmolLM2-135M-Instruct, and the bundled scorer provenance revision moves to 4
+  so pre-change baselines are not silently compared on the new scale.
+
+- **`soup data augment` wrote rows with an empty rewritten field, and `soup distill-prompt` silently dropped every failed row, both still reporting success (#1274 by @AaronProbha18 in #1463).** Both commands built their LLM provider without `raise_on_error`, so a connection error, HTTP 404/429/500 or malformed response came back as empty text instead of raising — `augment` rewrote a field to `""` and kept the row, `distill-prompt` dropped the row and wrote an empty output file with `Rows: 0`, and both exited 0. Same defect class as #1221 (fixed for `soup data forge` in #1261): the provider is now built with `raise_on_error=True` for both commands, failures (a raised error or an empty/whitespace-only reply) are counted via the shared `ForgeJudgeStats`, and a row is never written with an empty or unrewritten field. A run where every call failed exits 1 without writing an output file; a partial outage keeps only the successful rows under a yellow "with provider failures" panel reporting `N of M provider calls failed` with the endpoint and first error.
+
+- **`soup compile`, quantized GGUF export and `task: unlearn` now validate their destination before the expensive step (#1445 by @wanjinhao1 in #1469).** `soup compile -o <path outside cwd, or a symlink>` used to run the whole optimizer and its LLM calls before refusing the path with an unhandled `ValueError` (exit 1); it now refuses at plan time and exits 2, with the write-time check kept as the TOCTOU guard. A quantized GGUF export into a directory that did not exist yet crashed in `mkdtemp` after the adapter was merged, and the cleanup deleted the merged model; the parent directory is now created up front. `task: unlearn` used to load the policy and a frozen reference copy and run every NPO / SimNPO / RMU step before refusing an `output` outside the working directory or a symlinked one; `setup()` now refuses first, before any model is loaded.
+`soup compile --plan-only` now also refuses such a destination (exit 2) instead of printing the plan and exiting 0.
+
+- Machine-readable output from `soup audit-log tail --json`, `soup bom emit`, `soup eval leaderboard --format json|csv` and `soup profile --json` now writes straight to stdout via `typer.echo` instead of the Rich console, so a piped record is no longer folded at 80 columns and `[...]` is kept verbatim instead of being parsed as markup (which previously crashed the command on a token like `[/x]`) (#1468 by @abhinyaay in #1470).
+
+- `soup data generate --template reasoning` now tells the generator how to end each solution, so the golds it writes are readable by GRPO's `accuracy` and `verifiable` math rewards: `math` rows end with `#### <number>` on its own line, `logic` and `code` rows with an `Answer: <answer>` line. Before, the prompt asked only for "the final answer", and a gold such as `So there are 42 apples.` makes `soup train` refuse the dataset before generation (#1349 by @Momoyeyu in #1471).
+
+- Model output is now read by its structure. The LLM judge (`soup eval judge`, the eval gate's judge task and `soup ship`'s `judge_score`) reads the reply's whole JSON object, so reasoning that quotes a nested object no longer scores every criterion at the minimum; criterion keys match case-insensitively, `{"score": N}` is accepted, and a missing or non-numeric criterion, or one scored under two spellings, raises an error naming it; a reply longer than 65,536 characters is refused unread. `soup eval checklist` keywords and `soup eval behavior --evidence` oracle labels match when they start or end with punctuation (`-5`, `(B)`, `C++`, `100%`), still as whole words on both sides. The judge node of `soup data recipe --execute` reads the first word of the reply: `OK` keeps the row, `REJECT` or `NOT OK` drops it, and any other reply counts as a failed call; its default prompt asks for a one-word verdict (#1467 by @developerjillur in #1472).
+
+- Autopilot no longer enables DoRA on a GPTQ / AWQ / AQLM / EETQ base. peft
+  refuses DoRA on those layers, so a large dataset produced a config that
+  failed after the model load. `decide_peft` takes the chosen `quantization`
+  and keeps `use_dora` off for them (#1466 by @drakeo338 in #1473).
+
+- Wire the "Standalone Sweep Config" docs example: `soup sweep --sweep-config sweep.yaml` now loads `strategy`/`n_runs`/`seed`/`params` from a separate YAML file, instead of `--param` being a required option that the documented invocation never supplied (#1465 by @AmirF194 in #1475).
+
+- Fixed KTO reaching TRL with a per-device batch of 1: the `batch_size >= 2` parse-time refusal now covers every `task='kto'` config (not only `stream_layers`), `batch_size: auto` floors its estimate at 2 instead of 1, and `soup local-rl train --train-method kto` writes `batch_size: 2` (#1420 by @wanjinhao1 in #1476).
+
+- `soup serve --device` now reaches the transformers loader. `_load_model` ignored
+  its `device` argument and always passed `device_map="auto"`, so `--device cpu`
+  still placed the model on a visible GPU. The base model, the merged model and the
+  speculative draft model now use the same placement rule as `soup infer` / `chat` /
+  `diff`: `cuda:N` is accepted and pinned to that GPU (it was accepted and ignored
+  before), `mps` is pinned, `mlx` runs on the CPU, and `cuda` keeps
+  `device_map="auto"`. Unknown values are refused with exit code 2 naming
+  `cpu, cuda, cuda:<index> or mps`; `--device` is case-insensitive. An explicit
+  `--kv-cache-type bf16` / `f16` still sets the load dtype on every device.
+  Behaviour change: on a CPU-only host the default load is now float32 pinned to the
+  CPU, which doubles its RAM (a 7B model needs about 28 GB instead of 14 GB)
+  (#1478 by @drakeo338 in #1479).
+
+- `soup diagnose` now detects verbatim memorization on long training rows by measuring
+  clipped completion-bigram precision against the held-out suffix. The fixed 64-token live
+  generation budget no longer dilutes overlap as the untouched suffix grows, while adjacent-token
+  matching avoids false positives from shared vocabulary and repetition loops. This changes the
+  threshold semantics from set-Jaccard, so earlier memorization results are not directly comparable
+  (#1437 by @fukalous in #1481).
+
+- **`mistral-medium-3-5-sft` can now load and attach LoRA (#1395 by @Areen-09 in #1482).** The recipe base model (`mistralai/Mistral-Medium-3.5-128B`) uses `Mistral3ForConditionalGeneration`, a vision-language wrapper. The recipe was missing `modality: vision` under `task: sft`, causing the loader to dispatch to `AutoModelForCausalLM` and fail. In addition, `target_modules: auto` had no mapping for `mistral3` in `MOE_TEXT_LORA_TARGETS`, which now targets the language model attention projections (`.*language_model\..*\.self_attn\.(q_proj|k_proj|v_proj|o_proj)`) while excluding the vision tower, multimodal projector, and MLP projections. The recipe is also unpinned from the cannot-attach exceptions list in `scripts/check_recipe_attach.py`.
+
+- **A judge that cannot be reached is reported as unavailable, not scored as a tie (#1447 by @Srinivasan8888 in #1484).** Every LLM-judge request now goes through one helper that retries 429, 5xx and transport errors within a bound (honouring `Retry-After`), fails at once on a 4xx that will not heal, treats a reply with no usable content as a judge error, and raises `JudgeUnavailableError` naming the judge URL once the retries are spent. `soup ship --task-mode pairwise` exits 1 with that message instead of scoring a dead judge as a measured 0.5 win-rate and printing DON'T SHIP; `soup eval judge` skips and counts the failing row and still scores, shows and saves the rest; a training eval gate still fails closed, and its log line says which task could not be scored and why instead of calling it a regression. The Online DPO adapter keeps leaving a failed pair unranked, as #1225 designed.
+
+- `soup version --json --full` and `soup cost --json` now write their JSON straight to stdout instead of through the Rich console. Rich folds a document wider than the console (80 columns when the output is piped) and reads `[...]` inside a string as markup, so a long record was split across lines, a value such as `[v2]` was dropped, and `[/x]` aborted the command with `MarkupError`. `soup eval against --json-only` had the same defect and is fixed with them. A test walks `src/soup_cli/` and fails if any command puts serialised JSON back through `console.print` (#1480 by @putramkti in #1485).
+
+- `soup eval`'s custom-task `contains` scorer now requires the expected string to appear as a whole token, so `14` no longer counts as containing `4` and `#### 420` no longer contains `42`. This changes scores: a gate baseline or a `soup eval custom --run-id` result recorded with the old substring `contains` can be higher than the same outputs score now, and the baseline's scorer stamp does not notice, so re-measure those before comparing. A new `scoring: "answer"` mode compares the final answer the model states (via the same parser GRPO's `accuracy` reward uses) instead of substring-matching, and refuses task rows whose `expected` states no single answer instead of silently scoring 0 (#1342 by @Momoyeyu in #1490).
+
+- **Refuse `.soup` and `.soup/mcp-runs` directory symlinks and junctions at plan time (#1211 by @kok-o in #1492).**
+  Following #1158 and #1171, `snapshot_config` now inspects the directory hierarchy with `refuse_linked_dirs` before creating directories or writing `config.yaml`, preventing config snapshot redirection outside the working directory when `.soup` or `.soup/mcp-runs` is a symbolic link or Windows junction.
+
+- **`soup data clean` no longer drops a tool-calling trajectory whose call-only assistant turn has empty content (#1477 by @abdulwaarith0 in #1493).** With no flags, the `--min-tokens` check ran on every assistant turn in the `chatml` branch, so a turn with `"content": ""` and a non-empty `tool_calls`, the shape the tool-calling format itself writes, dropped its row as "Empty / Whitespace Turns" while the same turn with `"content": null` was kept and the loader accepted both. A turn that carries tool calls is now exempt from `--min-tokens`; turns with no calls keep the rule.
+
+- `format: auto` now detects a dataset's format from a bounded prefix of rows instead of the first row alone, so a first row that happens to lack an optional key no longer picks the poorer converter for the whole file and silently drops that key from every row. A mixed file either upgrades to the richer format of the same family when its converter accepts the poorer rows, or is refused with a message naming both shapes and the row where each was first seen. Files that used to load under `format: auto` with a key stripped or rows dropped under a warning now stop at load; set `data.format` to the shape you want to keep. The Web UI data explorer now reports the refusal instead of failing, and the auto-detection behaviour is documented. (#1424 by @chaitanya-y20 in #1496).
+
+- **`soup data from-traces` reads the signals Soup's own producers write, instead of reporting a green 0 pairs (#1440 by @umran666 in #1498).** The pair builders key on the per-trace `signal` and on `edited_output`, but the `soup-serve` parser read the signal only from a nested `feedback.rating` that no Soup producer writes: `soup ingest` emits a top-level `signal` and `soup serve --trace-log` records no feedback at all, so every ingest row read as `none` and `soup data from-traces --signal thumbs_up` wrote an empty file and exited 0. The top-level `signal` is now read (`feedback.rating` stays as a fallback for older logs), an `edited_output` under any of its three names makes `--signal user_edit` buildable from a real record, and a harvest that reads traces but matches none now names how many it read, which signal it wanted and which signals were present instead of reporting a normal write of 0. The examples in `docs/data.md` are corrected too: `--format soup_serve`, `--signal regeneration` and a single-file `--logs` for the soup-serve parser are all refused by the CLI.
+
+- **`soup expect` refuses a top-level suite key other than `expectations` (#1483 by @Srinivasan8888 in #1499).** `parse_suite_spec` read only `expectations` and dropped every other top-level key, so a suite with `fail_fast: true` (or any typo) beside `expectations:` loaded, ran and exited 0 with no message about the key. It is now refused when the suite loads, before the data file is opened (exit 3), with every unknown key named; the key text is echoed as a Python literal so a hostile key cannot reach the terminal as a control sequence. This is the same check #1461 added one level down, inside an expectation entry.
+
+- **`task: simpo` refuses a dataset whose completion would be truncated away, instead of training to NaN behind a logged loss of 0.0 (#1208 by @umran666 in #1500).** On trl 0.29.x, a SimPO row whose `chosen` outgrows `data.max_length` loses its whole `rejected`: trl truncates each answer to `max_length` minus the **longer** answer's length, so the shorter side of a lopsided pair ends with zero tokens and SimPO's length-normalised log-probability becomes 0/0. Every LoRA tensor went NaN while transformers' `logging_nan_inf_filter` logged the loss as `0.0`. `soup train` now refuses before the first step, naming how many rows are affected, which ones, and the `data.max_length` involved; a pair that keeps trainable tokens on both sides is left alone, including a long `chosen` beside a shorter `rejected` that trl truncated to 64/14.
+
+- **GRPO's `accuracy` and verifiable `math` rewards now end the answer clause at justification connectives `because` and `since` (#1328).** Previously, an inline justification such as `The answer is 42 because 6*7=42.` stayed in the clause and counted all numbers, treating the answer as a hedge and scoring 0.0. The clause now ends at `because` or `since`, correctly reading 42 (#1328 by @kok-o in #1501).
+
+- **`distill_mode: sequence` now numbers rows the way token mode does, and refuses a split with nothing left (#1344 in #1502).** In `distill_mode: sequence`, original source row indices are preserved when skipping rows with no prompt turn, user's 1-based source row positions are reported on causal-loss target failures (noting the assistant response was generated by the teacher), skipped row counts and positions are printed at setup, and splits left with 0 usable rows are refused before training starts (#1344 by @kok-o in #1502).
+
+- Resuming a QLoRA SFT run no longer upcasts the trainable LoRA adapter from bf16
+  to fp32: the dtypes recorded before `Trainer._load_from_checkpoint` are restored
+  right after it, before the optimizer is created, so a resumed run reproduces the
+  uninterrupted one (#1503 by @bobbonauta in #1504).
+
+- **`soup expect` requires a judge for `expect_chosen_preferred_over_rejected_by_judge` instead of silently scoring 1.0 (#1433 by @kok-o in #1505).**
+  `expect_chosen_preferred_over_rejected_by_judge` gave every row 1.0 when `judge_fn` was `None`, so `soup expect` ran with no judge and passed every preference dataset at any threshold. The expectation now flags preference rows as violations when no judge is configured (exit 2). A judge can be supplied via `soup expect --judge <url>` or in suite YAML under `args: {judge: "ollama://llama3.1", threshold: 0.7}`. Callers that deliberately want to trust existing labels without running a judge can opt in with `args: {advisory: true}`.
+
+- **`soup train --cloud lambda` keeps running across transient SSH disconnects instead of terminating the instance (#1439 by @kok-o in #1506).**
+  The rendered Lambda lifecycle controller previously relied on a single idle 90000s SSH session without keepalive probes and treated SSH exit 255 as a training failure, immediately terminating the instance and losing ongoing runs when NAT or Wi-Fi dropped. The controller now configures `ServerAliveInterval=30` and `ServerAliveCountMax=6`, polls training status with short SSH calls checking cloud-init and `/home/ubuntu/soup.exit`, retries transient transport errors (exit 255 and timeouts) over a 15-minute retry window with exponential backoff before giving up, retries checkpoint copy (`scp`) across a 15-minute window before instance termination, and prints clear distinct messages for connection loss, remote training exit, and copy failures.
+
+- **`training.warmup_ratio` dynamically resolves over actual optimizer steps instead of a precomputed estimate (#1431 by @kok-o in #1507).**
+  Trainer wrappers previously turned `warmup_ratio` into fixed `warmup_steps` using raw dataset row counts before constructing the trainer. Under GRPO (where prompts repeat `num_generations` times), SFT with packing or multipack, and pretrain with packing, the trainer executed a different step count, causing warmup to shrink or cover the entire run so peak learning rate was never reached. All wrappers now pass `warmup_ratio` through via `resolve_trainer_warmup_steps` directly to `TrainingArguments(warmup_steps=...)`, letting transformers resolve warmup dynamically as `ceil(real_optimizer_steps * warmup_ratio)`. Runs with fewer than 34 optimizer steps at the default `warmup_ratio: 0.03` now resolve to exactly one warmup step, whose first step trains at learning rate 0.
+
+- **Decouple `soup diagnose` forgetting probe from training dataset rows (#1436 by @kok-o in #1508).** The live forgetting probe previously evaluated retention on the first 12 rows of `--dataset`, which is documented as the adapter's own training data. Fine-tuned adapters match or outperform their base model on their own training targets, causing the probe to falsely report `OK 1.000` even when catastrophic forgetting occurred across general tasks. The forgetting probe now evaluates against a separate `--holdout <path>` JSONL option or a built-in general knowledge probe set with reference answers when `--holdout` is omitted, while `--dataset` continues feeding the memorization, format, and citation probes. If `--holdout` has no usable prompt/answer rows, forgetting reports `NOT_RUN` rather than a false pass.
+
+- Layer streaming now materializes models cached by huggingface_hub 1.32 or later,
+  whose Xet blobs live in the cache-wide shared blob store; links that leave both the
+  repo's blob store and the marked shared store are still refused (#1509 by @bobbonauta in #1510).
+
+- Layer streaming now accepts a local path to a Hugging Face cache snapshot
+  (`snapshots/<commit>`): it is copied to regular files like the snapshot behind a Hub id,
+  instead of stopping with "no .safetensors weight files found" (#1511 by @bobbonauta in #1512).
+
+- **`training.preference_loss_weights` refuses a blend it cannot compute, instead of training one loss and reporting several (#1425 by @umran666 in #1513).** No trl 0.29 trainer puts per-sequence log-probs on the batch, so every requested term went uncomputed and the wrapper fell back to `primary_loss * primary_weight`: `{dpo: 0.7, simpo: 0.3}` printed `Multi-objective preference loss: 0.70·dpo + 0.30·simpo` at setup and then trained DPO alone scaled by 0.7, with nothing in the output saying so. A blend that cannot be evaluated now stops the run, naming the terms it could not compute, the ones it could, and what was requested; the weighted-sum path itself is unchanged, so a trl that does carry log-probs still blends. Every `preference_loss_weights` config therefore stops at the first step until the real blend lands: to train one loss, remove the weights and set `training.preference_loss`.
+
+- **`task: ppo` refuses the reward-hacking and echo-trap flags it cannot feed, instead of loading them inert (#1441 by @umran666 in #1514).** The `trl` PPO trainer this build supports takes no reward functions — its reward comes from the reward model it calls internally — so the wrappers Soup built for the shared signal buffer were dropped, the buffer was never written, and because the buffer object existed the detector's log-reading fallback returned early as well. A run with `reward_hack_detector`, `reward_hack_mitigation` or `echo_trap_enabled` was announced and then never halted, mitigated or trapped. Those three flags are now refused before the model loads, naming every flag set and pointing at `task: grpo`, where the buffer is fed. The on-GPU buffer feed for PPO rollouts is still open.
+
+- `soup local-rl train` without `--once` renders `--min-pairs` and `-o` into the systemd `.service` and launchd `.plist` it writes, so the nightly job trains with the threshold and output directory the user asked for instead of the defaults (10 pairs, `local_rl_adapter/`). A `--min-pairs` the nightly run would refuse now exits 2 before any unit file is written (part of #1448 by @MohammadHijjawi97 in #1517).
+
+- **`soup advise run --probe-model X` ran the live probe and hid its ROI table (#1448 by @qwist1233-cpu in #1521).** `--probe-model` implies `--probe` and the probe ran under that derived flag, but the `ROI deltas (probe)` table was gated on the raw `--probe` option. The table now follows the same flag as the probe.
+
+- **`soup diagnose` live probes now read ShareGPT, Alpaca `input`, ChatML, tool-calling, DPO, KTO and plaintext datasets (#1435 by @bakdauletbaktygaliyev in [#1526](https://github.com/MakazhanAlpamys/Soup/pull/1526)).** Rows go through the same format converters training uses, with the old flat-key lookup as a fallback, so these datasets give the format and mode-collapse probes a prompt/answer pair instead of `NOT_RUN`. Memorization no longer waits for pairs and runs on plaintext rows. LLaVA and audio rows are skipped because the probes are text-only, a prompt over 8192 characters is skipped instead of failing the probe, the `NOT_RUN` reason names the dominant cause, and skipped rows are counted in `extras.rows_skipped` and printed as `Rows skipped: ...`. For multi-turn ChatML rows the probe prompt now stops at the first assistant reply. Two more visible changes: rows with an `audio` field and `messages` used to be probed as text and are now `NOT_RUN` (exit 3 unless `--allow-not-run`), and Alpaca prompts now include `input` and `system`, which moves existing scores. A prompt containing a NUL byte is skipped like an over-long one instead of failing the probe. A `--holdout` file is read the same way: ShareGPT, Alpaca and ChatML hold-outs now feed the forgetting probe, and LLaVA and audio hold-out rows are skipped, so an audio hold-out is `NOT_RUN` like an audio `--dataset`.
+
+- **`training.freeze_layers` / `training.freeze_ratio` are refused at load on the tasks that never applied them (#1497 by @abdulwaarith0 in #1532).** Both fields loaded on every task, but only `task: sft` (and `tts`, which trains through the SFT trainer) freezes layers. On every other task (`dpo`, `grpo`, `ppo`, `kto`, `orpo`, `simpo`, `ipo`, `bco`, `preference`, `reward_model`, `pretrain`, `embedding`, `prm`, `classifier`, `reranker`, `cross_encoder`, `distill`, `unlearn`, `moe_lora_routing`, `online_dpo`, `asr`) the run trained every layer and said nothing. **This is a breaking change: a config that sets either field on one of those tasks loaded before and now stops at load**, with a message naming the field, the task and the fix (use `task: sft`, or remove the key), and `soup doctor --config` exits 2. Removing the key changes nothing about what trains, since those runs were already training every layer. `sft` and `tts` configs, and dumped configs (which write both fields as `null`), are unchanged.
+
+- `soup reward synth`'s numeric verifier now reads both the gold and the completion with the shared answer parser the built-in `math` / `accuracy` rewards use, so `1,000`, `#### 1,000`, `\boxed {42}` and `#### −42` spellings score the same under the generated verifier as under the built-ins, and malformed comma groupings like `10,00` are no longer detected as numeric. Regeneration also stops paying some completions the old regex paid — `####` or `\boxed{}` answers carrying units, `%` or a non-dollar currency symbol or code (`#### 42 apples`, `\boxed{42\%}`, `#### €42`), hedged or justified answer phrases, and a wrong last box after a right first now score 0, matching the built-ins (bare `42%` and `The answer is 42%.` still pay). A `reward.py` synthesized before this version scored the newly-accepted spellings 0, so regenerate it before comparing runs; the emitted file now imports `soup_cli` rather than being fully self-contained. The calibration report and `--output-report` also name every reference the verifier rejects (`rejected_references`) instead of reporting only a refusal rate, and a refused run lists the first ten rejected references in the panel (#1350 by @Momoyeyu in #1533).
+
+- Fix `soup train --task unlearn` crashing with `KeyError: 'duration'` in the
+  "Training Complete!" panel after the run had already finished: the adapter was
+  saved and the tracker row written, but the unlearn wrapper was the one
+  transformers-backend trainer that returned only `duration_secs` without the
+  pre-formatted `duration` string. The wrapper now formats `duration` like every
+  other wrapper, and the completion panel falls back to formatting
+  `duration_secs` itself so no future wrapper can lose a finished run's summary
+  (#1529 by @vaputa in #1537).
+
+- `soup eval`'s custom-task `contains` scorer is linear again in the length of the output and of `expected`. The whole-token match from #1490 restarted its search at every position, so a 400,000-character output against a 200,000-character `expected` took 68 s; it now takes milliseconds. Both sides are case-folded with `str.lower()`, as in v0.75.1, so `istanbul` no longer matches `İstanbul` and `s` no longer matches `ſ`; no other score changes (#1528 by @UroojFatima-052 in #1540).
+
+- **Aligned ULD (`uld_strategy: wasserstein_aligned`) no longer scores student positions that have no teacher target (#1426 by @developerjillur in #1541).** A byte-fallback piece, an empty decoded piece or a student-only special token aligns to no teacher token; it got an all-zero teacher row, which softmaxes to uniform, and each such position added about `V/2` to the loss. These positions now leave both the sum and the denominator under the label mask, the attention mask and no mask, and the trainer decodes student special tokens to `""`, as it already does for the teacher.
+
+- **76 tests across 10 files downloaded tiny models/tokenizers from the
+  Hugging Face Hub on every run, none marked `smoke` and none guarded against
+  the network being unavailable (#1356 by @SID-6921 in #1544).** A real sweep
+  (`HF_HUB_OFFLINE=1`, empty `HF_HOME`, `pytest tests/ -m "not smoke"`) found
+  a much larger landscape than a preliminary grep-based pass had estimated.
+  Every site now builds its tiny model and tokenizer locally instead --
+  a `ByteLevelBPETokenizer` trained from a few lines of in-file text feeding
+  a real, randomly-initialised `LlamaConfig`/`GPT2Config` model, matching the
+  existing `_write_tiny_qwen2` convention -- since none of the fixed tests
+  needed real pretrained weights or vocabulary, only a working tokenizer and
+  a save/reload round-trip. A full-suite offline re-sweep afterward confirms
+  zero remaining Hub-dependent failures.
+
+- `notebooks/proof-4gb.ipynb` runs again on a hosted multi-GPU runtime with a current `huggingface-hub`: the install cell caps `huggingface-hub<1.32.0` (soup-cli 0.75.0 refuses the shared blob store introduced in 1.32, #1509) and the notebook sets `CUDA_VISIBLE_DEVICES` to one card before torch is imported, because layer streaming cannot run under `nn.DataParallel` (#1543 by @here-2007 in #1545).
+
+- `eval.auto_eval: true` now runs the configured `eval.benchmarks` and `eval.custom_tasks` after `soup train` finishes; before, no trainer handed the evaluation config to the training callback, so nothing ran (#1487 by @commit-msuyog in #1546).
+
+- Terminal output strips the C1 control range (U+0080-U+009F) as well as C0
+  and DEL, and text read from files is printed through the shared
+  `for_terminal` helper instead of raw, through `escape()` alone, or quoted
+  with `repr()` after escaping: adapter-config base model names in `soup
+  chat`, `soup merge`, `soup serve`, `soup export`, `soup eval benchmark` and
+  the `--trust-remote-code` warning; `soup adapters list` / `info` /
+  `compare` / `diff`; benchmark names in the `soup ship` footer; `soup edit
+  diff`; the SFT "cannot open image/audio" warnings; audio file names in the
+  `soup infer --task asr` skip warnings; the config loader's validation
+  lines; `soup probe interference` loss keys; and the Web UI's log line for a
+  refused config. Markup in such a value no longer changes an exit code: a
+  signature sidecar whose `backend` name contains `[/]` gets `soup attest
+  verify`'s documented exit code 3 instead of 1, and a path or key
+  containing `[/]` gets exit code 2 instead of 1 from `soup env lock` / `env
+  fix`, `soup tunability`, `soup deploy autopilot --measure` and `soup probe
+  interference` (`soup data forge` and `soup adapters arithmetic` now print
+  such a name as text too). A `.can` manifest `author` refuses control
+  characters (#1552).
+
+- **`soup init` refuses a symbolic link, junction or other reparse point at the config path it writes, and MCP planning creates the config snapshot's run directory fresh (#1553).**
+  `soup init` wrote the starter config with a plain write that follows a link at the target (`soup.yaml` or `--output`), and a dangling link even skipped the overwrite prompt. It now refuses a symbolic link, junction or other reparse point there before prompting or running the wizard, naming the path, matching the link refusal the other config writers apply, and it creates or opens the file without following a link that appears there afterwards: nothing is written through such a link and nothing is created at its target. Ordinary paths, including ones outside the working directory or reached through a linked parent directory, behave as before. Following #1492, `train_start` under `soup mcp serve` now also checks the run directory `.soup/mcp-runs/<run_id>` itself, creates it with `exist_ok=False`, and creates `config.yaml` exclusively (`O_EXCL`) without following a link, refusing the plan with a path-free error when the run directory or the file already exists or is a link.
+
+- The outbound loopback allowlist is now a single shared set:
+  ``http://[::1]:<port>`` judge URLs are accepted by ``GateTask.judge_model``,
+  ``soup ship --judge-model``, and the online-DPO trainer's
+  ``_parse_judge_url``, matching the judge API-base and vLLM checks. Each
+  gate previously kept its own ``("localhost", "127.0.0.1")`` literal, which
+  refused the IPv6 loopback (#1548 by @akshatshahh in #1554).
+
+- `training.lora.use_dora: true` with `training.quantization: gptq`, `awq`,
+  `aqlm` or `eetq` is now refused when the config is loaded. peft has no DoRA
+  variant for those layers, so the config used to load and fail only when the
+  adapter was attached, after the model load. Autopilot's `decide_peft` reads
+  the same format set (#1466 by @ybai08 in #1555).
+
+- Fix `soup data from-traces --format soup-serve` silently writing an empty output (exit 0, `Wrote 0 preference pair(s)`) when `--logs` pointed at a single file: the soup-serve reader wants the directory `soup serve --trace-log` writes, and a file is now refused with a message naming the option and the expected shape; a source that reads zero traces at all now says so ahead of the count line, so an empty output no longer reads the same as a completed harvest (#1530 by @vaputa in #1557).
+
+- **`training.quantization: mxfp4` passed config validation and then failed at
+  the model load (#1466 by @ybai08 in #1558).** Soup built
+  `BitsAndBytesConfig(bnb_4bit_quant_type="mxfp4")`, which bitsandbytes
+  rejects (it accepts `nf4` and `fp4` only) and which clashes with the
+  `Mxfp4Config` a pre-quantized MXFP4 checkpoint carries, including the bases
+  `soup autopilot` passes through as `mxfp4`. The loader now returns
+  transformers' `Mxfp4Config(dequantize=True)`, since transformers does not
+  train MXFP4 weights as loaded, so the model trains in bf16. `mxfp4` no
+  longer goes through `prepare_model_for_kbit_training`, which would cast the
+  dequantized model to fp32. Two configs that validated before are now
+  refused, neither of which could train: `bnb_4bit_quant_storage` with `mxfp4`
+  (it is a bitsandbytes argument), and `mxfp4` with a local base whose
+  `config.json` does not declare `quant_method: mxfp4`.
+  The hardware-fit calculator (`soup_cli.utils.hardware_fit`) now prices an
+  `mxfp4` base at 2 bytes per parameter, as the bf16 model it loads (it was
+  0.55).
+
+- Lao, Khmer, Myanmar, halfwidth katakana and CJK Ext C+ are now scored per character pair like Thai; symbol-only answers are compared by their symbols; rows and answer sets with no tokens are skipped and counted. (#1343 by @Hitesh-XS in #1559)
+
+- **`soup migrate` maps every LLaMA-Factory `pref_loss` and TRL trainer class to its Soup task, and refuses the rest by name (#1214 by @Srinivasan8888 in #1560).** LLaMA-Factory `stage: dpo` with `pref_loss: ipo` now migrates to `task: ipo` instead of plain `dpo`; `hinge`, `kto_pair` and any other value with no Soup task make `soup migrate` exit 1 naming the value and the supported list, instead of loading as `dpo` with no warning. Unsloth notebooks: `RewardTrainer` -> `reward_model`, `BCOTrainer` -> `bco`, `OnlineDPOTrainer` -> `online_dpo` (with a warning that the judge / reward model is not carried over), and `CPOTrainer` -> `simpo` only when the `loss_type="simpo"` on that trainer's own call or its `args=` config; other CPO losses are refused. `SFTConfig` and the other TRL `*Config` classes are now read for hyperparameters, so a notebook passing `args=SFTConfig(...)` keeps its batch size, epochs, learning rate and output directory. `OnlineDPOTrainer` notebooks migrate with `training.online_dpo_judge: ollama://REPLACE-ME` as a placeholder (TRL's judge is a Python object with no string form) and a warning naming it; replace it, or set `training.reward_model` instead. Migrations that used to produce a config and now stop with exit 1: LLaMA-Factory `stage: dpo` with `pref_loss: hinge`, `kto_pair`, any other unlisted value, or a scalar that is not a string such as `5` or `true` (they loaded as `task: dpo`; a list or mapping already stopped on `main`, with a `TypeError` traceback instead of the by-name message), and an Unsloth notebook whose `CPOTrainer` does not set `loss_type="simpo"` on its own call or its `args=` config, or whose `args=` cannot be read statically (they loaded as `task: sft`). Migrations whose result changes: LLaMA-Factory `pref_loss: orpo` / `simpo` under a stage other than `dpo` now keeps that stage's task, as LLaMA-Factory itself does (they loaded as `orpo` / `simpo`); and because `SFTConfig` is now in the config table, a notebook with a later `SFTTrainer(args=SFTConfig(...))` after another trainer migrates as `sft` (the last `*Config` call decides, as it already did for the other config classes). The axolotl migrator was settled by #1254.
+
+- **IP-literal parsing depended on the platform and the interpreter (#1550 by @qwist1233-cpu in #1562).** On Windows the C library refused `0xffffffff`, `4294967295` and `0377.0377.0377.0377`, so those spellings of `255.255.255.255` passed the outbound guard; 6to4, NAT64 and Teredo literals were classified only by the interpreter's `ipaddress` tables. `net_guard` now parses IPv4 spellings in pure Python, unwraps the embedded IPv4 address and classifies it too, and `refuse_private_ip_literal` parses once.
+
+- **A judge that is down no longer costs 3 s of backoff for every row (#1522
+  by @ybai08 in #1563).** Each judged row retried on its own, so `soup eval
+  judge` over 10,000 rows slept for more than 8 hours against a host that
+  never answered, and `soup data from-traces --judge` did the same and then
+  wrote an empty file with exit 0. An evaluator now counts the requests in a
+  row that spent their retries unanswered and raises `JudgeDownError`, a
+  `JudgeUnavailableError`, at the third. `soup eval judge` stops there, prints
+  one message naming the judge URL and how many items were not judged, shows
+  the scores from before the outage without saving them, and exits 1;
+  `from-traces --judge` exits 1 and writes nothing; `soup data best-of-n` and
+  `soup ship --task-mode pairwise` say how many prompts or pairs were left.
+  One reply resets the count, and a 4xx or an unusable reply counts as a
+  reply. A judge-ranked training run is unchanged: it keeps asking and resumes
+  on the first reply.
+
+- Honor configured optimizer, schedule, warmup, weight decay, clipping and effective batch settings across PRM, MoLE, PPO and unlearning; keep unlearn loss and sample counts on their original scale.
+  Unlearn now tokenizes forget and retain rows to `data.max_length` (default 2048) instead of
+  a hard-coded 256, so existing unlearn configs use more memory and run longer; set
+  `data.max_length: 256` to keep the old limit. On unlearn, `batch_size: auto` now resolves
+  to 1 rather than to a memory estimate, so the same config makes the same number of
+  optimizer updates on any card. (#805 by @Oxygen56 in #1564)
+
+- **The provenance and compliance artifacts record what was measured, and only that (#1446 by @Srinivasan8888 in #1569).** `soup attest emit --invocation` now reaches the SLSA statement, at `buildDefinition.externalParameters.invocation`, unsigned and signed; it was stored under a key the builder never read. Annex XI and XII write `not measured` for training compute, energy and CO2 when nothing was measured (`soup train --annex-xi` without `--track-energy`, and FLOPs always, which Soup does not measure), instead of `0` and `0.000 kWh` / `0.000 kg` presented as measurements. The CycloneDX 1.6 ML-BOM has an RFC 4122 `serialNumber`, writes a known SPDX id in its canonical spelling (`apache-2.0` → `Apache-2.0`), an SPDX expression under `expression`, and any other license name under `license.name`; the SPDX 2.3 document does the same in `licenseConcluded` / `licenseDeclared` (other names become a `LicenseRef-` with `hasExtractedLicensingInfos`), and now states that the training data is a build dependency of the model rather than the reverse. The SR 11-7 reproducibility receipt fills `driver_version` on a CUDA host. The CycloneDX 1.6 schema set is vendored under `tests/fixtures/cyclonedx/` and the document is validated against it.
+
+- **`soup expect` names at most ten unknown suite keys in a refusal, then counts the rest (by @Srinivasan8888 in #1570).** The refusals #1461 and #1499 added for a key beside `name` / `args` and for a key beside `expectations:` named every offending key, so a suite under the 1 MiB cap with tens of thousands of unknown keys produced a message nearly as large as the file. The first ten are named and the remainder reported as `and N more`; messages with ten keys or fewer are unchanged.
+
+- **Every documented `soup` invocation names a real command path and real flags, and a guard keeps it so (#1465 by @Srinivasan8888 in #1578).** Five documented commands named a flag or command path the CLI refuses and one recipe description named an option no command has: `soup loop watch --max-iter` is `--max-iterations`; `soup serve ... --spec-tokens` is `--num-speculative-tokens`; `soup --verbose eval --model ...` is `soup eval benchmark ...`; `--no-telemetry` is a global option and goes before the command (`soup --no-telemetry train ...`); `soup adapters blame` has no `--live`; the `online-dpo-smollm2-135m` description points at `training.online_dpo_judge`. Sixteen more documented lines were missing a required option or carried an extra argument (`soup data pii` / `decontaminate` / `augment` take `--input`; `soup infer` needs `--output`; `soup eval custom` needs `--model` and `soup eval human` both `--model-a` / `--model-b`; `soup serve --reasoning-parser` needs `--model`; a second adapter needs its own `--adapters`; `soup runs list` is `soup runs`; `soup recipes search --tag mlx` is `soup recipes search mlx`) and are corrected. `docs/data.md` now says that `soup data decontaminate --benchmarks` records labels only and that `--benchmark-file` is what filters, since no benchmark corpora are bundled; its examples pass one. A test walks every `soup ...` line (aligned columns, `VAR=value` prefixes and backslash continuations included) and every `` `soup ...` `` span in `docs/*.md` and `README.md`, plus every recipe description, against the live Click tree: a flag or command path that does not exist, or a subcommand a group does not have, fails CI. Whether a line also carries every required option is not checked. (The standalone sweep config was #1475.)
+
+- **A `training.prm_reward` Hub id is downloaded before training, and a PRM without a reward head is refused before the model loads (#1466 by @Srinivasan8888 in #1580).** `prm_reward` is documented as a path or a Hub id, but the PRM's reward head was read only from a local directory, so a GRPO run given `org/name` loaded the tokenizer and the model and then died at the first reward call with "path is not a directory". The id (optionally `org/name@revision`) is now resolved through Soup's Hub download wrapper (`utils.hubs.snapshot_download`, which runs the repo-id, revision and namespace-pin checks first), restricted to weights, tokenizer files and custom-code modules, and the head is read from that snapshot when the reward is built; a repo that is not a Soup-trained PRM, a download failure, or a value that is neither an existing directory nor a repo id each stop with one message naming the value, before any training. Existing local paths keep their containment check and now also fail early when they carry no reward head.
+
+- **`soup migrate --from unsloth` reads a notebook that carries IPython magics (#1579 by @Srinivasan8888 in #1583).** Every code cell was concatenated and parsed as one Python module, so the first `!pip install ...` or `%%capture` line made the whole notebook a `SyntaxError` with no cell and no line, and every official Unsloth notebook starts with such a cell. A `%%` cell magic whose body IPython runs as Python (`%%capture`, `%%time`, `%%timeit`, `%%prun`) now loses only its header and its body is read; any other cell magic (`%%bash`, `%%writefile`, ...) is skipped whole. A line whose first non-blank character is `!` or `%` is treated as a magic only at statement level, so a `%` operator or a `!=` at the start of a continuation line is untouched, and a magic that is the only statement of an `if` / `for` / `with` body leaves a valid block behind. A cell that parses today is read byte for byte. A real syntax error is now reported with its code cell and line.
+
+- **With `training.expand_layers` set, `training.freeze_trainable_layers` must now equal it, and any other value fails at load (#1409 by @dchaudhari7177 in #1586).**
+  The field was read only for its sign: `1`, `2` and `4` all trained just the
+  appended blocks, and `0` or a negative value silently trained the whole
+  expanded model. It now has one meaning, freeze the original model and train
+  only the appended blocks, so a config with `expand_layers: N` and a
+  `freeze_trainable_layers` of `0`, a negative value or a different positive
+  value is refused with both fields named and `Set freeze_trainable_layers: N.`
+  Before, with `lora.r: 0`, `0` and negative values trained every layer and any
+  positive value trained the appended blocks; under LoRA the value changed
+  nothing (#1326). `expand_layers: N` with `freeze_trainable_layers: N` trains
+  exactly what it did.
+
+- `training.moe_lora: true` now adapts the routed experts of every fused-expert MoE on transformers 5 (by module names alone Mixtral and MiniMax adapted attention only, Qwen2-MoE attention plus its shared expert, Qwen3.5-MoE the shared expert only; Qwen3-MoE, OLMoE, DeepSeek-V3 and GLM-4 were reached only through peft's own name conversion): the fused `mlp.experts.gate_up_proj` / `down_proj` tensors are handed to peft as `target_parameters`, the module targets `auto` resolved are kept beside them (an explicit `lora.target_modules` list is kept too, where `moe_lora` used to replace it), and the console line names the parameters. Because peft's `ParamWrapper` refuses dropout, `moe_lora` with a non-zero `lora.dropout` is now refused on Mixtral and MiniMax too (#1421 by @Srinivasan8888 in #1590).
+- `training.moe_expert_quant` on a fused-expert model is refused at setup, naming the architecture and the fused parameters, instead of printing `applied to 0 expert Linear block(s)` and training in full precision; matching no expert at all is refused the same way (#1421 by @Srinivasan8888 in #1590).
+
+- A `task: grpo` run with `training.eval_steps` now records the held-out reward (`eval_reward`, higher is better) as its validation metric: the live panel shows a `Val reward` row, the tracker's metrics table gains a `val_reward` column (added to existing databases in place), and the training event stream carries `val_reward`. TRL's `eval_loss` on grpo, the policy objective, is no longer stored or shown as `val_loss`; every other task keeps `eval_loss` / `val_loss` unchanged. The per-task choice lives in `VALIDATION_METRICS` in `utils/eval_schedule.py` (#1389 by @Srinivasan8888 in #1592).
+
+- **The pattern used to match HTTP 401/403 errors in the `format_friendly_error` function in `errors.py` no longer backtracks quadratically if handed an exception which contains the characters "HTTP" followed by whitespace with no status code (#1367 by @johncoplin in #1594).** The old pattern had two places in which whitespace could go if the separator was missing from an exception, meaning the function would have to try every possible combination of whitespace before being able to print the message for unmatched errors. This pattern has now been replaced with one that only has two spots for whitespace if the separator exists, preventing quadratic backtracking and meaning error-messages print faster overall for these kinds of exceptions.
+
+- Vision and audio rows loaded through a streaming `data.interleave`, a remote URI or a Hugging Face Hub dataset (train and `validation` splits) now resolve their `image` / `audio` paths the same way as rows from a local file: against `data.image_dir` / `data.audio_dir` when set, otherwise against the directory of the local data file the row came from, skipping a row whose file lies outside that directory with the usual "rows skipped" warning. These load paths used to keep the value as written, so a relative path was opened against the working directory and `data.image_dir` / `data.audio_dir` had no effect. This is stricter for a remote URI or a Hub dataset whose rows hold file paths and that sets neither directory: there is no local directory to resolve them against, so the load now stops with a message naming the setting (`data.image_dir: .` resolves them under the working directory, skipping paths outside it). An image the Hub dataset has already decoded is passed on as before. On every load path, in `soup infer --task asr` and in `soup data inspect`, a value naming a network share, a device or an extended-length path is skipped without being looked up, and so are a `bytes` value and, on Windows, a DOS device name such as `nul`; on Linux and macOS a value beginning with `//` now counts as a network path too. The SFT vision and audio paths and the ASR / TTS audio loader read a file only when it is a regular file, so a directory, FIFO or device is reported instead of being read (#1599).
+
+- Vision SFT accepts decoded PIL images from Hugging Face Hub datasets and Parquet image structs ({"bytes", "path"}) without crashing. Path structs follow the same directory resolution and path containment rules as file path strings (#1597 by @Nari-Ab in #1601).
+
+- `soup data inspect` resolves relative vision image paths against the data file's directory (or `--image-dir`), the same way training does, and reports an image training would refuse as outside the image directory instead of counting it as found (#1598 by @commit-msuyog in #1604).
+
+- `soup data generate --template preference`: deduplicate generated preference rows (DPO and KTO formats) against `--dedup-with` and within-run duplicates using a stable key, rather than bypassing deduplication (part of #1448 by @Nari-Ab in #1605).
+
+- `soup merge --save-format 4bit_forced`: pass `llm_int8_skip_modules=[]` to `BitsAndBytesConfig` so transformers quantizes all linear modules including `lm_head` rather than silently skipping them, and refuse models with tied embeddings (`tie_word_embeddings=True`) by name before loading weights (part of #1448 by @Nari-Ab in #1606).
+
+- `soup serve`: wire output constraint logits processors and reasoning parser into `_stream_response` so streaming chat completions (`stream: true`) apply structured generation constraints and strip `<think>` blocks before emitting SSE events (part of #1448 by @Nari-Ab in #1607).
+
+- **GRPO variant loss kernels now guard against exponential ratio overflow and NaN backward gradients.**
+  Importance weight ratios and sequence ratios in `grpo_variants.py` are clamped from
+  above before exponentiation using an advantage-aware bound, and padding tokens use boolean
+  masking, preventing infinite terms from producing NaN parameter gradients under policy divergence.
+  (#1609 by @harshitthek in #1610)
+
+- **A pinned staging arena whose base is off a 4096-byte boundary no longer
+  turns direct I/O off for the whole disk-tier store (#1531 by @ybai08 in
+  #1621).** `plan_pinned_arenas` aligns the staging regions relative to their
+  arena, and torch's caching host allocator can hand back an arena at a
+  multiple of only 512 bytes; one misaligned region then sent every layer
+  through the page cache, 2.4x slower cold (#974), with a `logger.warning`
+  as the only sign. `AsyncDiskSource` now reads each arena's base, shifts the
+  placements inside the arena when its slack allows, and otherwise takes the
+  next power of two up; `pinned_bytes` counts the arenas actually held. If the
+  staging is misaligned anyway, the page-cache fallback is printed on the
+  console as well as logged.
+
+- `data.add_new_tokens` / `data.new_special_tokens` are refused at config load wherever no trainer setup adds them to the tokenizer, naming what does not apply them: every `backend: unsloth` setup (`tts` with `new_special_tokens` included; SFT's vision and audio paths excepted), `backend: mlx`, `training.stream_layers: true`, and the tasks whose trainers never call the expansion helper (`pretrain`, `embedding`, `ppo`, `reward_model`, `prm`, `classifier`, `reranker`, `cross_encoder`, `unlearn`, `moe_lora_routing`, `distill`, `asr`). They used to load there and be dropped, so the tokens never reached the tokenizer. On `backend: transformers` for `sft`, `dpo`, `kto`, `orpo`, `ipo`, `simpo`, `bco`, `grpo`, `online_dpo`, `preference` and `tts` nothing changes (#1358 by @Srinivasan8888 in #1622).
+
+- **QuEST continuation now preserves the artifact's measured calibration.** Continuing training from a local QuEST artifact previously recalibrated activation clips on the first 32 new training rows, changing the route represented by the checkpoint. Soup now restores the saved clipping table and route. It also refuses a non-local artifact and a `config.json` declaration that differs from the mandatory metadata sidecar. (#674 by @Shutaru in #1624).
+
+- **The grad-accum advisory measures VRAM pressure against the card the run uses, not a fixed 24 GB (#1620).** `training.grad_accum_auto_tune` built its monitor with a hard-coded `total_vram_gb=24.0`, so on every card smaller than about 24 GB (all common 4, 8, 12, 16 and 20 GB cards) the advisory could never fire, while a 40-80 GB card fired at ~22 GB of peak use (about 28% of an H100). The callback now reads the CUDA device's real total memory on the first advisory call (an explicit `grad_accum_total_vram_gb` still overrides it), reads the peak from the same device, prints the measured numbers in the advisory (`peak 7.8 of 8.0 GB (97%)`), and the live memory panel reads its total from the same device instead of always device 0 (#1620 by @vaputa in #1625).
+
+- **`SOUP_LAYER_STREAM_STRIPE_DIRS` refusals show the entry as typed (#1611).** Every refusal formatted the entry with `repr`, so each backslash of a Windows path was doubled, and copying the entry out of the message gave a spelling that does not work. Entries are now shown in single quotes with single backslashes. Control characters are still escaped as `\xNN`, so they never reach the terminal raw. The same applies to the Windows owner-only folder errors and the disk pre-flight message (#1611 by @vaputa in #1626).
+
+- **`training.auto_mixed_precision` is now refused at config load on every task whose trainer never reads it (#1618).** The field loaded on all 23 tasks while only the SFT trainer applied it (inherited by `tts`), so a DPO, GRPO, KTO or any other non-SFT run carrying the key trained at its trainer's default bf16/fp16 choice with nothing said, and `soup autopilot` wrote the key into generated non-SFT configs. Setting it on any task outside `sft`/`tts` now fails config validation naming the task and the way out, `generate_config` no longer emits it there, the GRPO `grpo_fp16` + `auto_mixed_precision` refusal now says `grpo_fp16` is the only dtype pick on that task, and the field description and GRPO docstring no longer promise a picker that never ran. **This is a breaking change:** a config that sets the field on a task other than `sft`/`tts` used to load and is now refused — removing the key changes nothing about how such a run trains (#1618 by @vaputa in #1627).
+
+- Layer streaming validates `SOUP_LAYER_STREAM_STRIPE_DIRS` early during `soup train` startup and `--dry-run`, refusing missing folders, bad syntax, and same-volume stripes before loading datasets or prompting, and `soup doctor` now reports stripe roots under System Resources (#1613 by @Nari-Ab in #1628).
+
+- Layer streaming copies a Hugging Face snapshot only from the repo's own `blobs` directory
+  and the marked shared store: a `blobs` directory that is itself a link (a symlink, or a
+  junction on Windows) is now refused with a message naming it instead of being followed,
+  and a junction inside a snapshot directory is refused like a directory symlink. The links
+  huggingface_hub creates, including those into the shared store of 1.32 or later, work as
+  before, and so does a cache or repo folder that was moved as a whole and linked (#1629).
+
+- `info_rm` reward-hacking detection no longer votes on a step whose median split leaves either half constant — a two-valued reward (e.g. `reward_fn: accuracy`'s 0/1), or a continuous reward where half the batch lands on the same value. Previously the pooled-variance floor collapsed to `1e-9` and a first step near a 50% success rate recorded a phantom separation of ~31,623 as the baseline, so later, healthier steps read as a collapse and could halt the run or mutate β. Those steps now cast no vote and log one warning naming the cause. A step where every reward is identical still votes once a baseline exists, so a genuinely collapsed continuous reward reads HACK as before. The pooled-variance floor is also tied to the observed reward range instead of a bare `1e-9`. Detector logs and `mitigation_log.jsonl` from runs before this version are not comparable — use `reward_hack_detector: rm_ensemble` or the length/repetition signals on two-valued rewards (#1438 by @Momoyeyu in #1630).
+
+- **Wire DPO-family reference adapter regeneration on LoRA (#1345 by @kok-o in #1636).** `dpo_ref_regen_epochs` periodically syncs reference model weights on DPO, IPO, and preference training. Under LoRA (where TRL creates a frozen `ref` adapter and leaves `trainer.ref_model` as `None`), in-place copies active `.default.` adapter parameters into `.ref.` parameters under `torch.no_grad()` on every Nth epoch. Full fine-tuning (`lora.r: 0`) remains refused at config load time.
+
+- **A fresh `pip install 'soup-cli[train]'` could no longer run `task: grpo` or
+  `task: online_dpo`: the trainer import stopped with `ModuleNotFoundError: No
+  module named 'requests'` (#1637).** trl imports `requests` at module scope in
+  `trl/generation/vllm_client.py`, and both `trl.trainer.grpo_trainer` and
+  `trl.experimental.online_dpo` import that module unconditionally, but trl
+  lists `requests` only under its optional `vllm` extra. A training install
+  received the package indirectly through `datasets`, until datasets 5.1.0
+  (2026-10-05) dropped that dependency. Environments created before that date
+  keep working because pip does not remove an installed package; environments
+  created after it were missing `requests`. On GRPO the failure surfaced as
+  `RuntimeError: Failed to import trl.trainer.grpo_trainer`, and on online DPO
+  as `installed trl 0.29.1 does not provide 'OnlineDPOConfig'`, with the real
+  cause at the end of the message. The `[train]` extra now declares
+  `requests>=2.32.2` itself — the floor `datasets` carried, so an existing
+  environment resolves to the same set. Trainers that do not load those two
+  trl modules were not affected: on trl 0.29.1 the SFT, DPO, KTO, ORPO, CPO,
+  BCO, PPO and reward trainer classes import without `requests`. On an
+  installed release without this change, `pip install "requests>=2.32.2"`
+  restores both tasks. `tests/test_train_extra_declares_requests.py` pins the
+  declaration.
+
+- **Step PyTorch profiler on each training step so `soup train --profile` writes traces (#1448 by @kok-o in #1639).** `soup train --profile` previously announced writing a trace upon completion but left `<output_dir>/profiles/` empty because `torch.profiler.profile` schedule state only advances when `profiler.step()` is invoked per step. Added `ProfileStepCallback` lazily subclassing HuggingFace `TrainerCallback` via PEP 562 to step the profiler on `on_step_end` without importing `transformers` at CLI startup, and wired it into `soup_cli.commands.train` when profiling is enabled.
+
+- `soup sweep` now marks an arm as failed when trainer construction or setup raises,
+  preventing stuck `running` rows in the experiment tracker (#1464 by @deximple in #1640)
+
+- **A sink-based ratchet for outbound HTTP calls across `src/soup_cli` (#1547 by @Areen-09 in #1646).**
+  An AST ratchet verifies every outbound HTTP call (`httpx` methods and clients,
+  `urllib.request` openers and callers, and `requests` methods) against a declared
+  ledger table of known gates and justifications, in addition to shape-based checks,
+  with fail-closed bidirectional enforcement. `validate_electricity_map_endpoint` now
+  routes through `net_guard.LOOPBACK_HOSTS` and `refuse_private_ip_literal`: it refuses
+  abbreviated IPv4 forms (such as `10.1`) and RFC 6598 carrier-grade NAT (`100.64.0.0/10`),
+  while loopback addresses such as `https://127.0.0.2/` and `https://[::ffff:127.0.0.1]/`
+  are now accepted under the shared loopback policy.
+
+- `soup diagnose`, `soup train --diagnose-gate` and `soup eval unlearning`
+  print text they did not write through the shared `for_terminal` helper
+  instead of `escape()` alone, so ESC, DEL and the C1 control range
+  (U+0080-U+009F) are stripped before the text reaches the terminal: the
+  evidence line of every score or metric (from `--evidence` /
+  `--diagnose-gate` JSON or a live run), the adapter name and run id in the
+  table titles and the overall panel, the `--output` and `--badge` paths,
+  the `--attach-to-registry` id, and the exception text in their error
+  lines. The `--diagnose-gate failed` line of `soup train` printed its
+  exception text as Rich markup: an evidence file whose refused `verdict`
+  contained `[/]` ended the command with a `MarkupError` traceback instead
+  of the message (#1647).
+
+- **`training.freeze_layers` / `training.freeze_ratio` are refused at load on the `sft` and `tts` paths that never applied them (#1581 by @abdulwaarith0 in #1649).** #1532 refused the two fields on every other task; inside `sft` and `tts` they are read only on the text path with `backend: transformers` and no layer streaming. With `backend: mlx`, `backend: unsloth`, `modality: vision`, `modality: audio` or `training.stream_layers: true` (on `tts`, `backend: unsloth`) the config loaded, nothing was frozen and nothing was printed: those setups always attach an adapter, so the run trained every layer. **This is a breaking change: a config that sets either field on one of those paths loaded before and now stops at load**, with a message naming the field, every setting that leaves the text path and what to change (for example `Use backend: transformers, or remove the key.`), and `soup doctor --config` exits 2. Removing the key changes nothing about what trains. Text configs on `backend: transformers`, and dumped configs (which write both fields as `null`), are unchanged.
+
+- **A host written only as numbers is an IPv4 address or it is refused (#1650, follow-up to #1562).** `net_guard` reads IPv4 spellings with one strict grammar on every platform, and text that looks like a number but does not fit it (a number too large for its position such as `4294967296` or `10.0.0.256`, a `0x` with no hex digit after it, an `8` in an octal part, a fifth part) was treated as a hostname, although C libraries do not all read such text the same way. The outbound endpoint checks (`--api-base`, judge URLs, `online_dpo_judge`, the vLLM URL, webhooks, the OTLP endpoint, the Langfuse host, the telemetry endpoint, the Web UI chat endpoint) now refuse a host made of numeric labels only that is not a valid IPv4 address; where the check reports its own message it reads `an all-numeric host that is not a valid IPv4 address is not allowed`. A hostname with any label that is not a number, loopback, and every numeric spelling that is a valid address are unaffected. A decimal number longer than `int()` converts (4300 digits) is now "not an address" instead of an uncaught `ValueError`. A host that is a single space counts as non-public on every platform, as it did on Windows.
+
+- **The `soup train` VRAM pre-flight skipped `training.quantization: mxfp4`
+  (#1631 by @ybai08 in #1655).** An MXFP4 base is dequantized on load and
+  trains in bf16, but the pre-flight built its estimate only for `none`,
+  `4bit` and `8bit`, so an `mxfp4` run was never checked. It is now checked
+  against the same estimate as a `quantization: none` run, about 2 bytes per
+  parameter, and a run that does not fit is refused with one extra sentence
+  saying the estimate prices the bf16 model. This refuses `mxfp4` configs that
+  used to start on a card too small for the model; `--allow-oom-attempt`
+  launches them anyway.
+
+- **Budget `mxfp4` bases as dequantized bf16 in autopilot (#1653 by @kok-o in #1656).** `decide_quantization` now enforces the VRAM budget for `mxfp4` pre-quantized models which dequantize on load to bf16 (2 bytes per parameter), preventing generation of configurations that cannot load on the target GPU budget.
+
+- **Handle `typer.Exit` cleanly in `soup train` auto-eval custom tasks (#1641 by @kok-o in #1658).** Catch `typer.Exit` when executing auto-eval custom tasks to avoid printing an unhandled traceback and reporting the run as failed.
+
+- **Keep trainable adapter dtype across checkpoint resume for DPO, IPO, GRPO, and Reward trainers (#1573 by @kok-o in #1660).** Apply `keep_trainable_dtype_on_resume` in `DPOTrainerWrapper`, `IPOTrainerWrapper`, `GRPOTrainerWrapper`, and `RewardModelTrainerWrapper` so that resuming a run preserves the trainable adapter's original dtype instead of upcasting to fp32.
+
+- **Auto-evaluation after `soup train` follows the run's `--trust-remote-code` flag
+  (#1644 by @Areen-09 in #1662).** `soup train --trust-remote-code` with
+  `eval.auto_eval: true` now passes the flag to the benchmark and custom
+  evaluation of the model the run just saved, instead of always `False`, which
+  made a base that needs custom code train and then fail its own evaluation.
+  Without the flag both stay off, as before. The opt-in is CLI only: a
+  `soup.yaml` with `trust_remote_code` (top level or under `eval:`) is refused
+  as an unknown key.
+
+- Re-check that a `SOUP_LAYER_STREAM_STRIPE_DIRS` folder has not been renamed and replaced by a link before every per-layer write and the marker write of a layer-stream shard, instead of only once before the shard starts; and refuse a directory junction as a stripe root while still accepting a genuine Windows volume mount point, distinguishing the two by their link target rather than their shared reparse tag (#1614 by @SID-6921 in #1663).
+
+- Layer streaming reuses its regular-file copy of a Hugging Face snapshot only while that
+  snapshot would still be copied. When the repo's `blobs` directory has become a link (a
+  symlink, or a junction on Windows) since the copy was made, or the snapshot has gained a
+  linked directory or a file whose link leaves the blob store, the run now stops with the
+  same message as a first copy instead of returning the earlier copy. That copy is left in
+  place, and an unchanged snapshot is reused without copying, as before (#1666).
+
+- Layer streaming keeps the regular-file copy of a local Hugging Face snapshot path
+  (`.../models--org--name/snapshots/<commit>`) in the cache slot of the Hub id `org/name`
+  only when that path is the folder the Hub id resolves to in the active Hugging Face cache
+  (a cache that was moved and linked counts as the same folder). A snapshot folder anywhere
+  else now gets a slot of its own, named after its resolved location, so a copy taken from
+  one folder is never reused for another folder or for the Hub id; such a folder is copied
+  once more on its next run (#1667).
+
+- **`mini_common_sense` no longer sits at a 1.000 ceiling (#1192 by @AaronProbha18 in #1673).**
+  The suite grows from 24 to 40 rows with 16 four-option reasoning questions;
+  Qwen2.5-1.5B-Instruct measures 0.850 against 0.275 on SmolLM2-135M-Instruct,
+  which is chance level for the suite. The answer key no longer favours one
+  letter, so a model that always answers "B" drops from 0.583 to that same
+  0.275, and the bundled scorer provenance revision moves to 5 so pre-change
+  baselines are not silently compared on the new scale.
+
+- `soup local-rl train --backend` prints a note that the option has no effect on training; it is validated but not rendered into the scheduler scaffold (part of #1448 by @Nick-800 in #1678).
+
+- `soup export --registry-id` now records the exported files for `onnx`,
+  `tensorrt`, `awq`, `gptq`, `torchao`, `gguf-ud`, `bitnet` and `tq1_0` (every
+  shard or engine file, named in the success line). `--deploy ollama` now works
+  with `gguf-ud`, `bitnet` and `tq1_0` and is refused before the export starts
+  for the formats Ollama cannot load (part of #1448 by @Nick-800 in #1679).
+
+- **`task: ppo` saves its checkpoints again on transformers 5.19.0.** trl's experimental `PPOTrainer` is a `transformers.Trainer` subclass that never runs `Trainer.__init__`, and transformers 5.19.0 made `Trainer.save_model` read an attribute only `Trainer.__init__` assigns (`is_distributed_loading_by_transformers`), so every PPO run stopped at its first checkpoint with `AttributeError: 'PPOTrainer' object has no attribute 'is_distributed_loading_by_transformers'`. After building the PPO trainer Soup now gives it each attribute the installed `Trainer.__init__` assigns that the trainer lacks and `Trainer`'s save path reads (that one, `is_fsdp_xla_v1_enabled` and `hp_name`), with the value `Trainer.__init__` would have assigned; an attribute the trainer already has is left alone, and nothing changes on a transformers that never had the attribute. No other task is affected: every other trl trainer Soup builds runs `Trainer.__init__`. Reported by @Srinivasan8888 in #1675 (#1682).
+
+- `soup diagnose --attach-to-registry` and `soup eval unlearning --attach-to-registry`
+  attach the report. Both called the registry helper with arguments it does not take, so
+  the attach raised a `TypeError` on every run, the report was never linked to the entry,
+  and the command printed the error as a warning and exited 0. The `--output` file is now
+  stored on the entry (as `diagnose_report` / `eval_results`), and a requested attach is
+  part of the command's success, as it already is for `soup bom emit`, `soup attest emit`
+  and `soup eval custom`: a failed attach (unknown or ambiguous entry, unreadable
+  registry) prints an error and exits 1 with the report left on disk, and
+  `--attach-to-registry` without `--output` is refused before anything runs (exit 3 for
+  `soup diagnose`, exit 2 for `soup eval unlearning`) instead of being skipped with a
+  warning (#1683).
+
+- `soup steer train --registry-id` and `soup edit set --registry-id` record the result on
+  the registry entry. Both passed their output directory to the registry, which stores one
+  hashed file per artifact and refuses a directory, so every run printed `Could not attach
+  to Registry: artifact not found: <dir>` as a warning and exited 0 with nothing recorded.
+  `soup steer train` now attaches the vector file (`steering_vector.safetensors`) as
+  `steering_vector`, and a vector saved outside `./steering/<name>` is found by name through
+  the entry; `soup edit set` attaches the weight file(s) `save_pretrained` wrote as
+  `edited_model`, or `grace_codebook.json` as `grace_codebook`. A requested attach is part
+  of the command's success, as it already is for `soup bom emit`, `soup attest emit` and
+  `soup eval custom`: a failed attach (unknown or ambiguous entry, unreadable registry, no
+  weight file) prints an error and exits 1 with the result left on disk, and `soup edit set
+  --registry-id` without `--output` is refused before the model is loaded (exit 2) instead
+  of skipping the attach without a message (#1686).
+
+- The Web UI's New Training page shows the run's log. The "Training Logs" card and the
+  function that streams `/api/train/logs` into it were both there, but nothing called the
+  function, so starting a run showed `Training started! PID: ...` and never a line of
+  output. The page now opens the card and follows the log when a run is started from it,
+  and when it is opened or reloaded while a run is in progress (the server replays the log
+  from its first line), including for a run that exits at once, whose output is the error
+  to read. The progress card stays hidden: no route reports a total step count for the run
+  the UI started, so its bar could not move (#1687).
+
+- `soup train --gpus N` on Windows waits for the `accelerate launch` it hands the run to and
+  exits with the launcher's exit code. The hand-over used `os.execvp` on every platform. On
+  Linux and macOS that replaces the process, so the launcher's status is the command's; on
+  Windows it starts the launcher as a new process and ends the calling one with status 0 at
+  once, so the shell got its prompt back while the run was still going and `soup train
+  --gpus 2 && next-step` ran `next-step` whatever the launcher returned later. Windows now
+  runs the launcher as a child (list argv, no shell), looked up in the `PATH` directories
+  only, and Ctrl+C waits for the launcher's own shutdown. Linux and macOS are unchanged; an
+  end-to-end test with a stand-in `accelerate` now checks the exit code on whichever
+  platform the suite runs on (#1688).
+
+- **DPO loads a vision-language wrapper checkpoint when `modality: vision` is set (#1393 by @Srinivasan8888 in #1707).** `task: dpo` always built `AutoModelForCausalLM`, so a base published as a vision-language wrapper (MiniMax-M3, `model_type: minimax_m3_vl`) could not load at all, while SFT trained its language tower through its vision path. With `modality: vision`, DPO now loads `AutoModelForImageTextToText` with the model's processor, which trl's `DPOTrainer` takes as its processing class for text-only preference rows, and the LoRA targets resolve to the language tower as before; `soup recipes verify` builds the same class, and `task: preference` with `preference_loss: dpo` follows it. `backend: unsloth` does not read `modality` for DPO and is refused at config load for that combination. The text path is unchanged.
+
+- **Unsloth migration reads the final trainer's config**: task, output directory and hyperparameters come from the config passed to the last trainer, whether inline, named or positional. SFT warm-ups and unused later configs no longer overwrite stage settings. Warm-up `num_train_epochs` and other settings no longer leak into the final stage; this removes inherited `training.epochs: 2` from four public Qwen3 4B GRPO notebook variants (including AMD, Kaggle and Hugging Face Course). Earlier-stage warnings and config-only notebook behavior are preserved. (#1603 by @akkupratap323 in #1711)
+
+- **`soup train` refuses `use_liger` / `use_flash_attn` under `stream_layers: true` (#1692 by @Faisal-Fayaz in #1716).** Both switches loaded, trained and said nothing, because they are read only by the resident setup: Liger patches the MLP forward in `_setup_transformers` and flash-attn is handed to `from_pretrained` as `attn_implementation`. A streamed run goes to `_setup_streaming_transformers`, whose model is built by `AutoModelForCausalLM.from_config(...)` with no attention argument and no Liger patch, and `_liger_applied` is never set, so `use_liger_kernel` misses `TrainingArguments` as well. Since these are the switches a user reaches for when a streamed run will not fit, silently dropping them was the worst of the outcomes, so `stream_layers` now names both fields in its conflict list at config load. Nothing is wired: this is the refusal half, and each switch is offered again once it is shown to engage on a streamed model. `use_cut_ce` has the same shape under streaming and stays on #1206, deliberately still loading here. The streamed preference tasks (`dpo`/`kto`/`orpo`/`simpo`) are unaffected: they already refuse both fields on their own terms, so no branch was needed for them.
+
+- **`soup eval benchmark`: do not store an unmeasured result as zero.**
+  Missing or scoreless requested results are skipped, named and counted; a genuine
+  numeric zero is retained and booleans are not scores. The saved banner counts
+  persisted results, and an all-skipped invocation exits 1. Groups require their
+  own numeric entry; sub-task rows are not saved implicitly. (#1718 by @taljeon in #1722)
+
+- **`training.moe_lora: true` with `lora.use_vera: true` is refused on a fused-expert MoE (#1197 by @Srinivasan8888 in #1723).** VeRA wraps `nn.Linear` modules only and has no `target_parameters` path, so on a transformers-5 MoE whose routed experts are 3-D tensors (Qwen3-MoE, Qwen2-MoE, Mixtral, MiniMax) the flag adapted the attention projections exactly as VeRA without it did, while printing the ScatterMoE targeting line. The combination now stops at setup, before the dropout rule, naming both flags, the fused parameters and the two ways out (`use_vera: false` to adapt the experts with LoRA, or drop `moe_lora`). A dense base and a checkpoint that keeps one `nn.Linear` per expert are not refused.
+
+- Layer streaming now reads source safetensors headers during the disk pre-flight to charge each stripe drive the exact bytes of the decoder layers it receives, allocating non-decoder weights to the primary root at streaming dtype rather than splitting the shard estimate evenly (#1612 by @Nari-Ab in #1726).
+
+- **`soup eval human`: reject non-object JSONL rows before loading either model.**
+  Report the physical line number and expected JSON object instead of passing a
+  string or array through to a later TypeError. Object rows are unchanged.
+  (#1725 by @taljeon in #1727)
+
+- **A QuEST resume from a format-v1 checkpoint no longer reads and re-hashes the whole local base a third time (#1199 by @Faisal-Fayaz in #1728).** `validate_resume_metadata` re-resolved `legacy_base_model` to compare it against the identity this run had already computed, so a first v1 resume read every selected file of a local base three times instead of twice — about 3.9 s per GB on the maintainer's measurement, more on a busy machine. The identity is already in `current["base_model"]` (the caller filled that field with it), so the extra pass rediscovered what it was handed. It now takes an optional pre-resolved identity and `SFTTrainerWrapper.train` passes the one it holds, which removes the pass. The value passed is the identity of `config.base` resolved before the load (`_quest_base_identity_before`), which is what the check compares against — **not** `current["base_model"]`, which on the continuation path is the artifact sidecar's recorded base and would make the check compare a value with itself. An identity that disagrees with the base still produces the same `QuEST original base model reference does not match current identity` refusal, and the default path for a caller that passes nothing is unchanged. Hub bases are unaffected either way, since their identity is the repo id; the pass that disappears is the one that cost something. Fix 1 of that issue (hash once and compare `(st_dev, st_ino, st_size, st_mtime_ns)` after the load) is deliberately **not** here: it would trade the content guarantee for a stat one, and the issue says to skip it if the stronger guarantee is wanted. Fix 3 already merged as #1588.
+
+- **`training.rope_scaling_type` is refused at load where no setup applies it (#1697 by @ybai08 in #1730).** The field loaded on all 23 tasks and every path, but only the transformers setups of `sft`, `tts` and `pretrain` read it; everywhere else the run trained on the checkpoint's own RoPE and printed nothing. **This is a breaking change: a config that sets the field on one of these loaded before and now stops at load**: any of the other 20 tasks; `task: sft` with `backend: mlx`, `modality: vision`, `modality: audio` or `training.stream_layers: true`; and `sft`, `tts` or `pretrain` with `backend: unsloth`. The message names the field, the task or every setting that leaves the reading setup, and what to change (for example `Use backend: transformers, or remove the key.`); a `yarn_*` key set beside it is named too, since it is legal only with `rope_scaling_type: yarn`. `soup doctor --config` exits 2. Removing the key changes nothing about what trains. The `longcontext` template no longer suggests `# backend: unsloth`, which it would now be refused with. Text configs on `backend: transformers`, `pretrain` on `backend: transformers` with any modality, and dumped configs (which write the field as `null`) are unchanged.
+
+- **Custom tool-call subset scoring: do not credit malformed provided arguments.**
+  Values that fail to parse as a JSON object no longer earn empty-argument
+  credit. Valid empty objects, omitted arguments, weights and the match threshold
+  keep their existing treatment. (#1734 by @taljeon in #1737)
+
+- Quant-check rounds score-drop float noise before comparing verdict thresholds,
+  so exact two- and five-percentage-point drops remain MINOR and MAJOR respectively
+  without changing scores or thresholds. (#1740 by @taljeon in #1743)
+
+- **`training.quantization: fp8` stops with the reason on transformers below 5.17.0 (#1731 by @ybai08 in #1745).** Soup's declared floor is 5.16.1, and there the FP8 quantizer raises `AttributeError: 'NoneType' object has no attribute 'get'` in `update_tp_plan` when it loads a dense base, so an `fp8` run died inside transformers. The run now stops where the quantization config is built: `quantization: fp8 needs transformers >= 5.17.0, and 5.16.1 is installed`, with the cause and `pip install -U 'transformers>=5.17.0'`. Every other quantization mode is unchanged on 5.16.1. The Quant Menu row and the missing-class message said `>= 4.45`; both now say 5.17.0.
+
+- **`soup train` suggests `backend: unsloth` only for a config that would load with it (#1736 by @ybai08 in #1746).** With unsloth installed, every run on `backend: transformers` was told `Tip: unsloth is installed. Add backend: unsloth ...`, including configs the loader refuses as soon as that line is added: a task with no unsloth setup, `freeze_layers`, `rope_scaling_type`, `moe_lora` recipes. 38 of the 184 shipped templates and recipes on transformers got a tip they would be refused with. The tip now validates the config again with the backend changed and is printed only if that succeeds, so a new backend refusal is covered without a list in `train.py`. Nothing else about the run changes, and a machine without unsloth validates nothing twice.
+
+- **Interrupted content-changing layer re-shards can no longer leave an old cache index pointing at partially rewritten files.** Soup quarantines the old index before rewriting, reports unfinished re-shards and unindexed cache files, and keeps post-commit cleanup failures non-fatal. (#1616 by @Samearth17 in #1747)
+
+- `deploy measure` delegates verdict classification to `eval.quant_check.classify_delta`, eliminating the duplicated ladder and rounding score-drop float noise so exact two- and five-percentage-point drops are now classified as MINOR and MAJOR respectively without changing scores or thresholds; caches written before this fix retain their stored verdict until cleared (#1744 by @kok-o in #1748).
+
+- Close file descriptors before unlinking staged offline datasets on Windows so the original error is not masked by WinError 32 and no staging files are left behind (#1464 by @Guts1005 in #1753)
+
+- **`soup <command> --help` shows argument descriptions again on fresh installs: click is bounded below 8.5 (#1789).** click 8.5.0 overwrites the help text typer gives each positional argument, so every positional argument in every `--help` page lost its description (`ADAPTER  TEXT  [required]` with nothing after it) on any install that resolved the newest click; option help was unaffected. Soup now declares `click>=8.0.0,<8.5`, which it imports directly but had left to typer to pull in, and lifting the bound would need typer 0.26 or newer.
+
+### Security
+
+- **`soup ui` no longer keeps its auth token in `sessionStorage` or on `window._authToken` (#1136 by @mohdUwaish59 in #1190).** The Web UI now holds the token in a closure in `app.js`, and every request goes through one `authFetch` wrapper that adds the `Authorization` header without exposing the token to other page script. The token is deliberately not persisted: a reload or a new tab asks for it again (paste the token `soup ui` printed), where before it was restored from `sessionStorage`. This narrows the gap between a future rendering mistake and a token disclosure; it does not stop script already running in the page, for which the Content-Security-Policy remains the defence. A fresh desktop browser can now sign in at all: `soup ui` opens its URL without a token, and on 0.75.0 through 0.75.2 nothing in the page asked for one, so every panel stayed at 401; the page now prompts on the first 401 and accepts the pasted token or the whole `Authorization: Bearer …` line. `authFetch` also refuses cross-origin URLs, so the header only ever goes to the UI's own origin. The chat request no longer sends an empty `Bearer ` header when no token is held.
+
+## [0.75.2] - 2026-10-01
+
+### Changed
+
+- Outbound endpoint checks now refuse a private, link-local or reserved IP literal over `https` as well as `http`. This covers `soup data generate --api-base`, the vLLM provider and the commands that use it, judge URLs in `soup eval judge`, eval-gate suites, `soup ship --judge-model` / `eval.ship.judge_model` and `training.online_dpo_judge`, and the Web UI chat proxy. Loopback still works; address a LAN server by its hostname. `training.online_dpo_judge` is now checked when soup.yaml loads, not only when the trainer starts.
+
+- `soup data generate --api-base` and the Web UI chat proxy no longer treat `http://0.0.0.0` as local; use `localhost` or `127.0.0.1`.
+
+- `100.64.0.0/10` and `fec0::/10` literals are now treated as non-public by every check that already refused private addresses (webhooks, the OTLP endpoint, telemetry, hub endpoints over HTTP, and `soup ingest --pull`, where `--allow-private-host` admits them).
+
+- Every check that refuses private addresses now also recognizes an IP literal written with non-ASCII digits or label separators, which an HTTP client folds to ASCII before it connects.
+
+### Fixed
+
+- `soup ship` checks `--judge-model` before it builds the base and tuned models; it used to load both and only then stop with a usage error.
+
+- The Web UI chat proxy answers 400, not 500, for an endpoint URL that does not parse.
+
+### Security
+
+- Hardening of outbound endpoint validation — [GHSA-9f49-hqpf-c849](https://github.com/MakazhanAlpamys/Soup/security/advisories/GHSA-9f49-hqpf-c849). The advisory has the details and upgrade guidance.
+
+## [0.75.1] - 2026-09-21
 
 ### Fixed
 
@@ -4664,7 +8304,13 @@ what a fine-tune forgets and leaks.
   `SECURITY.md` (~220 KB). `SECURITY.md` is now a concise security policy; the
   detailed hardening notes remain in git history and the GitHub Releases notes.
 
-[Unreleased]: https://github.com/MakazhanAlpamys/Soup/compare/v0.75.0...HEAD
+[Unreleased]: https://github.com/MakazhanAlpamys/Soup/compare/v0.77.1...HEAD
+[0.77.1]: https://github.com/MakazhanAlpamys/Soup/compare/v0.77.0...v0.77.1
+[0.77.0]: https://github.com/MakazhanAlpamys/Soup/compare/v0.76.0...v0.77.0
+[0.76.1]: https://github.com/MakazhanAlpamys/Soup/compare/v0.76.0...v0.76.1
+[0.76.0]: https://github.com/MakazhanAlpamys/Soup/compare/v0.75.2...v0.76.0
+[0.75.2]: https://github.com/MakazhanAlpamys/Soup/compare/v0.75.1...v0.75.2
+[0.75.1]: https://github.com/MakazhanAlpamys/Soup/compare/v0.75.0...v0.75.1
 [0.75.0]: https://github.com/MakazhanAlpamys/Soup/compare/v0.74.0...v0.75.0
 [0.74.0]: https://github.com/MakazhanAlpamys/Soup/compare/v0.73.3...v0.74.0
 [0.73.1]: https://github.com/MakazhanAlpamys/Soup/compare/v0.73.0...v0.73.1

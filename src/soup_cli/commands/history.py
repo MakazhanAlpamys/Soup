@@ -7,9 +7,11 @@ import os
 import typer
 from rich.console import Console
 from rich.markup import escape
+from rich.text import Text
 from rich.tree import Tree
 
 from soup_cli.registry.store import RegistryStore, validate_name
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -23,7 +25,8 @@ def history(
     try:
         validate_name(name)
     except ValueError as exc:
-        console.print(f"[red]Invalid name: {escape(str(exc))}[/]")
+        # validate_name quotes the name as typed, so strip, escape and keep ":name:" literal.
+        console.print(f"[red]Invalid name: {for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(1) from exc
 
     with RegistryStore() as store:
@@ -81,7 +84,12 @@ def history(
                 br_node = node.add("[dim]branches[/]")
                 for art in branch_refs:
                     label = os.path.basename(art.get("path", "")) or "branch"
-                    br_node.add(f"[green]branch[/] [cyan]{escape(label)}[/]")
+                    # The label is a file name, which is not validated like a name or a tag.
+                    br_node.add(
+                        Text.from_markup(
+                            f"[green]branch[/] [cyan]{for_terminal(label)}[/]", emoji=False
+                        )
+                    )
 
         console.print(tree)
 

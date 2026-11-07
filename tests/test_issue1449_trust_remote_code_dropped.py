@@ -157,7 +157,7 @@ class TestEvalAutoTrust:
             eval_cmd, "_run_lm_eval",
             lambda model_arg, *a, **k: seen_model_args.append(model_arg) or {"results": {}},
         )
-        monkeypatch.setattr(eval_cmd, "_save_benchmark_results", lambda *a, **k: None)
+        monkeypatch.setattr(eval_cmd, "_save_benchmark_results", lambda *a, **k: 1)
         monkeypatch.setattr(eval_cmd, "_save_custom_results", lambda *a, **k: None)
         monkeypatch.setattr(
             custom, "_create_default_generator",
@@ -492,23 +492,30 @@ class TestDefaultsStayDeny:
         assert result.exit_code == 0, result.output
         assert seen_generator_calls[0][1].get("trust_remote_code") is expected, seen_generator_calls
 
-    def test_training_auto_eval_callback_never_opts_in(self, monkeypatch):
+    @pytest.mark.parametrize(
+        ("passed_flag", "expected"),
+        [(False, False), (True, True)],
+    )
+    def test_training_auto_eval_follows_run_flag(
+        self, monkeypatch, passed_flag, expected
+    ):
         import soup_cli.commands.eval as ce
-        from soup_cli.monitoring.callback import SoupTrainerCallback
+        import soup_cli.commands.train as train_cmd
 
         calls: dict = {}
         monkeypatch.setattr(ce, "benchmark", lambda **kw: calls.__setitem__("benchmark", kw))
         monkeypatch.setattr(ce, "custom", lambda **kw: calls.__setitem__("custom", kw))
-        callback = SoupTrainerCallback.__new__(SoupTrainerCallback)
-        callback.eval_config = type(
+        monkeypatch.setattr(train_cmd, "_should_run_diagnose_gate_on_rank", lambda: True)
+
+        eval_config = type(
             "EvalCfg", (),
             {"auto_eval": True, "benchmarks": ["mmlu"], "custom_tasks": "tasks.jsonl"},
         )()
-        callback.output_dir = "out"
-        callback.run_id = "run-1"
-        callback._run_auto_eval()
-        assert calls["benchmark"]["trust_remote_code"] is False, calls
-        assert calls["custom"]["trust_remote_code"] is False, calls
+        train_cmd._run_auto_eval_after_training(
+            eval_config, "out", "run-1", trust_remote_code=passed_flag
+        )
+        assert calls["benchmark"]["trust_remote_code"] is expected, calls
+        assert calls["custom"]["trust_remote_code"] is expected, calls
 
     @pytest.mark.parametrize(("flag", "panel"), [([], False), (["--trust-remote-code"], True)])
     def test_data_download_warning_panel_only_with_flag(self, tmp_path, monkeypatch, flag, panel):

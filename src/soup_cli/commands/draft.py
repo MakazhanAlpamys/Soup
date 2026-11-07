@@ -33,6 +33,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli import __version__
 from soup_cli.utils.adapter_fuse import merge_adapter_to_dense
@@ -94,8 +95,47 @@ def _fail(message: str, code: int = 1) -> NoReturn:
     """Print a red error and exit. Raises internally so a forgotten ``raise``
     at a call site can never silently turn a failure into a no-op (mirrors
     ``commands/ship.py::_fail``)."""
-    console.print(f"[red]{escape(message)}[/]")
+    console.print(f"[red]{for_terminal(message)}[/]", emoji=False)
     raise typer.Exit(code)
+
+
+# Top-level import names declared by pyproject's ``[train]`` optional-dependency
+# group. Kept in sync with that group by hand (the install names there match
+# their import names). Only a module in this set means the ``[train]`` extra is
+# the right fix; a model's ``trust_remote_code`` config can import anything
+# (einops, flash_attn, ...), and blaming the extra for those would send the user
+# the wrong way.
+_TRAIN_EXTRA_MODULES = frozenset(
+    {
+        "torch",
+        "transformers",
+        "peft",
+        "trl",
+        "requests",
+        "datasets",
+        "bitsandbytes",
+        "accelerate",
+    }
+)
+
+
+def _config_read_error(exc: Exception) -> str:
+    """Message for a failed ``config`` read, hinting ``[train]`` only when apt.
+
+    A ``ModuleNotFoundError`` for a module the ``[train]`` extra provides means
+    the extra is not installed, so point the user at it. Any other failure —
+    including a missing module pulled in by a model's remote code — surfaces
+    verbatim, without the hint. ``_fail`` escapes, so the ``[train]`` bracket
+    renders literally.
+    """
+    message = f"could not read model config: {exc}"
+    missing = (getattr(exc, "name", None) or "").split(".")[0]
+    if isinstance(exc, ModuleNotFoundError) and missing in _TRAIN_EXTRA_MODULES:
+        message += (
+            '. The training extra is not installed; install it with: '
+            'pip install "soup-cli[train]"'
+        )
+    return message
 
 
 def _read_jsonl(path: str, label: str, max_rows: int) -> list[dict]:
@@ -107,7 +147,7 @@ def _read_jsonl(path: str, label: str, max_rows: int) -> list[dict]:
     except OSError as exc:
         raise ValueError(f"{label} unreadable: {exc}") from exc
     rows: list[dict] = []
-    with os.fdopen(fd, "r", encoding="utf-8") as handle:
+    with os.fdopen(fd, "r", encoding="utf-8-sig") as handle:
         if os.fstat(handle.fileno()).st_size > _MAX_INPUT_BYTES:
             raise ValueError(f"{label} exceeds {_MAX_INPUT_BYTES} bytes")
         for line in handle:
@@ -157,7 +197,7 @@ def _pair_vocab_sizes_or_fail(
             _vocab_size_of(draft_id, draft_trc),
         )
     except Exception as exc:  # noqa: BLE001 — surface as a friendly CLI error
-        _fail(f"could not read model config: {exc}")
+        _fail(_config_read_error(exc))
 
 
 def _write_draft_report(report: AcceptanceReport, output: str) -> None:
@@ -617,7 +657,7 @@ def distill(
         target_vocab = _vocab_size_of(target, target_trc)
         draft_vocab = _vocab_size_of(draft_base, draft_trc)
     except Exception as exc:  # noqa: BLE001 — surface as a friendly CLI error
-        _fail(f"could not read model config: {exc}")
+        _fail(_config_read_error(exc))
 
     cross_tokenizer = target_vocab != draft_vocab
     if not cross_tokenizer:
@@ -654,11 +694,17 @@ def distill(
             f"-> uld_strategy=wasserstein_aligned"
         )
         console.print(
-            f"[bold]Plan[/] — distil [cyan]{escape(target)}[/] into "
-            f"[cyan]{escape(draft_base)}[/] over {len(rows)} rows "
-            f"({vocab_desc})\n"
+            Text.assemble(
+                ("Plan", "bold"),
+                " — distil ",
+                (strip_control(target), "cyan"),
+                " into ",
+                (strip_control(draft_base), "cyan"),
+                f" over {len(rows)} rows ({vocab_desc})\n",
+            )
         )
-        console.print(escape(yaml_text))
+        # The YAML already quotes its scalars. Rich must not reinterpret those bytes.
+        console.print(yaml_text, markup=False, emoji=False)
         console.print("[dim]--plan-only: nothing written.[/]")
         return
 
@@ -1054,9 +1100,9 @@ def list_registered() -> None:
     for entry in entries:
         rate = entry.get("acceptance_rate")
         table.add_row(
-            for_terminal(str(entry.get("target", "?"))),
-            for_terminal(str(entry.get("draft", "?"))),
+            Text(strip_control(entry.get("target", "?"))),
+            Text(strip_control(entry.get("draft", "?"))),
             "-" if rate is None else f"{float(rate) * 100:.1f}%",
-            for_terminal(str(entry.get("created", "?"))),
+            Text(strip_control(entry.get("created", "?"))),
         )
     console.print(table)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import ipaddress
 import os
 import re
@@ -14,6 +15,8 @@ MAX_NUM_MACHINES = 256  # sanity cap, consistent with --gpus MAX_GPU_COUNT=128
 DEFAULT_MAIN_PROCESS_PORT = 29500
 MAX_HOSTNAME_LEN = 253  # RFC 1035: 255 wire octets less the leading length and root bytes
 _HOSTNAME_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
+# Windows cannot replace a process image; see run_launcher.
+_IS_WINDOWS = os.name == "nt"
 
 
 def _is_hostname_or_ip(value: object) -> bool:
@@ -287,8 +290,8 @@ def build_train_reexec_argv(
 ) -> list[str]:
     """Argv soup would pass through ``accelerate launch`` on auto-reexec.
 
-    This is the single source for "what the user typed" (#372). Both
-    ``os.execvp`` and the ``--no-reexec`` printed hint derive from this list, so
+    This is the single source for "what the user typed" (#372). Both the
+    hand-over (``run_launcher``) and the ``--no-reexec`` printed hint derive from this list, so
     they cannot drift. ``--no-reexec`` is always present because the child is
     already under a launcher and must not re-exec again.
     """
@@ -305,6 +308,60 @@ def build_train_reexec_argv(
         "--no-reexec",
         *extra,
     ]
+
+
+def run_launcher(argv: Sequence[str]) -> int:
+    """Hand the run over to the launcher ``argv`` and report ITS exit code.
+
+    The launcher is run by the absolute path ``_find_on_path`` gives for
+    ``argv[0]`` (an absolute PATH directory, never the current directory).
+
+    POSIX: ``os.execv`` replaces this process with the launcher, so the
+    launcher's exit status is the command's and this function does not return.
+
+    Windows has no exec. ``os.execvp`` there starts the launcher as a NEW
+    process and ends the calling one with status 0 at once: the shell gets its
+    prompt back while the run is still going, and ``soup train --gpus N &&
+    next-step`` runs ``next-step`` straight away, whatever the launcher returns
+    later. So on Windows the launcher runs as a child (list argv, no shell,
+    inherited stdio and environment), this process waits for it, and its exit
+    code is returned for the caller to exit with.
+
+    Raises ``OSError`` when the launcher cannot be started.
+    """
+    args = list(argv)
+    if not args:
+        raise ValueError("launcher argv must not be empty")
+    resolved = _find_on_path(args[0])
+    if resolved is None:
+        raise FileNotFoundError(errno.ENOENT, "launcher not found on PATH", args[0])
+    if _IS_WINDOWS:
+        import subprocess
+
+        process = subprocess.Popen([resolved, *args[1:]])
+        while True:
+            try:
+                return process.wait()
+            except KeyboardInterrupt:
+                # The console delivers Ctrl+C to the launcher as well. Wait for
+                # it to finish its own shutdown and report the code it ends with.
+                continue
+    os.execv(resolved, args)
+
+
+def _find_on_path(name: str) -> str | None:
+    """Absolute path of the launcher ``name``, or ``None``.
+
+    A name with a directory part is used as it is. A bare name is looked up in
+    the absolute PATH directories only (:func:`soup_cli.utils.tool_paths.find_tool`,
+    with the PATHEXT suffixes on Windows, so ``accelerate`` finds
+    ``accelerate.exe``); the current directory is never searched.
+    """
+    if os.path.dirname(name):
+        return name if os.path.isfile(name) else None
+    from soup_cli.utils.tool_paths import find_tool
+
+    return find_tool(name)
 
 
 def hint_argv_from_reexec(script_args: Sequence[str]) -> list[str]:

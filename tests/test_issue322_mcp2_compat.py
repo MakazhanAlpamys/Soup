@@ -21,6 +21,7 @@ the fact that neither is a version check in disguise.
 from __future__ import annotations
 
 import inspect
+import json
 import pathlib
 import re
 import types as pytypes
@@ -114,6 +115,7 @@ class TestTheServerBuildsOnWhicheverMajorIsInstalled:
 
         class _Spec:
             name = "boom"
+            mutating = False
 
             @staticmethod
             def handler(_args):
@@ -124,6 +126,24 @@ class TestTheServerBuildsOnWhicheverMajorIsInstalled:
         message = str(excinfo.value)
         assert message == "internal error (RuntimeError)"
         assert "secret" not in message
+
+    def test_a_mutating_spec_runs_when_the_table_was_built_permissive(self):
+        """`soup mcp serve --allow-mutating` path: a mutating spec that is in the
+        table (built with allow_mutating=True) must actually run through
+        `_dispatch_tool`, which passes allow_mutating=True onward. Without that,
+        the tools the server was started to allow would be refused."""
+        from soup_cli.mcp_server.server import _dispatch_tool
+
+        class _Spec:
+            name = "mutate"
+            mutating = True
+
+            @staticmethod
+            def handler(_args):
+                return {"ok": True}
+
+        text = _dispatch_tool({"mutate": _Spec}, "mutate", {})
+        assert json.loads(text) == {"ok": True}
 
 
 class TestTheDualMajorReaders:

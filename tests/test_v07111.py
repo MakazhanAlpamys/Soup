@@ -154,7 +154,9 @@ class TestRewardHackCallback:
         from soup_cli.utils.reward_hacking import build_reward_hack_callback
 
         cb = build_reward_hack_callback(detector="info_rm")
-        snap = {"rewards": [0.0, 0.0, 5.0, 5.0], "per_func": {}}
+        # Continuous rewards with a varying median split (#1438: a two-valued
+        # reward leaves a constant half and no longer yields a signal).
+        snap = {"rewards": [0.0, 0.1, 4.9, 5.0], "per_func": {}}
         sig = cb.compute_signal(snap)
         assert sig is not None and sig > 0.0
 
@@ -183,10 +185,13 @@ class TestRewardHackCallback:
             detector="info_rm", halt_on_hack=True, buffer=buf
         )
         state, control = _FakeState(1), _FakeControl()
-        # Step 1 — high separation = baseline.
-        buf.record(func_name="r", completions=["a"] * 4, rewards=[0, 0, 9, 9])
+        # Step 1 — high separation = baseline. (Continuous rewards with both
+        # median halves varying; #1438 makes a two-valued reward produce no
+        # signal at all.)
+        buf.record(func_name="r", completions=["a"] * 4, rewards=[0, 0.2, 8.8, 9])
         cb.on_step_end(None, state, control)
-        # Step 2 — bunched rewards = HACK.
+        # Step 2 — a fully constant step with a baseline reads as a total
+        # collapse = HACK (see test_issue1438_info_rm_discrete_reward.py).
         buf.record(func_name="r", completions=["a"] * 4, rewards=[5, 5, 5, 5])
         state.global_step = 2
         cb.on_step_end(None, state, control)

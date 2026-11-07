@@ -356,6 +356,10 @@ _PR_TARGET_RE = re.compile(
     r"^([A-Za-z0-9][A-Za-z0-9._-]*)/([A-Za-z0-9][A-Za-z0-9._-]*)#([0-9]+)$"
 )
 _MAX_PR_BODY_BYTES = 60_000  # GitHub caps issue-comment bodies at 65_536 bytes
+_GH_NOT_FOUND = (
+    "`gh` CLI not found; install GitHub CLI or drop --push "
+    "and use --output to write the Markdown"
+)
 
 # Env keys passed through to the `gh` child — everything else (HF_TOKEN /
 # OPENAI_API_KEY / ANTHROPIC_API_KEY / ...) is filtered out so a publish call
@@ -363,7 +367,8 @@ _MAX_PR_BODY_BYTES = 60_000  # GitHub caps issue-comment bodies at 65_536 bytes
 # mirrors v0.44.0 _LLAMA_ENV_ALLOWLIST).
 _GH_ENV_ALLOWLIST = frozenset(
     {
-        "PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+        "PATH", "PATHEXT", "NoDefaultCurrentDirectoryInExePath",
+        "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
         "SYSTEMROOT", "SystemRoot", "TEMP", "TMP", "TMPDIR",
         "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_API_URL",
         "GH_HOST", "GH_CONFIG_DIR",
@@ -442,8 +447,13 @@ def post_pr_comment(
 
     import subprocess  # noqa: S404 — argv list mode, no shell
 
+    from soup_cli.utils.tool_paths import filtered_environment, find_tool
+
+    gh = find_tool("gh")
+    if gh is None:
+        raise RuntimeError(_GH_NOT_FOUND)
     argv = [
-        "gh",
+        gh,
         "api",
         "--method",
         "POST",
@@ -460,9 +470,7 @@ def post_pr_comment(
     if env is not None:
         base_env = dict(env)
     else:
-        base_env = {
-            k: v for k, v in os.environ.items() if k in _GH_ENV_ALLOWLIST
-        }
+        base_env = filtered_environment(_GH_ENV_ALLOWLIST, os.environ)
     base_env.setdefault("GH_TOKEN", token)
     run = runner if runner is not None else subprocess.run
     try:
@@ -476,10 +484,7 @@ def post_pr_comment(
             env=base_env,
         )
     except FileNotFoundError as exc:
-        raise RuntimeError(
-            "`gh` CLI not found; install GitHub CLI or drop --push "
-            "and use --output to write the Markdown"
-        ) from exc
+        raise RuntimeError(_GH_NOT_FOUND) from exc
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError("gh api timed out posting the PR comment") from exc
 

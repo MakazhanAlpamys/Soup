@@ -6,6 +6,8 @@ from unittest import mock
 
 import pytest
 
+BOUNDED_POST = "soup_cli.utils.http_response.post_capped"
+
 
 @pytest.fixture(autouse=True)
 def _key(monkeypatch):
@@ -18,7 +20,7 @@ def _auth_header_for(url: str):
 
     provider, model, base = _parse_judge_url(url)
     evaluator = JudgeEvaluator(provider=provider, model=model, api_base=base)
-    with mock.patch("httpx.post") as post:
+    with mock.patch(BOUNDED_POST) as post:
         post.return_value.status_code = 200
         post.return_value.json.return_value = {
             "choices": [{"message": {"content": '{"winner": "A"}'}}]

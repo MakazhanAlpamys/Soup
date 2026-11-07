@@ -13,6 +13,8 @@ Requires: liger-kernel >= 0.3.0
 
 from __future__ import annotations
 
+from soup_cli.utils.run_provenance import base_revision_kwargs
+
 
 def check_liger_available() -> bool:
     """Check if liger-kernel is installed."""
@@ -69,6 +71,14 @@ def apply_liger_kernel(model_name: str) -> bool:
     # `_apply_liger_kernel(model_type)` expects, and a directory cannot rename it.
     model_type = _detect_model_type(model_name)
     if model_type:
+        # #1811: liger's `_apply_liger_kernel` logs and returns, without raising,
+        # for a type it has no kernels for, so calling it proved nothing. Ask its
+        # own table first. A known type that is not in it is unsupported: the
+        # name-based fallback below is for a config that cannot be read, and on
+        # `phi` (phi-2) it would "succeed" by patching Phi-3's classes.
+        supported = _liger_model_types()
+        if supported is not None and model_type not in supported:
+            return False
         try:
             from liger_kernel.transformers import _apply_liger_kernel
 
@@ -83,6 +93,22 @@ def apply_liger_kernel(model_name: str) -> bool:
     return _apply_liger_manual(last_component)
 
 
+def _liger_model_types() -> frozenset[str] | None:
+    """The model types liger has kernels for, from its own table, or None.
+
+    ``None`` means the table could not be read (an older or reorganised liger);
+    the caller then keeps the previous behaviour instead of guessing.
+    """
+    try:
+        from liger_kernel.transformers.monkey_patch import MODEL_TYPE_TO_APPLY_LIGER_FN
+    except (ImportError, AttributeError):
+        return None
+    try:
+        return frozenset(str(key) for key in MODEL_TYPE_TO_APPLY_LIGER_FN)
+    except TypeError:
+        return None
+
+
 def _detect_model_type(model_name: str) -> str:
     """``config.model_type`` for a local path or hub id, or "" when unavailable.
 
@@ -92,7 +118,10 @@ def _detect_model_type(model_name: str) -> str:
     try:
         from transformers import AutoConfig
 
-        config = AutoConfig.from_pretrained(model_name, trust_remote_code=False)
+        config = AutoConfig.from_pretrained(
+            model_name, trust_remote_code=False,
+            **base_revision_kwargs(model_name),
+        )
     except Exception:  # noqa: BLE001 — detection is best-effort by design
         return ""
     return str(getattr(config, "model_type", "") or "")

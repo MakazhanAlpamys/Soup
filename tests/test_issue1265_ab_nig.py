@@ -225,44 +225,23 @@ class TestPriorScale:
 
 
 # ---------------------------------------------------------------------------
-# Boundaries: reject at 1/alpha (Ville), accept at beta / (1 - alpha)
+# Boundaries: reject at 1/alpha (Ville). The accept rule is #1418's confidence
+# sequence, pinned in tests/test_issue1418_ab_cs_accept.py.
 # ---------------------------------------------------------------------------
 
 
 class TestBoundaries:
-    def test_reject_boundary_is_one_over_alpha_whatever_beta(self, monkeypatch):
+    def test_reject_boundary_is_one_over_alpha(self, monkeypatch):
         from soup_cli.utils import ab_test
 
+        # No accept, so the only way out of continue is the reject boundary.
+        monkeypatch.setattr(ab_test, "_nig_confidence_half_width", lambda **_: math.inf)
         for alpha in (0.05, 0.01, 0.001):
-            for beta in (0.05, 0.2, 0.5):
-                edge = math.log(1.0 / alpha)
-                for llr, decision in ((edge, "reject_h0"), (edge - 1e-9, "continue")):
-                    monkeypatch.setattr(ab_test, "_nig_log_bayes_factor", lambda **_: llr)
-                    got = _step(_CONTROL, _TREATMENT, alpha=alpha, beta=beta)
-                    assert got.decision == decision, (alpha, beta, llr)
-
-    def test_accept_boundary_is_beta_over_one_minus_alpha(self, monkeypatch):
-        from soup_cli.utils import ab_test
-
-        edge = math.log(0.20 / 0.95)
-        for llr, decision in ((edge, "accept_h0"), (edge + 1e-9, "continue")):
-            monkeypatch.setattr(ab_test, "_nig_log_bayes_factor", lambda **_: llr)
-            assert _step(_CONTROL, _TREATMENT).decision == decision, llr
-
-    @pytest.mark.parametrize(
-        ("alpha", "beta"), [(0.05, 0.2), (0.01, 0.1), (0.5, 0.49), (0.05, 0.9499)]
-    )
-    def test_an_allowed_pair_accepts_only_on_evidence_for_h0(self, alpha, beta):
-        """#1339's alpha + beta < 1 is what keeps the accept boundary below BF 1.
-
-        Under #1227's statistic the same bound kept the two boundaries from
-        crossing; here the reject boundary 1 / alpha is always above 1, and the
-        bound matters because the accept boundary must stay under it.
-        """
-        from soup_cli.utils.ab_test import MsprtConfig
-
-        config = MsprtConfig(metric="judge_score", alpha=alpha, beta=beta)
-        assert math.log(config.beta / (1.0 - config.alpha)) < 0.0
+            edge = math.log(1.0 / alpha)
+            for llr, decision in ((edge, "reject_h0"), (edge - 1e-9, "continue")):
+                monkeypatch.setattr(ab_test, "_nig_log_bayes_factor", lambda **_: llr)
+                got = _step(_CONTROL, _TREATMENT, alpha=alpha)
+                assert got.decision == decision, (alpha, llr)
 
     def test_a_near_constant_held_out_column_is_refused_not_accepted(self):
         """#1339 in the NIG path: the scale comes from the held-out rows only.
@@ -406,13 +385,15 @@ class TestAcceptHold:
         control = _SATURATED_C + _ORDINARY_C[5:]
         treatment = _SATURATED_T + [x + shift for x in _ORDINARY_T[5:]]
         assert all(v.decision != "accept_h0" for v in _peeks(control, treatment))
-        # The premise: without the hold, both accept at the first peek.
+        # The premise: without the hold, both accept within these rows. Under
+        # #1418's accept rule that takes 12 and 19 rows per arm, not the first
+        # peek, and both shifts are below the default --effect-size 0.1.
         monkeypatch.setattr(ab_test, "ACCEPT_HOLD_SPREAD_RATIO", math.inf)
-        assert _peeks(control, treatment)[0].decision == "accept_h0"
+        assert any(v.decision == "accept_h0" for v in _peeks(control, treatment))
 
     def test_the_same_tested_rows_with_ordinary_held_out_rows_still_accept(self):
-        verdict = _step(_ORDINARY_C[:7], _ORDINARY_T[:7])
-        assert verdict.decision == "accept_h0", verdict
+        decided = [v for v in _peeks(_ORDINARY_C, _ORDINARY_T) if v.decision != "continue"]
+        assert decided and decided[0].decision == "accept_h0", decided[:1]
 
     def test_a_reject_is_never_held_back(self):
         """A saturated start with a clear shift still rejects, with its direction."""
@@ -467,7 +448,7 @@ class TestAcceptHold:
 _N_MAX = 200
 
 
-def _simulate(np, *, ratio, shift_in_effects, reps, seed, alpha, beta=0.20, effect_size=0.1):
+def _simulate(np, *, ratio, shift_in_effects, reps, seed, alpha, effect_size=0.1):
     """First verdict per run: (decision, direction, rows per arm), or None if undecided."""
     from soup_cli.utils.ab_test import PRIOR_SCALE_ROWS
 
@@ -492,10 +473,19 @@ def _simulate(np, *, ratio, shift_in_effects, reps, seed, alpha, beta=0.20, effe
     log_bf = -0.5 * np.log(spread) - 0.5 * (nu + 1) * (
         np.log1p(t_sq / (nu * spread)) - np.log1p(t_sq / nu)
     )
-    upper, lower = math.log(1 / alpha), math.log(beta / (1 - alpha))
+    upper = math.log(1 / alpha)
+    # #1418: accept once the confidence sequence at coverage 1 - alpha lies inside
+    # +-effect_size, unless the accept hold is on.
+    c = np.exp(-(2 * math.log(1 / alpha) + np.log(spread)) / (nu + 1))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t_edge = np.where(c > 1 / spread, nu * (1 - c) / (c - 1 / spread), np.inf)
+    pooled = sum_sq / nu
+    half_width = np.sqrt(t_edge * pooled / n_eff)
+    hold = np.sqrt(pooled) > 3.0 * np.sqrt(s0_sq)[:, None]
+    accept = (np.abs(mean_t - mean_c) + half_width < effect_size) & ~hold
     outcomes = []
     for run in range(reps):
-        hits = np.flatnonzero((log_bf[run] >= upper) | (log_bf[run] <= lower))
+        hits = np.flatnonzero((log_bf[run] >= upper) | accept[run])
         if hits.size == 0:
             outcomes.append(None)
             continue

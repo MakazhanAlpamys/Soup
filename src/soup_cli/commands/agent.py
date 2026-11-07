@@ -16,8 +16,17 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
+
+from soup_cli.utils.terminal import strip_control
 
 console = Console()
+
+
+def _print_error(label: str, exc: BaseException) -> None:
+    # A Text is not parsed as markup and has no emoji codes, so the message is shown as typed.
+    console.print(Text.assemble((label, "red"), " ", strip_control(exc)))
+
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -52,16 +61,16 @@ def synth(
     try:
         spec_dict = load_spec_file(spec)
     except (ValueError, FileNotFoundError, TypeError) as exc:
-        console.print(f"[red]Spec load failed:[/] {escape(str(exc))}")
+        _print_error("Spec load failed:", exc)
         raise typer.Exit(1) from exc
     except Exception as exc:  # noqa: BLE001 — yaml/json parse errors
-        console.print(f"[red]Spec parse failed:[/] {escape(str(exc))}")
+        _print_error("Spec parse failed:", exc)
         raise typer.Exit(1) from exc
 
     try:
         endpoints, report = parse_spec(spec_dict, kind=kind)
     except (ValueError, TypeError) as exc:
-        console.print(f"[red]Parse failed:[/] {escape(str(exc))}")
+        _print_error("Parse failed:", exc)
         raise typer.Exit(1) from exc
 
     if not endpoints:
@@ -70,40 +79,45 @@ def synth(
             f"Detected kind: [bold]{escape(report.spec_kind)}[/]."
         )
         for w in report.warnings[:5]:
-            console.print(f"  [dim]- {escape(w)}[/]")
+            console.print(Text(f"  - {strip_control(w)}", style="dim"))
         raise typer.Exit(1)
 
     rows = synthesise_dataset(endpoints, examples_per_endpoint=examples_per_endpoint)
     try:
         out_path = write_dataset(rows, output)
     except (ValueError, TypeError) as exc:
-        console.print(f"[red]Write failed:[/] {escape(str(exc))}")
+        _print_error("Write failed:", exc)
         raise typer.Exit(1) from exc
 
     table = Table(title=f"Agent Forge — {escape(report.spec_kind)}")
     table.add_column("Tool", style="bold cyan")
     table.add_column("Method", style="magenta")
     table.add_column("Path")
-    # ep.path is partly user-controlled (from the spec) — escape every cell
-    # before handing to Rich Table (matches v0.43.0 Part B Tournament policy).
+    # ep.path is user-controlled (from the spec): a Text cell shows it as typed. The tool
+    # name matches ^[A-Za-z_][A-Za-z0-9_.-]*$ and the method is one of the fixed HTTP verbs.
     for ep in endpoints[:20]:
-        table.add_row(escape(ep.tool), escape(ep.method), escape(ep.path))
+        table.add_row(escape(ep.tool), escape(ep.method), Text(strip_control(ep.path)))
     console.print(table)
     if len(endpoints) > 20:
         console.print(f"[dim]... and {len(endpoints) - 20} more[/]")
 
     console.print(
         Panel(
-            f"Spec kind:  [bold]{escape(report.spec_kind)}[/]\n"
-            f"Endpoints:  [bold]{report.endpoint_count}[/] "
-            f"(skipped duplicates: {report.skipped})\n"
-            f"Rows:       [bold]{len(rows)}[/]\n"
-            f"Output:     [bold]{escape(out_path)}[/]",
+            Text.assemble(
+                "Spec kind:  ",
+                (report.spec_kind, "bold"),
+                "\nEndpoints:  ",
+                (str(report.endpoint_count), "bold"),
+                f" (skipped duplicates: {report.skipped})\nRows:       ",
+                (str(len(rows)), "bold"),
+                "\nOutput:     ",
+                (strip_control(out_path), "bold"),
+            ),
             title="[bold green]Agent Forge — synth complete[/]",
         )
     )
     for w in report.warnings[:5]:
-        console.print(f"[yellow]warning:[/] {escape(w)}")
+        console.print(Text.assemble(("warning:", "yellow"), " ", strip_control(w)))
 
 
 @app.command()
@@ -123,6 +137,7 @@ def train(
     ),
     examples_per_endpoint: int = typer.Option(
         4, "--examples-per-endpoint", "-n", min=1, max=32,
+        help="Number of synthetic examples to create per API endpoint.",
     ),
 ):
     """One-shot wrapper: synth + planned soup train invocation (printed)."""
@@ -152,7 +167,7 @@ def train(
         spec_dict = load_spec_file(spec)
         endpoints, report = parse_spec(spec_dict)
     except (ValueError, TypeError, FileNotFoundError) as exc:
-        console.print(f"[red]Spec error:[/] {escape(str(exc))}")
+        _print_error("Spec error:", exc)
         raise typer.Exit(1) from exc
 
     if not endpoints:
@@ -163,7 +178,7 @@ def train(
     try:
         ds_path = write_dataset(rows, dataset_out)
     except (ValueError, TypeError) as exc:
-        console.print(f"[red]Dataset write failed:[/] {escape(str(exc))}")
+        _print_error("Dataset write failed:", exc)
         raise typer.Exit(1) from exc
 
     planned_cmd = " ".join(
@@ -188,13 +203,23 @@ def train(
 
     console.print(
         Panel(
-            f"Spec:      [bold]{escape(spec)}[/]\n"
-            f"Endpoints: [bold]{report.endpoint_count}[/]\n"
-            f"Dataset:   [bold]{escape(ds_path)}[/]\n"
-            f"Base:      [bold]{escape(base)}[/]\n"
-            f"Output:    [bold]{escape(output_dir)}[/]\n\n"
-            f"[bold]Planned recipe (agent_train.yaml):[/]\n{escape(recipe_yaml)}\n"
-            f"[bold]Run:[/] {escape(planned_cmd)}",
+            Text.assemble(
+                "Spec:      ",
+                (strip_control(spec), "bold"),
+                "\nEndpoints: ",
+                (str(report.endpoint_count), "bold"),
+                "\nDataset:   ",
+                (strip_control(ds_path), "bold"),
+                "\nBase:      ",
+                (strip_control(base), "bold"),
+                "\nOutput:    ",
+                (strip_control(output_dir), "bold"),
+                "\n\n",
+                ("Planned recipe (agent_train.yaml):", "bold"),
+                f"\n{strip_control(recipe_yaml)}\n",
+                ("Run:", "bold"),
+                f" {planned_cmd}",
+            ),
             title="[bold green]Agent Forge — train plan[/]",
         )
     )
@@ -262,7 +287,7 @@ def eval(
         spec_dict = load_spec_file(spec)
         endpoints, _ = parse_spec(spec_dict)
     except (ValueError, TypeError, FileNotFoundError) as exc:
-        console.print(f"[red]Spec error:[/] {escape(str(exc))}")
+        _print_error("Spec error:", exc)
         raise typer.Exit(1) from exc
     tool_to_endpoint = {ep.tool: ep for ep in endpoints}
 
@@ -275,7 +300,7 @@ def eval(
     tool_ok = 0
     args_ok = 0
     try:
-        with open(predictions, "r", encoding="utf-8") as fh:
+        with open(predictions, "r", encoding="utf-8-sig") as fh:
             for line in fh:
                 line = line.strip()
                 if not line:
@@ -301,7 +326,7 @@ def eval(
                         if not invalid:
                             args_ok += 1
     except OSError as exc:
-        console.print(f"[red]Predictions read failed:[/] {escape(str(exc))}")
+        _print_error("Predictions read failed:", exc)
         raise typer.Exit(1) from exc
 
     if total == 0:
@@ -345,7 +370,7 @@ def _eval_sandbox(predictions: str, tool_to_endpoint: dict, max_pred_lines: int)
     total = 0
     counts = {"ok": 0, "tool_error": 0, "timeout": 0, "arg_error": 0}
     try:
-        with open(predictions, "r", encoding="utf-8") as fh:
+        with open(predictions, "r", encoding="utf-8-sig") as fh:
             for line in fh:
                 line = line.strip()
                 if not line:
@@ -382,7 +407,7 @@ def _eval_sandbox(predictions: str, tool_to_endpoint: dict, max_pred_lines: int)
                 )
                 counts[cls] = counts.get(cls, 0) + 1
     except OSError as exc:
-        console.print(f"[red]Predictions read failed:[/] {escape(str(exc))}")
+        _print_error("Predictions read failed:", exc)
         raise typer.Exit(1) from exc
 
     if total == 0:

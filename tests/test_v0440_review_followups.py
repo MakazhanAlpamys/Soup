@@ -14,12 +14,6 @@ import threading
 import pytest
 
 from soup_cli.commands.llama import _LLAMA_ENV_ALLOWLIST, _filtered_env
-from soup_cli.ui.plugins import (
-    clear_tabs,
-    list_tabs,
-    load_plugins,
-    register_tab,
-)
 from soup_cli.utils.checkpoint_trigger import write_trigger
 from soup_cli.utils.delinearize_llama4 import discover_weight_files
 from soup_cli.utils.fetch_examples import fetch_examples_dir
@@ -44,9 +38,9 @@ from soup_cli.utils.ui_env import resolve_ui_env
 # --- gpu_monitor coverage ---------------------------------------------------
 
 def test_query_nvidia_smi_no_smi_returns_false_empty(monkeypatch):
-    import shutil as _shutil
-
-    monkeypatch.setattr(_shutil, "which", lambda _name: None)
+    monkeypatch.setattr(
+        "soup_cli.utils.tool_paths.find_tool", lambda _name, path=None: None
+    )
     ok, samples = query_nvidia_smi()
     assert ok is False
     assert samples == []
@@ -189,25 +183,6 @@ def test_render_qr_ascii_rejects_non_string():
         render_qr_ascii(123)  # type: ignore[arg-type]
 
 
-# --- ui plugins -------------------------------------------------------------
-
-def test_load_plugins_returns_int(monkeypatch):
-    clear_tabs()
-    count = load_plugins()
-    assert isinstance(count, int)
-    # No bundled plugins ship in v0.44.0 — count is 0.
-    assert count == 0
-
-
-def test_register_tab_clear_resets_limit():
-    clear_tabs()
-    for idx in range(32):
-        register_tab(name=f"t{idx}", title="T", render=lambda: "x")
-    clear_tabs()
-    register_tab(name="fresh", title="T", render=lambda: "x")
-    assert "fresh" in list_tabs()
-
-
 # --- ui_env -----------------------------------------------------------------
 
 def test_resolve_ui_env_default_reads_environ(monkeypatch):
@@ -331,9 +306,9 @@ def test_discover_weight_files_non_string_rejected():
 # --- llama_proxy ------------------------------------------------------------
 
 def test_llama_resolve_rejects_null_byte_arg(monkeypatch):
-    import shutil as _shutil
-
-    monkeypatch.setattr(_shutil, "which", lambda *_a, **_k: "/fake/llama-cli")
+    monkeypatch.setattr(
+        "soup_cli.utils.tool_paths.find_tool", lambda name, path=None: "/fake/llama-cli"
+    )
     with pytest.raises(ValueError, match="control"):
         resolve("cli", ["bad\x00arg"])
 

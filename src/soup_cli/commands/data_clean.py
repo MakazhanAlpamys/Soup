@@ -11,23 +11,52 @@ Applies deterministic data cleaning rules:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.data.formats import detect_format
 from soup_cli.data.loader import load_raw_data
 from soup_cli.utils.data_clean import CleanReport, clean_dataset
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
+
+# #1818: the one sentence that says the fallback is only a character sanitiser.
+# Kept as a constant so the command and its test cannot drift apart.
+UNDETECTED_FORMAT_NOTE = (
+    "rows are not in a recognised format; nothing was cleaned beyond character sanitising"
+)
+
+
+@contextlib.contextmanager
+def _loader_warnings_to_stderr(enabled: bool) -> Iterator[None]:
+    """Send the loader's warnings (a malformed JSONL line, an empty file) to stderr.
+
+    ``--json`` promises a stdout that parses; the loader prints its warnings on its
+    own module-level console, which writes to stdout. The console is swapped for the
+    duration of the load and always put back.
+    """
+    if not enabled:
+        yield
+        return
+    from soup_cli.data import loader
+
+    saved = loader.console
+    loader.console = Console(stderr=True)
+    try:
+        yield
+    finally:
+        loader.console = saved
 
 
 def _render_summary_table(report: CleanReport) -> None:
@@ -40,9 +69,27 @@ def _render_summary_table(report: CleanReport) -> None:
         table.add_row("[green]No issues found[/]", "0")
     else:
         for rule_name, count in sorted(report.rule_counts.items(), key=lambda x: -x[1]):
-            table.add_row(escape(rule_name), f"[cyan]{count}[/]")
+            table.add_row(for_terminal(rule_name), f"[cyan]{count}[/]")
 
     console.print(table)
+
+
+def _report_undetected_format(exc: ValueError, *, json_output: bool) -> None:
+    """Say that detection failed and why, instead of carrying on as plaintext.
+
+    ``detect_format`` refuses rows that match no signature and files that mix
+    unrelated shapes. Falling through to the plaintext sanitiser silently made
+    such a file print "Cleaning N rows in plaintext format" and "No issues
+    found", which reads as "this file is fine". The detection error still
+    carries the first offending row's keys (or the shapes it saw), so print it
+    next to the warning instead of discarding it (#1818).
+
+    With ``--json`` the warning goes to stderr, because stdout is the summary
+    document that has to parse.
+    """
+    target = Console(stderr=True) if json_output else console
+    target.print(f"[yellow]Warning:[/] {UNDETECTED_FORMAT_NOTE}.")
+    target.print(Text(strip_control(str(exc)), style="dim"))
 
 
 def clean(
@@ -110,19 +157,22 @@ def clean(
 
     file_path = Path(path)
     if not file_path.exists():
-        console.print(f"[red]File not found:[/] {file_path}")
+        console.print(Text.assemble(("File not found:", "red"), f" {strip_control(file_path)}"))
         raise typer.Exit(1)
 
     if not is_under_cwd(file_path):
         console.print(
-            f"[red]Input path must be under the current working directory:[/] {file_path}"
+            Text.assemble(("Input path must be under the current working directory:", "red"),
+                          f" {strip_control(file_path)}")
         )
         raise typer.Exit(1)
 
     try:
-        data = load_raw_data(file_path)
+        with _loader_warnings_to_stderr(json_output):
+            data = load_raw_data(file_path)
     except Exception as exc:
-        console.print(f"[red]Failed to load dataset:[/] {escape(str(exc))}")
+        console.print(Text.assemble(("Failed to load dataset:", "red"),
+                                    f" {strip_control(str(exc))}"))
         raise typer.Exit(1) from exc
 
     if not data:
@@ -131,8 +181,9 @@ def clean(
 
     try:
         fmt = detect_format(data)
-    except ValueError:
+    except ValueError as exc:
         fmt = "plaintext"
+        _report_undetected_format(exc, json_output=json_output)
 
     if not json_output:
         console.print(
@@ -160,21 +211,23 @@ def clean(
 
         if not is_under_cwd(output_path):
             console.print(
-                f"[red]Output path must be under the current working directory:[/] {output_path}"
+                Text.assemble(("Output path must be under the current working directory:", "red"),
+                              f" {strip_control(output_path)}")
             )
             raise typer.Exit(1)
 
         if output_path.resolve() == file_path.resolve():
             console.print(
-                f"[red]Output path cannot be the same as input path:[/] {output_path} "
-                "(soup data clean never modifies its input file in place)"
+                Text.assemble(("Output path cannot be the same as input path:", "red"),
+                              f" {strip_control(output_path)} "
+                              "(soup data clean never modifies its input file in place)")
             )
             raise typer.Exit(1)
 
         if output_path.exists() and not force:
             console.print(
-                f"[red]Output file already exists:[/] {output_path} "
-                "(use --force / -f to overwrite)"
+                Text.assemble(("Output file already exists:", "red"),
+                              f" {strip_control(output_path)} (use --force / -f to overwrite)")
             )
             raise typer.Exit(1)
 
@@ -183,7 +236,8 @@ def clean(
             content = "\n".join(jsonl_lines) + ("\n" if jsonl_lines else "")
             atomic_write_text(content, str(output_path))
         except Exception as exc:
-            console.print(f"[red]Failed to write output file:[/] {escape(str(exc))}")
+            console.print(Text.assemble(("Failed to write output file:", "red"),
+                                        f" {strip_control(str(exc))}"))
             raise typer.Exit(1) from exc
 
     if json_output:
@@ -216,6 +270,6 @@ def clean(
 
     if output_path is not None:
         console.print(
-            f"\n[bold green]✓ Cleaned dataset saved to:[/] {output_path} "
-            f"({len(cleaned_data)} rows)"
+            Text.assemble("\n", ("✓ Cleaned dataset saved to:", "bold green"),
+                          f" {strip_control(output_path)} ({len(cleaned_data)} rows)")
         )

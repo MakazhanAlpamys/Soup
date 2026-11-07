@@ -28,6 +28,8 @@ import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
+from tests.ui_helpers import ui_client
+
 runner = CliRunner()
 
 ESC = chr(27)
@@ -619,11 +621,11 @@ class TestWebUiConfigLogLines:
     @staticmethod
     def _client():
         pytest.importorskip("fastapi")
-        from fastapi.testclient import TestClient
 
         from soup_cli.ui.app import create_app, get_auth_token
 
-        return TestClient(create_app()), {"Authorization": f"Bearer {get_auth_token()}"}
+        client = ui_client(create_app())
+        return client, {"Authorization": f"Bearer {get_auth_token()}"}
 
     def _logged(self, caplog) -> list[str]:
         return [record.getMessage() for record in caplog.records if record.name == self.LOGGER]

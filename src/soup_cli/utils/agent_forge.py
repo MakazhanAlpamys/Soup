@@ -520,9 +520,9 @@ def load_spec_file(spec_path: str) -> Mapping[str, Any]:
     with open(real, "r", encoding="utf-8") as fh:
         text = fh.read()
     if spec_path.lower().endswith((".yaml", ".yml")):
-        import yaml
+        from soup_cli.utils.yaml_limits import load_yaml_limited
 
-        loaded = yaml.safe_load(text)
+        loaded = load_yaml_limited(text, "spec file", max_bytes=_MAX_SPEC_BYTES)
     else:
         loaded = json.loads(text)
     if not isinstance(loaded, dict):

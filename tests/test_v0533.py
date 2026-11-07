@@ -16,6 +16,8 @@ import yaml
 from pydantic import ValidationError
 
 from soup_cli.config.loader import load_config_from_string
+from soup_cli.config.schema import SoupConfig
+from soup_cli.config.staged_fields import STAGED_FIELD_REJECTION_VERSION
 from soup_cli.utils.prm import (
     KNOWN_VLM_REGEX,
     is_known_vlm_base,
@@ -81,16 +83,22 @@ class TestGRPOFP16:
         assert cfg.training.grpo_fp16 is True
         assert cfg.training.auto_mixed_precision is False
 
-    def test_amp_alone_passes(self) -> None:
-        cfg = load_config_from_string(_minimal_grpo_yaml(
+    def test_amp_alone_is_refused_on_grpo(self) -> None:
+        """#1618 — the GRPO trainer never reads auto_mixed_precision, so a
+        GRPO config carrying the field alone is refused, not silently run at
+        the trainer's default precision."""
+        yml = _minimal_grpo_yaml(
             training={
                 "reward_fn": "accuracy",
                 "num_generations": 2,
                 "auto_mixed_precision": True,
             },
-        ))
-        assert cfg.training.grpo_fp16 is False
-        assert cfg.training.auto_mixed_precision is True
+        )
+        with pytest.raises((ValidationError, ValueError)) as exc:
+            load_config_from_string(yml)
+        msg = str(exc.value)
+        assert "auto_mixed_precision" in msg
+        assert "grpo" in msg
 
 
 class TestGRPOFP16Routing:
@@ -315,8 +323,16 @@ class TestSchemaIntegrationVisionGRPO:
               reward_fn: accuracy
               num_generations: 2
         """).strip()
-        cfg = load_config_from_string(yml)
+        # vision_grpo is staged (#808): the schema's base probe still passes it, and
+        # the loader refuses it as of v0.77.
+        cfg = SoupConfig(**yaml.safe_load(yml))
         assert cfg.training.vision_grpo is True
+        with pytest.raises(ValueError) as excinfo:
+            load_config_from_string(yml)
+        assert str(excinfo.value) == (
+            "training.vision_grpo is accepted but read by nothing; "
+            f"refused as of v{STAGED_FIELD_REJECTION_VERSION}. Delete the line."
+        )
 
 
 # ---------------------------------------------------------------------------

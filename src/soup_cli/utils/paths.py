@@ -21,6 +21,23 @@ from pathlib import Path
 from typing import Iterable, Optional, Union
 
 
+def quote_path(path: str) -> str:
+    """Quote a path for an error message as it was typed, not as ``repr`` renders it.
+
+    ``repr`` doubles every backslash of a Windows path, and an operator who copies the
+    entry out of the message copies the doubled, non-working spelling back into the
+    variable (#1611). The path is shown inside single quotes so leading and trailing
+    spaces stay visible, backslashes stay single, and the control characters the
+    validation rules refuse (C0, DEL, C1) are escaped as ``\\xNN`` so they never reach
+    the terminal as raw bytes.
+    """
+    escaped = "".join(
+        f"\\x{ord(ch):02x}" if (ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F) else ch
+        for ch in path
+    )
+    return f"'{escaped}'"
+
+
 def is_under(path: Union[str, Path], base: Union[str, Path]) -> bool:
     """Return True when ``path`` resolves inside ``base``."""
     try:
@@ -141,9 +158,9 @@ def enforce_under_cwd_and_no_symlink(path: str, field: str) -> str:
     if "\x00" in path:
         raise ValueError(f"{field} must not contain null bytes")
     if not is_under_cwd(path):
-        raise ValueError(
-            f"{field} {os.path.basename(path)!r} must stay under cwd"
-        )
+        # The path as typed, not its basename: for ``../out.json`` the basename alone
+        # reads ``'out.json'``, which looks like a path under cwd and hides the reason.
+        raise ValueError(f"{field} {quote_path(path)} must stay under cwd")
     if os.path.lexists(path):
         try:
             st = os.lstat(path)
@@ -167,6 +184,68 @@ def enforce_under_cwd_and_no_symlink(path: str, field: str) -> str:
                     "(TOCTOU defence)"
                 )
     return path
+
+
+def check_report_output_path(path: str, field: str = "--output") -> str:
+    """Validate, before any work starts, a path a command will write its report to.
+
+    :func:`enforce_under_cwd_and_no_symlink` plus a refusal of a directory. An
+    existing regular file is allowed: a report is replaced atomically by
+    :func:`atomic_write_text`, as ``soup attest emit -o`` replaces its statement.
+    Call it as the first thing a command does, so a refused path fails in
+    milliseconds instead of after a model has been loaded and a run has finished.
+    """
+    enforce_under_cwd_and_no_symlink(path, field)
+    if os.path.isdir(path):
+        raise ValueError(f"{field} {quote_path(path)} must name a file, not a directory")
+    return path
+
+
+def _same_file(first: str, second: str) -> bool:
+    """Whether two existing paths are one file, hard links included."""
+    try:
+        return os.path.samefile(first, second)
+    except (OSError, ValueError):
+        # A path that does not exist yet cannot be a hard link to anything.
+        return False
+
+
+def ensure_distinct_paths(
+    inputs: Iterable[tuple[str, str]],
+    outputs: Iterable[tuple[str, str]],
+    *,
+    reject_nested: bool = False,
+) -> None:
+    """Refuse outputs aliasing inputs, optionally including nested directories.
+
+    Items are (field, path) pairs. Identity uses normcase(realpath(...))
+    and samefile for existing paths, including hard links.
+    With reject_nested=True, neither path may contain the other.
+    Opens and creates nothing.
+    """
+    input_list = list(inputs)
+    for out_field, out_path in outputs:
+        out_identity = os.path.normcase(os.path.realpath(out_path))
+        for in_field, in_path in input_list:
+            in_identity = os.path.normcase(os.path.realpath(in_path))
+            if out_identity == in_identity or _same_file(out_path, in_path):
+                raise ValueError(
+                    f"{out_field} {quote_path(out_path)} is the same file as "
+                    f"{in_field} {quote_path(in_path)}; choose a different {out_field}"
+                )
+
+            if reject_nested:
+                try:
+                    common = os.path.commonpath([in_identity, out_identity])
+                except ValueError:
+                    # Paths on different drives cannot contain each other.
+                    continue
+                if common in (in_identity, out_identity):
+                    raise ValueError(
+                        f"{out_field} {quote_path(out_path)} overlaps "
+                        f"{in_field} {quote_path(in_path)}; "
+                        "choose separate, non-nested output directories"
+                    )
 
 
 def atomic_write_text(

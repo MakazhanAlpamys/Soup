@@ -1,0 +1,14 @@
+# #1802: every [project] dependency at its declared inclusive lower bound.
+# Keep this core-only: [dev]/[train] require newer versions of these packages.
+# tests/test_core_dependency_floors.py binds these pins to metadata and CI.
+typer==0.15.4
+click==8.0.0
+rich==13.0.0
+pydantic==2.0.0
+pyyaml==6.0
+# PyPI has no stable 0.16.0, and 0.16.1 is yanked; 0.16.2 is the first available
+# admitted by >=0.16.0. Keep the declaration and this exception bound by the test.
+huggingface-hub==0.16.2
+# Likewise, PyPI has no 5.2.0 or 5.2.1; >=5.2.0 first admits 5.2.2.
+plotext==5.2.2
+packaging==21.0

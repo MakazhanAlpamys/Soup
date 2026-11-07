@@ -20,9 +20,9 @@ These tests pin both halves:
 * doctor's torch literal equals the pyproject declaration — hermetic, repo text
   against src literal, the pin that keeps the second copy honest.
 
-pyproject is parsed with regex rather than ``tomllib`` because ``tomllib`` is
-3.11+ and this repo supports 3.10 — the same convention as
-``tests/test_requires_python_bound.py``.
+pyproject is parsed with regex rather than ``tomllib``, the convention
+``tests/test_requires_python_bound.py`` set while the floor was 3.10, which has no
+``tomllib``.
 """
 
 from __future__ import annotations

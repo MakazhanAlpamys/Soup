@@ -73,12 +73,21 @@ def test_lr_groups_refused(pattern):
 
 
 def test_lr_groups_refused_through_the_config_loader():
+    """``lr_groups`` is a staged field (#761, #808), so the loader refuses the line
+    as staged first; the schema's own check still names the pattern."""
     from soup_cli.config.loader import load_config_from_string
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.config.staged_fields import STAGED_FIELD_REJECTION_VERSION
 
+    text = _sft_yaml("lr_groups:\n  - pattern: '(.+){2,}z'\n    lr: 0.0001\n")
+    with pytest.raises(ValueError) as excinfo:
+        load_config_from_string(text)
+    assert str(excinfo.value) == (
+        "training.lr_groups is accepted but read by nothing; "
+        f"refused as of v{STAGED_FIELD_REJECTION_VERSION}. Delete the line."
+    )
     with pytest.raises(ValueError, match=r"training\.lr_groups: pattern .* too complex"):
-        load_config_from_string(
-            _sft_yaml("lr_groups:\n  - pattern: '(.+){2,}z'\n    lr: 0.0001\n")
-        )
+        SoupConfig(**yaml.safe_load(text))
 
 
 def test_chain_payload_named_reason_through_unfrozen_parameters():

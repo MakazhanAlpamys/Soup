@@ -4,6 +4,8 @@ import asyncio
 
 import pytest
 
+from tests.ui_helpers import ui_client
+
 
 def _auth_headers():
     """Return auth headers with the current UI token."""
@@ -32,7 +34,6 @@ def test_oversized_body_is_413_before_route_runs(
 ) -> None:
     """Both routes must stop before their own validation is reached."""
     pytest.importorskip("fastapi")
-    from fastapi.testclient import TestClient
 
     from soup_cli.ui.app import create_app
 
@@ -53,7 +54,7 @@ def test_oversized_body_is_413_before_route_runs(
 
         monkeypatch.setattr(paths, "is_under_cwd", fail_if_called)
 
-    with TestClient(create_app()) as client:
+    with ui_client(create_app()) as client:
         response = client.post(endpoint, json=payload, headers=_auth_headers())
 
     assert response.status_code == 413, response.text

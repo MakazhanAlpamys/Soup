@@ -26,16 +26,19 @@ from rich.console import Console, Group
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils import reward_stress
 from soup_cli.utils import reward_synth as rs
 from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 app = typer.Typer(help="Synthesize a deterministic reward verifier from reference outputs.")
 console = Console()
 
 _MAX_INPUT_BYTES = 64 * 1024 * 1024
 _MAX_ROWS = 1_000_000
+_MAX_LISTED_REJECTED = 10
 _ALLOWED_KINDS = ("auto",) + rs.KINDS
 _MAX_SENTINEL_LEN = 256
 
@@ -49,7 +52,9 @@ def _reward() -> None:
 def _fail(message: str, code: int = 1) -> NoReturn:
     """Print a red error and exit (raises internally — a forgotten ``raise`` at a
     call site can never silently become a no-op; mirrors ``commands/ship.py``)."""
-    console.print(f"[red]{escape(message)}[/]")
+    # Messages carry typed values (a kind, an attack name, a path) and the text of an
+    # exception raised by the reward file itself, so strip, escape and keep ":name:" literal.
+    console.print(f"[red]{for_terminal(message)}[/]", emoji=False)
     raise typer.Exit(code)
 
 
@@ -100,10 +105,12 @@ def _render_report_panel(report: rs.CalibrationReport, kind: str, out_path: str)
     table.add_column()
     table.add_row("verifier kind", escape(kind))
     table.add_row("references (accepted)", f"{report.positives} ({report.pos_accept:.0%})")
+    for ref in report.rejected_references:
+        table.add_row("rejected reference", Text(strip_control(repr(ref))))
     table.add_row("negatives (accepted)", f"{report.negatives} ({report.neg_accept:.0%})")
     table.add_row("discrimination", f"{report.discrimination:.2f}")
     table.add_row("precision", f"{report.precision:.2f}")
-    table.add_row("emitted", escape(out_path))
+    table.add_row("emitted", Text(strip_control(out_path)))
     return Panel(table, title="[bold green]reward verifier synthesized[/]",
                  border_style="green")
 
@@ -162,8 +169,9 @@ def synth(
         _fail(str(exc))
 
     if plan_only:
+        # The summary holds text induced from the references (schema keys, tool names, a pattern).
         console.print(Panel(
-            escape(_spec_summary(result.kind, result.spec)),
+            Text(strip_control(_spec_summary(result.kind, result.spec))),
             title=f"[bold]plan: {escape(result.kind)} verifier[/]", border_style="cyan"))
         raise typer.Exit(0)
 
@@ -229,12 +237,20 @@ def synth(
         try:
             atomic_write_text(json.dumps(asdict(report), indent=2), output_report)
         except OSError as exc:
-            console.print(f"[yellow]Warning: could not write report: {escape(str(exc))}[/]")
+            console.print(
+                f"[yellow]Warning: could not write report: {for_terminal(exc)}[/]",
+                emoji=False,
+            )
 
     if report.refused:
         _cleanup(candidate_path)
+        shown = report.rejected_references[:_MAX_LISTED_REJECTED]
+        rejected = "".join(f"\nrejected reference: {repr(ref)}" for ref in shown)
+        remaining = len(report.rejected_references) - len(shown)
+        if remaining:
+            rejected += f"\n+{remaining} more (see --output-report)"
         console.print(Panel(
-            escape(report.reason),
+            Text(strip_control(report.reason + rejected)),
             title="[bold red]verifier refused (not emitted)[/]", border_style="red"))
         raise typer.Exit(2)
 
@@ -288,7 +304,8 @@ def _render_stress_panel(report: reward_stress.StressReport, target: str) -> Pan
     border = "red" if report.gameable else "green"
     return Panel(
         Group(table, footer),
-        title=f"[bold]reward stress: {escape(target)}[/]", border_style=border,
+        title=Text.from_markup(f"[bold]reward stress: {for_terminal(target)}[/]", emoji=False),
+        border_style=border,
     )
 
 
@@ -390,7 +407,10 @@ def stress(
         try:
             atomic_write_text(json.dumps(asdict(report), indent=2), output_report)
         except OSError as exc:
-            console.print(f"[yellow]Warning: could not write report: {escape(str(exc))}[/]")
+            console.print(
+                f"[yellow]Warning: could not write report: {for_terminal(exc)}[/]",
+                emoji=False,
+            )
 
     console.print(_render_stress_panel(report, reward_target))
     raise typer.Exit(2 if report.gameable else 0)

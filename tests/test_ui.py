@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.ui_helpers import ui_client
+
 
 def _auth_headers():
     """Return auth headers with the current UI token."""
@@ -101,14 +103,11 @@ class TestHealthEndpoint:
 
     def test_health_returns_ok(self):
         """Health endpoint should return ok status."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.get("/api/health")
         assert response.status_code == 200
         assert response.json()["status"] == "ok"
@@ -119,14 +118,11 @@ class TestIndexEndpoint:
 
     def test_index_returns_html(self):
         """Root should serve HTML page."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.get("/")
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
@@ -134,14 +130,11 @@ class TestIndexEndpoint:
 
     def test_index_contains_pages(self):
         """Index HTML should contain all page sections."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.get("/")
         html = response.text
         assert "page-dashboard" in html
@@ -155,14 +148,11 @@ class TestSystemEndpoint:
 
     def test_system_info(self):
         """System endpoint should return version and device info."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.get("/api/system", headers=_auth_headers())
         assert response.status_code == 200
         data = response.json()
@@ -178,14 +168,11 @@ class TestTemplatesEndpoint:
 
     def test_list_templates(self):
         """Templates endpoint should return all built-in templates."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.get("/api/templates", headers=_auth_headers())
         assert response.status_code == 200
         data = response.json()
@@ -198,14 +185,11 @@ class TestTemplatesEndpoint:
 
     def test_templates_contain_yaml(self):
         """Each template should contain valid YAML content."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.get("/api/templates", headers=_auth_headers())
         templates = response.json()["templates"]
         for name, yaml_str in templates.items():
@@ -218,14 +202,11 @@ class TestConfigValidation:
 
     def test_valid_config(self):
         """Should validate a correct config."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         yaml_str = """
 base: meta-llama/Llama-3.1-8B
 data:
@@ -245,14 +226,11 @@ data:
 
     def test_invalid_config(self):
         """Should report errors for invalid config."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.post(
             "/api/config/validate",
             json={"yaml": "invalid: true"},
@@ -265,14 +243,11 @@ data:
 
     def test_empty_config(self):
         """Should reject empty config."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.post(
             "/api/config/validate",
             json={"yaml": ""},
@@ -286,26 +261,20 @@ class TestRunsEndpoint:
 
     def test_list_runs_empty(self, tmp_path):
         """Should return empty list when no runs exist."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             from soup_cli.ui.app import create_app
 
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.get("/api/runs", headers=_auth_headers())
             assert response.status_code == 200
             assert response.json()["runs"] == []
 
     def test_list_runs_with_data(self, tmp_path):
         """Should return runs from the database."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
@@ -322,7 +291,7 @@ class TestRunsEndpoint:
             )
             tracker.close()
 
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.get("/api/runs", headers=_auth_headers())
             assert response.status_code == 200
             runs = response.json()["runs"]
@@ -331,10 +300,7 @@ class TestRunsEndpoint:
 
     def test_get_run_detail(self, tmp_path):
         """Should return run details by ID."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
@@ -350,7 +316,7 @@ class TestRunsEndpoint:
             )
             tracker.close()
 
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.get(f"/api/runs/{run_id}", headers=_auth_headers())
             assert response.status_code == 200
             data = response.json()
@@ -359,16 +325,13 @@ class TestRunsEndpoint:
 
     def test_get_run_not_found(self, tmp_path):
         """Should return 404 for nonexistent run."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             from soup_cli.ui.app import create_app
 
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.get(
                 "/api/runs/nonexistent_run_id", headers=_auth_headers()
             )
@@ -376,10 +339,7 @@ class TestRunsEndpoint:
 
     def test_delete_run(self, tmp_path):
         """Should delete a run and return success."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
@@ -395,7 +355,7 @@ class TestRunsEndpoint:
             )
             tracker.close()
 
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.delete(
                 f"/api/runs/{run_id}", headers=_auth_headers()
             )
@@ -408,16 +368,13 @@ class TestRunsEndpoint:
 
     def test_delete_run_not_found(self, tmp_path):
         """Should return 404 when deleting nonexistent run."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             from soup_cli.ui.app import create_app
 
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.delete(
                 "/api/runs/nonexistent", headers=_auth_headers()
             )
@@ -429,10 +386,7 @@ class TestRunMetrics:
 
     def test_get_metrics(self, tmp_path):
         """Should return metrics for a run."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
@@ -451,7 +405,7 @@ class TestRunMetrics:
             tracker.log_metrics(run_id, step=30, loss=1.5, lr=8e-6)
             tracker.close()
 
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.get(f"/api/runs/{run_id}/metrics", headers=_auth_headers())
             assert response.status_code == 200
             data = response.json()
@@ -463,16 +417,13 @@ class TestRunMetrics:
 
     def test_get_metrics_not_found(self, tmp_path):
         """Should return 404 for metrics of nonexistent run."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             from soup_cli.ui.app import create_app
 
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.get(
                 "/api/runs/nonexistent/metrics", headers=_auth_headers()
             )
@@ -484,10 +435,7 @@ class TestRunEval:
 
     def test_get_eval_results(self, tmp_path):
         """Should return eval results for a run."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
@@ -510,7 +458,7 @@ class TestRunEval:
             )
             tracker.close()
 
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.get(f"/api/runs/{run_id}/eval", headers=_auth_headers())
             assert response.status_code == 200
             data = response.json()
@@ -524,10 +472,7 @@ class TestDataInspect:
 
     def test_inspect_jsonl(self, tmp_path):
         """Should inspect a JSONL file and return entries."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
@@ -539,7 +484,7 @@ class TestDataInspect:
         ]
         data_file.write_text("\n".join(json.dumps(e) for e in entries), encoding="utf-8")
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         with patch("soup_cli.ui.app.Path.cwd", return_value=tmp_path):
             response = client.post(
                 "/api/data/inspect",
@@ -555,14 +500,11 @@ class TestDataInspect:
 
     def test_inspect_file_not_found(self, tmp_path):
         """Should return 404 for nonexistent file."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         with patch("soup_cli.ui.app.Path.cwd", return_value=tmp_path):
             response = client.post(
                 "/api/data/inspect",
@@ -573,10 +515,7 @@ class TestDataInspect:
 
     def test_inspect_with_limit(self, tmp_path):
         """Should respect the limit parameter."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
@@ -589,7 +528,7 @@ class TestDataInspect:
             "\n".join(json.dumps(e) for e in entries), encoding="utf-8"
         )
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         with patch("soup_cli.ui.app.Path.cwd", return_value=tmp_path):
             response = client.post(
                 "/api/data/inspect",
@@ -603,10 +542,7 @@ class TestDataInspect:
 
     def test_inspect_json_file(self, tmp_path):
         """Should inspect a JSON array file."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
@@ -616,7 +552,7 @@ class TestDataInspect:
         ]
         data_file.write_text(json.dumps(entries), encoding="utf-8")
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         with patch("soup_cli.ui.app.Path.cwd", return_value=tmp_path):
             response = client.post(
                 "/api/data/inspect",
@@ -632,10 +568,7 @@ class TestTrainEndpoints:
 
     def test_train_status_not_running(self):
         """Should report not running when no training in progress."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         import soup_cli.ui.app as ui_app_module
         from soup_cli.ui.app import create_app
@@ -643,34 +576,28 @@ class TestTrainEndpoints:
         # Reset global state
         ui_app_module._train_process = None
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.get("/api/train/status", headers=_auth_headers())
         assert response.status_code == 200
         assert response.json()["running"] is False
 
     def test_stop_training_not_running(self):
         """Should report no training to stop."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         import soup_cli.ui.app as ui_app_module
         from soup_cli.ui.app import create_app
 
         ui_app_module._train_process = None
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.post("/api/train/stop", headers=_auth_headers())
         assert response.status_code == 200
         assert response.json()["stopped"] is False
 
     def test_start_training(self, tmp_path):
         """Should start training subprocess."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         import soup_cli.ui.app as ui_app_module
         from soup_cli.ui.app import create_app
@@ -682,7 +609,7 @@ class TestTrainEndpoints:
         mock_popen.pid = 12345
 
         with patch("soup_cli.ui.app.subprocess.Popen", return_value=mock_popen):
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.post(
                 "/api/train/start",
                 json={
@@ -700,10 +627,7 @@ class TestTrainEndpoints:
 
     def test_start_training_conflict(self, tmp_path):
         """Should reject second training when one is running."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         import soup_cli.ui.app as ui_app_module
         from soup_cli.ui.app import create_app
@@ -713,7 +637,7 @@ class TestTrainEndpoints:
         mock_proc.poll.return_value = None
         ui_app_module._train_process = mock_proc
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.post(
             "/api/train/start",
             json={
@@ -789,28 +713,22 @@ class TestStaticFiles:
 
     def test_static_css(self):
         """Should serve CSS file."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.get("/static/style.css")
         assert response.status_code == 200
         assert "text/css" in response.headers["content-type"]
 
     def test_static_js(self):
         """Should serve JavaScript file."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.get("/static/app.js")
         assert response.status_code == 200
         assert "javascript" in response.headers["content-type"]
@@ -830,30 +748,24 @@ class TestRunsLimitParam:
 
     def test_runs_limit_default(self, tmp_path):
         """Should use default limit of 50."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             from soup_cli.ui.app import create_app
 
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.get("/api/runs", headers=_auth_headers())
             assert response.status_code == 200
 
     def test_runs_custom_limit(self, tmp_path):
         """Should accept custom limit parameter."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             from soup_cli.ui.app import create_app
 
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.get("/api/runs?limit=10", headers=_auth_headers())
             assert response.status_code == 200

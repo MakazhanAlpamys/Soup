@@ -215,6 +215,15 @@ def run_can(
         if not confirm_callback(manifest):
             raise ValueError("user declined to run the can")
 
+    # Pre-validate capture_env_to before creating temporary extract dir.
+    env_target: Optional[Path] = None
+    if capture_env_to:
+        env_target = Path(capture_env_to)
+        if not is_under_cwd(env_target):
+            raise ValueError(
+                f"capture_env_to '{capture_env_to}' is outside cwd - refusing"
+            )
+
     # Resolve extraction destination.
     if extract_dir is None:
         owned_dir = Path(tempfile.mkdtemp(prefix="soup-can-run-"))
@@ -229,40 +238,35 @@ def run_can(
 
     try:
         extract_can(str(src), str(owned_dir))
+
+        # Optional env capture.
+        env_path: Optional[Path] = None
+        if env_target is not None:
+            env_path = capture_env(env_target)
+
+        # Train via subprocess against the embedded config.
+        train_argv = [
+            sys.executable, "-m", "soup_cli.cli", "train",
+            "--config", str(owned_dir / "config.yaml"),
+            "--yes",  # the can-run wrapper already confirmed
+        ]
+        if train_argv_extra:
+            train_argv.extend(train_argv_extra)
+        train_rc = _run_subprocess(train_argv)
+
+        # Optional deploy after training.
+        deploy_rc: Optional[int] = None
+        if deploy and train_rc == 0 and manifest.deploy_targets:
+            for target in manifest.deploy_targets:
+                deploy_rc = _deploy_target(target, owned_dir)
+                if deploy_rc != 0:
+                    break
     except Exception:
-        # If extraction fails after we created an owned tmp dir, clean up
-        # to prevent leaks of partially-extracted (potentially large) data.
+        # If any later step fails after we created an owned tmp dir, clean up
+        # to prevent leaks of extracted (potentially large) data.
         if extract_dir is None:
             cleanup_extract_dir(owned_dir)
         raise
-
-    # Optional env capture.
-    env_path: Optional[Path] = None
-    if capture_env_to:
-        env_target = Path(capture_env_to)
-        if not is_under_cwd(env_target):
-            raise ValueError(
-                f"capture_env_to '{capture_env_to}' is outside cwd - refusing"
-            )
-        env_path = capture_env(env_target)
-
-    # Train via subprocess against the embedded config.
-    train_argv = [
-        sys.executable, "-m", "soup_cli.cli", "train",
-        "--config", str(owned_dir / "config.yaml"),
-        "--yes",  # the can-run wrapper already confirmed
-    ]
-    if train_argv_extra:
-        train_argv.extend(train_argv_extra)
-    train_rc = _run_subprocess(train_argv)
-
-    # Optional deploy after training.
-    deploy_rc: Optional[int] = None
-    if deploy and train_rc == 0 and manifest.deploy_targets:
-        for target in manifest.deploy_targets:
-            deploy_rc = _deploy_target(target, owned_dir)
-            if deploy_rc != 0:
-                break
 
     return CanRunResult(
         extract_dir=owned_dir,

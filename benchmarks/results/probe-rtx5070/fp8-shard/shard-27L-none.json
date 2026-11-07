@@ -1,0 +1,75 @@
+{
+  "weights": "D:/soup-bench/models/Moonlight-16B-A3B-fp8block",
+  "out": "D:/soup-bench/fp8-shard-27L-none",
+  "arguments": {
+    "dtype": "bfloat16",
+    "arch": "deepseek_v3",
+    "quant": "none",
+    "quant_suffixes": [],
+    "double_quant": true,
+    "expert_layout": "",
+    "num_hidden_layers": 27,
+    "quant_device": "cpu"
+  },
+  "box": {
+    "utc": "2026-10-19T19:20:43Z",
+    "python": "3.12.10",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "torch": "2.14.0+cu130",
+    "cuda_visible_devices": "-1",
+    "cuda_available": false,
+    "cpu_count": 32,
+    "available_ram_bytes": 10302332928,
+    "total_ram_bytes": 34070192128,
+    "disk_free_bytes": {
+      "D:\\soup-bench": 137838829568
+    }
+  },
+  "shard_wall_seconds": 73.21043450001162,
+  "memory": {
+    "peak_rss_bytes": 4362596352,
+    "min_available_ram_bytes": 6040850432,
+    "ram_samples": 37,
+    "sample_period_s": 2.0
+  },
+  "n_layers": 27,
+  "total_params": 15960111936,
+  "notes": [
+    "[yellow]Re-sharding layer cache:[/] cache index is missing or unreadable."
+  ],
+  "size": {
+    "estimate_total_bytes": 31920287732,
+    "cache_bytes_on_disk": 31920272800,
+    "ratio_estimate_to_disk": 1.0000004677904883,
+    "layer_payload_exact": true,
+    "layer_payload_mismatches": [],
+    "other_payload_exact": true,
+    "estimate_other_bytes": 1342181376,
+    "cache_other_payload_bytes": 1342181376,
+    "pass": true
+  },
+  "real_data_checks": [
+    {
+      "layer": 1,
+      "fp8_derived_tensors_checked": 135,
+      "nf4_tensors_checked": 0,
+      "mismatches": []
+    },
+    {
+      "layer": 13,
+      "fp8_derived_tensors_checked": 135,
+      "nf4_tensors_checked": 0,
+      "mismatches": []
+    },
+    {
+      "layer": 26,
+      "fp8_derived_tensors_checked": 135,
+      "nf4_tensors_checked": 0,
+      "mismatches": []
+    }
+  ],
+  "real_data_check_seconds": 23.81258299999172,
+  "real_data_exact": true,
+  "disk_free_after_bytes": 105918509056,
+  "verdict": "PASS"
+}

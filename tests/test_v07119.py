@@ -139,7 +139,7 @@ class TestVisionAudioQuantMenuWiring:
 
     def test_vision_setup_still_prepares_kbit(self):
         # prepare_model_for_kbit_training is still gated on bnb formats so
-        # 4bit/8bit/mxfp4 still run through kbit-prep in vision/audio.
+        # 4bit/8bit still run through kbit-prep in vision/audio.
         vision_block = _SFT_SRC.split("def _setup_vision_transformers")[1].split(
             "def _prepare_vision_dataset"
         )[0]

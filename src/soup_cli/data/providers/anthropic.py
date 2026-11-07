@@ -39,7 +39,7 @@ def generate_anthropic(
         ImportError: If httpx is not installed.
     """
     try:
-        import httpx
+        import httpx  # noqa: F401 -- retain the optional-dependency diagnostic
     except ImportError:
         raise ImportError(
             "httpx is required for Anthropic generation. Install: pip install httpx"
@@ -51,7 +51,9 @@ def generate_anthropic(
             "Anthropic API key not found. Set ANTHROPIC_API_KEY environment variable."
         )
 
-    response = httpx.post(
+    from soup_cli.utils.http_response import GENERATION_RESPONSE_LIMIT_BYTES, post_capped
+
+    response = post_capped(
         ANTHROPIC_API_URL,
         headers={
             "x-api-key": api_key,
@@ -67,11 +69,12 @@ def generate_anthropic(
             "temperature": temperature,
             "max_tokens": 4096,
         },
+        max_bytes=GENERATION_RESPONSE_LIMIT_BYTES,
+        endpoint_label="Anthropic --provider anthropic",
         timeout=120.0,
     )
 
     if response.status_code != 200:
-        logger.debug("Anthropic error response: %s", response.text)
         raise ValueError(
             f"Anthropic API returned {response.status_code}. "
             "Check your API key and model name."

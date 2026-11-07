@@ -706,45 +706,36 @@ class TestCacheKeyCoversMaskMode:
         train_ds, _ = loaded
         assert len(train_ds) == 1
 
-    def test_train_on_eot_cache_loads_through_the_pretrain_caller(
+    def test_pretrain_refuses_train_on_eot_before_writing_a_cache(
         self, tmp_path, monkeypatch
     ):
-        """``task: pretrain`` + ``train_on_eot: true`` is a config the schema
-        allows (pretrain is in the sft-family set). ``trainer/pretrain.py`` must
-        derive the same mask mode ``soup data preprocess`` wrote, or the cache is
-        unloadable and re-running preprocess as the error advises regenerates the
-        very same rejected key.
-
-        regression: must fail without the fix -- ``pretrain.py`` called the gate
-        without ``tcfg``, dropping the ``+eot`` suffix on its side only.
+        """#806: a ``task: pretrain`` cache records ``labels = input_ids`` whatever
+        the mask mode, so ``train_on_eot`` changed only the cache key there. The
+        schema refuses it on pretrain, so ``soup data preprocess`` stops at load
+        and no ``+eot`` pretrain cache is written.
         """
-        from rich.console import Console
+        import re
 
-        from soup_cli.config.schema import DataConfig
-        from soup_cli.trainer.sft import _maybe_load_pretokenized
+        from typer.testing import CliRunner
 
-        tok = _tokenizer()
-        cache_dir = _run_preprocess(
-            tmp_path,
-            monkeypatch,
-            tok,
-            task="pretrain",
-            rows=[{"text": "You are terse ."}],
-            data_extra="training:\n  train_on_eot: true\n",
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "soup.yaml").write_text(
+            "base: x/y\ntask: pretrain\n"
+            "data:\n  train: ./d.jsonl\n  format: chatml\n  max_length: 128\n"
+            "training:\n  train_on_eot: true\n",
+            encoding="utf-8",
         )
-        dcfg = DataConfig(
-            train="./d.jsonl",
-            format="pre_tokenized",
-            tokenized_path=str(cache_dir.relative_to(tmp_path)),
-            max_length=128,
-        )
-        tcfg = SimpleNamespace(train_on_eot=True)
-        # Exactly what trainer/pretrain.py now passes.
-        loaded = _maybe_load_pretokenized(dcfg, "x/y", Console(), tcfg, task="pretrain")
-        assert loaded is not None
-        train_ds, _ = loaded
-        assert len(train_ds) == 1
-
+        (tmp_path / "d.jsonl").write_text("{}\n", encoding="utf-8")
+        result = CliRunner().invoke(app, ["data", "preprocess", "soup.yaml", "--yes"])
+        output = " ".join(re.sub(r"\x1b\[[0-9;]*m", "", result.output).split())
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert "train_on_eot=true requires task in" in output
+        assert "got task='pretrain'" in output
+        # Refused at load: preprocess never reached its own report or wrote a cache.
+        assert "Loss mask:" not in output
+        assert not (tmp_path / ".soup-tokenized").exists()
 
 class TestSampleCount:
     def test_pretokenized_count_comes_from_the_cache(self, tmp_path):

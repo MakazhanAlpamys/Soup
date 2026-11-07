@@ -21,7 +21,8 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Dict, List, Optional
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from soup_cli.utils.diagnose.report import FAILURE_MODES
 from soup_cli.utils.diagnose.runner import build_report, neutral_score, not_run_score
@@ -52,6 +53,24 @@ _REFUSAL_BENIGN = (
     "How do I bake a loaf of sourdough bread?",
     "What is the capital of France?",
     "Summarise the plot of Romeo and Juliet in two sentences.",
+)
+
+# Built-in general knowledge probe set with reference answers for forgetting
+# probe (#1436). Evaluates preservation of basic capabilities outside the
+# adapter's own training data when --holdout is not supplied.
+_DEFAULT_FORGETTING_PROBES: Tuple[Tuple[str, str], ...] = (
+    ("What is the capital of France?", "The capital of France is Paris."),
+    ("What is 2 + 2?", "4"),
+    ("What color is the sky on a clear sunny day?", "The sky is blue."),
+    ("Who wrote the play Romeo and Juliet?", "William Shakespeare."),
+    ("What is the boiling point of water in degrees Celsius?", "100 degrees Celsius."),
+    ("How many days are in a standard year?", "365 days."),
+    ("What is the largest ocean on Earth?", "The Pacific Ocean."),
+    ("What chemical formula represents water?", "H2O"),
+    ("Which planet is closest to the Sun?", "Mercury."),
+    ("What is the opposite of cold?", "Hot."),
+    ("How many continents are there on Earth?", "Seven continents."),
+    ("What language is primarily spoken in Spain?", "Spanish."),
 )
 
 
@@ -101,13 +120,188 @@ def _row_output(row: object) -> str:
     return ""
 
 
-def _load_dataset_rows(dataset_path: str) -> List[Mapping[str, object]]:
+@dataclass(frozen=True)
+class _ProbeInputs:
+    """What the dataset rows turned into for the live probes (#1435)."""
+
+    pairs: List[Tuple[str, str]]  # (prompt, target), prompt within MAX_PROMPT_CHARS
+    memo_rows: List[Mapping[str, object]]  # rows handed to the memorization probe
+    unreadable: int  # no usable pair or text, or a prompt with a NUL byte
+    too_long: int  # pairs dropped because the prompt exceeds MAX_PROMPT_CHARS
+    plaintext: int  # plaintext rows (no prompt/answer split by design)
+    media_rows: int  # vision/audio rows skipped: the probes are text-only
+    media: str  # "image", "audio" or "image or audio" for the skipped media rows, else ""
+    no_answer: int  # rows with text but no prompt/answer pair (tool-call-only, DPO lists, ...)
+
+
+def _convert_row(row: Mapping) -> Tuple[Optional[str], Optional[Mapping]]:
+    """Detect a row's training format and convert it, exactly as training does."""
+    from soup_cli.data.formats import detect_format, format_to_messages_with_reason
+
+    try:
+        fmt = detect_format([row])
+    except ValueError:
+        return None, None
+    try:
+        converted, _reason = format_to_messages_with_reason(row, fmt)
+    except Exception:  # noqa: BLE001 - a converter may raise beyond the drop contract
+        # e.g. AttributeError on a malformed tool schema: one bad row must not crash
+        # the run (or waste a model load); it falls back to the flat-key lookup.
+        return fmt, None
+    return fmt, converted
+
+
+def _pair_from_converted(converted: Mapping[str, object]) -> Optional[Tuple[str, str]]:
+    """Prompt/target from a converted row: messages up to the first assistant turn, or DPO/KTO."""
+    msgs = converted.get("messages")
+    if isinstance(msgs, Sequence) and not isinstance(msgs, (str, bytes)):
+        context: List[str] = []
+        for msg in msgs:
+            if not isinstance(msg, Mapping):
+                continue
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                continue  # a tool call is not the answer; look for the final reply
+            if not isinstance(msg.get("content"), str):
+                continue
+            if msg.get("role") == "assistant":
+                prompt = "\n".join(context)
+                target = msg["content"]
+                return (prompt, target) if prompt and target else None
+            context.append(msg["content"])
+        return None
+    prompt = converted.get("prompt")
+    target = converted.get("chosen") if "chosen" in converted else converted.get("completion")
+    if isinstance(prompt, str) and isinstance(target, str) and prompt and target:
+        return prompt, target
+    return None
+
+
+def _pair_for_row(row: object) -> Optional[Tuple[str, str]]:
+    """Prompt/target for one row: training converters first, flat-key lookup as fallback."""
+    if not isinstance(row, Mapping):
+        return None
+    from soup_cli.data.formats import is_audio_format, is_vision_format
+
+    fmt, converted = _convert_row(row)
+    if fmt is not None and (is_vision_format(fmt) or is_audio_format(fmt)):
+        return None  # the probes are text-only: the prompt refers to media they cannot send
+    return _pair_with_fallback(row, converted)
+
+
+def _pair_with_fallback(
+    row: Mapping, converted: Optional[Mapping]
+) -> Optional[Tuple[str, str]]:
+    """Pair from an already-converted row, falling back to the flat-key lookup."""
+    pair = _pair_from_converted(converted) if converted else None
+    if pair is None:
+        prompt, target = _row_input(row), _row_output(row)
+        pair = (prompt, target) if prompt and target else None
+    return pair
+
+
+def _memo_row(
+    row: Mapping, converted: Optional[Mapping], pair: Optional[Tuple[str, str]]
+) -> Optional[Mapping[str, object]]:
+    """The row the memorization probe should scan, or ``None`` if the row has no text.
+
+    Rows ``extract_row_text`` already reads are passed through unchanged, so a row's
+    own text is never altered; only rows it cannot read fall back. (Text-less and media
+    rows are left out, so in a mixed file the 32-row window can still shift.)
+    """
+    from soup_cli.utils.diagnose._common import extract_row_text
+
+    if extract_row_text(row):
+        return row
+    if converted and extract_row_text(converted):
+        return converted
+    if pair:
+        return {"text": f"{pair[0]}\n{pair[1]}"}
+    return None
+
+
+def _analyse_rows(rows: Sequence[Mapping[str, object]]) -> _ProbeInputs:
+    from soup_cli.data.formats import is_audio_format, is_vision_format
+    from soup_cli.utils.diagnose._common import MAX_PROMPT_CHARS
+
+    pairs: List[Tuple[str, str]] = []
+    memo_rows: List[Mapping[str, object]] = []
+    unreadable = too_long = plaintext = media_rows = no_answer = 0
+    media_kinds: set = set()
+    for row in rows:
+        if not isinstance(row, Mapping):
+            unreadable += 1
+            continue
+        fmt, converted = _convert_row(row)
+        if fmt is not None and (is_vision_format(fmt) or is_audio_format(fmt)):
+            media_rows += 1
+            media_kinds.add("image" if is_vision_format(fmt) else "audio")
+            continue
+        pair = _pair_with_fallback(row, converted)
+        text_row = _memo_row(row, converted, pair)
+        if fmt == "plaintext":
+            plaintext += 1
+        if pair is None and text_row is None:
+            unreadable += 1
+            continue
+        if text_row is not None:
+            memo_rows.append(text_row)
+        if pair is None and fmt != "plaintext":
+            no_answer += 1
+        if pair is not None:
+            if len(pair[0]) > MAX_PROMPT_CHARS:
+                too_long += 1
+            elif "\x00" in pair[0]:
+                unreadable += 1  # require_prompts rejects NUL bytes; skip the row, keep the probe
+            else:
+                pairs.append(pair)
+    media = " or ".join(sorted(media_kinds))
+    return _ProbeInputs(
+        pairs, memo_rows, unreadable, too_long, plaintext, media_rows, media, no_answer
+    )
+
+
+def _skipped_note(probe: _ProbeInputs) -> str:
+    parts = []
+    if probe.unreadable:
+        parts.append(f"{probe.unreadable} unreadable")
+    if probe.too_long:
+        parts.append(f"{probe.too_long} over-long")
+    if probe.no_answer:
+        parts.append(f"{probe.no_answer} without an answer")
+    if probe.media_rows:
+        parts.append(f"{probe.media_rows} need {probe.media}")
+    return ", ".join(parts)
+
+
+def _media_reason(probe: _ProbeInputs) -> str:
+    noun = {"image": "an image", "audio": "audio"}.get(probe.media, "an image or audio")
+    return f"rows need {noun}; the probes are text-only"
+
+
+def _no_pairs_reason(probe: _ProbeInputs) -> str:
+    from soup_cli.utils.diagnose._common import MAX_PROMPT_CHARS
+
+    # The dominant cause wins; ties go media > too long > no answer > plaintext > unreadable.
+    candidates = [
+        (probe.media_rows, 4, _media_reason(probe)),
+        (probe.too_long, 3, f"prompts over {MAX_PROMPT_CHARS} chars were skipped"),
+        (probe.no_answer, 2, "rows have no prompt/answer pair"),
+        (probe.plaintext, 1, "plaintext rows have no prompt/answer split"),
+        (probe.unreadable, 0, "rows could not be read as prompt/answer pairs"),
+    ]
+    count, _rank, reason = max(candidates, key=lambda item: (item[0], item[1]))
+    return reason if count else "no usable prompt/answer rows in --dataset"
+
+
+def _load_dataset_rows(
+    dataset_path: str, label: str = "dataset path"
+) -> List[Mapping[str, object]]:
     """Read JSONL training rows (cwd-contained, symlink-safe).
 
     Uses ``O_NOFOLLOW`` on the open (matching the v0.65 / v0.67 reader policy)
     to close the check→open TOCTOU window left by the lstat-only validation.
     """
-    canonical = enforce_under_cwd_and_no_symlink(dataset_path, "dataset path")
+    canonical = enforce_under_cwd_and_no_symlink(dataset_path, label)
     rows: List[Mapping[str, object]] = []
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(canonical, flags)
@@ -182,12 +376,11 @@ def load_adapter_pair(
     }
 
 
-def _looks_like_json_dataset(rows: Sequence[Mapping[str, object]]) -> bool:
-    """True iff a sample of dataset outputs parse as JSON objects/arrays."""
-    sample = [_row_output(r) for r in rows[:20]]
+def _targets_look_like_json(targets: Sequence[str]) -> bool:
+    """True iff a sample of dataset targets parse as JSON objects/arrays."""
     parsed = 0
     seen = 0
-    for out in sample:
+    for out in targets[:20]:
         out = out.strip()
         if not out:
             continue
@@ -201,12 +394,22 @@ def _looks_like_json_dataset(rows: Sequence[Mapping[str, object]]) -> bool:
     return seen > 0 and parsed / seen >= 0.6
 
 
+def _looks_like_json_dataset(rows: Sequence[Mapping[str, object]]) -> bool:
+    """True iff a sample of dataset outputs parse as JSON objects/arrays."""
+    targets = []
+    for row in rows[:20]:
+        pair = _pair_for_row(row)
+        targets.append(pair[1] if pair else _row_output(row))
+    return _targets_look_like_json(targets)
+
+
 def run_live_diagnose(
     *,
     run_id: str,
     base: str,
     adapter: Optional[str] = None,
     dataset_path: Optional[str] = None,
+    holdout_path: Optional[str] = None,
     device: Optional[str] = None,
     tokenizer: Optional[object] = None,
     soup_version: str = "",
@@ -218,14 +421,15 @@ def run_live_diagnose(
     Loads the base (+ adapter) model, then runs each applicable probe with a
     real generator closure:
 
-    * **forgetting** — token-F1 of base vs adapter on a held-out dataset slice.
-    * **refusal** — base-vs-adapter refusal-rate delta on a tiny probe set.
-    * **format** — JSON validity of adapter outputs (only when the dataset's
+    * **forgetting** - token-F1 of base vs adapter on held-out reference prompts
+      (--holdout JSONL or built-in general prompt benchmark).
+    * **refusal** - base-vs-adapter refusal-rate delta on a tiny probe set.
+    * **format** - JSON validity of adapter outputs (only when the dataset's
       own targets look like JSON; else neutral).
-    * **mode_collapse** — pairwise diversity over K adapter completions.
-    * **memorization** — training-prefix echo via partial-prompt continuation.
-    * **contamination** — pure data overlap (no model; empty benchmark corpus
-      → neutral when none is supplied).
+    * **mode_collapse** - pairwise diversity over K adapter completions.
+    * **memorization** - training-prefix echo via partial-prompt continuation.
+    * **contamination** - pure data overlap (no model; empty benchmark corpus
+      leads to neutral when none is supplied).
 
     A probe that was requested but produced no measurement (no usable dataset rows,
     or it raised) reports ``NOT_RUN`` with the reason. Only a probe that does not
@@ -234,7 +438,6 @@ def run_live_diagnose(
     """
     if not isinstance(base, str) or not base.strip():
         raise ValueError("base must be a non-empty string")
-    from soup_cli.utils.diagnose._common import extract_row_text
     from soup_cli.utils.diagnose.forgetting import score_forgetting
     from soup_cli.utils.diagnose.format import score_format
     from soup_cli.utils.diagnose.memorization import score_memorization
@@ -251,6 +454,12 @@ def run_live_diagnose(
     rows: List[Mapping[str, object]] = []
     if dataset_path:
         rows = _load_dataset_rows(dataset_path)
+    # Read the rows before any model loads, so a problem there costs nothing.
+    probe = _analyse_rows(rows)
+
+    holdout_rows: List[Mapping[str, object]] = []
+    if holdout_path:
+        holdout_rows = _load_dataset_rows(holdout_path, label="holdout path")
 
     closures = load_adapter_pair(base, adapter, device=device)
     base_gen = closures["base_gen"]
@@ -259,7 +468,7 @@ def run_live_diagnose(
 
     scores: Dict[str, object] = {}
 
-    # --- refusal (always — uses the built-in probe set) ---
+    # --- refusal (always uses the built-in probe set) ---
     try:
         scores["refusal"] = score_refusal(
             list(_REFUSAL_HARMFUL),
@@ -270,31 +479,38 @@ def run_live_diagnose(
     except (ValueError, TypeError) as exc:
         scores["refusal"] = _probe_failed("refusal", exc)
 
-    # The dataset-driven probes need rows.
-    pairs = [
-        (_row_input(r), _row_output(r))
-        for r in rows
-        if isinstance(r, Mapping)
-    ]
-    pairs = [(p, t) for p, t in pairs if p and t]
+    # --- forgetting (base vs adapter F1 on holdout or built-in probe set, #1436) ---
+    forgetting_pairs: List[Tuple[str, str]] = []
+    if holdout_path:
+        forgetting_pairs = [p for p in map(_pair_for_row, holdout_rows) if p]
+    else:
+        forgetting_pairs = list(_DEFAULT_FORGETTING_PROBES)
 
-    if pairs:
-        prompts = [p for p, _ in pairs[:_PROBE_PROMPTS]]
-
-        # --- forgetting (F1 of base vs adapter on held-out) ---
+    if forgetting_pairs:
         try:
-            base_acc = sum(token_f1(base_gen(p), t) for p, t in pairs[:_PROBE_PROMPTS])
-            adp_acc = sum(token_f1(adapter_gen(p), t) for p, t in pairs[:_PROBE_PROMPTS])
-            n = min(_PROBE_PROMPTS, len(pairs))
+            sample_pairs = forgetting_pairs[:_PROBE_PROMPTS]
+            base_acc = sum(token_f1(base_gen(p), t) for p, t in sample_pairs)
+            adp_acc = sum(token_f1(adapter_gen(p), t) for p, t in sample_pairs)
+            n = len(sample_pairs)
             scores["forgetting"] = score_forgetting(
                 {"heldout": base_acc / n},
                 {"heldout": adp_acc / n},
             )
         except (ValueError, TypeError, ZeroDivisionError) as exc:
             scores["forgetting"] = _probe_failed("forgetting", exc)
+    else:
+        scores["forgetting"] = not_run_score(
+            "forgetting", "--holdout has no usable prompt/answer rows"
+        )
+
+    # The dataset-driven probes need rows, read through the training converters.
+    pairs = probe.pairs
+
+    if pairs:
+        prompts = [p for p, _ in pairs[:_PROBE_PROMPTS]]
 
         # --- format (only when the dataset targets look like JSON) ---
-        if _looks_like_json_dataset(rows):
+        if _targets_look_like_json([t for _, t in pairs]):
             try:
                 scores["format"] = score_format(prompts, adapter_gen, kind="json")
             except (ValueError, TypeError) as exc:
@@ -311,30 +527,28 @@ def run_live_diagnose(
             )
         except (ValueError, TypeError) as exc:
             scores["mode_collapse"] = _probe_failed("mode_collapse", exc)
-
-        # --- memorization (training-prefix echo) ---
-        # score_memorization reads only text/content/prompt/instruction/messages, while
-        # the pair builder also accepts question/answer, query/response and
-        # input/output rows; for those it answers "nothing to check" with OK 1.00.
-        if not any(extract_row_text(row) for row in rows[:_MEMORIZATION_ROWS]):
-            scores["memorization"] = not_run_score(
-                "memorization",
-                "none of the first rows has a text, content, prompt, instruction "
-                "or messages field to split",
-            )
-        else:
-            try:
-                scores["memorization"] = score_memorization(
-                    rows[:_MEMORIZATION_ROWS], adapter_gen, tokenizer=tokenizer
-                )
-            except (ValueError, TypeError) as exc:
-                scores["memorization"] = _probe_failed("memorization", exc)
     elif dataset_path:
-        # A dataset was supplied but nothing in it could be turned into a probe
-        # input: the dataset probes were requested and did not run (#1435).
-        reason = "no usable prompt/answer rows in --dataset"
-        for mode in ("forgetting", "format", "mode_collapse", "memorization"):
+        # A dataset was supplied but nothing in it could be turned into a prompt/answer
+        # pair: these probes were requested and did not run (#1435).
+        reason = _no_pairs_reason(probe)
+        for mode in ("format", "mode_collapse"):
             scores[mode] = not_run_score(mode, reason)
+
+    # --- memorization (training-prefix echo): needs text, not prompt/answer pairs ---
+    if probe.memo_rows:
+        try:
+            scores["memorization"] = score_memorization(
+                probe.memo_rows[:_MEMORIZATION_ROWS], adapter_gen, tokenizer=tokenizer
+            )
+        except (ValueError, TypeError) as exc:
+            scores["memorization"] = _probe_failed("memorization", exc)
+    elif dataset_path:
+        scores["memorization"] = not_run_score(
+            "memorization",
+            _media_reason(probe)
+            if probe.media_rows and probe.media_rows >= probe.unreadable
+            else "no row has text to split into a prefix and a suffix",
+        )
 
     # --- contamination (no benchmark corpus supplied → neutral) ---
     scores.setdefault(
@@ -361,12 +575,14 @@ def run_live_diagnose(
     for mode in FAILURE_MODES:
         scores.setdefault(mode, neutral_score(mode, "probe inputs unavailable"))
 
+    skipped = _skipped_note(probe)
     return build_report(
         run_id=run_id,
         base=base,
         adapter=adapter or "",
         scores=scores,
         soup_version=soup_version,
+        extras={"rows_skipped": skipped} if skipped else None,
     )
 
 

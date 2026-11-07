@@ -13,6 +13,9 @@ if TYPE_CHECKING:
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
+
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
@@ -278,7 +281,9 @@ def ollama(
         table.add_column("Name", style="bold cyan")
         table.add_column("Size", style="green")
         for entry in models:
-            table.add_row(entry["name"], entry["size"])
+            # Text, not str: a cell string is parsed as markup, and these names are
+            # whatever `ollama list` printed.
+            table.add_row(Text(strip_control(entry["name"])), Text(strip_control(entry["size"])))
         console.print(table)
         raise typer.Exit(0)
 
@@ -301,9 +306,9 @@ def ollama(
 
         success, message = remove_model(remove)
         if success:
-            console.print(f"[green]{message}[/]")
+            console.print(f"[green]{for_terminal(message)}[/]", emoji=False)
         else:
-            console.print(f"[red]{message}[/]")
+            console.print(f"[red]{for_terminal(message)}[/]", emoji=False)
             raise typer.Exit(1)
         raise typer.Exit(0)
 
@@ -328,7 +333,7 @@ def ollama(
     gguf_path = Path(model)
     valid_path, path_err = validate_gguf_path(gguf_path)
     if not valid_path:
-        console.print(f"[red]{path_err}[/]")
+        console.print(f"[red]{for_terminal(path_err)}[/]", emoji=False)
         raise typer.Exit(1)
 
     # Check Ollama is installed
@@ -351,8 +356,9 @@ def ollama(
         resolved_template = template
     else:
         console.print(
-            f"[red]Unknown template: {template}[/]\n"
-            f"Available: auto, {', '.join(OLLAMA_TEMPLATES.keys())}"
+            f"[red]Unknown template: {for_terminal(template)}[/]\n"
+            f"Available: auto, {', '.join(OLLAMA_TEMPLATES.keys())}",
+            emoji=False,
         )
         raise typer.Exit(1)
 
@@ -361,7 +367,9 @@ def ollama(
     if parameter:
         for param_str in parameter:
             if "=" not in param_str:
-                console.print(f"[red]Invalid parameter format: {param_str}[/]")
+                console.print(
+                    f"[red]Invalid parameter format: {for_terminal(param_str)}[/]", emoji=False
+                )
                 console.print("[dim]Expected format: key=value (e.g. temperature=0.7)[/]")
                 raise typer.Exit(1)
             key, value = param_str.split("=", 1)
@@ -370,11 +378,14 @@ def ollama(
     # Show deploy plan
     console.print(
         Panel(
-            f"Model:    [bold]{name}[/]\n"
-            f"GGUF:     [bold]{gguf_path}[/]\n"
-            f"Template: [bold]{resolved_template}[/]"
-            + (f"\nSystem:   [bold]{system}[/]" if system else "")
-            + (f"\nParams:   [bold]{params}[/]" if params else ""),
+            Text.from_markup(
+                f"Model:    [bold]{name}[/]\n"
+                f"GGUF:     [bold]{for_terminal(gguf_path)}[/]\n"
+                f"Template: [bold]{resolved_template}[/]"
+                + (f"\nSystem:   [bold]{for_terminal(system)}[/]" if system else "")
+                + (f"\nParams:   [bold]{for_terminal(params)}[/]" if params else ""),
+                emoji=False,
+            ),
             title="Deploy to Ollama",
         )
     )
@@ -383,14 +394,15 @@ def ollama(
     if not yes:
         console.print(
             "[yellow]Warning:[/] This will overwrite any existing Ollama model "
-            f"named '{name}'."
+            f"named '{name}'.",
+            emoji=False,
         )
         confirm = typer.confirm("Proceed?")
         if not confirm:
             raise typer.Exit(0)
 
     # Generate Modelfile
-    console.print(f"[green]\u2713[/] Ollama v{version} detected")
+    console.print(f"[green]\u2713[/] Ollama v{for_terminal(version)} detected", emoji=False)
     try:
         modelfile = create_modelfile(
             gguf_path=gguf_path,
@@ -399,7 +411,7 @@ def ollama(
             parameters=params,
         )
     except ValueError as exc:
-        console.print(f"[red]Invalid parameter:[/] {exc}")
+        console.print(f"[red]Invalid parameter:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1)
     console.print("[green]\u2713[/] Modelfile generated")
 
@@ -407,13 +419,15 @@ def ollama(
     console.print("[dim]Creating model in Ollama...[/]")
     success, message = deploy_to_ollama(name, modelfile)
     if not success:
-        console.print(f"[red]Deploy failed:[/] {message}")
+        console.print(f"[red]Deploy failed:[/] {for_terminal(message)}", emoji=False)
         raise typer.Exit(1)
 
-    console.print(f"[green]\u2713[/] Model created: [bold]{name}[/]")
+    console.print(
+        f"[green]\u2713[/] Model created: [bold]{name}[/]", emoji=False
+    )
     console.print(
         Panel(
-            f"Run: [bold]ollama run {name}[/]",
+            Text.from_markup(f"Run: [bold]ollama run {name}[/]", emoji=False),
             title="[bold green]Deploy Complete![/]",
         )
     )
@@ -460,6 +474,8 @@ def hf_space(
     Uploads an app.py, requirements.txt, and README.md rendered from the
     chosen template. Supports gradio-chat and streamlit-chat.
     """
+    from rich.markup import escape
+
     from soup_cli.utils.hf import (
         get_hf_api,
         resolve_endpoint,
@@ -472,12 +488,15 @@ def hf_space(
     try:
         validate_repo_id(space)
     except ValueError as exc:
-        console.print(f"[red]Invalid --space repo id:[/] {exc}")
+        # The message quotes the id with repr(), which already shows control
+        # characters as escapes, so only the tags and ":name:" codes are left.
+        console.print(f"[red]Invalid --space repo id:[/] {escape(str(exc))}", emoji=False)
         raise typer.Exit(1) from exc
     if template_dir is None and template not in HF_SPACE_TEMPLATES:
         console.print(
-            f"[red]Unknown template: {template}[/]\n"
-            f"Available: {', '.join(HF_SPACE_TEMPLATES.keys())}"
+            f"[red]Unknown template: {for_terminal(template)}[/]\n"
+            f"Available: {', '.join(HF_SPACE_TEMPLATES.keys())}",
+            emoji=False,
         )
         raise typer.Exit(1)
 
@@ -512,19 +531,25 @@ def hf_space(
             files = render_space_template(template, model_repo=model)
             sdk = HF_SPACE_TEMPLATES[template]["sdk"]
     except ValueError as exc:
-        console.print(f"[red]Template render failed:[/] {exc}")
+        # Quoted with repr() or fixed text, like the --space id above.
+        console.print(f"[red]Template render failed:[/] {escape(str(exc))}", emoji=False)
         raise typer.Exit(1) from exc
     except FileNotFoundError as exc:
-        console.print(f"[red]Template directory error:[/] {exc}")
+        console.print(f"[red]Template directory error:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
 
     template_label = template_dir if template_dir is not None else template
+    # The space and the model passed validate_repo_id; the template directory is
+    # typed text.
     console.print(
         Panel(
-            f"Space:    [bold]{space}[/]\n"
-            f"Model:    [bold]{model}[/]\n"
-            f"Template: [bold]{template_label}[/]\n"
-            f"Private:  [bold]{private}[/]",
+            Text.from_markup(
+                f"Space:    [bold]{space}[/]\n"
+                f"Model:    [bold]{model}[/]\n"
+                f"Template: [bold]{for_terminal(template_label)}[/]\n"
+                f"Private:  [bold]{private}[/]",
+                emoji=False,
+            ),
             title="Deploy HuggingFace Space",
         )
     )
@@ -555,7 +580,7 @@ def hf_space(
                 commit_message=f"Soup CLI: add {in_repo_name}",
             )
     except Exception as exc:
-        console.print(f"[red]Space deploy failed:[/] {exc}")
+        console.print(f"[red]Space deploy failed:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
 
     console.print(
@@ -621,7 +646,7 @@ def autopilot(
         "--measure-candidates",
         help=(
             "Comma-separated quant candidates to measure (default: profile's "
-            "primary quant). Example: 4bit,gptq,awq"
+            "primary quant). Example: 4bit,8bit,fp8"
         ),
     ),
 ):
@@ -727,15 +752,22 @@ def _auto_detect_template() -> Optional[str]:
     try:
         import yaml
 
-        with open(config_path, encoding="utf-8") as fh:
-            config = yaml.safe_load(fh)
+        from soup_cli.utils.yaml_limits import (
+            MAX_CONFIG_BYTES,
+            YamlLimitError,
+            load_yaml_file_limited,
+        )
+
+        config = load_yaml_file_limited(
+            config_path, "soup.yaml", max_bytes=MAX_CONFIG_BYTES
+        )
         if not isinstance(config, dict):
             return None
         data_section = config.get("data", {})
         if isinstance(data_section, dict):
             fmt = data_section.get("format")
             return infer_chat_template(fmt)
-    except (yaml.YAMLError, OSError, KeyError, ImportError):
+    except (yaml.YAMLError, YamlLimitError, OSError, KeyError, ImportError):
         return None
     return None
 

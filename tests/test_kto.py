@@ -467,13 +467,13 @@ class TestKTODataFormatEdgeCases:
         result = format_to_messages(row, "kto")
         assert set(result.keys()) == {"prompt", "completion", "label"}
 
-    def test_convert_kto_none_label_coerced_to_false(self):
-        """None label should be coerced to False via bool()."""
+    def test_convert_kto_none_label_is_refused(self):
+        """A missing-value label must not train as an undesirable row."""
         from soup_cli.data.formats import format_to_messages
 
         row = {"prompt": "Q", "completion": "A", "label": None}
         result = format_to_messages(row, "kto")
-        assert result["label"] is False
+        assert result is None
 
 
 # ─── Train Method Guard Test ──────────────────────────────────────────────────

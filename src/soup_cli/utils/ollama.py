@@ -120,11 +120,22 @@ def validate_gguf_path(gguf_path: Path) -> Tuple[bool, str]:
     return True, ""
 
 
+def _ollama() -> str:
+    """Absolute path of the ``ollama`` CLI on PATH.
+
+    Raises ``FileNotFoundError`` (``ToolNotFoundError``) when it is not
+    installed, which every caller below already handles.
+    """
+    from soup_cli.utils.tool_paths import require_tool
+
+    return require_tool("ollama", "Install from https://ollama.com")
+
+
 def detect_ollama() -> Optional[str]:
     """Check if Ollama is installed, return version string or None."""
     try:
         result = subprocess.run(
-            ["ollama", "--version"],
+            [_ollama(), "--version"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -225,7 +236,7 @@ def deploy_to_ollama(name: str, modelfile_content: str) -> Tuple[bool, str]:
 
     try:
         result = subprocess.run(
-            ["ollama", "create", name, "-f", tmp_path],
+            [_ollama(), "create", name, "-f", tmp_path],
             capture_output=True,
             text=True,
             timeout=300,
@@ -250,7 +261,7 @@ def list_soup_models() -> List[Dict[str, str]]:
     """
     try:
         result = subprocess.run(
-            ["ollama", "list"],
+            [_ollama(), "list"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -282,7 +293,7 @@ def remove_model(name: str) -> Tuple[bool, str]:
     """
     try:
         result = subprocess.run(
-            ["ollama", "rm", name],
+            [_ollama(), "rm", name],
             capture_output=True,
             text=True,
             timeout=30,

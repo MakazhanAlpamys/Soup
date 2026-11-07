@@ -159,14 +159,17 @@ class TestAiderResultParser:
             parse_aider_results(tmp_path, model="openai/example")
 
 
+#: Where the preflight looks docker up (absolute PATH directories only).
+_FIND_TOOL = "soup_cli.utils.tool_paths.find_tool"
+
+
 class TestAiderDockerRunner:
     def test_image_cannot_be_parsed_as_a_docker_option(self, monkeypatch):
         import soup_cli.eval.aider_polyglot as aider_eval
 
         monkeypatch.setattr(
-            aider_eval.shutil,
-            "which",
-            lambda _name: pytest.fail("invalid image must fail before Docker lookup"),
+            _FIND_TOOL,
+            lambda _name, path=None: pytest.fail("invalid image must fail before Docker lookup"),
         )
 
         with pytest.raises(aider_eval.AiderEvalError, match="valid Docker image reference"):
@@ -175,7 +178,7 @@ class TestAiderDockerRunner:
     def test_missing_docker_has_friendly_error(self, monkeypatch):
         import soup_cli.eval.aider_polyglot as aider_eval
 
-        monkeypatch.setattr(aider_eval.shutil, "which", lambda _name: None)
+        monkeypatch.setattr(_FIND_TOOL, lambda _name, path=None: None)
 
         with pytest.raises(aider_eval.AiderEvalError, match="Docker CLI was not found"):
             aider_eval.preflight_docker("aider-benchmark")
@@ -183,7 +186,7 @@ class TestAiderDockerRunner:
     def test_daemon_failure_has_friendly_error(self, monkeypatch):
         import soup_cli.eval.aider_polyglot as aider_eval
 
-        monkeypatch.setattr(aider_eval.shutil, "which", lambda _name: "/usr/bin/docker")
+        monkeypatch.setattr(_FIND_TOOL, lambda _name, path=None: "/usr/bin/docker")
         monkeypatch.setattr(
             aider_eval.subprocess,
             "run",
@@ -202,7 +205,7 @@ class TestAiderDockerRunner:
                 SimpleNamespace(returncode=1, stdout="", stderr="No such image"),
             ]
         )
-        monkeypatch.setattr(aider_eval.shutil, "which", lambda _name: "/usr/bin/docker")
+        monkeypatch.setattr(_FIND_TOOL, lambda _name, path=None: "/usr/bin/docker")
         monkeypatch.setattr(aider_eval.subprocess, "run", lambda *_a, **_kw: next(calls))
 
         with pytest.raises(aider_eval.AiderEvalError, match="docker_build.sh"):
@@ -211,7 +214,7 @@ class TestAiderDockerRunner:
     def test_preflight_timeout_is_friendly(self, monkeypatch):
         import soup_cli.eval.aider_polyglot as aider_eval
 
-        monkeypatch.setattr(aider_eval.shutil, "which", lambda _name: "/usr/bin/docker")
+        monkeypatch.setattr(_FIND_TOOL, lambda _name, path=None: "/usr/bin/docker")
 
         def timeout(*_args, **_kwargs):
             raise subprocess.TimeoutExpired("docker info", 10)

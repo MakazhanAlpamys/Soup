@@ -189,12 +189,16 @@ class TestWeightDecayIsActuallyPassed:
 
 class TestUnsupportedNamesAreRefusedNotSilentlyAdamW:
     def test_an_optimizer_with_no_mlx_equivalent_is_refused_by_name(self):
-        """`adam_mini` is a *valid* Soup optimizer, which is the point.
+        """`grokadamw` is a *valid* Soup optimizer, which is the point.
 
         A name the schema already rejects would prove nothing about this layer.
         """
-        with pytest.raises(MlxOptimizerError, match="adam_mini"):
-            resolve_optimizer_name("adam_mini")
+        from soup_cli.utils.optimizer_zoo import validate_optimizer_name
+
+        assert validate_optimizer_name("grokadamw") == "grokadamw"  # the premise above
+
+        with pytest.raises(MlxOptimizerError, match="grokadamw"):
+            resolve_optimizer_name("grokadamw")
 
     def test_the_refusal_names_what_is_available(self):
         with pytest.raises(MlxOptimizerError, match="adamw"):
@@ -381,7 +385,7 @@ class TestTheWrapperPassesUpdatesNotIterations:
         _install_fake_mlx(monkeypatch)
         with pytest.raises(MlxOptimizerError, match="no MLX equivalent"):
             _run_wrapper(
-                tmp_path, rows=8, epochs=1, batch_size=1, optimizer="adam_mini",
+                tmp_path, rows=8, epochs=1, batch_size=1, optimizer="grokadamw",
                 gradient_accumulation_steps=1,
             )
 
@@ -470,6 +474,45 @@ def _record_optimizer_calls(monkeypatch):
 
 
 class TestThePlannedOptimizerIsTheOneConstructed:
+    @pytest.mark.parametrize("name", sorted(set(_OPTIMIZER_MAP.values()) - {"Adafactor"}))
+    def test_other_optimizers_receive_no_adafactor_only_keywords(self, monkeypatch, name):
+        from soup_cli.trainer.mlx_optim import build_optimizer
+
+        _install_fake_mlx(monkeypatch)
+        calls = _record_optimizer_calls(monkeypatch)
+        plan = OptimizerPlan(name, "constant", 0, 4, 0.0, 0.003)
+        build_optimizer(plan)
+
+        assert calls[0][0] == name
+        assert "relative_step" not in calls[0][1]
+        assert "scale_parameter" not in calls[0][1]
+
+    @pytest.mark.parametrize(
+        "scheduler,warmup_ratio",
+        [("constant", 0.0), ("constant_with_warmup", 0.25),
+         ("linear", 0.25), ("cosine", 0.25)],
+    )
+    def test_adafactor_uses_the_configured_rate_without_relative_or_parameter_scaling(
+        self, tmp_path, monkeypatch, scheduler, warmup_ratio,
+    ):
+        _install_fake_mlx(monkeypatch)
+        calls = _record_optimizer_calls(monkeypatch)
+        _run_wrapper(
+            tmp_path, rows=8, epochs=1, batch_size=1, optimizer="adafactor",
+            lr=0.003, scheduler=scheduler, warmup_ratio=warmup_ratio,
+            weight_decay=0.0, gradient_accumulation_steps=1,
+        )
+
+        assert len(calls) == 1
+        name, kwargs = calls[0]
+        assert name == "Adafactor"
+        assert kwargs.get("relative_step") is False
+        assert kwargs.get("scale_parameter") is False
+        if warmup_ratio:
+            assert callable(kwargs["learning_rate"])
+        else:
+            assert kwargs["learning_rate"] == pytest.approx(0.003)
+
     def test_the_configured_decay_reaches_the_constructor(self, tmp_path, monkeypatch):
         """Not the metadata -- the constructor. `as_metadata()` reads the same
         plan the metadata tests assert, so it reports 0.3 whether or not the
@@ -568,6 +611,43 @@ class TestThePlannedOptimizerIsTheOneConstructed:
             warmup_ratio=0.0, lr=3e-4, gradient_accumulation_steps=1,
         )
         assert calls[0][1]["learning_rate"] == pytest.approx(3e-4)
+
+
+@pytest.mark.parametrize("shape", [(2,), (2, 2)], ids=["unfactored", "factored"])
+@pytest.mark.parametrize(
+    "scheduler,warmup_ratio,rates",
+    [
+        ("constant", 0.0, [0.003] * 4),
+        ("constant_with_warmup", 0.25, [0.0, 0.0015, 0.003, 0.003]),
+        ("linear", 0.25,
+         [0.0, 0.0015, 0.003, 0.0025, 0.002, 0.0015, 0.001, 0.0005, 0.0]),
+        ("cosine", 0.25,
+         [0.0, 0.0015, 0.003, 0.0027990381, 0.00225, 0.0015, 0.00075, 0.0002009619, 0.0]),
+    ],
+)
+def test_native_adafactor_updates_follow_the_configured_schedule(
+    shape, scheduler, warmup_ratio, rates,
+):
+    mx = pytest.importorskip("mlx.core")
+    nn = pytest.importorskip("mlx.nn")
+    from soup_cli.trainer.mlx_optim import build_optimizer
+
+    model = nn.Module()
+    model.weight = mx.full(shape, 4.0)
+    opt = build_optimizer(plan_optimizer(
+        lr=0.003, optimizer="adafactor", scheduler=scheduler,
+        warmup_ratio=warmup_ratio, weight_decay=0.0, total_updates=8,
+    ))
+    gradients = {"weight": mx.ones(shape)}
+    # Unit gradients have unit second moment and unit normalized update.
+    # RMS(weight)=4 and lr!=0.01 distinguish both of Adafactor's default modes.
+    for update, expected_rate in enumerate(rates, start=1):
+        before = model.weight
+        opt.update(model, gradients)
+        mx.eval(model.parameters(), opt.state)
+        observed = (before - model.weight).reshape(-1).tolist()
+        assert observed == pytest.approx([expected_rate] * len(observed), abs=3e-7)
+        assert int(opt.step) == update
 
 
 class TestTheScheduleBuiltIsTheScheduleRequested:

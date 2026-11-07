@@ -147,7 +147,8 @@ def _build(path, monkeypatch, evaluator, *, batch_size=4, n_prompts=4, extra="")
         '  online_dpo_judge: "ollama://llama3.1"\n'
         f"  epochs: 1\n  batch_size: {batch_size}\n"
         "  online_dpo_max_new_tokens: 6\n  lr: 1e-4\n  quantization: none\n"
-        "  seed: 7\n" + extra + f"output: {(path / 'out').as_posix()}\n"
+        "  seed: 7\n"
+        "  warmup_ratio: 0.0\n" + extra + f"output: {(path / 'out').as_posix()}\n"
     )
     rows = [
         {"messages": [{"role": "user", "content": text}]} for text in _PROMPTS[:n_prompts]

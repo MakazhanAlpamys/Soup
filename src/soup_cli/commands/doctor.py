@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import platform
 import re
 import sys
@@ -11,8 +12,10 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.constants import GITHUB_URL
+from soup_cli.utils.terminal import strip_control
 from soup_cli.utils.torchao_compat import TORCHAO_MIN_VERSION
 
 console = Console()
@@ -26,7 +29,9 @@ console = Console()
 # extra, so a healthy core-only install reports no failures (#828).
 DEPS = [
     ("pydantic", "pydantic", "2.0.0", True),
-    ("typer", "typer", "0.9.0", True),
+    # A copy of the floor pyproject.toml declares, pinned to it by
+    # tests/test_cli_dependency_floors.py (#1802).
+    ("typer", "typer", "0.15.4", True),
     ("rich", "rich", "13.0.0", True),
     ("yaml", "pyyaml", "6.0", True),
     ("plotext", "plotext", "5.2.0", True),
@@ -41,7 +46,7 @@ DEPS = [
     ("unsloth", "unsloth", "2024.8", False),
     ("PIL", "Pillow", "9.0.0", False),
     ("torchao", "torchao", TORCHAO_MIN_VERSION, False),
-    ("sglang", "sglang", "0.2.0", False),
+    ("sglang", "sglang", "0.5.1", False),
     ("librosa", "librosa", "0.10.0", False),
 ]
 
@@ -119,8 +124,10 @@ def doctor(
     # MLX (Apple Silicon) check
     _check_mlx()
 
+    issues: list[str] = []
+
     # Resources check
-    _check_resources(probe_disk=disk)
+    _check_resources(probe_disk=disk, issues=issues)
 
     # Dependencies table
     table = Table(title="Dependencies")
@@ -129,8 +136,6 @@ def doctor(
     table.add_column("Installed", justify="center")
     table.add_column("Min Version")
     table.add_column("Status")
-
-    issues: list[str] = []
     # Actionable install specs for the trailing "Fix all" line. Only entries
     # that are actually missing or out of range land here — never the full
     # required set, and never a bare per-package floor for an extra group.
@@ -324,14 +329,23 @@ def doctor(
                 console.print(
                     f"[dim]  pip install {escape(' '.join(fix_parts))}[/]", highlight=False
                 )
-    else:
+
+    loaded_cfg = None
+    if config:
+        # Load and validate the config before the "All checks passed!" line (#2100);
+        # the environment tables above have already printed.
+        # If the config is refused or cannot be loaded, doctor terminates with exit 2
+        # before asserting that "All checks passed!".
+        loaded_cfg = _load_doctor_config(config)
+
+    if not issues:
         console.print("\n[bold green]All checks passed![/] Your environment is ready.")
 
     # After the environment summary on purpose: "All checks passed" reports on
     # the environment, and printing config findings above it read as though the
     # green line covered them too.
-    if config:
-        _check_config_support(config)
+    if loaded_cfg is not None:
+        _report_config_support(loaded_cfg)
 
     console.print(f"\n[dim]GitHub: [link={GITHUB_URL}]{GITHUB_URL}[/link][/]")
 
@@ -357,27 +371,16 @@ def _installed_version_str(import_name: str, pkg_name: str) -> str | None:
     return str(version)
 
 
-def _check_config_support(config_path: str) -> None:
-    """#755 — report the settings this config sets that its backend never reads.
-
-    Only fields the user wrote and switched on are listed (a ``false`` or unset
-    value is not; ``seed: 0`` is). A wall of 275 rows is not a pre-flight check,
-    and the fields sitting at their schema default or written in their off
-    position are not what anyone came here to ask about.
-    """
-    from soup_cli.config.backend_support import (
-        DEFAULT_BACKEND,
-        DEFAULT_MODALITY,
-        check_config,
-        unsupported_for,
-    )
-
+def _load_doctor_config(config_path: str):
+    """Load config for doctor, exiting with code 2 on refusal or load error (#2100)."""
     try:
         from soup_cli.config.loader import load_config
 
-        cfg = load_config(config_path)
+        return load_config(config_path)
     except FileNotFoundError as exc:
-        console.print(f"\n[red]Config not found:[/] {config_path}")
+        console.print(
+            Text.assemble(("\nConfig not found:", "red"), " ", strip_control(config_path))
+        )
         # Non-zero deliberately: this leg is meant to be gate-able in CI, and a
         # config that cannot be read is not a clean bill of health. `doctor`
         # without --config keeps its old exit status.
@@ -394,8 +397,29 @@ def _check_config_support(config_path: str) -> None:
         console.print(f"\n[red]Config could not be loaded:[/] {exc}")
         raise typer.Exit(2) from exc
 
+
+def _report_config_support(cfg) -> None:
+    """#755 — report the settings this config sets that its backend never reads.
+
+    Only fields the user wrote and switched on are listed (a ``false`` or unset
+    value is not; ``seed: 0`` is). A wall of 275 rows is not a pre-flight check,
+    and the fields sitting at their schema default or written in their off
+    position are not what anyone came here to ask about.
+    """
+    from soup_cli.config.backend_support import (
+        DEFAULT_BACKEND,
+        DEFAULT_MODALITY,
+        check_config,
+        unsupported_for,
+    )
+
     backend = getattr(cfg, "backend", DEFAULT_BACKEND)
     modality = getattr(cfg, "modality", DEFAULT_MODALITY)
+    task = cfg.task
+    if backend == "mlx":
+        from soup_cli.config.schema import resolve_mlx_task
+
+        task = resolve_mlx_task(task, cfg.training.preference_loss)
     gaps = check_config(cfg)
 
     modality_str = f" modality=[bold]{modality}[/]" if modality != DEFAULT_MODALITY else ""
@@ -404,7 +428,7 @@ def _check_config_support(config_path: str) -> None:
         f"backend=[bold]{backend}[/]{modality_str}"
     )
     if not gaps:
-        known = unsupported_for(cfg.task, backend, modality)
+        known = unsupported_for(task, backend, modality)
         modality_msg = f" modality={modality}" if modality != DEFAULT_MODALITY else ""
         console.print(
             f"  [green]None of the {len(known)} setting(s) known to be unread "
@@ -623,10 +647,18 @@ def _check_gpu():
                 )
             )
         elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            from soup_cli.utils.terminal import for_terminal
+
+            async_load = os.environ.get("HF_DEACTIVATE_ASYNC_LOAD")
+            if async_load is None:
+                async_desc = "not set (soup train sets it to 1 on MPS)"
+            else:
+                async_desc = for_terminal(async_load)
             console.print(
                 Panel(
                     "Backend:  [bold green]MPS (Apple Silicon)[/]\n"
-                    "Status:   [bold green]available[/]",
+                    "Status:   [bold green]available[/]\n"
+                    f"HF_DEACTIVATE_ASYNC_LOAD: [dim]{async_desc}[/]",
                     title="GPU",
                 )
             )
@@ -697,14 +729,14 @@ def _torch_cuda_wheel_tag(driver: tuple[int, int] | None) -> str | None:
 
 
 def _nvidia_smi_executable() -> str | None:
-    """Absolute path to nvidia-smi, or None.
+    """Absolute path of nvidia-smi in an absolute PATH directory, or None.
 
-    Bare ``nvidia-smi`` is never handed to ``subprocess`` (CWE-427):
-    Windows ``CreateProcess`` searches the current directory before PATH.
+    nvidia-smi is run by this path, never by its bare name, so the current
+    directory is never searched for it.
     """
-    import shutil
+    from soup_cli.utils.tool_paths import find_tool
 
-    return shutil.which("nvidia-smi")
+    return find_tool("nvidia-smi")
 
 
 def _nvidia_smi_cuda_version() -> tuple[int, int] | None:
@@ -752,6 +784,21 @@ def _detect_gpu_arch_mismatch_advisory() -> str:
     )
 
 
+def _cuda_visibility_hides_every_gpu(value: str | None, gpu_count: int) -> bool:
+    """CUDA exposes only the devices listed before the first invalid entry."""
+    if value is None:
+        return False
+    first = value.split(",", 1)[0].strip()
+    if first.startswith(("GPU-", "MIG-")):
+        return False  # UUID validation would require a separate nvidia-smi -L query.
+    if not (first.isascii() and first.isdigit()):
+        return True
+    try:
+        return int(first) >= gpu_count
+    except ValueError:
+        return True  # An oversized integer must not crash the diagnostic.
+
+
 def _detect_gpu_hw_without_torch_cuda() -> str:
     """v0.40.1 Part C / N3 — return advisory string if nvidia-smi succeeds
     but torch lacks CUDA (i.e. user installed the CPU-only wheel).
@@ -772,14 +819,22 @@ def _detect_gpu_hw_without_torch_cuda() -> str:
         return ""
     if completed.returncode != 0:
         return ""
-    gpu_name = (completed.stdout or "").strip().splitlines()[:1]
-    raw_label = gpu_name[0] if gpu_name else "GPU"
+    gpu_names = (completed.stdout or "").strip().splitlines()
+    raw_label = gpu_names[0] if gpu_names else "GPU"
     # v0.40.1 review fix — security: nvidia-smi output is embedded in a
-    # Rich-markup string at the call site; escape `[`/`]` so a GPU name like
-    # "NVIDIA Quadro [T4]" cannot break or inject markup.
-    from rich.markup import escape as _markup_escape
+    # Rich-markup string at the call site; strip controls and escape markup
+    # in both the card name and the visibility setting.
+    from soup_cli.utils.terminal import for_terminal
 
-    gpu_label = _markup_escape(raw_label)
+    gpu_label = for_terminal(raw_label)
+    visibility = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if _cuda_visibility_hides_every_gpu(visibility, len(gpu_names)):
+        return (
+            f"GPU hardware present ({gpu_label}) but "
+            f"CUDA_VISIBLE_DEVICES={for_terminal(visibility)} "
+            "hides it from torch. Unset CUDA_VISIBLE_DEVICES to use the GPU."
+        )
+
     try:
         from importlib.metadata import version as _pkgver
 
@@ -852,6 +907,8 @@ def _detect_dual_python_interpreters() -> str:
 
 
 _GB = 1024**3
+#: macOS ships sysctl at this fixed location.
+_MACOS_SYSCTL = "/usr/sbin/sysctl"
 
 
 def _get_ram_gb() -> str:
@@ -879,7 +936,7 @@ def _get_ram_gb() -> str:
             import subprocess
 
             res = subprocess.run(
-                ["sysctl", "-n", "hw.memsize"],
+                [_MACOS_SYSCTL, "-n", "hw.memsize"],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -916,13 +973,13 @@ def _get_ram_gb() -> str:
     return "Unknown"
 
 
-def _check_resources(probe_disk: bool = False):
+def _check_resources(probe_disk: bool = False, issues: list[str] | None = None):
     """Check RAM and Disk space and display info."""
     import shutil
 
     table = Table(title="System Resources")
     table.add_column("Resource", style="bold")
-    table.add_column("Value")
+    table.add_column("Value", overflow="fold")
 
     table.add_row("RAM", _get_ram_gb())
 
@@ -958,6 +1015,53 @@ def _check_resources(probe_disk: bool = False):
             "hdd": "[red]HDD[/] — layer streaming refuses the disk tier (RAM only)",
         }.get(kind, "[yellow]Unknown[/] — layer streaming will refuse the disk tier")
         table.add_row("Disk type", verdict)
+
+    stripe_var = os.environ.get("SOUP_LAYER_STREAM_STRIPE_DIRS")
+    if stripe_var:
+        from soup_cli.utils.layer_shard import resolve_cache_root
+        from soup_cli.utils.stripe_roots import (
+            STRIPE_DIRS_ENV,
+            iter_early_stripe_roots,
+            parse_stripe_dirs,
+        )
+        from soup_cli.utils.terminal import for_terminal
+
+        stripe_entries = parse_stripe_dirs(stripe_var)
+        primary = resolve_cache_root()
+        has_refused = False
+
+        for entry, resolved, reason in iter_early_stripe_roots(primary, stripe_entries):
+            row_label = "Stripe root"
+            if reason is not None:
+                has_refused = True
+                row_val = f"{for_terminal(entry)} — [red]Refused[/]: {for_terminal(reason)}"
+            elif probe_disk:
+                from soup_cli.utils.layer_stream import detect_disk_kind
+
+                try:
+                    kind = detect_disk_kind(resolved)
+                except Exception:  # noqa: BLE001
+                    kind = "unknown"
+                if kind != "nvme":
+                    has_refused = True
+                    reason_disk = (
+                        "the disk tier streams from NVMe only, and this volume classifies "
+                        f"as {kind!r}. If the probe is wrong, "
+                        "training.stream_disk_kind overrides it."
+                    )
+                    refused_msg = for_terminal(reason_disk)
+                    row_val = f"{for_terminal(entry)} — [red]Refused[/]: {refused_msg}"
+                else:
+                    row_val = f"{for_terminal(entry)} — [green]NVMe[/]"
+            else:
+                row_val = f"{for_terminal(entry)} — [green]OK[/]"
+            table.add_row(row_label, row_val)
+
+        if has_refused and issues is not None:
+            issues.append(
+                f"{STRIPE_DIRS_ENV}: one or more stripe roots are refused "
+                "(see System Resources above)"
+            )
 
     console.print(table)
     console.print()

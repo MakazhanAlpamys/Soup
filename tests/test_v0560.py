@@ -634,14 +634,16 @@ class TestCli:
         )
         assert result.exit_code == 1
 
-    def test_diagnose_attach_to_registry_without_output_warns(
+    def test_diagnose_attach_to_registry_without_output_is_refused(
         self, tmp_path: Path
     ) -> None:
+        # A requested attach that cannot happen is an input error, not a
+        # warning with exit 0.
         os.chdir(tmp_path)
         result = runner.invoke(
             app, ["diagnose", "myrun", "--attach-to-registry", "abc"]
         )
-        assert result.exit_code == 0
+        assert result.exit_code == 3, (result.output, repr(result.exception))
         assert "needs --output" in _strip_ansi(result.output)
 
     def test_diagnose_run_id_oversize(self, tmp_path: Path) -> None:

@@ -212,6 +212,18 @@ class TestFreezeModelLayers:
         frozen = freeze_model_layers(model, freeze_layers=None, freeze_ratio=None)
         assert frozen == 0
 
+    def test_freeze_warns_when_no_numbered_layers_detected(self, caplog):
+        """A freeze request against a model with no 'layers.N.'/'h.N.' naming
+        is a no-op, and must say so rather than silently doing nothing."""
+        from soup_cli.utils.freeze import freeze_model_layers
+
+        model = MagicMock()
+        model.named_parameters.return_value = [("embed.weight", MagicMock())]
+        with caplog.at_level("WARNING"):
+            frozen = freeze_model_layers(model, freeze_layers=4)
+        assert frozen == 0
+        assert "could not detect numbered layers" in caplog.text
+
     def test_detect_num_layers(self):
         """_detect_num_layers extracts layer count from model params."""
         from soup_cli.utils.freeze import _detect_num_layers
@@ -245,6 +257,83 @@ class TestFreezeModelLayers:
         ]
         model.named_parameters.return_value = params
         assert _detect_num_layers(model) == 12
+
+
+# ---------------------------------------------------------------------------
+# #1432: freeze_layer_cutoff (the range LoRA must respect too)
+# ---------------------------------------------------------------------------
+
+
+class TestFreezeLayerCutoff:
+    """freeze_layer_cutoff resolves the same (cutoff, total_layers) pair
+    freeze_model_layers acts on, for a caller that needs the boundary
+    without mutating requires_grad (#1432: the LoRA branch reads this to
+    build ``layers_to_transform`` for the range freeze_model_layers left
+    trainable)."""
+
+    def _make_model(self, num_layers: int):
+        model = MagicMock()
+        model.named_parameters.return_value = [
+            (f"model.layers.{idx}.self_attn.q_proj.weight", MagicMock())
+            for idx in range(num_layers)
+        ]
+        return model
+
+    def test_both_none_returns_none(self):
+        from soup_cli.utils.freeze import freeze_layer_cutoff
+
+        model = self._make_model(32)
+        assert freeze_layer_cutoff(model, freeze_layers=None, freeze_ratio=None) is None
+
+    def test_no_numbered_layers_returns_none(self):
+        from soup_cli.utils.freeze import freeze_layer_cutoff
+
+        model = MagicMock()
+        model.named_parameters.return_value = [("embed.weight", MagicMock())]
+        assert freeze_layer_cutoff(model, freeze_layers=4) is None
+
+    def test_freeze_layers_cutoff(self):
+        from soup_cli.utils.freeze import freeze_layer_cutoff
+
+        model = self._make_model(32)
+        assert freeze_layer_cutoff(model, freeze_layers=24) == (24, 32)
+
+    def test_freeze_layers_clamped_to_total(self):
+        """Mirrors freeze_model_layers' own clamp: freezing more layers than
+        exist freezes all of them, cutoff == total_layers."""
+        from soup_cli.utils.freeze import freeze_layer_cutoff
+
+        model = self._make_model(8)
+        assert freeze_layer_cutoff(model, freeze_layers=100) == (8, 8)
+
+    def test_freeze_ratio_cutoff(self):
+        from soup_cli.utils.freeze import freeze_layer_cutoff
+
+        model = self._make_model(32)
+        assert freeze_layer_cutoff(model, freeze_ratio=0.75) == (24, 32)
+
+    def test_freeze_layers_takes_priority_over_ratio(self):
+        from soup_cli.utils.freeze import freeze_layer_cutoff
+
+        model = self._make_model(32)
+        assert freeze_layer_cutoff(model, freeze_layers=10, freeze_ratio=0.75) == (10, 32)
+
+    def test_matches_freeze_model_layers_frozen_set(self):
+        """CONTROL: the boundary this returns must be the exact same one
+        freeze_model_layers used to set requires_grad=False, or the two
+        would silently drift apart the next time either is edited."""
+        from soup_cli.utils.freeze import freeze_layer_cutoff, freeze_model_layers
+
+        model = self._make_model(32)
+        params = dict(model.named_parameters())
+        for _name, param in params.items():
+            param.requires_grad = True
+        freeze_model_layers(model, freeze_layers=24)
+        cutoff, total_layers = freeze_layer_cutoff(model, freeze_layers=24)
+        assert total_layers == 32
+        for name, param in params.items():
+            layer_idx = int(name.split("layers.")[1].split(".")[0])
+            assert param.requires_grad == (layer_idx >= cutoff)
 
 
 # ---------------------------------------------------------------------------

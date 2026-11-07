@@ -764,10 +764,9 @@ def load_mix_recipe(path: str) -> Mapping[str, object]:
         raise ValueError(
             f"recipe exceeds {_MAX_RECIPE_BYTES} bytes cap (got {size})"
         )
-    import yaml
+    from soup_cli.utils.yaml_limits import load_yaml_file_limited
 
-    with open(real, "r", encoding="utf-8") as fh:
-        data = yaml.safe_load(fh)
+    data = load_yaml_file_limited(real, "recipe", max_bytes=_MAX_RECIPE_BYTES)
     if not isinstance(data, Mapping):
         raise ValueError("recipe must be a YAML mapping at top level")
     data_block = data.get("data")

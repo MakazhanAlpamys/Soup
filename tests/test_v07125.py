@@ -24,7 +24,6 @@ from pathlib import Path
 
 import pytest
 from rich.console import Console
-from typer.testing import CliRunner
 
 from soup_cli import __version__
 from soup_cli.utils.ship_verdict import (
@@ -44,6 +43,7 @@ from soup_cli.utils.ship_verdict import (
     render_ship_panel,
     verdict_to_dict,
 )
+from tests.cli_runner import CliRunner
 
 _SRC = Path(__file__).resolve().parent.parent / "src" / "soup_cli"
 

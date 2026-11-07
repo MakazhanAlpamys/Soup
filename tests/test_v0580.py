@@ -32,6 +32,7 @@ from soup_cli.utils.loop_budget import (
     check_budget,
     parse_budget_string,
     reset_daily_counter_if_new_day,
+    reset_monthly_spend_if_new_month,
 )
 from soup_cli.utils.loop_daemon import (
     WatchConfig,
@@ -649,6 +650,39 @@ class TestDailyCounter:
     def test_negative_runs_today_rejected(self):
         with pytest.raises(ValueError):
             reset_daily_counter_if_new_day(-1, "2026-05-15")
+
+
+class TestMonthlySpend:
+    def test_same_month_keeps_spend(self):
+        now = datetime(2026, 5, 31, tzinfo=timezone.utc)
+        assert reset_monthly_spend_if_new_month(4.5, "2026-05-01", now=now) == 4.5
+
+    def test_new_month_resets(self):
+        now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+        assert reset_monthly_spend_if_new_month(4.5, "2026-05-31", now=now) == 0.0
+
+    def test_new_year_same_month_number_resets(self):
+        now = datetime(2027, 5, 15, tzinfo=timezone.utc)
+        assert reset_monthly_spend_if_new_month(4.5, "2026-05-15", now=now) == 0.0
+
+    def test_december_to_january_resets(self):
+        now = datetime(2027, 1, 1, tzinfo=timezone.utc)
+        assert reset_monthly_spend_if_new_month(4.5, "2026-12-31", now=now) == 0.0
+
+    def test_none_prior_date_keeps_spend(self):
+        now = datetime(2026, 5, 15, tzinfo=timezone.utc)
+        assert reset_monthly_spend_if_new_month(4.5, None, now=now) == 4.5
+
+    @pytest.mark.parametrize(
+        "spent", [-0.01, True, float("nan"), float("inf"), "1.0", None]
+    )
+    def test_invalid_spend_rejected(self, spent):
+        with pytest.raises(ValueError):
+            reset_monthly_spend_if_new_month(spent, "2026-05-15")  # type: ignore[arg-type]
+
+    def test_non_str_date_rejected(self):
+        with pytest.raises(ValueError):
+            reset_monthly_spend_if_new_month(1.0, 20260515)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

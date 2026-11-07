@@ -147,7 +147,7 @@ def apply_changes(
     one-number edit arrives as a whole-file diff. Bytes translate nothing, so
     a run touches exactly the characters it means to.
     (``Path.read_text(newline=...)`` would say this more directly but only
-    exists on 3.13+, and this project supports 3.10.)
+    exists on 3.13+, and this project supports 3.11 and 3.12 too.)
     """
     resolved_sites = _resolve_sites(sites)
 

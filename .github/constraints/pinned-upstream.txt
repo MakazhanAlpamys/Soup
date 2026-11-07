@@ -1,0 +1,34 @@
+# The upstream stack that pull-request CI installs: exact pins, nothing else.
+#
+# WHAT. On a pull request and on a push to `main`, every workflow job that
+# installs torch or transformers passes this file to pip with `-c`, so a new
+# release of a package below cannot fail every open pull request at once. A
+# constraint installs nothing: a job takes only the lines for what it installs
+# (mlx-smoke, which has no torch: transformers, tokenizers, huggingface-hub and
+# safetensors). `transformers-floor` uses its own file, transformers-floor.txt.
+#
+# WHERE A NEW RELEASE STILL SHOWS. The nightly full run of ci.yml, a manual
+# dispatch, a push to `release/**` and the weekly `dependency drift` job install
+# without this file. Packages that are not listed here float on every run.
+#
+# WHEN TO BUMP. The nightly run is green on newer versions; or it is red on a
+# new release, and the pull request that fixes `main` bumps the pin so that its
+# own cells run the fix; or a bound in pyproject.toml moves past a pin.
+#
+# HOW. Run this on Windows or macOS (on Linux it downloads the CUDA wheels):
+#   python -m pip install --dry-run --ignore-installed -e ".[dev]"
+# Copy the versions it prints after `Would install` for the packages below, run
+# `pytest --no-cov -q tests/test_ci_pinned_upstream.py`, and open a pull request
+# with the `ci:full` label: its own cells then install under the new pins.
+#
+# FORMAT. One `name==version` per line and each package once: no range, marker,
+# pip option or trailing comment. The test refuses them.
+torch==2.14.1
+transformers==5.19.0
+tokenizers==0.23.3
+huggingface-hub==2.2.0
+safetensors==0.8.0
+trl==0.29.1
+peft==0.21.2
+accelerate==1.15.0
+datasets==5.1.0

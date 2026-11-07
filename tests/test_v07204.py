@@ -546,7 +546,7 @@ class TestPeakVramIsNotDoubled:
             from transformers import AutoModelForCausalLM
 
             forced = AutoModelForCausalLM.from_pretrained(
-                weights, torch_dtype=next(wrapper.model.parameters()).dtype
+                weights, dtype=next(wrapper.model.parameters()).dtype
             ).to("cuda")
             wrapper.trainer.ref_model = forced
         # Reset AFTER setup: the pre-flight's own GEMM ceiling probe allocates
@@ -1121,12 +1121,13 @@ class TestKtoBatchIsRefusedEarly:
         assert "KL term" in message and "gradient_accumulation_steps" in message
         assert "streaming" not in message
 
-    def test_mlx_kto_reports_the_backend_refusal_first(self):
+    def test_mlx_kto_keeps_the_same_floor(self):
+        """MLX KTO (#2000) builds TRL's KL rows, so batch 1 is refused there too."""
         import yaml
 
         from soup_cli.config.loader import load_config_from_string
 
-        with pytest.raises(ValueError, match="MLX backend only ships SFT"):
+        with pytest.raises(ValueError, match="task='kto' requires training.batch_size >= 2"):
             load_config_from_string(
                 yaml.safe_dump(
                     {
@@ -1196,7 +1197,7 @@ class TestKtoBatchIsRefusedEarly:
         from datasets import Dataset
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        model = AutoModelForCausalLM.from_pretrained(weights, torch_dtype=torch.float32)
+        model = AutoModelForCausalLM.from_pretrained(weights, dtype=torch.float32)
         tokenizer = AutoTokenizer.from_pretrained(weights)
         dataset = Dataset.from_list(_kto_rows(4))
         from soup_cli.trainer._trl_compat import prompt_length_kwargs

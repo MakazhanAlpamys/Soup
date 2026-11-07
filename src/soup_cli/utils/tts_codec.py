@@ -22,9 +22,10 @@ per-family encoder) is family-agnostic. It now has codec-string encoders for:
 
 Spark and Oute raw-audio live encoding is deliberately refused on this path
 because their current upstream stacks are incompatible with Soup. Sesame CSM
-is also refused: current CSM training uses 32 Mimi codebooks plus text as
+is refused on this codec-string path: its native trainer uses 32 Mimi codebooks plus text as
 parallel multimodal frames, which cannot be represented faithfully by replacing
-a text assistant turn.
+a text assistant turn. Raw-audio transcript pairs use the dedicated native CSM
+trainer instead.
 
 Security / robustness:
 - Heavy imports (numpy / soundfile / torch / snac / transformers) are lazy — module import
@@ -386,9 +387,9 @@ def csm_live_codec_error() -> RuntimeError:
         "TTS family 'sesame_csm' cannot use Soup's codec-string SFT "
         "live-codec path: CSM trains 32 Mimi codebooks plus text as parallel "
         "multimodal frames, not audio ids embedded in a text assistant turn. "
-        "Use the model's native CSM/AutoProcessor training path; Soup needs a "
-        "dedicated CSM trainer before either data.format=audio or pre-encoded "
-        "data.format=chatml can be supported safely."
+        "Use Soup's dedicated CSM trainer with training.tts_family=sesame_csm, "
+        "data.format=audio and training.quantization=none. Pre-encoded "
+        "data.format=chatml is not a native CSM training example."
     )
 
 

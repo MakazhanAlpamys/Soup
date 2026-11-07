@@ -36,9 +36,24 @@ name: CodSpeed
 # not as a pass, so it does not bring back the unearned green a silent step
 # skip would.
 #
-# TO TURN IT ON: install the CodSpeed GitHub App on this repository, then set
-# the repository variable CODSPEED_ENABLED to `true` (Settings > Secrets and
-# variables > Actions > Variables). Remove or unset it to turn it off again.
+# THE TRIGGERS ARE OFF AS WELL (2026-10-12). A job-level skip still CREATES a
+# run. With the `push` and `pull_request` triggers on and the variable unset,
+# every pull-request event and every push to `main` started a run whose only
+# job was skipped: 201 runs in the 48 hours from 2026-10-07 13:00Z, 96 of the
+# newest hundred skipped (three more waiting for approval, one failed). A
+# workflow that can report nothing should not start, so until the App is
+# installed the one trigger left is a manual dispatch.
+#
+# TO TURN IT ON, in this order:
+#   1. install the CodSpeed GitHub App on this repository;
+#   2. set the repository variable CODSPEED_ENABLED to `true` (Settings >
+#      Secrets and variables > Actions > Variables);
+#   3. start this workflow by hand on `main` (Actions > CodSpeed > Run
+#      workflow) and see the upload succeed;
+#   4. restore the two triggers commented out under `on:` below, and correct
+#      the `benchmark` entry in CONTRIBUTING.md, which says it is off.
+# To turn it off again, comment the two triggers out; unsetting the variable
+# alone brings the empty runs back.
 #
 # FORK PRs NEVER RUN IT, EVEN WITH THE APP INSTALLED. GitHub does not grant
 # id-token: write to a pull_request run triggered from a fork, whatever this
@@ -53,10 +68,12 @@ name: CodSpeed
 # App uninstalled later, or CodSpeed unreachable): it says so instead of
 # leaving a bare red.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  # Off until the App is installed: step 4 of TO TURN IT ON above restores these.
+  # push:
+  #   branches: [main]
+  # pull_request:
+  #   branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
@@ -64,8 +81,11 @@ concurrency:
 
 jobs:
   benchmark:
+    # `!= 'pull_request'` and not `== 'push'`, so that the manual dispatch of
+    # step 3 above runs the job as a push does. A pull request still needs to
+    # come from this repository.
     if: >-
-      vars.CODSPEED_ENABLED == 'true' && (github.event_name == 'push' ||
+      vars.CODSPEED_ENABLED == 'true' && (github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     permissions:

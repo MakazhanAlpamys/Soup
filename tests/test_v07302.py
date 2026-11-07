@@ -873,9 +873,8 @@ class TestAHostileEvidenceFloorIsBoundedAndLoud:
         """The actual mitigation: the evidence reader must be exactly as loud
         as the live measurement path. The quieter of two readers is the one an
         attacker picks."""
-        from typer.testing import CliRunner
-
         from soup_cli.cli import app
+        from tests.cli_runner import CliRunner
 
         monkeypatch.chdir(tmp_path)
         (tmp_path / "ev.json").write_text(
@@ -902,9 +901,8 @@ class TestAHostileEvidenceFloorIsBoundedAndLoud:
     ):
         """CONTROL. Warning on every evidence file trains the operator to
         ignore the warning."""
-        from typer.testing import CliRunner
-
         from soup_cli.cli import app
+        from tests.cli_runner import CliRunner
 
         monkeypatch.chdir(tmp_path)
         (tmp_path / "ev.json").write_text(
@@ -1343,10 +1341,9 @@ def _run_ship_cli(monkeypatch, base_gen, tuned_gen, extra_args=None):
     """
     import os as _os
 
-    from typer.testing import CliRunner
-
     from soup_cli.cli import app
     from soup_cli.commands import ship as ship_cmd
+    from tests.cli_runner import CliRunner
 
     monkeypatch.setattr(
         ship_cmd, "_resolve_generators", lambda *a, **k: (base_gen, tuned_gen)
@@ -1430,6 +1427,22 @@ class TestIssue317ThroughTheRealCli:
         assert [d["name"] for d in verdict["benchmark_deltas"] if d["regressed"]] == []
 
 
+def _mmlu_high_low_letters() -> tuple[str, str]:
+    """The most and least frequent mini_mmlu answer letters.
+
+    A constant-letter model scores each letter's share of the key, so these two
+    give the widest gap the fixture allows (#1192 balanced the key; the gap must
+    still clear the 0.05 regression threshold for the tests below to mean
+    anything, which the assertion pins).
+    """
+    from collections import Counter
+
+    counts = Counter(item["answer"] for item in MINI_BENCHMARKS["mini_mmlu"])
+    (high, n_high), *_, (low, n_low) = counts.most_common()
+    assert (n_high - n_low) / len(MINI_BENCHMARKS["mini_mmlu"]) > 0.05, counts
+    return high, low
+
+
 class TestNoiseFloorThroughTheRealCli:
     """H1 — ``--noise-floor`` must be wired all the way through
     ``_verdict_live``, not just validated as a flag."""
@@ -1461,6 +1474,7 @@ class TestNoiseFloorThroughTheRealCli:
         0.05 threshold, on an instrument whose own repeats move MORE than that,
         must not be called a regression."""
         n_items = len(MINI_BENCHMARKS["mini_mmlu"])
+        high, low = _mmlu_high_low_letters()
         state = {"n": 0}
 
         def noisy_base(prompt):
@@ -1468,12 +1482,12 @@ class TestNoiseFloorThroughTheRealCli:
                 return "hi"
             state["n"] += 1
             # Alternate WHOLE passes so the two repeats genuinely disagree.
-            return "B" if ((state["n"] - 1) // n_items) % 2 == 0 else "C"
+            return high if ((state["n"] - 1) // n_items) % 2 == 0 else low
 
         def dropped_tuned(prompt):
             if prompt == "say hi":
                 return "hi hi"
-            return "C"
+            return low
 
         with_floor, v_floor = _run_ship_cli(
             monkeypatch, noisy_base, dropped_tuned,
@@ -1488,18 +1502,19 @@ class TestNoiseFloorThroughTheRealCli:
         """CONTROL for the test above — proves the floor is what changed the
         answer and not the generators. Same base/tuned, no --noise-floor."""
         n_items = len(MINI_BENCHMARKS["mini_mmlu"])
+        high, low = _mmlu_high_low_letters()
         state = {"n": 0}
 
         def noisy_base(prompt):
             if prompt == "say hi":
                 return "hi"
             state["n"] += 1
-            return "B" if ((state["n"] - 1) // n_items) % 2 == 0 else "C"
+            return high if ((state["n"] - 1) // n_items) % 2 == 0 else low
 
         def dropped_tuned(prompt):
             if prompt == "say hi":
                 return "hi hi"
-            return "C"
+            return low
 
         result, verdict = _run_ship_cli(
             monkeypatch, noisy_base, dropped_tuned,
@@ -1751,14 +1766,13 @@ class TestBareFunctionShapeGuard:
 
 class TestNoiseFloorCliFlag:
     def _runner(self):
-        from typer.testing import CliRunner
+        from tests.cli_runner import CliRunner
 
         return CliRunner()
 
     def test_the_flag_exists_and_is_documented(self):
-        from typer.testing import CliRunner
-
         from soup_cli.cli import app
+        from tests.cli_runner import CliRunner
 
         result = CliRunner().invoke(app, ["ship", "--help"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -1770,9 +1784,8 @@ class TestNoiseFloorCliFlag:
 
     @pytest.mark.parametrize("bad", ["1", "0", "-3", "11"])
     def test_out_of_range_is_a_usage_error(self, bad, tmp_path):
-        from typer.testing import CliRunner
-
         from soup_cli.cli import app
+        from tests.cli_runner import CliRunner
 
         tasks = tmp_path / "t.jsonl"
         tasks.write_text('{"prompt": "hi", "expected": "hi"}\n', encoding="utf-8")
@@ -1789,9 +1802,8 @@ class TestNoiseFloorCliFlag:
     def test_an_offline_verdict_refuses_to_measure_a_floor(self, tmp_path, monkeypatch):
         """``--evidence`` loads no model, so there is nothing to repeat.
         Refusing beats silently ignoring the flag the operator asked for."""
-        from typer.testing import CliRunner
-
         from soup_cli.cli import app
+        from tests.cli_runner import CliRunner
 
         monkeypatch.chdir(tmp_path)
         ev = tmp_path / "ev.json"
@@ -1811,9 +1823,8 @@ class TestNoiseFloorCliFlag:
 
     def test_an_offline_verdict_without_the_flag_still_works(self, tmp_path, monkeypatch):
         """CONTROL. The refusal must be about the FLAG, not about --evidence."""
-        from typer.testing import CliRunner
-
         from soup_cli.cli import app
+        from tests.cli_runner import CliRunner
 
         monkeypatch.chdir(tmp_path)
         ev = tmp_path / "ev.json"

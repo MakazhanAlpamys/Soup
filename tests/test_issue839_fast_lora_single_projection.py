@@ -16,11 +16,24 @@ Asserted on CPU (no CUDA needed):
   less than it appeared to. With ``lora_B`` randomised the comparison is a real
   one and the tolerance is what carries it.
 - Delegation to peft's own forward: disabled adapters, merged adapters, a DoRA
-  variant, non-zero dropout, and the ``adapter_names`` kwarg.
+  variant, non-zero dropout without the opt-in, and the ``adapter_names`` kwarg.
+- The dropout opt-in (``allow_dropout=True``) on the single-projection patcher:
+  forward and backward parity against an unpatched peft twin under an injected
+  fixed mask and under one seed for both paths, mask equality across a
+  ``checkpoint`` recompute (both ``use_reentrant`` modes), eval-mode identity,
+  ``p = 1`` delegation, and the real draw's keep-rate statistics.
+- NF4 + dropout on CPU (bitsandbytes quantizes on CPU): the captured mask
+  replays into the unpatched path on the same module under checkpoint, which
+  is the arm that pins the ``ctx.qstart`` slice the backward rebuilds from.
 - The patched forward reads the base weight at call time (the streaming
   contract); patching is counted, idempotent and reversible.
 - A 4-layer tiny Llama with 2 stream buffers: the patched streamed model's loss
   and all 16 adapter grads match the resident twin (#331 shape).
+- A 4-layer NF4 ``o_proj`` streamed model with 2 buffers, compared against a
+  second unpatched streamed twin: loss and every layer's ``o_proj`` adapter
+  grads match at ``rtol=1e-4, atol=1e-5``. The kernel must read
+  ``ctx.saved_tensors`` once; a second read raises ``CheckpointError`` under the
+  streamed unpack hook, and this test keeps that contract pinned.
 - Saved-for-backward bytes are not worse than peft's graph at the unit shapes
   (measured equal; the assertion is ``<=``).
 - The kernel's own grad_fn is asserted on CPU across bias, rank, and dtypes
@@ -34,11 +47,16 @@ Marked ``gpu`` (the protocol for a CUDA run; skipped in CI):
   ``lora.bnb.Linear4bit``. The tolerance is loose on purpose: the fused-vs-dequant
   divergence #776 pins is part of whatever delta is measured there, and the honest
   magnitude needs a card.
-- A micro-benchmark at the Llama-3.1-8B ``o_proj`` shape. Report, do not
-  assert.
+- A 4-layer NF4 streamed ``o_proj`` model with 2 buffers, compared against a
+  resident NF4 twin: loss and every layer's ``o_proj`` adapter grads, not only
+  the last buffer's.
+- A micro-benchmark at the Llama-3.1-8B ``o_proj`` shape (4096 -> 4096,
+  ``N=2048``, ``r`` in {16, 64}), bf16 dense and NF4: median forward+backward
+  and ``torch.cuda.max_memory_allocated``, with the card, driver and versions
+  printed as the report header. Report, do not assert speed.
 
-The gpu-marked tests need a card. Everything CPU above ran green on macOS with
-torch 2.14.0 / peft 0.21.0 / Python 3.12 (the versions CI installs).
+The gpu-marked tests need a card. Everything CPU above is CI-visible; the NF4
+streamed checkpoint test skips when bitsandbytes is not installed.
 """
 
 from __future__ import annotations
@@ -61,21 +79,147 @@ def _spy(real_forward, calls, *args, **kwargs):
     return real_forward(*args, **kwargs)
 
 
-def _randomise_lora_b(module):
+def _randomise_lora_b(module, std=0.5):
     """Give ``lora_B`` a non-zero weight so the LoRA term is actually exercised.
 
     peft initialises ``lora_B`` to zeros, which makes ``h @ B^T`` vanish: every
     comparison then holds trivially, ``dA`` is compared zero against zero, and a
     kernel that drops the dropout, ``disable_adapters``, ``merged`` or DoRA guard
     still passes. Randomising B is what makes those tests mean anything.
+
+    The NF4 streamed tests use ``std=0.02``: the tiny NF4 model has no reason to
+    carry an adapter as large as the unit-shape fp32 fixtures.
     """
     import torch
 
     with torch.no_grad():
         for _name, param in module.named_parameters():
             if "lora_B" in _name:
-                torch.nn.init.normal_(param, std=0.5)
+                torch.nn.init.normal_(param, std=std)
     return module
+
+
+def _tiny_llama_config(n_layers=4, hidden_size=64):
+    """A CPU-sized Llama. Hidden 64 is load-bearing for CPU NF4; see test_v07202."""
+    from transformers import LlamaConfig
+
+    return LlamaConfig(
+        vocab_size=64,
+        hidden_size=hidden_size,
+        intermediate_size=64,
+        num_hidden_layers=n_layers,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        tie_word_embeddings=False,
+        max_position_embeddings=128,
+    )
+
+
+def _oproj_lora(r=4, alpha=8):
+    from peft import LoraConfig, TaskType
+
+    return LoraConfig(
+        r=r,
+        lora_alpha=alpha,
+        lora_dropout=0.0,
+        bias="none",
+        target_modules=["o_proj"],
+        task_type=TaskType.CAUSAL_LM,
+    )
+
+
+def _nf4_streamed_oproj(tmp_path, *, device, dtype, n_layers=4, buffers=2):
+    """A tiny Llama sharded as NF4 on ``device`` with ``o_proj`` adapters only.
+
+    Four layers against two buffers is the #331 shape: the streamed checkpoint
+    must survive more layers than the pools hold. ``quant_device`` is pinned to
+    ``device`` because CPU and CUDA quantisation differ in nested statistics,
+    which is unrelated to the kernel.
+    """
+    import torch
+    from safetensors.torch import save_file
+    from transformers import LlamaForCausalLM
+
+    from soup_cli.utils.layer_shard import QUANT_NF4, shard_checkpoint
+    from soup_cli.utils.layer_stream_runtime import (
+        build_meta_skeleton,
+        build_streamed_model,
+        quantised_layer_suffixes,
+    )
+
+    config = _tiny_llama_config(n_layers)
+    weights = tmp_path / "model"
+    weights.mkdir(parents=True, exist_ok=True)
+    torch.manual_seed(7)
+    save_file(
+        {
+            name: tensor.contiguous()
+            for name, tensor in LlamaForCausalLM(config).state_dict().items()
+        },
+        str(weights / "model.safetensors"),
+    )
+    config.save_pretrained(str(weights))
+
+    probe = build_meta_skeleton(str(weights), dtype=dtype, quant=QUANT_NF4)
+    suffixes = quantised_layer_suffixes(probe)
+    del probe
+    shards = str(tmp_path / "shards")
+    index = shard_checkpoint(
+        str(weights),
+        shards,
+        dtype=dtype,
+        arch="llama",
+        quant=QUANT_NF4,
+        quant_suffixes=suffixes,
+        quant_device=device,
+    )
+    lora_config = _oproj_lora()
+    model, _runtime = build_streamed_model(
+        model_id=str(weights),
+        shard_dir=shards,
+        index=index,
+        lora_config=lora_config,
+        device=device,
+        dtype=dtype,
+        buffers=buffers,
+        pin=False,
+        seed=3,
+        quant=QUANT_NF4,
+    )
+    return model, weights, lora_config
+
+
+def _sync_adapters(dst, src):
+    """Copy every LoRA tensor from ``src`` into ``dst``; return the match count.
+
+    Names are normalised for peft's ``.inner.`` wrapper so the streamed and
+    resident twins can be compared parameter-for-parameter.
+    """
+    import torch
+
+    source = {
+        name.replace(".inner.", "."): tensor.detach().clone()
+        for name, tensor in src.state_dict().items()
+        if "lora_" in name
+    }
+    copied = 0
+    with torch.no_grad():
+        for name, tensor in dst.state_dict().items():
+            if "lora_" not in name:
+                continue
+            match = source.get(name.replace(".inner.", "."))
+            if match is not None:
+                tensor.copy_(match.to(tensor.device, tensor.dtype))
+                copied += 1
+    return copied
+
+
+def _oproj_grads(module):
+    grads = {}
+    for name, param in module.named_parameters():
+        if "lora_" in name and ".o_proj." in name and param.grad is not None:
+            grads[name.replace(".inner.", ".")] = param.grad.detach().clone()
+    return grads
 
 
 def _make_adapted_linear(in_f=8, out_f=6, r=2, alpha=4, bias=True, dropout=0.0, dora=False):
@@ -142,7 +286,7 @@ class TestGradcheckFloat64:
         bb = torch.randn(out_f, r, dtype=torch.float64, requires_grad=True)
 
         def f(x_, a_, b_):
-            return fn.apply(x_, w, b, a_, b_, 0.5, None)
+            return fn.apply(x_, w, b, a_, b_, 0.5, None, 0.0, False)
 
         assert torch.autograd.gradcheck(f, (x, a, bb))
 
@@ -169,7 +313,7 @@ class TestGradcheckFloat64:
         a = torch.randn(r, in_f, dtype=torch.float64, requires_grad=True)
         bb = torch.randn(out_f, r, dtype=torch.float64, requires_grad=True)
 
-        out = fn.apply(x, w, None, a, bb, 0.5, None)
+        out = fn.apply(x, w, None, a, bb, 0.5, None, 0.0, False)
         first = torch.autograd.grad(out.sum(), (x, a, bb), create_graph=True)
 
         with pytest.raises(RuntimeError) as caught:
@@ -357,19 +501,32 @@ class TestDelegation:
         got = layer(x)
         torch.testing.assert_close(got, expected)
 
-    def test_dropout_delegates(self):
-        """Non-zero dropout is refused by the tracker's validators; a direct
-        caller gets peft's own (stochastic) path, not silently unregularised
-        math. Seeded, both paths must draw the same masks."""
+    def test_dropout_delegates(self, monkeypatch):
+        """Non-zero dropout is refused without the opt-in; a direct caller gets
+        peft's own (stochastic) path, not silently unregularised math.
+
+        The kernel must not run, and on CPU its draw follows the same RNG order
+        as ``nn.Dropout``, so seeded output equality alone cannot tell the two
+        paths apart: a recorder on the draw plus the grad_fn pin it.
+        """
         _requires_train_extra()
         import torch
 
+        from soup_cli.utils import fast_lora
         from soup_cli.utils.fast_lora import patch_fast_lora_single_projection
 
         torch.manual_seed(0)
         model, layer = _make_adapted_linear(dropout=0.5)
         twin = copy.deepcopy(model)
 
+        draws = []
+        real = fast_lora._dropout_mask
+
+        def recorder(x_, p):
+            draws.append(True)
+            return real(x_, p)
+
+        monkeypatch.setattr(fast_lora, "_dropout_mask", recorder)
         assert patch_fast_lora_single_projection(model) == 1
         layer.train()
         twin.linear.train()
@@ -381,6 +538,13 @@ class TestDelegation:
         expected = twin.linear(x)
 
         torch.testing.assert_close(got, expected)
+        assert draws == [], (
+            "the patched forward drew a mask on a delegated call, so the kernel ran "
+            "without the opt-in"
+        )
+        assert type(got.grad_fn).__name__ != "_FastLoraSingleProjectionBackward", (
+            "off-by-default is not pinned: the kernel ran on a call that must delegate"
+        )
 
     def test_adapter_names_kwarg_goes_to_peft(self):
         """The mixed-batch forward is peft's; the patched and unpatched calls
@@ -666,6 +830,416 @@ class TestPatchPlumbing:
         torch.testing.assert_close(second, expected)
 
 
+class TestDropoutOptIn:
+    """#839: dropout is modelled only when the caller asks for it.
+
+    The default stays peft's call (``TestDelegation`` pins that the kernel
+    stays out); with ``allow_dropout=True`` the kernel draws the mask itself
+    and has to be held to the same standards as the deterministic path: parity
+    two ways (under an injected fixed mask, and under one seed for both paths,
+    which on CPU share the draw's RNG order), a mask that survives a checkpoint
+    recompute in both checkpoint modes, eval identity, ``p = 1`` delegation,
+    and the draw's own statistics. NF4 + dropout covers the quant-state slice
+    on CPU.
+    """
+
+    def test_shared_check_still_refuses_dropout_for_other_callers(self):
+        """The MLP and QKV kernels never pass the opt-in, so the guard stays.
+
+        A non-zero dropout layer must hand them ``None`` (peft keeps those
+        calls); only the single-projection opt-in turns the state into one
+        carrying the dropout knobs.
+        """
+        _requires_train_extra()
+        import torch
+
+        from soup_cli.utils import fast_lora
+
+        torch.manual_seed(0)
+        model, layer = _make_adapted_linear(dropout=0.5)
+        layer.train()
+        x = torch.randn(5, 8)
+
+        assert fast_lora._projection_state(layer, x) is None
+        state = fast_lora._projection_state(layer, x, allow_dropout=True)
+        assert state is not None
+        assert state.dropout_p == 0.5
+        assert state.dropout_training is True
+
+    def test_dropout_parity_with_peft_under_an_injected_mask(self, monkeypatch):
+        """Forward and backward match peft when both sides apply one fixed mask."""
+        _requires_train_extra()
+        import torch
+
+        from soup_cli.utils import fast_lora
+        from soup_cli.utils.fast_lora import patch_fast_lora_single_projection
+
+        class _FixedMaskDropout(torch.nn.Module):
+            """peft's dropout slot, pinned to one mask for a deterministic twin."""
+
+            def __init__(self, keep, p):
+                super().__init__()
+                self.register_buffer("keep", keep)
+                self.p = p
+
+            def forward(self, x):
+                return x * self.keep / (1.0 - self.p)
+
+        torch.manual_seed(0)
+        model, layer = _make_adapted_linear(dropout=0.5)
+        ref_model = copy.deepcopy(model)
+        ref_layer = ref_model.linear
+
+        keep = torch.rand(5, 8) > 0.5
+        ref_layer.lora_dropout["default"] = _FixedMaskDropout(keep, 0.5)
+
+        def fixed_mask(x_, p_):
+            return keep, x_ * keep / (1.0 - p_)
+
+        monkeypatch.setattr(fast_lora, "_dropout_mask", fixed_mask)
+        assert patch_fast_lora_single_projection(model, allow_dropout=True) == 1
+
+        layer.train()
+        ref_layer.train()
+        x = torch.randn(5, 8, requires_grad=True)
+
+        ref = ref_layer(x)
+        ref.sum().backward()
+        ref_x = x.grad.detach().clone()
+        ref_p = {
+            name: p.grad.detach().clone()
+            for name, p in ref_layer.named_parameters()
+            if p.grad is not None
+        }
+
+        x.grad = None
+        for p in layer.parameters():
+            p.grad = None
+
+        out = layer(x)
+        assert type(out.grad_fn).__name__ == "_FastLoraSingleProjectionBackward", (
+            f"the kernel did not run: grad_fn is {type(out.grad_fn).__name__}"
+        )
+        out.sum().backward()
+
+        torch.testing.assert_close(out, ref)
+        torch.testing.assert_close(x.grad, ref_x)
+        for name, p in layer.named_parameters():
+            if name in ref_p:
+                torch.testing.assert_close(p.grad, ref_p[name], msg=name)
+
+    @pytest.mark.parametrize("use_reentrant", [False, True])
+    def test_mask_matches_under_checkpoint_recompute(self, monkeypatch, use_reentrant):
+        """The recompute draws the same mask, and the grads land where the plain
+        run puts them.
+
+        ``checkpoint`` runs the forward twice; with ``preserve_rng_state`` the
+        second pass starts from the same RNG state, so the recorded masks must
+        be identical. The saved-mask design is what makes this the equality to
+        assert: a recompute that re-drew fresh dropout would show up as a
+        different mask and different grads.
+        """
+        _requires_train_extra()
+        import torch
+
+        from soup_cli.utils import fast_lora
+        from soup_cli.utils.fast_lora import patch_fast_lora_single_projection
+
+        torch.manual_seed(0)
+        model, layer = _make_adapted_linear(dropout=0.5)
+
+        draws = []
+        real = fast_lora._dropout_mask
+
+        def recorder(x_, p):
+            keep_, x_d = real(x_, p)
+            draws.append(keep_)
+            return keep_, x_d
+
+        monkeypatch.setattr(fast_lora, "_dropout_mask", recorder)
+        assert patch_fast_lora_single_projection(model, allow_dropout=True) == 1
+
+        layer.train()
+        x = torch.randn(5, 8, requires_grad=True)
+
+        torch.manual_seed(7)
+        ref = layer(x)
+        ref.sum().backward()
+        ref_x = x.grad.detach().clone()
+        ref_p = {
+            name: p.grad.detach().clone()
+            for name, p in layer.named_parameters()
+            if p.grad is not None
+        }
+        assert len(draws) == 1, f"the plain run should draw once, drew {len(draws)}"
+        ref_keep = draws[0]
+
+        x.grad = None
+        for p in layer.parameters():
+            p.grad = None
+        draws.clear()
+
+        torch.manual_seed(7)
+        out = torch.utils.checkpoint.checkpoint(
+            lambda t: layer(t), x, use_reentrant=use_reentrant
+        )
+        out.sum().backward()
+
+        assert len(draws) == 2, (
+            f"checkpoint should run the forward twice (original + recompute); saw {len(draws)}"
+        )
+        assert torch.equal(draws[0], ref_keep), "the same seed drew a different mask"
+        assert torch.equal(draws[0], draws[1]), "the recompute drew a different mask"
+
+        torch.testing.assert_close(out, ref)
+        torch.testing.assert_close(x.grad, ref_x)
+        for name, p in layer.named_parameters():
+            if name in ref_p:
+                torch.testing.assert_close(p.grad, ref_p[name], msg=name)
+
+    def test_eval_mode_skips_the_mask(self, monkeypatch):
+        """nn.Dropout is identity in eval, and a validation pass must match.
+
+        The kernel reads the dropout module's training flag; in eval no mask
+        may be drawn and the output must equal the unpatched twin's.
+        """
+        _requires_train_extra()
+        import torch
+
+        from soup_cli.utils import fast_lora
+        from soup_cli.utils.fast_lora import patch_fast_lora_single_projection
+
+        torch.manual_seed(0)
+        model, layer = _make_adapted_linear(dropout=0.5)
+        twin = copy.deepcopy(model)
+
+        draws = []
+        real = fast_lora._dropout_mask
+
+        def recorder(x_, p):
+            draws.append(True)
+            return real(x_, p)
+
+        monkeypatch.setattr(fast_lora, "_dropout_mask", recorder)
+        assert patch_fast_lora_single_projection(model, allow_dropout=True) == 1
+
+        layer.eval()
+        twin.linear.eval()
+        x = torch.randn(5, 8)
+
+        got = layer(x)
+        expected = twin.linear(x)
+
+        assert draws == [], "a mask was drawn in eval"
+        torch.testing.assert_close(got, expected)
+
+    def test_the_real_draw_keeps_at_about_one_minus_p(self):
+        """The draw itself: boolean mask, one byte per element, keep rate ~1-p.
+
+        The parity arm injects its mask, so this is the only place a wrong
+        probability or an inverted keep/drop convention can be caught.
+        """
+        _requires_train_extra()
+        import torch
+
+        from soup_cli.utils import fast_lora
+
+        torch.manual_seed(0)
+        x = torch.randn(1000, 1000)
+        keep, x_d = fast_lora._dropout_mask(x, 0.25)
+
+        assert keep.shape == x.shape
+        assert keep.dtype == torch.bool
+        assert keep.element_size() == 1
+        rate = keep.float().mean().item()
+        assert abs(rate - 0.75) < 0.003, f"keep rate {rate:.4f} is not ~0.75"
+        torch.testing.assert_close(x_d, x * keep / 0.75)
+
+    def test_dropout_parity_with_peft_under_the_same_seed(self):
+        """Seeded, both paths draw the same masks on CPU, so the twin comparison
+        needs no injected mask. This is the stronger witness: it goes red if the
+        kernel's draw diverges from ``nn.Dropout``'s RNG order."""
+        _requires_train_extra()
+        import torch
+
+        from soup_cli.utils.fast_lora import patch_fast_lora_single_projection
+
+        torch.manual_seed(0)
+        model, layer = _make_adapted_linear(dropout=0.5)
+        twin = copy.deepcopy(model)
+
+        assert patch_fast_lora_single_projection(model, allow_dropout=True) == 1
+        layer.train()
+        twin.linear.train()
+        x = torch.randn(5, 8, requires_grad=True)
+
+        torch.manual_seed(7)
+        got = layer(x)
+        assert type(got.grad_fn).__name__ == "_FastLoraSingleProjectionBackward", (
+            f"the kernel did not run: grad_fn is {type(got.grad_fn).__name__}"
+        )
+        got.sum().backward()
+        got_x = x.grad.detach().clone()
+        got_p = {
+            name: p.grad.detach().clone()
+            for name, p in layer.named_parameters()
+            if p.grad is not None
+        }
+
+        x.grad = None
+        for p in layer.parameters():
+            p.grad = None
+
+        torch.manual_seed(7)
+        expected = twin.linear(x)
+        expected.sum().backward()
+
+        torch.testing.assert_close(got, expected)
+        torch.testing.assert_close(got_x, x.grad)
+        for name, p in twin.linear.named_parameters():
+            if name in got_p:
+                torch.testing.assert_close(p.grad, got_p[name], msg=name)
+
+    def test_lora_dropout_p_one_delegates_and_stays_finite(self, monkeypatch):
+        """``lora_dropout=1.0`` delegates: ``1 / (1 - p)`` is undefined at one
+        and peft's native dropout handles the edge. The recorder proves the
+        kernel stayed out and nothing produced NaN."""
+        _requires_train_extra()
+        import torch
+
+        from soup_cli.utils import fast_lora
+        from soup_cli.utils.fast_lora import patch_fast_lora_single_projection
+
+        torch.manual_seed(0)
+        model, layer = _make_adapted_linear(dropout=1.0)
+        twin = copy.deepcopy(model)
+
+        draws = []
+        real = fast_lora._dropout_mask
+
+        def recorder(x_, p):
+            draws.append(True)
+            return real(x_, p)
+
+        monkeypatch.setattr(fast_lora, "_dropout_mask", recorder)
+        assert patch_fast_lora_single_projection(model, allow_dropout=True) == 1
+        layer.train()
+        twin.linear.train()
+        x = torch.randn(5, 8)
+
+        torch.manual_seed(7)
+        got = layer(x)
+        torch.manual_seed(7)
+        expected = twin.linear(x)
+
+        assert draws == [], "the kernel drew for p = 1.0 instead of delegating"
+        assert bool(torch.isfinite(got).all()), "p = 1.0 produced non-finite output"
+        torch.testing.assert_close(got, expected)
+
+    def test_nf4_dropout_under_checkpoint_rebuilds_the_quant_state(self, monkeypatch):
+        """NF4 + dropout: the backward's ``saved[ctx.qstart:]`` slice must skip
+        the mask before rebuilding the ``QuantState``.
+
+        bitsandbytes quantizes on CPU (0.50.2), so this arm needs no card: the
+        captured mask replays into the unpatched path on the same module under
+        the same checkpoint mode. ``ctx.qstart = 5``, which survives every other
+        test, turns this one red.
+        """
+        _requires_train_extra()
+        pytest.importorskip("bitsandbytes", reason="4-bit tests need bitsandbytes")
+        import bitsandbytes as bnb
+        import torch
+        import torch.nn as nn
+        from peft import LoraConfig, inject_adapter_in_model
+
+        from soup_cli.utils import fast_lora
+        from soup_cli.utils.fast_lora import (
+            patch_fast_lora_single_projection,
+            unpatch_fast_lora_single_projection,
+        )
+
+        class _Wrapper(nn.Module):
+            def __init__(self, layer):
+                super().__init__()
+                self.linear = layer
+
+        class _FixedMaskDropout(torch.nn.Module):
+            """peft's dropout slot, pinned to one mask for the unpatched twin."""
+
+            def __init__(self, keep, p):
+                super().__init__()
+                self.register_buffer("keep", keep)
+                self.p = p
+
+            def forward(self, x):
+                return x * self.keep / (1.0 - self.p)
+
+        torch.manual_seed(0)
+        model = _Wrapper(
+            bnb.nn.Linear4bit(16, 16, bias=False, compute_dtype=torch.float32, quant_type="nf4")
+        )
+        inject_adapter_in_model(
+            LoraConfig(r=4, lora_alpha=8, lora_dropout=0.5, bias="none", target_modules=["linear"]),
+            model,
+        )
+        _randomise_lora_b(model)
+        layer = model.linear
+
+        # Quantize explicitly: bnb's lazy path wants a ``.cuda()`` move, and
+        # this arm must exercise the quant branch, not the dense fallback.
+        packed, quant_state = bnb.functional.quantize_4bit(layer.weight.data, quant_type="nf4")
+        layer.weight.data = packed
+        layer.weight.quant_state = quant_state
+
+        draws = []
+        real = fast_lora._dropout_mask
+
+        def recorder(x_, p):
+            keep_, x_d = real(x_, p)
+            draws.append(keep_)
+            return keep_, x_d
+
+        monkeypatch.setattr(fast_lora, "_dropout_mask", recorder)
+        assert patch_fast_lora_single_projection(model, allow_dropout=True) == 1
+        layer.train()
+
+        x = torch.randn(5, 16, requires_grad=True)
+        torch.manual_seed(7)
+        out = torch.utils.checkpoint.checkpoint(lambda t: layer(t), x, use_reentrant=False)
+        out.sum().backward()
+
+        assert len(draws) == 2, f"checkpoint should draw twice; saw {len(draws)}"
+        assert torch.equal(draws[0], draws[1]), "the recompute drew a different mask"
+        got_x = x.grad.detach().clone()
+        got_p = {
+            name: p.grad.detach().clone()
+            for name, p in layer.named_parameters()
+            if p.grad is not None
+        }
+        assert got_p, "no parameter grads reached the backward"
+
+        # The unpatched path on the same module, fed the captured mask.
+        assert unpatch_fast_lora_single_projection(model) == 1
+        layer.lora_dropout["default"] = _FixedMaskDropout(draws[0], 0.5)
+
+        x.grad = None
+        for p in layer.parameters():
+            p.grad = None
+
+        ref = layer(x)
+        ref.sum().backward()
+
+        # Loose on purpose, like the CUDA NF4 arm: the fused-vs-dequant
+        # divergence (#776) is part of this delta.
+        atol = 1e-2
+        rtol = 1e-2
+        torch.testing.assert_close(out, ref, rtol=rtol, atol=atol)
+        torch.testing.assert_close(got_x, x.grad, rtol=rtol, atol=atol)
+        for name, p in layer.named_parameters():
+            if name in got_p:
+                torch.testing.assert_close(p.grad, got_p[name], rtol=rtol, atol=atol, msg=name)
+
+
 class TestSavedBytes:
     """#839: bytes held for backward, reported; no figure asserted in advance."""
 
@@ -733,7 +1307,10 @@ class TestStreamedModel:
         weights = tmp_path / "model"
         weights.mkdir(parents=True, exist_ok=True)
         save_file(
-            {k: v.contiguous() for k, v in LlamaForCausalLM(config).state_dict().items()},
+            {
+                name: tensor.contiguous()
+                for name, tensor in LlamaForCausalLM(config).state_dict().items()
+            },
             str(weights / "model.safetensors"),
         )
         config.save_pretrained(str(weights))
@@ -813,6 +1390,85 @@ class TestStreamedModel:
         assert matched == 16
 
 
+class TestNf4StreamedOProjCheckpoint:
+    """A streamed NF4 checkpoint must not unpack ``ctx.saved_tensors`` twice.
+
+    Four layers against two buffers makes the streamed runtime recompute through
+    ``torch.utils.checkpoint``. A second ``ctx.saved_tensors`` read there raises
+    ``CheckpointError``; the NF4 branch used to consume a second read for the
+    quant state. The kernel now reads once, and this CPU test keeps that
+    contract pinned without a card. It also compares the loss and all eight
+    ``o_proj`` adapter grads against a second streamed model running peft's own
+    backward, so a wrong path through the NF4 backward cannot pass by producing
+    finite, non-zero grads.
+    """
+
+    def test_every_layer_receives_a_gradient(self, tmp_path):
+        _requires_train_extra()
+        for mod in ("transformers", "safetensors", "bitsandbytes"):
+            pytest.importorskip(mod, reason=f"{mod} is only in the [train] extra")
+        import torch
+
+        from soup_cli.utils.fast_lora import patch_fast_lora_single_projection
+        from soup_cli.utils.layer_stream_runtime import decoder_owner
+
+        model, _weights, _lora = _nf4_streamed_oproj(
+            tmp_path / "fast", device="cpu", dtype="float32"
+        )
+        reference, _ref_weights, _ref_lora = _nf4_streamed_oproj(
+            tmp_path / "reference", device="cpu", dtype="float32"
+        )
+        _randomise_lora_b(model, std=0.02)
+        assert _sync_adapters(reference, model) == 8
+        assert patch_fast_lora_single_projection(model) == 4
+        layers = decoder_owner(model).layers
+        assert len(layers) == 4
+        assert [layer.self_attn.o_proj.forward.__func__.__name__ for layer in layers] == [
+            "_fast_lora_single_forward"
+        ] * 4
+        assert all(
+            layer.self_attn.o_proj.forward.__func__.__name__ != "_fast_lora_single_forward"
+            for layer in decoder_owner(reference).layers
+        ), "the reference must stay unpatched"
+
+        torch.manual_seed(11)
+        input_ids = torch.randint(0, 64, (1, 8))
+        labels = torch.randint(0, 64, (1, 8))
+        model.train()
+        reference.train()
+        loss = model(input_ids=input_ids, labels=labels).loss
+        assert torch.isfinite(loss)
+        loss.backward()
+        reference_loss = reference(input_ids=input_ids, labels=labels).loss
+        assert torch.isfinite(reference_loss)
+        reference_loss.backward()
+
+        torch.testing.assert_close(loss, reference_loss, rtol=1e-4, atol=1e-5)
+
+        grads = _oproj_grads(model)
+        reference_grads = _oproj_grads(reference)
+        assert len(grads) == 8
+        assert len(reference_grads) == 8
+        for layer in range(4):
+            for ab in ("lora_A", "lora_B"):
+                suffix = f"layers.{layer}.self_attn.o_proj.{ab}.default.weight"
+                streamed_match = [grad for name, grad in grads.items() if name.endswith(suffix)]
+                reference_match = [
+                    grad for name, grad in reference_grads.items() if name.endswith(suffix)
+                ]
+                assert len(streamed_match) == 1, (layer, ab, sorted(grads))
+                assert len(reference_match) == 1, (layer, ab, sorted(reference_grads))
+                assert torch.isfinite(streamed_match[0]).all(), (layer, ab)
+                assert streamed_match[0].abs().max().item() > 0, (layer, ab)
+                torch.testing.assert_close(
+                    streamed_match[0],
+                    reference_match[0],
+                    rtol=1e-4,
+                    atol=1e-5,
+                    msg=f"layer {layer} {ab}",
+                )
+
+
 @pytest.mark.gpu
 class TestNf4Parity:
     """NF4: parity against unpatched ``lora.bnb.Linear4bit``. Needs a card."""
@@ -881,26 +1537,169 @@ class TestNf4Parity:
 
 
 @pytest.mark.gpu
-class TestMicroBenchmark:
-    """Llama-3.1-8B ``o_proj`` shape: report, do not assert (tracker #792)."""
+class TestNf4StreamedOProjParity:
+    """NF4 streaming on the card: every layer's ``o_proj`` adapter, not the last."""
 
-    def _time_fwd_bwd(self, layer, x, iters=5):
+    def test_streamed_nf4_matches_resident_on_every_layer(self, tmp_path):
+        _requires_train_extra()
+        for mod in ("transformers", "safetensors", "bitsandbytes", "accelerate"):
+            pytest.importorskip(mod, reason=f"{mod} is only in the [train] extra")
+        import torch
+        from peft import get_peft_model
+        from transformers import AutoModelForCausalLM
+
+        from soup_cli.utils.fast_lora import patch_fast_lora_single_projection
+        from soup_cli.utils.layer_stream_runtime import build_nf4_config, decoder_owner
+
+        model, weights, lora_config = _nf4_streamed_oproj(
+            tmp_path, device="cuda", dtype="bfloat16"
+        )
+        _randomise_lora_b(model, std=0.02)
+
+        resident = AutoModelForCausalLM.from_pretrained(
+            str(weights),
+            quantization_config=build_nf4_config("bfloat16"),
+            dtype=torch.bfloat16,
+            device_map={"": "cuda"},
+        )
+        resident.config.use_cache = False
+        for param in resident.parameters():
+            param.requires_grad = False
+        resident = get_peft_model(resident, lora_config)
+        assert _sync_adapters(resident, model) == 8
+
+        assert patch_fast_lora_single_projection(model) == 4
+        layers = decoder_owner(model).layers
+        assert len(layers) == 4
+        assert [layer.self_attn.o_proj.forward.__func__.__name__ for layer in layers] == [
+            "_fast_lora_single_forward"
+        ] * 4
+
+        torch.manual_seed(11)
+        input_ids = torch.randint(0, 64, (1, 8), device="cuda")
+        labels = torch.randint(0, 64, (1, 8), device="cuda")
+        model.train()
+        resident.train()
+        streamed_loss = model(input_ids=input_ids, labels=labels).loss
+        streamed_loss.backward()
+        resident_loss = resident(input_ids=input_ids, labels=labels).loss
+        resident_loss.backward()
+
+        assert torch.isfinite(streamed_loss)
+        # Loose for the same reason as TestNf4Parity: fused-vs-dequant (#776)
+        # is part of the delta, so this compares delivery, not bit layout.
+        torch.testing.assert_close(streamed_loss, resident_loss, rtol=1e-2, atol=1e-2)
+
+        streamed_grads = _oproj_grads(model)
+        resident_grads = _oproj_grads(resident)
+        assert len(streamed_grads) == 8
+        assert len(resident_grads) == 8
+        for layer in range(4):
+            for ab in ("lora_A", "lora_B"):
+                suffix = f"layers.{layer}.self_attn.o_proj.{ab}.default.weight"
+                streamed_match = [
+                    grad for name, grad in streamed_grads.items() if name.endswith(suffix)
+                ]
+                resident_match = [
+                    grad for name, grad in resident_grads.items() if name.endswith(suffix)
+                ]
+                assert len(streamed_match) == 1, (layer, ab, sorted(streamed_grads))
+                assert len(resident_match) == 1, (layer, ab, sorted(resident_grads))
+                assert torch.isfinite(streamed_match[0]).all(), (layer, ab)
+                assert streamed_match[0].abs().max().item() > 0, (layer, ab)
+                max_abs = (streamed_match[0] - resident_match[0]).abs().max().item()
+                print(f"#839 streamed NF4 layer {layer} {ab}: max abs diff {max_abs:.3e}")
+                # The largest measured difference on the sm_75 card is 8.7e-4.
+                # atol=2e-3 leaves ~2.3x headroom over that reading while still
+                # rejecting a 10% dX error, which moves the downstream layer
+                # gradients by more than this bound.
+                torch.testing.assert_close(
+                    streamed_match[0],
+                    resident_match[0],
+                    rtol=1e-2,
+                    atol=2e-3,
+                    msg=f"layer {layer} {ab}",
+                )
+
+
+@pytest.mark.gpu
+class TestMicroBenchmark:
+    """Llama-3.1-8B ``o_proj`` shape: report, do not assert speed (tracker #792)."""
+
+    @staticmethod
+    def _smi(fields):
+        import shutil
+        import subprocess
+
+        tool = shutil.which("nvidia-smi")
+        if tool is None:
+            return "unavailable"
+        try:
+            proc = subprocess.run(
+                [tool, f"--query-gpu={fields}", "--format=csv,noheader"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return "unavailable"
+        if proc.returncode != 0 or not proc.stdout.strip():
+            return "unavailable"
+        return proc.stdout.strip()
+
+    def _environment_header(self):
+        import bitsandbytes as bnb
+        import peft
+        import torch
+
+        props = torch.cuda.get_device_properties(0)
+        print(
+            f"#839 bench env: {props.name} sm_{props.major}{props.minor} "
+            f"driver={self._smi('driver_version')} "
+            f"sm_clock_before={self._smi('clocks.sm')} "
+            f"sm_clock_max={self._smi('clocks.max.sm')} "
+            f"torch={torch.__version__} cuda={torch.version.cuda} "
+            f"peft={peft.__version__} bitsandbytes={bnb.__version__}"
+        )
+
+    def _measure(self, model, x, iters=5):
+        import statistics
+
         import torch
 
         def step():
-            out = layer(x)
+            model.zero_grad(set_to_none=True)
+            x.grad = None
+            out = model.linear(x)
             out.sum().backward()
+            return out
 
-        step()
+        for _ in range(5):
+            out = step()
         torch.cuda.synchronize()
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
-        start.record()
+        # Drop the warmup graph and its grads: the baseline is the persistent
+        # model plus input, not the last warmup step. Otherwise the first arm
+        # carries a live graph into ``base`` and the two arms are not comparable.
+        model.zero_grad(set_to_none=True)
+        x.grad = None
+        del out
+        torch.cuda.synchronize()
+        base = torch.cuda.memory_allocated()
+        torch.cuda.reset_peak_memory_stats()
+        times = []
         for _ in range(iters):
-            step()
-        end.record()
-        torch.cuda.synchronize()
-        return start.elapsed_time(end) / iters
+            out = None  # drop the previous step's graph before timing the next
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
+            out = step()
+            end.record()
+            torch.cuda.synchronize()
+            times.append(start.elapsed_time(end))
+        peak = torch.cuda.max_memory_allocated()
+        assert torch.isfinite(out).all()
+        return statistics.median(times), peak, base
 
     def test_report_only(self):
         _requires_train_extra()
@@ -917,30 +1716,59 @@ class TestMicroBenchmark:
                 super().__init__()
                 self.linear = layer
 
-        config = LoraConfig(
-            r=16, lora_alpha=32, lora_dropout=0.0, bias="none", target_modules=["linear"]
-        )
-        x = torch.randn(1, 4096, 4096, device="cuda", dtype=torch.bfloat16)
+        # Isolate the readings from whatever the previous GPU test left alive.
+        import gc
 
-        dense = _Wrapper(nn.Linear(4096, 4096, bias=False, dtype=torch.bfloat16)).to("cuda")
-        inject_adapter_in_model(config, dense)
-        plain_ms = self._time_fwd_bwd(dense.linear, x)
-        assert patch_fast_lora_single_projection(dense) == 1
-        fast_ms = self._time_fwd_bwd(dense.linear, x)
-        assert torch.isfinite(dense.linear(x)).all()
-        print(f"#839 o_proj bf16 dense: peft={plain_ms:.2f}ms fast={fast_ms:.2f}ms")
+        gc.collect()
+        torch.cuda.empty_cache()
 
-        nf4 = _Wrapper(
-            bnb.nn.Linear4bit(
-                4096, 4096, bias=False, compute_dtype=torch.bfloat16, quant_type="nf4"
-            )
-        ).to("cuda")
-        inject_adapter_in_model(config, nf4)
-        nf4_plain_ms = self._time_fwd_bwd(nf4.linear, x)
-        assert patch_fast_lora_single_projection(nf4) == 1
-        nf4_fast_ms = self._time_fwd_bwd(nf4.linear, x)
-        assert torch.isfinite(nf4.linear(x)).all()
-        print(f"#839 o_proj bf16 nf4: peft={nf4_plain_ms:.2f}ms fast={nf4_fast_ms:.2f}ms")
+        # N=2048 follows the issue; x requires grad, as o_proj's input does in
+        # a real network, so the dX GEMM is part of the backward being timed.
+        x = torch.randn(1, 2048, 4096, device="cuda", dtype=torch.bfloat16, requires_grad=True)
+        self._environment_header()
+
+        for rank in (16, 64):
+            for kind in ("dense", "nf4"):
+                if kind == "dense":
+                    layer = nn.Linear(4096, 4096, bias=False, dtype=torch.bfloat16)
+                else:
+                    layer = bnb.nn.Linear4bit(
+                        4096,
+                        4096,
+                        bias=False,
+                        compute_dtype=torch.bfloat16,
+                        quant_type="nf4",
+                    )
+                model = _Wrapper(layer).to("cuda")
+                inject_adapter_in_model(
+                    LoraConfig(
+                        r=rank,
+                        lora_alpha=2 * rank,
+                        lora_dropout=0.0,
+                        bias="none",
+                        target_modules=["linear"],
+                    ),
+                    model,
+                )
+                plain_ms, plain_peak, plain_base = self._measure(model, x)
+                assert patch_fast_lora_single_projection(model) == 1
+                fast_ms, fast_peak, fast_base = self._measure(model, x)
+                print(
+                    f"#839 o_proj bf16 {kind} r={rank}: "
+                    f"peft median={plain_ms:.2f}ms "
+                    f"peak={plain_peak / 2**20:.0f}MiB "
+                    f"(base {plain_base / 2**20:.0f}MiB, "
+                    f"step {(plain_peak - plain_base) / 2**20:.0f}MiB); "
+                    f"fast median={fast_ms:.2f}ms "
+                    f"peak={fast_peak / 2**20:.0f}MiB "
+                    f"(base {fast_base / 2**20:.0f}MiB, "
+                    f"step {(fast_peak - fast_base) / 2**20:.0f}MiB)"
+                )
+                del model
+                gc.collect()
+                torch.cuda.empty_cache()
+
+        print(f"#839 bench env after: sm_clock={self._smi('clocks.sm')}")
 
 
 class TestTheFastPathIsActuallyTaken:

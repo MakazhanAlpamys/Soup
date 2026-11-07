@@ -8,6 +8,9 @@ from typing import Optional
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.text import Text
+
+from soup_cli.utils.terminal import strip_control
 
 console = Console()
 
@@ -20,6 +23,22 @@ def _is_loopback(host: str) -> bool:
         return ipaddress.ip_address(host.strip("[]")).is_loopback
     except ValueError:
         return False
+
+
+def _url_host(host: str) -> str:
+    """Return the host to put in the URL a browser opens for a server bound to ``host``.
+
+    ``0.0.0.0`` and ``::`` are bind addresses, not destinations: Windows refuses
+    to connect to them (#2054), so they map to loopback. IPv6 literals are
+    bracketed, as a URL needs.
+    """
+    try:
+        addr = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return host
+    if addr.is_unspecified:
+        addr = ipaddress.ip_address("127.0.0.1" if addr.version == 4 else "::1")
+    return f"[{addr}]" if addr.version == 6 else str(addr)
 
 
 def ui(
@@ -67,6 +86,7 @@ def ui(
     """Launch the Soup Web UI.
 
     A Bearer auth token is auto-generated at startup and printed to the console.
+    The launch URL includes `?token=` so the first browser tab authenticates.
     API endpoints require 'Authorization: Bearer <token>'.
 
     `--public` exposes the server on 0.0.0.0 for phone-on-LAN access. The
@@ -113,11 +133,10 @@ def ui(
             except (TypeError, ValueError):
                 valid = False
         if not valid:
-            from rich.markup import escape as _rich_escape
-
             console.print(
-                f"[red]Error:[/] binding non-loopback host '{_rich_escape(str(host))}' "
-                "requires a valid authentication token."
+                Text.assemble(("Error:", "red"),
+                              f" binding non-loopback host '{strip_control(str(host))}' "
+                              "requires a valid authentication token.")
             )
             raise typer.Exit(code=2)
 
@@ -127,19 +146,21 @@ def ui(
 
     app = create_app(host=host, port=port)
 
-    url = f"http://{host}:{port}"
+    # The server stays bound to `host`; only the printed and opened URL changes.
+    url = f"http://{_url_host(host)}:{port}"
+    login_url = f"{url}/?token={token}"
 
-    panel_body = (
-        f"URL:    [bold]{url}[/]\n"
-        f"Token:  [bold]{token}[/]\n\n"
-        f"API endpoints require:\n"
-        f"  [dim]Authorization: Bearer {token}[/]\n\n"
-        f"Pages:\n"
-        f"  [bold]Dashboard[/]      - View experiments, loss charts, system info\n"
-        f"  [bold]New Training[/]   - Create config from templates, start training\n"
-        f"  [bold]Data Explorer[/]  - Browse and inspect datasets\n"
-        f"  [bold]Model Chat[/]     - Chat with a running inference server\n\n"
-        f"Press [bold]Ctrl+C[/] to stop."
+    panel_body = Text.assemble(
+        "URL:    ", (strip_control(login_url), "bold"),
+        "\nToken:  ", (token, "bold"),
+        "\n\nAPI endpoints require:\n  ",
+        (f"Authorization: Bearer {token}", "dim"),
+        "\n\nPages:\n  ",
+        ("Dashboard", "bold"), "      - View experiments, loss charts, system info\n  ",
+        ("New Training", "bold"), "   - Create config from templates, start training\n  ",
+        ("Data Explorer", "bold"), "  - Browse and inspect datasets\n  ",
+        ("Model Chat", "bold"), "     - Chat with a running inference server\n\nPress ",
+        ("Ctrl+C", "bold"), " to stop.",
     )
 
     console.print(
@@ -203,7 +224,7 @@ def ui(
             import time
 
             time.sleep(1)
-            webbrowser.open(url)
+            webbrowser.open(login_url)
 
         threading.Thread(target=_open, daemon=True).start()
 

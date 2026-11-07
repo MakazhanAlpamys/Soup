@@ -188,6 +188,18 @@ class UnlearnTrainerWrapper:
         method = validate_unlearn_method(self.method)
         self.method = method
 
+        # #2574: read both row sets before any model loads, so an unusable
+        # one is refused without loading the policy or the reference.
+        forget_path = cfg.data.forget_set
+        self._forget = _load_unlearn_rows(forget_path)
+        if not self._forget:
+            raise ValueError(f"forget_set {forget_path!r} yielded no usable rows")
+        retain_path = cfg.data.retain_set
+        if retain_path:
+            self._retain = _load_unlearn_rows(retain_path)
+            if not self._retain:
+                raise ValueError(f"retain_set {retain_path!r} yielded no usable rows")
+
         self.model, self.tokenizer, self._dev = load_model_and_tokenizer(
             cfg.base,
             device=self.device,
@@ -213,6 +225,17 @@ class UnlearnTrainerWrapper:
         self.model = get_peft_model(self.model, lora_cfg)
         self.model.train()
 
+        # This loop has no Trainer, so nothing else switches checkpointing on.
+        # Do what Trainer.train() does for the other wrappers (#797): every
+        # enabled tier is full checkpointing, with Transformers' default
+        # (non-reentrant) kwargs, and HF enables input grads for the frozen base.
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+        if should_enable_hf_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+        ):
+            self.model.gradient_checkpointing_enable()
+
         # NPO + RMU need a frozen reference copy of the base.
         if method in ("npo", "rmu"):
             ref, _, _ = load_model_and_tokenizer(
@@ -224,13 +247,6 @@ class UnlearnTrainerWrapper:
                 p.requires_grad_(False)
             ref.eval()
             self.ref_model = ref
-
-        forget_path = cfg.data.forget_set
-        self._forget = _load_unlearn_rows(forget_path)
-        if not self._forget:
-            raise ValueError(f"forget_set {forget_path!r} yielded no usable rows")
-        if cfg.data.retain_set:
-            self._retain = _load_unlearn_rows(cfg.data.retain_set)
 
         # NPO / SimNPO without a retain set has no utility anchor — the policy
         # is driven down on the forget set with nothing holding general
@@ -420,9 +436,13 @@ class UnlearnTrainerWrapper:
             else [loss for loss in (initial_loss, final_loss) if loss is not None]
         )
         loss_summary = summarize_training_loss([{"loss": loss} for loss in losses])
+        hours = int(duration // 3600)
+        minutes = int((duration % 3600) // 60)
+        duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
         return {
             **loss_summary,
             "total_steps": step,
+            "duration": duration_str,
             "duration_secs": duration,
             "output_dir": output_dir,
         }
@@ -447,7 +467,11 @@ class UnlearnTrainerWrapper:
         retain_ce = self._retain_ce(tokenize_pair, dev)
 
         beta = _DEFAULT_BETA
-        alpha = float(self.config.training.unlearn_alpha or 1.0)
+        alpha = (
+            1.0
+            if self.config.training.unlearn_alpha is None
+            else float(self.config.training.unlearn_alpha)
+        )
         out = self.model(input_ids=input_ids)
         policy_logps = sequence_logprob(out.logits, labels)
         if method == "npo":
@@ -548,7 +572,11 @@ class UnlearnTrainerWrapper:
         if retain_acts is None or retain_frozen is None:
             # No retain set: pure forget steering.
             return torch.mean((forget_acts - control_vec) ** 2)
-        alpha = float(self.config.training.unlearn_alpha or 1.0)
+        alpha = (
+            1.0
+            if self.config.training.unlearn_alpha is None
+            else float(self.config.training.unlearn_alpha)
+        )
         return rmu_loss(
             forget_acts, control_vec, retain_acts, retain_frozen, alpha=alpha,
         )

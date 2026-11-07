@@ -246,6 +246,45 @@ def plan_gradient_checkpointing(
     )
 
 
+def keep_one_input_grad_hook(model: Any) -> bool:
+    """Make each ``enable_input_require_grads()`` on ``model`` replace its last hook (#2365).
+
+    ``gradient_checkpointing_enable`` calls ``enable_input_require_grads()``,
+    which registers a new forward hook on the input embedding and overwrites the
+    handle of the previous one. ``gradient_checkpointing_disable`` removes it only
+    for a model with ``_hf_peft_config_loaded``, which ``get_peft_model`` and a
+    plain model do not set. The trl loops switch checkpointing off and on around
+    generation, so every step added a hook. This wraps the method on the base
+    ``PreTrainedModel`` instance (the PEFT model's base when ``model`` is one) so
+    that it first runs ``disable_input_require_grads()``. The hook is still
+    registered on every call; only the previous copy is removed. Hooks registered
+    before this runs stay, as transformers no longer holds their handles.
+
+    Returns True when it wrapped the method, False when there was nothing to wrap
+    or it was already wrapped.
+    """
+    try:
+        from transformers import PreTrainedModel
+    except ImportError:
+        return False
+
+    get_base_model = getattr(model, "get_base_model", None)
+    base = get_base_model() if callable(get_base_model) else model
+    if not isinstance(base, PreTrainedModel):
+        return False
+    original = base.enable_input_require_grads
+    if getattr(original, "_soup_keeps_one_hook", False):
+        return False
+
+    def enable_input_require_grads() -> None:
+        base.disable_input_require_grads()
+        original()
+
+    enable_input_require_grads._soup_keeps_one_hook = True  # type: ignore[attr-defined]
+    base.enable_input_require_grads = enable_input_require_grads
+    return True
+
+
 def describe_tier(tier: TierLike, gpu_memory_gb: float | None = None) -> str:
     """Return a short human-readable description of the selected tier."""
     if not tier:

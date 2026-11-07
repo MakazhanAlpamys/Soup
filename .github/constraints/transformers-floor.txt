@@ -11,3 +11,15 @@ transformers==5.16.1
 trl==0.29.0
 peft==0.20.0
 plotext==6.0.0
+# #1802 — the declared floors of the CLI's own framework, so one CI cell starts the
+# CLI on them: `typer>=0.9.0` stayed declared while no command could run below
+# 0.12.4, and nothing noticed because every cell resolved the newest Typer. These two
+# pins must equal the floors in pyproject.toml's [project] dependencies
+# (tests/test_cli_dependency_floors.py refuses a pin that differs), and the job runs
+# that file to build the command tree and render every help page under them.
+# Side effect, intended: huggingface-hub requires typer>=0.20.0 from 1.14.0 and
+# click>=8.4.0 from 1.17.0, so under these pins the cell resolves huggingface-hub
+# 1.13.0 (and the newest datasets that accepts it, 5.0.1 on 2026-10-13) — the low
+# corner of the declared ranges, where every other cell runs the high one.
+typer==0.15.4
+click==8.0.0

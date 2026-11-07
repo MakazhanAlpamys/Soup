@@ -17,6 +17,7 @@ from typer.testing import CliRunner
 
 import soup_cli
 from soup_cli.cli import app
+from tests.ui_helpers import ui_client
 
 # CI's Rich pipeline emits ANSI escape codes that split keywords like
 # `--vocab-size` into multiple styled spans, breaking naive `in` checks.
@@ -146,7 +147,6 @@ def _auth_headers():
 
 def test_api_train_stream_emits_pending_events():
     pytest.importorskip("fastapi")
-    from fastapi.testclient import TestClient
 
     from soup_cli.ui.app import create_app
     from soup_cli.utils.sse_train_stream import TrainEvent
@@ -160,7 +160,7 @@ def test_api_train_stream_emits_pending_events():
     push_train_event(TrainEvent(type="status", message="started"))
 
     app_inst = create_app()
-    client = TestClient(app_inst)
+    client = ui_client(app_inst)
     response = client.get("/api/train/stream", headers=_auth_headers())
     assert response.status_code == 200
     body = response.text
@@ -195,7 +195,6 @@ def test_global_tool_buffer_round_trip():
 
 def test_api_tool_outputs_endpoint():
     pytest.importorskip("fastapi")
-    from fastapi.testclient import TestClient
 
     from soup_cli.ui.app import create_app
     from soup_cli.utils.tool_outputs import (
@@ -222,7 +221,7 @@ def test_api_tool_outputs_endpoint():
     )
 
     app_inst = create_app()
-    client = TestClient(app_inst)
+    client = ui_client(app_inst)
     response = client.get("/api/tool-outputs?limit=5", headers=_auth_headers())
     assert response.status_code == 200
     payload = response.json()
@@ -234,11 +233,10 @@ def test_api_tool_outputs_endpoint():
 
 def test_api_tool_outputs_rejects_out_of_bounds_limit():
     pytest.importorskip("fastapi")
-    from fastapi.testclient import TestClient
 
     from soup_cli.ui.app import create_app
 
-    client = TestClient(create_app())
+    client = ui_client(create_app())
     # limit must be 1..1000
     assert (
         client.get(

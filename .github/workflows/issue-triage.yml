@@ -1,0 +1,53 @@
+# Keep the triage labels of an issue consistent:
+#   - a new issue without a `difficulty:N` label gets `needs-triage`;
+#   - `needs-triage` is removed as soon as a `difficulty:N` label is set;
+#   - more than one `difficulty:N` label (or an unknown one) fails the run, so whoever added
+#     the second label sees it.
+# The rules live in scripts/issue_triage_labels.py (tests/test_issue_triage_labels.py).
+#
+# Security: this runs on the `issues` event in the base repository with a write token, so it
+# never reads what an issue author wrote. It takes the issue number, the repository and the
+# event action, hands them to the script as environment variables, and never puts an
+# expression into a shell command. Checkout is the default branch; the token is not kept.
+#
+# Load: only an `opened` event, a `difficulty:*` label or `needs-triage` can change the
+# outcome, so any other label event is skipped by the job condition and takes no runner.
+#
+# A failed run (two levels on one issue) shows a red mark on the newest commit of main: an
+# `issues` run belongs to the default branch. The job id `labels` is not a required check.
+name: issue triage labels
+
+on:
+  issues:
+    types: [opened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  labels:
+    if: >-
+      github.event.action == 'opened' ||
+      startsWith(github.event.label.name, 'difficulty:') ||
+      github.event.label.name == 'needs-triage'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # One run at a time per issue, and the `opened` run in a group of its own: a burst of
+    # label events at creation (a form sets labels) can then never replace it. The group is on
+    # the job, not on the workflow, so an event the condition above skips cannot replace a
+    # waiting run that matters.
+    concurrency:
+      group: issue-triage-${{ github.event.issue.number }}-${{ github.event.action == 'opened' && 'opened' || 'labels' }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Apply the triage label rules
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number }}
+          EVENT_ACTION: ${{ github.event.action }}
+        run: python3 -m scripts.issue_triage_labels

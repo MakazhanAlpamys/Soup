@@ -1,4 +1,4 @@
-<p align="center">🌍 <strong>English</strong> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a></p>
+<p align="center">🌍 <strong>English</strong> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
   <img src="soup.png" alt="Soup" width="280">
@@ -26,7 +26,7 @@
 <p align="center">
   <a href="https://pypi.org/project/soup-cli/"><img src="https://img.shields.io/pypi/v/soup-cli?color=blue" alt="PyPI"></a>
   <a href="https://pepy.tech/project/soup-cli"><img src="https://img.shields.io/pepy/dt/soup-cli?color=blue" alt="Downloads"></a>
-  <img src="https://img.shields.io/badge/python-3.10--3.12-blue" alt="Python 3.10-3.12">
+  <img src="https://img.shields.io/badge/python-3.11--3.13-blue" alt="Python 3.11-3.13">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0 License">
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/MakazhanAlpamys/65fdc943f85f3b2c46ecddb415c2b779/raw/soup_tests.json" alt="Tests"></a>
   <a href="https://github.com/MakazhanAlpamys/Soup/actions"><img src="https://github.com/MakazhanAlpamys/Soup/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -60,11 +60,14 @@ soup train
 
 **Fine-tune an 8B model on a 4 GB laptop GPU.** Layer streaming keeps the frozen base out of
 VRAM and feeds it to the GPU one decoder layer at a time. Measured on an RTX 3050 Laptop 4 GB:
-Llama-3.1-8B-Instruct + NF4 at **119.6 tok/s, 3.32 GB peak** — bit-exact against a normal
-resident run, and reproduced independently on an H100 at 113.00 tok/s in the same 3.32 GB.
-(Both figures were measured on v0.72.2, before the v0.73.0 correctness repair that cost
-−4.8% at 32B; neither has been re-run on a 4 GB card since — re-measurement pending in
-issue [#361](https://github.com/MakazhanAlpamys/Soup/issues/361).) Opt-in (`stream_layers: true`)
+Llama-3.1-8B-Instruct + NF4 at **119.6 tok/s at 952 MHz, 3.32 GB peak** (pre-repair) — bit-exact
+against a normal resident run, and reproduced independently on an H100 at 113.00 tok/s in the same
+3.32 GB. (Both figures were measured on v0.72.2, before the v0.73.0 correctness repair that cost
+−4.8% at 32B. The post-repair run, on another RTX 3050 Laptop 4 GB (@umran666, #1103), reads
+**208.6 tok/s at 1935–1957 MHz in a 2.40 GB peak**. That is 59% of its same-session GEMM ceiling
+against 68%: about 14% slower per unit clock, so the raw 1.74x gain is the clock, not a speedup.
+Large-layer streaming also changed the memory pattern between the two rows, so even the fraction
+is not like-for-like — [the record](benchmarks/gate-v0.72.2-nf4.md).) Opt-in (`stream_layers: true`)
 and still BETA —
 [how it works](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724) ·
 [all measurements](benchmarks/) · [paper](https://doi.org/10.5281/zenodo.21771064) ·
@@ -72,8 +75,8 @@ and still BETA —
 4 GB, then asserts a streamed model is bit-identical to a normal one)
 
 <p align="center">
-  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="soup train pre-flight for Llama-3.1-8B on a 4 GB card: a 3.60 GB base store pinned in RAM across 32 layers and two 113 MB VRAM buffers, then a measured peak of 3.32 GB at 119.6 tok/s, stopping short of the 4 GB line (measured on v0.72.2, before the #331 repair; re-measurement pending in issue #361)"></a><br>
-  <sub>Llama-3.1-8B-Instruct + NF4, LoRA, batch 1, seq 512 on an RTX 3050 Laptop 4 GB — <b>3.32 GB peak, 119.6 tok/s</b> (measured on v0.72.2, before the #331 repair; re-measurement pending in issue #361). <a href="https://youtu.be/T1LCErE943E">Full video (90s)</a></sub>
+  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="soup train pre-flight for Llama-3.1-8B on a 4 GB card: a 3.60 GB base store pinned in RAM across 32 layers and two 113 MB VRAM buffers, then a measured peak of 3.32 GB at 119.6 tok/s, stopping short of the 4 GB line (pre-repair row, measured on v0.72.2 at 952 MHz; the post-#331 row is in the caption below)"></a><br>
+  <sub>Llama-3.1-8B-Instruct + NF4, LoRA, batch 1, seq 512 on an RTX 3050 Laptop 4 GB — <b>3.32 GB peak, 119.6 tok/s</b> at 952 MHz (pre-repair, v0.72.2; post-#331: 208.6 tok/s at 1935 MHz in 2.40 GB, not directly comparable, @umran666, #1103). <a href="https://youtu.be/T1LCErE943E">Full video (90s)</a></sub>
 </p>
 
 ## Why Soup?
@@ -88,42 +91,40 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.75.0 — the same `soup.yaml` trained a different recipe on MLX than on transformers,
-silently.** Six training options were validated, documented, accepted — and read by nothing
-on that backend. **All 60 pull requests in this release came from outside the maintainer**,
-by 22 people.
+**v0.77.2 — a cut of `main` after v0.77.1: 159 pull requests, 153 of them from 30 people outside
+the maintainer.** Most of it is fixes. It also adds features and two rules that can refuse what
+v0.77.1 accepted, so read the
+[v0.77.2 release notes](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.2) before
+upgrading a server or a `task: sft` config. Coming from 0.76.x, run `soup doctor --config soup.yaml`
+first and read the [v0.77.0 release notes](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0).
 
-- **Breaking: an unknown config key now refuses the load.** v0.74 warned and named this
-  release as the deadline. A typo like `quantizaton`, or a key that only exists on a newer
-  Soup, used to be dropped while the run proceeded with the setting not applied; it now
-  fails on the CLI (exit 1) and in the API (`ValueError`), naming the field you probably
-  meant. The detector applies the root-level `lora:` remap the schema has honoured
-  since v0.40.1, so that spelling is accepted, not refused; the two `soup fetch examples`
-  files using it moved to the canonical `training.lora`. Every recipe and template loads
-  clean, key names are escaped before they reach the terminal, and the scan is bounded.
-- **MLX honours the config it accepted.** `train_on_responses_only`, `warmup_ratio` /
-  `scheduler` / `weight_decay` / `optimizer`, `max_grad_norm`, `gradient_accumulation_steps`
-  and `gradient_checkpointing` were each validated and then dropped on `backend: mlx`. Only
-  8 of the 32 optimizer names have an MLX equivalent; the other 24 are refused by name
-  instead of silently becoming AdamW. MLX also drives the live dashboard, the tracker and
-  `soup ui`, and `soup doctor --config` lists the settings a backend does not read.
-- **Validation loss existed nowhere.** It was computed on every backend and thrown away:
-  no metrics column, no event field, nothing on the panel. It is now recorded, streamed
-  and displayed.
-- **Breaking: `grpo_variant: gspo` is the published sequence-level objective**
-  (arXiv:2507.18071), replacing a column-centering heuristic in which a padding token also
-  shifted the gradient of every row sharing its column. Existing gspo configs will not
-  reproduce prior runs.
-- **Web UI read endpoints and SSE require auth**, with short-lived single-use tickets
-  instead of a token in a query string; `--public` no longer serves `/docs` and
-  `/openapi.json` to the LAN; and a training subprocess no longer hangs when nothing
-  reads its output.
-- **`torch>=2.6.0`** closes v0.74.0's known limitation: at 2.5.1 `trl>=0.29` could not
-  import and every preference trainer was dead. Also fixed: `training.loraplus_lr_ratio`
-  crashed every run that set it, and `packing: true` raised on TRL 0.29.
+- **`soup profile --model <id>` answers "will it fit?" without a `soup.yaml`.** It prices the run
+  from the model's `config.json`, shaped by `--seq`, `--batch`, `--method`, `--lora-r`,
+  `--optimizer` and `--gradient-checkpointing`; on Apple Silicon it compares with Metal's working
+  set. `soup plan` and `soup apply` take `--minillm-on-policy`.
+- **More training on Apple Silicon.** `task: preference` with `preference_loss: dpo`, `orpo` or
+  `simpo` runs the native MLX trainer, MLX GRPO trains on 4-bit `mlx-community` bases, and MLX
+  Adafactor follows the configured learning rate and schedule.
+- **Two new DPO recipes,** `qwen3.5-0.8b-dpo` and `qwen3.5-27b-dpo`.
+- **Closer VRAM estimates.** The optimizer step is its own phase, a PRM step is charged the logits
+  of one position, a sharded FSDP or ZeRO run is priced per card, a `stream_loss_chunk` step its
+  last layer's recompute, and Unsloth's LoRA targets as its loader picks them.
+- **Fewer silent overwrites and empty results.** More commands refuse an `--output` that names an
+  input (`soup data ingest`, `persona-mix`, `generate` and others); `soup ship --adapter` refuses an
+  adapter that changes nothing; `soup distill-prompt`, `soup data evolve`, `gen-magpie` and
+  `filter --perplexity` fail instead of writing an empty or unfiltered file.
+- **Preference and RL fixes.** `data.max_length` holds again for SimPO and KTO, PPO checkpoints its
+  policy when asked (and no longer crashes under 4-bit and 8-bit), and `soup merge` loads the base
+  commit the adapter was trained on.
+- **Text shown as typed.** Dozens of commands print paths, names and messages with brackets and
+  `:name:` text kept and terminal control characters removed.
 
-> Python **3.10–3.12** only. On 3.13+, pip used to resolve untested PyTorch wheels that
-> crash in the native extension before Soup runs at all.
+**Behaviour changes to know.** `soup serve --tool-auth-token` must be 16 to 128 characters of
+`A-Z`, `a-z`, `0-9`, `_` and `-` (exit 2 otherwise). `task: sft` refuses `reasoning_effort`,
+`train_on_eot`, `use_flash_attn` and `use_liger` on the vision, audio, MLX, Unsloth, RAFT and
+pre-tokenised paths that never applied them. Scripts from `soup completions` need regenerating.
+`soup data from-traces --signal thumbs_up`, MLX Adafactor, `soup merge` and the VRAM pre-flight can
+give a different result than on v0.77.1.
 
 Older highlights live on the [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) page.
 
@@ -201,7 +202,7 @@ soup merge  --adapter ./output                              # merge LoRA into th
 soup export --model ./output --format gguf --quant q4_k_m   # GGUF for Ollama / llama.cpp
 ```
 
-More export targets (ONNX, TensorRT, AWQ, GPTQ, BitNet) and deployment options live in
+More export targets (ONNX, TensorRT, BitNet) and deployment options live in
 [`docs/serving-and-export.md`](docs/serving-and-export.md).
 
 ## Web UI
@@ -212,7 +213,7 @@ training setup, live metrics, dataset exploration and model chat.
 ```bash
 pip install "soup-cli[ui]"
 soup ui
-# Opens http://127.0.0.1:7860
+# Opens http://127.0.0.1:7860/?token=<token> and prints the same URL
 ```
 
 ![Soup Web UI — New Training](docs/assets/web-ui-new-training.png)
@@ -280,13 +281,13 @@ ASR, plaintext, embedding, RAFT and more — all auto-detected from JSONL, JSON,
 TXT, so in most cases you point `data.train` at a file and nothing else changes. Schemas with a
 worked example per format, plus the data pipeline (remote URIs, streaming, sharding,
 interleaving, vocab expansion, document ingestion), are in
-[`docs/data.md`](docs/data.md#data-formats).
+[`docs/data.md`](docs/data.md#data-formats), with [native Sesame CSM audio training](docs/training.md#native-sesame-csm) documented separately.
 
 ## Common Commands
 
 ```bash
 soup train  --config soup.yaml        # train (SFT/DPO/GRPO/PPO/KTO/ORPO/SimPO/IPO/...)
-soup infer  --model ./output --input prompts.jsonl   # batch inference
+soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # batch inference
 soup chat   --model ./output          # interactive chat
 soup serve  --model ./output          # OpenAI-compatible API server
 soup ui                               # local browser dashboard
@@ -324,13 +325,13 @@ Run Soup without installing CUDA or PyTorch locally (image published to GHCR on 
 
 ```bash
 docker pull ghcr.io/makazhanalpamys/soup:latest
-docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml
+docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml --yes
 docker compose up   # or build locally
 ```
 
 ## Requirements
 
-- Python 3.10, 3.11 or 3.12 (those are the versions CI tests; 3.13+ is not supported yet
+- Python 3.11, 3.12 or 3.13 (those are the versions CI tests; 3.14+ is not supported yet
   because the PyTorch stack has not been validated there)
 - GPU with CUDA (recommended), Apple Silicon (MPS), or CPU (experimental — very slow)
 - 8 GB+ VRAM for 7B models with QLoRA
@@ -439,8 +440,12 @@ published**, which is also the shortest way to describe what the paper is for:
   the replication survives in a weaker form — the constraint is common to both machines and is
   not the GPU's compute.
 - **Replication on hardware nothing like the original** (added in v2): 119.6 tok/s on the RTX
-  3050 against a median 113.00 on an H100, at the same 3.32 GB peak. Both pre-date the #331
-  repair; the 4 GB re-measurement is pending in issue #361.
+  3050 (at 952 MHz) against a median 113.00 on an H100, at the same 3.32 GB peak. Both pre-date
+  the #331 repair and are the figures the paper reports. The post-#331 row (@umran666, #1103) is
+  208.6 tok/s at 1935–1957 MHz in a 2.40 GB peak, 59% against 68% of the same-session GEMM
+  ceiling: the raw 1.74x gain is the clock, not a speedup, and the memory pattern changed between
+  the rows, so even the fraction is not like-for-like
+  ([the record](benchmarks/gate-v0.72.2-nf4.md)).
 - **A silent wrong-gradient defect, found and repaired.** On NF4 above ~165 MiB per layer the
   forward stayed bit-exact and the loss curve looked healthy while the gradients were wrong. The
   cause is named in the upstream library and reported there; the repair is gated against controls
@@ -476,4 +481,4 @@ were measured and then discarded.
 
 ## License
 
-[Apache-2.0](LICENSE). Copyright © the Soup contributors.
+[Apache-2.0](LICENSE). Copyright 2026 Makazhan Alpamys and the Soup contributors. If you redistribute Soup or a modified copy of it, sections 4 and 6 of the license apply to you: keep `LICENSE` and `NOTICE` with every copy, mark the files you changed, and do not use the Soup name beyond saying where the work comes from.

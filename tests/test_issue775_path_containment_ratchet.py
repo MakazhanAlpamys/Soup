@@ -56,6 +56,8 @@ import ast
 import pathlib
 import textwrap
 
+from tests._source_scan import memoized_scan, walk_nodes
+
 SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "soup_cli"
 
 _CONTAINMENT_METHODS = frozenset({"relative_to", "is_relative_to"})
@@ -87,7 +89,7 @@ ALLOWLIST: dict[tuple[str, int], str] = {
 
 def _parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
     parents: dict[ast.AST, ast.AST] = {}
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         for child in ast.iter_child_nodes(node):
             parents[child] = node
     return parents
@@ -132,7 +134,7 @@ def _suppress_names(tree: ast.AST) -> set[str]:
     ``.suppress`` alone.
     """
     names = {"suppress"}
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if isinstance(node, ast.ImportFrom) and node.module == "contextlib":
             names.update(a.asname or a.name for a in node.names if a.name == "suppress")
     return names
@@ -208,6 +210,7 @@ def _containment_reason(
     return None
 
 
+@memoized_scan
 def find_containment_relative_to(source: str) -> list[tuple[int, str, str]]:
     """Return ``(lineno, call text, reason)`` per containment-deciding call.
 
@@ -222,7 +225,7 @@ def find_containment_relative_to(source: str) -> list[tuple[int, str, str]]:
     suppress_names = _suppress_names(tree)
     lines = source.splitlines()
     offenders: list[tuple[int, str, str]] = []
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
             continue
         if node.func.attr not in _CONTAINMENT_METHODS:

@@ -1,0 +1,45 @@
+# Regenerate the claim board: the body of the pinned, locked issue #1945.
+#
+# scripts/claim_board.py reads the open issues labelled `help wanted`, `claimed` or
+# `infra-blocked`, their comments and the open pull requests through `gh api`, and renders one
+# markdown table. Each title goes inside a code span with `|` and backticks replaced, so issue
+# text cannot add links, mentions or markup to the board.
+#
+# Why an issue and not a file: main requires status checks, and the workflow token cannot push
+# past them; editing an issue body needs no write access to the code and adds no commits.
+#
+# Security: the token can read contents and pull requests and write issues, nothing else.
+# Nothing an issue author wrote reaches a shell command: no expression is interpolated into
+# `run`. Checkout is the default branch, pinned by commit, and the token is not kept.
+name: claim board
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  board:
+    if: github.repository == 'MakazhanAlpamys/Soup'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # A manual run and the daily one never overlap, and neither cancels the other.
+    concurrency:
+      group: claim-board
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Rewrite the board issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOARD_ISSUE: "1945"
+        run: |
+          python3 scripts/claim_board.py --write claim-board.md
+          gh issue edit "$BOARD_ISSUE" --repo MakazhanAlpamys/Soup --body-file claim-board.md

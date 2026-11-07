@@ -228,7 +228,7 @@ class TestResolveDeepSpeed:
 
     def test_resolve_invalid_name(self):
         """Should raise exit for invalid name."""
-        from click.exceptions import Exit
+        from typer import Exit
 
         from soup_cli.commands.train import _resolve_deepspeed
 

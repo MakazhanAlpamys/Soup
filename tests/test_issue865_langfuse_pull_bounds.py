@@ -26,6 +26,8 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+from tests._loopback_http import LoopbackHTTPServer
+
 _PUBLIC = "pk-lf-SOUP865PUBLIC-1a2b"
 _SECRET = "sk-lf-SOUP865SECRET-3c4d"
 
@@ -125,7 +127,7 @@ def drip_server(monkeypatch):
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = LoopbackHTTPServer(("127.0.0.1", 0), Handler)
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:

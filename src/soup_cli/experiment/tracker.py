@@ -61,6 +61,9 @@ CREATE TABLE IF NOT EXISTS runs (
     duration_secs   REAL,
     output_dir      TEXT,
     base_model      TEXT,
+    base_revision   TEXT,
+    base_revision_source TEXT,
+    training_data_sha256 TEXT,
     task            TEXT,
     cost_usd        REAL,
     cost_gpu_label  TEXT,
@@ -79,6 +82,7 @@ CREATE TABLE IF NOT EXISTS metrics (
     epoch     REAL,
     loss      REAL,
     val_loss  REAL,
+    val_reward REAL,
     lr        REAL,
     grad_norm REAL,
     speed     REAL,
@@ -164,7 +168,7 @@ class ExperimentTracker:
     def _ensure_schema(self) -> None:
         """Create tables if they don't exist.
 
-        Lazy migration adds the v0.34.0 cost columns and the ``val_loss``
+        Lazy migration adds nullable run provenance, the v0.34.0 cost columns and ``val_loss``
         metrics column to legacy DBs -- ``~/.soup/experiments.db`` exists on
         every machine that has ever run ``soup train``, so the schema is
         upgraded in place rather than assumed. Each column is gated on its own
@@ -177,6 +181,11 @@ class ExperimentTracker:
         conn = self._get_conn()
         conn.executescript(_SCHEMA_SQL)
         for table, column, ddl in (
+            ("runs", "base_revision", "ALTER TABLE runs ADD COLUMN base_revision TEXT"),
+            ("runs", "base_revision_source",
+             "ALTER TABLE runs ADD COLUMN base_revision_source TEXT"),
+            ("runs", "training_data_sha256",
+             "ALTER TABLE runs ADD COLUMN training_data_sha256 TEXT"),
             ("runs", "cost_usd", "ALTER TABLE runs ADD COLUMN cost_usd REAL"),
             ("runs", "cost_gpu_label", "ALTER TABLE runs ADD COLUMN cost_gpu_label TEXT"),
             ("runs", "run_kind",
@@ -190,6 +199,9 @@ class ExperimentTracker:
             # column existed has no evaluation loss, and NULL says so. A 0.0
             # would read as a measurement nobody took.
             ("metrics", "val_loss", "ALTER TABLE metrics ADD COLUMN val_loss REAL"),
+            # grpo's held-out reward (#1389): its own column, because a reward
+            # is higher-is-better and must not be read as a loss.
+            ("metrics", "val_reward", "ALTER TABLE metrics ADD COLUMN val_reward REAL"),
         ):
             existing = {
                 row[1]
@@ -234,7 +246,8 @@ class ExperimentTracker:
         if existing is not None:
             conn.execute(
                 """UPDATE runs SET status = 'running', config_json = ?, device = ?,
-                   device_name = ?, gpu_memory = ?, experiment_name = ?, base_model = ?, task = ?
+                   device_name = ?, gpu_memory = ?, experiment_name = ?, base_model = ?, task = ?,
+                   base_revision = NULL, base_revision_source = NULL, training_data_sha256 = NULL
                    WHERE run_id = ?""",
                 (
                     config_json, device, device_name, gpu_memory, experiment_name, base_model, task,
@@ -255,6 +268,31 @@ class ExperimentTracker:
         )
         conn.commit()
         return run_id
+
+    def record_training_data_hash(self, run_id: str, digest: Optional[str]) -> None:
+        """Record startup source bytes, leaving unsupported/incomplete sources unknown."""
+        from soup_cli.utils.run_provenance import validate_training_hash
+
+        validate_training_hash(digest)
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE runs SET training_data_sha256=? WHERE run_id=?", (digest, run_id),
+        )
+        conn.commit()
+
+    def record_base_revision(
+        self, run_id: str, *, revision: Optional[str], source: str,
+    ) -> None:
+        """Store the current execution's identity, never backfill historical rows."""
+        from soup_cli.utils.run_provenance import validate_identity
+
+        validate_identity(revision, source)
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE runs SET base_revision=?, base_revision_source=? WHERE run_id=?",
+            (revision, source, run_id),
+        )
+        conn.commit()
 
     def launch_run(
         self,
@@ -349,21 +387,25 @@ class ExperimentTracker:
         speed: float = 0.0,
         gpu_mem: str = "",
         val_loss: Optional[float] = None,
+        val_reward: Optional[float] = None,
     ) -> None:
         """Log a single metrics row for the given run.
 
-        ``val_loss`` and ``grad_norm`` default to ``None`` rather than ``0.0``:
-        an omitted measurement must not look like a genuinely measured zero.
-        ``loss`` is None for a training log that carried no loss (#1225).
+        ``val_loss``, ``val_reward`` and ``grad_norm`` default to ``None`` rather
+        than ``0.0``: an omitted measurement must not look like a genuinely
+        measured zero. ``loss`` is None for a training log that carried no loss
+        (#1225). ``val_reward`` is grpo's held-out reward (#1389); every other
+        task leaves it NULL.
         """
         now = datetime.now().isoformat()
         conn = self._get_conn()
         conn.execute(
             """INSERT INTO metrics
-               (run_id, step, epoch, loss, val_loss, lr, grad_norm, speed,
+               (run_id, step, epoch, loss, val_loss, val_reward, lr, grad_norm, speed,
                 gpu_mem, timestamp)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (run_id, step, epoch, loss, val_loss, lr, grad_norm, speed, gpu_mem, now),
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (run_id, step, epoch, loss, val_loss, val_reward, lr, grad_norm, speed,
+             gpu_mem, now),
         )
         conn.commit()
 

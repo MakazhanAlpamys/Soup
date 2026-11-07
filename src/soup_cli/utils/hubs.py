@@ -26,6 +26,7 @@ from typing import Callable, Mapping, Optional, Tuple
 from urllib.parse import urlparse
 
 from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
+from soup_cli.utils.net_guard import UNSPECIFIED_HOST_HINT
 from soup_cli.utils.net_guard import is_private_or_link_local as _is_private_or_link_local
 
 _LOG = logging.getLogger(__name__)
@@ -180,9 +181,7 @@ def validate_hub_endpoint(endpoint: str, *, hub: str | None = None) -> str:
 
     host = parsed.hostname or ""
     if host == "0.0.0.0":
-        raise ValueError(
-            f"{label} 0.0.0.0 is ambiguous; use 127.0.0.1 or localhost"
-        )
+        raise ValueError(f"{label} {UNSPECIFIED_HOST_HINT}")
     host_clean = host.lower().rstrip(".")
     if parsed.scheme == "http" and host_clean not in _LOOPBACK_HOSTS:
         if _is_private_or_link_local(host):
@@ -417,12 +416,28 @@ def _validate_cache_dir(cache_dir: str, *, field: str = "cache_dir") -> str:
     )
 
 
+def hf_cache_dir() -> str | None:
+    """The cache directory :func:`snapshot_download` uses when ``cache_dir`` is ``None``.
+
+    That call leaves the choice to huggingface_hub (``HF_HUB_CACHE``, ``HF_HOME``, or
+    the default under the home directory). This returns huggingface_hub's own answer
+    instead of reading the environment a second time. ``None`` when huggingface_hub
+    is not installed.
+    """
+    try:
+        from huggingface_hub import constants
+    except ImportError:  # pragma: no cover - HF present in CI
+        return None
+    return str(constants.HF_HUB_CACHE)
+
+
 def snapshot_download(
     repo_id: str,
     *,
     cache_dir: str | None,
     revision: str | None = None,
     allow_patterns: list[str] | None = None,
+    ignore_patterns: list[str] | None = None,
     namespace_check: bool = True,
     allow_namespace_shift: str | None = None,
     _metadata_fn: Optional[Callable[[str], Optional[Tuple[str, str]]]] = None,
@@ -435,7 +450,9 @@ def snapshot_download(
     ``None`` asks Hugging Face for its canonical cached snapshot instead; this
     is used by layer streaming to inspect and reuse an existing non-symlinked
     cache entry before deciding whether a second materialised copy is needed.
-    The namespace-pin gate (#186) runs in both cases.
+    The namespace-pin gate (#186) runs in both cases. ``ignore_patterns`` is
+    forwarded only when given, as huggingface_hub applies it after
+    ``allow_patterns`` (#1806).
 
     Returns the absolute path to the downloaded snapshot directory. Raises
     ``ImportError`` (with a pip-install hint) when ``huggingface_hub`` is
@@ -448,11 +465,11 @@ def snapshot_download(
             raise TypeError("revision must be str or None")
         if "\x00" in revision or any(ord(c) < 0x20 for c in revision):
             raise ValueError("revision must not contain control characters")
-    if allow_patterns is not None:
-        if not isinstance(allow_patterns, list) or not all(
-            isinstance(p, str) for p in allow_patterns
-        ):
-            raise TypeError("allow_patterns must be a list of str or None")
+    for field_name, patterns in (("allow_patterns", allow_patterns),
+                                 ("ignore_patterns", ignore_patterns)):
+        if patterns is not None:
+            if not isinstance(patterns, list) or not all(isinstance(p, str) for p in patterns):
+                raise TypeError(f"{field_name} must be a list of str or None")
 
     if namespace_check:
         _run_namespace_check(
@@ -473,6 +490,8 @@ def snapshot_download(
         "revision": revision,
         "allow_patterns": allow_patterns,
     }
+    if ignore_patterns is not None:
+        kwargs["ignore_patterns"] = ignore_patterns
     if canonical_cache is None:
         return hf_snapshot_download(**kwargs)
     os.makedirs(canonical_cache, exist_ok=True)

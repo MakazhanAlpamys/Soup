@@ -179,7 +179,10 @@ def read_lock(path: str) -> SoupLock:
             f"lock file size {st.st_size} > {_MAX_FILE_BYTES}"
         )
     with open(real, encoding="utf-8") as fh:
-        data = json.load(fh)
+        try:
+            data = json.load(fh)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ValueError(f"lock file {path!r} is not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError("lock file root must be JSON object")
     # SoupLock __post_init__ does the rest of the validation

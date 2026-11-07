@@ -92,6 +92,8 @@ class TestRenderLambdaLabsStub:
         )
         namespace = {"__name__": "test"}
         exec(stub, namespace)
+        # ssh and scp count as installed wherever this runs.
+        namespace["_find_tool"] = lambda name: "/usr/bin/" + name
         requests = []
 
         def fake_request(api_key, path, *, method="GET", payload=None):
@@ -150,7 +152,7 @@ class TestPlanLambdaLabsRun:
         plan = plan_lambda_run("soup.yaml", gpu="a100", output_dir="./out", soup_version="0.71.22")
         assert isinstance(plan, CloudPlan)
         assert plan.cloud == "lambda"
-        assert plan.run_command == "python soup_lambda_app.py"
+        assert plan.run_command == "python -I soup_lambda_app.py"
 
     def test_plan_config_too_large(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -194,7 +196,7 @@ class TestSubmitLambdaLabsRun:
 
 
 class TestTrainCloudCliNew:
-    def test_cloud_runpod_refuses_not_yet_live(self, tmp_path, monkeypatch):
+    def test_cloud_runpod_refuses_unknown_gpu(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         (tmp_path / "soup.yaml").write_text(_SOUP_YAML, encoding="utf-8")
         from typer.testing import CliRunner
@@ -202,13 +204,13 @@ class TestTrainCloudCliNew:
         from soup_cli.cli import app
 
         result = CliRunner().invoke(
-            app, ["train", "--config", "soup.yaml", "--cloud", "runpod", "--gpu", "rtx-4090"]
+            app, ["train", "--config", "soup.yaml", "--cloud", "runpod", "--gpu", "tpu"]
         )
         assert result.exit_code == 2, (result.output, repr(result.exception))
         assert not (tmp_path / "soup_runpod_app.py").exists()
         txt = _strip_ansi(result.output)
-        assert "not yet live" in txt
-        assert "--cloud modal or lambda" in txt
+        assert "Invalid --cloud / --gpu" in txt
+        assert "rtx4090" in txt
 
     def test_cloud_lambda_plan_only(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -223,7 +225,7 @@ class TestTrainCloudCliNew:
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert (tmp_path / "soup_lambda_app.py").exists()
         txt = _strip_ansi(result.output)
-        assert "python soup_lambda_app.py" in txt
+        assert "python -I soup_lambda_app.py" in txt
 
     def test_cloud_name_is_case_insensitive(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -239,13 +241,12 @@ class TestTrainCloudCliNew:
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert (tmp_path / "soup_lambda_app.py").exists()
 
-        # And verify uppercase RUNPOD is also refused
+        # RunPod uses the same case-insensitive provider dispatch.
         res_runpod = CliRunner().invoke(
             app, ["train", "--config", "soup.yaml", "--cloud", "RUNPOD", "--gpu", "a100"]
         )
-        assert res_runpod.exit_code == 2
-        assert not (tmp_path / "soup_runpod_app.py").exists()
-        assert "not yet live" in _strip_ansi(res_runpod.output)
+        assert res_runpod.exit_code == 0, (res_runpod.output, repr(res_runpod.exception))
+        assert (tmp_path / "soup_runpod_app.py").exists()
 
 
 class TestCloudNoSecrets:
@@ -288,5 +289,3 @@ class TestCloudNoSecrets:
         assert secret not in stub_modal
         assert hf_token not in stub_modal
         assert wandb_key not in stub_modal
-
-

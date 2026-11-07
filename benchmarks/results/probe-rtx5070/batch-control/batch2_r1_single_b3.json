@@ -1,0 +1,202 @@
+{
+ "meta": {
+  "gpu": "NVIDIA GeForce RTX 5070 Laptop GPU",
+  "torch": "2.14.0+cu130",
+  "vram_total_gb": 8.518,
+  "soup_cli_file": "C:\\Users\\user\\projects\\Soup-r2\\src\\soup_cli\\__init__.py",
+  "driver": "616.92",
+  "pcie_gen": "5",
+  "pcie_width": "8",
+  "label": "R2 batch control round 1 arm SINGLE batch 3",
+  "weights": "D:/synth/llama-70b-shape-v32k-f4",
+  "weights_dir": "D:\\synth\\llama-70b-shape-v32k-f4",
+  "shard_dir": "C:\\Users\\user\\.soup\\layer-stream\\D___synth__llama-70b-shape-v32k-f4",
+  "quant": "nf4",
+  "dtype": "bfloat16",
+  "tier": "disk",
+  "pinned": true,
+  "source_class": "AsyncDiskSource",
+  "control_sync_source": false,
+  "read_ahead": 2,
+  "stripe_dirs": [],
+  "stripe_roots": [],
+  "layer_roots": [],
+  "direct_io": true,
+  "open_per_root": {
+   "0": "open_direct"
+  },
+  "store_gb": 1.956601912,
+  "disk_gb": 36.388145344,
+  "buffers": 2,
+  "buffer_bytes": 1419731000,
+  "large_buffer_bytes": 536870912,
+  "n_layers": 80,
+  "total_params": 68989231104,
+  "shapes": {
+   "hidden": 8192,
+   "intermediate": 28672,
+   "layers": 80,
+   "kv_out": 1024,
+   "q_out": 8192,
+   "vocab": 32768,
+   "decoder_params": 68451041280,
+   "lm_head_params": 268435456,
+   "flop_per_token": 411779989504,
+   "tied": false
+  },
+  "lora_r": 8,
+  "lora_targets": "q_proj,k_proj,v_proj,o_proj",
+  "batch": 3,
+  "seq": 512,
+  "steps": 3,
+  "warmup": 1,
+  "shard_seconds": 0.004021700005978346,
+  "build_seconds": 2.3071303999749944,
+  "evict_gb": 0.0,
+  "started": "2026-10-07T15:37:14"
+ },
+ "records": [
+  {
+   "kind": "step",
+   "label": "step_plain",
+   "tokens_per_step": 1536,
+   "steps": 3,
+   "warmup": 1,
+   "events_on": false,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 20.333806633328397,
+   "step_s_min": 20.274280400015414,
+   "step_s_max": 20.4053133999696,
+   "tok_per_s": 75.53922527631391,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 3.461145274030765,
+   "copy_s_per_step": 0.0,
+   "copy_stream_gb_per_s": null,
+   "stall_s_per_step": 0.0,
+   "stall_share": 0.0,
+   "peak_alloc_gb": 6.311822848,
+   "peak_reserved_gb": 7.027556352,
+   "sm_clock_mhz_start": 180,
+   "sm_clock_mhz_end": 2400,
+   "records": [
+    {
+     "step_s": 20.32182610000018,
+     "started_unix": 1791369456.6188557,
+     "loss": 11.969038009643555,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 20.274280400015414,
+     "started_unix": 1791369476.9407346,
+     "loss": 11.910778045654297,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 20.4053133999696,
+     "started_unix": 1791369497.2152035,
+     "loss": 11.796875,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    }
+   ],
+   "ids": {
+    "shape": [
+     3,
+     512
+    ],
+    "dtype": "int64",
+    "row_sha256": [
+     "01a8953cd89bfb3fe6e003606e1e10d7643bbc1c319458eb59ac53c5e0212b9b",
+     "676866c07ba282c9aa763fbdfd4bcde63e758b6a11e995a0fc04b039395db09a",
+     "ae6a77fa48999a13be128003098acdad01030c26e3f034b39dec2ee0c22bc6eb"
+    ]
+   },
+   "memory": {
+    "num_alloc_retries": 0,
+    "num_ooms": 0,
+    "free_gb": 0.263192576,
+    "total_gb": 8.5180416
+   }
+  },
+  {
+   "kind": "ablate",
+   "label": "B_nocopy_r0",
+   "tokens_per_step": 1536,
+   "steps": 3,
+   "warmup": 1,
+   "events_on": false,
+   "nocopy": true,
+   "nodequant": false,
+   "step_s_mean": 17.502826533357922,
+   "step_s_min": 17.49063630006276,
+   "step_s_max": 17.5256821999792,
+   "tok_per_s": 87.75725435389538,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 4.020965333677332,
+   "copy_s_per_step": 0.0,
+   "copy_stream_gb_per_s": null,
+   "stall_s_per_step": 0.0,
+   "stall_share": 0.0,
+   "peak_alloc_gb": 6.311822848,
+   "peak_reserved_gb": 7.027556352,
+   "sm_clock_mhz_start": 2100,
+   "sm_clock_mhz_end": 1402,
+   "records": [
+    {
+     "step_s": 17.49063630006276,
+     "started_unix": 1791369535.5403857,
+     "loss": 12.058713912963867,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 17.492161100031808,
+     "started_unix": 1791369553.0317729,
+     "loss": 12.023580551147461,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 17.5256821999792,
+     "started_unix": 1791369570.523791,
+     "loss": 11.973220825195312,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    }
+   ],
+   "arm": "B_nocopy",
+   "round": 0,
+   "memory": {
+    "num_alloc_retries": 0,
+    "num_ooms": 0,
+    "free_gb": 0.263192576,
+    "total_gb": 8.5180416
+   }
+  }
+ ]
+}

@@ -37,15 +37,27 @@ _BOILERPLATE_PREFIXES = [
     ),
 ]
 
-# Common LLM canned sign-offs / suffixes in assistant turns
+# Common LLM canned sign-offs / suffixes in assistant turns.
+#
+# Run through ``.search`` on text a dataset author controls, so no pattern may
+# backtrack quadratically:
+# * no leading whitespace quantifier -- the caller has already ``rstrip()``ped the
+#   text, and with ``.search`` a leading ``\s*`` is retried from every offset inside
+#   one interior run of spaces (20,000 chars took ~20 s, 40,000 took ~64 s);
+# * the free-text tail of a sign-off is capped at ``_SIGNOFF_TAIL_CHARS`` rather than
+#   left unbounded, because an unbounded tail is re-scanned to the end of the line
+#   from every repeat of the sign-off.
+# A sign-off whose tail is longer than the cap is left alone.
+_SIGNOFF_TAIL_CHARS = 200
 _BOILERPLATE_SUFFIXES = [
     re.compile(
-        r"\s*(?:i )?hope (?:this|that) helps[!,.]?(?:\s*(?:please )?let me know if you "
-        r"(?:need|have) (?:anything|any(?: other)? questions)[^.\n]*[!,.]?)?$",
+        r"(?:i )?hope (?:this|that) helps[!,.]?(?:\s*(?:please )?let me know if you "
+        r"(?:need|have) (?:anything|any(?: other)? questions)"
+        rf"[^.\n]{{0,{_SIGNOFF_TAIL_CHARS}}}[!,.]?)?$",
         re.IGNORECASE,
     ),
     re.compile(
-        r"\s*(?:please )?let me know if you (?:have|need) (?:any )?"
+        r"(?:please )?let me know if you (?:have|need) (?:any )?"
         r"(?:further|other|more)? (?:questions|assistance|help)[!,.]?$",
         re.IGNORECASE,
     ),
@@ -572,4 +584,3 @@ def clean_dataset(
             cleaned_rows.append(cleaned)
 
     return cleaned_rows, report
-

@@ -299,9 +299,26 @@ def apply_variant_loss(
     else:
         advantages_2d = advantages
 
-    # token-level importance ratio (PPO building block)
-    log_ratio = logp_new - logp_old
-    ratio = torch.exp(log_ratio)
+    # token-level importance ratio (PPO building block).
+    # Clamped from above to prevent torch.exp() overflow to +inf under extreme
+    # policy divergence, avoiding IEEE-754 0.0 * inf = NaN in backward autograd.
+    # The bound is adapted to max(|A|, 1.0) so ratio * A never overflows finfo.max
+    # without prematurely clamping moderate ratios in float16 (#1610).
+    max_log_ratio = math.log(torch.finfo(logp_new.dtype).max) - 1.0
+
+    if normalised in ("dapo", "dr_grpo", "bnpo", "two_sided"):
+        adv_bound = max_log_ratio - torch.log(
+            torch.clamp(torch.abs(advantages_2d.detach()), min=1.0)
+        )
+        log_ratio = torch.clamp_max(logp_new - logp_old, adv_bound)
+        ratio = torch.exp(log_ratio)
+    elif normalised == "gspo":
+        # GSPO sequence ratio is bounded at sequence level before exp().
+        log_ratio = logp_new - logp_old
+        ratio = None
+    else:
+        log_ratio = None
+        ratio = None
 
     if normalised == "gspo":
         # Group Sequence Policy Optimization (Qwen, arXiv:2507.18071):
@@ -319,21 +336,30 @@ def apply_variant_loss(
         elif advantages.dim() == 2 and advantages.size(-1) == 1:
             adv_seq = advantages.squeeze(-1)
         elif completion_mask is not None:
-            adv_seq = (advantages * completion_mask).sum(dim=-1) / completion_mask.sum(
+            adv_masked = torch.where(
+                completion_mask.bool(), advantages, torch.zeros_like(advantages)
+            )
+            adv_seq = adv_masked.sum(dim=-1) / completion_mask.to(dtype=advantages.dtype).sum(
                 dim=-1
             ).clamp(min=1.0)
         else:
             adv_seq = advantages.mean(dim=-1)
 
         if completion_mask is not None:
-            mask = completion_mask.to(dtype=log_ratio.dtype)
-            lengths = mask.sum(dim=-1)
-            valid_seq_mask = (lengths > 0).to(dtype=log_ratio.dtype)
-            seq_log_ratio = (log_ratio * mask).sum(dim=-1) / lengths.clamp(min=1.0)
+            lengths = completion_mask.to(dtype=log_ratio.dtype).sum(dim=-1)
+            valid_seq_mask = lengths > 0
+            masked_log_ratio = torch.where(
+                completion_mask.bool(), log_ratio, torch.zeros_like(log_ratio)
+            )
+            seq_log_ratio = masked_log_ratio.sum(dim=-1) / lengths.clamp(min=1.0)
         else:
             seq_log_ratio = log_ratio.mean(dim=-1)
-            valid_seq_mask = torch.ones_like(seq_log_ratio)
+            valid_seq_mask = torch.ones(
+                seq_log_ratio.shape, dtype=torch.bool, device=seq_log_ratio.device
+            )
 
+        adv_seq_bound = max_log_ratio - torch.log(torch.clamp(torch.abs(adv_seq.detach()), min=1.0))
+        seq_log_ratio = torch.clamp_max(seq_log_ratio, adv_seq_bound)
         seq_ratio = torch.exp(seq_log_ratio)
         surr1 = seq_ratio * adv_seq
         surr2 = torch.clamp(seq_ratio, min=1.0 - eps, max=1.0 + eps) * adv_seq
@@ -343,64 +369,74 @@ def apply_variant_loss(
             # importance sampling adds beta * kl_t to the per-sequence loss and
             # takes each sequence's masked token mean.
             if completion_mask is not None:
-                seq_kl = (per_token_kl * mask).sum(dim=-1) / lengths.clamp(min=1.0)
+                masked_kl = torch.where(
+                    completion_mask.bool(), per_token_kl, torch.zeros_like(per_token_kl)
+                )
+                seq_kl = masked_kl.sum(dim=-1) / lengths.clamp(min=1.0)
             else:
                 seq_kl = per_token_kl.mean(dim=-1)
             seq_loss = seq_loss + beta_f * seq_kl
-        denom = valid_seq_mask.sum().clamp(min=1.0)
-        return (seq_loss * valid_seq_mask).sum() / denom
+        masked_seq_loss = torch.where(valid_seq_mask, seq_loss, torch.zeros_like(seq_loss))
+        denom = valid_seq_mask.to(dtype=log_ratio.dtype).sum().clamp(min=1.0)
+        loss = masked_seq_loss.sum() / denom
 
-    if normalised == "dapo":
+    elif normalised == "dapo":
         # Decoupled clip — asymmetric bounds.
         eps_lo, eps_hi = 0.2, 0.28
         clipped = torch.clamp(ratio, min=1 - eps_lo, max=1 + eps_hi)
         # PPO surrogate: min(ratio * A, clipped * A).
         token_loss = -torch.min(ratio * advantages_2d, clipped * advantages_2d)
         token_loss = _with_kl(token_loss, per_token_kl, beta_f)
-        return _masked_mean(token_loss, completion_mask)
+        loss = _masked_mean(token_loss, completion_mask)
 
-    if normalised == "dr_grpo":
+    elif normalised == "dr_grpo":
         # No length normalisation — sum across tokens then mean across batch.
         token_loss = -(ratio * advantages_2d)
         token_loss = _with_kl(token_loss, per_token_kl, beta_f)
         if completion_mask is not None:
-            token_loss = token_loss * completion_mask
+            token_loss = torch.where(
+                completion_mask.bool(), token_loss, torch.zeros_like(token_loss)
+            )
         # sum-over-tokens, mean-over-batch (no division by completion length)
-        return token_loss.sum(dim=-1).mean()
+        loss = token_loss.sum(dim=-1).mean()
 
-    if normalised == "bnpo":
+    elif normalised == "bnpo":
         # Batch-normalised PPO with length-normalisation.
         eps = 0.2
         clipped = torch.clamp(ratio, min=1 - eps, max=1 + eps)
         token_loss = -torch.min(ratio * advantages_2d, clipped * advantages_2d)
         token_loss = _with_kl(token_loss, per_token_kl, beta_f)
-        return _masked_mean(token_loss, completion_mask, normalize_by_length=True)
+        loss = _masked_mean(token_loss, completion_mask, normalize_by_length=True)
 
-    if normalised == "two_sided":
+    elif normalised == "two_sided":
         # Symmetric clipping at [1-delta, 1+delta].
         clipped = torch.clamp(ratio, min=1 - delta_f, max=1 + delta_f)
         token_loss = -torch.min(ratio * advantages_2d, clipped * advantages_2d)
         token_loss = _with_kl(token_loss, per_token_kl, beta_f)
-        return _masked_mean(token_loss, completion_mask)
+        loss = _masked_mean(token_loss, completion_mask)
 
-    if normalised == "rft":
+    elif normalised == "rft":
         # Rejection sampling fine-tuning: only positive-advantage tokens
         # contribute to the gradient.
-        positive_mask = (advantages_2d > 0).to(logp_new.dtype)
+        pos_bool = advantages_2d > 0
         if completion_mask is not None:
-            positive_mask = positive_mask * completion_mask
+            pos_bool = pos_bool & completion_mask.bool()
         # Standard SFT-style negative log-likelihood weighted by positive mask.
-        token_loss = -(logp_new * positive_mask)
+        token_loss = torch.where(pos_bool, -logp_new, torch.zeros_like(logp_new))
         if per_token_kl is not None:
             # rft trains on the accepted completions only, so its KL covers the
             # same tokens over the same denominator (#1232): a batch with no
             # accepted completion still contributes zero.
-            token_loss = token_loss + beta_f * per_token_kl * positive_mask
-        denom = positive_mask.sum().clamp(min=1.0)
-        return token_loss.sum() / denom
+            token_loss = token_loss + beta_f * torch.where(
+                pos_bool, per_token_kl, torch.zeros_like(per_token_kl)
+            )
+        denom = pos_bool.to(dtype=logp_new.dtype).sum().clamp(min=1.0)
+        loss = token_loss.sum() / denom
+    else:
+        # Defensive fallback — schema rejects everything outside the allowlist.
+        raise ValueError(f"Unhandled grpo_variant={normalised!r}")
 
-    # Defensive fallback — schema rejects everything outside the allowlist.
-    raise ValueError(f"Unhandled grpo_variant={normalised!r}")
+    return loss
 
 
 def _per_token_kl(variant: str, beta: float, logp_new, reference_logp):
@@ -428,7 +464,9 @@ def _per_token_kl(variant: str, beta: float, logp_new, reference_logp):
             f"logp_new shape {tuple(logp_new.shape)}"
         )
     ref_minus_logp = reference_logp.detach() - logp_new
-    return torch.exp(ref_minus_logp) - ref_minus_logp - 1
+    max_log_ratio = math.log(torch.finfo(logp_new.dtype).max) - 1.0
+    ref_minus_logp_clamped = torch.clamp_max(ref_minus_logp, max_log_ratio)
+    return torch.exp(ref_minus_logp_clamped) - ref_minus_logp_clamped - 1
 
 
 def _with_kl(token_loss, per_token_kl, beta: float):
@@ -458,6 +496,8 @@ def variant_kl_metric(
     normalised = validate_grpo_variant(name)
     if normalised == "standard" or float(beta) == 0.0:
         return None
+    import torch  # lazy import — utility module is dependency-light
+
     per_token_kl = _per_token_kl(normalised, float(beta), logp_new, reference_logp).detach()
     mask = completion_mask
     if normalised == "rft":
@@ -467,7 +507,9 @@ def variant_kl_metric(
             mask = mask * completion_mask
     if mask is None:
         return per_token_kl.mean()
-    return (per_token_kl * mask).sum() / mask.sum().clamp(min=1.0)
+    masked_kl = torch.where(mask.bool(), per_token_kl, torch.zeros_like(per_token_kl))
+    acc_dtype = torch.promote_types(per_token_kl.dtype, torch.float32)
+    return masked_kl.sum(dtype=acc_dtype) / mask.to(dtype=acc_dtype).sum().clamp(min=1.0)
 
 
 def _masked_mean(
@@ -479,12 +521,15 @@ def _masked_mean(
     """Mean over a masked tensor; helper for :func:`apply_variant_loss`."""
     if completion_mask is None:
         return token_loss.mean()
-    masked = token_loss * completion_mask
+    import torch  # lazy import — utility module is dependency-light
+
+    masked = torch.where(completion_mask.bool(), token_loss, torch.zeros_like(token_loss))
+    mask_in_dtype = completion_mask.to(dtype=token_loss.dtype)
     if normalize_by_length:
-        lengths = completion_mask.sum(dim=-1).clamp(min=1.0)
+        lengths = mask_in_dtype.sum(dim=-1).clamp(min=1.0)
         per_sample = masked.sum(dim=-1) / lengths
         return per_sample.mean()
-    denom = completion_mask.sum().clamp(min=1.0)
+    denom = mask_in_dtype.sum().clamp(min=1.0)
     return masked.sum() / denom
 
 

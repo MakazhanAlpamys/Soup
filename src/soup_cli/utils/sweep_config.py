@@ -11,9 +11,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Mapping, Tuple
 
-import yaml
-
 from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.yaml_limits import load_yaml_limited
 
 _VALID_STRATEGIES = frozenset({"grid", "random"})
 _MAX_PARAM_KEYS = 32
@@ -59,7 +58,7 @@ def parse_sweep_yaml(text: str) -> SweepSpec:
         raise ValueError("sweep yaml contains NUL byte")
     if len(text.encode("utf-8")) > _MAX_FILE_BYTES:
         raise ValueError(f"sweep yaml exceeds {_MAX_FILE_BYTES} bytes")
-    data = yaml.safe_load(text)
+    data = load_yaml_limited(text, "sweep yaml", max_bytes=_MAX_FILE_BYTES)
     if not isinstance(data, dict):
         raise ValueError("sweep yaml must be a mapping at the top level")
     strategy = data.get("strategy", "grid")

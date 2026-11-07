@@ -252,8 +252,9 @@ def _fake_ppo_classes(captured, *, accepts_optimizers=True):
         """Keeps what the wrapper passes. weight_decay is not set by the
         wrapper; it is nonzero here so the decay / no-decay split is visible."""
 
-        def __init__(self, **kwargs):
+        def __init__(self, deepspeed=None, **kwargs):
             self.weight_decay = 0.05
+            self.deepspeed = deepspeed
             self.__dict__.update(kwargs)
 
     return FakePPOTrainer, FakePPOConfig
@@ -535,6 +536,7 @@ def test_real_ppo_trainer_trains_the_value_model_with_loraplus(tmp_path, monkeyp
         # #1391: two prompts have to fill one rollout batch (2 x 1)
         "  gradient_accumulation_steps: 1\n"
         "  lr: 1e-4\n"
+        "  warmup_ratio: 0.0\n"
         f"  loraplus_lr_ratio: {RATIO}\n"
         "output: ./out\n"
     )

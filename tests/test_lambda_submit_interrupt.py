@@ -101,7 +101,7 @@ def test_keyboard_interrupt_keeps_waiting_and_never_kills(monkeypatch, capsys):
 
     assert len(_FakePopen.instances) == 1
     proc = _FakePopen.instances[0]
-    assert proc.argv == [sys.executable, "x.py"]
+    assert proc.argv == [sys.executable, "-I", "x.py"]
     assert proc.env == _ENV
     assert proc.wait_calls == 3
     assert proc.kill_calls == 0

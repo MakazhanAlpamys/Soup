@@ -20,6 +20,18 @@ class _MLXRegistry(dict):
             from soup_cli.trainer.mlx_dpo import MLXDPOTrainerWrapper
 
             return MLXDPOTrainerWrapper
+        if task == "orpo":
+            from soup_cli.trainer.mlx_orpo import MLXORPOTrainerWrapper
+
+            return MLXORPOTrainerWrapper
+        if task == "simpo":
+            from soup_cli.trainer.mlx_simpo import MLXSimPOTrainerWrapper
+
+            return MLXSimPOTrainerWrapper
+        if task == "kto":
+            from soup_cli.trainer.mlx_kto import MLXKTOTrainerWrapper
+
+            return MLXKTOTrainerWrapper
         if task == "grpo":
             from soup_cli.trainer.mlx_grpo import MLXGRPOTrainerWrapper
 
@@ -27,13 +39,13 @@ class _MLXRegistry(dict):
         raise KeyError(task)
 
     def __contains__(self, key: object) -> bool:
-        return key in ("sft", "dpo", "grpo")
+        return key in ("sft", "dpo", "orpo", "simpo", "kto", "grpo")
 
     def __getitem__(self, key: str):
         return self._resolve(key)
 
     def keys(self):  # noqa: D401
-        return ("sft", "dpo", "grpo")
+        return ("sft", "dpo", "orpo", "simpo", "kto", "grpo")
 
 
 MLX_TRAINER_REGISTRY: _MLXRegistry = _MLXRegistry()
@@ -56,10 +68,15 @@ def resolve_trainer(cfg, trainer_kwargs: dict | None = None):
 
     Returns ``(trainer_cls, kwargs)`` — ``trainer_cls`` is the MLX trainer
     class when ``cfg.backend == "mlx"`` (raising ValueError for unsupported
-    tasks), or ``None`` so the caller falls through to the transformers task
-    chain. ``trainer_kwargs`` are forwarded unchanged in both cases.
+    tasks, resolving scalar preference aliases), or ``None`` so the caller
+    falls through to the transformers task chain. ``trainer_kwargs`` are
+    forwarded unchanged in both cases.
     """
     kwargs = dict(trainer_kwargs or {})
     if getattr(cfg, "backend", None) == "mlx":
-        return get_mlx_trainer(cfg.task), kwargs
+        from soup_cli.config.schema import resolve_mlx_task
+
+        loss = getattr(getattr(cfg, "training", None), "preference_loss", None)
+        task = resolve_mlx_task(cfg.task, loss)
+        return get_mlx_trainer(task), kwargs
     return None, kwargs

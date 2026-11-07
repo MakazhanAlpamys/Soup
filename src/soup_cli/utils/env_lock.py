@@ -340,7 +340,7 @@ def current_declared_bounds_check(dist_name: str = _SELF_DIST) -> BoundsCheck:
     tightened in ``pyproject.toml`` is only enforced here after a reinstall —
     #368 review.
     """
-    # `requires-python = ">=3.10"`, so `importlib.metadata` is always importable
+    # `requires-python = ">=3.11"`, so `importlib.metadata` is always importable
     # here; guarding it would be an unreachable branch that silently reports
     # clean (#368 review).
     from importlib.metadata import PackageNotFoundError, requires

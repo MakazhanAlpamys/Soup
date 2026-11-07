@@ -11,6 +11,9 @@ from typing import Optional
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.text import Text
+
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -43,7 +46,7 @@ def push(
         "--token",
         "-t",
         help=(
-            "Upload token. For --hub hf: [deprecated] use HF_TOKEN or cached login. "
+            "Upload token. For --hub hf: \\[deprecated] use HF_TOKEN or cached login. "
             "For other hubs: that hub's token (or MODELSCOPE_API_TOKEN / MODELERS_TOKEN)."
         ),
         envvar="HF_TOKEN",
@@ -89,7 +92,7 @@ def push(
     try:
         hub_canonical = validate_hub_name(hub)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(code=2) from exc
 
     from soup_cli.utils.paths import is_under_cwd
@@ -98,11 +101,13 @@ def push(
 
     # --- Validate model directory ---
     if not model_path.exists():
-        console.print(f"[red]Model path not found: {model_path}[/]")
+        console.print(f"[red]Model path not found: {for_terminal(model_path)}[/]", emoji=False)
         raise typer.Exit(1)
 
     if not model_path.is_dir():
-        console.print(f"[red]Expected a directory, got a file: {model_path}[/]")
+        console.print(
+            f"[red]Expected a directory, got a file: {for_terminal(model_path)}[/]", emoji=False
+        )
         raise typer.Exit(1)
 
     if not is_under_cwd(model_path):
@@ -138,20 +143,19 @@ def push(
     try:
         validate_repo_id(repo)
     except ValueError as exc:
-        console.print(f"[red]Invalid --repo:[/] {exc}")
+        console.print(f"[red]Invalid --repo:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
 
     hub_token: Optional[str] = None
     hf_token: Optional[str] = None
     hf_endpoint: Optional[str] = None
     if hub_canonical != "hf":
-        import click
-
         from soup_cli.utils.hubs import hub_token_env_var, resolve_hub_token
+        from soup_cli.utils.typer_compat import ParameterSource
 
         # --token also reads HF_TOKEN via envvar; only a value typed on the
         # command line is meant for this hub.
-        typed = ctx.get_parameter_source("token") == click.core.ParameterSource.COMMANDLINE
+        typed = ctx.get_parameter_source("token") == ParameterSource.COMMANDLINE
         hub_token = resolve_hub_token(hub_canonical, token if typed else None)
         if not hub_token:
             env_var = hub_token_env_var(hub_canonical)
@@ -177,7 +181,7 @@ def push(
         try:
             hf_endpoint = resolve_endpoint()
         except ValueError as exc:
-            console.print(f"[red]HF_ENDPOINT invalid:[/] {exc}")
+            console.print(f"[red]HF_ENDPOINT invalid:[/] {for_terminal(exc)}", emoji=False)
             raise typer.Exit(1) from exc
 
     # --- Show upload plan ---
@@ -187,12 +191,15 @@ def push(
 
     console.print(
         Panel(
-            f"Source:  [bold]{model_path}[/]\n"
-            f"Repo:   [bold]{repo}[/]\n"
-            f"Type:   [bold]{'LoRA adapter' if is_adapter else 'Full model'}[/]\n"
-            f"Files:  [bold]{file_count}[/]\n"
-            f"Size:   [bold]{size_str}[/]\n"
-            f"Private: [bold]{private}[/]",
+            Text.from_markup(
+                f"Source:  [bold]{for_terminal(model_path)}[/]\n"
+                f"Repo:   [bold]{for_terminal(repo)}[/]\n"
+                f"Type:   [bold]{'LoRA adapter' if is_adapter else 'Full model'}[/]\n"
+                f"Files:  [bold]{file_count}[/]\n"
+                f"Size:   [bold]{size_str}[/]\n"
+                f"Private: [bold]{private}[/]",
+                emoji=False,
+            ),
             title="Upload Plan",
         )
     )
@@ -206,16 +213,14 @@ def push(
         if hub_canonical != "hf":
             console.print("[yellow]--card is HF-only; ignoring for non-HF hub.[/]")
         else:
-            from rich.markup import escape
-
             from soup_cli.commands.card import CardError, build_card_for_ref
 
             try:
                 card_override = build_card_for_ref(card)
             except CardError as exc:
-                # escape: an AmbiguousRefError message embeds registry-derived
-                # entry names (v0.71.35 security review).
-                console.print(f"[red]--card: {escape(str(exc))}[/]")
+                # An AmbiguousRefError message embeds registry-derived entry names,
+                # and a missing ref is echoed as typed (v0.71.35 security review).
+                console.print(f"[red]--card: {for_terminal(exc)}[/]", emoji=False)
                 raise typer.Exit(1) from exc
 
     # v0.53.10 #152 — non-HF hubs route through utils.hubs.upload_repo
@@ -235,10 +240,10 @@ def push(
                 token=hub_token,
             )
         except ImportError as exc:
-            console.print(f"[red]{exc}[/]")
+            console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
             raise typer.Exit(1) from exc
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]{exc}[/]")
+            console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
             raise typer.Exit(2) from exc
         console.print(
             f"[green]Pushed to {hub_canonical}/{repo}.[/]\n"
@@ -293,7 +298,7 @@ def push(
                 commit_message="Add model card (generated by Soup CLI)",
             )
     except Exception as exc:
-        console.print(f"[red]Upload failed: {exc}[/]")
+        console.print(f"[red]Upload failed: {for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(1) from exc
 
     # --- Optional: add to Collection ---
@@ -309,13 +314,13 @@ def push(
         try:
             validate_collection_slug(collection)
         except ValueError as exc:
-            console.print(f"[red]Invalid --collection slug:[/] {exc}")
+            console.print(f"[red]Invalid --collection slug:[/] {for_terminal(exc)}", emoji=False)
             raise typer.Exit(1) from exc
 
         try:
             endpoint = _resolve_endpoint()
         except ValueError as exc:
-            console.print(f"[red]Collection: {exc}[/]")
+            console.print(f"[red]Collection: {for_terminal(exc)}[/]", emoji=False)
             raise typer.Exit(1) from exc
         try:
             add_to_collection(
@@ -325,9 +330,11 @@ def push(
                 endpoint=endpoint,
                 item_type="model",
             )
-            console.print(f"[green]Added to collection:[/] {collection}")
+            console.print(f"[green]Added to collection:[/] {for_terminal(collection)}", emoji=False)
         except Exception as exc:
-            console.print(f"[yellow]Could not add to collection:[/] {exc}")
+            console.print(
+                f"[yellow]Could not add to collection:[/] {for_terminal(exc)}", emoji=False
+            )
 
     repo_url = f"https://huggingface.co/{repo}"
     console.print(
@@ -380,12 +387,17 @@ def _load_training_config(model_path: Path) -> dict:
             import yaml
         except ImportError:
             return {}
+        from soup_cli.utils.yaml_limits import (
+            MAX_CONFIG_BYTES,
+            YamlLimitError,
+            load_yaml_file_limited,
+        )
+
         try:
-            with open(path, encoding="utf-8") as fh:
-                data = yaml.safe_load(fh)
+            data = load_yaml_file_limited(path, name, max_bytes=MAX_CONFIG_BYTES)
             if isinstance(data, dict):
                 return data
-        except (yaml.YAMLError, OSError):
+        except (yaml.YAMLError, YamlLimitError, OSError):
             continue
     return {}
 

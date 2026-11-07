@@ -2,11 +2,10 @@
 
 import json
 
-from typer.testing import CliRunner
-
 from soup_cli.cli import app
+from tests.conftest import make_cli_runner
 
-runner = CliRunner()
+runner = make_cli_runner()
 
 
 def test_cost_with_config_file(tmp_path):
@@ -48,7 +47,7 @@ def test_cost_json_output(tmp_path):
     )
     result = runner.invoke(app, ["cost", "--config", str(config_file), "--json"])
     assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert isinstance(data, list)
     assert len(data) > 0
     assert "total_cost" in data[0]

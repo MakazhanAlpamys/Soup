@@ -3,10 +3,9 @@
 from pathlib import Path
 from typing import Any, Dict, List
 
-import yaml
-
 from soup_cli.config.schema import SFT_KERNEL_AWARE_TASKS
-from soup_cli.migrate.common import to_number
+from soup_cli.migrate.common import to_number, unmapped_keys_warning, validation_split
+from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_file_limited
 
 # Axolotl rl → Soup task mapping
 _RL_MAP = {
@@ -32,6 +31,16 @@ _OPTIMIZER_MAP = {
     "adamw_8bit": "adamw_bnb_8bit",
 }
 
+# Every top-level key this migrator reads, mapped or warned about by name. Any
+# other key in the source is listed in one "not migrated" warning (#1807).
+_HANDLED_KEYS = frozenset({
+    "base_model", "rl", "datasets", "sequence_len", "val_set_size", "adapter", "lora_r",
+    "lora_alpha", "lora_dropout", "lora_target_linear", "lora_target_modules",
+    "micro_batch_size", "gradient_accumulation_steps", "num_epochs", "learning_rate",
+    "optimizer", "lr_scheduler", "warmup_ratio", "load_in_4bit", "load_in_8bit",
+    "flash_attention", "output_dir", "sample_packing", "wandb_project",
+})
+
 # Task → default data format
 _TASK_FORMAT_MAP = {
     "sft": None,  # Use dataset type
@@ -50,8 +59,9 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
     Returns a dict suitable for config_to_yaml(). Includes a ``_warnings``
     key with a list of human-readable migration notes.
     """
-    raw_text = config_path.read_text(encoding="utf-8")
-    raw = yaml.safe_load(raw_text)
+    raw = load_yaml_file_limited(
+        config_path, f"Config file {config_path}", max_bytes=MAX_CONFIG_BYTES
+    )
     if not raw or not isinstance(raw, dict):
         raise ValueError("Config file is empty or not a valid YAML mapping")
 
@@ -103,6 +113,11 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
 
     if "sequence_len" in raw:
         data["max_length"] = raw["sequence_len"]
+    # val_set_size: axolotl's default is 0 (train on every row); without this
+    # mapping every migrated config got Soup's default of 0.1 (#1807).
+    val_split = validation_split(raw.get("val_set_size"), "val_set_size", warnings)
+    if val_split is not None:
+        data["val_split"] = val_split
 
     # --- LoRA / Full Fine-tuning ---
     adapter = raw.get("adapter")
@@ -121,7 +136,9 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
         if "lora_dropout" in raw:
             lora_section["dropout"] = raw["lora_dropout"]
         if raw.get("lora_target_linear"):
-            lora_section["target_modules"] = "auto"
+            # Every linear layer; peft's spelling is ``all-linear``. ``auto`` would
+            # resolve to q_proj / v_proj on Llama, two of seven (#1807).
+            lora_section["target_modules"] = "all-linear"
         elif "lora_target_modules" in raw:
             lora_section["target_modules"] = raw["lora_target_modules"]
     else:
@@ -197,6 +214,9 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
         warnings.append(
             f"wandb_project: {raw['wandb_project']}. Use --wandb flag with soup train."
         )
+    dropped = unmapped_keys_warning(raw, _HANDLED_KEYS, "axolotl")
+    if dropped is not None:
+        warnings.append(dropped)
 
     result: Dict[str, Any] = {
         "base": base,

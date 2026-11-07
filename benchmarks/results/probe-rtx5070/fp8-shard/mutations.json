@@ -1,0 +1,849 @@
+[
+ {
+  "id": "M01",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "dequant skips the scale",
+  "returncode": 1,
+  "summary": "30 failed, 94 passed in 23.02s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_dequant_equals_the_reference_block_loop[576x2048-b128x128]",
+   "tests/test_fp8_block_streaming.py::test_dequant_equals_the_reference_block_loop[129x257-b128x128]",
+   "tests/test_fp8_block_streaming.py::test_dequant_equals_the_reference_block_loop[127x1-b128x128]",
+   "tests/test_fp8_block_streaming.py::test_dequant_equals_the_reference_block_loop[1x1-b128x128]",
+   "tests/test_fp8_block_streaming.py::test_dequant_equals_the_reference_block_loop[256x384-b128x128]",
+   "tests/test_fp8_block_streaming.py::test_dequant_equals_the_reference_block_loop[2048x1408-b128x128]",
+   "tests/test_fp8_block_streaming.py::test_dequant_equals_the_reference_block_loop[24x64-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_dequant_equals_the_reference_block_loop[100x70-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_dequant_equals_the_reference_block_loop[64x96-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_every_finite_e4m3_code_point_dequantises_exactly",
+   "tests/test_fp8_block_streaming.py::test_transformers_dequant_agrees_on_tileable_shapes[256x384]",
+   "tests/test_fp8_block_streaming.py::test_transformers_dequant_agrees_on_tileable_shapes[2048x1408]",
+   "tests/test_fp8_block_streaming.py::test_transformers_dequant_agrees_on_tileable_shapes[64x96]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[float32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[float32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[bfloat16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[bfloat16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_fp8_embeddings_and_head_are_dequantised_into_their_shards",
+   "tests/test_fp8_block_streaming.py::test_a_cache_of_one_format_is_never_reused_for_the_other[bf16-then-fp8]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[fused-q24-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[fused-qNone-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[per_expert-q24-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[per_expert-qNone-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[fused-q24-b128x128]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-fp32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-fp32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-bf16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-bf16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[nf4-bf16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[nf4-bf16-per_expert]"
+  ],
+  "restored": true,
+  "seconds": 32.1
+ },
+ {
+  "id": "M02",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "dequant swaps bm and bn",
+  "returncode": 1,
+  "summary": "15 failed, 109 passed in 21.90s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_dequant_equals_the_reference_block_loop[24x64-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_dequant_equals_the_reference_block_loop[100x70-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_dequant_equals_the_reference_block_loop[64x96-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_transformers_dequant_agrees_on_tileable_shapes[64x96]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[fused-q24-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[fused-qNone-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[per_expert-q24-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[per_expert-qNone-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_the_streamed_model_is_built_bf16_not_with_transformers_fp8_layers",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-fp32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-fp32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-bf16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-bf16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[nf4-bf16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[nf4-bf16-per_expert]"
+  ],
+  "restored": true,
+  "seconds": 27.8
+ },
+ {
+  "id": "M03",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "dequant crops the wrong edge",
+  "returncode": 1,
+  "summary": "20 failed, 104 passed in 22.83s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_dequant_equals_the_reference_block_loop[576x2048-b128x128]",
+   "tests/test_fp8_block_streaming.py::test_dequant_equals_the_reference_block_loop[129x257-b128x128]",
+   "tests/test_fp8_block_streaming.py::test_dequant_equals_the_reference_block_loop[24x64-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_dequant_equals_the_reference_block_loop[100x70-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[float32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[float32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[bfloat16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[bfloat16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_fp8_embeddings_and_head_are_dequantised_into_their_shards",
+   "tests/test_fp8_block_streaming.py::test_a_cache_of_one_format_is_never_reused_for_the_other[bf16-then-fp8]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[fused-q24-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[fused-qNone-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[per_expert-q24-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[per_expert-qNone-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-fp32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-fp32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-bf16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-bf16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[nf4-bf16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[nf4-bf16-per_expert]"
+  ],
+  "restored": true,
+  "seconds": 27.7
+ },
+ {
+  "id": "M04",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "non-finite scale accepted",
+  "returncode": 1,
+  "summary": "1 failed, 123 passed in 22.52s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_dequant_refuses_a_non_finite_scale"
+  ],
+  "restored": true,
+  "seconds": 29.9
+ },
+ {
+  "id": "M05",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "dequant accepts a non-e4m3 weight",
+  "returncode": 1,
+  "summary": "2 failed, 122 passed in 22.50s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_dequant_refuses_a_tensor_outside_the_format[e5m2]",
+   "tests/test_fp8_block_streaming.py::test_dequant_refuses_a_tensor_outside_the_format[bf16]"
+  ],
+  "restored": true,
+  "seconds": 29.6
+ },
+ {
+  "id": "M06",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "dequant accepts a wrong scale grid",
+  "returncode": 1,
+  "summary": "1 failed, 123 passed in 22.49s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_dequant_refuses_a_tensor_outside_the_format[grid]"
+  ],
+  "restored": true,
+  "seconds": 27.2
+ },
+ {
+  "id": "M07",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "dequant accepts a non-fp32 scale",
+  "returncode": 1,
+  "summary": "1 failed, 123 passed in 22.75s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_dequant_refuses_a_tensor_outside_the_format[scale-dtype]"
+  ],
+  "restored": true,
+  "seconds": 27.4
+ },
+ {
+  "id": "M08",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "per-tensor config not named",
+  "returncode": 1,
+  "summary": "4 failed, 120 passed in 23.85s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_unsupported_fp8_config_is_refused_naming_the_format[per-tensor-missing]",
+   "tests/test_fp8_block_streaming.py::test_an_unsupported_fp8_config_is_refused_naming_the_format[per-tensor-null]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_refuses_an_fp8_config_spelling_before_reading_a_header",
+   "tests/test_fp8_block_streaming.py::test_the_setup_refuses_an_unsupported_fp8_base_before_resolving_weights"
+  ],
+  "restored": true,
+  "seconds": 28.8
+ },
+ {
+  "id": "M09",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "bool block accepted",
+  "returncode": 1,
+  "summary": "1 failed, 123 passed in 22.78s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_unsupported_fp8_config_is_refused_naming_the_format[block-bool]"
+  ],
+  "restored": true,
+  "seconds": 27.5
+ },
+ {
+  "id": "M10",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "zero block accepted",
+  "returncode": 1,
+  "summary": "1 failed, 123 passed in 23.59s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_unsupported_fp8_config_is_refused_naming_the_format[block-zero]"
+  ],
+  "restored": true,
+  "seconds": 30.7
+ },
+ {
+  "id": "M11",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "float block accepted",
+  "returncode": 1,
+  "summary": "1 failed, 123 passed in 23.14s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_unsupported_fp8_config_is_refused_naming_the_format[block-float]"
+  ],
+  "restored": true,
+  "seconds": 27.7
+ },
+ {
+  "id": "M12",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "one-int block accepted",
+  "returncode": 1,
+  "summary": "1 failed, 123 passed in 23.13s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_unsupported_fp8_config_is_refused_naming_the_format[block-one-int]"
+  ],
+  "restored": true,
+  "seconds": 27.7
+ },
+ {
+  "id": "M13",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "e5m2 fmt accepted",
+  "returncode": 1,
+  "summary": "2 failed, 122 passed in 24.80s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_unsupported_fp8_config_is_refused_naming_the_format[e5m2]",
+   "tests/test_fp8_block_streaming.py::test_the_sharder_refuses_an_fp8_config_spelling_before_reading_a_header"
+  ],
+  "restored": true,
+  "seconds": 32.1
+ },
+ {
+  "id": "M14",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "ue8m0 accepted",
+  "returncode": 1,
+  "summary": "1 failed, 123 passed in 22.33s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_unsupported_fp8_config_is_refused_naming_the_format[ue8m0]"
+  ],
+  "restored": true,
+  "seconds": 27.7
+ },
+ {
+  "id": "M15",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "static activation accepted",
+  "returncode": 1,
+  "summary": "1 failed, 123 passed in 20.63s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_unsupported_fp8_config_is_refused_naming_the_format[static]"
+  ],
+  "restored": true,
+  "seconds": 25.8
+ },
+ {
+  "id": "M16",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "arch gate off",
+  "returncode": 1,
+  "summary": "7 failed, 117 passed in 23.22s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_fp8_base_on_another_architecture_is_refused[llama]",
+   "tests/test_fp8_block_streaming.py::test_an_fp8_base_on_another_architecture_is_refused[qwen3]",
+   "tests/test_fp8_block_streaming.py::test_an_fp8_base_on_another_architecture_is_refused[qwen4_exp]",
+   "tests/test_fp8_block_streaming.py::test_an_fp8_base_on_another_architecture_is_refused[]",
+   "tests/test_fp8_block_streaming.py::test_the_sharder_refuses_before_anything_is_written[llama]",
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[llama]",
+   "tests/test_fp8_block_streaming.py::test_the_setup_refuses_an_fp8_base_on_another_architecture"
+  ],
+  "restored": true,
+  "seconds": 27.8
+ },
+ {
+  "id": "M17",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "compressed-tensors not named",
+  "returncode": 1,
+  "summary": "2 failed, 122 passed in 16.81s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_fp8_tensors_without_the_fp8_block_config_are_refused[compressed-tensors]",
+   "tests/test_fp8_block_streaming.py::test_a_compressed_tensors_checkpoint_with_weight_scale_is_refused"
+  ],
+  "restored": true,
+  "seconds": 21.4
+ },
+ {
+  "id": "M18",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "e5m2 weight accepted",
+  "returncode": 1,
+  "summary": "3 failed, 121 passed in 22.37s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_fp8_tensor_layout_outside_the_format_is_refused_by_name[e5m2-weight]",
+   "tests/test_fp8_block_streaming.py::test_an_fp8_tensor_layout_outside_the_format_is_refused_by_name[fnuz-weight]",
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[e5m2-weight]"
+  ],
+  "restored": true,
+  "seconds": 27.7
+ },
+ {
+  "id": "M19",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "non-2-D FP8 accepted",
+  "returncode": 1,
+  "summary": "2 failed, 122 passed in 22.14s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_fp8_tensor_layout_outside_the_format_is_refused_by_name[fp8-3d]",
+   "tests/test_fp8_block_streaming.py::test_an_fp8_tensor_layout_outside_the_format_is_refused_by_name[fp8-vector]"
+  ],
+  "restored": true,
+  "seconds": 26.7
+ },
+ {
+  "id": "M20",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "FP8 tensor without scale accepted",
+  "returncode": 1,
+  "summary": "4 failed, 120 passed in 22.72s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_fp8_tensor_layout_outside_the_format_is_refused_by_name[fp8-without-scale]",
+   "tests/test_fp8_block_streaming.py::test_a_refusal_never_quotes_raw_control_bytes",
+   "tests/test_fp8_block_streaming.py::test_the_sharder_refuses_before_anything_is_written[fp8-without-scale]",
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[fp8-without-scale]"
+  ],
+  "restored": true,
+  "seconds": 29.1
+ },
+ {
+  "id": "M21",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "scale without tensor not named",
+  "returncode": 1,
+  "summary": "1 failed, 123 passed in 21.58s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_fp8_tensor_layout_outside_the_format_is_refused_by_name[scale-without-tensor]"
+  ],
+  "restored": true,
+  "seconds": 27.1
+ },
+ {
+  "id": "M22",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "scale beside bf16 accepted",
+  "returncode": 1,
+  "summary": "3 failed, 121 passed in 19.12s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_fp8_tensor_layout_outside_the_format_is_refused_by_name[scale-beside-bf16]",
+   "tests/test_fp8_block_streaming.py::test_the_sharder_refuses_before_anything_is_written[scale-without-tensor]",
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[scale-without-tensor]"
+  ],
+  "restored": true,
+  "seconds": 23.2
+ },
+ {
+  "id": "M23",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "non-F32 scale accepted",
+  "returncode": 1,
+  "summary": "2 failed, 122 passed in 21.51s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_fp8_tensor_layout_outside_the_format_is_refused_by_name[bf16-scale]",
+   "tests/test_fp8_block_streaming.py::test_an_fp8_tensor_layout_outside_the_format_is_refused_by_name[fp8-scale]"
+  ],
+  "restored": true,
+  "seconds": 25.4
+ },
+ {
+  "id": "M24",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "misshapen scale accepted",
+  "returncode": 1,
+  "summary": "5 failed, 119 passed in 14.96s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_fp8_tensor_layout_outside_the_format_is_refused_by_name[misshapen-scale]",
+   "tests/test_fp8_block_streaming.py::test_an_fp8_tensor_layout_outside_the_format_is_refused_by_name[per-tensor-scale]",
+   "tests/test_fp8_block_streaming.py::test_an_fp8_tensor_layout_outside_the_format_is_refused_by_name[per-tensor-scale-1]",
+   "tests/test_fp8_block_streaming.py::test_an_fp8_tensor_layout_outside_the_format_is_refused_by_name[transposed-grid]",
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[misshapen-scale]"
+  ],
+  "restored": true,
+  "seconds": 18.9
+ },
+ {
+  "id": "M25",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "per-tensor scale not named",
+  "returncode": 1,
+  "summary": "2 failed, 122 passed in 12.73s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_fp8_tensor_layout_outside_the_format_is_refused_by_name[per-tensor-scale]",
+   "tests/test_fp8_block_streaming.py::test_an_fp8_tensor_layout_outside_the_format_is_refused_by_name[per-tensor-scale-1]"
+  ],
+  "restored": true,
+  "seconds": 16.4
+ },
+ {
+  "id": "M26",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "FP8 without config not refused",
+  "returncode": 1,
+  "summary": "10 failed, 114 passed in 16.89s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_fp8_tensors_without_the_fp8_block_config_are_refused[no-config]",
+   "tests/test_fp8_block_streaming.py::test_fp8_tensors_without_the_fp8_block_config_are_refused[compressed-tensors]",
+   "tests/test_fp8_block_streaming.py::test_fp8_tensors_without_the_fp8_block_config_are_refused[other-method]",
+   "tests/test_fp8_block_streaming.py::test_an_enum_quant_method_is_named_by_its_value",
+   "tests/test_fp8_block_streaming.py::test_a_compressed_tensors_checkpoint_with_weight_scale_is_refused",
+   "tests/test_fp8_block_streaming.py::test_the_sharder_refuses_before_anything_is_written[compressed-tensors]",
+   "tests/test_fp8_block_streaming.py::test_the_sharder_refuses_before_anything_is_written[no-config]",
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[compressed-tensors]",
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[no-config]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_without_the_config_refuses_an_fp8_source"
+  ],
+  "restored": true,
+  "seconds": 21.6
+ },
+ {
+  "id": "M27",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "raw text in messages",
+  "returncode": 1,
+  "summary": "6 failed, 118 passed in 20.66s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_fp8_tensor_layout_outside_the_format_is_refused_by_name[bf16-scale]",
+   "tests/test_fp8_block_streaming.py::test_an_fp8_tensor_layout_outside_the_format_is_refused_by_name[e5m2-weight]",
+   "tests/test_fp8_block_streaming.py::test_an_fp8_tensor_layout_outside_the_format_is_refused_by_name[fp8-scale]",
+   "tests/test_fp8_block_streaming.py::test_fp8_tensors_without_the_fp8_block_config_are_refused[other-method]",
+   "tests/test_fp8_block_streaming.py::test_an_enum_quant_method_is_named_by_its_value",
+   "tests/test_fp8_block_streaming.py::test_a_refusal_never_quotes_raw_control_bytes"
+  ],
+  "restored": true,
+  "seconds": 26.8
+ },
+ {
+  "id": "M28",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "config objects ignored",
+  "returncode": 1,
+  "summary": "2 failed, 122 passed in 23.27s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_the_published_config_spellings_are_accepted",
+   "tests/test_fp8_block_streaming.py::test_an_enum_quant_method_is_named_by_its_value"
+  ],
+  "restored": true,
+  "seconds": 28.6
+ },
+ {
+  "id": "M29",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "enum values not normalised",
+  "returncode": 1,
+  "summary": "1 failed, 123 passed in 23.13s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_enum_quant_method_is_named_by_its_value"
+  ],
+  "restored": true,
+  "seconds": 30.2
+ },
+ {
+  "id": "M30",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "symlinked config read",
+  "returncode": 1,
+  "summary": "1 failed, 123 passed in 22.42s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_a_symlinked_config_is_not_read"
+  ],
+  "restored": true,
+  "seconds": 26.8
+ },
+ {
+  "id": "M31",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "config size unbounded",
+  "returncode": 1,
+  "summary": "1 failed, 123 passed in 22.50s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_an_oversized_config_is_not_read"
+  ],
+  "restored": true,
+  "seconds": 29.7
+ },
+ {
+  "id": "M32",
+  "file": "src/soup_cli/utils/fp8_block.py",
+  "what": "non-mapping quantization_config returned",
+  "returncode": 1,
+  "summary": "1 failed, 123 passed in 21.95s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_the_checkpoint_config_is_read_bounded[not-mapping]"
+  ],
+  "restored": true,
+  "seconds": 26.6
+ },
+ {
+  "id": "M33",
+  "file": "src/soup_cli/utils/layer_shard.py",
+  "what": "sharder stores layer scales",
+  "returncode": 1,
+  "summary": "24 failed, 100 passed in 24.22s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[float32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[float32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[bfloat16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[bfloat16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_fp8_embeddings_and_head_are_dequantised_into_their_shards",
+   "tests/test_fp8_block_streaming.py::test_the_router_and_its_bias_keep_their_stored_dtypes",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[float32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[float32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[bfloat16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[bfloat16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_a_cache_of_one_format_is_never_reused_for_the_other[bf16-then-fp8]",
+   "tests/test_fp8_block_streaming.py::test_a_cache_of_one_format_is_never_reused_for_the_other[fp8-then-bf16]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[fused-q24-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[fused-qNone-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[per_expert-q24-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[per_expert-qNone-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[fused-q24-b128x128]",
+   "tests/test_fp8_block_streaming.py::test_the_streamed_model_is_built_bf16_not_with_transformers_fp8_layers",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-fp32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-fp32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-bf16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-bf16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[nf4-bf16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[nf4-bf16-per_expert]"
+  ],
+  "restored": true,
+  "seconds": 29.5
+ },
+ {
+  "id": "M34",
+  "file": "src/soup_cli/utils/layer_shard.py",
+  "what": "sharder stores extras scales",
+  "returncode": 1,
+  "summary": "1 failed, 123 passed in 22.90s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_fp8_embeddings_and_head_are_dequantised_into_their_shards"
+  ],
+  "restored": true,
+  "seconds": 28.1
+ },
+ {
+  "id": "M35",
+  "file": "src/soup_cli/utils/layer_shard.py",
+  "what": "FP8 weight read without dequant",
+  "returncode": 1,
+  "summary": "24 failed, 100 passed in 20.58s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[float32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[float32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[bfloat16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[bfloat16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_fp8_embeddings_and_head_are_dequantised_into_their_shards",
+   "tests/test_fp8_block_streaming.py::test_the_router_and_its_bias_keep_their_stored_dtypes",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[float32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[float32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[bfloat16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[bfloat16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_a_cache_of_one_format_is_never_reused_for_the_other[bf16-then-fp8]",
+   "tests/test_fp8_block_streaming.py::test_a_cache_of_one_format_is_never_reused_for_the_other[fp8-then-bf16]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[fused-q24-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[fused-qNone-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[per_expert-q24-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[per_expert-qNone-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[fused-q24-b128x128]",
+   "tests/test_fp8_block_streaming.py::test_the_streamed_model_is_built_bf16_not_with_transformers_fp8_layers",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-fp32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-fp32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-bf16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-bf16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[nf4-bf16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[nf4-bf16-per_expert]"
+  ],
+  "restored": true,
+  "seconds": 24.1
+ },
+ {
+  "id": "M36",
+  "file": "src/soup_cli/utils/layer_shard.py",
+  "what": "experts read without dequant",
+  "returncode": 1,
+  "summary": "24 failed, 100 passed in 21.66s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[float32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[float32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[bfloat16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[bfloat16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_fp8_embeddings_and_head_are_dequantised_into_their_shards",
+   "tests/test_fp8_block_streaming.py::test_the_router_and_its_bias_keep_their_stored_dtypes",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[float32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[float32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[bfloat16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[bfloat16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_a_cache_of_one_format_is_never_reused_for_the_other[bf16-then-fp8]",
+   "tests/test_fp8_block_streaming.py::test_a_cache_of_one_format_is_never_reused_for_the_other[fp8-then-bf16]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[fused-q24-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[fused-qNone-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[per_expert-q24-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[per_expert-qNone-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[fused-q24-b128x128]",
+   "tests/test_fp8_block_streaming.py::test_the_streamed_model_is_built_bf16_not_with_transformers_fp8_layers",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-fp32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-fp32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-bf16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-bf16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[nf4-bf16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[nf4-bf16-per_expert]"
+  ],
+  "restored": true,
+  "seconds": 26.9
+ },
+ {
+  "id": "M37",
+  "file": "src/soup_cli/utils/layer_shard.py",
+  "what": "estimator charges scales",
+  "returncode": 1,
+  "summary": "10 failed, 114 passed in 22.97s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[float32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[float32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[bfloat16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[bfloat16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-fp32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-fp32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-bf16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-bf16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[nf4-bf16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[nf4-bf16-per_expert]"
+  ],
+  "restored": true,
+  "seconds": 30.0
+ },
+ {
+  "id": "M38",
+  "file": "src/soup_cli/utils/layer_shard.py",
+  "what": "estimator has no FP8 plan",
+  "returncode": 1,
+  "summary": "17 failed, 107 passed in 22.73s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[fp8-without-scale]",
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[scale-without-tensor]",
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[misshapen-scale]",
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[e5m2-weight]",
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[compressed-tensors]",
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[no-config]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[float32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[float32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[bfloat16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[bfloat16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_without_the_config_refuses_an_fp8_source",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-fp32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-fp32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-bf16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-bf16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[nf4-bf16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[nf4-bf16-per_expert]"
+  ],
+  "restored": true,
+  "seconds": 27.4
+ },
+ {
+  "id": "M39",
+  "file": "src/soup_cli/utils/layer_shard.py",
+  "what": "estimator reads headers before the config",
+  "returncode": 1,
+  "summary": "1 failed, 123 passed in 22.06s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_the_estimate_refuses_an_fp8_config_spelling_before_reading_a_header"
+  ],
+  "restored": true,
+  "seconds": 26.6
+ },
+ {
+  "id": "M40",
+  "file": "src/soup_cli/utils/layer_shard.py",
+  "what": "sharder reads headers before the config",
+  "returncode": 1,
+  "summary": "1 failed, 123 passed in 22.26s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_the_sharder_refuses_an_fp8_config_spelling_before_reading_a_header"
+  ],
+  "restored": true,
+  "seconds": 26.8
+ },
+ {
+  "id": "M41",
+  "file": "src/soup_cli/utils/layer_shard.py",
+  "what": "sharder has no FP8 plan",
+  "returncode": 1,
+  "summary": "30 failed, 94 passed in 24.54s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[float32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[float32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[bfloat16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[bfloat16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_fp8_embeddings_and_head_are_dequantised_into_their_shards",
+   "tests/test_fp8_block_streaming.py::test_the_router_and_its_bias_keep_their_stored_dtypes",
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[fp8-without-scale]",
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[scale-without-tensor]",
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[misshapen-scale]",
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[e5m2-weight]",
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[compressed-tensors]",
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[no-config]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[float32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[float32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[bfloat16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[bfloat16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_a_cache_of_one_format_is_never_reused_for_the_other[bf16-then-fp8]",
+   "tests/test_fp8_block_streaming.py::test_a_cache_of_one_format_is_never_reused_for_the_other[fp8-then-bf16]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[fused-q24-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[fused-qNone-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[per_expert-q24-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[per_expert-qNone-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[fused-q24-b128x128]",
+   "tests/test_fp8_block_streaming.py::test_the_streamed_model_is_built_bf16_not_with_transformers_fp8_layers",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-fp32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-fp32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-bf16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-bf16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[nf4-bf16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[nf4-bf16-per_expert]"
+  ],
+  "restored": true,
+  "seconds": 29.2
+ },
+ {
+  "id": "M42",
+  "file": "src/soup_cli/utils/layer_shard.py",
+  "what": "shared consumed rule empty",
+  "returncode": 1,
+  "summary": "24 failed, 100 passed in 23.61s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[float32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[float32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[bfloat16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_source_shards_to_the_cache_of_its_dequantised_weights[bfloat16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_fp8_embeddings_and_head_are_dequantised_into_their_shards",
+   "tests/test_fp8_block_streaming.py::test_the_router_and_its_bias_keep_their_stored_dtypes",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[float32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[float32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[bfloat16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[bfloat16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_a_cache_of_one_format_is_never_reused_for_the_other[bf16-then-fp8]",
+   "tests/test_fp8_block_streaming.py::test_a_cache_of_one_format_is_never_reused_for_the_other[fp8-then-bf16]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[fused-q24-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[fused-qNone-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[per_expert-q24-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[per_expert-qNone-b16x32]",
+   "tests/test_fp8_block_streaming.py::test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly[fused-q24-b128x128]",
+   "tests/test_fp8_block_streaming.py::test_the_streamed_model_is_built_bf16_not_with_transformers_fp8_layers",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-fp32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-fp32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-bf16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-bf16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[nf4-bf16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[nf4-bf16-per_expert]"
+  ],
+  "restored": true,
+  "seconds": 28.2
+ },
+ {
+  "id": "M43",
+  "file": "src/soup_cli/utils/layer_shard.py",
+  "what": "plain-read backstop off",
+  "returncode": 1,
+  "summary": "1 failed, 123 passed in 22.51s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_the_plain_read_backstop_still_refuses_an_fp8_tensor"
+  ],
+  "restored": true,
+  "seconds": 27.0
+ },
+ {
+  "id": "M44",
+  "file": "src/soup_cli/utils/safetensors_reader.py",
+  "what": "reader cannot read F8_E4M3",
+  "returncode": 1,
+  "summary": "20 failed, 104 passed in 25.63s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[fp8-without-scale]",
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[scale-without-tensor]",
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[misshapen-scale]",
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[e5m2-weight]",
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[compressed-tensors]",
+   "tests/test_fp8_block_streaming.py::test_the_disk_preflight_refuses_in_the_sharders_words[no-config]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[float32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[float32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[bfloat16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_is_exact_for_an_fp8_source[bfloat16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_estimate_without_the_config_refuses_an_fp8_source",
+   "tests/test_fp8_block_streaming.py::test_the_header_reader_reads_fp8_dtypes_at_one_byte",
+   "tests/test_fp8_block_streaming.py::test_the_preflight_estimate_is_not_approximate_for_an_fp8_source",
+   "tests/test_fp8_block_streaming.py::test_the_setup_hands_the_fp8_config_to_the_disk_preflight",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-fp32-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-fp32-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-bf16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[none-bf16-per_expert]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[nf4-bf16-fused]",
+   "tests/test_fp8_block_streaming.py::test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte[nf4-bf16-per_expert]"
+  ],
+  "restored": true,
+  "seconds": 30.2
+ },
+ {
+  "id": "M45",
+  "file": "src/soup_cli/utils/layer_stream_runtime.py",
+  "what": "skeleton keeps the FP8 config",
+  "returncode": 1,
+  "summary": "2 failed, 122 passed in 23.27s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_the_streamed_model_is_built_bf16_not_with_transformers_fp8_layers",
+   "tests/test_fp8_block_streaming.py::test_the_meta_skeleton_never_hands_an_fp8_config_to_from_config"
+  ],
+  "restored": true,
+  "seconds": 28.8
+ },
+ {
+  "id": "M46",
+  "file": "src/soup_cli/utils/layer_stream_runtime.py",
+  "what": "skeleton drop is a no-op",
+  "returncode": 1,
+  "summary": "2 failed, 122 passed in 26.71s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_the_streamed_model_is_built_bf16_not_with_transformers_fp8_layers",
+   "tests/test_fp8_block_streaming.py::test_the_meta_skeleton_never_hands_an_fp8_config_to_from_config"
+  ],
+  "restored": true,
+  "seconds": 34.1
+ },
+ {
+  "id": "M47",
+  "file": "src/soup_cli/trainer/stream_setup.py",
+  "what": "setup does not refuse early",
+  "returncode": 1,
+  "summary": "2 failed, 122 passed in 26.59s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_the_setup_refuses_an_unsupported_fp8_base_before_resolving_weights",
+   "tests/test_fp8_block_streaming.py::test_the_setup_refuses_an_fp8_base_on_another_architecture"
+  ],
+  "restored": true,
+  "seconds": 33.9
+ },
+ {
+  "id": "M48",
+  "file": "src/soup_cli/trainer/stream_setup.py",
+  "what": "pre-flight not fed the config",
+  "returncode": 1,
+  "summary": "1 failed, 123 passed in 21.95s",
+  "failed": [
+   "tests/test_fp8_block_streaming.py::test_the_setup_hands_the_fp8_config_to_the_disk_preflight"
+  ],
+  "restored": true,
+  "seconds": 28.3
+ }
+]

@@ -6,7 +6,7 @@ down; ``soup eval judge`` aborted on the first transport error and lost the
 scores already collected; nothing was ever retried; and a training eval gate
 called an unreachable judge a regression.
 
-``httpx.post`` is patched throughout, so no judge server is needed, and the
+``post_capped`` is patched throughout, so no judge server is needed, and the
 retry pause is captured instead of slept.
 """
 
@@ -27,6 +27,8 @@ from typer.testing import CliRunner
 from soup_cli.eval import judge as judge_mod
 from soup_cli.eval.judge import JudgeEvaluator, JudgeUnavailableError, pairwise_winrate
 from tests.conftest import strip_ansi
+
+BOUNDED_POST = "soup_cli.utils.http_response.post_capped"
 
 JUDGE_BASE = "http://localhost:8000"
 REQ = httpx.Request("POST", f"{JUDGE_BASE}/v1/chat/completions")
@@ -86,7 +88,7 @@ ATTEMPTS = judge_mod.JUDGE_MAX_RETRIES + 1
 class TestPairwiseFailureIsNotATie:
     def test_dead_judge_raises_instead_of_scoring_half(self, evaluator, no_sleep):
         pairs = [("p", "base answer", "tuned answer")] * 5
-        with mock.patch("httpx.post", side_effect=_refused) as post:
+        with mock.patch(BOUNDED_POST, side_effect=_refused) as post:
             with pytest.raises(JudgeUnavailableError) as excinfo:
                 pairwise_winrate(pairs, evaluator)
         # The message names the judge, and the first pair aborts the run after
@@ -96,18 +98,18 @@ class TestPairwiseFailureIsNotATie:
 
     def test_judge_that_answers_tie_still_scores_half(self, evaluator):
         pairs = [("p", "base answer", "tuned answer")] * 3
-        with mock.patch("httpx.post", return_value=_content("I cannot decide")):
+        with mock.patch(BOUNDED_POST, return_value=_content("I cannot decide")):
             assert pairwise_winrate(pairs, evaluator) == 0.5
 
     def test_judge_that_picks_tuned_scores_one(self, evaluator):
         # Base is A and tuned is B in the first order; the swapped order must
         # agree, so the fake answers by position.
-        def post(url, json, headers, timeout):
+        def post(url, json, headers, timeout, **limits):
             body = json["messages"][0]["content"]
             winner = "B" if body.index("tuned answer") > body.index("base answer") else "A"
             return _content(f'{{"winner": "{winner}"}}')
 
-        with mock.patch("httpx.post", side_effect=post):
+        with mock.patch(BOUNDED_POST, side_effect=post):
             assert pairwise_winrate([("p", "base answer", "tuned answer")], evaluator) == 1.0
 
     def test_compare_pair_lets_the_error_propagate(self, evaluator, monkeypatch):
@@ -128,7 +130,7 @@ class TestPairwiseFailureIsNotATie:
             judge = make_soup_pairwise_judge(evaluator)
         except ImportError:
             pytest.skip("installed trl has no BasePairwiseJudge")
-        with mock.patch("httpx.post", side_effect=_refused) as post:
+        with mock.patch(BOUNDED_POST, side_effect=_refused) as post:
             assert judge.judge(["p"], [["first", "second"]]) == [-1]
         # the first order spent its bounded retries; the swapped order was never asked
         assert post.call_count == ATTEMPTS
@@ -143,7 +145,7 @@ class TestRetry:
     def test_429_then_200_is_scored_after_one_retry(self, evaluator, no_sleep):
         replies = iter([_reply(429, {"error": "rate limited"}, {"Retry-After": "3"}),
                         _reply(200, SCORED)])
-        with mock.patch("httpx.post", side_effect=lambda *a, **k: next(replies)) as post:
+        with mock.patch(BOUNDED_POST, side_effect=lambda *a, **k: next(replies)) as post:
             score = evaluator.evaluate("q", "a")
         assert score.weighted_score == 4.0
         assert post.call_count == 2
@@ -156,20 +158,20 @@ class TestRetry:
             item = next(replies)
             return item(*args, **kwargs) if callable(item) else item
 
-        with mock.patch("httpx.post", side_effect=post) as post_mock:
+        with mock.patch(BOUNDED_POST, side_effect=post) as post_mock:
             assert evaluator.evaluate("q", "a").weighted_score == 4.0
         assert post_mock.call_count == 2
         assert len(no_sleep) == 1
 
     def test_persistent_503_is_bounded_and_raises(self, evaluator, no_sleep):
-        with mock.patch("httpx.post", return_value=_reply(503, {"error": "down"})) as post:
+        with mock.patch(BOUNDED_POST, return_value=_reply(503, {"error": "down"})) as post:
             with pytest.raises(JudgeUnavailableError, match="503"):
                 evaluator.evaluate("q", "a")
         assert post.call_count == ATTEMPTS
         assert len(no_sleep) == judge_mod.JUDGE_MAX_RETRIES
 
     def test_backoff_without_retry_after_grows_and_is_capped(self, evaluator, no_sleep):
-        with mock.patch("httpx.post", return_value=_reply(429, {"error": "rate limited"})):
+        with mock.patch(BOUNDED_POST, return_value=_reply(429, {"error": "rate limited"})):
             with pytest.raises(JudgeUnavailableError):
                 evaluator.evaluate("q", "a")
         assert no_sleep == sorted(no_sleep)
@@ -177,7 +179,7 @@ class TestRetry:
 
     def test_retry_after_is_capped(self, evaluator, no_sleep):
         with mock.patch(
-            "httpx.post", return_value=_reply(429, {}, {"Retry-After": "86400"})
+            BOUNDED_POST, return_value=_reply(429, {}, {"Retry-After": "86400"})
         ):
             with pytest.raises(JudgeUnavailableError):
                 evaluator.evaluate("q", "a")
@@ -185,7 +187,7 @@ class TestRetry:
 
     @pytest.mark.parametrize("status", [400, 401, 403, 404])
     def test_client_errors_are_not_retried(self, evaluator, no_sleep, status):
-        with mock.patch("httpx.post", return_value=_reply(status, {"error": "no"})) as post:
+        with mock.patch(BOUNDED_POST, return_value=_reply(status, {"error": "no"})) as post:
             with pytest.raises(JudgeUnavailableError, match=str(status)):
                 evaluator.evaluate("q", "a")
         assert post.call_count == 1
@@ -203,19 +205,19 @@ class TestRetry:
         ids=["empty-choices", "no-content", "null-content", "no-choices-key", "not-a-dict"],
     )
     def test_malformed_200_reply_is_a_judge_error(self, evaluator, no_sleep, body):
-        with mock.patch("httpx.post", return_value=_reply(200, body)) as post:
+        with mock.patch(BOUNDED_POST, return_value=_reply(200, body)) as post:
             with pytest.raises(JudgeUnavailableError):
                 evaluator.evaluate("q", "a")
         assert post.call_count == 1
 
     def test_non_json_200_reply_is_a_judge_error(self, evaluator, no_sleep):
         reply = httpx.Response(200, text="<html>gateway</html>", request=REQ)
-        with mock.patch("httpx.post", return_value=reply):
+        with mock.patch(BOUNDED_POST, return_value=reply):
             with pytest.raises(JudgeUnavailableError):
                 evaluator.evaluate("q", "a")
 
     def test_error_names_the_url_and_the_attempt_count(self, evaluator, no_sleep):
-        with mock.patch("httpx.post", side_effect=_refused):
+        with mock.patch(BOUNDED_POST, side_effect=_refused):
             with pytest.raises(JudgeUnavailableError) as excinfo:
                 evaluator.evaluate("q", "a")
         message = str(excinfo.value)
@@ -233,7 +235,7 @@ class TestRetry:
 
 @pytest.mark.parametrize("value", ["nan", "NaN", "-5", "-inf", "inf", "1e400", "abc", ""])
 def test_hostile_retry_after_never_yields_a_bad_pause(evaluator, no_sleep, value):
-    with mock.patch("httpx.post", return_value=_reply(429, {}, {"Retry-After": value})):
+    with mock.patch(BOUNDED_POST, return_value=_reply(429, {}, {"Retry-After": value})):
         with pytest.raises(JudgeUnavailableError):
             evaluator.evaluate("q", "a")
     assert no_sleep
@@ -252,7 +254,7 @@ def test_undecodable_reply_is_a_judge_error_not_a_raw_httpx_error(evaluator, no_
     def boom(*args, **kwargs):
         raise httpx.DecodingError("bad reply", request=REQ)
 
-    with mock.patch("httpx.post", side_effect=boom) as post:
+    with mock.patch(BOUNDED_POST, side_effect=boom) as post:
         with pytest.raises(JudgeUnavailableError, match="DecodingError"):
             evaluator.evaluate("q", "a")
     assert post.call_count == 1  # not transient: no retry
@@ -268,7 +270,7 @@ def test_undecodable_reply_is_a_judge_error_not_a_raw_httpx_error(evaluator, no_
 )
 def test_error_text_carries_no_credentials(no_sleep, base, secret):
     evaluator = JudgeEvaluator(provider="server", model="judge", api_base=base)
-    with mock.patch("httpx.post", side_effect=_refused) as post:
+    with mock.patch(BOUNDED_POST, side_effect=_refused) as post:
         with pytest.raises(JudgeUnavailableError) as excinfo:
             evaluator.evaluate("q", "a")
     assert secret not in str(excinfo.value)
@@ -301,9 +303,9 @@ def _write_rows(path: Path, n: int = 3) -> None:
 
 
 def _failing_row(prompt_marker: str, failure):
-    """A fake ``httpx.post`` that fails only for the row whose prompt has the marker."""
+    """A fake ``post_capped`` that fails only for the row whose prompt has the marker."""
 
-    def post(url, json, headers, timeout):
+    def post(url, json, headers, timeout, **limits):
         if prompt_marker in json["messages"][0]["content"]:
             if callable(failure):
                 return failure()
@@ -329,7 +331,7 @@ class TestEvalJudgeCli:
 
         monkeypatch.chdir(tmp_path)
         _write_rows(tmp_path / "t.jsonl")
-        with mock.patch("httpx.post", side_effect=_failing_row("q1", failure)):
+        with mock.patch(BOUNDED_POST, side_effect=_failing_row("q1", failure)):
             result = CliRunner().invoke(
                 app, ["eval", "judge", "--target", "t.jsonl", "--provider", "server"],
             )
@@ -352,7 +354,7 @@ class TestEvalJudgeCli:
         def hostile():
             raise httpx.ConnectError("[red]boom[/] \x1b[2J gone", request=REQ)
 
-        with mock.patch("httpx.post", side_effect=_failing_row("q1", hostile)):
+        with mock.patch(BOUNDED_POST, side_effect=_failing_row("q1", hostile)):
             result = CliRunner().invoke(
                 app, ["eval", "judge", "--target", "t.jsonl", "--provider", "server"],
             )
@@ -366,7 +368,7 @@ class TestEvalJudgeCli:
 
         monkeypatch.chdir(tmp_path)
         _write_rows(tmp_path / "t.jsonl")
-        with mock.patch("httpx.post", side_effect=_refused):
+        with mock.patch(BOUNDED_POST, side_effect=_refused):
             result = CliRunner().invoke(
                 app, ["eval", "judge", "--target", "t.jsonl", "--provider", "server"],
             )
@@ -394,7 +396,7 @@ class TestShipPairwiseCli:
             ship_cmd, "_resolve_generators",
             lambda *a, **k: (lambda p: "base answer", lambda p: "tuned answer"),
         )
-        with mock.patch("httpx.post", side_effect=_refused):
+        with mock.patch(BOUNDED_POST, side_effect=_refused):
             result = CliRunner().invoke(
                 ship_cmd.app,
                 ["--base", "m", "--tuned", "t", "--task-eval", "tasks.jsonl",
@@ -425,7 +427,7 @@ class TestEvalGate:
             tasks=[GateTask(type="judge", name="quality", threshold=0.7,
                             prompts="prompts.jsonl", judge_model=f"{JUDGE_BASE}/m")],
         )
-        with mock.patch("httpx.post", side_effect=_refused):
+        with mock.patch(BOUNDED_POST, side_effect=_refused):
             result = run_gate(suite, generate_fn=lambda prompt: "x")
         assert result.passed is False
         (task,) = result.task_results

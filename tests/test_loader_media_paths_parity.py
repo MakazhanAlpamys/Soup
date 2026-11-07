@@ -1393,18 +1393,19 @@ def test_vision_trainer_checks_a_bytes_path_too(tmp_path, monkeypatch):
     assert _plain(out.getvalue()).count("Warning: cannot open image:") == len(refused)
 
 
-def test_vision_trainer_hands_a_decoded_image_to_the_reader(tmp_path, monkeypatch):
+def test_vision_trainer_converts_a_decoded_image_without_the_reader(tmp_path, monkeypatch):
     pil_image = pytest.importorskip("PIL.Image")
     wrapper, _ = _vision_wrapper(monkeypatch)
-    rows = [{"messages": _VISION_MESSAGES, "image": pil_image.new("RGB", (4, 4), "blue")}]
+    rows = [{"messages": _VISION_MESSAGES, "image": pil_image.new("RGBA", (4, 4), "blue")}]
     opened: list = []
 
     with monkeypatch.context() as patched:
         patched.setattr(pil_image, "open", _open_spy(pil_image, opened))
         train_ds, _ = wrapper._prepare_vision_dataset({"train": rows})
 
-    assert [isinstance(value, pil_image.Image) for value in opened] == [True]
-    assert [len(images) for images in train_ds["images"]] == [1]
+    # A decoded image is already an image: PIL.Image.open cannot read one (#1597).
+    assert opened == []
+    assert [[image.mode for image in images] for images in train_ds["images"]] == [["RGB"]]
 
 
 _AUDIO_MESSAGES = [

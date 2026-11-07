@@ -19,6 +19,7 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.experiment.tracker import ExperimentTracker
+from soup_cli.utils.typer_compat import is_group, is_option
 
 runner = CliRunner()
 
@@ -32,10 +33,10 @@ def _plain(text: str) -> str:
 
 def _clean_command() -> click.Command:
     root = typer.main.get_command(app)
-    root_ctx = click.Context(root)
+    root_ctx = root.context_class(root)
     runs_group = root.get_command(root_ctx, "runs")
     assert runs_group is not None
-    clean = runs_group.get_command(click.Context(runs_group), "clean")
+    clean = runs_group.get_command(runs_group.context_class(runs_group), "clean")
     assert clean is not None
     return clean
 
@@ -151,8 +152,8 @@ class TestBehaviour:
 
 def _walk(command: click.Command, path: tuple):
     yield path, command
-    if isinstance(command, click.Group):
-        ctx = click.Context(command)
+    if is_group(command):
+        ctx = command.context_class(command)
         for name in command.list_commands(ctx):
             sub = command.get_command(ctx, name)
             if sub is not None:
@@ -168,7 +169,7 @@ class TestNoTrueDefaultFlagWithoutNegative:
         for path, command in _walk(root, ("soup",)):
             for param in command.params:
                 if (
-                    isinstance(param, click.Option)
+                    is_option(param)
                     and param.is_flag
                     and param.default is True
                     and not param.secondary_opts

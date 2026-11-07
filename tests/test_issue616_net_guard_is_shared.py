@@ -29,6 +29,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._source_scan import parse_source, walk_nodes
+
 _UTILS_DIR = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils"
 _SRC_ROOT = _UTILS_DIR.parent
 _HOME = _UTILS_DIR / "net_guard.py"
@@ -40,7 +42,7 @@ _CONSUMERS = ("hf.py", "hubs.py", "loop_stages.py", "qr_url.py", "webhooks.py", 
 
 
 def _parse(path: Path) -> ast.Module:
-    return ast.parse(path.read_text(encoding="utf-8"))
+    return parse_source(path.read_text(encoding="utf-8"), keep=True)
 
 
 def _assigned_names(node: ast.AST) -> list[str]:
@@ -64,7 +66,7 @@ def _imports_net_guard(path: Path) -> bool:
     """
     return any(
         isinstance(node, ast.ImportFrom) and node.module == "soup_cli.utils.net_guard"
-        for node in ast.walk(_parse(path))
+        for node in walk_nodes(_parse(path))
     )
 
 
@@ -91,7 +93,7 @@ def _definers(path: Path) -> list[str]:
     recorded once, under BUNDLED_SCORER_FINGERPRINT.
     """
     found: list[str] = []
-    for node in ast.walk(_parse(path)):
+    for node in walk_nodes(_parse(path)):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if node.name.endswith(_FUNC_SUFFIX):
                 found.append(node.name)
@@ -110,7 +112,7 @@ def _builders(path: Path) -> list[str]:
     """Every name assigned in ``path`` ending in the host-set suffix."""
     return [
         name
-        for node in ast.walk(_parse(path))
+        for node in walk_nodes(_parse(path))
         for name in _assigned_names(node)
         if _normalised(name).endswith(_normalised(_SET_SUFFIX))
     ]
@@ -269,7 +271,7 @@ _HOSTNAME_CHECKS_WITHOUT_THE_REFUSAL = {
 def _functions(path: Path) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
     return [
         node
-        for node in ast.walk(_parse(path))
+        for node in walk_nodes(_parse(path))
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     ]
 
@@ -324,7 +326,7 @@ def _imports_the_refusal(path: Path) -> bool:
         isinstance(node, ast.ImportFrom)
         and node.module == "soup_cli.utils.net_guard"
         and any(alias.name == _REFUSAL for alias in node.names)
-        for node in ast.walk(_parse(path))
+        for node in walk_nodes(_parse(path))
     )
 
 

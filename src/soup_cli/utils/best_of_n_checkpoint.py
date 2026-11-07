@@ -61,18 +61,18 @@ def _open_checkpoint(path: str):
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise ValueError("checkpoint must be a regular file")
-        return os.fdopen(fd, "r", encoding="utf-8")
+        return os.fdopen(fd, "rb")
     except Exception:
         os.close(fd)
         raise
 
 
 def _discard_incomplete_tail(path: str) -> None:
-    """Drop an uncommitted final JSONL fragment left by an interrupted append.
+    """Drop an uncommitted final fragment after committed records validate.
 
-    ``append_checkpoint`` commits records with a trailing newline followed by
-    ``fsync``. A final fragment without that newline is therefore never a
-    committed record and can be discarded safely before validation.
+    ``append_checkpoint`` terminates each record with a newline and then
+    calls ``fsync``. ``load_checkpoint`` validates the committed prefix
+    before calling this helper to remove a final fragment without a newline.
     """
     enforce_under_cwd_and_no_symlink(path, "--checkpoint path")
     flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
@@ -107,38 +107,81 @@ def _discard_incomplete_tail(path: str) -> None:
 def load_checkpoint(
     path: str, *, digest: str, total: int
 ) -> list[tuple[dict, dict | None]]:
-    """Validate a journal and return its exactly-once completed prompt prefix."""
-    _discard_incomplete_tail(path)
+    """Validate committed records before discarding an incomplete final tail."""
     entries: list[tuple[dict, dict | None]] = []
+    header_validated = False
+    incomplete_tail = False
+
     with _open_checkpoint(path) as handle:
         for line_number, raw in enumerate(handle, 1):
+            if not raw.endswith(b"\n"):
+                incomplete_tail = True
+                break
+
             try:
-                record = json.loads(raw)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"checkpoint has invalid JSON on line {line_number}") from exc
+                record = json.loads(raw.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                raise ValueError(
+                    f"checkpoint has invalid JSON on line {line_number}"
+                ) from exc
+
             if line_number == 1:
-                header = record.get("_best_of_n_checkpoint") if isinstance(record, dict) else None
+                header = (
+                    record.get("_best_of_n_checkpoint")
+                    if isinstance(record, dict)
+                    else None
+                )
                 if not isinstance(header, dict):
                     raise ValueError("checkpoint header is missing")
                 if header.get("version") != _CHECKPOINT_VERSION:
                     raise ValueError("checkpoint version is not supported")
-                if header.get("run_digest") != digest or header.get("total") != total:
-                    raise ValueError("checkpoint does not match prompts or run configuration")
+                if (
+                    header.get("run_digest") != digest
+                    or header.get("total") != total
+                ):
+                    raise ValueError(
+                        "checkpoint does not match prompts or run configuration"
+                    )
+                header_validated = True
                 continue
-            if not isinstance(record, dict) or record.get("index") != len(entries):
-                raise ValueError("checkpoint prompt indexes must be sequential and exactly once")
-            core = {key: value for key, value in record.items() if key != "entry_digest"}
+
+            if (
+                not isinstance(record, dict)
+                or record.get("index") != len(entries)
+            ):
+                raise ValueError(
+                    "checkpoint prompt indexes must be sequential and exactly once"
+                )
+            core = {
+                key: value
+                for key, value in record.items()
+                if key != "entry_digest"
+            }
             if record.get("entry_digest") != _record_digest(core):
-                raise ValueError(f"checkpoint entry {len(entries)} has a digest mismatch")
+                raise ValueError(
+                    f"checkpoint entry {len(entries)} has a digest mismatch"
+                )
             sft = record.get("sft")
             dpo = record.get("dpo")
-            if not isinstance(sft, dict) or (dpo is not None and not isinstance(dpo, dict)):
-                raise ValueError(f"checkpoint entry {len(entries)} is malformed")
+            if (
+                not isinstance(sft, dict)
+                or (dpo is not None and not isinstance(dpo, dict))
+            ):
+                raise ValueError(
+                    f"checkpoint entry {len(entries)} is malformed"
+                )
             entries.append((sft, dpo))
             if len(entries) > total:
-                raise ValueError("checkpoint contains more prompt groups than the input")
-    if not entries and not os.path.getsize(path):
-        raise ValueError("checkpoint is empty")
+                raise ValueError(
+                    "checkpoint contains more prompt groups than the input"
+                )
+
+    if not header_validated:
+        raise ValueError("checkpoint is empty or has no committed header")
+
+    if incomplete_tail:
+        _discard_incomplete_tail(path)
+
     return entries
 
 

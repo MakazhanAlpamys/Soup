@@ -10,10 +10,11 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
+from rich.text import Text
 
 from soup_cli.templates import list_templates, load_template
 from soup_cli.utils.paths import open_no_follow, refuse_linked_dirs
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
@@ -22,7 +23,8 @@ def _print_link_refusal(output: str) -> None:
     console.print(
         f"[red]{for_terminal(output)} is a symbolic link, junction or other reparse "
         "point; soup init does not write through it.[/]\n"
-        "Remove it or choose a different --output."
+        "Remove it or choose a different --output.",
+        emoji=False,
     )
 
 
@@ -144,25 +146,29 @@ def init(
     _refuse_link_at(output)
 
     if output_path.exists() and not force:
-        overwrite = typer.confirm(f"{output_path} already exists. Overwrite?")
+        overwrite = typer.confirm(f"{strip_control(output_path)} already exists. Overwrite?")
         if not overwrite:
             raise typer.Exit()
 
     if template:
         config_text = load_template(template)
         if config_text is None:
-            console.print(f"[red]Unknown template: {template}[/]")
+            console.print(f"[red]Unknown template: {for_terminal(template)}[/]", emoji=False)
             console.print(f"Available: {', '.join(list_templates())}")
             raise typer.Exit(1)
-        console.print(f"[green]Using template:[/] {template}")
+        console.print(f"[green]Using template:[/] {for_terminal(template)}")
     else:
         config_text = _interactive_wizard()
 
     _write_config(output, config_text)
+    display_output = for_terminal(output_path)
     console.print(
         Panel(
-            f"[bold green]Config saved to {output_path}[/]\n\n"
-            f"Next step: [bold]soup train --config {output_path}[/]",
+            Text.from_markup(
+                f"[bold green]Config saved to {display_output}[/]\n\n"
+                f"Next step: [bold]soup train --config {display_output}[/]",
+                emoji=False,
+            ),
             title="Ready!",
         )
     )

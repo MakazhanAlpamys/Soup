@@ -11,6 +11,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
 from soup_cli.utils.paths import atomic_write_text
 from soup_cli.utils.prompt_compile import (
@@ -18,6 +19,7 @@ from soup_cli.utils.prompt_compile import (
     build_compile_plan,
     run_compile,
 )
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -55,16 +57,19 @@ def compile_cmd(
             output_path=output,
         )
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(2) from exc
 
     console.print(
         Panel(
-            f"Program:     [bold]{escape(plan.program_path)}[/]\n"
-            f"Eval suite:  [bold]{escape(plan.eval_suite_path)}[/]\n"
-            f"Optimizer:   [bold]{escape(plan.optimizer)}[/]\n"
-            f"Max iters:   [bold]{plan.max_iters}[/]\n"
-            f"Output:      [bold]{escape(plan.output_path)}[/]",
+            Text.from_markup(
+                f"Program:     [bold]{for_terminal(plan.program_path)}[/]\n"
+                f"Eval suite:  [bold]{for_terminal(plan.eval_suite_path)}[/]\n"
+                f"Optimizer:   [bold]{escape(plan.optimizer)}[/]\n"
+                f"Max iters:   [bold]{plan.max_iters}[/]\n"
+                f"Output:      [bold]{for_terminal(plan.output_path)}[/]",
+                emoji=False,
+            ),
             title="soup compile — plan",
         )
     )
@@ -77,13 +82,16 @@ def compile_cmd(
     except ImportError as exc:
         console.print(
             Panel(
-                f"[yellow]{escape(str(exc))}[/]",
+                Text.from_markup(f"[yellow]{for_terminal(exc)}[/]", emoji=False),
                 title="compile — missing dependency",
             )
         )
         raise typer.Exit(2) from exc
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
+        raise typer.Exit(2) from exc
+    except Exception as exc:
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(2) from exc
 
     try:
@@ -91,14 +99,22 @@ def compile_cmd(
     except ValueError as exc:
         # #1445 — the write-time TOCTOU guard refuses cleanly (exit 2), not
         # as an unhandled crash, matching the plan-time refusal above.
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(2) from exc
+    score_display = (
+        "unmeasured"
+        if getattr(result, "score_unmeasured", False)
+        else f"{result.score:.3f}"
+    )
     console.print(
         Panel(
-            f"Output:      [bold]{escape(plan.output_path)}[/]\n"
-            f"Score:       [bold]{result.score:.3f}[/]\n"
-            f"Iterations:  [bold]{result.iterations}[/]\n"
-            f"Converged:   [bold]{result.converged}[/]",
+            Text.from_markup(
+                f"Output:      [bold]{for_terminal(plan.output_path)}[/]\n"
+                f"Score:       [bold]{score_display}[/]\n"
+                f"Iterations:  [bold]{result.iterations}[/]\n"
+                f"Converged:   [bold]{result.converged}[/]",
+                emoji=False,
+            ),
             title="soup compile — done",
         )
     )

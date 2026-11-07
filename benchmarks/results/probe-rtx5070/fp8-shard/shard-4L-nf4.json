@@ -1,0 +1,86 @@
+{
+  "weights": "D:/soup-bench/models/Moonlight-16B-A3B-fp8block",
+  "out": "D:/soup-bench/fp8-shard-4L-nf4",
+  "arguments": {
+    "dtype": "bfloat16",
+    "arch": "deepseek_v3",
+    "quant": "nf4",
+    "quant_suffixes": [
+      "mlp.down_proj.weight",
+      "mlp.gate_proj.weight",
+      "mlp.shared_experts.down_proj.weight",
+      "mlp.shared_experts.gate_proj.weight",
+      "mlp.shared_experts.up_proj.weight",
+      "mlp.up_proj.weight",
+      "self_attn.kv_a_proj_with_mqa.weight",
+      "self_attn.kv_b_proj.weight",
+      "self_attn.o_proj.weight",
+      "self_attn.q_proj.weight"
+    ],
+    "double_quant": true,
+    "expert_layout": "",
+    "num_hidden_layers": 4,
+    "quant_device": "cpu"
+  },
+  "box": {
+    "utc": "2026-10-19T19:03:16Z",
+    "python": "3.12.10",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "torch": "2.14.0+cu130",
+    "cuda_visible_devices": "-1",
+    "cuda_available": false,
+    "cpu_count": 32,
+    "available_ram_bytes": 10105769984,
+    "total_ram_bytes": 34070192128,
+    "disk_free_bytes": {
+      "D:\\soup-bench": 173193486336
+    }
+  },
+  "shard_wall_seconds": 12.098521300009452,
+  "memory": {
+    "peak_rss_bytes": 4399898624,
+    "min_available_ram_bytes": 5701738496,
+    "ram_samples": 7,
+    "sample_period_s": 2.0
+  },
+  "n_layers": 4,
+  "total_params": 2508607936,
+  "notes": [
+    "[yellow]Re-sharding layer cache:[/] cache index is missing or unreadable."
+  ],
+  "size": {
+    "estimate_total_bytes": 4755803855,
+    "cache_bytes_on_disk": 4755794622,
+    "ratio_estimate_to_disk": 1.0000019414210946,
+    "layer_payload_exact": true,
+    "layer_payload_mismatches": [],
+    "other_payload_exact": true,
+    "estimate_other_bytes": 1342182464,
+    "cache_other_payload_bytes": 1342182464,
+    "pass": true
+  },
+  "real_data_checks": [
+    {
+      "layer": 1,
+      "fp8_derived_tensors_checked": 135,
+      "nf4_tensors_checked": 7,
+      "mismatches": []
+    },
+    {
+      "layer": 2,
+      "fp8_derived_tensors_checked": 135,
+      "nf4_tensors_checked": 7,
+      "mismatches": []
+    },
+    {
+      "layer": 3,
+      "fp8_derived_tensors_checked": 135,
+      "nf4_tensors_checked": 7,
+      "mismatches": []
+    }
+  ],
+  "real_data_check_seconds": 20.774697899993043,
+  "real_data_exact": true,
+  "disk_free_after_bytes": 168437407744,
+  "verdict": "PASS"
+}

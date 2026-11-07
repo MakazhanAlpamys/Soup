@@ -1,0 +1,22 @@
+{
+  "soup_cli": "C:\\Users\\user\\projects\\soup-wt\\moe-fp8\\src\\soup_cli\\__init__.py",
+  "cwd": "D:\\soup-bench",
+  "env": {
+    "SOUP_LAYER_STREAM_CACHE_DIR": "D:/soup-bench/soup-cache"
+  },
+  "cache_root": "D:\\soup-bench\\soup-cache",
+  "base": "D:/soup-bench/models/Moonlight-16B-A3B",
+  "shard_dir": "D:\\soup-bench\\soup-cache\\D___soup-bench__models__Moonlight-16B-A3B",
+  "shard_dir_exists": true,
+  "source_files": 28,
+  "source_fingerprint": "7a63224f1c5020e20db4d2dfa3d529e0ae5a76999e46b4ff3cac99c89757c2a6",
+  "shard_files": 31,
+  "shard_bytes": 30598520590,
+  "shard_listing_sha256": "d878adad84a383bdb0886e0a79490bd6823f262de6e61002a8f702922a1ebf9e",
+  "index_soup_version": "0.76.0",
+  "index_quant_device": "cuda",
+  "index_format_version": 5,
+  "reusable": true,
+  "reason": "cache is reusable",
+  "cache_volume_free_bytes": 101162680320
+}

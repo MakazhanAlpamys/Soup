@@ -10,14 +10,17 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.registry.diff import config_diff, eval_delta
 from soup_cli.registry.store import (
     AmbiguousRefError,
     RegistryStore,
+    validate_idempotency_key,
     validate_name,
     validate_tag,
 )
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
@@ -25,7 +28,9 @@ app = typer.Typer(no_args_is_help=True)
 
 
 def _fail(message: str) -> None:
-    console.print(f"[red]{escape(message)}[/]")
+    # Most messages carry text the user typed (a reference, a run id, a path, a name or a tag
+    # that validate_name / validate_tag quote as typed), so strip, escape and keep ":name:" literal.
+    console.print(f"[red]{for_terminal(message)}[/]", emoji=False)
     raise typer.Exit(1)
 
 
@@ -42,19 +47,54 @@ def _require_entry(store: RegistryStore, ref: str) -> dict:
     return entry
 
 
+def _data_file(path: str) -> str:
+    """The ``--data`` file, refused before any database is opened."""
+    from pathlib import Path
+
+    from soup_cli.utils.paths import is_under_cwd
+
+    file_path = Path(path)
+    if not file_path.exists():
+        _fail(f"--data file not found: {path}")
+    if not file_path.is_file():
+        _fail(f"--data is not a file: {path}")
+    if not is_under_cwd(file_path):
+        _fail(f"--data must be under the current working directory: {path}")
+    return str(file_path)
+
+
 @app.command("push")
 def push_cmd(
     run_id: str = typer.Option(..., "--run-id", help="Training run id to register"),
     name: str = typer.Option(..., "--name", "-n", help="Registry entry name"),
     tag: str = typer.Option("v1", "--tag", "-t", help="Tag (e.g. v1, prod-2024)"),
     notes: str = typer.Option("", "--notes", help="Free-form notes"),
+    data: Optional[str] = typer.Option(
+        None, "--data",
+        help=(
+            "Training data file to record: its SHA-256 is stored as data_hash. "
+            "This is the file registered as the training input, not proof of "
+            "what the run trained on. Must be a file under the current directory."
+        ),
+    ),
+    idempotency_key: Optional[str] = typer.Option(
+        None, "--idempotency-key",
+        help=(
+            "Make a retry safe: a later push with the same key and the same run, name, "
+            "tag and data returns the existing entry instead of a new one; anything "
+            "different is refused. 1-128 characters from letters, digits, '.', '_', ':', '-'."
+        ),
+    ),
 ) -> None:
     """Register a completed training run as a registry entry."""
     try:
         validate_name(name)
         validate_tag(tag)
+        if idempotency_key is not None:
+            validate_idempotency_key(idempotency_key)
     except ValueError as exc:
         _fail(f"Invalid input: {exc}")
+    data_path = _data_file(data) if data is not None else None
 
     from soup_cli.experiment.tracker import ExperimentTracker
 
@@ -63,15 +103,21 @@ def push_cmd(
         if tracker.get_run(run_id) is None:
             _fail(f"Run not found: {run_id}")
         with RegistryStore() as store:
+            earlier = (
+                store.get_by_idempotency_key(idempotency_key)
+                if idempotency_key is not None else None
+            )
             try:
                 entry_id = store.register_from_run(
                     tracker, run_id, name=name, tag=tag,
-                    notes=notes or None,
+                    notes=notes or None, data_path=data_path,
+                    idempotency_key=idempotency_key,
                 )
             except ValueError as exc:
                 _fail(str(exc))
+        verb = "Already registered" if earlier and earlier["id"] == entry_id else "Registered"
         console.print(Panel(
-            f"Registered [cyan]{escape(name)}[/]:[magenta]{escape(tag)}[/]\n"
+            f"{verb} [cyan]{escape(name)}[/]:[magenta]{escape(tag)}[/]\n"
             f"Entry ID: [bold]{escape(entry_id)}[/]",
             title="Registry", border_style="green",
         ))
@@ -81,11 +127,21 @@ def push_cmd(
 
 @app.command("list")
 def list_cmd(
-    name: Optional[str] = typer.Option(None, "--name", "-n"),
-    tag: Optional[str] = typer.Option(None, "--tag", "-t"),
-    base: Optional[str] = typer.Option(None, "--base", "-b"),
-    task: Optional[str] = typer.Option(None, "--task"),
-    limit: int = typer.Option(100, "--limit", "-l"),
+    name: Optional[str] = typer.Option(
+        None, "--name", "-n", help="Filter by registry entry name."
+    ),
+    tag: Optional[str] = typer.Option(
+        None, "--tag", "-t", help="Filter by tag."
+    ),
+    base: Optional[str] = typer.Option(
+        None, "--base", "-b", help="Filter by base model."
+    ),
+    task: Optional[str] = typer.Option(
+        None, "--task", help="Filter by training task."
+    ),
+    limit: int = typer.Option(
+        100, "--limit", "-l", help="Maximum number of entries to show."
+    ),
 ) -> None:
     """List registry entries."""
     with RegistryStore() as store:
@@ -109,8 +165,8 @@ def list_cmd(
                 escape(short_id),
                 escape(entry["name"]),
                 escape(", ".join(entry.get("tags", []))),
-                escape(entry["base_model"]),
-                escape(entry["task"]),
+                Text(strip_control(entry["base_model"])),
+                Text(strip_control(entry["task"])),
                 escape(entry["created_at"][:16].replace("T", " ")),
             )
 
@@ -137,14 +193,21 @@ def show_cmd(
             ("name", entry["name"]),
             ("tags", ", ".join(entry.get("tags", []))),
             ("base_model", entry["base_model"]),
+            ("base_revision", entry.get("base_revision") or "unknown"),
+            ("base_revision_source", entry.get("base_revision_source") or "unknown"),
+            ("training_data_sha256", entry.get("training_data_sha256") or "unknown"),
             ("task", entry["task"]),
             ("run_id", entry.get("run_id") or "-"),
             ("entry_hash", entry.get("entry_hash", "")[:16] + "..."),
+            ("data_hash", (entry["data_hash"][:16] + "...") if entry.get("data_hash") else "-"),
             ("created_at", entry["created_at"]),
             ("notes", entry.get("notes") or ""),
         ]
+        # The name, the tags, the ids and the hashes are validated when an entry is pushed;
+        # the base model, the task, the run id and the notes are free text, so every value
+        # is a Text: never read as markup or emoji codes.
         for key, val in fields:
-            table.add_row(escape(key), escape(str(val)))
+            table.add_row(escape(key), Text(strip_control(str(val))))
         console.print(table)
 
         artifacts = store.get_artifacts(entry["id"])
@@ -157,7 +220,7 @@ def show_cmd(
             for art in artifacts:
                 art_table.add_row(
                     escape(art["kind"]),
-                    escape(art["path"]),
+                    Text(strip_control(art["path"])),
                     f"{art['size_bytes'] / 1024 / 1024:.1f} MB"
                     if art["size_bytes"] > 1024 * 1024
                     else f"{art['size_bytes']} B",
@@ -182,16 +245,19 @@ def show_cmd(
 @app.command("search")
 def search_cmd(
     query: str = typer.Argument(..., help="Keyword to search for"),
-    limit: int = typer.Option(50, "--limit", "-l"),
+    limit: int = typer.Option(
+        50, "--limit", "-l", help="Maximum number of matching entries to show."
+    ),
 ) -> None:
     """Search registry entries by name/base/task/notes."""
     with RegistryStore() as store:
         hits = store.search(query, limit=max(1, min(limit, 500)))
         if not hits:
-            console.print(f"[dim]No entries match '{escape(query)}'.[/]")
+            console.print(f"[dim]No entries match '{for_terminal(query)}'.[/]", emoji=False)
             return
 
-        table = Table(title=f"Search: '{escape(query)}'")
+        # A Text does not get the italic a str title gets, so the title style is set by hand.
+        table = Table(title=Text(f"Search: '{strip_control(query)}'", style="table.title"))
         table.add_column("Entry ID", style="bold cyan")
         table.add_column("Name")
         table.add_column("Base Model")
@@ -200,8 +266,8 @@ def search_cmd(
             table.add_row(
                 escape(entry["id"]),
                 escape(entry["name"]),
-                escape(entry["base_model"]),
-                escape(entry["task"]),
+                Text(strip_control(entry["base_model"])),
+                Text(strip_control(entry["task"])),
             )
         console.print(table)
 
@@ -236,10 +302,10 @@ def diff_cmd(
         else:
             for change in changes:
                 table.add_row(
-                    escape(change.path),
+                    Text(strip_control(change.path)),
                     escape(change.kind),
-                    escape(str(change.left) if change.left is not None else "-"),
-                    escape(str(change.right) if change.right is not None else "-"),
+                    Text(strip_control(str(change.left) if change.left is not None else "-")),
+                    Text(strip_control(str(change.right) if change.right is not None else "-")),
                 )
             console.print(table)
 
@@ -256,7 +322,7 @@ def diff_cmd(
                 delta_val = row["delta"]
                 delta_str = f"{delta_val:+.3f}" if delta_val is not None else "-"
                 eval_table.add_row(
-                    escape(str(row["benchmark"])),
+                    Text(strip_control(str(row["benchmark"]))),
                     f"{row['left']:.3f}" if row["left"] is not None else "-",
                     f"{row['right']:.3f}" if row["right"] is not None else "-",
                     delta_str,

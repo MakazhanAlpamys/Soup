@@ -240,7 +240,7 @@ def register(app: typer.Typer, console: Console) -> None:
     @app.command(name="against", cls=GateCommand)
     def against_cmd(
         baseline_run_id: str = typer.Argument(
-            ..., help="Baseline run id (from `soup runs list`).",
+            ..., help="Baseline run id (from `soup runs`).",
         ),
         candidate_run_id: str = typer.Option(
             ..., "--candidate",

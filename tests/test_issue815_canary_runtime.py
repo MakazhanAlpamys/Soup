@@ -54,7 +54,7 @@ def test_five_percent_policy_routes_live_serve_requests(tmp_path, monkeypatch):
 
     def generate(current_model, *args, **kwargs):
         observed.append(current_model.current)
-        return "ok", 1, 1
+        return "ok", 1, 1, "stop"
 
     monkeypatch.setattr(serve, "_generate_response", generate)
     app = serve._create_app(
@@ -84,6 +84,7 @@ def test_five_percent_policy_routes_live_serve_requests(tmp_path, monkeypatch):
     canary_count = observed.count("candidate")
     assert 10 <= canary_count <= 30
     assert observed.count(None) == request_count - canary_count
+    client.app.state.canary_outcomes.close()
 
 
 def test_failing_live_canary_requests_reach_the_rollout_stats(tmp_path, monkeypatch):
@@ -111,7 +112,7 @@ def test_failing_live_canary_requests_reach_the_rollout_stats(tmp_path, monkeypa
         observed.append(current_model.current)
         if current_model.current == "candidate":
             raise RuntimeError("bad canary")
-        return "ok", 1, 1
+        return "ok", 1, 1, "stop"
 
     monkeypatch.setattr(serve, "_generate_response", generate)
     app = serve._create_app(
@@ -140,6 +141,7 @@ def test_failing_live_canary_requests_reach_the_rollout_stats(tmp_path, monkeypa
 
     canary_count = observed.count("candidate")
     stable_count = observed.count(None)
+    client.app.state.canary_outcomes.close()
     stats = read_bucket_stats(
         stable="base",
         canary="candidate",
@@ -310,7 +312,7 @@ def _serve_with_canary(monkeypatch, state_path, stats_path, adapters, fail_on=No
         observed.append(current_model.current)
         if fail_on is not None and current_model.current == fail_on:
             raise RuntimeError("bad canary")
-        return "ok", 1, 1
+        return "ok", 1, 1, "stop"
 
     monkeypatch.setattr(serve, "_generate_response", generate)
     app = serve._create_app(
@@ -400,6 +402,7 @@ def test_keyed_stable_traffic_is_the_base_even_after_a_manual_cutover(
 
     assert "other" not in observed
     assert 0 < observed.count("candidate") < 100
+    client.app.state.canary_outcomes.close()
     stats = read_bucket_stats(
         stable="base", canary="candidate", rollout_id="rollout-cutover", path=str(stats_path)
     )
@@ -430,6 +433,7 @@ def test_failing_live_canary_stream_requests_reach_the_rollout_stats(
         assert response.status_code == 200
 
     canary_count = observed.count("candidate")
+    client.app.state.canary_outcomes.close()
     stats = read_bucket_stats(
         stable="base", canary="candidate", rollout_id="rollout-stream", path=str(stats_path)
     )

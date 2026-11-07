@@ -191,6 +191,7 @@ class CompileResult:
     score: float
     iterations: int
     converged: bool
+    score_unmeasured: bool = False
 
     def __post_init__(self) -> None:
         if isinstance(self.program_text, bool) or not isinstance(self.program_text, str):
@@ -209,6 +210,8 @@ class CompileResult:
             raise ValueError("iterations must be >= 0")
         if not isinstance(self.converged, bool):
             raise TypeError("converged must be bool")
+        if not isinstance(self.score_unmeasured, bool):
+            raise TypeError("score_unmeasured must be bool")
 
 
 # ---------------------------------------------------------------------------
@@ -324,10 +327,44 @@ def _resolve_program(module: Any) -> Any:
     )
 
 
-def _resolve_metric(module: Any) -> "Optional[Callable]":
-    """Return the user metric (``metric`` attr) or None (caller defaults)."""
+def _resolve_metric(
+    module: Any, eval_examples: Optional[List[dict]] = None
+) -> "Optional[Callable]":
+    """Return user metric (``metric`` attr), suite-derived metric, or None.
+
+    If module defines a callable ``metric``, returns it. If not and eval_examples
+    are provided, builds and returns a suite-derived metric. Returns None if
+    neither is available.
+    """
     metric = getattr(module, "metric", None)
-    return metric if callable(metric) else None
+    if callable(metric):
+        return metric
+
+    if not eval_examples:
+        return None
+
+    candidate_keys = ("answer", "output", "completion", "label", "target", "response")
+    target_key = next((k for k in candidate_keys if any(k in ex for ex in eval_examples)), None)
+
+    def _suite_metric(gold: Any, pred: Any, trace: Any = None) -> float:
+        if target_key:
+            if isinstance(gold, dict):
+                expected = gold.get(target_key)
+            else:
+                expected = getattr(gold, target_key, None)
+            actual = (
+                pred.get(target_key) if isinstance(pred, dict) else getattr(pred, target_key, None)
+            )
+            if actual is None and hasattr(pred, "output"):
+                actual = getattr(pred, "output")
+            if actual is None and hasattr(pred, "completion"):
+                actual = getattr(pred, "completion")
+            if actual is None and isinstance(pred, (str, int, float, bool)):
+                actual = pred
+            return 1.0 if str(actual).strip() == str(expected).strip() else 0.0
+        return 1.0 if str(pred).strip() == str(gold).strip() else 0.0
+
+    return _suite_metric
 
 
 def _run_dspy(plan: CompilePlan) -> CompileResult:
@@ -338,25 +375,42 @@ def _run_dspy(plan: CompilePlan) -> CompileResult:
             f"DSPy is required for the {plan.optimizer!r} optimizer. {_INSTALL_HINT}"
         ) from exc
 
+    raw_examples = load_eval_examples(plan.eval_suite_path)
     module = _load_program_module(plan.program_path)
     program = _resolve_program(module)
-    metric = _resolve_metric(module)
+    metric = _resolve_metric(module, raw_examples)
+    if metric is None:
+        raise ValueError(
+            "program module must expose a callable `metric`, or eval suite must provide examples"
+        )
     trainset = _dspy_examples(dspy, module, plan.eval_suite_path)
 
     if plan.optimizer == "bootstrap_fewshot":
         optimizer = dspy.BootstrapFewShot(metric=metric, max_rounds=plan.max_iters)
+        compiled = optimizer.compile(program, trainset=trainset)
     elif plan.optimizer == "mipro":
-        optimizer = dspy.MIPROv2(metric=metric, auto="light")
+        optimizer = dspy.MIPROv2(
+            metric=metric,
+            auto=None,
+            num_candidates=max(1, min(plan.max_iters, 10)),
+        )
+        compiled = optimizer.compile(program, trainset=trainset, num_trials=plan.max_iters)
     else:  # copro
         optimizer = dspy.COPRO(metric=metric, depth=plan.max_iters)
+        compiled = optimizer.compile(program, trainset=trainset)
 
-    compiled = optimizer.compile(program, trainset=trainset)
     program_text = _serialize_dspy(compiled)
+    score = float(getattr(compiled, "score", getattr(compiled, "best_score", 0.0)) or 0.0)
+    iters_raw = getattr(compiled, "total_calls", None)
+    if iters_raw is None:
+        iters_raw = getattr(compiled, "iterations", plan.max_iters)
+    iterations = int(iters_raw or plan.max_iters)
+    converged = bool(getattr(compiled, "converged", False))
     return CompileResult(
         program_text=program_text,
-        score=0.0,
-        iterations=plan.max_iters,
-        converged=True,
+        score=score if math.isfinite(score) else 0.0,
+        iterations=iterations,
+        converged=converged,
     )
 
 
@@ -404,18 +458,87 @@ def _run_gepa(plan: CompilePlan) -> CompileResult:
     module = _load_program_module(plan.program_path)
     program = _resolve_program(module)
     examples = load_eval_examples(plan.eval_suite_path)
-    optimised = gepa.optimize(  # type: ignore[attr-defined]
-        seed_candidate=program,
-        trainset=examples,
-        max_metric_calls=plan.max_iters,
+    seed_candidate = program if isinstance(program, dict) else {"prompt": str(program)}
+    adapter = getattr(module, "adapter", None)
+    if adapter is not None:
+        if not hasattr(adapter, "evaluate"):
+            raise ValueError(
+                f"Adapter in {plan.program_path} does not implement the required 'evaluate' method."
+            )
+        task_lm = None
+    else:
+        task_lm = getattr(module, "task_lm", None)
+        if not task_lm:
+            raise ValueError(
+                f"GEPA optimizer requires program {plan.program_path} to "
+                "define 'task_lm' or 'adapter'."
+            )
+
+    reflection_lm = (
+        getattr(module, "reflection_lm", None)
+        or getattr(module, "reflection_model", None)
     )
-    program_text = str(getattr(optimised, "best_candidate", optimised))
-    score = float(getattr(optimised, "best_score", 0.0) or 0.0)
+    reflection_strategy = getattr(module, "reflection_strategy", None)
+    custom_candidate_proposer = getattr(module, "custom_candidate_proposer", None) or getattr(
+        module, "proposer", None
+    )
+    adapter_has_propose = (
+        adapter is not None
+        and hasattr(adapter, "propose_new_texts")
+        and getattr(adapter, "propose_new_texts") is not None
+    )
+    if (
+        not adapter_has_propose
+        and custom_candidate_proposer is None
+        and reflection_strategy is None
+        and reflection_lm is None
+    ):
+        reflection_lm = task_lm
+
+    kwargs: dict[str, Any] = {
+        "seed_candidate": seed_candidate,
+        "trainset": examples,
+        "max_metric_calls": plan.max_iters,
+        "task_lm": task_lm,
+    }
+    if adapter is not None:
+        kwargs["adapter"] = adapter
+    if reflection_lm is not None:
+        kwargs["reflection_lm"] = reflection_lm
+    if reflection_strategy is not None:
+        kwargs["reflection_strategy"] = reflection_strategy
+    if custom_candidate_proposer is not None:
+        kwargs["custom_candidate_proposer"] = custom_candidate_proposer
+
+    optimised = gepa.optimize(**kwargs)  # type: ignore[attr-defined]
+    best_candidate = getattr(optimised, "best_candidate", optimised)
+    if isinstance(best_candidate, dict):
+        program_text = str(best_candidate.get("prompt", next(iter(best_candidate.values()), "")))
+    else:
+        program_text = str(best_candidate)
+
+    if hasattr(optimised, "val_aggregate_scores") and hasattr(optimised, "best_idx"):
+        try:
+            best_idx = int(getattr(optimised, "best_idx"))
+            scores = getattr(optimised, "val_aggregate_scores")
+            score = float(scores[best_idx])
+        except (IndexError, TypeError, ValueError):
+            score = 0.0
+    elif hasattr(optimised, "best_score"):
+        score = float(getattr(optimised, "best_score", 0.0) or 0.0)
+    else:
+        score = 0.0
+    iterations = int(
+        getattr(optimised, "total_metric_calls", None)
+        or getattr(optimised, "iterations", plan.max_iters)
+        or plan.max_iters
+    )
+    converged = bool(getattr(optimised, "converged", False))
     return CompileResult(
         program_text=program_text,
         score=score if math.isfinite(score) else 0.0,
-        iterations=plan.max_iters,
-        converged=True,
+        iterations=iterations,
+        converged=converged,
     )
 
 
@@ -430,23 +553,130 @@ def _run_textgrad(plan: CompilePlan) -> CompileResult:
     program = _resolve_program(module)
     # The user program is expected to be (or contain) a tg.Variable to
     # optimise. We run a textual-gradient descent loop over the eval suite.
-    if isinstance(program, tg.Variable):
-        variable = program
-    else:
-        variable = tg.Variable(
-            str(program), requires_grad=True, role_description="prompt program"
+    initial_text = str(program.value) if isinstance(program, tg.Variable) else str(program)
+    variable = getattr(module, "variable", None)
+    if variable is None:
+        if isinstance(program, tg.Variable):
+            variable = program
+        else:
+            variable = tg.Variable(
+                initial_text,
+                requires_grad=True,
+                role_description="prompt",
+            )
+    initial_text = str(variable.value)
+    engine = getattr(module, "engine", None)
+    if engine is None and hasattr(tg, "SingletonBackwardEngine"):
+        try:
+            engine = tg.SingletonBackwardEngine().get_engine()
+        except Exception:  # noqa: BLE001
+            engine = None
+    if engine is None:
+        raise ValueError(
+            "No backward engine configured for TextGrad. Define 'engine' or call "
+            "'textgrad.set_backward_engine(...)' in your program."
         )
-    optimizer = tg.TGD(parameters=[variable])
-    examples = load_eval_examples(plan.eval_suite_path)
-    iterations = min(plan.max_iters, max(1, len(examples)))
-    for _ in range(iterations):
+
+    if hasattr(tg, "set_backward_engine"):
+        try:
+            singleton_engine = None
+            if hasattr(tg, "SingletonBackwardEngine"):
+                singleton_engine = tg.SingletonBackwardEngine().get_engine()
+            if singleton_engine is None:
+                tg.set_backward_engine(engine)
+        except Exception:  # noqa: BLE001
+            pass
+
+    try:
+        optimizer = tg.TGD(parameters=[variable], engine=engine)
+    except TypeError:
+        optimizer = tg.TGD(parameters=[variable])
+
+    raw_examples = load_eval_examples(plan.eval_suite_path)
+    metric = _resolve_metric(module, raw_examples)
+
+    def _calc_score(txt: str) -> float:
+        if not raw_examples or metric is None:
+            return 0.0
+        total = 0.0
+        for ex in raw_examples:
+            try:
+                total += float(metric(ex, txt))
+            except TypeError:
+                try:
+                    total += float(metric(txt))
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        return total / len(raw_examples)
+
+    initial_score = float(getattr(variable, "score", _calc_score(initial_text)) or 0.0)
+    best_score = initial_score
+    best_text = initial_text
+    converged = False
+    iterations = 0
+    has_score_signal = hasattr(variable, "score") or (initial_score > 0.0)
+
+    for i in range(plan.max_iters):
+        ex = raw_examples[i % len(raw_examples)] if raw_examples else {}
+        loss_text = f"Evaluate {variable.value} with eval example: {ex}"
+        if hasattr(tg, "TextLoss"):
+            loss_fn = tg.TextLoss(eval_system_prompt=loss_text, engine=engine)
+            loss = loss_fn(variable)
+        elif hasattr(tg, "LLMCall"):
+            loss_fn = tg.LLMCall(engine, loss_text)
+            loss = loss_fn(variable)
+        else:
+            loss = (
+                tg.Variable(
+                    loss_text,
+                    role_description="evaluation loss",
+                    predecessors=[variable],
+                )
+                if hasattr(tg, "Variable")
+                else variable
+            )
         optimizer.zero_grad()
+        if hasattr(tg, "set_backward_engine"):
+            loss.backward()
+        else:
+            try:
+                loss.backward(backward_engine=engine)
+            except TypeError:
+                try:
+                    loss.backward(engine=engine)
+                except TypeError:
+                    loss.backward()
         optimizer.step()
+        iterations = i + 1
+        cur_score = float(getattr(variable, "score", _calc_score(str(variable.value))) or 0.0)
+        if cur_score > 0.0 or hasattr(variable, "score"):
+            has_score_signal = True
+        if cur_score > best_score:
+            best_score = cur_score
+            best_text = str(variable.value)
+            if best_score >= 1.0:
+                break
+
+    if not has_score_signal:
+        best_text = str(variable.value)
+        return CompileResult(
+            program_text=best_text,
+            score=0.0,
+            iterations=iterations,
+            converged=False,
+            score_unmeasured=True,
+        )
+
+    if best_score > initial_score and best_score >= 1.0:
+        converged = True
     return CompileResult(
-        program_text=str(variable.value),
-        score=0.0,
+        program_text=best_text,
+        score=best_score,
         iterations=iterations,
-        converged=True,
+        converged=converged,
+        score_unmeasured=False,
     )
 
 

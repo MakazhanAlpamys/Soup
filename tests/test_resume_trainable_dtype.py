@@ -56,6 +56,9 @@ class _FakeTrainer:
     def save_model(self, output):
         pass
 
+    def save_state(self):
+        pass
+
 
 def _wrapper(monkeypatch, tmp_path, trainer):
     from soup_cli.config.schema import SoupConfig
@@ -95,6 +98,97 @@ def test_sft_train_keeps_the_adapter_dtype_across_a_resume(monkeypatch, tmp_path
 def test_sft_train_without_resume_leaves_the_loader_alone(monkeypatch, tmp_path):
     trainer = _FakeTrainer(_model())
     _wrapper(monkeypatch, tmp_path, trainer).train(resume_from_checkpoint=None)
+    assert "_load_from_checkpoint" not in vars(trainer)
+    assert trainer.dtypes_in_train == {torch.bfloat16}
+
+
+def _dpo_wrapper(tmp_path, trainer):
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.trainer.dpo import DPOTrainerWrapper
+
+    wrapper = object.__new__(DPOTrainerWrapper)
+    wrapper.config = SoupConfig(
+        base="org/model",
+        task="preference",
+        data={"train": "data.jsonl", "format": "dpo"},
+        training={"preference_loss": "dpo"},
+    )
+    wrapper._output_dir = str(tmp_path)
+    wrapper.trainer = trainer
+    wrapper.tokenizer = SimpleNamespace(save_pretrained=lambda output: None)
+    wrapper._attach_streamed_save_guard = lambda: None
+    wrapper._training_context = lambda context: contextlib.ExitStack()
+    wrapper._assert_streamed_adapter_saved = lambda output_dir: None
+    return wrapper
+
+
+def _ipo_wrapper(tmp_path, trainer):
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.trainer.ipo import IPOTrainerWrapper
+
+    wrapper = object.__new__(IPOTrainerWrapper)
+    wrapper.config = SoupConfig(
+        base="org/model",
+        task="preference",
+        data={"train": "data.jsonl", "format": "dpo"},
+        training={"preference_loss": "ipo"},
+    )
+    wrapper._output_dir = str(tmp_path)
+    wrapper.trainer = trainer
+    wrapper.tokenizer = SimpleNamespace(save_pretrained=lambda output: None)
+    return wrapper
+
+
+def _grpo_wrapper(tmp_path, trainer):
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.trainer.grpo import GRPOTrainerWrapper
+
+    wrapper = object.__new__(GRPOTrainerWrapper)
+    wrapper.config = SoupConfig(
+        base="org/model", task="grpo", data={"train": "data.jsonl"}, training={}
+    )
+    wrapper._output_dir = str(tmp_path)
+    wrapper.trainer = trainer
+    wrapper.tokenizer = SimpleNamespace(save_pretrained=lambda output: None)
+    return wrapper
+
+
+def _reward_wrapper(tmp_path, trainer):
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.trainer.reward_model import RewardModelTrainerWrapper
+
+    wrapper = object.__new__(RewardModelTrainerWrapper)
+    wrapper.config = SoupConfig(
+        base="org/model",
+        task="reward_model",
+        data={"train": "data.jsonl"},
+        training={},
+    )
+    wrapper._output_dir = str(tmp_path)
+    wrapper.trainer = trainer
+    wrapper.tokenizer = SimpleNamespace(save_pretrained=lambda output: None)
+    return wrapper
+
+
+@pytest.mark.parametrize(
+    "builder",
+    [_dpo_wrapper, _ipo_wrapper, _grpo_wrapper, _reward_wrapper],
+    ids=["dpo", "ipo", "grpo", "reward_model"],
+)
+def test_other_trl_trainers_keep_the_adapter_dtype_across_a_resume(builder, tmp_path):
+    trainer = _FakeTrainer(_model())
+    builder(tmp_path, trainer).train(resume_from_checkpoint="ckpt")
+    assert trainer.dtypes_in_train == {torch.bfloat16}
+
+
+@pytest.mark.parametrize(
+    "builder",
+    [_dpo_wrapper, _ipo_wrapper, _grpo_wrapper, _reward_wrapper],
+    ids=["dpo", "ipo", "grpo", "reward_model"],
+)
+def test_other_trl_trainers_without_resume_leave_the_loader_alone(builder, tmp_path):
+    trainer = _FakeTrainer(_model())
+    builder(tmp_path, trainer).train(resume_from_checkpoint=None)
     assert "_load_from_checkpoint" not in vars(trainer)
     assert trainer.dtypes_in_train == {torch.bfloat16}
 

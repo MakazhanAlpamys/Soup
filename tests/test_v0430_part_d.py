@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
 from soup_cli.commands.data import app as data_app
 from soup_cli.utils.demo_bundles import (
@@ -16,6 +15,7 @@ from soup_cli.utils.demo_bundles import (
     get_bundle,
     list_bundles,
 )
+from tests.cli_runner import CliRunner
 
 
 class TestDemoBundleRegistry:
@@ -114,6 +114,25 @@ class TestCopyBundleTo:
         monkeypatch.chdir(tmp_path)
         out = copy_bundle_to(name, f"./{name}.jsonl")
         assert os.path.getsize(out) > 0
+
+    def test_explicit_root_containment(self, tmp_path, monkeypatch):
+        cwd_dir = tmp_path / "cwd"
+        cwd_dir.mkdir()
+        monkeypatch.chdir(cwd_dir)
+        workspace = tmp_path / "custom_root"
+        workspace.mkdir()
+        out = copy_bundle_to("alpaca_demo", str(workspace / "alpaca.jsonl"), root=workspace)
+        assert Path(out).is_file()
+        assert Path(out).parent == workspace
+
+    def test_explicit_root_rejection(self, tmp_path, monkeypatch):
+        cwd_dir = tmp_path / "cwd"
+        cwd_dir.mkdir()
+        monkeypatch.chdir(cwd_dir)
+        workspace = tmp_path / "custom_root"
+        workspace.mkdir()
+        with pytest.raises(ValueError, match="under root"):
+            copy_bundle_to("alpaca_demo", str(cwd_dir / "alpaca.jsonl"), root=workspace)
 
 
 class TestDataDemoCli:

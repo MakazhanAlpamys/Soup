@@ -1,12 +1,12 @@
 """v0.53.0 Parts A+B — UD GGUF + IQ / Apple-ARM quant schema helpers.
 
-Schema-only support for Unsloth Dynamic 2.0 GGUF ladder (``UD-Q8_K_XL`` …
+Allowlists, specs and validators for the Unsloth Dynamic 2.0 GGUF ladder (``UD-Q8_K_XL`` …
 ``UD-IQ1_M``), the IQ1/IQ2/IQ3 family, the Apple/ARM-friendly Q4_NL /
-Q5.x / Q4.x variants, and the existing TQ1_0 1.58-bit GGUF flavour (from
-v0.52.0 Part D, re-exposed here for ``soup export --format gguf-iq``).
+Q5.x / Q4.x variants. TQ1_0 is not in these tables: ``soup export --format tq1_0``
+(``utils/bitnet.py``) exports it with this module's convert and quantize helpers.
 
-Live llama.cpp ``imatrix`` calibration + actual GGUF write are deferred
-to v0.53.1 (mirrors v0.50.0 stub-then-live pattern).
+Live: ``export_advanced_gguf`` runs the llama.cpp ``imatrix`` calibration and the GGUF
+write for ``soup export --format gguf-ud --gguf-flavour <flavour>``.
 """
 
 from __future__ import annotations
@@ -67,9 +67,8 @@ APPLE_ARM_GGUF_FORMATS: frozenset[str] = frozenset({
     "Q4_K_M",
 })
 
-# Union of all v0.53.0 schema-only GGUF flavours (excludes TQ1_0 which is owned
-# by v0.52.0 Part D ``utils/bitnet.py``; ``is_advanced_gguf_format`` returns
-# True for the BitNet family too via the helper below for export-CLI parity).
+# Union of the three flavour tables above. TQ1_0 is not in it: ``utils/bitnet.py`` owns
+# it, and ``is_advanced_gguf_format`` returns False for it.
 ALL_ADVANCED_GGUF_FORMATS: frozenset[str] = (
     UD_GGUF_FORMATS | IQ_GGUF_FORMATS | APPLE_ARM_GGUF_FORMATS
 )
@@ -338,7 +337,8 @@ def _resolve_quantize_binary(llama_cpp_dir: str) -> Path:
     ]
     for candidate in candidates:
         if candidate.is_file():
-            return candidate
+            # Absolute, so the binary runs from this directory even when it is ".".
+            return Path(os.path.abspath(candidate))
     raise FileNotFoundError(
         f"llama-quantize binary not found under {llama_cpp_dir!r}. "
         "Build llama.cpp with cmake first."
@@ -360,7 +360,8 @@ def _resolve_imatrix_binary(llama_cpp_dir: str) -> Path:
     ]
     for candidate in candidates:
         if candidate.is_file():
-            return candidate
+            # Absolute, so the binary runs from this directory even when it is ".".
+            return Path(os.path.abspath(candidate))
     raise FileNotFoundError(
         f"llama-imatrix binary not found under {llama_cpp_dir!r}. "
         "Build llama.cpp tools with `cmake --build . --target llama-imatrix` "

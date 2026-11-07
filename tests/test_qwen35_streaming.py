@@ -797,6 +797,17 @@ class TestQwen35StreamingRuntime:
 
 class TestQwen35StreamingSetup:
     def test_stream_setup_threads_moe_targets_and_union_budget(self, monkeypatch, tmp_path):
+        """moe_lora's targets reach the LoRA config, and the budget is the union
+        of the heterogeneous layers' specs.
+
+        The target assertion used to be the seven MoE names alone. That pinned a
+        replace nobody chose: the test was written in #426, when ``auto`` still
+        resolved to ``None`` on this path, so the MoE list was all there was. Once
+        #507 resolved ``auto`` to Qwen3.5's list, the replace silently dropped
+        ``in_proj_qkv`` / ``out_proj``. Streaming now extends the resolved list as
+        the resident trainers do (#1590), so the expected value is the union: the
+        ``auto`` list first, then the MoE names it does not already have.
+        """
         from soup_cli.trainer.stream_setup import StreamingSetupMixin
 
         class _Wrapper(StreamingSetupMixin):
@@ -950,9 +961,13 @@ class TestQwen35StreamingSetup:
         wrapper._setup_streaming_transformers(cfg, tcfg)
 
         assert captured["target_modules"] == [
+            # target_modules: auto on qwen3_5_moe_text (QWEN35_TEXT_LORA_TARGETS)
             "q_proj",
-            "k_proj",
             "v_proj",
+            "in_proj_qkv",
+            "out_proj",
+            # added by moe_lora (the stubbed get_moe_target_modules, minus repeats)
+            "k_proj",
             "o_proj",
             "gate_proj",
             "up_proj",

@@ -12,7 +12,7 @@ import yaml
 from pydantic import ValidationError
 
 from soup_cli.config.loader import load_config_from_string
-from soup_cli.config.schema import TEMPLATES, SoupConfig, TrainingConfig
+from soup_cli.config.schema import TEMPLATES, DataConfig, SoupConfig, TrainingConfig
 from soup_cli.recipes.catalog import RECIPES, get_recipe, list_recipes, search_recipes
 from soup_cli.utils import hubs as hubs_mod
 from soup_cli.utils.hubs import (
@@ -29,6 +29,7 @@ from soup_cli.utils.multipack_sampler import (
     MULTIPACK_ARCHITECTURES,
     validate_multipack_architecture,
 )
+from tests.recipe_contracts import load_catalog_config
 
 # =====================================================================
 # Part E — hubs.validate_hub_name
@@ -505,12 +506,16 @@ class TestV0510Recipes:
         assert meta.yaml_str
 
     @pytest.mark.parametrize("name", V0510_RECIPE_NAMES)
-    def test_recipe_yaml_parses_as_soup_config(self, name: str) -> None:
-        yaml_str = RECIPES[name].yaml_str
-        cfg = load_config_from_string(yaml_str)
-        assert isinstance(cfg, SoupConfig)
-        assert cfg.base == RECIPES[name].model
-        assert cfg.task == RECIPES[name].task
+    def test_recipe_yaml_loads_or_refuses_with_its_documented_reason(self, name: str) -> None:
+        recipe = RECIPES[name]
+        cfg = load_catalog_config(recipe)
+        parsed = yaml.safe_load(recipe.yaml_str)
+        assert parsed["base"] == recipe.model
+        assert parsed["task"] == recipe.task
+        if cfg is not None:
+            assert isinstance(cfg, SoupConfig)
+            assert cfg.base == recipe.model
+            assert cfg.task == recipe.task
 
     @pytest.mark.parametrize("name", V0510_RECIPE_NAMES)
     def test_recipe_yaml_is_safe_loadable(self, name: str) -> None:
@@ -555,16 +560,22 @@ class TestV0510Recipes:
 class TestV0510RecipeInvariants:
     @pytest.mark.parametrize("name", V0510_RECIPE_NAMES)
     def test_max_length_within_bounds(self, name: str) -> None:
-        cfg = load_config_from_string(RECIPES[name].yaml_str)
+        recipe = RECIPES[name]
+        cfg = load_catalog_config(recipe)
+        data = cfg.data if cfg else DataConfig(**yaml.safe_load(recipe.yaml_str).get("data", {}))
         # Schema bounds: 64 <= max_length <= 1_048_576
-        assert 64 <= cfg.data.max_length <= 1_048_576
+        assert 64 <= data.max_length <= 1_048_576
 
     @pytest.mark.parametrize("name", V0510_RECIPE_NAMES)
     def test_task_has_required_fields(self, name: str) -> None:
-        cfg = load_config_from_string(RECIPES[name].yaml_str)
-        if cfg.task == "grpo":
-            assert cfg.training.reward_fn is not None
-            assert cfg.training.num_generations >= 1
+        recipe = RECIPES[name]
+        cfg = load_catalog_config(recipe)
+        if recipe.task == "grpo":
+            training = cfg.training if cfg else TrainingConfig(
+                **yaml.safe_load(recipe.yaml_str).get("training", {}),
+            )
+            assert training.reward_fn is not None
+            assert training.num_generations >= 1
 
 
 # =====================================================================

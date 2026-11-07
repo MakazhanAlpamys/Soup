@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 import typer
@@ -11,13 +12,18 @@ from rich.panel import Panel
 from rich.table import Table
 
 from soup_cli.commands._webhook_cli import emit_webhooks, validate_webhook_flags
+from soup_cli.config.deprecation import deadline_clause, refuses_deprecated_values
 from soup_cli.utils.ab_test import (
+    ACCEPT_HOLD_SPREAD_RATIO,
     HIGHER_IS_BETTER,
     PRIOR_SCALE_ROWS,
     MsprtConfig,
-    run_msprt,
+    msprt_step,
+    read_msprt_rows,
+    retired_beta_message,
     validate_metric_name,
 )
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -33,16 +39,17 @@ def ab(
     alpha: float = typer.Option(
         0.05, "--alpha",
         help=(
-            "Type-I error (false positive) rate (0, 1) of the two-sided test, kept for a "
-            "test re-run after every new row, at any number of rows."
+            "Error rate (0, 1) of both verdicts, kept for a test re-run after every "
+            "new row, at any number of rows: with no difference the test ends in "
+            "reject_h0, and with a true difference of --effect-size or more in "
+            "accept_h0, each in at most this share of runs."
         ),
     ),
-    beta: float = typer.Option(
-        0.20, "--beta",
+    beta: Optional[float] = typer.Option(
+        None, "--beta",
         help=(
-            "Type-II error (false negative) rate (0, 1). Not the power: a power "
-            "of 0.95 is --beta 0.05. alpha + beta must stay below 1, or the "
-            "test accepts H0 on no evidence either way."
+            "Retired (#1418): refused with a usage error. --alpha now bounds "
+            "wrong accept_h0 verdicts too."
         ),
     ),
     effect_size: float = typer.Option(
@@ -68,28 +75,45 @@ def ab(
     try:
         canonical = validate_metric_name(metric)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(2) from exc
 
     slack_url, discord_url = validate_webhook_flags(
         slack_url, discord_url, console=console
     )
 
+    # #1418: --beta is retired. Say so rather than drop it silently, and do not
+    # pass it on (MsprtConfig would warn a second time). Once deprecated values
+    # are refused, it is a usage error and nothing runs.
+    if beta is not None:
+        if refuses_deprecated_values():
+            console.print(
+                "[red]Error: "
+                f"{escape(retired_beta_message('--beta', '--alpha'))} {deadline_clause()}[/]"
+            )
+            # Exit 2, like soup ab's other flag errors (--metric, --alpha).
+            raise typer.Exit(2)
+        console.print(
+            "[yellow]Warning: "
+            f"{escape(retired_beta_message('--beta', '--alpha'))} {deadline_clause()}[/]"
+        )
+
     try:
         cfg = MsprtConfig(
-            metric=canonical, alpha=alpha, beta=beta, effect_size=effect_size,
+            metric=canonical, alpha=alpha, effect_size=effect_size,
         )
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
 
     try:
-        verdict = run_msprt(input_path, config=cfg)
+        rows = read_msprt_rows(input_path, config=cfg)
+        verdict = msprt_step(cfg, control=rows.control, treatment=rows.treatment)
     except FileNotFoundError:
-        console.print(f"[red]Input not found: {escape(input_path)}[/]")
+        console.print(f"[red]Input not found: {for_terminal(input_path)}[/]", emoji=False)
         raise typer.Exit(1) from None
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(1) from exc
 
     # The test is two-sided (#1227): a reject_h0 carries the direction, read
@@ -102,7 +126,7 @@ def ab(
         "continue": "cyan",
     }[verdict.decision]
 
-    table = Table(title=f"mSPRT verdict — {escape(canonical)}", border_style=decision_colour)
+    table = Table(title=f"A/B verdict — {escape(canonical)}", border_style=decision_colour)
     table.add_column("Field")
     table.add_column("Value")
     table.add_row("decision", f"[bold]{verdict.decision}[/]")
@@ -113,9 +137,45 @@ def ab(
     table.add_row("n_treatment", str(verdict.n_treatment))
     table.add_row("mean_control", f"{verdict.mean_control:.4f}")
     table.add_row("mean_treatment", f"{verdict.mean_treatment:.4f}")
+    # #1524 - the two spreads behind the hold, when it is what kept the verdict
+    # at `continue`. Shown next to the statistic so the reader can see that the
+    # accept rule was already satisfied.
+    if verdict.accept_held:
+        table.add_row("accept_held", "[bold]true[/]")
+        table.add_row("held_out_rows", str(verdict.held_out_rows))
+        table.add_row("held_out_spread", f"{verdict.held_out_spread:.4g}")
+        table.add_row("tested_spread", f"{verdict.tested_spread:.4g}")
     console.print(table)
 
-    if verdict.decision == "reject_h0" and worse:
+    if verdict.accept_held:
+        # #1524 - the accept rule is already satisfied (the confidence sequence
+        # lies inside the effect-size band); the only thing keeping this at
+        # `continue` is the 3x spread rule. The held-out rows are fixed,
+        # so "collect more samples" cannot help here — name the ratio and point
+        # at the rows that actually set it.
+        ratio = (
+            verdict.tested_spread / verdict.held_out_spread
+            if verdict.held_out_spread
+            else math.inf
+        )
+        console.print(
+            Panel(
+                "[cyan]Held back: the tested rows spread "
+                f"{ratio:.3g} times the held-out ones "
+                f"(held_out_spread {verdict.held_out_spread:.4g}, "
+                f"tested_spread {verdict.tested_spread:.4g}, "
+                f"limit {ACCEPT_HOLD_SPREAD_RATIO:g}x), so accept_h0 is "
+                "withheld even though the confidence sequence for the "
+                f"difference is already inside +-{cfg.effect_size:g}. "
+                f"The first {verdict.held_out_rows} rows of each arm set the scale of "
+                "--effect-size and barely vary (a warm cache, or a judge that gives "
+                "the same score early). Those rows are fixed, so more samples of the "
+                "same kind will not release the hold: drop them, or reorder the input "
+                "so the first rows vary, and re-run.[/]",
+                border_style="cyan",
+            )
+        )
+    elif verdict.decision == "reject_h0" and worse:
         console.print(
             Panel(
                 "[red]Significant difference detected: the treatment is worse than "
@@ -136,8 +196,9 @@ def ab(
     elif verdict.decision == "accept_h0":
         console.print(
             Panel(
-                "[yellow]No significant difference. Treatment is not "
-                "distinguishable from control at the configured effect size.[/]",
+                "[yellow]No significant difference: any difference between treatment "
+                f"and control on {escape(canonical)} is smaller than --effect-size "
+                f"{cfg.effect_size:g}, at confidence {1.0 - cfg.alpha:g}.[/]",
                 border_style="yellow",
             )
         )
@@ -151,6 +212,11 @@ def ab(
                 border_style="cyan",
             )
         )
+        # #1818 - rows the reader could not use are not rows to collect more of.
+        # Name them, so "control has 0" is not read as an empty file.
+        skipped_note = rows.skipped_note()
+        if skipped_note:
+            console.print(f"[yellow]{escape(skipped_note)}[/]")
     else:
         console.print(
             Panel(
@@ -161,6 +227,10 @@ def ab(
 
     # Webhook only fires on a terminal decision (reject_h0 / accept_h0) —
     # a `continue` verdict carries no actionable signal (issue #207).
+    # #1524 - a held run is a `continue` by construction (`accept_held` is only
+    # legal on one), so it never reaches this payload: the hold is reported on
+    # the panel and on the `MsprtVerdict` returned by `run_msprt` / `msprt_step`,
+    # and nothing about it belongs here as a key that is always false.
     if verdict.decision != "continue":
         emit_webhooks(
             slack_url,

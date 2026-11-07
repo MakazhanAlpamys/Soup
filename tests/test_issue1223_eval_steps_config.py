@@ -192,12 +192,18 @@ class TestEvalStepsFootguns:
         cfg = _load(_yaml(task="grpo", training_extra="  eval_steps: 5\n"))
         assert cfg.training.eval_steps == 5
 
-    def test_mlx_refuses_it_because_mlx_lm_evaluates_on_its_own_cadence(self):
+    def test_mlx_sft_honours_it_since_1990(self):
+        """Refused here until #1990, which counts it in optimizer updates on
+        MLX SFT (tests/test_mlx_eval_steps.py pins the schedule)."""
+        cfg = _load(_yaml(backend="mlx", training_extra="  eval_steps: 5\n"))
+        assert (cfg.backend, cfg.training.eval_steps) == ("mlx", 5)
+
+    def test_mlx_preference_tasks_still_refuse_it(self):
         with pytest.raises(ValueError) as info:
-            _load(_yaml(backend="mlx", training_extra="  eval_steps: 5\n"))
+            _load(_yaml(task="dpo", backend="mlx", training_extra="  eval_steps: 5\n"))
         message = str(info.value)
-        assert "training.eval_steps is not supported for backend='mlx'" in message
-        assert "#1223" in message
+        assert "training.eval_steps is not supported for task='dpo' on backend='mlx'" in message
+        assert "#1990" in message
 
     def test_mlx_without_it_still_loads(self):
         """The control for the refusal above: MLX itself is untouched."""

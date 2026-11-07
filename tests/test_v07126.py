@@ -67,8 +67,12 @@ class _SeqBuffer:
         return snap
 
 
-# Well-separated rewards (healthy) vs bunched rewards (reward model losing grip).
-_HEALTHY = _grpo_snapshot([0.0, 0.0, 1.0, 1.0], ["a", "b", "c", "d"])
+# Well-separated rewards (healthy) vs bunched rewards (reward model losing
+# grip). _HEALTHY keeps both median-split halves varying: a two-valued reward
+# leaves a constant half, and #1438 makes info_rm return no signal for it.
+# _HACK stays fully constant — with a baseline recorded it reads as a total
+# collapse (see test_issue1438_info_rm_discrete_reward.py).
+_HEALTHY = _grpo_snapshot([0.0, 0.05, 0.95, 1.0], ["a", "b", "c", "d"])
 _HACK = _grpo_snapshot([0.5, 0.5, 0.5, 0.5], ["a", "b", "c", "d"])
 
 # =====================================================================

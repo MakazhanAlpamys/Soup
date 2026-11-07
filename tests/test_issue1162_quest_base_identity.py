@@ -64,7 +64,11 @@ def test_selected_safetensors_matches_real_transformers_loader(tmp_path):
         LlamaConfig(
             hidden_size=128,
             intermediate_size=256,
-            num_hidden_layers=1,
+            # 24, not 1: #1199 refuses a local base whose config.json declares
+            # a layer count the measured route cannot cover, so a 1-layer toy
+            # is no longer a legal local QuEST base. These two tests pin which
+            # files are selected, for which the layer count is irrelevant.
+            num_hidden_layers=24,
             num_attention_heads=4,
             vocab_size=256,
         )
@@ -84,7 +88,8 @@ def test_sharded_safetensors_matches_real_transformers_loader(tmp_path):
         LlamaConfig(
             hidden_size=128,
             intermediate_size=256,
-            num_hidden_layers=1,
+            # 24, not 1: see the note in the safetensors test above.
+            num_hidden_layers=24,
             num_attention_heads=4,
             vocab_size=256,
         )
@@ -358,11 +363,16 @@ def test_changed_during_hash_is_refused(tmp_path, monkeypatch):
 
     weights = _base(tmp_path / "base") / "model.safetensors"
     original_fstat = quest.os.fstat
+    target = weights.stat()
     reads = 0
 
     def changed_fstat(fd):
         nonlocal reads
         result = original_fstat(fd)
+        if (result.st_dev, result.st_ino) != (target.st_dev, target.st_ino):
+            # ``quest.os`` is the os module itself: every other fstat in the
+            # process, pytest's capture included, must see the real result.
+            return result
         reads += 1
         if reads == 2:
             return SimpleNamespace(

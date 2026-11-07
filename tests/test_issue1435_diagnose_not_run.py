@@ -24,7 +24,7 @@ from soup_cli.utils.diagnose.report import (
 )
 from tests.conftest import strip_ansi
 
-DATASET_MODES = ("forgetting", "format", "mode_collapse", "memorization")
+DATASET_MODES = ("format", "mode_collapse", "memorization")
 
 RECOGNISED = [
     {"prompt": f"Write story number {i}.", "completion": f"Once upon a time {i}."}
@@ -268,11 +268,11 @@ class TestCli:
         svg = (tmp_path / "b.svg").read_text(encoding="utf-8")
         assert "NOT_RUN" in svg  # the overall pill
         assert "#8b949e" in svg
-        # The four dataset probes show "not run", never a stored 0.00 placeholder.
-        assert svg.count("not run") == 4
+        # The three dataset probes show "not run", never a stored 0.00 placeholder.
+        assert svg.count("not run") == 3
         assert "0.00" not in svg
-        # Only refusal, contamination and citation are OK (green); the pill is grey.
-        assert svg.count("#3fb950") == 3
+        # Refusal, forgetting, contamination and citation are OK (green); the pill is grey.
+        assert svg.count("#3fb950") == 4
 
     def test_bad_tokenizer_exits_3_before_model_load(self, tmp_path, monkeypatch):
         with mock.patch(
@@ -405,13 +405,26 @@ class TestEveryProbeSite:
         [QUESTION_ANSWER, QUERY_RESPONSE, INPUT_OUTPUT],
         ids=["question_answer", "query_response", "input_output"],
     )
-    def test_memorization_with_no_splittable_text_is_not_run(self, tmp_path, monkeypatch, rows):
+    def test_memorization_reads_question_answer_style_rows(self, tmp_path, monkeypatch, rows):
+        # These rows form prompt/answer pairs but have no text-like field of their own;
+        # the pair text (prompt + answer) is what memorization scans, so it must run
+        # instead of answering "nothing to check" with OK 1.00.
         report, _ = _run_live(tmp_path, monkeypatch, rows, _gens())
         score = report.scores["memorization"]
-        assert score.verdict == "NOT_RUN", score
-        assert "text, content" in score.evidence  # the new guard, not "no usable rows"
-        assert report.scores["forgetting"].verdict != "NOT_RUN"  # the rows do form pairs
-        assert report.overall == "NOT_RUN"
+        assert score.verdict != "NOT_RUN", score
+        assert "scanned=" in score.evidence
+        assert all(s.verdict != "NOT_RUN" for s in report.scores.values())
+
+    def test_memorization_runs_when_only_some_rows_have_a_text_field(
+        self, tmp_path, monkeypatch
+    ):
+        # Half the rows carry a prompt field, half are question/answer rows: every row
+        # is scanned (any row with text is enough; one text-less row must not stop it).
+        rows = RECOGNISED[:6] + QUESTION_ANSWER[:6]
+        report, _ = _run_live(tmp_path, monkeypatch, rows, _gens())
+        score = report.scores["memorization"]
+        assert score.verdict != "NOT_RUN", score
+        assert "scanned=" in score.evidence
 
 
 # ---------------------------------------------------------------------------
@@ -425,12 +438,12 @@ class TestReviewFollowUps:
             tmp_path, monkeypatch, UNRECOGNISED, _gens(), "--allow-not-run"
         )
         assert result.exit_code == 0
-        modes = ("forgetting", "format", "mode_collapse", "memorization")
+        modes = ("format", "mode_collapse", "memorization")
         rows = [
             line for line in out.splitlines()
             if "NOT_RUN" in line and any(mode in line for mode in modes)
         ]
-        assert len(rows) == 4  # one table row per NOT_RUN probe, not the overall panel
+        assert len(rows) == 3  # one table row per NOT_RUN probe, not the overall panel
         for line in rows:
             assert "\u2014" in line
             assert "0.000" not in line

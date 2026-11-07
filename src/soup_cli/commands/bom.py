@@ -14,6 +14,7 @@ from rich.markup import escape
 from soup_cli.utils.bom import BomEntry, attach_energy, render_bom, write_bom
 from soup_cli.utils.energy import EnergyMeasurement
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -42,7 +43,9 @@ def emit_cmd(
     ),
     task: str = typer.Option("sft", "--task", help="Training task (sft / dpo / grpo / ...)."),
     license_id: Optional[str] = typer.Option(
-        None, "--license", help="SPDX license id (e.g. apache-2.0, mit).",
+        None, "--license",
+        help="License: an SPDX id (e.g. Apache-2.0, MIT; case-insensitive), an SPDX "
+             "expression (Apache-2.0 OR MIT), or any other name.",
     ),
     fmt: str = typer.Option(
         "cyclonedx", "--format", "-f",
@@ -67,8 +70,9 @@ def emit_cmd(
     fmt_lc = fmt.lower()
     if fmt_lc not in {"cyclonedx", "spdx", "both"}:
         console.print(
-            f"[red]Unsupported --format: {escape(fmt)} "
-            "(use cyclonedx | spdx | both)[/]"
+            f"[red]Unsupported --format: {for_terminal(fmt)} "
+            "(use cyclonedx | spdx | both)[/]",
+            emoji=False,
         )
         raise typer.Exit(2)
 
@@ -77,15 +81,15 @@ def emit_cmd(
         try:
             validated = enforce_under_cwd_and_no_symlink(energy_path, "--energy")
         except ValueError as exc:
-            console.print(f"[red]Energy path rejected: {escape(str(exc))}[/]")
+            console.print(f"[red]Energy path rejected: {for_terminal(exc)}[/]", emoji=False)
             raise typer.Exit(2)
         if not Path(validated).is_file():
-            console.print(f"[red]Energy file not found: {escape(validated)}[/]")
+            console.print(f"[red]Energy file not found: {for_terminal(validated)}[/]", emoji=False)
             raise typer.Exit(2)
         try:
             raw = Path(validated).read_text()
         except OSError as exc:
-            console.print(f"[red]Cannot read energy file: {escape(str(exc))}[/]")
+            console.print(f"[red]Cannot read energy file: {for_terminal(exc)}[/]", emoji=False)
             raise typer.Exit(2)
         try:
             parsed = json.loads(raw)
@@ -95,7 +99,7 @@ def emit_cmd(
         try:
             measurement = EnergyMeasurement(**parsed)
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]Invalid energy measurement: {escape(str(exc))}[/]")
+            console.print(f"[red]Invalid energy measurement: {for_terminal(exc)}[/]", emoji=False)
             raise typer.Exit(2)
 
     try:
@@ -130,11 +134,12 @@ def emit_cmd(
             cdx_path = write_bom(entry, "cyclonedx", output + ".cdx.json")
             spdx_path = write_bom(entry, "spdx", output + ".spdx.json")
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]Write failed: {escape(str(exc))}[/]")
+            console.print(f"[red]Write failed: {for_terminal(exc)}[/]", emoji=False)
             raise typer.Exit(2)
         console.print(
-            f"[green]Wrote CycloneDX BOM[/] -> {escape(cdx_path)}\n"
-            f"[green]Wrote SPDX BOM[/] -> {escape(spdx_path)}"
+            f"[green]Wrote CycloneDX BOM[/] -> {for_terminal(cdx_path)}\n"
+            f"[green]Wrote SPDX BOM[/] -> {for_terminal(spdx_path)}",
+            emoji=False,
         )
         if attach_to_registry is not None:
             _attach_bom(attach_to_registry, [cdx_path, spdx_path])
@@ -156,10 +161,10 @@ def emit_cmd(
     try:
         written = write_bom(entry, fmt_lc, output)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]Write failed: {escape(str(exc))}[/]")
+        console.print(f"[red]Write failed: {for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(2)
     console.print(
-        f"[green]Wrote BOM ({fmt_lc})[/] -> {escape(written)}"
+        f"[green]Wrote BOM ({fmt_lc})[/] -> {for_terminal(written)}", emoji=False
     )
     if attach_to_registry is not None:
         _attach_bom(attach_to_registry, [written])
@@ -182,9 +187,13 @@ def _attach_bom(registry_id: str, paths: list[str]) -> None:
         try:
             attach_artifact(registry_id, path=path, kind="bom")
         except Exception as exc:  # noqa: BLE001
-            console.print(f"[red]Error:[/] could not attach to registry: {escape(str(exc))}")
+            console.print(
+                f"[red]Error:[/] could not attach to registry: {for_terminal(exc)}",
+                emoji=False,
+            )
             raise typer.Exit(_EXIT_ATTACH_FAILED) from exc
         console.print(
             f"[green]Attached[/] bom to registry entry [bold]{escape(registry_id)}[/] "
-            f"[dim]({escape(path)})[/]"
+            f"[dim]({for_terminal(path)})[/]",
+            emoji=False,
         )

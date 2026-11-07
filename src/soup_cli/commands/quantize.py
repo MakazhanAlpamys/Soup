@@ -13,11 +13,14 @@ import shlex
 
 import typer
 from rich.console import Console
-from rich.markup import escape
+from rich.text import Text
+
+from soup_cli.config.deprecation import EXPORT_FORMATS_REMOVED_IN
+from soup_cli.utils.terminal import strip_control
 
 console = Console()
 
-VALID_FORMATS = frozenset({"gguf", "gptq", "awq", "onnx", "tensorrt"})
+VALID_FORMATS = frozenset({"gguf", "onnx", "tensorrt"})
 
 
 def quantize(
@@ -28,12 +31,12 @@ def quantize(
     to: str = typer.Option(
         "gguf",
         "--to",
-        help="Target format: gguf | gptq | awq | onnx | tensorrt.",
+        help="Target format: gguf | onnx | tensorrt.",
     ),
     bits: int = typer.Option(
         4,
         "--bits",
-        help="Quantization bits (1-16; respected by gguf/gptq/awq).",
+        help="Quantization bits (1-16; respected by gguf).",
     ),
     output: str = typer.Option(
         None,
@@ -50,8 +53,15 @@ def quantize(
     canonical = to.lower().strip()
     if canonical not in VALID_FORMATS:
         console.print(
-            f"[red]--to must be one of {sorted(VALID_FORMATS)}; got {to!r}[/]"
+            Text(
+                f"--to must be one of {sorted(VALID_FORMATS)}; got {strip_control(repr(to))}",
+                style="red",
+            )
         )
+        if canonical in ("awq", "gptq"):
+            console.print(
+                f"[yellow]--to {canonical} was removed in v{EXPORT_FORMATS_REMOVED_IN}.[/]"
+            )
         raise typer.Exit(code=2)
     if isinstance(bits, bool) or not isinstance(bits, int):
         console.print("[red]--bits must be int[/]")
@@ -62,13 +72,11 @@ def quantize(
     parts = ["soup", "export", "--model", model_path, "--format", canonical]
     if canonical == "gguf":
         parts.extend(["--quant", f"q{bits}_K_M"])
-    elif canonical in ("gptq", "awq"):
-        parts.extend(["--bits", str(bits)])
     if output:
         parts.extend(["--output", output])
     rendered = " ".join(shlex.quote(part) for part in parts)
     console.print("[cyan]Run:[/]")
-    console.print(f"  [bold]{escape(rendered)}[/]")
+    console.print(Text(f"  {strip_control(rendered)}", style="bold"), soft_wrap=True)
     console.print(
         "[dim]Tip: `soup export --help` lists every advanced quantization flag.[/]"
     )
