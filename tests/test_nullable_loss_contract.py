@@ -51,9 +51,14 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 runner = CliRunner()
 
 
-def _plain(text: str) -> str:
-    """Strip colour escapes and collapse whitespace (Rich colours differ per OS)."""
-    return " ".join(_ANSI_RE.sub("", text).split())
+def _plain_lines(text: str) -> str:
+    """Strip colour escapes (they differ per OS) and collapse whitespace within each line.
+
+    The line breaks stay: the repo's flattening helpers join everything into one line,
+    and a ``next(line for line in text.splitlines() if name in line)`` over that is the
+    whole table, not the table row.
+    """
+    return "\n".join(" ".join(line.split()) for line in _ANSI_RE.sub("", text).splitlines())
 
 
 @pytest.fixture(autouse=True)
@@ -331,7 +336,7 @@ def _sweep_summary(monkeypatch, rows) -> str:
     output = StringIO()
     monkeypatch.setattr(sweep, "console", Console(file=output, width=200, force_terminal=False))
     sweep._display_summary(rows, {})
-    return _plain(output.getvalue())
+    return _plain_lines(output.getvalue())
 
 
 def _arm(name, loss, status="completed"):
@@ -374,7 +379,7 @@ def test_runs_list_shows_a_genuine_zero_loss_and_nothing_for_null(tracker, monke
     monkeypatch.setattr(runs_module, "console", Console(file=output, width=240))
     result = runner.invoke(app, ["runs"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    listing = _plain(output.getvalue())
+    listing = _plain_lines(output.getvalue())
     rows = {
         name: next(line for line in listing.splitlines() if name in line)
         for name in ("run_zero_loss", "run_no_loss")
