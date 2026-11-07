@@ -15,7 +15,7 @@ involve `bitsandbytes` and both showed up as "streamed NF4 does not match reside
 | Size | At most 1 ulp of the output dtype at the largest output of the row: 0.03 to 4 absolute on outputs of about 235 to 580 (unit-variance weights), up to 0.06 on outputs of about 5 to 12 (weights of std 0.02); both kernels are within about 1.5 ulp of an fp32 reference | Wrong gradients on every layer except the last few; large (the loss curve looked healthy) |
 | Specific to Blackwell? | Measured on `sm_120` only; other architectures were not measured (no card here) | No: measured first on 8x H100 |
 | Soup status | Not a Soup defect. Since v0.76.0 streamed NF4 follows `bitsandbytes`' own kernel choice, so streamed equals resident (see "What Soup does") | **Fixed in v0.73.0**: a streamed weight never enters `MatMul4Bit` |
-| Upstream status | Question drafted, not yet filed. `bitsandbytes` main is 3 commits past 0.50.2, none touching the CUDA 4-bit kernels, and behaves identically (below) | Reported as #2034; no reply as of 2026-11-07 |
+| Upstream status | Filed on 2026-11-06 as [bitsandbytes#2121](https://github.com/bitsandbytes-foundation/bitsandbytes/issues/2121) (open, no reply as of 2026-11-07). `bitsandbytes` main is 3 commits past 0.50.2, none touching the CUDA 4-bit kernels, and behaves identically (below) | Reported as [#2034](https://github.com/bitsandbytes-foundation/bitsandbytes/issues/2034) on 2026-08-07 (open, no reply as of 2026-11-07) |
 
 ## Problem 1 - fused GEMM versus dequantize + `F.linear` (#776)
 
@@ -137,8 +137,10 @@ There is nothing left to fix inside Soup for problem 1: both kernels are within 
 fp32 product and Soup now runs the kernel `bitsandbytes` itself chooses. Any further change
 would be in the `bitsandbytes` kernel, which Soup does not control, so no date is given. Whether the
 fused kernel should round the same way as dequantize + GEMM is a question for
-`bitsandbytes`; a draft of that question (environment, a 40-line standalone reproducer, the
-numbers above) is ready and has not been filed. `bitsandbytes` main does not change the
+`bitsandbytes`; it was filed on 2026-11-06 as
+[bitsandbytes#2121](https://github.com/bitsandbytes-foundation/bitsandbytes/issues/2121)
+(environment, a standalone reproducer, the numbers above); it is open and has no reply as of
+2026-11-07. `bitsandbytes` main does not change the
 result, and an open upstream PR
 ([bitsandbytes#2098](https://github.com/bitsandbytes-foundation/bitsandbytes/pull/2098),
 an `sm_120` single-row speed-up of the same kernel) would move the `M = 1` numbers if it
