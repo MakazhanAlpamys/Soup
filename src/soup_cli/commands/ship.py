@@ -71,6 +71,16 @@ from soup_cli.utils.paths import (
     enforce_under_cwd_and_no_symlink,
     quote_path,
 )
+from soup_cli.utils.ship_judge_rows import (
+    ID_EDIT_ID,
+    LEG_HELD_OUT,
+    LEG_TASK_EVAL,
+    JudgeRowRecorder,
+    RowId,
+    recording,
+    row_sink,
+    write_judge_rows,
+)
 from soup_cli.utils.ship_loop_gate import (
     ANSWER_MAX_NEW_TOKENS,
     GATE_LOOP_V2,
@@ -919,7 +929,10 @@ def _build_pairwise_scorer(
         gen_a: Callable[[str], str], gen_b: Callable[[str], str]
     ) -> float:
         pairs = [(t.prompt, gen_a(t.prompt), gen_b(t.prompt)) for t in tasks]
-        return pairwise_winrate(pairs, evaluator)
+        # ``row_sink`` is None unless the caller opened a ``recording`` scope around this call
+        # (``_leg1_pairwise`` does; the noise-floor repeats do not), so this adds nothing then.
+        on_row = row_sink(pairs, tasks)
+        return pairwise_winrate(pairs, evaluator, on_row=on_row)
 
     return _winrate
 
@@ -929,16 +942,19 @@ def _leg1_pairwise(
     tuned_gen: Callable[[str], str],
     task_eval: str,
     judge_model: str,
+    judge_rows: Optional[JudgeRowRecorder] = None,
 ) -> TaskWin:
     """Leg-1 via a true pairwise judge win-rate (#284).
 
     For each task prompt, generate a base and a tuned response and ask the judge
     which is better (swap-debiased). The tuned win-rate becomes leg 1, framed as
     ``TaskWin(base=0.5 coin-flip, tuned=win-rate)`` so ``won <=> win-rate > 0.5``.
+    ``judge_rows``, when given, also collects the per-row verdicts behind the win rate.
     """
     winrate = _build_pairwise_scorer(task_eval, judge_model)
     with group("task_eval", side="tuned", countable=True):
-        return build_task_win("pairwise", 0.5, winrate(base_gen, tuned_gen))
+        with recording(judge_rows, LEG_TASK_EVAL):
+            return build_task_win("pairwise", 0.5, winrate(base_gen, tuned_gen))
 
 
 def _extract_lm_score(bench_data: Mapping[str, object]) -> Optional[float]:
@@ -1267,7 +1283,8 @@ def _held_out_win_rate(judge_model: str, pairs: List[Tuple[str, str, str]]) -> f
 
     provider, model, api_base = _parse_judge_url(judge_model)
     evaluator = JudgeEvaluator(provider=provider, model=model, api_base=api_base)
-    return pairwise_winrate(pairs, evaluator)
+    # None outside the ``recording`` scope ``_apply_loop_gate`` opens, which names the rows.
+    return pairwise_winrate(pairs, evaluator, on_row=row_sink(pairs))
 
 
 def _answer_generators(
@@ -1311,12 +1328,14 @@ def _apply_loop_gate(
     *,
     task_mode: str,
     judge_model: Optional[str],
+    judge_rows: Optional[JudgeRowRecorder] = None,
 ) -> ShipVerdict:
     """Run the corrections and held-out checks and let them decide (``--gate loop-v2``).
 
     The old version is ``old_gen`` (the base, or base + ``--base-adapter``) and the new one
     ``new_gen`` (the candidate). A pairwise judge, when ``--task-mode pairwise`` has one, also rates
-    the held-out answers; that note is information and never decides.
+    the held-out answers; that note is information and never decides. ``judge_rows``, when given,
+    collects the judge's per-edit verdicts, named by ``edit_id``.
     """
     console.print(
         f"[dim]Gate {GATE_LOOP_V2}: asking both versions "
@@ -1328,7 +1347,9 @@ def _apply_loop_gate(
     judge_rate = None
     if task_mode == "pairwise" and judge_model:
         judge_rate = partial(_held_out_win_rate, judge_model)
-    held_out = check_held_out(old_gen, new_gen, inputs.held_out, judge_rate=judge_rate)
+    held_out_ids = [RowId(edit.edit_id, ID_EDIT_ID) for edit in inputs.held_out]
+    with recording(judge_rows, LEG_HELD_OUT, held_out_ids):
+        held_out = check_held_out(old_gen, new_gen, inputs.held_out, judge_rate=judge_rate)
     return apply_loop_gate(verdict, corrections, held_out)
 
 
@@ -1349,8 +1370,13 @@ def _verdict_live(
     chat_template_kwargs: Optional[dict] = None,
     base_adapter: Optional[str] = None,
     gate_inputs: Optional[GateInputs] = None,
+    judge_rows: Optional[JudgeRowRecorder] = None,
 ) -> ShipVerdict:
-    """Run a live verdict — validate flags (exit 2), then evaluate (exit 1)."""
+    """Run a live verdict — validate flags (exit 2), then evaluate (exit 1).
+
+    ``judge_rows``, when given, collects the pairwise judge's per-row verdicts (leg 1 and the
+    ``--gate loop-v2`` held-out note) for ``--output``'s sidecar; it never changes the verdict.
+    """
     if not base:
         _fail("live run needs --base <model>", _EXIT_USAGE)
     if adapter and tuned:
@@ -1464,7 +1490,9 @@ def _verdict_live(
         if task_mode == "judge_score":
             task_win = _leg1_judge(base_gen, tuned_gen, task_eval, judge_model)
         elif task_mode == "pairwise":
-            task_win = _leg1_pairwise(base_gen, tuned_gen, task_eval, judge_model)
+            task_win = _leg1_pairwise(
+                base_gen, tuned_gen, task_eval, judge_model, judge_rows=judge_rows,
+            )
         else:
             task_win = _leg1_metric(base_gen, tuned_gen, base, tuned_id, task_eval)
         base_scores, tuned_scores = _leg2_scores(
@@ -1499,7 +1527,7 @@ def _verdict_live(
             )
             verdict = _apply_loop_gate(
                 verdict, gate_inputs, old_answers, new_answers,
-                task_mode=task_mode, judge_model=judge_model,
+                task_mode=task_mode, judge_model=judge_model, judge_rows=judge_rows,
             )
         return replace(
             verdict,
@@ -1552,6 +1580,7 @@ def _emit_and_exit(
     emit_evidence: Optional[str] = None,
     provenance: Optional[Mapping[str, object]] = None,
     push: Optional[str] = None,
+    judge_rows: Optional[JudgeRowRecorder] = None,
 ) -> None:
     console.print(render_ship_panel(verdict))
     if output:
@@ -1562,6 +1591,19 @@ def _emit_and_exit(
             console.print(f"[green]Wrote[/] {escape(output)}")
         except (OSError, ValueError, TypeError) as exc:
             _fail(f"cannot write --output: {type(exc).__name__}: {exc}", _EXIT_RUNTIME)
+        if judge_rows is not None:
+            # The pairwise judge's per-row verdicts, beside the verdict (which is unchanged).
+            try:
+                rows_path = write_judge_rows(judge_rows, output)
+                console.print(
+                    f"[green]Wrote judge rows[/] {escape(for_terminal(rows_path))} "
+                    f"({len(judge_rows)} rows)"
+                )
+            except (OSError, ValueError, TypeError) as exc:
+                _fail(
+                    f"cannot write the judge rows next to --output: {type(exc).__name__}: {exc}",
+                    _EXIT_RUNTIME,
+                )
     if emit_evidence and verdict.failed_rule == FAILED_ADAPTER_NOOP:
         # Nothing was measured; 0.0 placeholder scores must not replay as evidence.
         console.print("[yellow]Warning:[/] no scores were measured; evidence not written")
@@ -1802,6 +1844,7 @@ def ship(
     # actually --emit-evidence.
     config_sha = _config_sha_of(soup_config) if soup_config is not None else None
     binding: Optional[Dict[str, object]] = None
+    judge_rows: Optional[JudgeRowRecorder] = None
 
     def capture_binding(
         mode: str, names: List[str], floor_runs: Optional[int],
@@ -1860,6 +1903,9 @@ def ship(
     elif base or tuned or adapter or task_eval:
         if emit_evidence:
             binding = capture_binding(task_mode, _parse_suite(general_suite), noise_floor)
+        # Per-row judge verdicts go beside --output; with no --output there is nowhere to put
+        # them, and only the pairwise mode runs a pairwise judge.
+        judge_rows = JudgeRowRecorder() if output and task_mode == "pairwise" else None
         verdict = _verdict_live(
             base=base,
             tuned=tuned,
@@ -1876,6 +1922,7 @@ def ship(
             **({"chat_template_kwargs": template_kwargs} if template_kwargs is not None else {}),
             **({"base_adapter": base_adapter} if base_adapter is not None else {}),
             **({"gate_inputs": gate_inputs} if gate_inputs is not None else {}),
+            **({"judge_rows": judge_rows} if judge_rows is not None else {}),
         )
         if emit_evidence and binding != capture_binding(
             task_mode, _parse_suite(general_suite), noise_floor,
@@ -1902,7 +1949,8 @@ def ship(
             provenance.update(_compute_provenance(soup_config))
         provenance["binding"] = binding
     _emit_and_exit(
-        verdict, output, emit_evidence=emit_evidence, push=push, provenance=provenance
+        verdict, output, emit_evidence=emit_evidence, push=push, provenance=provenance,
+        judge_rows=judge_rows,
     )
 
 

@@ -10,7 +10,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Protocol
+from typing import TYPE_CHECKING, Callable, Optional, Protocol
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
@@ -654,9 +654,41 @@ def pairwise_compare(
     doubles the judge calls per pair vs a one-shot random-flip; the stronger
     guarantee is intentional.
     """
+    return pairwise_compare_detailed(prompt, resp_a, resp_b, evaluator, swap=swap).combined
+
+
+@dataclass(frozen=True)
+class PairwiseOutcome:
+    """What the judge said about one pair, in both presentation orders, and what came of it.
+
+    Every verdict uses the judge's own coding: 0 = the response shown first, 1 = the one shown
+    second, -1 = no pick (a tie, or a reply that could not be read: ``compare_pair`` does not
+    tell the two apart).
+
+    ``first``: the pair shown as (A, B). ``swapped``: the pair shown as (B, A), as the judge
+    returned it, so 0 there means B. ``second``: ``swapped`` translated back into A/B space
+    (0 = A, 1 = B). ``combined``: the winner when both orders name the same one, else -1.
+    ``swapped`` and ``second`` are ``None`` when the pair was judged in one order only.
+    """
+
+    first: int
+    swapped: Optional[int]
+    second: Optional[int]
+    combined: int
+
+
+def pairwise_compare_detailed(
+    prompt: str,
+    resp_a: str,
+    resp_b: str,
+    evaluator: "PairwiseJudge",
+    *,
+    swap: bool = True,
+) -> PairwiseOutcome:
+    """:func:`pairwise_compare` with both presentation orders kept: same calls, same verdict."""
     first = evaluator.compare_pair(prompt, resp_a, resp_b)
     if not swap:
-        return first
+        return PairwiseOutcome(first=first, swapped=None, second=None, combined=first)
     swapped = evaluator.compare_pair(prompt, resp_b, resp_a)
     # Translate the swapped verdict back into A/B space: 0 -> B(1), 1 -> A(0).
     if swapped == 0:
@@ -666,18 +698,23 @@ def pairwise_compare(
     else:
         second = -1
     # Winner only when BOTH orders agree on a definite (0/1) verdict.
-    if first in (0, 1) and first == second:
-        return first
-    return -1
+    combined = first if first in (0, 1) and first == second else -1
+    return PairwiseOutcome(first=first, swapped=swapped, second=second, combined=combined)
 
 
 def pairwise_winrate(
-    pairs: "list[tuple[str, str, str]]", evaluator: "PairwiseJudge"
+    pairs: "list[tuple[str, str, str]]",
+    evaluator: "PairwiseJudge",
+    *,
+    on_row: "Optional[Callable[[int, PairwiseOutcome], None]]" = None,
 ) -> float:
     """Tuned win-rate in [0, 1] over ``(prompt, base_resp, tuned_resp)`` triples.
 
     Base is compared as A, tuned as B. A tuned win (verdict 1) scores 1.0, a tie
     (-1) scores 0.5, a loss (0) scores 0.0. Empty input -> 0.5 (no evidence).
+
+    ``on_row``, when given, is called as ``on_row(index, outcome)`` once per pair, right after
+    the pair is judged, with both presentation orders. It does not change the result.
     """
     if not pairs:
         return 0.5
@@ -686,9 +723,14 @@ def pairwise_winrate(
 
     for index, (prompt, base_resp, tuned_resp) in enumerate(track(pairs, len(pairs))):
         try:
-            verdict = pairwise_compare(prompt, base_resp, tuned_resp, evaluator, swap=True)
+            outcome = pairwise_compare_detailed(
+                prompt, base_resp, tuned_resp, evaluator, swap=True
+            )
         except JudgeUnavailableError as exc:
             raise exc.for_rows(len(pairs) - index, len(pairs), "pairs") from exc
+        verdict = outcome.combined
+        if on_row is not None:
+            on_row(index, outcome)
         if verdict == 1:
             total += 1.0
         elif verdict == -1:
