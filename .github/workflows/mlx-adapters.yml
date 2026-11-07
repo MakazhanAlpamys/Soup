@@ -13,6 +13,7 @@ on:
       - 'src/soup_cli/commands/merge.py'
       - 'tests/test_mlx*.py'
       - 'tests/test_issue634_mlx_resume.py'
+      - 'pyproject.toml'
       - '.github/constraints/pinned-upstream.txt'
       - '.github/workflows/mlx-adapters.yml'
   workflow_dispatch:
@@ -21,7 +22,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  # Unrelated label events must not cancel an approved run, even while it is pending.
+  group: ${{ github.workflow }}-${{ github.event.action == 'labeled' && github.event.label.name != 'ci:full' && format('labeled-{0}', github.run_id) || github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
