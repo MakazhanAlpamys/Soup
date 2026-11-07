@@ -1928,11 +1928,12 @@ def train(
     # never come through this command. Not a config validator: other commands load the
     # same config in shells where a launcher variable may be left over. The options that
     # are not in the config are handed over by hand, because the check has to name them.
+    distributed_stream = False
     if getattr(cfg.training, "stream_layers", False):
         from soup_cli.trainer.stream_setup import refuse_if_distributed_launch
 
         try:
-            refuse_if_distributed_launch(
+            distributed_stream = refuse_if_distributed_launch(
                 cfg,
                 resume=resume,
                 hf_resume=hf_resume,
@@ -2661,9 +2662,8 @@ def train(
     tracker_backend = tracker
 
     # Start experiment tracking
-    from soup_cli.experiment.tracker import ExperimentTracker
-
-    tracker = ExperimentTracker()
+    tracker = _open_run_tracker(distributed_stream=distributed_stream)
+    records_run = bool(getattr(tracker, "records_runs", True))
     run_base = cfg.base
     experiment_name = cfg.experiment_name or name
     run_id = tracker.start_run(
@@ -2679,10 +2679,13 @@ def train(
     # rescue path #401 built for MCP-spawned runs was otherwise inert here.
     tracker.mark_running(run_id, pid=os.getpid())
     tracker.record_training_data_hash(run_id, training_data_sha256)
-    tracker.record_code_revision(
-        run_id, commit=code_revision.commit, dirty=code_revision.dirty,
-    )
-    console.print(f"[dim]Run ID: {run_id}[/]")
+    if records_run:
+        tracker.record_code_revision(
+            run_id, commit=code_revision.commit, dirty=code_revision.dirty,
+        )
+        console.print(f"[dim]Run ID: {run_id}[/]")
+    else:
+        console.print("[dim]Run record: rank 0 keeps it; this rank records nothing.[/]")
 
     try:
         # Build trainer based on task type
@@ -3005,33 +3008,41 @@ def train(
         else None
     )
 
-    from soup_cli.utils.terminal import for_terminal as _for_terminal
+    if records_run:
+        from soup_cli.utils.terminal import for_terminal as _for_terminal
 
-    completion_commands = _completion_commands(
-        result["output_dir"],
-        merge_note,
-        backend_hint=backend_hint,
-        dequantize_hint=dequantize_hint,
-    )
-
-    if manual_stop.stopped:
-        title = "[bold yellow]Training Stopped — Ctrl+C[/]"
-    elif result.get("stop_reason") == "loss_watchdog":
-        title = "[bold yellow]Training Stopped — Loss watchdog[/]"
-    else:
-        title = "[bold green]Training Complete![/]"
-
-    console.print(
-        Panel(
-            f"{_format_training_complete_loss(result)}\n"
-            f"Duration: [bold]{_format_duration_display(result)}[/]\n"
-            f"Output: [bold]{_for_terminal(result['output_dir'], single_line=True)}[/]\n"
-            f"Run ID: [bold]{run_id}[/]\n\n"
-            f"{completion_commands}\n"
-            f"Run details: [bold]soup runs show {run_id}[/]",
-            title=title,
+        completion_commands = _completion_commands(
+            result["output_dir"],
+            merge_note,
+            backend_hint=backend_hint,
+            dequantize_hint=dequantize_hint,
         )
-    )
+
+        if manual_stop.stopped:
+            title = "[bold yellow]Training Stopped — Ctrl+C[/]"
+        elif result.get("stop_reason") == "loss_watchdog":
+            title = "[bold yellow]Training Stopped — Loss watchdog[/]"
+        else:
+            title = "[bold green]Training Complete![/]"
+
+        console.print(
+            Panel(
+                f"{_format_training_complete_loss(result)}\n"
+                f"Duration: [bold]{_format_duration_display(result)}[/]\n"
+                f"Output: [bold]{_for_terminal(result['output_dir'], single_line=True)}[/]\n"
+                f"Run ID: [bold]{run_id}[/]\n\n"
+                f"{completion_commands}\n"
+                f"Run details: [bold]soup runs show {run_id}[/]",
+                title=title,
+            )
+        )
+    else:
+        # C6: this rank wrote no adapter and holds no run row, so the panel's
+        # `soup chat` / `soup runs show` hints would point at nothing.
+        console.print(
+            "[dim]This rank finished training. Rank 0 saves the adapter and records the "
+            "run; this rank did neither.[/]"
+        )
 
     # --- v0.56.0 --diagnose-gate: post-training failure-mode check ---
     if diagnose_gate and _should_run_diagnose_gate_on_rank():
@@ -3304,6 +3315,21 @@ def _write_energy_json(path: str, measurement: "EnergyMeasurement") -> None:
 
     payload = json.dumps(asdict(measurement), indent=2)
     atomic_write_text(payload, path, field="--energy-out")
+
+
+def _open_run_tracker(*, distributed_stream: bool):
+    """The experiment tracker of this process (C6).
+
+    One run is one row. Under distributed layer streaming every rank runs this command,
+    and rank 0 alone records the run; every other rank gets a tracker that writes nothing
+    (no database is opened, no row is written). A run that is not distributed, or that does
+    not stream layers, gets the SQLite tracker as it always did.
+    """
+    from soup_cli.experiment.tracker import ExperimentTracker, NullTracker
+
+    if distributed_stream and not _should_run_diagnose_gate_on_rank():
+        return NullTracker()
+    return ExperimentTracker()
 
 
 def _should_run_diagnose_gate_on_rank() -> bool:

@@ -40,7 +40,8 @@ _SEED = 7
 _LORA_B_SCALE = 0.05
 
 
-def _parse(argv):
+def _parser():
+    """The argument parser; ``_stream_distributed_runtime_worker.py`` adds its own on top."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--rank", type=int, required=True)
     parser.add_argument("--world-size", type=int, default=1)
@@ -58,10 +59,17 @@ def _parse(argv):
         help="the one-rank reference runs the plain SFT step (the recorder is on by default "
         "and a distributed launch switches it off)",
     )
-    return parser.parse_args(argv)
+    return parser
+
+
+def _parse(argv):
+    return _parser().parse_args(argv)
 
 
 def _config(args, rank_root: Path):
+    """The SFT config of one process. ``seed``, ``lora_r``, ``target_modules``,
+    ``save_steps`` and ``epochs`` are optional attributes of ``args`` (the runtime worker
+    sets them per rank); without them the config is the one this worker always built."""
     import yaml
 
     from soup_cli.config.loader import load_config_from_string
@@ -79,7 +87,7 @@ def _config(args, rank_root: Path):
                     "gradient_accumulation_steps": args.grad_accum,
                     "quantization": "none",
                     "stream_layers": True,
-                    "epochs": 1,
+                    "epochs": getattr(args, "epochs", 1),
                     "lr": args.lr,
                     # Plain SGD on purpose: Adam divides the gradient by its own running
                     # scale, so a gradient that is 2x too large (a SUM instead of a mean)
@@ -90,14 +98,14 @@ def _config(args, rank_root: Path):
                     "warmup_ratio": 0.0,
                     "max_grad_norm": args.max_grad_norm,
                     "logging_steps": 1,
-                    "save_steps": 1000,
-                    "seed": 42,
+                    "save_steps": getattr(args, "save_steps", 1000),
+                    "seed": getattr(args, "seed", 42),
                     "rewind_log": not args.no_rewind_log,
                     "lora": {
-                        "r": 4,
+                        "r": getattr(args, "lora_r", 4),
                         "alpha": 8,
                         "dropout": 0.0,
-                        "target_modules": ["q_proj", "v_proj"],
+                        "target_modules": getattr(args, "target_modules", ["q_proj", "v_proj"]),
                     },
                 },
                 "output": str(rank_root / "out"),
