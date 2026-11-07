@@ -33,10 +33,18 @@ def input_file(tmp_path, monkeypatch):
     return data
 
 
-def _invoke(data, *args, model="owner/model-1B", goal="chat"):
+@pytest.fixture
+def fixed_hardware(monkeypatch):
+    profile = HardwareProfile("cpu", "none", 24.0, 0.0, 32.0)
+    monkeypatch.setattr(autopilot, "analyze_hardware", lambda: profile)
+    monkeypatch.setattr(generate_config, "analyze_hardware", lambda: profile)
+
+
+def _invoke(data, *args, model="owner/model-1B", goal="chat", stdin=None):
     return make_cli_runner().invoke(
         app,
         ["autopilot", "--model", model, "--data", str(data), "--goal", goal, *args],
+        input=stdin,
     )
 
 
@@ -61,17 +69,13 @@ def test_model_and_hardware_names_in_decision_panel(input_file, monkeypatch, val
 
 
 @pytest.mark.parametrize("value,shown", SPELLINGS)
-def test_dataset_and_output_path_keep_literal_names(input_file, monkeypatch, value, shown):
+def test_dataset_and_output_path_keep_literal_names(input_file, fixed_hardware, value, shown):
     if sys.platform == "win32" and ":" in value:
         pytest.skip("colon is not a valid Windows filename character")
     data = input_file.parent / f"rows-{value}.jsonl"
     data.parent.mkdir(parents=True, exist_ok=True)
     input_file.rename(data)
     output = input_file.parent / f"config-{value}.yaml"
-    profile = HardwareProfile("cpu", "none", 24.0, 0.0, 32.0)
-    monkeypatch.setattr(autopilot, "analyze_hardware", lambda: profile)
-    monkeypatch.setattr(generate_config, "analyze_hardware", lambda: profile)
-
     result = _invoke(data, "--output", str(output), "--yes")
 
     assert result.exit_code == 0, (result.output, result.exception)
@@ -119,3 +123,72 @@ def test_missing_dataset_stays_literal(input_file):
     assert result.exit_code == 1, result.exception
     shown = os.path.realpath(input_file.with_name("missing[red].jsonl"))
     assert f"Data file not found: {shown}" in " ".join(strip_ansi(result.output).split())
+
+
+def test_both_decision_panels_keep_their_rows(input_file, fixed_hardware):
+    result = _invoke(input_file, "--yes")
+
+    assert result.exit_code == 0, (result.output, result.exception)
+    rows = [
+        line.removeprefix("│ ").removesuffix("│").rstrip()
+        for line in strip_ansi(result.output).splitlines()
+        if line.startswith("│")
+    ]
+    assert all(not row or ":" in row for row in rows)
+    assert [row.partition(":")[0] for row in rows] == [
+        "Dataset",
+        "  format",
+        "  samples",
+        "  tokens",
+        "  quality",
+        "",
+        "Model",
+        "  params",
+        "  context",
+        "",
+        "Hardware",
+        "  vram",
+        "",
+        "Goal",
+        "Quantization",
+        "PEFT",
+        "Batch size",
+        "Learning rate",
+        "Epochs",
+        "Max length",
+        "Flash Attention",
+        "Liger Kernel",
+    ]
+
+
+def test_refusals_and_receipt_keep_their_colours(input_file, fixed_hardware, monkeypatch):
+    monkeypatch.setattr(
+        autopilot,
+        "console",
+        Console(
+            width=300, height=100, force_terminal=True, no_color=False, color_system="standard"
+        ),
+    )
+    missing = input_file.with_name("missing.jsonl")
+
+    goal = _invoke(input_file, goal="nope")
+    absent = _invoke(missing)
+    written = _invoke(input_file, "--yes")
+
+    assert goal.exit_code == 1 and absent.exit_code == 1 and written.exit_code == 0
+    assert "\x1b[31mUnknown goal 'nope'. Options:" in goal.output
+    assert f"\x1b[31mData file not found: {os.path.realpath(missing)}\x1b[0m" in absent.output
+    assert "\x1b[32mConfig written:\x1b[0m " in written.output
+
+
+def test_overwrite_prompt_strips_controls_and_keeps_existing_file(input_file, fixed_hardware):
+    output = input_file.with_name("config[red]\x9b\u202e.yaml")
+    output.write_bytes(b"keep existing config\n")
+
+    result = _invoke(input_file, "--output", str(output), stdin="n\n")
+
+    assert result.exit_code == 0, (result.output, result.exception)
+    shown = os.path.realpath(input_file.with_name("config[red].yaml"))
+    assert f"{shown} exists. Overwrite?" in strip_ansi(result.output)
+    assert "\x9b" not in result.output and "\u202e" not in result.output
+    assert output.read_bytes() == b"keep existing config\n"

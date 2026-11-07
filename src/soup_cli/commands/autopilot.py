@@ -251,7 +251,7 @@ def autopilot_cmd(
     output_path = Path(os.path.realpath(str(output_raw)))
 
     if output_path.exists() and not yes:
-        if not typer.confirm(f"{output_path} exists. Overwrite?"):
+        if not typer.confirm(f"{strip_control(output_path)} exists. Overwrite?"):
             raise typer.Exit()
 
     write_yaml(cfg, output_path)
