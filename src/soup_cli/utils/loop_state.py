@@ -75,6 +75,10 @@ class LoopState:
     # pre-wired harvest reads its thumbs as preference pairs. None = not used.
     # Last, so adding it shifted no existing positional field.
     thumbs_db: Optional[str] = None
+    # The model the pre-wired train stage starts from: `soup loop init
+    # --base-model`, or what init resolved from a registry:// entry. None =
+    # resolve at watch time (served_model itself when it is not registry://).
+    base_model: Optional[str] = None
 
     def __post_init__(self) -> None:  # noqa: D401 — validator hook
         # Closed-allowlist enforcement + bool-as-int rejection mirror the
@@ -124,6 +128,8 @@ class LoopState:
             _require_str("canary_active", self.canary_active, allow_empty=False)
         if self.thumbs_db is not None:
             _require_str("thumbs_db", self.thumbs_db, allow_empty=False)
+        if self.base_model is not None:
+            _require_str("base_model", self.base_model, allow_empty=False)
         if self.canary_rollout_id is not None:
             _require_str("canary_rollout_id", self.canary_rollout_id, allow_empty=False)
         if self.last_iteration_id is not None:
@@ -289,6 +295,7 @@ def init_state(
     max_runs_per_day: Optional[int] = None,
     pre_wired: bool = False,
     thumbs_db: Optional[str] = None,
+    base_model: Optional[str] = None,
     path: Optional[str] = None,
     force: bool = False,
 ) -> Tuple[LoopState, str]:
@@ -318,6 +325,7 @@ def init_state(
         status="stopped",
         pre_wired=pre_wired,
         thumbs_db=thumbs_db,
+        base_model=base_model,
         monthly_budget_usd=monthly_budget_usd,
         max_runs_per_day=max_runs_per_day,
         created_at=now,
