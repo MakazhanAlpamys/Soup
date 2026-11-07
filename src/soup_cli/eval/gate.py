@@ -535,7 +535,7 @@ def _run_judge_task(
 
     items: list[dict] = []
     with prompts_path.open("r", encoding="utf-8") as fh:
-        for line in fh:
+        for line_number, line in enumerate(fh, start=1):
             line = line.strip()
             if not line:
                 continue
@@ -545,7 +545,17 @@ def _run_judge_task(
                 raise ValueError(
                     f"invalid JSONL in {task.prompts}: {exc}"
                 ) from exc
+            if not isinstance(row, dict):
+                raise ValueError(
+                    f"judge task {task.name!r} file {task.prompts!r} line {line_number}: "
+                    f"row must be an object, got {type(row).__name__}"
+                )
             prompt = row.get("prompt", "")
+            if not isinstance(prompt, str):
+                raise ValueError(
+                    f"judge task {task.name!r} file {task.prompts!r} line {line_number}: "
+                    f"field 'prompt' must be a string, got {type(prompt).__name__}"
+                )
             response = generate_fn(prompt)
             items.append({
                 "prompt": prompt,
@@ -652,6 +662,12 @@ def run_gate(
             context="baseline score",
         )
     _require_gate_tasks(suite)
+    try:
+        finite_threshold = math.isfinite(regression_threshold)
+    except OverflowError:
+        finite_threshold = False
+    if not finite_threshold:
+        raise ValueError("regression_threshold must be finite")
     task_results: list[GateTaskResult] = []
     any_regressed = False
     any_failed_threshold = False

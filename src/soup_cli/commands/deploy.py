@@ -15,7 +15,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
@@ -281,7 +281,9 @@ def ollama(
         table.add_column("Name", style="bold cyan")
         table.add_column("Size", style="green")
         for entry in models:
-            table.add_row(entry["name"], entry["size"])
+            # Text, not str: a cell string is parsed as markup, and these names are
+            # whatever `ollama list` printed.
+            table.add_row(Text(strip_control(entry["name"])), Text(strip_control(entry["size"])))
         console.print(table)
         raise typer.Exit(0)
 
@@ -400,7 +402,7 @@ def ollama(
             raise typer.Exit(0)
 
     # Generate Modelfile
-    console.print(f"[green]\u2713[/] Ollama v{version} detected")
+    console.print(f"[green]\u2713[/] Ollama v{for_terminal(version)} detected", emoji=False)
     try:
         modelfile = create_modelfile(
             gguf_path=gguf_path,
@@ -472,6 +474,8 @@ def hf_space(
     Uploads an app.py, requirements.txt, and README.md rendered from the
     chosen template. Supports gradio-chat and streamlit-chat.
     """
+    from rich.markup import escape
+
     from soup_cli.utils.hf import (
         get_hf_api,
         resolve_endpoint,
@@ -484,12 +488,15 @@ def hf_space(
     try:
         validate_repo_id(space)
     except ValueError as exc:
-        console.print(f"[red]Invalid --space repo id:[/] {exc}")
+        # The message quotes the id with repr(), which already shows control
+        # characters as escapes, so only the tags and ":name:" codes are left.
+        console.print(f"[red]Invalid --space repo id:[/] {escape(str(exc))}", emoji=False)
         raise typer.Exit(1) from exc
     if template_dir is None and template not in HF_SPACE_TEMPLATES:
         console.print(
-            f"[red]Unknown template: {template}[/]\n"
-            f"Available: {', '.join(HF_SPACE_TEMPLATES.keys())}"
+            f"[red]Unknown template: {for_terminal(template)}[/]\n"
+            f"Available: {', '.join(HF_SPACE_TEMPLATES.keys())}",
+            emoji=False,
         )
         raise typer.Exit(1)
 
@@ -524,19 +531,25 @@ def hf_space(
             files = render_space_template(template, model_repo=model)
             sdk = HF_SPACE_TEMPLATES[template]["sdk"]
     except ValueError as exc:
-        console.print(f"[red]Template render failed:[/] {exc}")
+        # Quoted with repr() or fixed text, like the --space id above.
+        console.print(f"[red]Template render failed:[/] {escape(str(exc))}", emoji=False)
         raise typer.Exit(1) from exc
     except FileNotFoundError as exc:
-        console.print(f"[red]Template directory error:[/] {exc}")
+        console.print(f"[red]Template directory error:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
 
     template_label = template_dir if template_dir is not None else template
+    # The space and the model passed validate_repo_id; the template directory is
+    # typed text.
     console.print(
         Panel(
-            f"Space:    [bold]{space}[/]\n"
-            f"Model:    [bold]{model}[/]\n"
-            f"Template: [bold]{template_label}[/]\n"
-            f"Private:  [bold]{private}[/]",
+            Text.from_markup(
+                f"Space:    [bold]{space}[/]\n"
+                f"Model:    [bold]{model}[/]\n"
+                f"Template: [bold]{for_terminal(template_label)}[/]\n"
+                f"Private:  [bold]{private}[/]",
+                emoji=False,
+            ),
             title="Deploy HuggingFace Space",
         )
     )
@@ -567,7 +580,7 @@ def hf_space(
                 commit_message=f"Soup CLI: add {in_repo_name}",
             )
     except Exception as exc:
-        console.print(f"[red]Space deploy failed:[/] {exc}")
+        console.print(f"[red]Space deploy failed:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
 
     console.print(

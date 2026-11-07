@@ -26,8 +26,8 @@ from typing import Any, Mapping, Sequence
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
 from soup_cli.commands.push import (
     _render_eval_scorecard,
@@ -37,6 +37,7 @@ from soup_cli.commands.push import (
 from soup_cli.eval.results import newest_eval_rows
 from soup_cli.registry.store import AmbiguousRefError, RegistryStore
 from soup_cli.utils.paths import atomic_write_text
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -295,18 +296,20 @@ def card(
     try:
         markdown = build_card_for_ref(ref)
     except CardError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(1) from exc
 
     try:
         written = atomic_write_text(markdown, output, field="card output")
     except (ValueError, OSError) as exc:
-        console.print(f"[red]Cannot write card: {escape(str(exc))}[/]")
+        console.print(f"[red]Cannot write card: {for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(1) from exc
 
     console.print(
         Panel(
-            f"Model card written to [bold]{escape(written)}[/]",
+            Text.from_markup(
+                f"Model card written to [bold]{for_terminal(written)}[/]", emoji=False
+            ),
             title="soup card",
             border_style="green",
         )

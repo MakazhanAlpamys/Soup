@@ -9,6 +9,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
 from soup_cli.utils.prompt_distill import (
     SUPPORTED_DISTILL_STRATEGIES,
@@ -17,8 +18,14 @@ from soup_cli.utils.prompt_distill import (
     build_distill_prompt_plan,
     prepare_distill_dataset,
 )
+from soup_cli.utils.terminal import strip_control
 
 console = Console()
+
+
+def _detail(label: str, value: object) -> Text:
+    # A Text is not parsed as markup and has no emoji codes, so the value is shown as typed.
+    return Text.assemble(label, (strip_control(value), "bold"))
 
 
 def distill_prompt_cmd(
@@ -62,17 +69,21 @@ def distill_prompt_cmd(
             output_path=output,
         )
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(Text(strip_control(exc), style="red"))
         raise typer.Exit(2) from exc
 
     console.print(
         Panel(
-            f"Traces:    [bold]{escape(plan.traces_path)}[/]\n"
-            f"Teacher:   [bold]{escape(plan.teacher)}[/]\n"
-            f"Student:   [bold]{escape(plan.student)}[/]\n"
-            f"Strategy:  [bold]{escape(plan.strategy)}[/]\n"
-            f"Provider:  [bold]{escape(provider)}[/]\n"
-            f"Output:    [bold]{escape(plan.output_path)}[/]",
+            Text("\n").join(
+                [
+                    _detail("Traces:    ", plan.traces_path),
+                    _detail("Teacher:   ", plan.teacher),
+                    _detail("Student:   ", plan.student),
+                    _detail("Strategy:  ", plan.strategy),
+                    _detail("Provider:  ", provider),
+                    _detail("Output:    ", plan.output_path),
+                ]
+            ),
             title="soup distill-prompt — plan",
         )
     )
@@ -102,39 +113,38 @@ def distill_prompt_cmd(
     except ProviderCallError as exc:
         # #1274: every teacher/student call failed — fail loudly instead of
         # writing an empty dataset and reporting "done" (mirrors #1221).
-        console.print(f"[red]No usable rows produced:[/] {escape(str(exc))}")
+        console.print(
+            Text.assemble(("No usable rows produced:", "red"), " ", strip_control(exc))
+        )
         raise typer.Exit(1) from exc
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(Text(strip_control(exc), style="red"))
         raise typer.Exit(2) from exc
     except ImportError as exc:
         console.print(
             Panel(
-                f"[yellow]{escape(str(exc))}[/]",
+                Text(strip_control(exc), style="yellow"),
                 title="distill-prompt — missing dependency",
             )
         )
         raise typer.Exit(2) from exc
 
-    call_line = ""
+    body = Text()
     title = "soup distill-prompt — done"
     if stats.failures:
-        call_line = (
-            f"Provider calls: [bold yellow]{stats.failures} of "
-            f"{stats.calls} failed[/]\n"
-        )
+        body.append("Provider calls: ")
+        body.append(f"{stats.failures} of {stats.calls} failed", style="bold yellow")
+        body.append("\n")
         title = "soup distill-prompt — done with provider failures"
-    skipped_note = ""
+    body.append("Rows:   ")
+    body.append(str(n), style="bold")
     if trace_stats.skipped:
-        skipped_note = (
-            f" [yellow]({trace_stats.skipped} of {trace_stats.read} trace rows "
-            "skipped: no prompt found)[/]"
+        body.append(" ")
+        body.append(
+            f"({trace_stats.skipped} of {trace_stats.read} trace rows "
+            "skipped: no prompt found)",
+            style="yellow",
         )
-    console.print(
-        Panel(
-            f"{call_line}"
-            f"Rows:   [bold]{n}[/]{skipped_note}\n"
-            f"Output: [bold]{escape(plan.output_path)}[/]",
-            title=title,
-        )
-    )
+    body.append("\nOutput: ")
+    body.append(strip_control(plan.output_path), style="bold")
+    console.print(Panel(body, title=title))

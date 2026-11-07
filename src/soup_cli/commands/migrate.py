@@ -7,6 +7,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.syntax import Syntax
+from rich.text import Text
 
 from soup_cli.utils.terminal import for_terminal, strip_control
 
@@ -53,8 +54,9 @@ def migrate(
     # Validate source
     if source not in SUPPORTED_SOURCES:
         console.print(
-            f"[red]Unknown source: {source}[/]\n"
-            f"Supported: {', '.join(SUPPORTED_SOURCES)}"
+            f"[red]Unknown source: {for_terminal(source)}[/]\n"
+            f"Supported: {', '.join(SUPPORTED_SOURCES)}",
+            emoji=False,
         )
         raise typer.Exit(1)
 
@@ -109,16 +111,16 @@ def migrate(
             from soup_cli.migrate.unsloth import migrate_unsloth
             result = migrate_unsloth(input_path)
     except ValueError as exc:
-        console.print(f"[red]Migration failed:[/] {for_terminal(exc)}")
+        console.print(f"[red]Migration failed:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1)
 
-    # Show warnings (escape Rich markup from untrusted config values)
+    # Show warnings (untrusted config values: a Panel body is parsed as markup and
+    # emoji codes, which console.print(emoji=False) does not reach)
     migration_warnings = result.get("_warnings", [])
     if migration_warnings:
-        from rich.markup import escape
-        warning_text = "\n".join(f"  [yellow]![/] {escape(w)}" for w in migration_warnings)
+        warning_text = "\n".join(f"  [yellow]![/] {for_terminal(w)}" for w in migration_warnings)
         console.print(Panel(
-            warning_text,
+            Text.from_markup(warning_text, emoji=False),
             title="[yellow]Migration Warnings[/]",
             border_style="yellow",
         ))
@@ -132,7 +134,10 @@ def migrate(
     try:
         loaded_cfg = load_config_from_string(yaml_str)
     except Exception as exc:
-        console.print(f"[red]Generated config failed schema validation: {for_terminal(exc)}[/]")
+        console.print(
+            f"[red]Generated config failed schema validation: {for_terminal(exc)}[/]",
+            emoji=False,
+        )
         raise typer.Exit(1)
 
     task_val = getattr(loaded_cfg, "task", "unknown")

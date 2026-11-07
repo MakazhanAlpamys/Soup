@@ -213,16 +213,14 @@ def push(
         if hub_canonical != "hf":
             console.print("[yellow]--card is HF-only; ignoring for non-HF hub.[/]")
         else:
-            from rich.markup import escape
-
             from soup_cli.commands.card import CardError, build_card_for_ref
 
             try:
                 card_override = build_card_for_ref(card)
             except CardError as exc:
-                # escape: an AmbiguousRefError message embeds registry-derived
-                # entry names (v0.71.35 security review).
-                console.print(f"[red]--card: {escape(str(exc))}[/]")
+                # An AmbiguousRefError message embeds registry-derived entry names,
+                # and a missing ref is echoed as typed (v0.71.35 security review).
+                console.print(f"[red]--card: {for_terminal(exc)}[/]", emoji=False)
                 raise typer.Exit(1) from exc
 
     # v0.53.10 #152 — non-HF hubs route through utils.hubs.upload_repo

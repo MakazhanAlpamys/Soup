@@ -81,6 +81,7 @@ DECISION_DONT_SHIP = "DON'T SHIP"
 FAILED_MISSING_BASELINE = "missing_baseline"  # leg 2 could not be measured
 FAILED_TASK_WIN = "task_win"  # leg 1: task did not strictly improve
 FAILED_REGRESSION = "regression"  # leg 2: a general benchmark regressed
+FAILED_ADAPTER_NOOP = "adapter_noop"  # every lora_B is zero: tuned == base, nothing ran
 
 # Default forgetting threshold — 0.05 ABSOLUTE points, mirroring
 # ``EvalGateConfig.regression_threshold`` and ``run_gate`` semantics.
@@ -562,6 +563,12 @@ def _failed_rule_explanation(verdict: ShipVerdict) -> str:
         return (
             f"Task did not improve ({win.mode}: {win.base:.4f} -> "
             f"{win.tuned:.4f}, {verb}). A strict win is required to ship."
+        )
+    if verdict.failed_rule == FAILED_ADAPTER_NOOP:
+        return (
+            "Every lora_B tensor in the adapter is zero, so it adds nothing to the "
+            "base model (an untrained adapter, or a DPO ref/ folder). No model was "
+            "loaded or evaluated."
         )
     if verdict.failed_rule == FAILED_REGRESSION:
         names = _regressed_names(verdict)

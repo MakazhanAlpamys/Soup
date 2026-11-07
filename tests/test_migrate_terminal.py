@@ -151,3 +151,77 @@ def test_migrate_refused_output_path_shows_an_emoji_code_as_typed(source):
 
     assert result.exit_code == 1
     assert "Output path is outside the current directory: ../x:warning:.yaml" in _plain(result)
+
+
+_CONTROLS = "\x9b\u202e"
+
+
+@pytest.mark.parametrize("name", ["x[red]s", "x[/]s", "s:warning:"])
+def test_migrate_unknown_source_is_named_as_typed(source, name):
+    result = runner.invoke(app, ["migrate", "--from", name, str(source)])
+
+    assert result.exit_code == 1
+    assert f"Unknown source: {name}" in _plain(result)
+
+
+def test_migrate_unknown_source_strips_controls_from_the_display(source):
+    result = runner.invoke(app, ["migrate", "--from", f"x[bold]s{_CONTROLS}", str(source)])
+
+    assert result.exit_code == 1
+    text = _plain(result)
+    assert "Unknown source: x[bold]s" in text
+    assert "\x9b" not in text and "\u202e" not in text
+
+
+@pytest.mark.parametrize(
+    "message", ["bad [/] value", "[red]refused", "stop:warning:", f"x[bold]m{_CONTROLS}"]
+)
+def test_migrate_failure_message_is_shown_as_typed(source, monkeypatch, message):
+    def _refuse(path):
+        raise ValueError(message)
+
+    monkeypatch.setattr("soup_cli.migrate.llamafactory.migrate_llamafactory", _refuse)
+
+    result = _migrate(str(source), "--output", "soup.yaml", "--yes")
+
+    assert result.exit_code == 1
+    text = _plain(result)
+    assert f"Migration failed: {message.replace(_CONTROLS, '')}" in text
+    assert "\x9b" not in text and "\u202e" not in text
+
+
+@pytest.mark.parametrize(
+    "message", ["bad [/] value", "[red]refused", "stop:warning:", f"x[bold]m{_CONTROLS}"]
+)
+def test_migrate_schema_failure_message_is_shown_as_typed(source, monkeypatch, message):
+    def _refuse(yaml_str):
+        raise ValueError(message)
+
+    monkeypatch.setattr("soup_cli.config.loader.load_config_from_string", _refuse)
+
+    result = _migrate(str(source), "--output", "soup.yaml", "--yes")
+
+    assert result.exit_code == 1
+    text = _plain(result)
+    shown = message.replace(_CONTROLS, "")
+    assert f"Generated config failed schema validation: {shown}" in text
+    assert "\x9b" not in text and "\u202e" not in text
+
+
+@pytest.mark.parametrize(
+    "warning", ["bad [/] value", "[red]careful", "stop:warning:", f"x[bold]w{_CONTROLS}"]
+)
+def test_migrate_warnings_are_shown_as_typed(source, monkeypatch, warning):
+    from soup_cli.migrate import llamafactory
+
+    real = llamafactory.migrate_llamafactory
+    monkeypatch.setattr(
+        llamafactory, "migrate_llamafactory", lambda path: {**real(path), "_warnings": [warning]}
+    )
+
+    result = _migrate(str(source), "--output", "soup.yaml", "--yes")
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    text = _plain(result)
+    assert f"! {warning.replace(_CONTROLS, '')}" in text
+    assert "\x9b" not in text and "\u202e" not in text

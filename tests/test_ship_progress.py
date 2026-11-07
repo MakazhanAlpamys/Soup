@@ -187,10 +187,12 @@ def test_subprocess_jsonl_native_warnings_repeats_and_default_parity(tmp_path: P
     assert emitted[-1]["event"] == "end"
 
 
-@pytest.mark.parametrize("abort", [True, "interrupt"])
-def test_subprocess_abort_is_terminal_content_free_jsonl(tmp_path: Path, abort: bool | str) -> None:
+@pytest.mark.parametrize("abort, exit_code", [(True, 1), ("interrupt", 130)])
+def test_subprocess_abort_is_terminal_content_free_jsonl(
+    tmp_path: Path, abort: bool | str, exit_code: int,
+) -> None:
     result = invoke(tmp_path, live_flags() + ["--progress", "jsonl"], abort=abort)
-    assert result.returncode == 1
+    assert result.returncode == exit_code
     emitted = [json.loads(line) for line in result.stderr.splitlines()]
     assert [e["event"] for e in emitted if e["phase"] == "load"] == ["start", "error"]
     assert emitted[-1]["event"] == "error"
