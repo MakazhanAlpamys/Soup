@@ -61,7 +61,7 @@ def edit_set(*args, method="rome", governor=False):
 def panel_rows(output):
     return [
         line.removeprefix("│ ").removesuffix("│").rstrip()
-        for line in strip_ansi(output).splitlines()
+        for line in output.splitlines()
         if line.startswith("│")
     ]
 
@@ -69,7 +69,7 @@ def panel_rows(output):
 def test_plan_preserves_values_labels_and_blank_row():
     result = edit_set("--plan-only")
     assert result.exit_code == 0, (result.output, result.exception)
-    rows = panel_rows(result.output)
+    rows = panel_rows(strip_ansi(result.output))
     assert rows[:6] == [
         "Method: rome",
         f"Base:   base-{RAW}",
@@ -190,7 +190,8 @@ def test_saved_result_and_attach_use_original_values(monkeypatch):
     result = edit_set("-o", str(path), "--registry-id", STORED)
     assert result.exit_code == 0, (result.output, result.exception)
     shown = str(path).replace("\x9b\u202e", "")
-    assert panel_rows(result.output)[-6:] == [
+    rows = panel_rows(strip_ansi(result.output))
+    assert rows[-6:] == [
         "Method: rome",
         "Layers edited: [6]",
         "Norm delta: 1.0000",
