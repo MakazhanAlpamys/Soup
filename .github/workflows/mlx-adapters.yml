@@ -4,6 +4,9 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review, labeled]
+    # Shared train.py edits have fake-MLX command coverage in the main matrix.
+    # This optional workflow follows explicit MLX and dependency inputs only.
+    # Remove the path filter first if this ever becomes a required check.
     paths:
       - 'src/soup_cli/trainer/mlx*.py'
       - 'src/soup_cli/utils/mlx*.py'
@@ -43,6 +46,8 @@ jobs:
         stack: [floor, current]
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

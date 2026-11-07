@@ -875,6 +875,37 @@ class TestAdapterWorkflow:
         second = _render(key, _on_event("workflow_dispatch", run_id="2"))
         assert len({pr, first, second}) == 3
 
+    @pytest.mark.parametrize(
+        ("context", "runs"),
+        [
+            (_pull_request("synchronize", labels=(LABEL,)), True),
+            (_pull_request("labeled", label=LABEL), True),
+            (_pull_request("ready_for_review", labels=(LABEL,)), True),
+            (_pull_request("synchronize"), False),
+            (_pull_request("labeled", label="bug", labels=(LABEL,)), False),
+            (_pull_request("synchronize", labels=(LABEL,), draft=True), False),
+            (_on_event("workflow_dispatch"), True),
+        ],
+    )
+    def test_the_job_starts_only_for_a_labelled_ready_run_or_a_manual_one(
+        self, workflow, context, runs
+    ):
+        condition = str(workflow["jobs"]["native-adapters"]["if"])
+        assert _truthy(_Expression(condition, context).value()) == runs
+
+    def test_the_token_reads_code_and_nothing_else(self, workflow):
+        assert workflow["permissions"] == {"contents": "read"}
+        assert "permissions" not in workflow["jobs"]["native-adapters"]
+        triggers = workflow.get("on", workflow.get(True))
+        assert "pull_request_target" not in triggers
+
+    def test_checkout_does_not_persist_the_token(self, workflow):
+        steps = workflow["jobs"]["native-adapters"]["steps"]
+        checkout = next(
+            step for step in steps if step.get("uses", "").startswith("actions/checkout@")
+        )
+        assert checkout["with"]["persist-credentials"] is False
+
 
 def _posix_bash() -> str | None:
     """A bash that runs a POSIX script; on Windows, Git for Windows' copy.
