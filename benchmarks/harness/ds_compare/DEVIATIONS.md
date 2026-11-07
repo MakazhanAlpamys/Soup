@@ -2,8 +2,9 @@
 
 `PROTOCOL.md` is frozen and has not been edited (its committed text has the sha256
 `bcb6ad4275aba456c1527ded0bb853f7ba1110a974620beaa171cc06249ab164`). Everything below is where the
-harness or the run differs from what that text says, why, and what it does to the numbers. All three
-were found on the first rented run of part 1, before any value entered a gate; none moves a threshold.
+harness or the run differs from what that text says, why, and what it does to the numbers. D-1 to D-3
+were found on the first rented run of part 1, before any value entered a gate; D-4 concerns how parts 2
+and 3 were run. None moves a threshold.
 
 ## D-1 The streaming arms pin their store explicitly (`stream_pin: true`)
 
@@ -81,3 +82,27 @@ the scheduler to the Trainer keeps the one thing the protocol insists on: the sa
 **Effect on the record.** None on throughput. The first optimizer step of a D arm now runs at lr 2e-4, as in
 every other arm (under `WarmupLR` it would have run at lr 0, which would have shifted the first losses
 slightly).
+
+## D-4 Parts 2 and 3 ran in one job on one instance
+
+**Protocol / README:** the series runs as three rentals, one instance per part. **Run:** parts 2 and 3
+ran back to back in one job, `job_part23.sh` (one set-up, one pull), on instance 59572480: part 2 from
+13:11:56Z to 13:36:56Z (20 of 20 runs ok), part 3 from 13:36:56Z to 14:14:27Z (15 of 15 runs ok). Both parts
+read part 1's run jsons from the one shipped payload and derived SB and D-best from them as before.
+
+**Why.** One set-up and one pull instead of two. The instance is the same machine as part 1's (the hardware
+record differs only in host name, time, free memory and disk fill).
+
+**The first part-2 attempt.** An earlier rental, instance 59565501 (11:52:35Z to 12:20:08Z), ran part 2 to
+the end: its job finished with exit code 0 at 12:18:21Z and all 20 runs are ok. Its results were not pulled
+then: the stopped instance needed a restart for the pull, requested at 12:32:53Z, and the files were
+pulled only at 14:21:10Z, after a second restart request at 14:19:48Z. Part 2 was therefore run again inside
+instance 59572480, which finished before the first attempt's files arrived. The rerun is the record's value for
+part 2; the first attempt is reported next to it as a replicate and enters no gate. Both give the same
+verdicts.
+
+**Effect on the record.** (1) Parts 2 and 3 share one machine and one session, so the README's limit "every
+part is a different rented machine" does not hold between them; part 1 was the same machine on another
+rental. (2) Part 2's first timed run (SB at Shape B, repeat 1) was the first run on a cold instance, as the
+README says of the first timed runs of parts 2 and 3; it was slower than its second repeat in both attempts
+(section 11 of the record). (3) Part 3 started on an instance that had just run part 2.

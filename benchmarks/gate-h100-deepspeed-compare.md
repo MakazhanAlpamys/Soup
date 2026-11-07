@@ -1,9 +1,11 @@
 <!--
-Measurement record, DRAFT: part 1 of 3 is measured, parts 2 and 3 are marked <PENDING>.
+Measurement record, DRAFT: all three parts are measured; two items are marked <PENDING>
+(a tokenizer_config.json diff and the invoice totals).
 Published as measured; nothing here is rounded in the direction of a conclusion.
 
 Hardware (part 1): 1x H100 80GB HBM3 (SXM), rented on vast.ai, instance 59547782, 2026-11-07.
   EPYC 9684X (2 sockets, 384 threads), 1,511 GB host RAM, Ubuntu 22.04.5, driver 615.71.09.
+  Parts 2 and 3: the same machine, instance 59572480, one job (job_part23.sh, DEVIATIONS.md D-4).
 Stack: Python 3.11.14, torch 2.9.1+cu128, transformers 5.22.2, peft 0.21.2, accelerate 1.15.0,
   deepspeed 0.19.9 (cpu_adam built), trl 0.29.1, datasets 5.1.0.
 Soup: soup-cli 0.77.2 at 9ca9819747a624da4cbbff03cc8e1a7d2a81100d (not editable).
@@ -11,43 +13,57 @@ Harness: benchmarks/harness/ds_compare/ at 3c32b121a5b459be156145c50f584447ddc29
 Rule: benchmarks/harness/ds_compare/PROTOCOL.md, committed before the first rental and not edited
   since; sha256 bcb6ad4275aba456c1527ded0bb853f7ba1110a974620beaa171cc06249ab164 (committed LF blob;
   its CRLF working copy hashes to a40c70de..., see section 4).
-Raw output: benchmarks/results/ds-compare/part1/ (this record's numbers) and
-  benchmarks/results/ds-compare/part1-first-rental/ (the first rental, which ended early; informational).
+Raw output: benchmarks/results/ds-compare/part1/ and part23/ (this record's numbers),
+  part1-first-rental/ (the first rental, which ended early) and part2-first-attempt/ (a replicate of part 2);
+  the last two are informational.
 -->
 
 # Gate record: layer streaming against DeepSpeed on one H100 (re-check of STEP 3)
 
-**Status: part 1 of 3 MEASURED (Shape A, the full 80 GB card, 3 repeats per arm, 2026-11-07).
-G1 = LOWER: the 2.93x of `gate-h100-validation.md` STEP 3 does not reproduce. Layer streaming
-(S1) ran at 61.99 tok/s and DeepSpeed ZeRO-3 with CPU parameter offload (D1) at 39.79 tok/s, a
-ratio of 1.56x against the pre-registered threshold of 2.64x.** No run was void.
+**Status: all three parts MEASURED (2026-11-07, one H100 SXM host; Shape A at 80, 24 and 16 GB, Shapes B
+and C at 80 GB).** **Layer streaming is slower than every DeepSpeed arm that keeps the weights on the GPU, at
+every setting that was run, and it is faster than DeepSpeed ZeRO-3 with CPU parameter offload by only 1.4x to
+1.7x, not by the 2.93x of `gate-h100-validation.md` STEP 3.** G1 = LOWER (S1 61.99 / D1 39.79 tok/s = 1.56x
+against the pre-registered threshold of 2.64x); G2 = 0.23 against the best DeepSpeed arm at 80, 24 and 16 GB;
+G4 = REVERSED at both realistic lengths (SB / D-best 0.20 at 512 tokens, 0.41 at 2,048). No run was
+void and none ran out of memory.
 
 - **Where STEP 3's 2.93x came from.** The streamed number reproduces: S1 61.99 tok/s against
   63.52 in STEP 3 (-2.4%). The DeepSpeed number does not. STEP 3's denominator, 21.65 tok/s with a
   38,135 MiB peak, came from DeepSpeed reached through Soup's own `--deepspeed` flag on a box where
-  `cpu_adam` could not be built (so optimizer offload was never measured there; D1 does not use it). Configured from the DeepSpeed documentation in a plain Hugging Face
+  `cpu_adam` could not be built (so optimizer offload was never measured there; D1 does not use it).
+  Configured from the DeepSpeed documentation in a plain Hugging Face
   Trainer + PEFT script with no Soup code, the same ZeRO-3 + CPU parameter offload setting runs at
   39.79 tok/s (1.84x STEP 3's value) with a 4,979 MiB peak, and the variant with optimizer offload and
   a built `cpu_adam` (D2) at 39.01 tok/s. This run did not separate the causes: the Soup path, the
   library versions and the host machine all changed together.
-- **Against the best DeepSpeed arm at 80 GB (G2).** SB (the best streaming configuration, 64.36
-  tok/s) over D3 (ZeRO-2 with optimizer offload, parameters resident on the GPU, 280.72 tok/s) is
-  **0.23**. At 80 GB the 8B model fits, and every arm that keeps its weights on the GPU is faster
-  than every streaming arm. Streaming is faster only than the two DeepSpeed arms that move
-  parameters off the GPU: SB / D1 = 1.62, SB / D2 = 1.65.
-- **Resident reference (G3).** Resident bf16 LoRA (R1, 406.79 tok/s) is **6.32x** SB; with gradient
+- **Against the best DeepSpeed arm (G2).** SB (the best streaming configuration) over D3 (ZeRO-2 with
+  optimizer offload, parameters resident on the GPU) is **0.23** at 80 GB (64.36 / 280.72 tok/s),
+  **0.23** under the 24 GB cap (63.88 / 281.41) and **0.23** under the 16 GB cap
+  (64.02 / 282.72). The caps changed nothing: every arm, resident R1 and ZeRO-2 D3 included, fit under both
+  (an interpretation of why is in section 11). Streaming is faster only than the two DeepSpeed arms that
+  move parameters off the GPU: SB / D1 = 1.62, 1.68 and 1.69 at 80, 24 and 16 GB (the rise is a session
+  difference in D1, section 8).
+- **Realistic lengths (G4): REVERSED at both.** At 512 tokens SB / D3 = 0.20, SB / D1 = 1.42,
+  R1 / SB = 7.14; at 2,048 tokens 0.41, 1.56 and 2.75. The 512-token SB value rests on two repeats,
+  751.66 and 1,022.78 tok/s, the first being the first run on a cold instance; with the second alone the
+  ratios are 0.23, 1.64 and 6.19, the same verdict. A first attempt at part 2 on the same
+  host gave 0.22, 1.55, 6.47 and 0.42, 1.57, 2.75.
+- **Resident reference (G3).** Resident bf16 LoRA (R1, 406.79 tok/s at Shape A) is **6.32x** SB; with gradient
   checkpointing (R2, 221.96 tok/s) it is 3.45x.
 - **Ablation (S1 spread 0.75%).** Pinning the store is the one large effect: without it (S4)
   throughput falls 65.6%. `stream_buffers: 3` adds 2.5%; `stream_recompute` auto or off adds 0.8%
   (the edge of S1's spread, see section 8); `expandable_segments` off costs 1.2% (one slow start
   in three repeats, see section 8); the loss chunk changes nothing.
-- **What streaming buys is VRAM, not speed on a card the model fits.** SB peaks at 3,487 MiB
+- **What streaming buys is VRAM, not speed on a card the model fits.** At Shape A, SB peaks at 3,487 MiB
   against 16,529 MiB for resident R1 and 17,515 MiB for ZeRO-2 D3. Against ZeRO-3 with parameter
   offload the gap is much smaller than STEP 3 reported: D1 peaks at 4,979 MiB, 1.70x S1's 2,921 MiB
-  (STEP 3: 9.7x) and 1.43x SB's. Whether the VRAM difference decides a run is what the 24 and 16 GB
-  caps measure.
-
-**Parts 2 and 3 (Shapes B and C; 24 and 16 GB caps): <PENDING: filled from instance 59572480>**
+  (STEP 3: 9.7x) and 1.43x SB's. At the longer rows the low-memory streaming configuration S1 peaks at
+  3,861 MiB (512 tokens) and 6,921 MiB (2,048 tokens), against 9,333 and 22,577 MiB for D1 and
+  19,885 and 30,061 MiB for R1, at 1.57x and 1.49x D1's throughput.
+- **What was not reached.** The pre-registered caps (24 and 16 GiB) were too loose to leave only streaming
+  and ZeRO-3 offload in the race, and an explicit 8 or 12 GB cap was not run. That is an interpretation of
+  the figures, stated as such in section 11; no run below 16 GiB exists.
 
 Unit convention: peak VRAM is in MiB, as `nvidia-smi` reports it (sampled every 0.5 s) or as
 `torch.cuda.max_memory_reserved` divided by 2^20; "GB" in the text is decimal. tok/s is trained
@@ -97,6 +113,16 @@ build log is kept; the wheel build reports 45.3 s, and the `cpu_adam_op` extensi
 g++), then constructed a `DeepSpeedCPUAdam` object and printed `deepspeed 0.19.9 cpu_adam OK`. Arm D2
 (`offload_optimizer: cpu`) ran to completion in all three repeats; that is the configuration that
 failed on STEP 3's box with `AttributeError: 'DeepSpeedCPUAdam' object has no attribute 'ds_opt_adam'`.
+
+**Parts 2 and 3** ran on instance 59572480 (rate $2.4333/h; kit launch 13:10:10Z, stopped 14:19:35Z), the
+same machine as part 1: the two hardware records differ only in host name, time, free memory and disk fill
+(`part23/setup_part2/hardware.txt`), the libraries are the same, soup-cli is the same `9ca9819`, the harness
+commit is the same `3c32b121a`, and both set-ups recorded the protocol hash `bcb6ad42...`. They ran back to
+back in one job, `job_part23.sh` (DEVIATIONS.md D-4): part 2 (Shapes B and C at 80 GB) from 13:11:56Z to
+13:36:56Z, 20 of 20 runs ok; part 3 (Shape A under the 24 and 16 GB caps) from 13:36:56Z to 14:14:27Z, 15 of
+15 runs ok. Set-up took 193 s for part 2 and 65 s for part 3. The busy SM clock was 1,980 MHz in 31 of the 35
+runs and 1,965 MHz in the four Shape C runs of D3 and R1 (0.8% below 1,980 MHz; the void
+limit is 5%); the session median was 1,980 MHz and no valid run was more than 5% below it.
 
 ## 3. The model
 
@@ -161,9 +187,9 @@ measurable effect"; a gate value within 2% of a threshold is reported as a near 
 
 ## 5. Deviations from the protocol
 
-Three differences between the frozen text and what ran are listed in `DEVIATIONS.md` in the harness
-folder. They were found on the first rental of part 1 (section 9), before any value entered a gate;
-none moves a threshold.
+Four differences between the frozen text and what ran are listed in `DEVIATIONS.md` in the harness
+folder. D-1 to D-3 were found on the first rental of part 1 (section 9), before any value entered a gate;
+D-4 concerns how parts 2 and 3 were run. None moves a threshold.
 
 **D-1. The streaming arms set `stream_pin: true` explicitly.** Protocol section 2 has S1 with
 `stream_pin` automatic. In the run every streaming arm except S4 carries `training.stream_pin: true` in
@@ -211,6 +237,12 @@ strict-zip failure of STEP 3 does not occur on this torch, and a DeepSpeed `Warm
 `warmup_num_steps: 0` is refused by the Trainer's config check, seen on an earlier rental whose log is
 not among the pulled files. *Effect:* none on throughput; the first optimizer step of a DeepSpeed arm
 runs at lr 2e-4 as in every other arm, instead of lr 0 under `WarmupLR`.
+
+**D-4. Parts 2 and 3 ran in one job on one instance** (`job_part23.sh`, the same machine as part 1), not as two
+rentals. A first attempt at part 2 on another rental (instance 59565501, 11:52Z to 12:20Z) finished all 20 runs,
+but its files were pulled only at 14:21Z, after part 2 had been run again inside instance 59572480; the rerun
+is the record's value and the first attempt is reported as a replicate in section 11 and enters no gate. See
+`DEVIATIONS.md`.
 
 ## 6. Arms
 
@@ -366,7 +398,19 @@ included is the same. The ratio against each DeepSpeed arm:
 | D3 | 280.72 | 0.45% | **0.229** | 4.36 | 3,487 / 17,515 | 2,872 / 15,808 |
 | D4 | 87.96 | 1.75% | 0.732 | 1.37 | 3,487 / 17,741 | 2,872 / 16,566 |
 
-G2 at 24 and 16 GB is in section 11.
+**G2 under the VRAM caps and at 80 GB (Shape A; no pass mark).** The caps are in GiB and limit PyTorch's
+allocator; every arm ran to completion under both (section 11 says what that implies).
+
+| budget | SB tok/s (repeats, spread) | arms that fit | best DeepSpeed arm that fits | tok/s (repeats, spread) | SB / best | peak VRAM MiB, nvidia-smi (SB / best) |
+|---|---|---|---|---|---|---|
+| 80 GB (part 1) | 64.36 (3, 0.40%) | all | D3 | 280.72 (3, 0.45%) | **0.229** | 3,487 / 17,515 |
+| 24 GB cap | 63.88 (2, 0.17%) | SB, D1, D2, D3, R1: all five | D3 | 281.41 (2, 0.45%) | **0.227** | 3,509 / 17,515 |
+| 16 GB cap | 64.02 (1) | SB, D1, D2, D3, R1: all five | D3 | 282.72 (1) | **0.226** | 3,727 / 17,515 |
+
+No prefetch variant ran (part 1), so the ratios with the variants included are the same. SB / D1 at the same
+three budgets: 1.618, 1.679, 1.695; D1 itself ran 4.3% and 5.0% slower in the part-3
+session than in part 1 with its memory use unchanged (3,628 MiB reserved, far below either cap), while SB moved
+by 0.7% and 0.5%; the rise of SB / D1 from 80 GB to the caps is that session difference, not a cap effect.
 
 **G3, the resident reference, stated plainly: resident is faster.**
 R1 / SB = 406.79 / 64.36 = **6.32** (peak VRAM 16,529 / 3,487 MiB); R2 / SB = 221.96 / 64.36 = **3.45**
@@ -374,7 +418,9 @@ R1 / SB = 406.79 / 64.36 = **6.32** (peak VRAM 16,529 / 3,487 MiB); R2 / SB = 22
 this run agrees: R1 is 6.56x S1 and 6.32x SB, at 4.74x SB's peak VRAM. The case for streaming is the
 VRAM it needs, not speed on a card the model fits.
 
-**G4, realistic lengths: <PENDING: Shapes B and C, section 11.>**
+**G4, realistic lengths, 80 GB: REVERSED at both shapes** (SB / D-best below 1.0). D-best is D3. At 512
+tokens SB / D3 = 0.196, SB / D1 = 1.420, R1 / SB = 7.140; at 2,048 tokens 0.406, 1.563 and 2.746; peak VRAM pairs and
+the detail are in section 11. The Shape A headline (G1) is quoted here only next to these values.
 
 **Ablation (protocol section 6).** Change of the median against S1 (61.99 tok/s, spread 0.75%):
 
@@ -450,52 +496,137 @@ So this record compares ratios between arms measured on one box in one session (
 a part), and quotes an absolute tok/s only with its host named (part 1: the second host, EPYC 9684X, PCIe
 gen 5 x16, instance 59547782; parts 2 and 3 name theirs). A ratio built from arms of two different hosts is
 not reported; the comparisons with STEP 3's absolute numbers (sections 5 and 8) are across hosts and are
-orientation only.
+orientation only. The same machine on different rentals also moves: D1 ran 4.3% and 5.0% slower in the
+part-3 session than in part 1 (section 8) at identical memory use, and SB at Shape B ran 751.66 tok/s on its
+first run of part 2 against 1,022.78 on its second (section 11).
 
-## 11. Parts 2 and 3: slots
+## 11. Parts 2 and 3: Shapes B and C, and the VRAM caps
 
-Part 1 holds G1, the ablation, and G2 and G3 at 80 GB. G4 and G2 under the VRAM caps come from the next
-two parts. Each part runs on its own rental, so each carries its own hardware record, and its arms are
-compared only with arms of the same part (the interleaving of arms by repeat holds inside a part).
+Part 2 (Shapes B and C) and part 3 (the VRAM caps) ran in one job on the part-1 machine (D-4). Shape B is 64 rows of 512 tokens, 2 epochs, 128 steps, 65,536 trained tokens per run; Shape C is 64 rows
+of 2,048 tokens, 1 epoch, 64 steps, 131,072 trained tokens per run. Arms SB, S1, D3 (D-best, the fastest
+DeepSpeed arm of Shape A at 80 GB, `d_best.json`), D1 and R1; 2 repeats each. The caps run Shape A under a hard
+cap from `torch.cuda.set_per_process_memory_fraction`, the cap in GiB (so 16 means 17,179,869,184 bytes);
+arms SB, D1, D2, D3 and R1; 2 repeats at 24 GB, 1 at 16 GB. All 35 runs ran at attempt 1, exited 0, were not
+void, saw no foreign process on the GPU, trained the expected token count, and (Soup arms) saved an adapter
+with the expected targets; the cap line was present in every capped run's log. No arm ran out of memory, so no
+Shape C streaming arm needed the `stream_recompute: on` rerun.
 
-**G4, realistic lengths (Shape B: 64 rows of 512 tokens, 2 epochs, 128 steps; Shape C: 64 rows of
-2,048 tokens, 1 epoch, 64 steps; 80 GB; arms SB, S1, D-best, D1, R1; 2 repeats).** D-best is the fastest
-DeepSpeed arm of Shape A at 80 GB, which part 1 found to be D3. Read per protocol: HOLDS if SB / D-best
->= 2.0, SMALLER if 1.0 <= SB / D-best < 2.0, REVERSED if below 1.0.
+**G4 (protocol section 6). Read: HOLDS if SB / D-best >= 2.0, SMALLER if 1.0 <= SB / D-best < 2.0, REVERSED if
+below 1.0. Both shapes read REVERSED.**
 
-| shape | SB tok/s | D-best (D3) tok/s | D1 tok/s | R1 tok/s | SB / D-best | SB / D1 | R1 / SB | peak VRAM MiB (SB / D-best / D1 / R1) | verdict |
+| shape | SB tok/s | D-best (D3) tok/s | D1 tok/s | R1 tok/s | SB / D-best | SB / D1 | R1 / SB | peak VRAM MiB, nvidia-smi (SB / D-best / D1 / R1) | verdict |
 |---|---|---|---|---|---|---|---|---|---|
-| B (512 tokens) | <PENDING> | <PENDING> | <PENDING> | <PENDING> | <PENDING> | <PENDING> | <PENDING> | <PENDING> | <PENDING> |
-| C (2,048 tokens) | <PENDING> | <PENDING> | <PENDING> | <PENDING> | <PENDING> | <PENDING> | <PENDING> | <PENDING> | <PENDING> |
+| B (512 tokens) | 887.22 | 4,529.65 | 624.70 | 6,334.31 | **0.20** | **1.42** | **7.14** | 6,693 / 20,807 / 9,333 / 19,885 | REVERSED |
+| C (2,048 tokens) | 3,908.29 | 9,621.51 | 2,500.76 | 10,730.24 | **0.41** | **1.56** | **2.75** | 17,083 / 30,969 / 22,577 / 30,061 | REVERSED |
 
-**G2 under the VRAM caps (Shape A; hard cap through `torch.cuda.set_per_process_memory_fraction`, the cap
-in GiB; arms SB, D1, D2, D3, R1; 2 repeats at 24 GB, 1 repeat at 16 GB; an out-of-memory run is
-"does not fit at this cap", not a failure).** For scale, the torch-reserved memory at 80 GB was 15,808 MiB
-for D3, 15,772 MiB for R1, 3,628 MiB for D1, 3,570 MiB for D2 and 2,872 MiB for SB, against caps of 24,576
-MiB (24 GiB) and 16,384 MiB (16 GiB); whether an arm fits is the part-3 measurement, not an inference from
-these figures.
+Every arm at the two shapes (two repeats each, the value is the median of the two, so the mean):
 
-| budget | SB tok/s | arms that fit | best DeepSpeed arm that fits | SB / best | peak VRAM MiB (SB / best) | spreads |
+| arm | median tok/s | repeats, tok/s (rep 1, 2) | spread | steady-state tok/s | peak VRAM, nvidia-smi (MiB) | torch reserved (MiB) | mean loss | mean GPU utilisation | runs valid |
+|---|---|---|---|---|---|---|---|---|---|
+| **Shape B, 512 tokens** | | | | | | | | | |
+| SB | **887.22** | 751.66, 1,022.78 | 30.56% | 949.26 | 6,693 | 5,838 | 5.376 | 84.5% | 2 of 2 |
+| S1 | **978.03** | 979.15, 976.91 | 0.23% | 988.56 | 3,861 | 3,006 | 5.376 | 95.8% | 2 of 2 |
+| D3 | **4,529.65** | 4,503.76, 4,555.54 | 1.14% | 4,639.73 | 20,807 | 19,100 | 5.366 | 50.8% | 2 of 2 |
+| D1 | **624.70** | 614.75, 634.65 | 3.19% | 628.86 | 9,333 | 7,982 | 5.365 | 66.5% | 2 of 2 |
+| R1 | **6,334.31** | 6,334.49, 6,334.12 | 0.01% | 6,588.03 | 19,885 | 19,128 | 5.365 | 60.8% | 2 of 2 |
+| **Shape C, 2,048 tokens** | | | | | | | | | |
+| SB | **3,908.29** | 3,916.23, 3,900.35 | 0.41% | 3,957.60 | 17,083 | 16,226 | 5.394 | 95.4% | 2 of 2 |
+| S1 | **3,732.26** | 3,740.37, 3,724.14 | 0.43% | 3,805.62 | 6,921 | 6,066 | 5.394 | 95.2% | 2 of 2 |
+| D3 | **9,621.51** | 9,606.36, 9,636.66 | 0.31% | 9,780.12 | 30,969 | 29,262 | 5.393 | 78.2% | 2 of 2 |
+| D1 | **2,500.76** | 2,477.22, 2,524.30 | 1.88% | 2,493.44 | 22,577 | 21,226 | 5.392 | 75.5% | 2 of 2 |
+| R1 | **10,730.24** | 10,728.57, 10,731.91 | 0.03% | 10,834.92 | 30,061 | 29,304 | 5.393 | 88.4% | 2 of 2 |
+
+- **Cold start in Shape B's SB.** SB's first repeat at Shape B (751.66 tok/s, 87.2 s of `train_runtime`, mean GPU utilisation
+  71%) was the first run of part 2 on a freshly set-up instance (the README notes that parts 2 and 3 have no untimed
+  warm-up); its second repeat ran 1,022.78 tok/s in 64.1 s at 98% utilisation. The protocol's value is the median of the two,
+  887.22, with a spread of 30.56%; the run was not void (clock, loss and process checks pass). Using the second repeat
+  alone would give SB / D3 = 0.23, SB / D1 = 1.64, R1 / SB = 6.19, which is the same verdict at both
+  shapes; it is shown as a sensitivity, not as a replacement. At the median SB is below S1 at Shape B (887.22 against
+  978.03); on the second repeat it is +4.6% above it.
+- **Streaming against DeepSpeed with parameter offload.** S1 / D1 = 1.57 at 512 tokens and 1.49 at 2,048; SB / D1 =
+  1.42 (second repeat alone 1.64) and 1.56. Against the resident arms the gap narrows only at 2,048 tokens: R1 / SB is
+  2.75 there, 7.14 at 512 tokens and 6.32 at 32 tokens (Shape A).
+- **SB keeps activations when memory is free; S1 recomputes.** At Shape C, SB is 4.7% faster than S1 (3,908.29 against 3,732.26) and peaks at
+  17,083 MiB against 6,921 MiB; at Shape B SB peaks at 6,693 MiB against 3,861 MiB. S1 is the
+  low-memory streaming configuration at these lengths: 6,921 MiB against 22,577 MiB for D1 and 30,061 MiB for R1 at 2,048
+  tokens, and 3,861 against 9,333 and 19,885 MiB at 512 tokens.
+- **Losses.** Mean loss over the run is 5.376 for SB and 5.365 for R1 at Shape B, and
+  5.394 and 5.393 at Shape C: every arm trains the same task.
+
+**A replicate of part 2.** A first attempt at part 2 (instance 59565501, the same machine, 11:52Z to 12:20Z; D-4)
+finished all 20 runs. Its files arrived after the rerun above had finished, so the rerun is the record's value and
+this is a replicate; it enters no gate. Its own gate lines (`part2-first-attempt/gates.txt`) read the same
+verdicts: Shape B SB / D-best 0.22, SB / D1 1.55, R1 / SB 6.47, REVERSED; Shape C 0.42, 1.57, 2.75, REVERSED.
+
+| shape | arm | rerun median tok/s (record) | first attempt median tok/s | difference | rerun repeats | first-attempt repeats |
 |---|---|---|---|---|---|---|
-| 24 GB | <PENDING> | <PENDING> | <PENDING> | <PENDING> | <PENDING> | <PENDING> |
-| 16 GB | <PENDING> | <PENDING> | <PENDING> | <PENDING> | <PENDING> | <PENDING> |
+| B | SB | 887.22 | 976.16 | +10.0% | 751.66, 1,022.78 | 935.11, 1,017.21 |
+| B | S1 | 978.03 | 979.55 | +0.2% | 979.15, 976.91 | 979.12, 979.98 |
+| B | D3 | 4,529.65 | 4,505.62 | -0.5% | 4,503.76, 4,555.54 | 4,520.29, 4,490.95 |
+| B | D1 | 624.70 | 630.86 | +1.0% | 614.75, 634.65 | 630.40, 631.32 |
+| B | R1 | 6,334.31 | 6,317.02 | -0.3% | 6,334.49, 6,334.12 | 6,343.32, 6,290.71 |
+| C | SB | 3,908.29 | 3,897.31 | -0.3% | 3,916.23, 3,900.35 | 3,892.22, 3,902.40 |
+| C | S1 | 3,732.26 | 3,738.65 | +0.2% | 3,740.37, 3,724.14 | 3,737.78, 3,739.52 |
+| C | D3 | 9,621.51 | 9,378.36 | -2.5% | 9,606.36, 9,636.66 | 9,376.22, 9,380.51 |
+| C | D1 | 2,500.76 | 2,480.11 | -0.8% | 2,477.22, 2,524.30 | 2,485.42, 2,474.79 |
+| C | R1 | 10,730.24 | 10,727.25 | -0.0% | 10,728.57, 10,731.91 | 10,731.47, 10,723.04 |
 
-<PENDING: filled from instance 59572480>
+The first attempt's SB at Shape B was also slower on its first repeat (935.11 against 1,017.21), as the
+first run of that session. Its Shape C D1 peaked at 22,353 MiB against 22,577 MiB in the rerun; no other arm's peak differs.
+
+**The caps, Shape A (part 3).** Cap sizes: 24 GB = 24,576 MiB, 16 GB = 16,384 MiB of allocator memory. Every
+run below ran to completion; the reserved column is the largest `torch.cuda.max_memory_reserved` of its
+repeats.
+
+| cap | arm | median tok/s | repeats, tok/s | spread | torch reserved (MiB, max) | nvidia-smi peak (MiB, max) | outcome |
+|---|---|---|---|---|---|---|---|
+| 24 GB | SB | **63.88** | 63.83, 63.94 | 0.17% | 2,872 | 3,531 | ran, exit 0 |
+| 24 GB | D1 | **38.06** | 38.28, 37.83 | 1.19% | 3,628 | 4,979 | ran, exit 0 |
+| 24 GB | D2 | **37.41** | 37.38, 37.45 | 0.18% | 3,570 | 4,921 | ran, exit 0 |
+| 24 GB | D3 | **281.41** | 282.04, 280.78 | 0.45% | 15,808 | 17,515 | ran, exit 0 |
+| 24 GB | R1 | **407.09** | 407.07, 407.10 | 0.01% | 15,772 | 16,529 | ran, exit 0 |
+| 16 GB | SB | **64.02** | 64.02 | n/a (1 run) | 2,872 | 3,727 | ran, exit 0 |
+| 16 GB | D1 | **37.78** | 37.78 | n/a (1 run) | 3,628 | 4,979 | ran, exit 0 |
+| 16 GB | D2 | **37.48** | 37.48 | n/a (1 run) | 3,538 | 4,889 | ran, exit 0 |
+| 16 GB | D3 | **282.72** | 282.72 | n/a (1 run) | 15,808 | 17,515 | ran, exit 0 |
+| 16 GB | R1 | **409.78** | 409.78 | n/a (1 run) | 15,772 | 16,529 | ran, exit 0 |
+
+**Interpretation (not a measurement).** The caps are in GiB, so the "16 GB" cap is 17,179,869,184 bytes of
+allocator memory. At Shape A the resident R1 reserves 16,538,140,672 bytes (15,772 MiB) and D3 reserves
+16,575,889,408 bytes (15,808 MiB), 576 and 612 MiB below the 16 GiB cap, so both fit under
+it and under the 24 GiB cap, and no arm ran out of memory. Their `nvidia-smi` peaks, which include the CUDA context
+that sits outside the cap, were 16,529 and 17,515 MiB, above the 16,384 MiB of a 16 GiB card; on a physical 16 GB card they would
+be at or past the edge. So the pre-registered caps were not tight enough to reach the regime in which only streaming
+and ZeRO-3 with parameter offload fit; the bf16 weights alone are 16.06 GB (14.96 GiB), so that regime begins below
+about 16 GB for this model. In that regime the two arms left are SB and D1 (D2 behaves like D1). Where both were
+measured and both used under 5,000 MiB (Shape A at 80, 24 and 16 GB; D1 4,979 MiB, SB 3,487 to 3,727 MiB), the ratio SB / D1
+was 1.62, 1.68 and 1.69; at 512 and 2,048 tokens (80 GB, where neither arm is under 5,000 MiB) it was 1.42 and 1.56. The part-3 D1 was
+about 4 to 5% slower than part 1's (section 8), so the spread of those ratios is a session effect. An explicit 8 or
+12 GB cap was not run, so there is no measurement below the caps that were used; the figures above are what is
+known about the arms that fit there.
 
 ## 12. Cost so far
 
-Protocol section 8: budget USD 30 and at most 8 hours of H100 time for the series, through the
-self-stopping rental kit only. Estimates from the kit's timestamps and the listed hourly rates; the invoice
-figures replace them when the series ends.
+Protocol section 8: budget USD 30 and at most 8 hours of H100 time for the series, through the self-stopping
+rental kit only. The figures are the kit's own estimate, `est.cost` = hourly rate x (time the instance was seen
+stopped, or destroyed if it never stopped, minus launch time), computed from the kit's ledger for every
+`ds-compare` instance (`vk.py status` lists only live instances, and all of these are destroyed). They exclude
+bandwidth charges and the storage charge of an instance while it sat stopped; the last column estimates the
+storage from the ledger's storage rate. The invoice replaces them.
 
-| rental | what | rate | window | estimated cost |
-|---|---|---|---|---|
-| 59539897 | first part-1 rental, ended during S4 repeat 1 (section 9) | $2.2333/h | 07:51:35Z to 08:40:39Z (kit launch and finish times), 0.82 h | about $1.83 |
-| 59547782 | part 1, the numbers of this record | $2.4333/h | 09:25Z to 11:43Z, 2.30 h (job window 09:26:28Z to 11:34:08Z) | about $5.60 |
-| total, part 1 | | | 3.12 h | about $7.4 |
+| instance | what | date (UTC) | rate | launch to stopped | hours | est.cost | storage while stopped (est.) |
+|---|---|---|---|---|---|---|---|
+| 59473650 | first test rental, destroyed before the job started | 2026-11-06 | $2.2333/h | 21:41:57Z to 21:43:37Z | 0.03 | $0.06 | $0.00 |
+| 59473879 | canary; set-up failed (exit 2) | 2026-11-06 | $2.2333/h | 21:44:30Z to 21:48:30Z | 0.07 | $0.15 | $0.00 |
+| 59519012 | canary | 2026-11-07 | $2.3000/h | 04:39:07Z to 04:56:27Z | 0.29 | $0.66 | $0.09 |
+| 59539897 | first part-1 rental, ended during S4 repeat 1 (section 9) | 2026-11-07 | $2.2333/h | 07:51:35Z to 08:41:09Z | 0.83 | $1.85 | $0.00 |
+| 59547782 | part 1 (the numbers of sections 7 and 8) | 2026-11-07 | $2.4333/h | 09:23:02Z to 11:43:25Z | 2.34 | $5.69 | $0.02 |
+| 59565501 | first attempt at part 2 (a replicate, section 11) | 2026-11-07 | $2.4333/h | 11:52:35Z to 12:20:08Z | 0.46 | $1.12 | $0.34 |
+| 59572480 | parts 2 and 3 (one job) | 2026-11-07 | $2.4333/h | 13:10:10Z to 14:19:35Z | 1.16 | $2.82 | $0.01 |
+| **total** | | | | | **5.17 h** | **$12.35** | **$0.45** |
 
-Short canary rentals before part 1 are not itemised here. <PENDING: canary rentals, parts 2 and 3, and
-the invoice totals>
+Total about $12.35 for 5.17 hours of instance time, or about $12.80 with the stopped-instance storage, against
+the budget of USD 30 and 8 hours. <PENDING: invoice totals>
 
 ## 13. Files and how to repeat
 
@@ -532,9 +663,21 @@ Raw results of part 1, in `benchmarks/results/ds-compare/part1/`:
 - `setup_part1/`: `hardware.txt`, `env.txt`, `model_hashes.txt`, `protocol.sha256`, `setup.log`,
   `setup_seconds.txt`, `deepspeed_build.log`.
 
+Raw results of parts 2 and 3, in `benchmarks/results/ds-compare/part23/`: the same layout as part 1 for
+`B/80`, `C/80`, `A/24` and `A/16` (run JSON, `gpu.csv`, `rss.csv`, `raw.trace.json`, console log, and for Soup
+arms `soup.yaml`, `adapter_config.json` and, for SB, `overrides.json`), plus `gates.json`, `gates.txt`,
+`runs.csv` (recomputed over every run present, part 1's included), `d_best.json`, `session_part2.json`,
+`session_part3.json`, `progress_part2.json`, `progress_part3.json`, `DONE_part2`, `DONE_part3`, `run_log.jsonl`,
+`orchestrate.log`, `job_part2.log`, `job_part3.log`, `job23.txt`, `payload_part2.txt`, `payload_part3.txt`,
+`VK_STATUS`, `vk_guard.log` and `setup_part2/`, `setup_part3/` (hardware, environment, model hashes, protocol
+hash, set-up log; the DeepSpeed build logs of the two set-ups are left out, the build is the same as part 1's and
+`setup.log` carries the `cpu_adam OK` line). The first part-2 attempt's evidence (a replicate, section 11) is in
+`benchmarks/results/ds-compare/part2-first-attempt/`: its 20 run JSONs, `gates.txt`, `hardware.txt`,
+`job_part2.log`, `VK_STATUS`. The job script of parts 2 and 3 is `benchmarks/harness/ds_compare/job_part23.sh`.
+
 The first rental's evidence (section 9) is in `benchmarks/results/ds-compare/part1-first-rental/`:
 `hardware.txt`, `env_s0.txt`, the S0 failure log, the S1, S2 and S3 run JSONs, S1's Soup console log, the
-two warm-up JSONs, `job_part1.log`. Left out of both folders: Soup's `experiments.db` files, each run's
+two warm-up JSONs, `job_part1.log`. Left out of every results folder: Soup's `experiments.db` files, each run's
 `rep<k>.raw.json` (the child process's own output, merged into `rep<k>.json`), and Soup's console logs
 (`rep<k>.raw.log`, mostly progress bars), except S1 and S4 repeat 1, which carry the pin lines quoted in
 D-1.
@@ -551,14 +694,18 @@ SKIP_S0=1 bash setup.sh && bash run_all.sh --all
 
 `bash run_all.sh --all --dry-run` prints every command and every `soup.yaml` without running anything;
 `bash run_all.sh --dry-run --part part1` prints one part's plan. The harness README ("Running in parts")
-describes the three-rental split used here.
+describes the split into parts; parts 2 and 3 ran in one job, `job_part23.sh` (D-4).
 
 ## 14. Known limits and open items
 
 - **Single GPU.** ZeRO-3 is designed to shard across ranks; at world size 1 it is outside its intended
   regime, which is also streaming's home ground. No multi-GPU claim is made either way.
-- **One host per part.** Ratios hold inside a part; section 9 shows how far absolute throughput moves
-  between two hosts.
+- **One host per part, and one session per part.** Ratios hold inside a part; section 9 shows how far absolute
+  throughput moves between two hosts, and section 10 how far the same machine moves between sessions.
+- **Two repeats at Shapes B and C and at the 24 GB cap, one at the 16 GB cap.** Two repeats give a median that is
+  the mean of both, and a spread that one slow run can dominate (SB at Shape B, section 11).
+- **No explicit 8 or 12 GB cap was run** (section 11): the regime where only streaming and ZeRO-3 with parameter
+  offload fit was not measured.
 - **Timing scope.** `train_runtime` is the trainer's: for the HF and DeepSpeed arms it includes engine
   start-up before the first step; for Soup arms the stream set-up is outside it. `steady_tok_per_s` removes
   both and the whole-process wall time is recorded. Soup arms log every step (`logging_steps: 1`, needed for
@@ -569,5 +716,5 @@ describes the three-rental split used here.
   header and always appends an assistant header, identically in every arm.
 - **Not isolated:** the cause of the 1.84x between STEP 3's DeepSpeed number and D1 (section 8), the cause of
   the first rental's slowdown (section 9), and the S0 failure (D-2).
-- **Open before this draft is final:** <PENDING: parts 2 and 3>; <PENDING: `tokenizer_config.json` diff
-  (section 3)>; <PENDING: invoice totals (section 12)>.
+- **Open before this draft is final:** <PENDING: `tokenizer_config.json` diff (section 3)>; <PENDING: invoice
+  totals (section 12)>.

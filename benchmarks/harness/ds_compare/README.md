@@ -1,12 +1,12 @@
-# ds_compare: layer streaming against an independently configured DeepSpeed, 1x H100
+# ds_compare: layer streaming against DeepSpeed configured from its documentation, 1x H100
 
 The harness of a pre-registered comparison (the protocol is frozen by its sha256, recorded with
 the run). It re-checks, on current `main`, the STEP 3 / STEP 4 result of
 `benchmarks/gate-h100-validation.md` (bf16 layer streaming 2.93x the throughput of DeepSpeed
 ZeRO-3 with CPU parameter offload, Llama-3.1-8B-Instruct, LoRA r=8, batch 1), adds an ablation
-of what each streaming optimization contributes, and runs DeepSpeed the way an independent
-engineer would set it up: a plain Hugging Face Trainer + PEFT script with no Soup code in the
-path, configured from the DeepSpeed documentation.
+of what each streaming optimization contributes, and runs DeepSpeed configured from the
+DeepSpeed documentation, in a plain Hugging Face Trainer + PEFT script with no Soup code in the
+path.
 
 ## Repeat the whole series with one command
 
@@ -32,9 +32,10 @@ DEADLINE_EPOCH=$(date -d '+7 hours' +%s) bash run_all.sh --all   # stop rule, se
 
 A finished run is not run again: restarting `--all` after an interruption resumes.
 
-Three things differ from the frozen protocol and are listed in [`DEVIATIONS.md`](DEVIATIONS.md): the
+Four things differ from the frozen protocol and are listed in [`DEVIATIONS.md`](DEVIATIONS.md): the
 streaming arms pin their store explicitly (D-1), arm S0 is not run (D-2; `SKIP_S0=1 bash setup.sh` skips
-building its venv), and the Hugging Face Trainer owns the scheduler in the DeepSpeed arms (D-3).
+building its venv), the Hugging Face Trainer owns the scheduler in the DeepSpeed arms (D-3), and parts 2 and 3
+ran in one job on one instance, `job_part23.sh` (D-4).
 
 ## Running in parts
 
@@ -108,7 +109,7 @@ part 1 only, so the first timed runs of part 2 and part 3 start on a cold instan
 |---|---|
 | `setup.sh` | hardware record, soup-cli from a git commit (`SOUP_COMMIT`, default the `main` commit written in the file), DeepSpeed built with `DS_BUILD_CPU_ADAM=1` (log kept) and `DeepSpeedCPUAdam` verified, second venv for S0 (skipped with `SKIP_S0=1`), the model at its pinned revision with no token, `results/model_hashes.txt`, `results/env.txt`; `SETUP_PART=<part>` writes the records under `results/setup_<part>/`, `SKIP_S0=1` skips the S0 venv |
 | `run_all.sh` | environment preparation, then `orchestrate.py` (`--part <part>` runs one part) |
-| `make_payload.sh`, `job_part1.sh`, `job_part2.sh`, `job_part3.sh`, `job_common.sh` | running in parts: the payload folder of one part, and the kit job of each part (see "Running in parts") |
+| `make_payload.sh`, `job_part1.sh`, `job_part2.sh`, `job_part3.sh`, `job_part23.sh`, `job_common.sh` | running in parts: the payload folder of one part, and the kit job of each part; `job_part23.sh` runs parts 2 and 3 in one instance (see "Running in parts" and D-4) |
 | `dry_run_parts.py` | run count, estimated GPU minutes and suggested `--max-hours` of each part |
 | `orchestrate.py` | the plan (protocol sections 2 to 5), the interleaved order, the SB derivation rule, the D-best choice, the void checks, the budget drop order, `gates.json` at the end |
 | `soup_arm.py` | streaming arms S1..S8 and SB (the code of S0 is kept; S0 is not in the plan): writes the `soup.yaml`, runs `soup train --config soup.yaml --yes`, writes the run json |

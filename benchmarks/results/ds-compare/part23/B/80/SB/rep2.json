@@ -1,0 +1,700 @@
+{
+  "argv": [
+    "/workspace/payload/benchmarks/harness/ds_compare/soup_arm.py",
+    "--arm",
+    "SB",
+    "--shape",
+    "B",
+    "--workdir",
+    "/workspace/out/results/B/80/SB/rep2.work",
+    "--out",
+    "/workspace/out/results/B/80/SB/rep2.raw.json",
+    "--model",
+    "/workspace/payload/benchmarks/harness/ds_compare/model",
+    "--soup-bin",
+    "soup",
+    "--rep",
+    "2",
+    "--overrides-json",
+    "/workspace/out/results/B/80/SB/rep2.overrides.json"
+  ],
+  "arm": "SB",
+  "attempt": 1,
+  "budget_gb": 80,
+  "cap_applied": false,
+  "cap_gb": null,
+  "child_exit_code": 0,
+  "command": [
+    "soup",
+    "train",
+    "--config",
+    "soup.yaml",
+    "--yes"
+  ],
+  "cost_usd": null,
+  "device_name": "NVIDIA H100 80GB HBM3",
+  "error": null,
+  "exit_code": 0,
+  "final_loss": 5.24749231338501,
+  "kind": "soup",
+  "loss_at": {
+    "128": 5.24749231338501,
+    "64": 5.235164165496826
+  },
+  "loss_curve": [
+    [
+      1,
+      6.513960361480713
+    ],
+    [
+      2,
+      6.280714511871338
+    ],
+    [
+      3,
+      6.23639440536499
+    ],
+    [
+      4,
+      6.160557270050049
+    ],
+    [
+      5,
+      6.089837551116943
+    ],
+    [
+      6,
+      6.094034671783447
+    ],
+    [
+      7,
+      5.928797721862793
+    ],
+    [
+      8,
+      6.07438850402832
+    ],
+    [
+      9,
+      5.9086103439331055
+    ],
+    [
+      10,
+      5.8658270835876465
+    ],
+    [
+      11,
+      5.88253116607666
+    ],
+    [
+      12,
+      5.8021559715271
+    ],
+    [
+      13,
+      5.80877161026001
+    ],
+    [
+      14,
+      5.745175838470459
+    ],
+    [
+      15,
+      5.73469877243042
+    ],
+    [
+      16,
+      5.771934986114502
+    ],
+    [
+      17,
+      5.710760116577148
+    ],
+    [
+      18,
+      5.599794864654541
+    ],
+    [
+      19,
+      5.6114020347595215
+    ],
+    [
+      20,
+      5.629846572875977
+    ],
+    [
+      21,
+      5.539131164550781
+    ],
+    [
+      22,
+      5.548155307769775
+    ],
+    [
+      23,
+      5.487530708312988
+    ],
+    [
+      24,
+      5.476925373077393
+    ],
+    [
+      25,
+      5.424922466278076
+    ],
+    [
+      26,
+      5.50362491607666
+    ],
+    [
+      27,
+      5.397336006164551
+    ],
+    [
+      28,
+      5.456567764282227
+    ],
+    [
+      29,
+      5.4083099365234375
+    ],
+    [
+      30,
+      5.415205001831055
+    ],
+    [
+      31,
+      5.4050421714782715
+    ],
+    [
+      32,
+      5.370639801025391
+    ],
+    [
+      33,
+      5.359203815460205
+    ],
+    [
+      34,
+      5.3388261795043945
+    ],
+    [
+      35,
+      5.36130952835083
+    ],
+    [
+      36,
+      5.373782634735107
+    ],
+    [
+      37,
+      5.324294567108154
+    ],
+    [
+      38,
+      5.307255268096924
+    ],
+    [
+      39,
+      5.3446574211120605
+    ],
+    [
+      40,
+      5.356276512145996
+    ],
+    [
+      41,
+      5.334976673126221
+    ],
+    [
+      42,
+      5.256999969482422
+    ],
+    [
+      43,
+      5.300262928009033
+    ],
+    [
+      44,
+      5.314577579498291
+    ],
+    [
+      45,
+      5.317078113555908
+    ],
+    [
+      46,
+      5.270495891571045
+    ],
+    [
+      47,
+      5.304431915283203
+    ],
+    [
+      48,
+      5.261040687561035
+    ],
+    [
+      49,
+      5.296557903289795
+    ],
+    [
+      50,
+      5.285771369934082
+    ],
+    [
+      51,
+      5.284477710723877
+    ],
+    [
+      52,
+      5.286463260650635
+    ],
+    [
+      53,
+      5.3206095695495605
+    ],
+    [
+      54,
+      5.2979631423950195
+    ],
+    [
+      55,
+      5.265842437744141
+    ],
+    [
+      56,
+      5.274716854095459
+    ],
+    [
+      57,
+      5.297938346862793
+    ],
+    [
+      58,
+      5.254701137542725
+    ],
+    [
+      59,
+      5.295262813568115
+    ],
+    [
+      60,
+      5.288002967834473
+    ],
+    [
+      61,
+      5.293913841247559
+    ],
+    [
+      62,
+      5.280663013458252
+    ],
+    [
+      63,
+      5.247344970703125
+    ],
+    [
+      64,
+      5.235164165496826
+    ],
+    [
+      65,
+      5.261167526245117
+    ],
+    [
+      66,
+      5.213770389556885
+    ],
+    [
+      67,
+      5.242496013641357
+    ],
+    [
+      68,
+      5.22819709777832
+    ],
+    [
+      69,
+      5.239986896514893
+    ],
+    [
+      70,
+      5.250781059265137
+    ],
+    [
+      71,
+      5.251038074493408
+    ],
+    [
+      72,
+      5.243100643157959
+    ],
+    [
+      73,
+      5.269155502319336
+    ],
+    [
+      74,
+      5.275241851806641
+    ],
+    [
+      75,
+      5.283019542694092
+    ],
+    [
+      76,
+      5.240424633026123
+    ],
+    [
+      77,
+      5.255509376525879
+    ],
+    [
+      78,
+      5.2607221603393555
+    ],
+    [
+      79,
+      5.2308149337768555
+    ],
+    [
+      80,
+      5.231104850769043
+    ],
+    [
+      81,
+      5.235362529754639
+    ],
+    [
+      82,
+      5.2234721183776855
+    ],
+    [
+      83,
+      5.192269325256348
+    ],
+    [
+      84,
+      5.249564170837402
+    ],
+    [
+      85,
+      5.226328372955322
+    ],
+    [
+      86,
+      5.22876501083374
+    ],
+    [
+      87,
+      5.2516889572143555
+    ],
+    [
+      88,
+      5.189662456512451
+    ],
+    [
+      89,
+      5.238207817077637
+    ],
+    [
+      90,
+      5.251410961151123
+    ],
+    [
+      91,
+      5.252823829650879
+    ],
+    [
+      92,
+      5.205567359924316
+    ],
+    [
+      93,
+      5.221007823944092
+    ],
+    [
+      94,
+      5.235258102416992
+    ],
+    [
+      95,
+      5.206087112426758
+    ],
+    [
+      96,
+      5.166574478149414
+    ],
+    [
+      97,
+      5.190698623657227
+    ],
+    [
+      98,
+      5.227854251861572
+    ],
+    [
+      99,
+      5.201107501983643
+    ],
+    [
+      100,
+      5.2322678565979
+    ],
+    [
+      101,
+      5.213295936584473
+    ],
+    [
+      102,
+      5.210907459259033
+    ],
+    [
+      103,
+      5.243586540222168
+    ],
+    [
+      104,
+      5.225589752197266
+    ],
+    [
+      105,
+      5.233328819274902
+    ],
+    [
+      106,
+      5.193770408630371
+    ],
+    [
+      107,
+      5.213776588439941
+    ],
+    [
+      108,
+      5.208702564239502
+    ],
+    [
+      109,
+      5.214275360107422
+    ],
+    [
+      110,
+      5.219904899597168
+    ],
+    [
+      111,
+      5.24062967300415
+    ],
+    [
+      112,
+      5.215995788574219
+    ],
+    [
+      113,
+      5.230648994445801
+    ],
+    [
+      114,
+      5.205187797546387
+    ],
+    [
+      115,
+      5.232203483581543
+    ],
+    [
+      116,
+      5.214016914367676
+    ],
+    [
+      117,
+      5.250890731811523
+    ],
+    [
+      118,
+      5.244099140167236
+    ],
+    [
+      119,
+      5.224608421325684
+    ],
+    [
+      120,
+      5.202505588531494
+    ],
+    [
+      121,
+      5.2224907875061035
+    ],
+    [
+      122,
+      5.208508491516113
+    ],
+    [
+      123,
+      5.220309734344482
+    ],
+    [
+      124,
+      5.229496955871582
+    ],
+    [
+      125,
+      5.19994592666626
+    ],
+    [
+      126,
+      5.277605056762695
+    ],
+    [
+      127,
+      5.220279693603516
+    ],
+    [
+      128,
+      5.24749231338501
+    ]
+  ],
+  "max_memory_allocated_bytes": 5945270784,
+  "max_memory_reserved_at_train_begin_bytes": 3598712832,
+  "max_memory_reserved_bytes": 6121586688,
+  "model": {
+    "id": "/workspace/payload/benchmarks/harness/ds_compare/model",
+    "revision": "d10aef7999a2b5ba950ab3974312feeedbfe0b77"
+  },
+  "peak_vram_mib": 6693.0,
+  "pytorch_cuda_alloc_conf": "expandable_segments:True",
+  "rep": 2,
+  "rerun_recompute_on": false,
+  "sampler": {
+    "foreign_gpu_processes": {
+      "apps_seen": {
+        "9638": {
+          "first_seen": 1794058280.40321,
+          "last_seen": 1794058356.2838962,
+          "max_mib": 6652.0,
+          "name": "/workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python"
+        }
+      },
+      "foreign_pids": [],
+      "pid_namespace_visible": true
+    },
+    "gpu_idle_baseline_mib": 0.0,
+    "preflight_busy": false,
+    "rss_peak_bytes": 18434322432.0,
+    "rss_samples": 88,
+    "train_window": {
+      "busy_samples": 127,
+      "end": 1794058354.894246,
+      "gpu_util_mean_pct": 97.97637795275591,
+      "samples": 127,
+      "sm_clock_busy_median_mhz": 1980.0,
+      "start": 1794058291.060785,
+      "vram_peak_mib": 6693.0
+    },
+    "whole_run": {
+      "busy_samples": 132,
+      "gpu_util_mean_pct": 72.29885057471265,
+      "samples": 174,
+      "sm_clock_busy_median_mhz": 1980.0,
+      "vram_peak_mib": 6693.0
+    }
+  },
+  "schema": "ds_compare.run.v1",
+  "shape": "B",
+  "soup": {
+    "adapter_target_modules": [
+      "q_proj",
+      "v_proj"
+    ],
+    "applied_changes": [
+      "overrides"
+    ],
+    "dropped_keys": [],
+    "expected_target_modules": [
+      "q_proj",
+      "v_proj"
+    ],
+    "extra_env": {},
+    "stream_log": {
+      "arch": "llama",
+      "oom_in_log": false,
+      "recompute_auto_kept_layers": 32,
+      "recompute_auto_total_layers": 32,
+      "store_gb": 16.06,
+      "store_layers": 32,
+      "store_pinned": true,
+      "tier": "ram",
+      "vram_cap_applied_in_log": false
+    },
+    "target_modules_match": true,
+    "tracker_db": {
+      "duration_secs": 64.29371738433838,
+      "final_loss": 5.24749231338501,
+      "initial_loss": 6.513960361480713,
+      "metric_rows": 129,
+      "run_id": "run_20261107_133115_268cc6b2",
+      "status": "completed",
+      "total_steps": 128
+    },
+    "unavailable_keys_at_2c9a078": null,
+    "yaml": "base: /workspace/payload/benchmarks/harness/ds_compare/model\ntask: sft\ndata:\n  train: rows.jsonl\n  format: alpaca\n  val_split: 0\n  max_length: 512\ntraining:\n  epochs: 2\n  lr: 0.0002\n  batch_size: 1\n  gradient_accumulation_steps: 1\n  quantization: none\n  lora:\n    r: 8\n    alpha: 16\n    dropout: 0.05\n  optimizer: adamw_torch\n  scheduler: constant\n  warmup_ratio: 0.0\n  weight_decay: 0.0\n  max_grad_norm: 1.0\n  logging_steps: 1\n  save_steps: 1000000\n  seed: 42\n  stream_layers: true\n  stream_pin: true\n  stream_buffers: 3\n  stream_recompute: auto\noutput: ./output\n",
+    "yaml_sha256": "9a9f16da1dc5801fdfd679bdf2b05f472abf5e2e36b9068e229f9ff1f30b30ef"
+  },
+  "started_at": 1794058272.780498,
+  "status": "ok",
+  "steady_tok_per_s": 1028.6824072242346,
+  "steps": 128,
+  "tok_per_s": 1022.7758651364148,
+  "tokens_check": {
+    "equal": true,
+    "expected": 65536,
+    "source": "trainer num_tokens",
+    "trainer_or_counted": 65536
+  },
+  "tokens_source": "trainer num_tokens",
+  "tokens_trained": 65536,
+  "trace_args": {
+    "bf16": true,
+    "deepspeed": false,
+    "gradient_accumulation_steps": 1,
+    "gradient_checkpointing": false,
+    "learning_rate": 0.0002,
+    "lr_scheduler_type": "constant",
+    "max_grad_norm": 1.0,
+    "num_train_epochs": 2,
+    "optim": "adamw_torch",
+    "per_device_train_batch_size": 1,
+    "seed": 42,
+    "weight_decay": 0.0,
+    "world_size": 1
+  },
+  "trace_begin_wall": 1794058291.060785,
+  "trace_complete": true,
+  "trace_last_step_seconds": 63.83346102293581,
+  "train_loss_mean": 5.3764141499996185,
+  "train_runtime_s": 64.0766,
+  "train_runtime_source": "trainer train_runtime",
+  "train_samples_per_second": 1.998,
+  "versions": {
+    "accelerate": "1.15.0",
+    "cuda_available": true,
+    "cuda_runtime": "12.8",
+    "datasets": "5.1.0",
+    "deepspeed": "0.19.9",
+    "peft": "0.21.2",
+    "python": "3.11.14",
+    "soup-cli": "0.77.2",
+    "soup_cli_commit": "9ca9819747a624da4cbbff03cc8e1a7d2a81100d",
+    "soup_cli_editable": false,
+    "torch": "2.9.1+cu128",
+    "transformers": "5.22.2",
+    "trl": "0.29.1"
+  },
+  "void": false,
+  "void_attempts": 0,
+  "void_reasons": [],
+  "wall_seconds": 88.50386023521423,
+  "wall_seconds_child": 87.89702486991882,
+  "warmup": false
+}

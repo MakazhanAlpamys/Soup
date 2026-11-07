@@ -1,0 +1,9 @@
+state=DONE
+detail=DONE rc=0
+finished_epoch=1794053901
+launch_epoch=1794052355
+deadline_epoch=1794060455
+job_start_epoch=1794052438
+job_exit_code=0
+task=ds-compare
+instance=59565501
