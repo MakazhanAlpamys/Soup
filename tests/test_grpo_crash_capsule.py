@@ -186,12 +186,12 @@ def test_anomaly_capsule_is_weights_only_loadable_and_precedes_a_watchdog(tmp_pa
     assert payload_path.is_file()
     payload = torch.load(payload_path, weights_only=True)
     assert torch.equal(payload["microbatches"][0]["input_ids"], inputs["input_ids"])
-    assert "lora_A.weight" in payload["nonfinite_gradient_names"]
+    assert "lora_A.weight" in payload["post_clip_nonfinite_gradient_names"]
     assert payload["lora_observations"]["lora_A"][0]["input"]["finite"] is True
     assert payload["first_nonfinite_activation"]["stage"] == "grad_output"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     assert summary["reason"] == "nonfinite_before_watchdog"
-    assert summary["nonfinite_gradient_names"] == ["lora_A.weight"]
+    assert summary["post_clip_nonfinite_gradient_names"] == ["lora_A.weight"]
 
 
 def test_a_finite_step_leaves_no_training_rows_on_disk(tmp_path):
@@ -236,7 +236,14 @@ def test_a_finite_step_leaves_no_training_rows_on_disk(tmp_path):
     assert trainer.callback_handler.callbacks == []
 
 
-def test_evaluation_forward_does_not_open_a_training_capture_window(tmp_path):
+@pytest.mark.parametrize(
+    ("evaluation", "without_grad"),
+    [(True, False), (False, True)],
+    ids=["evaluation_with_grad", "training_without_grad"],
+)
+def test_nontraining_forward_does_not_open_a_training_capture_window(
+    tmp_path, evaluation, without_grad
+):
     torch = pytest.importorskip("torch")
     harness = _module()
 
@@ -260,13 +267,17 @@ def test_evaluation_forward_does_not_open_a_training_capture_window(tmp_path):
     trainer = Trainer()
     capsule = harness.Issue342CrashCapsule(
         trainer,
-        output_dir=tmp_path / "evaluation",
+        output_dir=tmp_path / "nontraining",
         max_total_bytes=1 << 20,
         acknowledge_training_rows=True,
         instrument_lora_operands=False,
     ).install()
-    trainer.model.eval()
-    with torch.no_grad():
+    if evaluation:
+        trainer.model.eval()
+    if without_grad:
+        with torch.no_grad():
+            trainer._compute_loss(trainer.model, {"input_ids": torch.ones(1)})
+    else:
         trainer._compute_loss(trainer.model, {"input_ids": torch.ones(1)})
 
     assert capsule._current is None
@@ -321,7 +332,10 @@ def test_capsule_distinguishes_pre_clip_attribution_from_post_clip_gradient_stat
     )
     assert payload["first_nonfinite_parameter"]["name"] == "lora_A.weight"
     assert payload["nonfinite_parameter_names_before_clip"] == ["lora_A.weight"]
-    assert sorted(payload["nonfinite_gradient_names"]) == ["lora_A.weight", "lora_B.weight"]
+    assert sorted(payload["post_clip_nonfinite_gradient_names"]) == [
+        "lora_A.weight",
+        "lora_B.weight",
+    ]
     assert payload["post_clip_pre_watchdog_gradient_stats"]["lora_B.weight"]["finite"] is False
 
 

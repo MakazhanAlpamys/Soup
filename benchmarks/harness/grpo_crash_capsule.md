@@ -68,11 +68,9 @@ config, model checkpoint, data snapshot, and output-cap policy:
 - `flash`
 
 An unavailable or failing backend is a result to record, not a reason to
-silently fall back to another backend. PyTorch 2.13 documents both
-`torch.nn.attention.sdpa_kernel` and the legacy
-`torch.backends.cuda.sdp_kernel` context manager. The harness prefers the
-former whenever it exists and falls back to the latter only when the current
-API is unavailable.
+silently fall back to another backend. The harness prefers
+`torch.nn.attention.sdpa_kernel` whenever it exists and falls back to the
+legacy `torch.backends.cuda.sdp_kernel` context manager only when necessary.
 
 ## Evidence written on an anomaly
 
@@ -86,9 +84,11 @@ The capsule records, per rank:
 - CPU copies of the token tensors passed to the loss for every accumulated
   microbatch in that step;
 - pre-step trainable state, first non-finite LoRA input/output or
-  parameter-gradient name, every parameter name observed non-finite by the
-  backward hooks before clipping, and gradient statistics sampled after
-  `max_grad_norm` clipping but before the watchdog can clear them;
+  parameter-gradient name, and every parameter name observed non-finite by the
+  backward hooks before clipping (`first_nonfinite_parameter` and
+  `nonfinite_parameter_names_before_clip`); `post_clip_nonfinite_gradient_names`
+  and `post_clip_pre_watchdog_gradient_stats` are sampled after `max_grad_norm`
+  clipping but before the watchdog can clear them;
 - input/gradient-output bounds for LoRA-named modules and the resulting
   conditional FP32 contraction bound.
 

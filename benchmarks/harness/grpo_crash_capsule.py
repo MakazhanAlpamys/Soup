@@ -683,14 +683,16 @@ class Issue342CrashCapsule:
                 bad.append(name)
         return records, bad
 
-    def _summary(self, reason: str, bad: list[str], error: str | None = None) -> dict[str, Any]:
+    def _summary(
+        self, reason: str, post_clip_bad: list[str], error: str | None = None
+    ) -> dict[str, Any]:
         assert self._current is not None
         return {
             "schema_version": _SCHEMA_VERSION,
             "reason": reason,
             "serial": self._current["serial"],
             "global_step": self._current["global_step"],
-            "nonfinite_gradient_names": bad,
+            "post_clip_nonfinite_gradient_names": post_clip_bad,
             "first_nonfinite_parameter": self._current["first_nonfinite_parameter"],
             "nonfinite_parameter_names_before_clip": self._current[
                 "nonfinite_parameter_names_before_clip"
@@ -712,7 +714,7 @@ class Issue342CrashCapsule:
         payload["reason"] = reason
         gradient_stats, nonfinite_names = self._gradient_stats()
         payload["post_clip_pre_watchdog_gradient_stats"] = gradient_stats
-        payload["nonfinite_gradient_names"] = nonfinite_names
+        payload["post_clip_nonfinite_gradient_names"] = nonfinite_names
         name = f"capsule_{self._current['serial']:06d}.pt"
         summary_name = f"capsule_{self._current['serial']:06d}.json"
         try:
