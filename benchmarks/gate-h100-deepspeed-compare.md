@@ -11,7 +11,7 @@ Harness: benchmarks/harness/ds_compare/ at 3c32b121a5b459be156145c50f584447ddc29
 Rule: benchmarks/harness/ds_compare/PROTOCOL.md, committed before the first rental and not edited
   since; sha256 bcb6ad4275aba456c1527ded0bb853f7ba1110a974620beaa171cc06249ab164 (LF line ends).
 Raw output: benchmarks/results/ds-compare/part1/ (this record's numbers) and
-  benchmarks/results/ds-compare/part1-first-rental/ (the stopped first rental, informational).
+  benchmarks/results/ds-compare/part1-first-rental/ (the first rental, which ended early; informational).
 -->
 
 # Gate record: layer streaming against DeepSpeed on one H100 (re-check of STEP 3)
@@ -24,7 +24,7 @@ ratio of 1.56x against the pre-registered threshold of 2.64x.** No run was void.
 - **Where STEP 3's 2.93x came from.** The streamed number reproduces: S1 61.99 tok/s against
   63.52 in STEP 3 (-2.4%). The DeepSpeed number does not. STEP 3's denominator, 21.65 tok/s with a
   38,135 MiB peak, came from DeepSpeed reached through Soup's own `--deepspeed` flag on a box where
-  `cpu_adam` could not be built. Configured from the DeepSpeed documentation in a plain Hugging Face
+  `cpu_adam` could not be built (so optimizer offload was never measured there; D1 does not use it). Configured from the DeepSpeed documentation in a plain Hugging Face
   Trainer + PEFT script with no Soup code, the same ZeRO-3 + CPU parameter offload setting runs at
   39.79 tok/s (1.84x STEP 3's value) with a 4,979 MiB peak, and the variant with optimizer offload and
   a built `cpu_adam` (D2) at 39.01 tok/s. This run did not separate the causes: the Soup path, the
@@ -170,8 +170,8 @@ Soup commit that ran, the automatic decision attempts to pin (`pinned_limit_byte
 `src/soup_cli/trainer/stream_setup.py:1370`, so `decide_pinning` returns `pinned=True`) and falls back,
 loudly, only if the allocation fails; no code under `src/` reads `RLIMIT_MEMLOCK` (the name occurs in
 one comment). The container's limit was 8 MB on both rentals and did not prevent a 16.11 GB page-locked
-store. S1 is therefore "current main with the pin requested explicitly", which on this box is the same
-run as the automatic choice.
+store. S1 is therefore "current main with the pin requested explicitly", which, on the evidence of the
+first rental, is the same run as the automatic choice.
 <PENDING: `DEVIATIONS.md` D-1, as committed in `3c32b121a`, gives a different reason (that the automatic
 decision refused to pin under the 8 MB limit, so the first rental ran its streaming arms, at 27.29,
 27.39 and 27.32 tok/s, from unpinned pageable memory). The first rental's own log, quoted above, says the
@@ -190,7 +190,8 @@ The S0 venv held soup-cli `2c9a078883af6e826df433804da3368c70561d5c`, transforme
 peft 0.20.0, accelerate 1.14.0, torch 2.9.1+cu128 (`part1-first-rental/env_s0.txt`). Its banner shows a
 13.96 GB layer store against S1's 16.06 GB; the 2.10 GB difference equals the size of the embedding plus
 the head (2 x 128,256 x 4,096 bf16 values), which fits the "untied embedding and head streaming" change
-the protocol lists among the code-level changes since STEP 3. The failure was not diagnosed. The part-1 job ran with `SKIP_S0=1`.
+the protocol lists among the code-level changes since STEP 3. The failure was not diagnosed.
+The part-1 job ran with `SKIP_S0=1`.
 *Effect:* G1's secondary value S0 / D1 is not reported, and the sum of the code-level changes since
 STEP 3 that have no switch (pinned arena packing, untied embedding and head streaming, head and
 embedding prefetch, per-call overhead removals, the allocator hint) is not measured on this box. G1
@@ -385,7 +386,7 @@ VRAM it needs, not speed on a card the model fits.
 | SB | S2 + S6 | 64.36 | +3.82% | 0.40% | +3.72% | 3,487 (+566) | derived arm |
 
 - **Pinning is the one large effect.** Without it throughput falls to 21.30 tok/s, 2.91x slower, and the
-  mean GPU utilisation to 39.7%. The pageable run costs no VRAM saving worth the name (-30 MiB).
+  mean GPU utilisation to 39.7%. Peak VRAM is unchanged within 30 MiB.
 - **`stream_buffers: 3`** is the one clear small gain (+2.51%, outside both arms' spreads) for 420 MiB.
 - **`stream_recompute` auto and off** read "faster" by the protocol's rule, at the edge: +0.85% and +0.83%
   against an S1 spread of 0.75%, and S2's own spread (2.27%) is larger than its gain. At 80 GB the auto
@@ -406,7 +407,7 @@ The first rental of part 1 (instance 59539897, $2.2333/h) ended during S4 repeat
 Soup arms had finished one repeat each. It is a different physical machine from the one above, and
 nothing from it enters a gate, a ratio or the SB derivation.
 
-| | first rental (stopped) | this run (instance 59547782) |
+| | first rental (ended early) | this run (instance 59547782) |
 |---|---|---|
 | CPU | EPYC 7402P, 1 socket x 24 cores, 48 threads | EPYC 9684X, 2 sockets x 96 cores, 384 threads |
 | host RAM | 157 GB | 1,511 GB |
