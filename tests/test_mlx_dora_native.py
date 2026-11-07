@@ -22,15 +22,16 @@ from transformers import PreTrainedTokenizerFast  # noqa: E402
 
 from soup_cli.config.schema import SoupConfig  # noqa: E402
 from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper  # noqa: E402
+from tests.conftest import strip_ansi  # noqa: E402
 
 
-def _checkpoint(path, quantized=False, *, layers=1):
+def _checkpoint(path, quantized=False, *, layers=1, tied=False):
     path.mkdir()
     mx.random.seed(7)
     config = dict(
         model_type="llama", hidden_size=64, num_hidden_layers=layers, intermediate_size=128,
         num_attention_heads=4, num_key_value_heads=4, rms_norm_eps=1e-5,
-        vocab_size=32, tie_word_embeddings=False,
+        vocab_size=32, tie_word_embeddings=tied,
     )
     model = Model(ModelArgs(**config))
     if quantized:
@@ -531,3 +532,330 @@ def test_native_watchdog_runs_final_eval_at_stopped_update(tmp_path):
     assert result["eval_updates"] == [2]
     assert wrapper._eval_log[0]["optimizer_step"] == 2
     assert math.isfinite(result["val_loss"])
+
+
+@pytest.mark.parametrize('quantized,tied,dtype,tolerance', [
+    (False, False, 'float32', 1e-4), (False, False, 'float16', 3e-3),
+    (True, False, 'float32', 1e-4), (True, True, 'bfloat16', 3e-2),
+])
+def test_native_merge_standalone_dense_checkpoint(
+    tmp_path, monkeypatch, quantized, tied, dtype, tolerance,
+):
+    """Public fusion matches an independent delta oracle and reloads without its inputs."""
+    import hashlib
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+    from soup_cli.utils.mlx_generation import load_native_model
+
+    monkeypatch.chdir(tmp_path)
+    base = _checkpoint(tmp_path / 'base', quantized, tied=tied)
+    adapter = tmp_path / 'adapter'
+    target = 'self_attn.q_proj' if tied else 'lm_head'
+    cfg = _config(base, adapter, dora=False, quantized=quantized, targets=[target])
+    cfg.training.lr = 0.01
+    cfg.training.epochs = 4
+    wrapper = MLXSFTTrainerWrapper(cfg)
+    wrapper.setup(_rows())
+    wrapper.train()
+    active, _ = load_native_model(str(adapter))
+    layer = active.layers[0].self_attn.q_proj if tied else active.lm_head
+    if quantized:
+        assert layer.linear.bits == 4 and layer.linear.weight.dtype == mx.uint32
+        weight = mx.dequantize(layer.linear.weight, layer.linear.scales, layer.linear.biases,
+                               group_size=layer.linear.group_size, bits=4)
+    else:
+        weight = layer.linear.weight
+    delta = layer.scale * (layer.lora_a @ layer.lora_b).T
+    assert float(mx.max(mx.abs(delta)).item()) > 0
+    if not tied:
+        assert weight.shape == (32, 64)  # Non-square stored LoRA layout oracle.
+    expected_weight = (weight + delta.astype(weight.dtype)).astype(getattr(mx, dtype))
+    tokens = mx.array([[5, 6, 7, 5]])
+    expected_logits = active(tokens)
+    mx.eval(expected_weight, expected_logits)
+
+    def hashes():
+        return {str(p): hashlib.sha256(p.read_bytes()).hexdigest()
+                for root in (base, adapter) for p in root.rglob('*') if p.is_file()}
+
+    before = hashes()
+    args = ['merge', '--backend', 'mlx', '--adapter', str(adapter), '--dtype', dtype]
+    runner = CliRunner()
+    if quantized:
+        refused = runner.invoke(app, args + ['--output', 'needs-opt-in'])
+        assert refused.exit_code == 1
+        assert '--dequantize' in ' '.join(strip_ansi(refused.output).split())
+        assert not Path('needs-opt-in').exists()
+        args += ['--dequantize']
+    if not quantized and dtype == 'float32':
+        import mlx_lm.utils as utils
+        from mlx_lm.models.switch_layers import QuantizedSwitchLinear
+
+        from soup_cli.utils import mlx_generation
+
+        refused = runner.invoke(app, args + ['--low-memory', '--output', 'needs-streaming'])
+        assert refused.exit_code == 1
+        assert '--low-memory' in ' '.join(strip_ansi(refused.output).split())
+        assert not Path('needs-streaming').exists()
+
+        # The loaded model can contain untargeted quantized components too.
+        for quantized_layer in (
+            nn.QuantizedEmbedding(32, 64, group_size=32, bits=8),
+            QuantizedSwitchLinear(64, 64, 2, group_size=32, bits=8),
+        ):
+            def load_with_eight_bit_component(*a, **k):
+                loaded, tokenizer, config = load_native_model(*a, **k)
+                loaded.extra_quantized = quantized_layer
+                return loaded, tokenizer, config
+
+            with monkeypatch.context() as patch:
+                patch.setattr(mlx_generation, 'load_native_model', load_with_eight_bit_component)
+                refused = runner.invoke(app, args + [
+                    '--dequantize', '--output', 'unsupported-eight-bit',
+                ])
+            assert refused.exit_code == 1
+            assert '4-bit bases only' in ' '.join(strip_ansi(refused.output).split())
+            assert not Path('unsupported-eight-bit').exists()
+
+        for error in (OSError, KeyboardInterrupt):
+            def failed_save(dst, *a, **k):
+                dst.mkdir(parents=True)
+                (dst / 'partial').write_text('not a checkpoint')
+                raise error('injected save failure')
+
+            with monkeypatch.context() as patch:
+                patch.setattr(utils, 'save', failed_save)
+                failed = runner.invoke(app, args + ['--output', 'failed-output'])
+            assert failed.exit_code == (130 if error is KeyboardInterrupt else 1)
+            assert not Path('failed-output').exists()
+            assert not list(tmp_path.glob('.soup_mlx_merge_*'))
+        assert hashes() == before
+    result = runner.invoke(app, args + ['--output', 'fused'])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert hashes() == before
+    assert not list(tmp_path.glob('.soup_mlx_merge_*'))
+    config = json.loads(Path('fused/config.json').read_text())
+    assert 'quantization' not in config and 'quantization_config' not in config
+    assert config['tie_word_embeddings'] is tied and config['dtype'] == dtype
+    assert not Path('fused/adapter_config.json').exists()
+    weights = mx.load('fused/model.safetensors')
+    assert not any('lora_' in name or name.endswith(('.scales', '.biases')) for name in weights)
+    assert all(value.dtype == getattr(mx, dtype) for value in weights.values())
+    key = 'model.layers.0.self_attn.q_proj.weight' if tied else 'lm_head.weight'
+    assert mx.allclose(weights[key], expected_weight, atol=tolerance, rtol=tolerance).item()
+    mx.save_safetensors('expected.safetensors', {'logits': expected_logits})
+    base.rename(tmp_path / 'unavailable-base')
+    adapter.rename(tmp_path / 'unavailable-adapter')
+    script = r'''
+import json
+from pathlib import Path
+import mlx.core as mx
+from typer.testing import CliRunner
+from soup_cli.cli import app
+from soup_cli.utils.mlx_generation import load_native_model
+assert not Path('base').exists() and not Path('adapter').exists()
+model, tokenizer = load_native_model('fused')
+assert tokenizer.encode('alpha')
+actual = model(mx.array([[5, 6, 7, 5]]))
+expected = mx.load('expected.safetensors')['logits']
+tolerance = float(__import__('sys').argv[1])
+assert mx.allclose(actual, expected, atol=tolerance, rtol=tolerance).item(), (actual, expected)
+Path('prompts.jsonl').write_text('{"prompt":"alpha"}\n')
+result = CliRunner().invoke(app, ['infer', '--backend', 'mlx', '--model', 'fused',
+                                 '--input', 'prompts.jsonl', '--output', 'results.jsonl',
+                                 '--temperature', '0', '--max-tokens', '4'])
+assert result.exit_code == 0, (result.output, repr(result.exception))
+row = json.loads(Path('results.jsonl').read_text())
+assert row['prompt'] == 'alpha' and isinstance(row['response'], str)
+assert 0 <= row['tokens_generated'] <= 4
+Path('fusion-evidence.json').write_text(json.dumps({'response': row, 'tolerance': tolerance}))
+'''
+    env = dict(os.environ, HF_HUB_OFFLINE='1')
+    env['PYTHONPATH'] = str(Path(__file__).parents[1] / 'src')
+    reloaded = subprocess.run([sys.executable, '-c', script, str(tolerance)], cwd=tmp_path,
+                              env=env, capture_output=True, text=True, timeout=120)
+    assert reloaded.returncode == 0, reloaded.stdout + reloaded.stderr
+
+
+@pytest.fixture
+def fusion_inputs(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    base = _checkpoint(tmp_path / 'base')
+    adapter = tmp_path / 'adapter'
+    wrapper = MLXSFTTrainerWrapper(_config(base, adapter, dora=False, targets=['lm_head']))
+    wrapper.setup(_rows())
+    wrapper.train()
+    return base, adapter
+
+
+@pytest.fixture
+def partial_hub_cache(fusion_inputs, tmp_path, monkeypatch):
+    """A real offline snapshot whose cached tree lists unrequested repository files."""
+    import hashlib
+    import shutil
+    import socket
+
+    from huggingface_hub import constants
+
+    base, adapter = fusion_inputs
+    cache = tmp_path / 'hub-cache'
+    repository = cache / 'models--owner--base'
+    commit = 'a' * 40
+    snapshot = repository / 'snapshots' / commit
+    snapshot.mkdir(parents=True)
+    (repository / 'refs').mkdir()
+    (repository / 'refs/main').write_text(commit)
+    (base / 'custom_model.py').write_text('# Copied support module.\n')
+    (base / 'generation_config.json').write_text('{"max_new_tokens":4}')
+    entries = {}
+    for source in base.iterdir():
+        shutil.copyfile(source, snapshot / source.name)
+        entries[source.name] = {
+            'size': source.stat().st_size,
+            'blob_id': hashlib.sha1(source.read_bytes()).hexdigest(),
+        }
+    for missing in ('README.md', '.gitattributes'):
+        entries[missing] = {'size': 1, 'blob_id': 'b' * 40}
+    (repository / 'trees').mkdir()
+    (repository / 'trees' / f'{commit}.json').write_text(json.dumps({
+        'format_version': 1, 'files': entries,
+    }))
+    monkeypatch.setattr(constants, 'HF_HUB_CACHE', str(cache))
+    monkeypatch.setattr(constants, 'HF_HUB_OFFLINE', True)
+
+    def no_network(*args, **kwargs):
+        raise AssertionError('Cached fusion must not open a network connection')
+
+    monkeypatch.setattr(socket.socket, 'connect', no_network)
+    return base, adapter, snapshot, repository
+
+
+def test_native_merge_hub_base_uses_cached_snapshot(partial_hub_cache, tmp_path, monkeypatch):
+    import hashlib
+
+    import mlx_lm.utils as utils
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+    from soup_cli.utils.mlx_generation import load_native_model
+
+    base, adapter, snapshot, repository = partial_hub_cache
+    expected, _ = load_native_model(str(adapter))
+    tokens = mx.array([[5, 6, 7]])
+    logits = expected(tokens)
+    mx.eval(logits)
+    metadata = adapter / 'adapter_config.json'
+    config = json.loads(metadata.read_text())
+    config['model'] = 'owner/base'
+    metadata.write_text(json.dumps(config))
+    original_card = utils.create_model_card
+    cards = []
+
+    def offline_card(destination, hf_repo=None):
+        cards.append(hf_repo)
+        if hf_repo is not None:
+            raise RuntimeError('Unexpected Hub README fetch')
+        return original_card(destination, hf_repo)
+
+    monkeypatch.setattr(utils, 'create_model_card', offline_card)
+    # The real Hub loader can read the patterned snapshot before fusion.
+    cached, _ = load_native_model(str(adapter))
+    assert mx.allclose(cached(tokens), logits, atol=1e-5, rtol=1e-5).item()
+    before = {
+        path: hashlib.sha256(path.read_bytes()).hexdigest()
+        for directory in (repository, adapter) for path in directory.rglob('*') if path.is_file()
+    }
+    args = ['merge', '--backend', 'mlx', '--adapter', str(adapter), '--dtype', 'float32']
+    result = CliRunner().invoke(app, args + ['--output', 'fused-hub'])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert cards == [None]
+    overlap = CliRunner().invoke(app, args + ['--output', str(snapshot / 'fused')])
+    assert overlap.exit_code == 1
+    assert 'overlap' in ' '.join(strip_ansi(overlap.output).split())
+    assert not (snapshot / 'fused').exists()
+    assert all(hashlib.sha256(path.read_bytes()).hexdigest() == digest
+               for path, digest in before.items())
+    destination = tmp_path / 'fused-hub'
+    for name in ('custom_model.py', 'generation_config.json'):
+        assert (destination / name).read_bytes() == (base / name).read_bytes()
+    assert (destination / 'README.md').is_file()
+    # The published checkpoint also loads without a Hub lookup or either input.
+    base.rename(tmp_path / 'hidden-base')
+    adapter.rename(tmp_path / 'hidden-adapter')
+    repository.rename(tmp_path / 'hidden-cache')
+    actual, _ = load_native_model(str(destination))
+    assert mx.allclose(actual(tokens), logits, atol=1e-5, rtol=1e-5).item()
+    assert not list(tmp_path.glob('.soup_mlx_merge_*'))
+
+
+def test_native_merge_partial_cache_keeps_required_file_checks(partial_hub_cache):
+    # Older Hub releases have no tree-completeness check; the end-to-end case above
+    # still exercises real snapshot resolution there, without this newer error oracle.
+    hub = pytest.importorskip('huggingface_hub', minversion='1.30')
+    from huggingface_hub.errors import IncompleteSnapshotError
+
+    from soup_cli.utils.mlx_merge import _local_base_path
+
+    _, _, snapshot, _ = partial_hub_cache
+    with pytest.raises(IncompleteSnapshotError, match='README.md'):
+        hub.snapshot_download('owner/base', local_files_only=True)
+    assert _local_base_path('owner/base') == snapshot
+    required = snapshot / 'config.json'
+    contents = required.read_bytes()
+    required.unlink()
+    try:
+        with pytest.raises(IncompleteSnapshotError, match='config.json'):
+            _local_base_path('owner/base')
+    finally:
+        required.write_bytes(contents)
+    assert _local_base_path('owner/base') == snapshot
+
+
+def test_native_merge_requires_linear_lora(fusion_inputs, tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+    from soup_cli.utils import mlx_generation
+
+    base, adapter = fusion_inputs
+    args = ['merge', '--backend', 'mlx', '--adapter', str(adapter), '--dtype', 'float32']
+    with monkeypatch.context() as patch:
+        patch.setattr(mlx_generation, 'load_native_model', lambda *a, **k: load(
+            str(base), return_config=True,
+        ))
+        result = CliRunner().invoke(app, args + ['--output', 'without-lora'])
+    assert result.exit_code == 1
+    assert 'no supported linear LoRA' in ' '.join(strip_ansi(result.output).split())
+    assert not (tmp_path / 'without-lora').exists()
+    control = CliRunner().invoke(app, args + ['--output', 'with-lora'])
+    assert control.exit_code == 0, control.output
+
+
+def test_native_merge_rejects_dtype_overflow(fusion_inputs, tmp_path):
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+
+    base, adapter = fusion_inputs
+    weights = mx.load(str(base / 'model.safetensors'))
+    weights['lm_head.weight'] = mx.full(weights['lm_head.weight'].shape, 1e6, dtype=mx.float32)
+    mx.save_safetensors(str(base / 'model.safetensors'), weights)
+    before = (base / 'model.safetensors').read_bytes()
+    args = ['merge', '--backend', 'mlx', '--adapter', str(adapter)]
+    result = CliRunner().invoke(app, args + ['--dtype', 'float16', '--output', 'overflow'])
+    assert result.exit_code == 1
+    assert 'nonfinite weights at the requested dtype' in ' '.join(strip_ansi(result.output).split())
+    assert not (tmp_path / 'overflow').exists()
+    assert not list(tmp_path.glob('.soup_mlx_merge_*'))
+    control = CliRunner().invoke(app, args + ['--dtype', 'float32', '--output', 'finite'])
+    assert control.exit_code == 0, control.output
+    saved = mx.load(str(tmp_path / 'finite/model.safetensors'))['lm_head.weight']
+    assert bool(mx.all(mx.isfinite(saved)).item())
+    assert float(mx.max(saved).item()) > 65504
+    assert (base / 'model.safetensors').read_bytes() == before
