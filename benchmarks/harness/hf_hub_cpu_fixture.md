@@ -36,7 +36,7 @@ This is intentionally an explicit, credentialed operation. Before running it:
 
 1. Create a **new private model repository** on Hugging Face yourself.
 2. Configure a write token through `HF_TOKEN` or `huggingface-cli login`; never put the token in a shell history, fixture file, or issue comment.
-3. Pass the existing repo name below. The harness checks that it is private before training because Soup's current auto-push callback calls `create_repo(..., private=False, exist_ok=True)`. Pre-creating the private repository preserves its visibility.
+3. Pass the existing repo name below. The harness checks that it is private and that it does **not** already have a `checkpoint-1` branch before training. This prevents an old complete branch from being mistaken for this run's upload. Soup's current auto-push callback calls `create_repo(..., private=False, exist_ok=True)`, so pre-creating the private repository preserves its visibility.
 
 ```bash
 python benchmarks/harness/hf_hub_cpu_fixture.py \

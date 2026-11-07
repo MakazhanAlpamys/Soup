@@ -2,11 +2,12 @@
 """Prepare and run a one-step CPU fixture for the Issue #74 Hub QA pass.
 
 The default action only writes a fresh, local fixture below ``--output-dir``.
-``--train`` runs one SFT step in a child process with CUDA/ROCm hidden.  Hub
-traffic is impossible unless both ``--push-as`` and ``--verify-hub`` are
-provided.  In that mode the script first verifies that the destination model
-repository already exists and is private, then verifies the pushed
-``checkpoint-1`` branch after training.
+``--train`` runs one SFT step in a child process with CUDA/ROCm hidden and
+downloads its public tiny base model without credentials. Hub writes are
+impossible unless both ``--push-as`` and ``--verify-hub`` are provided. In
+that mode the script first verifies that the destination model repository
+already exists, is private, and has no ``checkpoint-1`` branch; it then verifies the
+newly pushed branch after training.
 
 This is a QA fixture, not a claim that a local CPU run proves Hub behavior.
 It deliberately never creates a Hub repository, stores a token, or uploads by
@@ -190,7 +191,7 @@ def _refuse_mps_acceleration() -> None:
 
 
 def verify_private_destination(repo_id: str) -> None:
-    """Require a pre-existing private model repo before a live push is possible."""
+    """Require a private destination with no stale checkpoint branch."""
     _prefer_local_source()
     from soup_cli.utils.hf import get_hf_api, resolve_endpoint, resolve_token, validate_repo_id
 
@@ -212,6 +213,19 @@ def verify_private_destination(repo_id: str) -> None:
         raise RuntimeError(
             f"Refusing --push-as to non-private repository {repo_id!r}. "
             "Create a new private model repository first."
+        )
+    try:
+        refs = api.list_repo_refs(repo_id)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Could not inspect existing branches in private destination {repo_id!r}."
+        ) from exc
+    branches = {str(branch.name) for branch in getattr(refs, "branches", [])}
+    if CHECKPOINT_NAME in branches:
+        raise RuntimeError(
+            f"Refusing --push-as because private destination {repo_id!r} already has "
+            f"a {CHECKPOINT_NAME!r} branch. Use a fresh repository or remove that branch "
+            "before this one-step verification."
         )
 
 

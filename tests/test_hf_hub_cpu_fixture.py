@@ -27,7 +27,7 @@ def _load_harness():
 
 
 class _FakeHubApi:
-    def __init__(self, *, private=True, branches=("checkpoint-1",), files=(), model_error=None):
+    def __init__(self, *, private=True, branches=("main",), files=(), model_error=None):
         self.private = private
         self.branches = branches
         self.files = list(files)
@@ -55,6 +55,11 @@ def _use_fake_hub(monkeypatch, harness, api, token="hf_test_token"):
     monkeypatch.setattr(hf, "resolve_token", lambda: token)
     monkeypatch.setattr(hf, "resolve_endpoint", lambda: "https://example.invalid")
     monkeypatch.setattr(hf, "get_hf_api", lambda **kwargs: api)
+
+
+def _allow_cpu_subprocess_test(monkeypatch, harness):
+    """Keep subprocess-contract tests independent from the real host's MPS capability."""
+    monkeypatch.setattr(harness, "_refuse_mps_acceleration", lambda: None)
 
 
 def test_preparation_writes_one_row_one_step_fixture_under_named_directory(tmp_path):
@@ -144,8 +149,34 @@ def test_fake_hub_helper_restores_its_temporary_source_path(monkeypatch):
     assert sys.path == original_path
 
 
+@pytest.mark.parametrize(
+    ("platform", "mps_available", "refuses"),
+    [
+        ("darwin", True, True),
+        ("darwin", False, False),
+        ("linux", True, False),
+    ],
+)
+def test_mps_acceleration_is_refused_before_a_cpu_fixture(
+    monkeypatch, platform, mps_available, refuses
+):
+    harness = _load_harness()
+    fake_torch = SimpleNamespace(
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: mps_available))
+    )
+    monkeypatch.setattr(harness.sys, "platform", platform)
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    if refuses:
+        with pytest.raises(RuntimeError, match="MPS"):
+            harness._refuse_mps_acceleration()
+    else:
+        harness._refuse_mps_acceleration()
+
+
 def test_cpu_training_preflight_requires_torch_to_report_cuda_hidden(monkeypatch, tmp_path):
     harness = _load_harness()
+    _allow_cpu_subprocess_test(monkeypatch, harness)
     paths = harness.fixture_paths(tmp_path / "fixture")
     calls = []
 
@@ -170,6 +201,7 @@ def test_cpu_training_preflight_requires_torch_to_report_cuda_hidden(monkeypatch
 
 def test_cpu_training_refuses_to_continue_when_torch_still_sees_cuda(monkeypatch, tmp_path):
     harness = _load_harness()
+    _allow_cpu_subprocess_test(monkeypatch, harness)
     paths = harness.fixture_paths(tmp_path / "fixture")
     calls = []
 
@@ -187,6 +219,7 @@ def test_cpu_training_refuses_to_continue_when_torch_still_sees_cuda(monkeypatch
 
 def test_cpu_training_reports_the_last_failed_probe_stderr_line(monkeypatch, tmp_path):
     harness = _load_harness()
+    _allow_cpu_subprocess_test(monkeypatch, harness)
     paths = harness.fixture_paths(tmp_path / "fixture")
 
     monkeypatch.setattr(
@@ -205,6 +238,7 @@ def test_cpu_training_reports_the_last_failed_probe_stderr_line(monkeypatch, tmp
 
 def test_cpu_training_refuses_an_empty_cuda_probe_result(monkeypatch, tmp_path):
     harness = _load_harness()
+    _allow_cpu_subprocess_test(monkeypatch, harness)
     paths = harness.fixture_paths(tmp_path / "fixture")
 
     monkeypatch.setattr(
@@ -288,6 +322,32 @@ def test_private_destination_accepts_an_existing_private_repository(monkeypatch)
     assert harness.verify_private_destination("tester/private") is None
 
 
+def test_private_destination_refuses_a_stale_checkpoint_branch(monkeypatch):
+    harness = _load_harness()
+    _use_fake_hub(monkeypatch, harness, _FakeHubApi(branches=("main", "checkpoint-1")))
+
+    with pytest.raises(RuntimeError, match="already has a 'checkpoint-1' branch"):
+        harness.verify_private_destination("tester/private")
+
+
+def test_live_main_refuses_a_stale_checkpoint_before_writing_a_fixture(monkeypatch, tmp_path):
+    harness = _load_harness()
+    _use_fake_hub(monkeypatch, harness, _FakeHubApi(branches=("main", "checkpoint-1")))
+    output_dir = tmp_path / "fixture"
+
+    assert harness.main(
+        [
+            "--output-dir",
+            str(output_dir),
+            "--train",
+            "--push-as",
+            "tester/private",
+            "--verify-hub",
+        ]
+    ) == 1
+    assert not output_dir.exists()
+
+
 def test_remote_checkpoint_requires_a_token_and_checkpoint_branch(monkeypatch):
     harness = _load_harness()
     _use_fake_hub(monkeypatch, harness, _FakeHubApi(), token=None)
@@ -307,12 +367,20 @@ def test_remote_checkpoint_requires_adapter_config_state_and_adapter_weights(mon
         "training_args.bin",
         "optimizer.pt",
     ]
-    _use_fake_hub(monkeypatch, harness, _FakeHubApi(files=only_non_adapter_checkpoint_files))
+    _use_fake_hub(
+        monkeypatch,
+        harness,
+        _FakeHubApi(branches=("checkpoint-1",), files=only_non_adapter_checkpoint_files),
+    )
 
     with pytest.raises(RuntimeError, match="adapter weights"):
         harness.verify_remote_checkpoint("tester/private")
 
-    _use_fake_hub(monkeypatch, harness, _FakeHubApi(files=["adapter_model.safetensors"]))
+    _use_fake_hub(
+        monkeypatch,
+        harness,
+        _FakeHubApi(branches=("checkpoint-1",), files=["adapter_model.safetensors"]),
+    )
     with pytest.raises(RuntimeError, match="adapter_config.json, trainer_state.json"):
         harness.verify_remote_checkpoint("tester/private")
 
@@ -320,7 +388,7 @@ def test_remote_checkpoint_requires_adapter_config_state_and_adapter_weights(mon
 def test_remote_checkpoint_returns_branch_and_file_count_for_a_complete_adapter(monkeypatch):
     harness = _load_harness()
     files = ["adapter_config.json", "adapter_model.bin", "trainer_state.json"]
-    _use_fake_hub(monkeypatch, harness, _FakeHubApi(files=files))
+    _use_fake_hub(monkeypatch, harness, _FakeHubApi(branches=("checkpoint-1",), files=files))
 
     assert harness.verify_remote_checkpoint("tester/private") == {
         "branch": "checkpoint-1",
