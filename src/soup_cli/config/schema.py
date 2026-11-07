@@ -2,7 +2,19 @@
 
 import math
 import re
-from typing import Any, Callable, Dict, List, Literal, NamedTuple, Optional, Union
+from types import UnionType
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    NamedTuple,
+    Optional,
+    Union,
+    get_args,
+    get_origin,
+)
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -69,7 +81,136 @@ _LISA_SUPPORTED_TASKS = ("sft", "pretrain")
 _LORAFA_SUPPORTED_TASKS = ("sft", "pretrain", "embedding")
 
 
+def _is_scalar_numeric_annotation(annotation: Any) -> bool:
+    """Whether an annotation represents a scalar int/float, including unions."""
+    if annotation in (int, float):
+        return True
+    if get_origin(annotation) in (Union, UnionType):
+        return any(
+            _is_scalar_numeric_annotation(member)
+            for member in get_args(annotation)
+        )
+    return False
+
+
+def _scalar_numeric_types(annotation: Any) -> set[type]:
+    """Return scalar numeric types accepted by an annotation."""
+    if annotation in (int, float):
+        return {annotation}
+    if get_origin(annotation) in (Union, UnionType):
+        result: set[type] = set()
+        for member in get_args(annotation):
+            result.update(_scalar_numeric_types(member))
+        return result
+    return set()
+
+
+def _annotation_accepts_bool(annotation: Any) -> bool:
+    """Whether an annotation explicitly permits bool, including bool literals."""
+    if annotation is bool:
+        return True
+
+    origin = get_origin(annotation)
+    if origin is Literal:
+        return any(type(value) is bool for value in get_args(annotation))
+
+    if origin in (Union, UnionType):
+        return any(
+            _annotation_accepts_bool(member)
+            for member in get_args(annotation)
+        )
+
+    return False
+
+
+def _reject_boolean_numeric_field(
+    model: type[BaseModel],
+    field_name: str,
+    value: Any,
+    *,
+    exempt_fields: frozenset[str] = frozenset(),
+) -> Any:
+    """Reject bools in scalar numeric fields before Pydantic coercion."""
+    if not isinstance(value, bool) or field_name in exempt_fields:
+        return value
+
+    field = model.model_fields.get(field_name)
+    if field is None:
+        return value
+
+    annotation = field.annotation
+    if (
+        _is_scalar_numeric_annotation(annotation)
+        and not _annotation_accepts_bool(annotation)
+    ):
+        if _scalar_numeric_types(annotation) == {int}:
+            raise ValueError(f"{field_name} must be an int, not a bool")
+        raise ValueError(f"{field_name} must be a number, not a bool")
+
+    return value
+
+
+_TRAINING_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS = frozenset({
+    "seed",
+    "data_seed",
+    "expand_layers",
+    "freeze_trainable_layers",
+    "eval_steps",
+    "grpo_beta",
+    "grpo_judge_max_tokens",
+    "grpo_judge_max_calls",
+    "grpo_judge_max_failure_rate",
+    "reward_hack_dwell_steps",
+    "reward_hack_release_patience",
+    "reward_hack_rollback_patience",
+    "reward_hack_max_recovery_attempts",
+    "reward_hack_smoothing_window",
+    "reward_hack_beta_floor",
+    "reward_hack_beta_ceil",
+    "reward_hack_trip_band",
+    "reward_hack_release_band",
+    "reward_hack_kl_gain",
+    "reward_hack_pid_kp",
+    "reward_hack_pid_ki",
+    "reward_hack_pid_kd",
+    "reward_hack_signal_target",
+    "reward_hack_integral_clamp",
+    "reward_hack_shaping_strength",
+    "minillm_rollout_length",
+    "mole_top_k",
+    "mole_temperature",
+    "distill_chunk_size",
+    "distill_temperature",
+    "mod_capacity_factor",
+    "ebft_temperature",
+    "num_labels",
+    "lisa_num_layers",
+    "lisa_interval_steps",
+    "stream_buffers",
+    "stream_read_ahead",
+    "stream_vram_override",
+    "stream_loss_chunk",
+    "unlearn_alpha",
+    "ref_model_ema_alpha",
+    "tis_threshold",
+    "off_policy_mask_threshold",
+    "replay_buffer_size",
+    "grpo_delta",
+    "yarn_factor",
+    "yarn_attn_factor",
+    "yarn_beta_fast",
+    "yarn_beta_slow",
+    "citation_recall_threshold",
+    "grace_codebook_size",
+    "grace_codebook_dim",
+})
+
 class LoraConfig(BaseModel):
+    @field_validator("*", mode="before")
+    @classmethod
+    def _reject_boolean_numeric_inputs(cls, value: Any, info: Any) -> Any:
+        return _reject_boolean_numeric_field(cls, info.field_name, value)
+
     # #340 — `r: 0` is the first-class full-fine-tuning switch: no
     # adapter is applied and the base weights train directly. It is the
     # spelling `trainer/classifier.py` has read as "no adapter" since
@@ -1125,6 +1266,16 @@ class EvalGateConfig(BaseModel):
 
 
 class TrainingConfig(BaseModel):
+    @field_validator("*", mode="before")
+    @classmethod
+    def _reject_boolean_numeric_inputs(cls, value: Any, info: Any) -> Any:
+        return _reject_boolean_numeric_field(
+            cls,
+            info.field_name,
+            value,
+            exempt_fields=_TRAINING_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS,
+        )
+
     epochs: int = Field(default=3, ge=1, description="Number of training epochs")
     lr: float = Field(default=2e-5, gt=0, description="Learning rate")
     batch_size: Union[int, Literal["auto"]] = Field(
