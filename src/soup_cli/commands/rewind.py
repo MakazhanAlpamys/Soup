@@ -12,8 +12,9 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import strip_control
 
 console = Console()
 
@@ -108,7 +109,7 @@ def rewind(
         try:
             check_report_output_path(json_path, "--json")
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]Invalid output:[/] {for_terminal(exc)}")
+            console.print(Text.assemble(("Invalid output:", "red"), f" {strip_control(exc)}"))
             raise typer.Exit(2) from exc
 
     tracker = ExperimentTracker()
@@ -121,7 +122,7 @@ def rewind(
     else:
         target = tracker.get_run(run_id)
         if target is None:
-            console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]")
+            console.print(Text(run_lookup_failure(tracker, run_id, markup=False), style="red"))
             raise typer.Exit(1)
 
     candidates = _log_candidates(target, RewindLog.FILENAME)
@@ -132,26 +133,32 @@ def rewind(
     path = next((c for c in candidates if c.exists()), candidates[0])
     if not path.exists():
         console.print(
-            f"[red]No rewind log at[/] {for_terminal(str(path))}\n"
-            "Three things cause this: the run set [bold]training.rewind_log: false[/], "
-            "it was not an SFT run (the recorder is SFT-only), or it predates the "
-            "flight recorder."
+            Text.assemble(
+                ("No rewind log at", "red"),
+                f" {strip_control(path)}\nThree things cause this: the run set ",
+                ("training.rewind_log: false", "bold"),
+                ", it was not an SFT run (the recorder is SFT-only), or it predates the "
+                "flight recorder.",
+            )
         )
         raise typer.Exit(1)
 
     try:
         run = read_rewind_log(path)
     except RewindLogError as exc:
-        console.print(f"[red]Cannot read rewind log:[/] {for_terminal(str(exc))}")
+        console.print(Text.assemble(("Cannot read rewind log:", "red"), f" {strip_control(exc)}"))
         raise typer.Exit(1) from exc
 
     recorded = run.steps()
     console.print(
         Panel(
-            f"Run: [bold]{for_terminal(str(target['run_id']))}[/]\n"
-            f"Backend: {for_terminal(str(run.header.get('backend') or '-'))} | "
-            f"Task: {for_terminal(str(run.header.get('task') or '-'))} | "
-            f"Steps recorded: {len(recorded)}",
+            Text.assemble(
+                "Run: ",
+                (strip_control(target["run_id"]), "bold"),
+                f"\nBackend: {strip_control(run.header.get('backend') or '-')} | "
+                f"Task: {strip_control(run.header.get('task') or '-')} | "
+                f"Steps recorded: {len(recorded)}",
+            ),
             title="soup rewind",
         )
     )
@@ -163,11 +170,15 @@ def rewind(
         # printing "No loss spikes recorded" in green reads as "your run was
         # clean" -- a confident answer from an empty file is worse than none.
         console.print(
-            f"[yellow]No micro-batches were recorded[/] in {for_terminal(str(path))} — "
-            "the file holds only its header.\n"
-            "The recorder was switched off during the run; look for a "
-            "[bold]Rewind log off[/] or [bold]Rewind recorder disabled[/] line in "
-            "its output. This says nothing about whether the run was clean."
+            Text.assemble(
+                ("No micro-batches were recorded", "yellow"),
+                f" in {strip_control(path)} — the file holds only its header.\n"
+                "The recorder was switched off during the run; look for a ",
+                ("Rewind log off", "bold"),
+                " or ",
+                ("Rewind recorder disabled", "bold"),
+                " line in its output. This says nothing about whether the run was clean.",
+            )
         )
         raise typer.Exit(1)
 
@@ -198,7 +209,10 @@ def rewind(
         detail_step = step
         if not run.batches_for(detail_step):
             console.print(
-                f"[red]No records for step {detail_step}[/] in {for_terminal(str(path))}"
+                Text.assemble(
+                    (f"No records for step {detail_step}", "red"),
+                    f" in {strip_control(path)}",
+                )
             )
             raise typer.Exit(1)
 
@@ -217,14 +231,14 @@ def rewind(
     if previews is not None:
         table.add_column("Preview")
     for ranked in rows:
-        cells = [
+        cells: list[str | Text] = [
             str(ranked.row),
             _fmt_loss(ranked.loss),
             f"{ranked.tokens:,}",
             f"{ranked.share:.1%}",
         ]
         if previews is not None:
-            cells.append(for_terminal(previews.get(ranked.row, "")))
+            cells.append(Text(strip_control(previews.get(ranked.row, ""))))
         table.add_row(*cells)
     console.print(table)
 
@@ -270,9 +284,11 @@ def rewind(
                 field="--json",
             )
         except (OSError, ValueError) as exc:
-            console.print(f"[red]Cannot write the JSON:[/] {for_terminal(exc)}")
+            console.print(
+                Text.assemble(("Cannot write the JSON:", "red"), f" {strip_control(exc)}")
+            )
             raise typer.Exit(1) from exc
-        console.print(f"[dim]Wrote {for_terminal(json_path)}[/]")
+        console.print(Text(f"Wrote {strip_control(json_path)}", style="dim"))
 
 
 def _log_candidates(target: dict, filename: str) -> list[Path]:
@@ -330,7 +346,7 @@ def _row_previews(target, run, rows, rewind_utils) -> dict[int, str] | None:
         )
     except (ValueError, TypeError, KeyError, OSError) as exc:
         console.print(
-            f"[dim]Could not rebuild the dataset for previews: {for_terminal(exc)}[/]"
+            Text(f"Could not rebuild the dataset for previews: {strip_control(exc)}", style="dim")
         )
         return None
 
