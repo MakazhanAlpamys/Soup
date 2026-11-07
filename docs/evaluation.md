@@ -217,6 +217,12 @@ Git-for-Windows' bundled bash on Windows.
 
 Halt training automatically if a declarative eval suite regresses beyond a threshold vs a baseline. The gate runs at epoch boundaries — no wasted compute on runs that are already worse.
 
+Eval-gated training requires a live training callback. `soup train` refuses an
+enabled gate on `backend: mlx` and on `task: prm`, `unlearn` or
+`moe_lora_routing`, whether enabled in YAML or through `--gate`. It names the
+unsupported backend or task and exits 1 before building a model. Omit or disable
+`training.eval_gate` and remove `--gate` to train on those paths.
+
 **Configure in `soup.yaml`:**
 
 ```yaml
