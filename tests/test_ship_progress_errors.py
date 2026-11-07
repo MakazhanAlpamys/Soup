@@ -22,8 +22,11 @@ from soup_cli.commands import ship
 kind, message, arguments = sys.argv[1:]
 message = json.loads(message)
 if kind != "none":
-    error_type = {"key": KeyError, "runtime": RuntimeError,
-                  "interrupt": KeyboardInterrupt}[kind]
+    if kind == "custom":
+        error_type = type(message, (RuntimeError,), {})
+    else:
+        error_type = {"key": KeyError, "runtime": RuntimeError,
+                      "interrupt": KeyboardInterrupt}[kind]
     def fail(*args, **kwargs):
         raise error_type(message)
     ship._parse_chat_template_kwargs = fail
@@ -43,6 +46,7 @@ def _invoke(
     env.pop("NO_COLOR", None)
     if color:
         env["FORCE_COLOR"] = "1"
+        env["TERM"] = "xterm"
     else:
         env.pop("FORCE_COLOR", None)
         env["NO_COLOR"] = "1"
@@ -190,3 +194,39 @@ def test_completed_offline_verdict_keeps_its_output_and_end_event(
     events = [json.loads(line) for line in progress.stderr.splitlines()]
     assert [event["event"] for event in events] == ["start", "end"]
     assert all("error" not in event for event in events)
+
+
+@pytest.mark.parametrize("kind", ["key", "runtime"])
+@pytest.mark.parametrize(
+    "message,shown",
+    [
+        ("try :warning:", "try :warning:"),
+        ("x\\[n", "x\\[n"),
+        ("control:A\x9bB\u202eC", "control:ABC"),
+    ],
+)
+def test_jsonl_runtime_diagnostic_keeps_literal_text_and_red_label(
+    kind: str,
+    message: str,
+    shown: str,
+    tmp_path: Path,
+) -> None:
+    result = _invoke(tmp_path, kind=kind, message=message, color=True)
+
+    assert result.returncode == 1, (result.stdout, result.stderr)
+    error_type = {"key": "KeyError", "runtime": "RuntimeError"}[kind]
+    expected = repr(message) if kind == "key" else shown
+    assert _plain(result.stdout) == f"Error: {error_type}: {expected}"
+    assert "\x1b[1;31mError:\x1b[0m " in result.stdout
+    _assert_aborted_jsonl(result)
+    assert shown not in result.stderr
+
+
+def test_jsonl_diagnostic_preserves_custom_exception_name(tmp_path: Path) -> None:
+    name = "Failure:warning:x\\[n\u202e"
+    result = _invoke(tmp_path, kind="custom", message=name)
+
+    assert result.returncode == 1, (result.stdout, result.stderr)
+    assert _plain(result.stdout) == r"Error: Failure:warning:x\[n: Failure:warning:x\[n"
+    assert "\u202e" not in result.stdout
+    _assert_aborted_jsonl(result)
