@@ -7603,10 +7603,10 @@ class SoupConfig(BaseModel):
                 "VeRA's shared projections are built from the materialised "
                 "base weights, which streaming keeps on the meta device."
             )
-        # A LoRA target on the streamed embedding or head (#1012) is refused by
-        # build_streamed_model() after get_peft_model() (#1048): whether the
-        # checkpoint streams them (untied) and which modules a target_modules
-        # spelling matches are not known here.
+        # A LoRA target on the streamed embedding or head (#1012) is not refused:
+        # build_streamed_model() builds and saves it on tied and untied
+        # checkpoints (#1048). It refuses only a PEFT modules_to_save on a
+        # streamed boundary, before get_peft_model() (#2548).
         if tcfg.moe_expert_quant is not None:
             raise ValueError(
                 "training.stream_layers is incompatible with "

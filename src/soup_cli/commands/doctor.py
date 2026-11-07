@@ -12,8 +12,10 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.constants import GITHUB_URL
+from soup_cli.utils.terminal import strip_control
 from soup_cli.utils.torchao_compat import TORCHAO_MIN_VERSION
 
 console = Console()
@@ -376,7 +378,9 @@ def _load_doctor_config(config_path: str):
 
         return load_config(config_path)
     except FileNotFoundError as exc:
-        console.print(f"\n[red]Config not found:[/] {config_path}")
+        console.print(
+            Text.assemble(("\nConfig not found:", "red"), " ", strip_control(config_path))
+        )
         # Non-zero deliberately: this leg is meant to be gate-able in CI, and a
         # config that cannot be read is not a clean bill of health. `doctor`
         # without --config keeps its old exit status.

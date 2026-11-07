@@ -241,7 +241,7 @@ def _generation_client(base_url="http://127.0.0.1:8000", **kwargs):
 def test_generation_routes_refuse_foreign_origin(path, body):
     """A page the operator merely visits must not be able to drive generation."""
     with patch("soup_cli.commands.serve._generate_response") as mock_gen:
-        mock_gen.return_value = ("hello world", 3, 2)
+        mock_gen.return_value = ("hello world", 3, 2, "stop")
         resp = _generation_client().post(
             path, json=body, headers={"Origin": "http://evil.example"}
         )
@@ -252,7 +252,7 @@ def test_generation_routes_refuse_foreign_origin(path, body):
 @pytest.mark.parametrize(("path", "body"), GENERATION)
 def test_generation_routes_allow_loopback_origin(path, body):
     with patch("soup_cli.commands.serve._generate_response") as mock_gen:
-        mock_gen.return_value = ("hello world", 3, 2)
+        mock_gen.return_value = ("hello world", 3, 2, "stop")
         resp = _generation_client().post(
             path, json=body, headers={"Origin": "http://localhost:5173"}
         )
@@ -262,7 +262,7 @@ def test_generation_routes_allow_loopback_origin(path, body):
 @pytest.mark.parametrize(("path", "body"), GENERATION)
 def test_generation_routes_allow_missing_origin(path, body):
     with patch("soup_cli.commands.serve._generate_response") as mock_gen:
-        mock_gen.return_value = ("hello world", 3, 2)
+        mock_gen.return_value = ("hello world", 3, 2, "stop")
         resp = _generation_client().post(path, json=body)
     assert resp.status_code == 200, (path, resp.status_code, resp.text)
 
@@ -275,7 +275,7 @@ def test_generation_routes_allow_reverse_proxy_shape(path, body):
     check here would refuse every proxied deployment.
     """
     with patch("soup_cli.commands.serve._generate_response") as mock_gen:
-        mock_gen.return_value = ("hello world", 3, 2)
+        mock_gen.return_value = ("hello world", 3, 2, "stop")
         resp = _generation_client(base_url="http://proxy.example").post(path, json=body)
     assert resp.status_code == 200, (path, resp.status_code, resp.text)
 

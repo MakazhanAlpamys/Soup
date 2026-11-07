@@ -124,7 +124,7 @@ src/soup_cli/
   eval/               - Eval platform (custom tasks, LLM judge, human eval, leaderboard)
   bench/              - Benchmark instruments behind `soup bench train` (collector, train_report, train_run) (#836)
   migrate/            - Config migration (LLaMA-Factory, Axolotl, Unsloth)
-  recipes/            - Ready-made configs for popular models (172 recipes)
+  recipes/            - Ready-made configs for popular models (174 recipes)
   autopilot/          - Zero-config decision engine (v0.25.0)
   registry/           - Model Registry (hashing, store, diff, attach) (v0.26.0 + v0.33.0)
   cans/               - Shareable .can artifact format + run/publish orchestrator (v0.26.0 + v0.33.0)
@@ -583,7 +583,13 @@ If adding a new training algorithm:
 
 1. Add a `RecipeMeta` entry in `recipes/catalog.py`
 2. Add tests in `tests/test_recipes.py`
-3. Update `README.md` recipes section
+3. Set `EXPECTED_RECIPE_COUNT` in `tests/recipe_count.py` to the new count, then run
+   `python scripts/sync_recipe_count.py` to rewrite every documentation site that
+   states it (`DOC_SITES` in `tests/test_recipe_count_is_synced.py` lists them).
+   `python scripts/sync_recipe_count.py --check` reports what is out of sync and
+   writes nothing. The pin is edited by hand on purpose: deriving it from
+   `len(RECIPES)` would reduce the milestone assertions to `len(RECIPES) ==
+   len(RECIPES)`, which can never fail (#1016)
 4. Regenerate `tests/fixtures/recipe_config_snapshots.json` with
    `python scripts/generate_recipe_snapshot.py` and review the diff — the new
    recipe's resolved config must be in the committed snapshot, or

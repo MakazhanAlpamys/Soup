@@ -236,7 +236,7 @@ training:
   only the prefix the prompt and `prompt + answer` renderings share), the
   answer located even when the tokenizer merges the last prompt token into it,
   BOS prepended and EOS appended when missing. Over-long rows are cut as on the
-  transformers backend (prompt to `max_length // 2`, keeping its end, answers to
+  transformers backend (prompt to `max_length // 2`, keeping its end, with the BOS in front, answers to
   the remaining room); TRL's own earlier answer cut, which can leave the shorter
   answer empty, is not reproduced. A pair the template cannot split is skipped
   with a count; a row with no room for an answer is refused.
@@ -293,11 +293,15 @@ That shows the objective moving, not alignment quality.
   micro-batch and the micro-batches are averaged with equal weight, as the
   transformers Trainer does for TRL's CPO.
 - **Tokens** are ORPO's above: TRL's CPO and ORPO trainers tokenize rows with
-  the same code, so rows that fit in `data.max_length` train on the same tokens
-  on either backend. Over-long rows are cut with Soup's cap (prompt to
-  `max_length // 2`, keeping its end, answers to the remaining room). The
-  transformers SimPO path applies no prompt cap: TRL 0.29.1 cuts only the
-  answers there, and Soup refuses a row whose shorter answer that cut empties.
+  the same code. MLX SimPO, like MLX DPO and ORPO, cuts by the prompt alone: a
+  prompt longer than `max_length // 2` tokens is cut to that many, keeping its
+  end, and the answers to the remaining room, even when the row would fit. The
+  transformers SimPO path applies the same cap only when a row does not fit
+  `data.max_length` (TRL 0.29.1 cuts only the answers, so a long prompt reached
+  the model whole); Soup refuses a row whose shorter answer that cut empties.
+  Rows that fit with a prompt of at most `max_length // 2` tokens train on the
+  same tokens on either backend; a row that fits with a longer prompt keeps its
+  whole prompt on transformers and loses its start on MLX.
 - **Ties train**, as in TRL: the preference term is the constant
   `softplus(simpo_gamma)` and the NLL still learns.
 - **Stops on a nonfinite loss** instead of training on NaN.
@@ -391,8 +395,9 @@ training:
   completion located even when the tokenizer merges the last prompt token
   into it, BOS prepended to the prompt and EOS appended to the completion when
   missing. A row longer than `data.max_length` loses the end of its completion;
-  the prompt is never cut (TRL 0.29.1 has no prompt cap, and the transformers
-  path adds none). A KL row is re-cut to its own prompt's room.
+  the prompt is never cut (TRL 0.29.1 has no prompt cap; the transformers path
+  now caps the prompt only when a row does not fit `data.max_length`). A KL row
+  is re-cut to its own prompt's room.
 - **Labels** are read by the loader's `format: kto` converter, exactly as on the
   transformers backend (`true` / `false`, and the strings and numbers that
   converter accepts); MLX adds no reading of its own. Only a row handed to the
@@ -658,6 +663,10 @@ Soup's optimizer allowlist (`utils.optimizer_zoo`) is far wider than anything
 MLX ships, so most valid values have no MLX equivalent. Run those recipes on
 the transformers backend.
 
+Adafactor uses `relative_step=False` and `scale_parameter=False`, so the
+configured learning rate, warmup and schedule control its updates instead of
+MLX's default relative step size and parameter-RMS scaling.
+
 The schedule counts **optimizer updates**, not iterations: mlx-lm calls
 `optimizer.update()` once every `gradient_accumulation_steps`, so a warmup of
 `warmup_ratio × (iters // gradient_accumulation_steps)` is what actually runs.
@@ -789,8 +798,14 @@ Only ed25519 and RSA public keys are accepted:
 soup train --config soup.yaml --cloud runpod --gpu rtx4090 --cloud-submit
 ```
 
-The local controller creates one Secure Cloud GPU Pod with TCP SSH access, installs
-the running Soup version, runs training over SSH and copies the configured relative
+The local controller creates one Secure Cloud GPU Pod with TCP SSH access, creates
+`/workspace/venv` with `python3 -m venv --system-site-packages`, and installs the
+running Soup version with `/workspace/venv/bin/python -m pip`. This keeps the
+image's preinstalled torch visible and avoids installing Soup into its system
+Python. Training uses `/workspace/venv/bin/soup` by absolute path, so it does not
+depend on the non-login SSH command's script search path. Environment creation
+and installation diagnostics go to stderr; either failure stops before training.
+The controller runs training over SSH and copies the configured relative
 output directory back before deleting the Pod. Choose a fresh local output path;
 existing outputs, symlink/junction paths and path components starting with `-` are
 refused before allocation and rechecked before copying. SCP separates options from
@@ -857,6 +872,9 @@ or claim successful artifact retrieval.
 **Not yet live-validated.** Tests use local mocked API/SSH transports. The code
 PR does not include a paid run; provider execution, GPU behavior, retrieval and
 billing termination remain a separate live-validation task, per #264's ruling.
+That first live run (#2098) should also record the image's externally-managed
+Python marker and SSH `PATH`, to establish whether the image needed the venv
+workaround tracked in #2192.
 API contract: [RunPod REST v1 OpenAPI](https://rest.runpod.io/v1/openapi.json),
 [SSH setup](https://docs.runpod.io/pods/configuration/use-ssh).
 
@@ -1107,6 +1125,10 @@ soup recipes verify
 soup recipes verify --config soup.yaml
 soup recipes verify --json    # one row per config on stdout, for CI
 ```
+
+`recipes use --output` keeps the requested filename and writes the recipe's YAML unchanged.
+Receipts and errors display brackets literally and strip terminal control characters only from
+the display.
 
 **What's covered:**
 

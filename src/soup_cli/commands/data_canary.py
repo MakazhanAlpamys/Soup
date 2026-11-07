@@ -20,6 +20,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from soup_cli.commands._common import refuse_output_over_input
 from soup_cli.config.schema import DataConfig
 from soup_cli.data.formats import detect_format
 from soup_cli.data.loader import _split_val, load_raw_data
@@ -36,7 +37,7 @@ from soup_cli.utils.canary import (
     write_manifest,
 )
 from soup_cli.utils.live_eval import compute_pair_losses
-from soup_cli.utils.paths import atomic_write_text, ensure_distinct_paths, is_under_cwd
+from soup_cli.utils.paths import atomic_write_text, is_under_cwd
 from soup_cli.utils.terminal import for_terminal
 
 if TYPE_CHECKING:  # static types only — transformers stays a lazy import
@@ -170,13 +171,12 @@ def insert(
     _guard_under_cwd(manifest, "Manifest")
     # Neither write may land on the dataset, and the dataset write must not
     # replace the manifest just written: either loss is unrecoverable (#2226).
-    try:
-        ensure_distinct_paths(
-            [("the input", path)], [("--output", output), ("--manifest", manifest)]
-        )
-        ensure_distinct_paths([("--output", output)], [("--manifest", manifest)])
-    except ValueError as exc:
-        _refuse(str(exc))
+    refuse_output_over_input(
+        [("the input", path)],
+        [("--output", output), ("--manifest", manifest)],
+        console=console,
+    )
+    refuse_output_over_input([("--output", output)], [("--manifest", manifest)], console=console)
     suffix = Path(output).suffix.lower()
     if suffix not in _OUTPUT_SUFFIXES:
         _refuse(
@@ -269,10 +269,11 @@ def check(
     """Check a model for memorization of the manifest's canaries."""
     if output is not None:
         _guard_under_cwd(output, "Output")
-        try:
-            ensure_distinct_paths([("--manifest", manifest)], [("--output", output)])
-        except ValueError as exc:
-            _refuse(str(exc))
+        refuse_output_over_input(
+            [("--manifest", manifest)],
+            [("--output", output)],
+            console=console,
+        )
     try:
         canaries = load_manifest(manifest)
     except (ValueError, OSError) as exc:
