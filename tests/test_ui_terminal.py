@@ -48,17 +48,19 @@ def test_startup_panel_and_original_bind(server, host):
     assert result.exit_code == 0, result.output
     assert calls == [(application, {"host": host, "port": 7860, "log_level": "warning"})]
     body = "\n".join(
-        line.strip(" │") for line in strip_ansi(result.output).splitlines() if line.startswith("│")
+        line.removeprefix("│ ").removesuffix("│").rstrip()
+        for line in strip_ansi(result.output).splitlines()
+        if line.startswith("│")
     )
     shown = host.replace("\x9b\u202e", "")
     assert body == (
         f"URL:    http://{shown}:7860/?token={TOKEN}\n"
         f"Token:  {TOKEN}\n\nAPI endpoints require:\n"
-        f"Authorization: Bearer {TOKEN}\n\nPages:\n"
-        "Dashboard      - View experiments, loss charts, system info\n"
-        "New Training   - Create config from templates, start training\n"
-        "Data Explorer  - Browse and inspect datasets\n"
-        "Model Chat     - Chat with a running inference server\n\nPress Ctrl+C to stop."
+        f"  Authorization: Bearer {TOKEN}\n\nPages:\n"
+        "  Dashboard      - View experiments, loss charts, system info\n"
+        "  New Training   - Create config from templates, start training\n"
+        "  Data Explorer  - Browse and inspect datasets\n"
+        "  Model Chat     - Chat with a running inference server\n\nPress Ctrl+C to stop."
     )
 
 
