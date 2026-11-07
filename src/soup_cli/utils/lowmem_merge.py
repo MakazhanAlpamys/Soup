@@ -10,6 +10,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from soup_cli.utils.lora_scaling import lora_scaling_factor
+
 _ADAPTER_PREFIX = "base_model.model."
 _LORA_A = ".lora_A.weight"
 _LORA_B = ".lora_B.weight"
@@ -142,9 +144,7 @@ def lora_scaling(config: Dict[str, Any]) -> float:
         raise LowMemoryMergeError(
             f"adapter_config.json field 'lora_alpha' must be a finite number, got {alpha!r}"
         )
-    if _flag(config, "use_rslora"):
-        return float(alpha) / math.sqrt(rank)
-    return float(alpha) / rank
+    return lora_scaling_factor(rank, float(alpha), use_rslora=_flag(config, "use_rslora"))
 
 
 def _check_delta_shape(
