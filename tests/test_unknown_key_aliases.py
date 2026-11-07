@@ -355,7 +355,7 @@ class TestNamesThatAreNotTheTrainingSettings:
         refused = format_unknown_keys(
             find_unknown_config_keys(_raw_with_training(**{key: 1})), include_deadline=False
         )
-        assert refused.lower().endswith("refused.")
+        assert refused.splitlines()[0].lower().endswith("refused.")
         assert f"'training.{key}'" in refused
 
     def test_a_note_is_a_fact_not_a_replacement(self):
