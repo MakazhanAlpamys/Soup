@@ -41,6 +41,10 @@ A rank that cannot build its own fingerprint (an unreadable shard) sends the err
 place of the fingerprint, so the other ranks refuse by name instead of waiting for it
 until the group timeout.
 
+Every collective goes through a :class:`~soup_cli.utils.adapter_grad_transport.GradGroup`:
+``torch.distributed`` (the default, unchanged) or, for B1, the TCP star. Objects travel as
+JSON there, which every value this module gathers survives.
+
 Torch is imported inside the functions: ``soup`` stays importable without it.
 """
 
@@ -57,6 +61,7 @@ from soup_cli.utils.adapter_grad_sync import (
     collect_trainable,
     validate_chunk_bytes,
 )
+from soup_cli.utils.adapter_grad_transport import resolve_group
 
 ITEM_LAYOUT = "trainable layout"
 ITEM_SHARD_INDEX = "shard index"
@@ -383,11 +388,12 @@ def broadcast_trainable(
     instead of leaving the others inside ``broadcast``).
     """
     import torch
-    import torch.distributed as dist
 
+    transport = resolve_group(group)
+    if transport is None:
+        raise RuntimeError("broadcast_trainable needs a process group, and there is none")
     step = validate_chunk_bytes(chunk_bytes) // _ELEMENT_BYTES
     total = sum(param.numel() for _name, param in params)
-    source = 0 if group is None else dist.get_global_rank(group, 0)
     if out is None:
         flat = torch.empty(total, dtype=torch.float32, device=params[0][1].device)
     elif out.dtype != torch.float32 or out.numel() != total:
@@ -403,7 +409,7 @@ def broadcast_trainable(
             flat[offset : offset + count].copy_(param.detach().reshape(-1))
             offset += count
         for begin in range(0, total, step):
-            dist.broadcast(flat[begin : begin + step], src=source, group=group)
+            transport.broadcast_(flat[begin : begin + step])
         offset = 0
         for _name, param in params:
             count = param.numel()
@@ -426,16 +432,15 @@ def verify_and_sync_init(
     process group although the run was launched as distributed (each rank would train its
     own copy, silently). In a world of one it only reports.
     """
-    import torch.distributed as dist
-
-    if not dist.is_available() or not dist.is_initialized():
+    transport = resolve_group(group)
+    if transport is None:
         raise RuntimeError(
             "distributed layer streaming has no process group, although the run was "
             "launched with several ranks: each rank would train its own copy of the "
             "adapters. The launcher (torchrun / accelerate launch) must create the group."
         )
-    world_size = dist.get_world_size(group)
-    rank = dist.get_rank(group)
+    world_size = transport.world_size
+    rank = transport.rank
     start = time.perf_counter()
 
     params: List[Tuple[str, Any]] = []
@@ -460,8 +465,7 @@ def verify_and_sync_init(
     except Exception as exc:  # noqa: BLE001 -- every rank must reach the gather
         local = {"error": f"{type(exc).__name__}: {exc}"}
 
-    gathered: List[Any] = [None] * world_size
-    dist.all_gather_object(gathered, local, group=group)
+    gathered: List[Any] = transport.all_gather_object(local)
 
     errors = [(index, entry["error"]) for index, entry in enumerate(gathered) if entry["error"]]
     if errors:
@@ -470,8 +474,7 @@ def verify_and_sync_init(
     layouts: Optional[List[Any]] = None
     digests = {entry["layout"]["digest"] for entry in gathered}
     if len(digests) > 1:
-        layouts = [None] * world_size
-        dist.all_gather_object(layouts, trainable_layout(params), group=group)
+        layouts = transport.all_gather_object(trainable_layout(params))
     found = find_mismatches(gathered, layouts)
     if found:
         raise DistributedInitMismatchError(format_mismatches(found))
@@ -481,7 +484,7 @@ def verify_and_sync_init(
         for index in range(1, world_size)
         if gathered[index]["values"] != gathered[0]["values"]
     )
-    sent = broadcast_trainable(params, group=group, chunk_bytes=chunk_bytes, out=flat)
+    sent = broadcast_trainable(params, group=transport, chunk_bytes=chunk_bytes, out=flat)
     return InitReport(
         world_size=world_size,
         rank=rank,

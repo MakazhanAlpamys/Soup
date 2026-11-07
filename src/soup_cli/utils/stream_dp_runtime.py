@@ -8,11 +8,15 @@
   collective for half an hour. The API is ``torch.distributed.set_timeout`` (public from
   torch 2.9 or so; on torch 2.14 it forwards the value to every backend of the group),
   with the older private ``distributed_c10d._set_pg_timeout`` as the fallback; where
-  neither exists the group keeps its launch value and the caller says so.
+  neither exists the group keeps its launch value and the caller says so. A B1 group
+  (:class:`~soup_cli.utils.adapter_grad_transport.TcpStarGroup`) sets the timeout of its own
+  sockets instead.
 * :func:`attach_stream_dp_metrics` (C7) adds a trainer callback that writes ONE JSON line
   per optimizer step to ``<output_dir>/stream_dp_metrics.rank<R>.jsonl``. Each rank writes
   its own file, so ranks that share a directory (several on one host, a shared
-  filesystem) never collide, and a stalled rank shows as a file that stopped growing.
+  filesystem) never collide, and a stalled rank shows as a file that stopped growing. Under B1
+  the rank is the group's (HF runs non-distributed there and calls every node rank 0).
+* :func:`shard_rows` (B1) gives each rank its share of the training rows, cut to equal lengths.
 
 Torch and transformers are imported inside the functions: ``soup`` stays importable
 without them.
@@ -26,7 +30,7 @@ import os
 import time
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 #: File name of one rank's step metrics, inside the run's output directory.
 METRICS_FILE_TEMPLATE = "stream_dp_metrics.rank{rank}.jsonl"
@@ -61,11 +65,17 @@ def apply_group_timeout(seconds: Any, *, group: Optional[Any] = None) -> GroupTi
 
     Never raises for a missing or refusing API: the group then keeps the timeout it was
     created with and the result says so. A bad ``seconds`` is a bug in the caller and does.
+    A :class:`~soup_cli.utils.adapter_grad_transport.GradGroup` (B1) sets its own sockets'
+    timeout.
     """
+    from soup_cli.utils.adapter_grad_transport import GradGroup
+
+    value = _positive_seconds(seconds)
+    if isinstance(group, GradGroup):
+        return GroupTimeout(group.set_timeout(value), value)
     import torch
     import torch.distributed as dist
 
-    value = _positive_seconds(seconds)
     if not dist.is_available() or not dist.is_initialized():
         return GroupTimeout(None, value, "there is no process group")
     timeout = timedelta(seconds=value)
@@ -129,9 +139,15 @@ def build_stream_dp_metrics_callback(trainer: Any, output_dir: str) -> Any:
             self._pending: Optional[Dict[str, Any]] = None
             self._warned = False
 
+        def _rank_and_world(self, args: Any) -> Tuple[int, int]:
+            group = getattr(self._trainer, "_dp_group", None)
+            if group is not None:
+                return int(group.rank), int(group.world_size)
+            return int(args.process_index), int(args.world_size)
+
         def _path_for(self, args: Any) -> str:
             if self._path is None:
-                self._path = stream_dp_metrics_path(self._output_dir, int(args.process_index))
+                self._path = stream_dp_metrics_path(self._output_dir, self._rank_and_world(args)[0])
             return self._path
 
         def _warn_once(self, exc: OSError) -> None:
@@ -180,6 +196,7 @@ def build_stream_dp_metrics_callback(trainer: Any, output_dir: str) -> Any:
             fresh = calls > self._calls_seen
             self._calls_seen = calls
             stats = getattr(self._trainer, "last_sync_stats", None) if fresh else None
+            rank, world_size = self._rank_and_world(args)
             record = {
                 "step": int(state.global_step),
                 "loss": None,
@@ -188,8 +205,8 @@ def build_stream_dp_metrics_callback(trainer: Any, output_dir: str) -> Any:
                 "t_sync": float(stats.seconds) if stats is not None else 0.0,
                 "sync_bytes": int(stats.bytes) if stats is not None else 0,
                 "sync_chunks": int(stats.n_chunks) if stats is not None else 0,
-                "world_size": int(args.world_size),
-                "rank": int(args.process_index),
+                "world_size": world_size,
+                "rank": rank,
             }
             if getattr(control, "should_log", False):
                 self._pending = record  # on_log of this very step follows, with the loss
@@ -210,6 +227,40 @@ def build_stream_dp_metrics_callback(trainer: Any, output_dir: str) -> Any:
             self._flush(args)
 
     return StreamDpMetricsCallback()
+
+
+def shard_rows(rows: Any, rank: int, world_size: int) -> Tuple[Any, int, int]:
+    """This rank's share of the training rows, cut to the length of the shortest (B1).
+
+    Returns ``(mine, rows_per_rank, rows_dropped)``. Rank ``r`` takes rows ``r, r + W, r + 2W,
+    ...`` (``datasets``' ``shard(num_shards=W, index=r, contiguous=False)``) and every rank keeps
+    the first ``len(rows) // W`` of its own, so all ranks run the same number of optimizer steps:
+    a rank with one more step than the others would wait for a sync that never comes. The
+    ``len(rows) % W`` rows dropped are the last of the longer shards. With a sequential sampler
+    step ``k`` then holds, over all ranks, rows ``W*k*b`` to ``W*(k+1)*b`` of the original: the
+    batch of ``W*b`` rows a single rank would take.
+
+    ``rows`` is a list or a ``datasets.Dataset``; a list stays a list.
+    """
+    for name, value in (("rank", rank), ("world_size", world_size)):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name} must be an int, got {value!r}")
+    if world_size < 1 or not 0 <= rank < world_size:
+        raise ValueError(f"rank {rank} is not a rank of {world_size}")
+    total = len(rows)
+    per_rank = total // world_size
+    if per_rank == 0:
+        raise ValueError(
+            f"{total} training row(s) cannot be sharded over {world_size} ranks: every rank "
+            "needs at least one row. Use a larger dataset or fewer nodes."
+        )
+    dropped = total - per_rank * world_size
+    if hasattr(rows, "shard") and hasattr(rows, "select"):
+        mine = rows.shard(num_shards=world_size, index=rank, contiguous=False)
+        mine = mine.select(range(per_rank))
+    else:
+        mine = list(rows[rank::world_size][:per_rank])
+    return mine, per_rank, dropped
 
 
 def attach_stream_dp_metrics(trainer: Any, output_dir: str) -> Any:
