@@ -1488,7 +1488,11 @@ a GRPO run, the optimizer step is skipped: weights and optimizer state are
 unchanged, and the step still counts toward the step total and the LR schedule.
 The skipped-step count is logged at the end of the run (as a console warning
 when the fraction exceeds 5%) and persisted in `trainer_state.json` so
-`soup adapters audit` can see it.
+`soup adapters audit` can see it. The warning and each skipped step's record
+name the parameters whose gradient was non-finite before the gradient clip
+(`nan_param_names_source: before_clip`). Where that is not known, they name the
+parameters read after the clip and say `after_clip`; one NaN reaches every
+gradient through the clip, so those names do not point at the cause.
 
 On Apple Silicon, `backend: mlx` trains GRPO natively with the same objective
 (TRL's `loss_type="dapo"` defaults) and the built-in rewards, on a dense or a
