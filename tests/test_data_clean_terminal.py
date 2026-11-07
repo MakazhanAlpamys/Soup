@@ -2,7 +2,7 @@
 
 import json
 import sys
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 
 import pytest
 from rich.console import Console
@@ -56,7 +56,6 @@ def test_real_paths_preserve_input_and_output_bytes(value, kind):
         target = Path("..") / target
     elif kind == "same":
         source = target
-    assert PureWindowsPath(str(source)).suffix == ".jsonl"
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text(json.dumps(ROW) + "\n", encoding="utf-8")
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -114,15 +113,69 @@ def test_dataset_errors_and_json_warnings_are_literal(monkeypatch, value, stage)
         assert f"{label} {shown}" in plain(result)
 
 
-def test_receipt_and_refusal_keep_their_label_styles(monkeypatch):
+def _coloured(monkeypatch):
     monkeypatch.setattr(
         "soup_cli.commands.data_clean.console",
         Console(
             width=500, height=100, force_terminal=True, no_color=False, color_system="standard"
         ),
     )
+
+
+def test_receipt_and_refusal_keep_their_label_styles(monkeypatch):
+    _coloured(monkeypatch)
     good = runner.invoke(app, ["data", "clean", "input.jsonl"])
     bad = runner.invoke(app, ["data", "clean", "missing.jsonl"])
     assert good.exit_code == 0 and bad.exit_code == 1
-    assert "\x1b[1;32m✓ Cleaned dataset saved to:\x1b[0m" in good.output
+    assert "\n\n\x1b[1;32m✓ Cleaned dataset saved to:\x1b[0m" in good.output
     assert "\x1b[31mFile not found:\x1b[0m missing.jsonl" in bad.output
+
+
+@pytest.mark.parametrize(
+    "label,args",
+    [
+        ("Input path must be under the current working directory:", ["../outside.jsonl"]),
+        (
+            "Output path must be under the current working directory:",
+            ["input.jsonl", "-o", "../out.jsonl"],
+        ),
+        (
+            "Output path cannot be the same as input path:",
+            ["input.jsonl", "-o", "input.jsonl"],
+        ),
+        ("Output file already exists:", ["input.jsonl", "-o", "existing.jsonl"]),
+    ],
+)
+def test_every_refusal_starts_with_a_red_label(monkeypatch, label, args):
+    _coloured(monkeypatch)
+    Path("../outside.jsonl").write_text(json.dumps(ROW) + "\n", encoding="utf-8")
+    Path("existing.jsonl").write_text("keep\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["data", "clean", *args])
+
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert f"\x1b[31m{label}\x1b[0m " in result.output
+
+
+@pytest.mark.parametrize(
+    "function,extra,exit_code,expected",
+    [
+        ("load_raw_data", [], 1, "\x1b[31mFailed to load dataset:\x1b[0m boom"),
+        ("atomic_write_text", [], 1, "\x1b[31mFailed to write output file:\x1b[0m boom"),
+        ("detect_format", ["--dry-run"], 0, "\x1b[2mboom\x1b[0m"),
+    ],
+)
+def test_failures_and_the_detection_note_keep_their_styles(
+    monkeypatch, function, extra, exit_code, expected
+):
+    _coloured(monkeypatch)
+
+    def fail(*_args, **_kwargs):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(f"soup_cli.commands.data_clean.{function}", fail)
+
+    result = runner.invoke(app, ["data", "clean", "input.jsonl", *extra])
+
+    assert result.exit_code == exit_code, (result.output, repr(result.exception))
+    assert expected in result.output
