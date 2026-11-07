@@ -1263,6 +1263,21 @@ def train(
         )
         raise typer.Exit(0)
 
+    # --- Layer streaming is single-process (#2585) ---
+    # The earliest point that knows WORLD_SIZE: after the config is loaded and the cloud
+    # hand-off (which runs elsewhere), before the dataset, the Hub resume pull, the run
+    # record and any model work. The trainer setup repeats the check for callers that
+    # never come through this command. Not a config validator: other commands load the
+    # same config in shells where a launcher variable may be left over.
+    if getattr(cfg.training, "stream_layers", False):
+        from soup_cli.trainer.stream_setup import refuse_if_distributed_launch
+
+        try:
+            refuse_if_distributed_launch()
+        except ValueError as exc:
+            console.print(f"[red]{markup_escape(str(exc))}[/]")
+            raise typer.Exit(1) from exc
+
     # --- --push-as / --hf-resume validation ---
     if push_as:
         from soup_cli.utils.hf import validate_repo_id
