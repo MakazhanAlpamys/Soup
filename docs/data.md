@@ -594,6 +594,11 @@ soup data review prefs.jsonl --sample 10
 **Supported log formats:** `langchain`, `openai`, `soup-serve`
 **Supported signals:** `thumbs_up` (rating-based), `regenerations` (latest wins), `user_edit` (edited wins)
 
+For `thumbs_up`, each prompt yields at most one pair. Soup selects the first
+upvoted response with a different downvoted response, then the first such
+downvoted response. Prompts without two distinct responses across the ratings
+yield no pair.
+
 **The `soup-serve` record shape.** The parser reads a top-level `signal` in the
 canonical vocabulary, falling back to a nested `feedback.rating` (`up` / `down`)
 for older logs:
@@ -872,6 +877,8 @@ Or use `.txt` files directly (one document per line).
 {"anchor": "What is Python?", "positive": "Python is a programming language."}
 {"anchor": "What is Python?", "positive": "A programming language.", "negative": "A type of snake."}
 ```
+
+The two lines show the two shapes, and a file uses one of them: a non-blank `negative` on every row, or on none. A mix is refused before the model loads, naming how many rows have a `negative` and how many do not; the validation set is checked on its own.
 
 With `embedding_loss: contrastive` (the default), each row's negatives are the other rows' positives in the same batch, so a batch needs at least two rows: `batch_size: 1` is refused at config load, `batch_size: auto` resolves to at least 2, and the last partial batch of each epoch is dropped. This also applies when `triplet` falls back to contrastive because the rows have no `negative`. Use `triplet` with a `negative` on every row, or `cosine`, to train at batch size 1.
 
@@ -1578,10 +1585,11 @@ needs |d| >= 0.8 and mean lengths at least 10% apart, MINOR |d| >= 0.3 and 5%, s
 consistent one-word gap between near-constant lengths is not flagged —
 `label_imbalance` (KTO desirable:undesirable ratio), `near_duplicates`
 (MinHash/LSH, reuses the `soup data dedup` kernel; requires
-`pip install "soup-cli[data]"`, degrades to an advisory skip otherwise),
+`pip install "soup-cli[data]"`; without it the check is reported as `SKIPPED`
+and the summary line counts it),
 `identical_pairs` (`chosen == rejected` — zero preference signal), and
 `prompt_leak` (the prompt echoed verbatim inside the completion, a common
 synthetic-data pipeline bug). For conversational `chosen` / `rejected` (message
 lists), `length_bias` and `prompt_leak` read only the assistant turns, since the
 leading user turn is the prompt itself. Same OK/MINOR/MAJOR taxonomy and exit codes as
-`soup data doctor`.
+`soup data doctor`; a `SKIPPED` check never raises the overall verdict or the exit code.

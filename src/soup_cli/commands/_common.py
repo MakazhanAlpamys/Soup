@@ -27,5 +27,5 @@ def refuse_output_over_input(
             [(label, path) for label, path in outputs if path],
         )
     except ValueError as exc:
-        console.print(f"[red]{for_terminal(exc)}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(exit_code) from exc

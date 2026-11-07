@@ -141,7 +141,16 @@ def jsonl_command(function: Callable[..., Any]) -> Callable[..., Any]:
                             raise
             except typer.Exit:
                 raise
-            except (Exception, KeyboardInterrupt):
+            except KeyboardInterrupt:
+                raise typer.Exit(code=130) from None
+            except Exception as exc:
+                from rich.console import Console
+
+                from soup_cli.utils.terminal import for_terminal
+
+                Console().print(
+                    f"[bold red]Error:[/] {for_terminal(type(exc).__name__)}: {for_terminal(exc)}"
+                )
                 raise typer.Exit(code=1) from None
         if completed_exit is not None:
             raise typer.Exit(code=completed_exit)
