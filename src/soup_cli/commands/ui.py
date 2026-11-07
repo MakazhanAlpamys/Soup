@@ -8,8 +8,9 @@ from typing import Optional
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.text import Text
 
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import strip_control
 
 console = Console()
 
@@ -132,11 +133,10 @@ def ui(
             except (TypeError, ValueError):
                 valid = False
         if not valid:
-            from rich.markup import escape as _rich_escape
-
             console.print(
-                f"[red]Error:[/] binding non-loopback host '{_rich_escape(str(host))}' "
-                "requires a valid authentication token."
+                Text.assemble(("Error:", "red"),
+                              f" binding non-loopback host '{strip_control(str(host))}' "
+                              "requires a valid authentication token.")
             )
             raise typer.Exit(code=2)
 
@@ -150,17 +150,17 @@ def ui(
     url = f"http://{_url_host(host)}:{port}"
     login_url = f"{url}/?token={token}"
 
-    panel_body = (
-        f"URL:    [bold]{for_terminal(login_url)}[/]\n"
-        f"Token:  [bold]{token}[/]\n\n"
-        f"API endpoints require:\n"
-        f"  [dim]Authorization: Bearer {token}[/]\n\n"
-        f"Pages:\n"
-        f"  [bold]Dashboard[/]      - View experiments, loss charts, system info\n"
-        f"  [bold]New Training[/]   - Create config from templates, start training\n"
-        f"  [bold]Data Explorer[/]  - Browse and inspect datasets\n"
-        f"  [bold]Model Chat[/]     - Chat with a running inference server\n\n"
-        f"Press [bold]Ctrl+C[/] to stop."
+    panel_body = Text.assemble(
+        "URL:    ", (strip_control(login_url), "bold"),
+        "\nToken:  ", (token, "bold"),
+        "\n\nAPI endpoints require:\n  ",
+        (f"Authorization: Bearer {token}", "dim"),
+        "\n\nPages:\n  ",
+        ("Dashboard", "bold"), "      - View experiments, loss charts, system info\n  ",
+        ("New Training", "bold"), "   - Create config from templates, start training\n  ",
+        ("Data Explorer", "bold"), "  - Browse and inspect datasets\n  ",
+        ("Model Chat", "bold"), "     - Chat with a running inference server\n\nPress ",
+        ("Ctrl+C", "bold"), " to stop.",
     )
 
     console.print(
