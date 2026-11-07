@@ -2771,15 +2771,15 @@ class TrainingConfig(BaseModel):
         mode="before",
     )
     @classmethod
-    def _validate_minillm_bool_fields(cls, v):
+    def _validate_minillm_bool_fields(cls, v, info):
         """v0.70.0 Part C — bool guards for MiniLLM toggles."""
         if v is None:
             return v
         if isinstance(v, bool):
             return v
-        raise TypeError(
-            f"v0.70.0 MiniLLM flag must be bool, got {type(v).__name__}"
-        )
+        # Name the field: this validator covers three toggles and used to say only
+        # "v0.70.0 MiniLLM flag", which left the user guessing which key to fix.
+        raise TypeError(f"{info.field_name} must be bool, got {type(v).__name__}")
 
     @field_validator("minillm_pretrain_anchor_path")
     @classmethod
@@ -4768,6 +4768,24 @@ class TrainingConfig(BaseModel):
         from soup_cli.utils.grace_codebook import validate_grace_codebook_dim
 
         return validate_grace_codebook_dim(v)
+
+    # Model-level, not ``field_validator("*", mode="wrap")``: on Pydantic 2.0.0, the declared
+    # minimum, an outer wildcard field wrap handler loses the field context of any inner
+    # validator that takes ``info``, so valid input raised RuntimeError
+    # (#2382#pullrequestreview-5726885957). A model wrap keeps that context and is the same
+    # on 2.0.0 and on current Pydantic.
+    @model_validator(mode="wrap")
+    @classmethod
+    def _typeerror_is_a_validation_error(cls, data, handler):
+        """Let a helper's TypeError surface as a ValidationError instead of a bare crash."""
+        try:
+            return handler(data)
+        except TypeError as exc:
+            # Pydantic does not wrap TypeError, so it escaped SoupConfig() unlabelled and
+            # the CLI printed "Error: TypeError: ..." with no field name. Converting it here
+            # puts it on the ``Config validation error:`` path; the field name comes from the
+            # message the validator raised, since a model-level entry has an empty ``loc``.
+            raise ValueError(str(exc)) from exc
 
 
 class ShipConfig(BaseModel):
