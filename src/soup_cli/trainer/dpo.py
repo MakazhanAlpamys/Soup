@@ -232,10 +232,13 @@ class DPOTrainerWrapper(StreamingSetupMixin):
             # TRL 0.29 removed the prompt cap and its new DPO tokenizer leaves
             # max_length enforcement to callers. Cap the prepared token ids so
             # text and conversational rows keep TRL's own rendering semantics.
+            # #1209 — only rows that overflow max_length are cut; a row that
+            # fits reaches the trainer whole, as for BCO, IPO, KTO and SimPO.
             cap_kwargs = {
                 "max_length": cfg.data.max_length,
                 "max_prompt_length": cfg.data.max_length // 2,
                 "truncation_mode": dpo_config.truncation_mode,
+                "only_when_overflow": True,
             }
             self.trainer.train_dataset = enforce_preference_sequence_limit(
                 self.trainer.train_dataset, **cap_kwargs
