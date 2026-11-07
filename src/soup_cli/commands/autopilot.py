@@ -11,6 +11,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
+from rich.text import Text
 
 from soup_cli.autopilot.analyzer import (
     analyze_dataset,
@@ -24,7 +25,7 @@ from soup_cli.autopilot.decisions import (
 )
 from soup_cli.autopilot.generate_config import build_soup_config, write_yaml
 from soup_cli.config.schema import SFT_KERNEL_AWARE_TASKS
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import strip_control
 from soup_cli.utils.typer_compat import MissingParameter
 
 console = Console()
@@ -61,7 +62,7 @@ def _kernel_display(enabled: bool, note: str | None) -> str:
     qualifies and the package simply isn't there, say so instead.
     """
     if not enabled and note:
-        return f"off ({for_terminal(note)})"
+        return f"off ({strip_control(note)})"
     return str(enabled)
 
 
@@ -140,8 +141,11 @@ def autopilot_cmd(
 
     if goal not in GOAL_TO_TASK:
         console.print(
-            f"[red]Unknown goal '{goal}'. "
-            f"Options: {', '.join(sorted(GOAL_TO_TASK.keys()))}[/]"
+            Text(
+                f"Unknown goal '{strip_control(goal)}'. "
+                f"Options: {', '.join(sorted(GOAL_TO_TASK.keys()))}",
+                style="red",
+            )
         )
         raise typer.Exit(1)
 
@@ -153,7 +157,7 @@ def autopilot_cmd(
     data_path = Path(os.path.realpath(str(data_path)))
 
     if not data_path.exists():
-        console.print(f"[red]Data file not found: {data_path}[/]")
+        console.print(Text(f"Data file not found: {strip_control(data_path)}", style="red"))
         raise typer.Exit(1)
 
     # GPU budget
@@ -162,7 +166,7 @@ def autopilot_cmd(
         try:
             vram_gb = parse_gpu_budget(gpu_budget)
         except ValueError as exc:
-            console.print(f"[red]{exc}[/]")
+            console.print(Text(strip_control(exc), style="red"))
             raise typer.Exit(1)
 
     # Analyze
@@ -170,7 +174,7 @@ def autopilot_cmd(
     try:
         dataset_profile = analyze_dataset(str(data_path))
     except ValueError as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(Text(strip_control(exc), style="red"))
         raise typer.Exit(1)
     model_profile = analyze_model(model)
     hardware_profile = analyze_hardware()
@@ -185,7 +189,7 @@ def autopilot_cmd(
             vram_gb=effective_vram,
         )
     except ValueError as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(Text(strip_control(exc), style="red"))
         raise typer.Exit(1)
 
     # #1212 — when the GPU qualifies but a package is missing, the panel names
@@ -200,33 +204,37 @@ def autopilot_cmd(
     # Render decision summary
     console.print(
         Panel(
-            f"Dataset:    {data_path.name}\n"
-            f"  format:   {dataset_profile.format}\n"
-            f"  samples:  {dataset_profile.samples:,}\n"
-            f"  tokens:   avg {dataset_profile.avg_tokens}, p95 {dataset_profile.p95_tokens}\n"
-            f"  quality:  {dataset_profile.quality}\n\n"
-            f"Model:      {model_profile.name}\n"
-            f"  params:   {model_profile.params_b:.1f}B\n"
-            f"  context:  {model_profile.context}\n\n"
-            f"Hardware:   {hardware_profile.gpu_name}\n"
-            f"  vram:     {hardware_profile.vram_gb:.1f}GB (budget: {effective_vram:.1f}GB)\n\n"
-            f"Goal:       {goal} -> task: {cfg.task}",
+            Text(
+                f"Dataset:    {strip_control(data_path.name)}\n"
+                f"  format:   {dataset_profile.format}\n"
+                f"  samples:  {dataset_profile.samples:,}\n"
+                f"  tokens:   avg {dataset_profile.avg_tokens}, p95 {dataset_profile.p95_tokens}\n"
+                f"  quality:  {dataset_profile.quality}\n\n"
+                f"Model:      {strip_control(model_profile.name)}\n"
+                f"  params:   {model_profile.params_b:.1f}B\n"
+                f"  context:  {model_profile.context}\n\n"
+                f"Hardware:   {strip_control(hardware_profile.gpu_name)}\n"
+                f"  vram:     {hardware_profile.vram_gb:.1f}GB (budget: {effective_vram:.1f}GB)\n\n"
+                f"Goal:       {goal} -> task: {cfg.task}"
+            ),
             title="Soup Autopilot",
         )
     )
     console.print(
         Panel(
-            f"Quantization: {cfg.training.quantization}\n"
-            f"PEFT: LoRA r={cfg.training.lora.r}, alpha={cfg.training.lora.alpha}\n"
-            f"Batch size: {cfg.training.batch_size} x grad_accum "
-            f"{cfg.training.gradient_accumulation_steps}\n"
-            f"Learning rate: {cfg.training.lr}\n"
-            f"Epochs: {cfg.training.epochs}\n"
-            f"Max length: {cfg.data.max_length}\n"
-            f"Flash Attention: "
-            f"{_kernel_display(cfg.training.use_flash_attn, kernel_notes['flash_attn'])}\n"
-            f"Liger Kernel: "
-            f"{_kernel_display(cfg.training.use_liger, kernel_notes['liger'])}",
+            Text(
+                f"Quantization: {cfg.training.quantization}\n"
+                f"PEFT: LoRA r={cfg.training.lora.r}, alpha={cfg.training.lora.alpha}\n"
+                f"Batch size: {cfg.training.batch_size} x grad_accum "
+                f"{cfg.training.gradient_accumulation_steps}\n"
+                f"Learning rate: {cfg.training.lr}\n"
+                f"Epochs: {cfg.training.epochs}\n"
+                f"Max length: {cfg.data.max_length}\n"
+                f"Flash Attention: "
+                f"{_kernel_display(cfg.training.use_flash_attn, kernel_notes['flash_attn'])}\n"
+                f"Liger Kernel: "
+                f"{_kernel_display(cfg.training.use_liger, kernel_notes['liger'])}"
+            ),
             title="Autopilot Decisions",
         )
     )
@@ -247,4 +255,4 @@ def autopilot_cmd(
             raise typer.Exit()
 
     write_yaml(cfg, output_path)
-    console.print(f"[green]Config written:[/] {output_path}")
+    console.print(Text.assemble(("Config written:", "green"), f" {strip_control(output_path)}"))
