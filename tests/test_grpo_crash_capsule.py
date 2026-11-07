@@ -1,0 +1,401 @@
+"""CPU safety and serialization tests for the opt-in GRPO crash capsule."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import sys
+from contextlib import contextmanager
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+HARNESS = ROOT / "benchmarks" / "harness" / "grpo_crash_capsule.py"
+
+
+def _module():
+    name = "grpo_crash_capsule_test_module"
+    sys.modules.pop(name, None)
+    spec = importlib.util.spec_from_file_location(name, HARNESS)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_harness_keeps_torch_import_lazy():
+    source = HARNESS.read_text(encoding="utf-8")
+
+    assert "\nimport torch\n" not in source
+    assert "def _torch()" in source
+
+
+def test_writer_requires_a_new_user_named_directory_and_never_overwrites(tmp_path):
+    harness = _module()
+    target = tmp_path / "issue342-capture"
+    writer = harness.CapsuleWriter.create(target, max_total_bytes=512)
+
+    assert writer.directory == target / "rank000"
+    writer.write_json("manifest.json", {"schema": 1})
+    assert json.loads((writer.directory / "manifest.json").read_text(encoding="utf-8")) == {
+        "schema": 1
+    }
+    with pytest.raises(harness.CapsuleError, match="one relative component"):
+        writer.write_json("../outside.json", {"no": "write"})
+    with pytest.raises(harness.CapsuleError, match="overwrite capsule file"):
+        writer.write_json("manifest.json", {"schema": 2})
+    with pytest.raises(FileExistsError, match="refusing to overwrite"):
+        harness.CapsuleWriter.create(target, max_total_bytes=512)
+
+
+def test_writer_enforces_its_per_rank_cap_before_creating_the_file(tmp_path):
+    harness = _module()
+    writer = harness.CapsuleWriter.create(tmp_path / "bounded", max_total_bytes=48)
+
+    with pytest.raises(harness.CapsuleSizeLimitError, match="cap"):
+        writer.write_json("too-large.json", {"row": "x" * 100})
+    assert list(writer.directory.iterdir()) == []
+
+
+def test_writer_refuses_a_global_cap_smaller_than_the_world_size(tmp_path):
+    harness = _module()
+
+    with pytest.raises(ValueError, match="at least world_size"):
+        harness.CapsuleWriter.create(
+            tmp_path / "too-small-for-ranks", max_total_bytes=1, rank=0, world_size=2
+        )
+
+    assert not (tmp_path / "too-small-for-ranks").exists()
+
+
+def test_multi_rank_writer_validates_distributed_support_before_creating_a_root(tmp_path):
+    harness = _module()
+    target = tmp_path / "needs-distributed"
+
+    with pytest.raises(harness.CapsuleError, match="requires torch_module"):
+        harness.CapsuleWriter.create(target, max_total_bytes=48, world_size=2)
+
+    assert not target.exists()
+
+
+def test_multi_rank_writer_broadcasts_rank_zero_creation_failure_before_barrier(tmp_path):
+    harness = _module()
+    target = tmp_path / "already-exists"
+    target.mkdir()
+
+    class Distributed:
+        broadcast_calls = []
+        barrier_calls = 0
+
+        @staticmethod
+        def is_available():
+            return True
+
+        @staticmethod
+        def is_initialized():
+            return True
+
+        @classmethod
+        def broadcast_object_list(cls, objects, src):
+            cls.broadcast_calls.append((list(objects), src))
+
+        @classmethod
+        def barrier(cls):
+            cls.barrier_calls += 1
+
+    fake_torch = SimpleNamespace(distributed=Distributed)
+    with pytest.raises(harness.CapsuleError, match="rank zero could not create"):
+        harness.CapsuleWriter.create(
+            target,
+            max_total_bytes=48,
+            rank=0,
+            world_size=2,
+            torch_module=fake_torch,
+        )
+
+    assert Distributed.broadcast_calls[0][1] == 0
+    assert Distributed.barrier_calls == 0
+
+
+def test_capsule_requires_explicit_sensitive_row_acknowledgement(tmp_path):
+    harness = _module()
+
+    with pytest.raises(harness.CapsuleError, match="acknowledge_training_rows=True"):
+        harness.Issue342CrashCapsule(
+            SimpleNamespace(model=object()), output_dir=tmp_path / "not-created"
+        )
+    assert not (tmp_path / "not-created").exists()
+
+
+def test_anomaly_capsule_is_weights_only_loadable_and_precedes_a_watchdog(tmp_path):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+
+    class Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.lora_A = torch.nn.Linear(1, 1, bias=False)
+
+    class Trainer:
+        def __init__(self):
+            self.model = Model()
+            self.state = SimpleNamespace(global_step=7)
+            self.callback_handler = SimpleNamespace(callbacks=[Watchdog(self.model)])
+
+        def add_callback(self, callback):
+            self.callback_handler.callbacks.append(callback)
+
+        def _compute_loss(self, model, inputs):
+            return (model.lora_A(inputs["input_ids"]) * inputs["poison"]).sum()
+
+    class Watchdog:
+        def __init__(self, model):
+            self.model = model
+
+        def on_pre_optimizer_step(self, args, state, control, **kwargs):
+            del args, state, kwargs
+            for parameter in self.model.parameters():
+                parameter.grad = None
+            return control
+
+    trainer = Trainer()
+    harness.Issue342CrashCapsule(
+        trainer,
+        output_dir=tmp_path / "capsule",
+        max_total_bytes=1 << 20,
+        acknowledge_training_rows=True,
+    ).install()
+    assert type(trainer.callback_handler.callbacks[0]).__name__ != "Watchdog"
+
+    inputs = {
+        "input_ids": torch.ones((1, 1), requires_grad=True),
+        "poison": torch.tensor([[float("nan")]]),
+    }
+    loss = trainer._compute_loss(trainer.model, inputs)
+    loss.backward()
+    for callback in trainer.callback_handler.callbacks:
+        callback.on_pre_optimizer_step(None, trainer.state, None, model=trainer.model)
+    assert trainer.model.lora_A.weight.grad is None
+
+    rank_dir = tmp_path / "capsule" / "rank000"
+    payload_path = rank_dir / "capsule_000001.pt"
+    summary_path = rank_dir / "capsule_000001.json"
+    assert payload_path.is_file()
+    payload = torch.load(payload_path, weights_only=True)
+    assert torch.equal(payload["microbatches"][0]["input_ids"], inputs["input_ids"])
+    assert "lora_A.weight" in payload["nonfinite_gradient_names"]
+    assert payload["lora_observations"]["lora_A"][0]["input"]["finite"] is True
+    assert payload["first_nonfinite_activation"]["stage"] == "grad_output"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["reason"] == "nonfinite_before_watchdog"
+    assert summary["nonfinite_gradient_names"] == ["lora_A.weight"]
+
+
+def test_a_finite_step_leaves_no_training_rows_on_disk(tmp_path):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+
+    class Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.tensor([1.0]))
+
+    class Trainer:
+        def __init__(self):
+            self.model = Model()
+            self.state = SimpleNamespace(global_step=0)
+            self.callback_handler = SimpleNamespace(callbacks=[])
+
+        def add_callback(self, callback):
+            self.callback_handler.callbacks.append(callback)
+
+        def _compute_loss(self, model, inputs):
+            return (model.weight * inputs["input_ids"]).sum()
+
+    trainer = Trainer()
+    original_loss = trainer._compute_loss
+    capsule = harness.Issue342CrashCapsule(
+        trainer,
+        output_dir=tmp_path / "normal",
+        max_total_bytes=1 << 20,
+        acknowledge_training_rows=True,
+        instrument_lora_operands=False,
+    ).install()
+    trainer._compute_loss(trainer.model, {"input_ids": torch.ones(1)}).backward()
+    callback = trainer.callback_handler.callbacks[0]
+    callback.on_pre_optimizer_step(None, trainer.state, None)
+    callback.on_step_end(None, trainer.state, None)
+
+    names = sorted(path.name for path in (tmp_path / "normal" / "rank000").iterdir())
+    assert names == ["capture_policy.json", "manifest.json"]
+    capsule.close()
+    assert trainer._compute_loss == original_loss
+    assert trainer.callback_handler.callbacks == []
+
+
+def test_install_fails_closed_when_callback_order_cannot_be_verified(tmp_path):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+
+    class Trainer:
+        def __init__(self):
+            self.model = torch.nn.Linear(1, 1)
+            self.state = SimpleNamespace(global_step=0)
+
+        def _compute_loss(self, model, inputs):
+            return model(inputs["input_ids"]).sum()
+
+        def add_callback(self, callback):
+            del callback
+
+    trainer = Trainer()
+    original_loss = trainer._compute_loss
+    capsule = harness.Issue342CrashCapsule(
+        trainer,
+        output_dir=tmp_path / "unsupported-trainer",
+        max_total_bytes=1 << 20,
+        acknowledge_training_rows=True,
+        instrument_lora_operands=False,
+    )
+
+    with pytest.raises(harness.CapsuleError, match="callback_handler.callbacks"):
+        capsule.install()
+
+    assert trainer._compute_loss == original_loss
+    assert capsule._closed is True
+
+
+def test_unknown_sdpa_mode_is_rejected_explicitly():
+    harness = _module()
+
+    with pytest.raises(ValueError, match="unknown SDPA mode"):
+        with harness.sdpa_backend("not-a-backend"):
+            pass
+
+
+def test_sdpa_baseline_leaves_the_native_policy_untouched(monkeypatch):
+    harness = _module()
+
+    def must_not_import_torch():
+        raise AssertionError("baseline must not force an SDPA backend")
+
+    monkeypatch.setattr(harness, "_torch", must_not_import_torch)
+
+    with harness.sdpa_backend("baseline"):
+        pass
+
+
+def test_cuda_sync_records_the_observed_boundary_before_reraising(tmp_path):
+    harness = _module()
+    writer = harness.CapsuleWriter.create(tmp_path / "sync", max_total_bytes=4096)
+
+    class Cuda:
+        @staticmethod
+        def is_available():
+            return True
+
+        @staticmethod
+        def synchronize():
+            raise RuntimeError("simulated asynchronous device error")
+
+    capsule = object.__new__(harness.Issue342CrashCapsule)
+    capsule.torch = SimpleNamespace(cuda=Cuda())
+    capsule.writer = writer
+    capsule._serial = 4
+    capsule.rank = 0
+    capsule.world_size = 1
+
+    with pytest.raises(RuntimeError, match="simulated asynchronous"):
+        capsule._synchronize("before_loss")
+
+    error = json.loads((writer.directory / "cuda_error_000004_before_loss.json").read_text())
+    assert error["boundary"] == "before_loss"
+
+
+def test_sdpa_prefers_the_current_torch_attention_context_manager(monkeypatch):
+    harness = _module()
+    calls = []
+
+    @contextmanager
+    def sdpa_kernel(backends):
+        calls.append(backends)
+        yield
+
+    backend_type = SimpleNamespace(MATH="math", FLASH_ATTENTION="flash")
+    fake_torch = SimpleNamespace(
+        nn=SimpleNamespace(
+            attention=SimpleNamespace(sdpa_kernel=sdpa_kernel, SDPBackend=backend_type)
+        )
+    )
+    monkeypatch.setattr(harness, "_torch", lambda: fake_torch)
+
+    with harness.sdpa_backend("math"):
+        pass
+
+    assert calls == [["math"]]
+
+
+def test_sdpa_current_api_refuses_an_unavailable_requested_backend(monkeypatch):
+    harness = _module()
+    fake_torch = SimpleNamespace(
+        nn=SimpleNamespace(
+            attention=SimpleNamespace(sdpa_kernel=lambda _: None, SDPBackend=object())
+        )
+    )
+    monkeypatch.setattr(harness, "_torch", lambda: fake_torch)
+
+    with pytest.raises(RuntimeError, match="does not expose"):
+        with harness.sdpa_backend("flash"):
+            pass
+
+
+def test_sdpa_uses_the_legacy_torch_213_context_manager_when_needed(monkeypatch):
+    harness = _module()
+    calls = []
+
+    @contextmanager
+    def legacy(**kwargs):
+        calls.append(kwargs)
+        yield
+
+    fake_torch = SimpleNamespace(
+        nn=SimpleNamespace(),
+        backends=SimpleNamespace(cuda=SimpleNamespace(sdp_kernel=legacy)),
+    )
+    monkeypatch.setattr(harness, "_torch", lambda: fake_torch)
+
+    with harness.sdpa_backend("mem_efficient"):
+        pass
+
+    assert calls == [
+        {
+            "enable_flash": False,
+            "enable_math": False,
+            "enable_mem_efficient": True,
+            "enable_cudnn": False,
+        }
+    ]
+
+
+def test_sdpa_legacy_context_omits_an_unsupported_cudnn_keyword(monkeypatch):
+    harness = _module()
+    calls = []
+
+    @contextmanager
+    def legacy(enable_flash, enable_math, enable_mem_efficient):
+        calls.append((enable_flash, enable_math, enable_mem_efficient))
+        yield
+
+    fake_torch = SimpleNamespace(
+        nn=SimpleNamespace(),
+        backends=SimpleNamespace(cuda=SimpleNamespace(sdp_kernel=legacy)),
+    )
+    monkeypatch.setattr(harness, "_torch", lambda: fake_torch)
+
+    with harness.sdpa_backend("math"):
+        pass
+
+    assert calls == [(False, True, False)]
