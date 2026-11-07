@@ -381,6 +381,9 @@ def make_generator(
 
     _gen.batch = _batch
     _gen.batch_size = batch_size
+    # The loaded ``(model, tokenizer, device)``: a caller that needs the same model with another
+    # token budget passes this back as ``loaded=`` instead of loading the weights a second time.
+    _gen.loaded = (model, tokenizer, dev)
     return _gen
 
 

@@ -3542,6 +3542,9 @@ Usage: `soup ship [OPTIONS] [<command>] [ARGS]...`
 | `--push` | text |  |  | Post the verdict as a GitHub PR comment (owner/repo#N). Auth via GITHUB_TOKEN / GH_TOKEN; needs the `gh` CLI. |
 | `--device` | text |  |  | Device for the live run (cuda / cpu). |
 | `--chat-template-kwargs` | text |  |  | Live chat-template variables as a JSON object, e.g. {"enable_thinking":false}. |
+| `--gate` | text |  |  | Decision gate: loop-v2 = SHIP needs the --corrections learned, the --held-out edits not significantly worse and the suites holding; the task win is information only. Live run only. |
+| `--corrections` | text |  |  | JSONL of corrections for --gate loop-v2: {edit_id, expected, original, paraphrases}. Check 1 asks both versions every paraphrase. |
+| `--held-out` | text |  |  | JSONL of held-out edits for --gate loop-v2: {edit_id, prompt, expected, original}. Check 2: the new version must not be significantly worse on them. |
 
 ## `soup shrink`
 
