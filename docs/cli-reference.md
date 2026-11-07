@@ -46,7 +46,7 @@ Usage: `soup [OPTIONS] <command> [ARGS]...`
 
 | Command | Summary |
 |---|---|
-| [`soup ab`](#soup-ab) | Two-sided mSPRT sequential A/B harness on latency / judge_score / retry_rate: reports whether the treatment is better or worse, valid under re-running after every new row (v0.63.0). |
+| [`soup ab`](#soup-ab) | Two-sided sequential A/B harness on latency / judge_score / retry_rate (Bayes factor with a confidence-sequence accept rule): reports whether the treatment is better or worse, valid under re-running after every new row (v0.63.0). |
 | [`soup adapters`](#soup-adapters) | Adapter management: list, info, compare LoRA adapters. |
 | [`soup advise`](#soup-advise) | Pre-flight decision: PROMPT_ENG / RAG / SFT / DPO / GRPO. Run BEFORE you spend 8 hours on a GPU (v0.54.0). |
 | [`soup agent`](#soup-agent) | Agent Forge: spec -> tool-calling dataset / train / eval (v0.46.0). |
@@ -127,7 +127,7 @@ Usage: `soup [OPTIONS] <command> [ARGS]...`
 
 ## `soup ab`
 
-Two-sided mSPRT sequential A/B harness on latency / judge_score / retry_rate: reports whether the treatment is better or worse, valid under re-running after every new row (v0.63.0).
+Two-sided sequential A/B harness on latency / judge_score / retry_rate (Bayes factor with a confidence-sequence accept rule): reports whether the treatment is better or worse, valid under re-running after every new row (v0.63.0).
 
 Usage: `soup ab [OPTIONS]`
 
@@ -545,7 +545,7 @@ Usage: `soup apply [OPTIONS]`
 |---|---|---|---|---|
 | `--config`, `-c` | text | `soup.yaml` |  | Path to soup.yaml. |
 | `--state` | text | `soup.tfstate` |  | Path to the state file written by `soup plan`. |
-| `--dry-run` | flag | off |  | Verify drift and exit without invoking training. |
+| `--dry-run` | flag | off |  | Verify drift and exit without marking the plan as applied. |
 | `--minillm-on-policy` | flag | off |  | Use on-policy MiniLLM; requires training.minillm_enabled=true on task=distill. |
 
 ## `soup attest`
@@ -2009,6 +2009,7 @@ Subcommands:
 - [`leaderboard`](#soup-eval-leaderboard)
 - [`lock`](#soup-eval-lock)
 - [`quant-check`](#soup-eval-quant-check)
+- [`retention`](#soup-eval-retention)
 - [`unlearning`](#soup-eval-unlearning)
 
 ### `soup eval against`
@@ -2301,6 +2302,27 @@ Usage: `soup eval quant-check [OPTIONS]`
 | `--tasks` | text |  | yes | JSONL eval tasks file (see 'soup eval custom') |
 | `--format` | text | `table` |  | Output format: table \| json \| markdown |
 | `--allow-stub` | flag | off |  | Allow deterministic stub generators if live model loading fails. |
+
+### `soup eval retention`
+
+Measure accumulated forgetting across a series of versions (exit 0 / 2 / 3 / 1).
+
+Usage: `soup eval retention [OPTIONS]`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `--model`, `-m` | text |  | yes | Base or merged model (HF id or path) to evaluate. |
+| `--label` | text |  | yes | Version label for this candidate (unique in the ledger), e.g. v3. |
+| `--ledger` | text | `retention.json` |  | Retention ledger JSON (cwd-contained; created by --add-task + --record). |
+| `--adapter` | text |  |  | LoRA adapter directory to evaluate on top of --model. |
+| `--add-task` | text, repeatable |  |  | Register a control task as NAME=PATH (a task-eval JSONL, the format of soup ship --task-eval). Repeatable. Its sha256 is pinned: a later change to the file is refused. Re-pass an existing NAME with the new PATH of a moved file to update the stored path. |
+| `--record` | flag | off |  | Append this version's scores (and any new tasks) to the ledger. |
+| `--threshold` | float | `0.05` |  | A drop below the best earlier score larger than this regresses (0.0-1.0, an absolute accuracy difference as a fraction). |
+| `--output`, `-o` | text |  |  | Write the full task x version matrix and summary as JSON. |
+| `--device` | text |  |  | Device for the live run (cuda / cpu). |
+| `--config` | text |  |  | soup.yaml of the training run: its training.quantization (4bit / 8bit) is reused for the live load, as soup ship --config does. Nothing else in the file is used. |
+| `--chat-template-kwargs` | text |  |  | Live chat-template variables as a JSON object, e.g. {"enable_thinking":false}. |
+| `--require-history` | flag | off |  | Refuse (exit 3) unless the ledger already holds a recorded version. Use it in CI: a lost or reset ledger would otherwise make every task new. |
 
 ### `soup eval unlearning`
 
@@ -2788,8 +2810,8 @@ Usage: `soup mcp serve [OPTIONS]`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
-| `--allow-mutating` | flag | off |  | Enable the plan-only mutating tools (train_start / export). Even when enabled they only render the command that would run - v1 never executes training or export. Off by default: those tools refuse. |
-| `--allow-execute` | flag | off |  | Reserve the execution gate for future MCP tools. Implies --allow-mutating, but train_start and export remain plan-only and never execute in this version. |
+| `--allow-mutating` | flag | off |  | Enable the plan-only mutating tools (train_start / export): they only render the command that would run. They never execute training or export unless --allow-execute is also given. Off by default: those tools refuse. |
+| `--allow-execute` | flag | off |  | Enable the execution tools train_execute / export_execute, which run a plan once the confirmation token from train_start / export is sent back. Implies --allow-mutating. Refused with --transport sse or http: execution is stdio only. |
 | `--transport` | text | `stdio` |  | stdio (default), sse, or http. stdio speaks JSON-RPC over the process pipes and is what a client that spawns Soup wants. sse and http open a local listener instead, for remote or multi-client setups, and require a Bearer token. |
 | `--host` | text |  |  | Interface to bind for --transport sse/http. Defaults to 127.0.0.1. Binding anything else exposes the server to the network, where the Bearer token is the only gate. |
 | `--port` | integer |  |  | Port to bind for --transport sse/http. Defaults to 8765. |
@@ -3459,7 +3481,7 @@ Usage: `soup serve [OPTIONS]`
 | `--bank-strength` | float | `1.0` |  | Vector-bank delta strength multiplier. Ignored when --bank is unset. |
 | `--mole` | text |  |  | Path to a MoLE training output dir (mole_gate.pt + mole_manifest.json). Serves the base + N frozen task LoRAs with per-token gate blending at decode time. Requires --backend transformers; not combinable with --bank / --steer / --adapters. (v0.71.17 #259) |
 | `--kv-cache-type` | text |  |  | KV-cache type for decoding: q8_0 (8-bit quantized, needs hqq) / bf16 / f16 (cache dtype) / fp8 (vLLM+Hopper only). Transformers backend only — vLLM / SGLang routing is in the blocked tail. v0.71.14 (#140). |
-| `--tool-auth-token` | text |  |  | Require 'Authorization: Bearer &lt;token>' on the tool endpoints (/v1/tools/python, /v1/tools/bash, /v1/tools/web_search). Without it, /v1/tools/python and /v1/tools/bash answer 401 on every bind and a non-loopback --host is refused. 16-128 characters of A-Z, a-z, 0-9, '\_' and '-', as secrets.token_urlsafe(32) makes. Env: `SOUP_TOOL_AUTH_TOKEN`. |
+| `--tool-auth-token` | text |  |  | Require 'Authorization: Bearer &lt;token>' on the tool endpoints (/v1/tools/python, /v1/tools/bash, /v1/tools/web_search), and on /v1/thumbs and the adapter routes (/v1/adapters, /v1/adapters/activate/&lt;name>, /v1/adapters/deactivate). Without it, /v1/tools/python and /v1/tools/bash answer 401 on every bind and a non-loopback --host is refused. 16-128 characters of A-Z, a-z, 0-9, '\_' and '-', as secrets.token_urlsafe(32) makes. Env: `SOUP_TOOL_AUTH_TOKEN`. |
 
 ## `soup ship`
 
@@ -3679,7 +3701,7 @@ Usage: `soup train [OPTIONS]`
 | `--energy-country` | text | `USA` |  | ISO 3166-1 alpha-3 country code for the CO2 grid-intensity estimate used by --track-energy (default USA). |
 | `--energy-out` | text |  |  | Write the --track-energy measurement to this JSON file (cwd-contained) so `soup bom emit --energy <path>` can consume it. v0.71.15. |
 | `--cloud` | text |  |  | Train on a cloud GPU instead of locally (v0.71.18 #16). Supported: modal, lambda, runpod. Renders a cloud app stub from the config (plan-only); use --cloud-submit to submit live. |
-| `--gpu` | text | `a100` |  | Cloud GPU type for --cloud (t4 / l4 / a10 / a10g / a100 / a100-80gb / l40s / h100 / a6000). Default a100. Provider-specific allowlists apply. |
+| `--gpu` | text | `a100` |  | Cloud GPU type for --cloud. modal: t4, l4, a10g, a100, a100-80gb, l40s, h100. lambda: a10, a100, a6000, h100. runpod: a100, a40, h100, rtx3090, rtx4090. Default a100. A type another provider lists is refused with exit 2. |
 | `--cloud-submit` | flag | off |  | With --cloud, submit the rendered run live via the cloud's SDK or API (gated on respective provider token/API key). Default is plan-only (render + print the command). Lambda requires a registered SSH key. |
 
 ## `soup tui`

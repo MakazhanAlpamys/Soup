@@ -9,6 +9,7 @@ from __future__ import annotations
 import warnings
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
@@ -432,10 +433,22 @@ def test_frozen_boundary_export_is_independent_and_conflicting_base_is_refused(
         runtime.close()
 
 
-@pytest.mark.parametrize("target", ["lm_head", "model.embed_tokens"])
+# PEFT's _set_trainable wraps every module whose name ends with an entry, so
+# the suffixes "head" and "_tokens" name the boundaries as surely as the full
+# names do (#2548).
+@pytest.mark.parametrize(
+    ("target", "refused"),
+    [
+        ("lm_head", "lm_head"),
+        ("head", "lm_head"),
+        ("model.embed_tokens", "model.embed_tokens"),
+        ("embed_tokens", "model.embed_tokens"),
+        ("_tokens", "model.embed_tokens"),
+    ],
+)
 @pytest.mark.parametrize("as_string", [False, True])
 def test_modules_to_save_is_refused_before_peft_or_streaming(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str, as_string: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str, refused: str, as_string: bool
 ) -> None:
     _requires_train_extra()
     import peft
@@ -455,7 +468,9 @@ def test_modules_to_save_is_refused_before_peft_or_streaming(
 
     monkeypatch.setattr(peft, "get_peft_model", must_not_run)
     monkeypatch.setattr(layer_stream_runtime, "install_streaming", must_not_run)
-    with pytest.raises(ValueError, match="modules_to_save.*frozen streamed boundary"):
+    with pytest.raises(
+        ValueError, match=f"modules_to_save.*frozen streamed boundary '{refused}'"
+    ):
         layer_stream_runtime.build_streamed_model(
             model_id=weights,
             shard_dir=shards,
@@ -465,6 +480,92 @@ def test_modules_to_save_is_refused_before_peft_or_streaming(
             dtype="float32",
             pin=False,
         )
+
+
+def _tiny_boundaries(*, head_alias: str | None = None) -> Any:
+    """Embedding, norm and head under Llama's names; ``head_alias`` registers the head twice."""
+    from torch import nn
+
+    class Tiny(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.model = nn.Module()
+            self.model.embed_tokens = nn.Embedding(4, 2)
+            self.model.norm = nn.LayerNorm(2)
+            self.lm_head = nn.Linear(2, 4, bias=False)
+            if head_alias is not None:
+                setattr(self, head_alias, self.lm_head)
+
+        def get_input_embeddings(self) -> Any:
+            return self.model.embed_tokens
+
+        def get_output_embeddings(self) -> Any:
+            return self.lm_head
+
+    return Tiny()
+
+
+_STREAMED_HEAD = SimpleNamespace(large_keys=("lm_head.weight",))
+
+
+def test_a_name_that_is_not_a_suffix_of_a_boundary_is_not_refused() -> None:
+    _requires_train_extra()
+    from soup_cli.utils.layer_stream_runtime import _refuse_trainable_streamed_boundary
+
+    for target in ("embed", "lm", "model", "norm"):
+        lora = SimpleNamespace(modules_to_save=[target])
+        _refuse_trainable_streamed_boundary(_tiny_boundaries(), _STREAMED_HEAD, lora)
+    lora = SimpleNamespace(modules_to_save=["unrelated", "head"])
+    with pytest.raises(ValueError, match="frozen streamed boundary 'lm_head'"):
+        _refuse_trainable_streamed_boundary(_tiny_boundaries(), _STREAMED_HEAD, lora)
+
+
+def test_a_second_name_of_a_boundary_is_refused_too() -> None:
+    # PEFT's _set_trainable walks named_modules(remove_duplicate=False), so a
+    # suffix of a boundary's second registered name is wrapped as well.
+    _requires_train_extra()
+    from soup_cli.utils.layer_stream_runtime import _refuse_trainable_streamed_boundary
+
+    model = _tiny_boundaries(head_alias="output_proj")
+    lora = SimpleNamespace(modules_to_save=["output_proj"])
+    with pytest.raises(ValueError, match="frozen streamed boundary 'output_proj'"):
+        _refuse_trainable_streamed_boundary(model, _STREAMED_HEAD, lora)
+
+
+def test_a_tied_checkpoint_still_builds_with_a_suffix_modules_to_save(tmp_path: Path) -> None:
+    # A tied checkpoint streams neither boundary (no large keys), so the
+    # wider suffix rule must still let PEFT wrap the resident head.
+    _requires_train_extra()
+    import torch
+    from peft.utils import ModulesToSaveWrapper
+
+    from soup_cli.utils.layer_shard import shard_checkpoint
+    from soup_cli.utils.layer_stream_runtime import build_streamed_model
+    from tests.test_issue1048_lora_head_save_resume import _lora, _tiny_llama_dir
+
+    weights = _tiny_llama_dir(tmp_path, tie=True)
+    shards = str(tmp_path / "shards")
+    index = shard_checkpoint(weights, shards, dtype="float32", arch="llama")
+    assert not tuple(getattr(index, "large_keys", ()) or ())
+    lora = _lora(["q_proj"])
+    lora.modules_to_save = ["head"]
+    model, runtime = build_streamed_model(
+        model_id=weights,
+        shard_dir=shards,
+        index=index,
+        lora_config=lora,
+        device="cpu",
+        dtype="float32",
+        pin=False,
+    )
+    try:
+        assert isinstance(model.base_model.model.lm_head, ModulesToSaveWrapper)
+        with torch.no_grad():
+            logits = model(input_ids=torch.tensor([[1, 2, 3, 4]])).logits
+        assert logits.shape == (1, 4, 64)
+        assert torch.isfinite(logits).all()
+    finally:
+        runtime.close()
 
 
 @pytest.mark.parametrize("target", ["lm_head", "embed_tokens"])

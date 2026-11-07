@@ -1010,7 +1010,8 @@ PEFT placement overrides must stay consistent with the runtime's own buffers;
 automatic redistribution cannot relocate those buffers.
 Loading an included frozen boundary weight that differs from that cache is refused with a base/cache
 diagnostic rather than silently ignoring it. The lower-level streaming builder also
-refuses `modules_to_save` on these frozen boundaries; Soup does not expose that PEFT field.
+refuses `modules_to_save` on these frozen boundaries, under any name PEFT matches by suffix
+(so `["head"]` is refused like `["lm_head"]`); Soup does not expose that PEFT field.
 CPU tests with PEFT 0.20.0 and 0.21.0 cover exact default-adapter reloads and SFT/DPO
 checkpoint continuation, including DPO's frozen `ref` adapter. Creating that reference
 uses a model-scoped injection bridge that restores streaming wrappers even if PEFT fails.
@@ -1309,6 +1310,47 @@ directory is refused like a directory symlink. A copy made earlier is reused onl
 snapshot still passes these checks: when its layout changes into a refused one afterwards,
 the next run stops with the same message and leaves the copy in place.
 
+
+### Forward-only inference mode (API only, no CLI yet)
+
+The streaming runtime can also *run* a model that does not fit in VRAM, without training it.
+`soup_cli.utils.stream_inference.build_streamed_inference_model` builds the same streamed model
+a training run uses (same shard cache, RAM or disk tier, buffer pool, prefetch, NF4 rebuild),
+but with no LoRA adapter and without importing PEFT: eval mode, every parameter frozen, no
+gradient checkpointing, `use_cache=False`.
+
+```python
+from soup_cli.utils.stream_inference import build_streamed_inference_model
+
+with build_streamed_inference_model(model_id="org/model", shard_dir=shard_dir) as stream:
+    logits = stream.logits(input_ids, attention_mask)             # (batch, seq_len, vocab)
+    log_probs = stream.score_sequences(input_ids, attention_mask)  # (batch, seq_len - 1), float32
+```
+
+`shard_dir` is an existing layer-stream shard cache; its index supplies the quantisation and, when
+`dtype` is left out, the compute dtype. `streamed_forward_logits(model, ...)` and
+`score_sequences(model, ...)` are the same two calls on a bare model. Both run under
+`torch.inference_mode()`, check their inputs (a 2-D integer `input_ids` inside the vocabulary,
+a matching 0/1 `attention_mask`) and refuse an empty batch by name. `score_sequences` returns
+`log p(token[j + 1] | tokens[: j + 1])` per position, with 0.0 where the target is padding.
+Leaving the `with` block (or calling `close()`) releases the runtime the way a training run does.
+`build_streamed_model(lora_config=None)` is the underlying call; with a `lora_config` it builds
+the training model exactly as before.
+
+What this is for and what it is not:
+
+- **Prefill, scoring and batch forward only.** A forward reads every decoder layer once, so the
+  read is amortised over all `batch x seq_len` tokens of that forward: eval, judge and reward
+  scoring over a model larger than VRAM.
+- **No KV cache yet, and no generation.** Every call is a full forward over the sequences given.
+  Per-token generation stays a permanent streaming exclusion, because a decode step would
+  re-read the whole model for each token.
+- **No CLI command.** It is a Python API for now.
+- **Parity is tested on CPU** against the resident Hugging Face model on a tiny Llama (logits
+  bit-exact, `torch.equal`). No GPU throughput figure is published for it. To measure your own
+  card, `benchmarks/harness/stream_infer_throughput.py` times a grid of batch size x sequence
+  length over an existing shard cache (median of N runs after warm-up, peak VRAM, layer loads)
+  and writes JSON.
 
 ## Correctness First (v0.36.0)
 
@@ -1734,7 +1776,7 @@ The `ScatterMoE LoRA:` setup line says which happened: `keeping target_modules '
 
 ## KV Cache Types (v0.53.0)
 
-`training.kv_cache_type: q8_0 | bf16 | f16 | fp8` controls the inference-time KV cache element type. `fp8` is Hopper-only; the MLX backend is rejected at config load.
+`training.kv_cache_type: q8_0 | bf16 | f16 | fp8` is recorded in `soup.yaml` only: neither `soup train` nor `soup serve` reads it (`fp8` is refused with `backend: mlx`). To apply a type, pass `soup serve --kv-cache-type <type>` (transformers backend); `fp8` is Hopper-only.
 
 The **live serve runtime shipped in v0.71.14** for the transformers backend:
 

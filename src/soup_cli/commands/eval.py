@@ -873,7 +873,11 @@ def compare(
             console.print(f"[red]Run not found: {rid}[/]")
             raise typer.Exit(1)
 
-    comparison = compare_runs(tracker, run1, run2)
+    try:
+        comparison = compare_runs(tracker, run1, run2)
+    except ValueError as exc:
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
+        raise typer.Exit(1) from None
 
     if not comparison["comparisons"]:
         console.print("[yellow]No eval results found for these runs.[/]")
@@ -940,7 +944,11 @@ def leaderboard(
     from soup_cli.experiment.tracker import ExperimentTracker
 
     tracker = ExperimentTracker()
-    lb = build_leaderboard_from_tracker(tracker)
+    try:
+        lb = build_leaderboard_from_tracker(tracker)
+    except ValueError as exc:
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
+        raise typer.Exit(1) from None
 
     if not lb.entries:
         console.print("[yellow]No eval results found.[/]")
@@ -1663,3 +1671,8 @@ _register_v0650(app, console)
 from soup_cli.commands._eval_v07110 import register as _register_v07110  # noqa: E402
 
 _register_v07110(app, console)
+
+# Register the retention-ledger subcommand (eval retention)
+from soup_cli.commands._eval_retention import register as _register_retention  # noqa: E402
+
+_register_retention(app, console)

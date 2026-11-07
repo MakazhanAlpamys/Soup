@@ -33,6 +33,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli import __version__
 from soup_cli.utils.adapter_fuse import merge_adapter_to_dense
@@ -94,7 +95,7 @@ def _fail(message: str, code: int = 1) -> NoReturn:
     """Print a red error and exit. Raises internally so a forgotten ``raise``
     at a call site can never silently turn a failure into a no-op (mirrors
     ``commands/ship.py::_fail``)."""
-    console.print(f"[red]{escape(message)}[/]")
+    console.print(f"[red]{for_terminal(message)}[/]", emoji=False)
     raise typer.Exit(code)
 
 
@@ -703,11 +704,17 @@ def distill(
             f"-> uld_strategy=wasserstein_aligned"
         )
         console.print(
-            f"[bold]Plan[/] — distil [cyan]{escape(target)}[/] into "
-            f"[cyan]{escape(draft_base)}[/] over {len(rows)} rows "
-            f"({vocab_desc})\n"
+            Text.assemble(
+                ("Plan", "bold"),
+                " — distil ",
+                (strip_control(target), "cyan"),
+                " into ",
+                (strip_control(draft_base), "cyan"),
+                f" over {len(rows)} rows ({vocab_desc})\n",
+            )
         )
-        console.print(escape(yaml_text))
+        # The YAML already quotes its scalars. Rich must not reinterpret those bytes.
+        console.print(yaml_text, markup=False, emoji=False)
         console.print("[dim]--plan-only: nothing written.[/]")
         return
 
@@ -1113,9 +1120,9 @@ def list_registered() -> None:
     for entry in entries:
         rate = entry.get("acceptance_rate")
         table.add_row(
-            for_terminal(str(entry.get("target", "?"))),
-            for_terminal(str(entry.get("draft", "?"))),
+            Text(strip_control(entry.get("target", "?"))),
+            Text(strip_control(entry.get("draft", "?"))),
             "-" if rate is None else f"{float(rate) * 100:.1f}%",
-            for_terminal(str(entry.get("created", "?"))),
+            Text(strip_control(entry.get("created", "?"))),
         )
     console.print(table)

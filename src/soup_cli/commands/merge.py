@@ -203,11 +203,19 @@ def merge(
         )
 
         console.print(f"[dim]Loading base model: {for_terminal(base)}...[/]")
+        from soup_cli.utils.run_provenance import recorded_base_kwargs
+
+        revision_kwargs = recorded_base_kwargs(adapter_path, base)
+        if revision_kwargs:
+            console.print(f"[dim]Base revision: {revision_kwargs['revision']} (recorded run)[/]")
+        else:
+            console.print("[dim]Base revision: unknown (legacy, local source or base override)[/]")
         model = AutoModelForCausalLM.from_pretrained(
             base,
             dtype=model_dtype,
             trust_remote_code=trc,
             device_map="cpu",
+            **revision_kwargs,
         )
 
         console.print(f"[dim]Loading LoRA adapter: {adapter_path}...[/]")
@@ -296,6 +304,14 @@ def _merge_low_memory(
             requires_remote_code=model_requires_trust_remote_code(str(adapter_path)) or False,
         )
 
+        from soup_cli.utils.run_provenance import recorded_base_kwargs
+
+        revision_kwargs = recorded_base_kwargs(adapter_path, base)
+        if revision_kwargs:
+            console.print(f"[dim]Base revision: {revision_kwargs['revision']} (recorded run)[/]")
+        else:
+            console.print("[dim]Base revision: unknown (legacy, local source or base override)[/]")
+
         if Path(base).is_dir():
             base_dir = Path(base)
         else:
@@ -307,6 +323,7 @@ def _merge_low_memory(
                     base,
                     cache_dir=None,
                     allow_patterns=["*.safetensors", "*.json"],
+                    revision=revision_kwargs.get("revision"),
                 )
             )
 
