@@ -23,14 +23,24 @@ def _find_adapters(directory: Path, max_depth: int = 6) -> list[Path]:
 
     Limited to max_depth levels and 200 results to prevent runaway scans.
     """
+    import os
+
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
     adapters = []
-    for config_file in directory.rglob("adapter_config.json"):
+    for parent, dirs, files in os.walk(directory, followlinks=False):
+        path = Path(parent)
         try:
-            depth = len(config_file.relative_to(directory).parts)
+            refuse_reward_artifact(path)
         except ValueError:
+            dirs[:] = []
             continue
-        if depth <= max_depth:
-            adapters.append(config_file.parent)
+        depth = len(path.relative_to(directory).parts)
+        if depth >= max_depth:
+            dirs[:] = []
+            continue
+        if "adapter_config.json" in files:
+            adapters.append(path)
         if len(adapters) >= 200:
             break
     return sorted(adapters)
@@ -121,6 +131,16 @@ def info(
     adapter: str = typer.Argument(..., help="Path to adapter directory"),
 ):
     """Show detailed metadata for a LoRA adapter."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (adapter,):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     adapter_path = Path(adapter).resolve()
     config_file = adapter_path / "adapter_config.json"
 
@@ -173,6 +193,16 @@ def compare(
     adapter2: str = typer.Argument(..., help="Path to second adapter"),
 ):
     """Compare two LoRA adapters side-by-side."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (adapter1, adapter2):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     path1 = Path(adapter1).resolve()
     path2 = Path(adapter2).resolve()
 
@@ -249,6 +279,16 @@ def diff(
                                help="Write report to file (json/markdown only)"),
 ):
     """Per-layer ΔW Frobenius diff + effective-rank drift (v0.57.0)."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (adapter_a, adapter_b):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     from soup_cli.utils.adapter_diff import (
         compute_adapter_diff,
         render_report_json,
@@ -405,6 +445,16 @@ def merge(
     ),
 ):
     """Merge LoRA adapters via linear / ties / dare / svd (v0.57.0, v0.60.0 license gate)."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in adapters:
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     from soup_cli.utils.adapter_merge import SUPPORTED_STRATEGIES, merge_adapters
     from soup_cli.utils.license_matrix import (
         check_license_compat,
@@ -807,6 +857,13 @@ def arithmetic(
                 f"{escape(str(exc))}[/]"
             )
             raise typer.Exit(1) from exc
+        from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+        try:
+            refuse_reward_artifact(path)
+        except ValueError as exc:
+            console.print(str(exc), markup=False)
+            raise typer.Exit(1) from exc
         mapping[name] = path
 
     # 2. Parse the expression against the declared names.
@@ -1019,6 +1076,16 @@ def blame(
     runner with a DataInf-style influence-function approximation. Pass
     ``--plan-only`` to inspect the plan without running the analysis.
     """
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (adapter_dir,):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     from soup_cli.utils.blame import (
         parse_budget,
         plan_blame,
@@ -1251,6 +1318,16 @@ def scan(
     backdoor pattern and ``adapters merge`` will refuse this adapter unless
     ``--allow-unscanned`` is passed.
     """
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (adapter,):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     from soup_cli.utils.adapter_scan import render_report_text, scan_adapter
 
     fmt = output_format.lower()
@@ -1866,6 +1943,16 @@ def audit(
     cannot speak to are reported ``unknown``, never as agreeing -- a false
     clean bill is worse than no audit -- and ``unknown`` exits 0.
     """
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (adapter,):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     import contextlib
     import json as _json
     import sys
@@ -2044,6 +2131,16 @@ def check_cmd(
     json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON document"),
 ):
     """Audit whether an adapter is trained: Frobenius delta, zero B, inner keys (#1721)."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (adapter,):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     from soup_cli.utils.adapter_check import (
         check_adapter,
         render_check_json,

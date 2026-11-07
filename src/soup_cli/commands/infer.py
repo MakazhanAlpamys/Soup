@@ -160,6 +160,16 @@ def infer(
     ),
 ):
     """Run batch inference on a JSONL file of prompts."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (model, base):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     from soup_cli.utils.mlx_generation import reject_native_adapter, validate_native_options
 
     if backend not in ("transformers", "mlx"):

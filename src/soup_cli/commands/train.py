@@ -110,6 +110,10 @@ def _resume_refusal(cfg: "SoupConfig", flag: str) -> str | None:
         from soup_cli.trainer.mlx_grpo import RESUME_REFUSAL
 
         return RESUME_REFUSAL.replace("--resume", flag, 1)
+    if cfg.task == "reward_model" and cfg.backend == "mlx":
+        from soup_cli.trainer.mlx_reward_model import RESUME_REFUSAL
+
+        return RESUME_REFUSAL.replace("--resume", flag, 1)
     return None
 
 
@@ -1084,6 +1088,23 @@ def train(
             {"minillm_on_policy": True} if minillm_on_policy else None
         ),
     )
+
+    # #2003: resume outranks every incompatible language-model operation.
+    if cfg.task == "reward_model" and cfg.backend == "mlx":
+        for flag, enabled in (("--resume", resume), ("--hf-resume", hf_resume)):
+            if enabled:
+                console.print(_resume_refusal(cfg, flag), markup=False)
+                raise typer.Exit(1)
+        for flag, enabled in (
+            ("--push-as", push_as), ("--gate", gate),
+            ("--diagnose-gate", diagnose_gate), ("--capture-activations", capture_activations),
+        ):
+            if enabled:
+                console.print(
+                    f"MLX reward_model does not support {flag}. Remove {flag}; "
+                    "use load_reward_scorer/score_completions for scoring.", markup=False,
+                )
+                raise typer.Exit(1)
 
     # --- v0.71.36 replay passthrough ---
     try:
@@ -2234,11 +2255,16 @@ def train(
             f"Duration: [bold]{_format_duration_display(result)}[/]\n"
             f"Output: [bold]{result['output_dir']}[/]\n"
             f"Run ID: [bold]{run_id}[/]\n\n"
-            f"Quick test:  [bold]soup chat --model {result['output_dir']}[/]\n"
-            f"Push to HF:  [bold]soup push --model {result['output_dir']}[/]\n"
-            f"{merge_hint}\n"
-            f"Export GGUF: [bold]soup export --model {result['output_dir']}[/]\n"
-            f"Run details: [bold]soup runs show {run_id}[/]",
+            + (
+                "Python scoring: [bold]soup_cli.utils.mlx_reward.load_reward_scorer[/] "
+                "and [bold]score_completions[/]\n"
+                if cfg.task == "reward_model" and cfg.backend == "mlx" else
+                f"Quick test:  [bold]soup chat --model {result['output_dir']}[/]\n"
+                f"Push to HF:  [bold]soup push --model {result['output_dir']}[/]\n"
+                f"{merge_hint}\n"
+                f"Export GGUF: [bold]soup export --model {result['output_dir']}[/]\n"
+            )
+            + f"Run details: [bold]soup runs show {run_id}[/]",
             title=("[bold yellow]Training Stopped — Loss watchdog[/]"
                    if result.get("stop_reason") == "loss_watchdog"
                    else "[bold green]Training Complete![/]"),

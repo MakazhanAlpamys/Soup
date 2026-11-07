@@ -58,6 +58,9 @@ def _config(task: str, backend: str, modality: str) -> dict:
         "data": {"train": "./data/train.jsonl", "format": _FORMAT[modality]},
         "output": "./output",
     }
+    if task == "reward_model" and backend == "mlx":
+        cfg["data"]["format"] = "dpo"
+        cfg["training"] = {"quantization": "none", "rewind_log": False}
     if modality != "text":
         cfg["modality"] = modality
     return cfg

@@ -171,6 +171,16 @@ def generate(
     ),
 ):
     """Generate synthetic training data using an LLM."""
+    if provider == "local" and not (isinstance(ollama_model, str) and ollama_model):
+        from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+        try:
+            if isinstance(model_name, (str, Path)):
+                refuse_reward_artifact(model_name)
+        except ValueError as exc:
+            console.print(str(exc), markup=False)
+            raise typer.Exit(1) from exc
+
     from soup_cli.commands._common import refuse_output_over_input
 
     inputs = [(field, path) for field, path in (
@@ -785,6 +795,9 @@ def _generate_local(
     trust_remote_code: bool = False,
 ) -> list[dict]:
     """Generate examples using a local model via transformers."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    refuse_reward_artifact(model_name)
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 

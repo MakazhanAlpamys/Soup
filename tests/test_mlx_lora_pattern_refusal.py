@@ -260,7 +260,7 @@ class TestOtherEntryPoints:
         flat = " ".join(text.split())
         assert (
             "`training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused "
-            "on `backend: mlx` for SFT, DPO, ORPO, SimPO, KTO and GRPO"
+            "on `backend: mlx` for SFT, DPO, ORPO, SimPO, KTO, GRPO and reward_model"
         ) in flat
 
     def test_the_doctor_table_has_no_pattern_rows(self) -> None:
