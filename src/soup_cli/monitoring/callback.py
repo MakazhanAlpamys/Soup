@@ -87,13 +87,16 @@ def build_soup_trainer_callback(
     output_dir: Optional[str] = None,
     task: Optional[str] = None,
     rank_gated: bool = False,
+    soup_rank: Optional[int] = None,
 ) -> Any:
     """Build a trainer callback with shared training and evaluation config.
 
     ``task`` picks the run's validation metric (#1389); only a trainer whose
     evaluation is scored differently (``grpo``) needs to pass it. ``rank_gated`` (C6,
     distributed layer streaming only) keeps the panel, the banners and the tracker rows
-    on rank 0; every other run keeps them on every rank, as before."""
+    on rank 0; every other run keeps them on every rank, as before. ``soup_rank`` is the rank
+    in Soup's own group (B1): HF is not distributed there and calls every node the chief, so
+    the gate reads this number instead of HF's."""
     training_config = config.training
     callback_cls = globals().get("SoupTrainerCallback")
     if callback_cls is None:
@@ -112,6 +115,7 @@ def build_soup_trainer_callback(
     )
     if rank_gated:
         callback.rank_gated = True
+        callback.soup_rank = soup_rank
     return callback
 
 
@@ -167,10 +171,17 @@ class _SoupTrainerCallback_body:  # noqa: N801
     #: before C6), which is what a resident distributed run with one tracker row per rank
     #: needs.
     rank_gated = False
+    #: B1 only: this node's rank in Soup's group. HF is not distributed there, so
+    #: ``state.is_world_process_zero`` is True on every node and cannot be the gate.
+    soup_rank: Optional[int] = None
 
     def _owns_outputs(self, state: Any) -> bool:
         """Whether this rank draws the panel, prints the banners and writes tracker rows."""
-        return not self.rank_gated or _is_chief(state)
+        if not self.rank_gated:
+            return True
+        if self.soup_rank is not None:
+            return self.soup_rank == 0
+        return _is_chief(state)
 
     def __init__(
         self,

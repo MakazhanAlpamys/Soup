@@ -28,6 +28,14 @@ mean over ranks of the per-rank gradients is the gradient of the global per-toke
 (the single-process gradient of the union batch). Averaging per-rank means instead, or
 summing, would be wrong whenever the ranks hold different token counts.
 
+B1 (data parallelism over one TCP socket, ``utils/adapter_grad_transport.py``) differs in
+exactly this scaling. HF then runs NON-distributed on every node and divides each window's
+summed token loss by the node's OWN token count ``N_r`` (the ``num_items_in_batch`` it hands to
+``training_step``), so the union-batch gradient is ``sum_r(N_r * g_r) / sum_r(N_r)``: the
+override passes ``N_r`` as the weight of the reduction. A model whose forward takes no loss
+kwargs gets no ``num_items_in_batch`` (HF divides by the accumulation steps instead), so B1
+refuses it (:func:`check_token_weighting`).
+
 Torch and transformers are imported inside the functions: ``soup`` stays importable
 without them.
 """
@@ -74,6 +82,32 @@ def assert_adapter_sync_installed(trainer: Any) -> None:
         )
 
 
+def check_token_weighting(trainer: Any, group: Any) -> None:
+    """Refuse a weighted (B1) group when HF would not hand the trainer a token count.
+
+    The weight of a rank is its window's ``num_items_in_batch``; HF computes it only for a model
+    whose forward takes loss kwargs (``model_accepts_loss_kwargs``). Without it every window is
+    scaled by the accumulation steps instead, and no weight would make the mean right.
+    """
+    if not getattr(group, "weighted", False):
+        return
+    if not getattr(trainer, "model_accepts_loss_kwargs", False):
+        raise ValueError(
+            "data-parallel streaming over TCP (SOUP_STREAM_DP_*) weights each node's gradient "
+            "by its token count, but this model's forward takes no loss kwargs, so "
+            "transformers does not count the tokens of a window and every node would be "
+            "weighted equally (wrong whenever the nodes hold different token counts). "
+            "Use a model whose forward accepts loss kwargs, or train on one node."
+        )
+
+
+def _items_in_batch(args: tuple, kwargs: dict) -> Any:
+    """``num_items_in_batch`` of a ``training_step(model, inputs, num_items_in_batch)`` call."""
+    if "num_items_in_batch" in kwargs:
+        return kwargs["num_items_in_batch"]
+    return args[2] if len(args) > 2 else None
+
+
 def _refuse_ddp_wrapped(model: Any) -> None:
     """The streamed model must reach ``training_step`` unwrapped (the flag of C4)."""
     import torch
@@ -99,6 +133,10 @@ def make_adapter_sync_trainer_class(base_cls: type) -> type:
     ``last_sync_stats`` is the :class:`SyncStats` of the latest sync (``None`` before the
     first), ``sync_calls`` counts the syncs. Both are meant for per-step metrics.
     Without a process group, or in a world of one, the sync is a no-op that reports zeros.
+
+    ``_dp_group`` is the :class:`~soup_cli.utils.adapter_grad_transport.GradGroup` to reduce
+    over; ``None`` (the default) means ``torch.distributed``, called exactly as before. A
+    weighted group (B1) gets the window's token count as the rank's weight.
     """
 
     class AdapterSyncTrainer(base_cls):  # type: ignore[misc, valid-type]
@@ -106,21 +144,37 @@ def make_adapter_sync_trainer_class(base_cls: type) -> type:
         last_sync_stats = None
         sync_calls = 0
         _adapter_grad_sync = None
+        _dp_group = None
 
-        def _sync_adapter_grads(self, model: Any) -> None:
+        def _window_weight(self, items: Any) -> float:
+            """This rank's token count for the window (B1): HF's own ``num_items_in_batch``."""
+            if items is None:
+                raise RuntimeError(
+                    "transformers passed no num_items_in_batch to training_step, so this rank "
+                    "cannot weight its gradient by its token count; refusing to average the "
+                    "ranks with equal weights (that is wrong whenever their token counts differ)"
+                )
+            return float(items)
+
+        def _sync_adapter_grads(self, model: Any, items: Any = None) -> None:
             if self._adapter_grad_sync is None:
                 from soup_cli.utils.adapter_grad_sync import AdapterGradSync
 
                 _refuse_ddp_wrapped(model)
                 self._adapter_grad_sync = AdapterGradSync(model)
-            self.last_sync_stats = self._adapter_grad_sync.sync()
+            group = self._dp_group
+            if group is None:
+                self.last_sync_stats = self._adapter_grad_sync.sync()
+            else:
+                weight = self._window_weight(items) if group.weighted else 1.0
+                self.last_sync_stats = self._adapter_grad_sync.sync(group, weight=weight)
             self.sync_calls += 1
 
         def training_step(self, *args: Any, **kwargs: Any) -> Any:  # type: ignore[override]
             loss = super().training_step(*args, **kwargs)
             if self.accelerator.sync_gradients:
                 model = args[0] if args else kwargs["model"]
-                self._sync_adapter_grads(model)
+                self._sync_adapter_grads(model, _items_in_batch(args, kwargs))
             return loss
 
     AdapterSyncTrainer.__name__ = f"AdapterSync{base_cls.__name__}"

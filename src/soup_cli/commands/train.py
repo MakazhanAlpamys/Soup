@@ -1271,6 +1271,16 @@ def train(
     # same config in shells where a launcher variable may be left over. The options that
     # are not in the config are handed over by hand, because the check has to name them.
     distributed_stream = False
+    if not getattr(cfg.training, "stream_layers", False):
+        # B1 (SOUP_STREAM_DP_*) exists for layer streaming only: a leftover variable must not
+        # quietly train an ordinary run on a shard of the data.
+        from soup_cli.utils.adapter_grad_transport import refuse_b1_without_streaming
+
+        try:
+            refuse_b1_without_streaming()
+        except ValueError as exc:
+            console.print(f"[red]{markup_escape(str(exc))}[/]")
+            raise typer.Exit(1) from exc
     if getattr(cfg.training, "stream_layers", False):
         from soup_cli.trainer.stream_setup import refuse_if_distributed_launch
 
@@ -2581,7 +2591,15 @@ def _should_run_diagnose_gate_on_rank() -> bool:
 
     Defaults to True (run gate) on any parse error: a malformed env var is
     safer to over-run than to silently skip.
+
+    Data-parallel layer streaming over TCP (B1) runs plain, non-distributed processes with no
+    ``RANK``; ``SOUP_STREAM_DP_RANK`` names the chief there.
     """
+    from soup_cli.utils.adapter_grad_transport import b1_rank_or_none
+
+    b1_rank = b1_rank_or_none()
+    if b1_rank is not None:
+        return b1_rank == 0
     rank = os.environ.get("RANK")
     if rank:  # non-empty -> multi-node / torchrun sets a global RANK
         try:

@@ -12,17 +12,20 @@ How one :meth:`AdapterGradSync.sync` call works:
   into ONE fp32 buffer. A parameter whose ``grad`` is ``None`` on this rank is written
   as zeros, so every rank sends the same number of elements and the same slot layout
   (a rank-dependent hole would hang or corrupt the collective);
-* the buffer is all-reduced with ``SUM`` in chunks of at most ``chunk_bytes`` (bounds
-  what the backend stages), then divided by the world size. ``ReduceOp.AVG`` is NCCL
-  only, and gloo (the CPU test backend) refuses it, so the mean is SUM then divide;
+* the buffer is all-reduced in chunks of at most ``chunk_bytes`` (bounds what the backend
+  stages) through a :class:`~soup_cli.utils.adapter_grad_transport.GradGroup`. Under
+  ``torch.distributed`` that is a ``SUM`` then a divide by the world size (``ReduceOp.AVG``
+  is NCCL only, and gloo, the CPU test backend, refuses it); under B1 (a TCP star, see
+  ``adapter_grad_transport``) it is the weighted mean ``sum_r(w_r * g_r) / sum_r(w_r)``;
 * the result is copied back into each ``.grad`` in place (a ``.grad`` that was ``None``
   is created: that parameter did receive the other ranks' gradient).
 
-The mean is the right scale only together with HF's own loss scaling
-(``average_tokens_across_devices``): a SUM would make the update world-size times too
-large. Every rank holds a bitwise identical reduced buffer after the all-reduce (the
-backends broadcast the final value), so ranks that start equal and run a deterministic
-optimizer stay bitwise equal.
+Under ``torch.distributed`` the plain mean is the right scale only together with HF's own
+loss scaling (``average_tokens_across_devices``): a SUM would make the update world-size
+times too large. Under B1 HF is not distributed and divides by its OWN token count, so the
+caller passes that count as ``weight``. Every rank holds a bitwise identical reduced buffer
+after the all-reduce (the backends broadcast the final value), so ranks that start equal and
+run a deterministic optimizer stay bitwise equal.
 
 Torch is imported inside the functions: ``soup`` stays importable without it.
 """
@@ -180,18 +183,21 @@ class AdapterGradSync:
         """Bytes one rank contributes per sync (fp32 wire): ``4 * n_elements``."""
         return _ELEMENT_BYTES * self.n_elements
 
-    def sync(self, group: Optional[Any] = None) -> SyncStats:
-        """All-reduce the gradients (mean over ranks) in place; return what was moved.
+    def sync(self, group: Optional[Any] = None, *, weight: float = 1.0) -> SyncStats:
+        """All-reduce the gradients (weighted mean over ranks) in place; return what was moved.
+
+        ``group`` is a :class:`~soup_cli.utils.adapter_grad_transport.GradGroup` (B1), a
+        ``torch.distributed`` process group, or ``None`` for the default one. ``weight`` is this
+        rank's share of the mean: 1 under ``torch.distributed`` (the only value that group
+        accepts), the rank's token count under B1.
 
         A no-op returning zero stats when ``torch.distributed`` is unavailable or not
         initialised, or when the group has a single rank.
         """
-        import torch.distributed as dist
+        from soup_cli.utils.adapter_grad_transport import resolve_group
 
-        if not dist.is_available() or not dist.is_initialized():
-            return SyncStats()
-        world_size = dist.get_world_size(group)
-        if world_size <= 1:
+        transport = resolve_group(group)
+        if transport is None or transport.world_size <= 1:
             return SyncStats()
 
         start = time.perf_counter()
@@ -199,9 +205,8 @@ class AdapterGradSync:
         step = self.chunk_bytes // _ELEMENT_BYTES
         n_chunks = 0
         for begin in range(0, flat.numel(), step):
-            dist.all_reduce(flat[begin : begin + step], op=dist.ReduceOp.SUM, group=group)
+            transport.all_reduce_weighted(flat[begin : begin + step], weight)
             n_chunks += 1
-        flat.div_(world_size)
         unflatten_grads(self._params, flat)
         return SyncStats(
             bytes=self.payload_bytes,

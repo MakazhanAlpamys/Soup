@@ -682,7 +682,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         """
         from soup_cli.trainer.stream_setup import _distributed_launch
 
-        if _distributed_launch():
+        if _distributed_launch() or self._distributed_stream:
             console.print(
                 "[yellow]Rewind log off:[/] the recorder is single-process; "
                 "this is a distributed launch"
@@ -757,7 +757,11 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         elif use_audio:
             self._setup_audio_transformers(cfg, tcfg)
         elif use_streaming:
-            self._setup_streaming_transformers(cfg, tcfg)
+            try:
+                self._setup_streaming_transformers(cfg, tcfg)
+            except BaseException:
+                self._close_dp_group()  # a B1 peer then fails at once, not at its timeout
+                raise
         elif use_unsloth:
             self._setup_unsloth(cfg, tcfg)
         else:
@@ -894,8 +898,14 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         pretok = _maybe_load_pretokenized(
             cfg.data, cfg.base, console, tcfg, task=cfg.task
         )
+        if self._dp_group is not None and pretok is None:
+            # B1: HF is not distributed, so Soup gives each rank its share of the rows,
+            # before they are tokenised.
+            dataset["train"] = self._shard_for_data_parallel(dataset["train"])
         if pretok is not None:
             train_ds, eval_ds = pretok
+            if self._dp_group is not None:
+                train_ds = self._shard_for_data_parallel(train_ds)
             _validate_pretokenized_targets(
                 train_ds, split="train", max_length=cfg.data.max_length
             )
@@ -996,6 +1006,11 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # the default val_split was withheld and never evaluated.
             **training_eval_kwargs(cfg, eval_ds, batch_size=batch_size),
         }
+        if self._is_dp_follower():
+            # B1: HF is not distributed, so on every node it believes it is rank 0 and would
+            # write checkpoints and report to W&B / TensorBoard. Only Soup's rank 0 does.
+            training_kwargs["save_strategy"] = "no"
+            training_kwargs["report_to"] = "none"
 
         # FSDP2 — alternative to DeepSpeed. The helper also enables
         # torch.compile when tcfg.use_fsdp2_compile is True.
@@ -1265,6 +1280,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             from soup_cli.utils.adapter_sync_trainer import assert_adapter_sync_installed
 
             assert_adapter_sync_installed(self.trainer)
+            self.trainer._dp_group = self._dp_group  # None: torch.distributed, as before
 
         # The recording trainer is the last branch above, so RAFT, multipack,
         # vision, audio and a pre-tokenised dataset all skip it -- silently,
@@ -2416,6 +2432,25 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
         return train_ds, eval_ds
 
+    def _shard_for_data_parallel(self, rows: Any) -> Any:
+        """B1: this rank's share of the training rows, equal in length on every rank."""
+        from soup_cli.utils.stream_dp_runtime import shard_rows
+
+        group = self._dp_group
+        total = len(rows)
+        mine, per_rank, dropped = shard_rows(rows, group.rank, group.world_size)
+        console.print(
+            f"[dim]Data parallel: {total:,} training rows over {group.world_size} ranks, "
+            f"{per_rank:,} each (this is rank {group.rank}).[/]"
+        )
+        if dropped:
+            console.print(
+                f"[yellow]Data parallel: {dropped:,} trailing row(s) dropped so that every rank "
+                "runs the same number of optimizer steps (a rank with one step more would wait "
+                "for a sync that never comes).[/]"
+            )
+        return mine
+
     def _writes_artifacts(self) -> bool:
         """Whether this process writes the run's artifacts beside the model (C6).
 
@@ -2423,10 +2458,13 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         first rank of each node with ``save_on_each_node``), and the tokenizer belongs next
         to the model it was written with. A non-saving rank of a distributed streaming run
         has no adapter, so a tokenizer there would pass for a finished artifact. Every other
-        run writes, as it always did.
+        run writes, as it always did. Under B1 HF is not distributed and every node believes
+        it is rank 0, so Soup's own rank decides.
         """
         if not self._distributed_stream:
             return True
+        if self._dp_group is not None:
+            return not self._is_dp_follower()
         return bool(getattr(self.trainer.args, "should_save", True))
 
     def train(
@@ -2463,6 +2501,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                     batch_size=self._batch_size,
                     output_dir=self._output_dir,
                     rank_gated=self._distributed_stream,
+                    soup_rank=None if self._dp_group is None else self._dp_group.rank,
                 )
             )
 
@@ -2590,7 +2629,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             self.trainer.state.log_history, model=self.trainer.model
         )
 
-        if self.config.training.relora_steps is None:
+        if self._is_dp_follower():
+            pass  # B1: HF believes this node is rank 0 and would save; Soup's rank 0 does
+        elif self.config.training.relora_steps is None:
             self.trainer.save_model(self._output_dir)
         else:
             from soup_cli.utils.peft_wiring import save_model_with_relora
