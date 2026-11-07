@@ -127,15 +127,19 @@ def resolve_trust_remote_code(
         # Lazy import — keeps `import soup_cli.utils.trust_remote` cheap
         # in environments that don't otherwise pull in rich.
         from rich.panel import Panel
+        from rich.text import Text
 
-        from soup_cli.utils.terminal import for_terminal
+        from soup_cli.utils.terminal import strip_control
 
         console.print(
             Panel.fit(
-                f"[yellow]--trust-remote-code is enabled for[/] "
-                f"[bold]{for_terminal(model_name)}[/]\n"
-                f"This will execute Python code shipped in the model repo. "
-                f"Only proceed if you trust the source.",
+                Text.assemble(
+                    ("--trust-remote-code is enabled for", "yellow"),
+                    " ",
+                    (strip_control(model_name), "bold"),
+                    "\nThis will execute Python code shipped in the model repo. "
+                    "Only proceed if you trust the source.",
+                ),
                 title="[red]REMOTE CODE WARNING[/]",
                 border_style="red",
             )
