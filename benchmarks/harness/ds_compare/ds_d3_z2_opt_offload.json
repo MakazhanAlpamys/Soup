@@ -11,15 +11,6 @@
       "weight_decay": 0.0
     }
   },
-  "scheduler": {
-    "type": "WarmupLR",
-    "params": {
-      "warmup_min_lr": 0,
-      "warmup_max_lr": 0.0002,
-      "warmup_num_steps": 0,
-      "warmup_type": "log"
-    }
-  },
   "zero_optimization": {
     "stage": 2,
     "offload_optimizer": {

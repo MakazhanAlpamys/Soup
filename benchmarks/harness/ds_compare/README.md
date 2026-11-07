@@ -201,7 +201,11 @@ store size, pinned or pageable), the `stream_recompute: auto` planner line and t
 * Launch of the DeepSpeed arms: `deepspeed --num_gpus 1 --master_port <port> hf_baseline.py ...` (the launcher
   the Hugging Face DeepSpeed guide documents; it appends `--local_rank`, which the script accepts). Resident arms: `python hf_baseline.py`.
   `TrainingArguments(deepspeed=...)` is built before `from_pretrained`, so the model is created under
-  `zero.Init`. Optimizer and scheduler are owned by DeepSpeed in the D arms (the json has the `optimizer` and `scheduler` blocks).
+  `zero.Init`. In the D arms DeepSpeed owns the optimizer (the json has an `optimizer` block) and the Hugging Face
+  Trainer owns the scheduler (`constant`, no warm-up): with torch 2.9 the strict-zip failure that made the
+  earlier record hand the scheduler to DeepSpeed does not occur, and a DeepSpeed `WarmupLR` with 0 steps
+  is refused by the Trainer's config check (`warmup_num_steps=0 vs hf warmup_steps=1`, seen on the first
+  rented run).
 
 ## What is the same in every arm
 
@@ -220,9 +224,8 @@ chat-template rendering and loss mask (`ds_common.render_alpaca_row`, checked ag
   row text differs. The pinned model's chat template has no system header and always appends a
   `<|start_header_id|>assistant<|end_header_id|>` header; the header after the answer is part of the trained span,
   identically in every arm.
-* "Linear warmup 0" is run as a constant 2e-4. DeepSpeed's `WarmupLR` raises `warmup_num_steps` to at least 2
-  internally, so in D1..D4 the first optimizer step uses lr 0 (log warm-up); this changes the first loss values
-  slightly and no throughput.
+* "Linear warmup 0" is run as a constant 2e-4 in every arm, the D arms included (the scheduler is the
+  Trainer's `constant` one there too).
 * `train_runtime` is the trainer's: for the HF and DeepSpeed arms it includes engine start-up that precedes
   the first step; for Soup arms the stream set-up is outside it. `steady_tok_per_s` removes both, and the
   whole-process wall time is recorded.

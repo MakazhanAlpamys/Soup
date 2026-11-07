@@ -1061,10 +1061,8 @@ def test_deepspeed_configs() -> None:
             config["optimizer"]["type"] == "AdamW" and config["optimizer"]["params"]["lr"] == 2e-4
         )
         assert config["optimizer"]["params"]["weight_decay"] == 0.0
-        assert (
-            config["scheduler"]["type"] == "WarmupLR"
-            and config["scheduler"]["params"]["warmup_num_steps"] == 0
-        )
+        # HF owns the scheduler (constant lr, no warm-up); DeepSpeed owns only the optimizer.
+        assert "scheduler" not in config, name
         assert zero["overlap_comm"] is True and zero["contiguous_gradients"] is True
         assert zero["reduce_bucket_size"] == "auto"
         for section in ("offload_param", "offload_optimizer"):
