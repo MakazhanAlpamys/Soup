@@ -32,12 +32,80 @@ DEADLINE_EPOCH=$(date -d '+7 hours' +%s) bash run_all.sh --all   # stop rule, se
 
 A finished run is not run again: restarting `--all` after an interruption resumes.
 
+## Running in parts
+
+The series can also run as three separate rentals, each its own instance with its own deadline, so
+that the results and the spend are visible in between. A part is a set of phases of the full plan;
+the three sets are disjoint and together they are the full plan (91 slots).
+
+| part | what | runs | est. GPU time | suggested `--max-hours` |
+|---|---|---|---|---|
+| `part1` | Shape A at 80 GB, every arm of protocol section 2: S0..S8, SB (derived, then run), D1..D4, R1, R2, the prefetch variants by their rule, the two warm-ups, 3 repeats. Holds G1, the ablation and the G2 / G3 values at 80 GB | 56 | 238 min | 5.00 |
+| `part2` | Shapes B and C at 80 GB: SB, S1, D-best, D1, R1; repeat 1 of both shapes, then repeat 2 (G4). Needs part 1's results (SB overrides, D-best) | 20 | 77 min | 2.25 |
+| `part3` | Shape A under the 24 GB cap (2 repeats) and the 16 GB cap (1 repeat): SB, D1, D2, D3, R1. Needs part 1's results (SB overrides) | 15 | 73 min | 2.25 |
+
+`python dry_run_parts.py [--rate 2.23] [--results <dir>]` prints these numbers (the estimator of the
+budget rule; `--results` replaces an estimate by the measured median wall time of that arm and shape).
+`--max-hours` = set-up (35 min) + all runs of the part, conditional ones included + 15 min, rounded up
+to the next 0.25 h. `bash run_all.sh --dry-run --part part2` prints the part's plan, command by command.
+
+```bash
+bash make_payload.sh part1 payloads/part1                       # the folder to ship
+python vk.py launch ... --max-hours 5 --payload payloads/part1 \
+    --job payloads/part1/benchmarks/harness/ds_compare/job_part1.sh
+# ... part 1 ends; pull its output; then:
+bash make_payload.sh part2 payloads/part2 <pulled output>/results
+bash make_payload.sh part3 payloads/part3 <pulled output>/results
+```
+
+* **The payload.** `make_payload.sh <part> <out_dir> [<results_dir>]` writes the harness from `git archive`
+  of the committed tree (LF only, no `__pycache__`; uncommitted changes in the harness refuse the build),
+  the file `PAYLOAD.txt` (part, commit, time) and, when a results folder is given, exactly what a later
+  part reads from it: the run jsons `<shape>/<budget>/<arm>/rep<k>.json` and `sb_overrides.json` /
+  `d_best.json`. The sampler CSVs, the console logs and the traces are left out (progress bars and the
+  csv module write carriage returns, and nothing in a later part reads them). It refuses, and leaves no
+  payload, if any file of the payload contains a CR byte or is over 50 MB, if a results folder holds no
+  run json, or if the part itself would refuse (next point).
+* **Resume.** A part reads the run jsons of the earlier parts from its results folder and derives SB
+  and D-best from them with the functions the full series uses; a finished run is never run again.
+  Part 2 and part 3 **refuse to start** without part 1's results (a valid S1 run at Shape A, 80 GB for
+  SB; part 2 also a valid DeepSpeed run there for D-best): `make_payload.sh` refuses first, the job
+  refuses again before any set-up time is spent, and `run_all.sh --part partN --preflight` is the same
+  check by hand. A derivation file without the run jsons behind it is not accepted.
+* **The job.** `job_part1.sh`, `job_part2.sh` and `job_part3.sh` (the logic is in `job_common.sh`) run as the
+  kit's job with the payload as the working directory: log to `$VK_OUT/job_<part>.log`; set
+  `DS_COMPARE_RESULTS=$VK_OUT/results` and copy the shipped `results/` into it; preflight; `setup.sh`
+  with `SETUP_PART=<part>` (part 2 and 3 also `SKIP_S0=1`: only part 1 runs arm S0); `run_all.sh --part <part>`.
+* **The deadline.** `DEADLINE_EPOCH` = the kit's deadline minus the kit's reserve minus a 10-minute finish
+  margin. The kit does not export `VK_DEADLINE_EPOCH` into the job, so the job uses the variable if it
+  was passed with `--env`, otherwise `/root/vk/deadline` (rewritten on an extension) and
+  `VK_RESERVE_S` from `/root/vk/vk.env`. With neither: the job start + `JOB_BUDGET_S` (written in each
+  job script as the part's `--max-hours` less 15 minutes of boot and upload) minus the finish margin.
+  The orchestrator reads it once at the start.
+* **The budget rule inside a part.** Only groups of the part can be dropped, in the protocol's order
+  (part 1: S8, prefetch; part 2: Shape B repeat 2, Shape C repeat 2; part 3: 16 GB, then 24 GB); `core`
+  is never dropped. Part 3 has no `core` group.
+* **What each part writes** (nothing of an earlier part is overwritten): `setup_<part>/` (e.g. `setup_part1/`: hardware, build
+  log of `cpu_adam`, model hashes, `env.txt`, `setup.log`, `setup_seconds.txt`), `session_<part>.json`,
+  `dropped_<part>.json`, `progress_<part>.json`, `DONE_<part>` (part 1's carries the SB choice and the
+  D-best it sees), plus the run files under `<shape>/<budget>/<arm>/`. `gates.json`, `gates.txt` and
+  `runs.csv` are recomputed over every run present. `sb_overrides.json` is written by the part that first
+  needs SB, `d_best.json` by the one that first needs D-best (part 2).
+
+Limits that come with the split: every part is a different rented machine, so a ratio is only as
+comparable as its two arms' part (G1 and G3 and G2 at 80 GB sit in part 1, G4 in part 2, G2 at 24 and 16 GB
+in part 3); the interleaving of arms by repeat holds inside a part, not across parts; the void rule's
+running median of the SM clock is per part (a part is a session); the untimed warm-up of S1 and D1 is in
+part 1 only, so the first timed runs of part 2 and part 3 start on a cold instance.
+
 ## Files
 
 | file | what it is |
 |---|---|
-| `setup.sh` | hardware record, soup-cli from a git commit (`SOUP_COMMIT`, default the `main` commit written in the file), DeepSpeed built with `DS_BUILD_CPU_ADAM=1` (log kept) and `DeepSpeedCPUAdam` verified, second venv for S0, the model at its pinned revision with no token, `results/model_hashes.txt`, `results/env.txt` |
-| `run_all.sh` | environment preparation, then `orchestrate.py` |
+| `setup.sh` | hardware record, soup-cli from a git commit (`SOUP_COMMIT`, default the `main` commit written in the file), DeepSpeed built with `DS_BUILD_CPU_ADAM=1` (log kept) and `DeepSpeedCPUAdam` verified, second venv for S0, the model at its pinned revision with no token, `results/model_hashes.txt`, `results/env.txt`; `SETUP_PART=<part>` writes the records under `results/setup_<part>/`, `SKIP_S0=1` skips the S0 venv |
+| `run_all.sh` | environment preparation, then `orchestrate.py` (`--part <part>` runs one part) |
+| `make_payload.sh`, `job_part1.sh`, `job_part2.sh`, `job_part3.sh`, `job_common.sh` | running in parts: the payload folder of one part, and the kit job of each part (see "Running in parts") |
+| `dry_run_parts.py` | run count, estimated GPU minutes and suggested `--max-hours` of each part |
 | `orchestrate.py` | the plan (protocol sections 2 to 5), the interleaved order, the SB derivation rule, the D-best choice, the void checks, the budget drop order, `gates.json` at the end |
 | `soup_arm.py` | streaming arms S0..S8 and SB: writes the `soup.yaml`, runs `soup train --config soup.yaml --yes`, writes the run json |
 | `hf_baseline.py` | plain Hugging Face Trainer + PEFT LoRA: arms D1..D4, the two prefetch variants, R1 and R2. Imports nothing from `soup_cli` |
@@ -110,6 +178,9 @@ results/
   hardware.txt  model_hashes.txt  env.txt  env_s0.txt  deepspeed_build.log  setup.log  DONE
 ```
 
+In parts, `dropped.json`, `session.json`, `progress.json` and `DONE` carry the part in their name
+(`dropped_part1.json`, ...) and the set-up records sit under `setup_<part>/`.
+
 A run json holds: arm id, argv, versions, status (`ok`, `oom`, `failed`), void flags and
 reasons, trained tokens and how they were counted, `train_runtime_s`, `tok_per_s` (tokens /
 `train_runtime`, the STEP 3 metric), `steady_tok_per_s` (steps 33..end from per-step
@@ -177,4 +248,6 @@ CUDA_VISIBLE_DEVICES=-1 PYTHONPATH=<repo>/src python selftest.py     # DS_COMPAR
 python make_rows.py --check --tokenizer <model dir>
 bash run_all.sh --all --dry-run
 python gates.py <results dir>
+python dry_run_parts.py --rate 2.23           # the three parts: runs, GPU minutes, --max-hours, cost
+bash run_all.sh --dry-run --part part1        # one part's plan (part 2 and 3 note a missing part 1)
 ```

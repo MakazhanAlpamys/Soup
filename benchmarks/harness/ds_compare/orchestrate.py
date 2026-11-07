@@ -32,6 +32,22 @@ Shapes B and C, are never dropped.
 Void rules (section 5) are applied per run; a void run is repeated once. Every attempt writes
 its json at once: ``results/<shape>/<budget>/<arm>/rep<k>.json`` (+ ``.gpu.csv``,
 ``.rss.csv``, ``.log``); ``results/DONE`` is written last.
+
+Parts. ``--part part1|part2|part3`` runs the series in three rented instances, each with its own
+deadline. The plan of a part is the slots of the full plan whose phase belongs to it (the three
+sets are disjoint and their union is the full plan):
+
+    part1  warmup, A, SB, variants, S8   Shape A at 80 GB: S0..S8, SB, D1..D4, R1, R2, the
+                                         prefetch variants (rule), 3 repeats
+    part2  B1, C1, B2, C2                Shapes B and C at 80 GB (SB, S1, D-best, D1, R1)
+    part3  cap24, cap16                  Shape A under the 24 and 16 GB caps
+
+Part 2 and part 3 read the run jsons of part 1 from the results directory they are given and
+derive SB and D-best from them with the same functions the full series uses; they refuse to
+start without part 1's results. The budget rule of a part drops only the groups inside the part,
+in the protocol's order; ``core`` is never dropped. Files that every part writes carry the part
+in their name (``session_part1.json``, ``dropped_part1.json``, ``DONE_part1``) so that a part
+never overwrites an earlier part's record.
 """
 
 from __future__ import annotations
@@ -39,6 +55,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import shutil
 import statistics
@@ -87,6 +104,18 @@ SB_CANDIDATES = ("S2", "S3", "S4", "S5", "S6", "S7")
 
 #: Drop order of protocol section 8. Group "core" is never dropped.
 DROP_ORDER = ("S8", "prefetch", "cap16", "B_rep2", "C_rep2", "cap24")
+
+#: The series in parts (one rented instance each): the phases of the full plan that belong to a
+#: part. Every phase is in exactly one part.
+PART_PHASES: dict[str, tuple[str, ...]] = {
+    "part1": ("warmup", "A", "SB", "variants", "S8"),
+    "part2": ("B1", "C1", "B2", "C2"),
+    "part3": ("cap24", "cap16"),
+}
+PARTS = tuple(PART_PHASES)
+_PHASE_PART = {phase: part for part, phases in PART_PHASES.items() for phase in phases}
+#: DeepSpeed arms that D-best is chosen from (Shape A, 80 GB).
+D_BEST_CANDIDATES = DS_PLAIN + ("D1PF", "D2PF")
 
 # Minutes per run, ESTIMATED from the STEP 3 / STEP 4 records (H100:1051-1056, 1105-1111):
 # bf16 streaming 129 s and DeepSpeed ZeRO-3 param offload 378 s for the 256-step shape A run.
@@ -160,6 +189,7 @@ class Slot:
     skipped: str | None = None
     resolved_arm: str | None = None
     note: str = field(default="")
+    part: str = field(default="")
 
     @property
     def label(self) -> str:
@@ -172,13 +202,30 @@ def _alternate(arms: list[str], rep: int) -> list[str]:
     return list(arms) if rep % 2 else list(reversed(arms))
 
 
-def build_plan(only: set[str] | None = None, phases: set[str] | None = None) -> list[Slot]:
+def build_plan(
+    only: set[str] | None = None,
+    phases: set[str] | None = None,
+    part: str | None = None,
+) -> list[Slot]:
+    """The ordered slots of the series, restricted by arm, by phase and/or to one part.
+
+    ``Slot.index`` is the position in the FULL plan whatever the restriction, so a slot has the
+    same number in every dry run.
+    """
+    if part is not None and part not in PART_PHASES:
+        raise ValueError(f"unknown part {part!r}: choose from {', '.join(PARTS)}")
     slots: list[Slot] = []
+    position = 0
 
     def add(phase: str, group: str, arm: str, shape: str, budget: int, rep: int, **kw: Any) -> None:
+        nonlocal position
+        index = position
+        position += 1
         if only is not None and arm not in only:
             return
         if phases is not None and phase not in phases:
+            return
+        if part is not None and phase not in PART_PHASES[part]:
             return
         if arm == "SB":
             kw["conditional"] = "sb_derivation"
@@ -186,7 +233,7 @@ def build_plan(only: set[str] | None = None, phases: set[str] | None = None) -> 
             kw["conditional"] = "d_best"
         slots.append(
             Slot(
-                len(slots),
+                index,
                 phase,
                 group,
                 arm,
@@ -194,6 +241,7 @@ def build_plan(only: set[str] | None = None, phases: set[str] | None = None) -> 
                 budget,
                 rep,
                 est_min=estimate_minutes(arm, shape),
+                part=_PHASE_PART[phase],
                 **kw,
             )
         )
@@ -222,6 +270,107 @@ def build_plan(only: set[str] | None = None, phases: set[str] | None = None) -> 
     for rep in (1, 2, 3):
         add("S8", "S8", "S8", "A", 80, rep)
     return slots
+
+
+# ---------------------------------------------------------------------------------------
+# Parts: the estimate of a plan, and what a part needs from the earlier ones
+# ---------------------------------------------------------------------------------------
+
+#: A part's own set-up (model download, DeepSpeed build with cpu_adam, dataset check) and the
+#: time kept free at the end of its rental. Used only for the suggested ``--max-hours``.
+SETUP_MIN_PER_PART = 35.0
+MARGIN_MIN_PER_PART = 15.0
+
+
+def measured_wall_minutes(runs: list[dict[str, Any]]) -> dict[tuple[str, str], float]:
+    """Median wall minutes of the finished runs of each (arm, shape)."""
+    walls: dict[tuple[str, str], list[float]] = {}
+    for run in runs:
+        if run.get("wall_seconds"):
+            walls.setdefault((run["arm"], run["shape"]), []).append(run["wall_seconds"] / 60.0)
+    return {key: median(values) for key, values in walls.items()}
+
+
+def estimate_plan(
+    plan: list[Slot], table: dict[tuple[str, str], float] | None = None
+) -> dict[str, Any]:
+    """Run count and estimated GPU minutes of a plan, with the estimator of the budget rule.
+
+    ``table`` (arm, shape) -> measured median wall minutes replaces the built-in estimate of
+    that arm and shape, as it does while a series runs.
+    """
+
+    def minutes(slot: Slot) -> float:
+        measured = (table or {}).get((slot.resolved_arm or slot.arm, slot.shape))
+        return measured if measured is not None else slot.est_min
+
+    conditional = [slot for slot in plan if slot.conditional in ("idle_rule", "d_best")]
+    by_group: dict[str, float] = {}
+    for slot in plan:
+        by_group[slot.group] = by_group.get(slot.group, 0.0) + minutes(slot)
+    total = sum(by_group.values())
+    conditional_minutes = sum(minutes(slot) for slot in conditional)
+    return {
+        "runs": len(plan),
+        "warmups": sum(1 for slot in plan if slot.warmup),
+        "conditional_runs": len(conditional),
+        "minutes": total,
+        "minutes_conditional": conditional_minutes,
+        "minutes_unconditional": total - conditional_minutes,
+        "by_group": by_group,
+    }
+
+
+def suggested_max_hours(gpu_minutes: float) -> float:
+    """``--max-hours`` for a part: set-up + runs + margin, rounded up to the next 0.25 h."""
+    hours = (SETUP_MIN_PER_PART + gpu_minutes + MARGIN_MIN_PER_PART) / 60.0
+    return math.ceil(hours * 4.0 - 1e-9) / 4.0
+
+
+def part_prerequisites(
+    part: str, results: str | Path, only: set[str] | None = None
+) -> list[str]:
+    """What ``part`` still needs from the earlier parts: a list of problems (empty: ready).
+
+    Part 1 needs nothing. Part 2 and part 3 derive SB from part 1's Shape A runs at 80 GB (a
+    valid S1 run is the base of the rule) and part 2 also derives D-best (a valid run of at
+    least one DeepSpeed arm). The evidence is the run jsons; a stray ``sb_overrides.json``
+    without them is not accepted.
+    """
+    if part not in PART_PHASES:
+        raise ValueError(f"unknown part {part!r}: choose from {', '.join(PARTS)}")
+    if part == "part1":
+        return []
+    plan = build_plan(only, None, part)
+    needs_sb = any(slot.arm == "SB" for slot in plan)
+    needs_d_best = any(slot.arm == "DBEST" for slot in plan)
+    if not (needs_sb or needs_d_best):
+        return []
+    runs = gates_module.load_runs(results)
+    fix = (
+        f"ship part 1's results folder with this part's payload "
+        f"(make_payload.sh {part} <out_dir> <part 1 results dir>)"
+    )
+    if not runs:
+        return [
+            f"{part} needs the results of part1 and found none: no <shape>/<budget>/<arm>/"
+            f"rep<k>.json under {results}; {fix}"
+        ]
+    problems: list[str] = []
+    if needs_sb and gates_module.arm_stats(runs, "A", 80, "S1")["status"] != "measured":
+        problems.append(
+            f"{part} needs part1's Shape A runs at 80 GB: arm S1 has no valid run under "
+            f"{results} (SB is derived from it); {fix}"
+        )
+    if (
+        needs_d_best
+        and gates_module.best_deepspeed(runs, "A", 80, D_BEST_CANDIDATES) is None
+    ):
+        problems.append(
+            f"{part} needs part1's Shape A runs at 80 GB: none of {', '.join(D_BEST_CANDIDATES)} "
+            f"has a valid run under {results} (D-best is derived from them); {fix}"
+        )
+    return problems
 
 
 # ---------------------------------------------------------------------------------------
@@ -358,9 +507,13 @@ class Session:
         self.budget_usd = env_float("BUDGET_USD")
         self.setup_seconds = env_float("SETUP_SECONDS") or 0.0
         self.started = time.time()
+        self.part: str | None = getattr(args, "part", None)
+        #: suffix of the files every part writes (a part never overwrites an earlier part's)
+        self.tag = f"_{self.part}" if self.part else ""
         self.plan = build_plan(
             set(args.only.split(",")) if args.only else None,
             set(args.phases.split(",")) if args.phases else None,
+            self.part,
         )
         self.dropped: list[str] = []
         self.sb_overrides: dict[str, Any] | None = None
@@ -396,11 +549,7 @@ class Session:
 
     def measured_table(self) -> dict[tuple[str, str], float]:
         """Median wall minutes of the finished runs of each (arm, shape)."""
-        walls: dict[tuple[str, str], list[float]] = {}
-        for run in self.runs():
-            if run.get("wall_seconds"):
-                walls.setdefault((run["arm"], run["shape"]), []).append(run["wall_seconds"] / 60.0)
-        return {key: median(values) for key, values in walls.items()}
+        return measured_wall_minutes(self.runs())
 
     def estimate_slot(self, slot: Slot, table: dict[tuple[str, str], float] | None = None) -> float:
         arm = slot.resolved_arm or slot.arm
@@ -419,7 +568,12 @@ class Session:
         return sum(self.estimate_slot(slot, table) for slot in self.pending())
 
     def enforce_budget(self) -> None:
-        """Drop whole groups, in protocol order, until what is left fits."""
+        """Drop whole groups, in protocol order, until what is left fits.
+
+        Only groups that still have pending slots can be dropped, so a part (whose plan holds
+        only its own slots) drops only groups inside the part, in the protocol's order; ``core``
+        is not in the drop order and is never dropped.
+        """
         while True:
             remaining_s = self.estimate_remaining_minutes() * 60.0 * SAFETY_FACTOR
             fits = True
@@ -445,7 +599,9 @@ class Session:
                 f"BUDGET: dropping group {group!r} (time left {left}, "
                 f"remaining estimate {remaining_s / 60:.0f} min)"
             )
-            atomic_write_json(self.results / "dropped.json", {"dropped_in_order": self.dropped})
+            atomic_write_json(
+                self.results / f"dropped{self.tag}.json", {"dropped_in_order": self.dropped}
+            )
 
     # -- output --------------------------------------------------------------------------
     def log(self, message: str) -> None:
@@ -777,7 +933,7 @@ class Session:
             f"peak {run.get('peak_vram_mib')} MiB wall {run.get('wall_seconds', 0):.0f} s"
         )
         atomic_write_json(
-            self.results / "progress.json",
+            self.results / f"progress{self.tag}.json",
             {
                 "updated": time.time(),
                 "dropped": self.dropped,
@@ -826,18 +982,38 @@ class Session:
         if path.exists():
             self.d_best = read_json(path).get("arm")
             return
-        best = gates_module.best_deepspeed(runs, "A", 80, DS_PLAIN + ("D1PF", "D2PF"))
+        best = gates_module.best_deepspeed(runs, "A", 80, D_BEST_CANDIDATES)
         if best is not None:
             self.d_best = best["arm"]
             atomic_write_json(self.results / "d_best.json", {"arm": self.d_best, "stats": best})
             self.log(f"D-best (fastest DeepSpeed arm, Shape A, 80 GB): {self.d_best}")
 
     # -- main loop ----------------------------------------------------------------------
+    def refusals(self) -> list[str]:
+        """Reasons not to start at all (checked before anything is written or run)."""
+        problems: list[str] = []
+        if self.part:
+            only = set(self.args.only.split(",")) if self.args.only else None
+            problems += part_prerequisites(self.part, self.results, only)
+        if any(slot.arm == "S0" for slot in self.plan) and not Path(self.s0_bin).exists():
+            problems.append(
+                f"arm S0 is in the plan but its executable {self.s0_bin} does not exist "
+                "(setup.sh was run with SKIP_S0=1, or not at all): run setup.sh without "
+                "SKIP_S0, or leave S0 out with --only"
+            )
+        return problems
+
     def execute(self) -> int:
+        problems = self.refusals()
+        if problems:
+            for problem in problems:
+                print(f"REFUSED: {problem}", file=sys.stderr, flush=True)
+            return 2
         self.results.mkdir(parents=True, exist_ok=True)
         atomic_write_json(
-            self.results / "session.json",
+            self.results / f"session{self.tag}.json",
             {
+                "part": self.part,
                 "started": self.started,
                 "model": self.model,
                 "model_revision": MODEL_REVISION,
@@ -880,15 +1056,37 @@ class Session:
             self.log(f"gates failed: {type(exc).__name__}: {exc}")
         self.write_runs_csv()
         atomic_write_json(
-            self.results / "DONE",
+            self.results / f"DONE{self.tag}",
             {
+                "part": self.part,
                 "finished": time.time(),
                 "dropped_groups": self.dropped,
                 "skipped": [f"{s.label}: {s.skipped}" for s in self.plan if s.skipped],
                 "elapsed_seconds": time.time() - self.started,
+                **self.derivations_for_the_record(),
             },
         )
         return 0
+
+    def derivations_for_the_record(self) -> dict[str, Any]:
+        """What part 1 hands to the later parts. Logged and recorded, never written as a file
+        here: ``sb_overrides.json`` is written when SB is first needed and ``d_best.json`` when
+        D-best is first needed (part 2), so an interrupted part 1 cannot freeze a choice made
+        from half of its data."""
+        if self.part != "part1":
+            return {}
+        try:
+            sb_path = self.results / "sb_overrides.json"
+            selected = read_json(sb_path).get("selected") if sb_path.exists() else None
+            best = gates_module.best_deepspeed(self.runs(), "A", 80, D_BEST_CANDIDATES)
+        except Exception as exc:  # noqa: BLE001 - the DONE marker must still be written
+            return {"derivation_error": f"{type(exc).__name__}: {exc}"}
+        d_best = best["arm"] if best else None
+        self.log(
+            f"part1 hands over: SB selected {selected}; D-best from these results: {d_best} "
+            "(part2 and part3 derive both again from the run jsons)"
+        )
+        return {"sb_selected": selected, "d_best_now": d_best}
 
     def write_runs_csv(self) -> None:
         fields = [
@@ -947,10 +1145,19 @@ def dry_run(session: Session) -> int:
             target.mkdir(parents=True, exist_ok=True)
             (target / "soup.yaml").write_text(soup_arm.dump_yaml(config), encoding="utf-8")
             atomic_write_json(target / "env_and_notes.json", {"env": env, "notes": notes})
-    print(f"plan: {len(session.plan)} slots (results {results}, model {session.model})")
+    part_note = f", {session.part}" if session.part else ""
+    print(f"plan: {len(session.plan)} slots (results {results}, model {session.model}{part_note})")
+    if session.part:
+        only = set(session.args.only.split(",")) if session.args.only else None
+        for problem in part_prerequisites(session.part, results, only):
+            print(f"NOTE: a real run would be REFUSED: {problem}")
     print(f"soup.yaml written for every streaming arm and shape under {configs}")
-    print("SB: derived after Shape A repeat 3 (the dry run writes S1's yaml as a stand-in)")
-    print("D-best (Shapes B and C): the fastest DeepSpeed arm of Shape A, decided at run time")
+    if session.part in ("part2", "part3"):
+        print("SB: derived from part1's Shape A results (the dry run writes S1's yaml)")
+    else:
+        print("SB: derived after Shape A repeat 3 (the dry run writes S1's yaml as a stand-in)")
+    if session.part in (None, "part2"):
+        print("D-best (Shapes B and C): the fastest DeepSpeed arm of Shape A, decided at run time")
     print()
     totals: dict[str, float] = {}
     conditional_total = 0.0
@@ -992,10 +1199,17 @@ def dry_run(session: Session) -> int:
     )
     total_h = grand / 60 + SETUP_HOURS
     verdict = "FITS" if total_h <= HOURS_LIMIT else "DOES NOT FIT (the budget rule drops groups)"
-    print(
-        f"with {SETUP_HOURS:.0f} h of setup: {total_h:.2f} h against the {HOURS_LIMIT:.0f} h "
-        f"limit -> {verdict}"
-    )
+    if session.part:
+        print(
+            f"suggested --max-hours for {session.part}: {suggested_max_hours(grand):.2f} "
+            f"(setup {SETUP_MIN_PER_PART:.0f} min + runs {grand:.0f} min + margin "
+            f"{MARGIN_MIN_PER_PART:.0f} min, rounded up to 0.25 h)"
+        )
+    else:
+        print(
+            f"with {SETUP_HOURS:.0f} h of setup: {total_h:.2f} h against the {HOURS_LIMIT:.0f} h "
+            f"limit -> {verdict}"
+        )
     print(
         "estimates: train time from the STEP 3 / STEP 4 records, plus a startup per run; "
         "replaced by measured wall times as runs finish"
@@ -1014,6 +1228,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="comma separated phases: warmup,A,SB,variants,B1,C1,cap24,B2,C2,cap16,S8",
     )
     parser.add_argument(
+        "--part",
+        choices=PARTS,
+        default=None,
+        help="run only this part of the series (one rented instance each): "
+        + "; ".join(f"{part} = {', '.join(phases)}" for part, phases in PART_PHASES.items()),
+    )
+    parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help="with --part: check that the earlier parts' results are in --results and exit "
+        "(0 ready, 2 refused); runs nothing, writes nothing",
+    )
+    parser.add_argument(
         "--results", default=os.environ.get("DS_COMPARE_RESULTS") or str(HERE / "results")
     )
     parser.add_argument(
@@ -1022,13 +1249,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=f"local directory of {MODEL_ID} at {MODEL_REVISION[:12]}",
     )
     args = parser.parse_args(argv)
-    if not (args.all or args.only or args.phases or args.dry_run):
-        parser.error("give --all, --only <arms>, --phases <names> or --dry-run")
+    if args.preflight and not args.part:
+        parser.error("--preflight needs --part")
+    if not (args.all or args.only or args.phases or args.dry_run or args.part):
+        parser.error("give --all, --part <part>, --only <arms>, --phases <names> or --dry-run")
     return args
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.preflight:
+        only = set(args.only.split(",")) if args.only else None
+        problems = part_prerequisites(args.part, args.results, only)
+        for problem in problems:
+            print(f"REFUSED: {problem}", file=sys.stderr, flush=True)
+        if not problems:
+            print(f"preflight {args.part}: ready (results {args.results})")
+        return 2 if problems else 0
     session = Session(args)
     if args.dry_run:
         return dry_run(session)

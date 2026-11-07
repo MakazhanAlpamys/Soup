@@ -4,6 +4,14 @@
 #
 #     bash setup.sh && bash run_all.sh --all
 #
+# Running the series in parts (README.md "Running in parts"): every part is its own rented
+# instance and runs this script once. Two switches:
+#     SETUP_PART=part1|part2|part3   write this instance's records under results/setup_<part>/
+#                                    instead of results/ (nothing of an earlier part is overwritten)
+#     SKIP_S0=1                      skip step 4, the S0 venv (only part 1 runs arm S0)
+# Every other step stays: the hardware record, the cpu_adam build and its log, the model and its
+# hashes, the dataset check, the environment record.
+#
 # Target: a rented PyTorch + CUDA *devel* image (it must have nvcc: DeepSpeed's cpu_adam is
 # compiled here) with Python 3.11 to 3.13 and torch >= 2.6 already installed. The image's own
 # torch is reused; both virtual environments are created with --system-site-packages so a
@@ -14,6 +22,7 @@
 #   2. main venv      soup-cli (train extras) from the git commit in $SOUP_COMMIT
 #   3. DeepSpeed      built with DS_BUILD_CPU_ADAM=1, build log kept; cpu_adam import verified
 #   4. S0 venv        soup-cli at commit 2c9a078 with the stack of the earlier record
+#                     (skipped with SKIP_S0=1)
 #   5. model          NousResearch/Meta-Llama-3.1-8B-Instruct at the pinned revision, no token;
 #                     sha256 of every downloaded file -> results/model_hashes.txt
 #   6. datasets       make_rows.py --check against the model's tokenizer
@@ -26,8 +35,21 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESULTS="${DS_COMPARE_RESULTS:-$HERE/results}"
 MODEL_DIR="${DS_COMPARE_MODEL_DIR:-$HERE/model}"
-mkdir -p "$RESULTS"
-exec > >(tee -a "$RESULTS/setup.log") 2>&1
+SETUP_PART="${SETUP_PART:-}"
+SKIP_S0="${SKIP_S0:-0}"
+case "$SETUP_PART" in
+    "" | part1 | part2 | part3) ;;
+    *) printf '[setup] ERROR: SETUP_PART must be part1, part2 or part3 (got %s)\n' "$SETUP_PART" >&2; exit 1 ;;
+esac
+case "$SKIP_S0" in
+    0 | 1) ;;
+    *) printf '[setup] ERROR: SKIP_S0 must be 0 or 1 (got %s)\n' "$SKIP_S0" >&2; exit 1 ;;
+esac
+# REC: where this instance's own records go (results/ itself when no part is named).
+REC="$RESULTS"
+if [ -n "$SETUP_PART" ]; then REC="$RESULTS/setup_$SETUP_PART"; fi
+mkdir -p "$RESULTS" "$REC"
+exec > >(tee -a "$REC/setup.log") 2>&1
 
 SETUP_T0="$(date +%s)"
 # soup-cli commit under test: origin/main when this harness was written (override with
@@ -70,7 +92,7 @@ log "recording the hardware"
     echo "## root mount";      mount | grep ' / ' || true
     echo "## python";          command -v python3 || true; python3 --version 2>&1 || true
     echo "## g++";             g++ --version 2>&1 | head -1 || echo "g++ NOT FOUND"
-} > "$RESULTS/hardware.txt" 2>&1 || true
+} > "$REC/hardware.txt" 2>&1 || true
 command -v nvcc >/dev/null 2>&1 || die "nvcc not found: use a CUDA *devel* image (DeepSpeed cpu_adam needs it)"
 command -v nvidia-smi >/dev/null 2>&1 || die "nvidia-smi not found"
 PINNED_KB="$(ulimit -l)"
@@ -126,11 +148,11 @@ print("soup-cli", metadata.version("soup-cli"), (json.loads(direct).get("vcs_inf
 PY
 
 # --- 3. DeepSpeed with cpu_adam ---------------------------------------------------------
-log "building ${DEEPSPEED_SPEC} with DS_BUILD_CPU_ADAM=1 (log: results/deepspeed_build.log)"
+log "building ${DEEPSPEED_SPEC} with DS_BUILD_CPU_ADAM=1 (log: $REC/deepspeed_build.log)"
 if ! DS_BUILD_CPU_ADAM=1 python -m pip install "$DEEPSPEED_SPEC" --no-cache-dir --no-build-isolation -v \
-    > "$RESULTS/deepspeed_build.log" 2>&1; then
-    tail -40 "$RESULTS/deepspeed_build.log"
-    die "the DeepSpeed build failed (full log: $RESULTS/deepspeed_build.log)"
+    > "$REC/deepspeed_build.log" 2>&1; then
+    tail -40 "$REC/deepspeed_build.log"
+    die "the DeepSpeed build failed (full log: $REC/deepspeed_build.log)"
 fi
 python -c "import torch; import deepspeed; from deepspeed.ops.adam import DeepSpeedCPUAdam; DeepSpeedCPUAdam([torch.nn.Parameter(torch.zeros(1))]); print('deepspeed', deepspeed.__version__, 'cpu_adam OK')" \
     || die "DeepSpeedCPUAdam could not be created: the cpu_adam build is not usable"
@@ -138,16 +160,20 @@ command -v deepspeed >/dev/null 2>&1 || die "the deepspeed launcher is not on PA
 
 # --- 4. S0 venv (earlier revision and its stack) ----------------------------------------
 VENV_S0="$HERE/venv_s0"
-if [ ! -x "$VENV_S0/bin/python" ]; then
-    log "creating $VENV_S0"
-    "$PYBIN" -m venv --system-site-packages "$VENV_S0"
+if [ "$SKIP_S0" = "1" ]; then
+    log "SKIP_S0=1: the S0 venv is not built (only part 1 runs arm S0)"
+else
+    if [ ! -x "$VENV_S0/bin/python" ]; then
+        log "creating $VENV_S0"
+        "$PYBIN" -m venv --system-site-packages "$VENV_S0"
+    fi
+    "$VENV_S0/bin/python" -m pip install --quiet --upgrade pip setuptools wheel
+    "$VENV_S0/bin/python" -m pip install --quiet psutil pyyaml
+    log "installing soup-cli [train] at $SOUP_OLD_COMMIT with ${S0_PINS[*]}"
+    "$VENV_S0/bin/python" -m pip install "soup-cli[train] @ git+${SOUP_REPO_URL}@${SOUP_OLD_COMMIT}" "${S0_PINS[@]}"
+    "$VENV_S0/bin/soup" --help >/dev/null || die "the S0 venv's soup does not start"
+    "$VENV_S0/bin/python" -m pip freeze > "$REC/env_s0.txt"
 fi
-"$VENV_S0/bin/python" -m pip install --quiet --upgrade pip setuptools wheel
-"$VENV_S0/bin/python" -m pip install --quiet psutil pyyaml
-log "installing soup-cli [train] at $SOUP_OLD_COMMIT with ${S0_PINS[*]}"
-"$VENV_S0/bin/python" -m pip install "soup-cli[train] @ git+${SOUP_REPO_URL}@${SOUP_OLD_COMMIT}" "${S0_PINS[@]}"
-"$VENV_S0/bin/soup" --help >/dev/null || die "the S0 venv's soup does not start"
-"$VENV_S0/bin/python" -m pip freeze > "$RESULTS/env_s0.txt"
 
 # --- 5. model (no token) ----------------------------------------------------------------
 log "downloading $MODEL_ID @ ${MODEL_REVISION:0:12} to $MODEL_DIR"
@@ -181,17 +207,17 @@ PY
     ( cd "$MODEL_DIR" && for file in config.json tokenizer.json tokenizer_config.json generation_config.json; do
         printf '%s  %s  %s\n' "$(sha256sum "$file" | cut -d' ' -f1)" "$(stat -c %s "$file")" "$file"
     done )
-} > "$RESULTS/model_hashes.txt"
+} > "$REC/model_hashes.txt"
 ls "$MODEL_DIR"/*.safetensors >/dev/null 2>&1 || die "no safetensors shards in $MODEL_DIR"
 [ "$(ls "$MODEL_DIR"/model-*.safetensors | wc -l)" = "4" ] || die "expected 4 safetensors shards"
-log "model_hashes.txt written"
+log "model_hashes.txt written ($REC)"
 
 # --- 6. datasets ------------------------------------------------------------------------
 log "checking the three dataset files against the model's tokenizer"
 python "$HERE/make_rows.py" --check --tokenizer "$MODEL_DIR" || die "the dataset files do not tokenize to their target lengths"
 
 # --- 7. environment record --------------------------------------------------------------
-python -m pip freeze > "$RESULTS/env.txt"
+python -m pip freeze > "$REC/env.txt"
 {
     echo "## versions"
     python - <<'PY'
@@ -208,9 +234,9 @@ print("peft default LoRA targets for llama:", MAPPING["llama"])
 PY
     echo "## nvcc"; nvcc --version | tail -2
     echo "## harness"; ( cd "$HERE" && sha256sum PROTOCOL.md ds_compare_rows_*.jsonl ds_*.json 2>/dev/null || true )
-} >> "$RESULTS/env.txt"
+} >> "$REC/env.txt"
 if [ -f "$HERE/PROTOCOL.md" ]; then
-    sha256sum "$HERE/PROTOCOL.md" > "$RESULTS/protocol.sha256"
+    sha256sum "$HERE/PROTOCOL.md" > "$REC/protocol.sha256"
 else
     log "note: no PROTOCOL.md next to the harness; its sha256 is not recorded"
 fi
@@ -221,17 +247,21 @@ x = torch.randn(64, 64, device="cuda", dtype=torch.bfloat16)
 print("cuda smoke OK on", torch.cuda.get_device_name(0), float((x @ x).float().abs().mean()) >= 0)
 PY
 
-# env.sh: sourced by run_all.sh
+# env.sh: sourced by run_all.sh (no SOUP_S0_BIN when the S0 venv was skipped)
+S0_EXPORT="export SOUP_S0_BIN=\"$VENV_S0/bin/soup\""
+if [ "$SKIP_S0" = "1" ]; then S0_EXPORT="# SKIP_S0=1: no S0 venv"; fi
 cat > "$HERE/env.sh" <<EOF
 # written by setup.sh
 export PATH="$VENV_MAIN/bin:\$PATH"
 export CUDA_HOME="$CUDA_HOME"
 export PATH="\$CUDA_HOME/bin:\$PATH"
 export PY="$VENV_MAIN/bin/python"
-export SOUP_S0_BIN="$VENV_S0/bin/soup"
+$S0_EXPORT
 export DS_COMPARE_MODEL_DIR="$MODEL_DIR"
 export DS_COMPARE_RESULTS="$RESULTS"
 export HF_HUB_OFFLINE=1
 EOF
-echo "$(( $(date +%s) - SETUP_T0 ))" > "$RESULTS/setup_seconds.txt"
-log "setup done in $(cat "$RESULTS/setup_seconds.txt") s; next: bash run_all.sh --all"
+echo "$(( $(date +%s) - SETUP_T0 ))" > "$REC/setup_seconds.txt"
+NEXT="bash run_all.sh --all"
+if [ -n "$SETUP_PART" ]; then NEXT="bash run_all.sh --part $SETUP_PART"; fi
+log "setup done in $(cat "$REC/setup_seconds.txt") s; next: $NEXT"

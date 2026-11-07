@@ -12,10 +12,15 @@ a fake ``nvidia-smi``, never with a real arm.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import importlib.util
+import io
+import itertools
 import json
 import os
+import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -30,6 +35,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import bench_trace  # noqa: E402
+import dry_run_parts  # noqa: E402
 import ds_common  # noqa: E402
 import gates  # noqa: E402
 import make_rows  # noqa: E402
@@ -386,6 +392,7 @@ def _args(results: str, **extra: Any) -> argparse.Namespace:
         "results": results,
         "model": "tiny",
         "dry_run": False,
+        "part": None,
     }
     values.update(extra)
     return argparse.Namespace(**values)
@@ -603,8 +610,10 @@ def test_sampler_with_a_fake_nvidia_smi() -> None:
         assert sampler.foreign_gpu_processes()["foreign_pids"] is None  # no apps, nothing visible
 
 
-def _session_with_fakes(tmp: Path, scenarios: list[str]) -> tuple[orchestrate.Session, list[dict]]:
-    session = orchestrate.Session(_args(str(tmp / "results")))
+def _session_with_fakes(
+    tmp: Path, scenarios: list[str], part: str | None = None
+) -> tuple[orchestrate.Session, list[dict]]:
+    session = orchestrate.Session(_args(str(tmp / "results"), part=part))
     session.nvidia_smi = _fake_executable(tmp, "fake_smi", FAKE_SMI)
     fake = tmp / "fake_child.py"
     fake.write_text(FAKE_CHILD)
@@ -1085,8 +1094,6 @@ def test_text_rules() -> None:
         text = path.read_text(encoding="utf-8").lower()
         for word in banned:
             assert word not in text, f"{path.name} contains {word!r}"
-        import re
-
         # "vast.ai" is the rental site, not the word.
         assert not re.search(r"\b(ai|agents?)\b", text.replace("vast.ai", "vast")), (
             f"{path.name} contains a banned word"
@@ -1094,6 +1101,674 @@ def test_text_rules() -> None:
         assert not re.search("[" + chr(0x400) + "-" + chr(0x4FF) + "]", text), (
             f"{path.name} contains Cyrillic"
         )
+
+
+# --------------------------------------------------------------------------------------
+# running in parts (README "Running in parts"): plan split, resume, refusal, scripts
+# --------------------------------------------------------------------------------------
+
+
+def _plan_key(slot: orchestrate.Slot) -> tuple:
+    return (slot.phase, slot.group, slot.arm, slot.shape, slot.budget, slot.rep, slot.warmup)
+
+
+def _fake_part1(root: Path) -> None:
+    """Shape A at 80 GB results as part 1 leaves them: SB picks S6, D-best is D3."""
+    _series(root, "A", 80, "S1", [60.0, 61.0, 60.5])
+    _series(root, "A", 80, "S6", [75.0] * 3)
+    _series(root, "A", 80, "D1", [20.0] * 3, util=45.0)
+    _series(root, "A", 80, "D3", [35.0] * 3, util=80.0)
+    _series(root, "A", 80, "D1PF", [24.0] * 3)
+
+
+def _ship_run_jsons(source: Path, target: Path) -> None:
+    """What make_payload.sh ships: the rep<k>.json files, nothing else."""
+    for path in source.glob("*/*/*/rep*.json"):
+        if re.match(r"^rep\d+\.json$", path.name):
+            destination = target / path.relative_to(source)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(path, destination)
+
+
+def test_parts_are_disjoint_and_cover_the_plan() -> None:
+    full = orchestrate.build_plan()
+    full_keys = [_plan_key(slot) for slot in full]
+    assert len(set(full_keys)) == len(full_keys) == 91
+    by_part = {part: orchestrate.build_plan(None, None, part) for part in orchestrate.PARTS}
+    assert tuple(by_part) == ("part1", "part2", "part3")
+    key_sets = {part: {_plan_key(slot) for slot in slots} for part, slots in by_part.items()}
+    for first, second in itertools.combinations(key_sets, 2):
+        assert not key_sets[first] & key_sets[second], (first, second)
+    assert set().union(*key_sets.values()) == set(full_keys)
+    assert sum(len(slots) for slots in by_part.values()) == len(full)
+    # every phase of the full plan is in exactly one part; the slot knows which
+    phases = [phase for part_phases in orchestrate.PART_PHASES.values() for phase in part_phases]
+    assert len(phases) == len(set(phases)) and set(phases) == {s.phase for s in full}
+    for part, slots in by_part.items():
+        assert all(slot.part == part for slot in slots)
+        # the protocol's order is kept and a slot keeps its position in the full plan
+        assert [slot.index for slot in slots] == sorted(slot.index for slot in slots)
+        assert all(_plan_key(full[slot.index]) == _plan_key(slot) for slot in slots)
+
+    part1, part2, part3 = (by_part[name] for name in orchestrate.PARTS)
+    assert len(part1) == 56 and len(part2) == 20 and len(part3) == 15
+    # part 1: Shape A at 80 GB, every arm of section 2 with the warm-ups, 3 repeats
+    assert {(s.shape, s.budget) for s in part1} == {("A", 80)}
+    assert {s.arm for s in part1} == set(orchestrate.SHAPE_A_ARMS) | {"SB", "D1PF", "D2PF", "S8"}
+    assert [s.arm for s in part1 if s.warmup] == ["S1", "D1"]
+    assert {s.rep for s in part1 if not s.warmup} == {1, 2, 3}
+    assert {s.phase for s in part1} == {"warmup", "A", "SB", "variants", "S8"}
+    # part 2: Shapes B and C at 80 GB, SB S1 D-best D1 R1, 2 repeats
+    assert {(s.shape, s.budget) for s in part2} == {("B", 80), ("C", 80)}
+    assert {s.arm for s in part2} == set(orchestrate.BC_ARMS) and {s.rep for s in part2} == {1, 2}
+    # part 3: the 24 and 16 GB caps on Shape A, SB D1 D2 D3 R1
+    assert {(s.shape, s.budget) for s in part3} == {("A", 24), ("A", 16)}
+    assert {s.arm for s in part3} == set(orchestrate.CAP_ARMS)
+    assert {s.rep for s in part3 if s.budget == 24} == {1, 2}
+    assert {s.rep for s in part3 if s.budget == 16} == {1}
+    # --only and --part combine
+    only = orchestrate.build_plan({"S1"}, None, "part2")
+    assert {(s.arm, s.shape) for s in only} == {("S1", "B"), ("S1", "C")}
+    try:
+        orchestrate.build_plan(None, None, "part9")
+    except ValueError as why:
+        assert "part9" in str(why)
+    else:
+        raise AssertionError("an unknown part must be refused")
+
+
+def test_part_estimates_add_up_and_max_hours_round_up() -> None:
+    full = orchestrate.estimate_plan(orchestrate.build_plan())
+    reports = [dry_run_parts.part_report(part, None, 2.23) for part in orchestrate.PARTS]
+    assert sum(report.runs for report in reports) == full["runs"] == 91
+    assert abs(sum(report.gpu_minutes for report in reports) - full["minutes"]) < 0.5
+    for report in reports:
+        raw = (
+            orchestrate.SETUP_MIN_PER_PART + report.gpu_minutes + orchestrate.MARGIN_MIN_PER_PART
+        ) / 60.0
+        assert raw <= report.suggested_max_hours < raw + 0.25 + 1e-6
+        assert (report.suggested_max_hours * 4) % 1 == 0
+        assert report.cost_at_max_hours_usd == round(report.suggested_max_hours * 2.23, 2)
+    # rounding: an exact quarter hour stays, a minute more goes up to the next one
+    assert orchestrate.suggested_max_hours(130.0) == 3.0  # (35 + 130 + 15) / 60
+    assert orchestrate.suggested_max_hours(131.0) == 3.25
+    assert orchestrate.suggested_max_hours(0.0) == 1.0
+    # a measured wall time replaces the estimate of that arm and shape, as in a running series
+    slow = dry_run_parts.part_report("part3", {("R1", "A"): 200.0}, None)
+    assert slow.gpu_minutes > reports[2].gpu_minutes + 400
+    # the --max-hours written into the job scripts (less 15 minutes of boot) is this estimate
+    for report in reports:
+        text = (HERE / f"job_{report.part}.sh").read_text(encoding="utf-8")
+        budget = int(re.search(r'JOB_BUDGET_S="\$\{JOB_BUDGET_S:-(\d+)\}"', text).group(1))
+        assert budget == int(report.suggested_max_hours * 3600) - 900, (report.part, budget)
+
+
+def test_part_budget_drop_is_confined_to_the_part() -> None:
+    expected = {
+        "part1": ["S8", "prefetch"],
+        "part2": ["B_rep2", "C_rep2"],
+        "part3": ["cap16", "cap24"],
+    }
+    for part, dropped in expected.items():
+        assert dropped == [g for g in orchestrate.DROP_ORDER if g in dropped]  # protocol order
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            session = orchestrate.Session(_args(tmp, part=part))
+            session.deadline = time.time() + 1
+            session.enforce_budget()
+            assert session.dropped == dropped, (part, session.dropped)
+            # core is never dropped, whatever is left
+            assert all(slot.group == "core" for slot in session.pending()), part
+            assert (part == "part3") == (session.pending() == [])  # part 3 has no core group
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        session = orchestrate.Session(_args(tmp, part="part1"))
+        total = session.estimate_remaining_minutes()
+        # room for everything except the 9.6 minutes of S8: only S8 goes
+        left_s = total * 0.97 * 60 * orchestrate.SAFETY_FACTOR + orchestrate.FINISH_MARGIN_S + 5
+        session.deadline = time.time() + left_s
+        session.enforce_budget()
+        assert session.dropped == ["S8"], session.dropped
+
+
+def test_part_resume_derives_the_same_sb_and_d_best() -> None:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        base = Path(tmp)
+        part1_results = base / "part1_results"
+        _fake_part1(part1_results)
+        # what the whole series derives from these run jsons
+        shutil.copytree(part1_results, base / "full")
+        full = orchestrate.Session(_args(str(base / "full")))
+        full_sb = full.ensure_sb()
+        full.resolve_d_best(full.runs())
+        assert full_sb["selected"] == ["S6"] and full.d_best == "D3"
+        for part in ("part2", "part3"):
+            shipped = base / part
+            _ship_run_jsons(part1_results, shipped)
+            assert not (shipped / "sb_overrides.json").exists()
+            session = orchestrate.Session(_args(str(shipped), part=part))
+            assert session.refusals() == []
+            sb = session.ensure_sb()
+            assert sb["selected"] == full_sb["selected"] and sb["training"] == full_sb["training"]
+            assert sb["env"] == full_sb["env"]
+            assert sb["arm_changes_pct"] == full_sb["arm_changes_pct"]
+            if part == "part2":
+                slot = _slot("DBEST", "B", 80, 1, conditional="d_best")
+                assert session.resolve(slot) and slot.resolved_arm == full.d_best == "D3"
+                assert json.loads((shipped / "d_best.json").read_text())["arm"] == "D3"
+        # part 1's own files are read when they were shipped too (sb_overrides.json, d_best.json)
+        shipped_files = base / "with_files"
+        _ship_run_jsons(part1_results, shipped_files)
+        shutil.copy(base / "part2" / "sb_overrides.json", shipped_files)
+        shutil.copy(base / "part2" / "d_best.json", shipped_files)
+        again = orchestrate.Session(_args(str(shipped_files), part="part3"))
+        assert again.refusals() == [] and again.ensure_sb()["selected"] == ["S6"]
+    # a finished run is never run again, in any part: no child process is started
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        session, calls = _session_with_fakes(Path(tmp), [], part="part1")
+        _fake_part1(Path(tmp) / "results")
+        slot = _slot("S1", "A", 80, 1)
+        before = len(session.runs())
+        session.run_slot(slot)  # an empty scenario list raises if a child would be started
+        assert slot.done and calls == [] and len(session.runs()) == before
+
+
+def test_part_refuses_without_part1_results() -> None:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        empty = Path(tmp) / "empty"
+        for part in ("part2", "part3"):
+            session = orchestrate.Session(_args(str(empty), part=part))
+            problems = session.refusals()
+            assert len(problems) == 1 and "found none" in problems[0] and "part1" in problems[0]
+            assert "make_payload.sh" in problems[0], "the message says what to do"
+            captured = io.StringIO()
+            with contextlib.redirect_stderr(captured):
+                assert session.execute() == 2
+            assert "REFUSED" in captured.getvalue() and "found none" in captured.getvalue()
+            assert not empty.exists(), "a refused part writes nothing"
+            captured = io.StringIO()
+            with contextlib.redirect_stderr(captured):
+                argv = ["--part", part, "--preflight", "--results", str(empty)]
+                assert orchestrate.main(argv) == 2
+            assert "found none" in captured.getvalue()
+        # part 1 needs nothing from an earlier part
+        assert orchestrate.part_prerequisites("part1", empty) == []
+        assert orchestrate.main(["--part", "part1", "--preflight", "--results", str(empty)]) == 0
+        # S1 alone: SB can be derived (part 3 may start), D-best cannot (part 2 refuses)
+        only_s1 = Path(tmp) / "only_s1"
+        _series(only_s1, "A", 80, "S1", [60.0, 61.0, 60.5])
+        assert orchestrate.part_prerequisites("part3", only_s1) == []
+        problems = orchestrate.part_prerequisites("part2", only_s1)
+        assert len(problems) == 1 and "D-best" in problems[0] and "D1PF" in problems[0]
+        # DeepSpeed alone: SB cannot be derived
+        only_ds = Path(tmp) / "only_ds"
+        _series(only_ds, "A", 80, "D1", [20.0] * 3)
+        for part in ("part2", "part3"):
+            problems = orchestrate.part_prerequisites(part, only_ds)
+            assert len(problems) == 1 and "S1" in problems[0] and "SB" in problems[0], part
+        # runs that are void, out of memory or at the wrong budget are not part 1's results
+        bad = Path(tmp) / "bad"
+        _series(bad, "A", 80, "S1", [60.0] * 3, void=True)
+        _series(bad, "A", 80, "D1", [20.0] * 3, status="oom")
+        _series(bad, "A", 24, "S1", [60.0] * 3)
+        _series(bad, "B", 80, "S1", [60.0] * 3)
+        assert len(orchestrate.part_prerequisites("part2", bad)) == 2
+        # a derivation file without the runs behind it is not accepted
+        files_only = Path(tmp) / "files_only"
+        files_only.mkdir()
+        (files_only / "sb_overrides.json").write_text('{"selected": []}')
+        (files_only / "d_best.json").write_text('{"arm": "D1"}')
+        assert "found none" in orchestrate.part_prerequisites("part2", files_only)[0]
+        # the S0 executable must exist when S0 is in the plan (part 1 after SKIP_S0=1)
+        session = orchestrate.Session(_args(str(Path(tmp) / "r"), part="part1"))
+        session.s0_bin = str(Path(tmp) / "no_such_soup")
+        assert any("SKIP_S0" in problem for problem in session.refusals())
+        session.s0_bin = str(Path(tmp) / "empty_file")
+        Path(session.s0_bin).write_text("")
+        assert session.refusals() == []
+        session = orchestrate.Session(_args(str(Path(tmp) / "r"), part="part2"))
+        session.s0_bin = str(Path(tmp) / "no_such_soup")
+        assert all("arm S0" not in problem for problem in session.refusals())
+
+
+def test_part_command_line() -> None:
+    args = orchestrate.parse_args(["--part", "part3"])
+    assert args.part == "part3" and not args.all and not args.preflight
+    assert orchestrate.parse_args(["--all"]).part is None
+    for bad in (["--part", "part9"], ["--preflight"], ["--part"], []):
+        with contextlib.redirect_stderr(io.StringIO()):
+            try:
+                orchestrate.parse_args(bad)
+            except SystemExit as why:
+                assert why.code == 2, bad
+            else:
+                raise AssertionError(f"{bad} must be refused")
+
+
+def test_parts_write_their_own_records() -> None:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        root = Path(tmp) / "results"
+        _fake_part1(root)
+        orchestrate.Session(_args(str(root), part="part1")).finish()
+        done_one = (root / "DONE_part1").read_bytes()
+        record = json.loads(done_one)
+        assert record["part"] == "part1" and record["d_best_now"] == "D3"
+        assert record["sb_selected"] is None, "no sb_overrides.json yet: nothing to report"
+        assert not (root / "DONE").exists(), "only a whole series writes DONE"
+        orchestrate.Session(_args(str(root), part="part2")).finish()
+        assert (root / "DONE_part2").exists() and (root / "DONE_part1").read_bytes() == done_one
+        session = orchestrate.Session(_args(str(root), part="part3"))
+        session.deadline = time.time() + 1
+        session.enforce_budget()
+        assert (root / "dropped_part3.json").exists() and not (root / "dropped.json").exists()
+        orchestrate.Session(_args(str(root))).finish()
+        assert (root / "DONE").exists() and json.loads((root / "DONE").read_text())["part"] is None
+        assert session.tag == "_part3" and orchestrate.Session(_args(str(root))).tag == ""
+
+
+# -- shell scripts ---------------------------------------------------------------------
+
+
+def _find_bash() -> str | None:
+    """Git Bash on Windows (a bare ``bash`` there is WSL's), ``bash`` elsewhere."""
+    if os.name != "nt":
+        return shutil.which("bash")
+    for candidate in (
+        os.environ.get("GIT_BASH", ""),
+        r"C:\Program Files\Git\usr\bin\bash.exe",
+        r"C:\Program Files\Git\bin\bash.exe",
+    ):
+        if candidate and Path(candidate).exists():
+            return candidate
+    return None
+
+
+_SCRIPT_ENV_KEYS = (
+    "DEADLINE_EPOCH VK_DEADLINE_EPOCH VK_RESERVE_S VK_OUT VK_ROOT PAYLOAD_DIR SETUP_PART SKIP_S0 "
+    "DS_COMPARE_RESULTS JOB_DRY_RUN JOB_BUDGET_S JOB_PYTHON ALLOW_DIRTY PAYLOAD_MAX_FILE_MB "
+    "PAYLOAD_REPO PAYLOAD_REF PAYLOAD_PYTHON SETUP_SECONDS PY SOUP_S0_BIN"
+).split()
+
+
+def _run_script(script: Path, *args: str, **env_extra: str) -> subprocess.CompletedProcess:
+    bash = _find_bash()
+    if bash is None:
+        raise SkipTestError("no bash")
+    env = {key: value for key, value in os.environ.items() if key not in _SCRIPT_ENV_KEYS}
+    env.update({"PYTHONDONTWRITEBYTECODE": "1", "CUDA_VISIBLE_DEVICES": "-1"})
+    if os.name == "nt":  # the msys tools (find, tar, grep) before Windows' own find.exe
+        env["PATH"] = str(Path(bash).parent) + os.pathsep + env.get("PATH", "")
+    env.update(env_extra)
+    return subprocess.run(
+        [bash, script.as_posix(), *args],
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=300,
+        check=False,
+    )
+
+
+def _copy_harness(target: Path, with_rows: bool = False) -> None:
+    """The harness files as committed (LF), into ``target``."""
+    target.mkdir(parents=True, exist_ok=True)
+    for path in sorted(HERE.iterdir()):
+        if not path.is_file() or path.suffix not in (".py", ".sh", ".json", ".md", ".jsonl"):
+            continue
+        if path.suffix == ".jsonl" and not with_rows:
+            continue
+        (target / path.name).write_bytes(path.read_bytes().replace(b"\r\n", b"\n"))
+
+
+def test_job_scripts_results_deadline_and_refusal() -> None:
+    if _find_bash() is None:
+        raise SkipTestError("no bash")
+    python = Path(sys.executable).as_posix()
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        base = Path(tmp)
+        payload, kit = base / "payload", base / "kit"
+        _copy_harness(payload / "benchmarks" / "harness" / "ds_compare")
+        (payload / "PAYLOAD.txt").write_text("part: part2\n")
+        _fake_part1(payload / "results")
+        kit.mkdir()
+        now = int(time.time())
+        (kit / "deadline").write_text(f"{now + 3 * 3600}\n")
+        (kit / "vk.env").write_text(
+            f"VK_DEADLINE_EPOCH={now + 99}\nVK_RESERVE_S=300\nVK_LAUNCH_EPOCH={now - 60}\n"
+        )
+
+        def job(part: str, out: str, **extra: str) -> subprocess.CompletedProcess:
+            env = {
+                "PAYLOAD_DIR": (base / "payload").as_posix(),
+                "VK_OUT": (base / out).as_posix(),
+                "VK_ROOT": kit.as_posix(),
+                "JOB_PYTHON": python,
+                "JOB_DRY_RUN": "1",
+            }
+            env.update(extra)
+            scripts = payload / "benchmarks" / "harness" / "ds_compare"
+            return _run_script(scripts / f"job_{part}.sh", **env)
+
+        # the kit's deadline file, less its reserve (300 s) and the 10-minute finish margin
+        result = job("part2", "out2")
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        epoch = int(re.search(r"DEADLINE_EPOCH=(\d+)", result.stdout).group(1))
+        assert epoch == now + 3 * 3600 - 300 - 600, (epoch, result.stdout)
+        assert "deadline" in result.stdout and "SKIP_S0=1" in result.stdout, result.stdout
+        out2 = base / "out2"
+        assert (out2 / "job_part2.log").exists() and (out2 / "payload_part2.txt").exists()
+        assert (out2 / "results" / "A" / "80" / "S1" / "rep1.json").exists(), "shipped results"
+        assert "would run: bash" in result.stdout and "run_all.sh --part part2" in result.stdout
+        # part 3 likewise, part 1 keeps the S0 venv
+        assert job("part3", "out3").returncode == 0
+        part1 = job("part1", "out1")
+        assert part1.returncode == 0 and "SKIP_S0=0" in part1.stdout, part1.stdout
+        # a deadline passed as an environment variable wins over the files
+        result = job("part2", "out2b", VK_DEADLINE_EPOCH=str(now + 7200), VK_RESERVE_S="120")
+        epoch = int(re.search(r"DEADLINE_EPOCH=(\d+)", result.stdout).group(1))
+        assert result.returncode == 0 and epoch == now + 7200 - 120 - 600, result.stdout
+        assert "environment VK_DEADLINE_EPOCH" in result.stdout
+        # no kit files: job start + JOB_BUDGET_S, less the finish margin
+        (base / "empty_kit").mkdir()
+        result = job("part2", "out2c", VK_ROOT=(base / "empty_kit").as_posix(), JOB_BUDGET_S="5000")
+        epoch = int(re.search(r"DEADLINE_EPOCH=(\d+)", result.stdout).group(1))
+        assert result.returncode == 0 and abs(epoch - (now + 5000 - 600)) < 120, result.stdout
+        assert "JOB_BUDGET_S" in result.stdout
+        # a deadline that is already past stops the job
+        (kit / "deadline").write_text(f"{now - 10}\n")
+        result = job("part2", "out2d")
+        assert result.returncode != 0 and "already past" in (result.stdout + result.stderr)
+        (kit / "deadline").write_text(f"{now + 3 * 3600}\n")
+        # part 2 without part 1's results refuses BEFORE set-up (the dry-run line is never reached)
+        shutil.move(str(payload / "results"), str(base / "results_aside"))
+        result = job("part2", "out2e")
+        assert result.returncode != 0, result.stdout
+        merged = result.stdout + result.stderr  # the job sends its stderr through its log tee
+        assert "found none" in merged and "no set-up time was spent" in merged
+        assert "would run" not in merged
+        # part 1 does not need them
+        assert job("part1", "out1e").returncode == 0
+        # a real run of setup.sh would follow: its switches are checked in test_setup_switches
+
+
+def test_setup_switches_and_run_all_part_option() -> None:
+    setup_text = (HERE / "setup.sh").read_text(encoding="utf-8")
+    # every record of a part goes to $REC (results/setup_<part>/); only env.sh names $RESULTS
+    for line in setup_text.splitlines():
+        if "$RESULTS" in line and not line.lstrip().startswith("#"):
+            assert any(
+                allowed in line
+                for allowed in (
+                    'RESULTS="${DS_COMPARE_RESULTS',
+                    'REC="$RESULTS"',
+                    'REC="$RESULTS/setup_$SETUP_PART"',
+                    'mkdir -p "$RESULTS" "$REC"',
+                    'export DS_COMPARE_RESULTS="$RESULTS"',
+                )
+            ), line
+    assert 'if [ "$SKIP_S0" = "1" ]' in setup_text and "SOUP_S0_BIN" in setup_text
+    bash = _find_bash()
+    if bash is None:
+        raise SkipTestError("no bash")
+    for script in ("setup.sh", "run_all.sh", "job_common.sh", "make_payload.sh", "job_part1.sh"):
+        result = subprocess.run(
+            [bash, "-n", (HERE / script).as_posix()], capture_output=True, text=True, check=False
+        )
+        assert result.returncode == 0, (script, result.stderr)
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        results = (Path(tmp) / "results").as_posix()
+        for key, value, message in (
+            ("SETUP_PART", "part9", "SETUP_PART must be"),
+            ("SKIP_S0", "2", "SKIP_S0 must be"),
+        ):
+            result = _run_script(HERE / "setup.sh", DS_COMPARE_RESULTS=results, **{key: value})
+            assert result.returncode == 1 and message in result.stderr, (key, result.stderr)
+            assert not Path(results).exists(), "a refused set-up writes nothing"
+        # run_all.sh finds the set-up time of the part it runs (results/setup_<part>/)
+        stand_in = Path(tmp) / "stand_in"
+        stand_in.mkdir()
+        shutil.copy(HERE / "run_all.sh", stand_in / "run_all.sh")
+        (stand_in / "orchestrate.py").write_text(
+            "import os, sys\n"
+            "print('SETUP_SECONDS=' + os.environ.get('SETUP_SECONDS', '')"
+            " + ' ARGS=' + ' '.join(sys.argv[1:]))\n"
+        )
+        stand_results = Path(tmp) / "stand_results"
+        (stand_results / "setup_part2").mkdir(parents=True)
+        (stand_results / "setup_part2" / "setup_seconds.txt").write_text("321\n")
+        (stand_results / "setup_seconds.txt").write_text("999\n")
+        for arguments, seconds in (
+            (["--part", "part2"], "321"),
+            (["--part=part2", "--dry-run"], "321"),
+            (["--part", "part3"], ""),  # no record of its own yet: not part 2's, not the series'
+            (["--all"], "999"),
+        ):
+            result = _run_script(
+                stand_in / "run_all.sh",
+                *arguments,
+                DS_COMPARE_RESULTS=stand_results.as_posix(),
+                PY=Path(sys.executable).as_posix(),
+            )
+            assert result.returncode == 0, (arguments, result.stderr)
+            assert f"SETUP_SECONDS={seconds} ARGS={' '.join(arguments)}" in result.stdout, (
+                arguments,
+                result.stdout,
+            )
+        # run_all.sh hands --part on to the real orchestrate.py
+        _fake_part1(Path(tmp) / "results")
+        python = Path(sys.executable).as_posix()
+        for part, lines in (("part2", "plan: 20 slots"), ("part3", "plan: 15 slots")):
+            for style in (["--part", part], [f"--part={part}"]):
+                result = _run_script(
+                    HERE / "run_all.sh", "--dry-run", *style, DS_COMPARE_RESULTS=results, PY=python
+                )
+                assert result.returncode == 0, (result.stdout[-400:], result.stderr[-400:])
+                assert lines in result.stdout and part in result.stdout.splitlines()[0]
+                assert "REFUSED" not in result.stdout
+        result = _run_script(
+            HERE / "run_all.sh",
+            "--dry-run",
+            "--part",
+            "part1",
+            DS_COMPARE_RESULTS=results,
+            PY=python,
+        )
+        assert "plan: 56 slots" in result.stdout, result.stdout[:300]
+        # no part-1 results: the dry run says so, a real start would refuse
+        result = _run_script(
+            HERE / "run_all.sh",
+            "--part",
+            "part2",
+            DS_COMPARE_RESULTS=(Path(tmp) / "nothing").as_posix(),
+            PY=python,
+        )
+        assert result.returncode == 2 and "found none" in result.stderr, result.stderr
+
+
+def _git(repo: Path, *args: str) -> str:
+    result = subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=selftest",
+            "-c",
+            "user.email=selftest@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.autocrlf=false",
+            "-C",
+            str(repo),
+            *args,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def _payload_repo(base: Path, extra: dict[str, bytes] | None = None) -> Path:
+    """A throw-away git repository whose HEAD holds the harness (LF) plus ``extra`` files."""
+    repo = base / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "core.autocrlf", "false")  # make_payload.sh's own git calls read this
+    _copy_harness(repo / "benchmarks" / "harness" / "ds_compare", with_rows=True)
+    for name, data in (extra or {}).items():
+        target = repo / "benchmarks" / "harness" / "ds_compare" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    _git(repo, "add", "-f", "-A")
+    _git(repo, "commit", "-q", "-m", "fixture")
+    return repo
+
+
+def _make_payload(repo: Path, part: str, out: Path, ship: Path | None = None, **env: str):
+    args = [part, out.as_posix()] + ([ship.as_posix()] if ship else [])
+    return _run_script(
+        HERE / "make_payload.sh",
+        *args,
+        PAYLOAD_REPO=repo.as_posix(),
+        PAYLOAD_PYTHON=Path(sys.executable).as_posix(),
+        **env,
+    )
+
+
+def _all_files(root: Path) -> list[Path]:
+    return sorted(path for path in root.rglob("*") if path.is_file())
+
+
+def test_make_payload_builds_a_clean_folder() -> None:
+    if _find_bash() is None or shutil.which("git") is None:
+        raise SkipTestError("no bash or git")
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        base = Path(tmp)
+        repo = _payload_repo(base, {"__pycache__/stale.pyc": b"\x00bytecode\r\n"})
+        out = base / "out1"
+        result = _make_payload(repo, "part1", out)
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        harness = out / "benchmarks" / "harness" / "ds_compare"
+        for name in ("orchestrate.py", "setup.sh", "job_part1.sh", "job_common.sh", "PROTOCOL.md"):
+            assert (harness / name).exists(), name
+        files = _all_files(out)
+        assert not any("__pycache__" in path.parts or path.suffix == ".pyc" for path in files)
+        assert all(b"\r" not in path.read_bytes() for path in files), "LF only"
+        info = (out / "PAYLOAD.txt").read_text()
+        assert "harness_commit: " + _git(repo, "rev-parse", "HEAD") in info
+        assert "suggested --max-hours: 5.00" in result.stdout and "job_part1.sh" in result.stdout
+        # an existing non-empty folder is never built over
+        again = _make_payload(repo, "part1", out)
+        assert again.returncode != 0 and "not empty" in again.stderr
+        # part 2 and part 3 without part 1's results: refused, no payload at the target
+        for part in ("part2", "part3"):
+            refused = _make_payload(repo, part, base / f"no_{part}")
+            assert refused.returncode != 0 and "found none" in refused.stderr, refused.stderr
+            assert not (base / f"no_{part}").exists()
+        # shipped results: the run jsons and nothing else; the CSV and log files hold CR bytes
+        results = base / "part1_results"
+        _fake_part1(results)
+        for folder in (results / "A" / "80" / "S1", results / "A" / "80" / "D1"):
+            (folder / "rep1.gpu.csv").write_bytes(b"time,mem\r\n1,2\r\n")
+            (folder / "rep1.log").write_bytes(b"step 1\r step 2\r")
+            (folder / "rep1.raw.json").write_text("{}")
+            (folder / "rep1.void1.json").write_text("{}")
+        (results / "sb_overrides.json").write_text('{"selected": ["S6"]}')
+        (results / "A" / "80" / "S1" / "notes.txt").write_text("stay behind")
+        out2 = base / "out2"
+        result = _make_payload(repo, "part2", out2, results)
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        shipped = sorted(
+            path.relative_to(out2 / "results").as_posix() for path in _all_files(out2 / "results")
+        )
+        wanted = sorted(
+            path.relative_to(results).as_posix() for path in results.glob("*/*/*/rep[0-9].json")
+        )
+        assert shipped == sorted(wanted + ["sb_overrides.json"]), shipped
+        assert all(b"\r" not in path.read_bytes() for path in _all_files(out2))
+        # what was shipped is what the part needs: its own preflight passes on the payload
+        assert orchestrate.part_prerequisites("part2", out2 / "results") == []
+        # a wrong folder (no run json in it) is refused
+        wrong = base / "wrong"
+        wrong.mkdir()
+        (wrong / "notes.txt").write_text("nothing here")
+        refused = _make_payload(repo, "part3", base / "out_wrong", wrong)
+        assert refused.returncode != 0 and "no run json" in refused.stderr
+        assert not (base / "out_wrong").exists()
+
+
+def test_make_payload_refuses_a_cr_byte_and_a_big_file() -> None:
+    if _find_bash() is None or shutil.which("git") is None:
+        raise SkipTestError("no bash or git")
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        base = Path(tmp)
+
+        def case(name: str, extra: dict[str, bytes] | None = None) -> Path:
+            (base / name).mkdir()
+            return _payload_repo(base / name, extra)
+
+        # a committed CR byte (a CRLF shell script) stops the build and leaves no payload
+        repo = case("crlf_script", {"extra_job.sh": b"#!/usr/bin/env bash\r\necho hi\r\n"})
+        out = base / "out_cr"
+        result = _make_payload(repo, "part1", out)
+        assert result.returncode != 0, (result.stdout, result.stderr)
+        assert "carriage-return" in result.stderr and "extra_job.sh" in result.stderr, result.stderr
+        assert not out.exists(), "a refused build leaves no payload at the target"
+        # one stray CR inside a data file is enough
+        repo = case("crlf_data", {"data.json": b'{"a": 1}\r\n'})
+        refused = _make_payload(repo, "part1", base / "out_cr_data")
+        assert refused.returncode != 0 and "data.json" in refused.stderr
+        # the same repository without the CR file builds: the check is what stops it
+        repo = case("lf_only", {"extra_job.sh": b"#!/usr/bin/env bash\necho hi\n"})
+        assert _make_payload(repo, "part1", base / "ok").returncode == 0
+        # a file over the limit (lowered to 1 MB here; the default is 50 MB)
+        repo = case("big_file", {"big.bin": b"x" * (2 * 1024 * 1024)})
+        result = _make_payload(repo, "part1", base / "out_big", PAYLOAD_MAX_FILE_MB="1")
+        assert result.returncode != 0 and "over 1 MB" in result.stderr, result.stderr
+        assert "big.bin" in result.stderr
+        assert not (base / "out_big").exists()
+        ok = _make_payload(repo, "part1", base / "big_ok", PAYLOAD_MAX_FILE_MB="3")
+        assert ok.returncode == 0, ok.stderr
+        assert "PAYLOAD_MAX_FILE_MB:-50" in (HERE / "make_payload.sh").read_text(encoding="utf-8")
+        # a harness that differs from HEAD is refused: the payload must be what the owner sees
+        repo = case("dirty")
+        script = repo / "benchmarks" / "harness" / "ds_compare" / "orchestrate.py"
+        text = script.read_text(encoding="utf-8")
+        script.write_text(text + "\n# uncommitted\n", encoding="utf-8")
+        result = _make_payload(repo, "part1", base / "out_dirty")
+        assert result.returncode != 0 and "uncommitted" in result.stderr, result.stderr
+        assert _make_payload(repo, "part1", base / "dirty_ok", ALLOW_DIRTY="1").returncode == 0
+
+
+def test_harness_files_are_lf_in_the_index() -> None:
+    if shutil.which("git") is None:
+        raise SkipTestError("no git")
+    listing = subprocess.run(
+        ["git", "-C", str(HERE), "ls-files", "--eol", "--", "."],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if listing.returncode != 0 or not listing.stdout.strip():
+        raise SkipTestError("not inside a git checkout")
+    for line in listing.stdout.splitlines():
+        info, _, name = line.partition("\t")
+        assert info.split()[0] not in ("i/crlf", "i/mixed"), f"{name}: not LF in the index"
+
+
+def test_readme_documents_running_in_parts() -> None:
+    text = (HERE / "README.md").read_text(encoding="utf-8")
+    assert "## Running in parts" in text
+    for needle in (
+        "--part part1",
+        "make_payload.sh",
+        "job_part1.sh",
+        "dry_run_parts.py",
+        "SKIP_S0",
+        "setup_part1",
+        "refuses",
+    ):
+        assert needle in text, needle
 
 
 # --------------------------------------------------------------------------------------
