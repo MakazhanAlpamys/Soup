@@ -1341,7 +1341,7 @@ The SDK recheck refuses non-finite `min_agreement` or `max_bias` (including
 integers beyond float range) with a named `ValueError` after existing report
 errors; finite custom limits and equality boundaries are unchanged (#2467).
 
-The report carries `position_bias` ∈ [-1, 1] (0 = no slot preference), a conformal abstention threshold from the score quantile, agreement-rate vs the oracle, and a `calibrated` bool. `ensure_judge_calibrated` refuses on missing report, low agreement, or extreme bias — so production scoring code can fail loud, not silent.
+The report carries `position_bias` ∈ [-1, 1] (0 = no slot preference), a conformal abstention threshold from the score quantile, agreement-rate vs the oracle, and a `calibrated` bool. `ensure_judge_calibrated` refuses on missing report, low agreement, or extreme bias — so production scoring code can fail loud, not silent. A report claiming `calibrated=True` must have `num_pairs >= 1`; a zero-pair calibrated report is refused with a `ValueError` (#2496).
 
 Persist a calibration once and reuse it across runs (v0.71.1): `write_judge_calibration(report, "calib.json")` writes a cwd-contained JSON, and `load_judge_calibration("calib.json")` re-validates it on load (a corrupt or out-of-range field on disk is rejected, since it's the production-gate safety net). The artifact attaches to the registry under the new `judge_calibration` kind.
 
