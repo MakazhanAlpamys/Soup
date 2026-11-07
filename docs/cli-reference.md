@@ -668,7 +668,7 @@ Usage: `soup bench infer [OPTIONS] MODEL`
 | `--prompts-file` | text |  |  | Path to custom prompts file (.txt or .jsonl) |
 | `--p50` | flag | off |  | Print p50 (median) per-prompt latency. v0.53.9 #26. |
 | `--p95` | flag | off |  | Print p95 per-prompt latency. v0.53.9 #26. |
-| `--backend` | text | `auto` |  | Inference backend hint: auto (default) \| transformers \| mlx. v0.53.9 #28. |
+| `--backend` | text | `auto` |  | auto (default) \| transformers. soup bench measures the transformers engine; another backend is refused, and an auto-detected one is named and benchmarked as transformers (#1811). |
 | `--cuda-graphs` | flag | off |  | Experimental CUDA graph decode for resident, unquantized Qwen2/Llama models. |
 
 ### `soup bench train`

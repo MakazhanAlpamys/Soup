@@ -74,8 +74,9 @@ def bench(
         "auto",
         "--backend",
         help=(
-            "Inference backend hint: auto (default) | transformers | mlx. "
-            "v0.53.9 #28."
+            "auto (default) | transformers. soup bench measures the transformers "
+            "engine; another backend is refused, and an auto-detected one is named "
+            "and benchmarked as transformers (#1811)."
         ),
     ),
     cuda_graphs: bool = typer.Option(
@@ -127,6 +128,23 @@ def bench(
             "--cuda-graphs requires --backend transformers. Omit --cuda-graphs to bench this "
             "backend"
         )
+
+    # #1811: loading and generation below go through infer._load_model /
+    # infer._generate, the transformers engine, whatever the backend says. A
+    # vllm / sglang / mlx row used to be transformers relabelled.
+    if backend_resolved != "transformers":
+        if backend_lower != "auto":
+            console.print(
+                f"[red]--backend {backend_resolved} is not supported by soup bench:[/] "
+                "it measures the transformers engine only. Use --backend transformers "
+                "(or auto), and the engine's own benchmark for vLLM, SGLang or MLX."
+            )
+            raise typer.Exit(2)
+        console.print(
+            f"[yellow]Note:[/] detected {backend_resolved}, but soup bench measures the "
+            "transformers engine; benchmarking with transformers."
+        )
+        backend_resolved = "transformers"
 
     if cuda_graphs is True:
         from soup_cli.commands.infer import _with_omit_hint
