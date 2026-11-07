@@ -25,14 +25,15 @@ From Python, `soup_cli.utils.loop_formats` returns them: `load_schema(name)`,
 `SCHEMA_VERSION`, and `prompt_hash(messages)` (see [paraphrase](#paraphrase)).
 `jsonschema` is not a runtime dependency of Soup; install it to validate lines yourself.
 
-> **Status.** Soup writes five of the six formats. `soup serve --trace-log` writes version 1
+> **Status.** Soup writes all six formats. `soup serve --trace-log` writes version 1
 > conversation lines and `soup serve --feedback-log` writes feedback lines (see
 > [Serving and Export](serving-and-export.md#response-ids-and-feedback)). `soup loop`
 > writes `iterations.jsonl`, `versions.jsonl` and `progress.jsonl` (see
 > [What `soup loop` writes](#what-soup-loop-writes)), next to the
-> `.soup-loops/<iteration-id>/iteration.json` manifest it has always written per iteration.
-> Nothing in Soup writes `paraphrases.jsonl` or the `verdict.corrections` /
-> `verdict.held_out` evidence yet; `soup loop` and Soup Zero will.
+> `.soup-loops/<iteration-id>/iteration.json` manifest it has always written per iteration,
+> and, before it trains, `paraphrases.jsonl` (see [Who writes it](#who-writes-it)).
+> Nothing in Soup writes the `verdict.corrections` / `verdict.held_out` evidence yet;
+> `soup ship` and Soup Zero will.
 > **One active loop per project:** the files take no lock, and two `soup loop watch`
 > processes on one `.soup/loop.yaml` would race on the version counter. Other programs may
 > append to the same files; Soup never assumes it is the only writer.
@@ -144,6 +145,26 @@ regenerates the paraphrases (a new template version, say) appends a new line.
 prompt (`same_as_prompt`) or contains the words the correction added (`leaks_answer`),
 regenerates once, and drops it if it fails again. `paraphrases` can therefore hold fewer
 items than were requested, but never none: if nothing survives, **no line is written**.
+
+### Who writes it
+
+`soup loop`'s pre-wired train stage, before it trains, for every edit in the training set that
+has no current line: current means the last line for its `response_id` has the `prompt_hash` of
+the edit's prompt, so an edit is generated once and every later iteration reuses it. It
+follows [Soup Zero](https://github.com/SoupTeam/SoupZero)'s method: the prompt that is
+paraphrased is the last user message; one request asks for two paraphrases as a numbered list
+(template `loop-paraphrase`, version `1`, temperature 0.7); a paraphrase is dropped when it
+equals the prompt after case-folding and removing punctuation and spacing (`same_as_prompt`) or
+holds at least half of the words the correction added (`leaks_answer`: the content words of the
+edit that the answer it corrected lacked, all of the edit's content words when that is fewer
+than two); when fewer than two survive the same request is made once more, never a third time;
+`dropped` counts every paraphrase dropped across both requests and `dropped_reasons` names each
+reason once, in the order it first happened. The model is `loop.yaml`'s `paraphraser_model` at
+its `paraphraser_endpoint`, else the loop's own serve endpoint, which answers the call with the
+`X-Soup-Internal: loop-check` header and the tool token so that it is not recorded (see
+[Internal Calls](serving-and-export.md#internal-calls-x-soup-internal) and
+[the flywheel](adapters-and-governance.md#data-flywheel-soup-loop)). The paraphrases are never
+training data.
 
 ## iteration
 

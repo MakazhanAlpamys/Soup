@@ -141,6 +141,57 @@ def _sft_recipe_label(state: LoopState) -> str:
     return f"{text} (from loop.yaml: {', '.join(own)}; the rest built-in defaults)"
 
 
+def _paraphraser_label(state: LoopState) -> str:
+    """Who writes the paraphrases, in one line (only called with a paraphraser set)."""
+    return f"{state.paraphraser_model} at {state.paraphraser_endpoint}"
+
+
+def _paraphraser_line(state: LoopState) -> str:
+    """The init panel line for a configured paraphraser (empty without), newline-ended."""
+    if not state.paraphraser_endpoint:
+        return ""
+    return f"paraphraser:  [bold]{escape(_paraphraser_label(state))}[/]\n"
+
+
+def _paraphraser_from_flags(
+    endpoint: Optional[str], model: Optional[str]
+) -> "tuple[Optional[str], Optional[str]]":
+    """The checked ``--paraphraser-endpoint`` / ``--paraphraser-model`` pair (exit 2 if bad).
+
+    Both or neither: the loop's own serve endpoint ignores a model name, and another endpoint
+    needs one. The endpoint goes through the same gate as SOUP_LOOP_SERVE_ENDPOINT.
+    """
+    if endpoint is None and model is None:
+        return None, None
+    if endpoint is None:
+        console.print(
+            "[red]--paraphraser-model needs --paraphraser-endpoint:[/] the loop's own serve "
+            "endpoint answers with the model it serves and ignores a model name"
+        )
+        raise typer.Exit(code=2)
+    if model is None:
+        console.print(
+            "[red]--paraphraser-endpoint needs --paraphraser-model:[/] the endpoint is asked "
+            "for a model by name"
+        )
+        raise typer.Exit(code=2)
+    model = model.strip()
+    if not model or len(model) > 256 or any(ord(c) < 0x20 or ord(c) == 0x7F for c in model):
+        console.print(
+            "[red]invalid --paraphraser-model:[/] a model name of 1 to 256 characters, "
+            "without control characters"
+        )
+        raise typer.Exit(code=2)
+    from soup_cli.utils.loop_paraphrase import checked_endpoint
+
+    try:
+        checked = checked_endpoint(endpoint, "--paraphraser-endpoint")
+    except ValueError as exc:
+        console.print(f"[red]invalid --paraphraser-endpoint:[/] {for_terminal(exc)}")
+        raise typer.Exit(code=2)
+    return checked, model
+
+
 def _train_method_note(state: LoopState) -> str:
     """The init panel lines under ``train_method`` (empty for dpo and kto), newline-ended."""
     if state.train_method != "sft":
@@ -401,6 +452,22 @@ def init_cmd(
             "built-in recipe."
         ),
     ),
+    paraphraser_endpoint: Optional[str] = typer.Option(
+        None, "--paraphraser-endpoint",
+        help=(
+            "OpenAI-compatible base URL (this machine or LAN) of the model that writes "
+            "paraphrases of the prompts of corrected answers, which the loop's verdict asks the "
+            "new version instead of the original prompts. Needs --paraphraser-model. Default: "
+            "the loop's own serve endpoint (SOUP_LOOP_SERVE_ENDPOINT) with the tool token."
+        ),
+    ),
+    paraphraser_model: Optional[str] = typer.Option(
+        None, "--paraphraser-model",
+        help=(
+            "Model name sent to --paraphraser-endpoint, recorded as the generator of the "
+            "paraphrases. A small served model paraphrases poorly: name a better one here."
+        ),
+    ),
     force: bool = typer.Option(False, "--force", help="Overwrite existing loop.yaml."),
 ) -> None:
     """Create the .soup/loop.yaml control file (one-time setup)."""
@@ -495,6 +562,9 @@ def init_cmd(
                 f"[yellow]warning:[/] no feedback log at {for_terminal(feedback_log)} yet; "
                 "the loop reads it once feedback lines are written there"
             )
+    paraphraser_endpoint, paraphraser_model = _paraphraser_from_flags(
+        paraphraser_endpoint, paraphraser_model
+    )
     from soup_cli.utils.loop_stages import check_verify_eval, resolve_base_model_source
 
     verify_method = verify.strip().lower().replace("-", "_")
@@ -540,6 +610,8 @@ def init_cmd(
             feedback_log=feedback_log,
             train_method=method,
             sft_recipe=sft_recipe,
+            paraphraser_endpoint=paraphraser_endpoint,
+            paraphraser_model=paraphraser_model,
             canary_max_wait_sec=max_wait_sec,
             canary_on_timeout=timeout_policy,
             production_adapter=(
@@ -571,6 +643,7 @@ def init_cmd(
             f"feedback_log: [bold]{escape(_feedback_log_label(state))}[/]\n"
             f"train_method: [bold]{escape(state.train_method)}[/]\n"
             f"{_train_method_note(state)}"
+            f"{_paraphraser_line(state)}"
             f"canary_max_wait: [bold]{format_wait_duration(state.canary_max_wait_sec)}[/]\n"
             f"canary_on_timeout: [bold]{escape(state.canary_on_timeout)}[/]\n"
             f"base_model:   [bold]{escape(state.base_model or 'unknown')}[/]"
@@ -613,6 +686,8 @@ def status_cmd() -> None:
     table.add_row("train_method", escape(state.train_method))
     if state.train_method == "sft":
         table.add_row("sft_recipe", escape(_sft_recipe_label(state)))
+    if state.paraphraser_endpoint:
+        table.add_row("paraphraser", escape(_paraphraser_label(state)))
     table.add_row("verify", escape(state.verify or "eval_gate"))
     table.add_row(
         "production",
