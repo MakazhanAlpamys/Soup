@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:soup-cli:loop:conversation:1",
+  "title": "Soup loop conversation record",
+  "description": "One line per model answer, appended to a conversation log (default layout: .soup-loops/traces/*.jsonl, the directory soup loop harvests by default). `id` identifies the answer; feedback records point at it through `response_id`. Readers ignore unknown fields. Lines without `schema_version` are version 0 (the pre-loop `soup serve --trace-log` line) and are not described by this schema.",
+  "type": "object",
+  "required": ["schema_version", "id", "ts", "model", "messages", "response", "tokens", "source"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "id": {
+      "$ref": "#/$defs/uuid",
+      "description": "The answer's id. Feedback.response_id refers to it."
+    },
+    "conversation_id": {
+      "description": "The client's conversation key (the canary router hashes it). Any string the client chose, not necessarily a UUID; null when the client sent none.",
+      "oneOf": [{"type": "string", "minLength": 1, "maxLength": 512}, {"type": "null"}]
+    },
+    "ts": {
+      "$ref": "#/$defs/utc_timestamp",
+      "description": "When the answer was completed."
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "description": "The model name as served (a soup serve model id or path, an Ollama tag such as myproj:v2)."
+    },
+    "version": {
+      "description": "The loop version that answered (1 = the first deployed model, +1 per promoted iteration); null when the producer does not track versions.",
+      "oneOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]
+    },
+    "adapter": {
+      "description": "Name of the adapter that produced the answer; null for the base model.",
+      "oneOf": [{"type": "string", "minLength": 1, "maxLength": 256}, {"type": "null"}]
+    },
+    "canary_bucket": {
+      "description": "Canary bucket the request was routed to; null when no canary split was active.",
+      "enum": ["stable", "canary", null]
+    },
+    "messages": {
+      "type": "array",
+      "minItems": 1,
+      "description": "The conversation the model saw, oldest first, WITHOUT the answer itself. Secrets are redacted by the writer.",
+      "items": {
+        "type": "object",
+        "required": ["role", "content"],
+        "properties": {
+          "role": {"enum": ["system", "developer", "user", "assistant", "tool"]},
+          "content": {"type": "string"}
+        }
+      }
+    },
+    "response": {
+      "type": "string",
+      "description": "The answer text (may be empty). Secrets are redacted by the writer."
+    },
+    "finish_reason": {
+      "description": "Why generation stopped, e.g. stop or length (Ollama calls it done_reason).",
+      "oneOf": [{"type": "string", "minLength": 1, "maxLength": 64}, {"type": "null"}]
+    },
+    "latency_ms": {
+      "description": "Wall time from request to completed answer; null when not measured. Never a made-up 0.",
+      "oneOf": [{"type": "number", "minimum": 0}, {"type": "null"}]
+    },
+    "tokens": {
+      "type": "object",
+      "required": ["prompt", "completion"],
+      "description": "Token counts as reported by the engine; null when the engine did not report one. Never a made-up 0.",
+      "properties": {
+        "prompt": {"oneOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
+        "completion": {"oneOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]}
+      }
+    },
+    "options": {
+      "type": "object",
+      "description": "Generation parameters the request used (temperature, top_p, max_tokens, ...)."
+    },
+    "source": {"$ref": "#/$defs/source"}
+  },
+  "patternProperties": {
+    "^x_[a-z][a-z0-9_]*$": {
+      "type": "object",
+      "description": "Producer extension namespace (x_<app>). Soup never reads or rewrites it."
+    }
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "A UUID in canonical lowercase form."
+    },
+    "utc_timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,9})?(Z|[+]00:00)$",
+      "description": "ISO 8601 date-time in UTC, suffix Z or +00:00."
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9_.-]*$",
+      "description": "Which surface produced the record. Known values: soup-serve (soup serve), playground, try_it, proxy (Soup Zero). Other lowercase names are accepted."
+    }
+  }
+}
