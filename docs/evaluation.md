@@ -16,6 +16,7 @@
 - [Drift Alarm (`soup drift-alarm`)](#drift-alarm-soup-drift-alarm)
 - [Diagnose (Post-Training Report Card)](#diagnose-post-training-report-card)
 - [Ship Verdict (`soup ship`)](#ship-verdict-soup-ship)
+- [Retention across versions: `soup eval retention`](#retention-across-versions-soup-eval-retention)
 - [NLG Evaluation Metrics (BLEU + ROUGE)](#nlg-evaluation-metrics-bleu--rouge)
 - [Quant Calibration (KL Divergence)](#quant-calibration-kl-divergence)
 - [Model Arena (Elo Tournament)](#model-arena-elo-tournament)
@@ -819,6 +820,142 @@ base run.
 Historical note: v0.73.2 changed three suite scorers (`mini_mmlu`,
 `mini_common_sense`, `mini_tool_call`) with measured jumps on an unchanged
 model far larger than the 0.05 gate. That is why unstamped files still warn.
+
+
+## Retention across versions: `soup eval retention`
+
+`soup ship` judges one candidate against one base on a fixed general suite, so a
+series of adapter updates can erode a task an earlier update taught while every step
+still looks fine against the one before it. `soup eval retention` measures that
+accumulated forgetting. It keeps a **ledger** of control tasks (held-out task-eval
+JSONL files, the same format `soup ship --task-eval` reads) and the accuracy every
+recorded version got on each, then scores a new candidate on **every** control task
+with one loaded model and compares each task with the **best** score any earlier
+version ever had.
+
+```bash
+# v1: register two control tasks and record the first version
+soup eval retention --model ./base --label v1 \
+  --add-task billing=evals/billing.jsonl --add-task tools=evals/tools.jsonl --record
+
+# v2 (an adapter trained afterwards): add a third task, judge, and record
+soup eval retention --model ./base --adapter ./out/v2 --label v2 \
+  --add-task invoices=evals/invoices.jsonl --record
+
+# v3: a dry run (the ledger is not touched) with a JSON report, refusing a lost ledger
+soup eval retention --model ./base --adapter ./out/v3 --label v3 \
+  --require-history --output report.json
+```
+
+**Rules.**
+
+- `--add-task NAME=PATH` registers a control task. A name is 1-64 characters of
+  `A-Z a-z 0-9 _ . -` and must start with a letter or digit. The file's SHA-256 is
+  pinned in the ledger; if a registered file later changes, the run is refused (exit
+  `3`) with a message naming the task and both hashes, because a silently swapped
+  control set would fake retention. Register the new file under a new task name
+  instead. The same name with the same bytes is a no-op, or updates the stored path if
+  you moved the file: pass `--add-task NAME=NEWPATH` (a missing control file is refused
+  with exactly that hint). The file is read once and the bytes that are hashed are the
+  bytes that are parsed.
+- For each task the reference is the **best** score over all recorded versions that
+  scored it, not the previous version: v1 0.90, v2 0.70 (shipped anyway), v3 0.75 is
+  still a 0.15 regression. `drop = best - current`; the task regressed when
+  `drop > --threshold` (default `0.05`; the threshold is an
+  absolute accuracy difference (a fraction, 0.05 = 5%), like
+  `soup ship --forgetting-threshold`; a drop of exactly the threshold passes). The
+  verdict compares the drop rounded to six decimals, and the table prints those digits
+  (`+0.333334`; a short one is padded to three, `+0.150`).
+- The first version that scores a task makes it a *new* task: that run is its baseline
+  entry, with no regression possible.
+- `--record` appends the version (label, `--model`, `--adapter`, UTC time, scores,
+  numerics) and any `--add-task` registrations to the ledger. Without it the ledger is
+  not touched (`--output` still writes its report file). A regressed version is still
+  recorded (the series is history) and the run still exits `2`. Labels are unique; a
+  duplicate is refused before any model loads.
+- `--require-history` refuses (exit `3`) a ledger that holds no recorded version. A
+  lost or reset ledger makes every task new, so nothing can regress and the run exits
+  `0`; in CI pass the flag so that cannot pass silently. Without the flag a run with no
+  earlier version prints a warning that names it.
+
+**Loading the model.** The candidate is loaded the way `soup ship` loads one, with
+the same helpers: bfloat16 on CUDA and float32 elsewhere; `--config soup.yaml` reuses
+the training run's `training.quantization` (`4bit` or `8bit`, nothing else in the file
+is used); `--chat-template-kwargs '{"enable_thinking": false}'` passes template
+variables (a Qwen3 model scores differently with thinking on or off). Every recorded
+version carries these **numerics** (`dtype`, `device` family, `quantization`,
+`chat_template_kwargs`), and a run whose numerics differ from any recorded version is
+refused before the model loads (exit `3`), naming each differing key with this run's
+value and the recorded one. A CPU run (float32) and a GPU run (bfloat16) are therefore
+never mixed in one ledger; start a new ledger with `--ledger NEW.json` to change them.
+
+**Failed generations.** A generation that raises, or returns something that is not
+text, is a failure and not a wrong answer. If any sample of a control task fails (an
+out-of-memory error on every example would otherwise read as accuracy 0.000, a
+regression), the run exits `1` naming the task and the count, and nothing is recorded
+or written, with or without `--record`. An empty string is an answer, a wrong one.
+
+**Output.** A Rich table (task rows x version columns, then the current score, the
+best earlier score, the drop and a status) and a summary:
+
+- *Regressions*: the tasks whose drop exceeded the threshold.
+- *Mean forgetting*: the mean over tasks an earlier version also scored of
+  `max(0, best - current)`.
+- *Backward transfer*: the mean over the same tasks of `current - first score`
+  (negative: the old tasks ended below where they started).
+
+New tasks are in neither mean. The table shows the last 8 earlier versions;
+`--output report.json` holds the full matrix, per-task example counts, the summary and
+this run's numerics.
+
+Exit codes follow `soup ship`: `0` no regression, `2` a regression, `3` a usage or
+input error (bad flag, malformed ledger, changed control file, different numerics), `1`
+a runtime error (model load, failed generation, ledger or `--output` write). A write
+that fails is reported as an error line after the report, and a regression still exits
+`2`: a failed write never hides it.
+
+**Ledger file** (`retention.json`, schema 1, written atomically):
+
+```json
+{"schema": 1,
+ "tasks": [{"name": "billing", "path": "evals/billing.jsonl", "sha256": "...",
+            "added_at": "2026-11-05T12:00:00Z", "added_with": "v1"}],
+ "versions": [{"label": "v1", "model": "./base", "adapter": null,
+               "evaluated_at": "2026-11-05T12:00:00Z", "scores": {"billing": 0.9},
+               "numerics": {"dtype": "float32", "device": "cpu", "quantization": null,
+                            "chat_template_kwargs": null}}]}
+```
+
+Every field is validated on read: an unknown key, a wrong type or a score outside
+[0, 1] (including an integer too large for a float) is refused with a message naming
+the key and the type found. The ledger, control files and `--output` must stay under
+the working directory and not be symlinks, the ledger is capped at 4 MiB, 1000 tasks and
+1000 versions, and `--output` may not be the ledger or a control file.
+
+**Two runs at once.** A run takes minutes. Right before `--record` writes, the ledger
+is read again; if it changed since this run read it (another run recorded a version),
+the write is refused with a message naming the cause, the report is still printed, and
+a label the other run already recorded is never duplicated.
+
+**What it does not do.** It is not part of the `soup ship` verdict. The evidence file
+that `soup ship --evidence` reads needs a leg-1 task win, which a retention run does
+not produce, so there is no `--emit-evidence`; gate a pipeline on the exit code instead.
+Scores come from one greedy-decode pass, so compare versions evaluated the same way
+(the numerics check enforces it) and read a drop against the size of the control set:
+with 40 examples, `0.05` is two answers.
+
+**Known limitations.**
+
+- Two runs whose compare-and-write land in the same instant can still both pass the
+  re-read check, and the later write then replaces the earlier one. There is no lock
+  file on purpose: a run killed while holding one would block every later `--record`.
+  Serialise recording runs in CI (one job per ledger).
+- `--require-history` cannot tell a ledger that was replaced by an OLDER copy from the
+  current one; keep the ledger under version control and review its diff.
+- A run stops at the first control task with a failed generation, so the message counts
+  that task's failures, not every task's.
+- The numerics stamp names the load settings, not the library versions or the checkpoint
+  bytes behind `--model`: the same `--model` path can hold different weights on two days.
 
 
 ## NLG Evaluation Metrics (BLEU + ROUGE)

@@ -229,6 +229,7 @@ class KTOTrainerWrapper(StreamingSetupMixin):
                 "truncation_mode": DEFAULT_PROMPT_TRUNCATION_MODE,
                 "only_when_overflow": True,
                 "kl_chunk_size": batch_size,
+                "bos_token_id": self.tokenizer.bos_token_id,
             }
             self.trainer.train_dataset = enforce_preference_sequence_limit(
                 self.trainer.train_dataset, **cap_kwargs

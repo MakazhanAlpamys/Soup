@@ -1598,3 +1598,8 @@ _register_v0650(app, console)
 from soup_cli.commands._eval_v07110 import register as _register_v07110  # noqa: E402
 
 _register_v07110(app, console)
+
+# Register the retention-ledger subcommand (eval retention)
+from soup_cli.commands._eval_retention import register as _register_retention  # noqa: E402
+
+_register_retention(app, console)

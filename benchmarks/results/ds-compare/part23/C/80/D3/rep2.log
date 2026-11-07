@@ -1,0 +1,86 @@
+[2026-11-07 13:34:29,784] [WARNING] [runner.py:214:fetch_hostfile] Unable to find hostfile, will proceed with training with local resources only.
+Detected VISIBLE_DEVICES=0 but ignoring it because one or several of --include/--exclude/--num_gpus/--num_nodes cl args were used. If you want to use CUDA_VISIBLE_DEVICES don't pass any of these arguments to deepspeed.
+[2026-11-07 13:34:29,784] [INFO] [runner.py:618:main] cmd = /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python -u -m deepspeed.launcher.launch --world_info=eyJsb2NhbGhvc3QiOiBbMF19 --master_addr=127.0.0.1 --master_port=29517 --enable_each_rank_log=None --log_level=info /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_c.jsonl --max-length 2048 --epochs 1 --arm D3 --shape C --rep 2 --out /workspace/out/results/C/80/D3/rep2.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d3_z2_opt_offload.json
+[2026-11-07 13:34:31,094] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_DEV_PACKAGE=libnccl-dev=2.25.1-1+cuda12.8
+[2026-11-07 13:34:31,094] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_DEV_PACKAGE_VERSION=2.25.1-1
+[2026-11-07 13:34:31,094] [INFO] [launch.py:145:main] 0 NCCL_VERSION=2.25.1-1
+[2026-11-07 13:34:31,094] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_DEV_PACKAGE_NAME=libnccl-dev
+[2026-11-07 13:34:31,094] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_PACKAGE=libnccl2=2.25.1-1+cuda12.8
+[2026-11-07 13:34:31,094] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_PACKAGE_NAME=libnccl2
+[2026-11-07 13:34:31,094] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_PACKAGE_VERSION=2.25.1-1
+[2026-11-07 13:34:31,094] [INFO] [launch.py:152:main] WORLD INFO DICT: {'localhost': [0]}
+[2026-11-07 13:34:31,094] [INFO] [launch.py:158:main] nnodes=1, num_local_procs=1, node_rank=0
+[2026-11-07 13:34:31,094] [INFO] [launch.py:169:main] global_rank_mapping=defaultdict(<class 'list'>, {'localhost': [0]})
+[2026-11-07 13:34:31,094] [INFO] [launch.py:170:main] dist_world_size=1
+[2026-11-07 13:34:31,094] [INFO] [launch.py:174:main] Setting CUDA_VISIBLE_DEVICES=0
+[2026-11-07 13:34:31,095] [INFO] [launch.py:245:main] process 11335 spawned with command: ['/workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python', '-u', '/workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py', '--local_rank=0', '--model', '/workspace/payload/benchmarks/harness/ds_compare/model', '--rows', '/workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_c.jsonl', '--max-length', '2048', '--epochs', '1', '--arm', 'D3', '--shape', 'C', '--rep', '2', '--out', '/workspace/out/results/C/80/D3/rep2.raw.json', '--deepspeed', '/workspace/payload/benchmarks/harness/ds_compare/ds_d3_z2_opt_offload.json']
+
+Loading weights:   0%|          | 0/291 [00:00<?, ?it/s]
+Loading weights: 100%|██████████| 291/291 [00:00<00:00, 8077.71it/s]
+{'loss': '5.936', 'grad_norm': '1.561', 'learning_rate': '0.0002', 'epoch': '0.01562'}
+{'loss': '5.911', 'grad_norm': '1.568', 'learning_rate': '0.0002', 'epoch': '0.03125'}
+{'loss': '5.862', 'grad_norm': '0.5278', 'learning_rate': '0.0002', 'epoch': '0.04688'}
+{'loss': '5.848', 'grad_norm': '0.6905', 'learning_rate': '0.0002', 'epoch': '0.0625'}
+{'loss': '5.782', 'grad_norm': '0.7014', 'learning_rate': '0.0002', 'epoch': '0.07812'}
+{'loss': '5.769', 'grad_norm': '0.8462', 'learning_rate': '0.0002', 'epoch': '0.09375'}
+{'loss': '5.679', 'grad_norm': '0.8703', 'learning_rate': '0.0002', 'epoch': '0.1094'}
+{'loss': '5.672', 'grad_norm': '0.907', 'learning_rate': '0.0002', 'epoch': '0.125'}
+{'loss': '5.62', 'grad_norm': '0.8785', 'learning_rate': '0.0002', 'epoch': '0.1406'}
+{'loss': '5.598', 'grad_norm': '0.9621', 'learning_rate': '0.0002', 'epoch': '0.1562'}
+{'loss': '5.572', 'grad_norm': '1.001', 'learning_rate': '0.0002', 'epoch': '0.1719'}
+{'loss': '5.541', 'grad_norm': '1.007', 'learning_rate': '0.0002', 'epoch': '0.1875'}
+{'loss': '5.525', 'grad_norm': '1.067', 'learning_rate': '0.0002', 'epoch': '0.2031'}
+{'loss': '5.513', 'grad_norm': '1.231', 'learning_rate': '0.0002', 'epoch': '0.2188'}
+{'loss': '5.474', 'grad_norm': '1.133', 'learning_rate': '0.0002', 'epoch': '0.2344'}
+{'loss': '5.452', 'grad_norm': '1.243', 'learning_rate': '0.0002', 'epoch': '0.25'}
+{'loss': '5.445', 'grad_norm': '1.16', 'learning_rate': '0.0002', 'epoch': '0.2656'}
+{'loss': '5.437', 'grad_norm': '1.18', 'learning_rate': '0.0002', 'epoch': '0.2812'}
+{'loss': '5.419', 'grad_norm': '1.156', 'learning_rate': '0.0002', 'epoch': '0.2969'}
+{'loss': '5.396', 'grad_norm': '1.233', 'learning_rate': '0.0002', 'epoch': '0.3125'}
+{'loss': '5.391', 'grad_norm': '1.354', 'learning_rate': '0.0002', 'epoch': '0.3281'}
+{'loss': '5.385', 'grad_norm': '1.336', 'learning_rate': '0.0002', 'epoch': '0.3438'}
+{'loss': '5.379', 'grad_norm': '1.283', 'learning_rate': '0.0002', 'epoch': '0.3594'}
+{'loss': '5.385', 'grad_norm': '1.386', 'learning_rate': '0.0002', 'epoch': '0.375'}
+{'loss': '5.365', 'grad_norm': '1.297', 'learning_rate': '0.0002', 'epoch': '0.3906'}
+{'loss': '5.346', 'grad_norm': '1.504', 'learning_rate': '0.0002', 'epoch': '0.4062'}
+{'loss': '5.358', 'grad_norm': '1.237', 'learning_rate': '0.0002', 'epoch': '0.4219'}
+{'loss': '5.339', 'grad_norm': '1.414', 'learning_rate': '0.0002', 'epoch': '0.4375'}
+{'loss': '5.326', 'grad_norm': '1.308', 'learning_rate': '0.0002', 'epoch': '0.4531'}
+{'loss': '5.342', 'grad_norm': '1.415', 'learning_rate': '0.0002', 'epoch': '0.4688'}
+{'loss': '5.325', 'grad_norm': '1.414', 'learning_rate': '0.0002', 'epoch': '0.4844'}
+{'loss': '5.323', 'grad_norm': '1.459', 'learning_rate': '0.0002', 'epoch': '0.5'}
+{'loss': '5.302', 'grad_norm': '1.462', 'learning_rate': '0.0002', 'epoch': '0.5156'}
+{'loss': '5.309', 'grad_norm': '1.483', 'learning_rate': '0.0002', 'epoch': '0.5312'}
+{'loss': '5.293', 'grad_norm': '1.472', 'learning_rate': '0.0002', 'epoch': '0.5469'}
+{'loss': '5.302', 'grad_norm': '1.753', 'learning_rate': '0.0002', 'epoch': '0.5625'}
+{'loss': '5.281', 'grad_norm': '1.401', 'learning_rate': '0.0002', 'epoch': '0.5781'}
+{'loss': '5.3', 'grad_norm': '1.544', 'learning_rate': '0.0002', 'epoch': '0.5938'}
+{'loss': '5.298', 'grad_norm': '1.619', 'learning_rate': '0.0002', 'epoch': '0.6094'}
+{'loss': '5.272', 'grad_norm': '1.392', 'learning_rate': '0.0002', 'epoch': '0.625'}
+{'loss': '5.279', 'grad_norm': '1.429', 'learning_rate': '0.0002', 'epoch': '0.6406'}
+{'loss': '5.278', 'grad_norm': '1.702', 'learning_rate': '0.0002', 'epoch': '0.6562'}
+{'loss': '5.271', 'grad_norm': '1.496', 'learning_rate': '0.0002', 'epoch': '0.6719'}
+{'loss': '5.277', 'grad_norm': '1.529', 'learning_rate': '0.0002', 'epoch': '0.6875'}
+{'loss': '5.257', 'grad_norm': '1.483', 'learning_rate': '0.0002', 'epoch': '0.7031'}
+{'loss': '5.266', 'grad_norm': '1.425', 'learning_rate': '0.0002', 'epoch': '0.7188'}
+{'loss': '5.25', 'grad_norm': '1.444', 'learning_rate': '0.0002', 'epoch': '0.7344'}
+{'loss': '5.264', 'grad_norm': '1.339', 'learning_rate': '0.0002', 'epoch': '0.75'}
+{'loss': '5.256', 'grad_norm': '1.432', 'learning_rate': '0.0002', 'epoch': '0.7656'}
+{'loss': '5.263', 'grad_norm': '1.577', 'learning_rate': '0.0002', 'epoch': '0.7812'}
+{'loss': '5.256', 'grad_norm': '1.607', 'learning_rate': '0.0002', 'epoch': '0.7969'}
+{'loss': '5.23', 'grad_norm': '1.439', 'learning_rate': '0.0002', 'epoch': '0.8125'}
+{'loss': '5.264', 'grad_norm': '1.646', 'learning_rate': '0.0002', 'epoch': '0.8281'}
+{'loss': '5.258', 'grad_norm': '1.577', 'learning_rate': '0.0002', 'epoch': '0.8438'}
+{'loss': '5.24', 'grad_norm': '1.457', 'learning_rate': '0.0002', 'epoch': '0.8594'}
+{'loss': '5.238', 'grad_norm': '1.494', 'learning_rate': '0.0002', 'epoch': '0.875'}
+{'loss': '5.243', 'grad_norm': '1.676', 'learning_rate': '0.0002', 'epoch': '0.8906'}
+{'loss': '5.256', 'grad_norm': '1.833', 'learning_rate': '0.0002', 'epoch': '0.9062'}
+{'loss': '5.232', 'grad_norm': '1.427', 'learning_rate': '0.0002', 'epoch': '0.9219'}
+{'loss': '5.238', 'grad_norm': '1.552', 'learning_rate': '0.0002', 'epoch': '0.9375'}
+{'loss': '5.23', 'grad_norm': '1.443', 'learning_rate': '0.0002', 'epoch': '0.9531'}
+{'loss': '5.233', 'grad_norm': '1.685', 'learning_rate': '0.0002', 'epoch': '0.9688'}
+{'loss': '5.244', 'grad_norm': '1.737', 'learning_rate': '0.0002', 'epoch': '0.9844'}
+{'loss': '5.24', 'grad_norm': '1.923', 'learning_rate': '0.0002', 'epoch': '1'}
+{'train_runtime': '13.6', 'train_samples_per_second': '4.705', 'train_steps_per_second': '4.705', 'train_loss': '5.393', 'epoch': '1'}
+[rank0]:[W1107 13:34:55.313391239 ProcessGroupNCCL.cpp:1524] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())
+[2026-11-07 13:34:57,101] [INFO] [launch.py:285:main] Process 11335 exits successfully.

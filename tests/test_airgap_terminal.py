@@ -1,5 +1,6 @@
 """soup airgap-bundle prints typed paths and build errors as typed, not as Rich markup."""
 
+import os
 import re
 import sys
 
@@ -81,6 +82,9 @@ def test_the_output_is_named_as_typed(name):
 
 @pytest.mark.parametrize("name", _NAMES)
 def test_the_model_directory_is_named_as_typed(name):
+    os.makedirs(name, exist_ok=True)
+    with open(os.path.join(name, "weights.bin"), "wb") as f:
+        f.write(b"")
     result = _bundle(model=name)
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -151,3 +155,67 @@ def test_a_refused_build_is_shown_as_typed(monkeypatch, value):
     text = _plain(result)
     assert f"bundle said {_shown(value)}" in text
     assert _not_shown(text)
+
+
+@pytest.mark.parametrize("name", _NAMES)
+def test_a_missing_model_directory_is_named_as_typed(name):
+    out_file = "out_missing_model.tar"
+    result = _bundle(model=f"missing_{name}", output=out_file)
+
+    assert result.exit_code == 1
+    text = _plain(result)
+    assert f"model directory not found: {_shown('missing_' + name)}" in text
+    assert _not_shown(text)
+    assert not os.path.exists(out_file)
+
+
+def test_a_missing_dataset_directory_is_refused():
+    out_file = "out_missing_dataset.tar"
+    result = _bundle("--dataset", "nope-dataset", output=out_file)
+
+    assert result.exit_code == 1
+    text = _plain(result)
+    assert "dataset directory not found: nope-dataset" in text
+    assert not os.path.exists(out_file)
+
+
+def test_a_missing_wheel_directory_is_refused():
+    out_file = "out_missing_wheel.tar"
+    result = _bundle("--wheel", "nope-wheel", output=out_file)
+
+    assert result.exit_code == 1
+    text = _plain(result)
+    assert "wheel directory not found: nope-wheel" in text
+    assert not os.path.exists(out_file)
+
+
+def test_a_missing_kernel_directory_is_refused():
+    out_file = "out_missing_kernel.tar"
+    result = _bundle("--kernel", "nope-kernel", output=out_file)
+
+    assert result.exit_code == 1
+    text = _plain(result)
+    assert "kernel directory not found: nope-kernel" in text
+    assert not os.path.exists(out_file)
+
+
+def test_a_missing_second_dataset_directory_is_refused():
+    out_file = "out_missing_second.tar"
+    result = _bundle("--dataset", "model", "--dataset", "nope-dataset", output=out_file)
+
+    assert result.exit_code == 1
+    assert "dataset directory not found: nope-dataset" in _plain(result)
+    assert not os.path.exists(out_file)
+
+
+def test_a_model_path_that_is_a_file_is_refused():
+    file_path = "model_not_a_dir.bin"
+    with open(file_path, "wb") as f:
+        f.write(b"")
+    out_file = "out_model_file.tar"
+    result = _bundle(model=file_path, output=out_file)
+
+    assert result.exit_code == 1
+    text = _plain(result)
+    assert "model path is not a directory: model_not_a_dir.bin" in text
+    assert not os.path.exists(out_file)
