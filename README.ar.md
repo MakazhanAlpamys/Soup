@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
+<!-- synced-from: README.md sha256:e6a4e2a06a8102eddef79a3659b3c6d50b95498c67a4937abb04db6657305811 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <strong>العربية</strong> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -289,6 +289,7 @@ soup train  --config soup.yaml        # درّب (SFT/DPO/GRPO/PPO/KTO/ORPO/SimP
 soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # استدلال دُفعي
 soup chat   --model ./output          # دردشة تفاعلية
 soup serve  --model ./output          # خادم API متوافق مع OpenAI
+soup serve  --backend mlx --model ./mlx-output  # نموذج نصي كثيف أصلي / LoRA على Apple Silicon
 soup ui                               # لوحة متصفح محلية
 soup merge  --adapter ./output        # ادمج LoRA في النموذج الأساسي
 soup export --model ./output --format gguf           # صدِّر للنشر

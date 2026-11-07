@@ -323,7 +323,8 @@ to the default Transformers backend is refused with a backend hint.
 The initial native consumer supports ordinary linear text LoRA (including the saved
 rsLoRA scale), with dense or genuinely 4-bit MLX bases, and base-only generation.
 DoRA, full-finetune adapters, embedding/switch-layer targets and other quantized
-adapter targets are refused. This does not add MLX serving or adapter fusion.
+adapter targets are refused. Native HTTP serving has its own dense-only
+[supported slice](#native-mlx-http-serving); adapter fusion is separate.
 Use the base tokenizer's chat template; rendered special tokens are encoded once.
 Temperature zero selects greedy decoding; positive temperature uses nucleus sampling
 with `top_p=0.9`, matching the Transformers inference default. `--max-tokens`
@@ -476,6 +477,79 @@ soup serve --model ./output --kv-cache-type q8_0   # 8-bit quantized cache (need
 ```
 
 `bf16`/`f16` need no extra dependency; `q8_0` requires a quant backend (`hqq` / `optimum-quanto`) or the CLI exits with an install hint; `fp8` is Hopper-only. Full detail and the vLLM/SGLang status live in [Performance & Quantization → KV Cache Types](performance-and-quantization.md#kv-cache-types-v0530).
+
+### Native MLX HTTP serving
+
+On Apple Silicon, install both extras and serve a local dense text causal model or
+an ordinary native Soup LoRA adapter:
+
+```bash
+pip install "soup-cli[mlx,serve]"
+cd /path/containing/your/models
+soup serve --backend mlx --model ./mlx-base
+# Or load the base named by a native adapter's metadata, once at startup:
+soup serve --backend mlx --model ./mlx-adapter
+```
+
+This uses the existing HTTP app and the shared MLX loader/template/generator. It
+supports `/health`, `/v1/models` and `/v1/chat/completions` only. There are no tool,
+adapter-switching, legacy completions, Anthropic messages or metrics routes. One
+fixed model and optional standard LoRA stay loaded for the process; the request's
+`model` must match `/v1/models` (or be omitted). There is no Transformers fallback.
+A missing MLX-LM dependency is refused by the public CLI with an installation hint
+before server startup. Readiness is reported only after successful native loading;
+startup failure stops the server. Quantized bases are currently refused by serving, although native batch
+inference retains its separately qualified 4-bit support.
+
+Generation is serialized on one native worker with at most **8 waiting requests**.
+An additional request receives **503** with `Retry-After: 1`. Each request has a fresh
+decode iterator, KV cache and private random seed. Disconnecting cancels queued work
+or stops an active decode at the next safe step, closes its iterator and releases the
+next request. A running native prefill/kernel is not interrupted mid-call. A slow
+stream reader buffers at most 8 native increments before applying backpressure.
+Each increment waits at most **30 seconds** for an output-queue slot
+(`OUTPUT_PUT_TIMEOUT_SECONDS`). On expiry, the job is cancelled, its iterator is
+closed and the worker proceeds to the next request. A streamed response blocked on
+ASGI send is also cancelled; it does not fabricate a successful finish or `[DONE]`.
+This is an output-backpressure deadline, not a total generation or kernel timeout.
+A warning names the configured put deadline when a stalled reader is cancelled.
+
+Messages accept text-only `system`, `user` and `assistant` roles. Supported controls
+are `temperature` (0–2; zero is greedy), `top_p` (greater than 0, at most 1),
+`max_tokens` (1–16384),
+`stream`, and `stop` (one string or up to four, each 1–256 characters). Stops can span
+increments and are excluded from content. Requests are capped at **1 MiB**, **128
+messages**, **65536 characters per message**, and **16384 input tokens**. These caps
+do not extend a checkpoint's context window. Invalid/extra fields, including tools,
+multimodal content, `n`, `seed`, logprobs, per-request adapters and `stream_options`,
+are refused rather than ignored. `top_p: 0` is refused: MLX-LM treats zero as
+disabled nucleus filtering, not a zero-mass nucleus. Model/adapter paths are operator startup inputs,
+not request parameters. Validation errors expose only location, message and error
+type, without echoing input or exception context. Local paths and their files must stay under the working
+directory without symlinks; a base Hub identity may come from adapter metadata.
+`--trust-remote-code` retains the shared default-deny policy.
+
+Streaming is incremental SSE: assistant role, content deltas, a terminal chunk with
+`finish_reason` and `usage`, then `[DONE]`. Usage counts actual prompt and sampled
+tokens, including a sampled EOS or a token containing a suppressed stop string.
+Nonstreamed responses use the same accounting. `stop` covers EOS and stop strings;
+`length` means the generation limit was reached. An error before the first increment
+returns an HTTP error; after headers it emits a sanitized SSE error and `[DONE]`.
+Among generation errors, only empty or over-limit tokenized prompts are 422;
+internal engine failures,
+including other `ValueError`s, are 500 errors. Client disconnects end quietly rather
+than being raised as ASGI task cancellations.
+
+The existing bind/token, CORS and browser-Origin policy is unchanged. In particular,
+generation routes do **not** authenticate bearer tokens, even on a non-loopback bind:
+the startup token requirement is not an inference access-control layer. Keep the
+loopback default or protect an exposed service at the proxy/network layer. A proxy
+Host is allowed on generation routes; a foreign browser Origin is refused.
+
+Omit `--device` (MLX selects its native device). Backend-specific flags such as
+tensor parallelism, speculative decoding, prefix caching, KV-cache overrides,
+structured output, steering, tracing, dashboards and non-HF hubs are refused.
+See the [native qualification and route review](../benchmarks/mlx-serve-2001.md).
 
 ### vLLM Backend (2-4x Faster Inference)
 

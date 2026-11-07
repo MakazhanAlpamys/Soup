@@ -1,0 +1,205 @@
+{
+  "soup_base_sha": "06ed11453b723e26192c99b77ff2c097588ad56a",
+  "source_files_sha256": {
+    "src/soup_cli/commands/serve.py": "b66a80bcec00efd138aa56bf1d2533aa955e8ba2a135684cbe573aca4a9af8bf",
+    "src/soup_cli/utils/mlx_generation.py": "ea926e1b6682cec2217b551c2ba7d00f6f640e1825fd9365a86bbdcfa465b0cc",
+    "src/soup_cli/utils/mlx_serve.py": "51910de633f1e50a1c7ae6a656ef81ee9bd4079ad866688d7d849301406a1363"
+  },
+  "working_source_tree_sha256": "8d27c508697b4af95a350795d6be7086a65bf041a5dc602339b38db034ef1611",
+  "benchmark_sha256": "5a8a926c1dfa89fe603cece25e1f9846e6e563828982e87054d4a0e45a28d9aa",
+  "fixture_generator_sha256": "e9026dcee42aca161cc98f124f3eaff108f2f15805e41ced6ac0e84a0d04fa0b",
+  "python": "3.12.7",
+  "versions": {
+    "mlx": "0.32.4",
+    "mlx-lm": "0.32.2",
+    "transformers": "5.19.0",
+    "fastapi": "0.162.0",
+    "starlette": "1.10.0",
+    "uvicorn": "0.54.0",
+    "httpx": "0.28.1",
+    "pydantic": "2.14.2"
+  },
+  "hardware": {
+    "platform": "Darwin",
+    "machine": "arm64",
+    "processor": "arm",
+    "chip": "Apple M4 Pro"
+  },
+  "unified_memory_bytes": 51539607552,
+  "device": "Device(gpu, 0)",
+  "metal_available": true,
+  "training_packages_present": [],
+  "model_files_sha256": {
+    "all_results.json": "1f68a2e167194d764c414643b54f0960945dc3f46bc47ec53b02475df527f376",
+    "config.json": "8eb740e8bbe4cff95ea7b4588d17a2432deb16e8075bc5828ff7ba9be94d982a",
+    "eval_results.json": "6c7ecd0c2c0e8f6af8cbb34065fb2d5eb4c504febf2e266a7c7f948f13c70b7c",
+    "generation_config.json": "87b916edaaab66b3899b9d0dd0752727dff6666686da0504d89ae0a6e055a013",
+    "merges.txt": "0b54e8aa4e53d5383e2e4bc635a56b43f9647f7b13832d5d9ecd8f82dac4f510",
+    "model.safetensors": "5af571cbf074e6d21a03528d2330792e532ca608f24ac70a143f6b369968ab8c",
+    "special_tokens_map.json": "2b7379f3ae813529281a5c602bc5a11c1d4e0a99107aaa597fe936c1e813ca52",
+    "tokenizer.json": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c",
+    "tokenizer_config.json": "4ec77d44f62efeb38d7e044a1db318f6a939438425312dfa333b8382dbad98df",
+    "train_results.json": "713996ce10b9d99a440fec73c0f3bdb2f3c4db6adba3d027bdaa40796f059b2d",
+    "trainer_state.json": "9664b2f12a8a29cad27a12da7b0d3a1081c8ba1392bcec71fa3bfd4fafc11284",
+    "vocab.json": "82b84012e3add4d01d12ba14442026e49b8cbbaead1f79ecf3d919784f82dc79"
+  },
+  "base_files_sha256": null,
+  "model_identity": "HuggingFaceTB/SmolLM2-135M-Instruct",
+  "model_revision": "12fd25f77366fa6b3b4b768ec3050bf629380bac",
+  "cases": [
+    [
+      {
+        "role": "user",
+        "content": "What is 2 + 2?"
+      }
+    ],
+    [
+      {
+        "role": "user",
+        "content": "Name one primary color."
+      }
+    ]
+  ],
+  "public_cli": [
+    "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/.venv-mlx-2001/bin/python",
+    "-m",
+    "soup_cli",
+    "serve",
+    "--backend",
+    "mlx",
+    "--model",
+    "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/test-results/2001/pretrained/SmolLM2-135M-Instruct",
+    "--port",
+    "61338"
+  ],
+  "readiness_seconds": 1.2776470420067199,
+  "child_returncode": 0,
+  "results": [
+    {
+      "case": 0,
+      "direct": {
+        "text": "2 + 2 is a simple arithmetic",
+        "finish_reason": "length",
+        "usage": {
+          "prompt_tokens": 38,
+          "completion_tokens": 8,
+          "total_tokens": 46
+        }
+      },
+      "http": {
+        "id": "chatcmpl-695d926bb9d443b092418ecb1440c3cb",
+        "created": 1793708448,
+        "model": "SmolLM2-135M-Instruct",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "2 + 2 is a simple arithmetic"
+            },
+            "finish_reason": "length"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 38,
+          "completion_tokens": 8,
+          "total_tokens": 46
+        }
+      },
+      "streaming_content": "2 + 2 is a simple arithmetic",
+      "streaming_usage": {
+        "prompt_tokens": 38,
+        "completion_tokens": 8,
+        "total_tokens": 46
+      },
+      "first_content_seconds": 0.024032458022702485,
+      "stream_seconds": 0.046035957988351583
+    },
+    {
+      "case": 1,
+      "direct": {
+        "text": "The primary color is usually considered to be",
+        "finish_reason": "length",
+        "usage": {
+          "prompt_tokens": 35,
+          "completion_tokens": 8,
+          "total_tokens": 43
+        }
+      },
+      "http": {
+        "id": "chatcmpl-3a95da5d5eb44df0a442fbfe03b1a28a",
+        "created": 1793708448,
+        "model": "SmolLM2-135M-Instruct",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "The primary color is usually considered to be"
+            },
+            "finish_reason": "length"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 35,
+          "completion_tokens": 8,
+          "total_tokens": 43
+        }
+      },
+      "streaming_content": "The primary color is usually considered to be",
+      "streaming_usage": {
+        "prompt_tokens": 35,
+        "completion_tokens": 8,
+        "total_tokens": 43
+      },
+      "first_content_seconds": 0.0238573340466246,
+      "stream_seconds": 0.04644783399999142
+    },
+    {
+      "case": 0,
+      "direct": {
+        "text": "2 + 2 is a simple arithmetic",
+        "finish_reason": "length",
+        "usage": {
+          "prompt_tokens": 38,
+          "completion_tokens": 8,
+          "total_tokens": 46
+        }
+      },
+      "http": {
+        "id": "chatcmpl-04f7cfe3401a4218aa79c6d01d4c8f3a",
+        "created": 1793708448,
+        "model": "SmolLM2-135M-Instruct",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "2 + 2 is a simple arithmetic"
+            },
+            "finish_reason": "length"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 38,
+          "completion_tokens": 8,
+          "total_tokens": 46
+        }
+      },
+      "streaming_content": "2 + 2 is a simple arithmetic",
+      "streaming_usage": {
+        "prompt_tokens": 38,
+        "completion_tokens": 8,
+        "total_tokens": 46
+      },
+      "first_content_seconds": 0.02491266600554809,
+      "stream_seconds": 0.0573560000048019
+    }
+  ],
+  "base_only_controls": null,
+  "fixture": null,
+  "limits": "CLI/HTTP lifecycle and greedy equality only; fixture is not pretrained quality; observed arrival times are not throughput benchmarks; concurrent/cancellation sensitivity is separately covered by deterministic offline ASGI tests"
+}

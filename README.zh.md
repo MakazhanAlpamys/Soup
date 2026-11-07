@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
+<!-- synced-from: README.md sha256:e6a4e2a06a8102eddef79a3659b3c6d50b95498c67a4937abb04db6657305811 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <strong>中文</strong></p>
 
 <p align="center">
@@ -283,6 +283,7 @@ soup train  --config soup.yaml        # 训练（SFT/DPO/GRPO/PPO/KTO/ORPO/SimPO
 soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # 批量推理
 soup chat   --model ./output          # 交互式对话
 soup serve  --model ./output          # OpenAI 兼容 API 服务
+soup serve  --backend mlx --model ./mlx-output  # Apple Silicon 原生稠密文本模型 / LoRA
 soup ui                               # 本地浏览器仪表盘
 soup merge  --adapter ./output        # 把 LoRA 合进基座模型
 soup export --model ./output --format gguf           # 导出用于部署

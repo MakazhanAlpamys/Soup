@@ -290,6 +290,7 @@ soup train  --config soup.yaml        # train (SFT/DPO/GRPO/PPO/KTO/ORPO/SimPO/I
 soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # batch inference
 soup chat   --model ./output          # interactive chat
 soup serve  --model ./output          # OpenAI-compatible API server
+soup serve  --backend mlx --model ./mlx-output  # native dense text model / LoRA on Apple Silicon
 soup ui                               # local browser dashboard
 soup merge  --adapter ./output        # merge LoRA into the base model
 soup export --model ./output --format gguf           # export for deployment
