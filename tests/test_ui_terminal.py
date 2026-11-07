@@ -77,13 +77,17 @@ def test_refused_public_host_is_literal_and_never_started(monkeypatch, server, h
     )
 
 
-def test_url_token_pages_and_shortcut_keep_their_styles(monkeypatch, server):
+def _coloured(monkeypatch):
     monkeypatch.setattr(
         "soup_cli.commands.ui.console",
         Console(
             width=500, height=100, force_terminal=True, no_color=False, color_system="standard"
         ),
     )
+
+
+def test_url_token_pages_and_shortcut_keep_their_styles(monkeypatch, server):
+    _coloured(monkeypatch)
 
     result = runner.invoke(app, ["ui", "--no-browser"])
 
@@ -99,3 +103,15 @@ def test_url_token_pages_and_shortcut_keep_their_styles(monkeypatch, server):
     ):
         assert f"\x1b[1m{value}\x1b[0m" in result.output
     assert f"\x1b[2mAuthorization: Bearer {TOKEN}\x1b[0m" in result.output
+
+
+def test_the_authentication_refusal_keeps_its_red_label(monkeypatch, server):
+    _coloured(monkeypatch)
+    calls, _ = server
+    monkeypatch.setattr("soup_cli.ui.app.get_auth_token", lambda: None)
+
+    result = runner.invoke(app, ["ui", "--host", "node:warning:.test", "--no-browser"])
+
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    assert not calls
+    assert "\x1b[31mError:\x1b[0m binding non-loopback host 'node:warning:.test'" in result.output
