@@ -217,7 +217,9 @@ def test_jsonl_runtime_diagnostic_keeps_literal_text_and_red_label(
     error_type = {"key": "KeyError", "runtime": "RuntimeError"}[kind]
     expected = repr(message) if kind == "key" else shown
     assert _plain(result.stdout) == f"Error: {error_type}: {expected}"
-    assert "\x1b[1;31mError:\x1b[0m " in result.stdout
+    if sys.platform != "win32":
+        # Rich can apply colour through Win32 instead of writing ANSI to the pipe.
+        assert "\x1b[1;31mError:\x1b[0m " in result.stdout
     _assert_aborted_jsonl(result)
     assert shown not in result.stderr
 
