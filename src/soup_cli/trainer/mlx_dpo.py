@@ -35,6 +35,7 @@ from typing import Any, Optional
 
 from rich.console import Console
 
+from soup_cli.experiment.row_kinds import metric_row_kind
 from soup_cli.trainer._trl_compat import _truncate_tokens
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.trainer.mlx_sft import (
@@ -873,6 +874,7 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
                 tracker.log_metrics(
                     run_id=run_id, step=step, epoch=epoch, loss=loss, lr=lr,
                     speed=speed, gpu_mem=gpu_mem, val_loss=val_loss,
+                    kind=metric_row_kind(val_loss=val_loss),
                 )
             except Exception:  # noqa: BLE001 — telemetry must not kill a run
                 pass
