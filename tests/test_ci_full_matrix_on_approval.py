@@ -1145,6 +1145,7 @@ PINNED_ON_PR_AND_PUSH = frozenset(
     {
         ("recipe-validation.yml", "validate-recipes"),
         ("recipe-attach.yml", "verify"),
+        ("mlx-adapters.yml", "native-adapters"),
     }
 )
 
