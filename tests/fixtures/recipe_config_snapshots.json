@@ -185,6 +185,7 @@
     "training.minillm_pretrain_anchor_weight": 0.0,
     "training.minillm_rollout_length": null,
     "training.minillm_teacher_mix_ratio": 0.0,
+    "training.mlx_full_state": false,
     "training.mod_capacity_factor": 0.125,
     "training.moe_aux_loss_coeff": 0.01,
     "training.moe_expert_quant": null,
