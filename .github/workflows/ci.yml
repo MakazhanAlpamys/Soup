@@ -693,6 +693,7 @@ jobs:
           tests/test_cli.py
           tests/test_cli_subprocess.py
           tests/test_plotext_compat.py
+          tests/test_config_field_types.py
 
   # #502/#503/#522/#571/#651: install the exact Torch 2.6.0 / Transformers 5.16.1 /
   # trl 0.29 / PEFT 0.20 support stack and Plotext 6.0.0 so pip cannot silently
