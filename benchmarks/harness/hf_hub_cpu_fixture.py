@@ -275,14 +275,17 @@ def _verify_cpu_child_environment(environment: dict[str, str]) -> None:
     reported = completed.stdout.strip().splitlines()
     cuda_available = reported[-1] if reported else ""
     if completed.returncode != 0:
+        stderr_lines = str(getattr(completed, "stderr", "")).strip().splitlines()
+        detail = f" Last stderr line: {stderr_lines[-1]}" if stderr_lines else ""
         raise RuntimeError(
             "Could not verify CPU-only training: the Torch CUDA visibility probe "
-            f"exited with status {completed.returncode}."
+            f"exited with status {completed.returncode}.{detail}"
         )
     if cuda_available != "False":
+        observed = repr(cuda_available) if cuda_available else "no CUDA availability result"
         raise RuntimeError(
             "CUDA remained visible in the CPU fixture child process; refusing to run "
-            "a fixture labelled CPU-only."
+            f"a fixture labelled CPU-only (probe reported {observed})."
         )
 
 

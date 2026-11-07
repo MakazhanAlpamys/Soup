@@ -49,7 +49,7 @@ class _FakeHubApi:
 
 
 def _use_fake_hub(monkeypatch, harness, api, token="hf_test_token"):
-    harness._prefer_local_source()
+    monkeypatch.syspath_prepend(str(harness._SOURCE_ROOT))
     import soup_cli.utils.hf as hf
 
     monkeypatch.setattr(hf, "resolve_token", lambda: token)
@@ -133,6 +133,17 @@ def test_parent_side_hub_checks_prefer_this_checkout_source(monkeypatch):
     assert harness.sys.path[0] == str(harness._SOURCE_ROOT)
 
 
+def test_fake_hub_helper_restores_its_temporary_source_path(monkeypatch):
+    harness = _load_harness()
+    original_path = list(sys.path)
+
+    with monkeypatch.context() as scoped_monkeypatch:
+        _use_fake_hub(scoped_monkeypatch, harness, _FakeHubApi())
+        assert sys.path[0] == str(harness._SOURCE_ROOT)
+
+    assert sys.path == original_path
+
+
 def test_cpu_training_preflight_requires_torch_to_report_cuda_hidden(monkeypatch, tmp_path):
     harness = _load_harness()
     paths = harness.fixture_paths(tmp_path / "fixture")
@@ -172,6 +183,38 @@ def test_cpu_training_refuses_to_continue_when_torch_still_sees_cuda(monkeypatch
         harness.run_training(paths, None)
 
     assert len(calls) == 1
+
+
+def test_cpu_training_reports_the_last_failed_probe_stderr_line(monkeypatch, tmp_path):
+    harness = _load_harness()
+    paths = harness.fixture_paths(tmp_path / "fixture")
+
+    monkeypatch.setattr(
+        harness.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="first detail\nModuleNotFoundError: No module named 'torch'\n",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="Last stderr line: ModuleNotFoundError"):
+        harness.run_training(paths, None)
+
+
+def test_cpu_training_refuses_an_empty_cuda_probe_result(monkeypatch, tmp_path):
+    harness = _load_harness()
+    paths = harness.fixture_paths(tmp_path / "fixture")
+
+    monkeypatch.setattr(
+        harness.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    with pytest.raises(RuntimeError, match="no CUDA availability result"):
+        harness.run_training(paths, None)
 
 
 def test_local_artifact_verification_requires_adapter_and_checkpoint_state(tmp_path):
