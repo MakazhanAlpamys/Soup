@@ -32,7 +32,7 @@ MODEL_ID = "hf-internal-testing/tiny-random-gpt2"
 CHECKPOINT_NAME = "checkpoint-1"
 _CPU_ENVIRONMENT = {
     "ACCELERATE_USE_CPU": "true",
-    "CUDA_VISIBLE_DEVICES": "",
+    "CUDA_VISIBLE_DEVICES": "-1",
     "HIP_VISIBLE_DEVICES": "",
     "ROCR_VISIBLE_DEVICES": "",
 }
@@ -156,9 +156,11 @@ def cpu_environment(push_as: str | None = None) -> dict[str, str]:
     environment.update(_CPU_ENVIRONMENT)
     if push_as is None:
         # A local-only run downloads a public model and must not expose an
-        # unrelated caller credential to its child process.
+        # unrelated caller credential to its child process. Hugging Face Hub
+        # otherwise sends a cached login on read requests by default.
         environment.pop("HF_TOKEN", None)
         environment.pop("HUGGINGFACE_HUB_TOKEN", None)
+        environment["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
     current_python_path = environment.get("PYTHONPATH", "")
     source_path = str(_SOURCE_ROOT)
     environment["PYTHONPATH"] = (
@@ -230,11 +232,13 @@ def verify_remote_checkpoint(repo_id: str) -> dict[str, Any]:
             "The training exit status alone is not a Hub push pass."
         )
     files = sorted(api.list_repo_files(repo_id, revision=CHECKPOINT_NAME))
-    has_weights = any(name.endswith((".safetensors", ".bin", ".pt")) for name in files)
+    has_weights = any(name in {"adapter_model.safetensors", "adapter_model.bin"} for name in files)
     required = {"adapter_config.json", "trainer_state.json"}
     missing = sorted(required.difference(files))
     if missing or not has_weights:
-        detail = ", ".join(missing) if missing else "checkpoint weights"
+        if not has_weights:
+            missing.append("adapter weights")
+        detail = ", ".join(missing)
         raise RuntimeError(f"Remote {CHECKPOINT_NAME!r} is incomplete; missing {detail}.")
     return {"branch": CHECKPOINT_NAME, "file_count": len(files)}
 
@@ -259,14 +263,39 @@ def verify_local_artifacts(paths: FixturePaths) -> dict[str, Any]:
     }
 
 
+def _verify_cpu_child_environment(environment: dict[str, str]) -> None:
+    """Fail closed unless a fresh child reports that CUDA is unavailable."""
+    completed = subprocess.run(
+        [sys.executable, "-c", "import torch; print(torch.cuda.is_available())"],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    reported = completed.stdout.strip().splitlines()
+    cuda_available = reported[-1] if reported else ""
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "Could not verify CPU-only training: the Torch CUDA visibility probe "
+            f"exited with status {completed.returncode}."
+        )
+    if cuda_available != "False":
+        raise RuntimeError(
+            "CUDA remained visible in the CPU fixture child process; refusing to run "
+            "a fixture labelled CPU-only."
+        )
+
+
 def run_training(paths: FixturePaths, push_as: str | None) -> dict[str, Any]:
     """Launch Soup training in a CPU-only child and verify its local artifacts."""
     _refuse_mps_acceleration()
     command = build_train_command(paths, push_as)
+    environment = cpu_environment(push_as)
+    _verify_cpu_child_environment(environment)
     completed = subprocess.run(
         command,
         cwd=paths.root,
-        env=cpu_environment(push_as),
+        env=environment,
         check=False,
     )
     if completed.returncode != 0:
@@ -308,6 +337,11 @@ def _write_result(result: dict[str, Any], json_output: bool) -> None:
         console.print("[yellow]Prepared only; pass --train to run the CPU step.[/]")
 
 
+def _write_report(paths: FixturePaths, result: dict[str, Any]) -> None:
+    """Persist an attempted fixture result after its fresh directory exists."""
+    paths.report.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.push_as and not args.train:
@@ -317,11 +351,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.verify_hub and not args.push_as:
         _parser().error("--verify-hub requires --push-as")
 
+    paths: FixturePaths | None = None
+    result: dict[str, Any] = {}
     try:
         if args.verify_hub:
             verify_private_destination(args.push_as)
         paths = prepare_fixture(args.output_dir, push_as=args.push_as)
-        result: dict[str, Any] = {
+        result = {
             "fixture_dir": str(paths.root),
             "model": MODEL_ID,
             "trained": bool(args.train),
@@ -332,11 +368,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.verify_hub:
             result["remote_checkpoint"] = verify_remote_checkpoint(args.push_as)
             result["hub_verified"] = True
-        paths.report.write_text(
-            json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
+        _write_report(paths, result)
     except (FileExistsError, OSError, RuntimeError, ValueError) as exc:
-        console.print(f"[red]CPU fixture failed:[/] {exc}", style=None)
+        if paths is not None:
+            result["hub_verified"] = False
+            result["error"] = str(exc)
+            try:
+                _write_report(paths, result)
+            except OSError:
+                pass
+        console.print(f"CPU fixture failed: {exc}", style="red", markup=False)
         return 1
 
     _write_result(result, args.json)

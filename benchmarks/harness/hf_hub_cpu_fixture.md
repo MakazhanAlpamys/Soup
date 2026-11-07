@@ -4,7 +4,7 @@
 
 ## Scope and evidence boundary
 
-The fixture supplies a public tiny causal-LM, one valid ChatML row, batch size one, one epoch, and `save_steps: 1`. Its training child hides CUDA and ROCm devices, so a successful `--train` invocation proves only that Soup can create a local `checkpoint-1` and a loadable adapter using this CPU fixture.
+The fixture supplies a public tiny causal-LM, one valid ChatML row, batch size one, one epoch, and `save_steps: 1`. Its training child hides CUDA and ROCm devices, then a fresh Python process must report `torch.cuda.is_available() == False` before training starts. A successful `--train` invocation therefore proves only that Soup can create a local `checkpoint-1` and a loadable adapter using this CPU fixture.
 
 It is not a Hugging Face upload result, a model-quality result, or evidence that a private Space can build or serve. Those require the live checks in Issue #74.
 
@@ -28,7 +28,7 @@ The path must not already exist. The harness writes only within that user-named 
 - `output/` — the local adapter and `checkpoint-1`;
 - `cpu-train-command.txt` and `cpu-fixture-report.json` — commands and local result metadata.
 
-Without `--train`, it prepares those inputs only. It never reads, writes, or stores an HF token in either local mode.
+Without `--train`, it prepares those inputs only. In either local-only mode it removes token environment variables and sets `HF_HUB_DISABLE_IMPLICIT_TOKEN=1`, so a cached Hub login is not sent while fetching the public tiny model. It never writes or stores an HF token.
 
 ## Live checkpoint-branch verification
 
@@ -46,6 +46,8 @@ python benchmarks/harness/hf_hub_cpu_fixture.py \
   --verify-hub --json
 ```
 
-`--push-as` is refused unless `--verify-hub` is also present. The latter checks both that the target is already private and that the remote `checkpoint-1` branch contains `adapter_config.json`, `trainer_state.json`, and checkpoint weights after the run. A zero training exit status is not accepted as a Hub-push pass.
+`--push-as` is refused unless `--verify-hub` is also present. The latter checks both that the target is already private and that the remote `checkpoint-1` branch contains `adapter_config.json`, `trainer_state.json`, and an actual adapter-weight file (`adapter_model.safetensors` or `adapter_model.bin`) after the run. Arbitrary `.bin` or `.pt` files do not count. A zero training exit status is not accepted as a Hub-push pass.
+
+If an attempted Hub verification fails after the local directory exists, `cpu-fixture-report.json` is still written with `hub_verified: false` and the error text. That failed report is evidence of the failed verification, not a pass.
 
 Record the command, Soup commit, Python and package versions, local result JSON, remote branch/file listing, and elapsed time in the Issue #74 report. The Space and dataset legs remain separate live checks.
