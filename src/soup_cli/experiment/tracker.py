@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+from soup_cli.experiment.row_kinds import check_loss_summary_kind, check_metric_row_kind
 from soup_cli.utils.constants import EXPERIMENTS_DB, SOUP_DIR
 from soup_cli.utils.crash import redact_secrets
 from soup_cli.utils.process_liveness import process_is_alive as _process_is_alive
@@ -72,6 +73,7 @@ CREATE TABLE IF NOT EXISTS runs (
     command_digest  TEXT,
     log_path        TEXT,
     exit_code       INTEGER,
+    loss_summary_kind TEXT,
     error_message   TEXT
 );
 
@@ -87,6 +89,7 @@ CREATE TABLE IF NOT EXISTS metrics (
     grad_norm REAL,
     speed     REAL,
     gpu_mem   TEXT,
+    kind      TEXT,
     timestamp TEXT NOT NULL
 );
 
@@ -202,6 +205,12 @@ class ExperimentTracker:
             # grpo's held-out reward (#1389): its own column, because a reward
             # is higher-is-better and must not be read as a loss.
             ("metrics", "val_reward", "ALTER TABLE metrics ADD COLUMN val_reward REAL"),
+            # What a stored number is (experiment/row_kinds.py). Nullable with no
+            # default, and never backfilled: NULL on an old row says it predates
+            # the column, which a guessed value would not.
+            ("metrics", "kind", "ALTER TABLE metrics ADD COLUMN kind TEXT"),
+            ("runs", "loss_summary_kind",
+             "ALTER TABLE runs ADD COLUMN loss_summary_kind TEXT"),
         ):
             existing = {
                 row[1]
@@ -381,48 +390,69 @@ class ExperimentTracker:
         run_id: str,
         step: int,
         epoch: float = 0.0,
-        loss: Optional[float] = 0.0,
-        lr: float = 0.0,
+        loss: Optional[float] = None,
+        lr: Optional[float] = None,
         grad_norm: Optional[float] = None,
         speed: float = 0.0,
         gpu_mem: str = "",
         val_loss: Optional[float] = None,
         val_reward: Optional[float] = None,
+        kind: Optional[str] = None,
     ) -> None:
         """Log a single metrics row for the given run.
 
-        ``val_loss``, ``val_reward`` and ``grad_norm`` default to ``None`` rather
-        than ``0.0``: an omitted measurement must not look like a genuinely
-        measured zero. ``loss`` is None for a training log that carried no loss
-        (#1225). ``val_reward`` is grpo's held-out reward (#1389); every other
-        task leaves it NULL.
+        ``loss``, ``lr``, ``val_loss``, ``val_reward`` and ``grad_norm`` default to
+        ``None`` rather than ``0.0``: an omitted measurement must not look like a
+        genuinely measured zero. ``loss`` is None for a training log that carried no
+        loss (#1225). ``val_reward`` is grpo's held-out reward (#1389); every other
+        task leaves it NULL. Each row gets its own ``id`` (``AUTOINCREMENT``), the
+        row identity ``get_metrics`` returns: a later measurement at the same or a
+        lower step is a new row with a larger id, never an overwrite.
+
+        ``kind`` says what the row is: ``train``, ``eval`` or ``summary``
+        (``experiment.row_kinds``). A writer states it; None is what a row written
+        before the column existed reads as. Any other value raises ``ValueError``
+        before the row is written.
         """
+        kind = check_metric_row_kind(kind)
         now = datetime.now().isoformat()
         conn = self._get_conn()
         conn.execute(
             """INSERT INTO metrics
                (run_id, step, epoch, loss, val_loss, val_reward, lr, grad_norm, speed,
-                gpu_mem, timestamp)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                gpu_mem, kind, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (run_id, step, epoch, loss, val_loss, val_reward, lr, grad_norm, speed,
-             gpu_mem, now),
+             gpu_mem, kind, now),
         )
         conn.commit()
 
     def finish_run(
         self,
         run_id: str,
-        initial_loss: float,
-        final_loss: float,
+        initial_loss: Optional[float],
+        final_loss: Optional[float],
         total_steps: int,
         duration_secs: float,
         output_dir: str,
+        loss_summary_kind: Optional[str] = None,
     ) -> None:
         """Mark run as completed and fill summary fields.
+
+        ``initial_loss`` / ``final_loss`` are ``None`` for a run that observed no
+        loss; the columns are NULL then, not 0.0, so a reader can tell "no
+        measurement" from a measured zero (see ``trainer.loss_summary.stored_run_losses``).
+
+        ``loss_summary_kind`` says what those two numbers are: ``per_step``, ``mean``
+        or ``unavailable`` (``experiment.row_kinds``; see
+        ``trainer.loss_summary.stored_loss_summary_kind``). None is what a run
+        finished before the column existed reads as. Any other value raises
+        ``ValueError`` before the run is touched.
 
         Also computes an informational per-run cost estimate based on the
         device_name captured at start_run() and the elapsed duration.
         """
+        loss_summary_kind = check_loss_summary_kind(loss_summary_kind)
         conn = self._get_conn()
         # Look up device name for cost estimate (best-effort).
         cost_usd: Optional[float] = None
@@ -450,11 +480,11 @@ class ExperimentTracker:
                status = 'completed',
                initial_loss = ?, final_loss = ?,
                total_steps = ?, duration_secs = ?, output_dir = ?,
-               cost_usd = ?, cost_gpu_label = ?
+               cost_usd = ?, cost_gpu_label = ?, loss_summary_kind = ?
                WHERE run_id = ?""",
             (
                 initial_loss, final_loss, total_steps, duration_secs, output_dir,
-                cost_usd, cost_label, run_id,
+                cost_usd, cost_label, loss_summary_kind, run_id,
             ),
         )
         conn.commit()

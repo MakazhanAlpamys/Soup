@@ -25,6 +25,7 @@ from soup_cli.data.loader import (
 )
 from soup_cli.monitoring.display import TrainingDisplay
 from soup_cli.trainer.classifier import CLASSIFICATION_TASKS
+from soup_cli.trainer.loss_summary import stored_loss_summary_kind, stored_run_losses
 from soup_cli.utils.gpu import (
     configure_cuda_alloc_hint,
     configure_mps_async_load,
@@ -116,7 +117,10 @@ def _resume_refusal(cfg: "SoupConfig", flag: str) -> str | None:
 def _format_training_complete_loss(result: dict) -> str:
     """Render only a loss comparison that the trainer actually measured."""
     summary_kind = result.get("loss_summary_kind")
-    if summary_kind == "unavailable":
+    # Neither the kind-"unavailable" placeholder nor a result without numbers (a
+    # missing key, None) is a loss to print: say so instead of formatting None.
+    stored_initial, stored_final = stored_run_losses(result)
+    if stored_initial is None or stored_final is None:
         return "Loss: [bold]unavailable[/]"
     loss_key = result.get("loss_key")
     label = f" [dim]({loss_key})[/]" if isinstance(loss_key, str) else ""
@@ -2178,14 +2182,17 @@ def train(
                 metadata["training_data_sha256"] = recorded_run.get("training_data_sha256")
             write_run_provenance(result["output_dir"], metadata)
 
-        # Save completion to tracker
+        # Save completion to tracker. A run that observed no loss stores NULL, not
+        # the trainer's 0.0 placeholder (stored_run_losses).
+        initial_loss, final_loss = stored_run_losses(result)
         tracker.finish_run(
             run_id=run_id,
-            initial_loss=result["initial_loss"],
-            final_loss=result["final_loss"],
+            initial_loss=initial_loss,
+            final_loss=final_loss,
             total_steps=result["total_steps"],
             duration_secs=result["duration_secs"],
             output_dir=result["output_dir"],
+            loss_summary_kind=stored_loss_summary_kind(result),
         )
 
         _run_auto_eval_after_training(
