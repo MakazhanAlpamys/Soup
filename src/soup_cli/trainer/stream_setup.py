@@ -748,6 +748,13 @@ def _distributed_launch() -> bool:
 #: loss with a second forward or rollouts, none of which is measured data-parallel.
 DISTRIBUTED_STREAM_TASKS = ("sft",)
 
+#: Seconds a rank waits on a silent peer, applied once the setup is done (C8, BETA, #2585).
+#: The group is created with the trainer's 1800 s because the first collective after the
+#: setup waits for the slower rank's download and sharding; a peer that stops answering
+#: later should end the run in minutes, not half an hour. Not a config key: it follows
+#: the launch.
+DISTRIBUTED_STREAM_TIMEOUT_SECONDS = 300
+
 
 def _local_world_size() -> Optional[int]:
     """``LOCAL_WORLD_SIZE`` as an int; ``None`` when it is unset, empty or malformed."""
@@ -940,6 +947,9 @@ class StreamingSetupMixin:
     #: True once the setup accepted a distributed launch (BETA): the trainer must then
     #: carry the adapter-gradient sync, and a resume is refused.
     _distributed_stream = False
+    #: The frozen-base items this rank sends to the cross-rank init check (C5), computed
+    #: by the streaming setup when the launch is distributed; ``None`` otherwise.
+    _stream_base_items = None
     # #1693 -- the head-and-loss hook of a run with `stream_loss_chunk` set.
     _stream_loss_chunk_hook = None
 
@@ -1694,6 +1704,7 @@ class StreamingSetupMixin:
         self._stream_runtime = runtime
         if distributed:
             self._bypass_accelerate_wrap(model)
+            self._stream_base_items = self._distributed_base_items(shard_dir, index)
         # #792 — on the materialised adapters, before the probe measures a step.
         from soup_cli.utils.peft_wiring import apply_fast_lora_patches, fast_lora_summary
 
@@ -1767,6 +1778,65 @@ class StreamingSetupMixin:
             "[dim]accelerate's DistributedDataParallel wrap is bypassed for the streamed "
             "model; the adapter gradients are averaged across ranks by Soup.[/]"
         )
+
+    @staticmethod
+    def _distributed_base_items(shard_dir: str, index) -> dict:
+        """C5: the frozen-base items of this rank (see ``utils/distributed_init_check``).
+
+        A failure (an unreadable shard) is returned as ``{"error": ...}``, not raised: the
+        other ranks are about to wait in the all-gather for this one, and they should refuse
+        by name instead of waiting out the group timeout.
+        """
+        from soup_cli.utils.distributed_init_check import frozen_base_items
+        from soup_cli.utils.run_provenance import active_base_revision
+
+        try:
+            return frozen_base_items(shard_dir, index, revision=active_base_revision())
+        except Exception as exc:  # noqa: BLE001 -- the gather must still be reached
+            return {"error": f"{type(exc).__name__}: {exc}"}
+
+    def _finish_distributed_stream_setup(self) -> None:
+        """What a distributed streaming run does once its trainer exists (BETA, #2585).
+
+        C5: every rank starts from the same trainable layout and frozen base (refused by name
+        otherwise) and from rank 0's adapter values (broadcast). It comes first on purpose:
+        its all-gather is the first collective after the setup and waits for the slower
+        rank at the launch timeout. C8: then the group timeout is shortened. C7: the
+        per-step metrics file of this rank.
+        """
+        from soup_cli.utils.distributed_init_check import verify_and_sync_init
+        from soup_cli.utils.stream_dp_runtime import (
+            apply_group_timeout,
+            attach_stream_dp_metrics,
+        )
+        from soup_cli.utils.terminal import for_terminal
+
+        report = verify_and_sync_init(self.model, self._stream_base_items)
+        differing = (
+            f"; rank(s) {', '.join(str(rank) for rank in report.differing_ranks)} started "
+            "from different adapter values (a different seed?) and took rank 0's"
+            if report.differing_ranks
+            else ""
+        )
+        console.print(
+            f"[green]Distributed init:[/] {report.world_size} ranks agree on the trainable "
+            f"layout ({report.n_tensors} tensors, {report.n_elements:,} elements) and the "
+            f"frozen base; adapters broadcast from rank 0 "
+            f"({report.broadcast_bytes / 1e6:.1f} MB in {report.seconds:.1f} s){differing}."
+        )
+        timeout = apply_group_timeout(DISTRIBUTED_STREAM_TIMEOUT_SECONDS)
+        if timeout.api is not None:
+            console.print(
+                f"[dim]Group timeout set to {timeout.seconds:g} s ({timeout.api}): a peer that "
+                "stops answering ends this run within that time.[/]"
+            )
+        else:
+            console.print(
+                "[yellow]Group timeout left at its launch value:[/] "
+                f"{for_terminal(timeout.reason)}. A peer that stops answering is waited for "
+                "until that timeout."
+            )
+        attach_stream_dp_metrics(self.trainer, self._output_dir)
 
     def _stream_large_budget_bytes(self, slot_bytes: int, n_large_keys: int) -> int:
         """Large-layer bytes the VRAM pre-flight charges.

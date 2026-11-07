@@ -86,17 +86,20 @@ def build_soup_trainer_callback(
     batch_size: Optional[int] = None,
     output_dir: Optional[str] = None,
     task: Optional[str] = None,
+    rank_gated: bool = False,
 ) -> Any:
     """Build a trainer callback with shared training and evaluation config.
 
     ``task`` picks the run's validation metric (#1389); only a trainer whose
-    evaluation is scored differently (``grpo``) needs to pass it."""
+    evaluation is scored differently (``grpo``) needs to pass it. ``rank_gated`` (C6,
+    distributed layer streaming only) keeps the panel, the banners and the tracker rows
+    on rank 0; every other run keeps them on every rank, as before."""
     training_config = config.training
     callback_cls = globals().get("SoupTrainerCallback")
     if callback_cls is None:
         callback_cls = __getattr__("SoupTrainerCallback")
 
-    return callback_cls(
+    callback = callback_cls(
         display=display,
         tracker=tracker,
         run_id=run_id,
@@ -107,6 +110,9 @@ def build_soup_trainer_callback(
             task=task,
         ),
     )
+    if rank_gated:
+        callback.rank_gated = True
+    return callback
 
 
 def _get_trainer_callback_base():
@@ -117,6 +123,19 @@ def _get_trainer_callback_base():
         return TrainerCallback
     except ImportError:
         return object
+
+
+def _is_chief(state: Any) -> bool:
+    """True on the process that owns the console and the run record (C6).
+
+    Under a distributed launch every rank runs this callback (the loss watchdog must stop
+    them all together; the logged loss is the cross-rank mean, so they all decide alike),
+    but the live panel, the watchdog banner and the tracker rows belong to rank 0 alone:
+    otherwise N nodes print N panels and write N rows for one run. HF's
+    ``TrainerState.is_world_process_zero`` is True for a single process, so a run that is
+    not distributed behaves as before; a state without the field counts as the chief.
+    """
+    return bool(getattr(state, "is_world_process_zero", True))
 
 
 def _gate_failure_summary(result) -> str:
@@ -142,6 +161,16 @@ def _gate_failure_summary(result) -> str:
 
 class _SoupTrainerCallback_body:  # noqa: N801
     """Bridges HF Trainer events to Soup's Rich live display and experiment tracker."""
+
+    #: C6: set by ``build_soup_trainer_callback(rank_gated=True)`` for distributed layer
+    #: streaming only. Off, every rank keeps its panel, banners and tracker rows (as
+    #: before C6), which is what a resident distributed run with one tracker row per rank
+    #: needs.
+    rank_gated = False
+
+    def _owns_outputs(self, state: Any) -> bool:
+        """Whether this rank draws the panel, prints the banners and writes tracker rows."""
+        return not self.rank_gated or _is_chief(state)
 
     def __init__(
         self,
@@ -234,7 +263,8 @@ class _SoupTrainerCallback_body:  # noqa: N801
         self, args: TrainingArguments, state: TrainerState,
         control: TrainerControl, **kwargs,
     ):
-        self.display.start(total_steps=state.max_steps)
+        if self._owns_outputs(state):
+            self.display.start(total_steps=state.max_steps)
         # Prod wiring for the eval gate: load the suite + baseline and build a
         # live generate_fn from the training model. Before this, ``_gate_suite``
         # was only ever set by tests, so ``_run_eval_gate`` returned immediately
@@ -315,6 +345,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
         except Exception:
             pass
 
+        chief = self._owns_outputs(state)
         step = state.global_step
         epoch = state.epoch or 0
         if logs.get("loss") is not None:
@@ -355,16 +386,17 @@ class _SoupTrainerCallback_body:  # noqa: N801
         measured_val_loss = logs.get(val_key)
         speed = logs.get("train_steps_per_second", 0.0)
 
-        self.display.update(
-            step=step,
-            epoch=epoch,
-            loss=loss,
-            lr=lr,
-            grad_norm=display_grad_norm,
-            speed=speed,
-            gpu_mem=gpu_mem,
-            **{val_field: display_val_loss},
-        )
+        if chief:
+            self.display.update(
+                step=step,
+                epoch=epoch,
+                loss=loss,
+                lr=lr,
+                grad_norm=display_grad_norm,
+                speed=speed,
+                gpu_mem=gpu_mem,
+                **{val_field: display_val_loss},
+            )
 
         # v0.53.9 #94 — push to the global SSE buffer so the live Web UI
         # dashboard sees per-step metrics in real time. Best-effort: any
@@ -430,33 +462,36 @@ class _SoupTrainerCallback_body:  # noqa: N801
                 self._watchdog_counter += 1
                 if self._watchdog_counter >= self._watchdog_patience:
                     self._watchdog_fired = True
-                    # Stop Live display before printing panel
-                    self.display.stop()
+                    # Every rank stops (the decision is the same on all of them), but
+                    # only the chief draws the banner and writes the recovery hint (C6).
+                    if chief:
+                        # Stop Live display before printing panel
+                        self.display.stop()
 
-                    from rich.console import Console as WatchdogConsole
-                    from rich.panel import Panel
+                        from rich.console import Console as WatchdogConsole
+                        from rich.panel import Panel
 
-                    wc = WatchdogConsole()
+                        wc = WatchdogConsole()
 
-                    # v0.33.0 #57 — spike recovery hint: write a recovery
-                    # state file the user can resume from. We do NOT mutate
-                    # optimizer state in-place (HF Trainer does not expose a
-                    # safe public API for that mid-loop) but we leave a
-                    # machine-readable hint so a wrapper / re-launch can
-                    # resume with a decayed LR.
-                    if self._spike_strategy is not None:
-                        self._write_spike_recovery_hint(args, loss)
+                        # v0.33.0 #57 — spike recovery hint: write a recovery
+                        # state file the user can resume from. We do NOT mutate
+                        # optimizer state in-place (HF Trainer does not expose a
+                        # safe public API for that mid-loop) but we leave a
+                        # machine-readable hint so a wrapper / re-launch can
+                        # resume with a decayed LR.
+                        if self._spike_strategy is not None:
+                            self._write_spike_recovery_hint(args, loss)
 
-                    wc.print(Panel(
-                        f"[bold red]Loss watchdog triggered![/]\n\n"
-                        f"Loss {loss:.4f} exceeded threshold "
-                        f"{self._watchdog_threshold} for "
-                        f"{self._watchdog_counter} consecutive steps "
-                        f"(patience={self._watchdog_patience}).\n\n"
-                        f"Training will stop.",
-                        title="Loss Watchdog",
-                        border_style="red",
-                    ))
+                        wc.print(Panel(
+                            f"[bold red]Loss watchdog triggered![/]\n\n"
+                            f"Loss {loss:.4f} exceeded threshold "
+                            f"{self._watchdog_threshold} for "
+                            f"{self._watchdog_counter} consecutive steps "
+                            f"(patience={self._watchdog_patience}).\n\n"
+                            f"Training will stop.",
+                            title="Loss Watchdog",
+                            border_style="red",
+                        ))
                     control.should_training_stop = True
             else:
                 self._watchdog_counter = 0
@@ -466,8 +501,8 @@ class _SoupTrainerCallback_body:  # noqa: N801
         if self._grad_accum_enabled and not self._grad_accum_advised:
             self._maybe_advise_grad_accum()
 
-        # Log to experiment tracker
-        if self.tracker and self.run_id:
+        # Log to experiment tracker (rank 0 only under a distributed launch, C6)
+        if chief and self.tracker and self.run_id:
             self.tracker.log_metrics(
                 run_id=self.run_id,
                 step=step,
@@ -622,7 +657,8 @@ class _SoupTrainerCallback_body:  # noqa: N801
         self, args: TrainingArguments, state: TrainerState,
         control: TrainerControl, **kwargs,
     ):
-        self.display.stop()
+        if self._owns_outputs(state):
+            self.display.stop()
 
     # ------------------------------------------------------------------
     # v0.33.0 #57 — spike recovery hint

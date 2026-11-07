@@ -1324,6 +1324,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             self.trainer.add_callback(
                 QuestMetadataCallback(self._output_dir, self._quest_metadata)
             )
+        if self._distributed_stream:
+            # C5 (init check + broadcast), C8 (group timeout), C7 (step metrics): last, so
+            # the trainer, the output dir and every callback above exist.
+            self._finish_distributed_stream_setup()
 
     def _setup_quest(self, train_ds: Any) -> None:
         """Calibrate and install #674's explicit mixed fake-quant route."""
@@ -2412,6 +2416,19 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
         return train_ds, eval_ds
 
+    def _writes_artifacts(self) -> bool:
+        """Whether this process writes the run's artifacts beside the model (C6).
+
+        ``save_model`` writes on the ranks where ``args.should_save`` holds (rank 0, or the
+        first rank of each node with ``save_on_each_node``), and the tokenizer belongs next
+        to the model it was written with. A non-saving rank of a distributed streaming run
+        has no adapter, so a tokenizer there would pass for a finished artifact. Every other
+        run writes, as it always did.
+        """
+        if not self._distributed_stream:
+            return True
+        return bool(getattr(self.trainer.args, "should_save", True))
+
     def train(
         self,
         display: Optional[object] = None,
@@ -2445,6 +2462,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                     run_id=run_id,
                     batch_size=self._batch_size,
                     output_dir=self._output_dir,
+                    rank_gated=self._distributed_stream,
                 )
             )
 
@@ -2613,7 +2631,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                     f"[dim]Normalised {renamed} adapter keys saved through "
                     "torch.compile's wrapper[/]"
                 )
-        self.tokenizer.save_pretrained(self._output_dir)
+        if self._writes_artifacts():
+            self.tokenizer.save_pretrained(self._output_dir)
 
         # Extract metrics
         logs = self.trainer.state.log_history

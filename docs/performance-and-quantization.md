@@ -476,7 +476,17 @@ training:
 soup train --config soup.yaml
 ```
 
-**Single process only, for now.** Under `torchrun`, `accelerate launch` or `deepspeed` (`WORLD_SIZE` above 1), `soup train` refuses a `stream_layers: true` config at startup with "distributed layer streaming is not supported yet" ([#2585](https://github.com/MakazhanAlpamys/Soup/issues/2585)); run it as one process, or set `stream_layers: false` to train resident across the cards.
+**Across processes: BETA, `task: sft` only.** Under `torchrun`, `accelerate launch` or `deepspeed` (`WORLD_SIZE` above 1), a streamed run is data-parallel over the ranks. Each rank streams its own copy of the frozen base, and Soup averages the LoRA gradients across the ranks itself, after the backward pass and before gradient clipping. Accelerate's `DistributedDataParallel` wrap is skipped, because it cannot hold a model whose base weights stay on `meta`. The setup prints a `Distributed layer streaming is BETA` line.
+
+What runs: `task: sft` with exactly one rank per machine (`LOCAL_WORLD_SIZE=1`, e.g. `--gpus 1 --nodes N`, see [Multi-node launch](#multi-node-launch)). `soup train` refuses anything else at startup, before any download or sharding, with "distributed layer streaming is not supported yet with ...". The message names the blocking settings:
+
+- another task, or more than one rank per machine;
+- `--deepspeed` or `--fsdp`;
+- `--resume`, `--hf-resume` or `--push-as`;
+- an eval gate (`--gate` or `training.eval_gate`);
+- `training.multipack`, `training.moe_lora` or `data.format: raft`.
+
+See [#2585](https://github.com/MakazhanAlpamys/Soup/issues/2585). The averaging is checked against a single-process run on the same rows, with two CPU processes over Gloo. A run across GPU machines has not been measured yet. To train without it, run one process, or set `stream_layers: false` to train resident across the cards.
 
 **Model and tokenizer code.** With `training.stream_layers: true`, Soup uses
 Transformers' own implementation for the model config, the meta skeleton used by
@@ -1556,6 +1566,9 @@ soup train --config soup.yaml --gpus 8 --nodes 2 \
 `--num_processes 16 --num_machines 2` to Accelerate, which starts eight workers
 on each machine. One GPU per node is also supported. `--gpus auto` detects the
 local count, so use it only when every node has the same number of visible GPUs.
+
+With `training.stream_layers: true`, launch with `--gpus 1`. Streaming runs one rank per machine, as BETA and for `task: sft` only.
+The **Layer Streaming** section above lists what is refused.
 
 `--nodes` defaults to 1. With multiple nodes, `--master-addr` is required;
 `--node-rank` defaults to 0 and `--master-port` to 29500. Ranks must be distinct
