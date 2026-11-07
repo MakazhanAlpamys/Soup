@@ -318,6 +318,17 @@ class TestNEFTuneTaskGate:
         ):
             self._make_cfg(task, 5.0, **extra)
 
+    def test_neftune_refusal_has_no_rst_backticks(self):
+        """#2220: the refusal message must not carry RST double backticks."""
+        with pytest.raises(ValidationError) as excinfo:
+            self._make_cfg("grpo", 5.0)
+        text = str(excinfo.value)
+        assert (
+            "forward it to TrainingArguments.neftune_noise_alpha. Remove "
+            "training.neftune_alpha, or use one of those tasks." in " ".join(text.split())
+        )
+        assert "``" not in text
+
     def test_mutation_check_drop_one_task(self, monkeypatch):
         """Mutation test: removing a task from NEFTUNE_APPLYING_TASKS fails.
 
