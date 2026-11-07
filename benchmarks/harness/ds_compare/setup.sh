@@ -8,7 +8,7 @@
 # instance and runs this script once. Two switches:
 #     SETUP_PART=part1|part2|part3   write this instance's records under results/setup_<part>/
 #                                    instead of results/ (nothing of an earlier part is overwritten)
-#     SKIP_S0=1                      skip step 4, the S0 venv (only part 1 runs arm S0)
+#     SKIP_S0=1                      skip step 4, the S0 venv (no arm of the plan uses it: D-2)
 # Every other step stays: the hardware record, the cpu_adam build and its log, the model and its
 # hashes, the dataset check, the environment record.
 #
@@ -161,7 +161,7 @@ command -v deepspeed >/dev/null 2>&1 || die "the deepspeed launcher is not on PA
 # --- 4. S0 venv (earlier revision and its stack) ----------------------------------------
 VENV_S0="$HERE/venv_s0"
 if [ "$SKIP_S0" = "1" ]; then
-    log "SKIP_S0=1: the S0 venv is not built (only part 1 runs arm S0)"
+    log "SKIP_S0=1: the S0 venv is not built (arm S0 is not in the plan)"
 else
     if [ ! -x "$VENV_S0/bin/python" ]; then
         log "creating $VENV_S0"

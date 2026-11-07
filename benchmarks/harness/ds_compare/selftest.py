@@ -360,10 +360,13 @@ def test_g2_g3_g4_ablation() -> None:
 
 def test_plan_shape() -> None:
     plan = orchestrate.build_plan()
-    assert len(plan) == 91
+    assert len(plan) == 88  # 91 before S0 left the plan (DEVIATIONS.md D-2)
     assert [s.arm for s in plan[:2]] == ["S1", "D1"] and all(s.warmup for s in plan[:2])
+    # S0 is not run: soup-cli at 2c9a078 does not start on this stack (D-2)
+    assert "S0" not in orchestrate.SHAPE_A_ARMS and not any(s.arm == "S0" for s in plan)
+    assert orchestrate.build_plan({"S0"}) == []
     a80 = [s for s in plan if s.phase == "A"]
-    assert len(a80) == 42
+    assert len(a80) == 39 == 3 * len(orchestrate.SHAPE_A_ARMS)
     for rep in (1, 2, 3):
         arms = [s.arm for s in a80 if s.rep == rep]
         assert sorted(arms) == sorted(orchestrate.SHAPE_A_ARMS)
@@ -783,10 +786,11 @@ def test_soup_arm_configs_load_in_soup() -> None:
                 assert (env == {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:False"}) == (
                     arm == "S5"
                 )
-                if arm == "S0":
-                    assert (
-                        notes["dropped_keys"] == ["training.seed"] and loaded.training.seed is None
-                    )
+                if arm == "S0":  # not in the plan (D-2); keys that did not exist at 2c9a078
+                    assert notes["dropped_keys"] == ["training.seed", "training.stream_pin"]
+                    assert loaded.training.seed is None and loaded.training.stream_pin is None
+                else:  # D-1: pinning is explicit, S4 alone turns it off
+                    assert loaded.training.stream_pin is (arm != "S4"), (arm, shape)
 
 
 def test_soup_arm_changes_are_single_keys() -> None:
@@ -810,6 +814,38 @@ def test_soup_arm_changes_are_single_keys() -> None:
         overrides={"training": {"stream_buffers": 3}, "env": {"X": "1"}},
     )
     assert config["training"]["stream_buffers"] == 3 and env == {"X": "1"}
+
+
+def test_soup_arms_pin_explicitly() -> None:
+    """D-1: the rented container's memlock limit made Soup's automatic choice refuse to pin."""
+    for shape in ds_common.SHAPES:
+        for arm in soup_arm.STREAM_ARMS:
+            config, _, notes = soup_arm.build_config(arm, shape, "m", "r.jsonl", "./o")
+            training = config["training"]
+            if arm == "S0":  # the key did not exist at 2c9a078: dropped, and listed
+                assert "stream_pin" not in training
+                assert "training.stream_pin" in notes["dropped_keys"]
+            elif arm == "S4":
+                assert training["stream_pin"] is False, shape
+            else:
+                assert training["stream_pin"] is True, (arm, shape)
+    # the generated soup.yaml carries it literally, so the log of a run can be checked against it
+    base, _, _ = soup_arm.build_config("S1", "A", "m", "r.jsonl", "./o")
+    assert "  stream_pin: true\n" in soup_arm.dump_yaml(base)
+    leave_one_out, _, _ = soup_arm.build_config("S4", "A", "m", "r.jsonl", "./o")
+    assert "  stream_pin: false\n" in soup_arm.dump_yaml(leave_one_out)
+    # SB keeps the pin unless the derivation selected S4's change
+    sb, _, _ = soup_arm.build_config(
+        "SB", "A", "m", "r.jsonl", "./o", overrides={"training": {"stream_buffers": 3}}
+    )
+    assert sb["training"]["stream_pin"] is True
+    sb, _, _ = soup_arm.build_config(
+        "SB", "A", "m", "r.jsonl", "./o", overrides={"training": {"stream_pin": False}}
+    )
+    assert sb["training"]["stream_pin"] is False
+    # S4 is still a single change from S1 (true -> false)
+    after, before = leave_one_out["training"], base["training"]
+    assert {key for key in after if after[key] != before[key]} == {"stream_pin"}
 
 
 def test_soup_arm_child_environment() -> None:
@@ -1131,7 +1167,7 @@ def _ship_run_jsons(source: Path, target: Path) -> None:
 def test_parts_are_disjoint_and_cover_the_plan() -> None:
     full = orchestrate.build_plan()
     full_keys = [_plan_key(slot) for slot in full]
-    assert len(set(full_keys)) == len(full_keys) == 91
+    assert len(set(full_keys)) == len(full_keys) == 88
     by_part = {part: orchestrate.build_plan(None, None, part) for part in orchestrate.PARTS}
     assert tuple(by_part) == ("part1", "part2", "part3")
     key_sets = {part: {_plan_key(slot) for slot in slots} for part, slots in by_part.items()}
@@ -1149,7 +1185,8 @@ def test_parts_are_disjoint_and_cover_the_plan() -> None:
         assert all(_plan_key(full[slot.index]) == _plan_key(slot) for slot in slots)
 
     part1, part2, part3 = (by_part[name] for name in orchestrate.PARTS)
-    assert len(part1) == 56 and len(part2) == 20 and len(part3) == 15
+    assert len(part1) == 53 and len(part2) == 20 and len(part3) == 15
+    assert not any(s.arm == "S0" for part in (part1, part2, part3) for s in part)  # D-2
     # part 1: Shape A at 80 GB, every arm of section 2 with the warm-ups, 3 repeats
     assert {(s.shape, s.budget) for s in part1} == {("A", 80)}
     assert {s.arm for s in part1} == set(orchestrate.SHAPE_A_ARMS) | {"SB", "D1PF", "D2PF", "S8"}
@@ -1178,7 +1215,7 @@ def test_parts_are_disjoint_and_cover_the_plan() -> None:
 def test_part_estimates_add_up_and_max_hours_round_up() -> None:
     full = orchestrate.estimate_plan(orchestrate.build_plan())
     reports = [dry_run_parts.part_report(part, None, 2.23) for part in orchestrate.PARTS]
-    assert sum(report.runs for report in reports) == full["runs"] == 91
+    assert sum(report.runs for report in reports) == full["runs"] == 88
     assert abs(sum(report.gpu_minutes for report in reports) - full["minutes"]) < 0.5
     for report in reports:
         raw = (
@@ -1315,9 +1352,12 @@ def test_part_refuses_without_part1_results() -> None:
         (files_only / "sb_overrides.json").write_text('{"selected": []}')
         (files_only / "d_best.json").write_text('{"arm": "D1"}')
         assert "found none" in orchestrate.part_prerequisites("part2", files_only)[0]
-        # the S0 executable must exist when S0 is in the plan (part 1 after SKIP_S0=1)
+        # S0 is not in the plan (D-2), so a missing S0 executable refuses nothing ...
         session = orchestrate.Session(_args(str(Path(tmp) / "r"), part="part1"))
         session.s0_bin = str(Path(tmp) / "no_such_soup")
+        assert session.refusals() == []
+        # ... but the guard stays for a plan that does hold an S0 slot (the arm's code is kept)
+        session.plan.append(_slot("S0", "A", 80, 1))
         assert any("SKIP_S0" in problem for problem in session.refusals())
         session.s0_bin = str(Path(tmp) / "empty_file")
         Path(session.s0_bin).write_text("")
@@ -1457,10 +1497,11 @@ def test_job_scripts_results_deadline_and_refusal() -> None:
         assert (out2 / "job_part2.log").exists() and (out2 / "payload_part2.txt").exists()
         assert (out2 / "results" / "A" / "80" / "S1" / "rep1.json").exists(), "shipped results"
         assert "would run: bash" in result.stdout and "run_all.sh --part part2" in result.stdout
-        # part 3 likewise, part 1 keeps the S0 venv
+        # part 3 likewise; part 1 skips the S0 venv too (no arm of the plan uses it: D-2)
         assert job("part3", "out3").returncode == 0
         part1 = job("part1", "out1")
-        assert part1.returncode == 0 and "SKIP_S0=0" in part1.stdout, part1.stdout
+        assert part1.returncode == 0 and "SKIP_S0=1" in part1.stdout, part1.stdout
+        assert "SKIP_S0=0" not in part1.stdout
         # a deadline passed as an environment variable wins over the files
         result = job("part2", "out2b", VK_DEADLINE_EPOCH=str(now + 7200), VK_RESERVE_S="120")
         epoch = int(re.search(r"DEADLINE_EPOCH=(\d+)", result.stdout).group(1))
@@ -1571,7 +1612,7 @@ def test_setup_switches_and_run_all_part_option() -> None:
             DS_COMPARE_RESULTS=results,
             PY=python,
         )
-        assert "plan: 56 slots" in result.stdout, result.stdout[:300]
+        assert "plan: 53 slots" in result.stdout, result.stdout[:300]
         # no part-1 results: the dry run says so, a real start would refuse
         result = _run_script(
             HERE / "run_all.sh",
@@ -1654,7 +1695,7 @@ def test_make_payload_builds_a_clean_folder() -> None:
         assert all(b"\r" not in path.read_bytes() for path in files), "LF only"
         info = (out / "PAYLOAD.txt").read_text()
         assert "harness_commit: " + _git(repo, "rev-parse", "HEAD") in info
-        assert "suggested --max-hours: 5.00" in result.stdout and "job_part1.sh" in result.stdout
+        assert "suggested --max-hours: 4.75" in result.stdout and "job_part1.sh" in result.stdout
         # an existing non-empty folder is never built over
         again = _make_payload(repo, "part1", out)
         assert again.returncode != 0 and "not empty" in again.stderr

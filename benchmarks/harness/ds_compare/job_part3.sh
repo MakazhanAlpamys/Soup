@@ -8,9 +8,9 @@
 #   python vk.py launch ... --max-hours <dry_run_parts.py --part part3> \
 #       --payload <out_dir> --job <out_dir>/benchmarks/harness/ds_compare/job_part3.sh
 #
-# Without them the job refuses before the set-up starts. Only part 1 runs arm S0, so the S0
-# venv is skipped here. The kit runs this file as /root/vk/job.sh, so the harness is found in the
-# payload, not next to this file. Everything else is in job_common.sh.
+# Without them the job refuses before the set-up starts. No part runs arm S0 (DEVIATIONS.md
+# D-2), so the S0 venv is skipped. The kit runs this file as /root/vk/job.sh, so the harness
+# is found in the payload, not next to this file. Everything else is in job_common.sh.
 set -euo pipefail
 
 PART=part3

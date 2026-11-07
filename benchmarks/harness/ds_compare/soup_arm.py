@@ -86,8 +86,8 @@ ARM_CHANGES: dict[str, dict[str, Any]] = {
 
 #: ``training:`` keys that do not exist at Soup 2c9a078 (found by loading that tree's
 #: ``TrainingConfig.model_fields``): an unknown key is ignored silently there, so S0 drops
-#: them from the yaml instead and lists them in the json. ``seed`` is in every generated
-#: yaml; the others only appear when an arm sets them.
+#: them from the yaml instead and lists them in the json. ``seed`` and ``stream_pin`` (D-1 in
+#: DEVIATIONS.md) are in every generated yaml; the others only appear when an arm sets them.
 S0_UNSUPPORTED_TRAINING_KEYS = (
     "seed",
     "stream_pin",
@@ -155,6 +155,11 @@ def build_config(
             "save_steps": 1000000,
             "seed": SEED,
             "stream_layers": True,
+            # Explicit, not automatic (deviation D-1 in DEVIATIONS.md): Soup's automatic
+            # choice refuses to pin when RLIMIT_MEMLOCK is small (8 MB in the rented
+            # container, 63 GB on the box of the earlier record), although CUDA pins there
+            # anyway. S4 still sets false.
+            "stream_pin": True,
         },
         "output": output_dir,
     }

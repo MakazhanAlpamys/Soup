@@ -19,7 +19,7 @@ bash setup.sh && bash run_all.sh --all
 ```
 
 `setup.sh` takes about an hour (model download, the DeepSpeed build). `run_all.sh --all` takes
-about 5.3 h of GPU time without the conditional runs and about 6.5 h with all of them (the
+about 5.1 h of GPU time without the conditional runs and about 6.3 h with all of them (the
 plan is estimated, see below; `bash run_all.sh --all --dry-run` prints it). Everything lands
 under `results/`; `results/DONE` is written last.
 
@@ -32,15 +32,19 @@ DEADLINE_EPOCH=$(date -d '+7 hours' +%s) bash run_all.sh --all   # stop rule, se
 
 A finished run is not run again: restarting `--all` after an interruption resumes.
 
+Three things differ from the frozen protocol and are listed in [`DEVIATIONS.md`](DEVIATIONS.md): the
+streaming arms pin their store explicitly (D-1), arm S0 is not run (D-2; `SKIP_S0=1 bash setup.sh` skips
+building its venv), and the Hugging Face Trainer owns the scheduler in the DeepSpeed arms (D-3).
+
 ## Running in parts
 
 The series can also run as three separate rentals, each its own instance with its own deadline, so
 that the results and the spend are visible in between. A part is a set of phases of the full plan;
-the three sets are disjoint and together they are the full plan (91 slots).
+the three sets are disjoint and together they are the full plan (88 slots).
 
 | part | what | runs | est. GPU time | suggested `--max-hours` |
 |---|---|---|---|---|
-| `part1` | Shape A at 80 GB, every arm of protocol section 2: S0..S8, SB (derived, then run), D1..D4, R1, R2, the prefetch variants by their rule, the two warm-ups, 3 repeats. Holds G1, the ablation and the G2 / G3 values at 80 GB | 56 | 238 min | 5.00 |
+| `part1` | Shape A at 80 GB, every arm of protocol section 2 except S0 (D-2): S1..S8, SB (derived, then run), D1..D4, R1, R2, the prefetch variants by their rule, the two warm-ups, 3 repeats. Holds G1, the ablation and the G2 / G3 values at 80 GB | 53 | 229 min | 4.75 |
 | `part2` | Shapes B and C at 80 GB: SB, S1, D-best, D1, R1; repeat 1 of both shapes, then repeat 2 (G4). Needs part 1's results (SB overrides, D-best) | 20 | 77 min | 2.25 |
 | `part3` | Shape A under the 24 GB cap (2 repeats) and the 16 GB cap (1 repeat): SB, D1, D2, D3, R1. Needs part 1's results (SB overrides) | 15 | 73 min | 2.25 |
 
@@ -102,12 +106,12 @@ part 1 only, so the first timed runs of part 2 and part 3 start on a cold instan
 
 | file | what it is |
 |---|---|
-| `setup.sh` | hardware record, soup-cli from a git commit (`SOUP_COMMIT`, default the `main` commit written in the file), DeepSpeed built with `DS_BUILD_CPU_ADAM=1` (log kept) and `DeepSpeedCPUAdam` verified, second venv for S0, the model at its pinned revision with no token, `results/model_hashes.txt`, `results/env.txt`; `SETUP_PART=<part>` writes the records under `results/setup_<part>/`, `SKIP_S0=1` skips the S0 venv |
+| `setup.sh` | hardware record, soup-cli from a git commit (`SOUP_COMMIT`, default the `main` commit written in the file), DeepSpeed built with `DS_BUILD_CPU_ADAM=1` (log kept) and `DeepSpeedCPUAdam` verified, second venv for S0 (skipped with `SKIP_S0=1`), the model at its pinned revision with no token, `results/model_hashes.txt`, `results/env.txt`; `SETUP_PART=<part>` writes the records under `results/setup_<part>/`, `SKIP_S0=1` skips the S0 venv |
 | `run_all.sh` | environment preparation, then `orchestrate.py` (`--part <part>` runs one part) |
 | `make_payload.sh`, `job_part1.sh`, `job_part2.sh`, `job_part3.sh`, `job_common.sh` | running in parts: the payload folder of one part, and the kit job of each part (see "Running in parts") |
 | `dry_run_parts.py` | run count, estimated GPU minutes and suggested `--max-hours` of each part |
 | `orchestrate.py` | the plan (protocol sections 2 to 5), the interleaved order, the SB derivation rule, the D-best choice, the void checks, the budget drop order, `gates.json` at the end |
-| `soup_arm.py` | streaming arms S0..S8 and SB: writes the `soup.yaml`, runs `soup train --config soup.yaml --yes`, writes the run json |
+| `soup_arm.py` | streaming arms S1..S8 and SB (the code of S0 is kept; S0 is not in the plan): writes the `soup.yaml`, runs `soup train --config soup.yaml --yes`, writes the run json |
 | `hf_baseline.py` | plain Hugging Face Trainer + PEFT LoRA: arms D1..D4, the two prefetch variants, R1 and R2. Imports nothing from `soup_cli` |
 | `bench_trace.py` | the per-step recorder (a `TrainerCallback`) and the metric derivation, shared by all arms |
 | `sitecustomize.py` | on `PYTHONPATH` for every arm alike: the VRAM cap (`SOUP_BENCH_VRAM_CAP_GB`) and, for `soup train`, the passive recorder (`SOUP_BENCH_TRACE_OUT`). Neither imports torch at interpreter start |
@@ -118,15 +122,16 @@ part 1 only, so the first timed runs of part 2 and part 3 start on a cold instan
 | `ds_d1_z3_param_offload.json`, `ds_d2_z3_param_opt_offload.json`, `ds_d3_z2_opt_offload.json`, `ds_d4_z3_no_offload.json` | the DeepSpeed arms |
 | `ds_d1_prefetch5e8.json`, `ds_d2_prefetch5e8.json` | the two allowed prefetch variants (run only when that arm's GPU was idle more than 50%) |
 | `tiny_fixture.py`, `selftest.py` | CPU rehearsal fixtures and the checks of the harness logic |
+| `DEVIATIONS.md` | where the run differs from the frozen `PROTOCOL.md` (D-1 explicit pin, D-2 no S0, D-3 scheduler), and informational values from an aborted run |
 
 ## Arms
 
 | id | what |
 |---|---|
-| S0 | Soup at `2c9a078` in a second venv with the earlier stack (transformers 4.57.6, trl 0.26.2, peft 0.20.0, accelerate 1.14.0); S1's yaml with the keys that did not exist then dropped (`training.seed`; the others are not set by any arm); the json lists them |
-| S1 | current `main`, defaults: `stream_layers`, `stream_recompute: on`, `stream_buffers: 2`, pinning automatic, `expandable_segments` exported by Soup |
+| S0 | **not run** (D-2: it fails before training on the rented box); Soup at `2c9a078` in a second venv with the earlier stack (transformers 4.57.6, trl 0.26.2, peft 0.20.0, accelerate 1.14.0); S1's yaml with the keys that did not exist then dropped (`training.seed` and `training.stream_pin`; the others are not set by any arm); the json lists them |
+| S1 | current `main`, defaults: `stream_layers`, `stream_recompute: on`, `stream_buffers: 2`, `stream_pin: true` (set explicitly, D-1), `expandable_segments` exported by Soup |
 | S2 / S3 | S1 + `stream_recompute: auto` / `off` |
-| S4 | S1 + `stream_pin: false` |
+| S4 | S1 + `stream_pin: false` (the only arm that does not pin) |
 | S5 | S1 with `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False` in the child environment (Soup keeps a user value, `src/soup_cli/utils/gpu.py:239-253`) |
 | S6 / S7 | S1 + `stream_buffers: 3` / `stream_loss_chunk: 128` |
 | S8 | S1 + `fast_lora: true` + `lora.dropout: 0` (informational, never in a ratio) |
@@ -193,7 +198,7 @@ store size, pinned or pageable), the `stream_recompute: auto` planner line and t
 * Pinned by the harness: the model `NousResearch/Meta-Llama-3.1-8B-Instruct` at revision
   `d10aef7999a2b5ba950ab3974312feeedbfe0b77` (a local copy, used by every arm; its four
   safetensors shards were compared with the published original's LFS sha256 values separately
-  from this harness); soup-cli at `SOUP_COMMIT` (default `9ca9819747a624da4cbbff03cc8e1a7d2a81100d`) and, for S0, at `2c9a078`.
+  from this harness); soup-cli at `SOUP_COMMIT` (default `9ca9819747a624da4cbbff03cc8e1a7d2a81100d`) and, for S0 (not run: D-2), at `2c9a078`.
 * Resolved at setup and written to `results/env.txt`: torch (the image's, >= 2.6), transformers
   (>= 5.16.1, < 6), peft (>= 0.20), trl (>= 0.29), accelerate, datasets, DeepSpeed (latest unless
   `DEEPSPEED_SPEC` pins it; the earlier record used 0.19.4). S0's venv pins the earlier record's stack.
@@ -240,7 +245,7 @@ chat-template rendering and loss mask (`ds_common.render_alpaca_row`, checked ag
 * The ZeRO-3 / PEFT / HF Trainer path and the Soup run were not run on a GPU while this harness was written
   (CPU only, no DeepSpeed installed on the development box). The untimed warm-up of D1 is the first real test of
   that path; the orchestrator's run loop was exercised with fake child processes only (`selftest.py`).
-* Estimates of the plan (about 5.3 h without the conditional runs, 6.5 h with them) are built from the STEP 3 and STEP 4
+* Estimates of the plan (about 5.1 h without the conditional runs, 6.3 h with them) are built from the STEP 3 and STEP 4
   timings for streaming (2.2 min) and D1 (6.5 min) and guesses for the other arms; they are replaced by the
   measured wall time of each arm as runs finish.
 

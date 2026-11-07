@@ -8,7 +8,8 @@ Order of execution (value first; the budget rule drops from the other end):
 
     warm-up (untimed S1, D1)
     Shape A, 80 GB:  3 repeats, interleaved by repeat (every arm repeat 1, then 2, then 3):
-                     S0 S1 S2 S3 S4 S5 S6 S7 D1 D2 D3 D4 R1 R2  (reversed on even repeats)
+                     S1 S2 S3 S4 S5 S6 S7 D1 D2 D3 D4 R1 R2  (reversed on even repeats;
+                     S0 is not run: DEVIATIONS.md D-2)
     SB derivation    from the Shape A medians (rule below) -> sb_overrides.json -> SB x 3
     variants         D1PF / D2PF x 3 when that arm's GPU was idle more than 50% (rule, not
                      result) -> d_best.json (fastest DeepSpeed arm of Shape A)
@@ -37,7 +38,7 @@ Parts. ``--part part1|part2|part3`` runs the series in three rented instances, e
 deadline. The plan of a part is the slots of the full plan whose phase belongs to it (the three
 sets are disjoint and their union is the full plan):
 
-    part1  warmup, A, SB, variants, S8   Shape A at 80 GB: S0..S8, SB, D1..D4, R1, R2, the
+    part1  warmup, A, SB, variants, S8   Shape A at 80 GB: S1..S8, SB, D1..D4, R1, R2, the
                                          prefetch variants (rule), 3 repeats
     part2  B1, C1, B2, C2                Shapes B and C at 80 GB (SB, S1, D-best, D1, R1)
     part3  cap24, cap16                  Shape A under the 24 and 16 GB caps
@@ -97,7 +98,9 @@ HF_ARMS: dict[str, dict[str, Any]] = {
     "R2": {"ds": None, "gc": True},
 }
 DS_PLAIN = ("D1", "D2", "D3", "D4")
-SHAPE_A_ARMS = ["S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7", "D1", "D2", "D3", "D4", "R1", "R2"]
+# S0 (soup-cli at 2c9a078) is not in the plan: it fails on this stack before training
+# (deviation D-2 in DEVIATIONS.md).
+SHAPE_A_ARMS = ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "D1", "D2", "D3", "D4", "R1", "R2"]
 CAP_ARMS = ["SB", "D1", "D2", "D3", "R1"]
 BC_ARMS = ["SB", "S1", "DBEST", "D1", "R1"]
 SB_CANDIDATES = ("S2", "S3", "S4", "S5", "S6", "S7")

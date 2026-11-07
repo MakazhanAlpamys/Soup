@@ -8,7 +8,7 @@
 #   --only S1,D1,...   restrict to these arm ids (SB and DBEST are valid ids)
 #   --part part1|part2|part3
 #                      run one part of the series (each part is its own rented instance, see
-#                      README.md "Running in parts"): part1 = Shape A at 80 GB (S0..S8, SB,
+#                      README.md "Running in parts"): part1 = Shape A at 80 GB (S1..S8, SB,
 #                      D1..D4, R1, R2, prefetch variants, warm-ups), part2 = Shapes B and C at
 #                      80 GB, part3 = the 24 and 16 GB caps. Part 2 and part 3 read part 1's
 #                      run jsons from DS_COMPARE_RESULTS and refuse to start without them.
