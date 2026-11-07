@@ -369,11 +369,18 @@ def _build_hardware_fit_input(cfg, gpu_memory_gb=None):
     ``"auto"``, unsupported quant, out-of-range dims), in which case the caller
     skips the gate rather than guess. Built by the shared
     ``hardware_fit_input_from_config``, as ``soup profile``'s input is (#2049).
-    ``gpu_memory_gb`` (GiB) resolves ``gradient_checkpointing: auto``.
+    ``gpu_memory_gb`` (GiB) resolves ``gradient_checkpointing: auto``. A line is
+    printed before the model's details are read from the Hub, without the offline
+    hint used by ``soup plan`` and ``soup profile``: the download comes next (#2306).
     """
     from soup_cli.utils.hardware_fit import hardware_fit_input_from_config
+    from soup_cli.utils.model_shape import HUB_REQUEST_LINE_BEFORE_DOWNLOAD
 
-    return hardware_fit_input_from_config(cfg, gpu_memory_gb=gpu_memory_gb)
+    return hardware_fit_input_from_config(
+        cfg,
+        gpu_memory_gb=gpu_memory_gb,
+        on_hub_request=lambda: console.print(f"[dim]{HUB_REQUEST_LINE_BEFORE_DOWNLOAD}[/]"),
+    )
 
 
 #: How the pre-flight panel names each sharding mode it prices per card (#2300).
