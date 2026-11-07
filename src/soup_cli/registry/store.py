@@ -660,7 +660,8 @@ class RegistryStore:
 
         Rejects self-references and indirect cycles (e.g. A→B→A) so BFS
         walks in :meth:`get_ancestors` and :meth:`get_descendants` always
-        terminate on a DAG.
+        terminate on a DAG. The reachability check and insert hold SQLite's
+        write lock, so a concurrent caller may wait up to SQLite's busy timeout.
         """
         if relation not in _VALID_RELATIONS:
             raise ValueError(
@@ -670,8 +671,8 @@ class RegistryStore:
         if child_id == parent_id:
             raise ValueError("lineage cannot reference self")
         conn = self._get_conn()
+        conn.execute("BEGIN IMMEDIATE")
         try:
-            conn.execute("BEGIN IMMEDIATE")
             if self.get(child_id) is None:
                 raise ValueError(f"child entry not found: {child_id}")
             if self.get(parent_id) is None:

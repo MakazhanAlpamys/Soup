@@ -625,7 +625,7 @@ class TestLineage:
         # This stays below sqlite's default five-second busy timeout: after
         # BEGIN IMMEDIATE, the second caller must remain blocked long enough
         # for the first caller to finish without a transient locked error.
-        checked = threading.Barrier(2, timeout=0.2)
+        checked = threading.Barrier(2, timeout=0.5)
         results: list[object] = []
 
         def add_opposite_edge(child_id: str, parent_id: str) -> None:
@@ -679,6 +679,26 @@ class TestLineage:
         verify.close()
         assert edge_count == 1
         assert not (forward and backward)
+
+    def test_refused_lineage_edges_roll_back_the_open_transaction(self, tmp_path):
+        """A caller that catches a refusal can safely reuse its RegistryStore."""
+        from soup_cli.registry.store import RegistryStore
+
+        store = RegistryStore(db_path=tmp_path / "reg.db")
+        a = store.push(name="a", tag="v1", base_model="b", task="sft",
+                       run_id=None, config={})
+        b = store.push(name="b", tag="v1", base_model="b", task="sft",
+                       run_id=None, config={})
+        store.add_lineage(child_id=a, parent_id=b, relation="forked_from")
+
+        with pytest.raises(ValueError, match="cycle"):
+            store.add_lineage(child_id=b, parent_id=a, relation="forked_from")
+        assert store._get_conn().in_transaction is False
+
+        with pytest.raises(ValueError, match="child entry not found"):
+            store.add_lineage(child_id="reg_missing", parent_id=a, relation="forked_from")
+        assert store._get_conn().in_transaction is False
+        store.close()
 
     def test_lineage_rejects_missing_child(self, tmp_path):
         from soup_cli.registry.store import RegistryStore
