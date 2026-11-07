@@ -68,7 +68,9 @@ from soup_cli.utils.loop_log import (
     withdrawn_line,
 )
 from soup_cli.utils.loop_state import (
+    ALL_LINEAR,
     CANARY_ON_TIMEOUT,
+    SFT_RECIPE_KEYS,
     TRAIN_METHODS,
     VERIFY_METHODS,
     LoopState,
@@ -76,6 +78,7 @@ from soup_cli.utils.loop_state import (
     init_state,
     parse_wait_duration,
     read_state,
+    validate_sft_recipe_value,
     write_state,
 )
 from soup_cli.utils.terminal import for_terminal
@@ -100,6 +103,108 @@ def _safe_read() -> LoopState:
     except (ValueError, TypeError) as exc:
         console.print(f"[red]loop state invalid:[/] {escape(str(exc))}")
         raise typer.Exit(code=2)
+
+
+#: What an sft loop trains on, said at init (the default method, so it is spelled out).
+SFT_TRAINS_ON = (
+    "sft trains on corrected answers and on answers rated good; an answer that was only "
+    "rated bad gives no training row"
+)
+
+
+def _sft_value_label(key: str, value: object) -> str:
+    """One sft recipe value as ``soup loop init`` and ``soup loop status`` print it."""
+    if key == "target_modules":
+        if value is None:
+            return "auto (schema default)"
+        return ", ".join(value) if isinstance(value, list) else str(value)
+    if key == "lr":
+        return f"{value:g}"
+    if key == "quantization" and value == "auto":
+        return "auto (none if the base fits in free VRAM, else 4bit)"
+    return str(value)
+
+
+def _sft_recipe_pairs(recipe: dict, keys: tuple) -> str:
+    """``lora_r 16; lr 0.0002``: the named keys of ``recipe``, in the order of ``keys``."""
+    return "; ".join(f"{key} {_sft_value_label(key, recipe[key])}" for key in keys)
+
+
+def _sft_recipe_label(state: LoopState) -> str:
+    """The effective sft recipe in one line, and which keys loop.yaml names."""
+    own = tuple(key for key in SFT_RECIPE_KEYS if key in (state.sft_recipe or {}))
+    text = _sft_recipe_pairs(state.effective_sft_recipe(), SFT_RECIPE_KEYS)
+    if not own:
+        return f"{text} (all built-in defaults)"
+    if len(own) == len(SFT_RECIPE_KEYS):
+        return f"{text} (all from loop.yaml)"
+    return f"{text} (from loop.yaml: {', '.join(own)}; the rest built-in defaults)"
+
+
+def _train_method_note(state: LoopState) -> str:
+    """The init panel lines under ``train_method`` (empty for dpo and kto), newline-ended."""
+    if state.train_method != "sft":
+        return ""
+    note = (
+        f"{SFT_TRAINS_ON}\n"
+        f"with a feedback log, training starts at {state.min_new_edits} new edits "
+        f"or {state.min_new_rated} new rated answers\n"
+    )
+    if state.sft_recipe:
+        own = tuple(key for key in SFT_RECIPE_KEYS if key in state.sft_recipe)
+        note += (
+            "sft recipe from loop.yaml: "
+            f"{escape(_sft_recipe_pairs(state.effective_sft_recipe(), own))}\n"
+        )
+    return note
+
+
+def _parse_target_modules(raw: str) -> object:
+    """``--sft-target-modules``: ``all-linear``, ``auto`` (None: the schema default) or a list."""
+    text = raw.strip()
+    if text.lower() == ALL_LINEAR:
+        return ALL_LINEAR
+    if text.lower() == "auto":
+        return None
+    names = [name.strip() for name in text.split(",")]
+    if not all(names):
+        raise ValueError(
+            "target_modules has an empty entry: use all-linear, auto, or a comma-separated "
+            "list such as q_proj,v_proj"
+        )
+    return names
+
+
+def _sft_recipe_from_flags(method: str, flags: tuple) -> Optional[dict]:
+    """The ``sft_recipe`` the ``--sft-*`` flags name (None when none was given).
+
+    ``flags`` is ``(flag, recipe key, value)`` triples; a value of None was not given.
+    Exits 2, naming the flag, for a value out of range, and for any flag at all when the
+    loop does not train sft (it would change nothing).
+    """
+    given = [(flag, key, value) for flag, key, value in flags if value is not None]
+    if not given:
+        return None
+    if method != "sft":
+        names = ", ".join(flag for flag, _, _ in given)
+        console.print(
+            f"[red]{names} only apply to --train-method sft[/] (this loop trains {method}, "
+            "so they would change nothing)"
+        )
+        raise typer.Exit(code=2)
+    recipe: dict = {}
+    for flag, key, value in given:
+        try:
+            if key == "target_modules":
+                value = _parse_target_modules(value)
+            elif key == "quantization":
+                value = value.strip().lower()
+            validate_sft_recipe_value(key, value)
+        except ValueError as exc:
+            console.print(f"[red]invalid {flag}:[/] {for_terminal(exc)}")
+            raise typer.Exit(code=2)
+        recipe[key] = value
+    return recipe
 
 
 def _warn_log(log: LoopLog, *, hint: str = "") -> None:
@@ -200,7 +305,24 @@ def init_cmd(
         help=(
             "Train only when at least this many preference pairs arrived since the last "
             "training run (the pre-wired harvest keeps a data cursor); the run still "
-            "trains on all pairs. Default 1."
+            "trains on all pairs. Default 1. An sft loop with a feedback log uses "
+            "--min-new-edits and --min-new-rated instead."
+        ),
+    ),
+    min_new_edits: int = typer.Option(
+        8, "--min-new-edits",
+        help=(
+            "An sft loop with a feedback log trains once at least this many new edits "
+            "(corrected answers newer than the last training run) have arrived, or "
+            "--min-new-rated new rated answers, whichever comes first. Default 8."
+        ),
+    ),
+    min_new_rated: int = typer.Option(
+        30, "--min-new-rated",
+        help=(
+            "An sft loop with a feedback log trains once at least this many new rated "
+            "answers (any thumb, rating or edit) have arrived, or --min-new-edits new "
+            "edits, whichever comes first. Default 30."
         ),
     ),
     feedback_log: Optional[str] = typer.Option(
@@ -212,10 +334,71 @@ def init_cmd(
         ),
     ),
     train_method: str = typer.Option(
-        "dpo", "--train-method",
+        "sft", "--train-method",
         help=(
-            "What the pre-wired loop trains: dpo (preference pairs, the default), kto "
-            "(answers labelled good or bad) or sft (the answers people corrected)."
+            "What the pre-wired loop trains: sft (the default; corrected answers and "
+            "answers rated good), dpo (preference pairs) or kto (answers labelled good "
+            "or bad). A loop.yaml without this field keeps dpo."
+        ),
+    ),
+    sft_target_modules: Optional[str] = typer.Option(
+        None, "--sft-target-modules",
+        help=(
+            "sft only: the LoRA target modules of the training config: all-linear, auto "
+            "(the config schema's default) or a comma-separated list such as "
+            "q_proj,v_proj. Default: the loop's built-in sft recipe (soup loop status)."
+        ),
+    ),
+    sft_lora_r: Optional[int] = typer.Option(
+        None, "--sft-lora-r",
+        help="sft only: LoRA rank of the training config, 1 to 1024. Default: the built-in recipe.",
+    ),
+    sft_lora_alpha: Optional[int] = typer.Option(
+        None, "--sft-lora-alpha",
+        help=(
+            "sft only: LoRA alpha of the training config, 1 to 4096. Default: the built-in "
+            "recipe."
+        ),
+    ),
+    sft_lr: Optional[float] = typer.Option(
+        None, "--sft-lr",
+        help=(
+            "sft only: learning rate of the training config, above 0 and at most 1 (for "
+            "example 2e-4). Default: the built-in recipe."
+        ),
+    ),
+    sft_epochs: Optional[int] = typer.Option(
+        None, "--sft-epochs",
+        help="sft only: epochs of the training config, 1 to 100. Default: the built-in recipe.",
+    ),
+    sft_batch_size: Optional[int] = typer.Option(
+        None, "--sft-batch-size",
+        help=(
+            "sft only: per-device micro-batch of the training config, 1 to 1024. Default: "
+            "the built-in recipe."
+        ),
+    ),
+    sft_grad_accum: Optional[int] = typer.Option(
+        None, "--sft-grad-accum",
+        help=(
+            "sft only: gradient accumulation steps of the training config, 1 to 1024 "
+            "(micro-batch x accumulation = the batch per optimizer step). Default: the "
+            "built-in recipe."
+        ),
+    ),
+    sft_seed: Optional[int] = typer.Option(
+        None, "--sft-seed",
+        help=(
+            "sft only: training seed of the training config, 0 to 4294967295. Default: "
+            "the built-in recipe."
+        ),
+    ),
+    sft_quantization: Optional[str] = typer.Option(
+        None, "--sft-quantization",
+        help=(
+            "sft only: quantization of the training config: 4bit, none or auto (none if the "
+            "base model fits in free VRAM when training starts, else 4bit). Default: the "
+            "built-in recipe."
         ),
     ),
     force: bool = typer.Option(False, "--force", help="Overwrite existing loop.yaml."),
@@ -233,9 +416,14 @@ def init_cmd(
     ):
         console.print("[red]--max-runs-per-day must be a positive int[/]")
         raise typer.Exit(code=2)
-    if isinstance(min_new_pairs, bool) or min_new_pairs < 1:
-        console.print("[red]--min-new-pairs must be a positive int[/]")
-        raise typer.Exit(code=2)
+    for flag, value in (
+        ("--min-new-pairs", min_new_pairs),
+        ("--min-new-edits", min_new_edits),
+        ("--min-new-rated", min_new_rated),
+    ):
+        if isinstance(value, bool) or value < 1:
+            console.print(f"[red]{flag} must be a positive int[/]")
+            raise typer.Exit(code=2)
     if thumbs_db is not None:
         from soup_cli.utils.local_rl import validate_db_path
 
@@ -278,6 +466,20 @@ def init_cmd(
             f"got {for_terminal(repr(train_method))}[/]"
         )
         raise typer.Exit(code=2)
+    sft_recipe = _sft_recipe_from_flags(
+        method,
+        (
+            ("--sft-target-modules", "target_modules", sft_target_modules),
+            ("--sft-lora-r", "lora_r", sft_lora_r),
+            ("--sft-lora-alpha", "lora_alpha", sft_lora_alpha),
+            ("--sft-lr", "lr", sft_lr),
+            ("--sft-epochs", "epochs", sft_epochs),
+            ("--sft-batch-size", "batch_size", sft_batch_size),
+            ("--sft-grad-accum", "gradient_accumulation_steps", sft_grad_accum),
+            ("--sft-seed", "seed", sft_seed),
+            ("--sft-quantization", "quantization", sft_quantization),
+        ),
+    )
     if feedback_log is not None:
         if not feedback_log.strip():
             console.print("[red]--feedback-log must not be empty[/]")
@@ -333,8 +535,11 @@ def init_cmd(
             verify=verify_method,
             deploy_traffic_pct=deploy_pct,
             min_new_pairs=min_new_pairs,
+            min_new_edits=min_new_edits,
+            min_new_rated=min_new_rated,
             feedback_log=feedback_log,
             train_method=method,
+            sft_recipe=sft_recipe,
             canary_max_wait_sec=max_wait_sec,
             canary_on_timeout=timeout_policy,
             production_adapter=(
@@ -365,6 +570,7 @@ def init_cmd(
             f"trace_dir:    [bold]{escape(_trace_dir_label(state))}[/]\n"
             f"feedback_log: [bold]{escape(_feedback_log_label(state))}[/]\n"
             f"train_method: [bold]{escape(state.train_method)}[/]\n"
+            f"{_train_method_note(state)}"
             f"canary_max_wait: [bold]{format_wait_duration(state.canary_max_wait_sec)}[/]\n"
             f"canary_on_timeout: [bold]{escape(state.canary_on_timeout)}[/]\n"
             f"base_model:   [bold]{escape(state.base_model or 'unknown')}[/]"
@@ -405,6 +611,8 @@ def status_cmd() -> None:
     table.add_row("trace_dir", escape(_trace_dir_label(state)))
     table.add_row("feedback_log", escape(_feedback_log_label(state)))
     table.add_row("train_method", escape(state.train_method))
+    if state.train_method == "sft":
+        table.add_row("sft_recipe", escape(_sft_recipe_label(state)))
     table.add_row("verify", escape(state.verify or "eval_gate"))
     table.add_row(
         "production",
@@ -418,6 +626,8 @@ def status_cmd() -> None:
     table.add_row("canary_on_timeout", escape(state.canary_on_timeout))
     table.add_row("new_data_since", _cursor_label(state))
     table.add_row("min_new_pairs", str(state.min_new_pairs))
+    table.add_row("min_new_edits", str(state.min_new_edits))
+    table.add_row("min_new_rated", str(state.min_new_rated))
     table.add_row("pre_wired", "yes" if state.pre_wired else "no")
     table.add_row("traces_collected", str(state.traces_collected))
     table.add_row("pairs_distilled", str(state.pairs_distilled))

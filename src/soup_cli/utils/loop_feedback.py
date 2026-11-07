@@ -25,22 +25,32 @@ From one reading it builds three datasets, whatever method the loop trains with.
 carries ``ts``, the time of the newest feedback line it came from (``None`` when that line
 has no usable ``ts``), which is what the loop's data cursor compares:
 
+An edit WINS, for every method: an answer with a real edit (one that differs from the
+original after trimming) is decided by its latest edit, whatever thumbs or ratings say before
+or after it. Thumbs and ratings decide only for an answer that has no real edit, by the
+newest of them in file order (a thumb up or a rating of 4-5 is good, a thumb down or a rating
+of 1-2 is bad, a rating of 3 says nothing).
+
 ``dpo``
     An edit is a preference: ``chosen`` is the edited text, ``rejected`` the original answer.
 ``kto``
-    One row labelled for the answer as given: a thumb up (+1) or a rating of 4-5 is
-    ``true``, a thumb down (-1) or a rating of 1-2 is ``false`` (a rating of 3 says
-    nothing), an edit is ``false``. When an answer has several of these, the newest line
-    decides, so the dataset never contradicts itself. An edit adds a second row: its
-    edited text, ``true``.
+    An answer with a real edit gives two rows: the edited text, ``true``, and the original,
+    ``false``. Any other answer gives one row for the answer as given, ``true`` when its
+    newest label is good and ``false`` when it is bad.
 ``sft``
-    An edit is the answer the model should have given: the prompt plus the edited text.
+    An edit is the answer the model should have given: the prompt plus the edited text. An
+    answer without a real edit whose newest label is good is trained on as it is. An answer
+    that was only rated bad gives no row.
 
 The prompt of every row is the conversation's ``messages`` as logged (a list of
 ``{"role", "content"}``), the layout ``soup train`` accepts for ``dpo`` and ``kto`` rows
-(``prompt`` as a message list) and, with the edited answer appended, for the ``chatml``
+(``prompt`` as a message list) and, with the answer appended, for the ``chatml``
 format that ``sft`` reads. An edit identical to the original answer (apart from
 surrounding whitespace) changes nothing and gives no row.
+
+Besides the rows it keeps, per answer, what the loop's ``sft`` trigger counts
+(``FeedbackDatasets.rated``): an answer is rated when it has a thumb, a rating or a real
+edit, and an edited answer is rated, and new, by its edit alone.
 
 Only the standard library is used (plus ``parse_ts`` for the ``ts`` fields). A bad line is
 skipped and counted, never raised: a log is written by other programs.
@@ -375,6 +385,19 @@ class DatasetRow:
     ts: Optional[float]
 
 
+@dataclass(frozen=True)
+class RatedAnswer:
+    """An answer of the feedback log that has feedback in force, as the loop's trigger counts it.
+
+    ``edited`` is True when the answer has a real edit; ``ts`` is then the edit's, since an
+    edit alone decides such an answer (a thumb after it is not news). Otherwise ``ts`` is the
+    newest of its thumb and rating. ``None`` when the line has no usable ``ts``.
+    """
+
+    ts: Optional[float]
+    edited: bool
+
+
 @dataclass
 class FeedbackDatasets:
     dpo: "list[DatasetRow]" = field(default_factory=list)
@@ -382,6 +405,11 @@ class FeedbackDatasets:
     sft: "list[DatasetRow]" = field(default_factory=list)
     #: Valid feedback lines about an answer that no conversation record has: ignored.
     unknown_response: int = 0
+    #: Every answer with a thumb, a rating or a real edit in force (any label), once each.
+    rated: "list[RatedAnswer]" = field(default_factory=list)
+    #: ``(prompt_key, answer)`` of every answer that has a real edit: the original must not be
+    #: trained on as good by another source (a thumbs database, a serve trace) either.
+    edited_originals: "set[tuple[str, str]]" = field(default_factory=set)
 
 
 def prompt_key(prompt: object) -> str:
@@ -426,7 +454,8 @@ def _decision(record: ResponseFeedback) -> "Optional[tuple[int, bool, Optional[f
     """The newest thumb or rating on the answer as given: ``(seq, label, ts)`` or ``None``.
 
     A thumb up and a rating of 4-5 are ``True``; a thumb down and a rating of 1-2 are
-    ``False``; a rating of 3 is not a signal. The caller adds an edit (``False``).
+    ``False``; a rating of 3 is not a signal. The caller handles an answer with a real edit
+    first: an edit wins over every thumb and rating.
     """
     signals = []
     if record.thumb is not None:
@@ -441,6 +470,8 @@ def build_datasets(
 ) -> FeedbackDatasets:
     """The dpo / kto / sft rows the feedback gives, in the order its ids first appeared."""
     dpo, kto, sft = [], [], []
+    rated: "list[RatedAnswer]" = []
+    edited_originals: "set[tuple[str, str]]" = set()
     unknown = 0
     for answer_id, record in feedback.by_response.items():
         conversation = records.get(answer_id)
@@ -449,33 +480,44 @@ def build_datasets(
             continue
         prompt = conversation.messages
         original = conversation.response
+        asked = prompt_key(prompt)
         edited = record.edit
         if edited is not None and edited.strip() == original.strip():
             edited = None  # nothing was corrected
-        deciding = _decision(record)
-        if edited is not None and (deciding is None or record.edit_seq > deciding[0]):
-            deciding = (record.edit_seq, False, record.edit_ts)
 
         if edited is not None:
+            # The edit wins: the original is bad whatever a thumb or a rating said, before or
+            # after, and only the edit is a good answer.
             ts = record.edit_ts
+            rated.append(RatedAnswer(ts, True))
+            edited_originals.add((asked, original))
             if original.strip():
-                key = (prompt_key(prompt), edited, original)
+                key = (asked, edited, original)
                 dpo.append((key, DatasetRow(_dpo_row(prompt, edited, original), ts)))
-            key = (prompt_key(prompt), edited)
-            sft.append((key, DatasetRow(_sft_row(prompt, edited), ts)))
-            kto.append(
-                ((prompt_key(prompt), edited, True), DatasetRow(_kto_row(prompt, edited, True), ts))
-            )
-        if deciding is not None and original.strip():
-            _, label, ts = deciding
-            kto.append(
-                (
-                    (prompt_key(prompt), original, label),
-                    DatasetRow(_kto_row(prompt, original, label), ts),
+            sft.append(((asked, edited), DatasetRow(_sft_row(prompt, edited, "feedback-edit"), ts)))
+            kto.append(((asked, edited, True), DatasetRow(_kto_row(prompt, edited, True), ts)))
+            if original.strip():
+                kto.append(
+                    ((asked, original, False), DatasetRow(_kto_row(prompt, original, False), ts))
                 )
+            continue
+
+        if record.thumb is not None or record.rating is not None:
+            rated.append(RatedAnswer(_newer(record.thumb_ts, record.rating_ts), False))
+        deciding = _decision(record)
+        if deciding is None or not original.strip():
+            continue
+        _, label, ts = deciding
+        kto.append(
+            ((asked, original, label), DatasetRow(_kto_row(prompt, original, label), ts))
+        )
+        if label:
+            sft.append(
+                ((asked, original), DatasetRow(_sft_row(prompt, original, "feedback-good"), ts))
             )
     return FeedbackDatasets(
-        dpo=_unique(dpo), kto=_unique(kto), sft=_unique(sft), unknown_response=unknown
+        dpo=_unique(dpo), kto=_unique(kto), sft=_unique(sft), unknown_response=unknown,
+        rated=rated, edited_originals=edited_originals,
     )
 
 
@@ -501,11 +543,46 @@ def _kto_row(prompt: "list[dict]", completion: str, label: bool) -> dict:
     }
 
 
-def _sft_row(prompt: "list[dict]", answer: str) -> dict:
+def _sft_row(prompt: "list[dict]", answer: str, source: str) -> dict:
     return {
         "messages": [*_copy(prompt), {"role": "assistant", "content": answer}],
-        "source": "feedback-edit",
+        "source": source,
     }
+
+
+# ---------------------------------------------------------------------------
+# Answers rated good in other stores (serve traces, the thumbs database)
+# ---------------------------------------------------------------------------
+
+
+def good_answer_row(
+    prompt: "str | list[dict]", answer: str, ts: Optional[float], source: str
+) -> DatasetRow:
+    """An sft row for an answer rated good in a store that keeps its prompt as text.
+
+    A string prompt becomes one user message; a message list is used as it is. The row is
+    the ``chatml`` layout ``soup train`` reads for ``sft``, like the feedback log's.
+    """
+    messages = [{"role": "user", "content": prompt}] if isinstance(prompt, str) else prompt
+    return DatasetRow(_sft_row(messages, answer, source), ts)
+
+
+def sft_key(row: dict) -> "tuple[str, str]":
+    """What makes two sft rows the same: the same prompt (``prompt_key``) and the same answer."""
+    messages = row["messages"]
+    return prompt_key(messages[:-1]), messages[-1]["content"]
+
+
+def without_edited(
+    rows: "Collection[DatasetRow]", edited_originals: "Collection[tuple[str, str]]"
+) -> "list[DatasetRow]":
+    """``rows`` less the answers a person corrected: an edit wins across stores too."""
+    return [item for item in rows if sft_key(item.row) not in edited_originals]
+
+
+def unique_sft(rows: "Collection[DatasetRow]") -> "list[DatasetRow]":
+    """Each prompt and answer once (the first row, the newest ts of its copies)."""
+    return _unique([(sft_key(item.row), item) for item in rows])
 
 
 # ---------------------------------------------------------------------------
@@ -558,6 +635,29 @@ def newest_ts(rows: "Collection[DatasetRow]") -> Optional[float]:
     newest: Optional[float] = None
     for row in rows:
         newest = _newer(newest, row.ts)
+    return newest
+
+
+def count_new(rated: "Collection[RatedAnswer]", cursor: Optional[float]) -> "tuple[int, int]":
+    """``(new edits, new rated answers)``: the answers whose feedback is news after ``cursor``.
+
+    An answer is new by ``is_new`` on its own ``ts`` (``RatedAnswer``); a new edit is also a
+    new rated answer. This is what an sft loop with a feedback log compares with
+    ``min_new_edits`` and ``min_new_rated``.
+    """
+    edits = answers = 0
+    for item in rated:
+        if is_new(item.ts, cursor):
+            answers += 1
+            edits += int(item.edited)
+    return edits, answers
+
+
+def newest_rated_ts(rated: "Collection[RatedAnswer]") -> Optional[float]:
+    """The largest ``ts`` among the rated answers, or ``None`` when none has one."""
+    newest: Optional[float] = None
+    for item in rated:
+        newest = _newer(newest, item.ts)
     return newest
 
 

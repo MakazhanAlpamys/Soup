@@ -35,13 +35,22 @@ def _params_from_local_safetensors(path: str) -> float | None:
     return (total / 1e9) if total else None
 
 
-def param_count_from_local_safetensors(path: str) -> int | None:
+def param_count_from_local_safetensors(
+    path: str, *, refuse_symlinks: bool = False
+) -> int | None:
     """Exact parameter count of a local checkpoint directory, read from the
-    safetensors headers alone, or None when there is nothing readable."""
+    safetensors headers alone, or None when there is nothing readable.
+
+    ``refuse_symlinks`` answers None for a symlinked directory or a symlinked
+    weights file, for a caller whose path came from a config file rather than from
+    the person at the keyboard (the loop's train stage).
+    """
     from soup_cli.utils.checkpoint_files import checkpoint_files
 
     try:
         if not os.path.isdir(path):
+            return None
+        if refuse_symlinks and os.path.islink(path):
             return None
         # #1806: the checkpoint is what the index names (or model.safetensors /
         # the model-*-of-* shards), never every *.safetensors: Mistral's repos
@@ -54,6 +63,8 @@ def param_count_from_local_safetensors(path: str) -> int | None:
             if os.path.isfile(os.path.join(path, name))
         ]
         if not shards:
+            return None
+        if refuse_symlinks and any(os.path.islink(shard) for shard in shards):
             return None
         total = 0
         for shard in shards:
