@@ -364,6 +364,11 @@ class DataConfig(BaseModel):
         ),
     )
 
+    validation: Optional[str] = Field(
+        default=None,
+        description="Explicit local validation TXT/JSONL file (native MLX pretrain only)",
+    )
+
     @field_validator("train", mode="before")
     @classmethod
     def _validate_train_shape(cls, v):
@@ -5247,7 +5252,7 @@ def _unsloth_flag_clause(training: "TrainingConfig") -> str:
 #: DPO, ORPO, SimPO, KTO and GRPO through Soup's own loops (``trainer/mlx_dpo.py``,
 #: ``trainer/mlx_orpo.py``, ``trainer/mlx_grpo.py``). Validators that defer
 #: to :meth:`SoupConfig._validate_mlx_task_support` read this, not ``"sft"``.
-MLX_TASKS: frozenset[str] = frozenset({"sft", "dpo", "orpo", "simpo", "kto", "grpo"})
+MLX_TASKS: frozenset[str] = frozenset({"sft", "dpo", "orpo", "simpo", "kto", "grpo", "pretrain"})
 
 
 def resolve_mlx_task(task: str, preference_loss: str | None = None) -> str:
@@ -8893,12 +8898,19 @@ class SoupConfig(BaseModel):
         Scalar preference aliases share their native task's scope restrictions.
         Every other task is refused here rather than at ``train()`` time.
         """
+        if self.data.validation is not None and (self.backend, self.task) != ("mlx", "pretrain"):
+            raise ValueError("data.validation is supported only by native MLX task: pretrain")
         if self.backend != "mlx":
             return self
         task = resolve_mlx_task(self.task, self.training.preference_loss)
         task_label = f"task={self.task!r}"
         if self.task == "preference":
             task_label += f" with preference_loss={self.training.preference_loss!r}"
+        if task == "pretrain":
+            from soup_cli.config.mlx_pretrain import refuse_unsupported_pretrain
+
+            refuse_unsupported_pretrain(self)
+            return self
         if task == "grpo":
             _refuse_mlx_grpo_scope(self)
             return self
@@ -8937,7 +8949,7 @@ class SoupConfig(BaseModel):
         if task in MLX_TASKS:
             return self
         raise ValueError(
-            f"MLX backend only ships SFT, DPO, ORPO, SimPO, KTO and GRPO; "
+            f"MLX backend only ships SFT, DPO, ORPO, SimPO, KTO, GRPO and pretrain; "
             f"task='{self.task}' has "
             "no trainer on backend='mlx'."
             f" Use backend=transformers for task={self.task}."
@@ -9343,12 +9355,12 @@ class SoupConfig(BaseModel):
 
         if self.training.eval_steps is None:
             return self
-        if self.backend == "mlx" and self.task != "sft":
+        if self.backend == "mlx" and self.task not in ("sft", "pretrain"):
             # #1990 honours it for MLX SFT. The native preference loops evaluate
             # once per epoch and do not read it yet.
             raise ValueError(
                 f"training.eval_steps is not supported for task={self.task!r} on "
-                "backend='mlx': only task='sft' honours it there (#1990); the MLX "
+                "backend='mlx': only task='sft' and 'pretrain' honour it there; the MLX "
                 "preference loop evaluates once per epoch"
             )
         reason = EVAL_STEPS_UNSUPPORTED_TASKS.get(self.task)
@@ -9357,9 +9369,8 @@ class SoupConfig(BaseModel):
                 f"training.eval_steps is not supported for task={self.task!r} "
                 f"because {reason} (#1223)"
             )
-        if self.data.val_split == 0 and not _data_may_carry_its_own_validation_split(
-            self.data
-        ):
+        if (self.data.val_split == 0 and self.data.validation is None
+                and not _data_may_carry_its_own_validation_split(self.data)):
             raise ValueError(
                 "training.eval_steps is set, but there is nothing to evaluate: "
                 "data.val_split is 0 and data.train names no source that carries "

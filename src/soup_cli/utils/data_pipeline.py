@@ -246,6 +246,10 @@ PREPROCESS_KEY_FIELDS: Mapping[str, str] = types.MappingProxyType({
 })
 
 NOT_PREPROCESS_KEY_FIELDS: Mapping[str, str] = types.MappingProxyType({
+    "validation": (
+        "explicit raw validation belongs only to native MLX pretrain, which "
+        "refuses pre_tokenized input and never consumes a preprocess cache"
+    ),
     "tokenized_path": "where the cache is read from, not an input to it",
     "train_on_prompt": (
         "the schema requires train_on_responses_only: false with it, and that "

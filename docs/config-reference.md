@@ -61,6 +61,7 @@ Sections:
 | Key | Type | Default | Constraints | Description |
 |---|---|---|---|---|
 | `data.train` | `str \| list[str]` | **required** |  | Path to training data or HF dataset name, or a list of >= 2 local file paths to combine via data.interleave. (#443) |
+| `data.validation` | `str \| null` | `null` |  | Explicit local validation TXT/JSONL file (native MLX pretrain only) |
 | `data.format` | `str` | `"auto"` | one of `"alpaca"`, `"sharegpt"`, `"chatml"`, `"dpo"`, `"kto"`, `"llava"`, `"sharegpt4v"`, `"plaintext"`, `"embedding"`, `"audio"`, `"tool-calling"`, `"auto"`, `"prm"`, `"pre_tokenized"`, `"input_output"`, `"video"`, `"multimodal"`, `"raft"`, `"asr"`, `"cross_encoder"` | Data format |
 | `data.val_split` | `float` | `0.1` | `>= 0.0`, `<= 0.5` | Validation split ratio |
 | `data.max_length` | `int` | `2048` | `>= 64`, `<= 1048576` | Max sequence length in tokens |

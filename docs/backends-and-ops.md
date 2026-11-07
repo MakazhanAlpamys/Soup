@@ -87,7 +87,8 @@ Fine-tune on M1-M4 Macs via Apple's [MLX](https://github.com/ml-explore/mlx) fra
 pip install "soup-cli[mlx]"
 ```
 
-For SFT with local JSONL, JSON, or CSV data, `[mlx]` is sufficient on its own.
+For SFT with local JSONL, JSON, or CSV data, and native pretraining with local
+TXT/JSONL, `[mlx]` is sufficient on its own.
 It can also be installed with `[train]` when the same environment needs the
 PyTorch/TRL Transformers backend: both extras now share the supported
 `transformers>=5.16.1,<6` range. A Hugging Face `datasets` source or
@@ -101,7 +102,7 @@ dependency; the local file path below does not.
 CUDA-shaped analytical VRAM preflight is skipped on the MLX path because Apple
 unified memory is managed by Metal, not a fixed CUDA VRAM pool.
 
-mlx-lm trains and evaluates in whole batches of `training.batch_size`
+MLX SFT through mlx-lm trains and evaluates in whole batches of `training.batch_size`
 ([#1851](https://github.com/MakazhanAlpamys/Soup/issues/1851)). A validation
 split with fewer rows than one batch, which the default `data.val_split: 0.1`
 produces on a small file, is not evaluated: the run warns, naming both numbers,
@@ -143,7 +144,12 @@ training:
     alpha: 32
 ```
 
-MLX backend supports SFT, DPO, ORPO, SimPO, KTO and GRPO. `task: preference`
+MLX backend supports SFT, DPO, ORPO, SimPO, KTO, GRPO and continued pretraining.
+`task: pretrain` uses document-isolated raw-text windows, token-weighted LoRA
+updates and validation, including partial batches/groups; see the runnable
+[native pretrain guide](training.md#native-mlx-continued-pretraining) for dense
+and actual pre-quantized 4-bit bases, coverage and weights-only resume limits.
+`task: preference`
 with `training.preference_loss: dpo`, `orpo` or `simpo` selects the corresponding
 native MLX trainer, with the same load-time restrictions and doctor support
 report as the explicit native task. The configured task remains `preference`;

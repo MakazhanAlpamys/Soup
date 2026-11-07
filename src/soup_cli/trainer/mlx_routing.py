@@ -12,6 +12,10 @@ class _MLXRegistry(dict):
     """Dict-like registry that lazy-imports MLX trainer classes."""
 
     def _resolve(self, task: str):
+        if task == "pretrain":
+            from soup_cli.trainer.mlx_pretrain import MLXPretrainTrainerWrapper
+
+            return MLXPretrainTrainerWrapper
         if task == "sft":
             from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
 
@@ -39,13 +43,13 @@ class _MLXRegistry(dict):
         raise KeyError(task)
 
     def __contains__(self, key: object) -> bool:
-        return key in ("sft", "dpo", "orpo", "simpo", "kto", "grpo")
+        return key in self.keys()
 
     def __getitem__(self, key: str):
         return self._resolve(key)
 
     def keys(self):  # noqa: D401
-        return ("sft", "dpo", "orpo", "simpo", "kto", "grpo")
+        return ("sft", "dpo", "orpo", "simpo", "kto", "grpo", "pretrain")
 
 
 MLX_TRAINER_REGISTRY: _MLXRegistry = _MLXRegistry()

@@ -561,6 +561,7 @@ def load_dataset(
     data_config: DataConfig,
     *,
     preserve_source_columns: bool = False,
+    native_pretrain: bool = False,
 ) -> dict:
     """Load dataset for training. Returns dict with 'train' and optionally 'val' keys.
 
@@ -580,6 +581,11 @@ def load_dataset(
     """
     global _last_load
     _last_load = LoadOutcome()
+
+    if native_pretrain:
+        from soup_cli.data.mlx_pretrain import load_pretrain_corpus
+
+        return load_pretrain_corpus(data_config)
 
     train_path = data_config.train
 

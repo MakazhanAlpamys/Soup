@@ -31,7 +31,7 @@ def _yaml(task="pretrain", backend="transformers", training=None, lora=None, mod
         "base": "org/model",
         "task": task,
         "backend": backend,
-        "data": {"train": "train.jsonl"},
+        "data": {"train": "train.jsonl", "format": "plaintext"},
         "training": block,
     }
     if modality is not None:
@@ -71,7 +71,7 @@ def test_lisa_with_rank_zero_still_loads_on_pretrain():
 @pytest.mark.parametrize(
     ("over", "named"),
     [
-        ({"backend": "mlx"}, "MLX backend only ships SFT"),
+        ({"backend": "mlx"}, "MLX pretrain requires training.lora.r >= 1"),
         (
             {"training": {"stream_layers": True, "batch_size": 1}},
             "training.stream_layers supports task",

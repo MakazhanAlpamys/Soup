@@ -1,0 +1,514 @@
+{
+  "date": "2026-11-01",
+  "soup_base_sha": "c38330cfae3c91e8d5ec880e8966a387ee025a74",
+  "working_source_tree_sha256": "a42a175007fd15de04f69eabda1cfc492eeed11d10cbbc2e876e666ee0e057a5",
+  "hardware": {
+    "platform": "Darwin",
+    "machine": "arm64",
+    "processor": "arm",
+    "chip": "Apple M4 Pro"
+  },
+  "unified_memory_bytes": 51539607552,
+  "device": "Device(gpu, 0)",
+  "metal_available": true,
+  "python": "3.12.7",
+  "limits": "tiny lifecycle fixture; no domain-quality or CUDA parity claim; peak MLX allocation excludes model loading; throughput excludes eval/save",
+  "fixture": {
+    "architecture": "random local Llama, 1 layer, hidden 32, intermediate 64, vocab 32, tied embeddings",
+    "base_seed": 13,
+    "tokenizer": "local WordLevel, BOS postprocessor, PAD=EOS",
+    "model_revision": "generated locally, identified by content hashes per case"
+  },
+  "records": [
+    {
+      "case": "floor-dense",
+      "versions": {
+        "mlx": "0.32.4",
+        "mlx-lm": "0.31.3",
+        "transformers": "5.22.1",
+        "tokenizers": "0.23.3",
+        "numpy": "2.5.4"
+      },
+      "model_file_hashes": {
+        "config.json": "84383abb92c4ebe7378c8ec4afc55daca222a63db83c3bc7480f17c358ccf4eb",
+        "model.safetensors": "4030a58ed0d88766998327f7083b0cdd74e8395822b1f53f051e58d151b5c514",
+        "model.safetensors.index.json": "83c88abd494cadd96daaa4a774782820d2c25f8bfce37ac3f87edcb8036eb3a7",
+        "tokenizer.json": "9a62578b1ed3a705eda3cb91aa020d125e026ec55ba517a5d9a3a59e77073083",
+        "tokenizer_config.json": "3c9e5e848f6761d5f3e1074344c95db3116cec243347b4b0b58140aebcd3002e"
+      },
+      "tokenizer_sha256": "294957c75ec5f656312c98477a2baab0f850e8c86bc006a7d750d58ed98b097c",
+      "base_quantization": null,
+      "source_corpora": {
+        "source": {
+          "source_documents": 3,
+          "accepted_documents": 3,
+          "dropped_documents": 0,
+          "source_sha256": "d710e9f9a42a05833eccc457134bd07d021900af14e46536a486bcd863f78192"
+        },
+        "validation_source": {
+          "source_documents": 2,
+          "accepted_documents": 2,
+          "dropped_documents": 0,
+          "source_sha256": "dc36b1e542202ff16907ab69303d30951eeef769ae5b9bf9eb83cce4d74f02b2"
+        },
+        "train_documents": 3,
+        "validation_documents": 2,
+        "split_policy": "explicit file",
+        "file_preparation_seconds": 0.00018812500638887286
+      },
+      "train_coverage": {
+        "documents": 3,
+        "targetless_documents": 0,
+        "tokenized_tokens": 27,
+        "context_only_tokens": 3,
+        "supervised_tokens": 24,
+        "windows": 3,
+        "max_window_tokens": 18
+      },
+      "validation_coverage": {
+        "documents": 2,
+        "targetless_documents": 0,
+        "tokenized_tokens": 17,
+        "context_only_tokens": 2,
+        "supervised_tokens": 15,
+        "windows": 2,
+        "max_window_tokens": 14
+      },
+      "window_policy": "independent-documents/one-context-overlap/keep-tail/v1",
+      "effective_context_limit": 64,
+      "optimizer": {
+        "optimizer": "AdamW",
+        "scheduler": "constant",
+        "warmup_updates": 0,
+        "total_updates": 8,
+        "weight_decay": 0.0,
+        "peak_lr": 0.03,
+        "max_grad_norm": 1.0
+      },
+      "seed": 7,
+      "data_seed": 11,
+      "lora_parameters": {
+        "rank": 4,
+        "scale": 2.0,
+        "dropout": 0.0,
+        "keys": [
+          "self_attn.q_proj",
+          "self_attn.v_proj"
+        ]
+      },
+      "batch_size": 2,
+      "accumulation": 2,
+      "epochs": 8,
+      "completed_updates": 8,
+      "consumed_targets": 192,
+      "initial_val_loss": 4.666231282552084,
+      "evaluations": [
+        {
+          "update": 3,
+          "val_loss": 2.461719258626302
+        },
+        {
+          "update": 6,
+          "val_loss": 1.7621470133463542
+        },
+        {
+          "update": 8,
+          "val_loss": 1.4834726969401042
+        }
+      ],
+      "file_preparation_seconds": 0.00018812500638887286,
+      "tokenization_seconds": 0.0003482080064713955,
+      "model_loading_seconds": 0.009199458989314735,
+      "graph_warmup_seconds": 0.005007916013710201,
+      "compilation": "eager; no mx.compile",
+      "update_seconds": 0.05040766688762233,
+      "supervised_tokens_per_second": 3808.9443899087873,
+      "throughput_scope": "optimizer updates after one forward/backward warmup; new shapes may incur additional runtime kernel preparation",
+      "peak_mlx_memory_bytes": 302026,
+      "end_to_end_seconds": 1.7021490840124898,
+      "fresh_reload_seconds": 0.875893292017281,
+      "fresh_reload_max_abs_difference": 0.0,
+      "base_max_abs_difference": 5.286922931671143,
+      "unchanged_base_tensors": 11,
+      "max_lora_b_change_from_zero": 1.1766443252563477,
+      "training_packages_present": [],
+      "base_tensor_dtypes": [
+        "mlx.core.float32"
+      ],
+      "adapter_tensor_dtypes": [
+        "mlx.core.float32"
+      ]
+    },
+    {
+      "case": "floor-4bit",
+      "versions": {
+        "mlx": "0.32.4",
+        "mlx-lm": "0.31.3",
+        "transformers": "5.22.1",
+        "tokenizers": "0.23.3",
+        "numpy": "2.5.4"
+      },
+      "model_file_hashes": {
+        "config.json": "87c0e11496ec40fd4aca7664935ad5b234666f92c97b7f465d41072c7232fb00",
+        "model.safetensors": "ffe61e11153e7eed8c28c841baef460b807f8c79e3b4500470a53d03259025c7",
+        "model.safetensors.index.json": "b7e46ee434bc1e07d642b0db21b17c2b646550d5f99c8a35b5f90867dd4f5132",
+        "tokenizer.json": "9a62578b1ed3a705eda3cb91aa020d125e026ec55ba517a5d9a3a59e77073083",
+        "tokenizer_config.json": "3c9e5e848f6761d5f3e1074344c95db3116cec243347b4b0b58140aebcd3002e"
+      },
+      "tokenizer_sha256": "294957c75ec5f656312c98477a2baab0f850e8c86bc006a7d750d58ed98b097c",
+      "base_quantization": {
+        "bits": 4,
+        "group_size": 32,
+        "mode": "affine",
+        "quantized_linear": 7,
+        "quantized_embedding": 1
+      },
+      "source_corpora": {
+        "source": {
+          "source_documents": 3,
+          "accepted_documents": 3,
+          "dropped_documents": 0,
+          "source_sha256": "d710e9f9a42a05833eccc457134bd07d021900af14e46536a486bcd863f78192"
+        },
+        "validation_source": {
+          "source_documents": 2,
+          "accepted_documents": 2,
+          "dropped_documents": 0,
+          "source_sha256": "dc36b1e542202ff16907ab69303d30951eeef769ae5b9bf9eb83cce4d74f02b2"
+        },
+        "train_documents": 3,
+        "validation_documents": 2,
+        "split_policy": "explicit file",
+        "file_preparation_seconds": 0.0001752499956637621
+      },
+      "train_coverage": {
+        "documents": 3,
+        "targetless_documents": 0,
+        "tokenized_tokens": 27,
+        "context_only_tokens": 3,
+        "supervised_tokens": 24,
+        "windows": 3,
+        "max_window_tokens": 18
+      },
+      "validation_coverage": {
+        "documents": 2,
+        "targetless_documents": 0,
+        "tokenized_tokens": 17,
+        "context_only_tokens": 2,
+        "supervised_tokens": 15,
+        "windows": 2,
+        "max_window_tokens": 14
+      },
+      "window_policy": "independent-documents/one-context-overlap/keep-tail/v1",
+      "effective_context_limit": 64,
+      "optimizer": {
+        "optimizer": "AdamW",
+        "scheduler": "constant",
+        "warmup_updates": 0,
+        "total_updates": 8,
+        "weight_decay": 0.0,
+        "peak_lr": 0.03,
+        "max_grad_norm": 1.0
+      },
+      "seed": 7,
+      "data_seed": 11,
+      "lora_parameters": {
+        "rank": 4,
+        "scale": 2.0,
+        "dropout": 0.0,
+        "keys": [
+          "self_attn.q_proj",
+          "self_attn.v_proj"
+        ]
+      },
+      "batch_size": 2,
+      "accumulation": 2,
+      "epochs": 8,
+      "completed_updates": 8,
+      "consumed_targets": 192,
+      "initial_val_loss": 4.6905059814453125,
+      "evaluations": [
+        {
+          "update": 3,
+          "val_loss": 2.327386474609375
+        },
+        {
+          "update": 6,
+          "val_loss": 1.579563522338867
+        },
+        {
+          "update": 8,
+          "val_loss": 1.5033411661783853
+        }
+      ],
+      "file_preparation_seconds": 0.0001752499956637621,
+      "tokenization_seconds": 0.000348250032402575,
+      "model_loading_seconds": 0.009223416040185839,
+      "graph_warmup_seconds": 0.006359499995596707,
+      "compilation": "eager; no mx.compile",
+      "update_seconds": 0.04924895701697096,
+      "supervised_tokens_per_second": 3898.559718408609,
+      "throughput_scope": "optimizer updates after one forward/backward warmup; new shapes may incur additional runtime kernel preparation",
+      "peak_mlx_memory_bytes": 280329,
+      "end_to_end_seconds": 1.6835060000303201,
+      "fresh_reload_seconds": 0.8643624999676831,
+      "fresh_reload_max_abs_difference": 0.0,
+      "base_max_abs_difference": 4.902771949768066,
+      "unchanged_base_tensors": 27,
+      "max_lora_b_change_from_zero": 1.2285363674163818,
+      "training_packages_present": [],
+      "base_tensor_dtypes": [
+        "mlx.core.float32",
+        "mlx.core.uint32"
+      ],
+      "adapter_tensor_dtypes": [
+        "mlx.core.float32"
+      ]
+    },
+    {
+      "case": "current-dense",
+      "versions": {
+        "mlx": "0.32.4",
+        "mlx-lm": "0.32.2",
+        "transformers": "5.22.1",
+        "tokenizers": "0.23.3",
+        "numpy": "2.5.4"
+      },
+      "model_file_hashes": {
+        "config.json": "84383abb92c4ebe7378c8ec4afc55daca222a63db83c3bc7480f17c358ccf4eb",
+        "model.safetensors": "4030a58ed0d88766998327f7083b0cdd74e8395822b1f53f051e58d151b5c514",
+        "model.safetensors.index.json": "83c88abd494cadd96daaa4a774782820d2c25f8bfce37ac3f87edcb8036eb3a7",
+        "tokenizer.json": "9a62578b1ed3a705eda3cb91aa020d125e026ec55ba517a5d9a3a59e77073083",
+        "tokenizer_config.json": "3c9e5e848f6761d5f3e1074344c95db3116cec243347b4b0b58140aebcd3002e"
+      },
+      "tokenizer_sha256": "294957c75ec5f656312c98477a2baab0f850e8c86bc006a7d750d58ed98b097c",
+      "base_quantization": null,
+      "source_corpora": {
+        "source": {
+          "source_documents": 3,
+          "accepted_documents": 3,
+          "dropped_documents": 0,
+          "source_sha256": "d710e9f9a42a05833eccc457134bd07d021900af14e46536a486bcd863f78192"
+        },
+        "validation_source": {
+          "source_documents": 2,
+          "accepted_documents": 2,
+          "dropped_documents": 0,
+          "source_sha256": "dc36b1e542202ff16907ab69303d30951eeef769ae5b9bf9eb83cce4d74f02b2"
+        },
+        "train_documents": 3,
+        "validation_documents": 2,
+        "split_policy": "explicit file",
+        "file_preparation_seconds": 0.00019933300791308284
+      },
+      "train_coverage": {
+        "documents": 3,
+        "targetless_documents": 0,
+        "tokenized_tokens": 27,
+        "context_only_tokens": 3,
+        "supervised_tokens": 24,
+        "windows": 3,
+        "max_window_tokens": 18
+      },
+      "validation_coverage": {
+        "documents": 2,
+        "targetless_documents": 0,
+        "tokenized_tokens": 17,
+        "context_only_tokens": 2,
+        "supervised_tokens": 15,
+        "windows": 2,
+        "max_window_tokens": 14
+      },
+      "window_policy": "independent-documents/one-context-overlap/keep-tail/v1",
+      "effective_context_limit": 64,
+      "optimizer": {
+        "optimizer": "AdamW",
+        "scheduler": "constant",
+        "warmup_updates": 0,
+        "total_updates": 8,
+        "weight_decay": 0.0,
+        "peak_lr": 0.03,
+        "max_grad_norm": 1.0
+      },
+      "seed": 7,
+      "data_seed": 11,
+      "lora_parameters": {
+        "rank": 4,
+        "scale": 2.0,
+        "dropout": 0.0,
+        "keys": [
+          "self_attn.q_proj",
+          "self_attn.v_proj"
+        ]
+      },
+      "batch_size": 2,
+      "accumulation": 2,
+      "epochs": 8,
+      "completed_updates": 8,
+      "consumed_targets": 192,
+      "initial_val_loss": 4.666231282552084,
+      "evaluations": [
+        {
+          "update": 3,
+          "val_loss": 2.461719258626302
+        },
+        {
+          "update": 6,
+          "val_loss": 1.7621470133463542
+        },
+        {
+          "update": 8,
+          "val_loss": 1.4834726969401042
+        }
+      ],
+      "file_preparation_seconds": 0.00019933300791308284,
+      "tokenization_seconds": 0.00015241699293255806,
+      "model_loading_seconds": 0.009647250000853091,
+      "graph_warmup_seconds": 0.004898500046692789,
+      "compilation": "eager; no mx.compile",
+      "update_seconds": 0.0505603319616057,
+      "supervised_tokens_per_second": 3797.4434215700994,
+      "throughput_scope": "optimizer updates after one forward/backward warmup; new shapes may incur additional runtime kernel preparation",
+      "peak_mlx_memory_bytes": 302026,
+      "end_to_end_seconds": 1.7316737920045853,
+      "fresh_reload_seconds": 0.8875437920214608,
+      "fresh_reload_max_abs_difference": 0.0,
+      "base_max_abs_difference": 5.286922931671143,
+      "unchanged_base_tensors": 11,
+      "max_lora_b_change_from_zero": 1.1766443252563477,
+      "training_packages_present": [],
+      "base_tensor_dtypes": [
+        "mlx.core.float32"
+      ],
+      "adapter_tensor_dtypes": [
+        "mlx.core.float32"
+      ]
+    },
+    {
+      "case": "current-4bit",
+      "versions": {
+        "mlx": "0.32.4",
+        "mlx-lm": "0.32.2",
+        "transformers": "5.22.1",
+        "tokenizers": "0.23.3",
+        "numpy": "2.5.4"
+      },
+      "model_file_hashes": {
+        "config.json": "87c0e11496ec40fd4aca7664935ad5b234666f92c97b7f465d41072c7232fb00",
+        "model.safetensors": "ffe61e11153e7eed8c28c841baef460b807f8c79e3b4500470a53d03259025c7",
+        "model.safetensors.index.json": "b7e46ee434bc1e07d642b0db21b17c2b646550d5f99c8a35b5f90867dd4f5132",
+        "tokenizer.json": "9a62578b1ed3a705eda3cb91aa020d125e026ec55ba517a5d9a3a59e77073083",
+        "tokenizer_config.json": "3c9e5e848f6761d5f3e1074344c95db3116cec243347b4b0b58140aebcd3002e"
+      },
+      "tokenizer_sha256": "294957c75ec5f656312c98477a2baab0f850e8c86bc006a7d750d58ed98b097c",
+      "base_quantization": {
+        "bits": 4,
+        "group_size": 32,
+        "mode": "affine",
+        "quantized_linear": 7,
+        "quantized_embedding": 1
+      },
+      "source_corpora": {
+        "source": {
+          "source_documents": 3,
+          "accepted_documents": 3,
+          "dropped_documents": 0,
+          "source_sha256": "d710e9f9a42a05833eccc457134bd07d021900af14e46536a486bcd863f78192"
+        },
+        "validation_source": {
+          "source_documents": 2,
+          "accepted_documents": 2,
+          "dropped_documents": 0,
+          "source_sha256": "dc36b1e542202ff16907ab69303d30951eeef769ae5b9bf9eb83cce4d74f02b2"
+        },
+        "train_documents": 3,
+        "validation_documents": 2,
+        "split_policy": "explicit file",
+        "file_preparation_seconds": 0.0001720840227790177
+      },
+      "train_coverage": {
+        "documents": 3,
+        "targetless_documents": 0,
+        "tokenized_tokens": 27,
+        "context_only_tokens": 3,
+        "supervised_tokens": 24,
+        "windows": 3,
+        "max_window_tokens": 18
+      },
+      "validation_coverage": {
+        "documents": 2,
+        "targetless_documents": 0,
+        "tokenized_tokens": 17,
+        "context_only_tokens": 2,
+        "supervised_tokens": 15,
+        "windows": 2,
+        "max_window_tokens": 14
+      },
+      "window_policy": "independent-documents/one-context-overlap/keep-tail/v1",
+      "effective_context_limit": 64,
+      "optimizer": {
+        "optimizer": "AdamW",
+        "scheduler": "constant",
+        "warmup_updates": 0,
+        "total_updates": 8,
+        "weight_decay": 0.0,
+        "peak_lr": 0.03,
+        "max_grad_norm": 1.0
+      },
+      "seed": 7,
+      "data_seed": 11,
+      "lora_parameters": {
+        "rank": 4,
+        "scale": 2.0,
+        "dropout": 0.0,
+        "keys": [
+          "self_attn.q_proj",
+          "self_attn.v_proj"
+        ]
+      },
+      "batch_size": 2,
+      "accumulation": 2,
+      "epochs": 8,
+      "completed_updates": 8,
+      "consumed_targets": 192,
+      "initial_val_loss": 4.6905059814453125,
+      "evaluations": [
+        {
+          "update": 3,
+          "val_loss": 2.327386474609375
+        },
+        {
+          "update": 6,
+          "val_loss": 1.579563522338867
+        },
+        {
+          "update": 8,
+          "val_loss": 1.5033411661783853
+        }
+      ],
+      "file_preparation_seconds": 0.0001720840227790177,
+      "tokenization_seconds": 0.00013479101471602917,
+      "model_loading_seconds": 0.009843207953963429,
+      "graph_warmup_seconds": 0.005597083014436066,
+      "compilation": "eager; no mx.compile",
+      "update_seconds": 0.050961999979335815,
+      "supervised_tokens_per_second": 3767.513050466084,
+      "throughput_scope": "optimizer updates after one forward/backward warmup; new shapes may incur additional runtime kernel preparation",
+      "peak_mlx_memory_bytes": 280329,
+      "end_to_end_seconds": 1.7160772920469753,
+      "fresh_reload_seconds": 0.8791123330011033,
+      "fresh_reload_max_abs_difference": 0.0,
+      "base_max_abs_difference": 4.902771949768066,
+      "unchanged_base_tensors": 27,
+      "max_lora_b_change_from_zero": 1.2285363674163818,
+      "training_packages_present": [],
+      "base_tensor_dtypes": [
+        "mlx.core.float32",
+        "mlx.core.uint32"
+      ],
+      "adapter_tensor_dtypes": [
+        "mlx.core.float32"
+      ]
+    }
+  ]
+}
