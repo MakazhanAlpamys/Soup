@@ -161,14 +161,20 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
 SOUP_LOOP_THUMBS_DB=./rl.db soup loop watch --pre-wired
 
 # Train only on news: loop.yaml keeps a data cursor (`soup loop status` shows it as
-# new_data_since), the newest feedback a training run has already seen. A pair is new
-# when the newer of its thumbs-up and thumbs-down is later than the cursor. An iteration
+# new_data_since), the newest feedback the version in PRODUCTION was trained on. A pair is
+# new when the newer of its thumbs-up and thumbs-down is later than the cursor. An iteration
 # trains once at least --min-new-pairs (default 1) pairs are new, else it is skipped
 # (not_enough_new_data in its record; an sft loop with a feedback log counts new edits and
 # new rated answers instead, see below); it then trains on ALL pairs, since every run starts
-# a fresh LoRA from the base model. The cursor moves after a training run, whatever its
-# verdict (DON'T SHIP used the data too), never after a skipped or failed one. Without it
-# the cycle after a promotion would retrain on the same feedback and start another canary.
+# a fresh LoRA from the base model. The cursor follows production: it moves when the canary
+# that used the rows is PROMOTED, and `soup loop rollback` returns it to the previous
+# production's; the rows of a candidate that was thrown away (DON'T SHIP, a withdrawn or
+# rolled-back canary, a canary that never started) are new again. What triggers training
+# counts feedback newer than the later of that cursor and the newest feedback a training run
+# read, promoted or not (attempt_cursor_ts in loop.yaml), so a rejected run is not repeated on
+# its own rows every poll, and never after a skipped or failed one. Without the cursor the
+# cycle after a promotion would retrain on the same feedback and start another canary.
+# A loop.yaml from before takes its cursor as production's.
 # A serve log line without a usable "ts" counts as new only until the cursor is first set.
 soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
     --pre-wired --thumbs-db ./rl.db --min-new-pairs 20
@@ -319,6 +325,42 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
 # reads at most 64 KiB of the reply and times out after 120 s.
 soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
     --pre-wired --paraphraser-endpoint http://127.0.0.1:11434 --paraphraser-model qwen2.5:7b
+
+# The loop's verdict (--verify ship, the default for a new loop) is `soup ship --gate loop-v2
+# --corrections FILE --held-out FILE`: did the new version learn the corrections people made,
+# and did it keep the edits held out of training? Both files are built from the iteration's
+# edits and written atomically under .soup-loops/verdicts/ (<run>.corrections.jsonl,
+# <run>.held-out.jsonl; both are passed even when empty); the evidence soup ship measures goes
+# into the iteration line (verdict.gate, .corrections, .held_out; docs/loop-formats.md). The
+# rules are Soup Zero's, so both programs split the same edits:
+#   the holdout split  the key of a corrected answer is the content of the last user message of
+#                      its conversation, text.strip().casefold(); the edit is held out iff
+#                      int(sha256(key), 16) % 100 < 30 ("How do I reset my password?" is 87,
+#                      "Straße öffnen – wie?" 12). Thumbs and ratings are never held out.
+#   one iteration      a held-out edit is kept out of training in exactly ONE iteration, the
+#   aside, then        first one that trains (one that trains nothing, or whose training
+#   graduation         failed, does not use it up) and is that iteration's held-out check.
+#                      From the next iteration on it trains, counts in the corrections check
+#                      and is never kept aside again, whatever the verdict was
+#                      (dataset.graduated counts them). .soup-loops/holdout.jsonl records which
+#                      edit was kept aside or graduated in which iteration (append only).
+#   the plan-time wait the edits that would train in a cycle are the new ones (newer than the
+#                      lineage cursor above) left after the keep-aside, plus the graduated ones.
+#                      None: nothing to check, the usual trigger (30 rated answers) decides.
+#                      One to four: nothing is trained and no GPU is spent, the iteration's
+#                      note, a progress line and the `waiting` row of `soup loop status` say
+#                         Waiting: 4/5 trainable corrections (2 more kept aside for checking) · 41 new ratings
+#                      and the edits keep accumulating. Five or more: it trains, if the usual
+#                      trigger allows it.
+#   canary_decides     with no corrections to check and the general suites holding, soup ship
+#                      says DON'T SHIP with canary_decides: true. The loop still deploys the
+#                      candidate to a canary and its ratings decide ("No corrections to check -
+#                      the canary's ratings decide"). Any other DON'T SHIP stops. A loop without
+#                      a feedback log has no ratings, so such a canary is judged by request
+#                      errors alone.
+# A loop on --verify eval-gate keeps nothing aside and does not wait for corrections.
+soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://prod \
+    --pre-wired --verify ship
 
 # Unpack a recorded iteration's Soup Can for what-if analysis (v0.71.4)
 soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump

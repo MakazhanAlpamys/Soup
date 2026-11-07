@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Mapping, Optional, Tuple
 
+from soup_cli.utils.loop_gate import GATE, check_corrections, check_held_out
 from soup_cli.utils.paths import is_under_cwd
 
 _DEFAULT_DIR = ".soup-loops"
@@ -50,6 +51,16 @@ class IterationRecord:
     # ``canary.quality`` object of the iteration format, see ``QualityStats.evidence``), or
     # None when no quality verdict took part. Last, so older manifests load without it.
     canary_quality: Optional[dict] = None
+    # The evidence of the verdict, when it was ``soup ship --gate loop-v2`` (the ``verdict.gate``,
+    # ``verdict.corrections``, ``verdict.held_out`` and ``verdict.reason`` of the iteration
+    # format; ``utils/loop_gate.py``) and the edits that graduated into training in this
+    # iteration (``dataset.graduated``). Last, so older manifests load without them; the
+    # iterations.jsonl line is built from these same fields (``loop_log.iteration_from_record``).
+    verdict_gate: Optional[str] = None
+    verdict_corrections: Optional[dict] = None
+    verdict_held_out: Optional[dict] = None
+    verdict_reason: Optional[str] = None
+    graduated: Optional[int] = None
 
     def __post_init__(self) -> None:
         _check_id(self.iteration_id)
@@ -108,6 +119,22 @@ class IterationRecord:
                 raise ValueError(
                     f"canary_quality exceeds {_MAX_CANARY_QUALITY_BYTES} characters"
                 )
+        if self.verdict_gate is not None and self.verdict_gate != GATE:
+            raise ValueError(f"verdict_gate must be {GATE!r} or None")
+        if self.verdict_corrections is not None:
+            check_corrections(self.verdict_corrections)
+        if self.verdict_held_out is not None:
+            check_held_out(self.verdict_held_out)
+        if self.verdict_reason is not None:
+            reason = self.verdict_reason
+            if not isinstance(reason, str) or "\x00" in reason or len(reason) > 4096:
+                raise ValueError("verdict_reason must be a NUL-free string of at most 4096 chars")
+        if self.graduated is not None and (
+            isinstance(self.graduated, bool)
+            or not isinstance(self.graduated, int)
+            or self.graduated < 0
+        ):
+            raise ValueError("graduated must be a non-negative int or None")
 
     def to_dict(self) -> Mapping[str, Any]:
         return MappingProxyType(asdict(self))

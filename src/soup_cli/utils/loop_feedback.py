@@ -379,10 +379,16 @@ def read_conversations(
 
 @dataclass(frozen=True)
 class DatasetRow:
-    """One training row and the ts of the newest feedback line it came from."""
+    """One training row and the ts of the newest feedback line it came from.
+
+    ``edit_id`` is the answer (the feedback's ``response_id``) whose correction the row comes
+    from, ``None`` for a row that is no correction (a thumb, a rating): the loop keeps the rows
+    of a corrected answer out of training for one iteration (``loop_holdout``).
+    """
 
     row: dict
     ts: Optional[float]
+    edit_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -404,13 +410,15 @@ class EditedAnswer:
 
     ``id`` is the conversation record's id (the ``response_id`` of the feedback line),
     ``messages`` the prompt as logged (without the answer), ``original`` the answer the
-    model gave and ``edited`` the text the person put in its place.
+    model gave and ``edited`` the text the person put in its place. ``ts`` is the time of the
+    edit line in force (``None`` when it has no usable one): what the data cursor compares.
     """
 
     id: str
     messages: "tuple[dict, ...]"
     original: str
     edited: str
+    ts: Optional[float] = None
 
 
 @dataclass
@@ -464,7 +472,7 @@ def _unique(rows: "list[tuple[tuple, DatasetRow]]") -> "list[DatasetRow]":
         if old is None:
             kept[key] = row
         elif row.ts is not None and (old.ts is None or row.ts > old.ts):
-            kept[key] = DatasetRow(old.row, row.ts)
+            kept[key] = DatasetRow(old.row, row.ts, old.edit_id)
     return list(kept.values())
 
 
@@ -511,17 +519,21 @@ def build_datasets(
             rated.append(RatedAnswer(ts, True))
             edited_originals.add((asked, original))
             edits.append(
-                EditedAnswer(answer_id, tuple(dict(m) for m in prompt), original, edited)
+                EditedAnswer(answer_id, tuple(dict(m) for m in prompt), original, edited, ts)
             )
             if original.strip():
                 key = (asked, edited, original)
-                dpo.append((key, DatasetRow(_dpo_row(prompt, edited, original), ts)))
-            sft.append(((asked, edited), DatasetRow(_sft_row(prompt, edited, "feedback-edit"), ts)))
-            kto.append(((asked, edited, True), DatasetRow(_kto_row(prompt, edited, True), ts)))
+                dpo.append((key, DatasetRow(_dpo_row(prompt, edited, original), ts, answer_id)))
+            sft.append(((asked, edited), DatasetRow(
+                _sft_row(prompt, edited, "feedback-edit"), ts, answer_id
+            )))
+            kto.append(((asked, edited, True), DatasetRow(
+                _kto_row(prompt, edited, True), ts, answer_id
+            )))
             if original.strip():
-                kto.append(
-                    ((asked, original, False), DatasetRow(_kto_row(prompt, original, False), ts))
-                )
+                kto.append(((asked, original, False), DatasetRow(
+                    _kto_row(prompt, original, False), ts, answer_id
+                )))
             continue
 
         if record.thumb is not None or record.rating is not None:

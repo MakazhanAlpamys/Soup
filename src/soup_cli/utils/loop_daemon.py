@@ -41,6 +41,14 @@ from soup_cli.utils.loop_budget import (
     reset_daily_counter_if_new_day,
     reset_monthly_spend_if_new_month,
 )
+from soup_cli.utils.loop_gate import GATE, clean_corrections, clean_held_out
+from soup_cli.utils.loop_holdout import (
+    HoldoutPlan,
+    later,
+    promotion_cursor_changes,
+    record_plan,
+    valid_cursor,
+)
 from soup_cli.utils.loop_iteration import (
     IterationRecord,
     new_iteration_id,
@@ -266,6 +274,7 @@ def run_once(
             canary_rollout_id=None,
             canary_adapter=None,
             canary_started_ts=None,
+            canary_cursor_ts=None,
             canary_iteration=None,
         )
     elif canary_verdict == "OK" and state.canary_active:
@@ -338,6 +347,7 @@ def run_once(
     events.emit("harvest", "start")
     harvest_out = dict(config.harvest_fn(state))
     events.emit("harvest", "end", message=_harvest_message(harvest_out))
+    waiting_note = _log_wait(log, iteration_id, state, harvest_out)
     if harvest_out.get("pairs_path"):
         events.go_live()  # a dataset was handed to training
     events.emit("train", "start")
@@ -346,12 +356,22 @@ def run_once(
     if trained_run:
         events.go_live()  # (a custom stage can train without a dataset path)
     _emit_train_end(events, train_out, trained_run)
+    # What this iteration read up to: the iteration that trained sets the attempt cursor, and the
+    # data cursor when its canary is promoted. The corrected answers it kept aside and the ones
+    # that graduated are now seen, for good: a run that trained nothing, or failed, used none up.
+    read_up_to = valid_cursor(harvest_out.get("cursor_ts")) if trained_run else None
+    plan = harvest_out.get("holdout")
+    ledger_notes = (
+        record_plan(plan, iteration_id=iteration_id, until=read_up_to)
+        if trained_run and isinstance(plan, HoldoutPlan)
+        else []
+    )
     if trained_run:
         events.emit("verdict", "start")
     gate_out = dict(config.gate_fn(state, train_out))
     if trained_run:
         _emit_verdict_end(events, gate_out)
-    deploying = trained_run and gate_out.get("gate_verdict") == "OK"
+    deploying = trained_run and (gate_out.get("gate_verdict") == "OK" or _canary_decides(gate_out))
     if deploying:
         events.emit("deploy", "start")
     deploy_out = dict(config.deploy_fn(state, {**train_out, **gate_out}))
@@ -388,10 +408,13 @@ def run_once(
                 train_out.get("notes"),
                 gate_out.get("notes"),
                 deploy_out.get("notes"),
+                *ledger_notes,
             )
             if n
         )[:4096],
         canary_quality=reading.evidence,
+        graduated=len(plan.graduated) if trained_run and isinstance(plan, HoldoutPlan) else None,
+        **_evidence(gate_out),
     )
     # The lifetime totals count what training used: an iteration that only waited for
     # more feedback (or whose training failed) would otherwise add the whole pile again.
@@ -410,10 +433,13 @@ def run_once(
         last_iteration_id=iteration_id,
         last_run_date=today,
     )
-    new_state = _advance_cursor(new_state, harvest_out, train_out)
+    new_state = _state_with(
+        _note_attempt(new_state, read_up_to), waiting_note=_safe_wait(waiting_note)
+    )
     if shipped and deploy_out.get("canary_active"):
         new_state = _state_with(
             new_state,
+            canary_cursor_ts=read_up_to,
             canary_active=str(deploy_out["canary_active"]),
             canary_adapter=(
                 str(deploy_out["canary_adapter"]) if deploy_out.get("canary_adapter") else None
@@ -553,6 +579,10 @@ def _emit_verdict_end(events: StageEvents, gate_out: Mapping[str, object]) -> No
     notes = str(gate_out.get("notes") or "")
     if verdict == "OK":
         events.emit("verdict", "end", message="SHIP")
+    elif verdict == "MAJOR" and _canary_decides(gate_out):
+        events.emit(
+            "verdict", "end", message="DON'T SHIP: no corrections to check, the canary decides"
+        )
     elif verdict == "MAJOR":
         events.emit("verdict", "end", message="DON'T SHIP")
     elif notes.startswith("verdict_skipped:"):
@@ -628,27 +658,76 @@ def _training_ran(train_out: Mapping[str, object]) -> bool:
     return bool(train_out.get("run_id")) and not train_out.get("skipped")
 
 
-def _advance_cursor(
-    state: LoopState, harvest_out: Mapping[str, object], train_out: Mapping[str, object]
-) -> LoopState:
-    """Move the data cursor to what the harvest saw, after a training run.
+def _note_attempt(state: LoopState, cursor: Optional[float]) -> LoopState:
+    """Note what a training run read: the newest feedback it saw (``attempt_cursor_ts``).
 
-    Only a run counts: a skip (not enough new data, no pairs) or a failed training
-    leaves it, so the same feedback is picked up again and accumulates. The verdict
-    does not matter (a DON'T SHIP still consumed the data), and the cursor never
-    moves back. A harvest that reports none, or a value ``LoopState`` would refuse
-    (a custom ``harvest_fn``), is ignored.
+    Only a run counts: a skip (not enough new data, no pairs) or a failed training leaves it, so
+    the same feedback is picked up again and accumulates. The verdict does not matter (a DON'T
+    SHIP still read the data, and retraining on it every poll would never end), and the cursor
+    never moves back. The data cursor itself (``harvest_cursor_ts``) is not touched here: it
+    follows the version in production and moves when the canary is promoted
+    (``loop_holdout.promotion_cursor_changes``). ``cursor`` is None for a harvest that reports
+    none, or a value ``LoopState`` would refuse (a custom ``harvest_fn``).
     """
-    cursor = harvest_out.get("cursor_ts")
-    if not _training_ran(train_out):
+    if cursor is None:
         return state
-    if isinstance(cursor, bool) or not isinstance(cursor, (int, float)):
-        return state
-    if not (0 <= cursor <= MAX_CURSOR_TS):  # False for NaN too
-        return state
-    if state.harvest_cursor_ts is not None and cursor <= state.harvest_cursor_ts:
-        return state
-    return _state_with(state, harvest_cursor_ts=float(cursor))
+    return _state_with(state, attempt_cursor_ts=later(state.attempt_cursor_ts, cursor))
+
+
+def _safe_wait(note: Optional[str]) -> Optional[str]:
+    """``note`` if ``LoopState`` would take it as the plan-time wait, else ``None``."""
+    if (
+        isinstance(note, str)
+        and 0 < len(note) <= 512
+        and all(ord(char) >= 0x20 and ord(char) != 0x7F for char in note)
+    ):
+        return note
+    return None
+
+
+def _log_wait(
+    log: LoopLog, iteration_id: str, state: LoopState, harvest_out: Mapping[str, object]
+) -> Optional[str]:
+    """Say, once per change, that the cycle waits for more corrections; returns the note.
+
+    A ``harvest`` progress line with the trainable corrections out of the five needed. The same
+    note as the cycle before is not written again (an idle poll adds nothing). None = not waiting.
+    """
+    waiting = harvest_out.get("waiting")
+    note = waiting.get("note") if isinstance(waiting, Mapping) else None
+    note = _safe_wait(note)
+    if note is not None and note != state.waiting_note:
+        log.progress(progress_line(
+            iteration_id, "harvest", "progress", done=waiting.get("trainable"),
+            total=waiting.get("needed"), message=note,
+        ))
+    return note
+
+
+def _canary_decides(gate_out: Mapping[str, object]) -> bool:
+    """The check said DON'T SHIP for want of corrections to check: the canary's ratings decide."""
+    return gate_out.get("gate_verdict") == "MAJOR" and gate_out.get("canary_decides") is True
+
+
+def _evidence(gate_out: Mapping[str, object]) -> "dict[str, object]":
+    """The iteration record's fields for the evidence of ``soup ship --gate loop-v2``.
+
+    Only what follows the iteration format: a custom gate stage that returns something else
+    leaves the evidence out instead of failing the record.
+    """
+    if gate_out.get("verdict_gate") != GATE:
+        return {}
+    fields: "dict[str, object]" = {"verdict_gate": GATE}
+    corrections = clean_corrections(gate_out.get("verdict_corrections"))
+    held_out = clean_held_out(gate_out.get("verdict_held_out"))
+    reason = gate_out.get("verdict_reason")
+    if corrections is not None:
+        fields["verdict_corrections"] = corrections
+    if held_out is not None:
+        fields["verdict_held_out"] = held_out
+    if isinstance(reason, str) and reason and "\x00" not in reason:
+        fields["verdict_reason"] = reason[:4096]
+    return fields
 
 
 def _promote(state: LoopState, config: WatchConfig) -> "tuple[LoopState, str]":
@@ -673,6 +752,7 @@ def _promote(state: LoopState, config: WatchConfig) -> "tuple[LoopState, str]":
         canary_adapter=None,
         canary_started_ts=None,
         **promotion_changes(state),
+        **promotion_cursor_changes(state),
     )
     note = f"canary {name} promoted to production"
     if out.get("notes"):
