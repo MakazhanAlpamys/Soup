@@ -60,6 +60,8 @@ def _config(task: str, backend: str, modality: str) -> dict:
     }
     if modality != "text":
         cfg["modality"] = modality
+    if task == "distill":
+        cfg["training"] = {"teacher_model": "test/teacher"}
     return cfg
 
 
