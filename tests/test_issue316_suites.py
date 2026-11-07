@@ -277,10 +277,20 @@ class TestJsonContainerExtraction:
         assert time.monotonic() - start < 5.0
 
     def test_suite_score_reflects_the_repair(self):
-        from soup_cli.eval.gate_suites import score_bundled_suite
+        from soup_cli.eval.gate_suites import (
+            _shape_example,
+            load_suite_items,
+            score_bundled_suite,
+        )
 
+        # #1192 — each row now checks its requested shape, so the reply must be
+        # the right JSON for that prompt; the fence is what is under test.
+        shaped = {
+            item["prompt"]: json.dumps(_shape_example(item["expect"]))
+            for item in load_suite_items("mini_format_json")
+        }
         fenced = score_bundled_suite(
-            "mini_format_json", lambda p: '```json\n{"k": "v"}\n```'
+            "mini_format_json", lambda p: f"```json\n{shaped[p]}\n```"
         )
         assert fenced == pytest.approx(1.0)
         # ... and the floor still exists.
