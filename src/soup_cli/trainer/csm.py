@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.trainer.sft import SFTTrainerWrapper, console
 from soup_cli.utils.csm import validate_csm_config, validate_csm_dataset, validate_csm_row
 from soup_cli.utils.eval_schedule import training_eval_kwargs
@@ -213,7 +214,7 @@ class CSMTrainerWrapper(SFTTrainerWrapper):
             learning_rate=tcfg.lr, weight_decay=tcfg.weight_decay, max_grad_norm=tcfg.max_grad_norm,
             warmup_steps=resolve_trainer_warmup_steps(tcfg.warmup_ratio),
             optim=tcfg.optimizer, lr_scheduler_type=tcfg.scheduler,
-            logging_steps=tcfg.logging_steps, save_steps=tcfg.save_steps, save_total_limit=3,
+            logging_steps=tcfg.logging_steps, **save_kwargs(tcfg),
             bf16=bf16, fp16=fp16, use_cpu=self.device == "cpu", report_to=self.report_to,
             gradient_checkpointing=tcfg.gradient_checkpointing,
             gradient_checkpointing_kwargs={"use_reentrant": False},

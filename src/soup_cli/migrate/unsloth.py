@@ -9,7 +9,7 @@ import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from soup_cli.migrate.common import unmapped_keys_warning
+from soup_cli.migrate.common import save_strategy_setting, unmapped_keys_warning
 
 # The ``TrainingArguments`` / TRL ``*Config`` keywords the migrator maps or warns
 # about by name; any other keyword on the final stage's config is listed in one
@@ -17,7 +17,7 @@ from soup_cli.migrate.common import unmapped_keys_warning
 _HANDLED_CONFIG_KWARGS = frozenset({
     "per_device_train_batch_size", "num_train_epochs", "learning_rate", "optim",
     "lr_scheduler_type", "output_dir", "beta", "max_steps", "gradient_accumulation_steps",
-    "weight_decay", "seed", "warmup_ratio", "warmup_steps", "loss_type",
+    "weight_decay", "seed", "warmup_ratio", "warmup_steps", "loss_type", "save_strategy",
 })
 
 # The ``get_peft_model`` keywords the migrator maps; the rest are listed the same way.
@@ -388,6 +388,12 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
                 training_params["seed"] = kwargs["seed"]
             if "warmup_ratio" in kwargs:
                 training_params["warmup_ratio"] = kwargs["warmup_ratio"]
+            if "save_strategy" in kwargs:
+                strategy = save_strategy_setting(
+                    kwargs["save_strategy"], "save_strategy", warnings
+                )
+                if strategy is not None:
+                    training_params["save_strategy"] = strategy
             if "warmup_steps" in kwargs:
                 # Soup derives the warmup length from training.warmup_ratio (and
                 # warmup_auto); a step count has no field to land in.

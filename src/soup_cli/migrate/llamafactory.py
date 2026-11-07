@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from soup_cli.migrate.common import (
+    save_strategy_setting,
     split_module_list,
     to_number,
     unmapped_keys_warning,
@@ -26,7 +27,7 @@ _HANDLED_KEYS = frozenset({
     "lr_scheduler_type", "warmup_ratio", "quantization_bit", "quantization_method",
     "pref_beta", "simpo_gamma", "reward_model", "loraplus_lr_ratio", "dataset",
     "cutoff_len", "val_size", "output_dir", "bf16", "fp16", "deepspeed", "report_to",
-    "neftune_noise_alpha", "template",
+    "neftune_noise_alpha", "template", "save_strategy",
 })
 
 # LLaMA-Factory stage → Soup task mapping
@@ -198,6 +199,10 @@ def migrate_llamafactory(config_path: Path) -> Dict[str, Any]:
         training["scheduler"] = raw["lr_scheduler_type"]
     if "warmup_ratio" in raw:
         training["warmup_ratio"] = raw["warmup_ratio"]
+    if "save_strategy" in raw:
+        strategy = save_strategy_setting(raw["save_strategy"], "save_strategy", warnings)
+        if strategy is not None:
+            training["save_strategy"] = strategy
 
     # Quantization
     quant_bit_raw = raw.get("quantization_bit")
