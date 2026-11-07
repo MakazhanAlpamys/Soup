@@ -1108,12 +1108,36 @@ class EvalGateConfig(BaseModel):
     )
     baseline: Optional[str] = Field(
         default=None,
-        description="registry://<id> | 'previous' | file path - scores to compare against",
+        description=(
+            "registry://<id> | file path - scores to compare against. "
+            "`soup eval gate --write-baseline` writes a file."
+        ),
     )
     on_regression: Literal["stop", "warn", "continue"] = Field(
         default="stop",
         description="Action on regression: stop training | warn only | continue",
     )
+
+    @field_validator("baseline")
+    @classmethod
+    def _baseline_is_not_previous(cls, value: Optional[str]) -> Optional[str]:
+        """Refuse ``baseline: previous`` at load (#2523).
+
+        The field was documented as ``registry://<id> | 'previous' | file path``
+        but ``previous`` was never implemented: ``resolve_baseline`` read it as a
+        file named ``previous``, and the epoch-end gate then logged one warning and
+        went on with an empty baseline, so a run meant to guard against regression
+        had nothing to regress against. It has no defined meaning yet (no version
+        chain), so it is refused naming the forms that work. The wording and every
+        spelling caught (case, whitespace, quotes) live in
+        ``eval.gate.previous_baseline_refusal``, shared with ``resolve_baseline``.
+        """
+        from soup_cli.eval.gate import previous_baseline_refusal
+
+        refusal = previous_baseline_refusal(value, field="training.eval_gate.baseline")
+        if refusal is not None:
+            raise ValueError(refusal)
+        return value
 
     @model_validator(mode="after")
     def _require_suite_when_enabled(self) -> "EvalGateConfig":
