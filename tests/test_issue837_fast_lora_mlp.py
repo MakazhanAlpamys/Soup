@@ -99,6 +99,24 @@ class TestMath:
         assert old.item() == 1.0
         assert _lora_dx_add(base, grad_h, lora_a).item() == 1.0 + 2.0**-7
 
+    def test_the_backward_adds_the_lora_dx_through_the_helper(self, monkeypatch):
+        torch = _deps()
+        from soup_cli.utils import fast_lora_mlp
+
+        calls = []
+        real = fast_lora_mlp._lora_dx_add
+
+        def spy(grad_base, grad_h, lora_a):
+            calls.append(grad_base.dtype)
+            return real(grad_base, grad_h, lora_a)
+
+        monkeypatch.setattr(fast_lora_mlp, "_lora_dx_add", spy)
+        model = _make_model(("down_proj",))
+        assert fast_lora_mlp.patch_fast_lora_mlp(model) == 1
+        x = torch.randn(2, 5, 8, requires_grad=True)
+        model(x).square().mean().backward()
+        assert len(calls) == 1
+
     def test_float64_gradcheck_all_six_adapter_matrices_unequal_ranks(self):
         torch = _deps()
         from soup_cli.utils.fast_lora_mlp import _mlp_function
