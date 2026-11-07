@@ -157,15 +157,18 @@ def score_memorization(
             break
 
     if not echoes:
+        # Nothing was measured, so this is not a clean result. Reporting 1.00
+        # here made an unchecked probe indistinguishable from a passing one
+        # (#1525).
         return FailureScore(
             mode="memorization",
-            score=1.0,
-            verdict="OK",
+            score=0.0,
+            verdict="NOT_RUN",
             evidence=merge_evidence(
                 {
                     "scanned": scanned,
                     "skipped_no_tokens": skipped_no_tokens,
-                    "status": "no rows had a suffix with tokens; nothing to check",
+                    "status": "no row long enough to split into a prefix and a suffix",
                 }
             ),
         )
