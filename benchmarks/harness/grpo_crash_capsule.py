@@ -473,8 +473,13 @@ class Issue342CrashCapsule:
                         "world_size": self.world_size,
                     },
                 )
-            except CapsuleError:
-                pass
+            except (CapsuleError, OSError) as record_exc:
+                warnings.warn(
+                    "could not write the capsule CUDA-error record; preserving the original "
+                    f"device error: {record_exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
             raise
 
     def _rng_state(self) -> dict[str, Any]:
@@ -501,6 +506,32 @@ class Issue342CrashCapsule:
         return sum(
             int(parameter.numel()) * int(parameter.element_size())
             for parameter in self.model.parameters()
+            if parameter.requires_grad
+        )
+
+    def _projected_pre_step_trainable_state_nbytes(self) -> int:
+        """Forecast Soup's FP16 LoRA alignment before the first training step.
+
+        The documented integration installs this harness after wrapper setup and
+        before wrapper.train(). That wrapper can subsequently upcast BF16 LoRA
+        parameters to FP32 for an FP16 GradScaler, so the raw state at install
+        time is not always the state captured at the first loss.
+        """
+        args = getattr(self.trainer, "args", None)
+        if not (
+            bool(getattr(args, "fp16", False))
+            and not bool(getattr(args, "bf16", False))
+        ):
+            return self._trainable_state_nbytes()
+        fp32_bytes = int(self.torch.finfo(self.torch.float32).bits // 8)
+        return sum(
+            int(parameter.numel())
+            * (
+                fp32_bytes
+                if "lora_" in name and parameter.dtype == self.torch.bfloat16
+                else int(parameter.element_size())
+            )
+            for name, parameter in self.model.named_parameters()
             if parameter.requires_grad
         )
 
@@ -725,13 +756,20 @@ class Issue342CrashCapsule:
         except CapsuleSizeLimitError as exc:
             try:
                 self.writer.write_json(summary_name, self._summary(reason, bad, error=str(exc)))
-            except CapsuleSizeLimitError as summary_exc:
+            except (CapsuleSizeLimitError, OSError) as summary_exc:
                 warnings.warn(
                     "capsule payload and size-limit summary could not be written: "
                     f"payload={exc}; summary={summary_exc}",
                     RuntimeWarning,
                     stacklevel=2,
                 )
+        except OSError as exc:
+            warnings.warn(
+                "capsule write failed; continuing to Soup's watchdog without a payload: "
+                f"{exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         self._flushed = True
 
     def capture_pre_optimizer(self, state: Any) -> None:
@@ -763,10 +801,11 @@ class Issue342CrashCapsule:
                 raise CapsuleError(
                     "Liger loss bypasses the wrapped GRPO loss path; crash capture is unsupported"
                 )
-            trainable_bytes = self._trainable_state_nbytes()
+            trainable_bytes = self._projected_pre_step_trainable_state_nbytes()
             if trainable_bytes > self.writer.max_bytes:
                 raise CapsuleSizeLimitError(
-                    "capsule rank cap cannot fit the pre-step trainable snapshot: "
+                    "capsule rank cap cannot fit the projected pre-step trainable snapshot "
+                    "(after Soup's FP16 LoRA alignment when applicable): "
                     f"{trainable_bytes} bytes required, {self.writer.max_bytes} bytes available"
                 )
             # Check before adding hooks or registering any callback.  A custom

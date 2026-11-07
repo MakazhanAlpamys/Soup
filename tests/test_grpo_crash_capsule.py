@@ -396,6 +396,47 @@ def test_install_refuses_a_rank_cap_smaller_than_the_pre_step_trainable_state(tm
         capsule.install()
 
 
+def test_install_projects_fp16_lora_alignment_for_cap_preflight(tmp_path):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+
+    class Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.lora_A = torch.nn.Linear(1024, 1024, bias=False, dtype=torch.bfloat16)
+
+    class Trainer:
+        def __init__(self):
+            self.model = Model()
+            self.args = SimpleNamespace(fp16=True, bf16=False)
+            self.state = SimpleNamespace(global_step=0)
+            self.callback_handler = SimpleNamespace(callbacks=[])
+
+        def add_callback(self, callback):
+            self.callback_handler.callbacks.append(callback)
+
+        def _compute_loss(self, model, inputs):
+            return model(inputs["input_ids"]).sum()
+
+    trainer = Trainer()
+    raw_bytes = sum(
+        parameter.numel() * parameter.element_size()
+        for parameter in trainer.model.parameters()
+        if parameter.requires_grad
+    )
+    capsule = harness.Issue342CrashCapsule(
+        trainer,
+        output_dir=tmp_path / "fp16-alignment",
+        max_total_bytes=2_300_000,
+        acknowledge_training_rows=True,
+        instrument_lora_operands=False,
+    )
+
+    assert raw_bytes < capsule.writer.max_bytes
+    with pytest.raises(harness.CapsuleSizeLimitError, match="FP16 LoRA alignment"):
+        capsule.install()
+
+
 def test_size_limited_payload_writes_a_summary_with_the_cap_error(tmp_path):
     torch = pytest.importorskip("torch")
     harness = _module()
@@ -484,6 +525,66 @@ def test_size_limited_payload_warns_when_its_summary_cannot_fit(tmp_path):
     assert not (rank_dir / "capsule_000001.json").exists()
 
 
+def test_payload_write_error_warns_and_allows_the_watchdog_to_run(monkeypatch, tmp_path):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+
+    class Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.lora_A = torch.nn.Linear(1, 1, bias=False)
+
+    class Watchdog:
+        def __init__(self, model):
+            self.model = model
+
+        def on_pre_optimizer_step(self, args, state, control, **kwargs):
+            del args, state, kwargs
+            for parameter in self.model.parameters():
+                parameter.grad = None
+            return control
+
+    class Trainer:
+        def __init__(self):
+            self.model = Model()
+            self.state = SimpleNamespace(global_step=0)
+            self.callback_handler = SimpleNamespace(callbacks=[Watchdog(self.model)])
+
+        def add_callback(self, callback):
+            self.callback_handler.callbacks.append(callback)
+
+        def _compute_loss(self, model, inputs):
+            return (model.lora_A(inputs["input_ids"]) * inputs["poison"]).sum()
+
+    trainer = Trainer()
+    capsule = harness.Issue342CrashCapsule(
+        trainer,
+        output_dir=tmp_path / "writer-error",
+        max_total_bytes=1 << 20,
+        acknowledge_training_rows=True,
+        instrument_lora_operands=False,
+    ).install()
+    trainer._compute_loss(
+        trainer.model,
+        {
+            "input_ids": torch.ones((1, 1)),
+            "poison": torch.tensor([[float("nan")]]),
+        },
+    ).backward()
+    monkeypatch.setattr(
+        capsule.writer,
+        "write_torch",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("simulated disk-full")),
+    )
+
+    with pytest.warns(RuntimeWarning, match="continuing to Soup's watchdog"):
+        for callback in trainer.callback_handler.callbacks:
+            callback.on_pre_optimizer_step(None, trainer.state, None)
+
+    assert trainer.model.lora_A.weight.grad is None
+    assert not (capsule.writer.directory / "capsule_000001.pt").exists()
+
+
 def test_install_fails_closed_when_callback_order_cannot_be_verified(tmp_path):
     torch = pytest.importorskip("torch")
     harness = _module()
@@ -561,6 +662,36 @@ def test_cuda_sync_records_the_observed_boundary_before_reraising(tmp_path):
 
     error = json.loads((writer.directory / "cuda_error_000004_before_loss.json").read_text())
     assert error["boundary"] == "before_loss"
+
+
+def test_cuda_sync_preserves_its_error_when_the_error_record_write_fails(monkeypatch, tmp_path):
+    harness = _module()
+    writer = harness.CapsuleWriter.create(tmp_path / "sync-write-error", max_total_bytes=4096)
+
+    class Cuda:
+        @staticmethod
+        def is_available():
+            return True
+
+        @staticmethod
+        def synchronize():
+            raise RuntimeError("simulated asynchronous device error")
+
+    capsule = object.__new__(harness.Issue342CrashCapsule)
+    capsule.torch = SimpleNamespace(cuda=Cuda())
+    capsule.writer = writer
+    capsule._serial = 4
+    capsule.rank = 0
+    capsule.world_size = 1
+    monkeypatch.setattr(
+        writer,
+        "write_json",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("simulated disk-full")),
+    )
+
+    with pytest.warns(RuntimeWarning, match="preserving the original device error"):
+        with pytest.raises(RuntimeError, match="simulated asynchronous"):
+            capsule._synchronize("before_loss")
 
 
 def test_sdpa_prefers_the_current_torch_attention_context_manager(monkeypatch):

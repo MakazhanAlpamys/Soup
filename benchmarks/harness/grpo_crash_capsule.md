@@ -27,9 +27,11 @@ incident on CPU, assign an SDPA backend, or identify a root cause.
 
 The default cap is 2 GiB. Choose a fresh path and a larger explicit cap only
 when the trainable LoRA state and one accumulated step require it. Before it
-installs hooks, the harness refuses a rank whose raw pre-step trainable-state
-snapshot alone cannot fit within that rank's share; the serialized payload,
-token rows, RNG state, and summary need additional space.
+installs hooks, the harness forecasts the pre-step trainable-state snapshot:
+when Soup will run FP16 with BF16 LoRA adapters, that forecast includes the
+BF16-to-FP32 alignment performed by `wrapper.train()`. It refuses a rank whose
+projected snapshot alone cannot fit within that rank's share; the serialized
+payload, token rows, RNG state, and summary need additional space.
 
 ## Capture run
 
