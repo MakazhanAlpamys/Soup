@@ -1138,6 +1138,13 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
 
             sft_cls = make_chunked_loss_trainer_class(SFTTrainer)
+        if self._distributed_stream:
+            # C3: layer streaming across ranks (BETA, #2585). accelerate cannot wrap the
+            # streamed model in DDP, so the trainer averages the LoRA gradients itself,
+            # between backward and HF's clipping.
+            from soup_cli.utils.adapter_sync_trainer import make_adapter_sync_trainer_class
+
+            sft_cls = make_adapter_sync_trainer_class(sft_cls)
         if self._is_raft:
             # v0.71.10 #199 — RAFT uses a plain Trainer + weighted-CE loss
             # (answer-only mask via loss_weights; citation-span boost when
@@ -1252,6 +1259,12 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             self.trainer = sft_cls(**trainer_kwargs)
         if chunk_hook is not None:
             setattr(self.trainer, HOOK_ATTR, chunk_hook)
+        if self._distributed_stream:
+            # Backstop for a branch above that builds its trainer from another class: it
+            # would train one unsynchronised copy per rank, without an error.
+            from soup_cli.utils.adapter_sync_trainer import assert_adapter_sync_installed
+
+            assert_adapter_sync_installed(self.trainer)
 
         # The recording trainer is the last branch above, so RAFT, multipack,
         # vision, audio and a pre-tokenised dataset all skip it -- silently,
@@ -2408,6 +2421,18 @@ class SFTTrainerWrapper(StreamingSetupMixin):
     ) -> dict:
         """Run training and return results summary."""
         start = time.time()
+
+        if self._distributed_stream:
+            # Callers that skip `soup train` (sweep, the web UI, the API) reach a resume
+            # only here; the same refusal as the command's, with the same wording.
+            from soup_cli.trainer.stream_setup import refuse_if_distributed_launch
+
+            refuse_if_distributed_launch(
+                self.config,
+                resume=resume_from_checkpoint,
+                deepspeed=self.deepspeed_config,
+                fsdp=self.fsdp_config,
+            )
 
         # Add callback for live display and experiment tracking
         if display:

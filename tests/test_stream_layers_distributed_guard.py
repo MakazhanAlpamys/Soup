@@ -1,12 +1,22 @@
-"""#2585 -- layer streaming is refused under a distributed launch (WORLD_SIZE > 1).
+"""#2585 -- layer streaming under a distributed launch (WORLD_SIZE > 1) is a decision.
 
 `refuse_if_data_parallel` returns early under torchrun / accelerate / deepspeed,
 because `nn.DataParallel` is never applied there. That left a distributed launch
-with no check at all, although nothing in the streaming runtime supports more
-than one process: the decoder's base weights stay on `meta`, which DDP refuses,
-and where the launcher does not create a process group each process would train
-its own unsynchronised copy. `refuse_if_distributed_launch` closes that gap, at
-two points:
+with no check at all, although the decoder's base weights stay on `meta`, which DDP
+refuses, and where the launcher does not create a process group each process would
+train its own unsynchronised copy. `refuse_if_distributed_launch` closes that gap, at
+two points. It first refused every WORLD_SIZE > 1; since the adapter-gradient sync
+(`utils/adapter_grad_sync.py`) exists it lets ONE slice through as BETA (task=sft, one
+rank per host, nothing that shards, resumes, pushes or gates) and refuses the rest by
+name. This file keeps the refusals and the single-process controls from #2586; the
+whole matrix of refused items is in `test_stream_distributed_trainer.py`.
+
+What changed with that decision: a WORLD_SIZE > 1 launch of an SFT config with
+`LOCAL_WORLD_SIZE=1` used to be refused and now streams, so every case that stood for
+"a distributed launch" now carries a blocker (`LOCAL_WORLD_SIZE` above one, or a
+preference task) to stay a refusal, and the guard takes the config. The message text
+changed (it names the blocking items); its phrases, the issue number and the exit
+behaviour did not.
 
 * `soup train`, right after the config is loaded -- before the dataset, the
   Hub resume pull, the run record or any model work;
@@ -41,12 +51,19 @@ from soup_cli.trainer.stream_setup import (
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 #: The sentence a refused user reads. Pinned whole: it names the setting, the
-#: launch, the reason, the tracking issue and both ways out.
+#: launch, the blocking items, the tracking issue, what is allowed and the ways out.
 _MESSAGE = (
     "training.stream_layers=true under a distributed launch (WORLD_SIZE={size}): "
-    "distributed layer streaming is not supported yet, see #2585. "
-    "Run on one process (no torchrun/accelerate launch), or set stream_layers: false."
+    "distributed layer streaming is not supported yet with {items}, see #2585. "
+    "It is BETA for task='sft' on one rank per host, without --deepspeed, --fsdp, --resume, "
+    "--hf-resume, --push-as, an eval gate (--gate / training.eval_gate), training.multipack, "
+    "training.moe_lora or data.format='raft'. "
+    "Run on one process (no torchrun/accelerate launch), set stream_layers: false, "
+    "or remove the blocking setting."
 )
+
+#: The blocking item of a launch whose ranks share a host (the whole world on one host).
+_SHARED_HOST = "LOCAL_WORLD_SIZE={size} (more than one rank per host)"
 
 #: Every spelling of "not a distributed launch" that must keep today's behaviour.
 _NOT_DISTRIBUTED = ["1", "0", "-1", "-8", "", " ", "abc", "2.5", "1e3", "two", "0x2"]
@@ -69,17 +86,25 @@ class _ReachedModelWorkError(AssertionError):
 # the guard itself (pure -- no torch, no GPU)
 # ==========================================================================
 class TestRefuseIfDistributedLaunch:
-    @pytest.mark.parametrize("size", [2, 3, 8, 64])
-    def test_refuses_when_world_size_is_above_one(self, monkeypatch, size):
-        monkeypatch.setenv("WORLD_SIZE", str(size))
-        with pytest.raises(ValueError) as excinfo:
-            refuse_if_distributed_launch()
-        assert _plain(str(excinfo.value)) == _MESSAGE.format(size=size)
+    """Every case that used to stand for "any distributed launch" now sets
+    `LOCAL_WORLD_SIZE` to the whole world (all ranks on one host), the blocker that keeps
+    it a refusal; the guard takes the config since it now decides on it."""
 
-    def test_message_carries_the_phrase_the_tests_and_users_grep_for(self, monkeypatch):
-        monkeypatch.setenv("WORLD_SIZE", "2")
+    @pytest.mark.parametrize("size", [2, 3, 8, 64])
+    def test_refuses_when_world_size_is_above_one(self, tmp_path, monkeypatch, size):
+        monkeypatch.setenv("WORLD_SIZE", str(size))
+        monkeypatch.setenv("LOCAL_WORLD_SIZE", str(size))
         with pytest.raises(ValueError) as excinfo:
-            refuse_if_distributed_launch()
+            refuse_if_distributed_launch(_config(tmp_path, "sft"))
+        assert _plain(str(excinfo.value)) == _MESSAGE.format(
+            size=size, items=_SHARED_HOST.format(size=size)
+        )
+
+    def test_message_carries_the_phrase_the_tests_and_users_grep_for(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("WORLD_SIZE", "2")
+        monkeypatch.setenv("LOCAL_WORLD_SIZE", "2")
+        with pytest.raises(ValueError) as excinfo:
+            refuse_if_distributed_launch(_config(tmp_path, "sft"))
         message = _plain(str(excinfo.value))
         assert "distributed layer streaming is not supported yet" in message
         assert f"#{DISTRIBUTED_STREAM_ISSUE}" in message
@@ -88,43 +113,56 @@ class TestRefuseIfDistributedLaunch:
         assert "training.stream_layers=true" in message
         assert "stream_layers: false" in message
         assert "no torchrun/accelerate launch" in message
+        assert "BETA" in message, "a refused user is told what IS allowed"
 
     def test_whitespace_around_the_number_is_parsed_like_the_dataparallel_guard(
-        self, monkeypatch
+        self, tmp_path, monkeypatch
     ):
         """`int(" 4 ")` is 4, so `_distributed_launch()` says distributed; the new guard
         must agree with it rather than carry a second parser."""
         monkeypatch.setenv("WORLD_SIZE", " 4 ")
+        monkeypatch.setenv("LOCAL_WORLD_SIZE", "4")
         with pytest.raises(ValueError) as excinfo:
-            refuse_if_distributed_launch()
+            refuse_if_distributed_launch(_config(tmp_path, "sft"))
         assert "WORLD_SIZE=4" in str(excinfo.value)
 
     @pytest.mark.parametrize("value", _NOT_DISTRIBUTED)
-    def test_not_distributed_values_are_not_refused(self, monkeypatch, value):
+    def test_not_distributed_values_are_not_refused(self, tmp_path, monkeypatch, value):
         """Control. Without it a guard that always raises would pass the test above and
         break every single-process run. A malformed value keeps today's behaviour."""
         monkeypatch.setenv("WORLD_SIZE", value)
-        refuse_if_distributed_launch()
+        monkeypatch.setenv("LOCAL_WORLD_SIZE", "8")
+        assert refuse_if_distributed_launch(_config(tmp_path, "dpo")) is False
 
-    def test_unset_world_size_is_not_refused(self, monkeypatch):
+    def test_unset_world_size_is_not_refused(self, tmp_path, monkeypatch):
         monkeypatch.delenv("WORLD_SIZE", raising=False)
-        refuse_if_distributed_launch()
+        monkeypatch.setenv("LOCAL_WORLD_SIZE", "8")
+        assert refuse_if_distributed_launch(_config(tmp_path, "dpo")) is False
 
     @pytest.mark.parametrize("value", [None, *_NOT_DISTRIBUTED, "2", " 4 ", "16"])
     def test_refuses_exactly_when_the_dataparallel_guard_calls_it_distributed(
-        self, monkeypatch, value
+        self, tmp_path, monkeypatch, value
     ):
-        """One definition of "distributed launch" for both guards."""
+        """One definition of "distributed launch" for both guards (the config here always
+        carries a blocker, so a distributed launch is always refused)."""
         if value is None:
             monkeypatch.delenv("WORLD_SIZE", raising=False)
         else:
             monkeypatch.setenv("WORLD_SIZE", value)
+        monkeypatch.setenv("LOCAL_WORLD_SIZE", "8")
         refused = False
         try:
-            refuse_if_distributed_launch()
+            refuse_if_distributed_launch(_config(tmp_path, "sft"))
         except ValueError:
             refused = True
         assert refused is _distributed_launch()
+
+    def test_one_rank_per_host_is_the_slice_that_is_no_longer_refused(self, tmp_path, monkeypatch):
+        """CHANGED from #2586, which refused every WORLD_SIZE > 1: an SFT config launched with
+        one rank per host now streams (BETA), and the guard says so by returning True."""
+        monkeypatch.setenv("WORLD_SIZE", "2")
+        monkeypatch.setenv("LOCAL_WORLD_SIZE", "1")
+        assert refuse_if_distributed_launch(_config(tmp_path, "sft")) is True
 
 
 class TestDataParallelGuardIsUnchanged:
@@ -233,17 +271,46 @@ _DATASET = {"train": [{"messages": [{"role": "user", "content": "hi"}]}]}
 class TestSetupRefusesBeforeAnyModelWork:
     @pytest.mark.parametrize("task", sorted(_WRAPPERS))
     def test_refuses_under_a_distributed_launch(self, tmp_path, monkeypatch, task):
+        """Both blockers at once for a preference task (the task, and ranks sharing a host);
+        for sft only the shared host, since sft with one rank per host now streams."""
         monkeypatch.setenv("WORLD_SIZE", "2")
+        monkeypatch.setenv("LOCAL_WORLD_SIZE", "2")
         _trap_model_work(monkeypatch)
         wrapper = _wrapper(tmp_path, task)
         with pytest.raises(ValueError) as excinfo:
             wrapper.setup(_DATASET)
-        assert _plain(str(excinfo.value)) == _MESSAGE.format(size=2)
+        items = _SHARED_HOST.format(size=2)
+        if task != "sft":
+            items = f"task='{task}', {items}"
+        assert _plain(str(excinfo.value)) == _MESSAGE.format(size=2, items=items)
+
+    @pytest.mark.parametrize("task", ["dpo", "kto", "orpo", "simpo"])
+    def test_a_preference_task_is_refused_even_with_one_rank_per_host(
+        self, tmp_path, monkeypatch, task
+    ):
+        monkeypatch.setenv("WORLD_SIZE", "2")
+        monkeypatch.setenv("LOCAL_WORLD_SIZE", "1")
+        _trap_model_work(monkeypatch)
+        wrapper = _wrapper(tmp_path, task)
+        with pytest.raises(ValueError) as excinfo:
+            wrapper.setup(_DATASET)
+        assert _plain(str(excinfo.value)) == _MESSAGE.format(size=2, items=f"task='{task}'")
+
+    def test_sft_with_one_rank_per_host_reaches_the_model(self, tmp_path, monkeypatch):
+        """CHANGED from #2586, which refused this: the sentinel on model work is now reached,
+        i.e. the decision let the setup go on."""
+        monkeypatch.setenv("WORLD_SIZE", "2")
+        monkeypatch.setenv("LOCAL_WORLD_SIZE", "1")
+        _trap_model_work(monkeypatch)
+        wrapper = _wrapper(tmp_path, "sft")
+        with pytest.raises(_ReachedModelWorkError):
+            wrapper.setup(_DATASET)
 
     @pytest.mark.parametrize("task", sorted(_WRAPPERS))
     def test_nothing_is_written_before_the_refusal(self, tmp_path, monkeypatch, task):
         """No shard directory, no cache root, no output directory."""
         monkeypatch.setenv("WORLD_SIZE", "2")
+        monkeypatch.setenv("LOCAL_WORLD_SIZE", "2")
         cache = tmp_path / "cache"
         monkeypatch.setenv("SOUP_LAYER_STREAM_CACHE_DIR", str(cache))
         _trap_model_work(monkeypatch)
@@ -310,6 +377,7 @@ class TestTrainCommandRefusesEarly:
     @pytest.mark.parametrize("dry_run", [False, True], ids=["train", "dry-run"])
     def test_refused_right_after_the_config_is_loaded(self, tmp_path, monkeypatch, dry_run):
         monkeypatch.setenv("WORLD_SIZE", "2")
+        monkeypatch.setenv("LOCAL_WORLD_SIZE", "2")
         monkeypatch.setenv("FORCE_COLOR", "1")
         start_run = _no_run_record(monkeypatch)
         _sentinel_after_the_guard(monkeypatch)
@@ -321,7 +389,7 @@ class TestTrainCommandRefusesEarly:
 
         assert result.exit_code == 1, (result.output, repr(result.exception))
         assert not isinstance(result.exception, _PastTheGuardError), "the guard let the run through"
-        assert _MESSAGE.format(size=2) in output, output
+        assert _MESSAGE.format(size=2, items=_SHARED_HOST.format(size=2)) in output, output
         assert "Loaded:" not in output, output
         assert "Run ID" not in output, output
         assert "Config valid" not in output, output
@@ -329,6 +397,7 @@ class TestTrainCommandRefusesEarly:
 
     def test_the_refusal_is_a_clean_exit_not_a_traceback(self, tmp_path, monkeypatch):
         monkeypatch.setenv("WORLD_SIZE", "4")
+        monkeypatch.setenv("LOCAL_WORLD_SIZE", "4")
         _sentinel_after_the_guard(monkeypatch)
         result = CliRunner().invoke(
             app, ["train", "--config", _write_config(tmp_path, stream_layers=True), "--yes"]
@@ -337,6 +406,20 @@ class TestTrainCommandRefusesEarly:
         assert isinstance(result.exception, SystemExit), repr(result.exception)
         assert "Traceback" not in result.output
         assert "WORLD_SIZE=4" in _plain(result.output)
+
+    def test_one_rank_per_host_is_no_longer_refused(self, tmp_path, monkeypatch):
+        """CHANGED from #2586, which refused every WORLD_SIZE > 1: the sentinel placed just
+        after the guard is reached, and no refusal is printed."""
+        monkeypatch.setenv("WORLD_SIZE", "2")
+        monkeypatch.setenv("LOCAL_WORLD_SIZE", "1")
+        _sentinel_after_the_guard(monkeypatch)
+        result = CliRunner().invoke(
+            app, ["train", "--config", _write_config(tmp_path, stream_layers=True), "--yes"]
+        )
+        assert isinstance(result.exception, _PastTheGuardError), (
+            result.output, repr(result.exception)
+        )
+        assert "distributed layer streaming" not in _plain(result.output)
 
     def test_stream_layers_off_is_not_refused(self, tmp_path, monkeypatch):
         monkeypatch.setenv("WORLD_SIZE", "2")

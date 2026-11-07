@@ -744,31 +744,137 @@ def _distributed_launch() -> bool:
     return _world_size() > 1
 
 
-def refuse_if_distributed_launch() -> None:
-    """Refuse layer streaming in a process that is one rank of a multi-process launch (#2585).
+#: The one task that streams under a distributed launch (BETA, #2585). The rest need a
+#: loss with a second forward or rollouts, none of which is measured data-parallel.
+DISTRIBUTED_STREAM_TASKS = ("sft",)
+
+
+def _local_world_size() -> Optional[int]:
+    """``LOCAL_WORLD_SIZE`` as an int; ``None`` when it is unset, empty or malformed."""
+    try:
+        return int(os.environ.get("LOCAL_WORLD_SIZE", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def _accelerate_flag(name: str) -> bool:
+    """An accelerate launcher flag (``ACCELERATE_USE_DEEPSPEED`` ...) spelled ``true``."""
+    return os.environ.get(name, "false").strip().lower() == "true"
+
+
+def distributed_stream_blockers(
+    cfg,
+    *,
+    resume: Optional[str] = None,
+    hf_resume: bool = False,
+    push_as: Optional[str] = None,
+    gate: Optional[str] = None,
+    deepspeed: Any = None,
+    fsdp: Any = None,
+) -> list:
+    """What stops ``cfg`` from streaming under a distributed launch (empty: nothing).
+
+    One line per blocking item, named the way the user set it, so a refusal tells which
+    setting to remove. The keyword arguments are the ``soup train`` options that are not
+    in the config. The slice that is allowed (BETA): ``task=sft``, one rank per host
+    (``LOCAL_WORLD_SIZE`` is exactly 1; unset cannot be confirmed), plain adapter
+    averaging. Refused: DeepSpeed and FSDP (also when only the launcher says so through
+    ``ACCELERATE_USE_*``: they shard or wrap the model), resume (every rank would need
+    the checkpoint, only rank 0 writes one), a push to the Hub and the eval gate (rank-0
+    work that stalls the other ranks past the group timeout), multipack and RAFT (their
+    trainers do not carry the adapter sync) and ``moe_lora`` (an expert adapter can get
+    no tokens in a step, which the flat sync layout was not measured against).
+
+    The rewind flight recorder is not listed: it defaults to on, and the SFT setup already
+    switches it off under a distributed launch with one console line.
+    """
+    blockers = []
+    task = getattr(cfg, "task", None)
+    if task not in DISTRIBUTED_STREAM_TASKS:
+        blockers.append(f"task={task!r}")
+    local_size = _local_world_size()
+    if local_size is None or local_size < 1:
+        blockers.append(
+            "LOCAL_WORLD_SIZE unset or invalid (one rank per host cannot be confirmed)"
+        )
+    elif local_size > 1:
+        blockers.append(f"LOCAL_WORLD_SIZE={local_size} (more than one rank per host)")
+    if deepspeed or _accelerate_flag("ACCELERATE_USE_DEEPSPEED"):
+        blockers.append("--deepspeed")
+    if fsdp or _accelerate_flag("ACCELERATE_USE_FSDP"):
+        blockers.append("--fsdp")
+    if resume is not None:
+        blockers.append("--resume")
+    if hf_resume:
+        blockers.append("--hf-resume")
+    if push_as:
+        blockers.append("--push-as")
+    tcfg = cfg.training
+    eval_gate = getattr(tcfg, "eval_gate", None)
+    if gate:
+        blockers.append("--gate")
+    if eval_gate is not None and getattr(eval_gate, "enabled", False):
+        blockers.append("training.eval_gate")
+    if getattr(tcfg, "multipack", False):
+        blockers.append("training.multipack")
+    if getattr(tcfg, "moe_lora", False):
+        blockers.append("training.moe_lora")
+    if getattr(cfg.data, "format", None) == "raft":
+        blockers.append("data.format='raft'")
+    return blockers
+
+
+def refuse_if_distributed_launch(
+    cfg,
+    *,
+    resume: Optional[str] = None,
+    hf_resume: bool = False,
+    push_as: Optional[str] = None,
+    gate: Optional[str] = None,
+    deepspeed: Any = None,
+    fsdp: Any = None,
+) -> bool:
+    """Decide layer streaming in a process that is one rank of a multi-process launch (#2585).
 
     ``refuse_if_data_parallel`` steps aside under torchrun / accelerate / deepspeed,
-    because DataParallel is never applied there. Nothing else in the streaming path
-    supports more than one process, so stepping aside let the run go on to fail late
-    or to train something other than what was asked: the decoder's base weights stay
-    on ``meta`` by design while ``DistributedDataParallel`` requires one device type,
-    and where the launcher creates no process group each process would train its own
-    unsynchronised copy without an error.
+    because DataParallel is never applied there. This is the check that does not: the
+    decoder's base weights stay on ``meta`` by design while ``DistributedDataParallel``
+    requires one device type, so what makes such a run correct is Soup's own adapter
+    average (``utils/adapter_grad_sync.py``), and only the slice measured with it is
+    allowed (BETA). ``distributed_stream_blockers`` names that slice and what is left
+    out; anything on that list is refused here with the blocking items named, before any
+    download, shard or copy.
 
-    This is checked first, before any download, shard or copy. It is a runtime check
-    and not a config validator on purpose: the same config is loaded by commands that
-    run fine in a shell with a launcher variable left over. The same ``WORLD_SIZE``
-    reading as ``_distributed_launch`` applies, so unset, ``1`` and malformed values
-    are not refused.
+    Returns ``True`` for an allowed distributed launch (the caller announces BETA and
+    installs the sync), ``False`` when the process is not distributed. It is a runtime
+    check and not a config validator on purpose: the same config is loaded by commands
+    that run fine in a shell with a launcher variable left over. The same ``WORLD_SIZE``
+    reading as ``_distributed_launch`` applies, so unset, ``1`` and malformed values are
+    not distributed and behave as before.
     """
     world_size = _world_size()
     if world_size <= 1:
-        return
-    raise ValueError(
-        f"training.stream_layers=true under a distributed launch (WORLD_SIZE={world_size}): "
-        f"distributed layer streaming is not supported yet, see #{DISTRIBUTED_STREAM_ISSUE}. "
-        "Run on one process (no torchrun/accelerate launch), or set stream_layers: false."
+        return False
+    blockers = distributed_stream_blockers(
+        cfg,
+        resume=resume,
+        hf_resume=hf_resume,
+        push_as=push_as,
+        gate=gate,
+        deepspeed=deepspeed,
+        fsdp=fsdp,
     )
+    if blockers:
+        raise ValueError(
+            f"training.stream_layers=true under a distributed launch (WORLD_SIZE={world_size}): "
+            f"distributed layer streaming is not supported yet with {', '.join(blockers)}, "
+            f"see #{DISTRIBUTED_STREAM_ISSUE}. It is BETA for task='sft' on one rank per "
+            "host, without --deepspeed, --fsdp, --resume, --hf-resume, --push-as, an eval "
+            "gate (--gate / training.eval_gate), training.multipack, training.moe_lora or "
+            "data.format='raft'. Run on one process (no torchrun/accelerate launch), set "
+            "stream_layers: false, or remove the blocking setting."
+        )
+    return True
 
 
 def refuse_if_data_parallel(device) -> None:
@@ -831,6 +937,9 @@ class StreamingSetupMixin:
 
     #: Set by :meth:`_setup_streaming_transformers`; absent on a resident run.
     _stream_runtime = None
+    #: True once the setup accepted a distributed launch (BETA): the trainer must then
+    #: carry the adapter-gradient sync, and a resume is refused.
+    _distributed_stream = False
     # #1693 -- the head-and-loss hook of a run with `stream_loss_chunk` set.
     _stream_loss_chunk_hook = None
 
@@ -923,10 +1032,22 @@ class StreamingSetupMixin:
         decoder layer from CPU RAM into a small pool of pre-allocated VRAM
         buffers. Peak VRAM becomes the size of ONE layer instead of the model.
         """
-        # FIRST, ahead of every import and every other check: this configuration is not
-        # supported across processes (#2585), and a refusal must not cost a tokenizer
-        # load, a weight resolve or a shard write.
-        refuse_if_distributed_launch()
+        # FIRST, ahead of every import and every other check: only a measured slice of
+        # this configuration runs across processes (#2585), and a refusal must not cost
+        # a tokenizer load, a weight resolve or a shard write.
+        distributed = refuse_if_distributed_launch(
+            cfg,
+            deepspeed=getattr(self, "deepspeed_config", None),
+            fsdp=getattr(self, "fsdp_config", None),
+        )
+        self._distributed_stream = distributed
+        if distributed:
+            console.print(
+                f"[yellow]Distributed layer streaming is BETA:[/] data-parallel over "
+                f"{_world_size()} ranks (task=sft, one rank per host, LoRA gradients "
+                f"averaged by Soup); see #{DISTRIBUTED_STREAM_ISSUE} for what is not "
+                "supported yet."
+            )
 
         from dataclasses import replace
 
@@ -1571,6 +1692,8 @@ class StreamingSetupMixin:
         )
         self.model = model
         self._stream_runtime = runtime
+        if distributed:
+            self._bypass_accelerate_wrap(model)
         # #792 — on the materialised adapters, before the probe measures a step.
         from soup_cli.utils.peft_wiring import apply_fast_lora_patches, fast_lora_summary
 
@@ -1626,6 +1749,23 @@ class StreamingSetupMixin:
         console.print(
             f"[green]Layer streaming ready:[/] {stats['n_layers']} layers, "
             f"{source_line}, {buffer_line}"
+        )
+
+    @staticmethod
+    def _bypass_accelerate_wrap(model) -> None:
+        """C4: keep accelerate from wrapping the streamed model in DDP, and say so once.
+
+        On a GPU launch accelerate wraps a model in ``DistributedDataParallel``, and torch
+        refuses a module whose parameters sit on ``meta`` and on the card. The flag makes
+        ``Accelerator.prepare_model`` return the model untouched; the trainer class that
+        the SFT setup builds averages the adapters instead (``AdapterGradSync``).
+        """
+        from soup_cli.utils.adapter_sync_trainer import mark_accelerate_prepared
+
+        mark_accelerate_prepared(model)
+        console.print(
+            "[dim]accelerate's DistributedDataParallel wrap is bypassed for the streamed "
+            "model; the adapter gradients are averaged across ranks by Soup.[/]"
         )
 
     def _stream_large_budget_bytes(self, slot_bytes: int, n_large_keys: int) -> int:
