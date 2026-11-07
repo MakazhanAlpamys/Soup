@@ -7778,8 +7778,10 @@ class SoupConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_vision_preference_format(self) -> "SoupConfig":
         """Refuse vision row formats for preference tasks until they have a row path."""
-        preference_tasks = {"dpo", "ipo", "simpo", "orpo", "bco", "preference"}
-        vision_preference_formats = {"llava", "sharegpt4v"}
+        preference_tasks = {
+            "dpo", "ipo", "simpo", "orpo", "bco", "preference", "kto", "reward_model",
+        }
+        vision_preference_formats = {"llava", "sharegpt4v", "video", "multimodal"}
         if self.task in preference_tasks and self.data.format in vision_preference_formats:
             raise ValueError(
                 f"task={self.task!r} with data.format={self.data.format!r} has no "
