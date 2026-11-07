@@ -11,37 +11,41 @@ were found on the first rented run of part 1, before any value entered a gate; n
 `training.stream_pin: true` in its `soup.yaml`; S4 (the leave-one-out arm for pinning) still sets
 `false`. SB inherits the `true` unless the SB rule selected S4's change.
 
-**Why.** On the rented container `RLIMIT_MEMLOCK` is 8 MB, soft and hard, and the job cannot raise it. Soup's
-automatic pin decision (`decide_pinning` in `src/soup_cli/utils/layer_stream.py`) refused to pin, so the first
-rented run executed every streaming arm from pageable memory:
+**Why.** Determinism. With the key set, the pin is a stated property of every run, and a failed page-lock
+makes Soup refuse instead of falling back to pageable memory, so no arm can turn pageable silently. It
+changes nothing on a box where Soup pins automatically, and both rented hosts are such boxes: the
+automatic decision at the Soup commit that ran (`pinned_limit_bytes=None` in `stream_setup.py`, so
+`decide_pinning` returns `pinned=True`) attempts to pin and falls back, loudly, only if the allocation
+fails, and nothing under `src/` reads `RLIMIT_MEMLOCK`. The container's `ulimit -l` was 8,192 KB on both
+hosts, and Soup's banner said `(pinned)` with `16.11 GB page-locked` on both: on the first host with the key
+unset (S0, S1, S2 and S3 all say `(pinned)`), on the second with it set. The warning in `setup.sh` about
+`ulimit -l` below 32 GB ("may not be pinned") is the harness's own text, not Soup's behaviour, and its
+premise did not hold on either host.
 
-| arm (rep 1, unpinned, informational) | tok/s | wall | peak VRAM (nvidia-smi) |
-|---|---|---|---|
-| S1 | 27.29 | 333 s | 2,922 MiB |
-| S2 | 27.39 | 333 s | 3,304 MiB |
-| S3 | 27.32 | 333 s | 3,066 MiB |
+**The first rental's slowdown was the host, not pinning.** The first rental of part 1 (aborted during S4)
+ran the same image, the same Soup commit and the same libraries on a different host, and was about 2x slower
+for every arm, DeepSpeed included:
 
-These values come from the aborted run, one repeat each, with the store unpinned. They enter no gate, no
-ratio and no SB derivation. For scale: the earlier record (STEP 3) measured 63.52 tok/s for this arm on a box
-whose `ulimit -l` was 63 GB, and its store was pinned.
+| | first host | second host (the numbers of the record) |
+|---|---|---|
+| CPU | EPYC 7402P, 48 CPUs, 157 GB RAM | EPYC 9684X, 384 CPUs, 1,511 GB RAM |
+| driver, PCIe link at idle | 570.207, gen 4 x16 | 615.71.09, gen 5 x16 |
+| S1, repeat 1 | 27.29 tok/s, 333 s wall | 61.57 tok/s (median of 3: 61.99), 156 s wall |
+| S2 / S3, repeat 1 | 27.39 / 27.32 tok/s | 61.14 / 62.52 tok/s |
+| untimed warm-up S1 | 27.18 tok/s (0.45x of the second host) | 59.88 tok/s |
+| untimed warm-up D1 (DeepSpeed, no Soup) | 19.80 tok/s (0.50x of the second host) | 39.56 tok/s |
 
-CUDA pinning works on the rented box regardless of that limit: a measured allocation pinned 2 GiB in 1.97 s.
-soup-cli at `2c9a078` (the S0 revision) also pinned on this same rented box; its banner said "(pinned)". So
-the automatic refusal is newer behaviour of the current `main`, not a property of the box that every
-revision shares. Forcing the pin gives the streaming arms what the earlier record's box gave them, and what
-the DeepSpeed arms already have (`pin_memory: true` on every offload in their json).
+The first host's values come from the aborted run (one repeat each) and enter no gate, no ratio and no SB
+derivation. Which property of the host moved them (CPU, host memory, PCIe generation, driver) was not
+isolated. For scale, STEP 3 measured 63.52 tok/s for this arm on a box whose `ulimit -l` was 63 GB.
 
-**Effect on the record.** S1 is "current main with the pin forced on", not "current main with its automatic
-choice". On a box with a large memlock limit the two are the same run. With `stream_pin: true` Soup refuses on
-a CUDA target rather than falling back to pageable memory, so a forced run cannot turn pageable silently; the
-run json of every Soup arm also records whether the store was pinned or pageable (parsed from Soup's own
-banner). `setup.sh` keeps recording `ulimit -l` in `hardware.txt`.
+**Effect on the record.** S1 is "current main with the pin requested explicitly", which is the same run as
+the automatic choice. The run json of every Soup arm records whether the store was pinned or pageable
+(parsed from Soup's own banner). `setup.sh` keeps recording `ulimit -l` in `hardware.txt`.
 S0's yaml drops the key (it did not exist at `2c9a078`; the json lists it).
 
-**Time estimate checked.** The estimate for a streaming run is 3.2 min (2.2 train + 1.0 start-up). Expected
-wall time pinned: STEP 3's 129 s train time, plus the 33 s of start-up and teardown seen in the unpinned run
-(333 s wall less 300 s train, 8,192 tokens at 27.29 tok/s), plus about 16 s to pin the 16 GB store at the
-measured rate: about 180 s. The estimate (192 s) stands; it is replaced by measured wall times as runs finish.
+**Time estimate checked.** The estimate for a streaming run was 3.2 min (2.2 train + 1.0 start-up). Measured
+on the second host: 155 s of whole-process wall time for S1 (132 s of `train_runtime`).
 
 ## D-2 Arm S0 is not measured
 

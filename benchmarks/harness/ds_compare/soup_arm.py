@@ -155,10 +155,10 @@ def build_config(
             "save_steps": 1000000,
             "seed": SEED,
             "stream_layers": True,
-            # Explicit, not automatic (deviation D-1 in DEVIATIONS.md): Soup's automatic
-            # choice refuses to pin when RLIMIT_MEMLOCK is small (8 MB in the rented
-            # container, 63 GB on the box of the earlier record), although CUDA pins there
-            # anyway. S4 still sets false.
+            # Explicit, not automatic (deviation D-1 in DEVIATIONS.md): the pin is then a
+            # stated property of the run, and a failed page-lock refuses instead of
+            # falling back to pageable memory. It changes nothing where Soup pins
+            # automatically. S4 still sets false.
             "stream_pin": True,
         },
         "output": output_dir,

@@ -817,7 +817,7 @@ def test_soup_arm_changes_are_single_keys() -> None:
 
 
 def test_soup_arms_pin_explicitly() -> None:
-    """D-1: the rented container's memlock limit made Soup's automatic choice refuse to pin."""
+    """D-1: every streaming arm requests the pin explicitly (S4 requests pageable memory)."""
     for shape in ds_common.SHAPES:
         for arm in soup_arm.STREAM_ARMS:
             config, _, notes = soup_arm.build_config(arm, shape, "m", "r.jsonl", "./o")

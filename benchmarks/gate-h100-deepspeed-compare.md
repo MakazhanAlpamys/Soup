@@ -9,7 +9,8 @@ Stack: Python 3.11.14, torch 2.9.1+cu128, transformers 5.22.2, peft 0.21.2, acce
 Soup: soup-cli 0.77.2 at 9ca9819747a624da4cbbff03cc8e1a7d2a81100d (not editable).
 Harness: benchmarks/harness/ds_compare/ at 3c32b121a5b459be156145c50f584447ddc29100 (re-runnable).
 Rule: benchmarks/harness/ds_compare/PROTOCOL.md, committed before the first rental and not edited
-  since; sha256 bcb6ad4275aba456c1527ded0bb853f7ba1110a974620beaa171cc06249ab164 (LF line ends).
+  since; sha256 bcb6ad4275aba456c1527ded0bb853f7ba1110a974620beaa171cc06249ab164 (committed LF blob;
+  its CRLF working copy hashes to a40c70de..., see section 4).
 Raw output: benchmarks/results/ds-compare/part1/ (this record's numbers) and
   benchmarks/results/ds-compare/part1-first-rental/ (the first rental, which ended early; informational).
 -->
@@ -139,13 +140,19 @@ token is available, and state what differs.>
 ## 4. The protocol and its frozen hash
 
 `benchmarks/harness/ds_compare/PROTOCOL.md` was committed (`65afbf1d5`, 2026-11-06 21:29Z, "protocol
-wording fixed before any run") before the first rental of 2026-11-07, and is unchanged since. Its text
-has sha256 **`bcb6ad4275aba456c1527ded0bb853f7ba1110a974620beaa171cc06249ab164`**; that is the value the
-box recorded for the shipped file (`setup_part1/protocol.sha256`) and the value of the committed blob.
-A Windows checkout with CRLF line ends hashes the same text to
-`a40c70debf72a448b6920033a54954d1e274390f6373d8eeed79ddf2b3542261`; the two differ in line ends only
-(re-computed for this record by converting one into the other). The first protocol commit
-(`a016cb04a`, sha256 `4f2a77b1...`) was superseded a minute later, before any run.
+wording fixed before any run") before the first rental of 2026-11-07, and is unchanged since. The first
+protocol commit (`a016cb04a`, sha256 `4f2a77b1...`) was superseded a minute later, before any run. The
+same text has two sha256 values, depending on which file is hashed; both are recorded, with the file each
+was computed from:
+
+| sha256 | computed from |
+|---|---|
+| **`bcb6ad4275aba456c1527ded0bb853f7ba1110a974620beaa171cc06249ab164`** | the committed blob (`git show HEAD:benchmarks/harness/ds_compare/PROTOCOL.md`, LF line ends); also the shipped copy that the rented box hashed (`setup_part1/protocol.sha256`, made by `git archive`) |
+| `a40c70debf72a448b6920033a54954d1e274390f6373d8eeed79ddf2b3542261` | the CRLF working copy of the same file on the Windows machine where the protocol was frozen (`sha256sum` of the checkout, `core.autocrlf=true`) |
+
+Converting the LF text to CRLF reproduces the second value and converting back reproduces the first
+(re-computed for this record), so the text is the same and only the line ends differ. The value that
+identifies the committed and shipped text is the first.
 
 Nothing in the thresholds moved after data existed. The gates are computed below as section 6 of the
 protocol states them: G1 CONFIRMED if S1 / D1 >= 2.64 (2.93 - 10%); G2 and G4 are numbers to quote;
@@ -172,11 +179,8 @@ loudly, only if the allocation fails; no code under `src/` reads `RLIMIT_MEMLOCK
 one comment). The container's limit was 8 MB on both rentals and did not prevent a 16.11 GB page-locked
 store. S1 is therefore "current main with the pin requested explicitly", which, on the evidence of the
 first rental, is the same run as the automatic choice.
-<PENDING: `DEVIATIONS.md` D-1, as committed in `3c32b121a`, gives a different reason (that the automatic
-decision refused to pin under the 8 MB limit, so the first rental ran its streaming arms, at 27.29,
-27.39 and 27.32 tok/s, from unpinned pageable memory). The first rental's own log, quoted above, says the
-store was pinned. This record follows the log; `DEVIATIONS.md` needs the same correction before
-publication.>
+`DEVIATIONS.md` D-1 states the same account (corrected after the harness commit `3c32b121a` that
+shipped to the rented box).
 
 **D-2. Arm S0 is not measured.** Protocol section 2 has S0 = Soup at `2c9a078` in a separate venv. On
 the first rental S0's `soup train` failed twice (attempt 1 and its one repeat, about 10 s each, exit
@@ -431,19 +435,22 @@ What the table says, and what it does not.
 - **The cause is not isolated.** The CPU, host memory, PCIe generation at idle and driver all differ; the
   rental ended before any one of them could be tested. The first rental's S1 / D1 pair of untimed
   warm-ups gives 1.37x (one run each), which is not a gate value.
-- **Why it matters for the record.** It is a measured case of how far one arm's absolute throughput moves
-  with the host: 2.0x to 2.3x between two H100 SXM rentals, with the same code, the same clock and the same
-  pin state. The ratios in this record come from one machine; a ratio from two machines would not be
-  comparable. Parts 2 and 3 therefore also record their own box (section 11).
+- **What follows from it** is in section 10.
 
-## 10. Side observation: the 8 MB memlock limit and pinning
+## 10. Host variance
 
-The container's `RLIMIT_MEMLOCK` was 8 MB on both rentals, and CUDA page-locked a 16.11 GB store anyway
-(Soup's banner: pinned on the first rental with the key unset, pinned here with the key set;
-`ulimit -l` is not a predictor of whether the pin succeeds on this stack). The harness's `setup.sh`
-prints a warning when `ulimit -l` is below 32 GB, saying the store "may not be pinned" and the streaming
-arms "would then run from pageable memory"; the premise of that warning did not hold on either machine.
-The only arm that ran from a pageable store is S4, by request.
+Absolute throughput moved about 2.3x between two H100 SXM hosts with the same container image, the same
+Soup commit, the same libraries and the same SM clock: S1 ran at 27.29 tok/s on the first host and 61.57
+tok/s on the second at repeat 1 (the second host's median is 61.99, 2.27x), and DeepSpeed moved by about the
+same factor (D1 warm-up 19.80 against 39.56 tok/s). Section 9 lists the two hosts. The pin state did not
+differ: Soup's banner said pinned on both, with `ulimit -l` at 8,192 KB on both. Which property of the host
+moved the numbers was not isolated.
+
+So this record compares ratios between arms measured on one box in one session (interleaved by repeat inside
+a part), and quotes an absolute tok/s only with its host named (part 1: the second host, EPYC 9684X, PCIe
+gen 5 x16, instance 59547782; parts 2 and 3 name theirs). A ratio built from arms of two different hosts is
+not reported; the comparisons with STEP 3's absolute numbers (sections 5 and 8) are across hosts and are
+orientation only.
 
 ## 11. Parts 2 and 3: slots
 
@@ -562,5 +569,5 @@ describes the three-rental split used here.
   header and always appends an assistant header, identically in every arm.
 - **Not isolated:** the cause of the 1.84x between STEP 3's DeepSpeed number and D1 (section 8), the cause of
   the first rental's slowdown (section 9), and the S0 failure (D-2).
-- **Open before this draft is final:** <PENDING: parts 2 and 3>; <PENDING: `DEVIATIONS.md` D-1 correction
-  (section 5)>; <PENDING: `tokenizer_config.json` diff (section 3)>; <PENDING: invoice totals (section 12)>.
+- **Open before this draft is final:** <PENDING: parts 2 and 3>; <PENDING: `tokenizer_config.json` diff
+  (section 3)>; <PENDING: invoice totals (section 12)>.
