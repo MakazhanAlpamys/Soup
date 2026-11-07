@@ -340,7 +340,7 @@ assert mx.allclose(model(tokens), mx.load("trained-logits.safetensors")["logits"
 assert not mx.allclose(model(tokens), base(tokens), atol=1e-5, rtol=1e-5).item()
 messages = [{"role": "user", "content": "alpha"}]
 expected, count = generate_native(model, tokenizer, messages, max_tokens=4, temperature=0)
-control, _ = generate_native(base, tokenizer, messages, max_tokens=4, temperature=0)
+control, control_count = generate_native(base, tokenizer, messages, max_tokens=4, temperature=0)
 if sys.argv[1] == "head":
     assert expected != control, (expected, control)
 Path("prompts.jsonl").write_text('{"prompt":"alpha"}\n{"prompt":"beta"}\n')
@@ -353,6 +353,33 @@ rows = [json.loads(line) for line in Path("results.jsonl").read_text().splitline
 assert [row["prompt"] for row in rows] == ["alpha", "beta"]
 assert rows[0]["response"] == expected
 assert rows[0]["tokens_generated"] == count
+tasks = [
+    {"prompt": "alpha", "expected": expected, "category": "native"},
+    {"prompt": "alpha", "expected": "deliberately incorrect oracle", "category": "native"},
+]
+Path("tasks.jsonl").write_text("".join(json.dumps(row) + "\n" for row in tasks))
+result = runner.invoke(app, ["eval", "custom", "--backend", "mlx", "--model", "adapter",
+                            "--tasks", "tasks.jsonl", "--output", "eval-results.json",
+                            "--temperature", "0", "--max-tokens", "4"])
+assert result.exit_code == 0, (result.output, repr(result.exception))
+report = json.loads(Path("eval-results.json").read_text())
+assert report["complete"] is True and report["requested"] == report["evaluated"] == 2
+assert (report["total"], report["correct"], report["accuracy"]) == (2, 1, 0.5)
+assert report["category_scores"]["native"] == {"total": 2, "correct": 1, "accuracy": 0.5}
+assert [r["output"] for r in report["results"]] == [expected, expected]
+assert all(r["tokens_generated"] == count for r in report["results"])
+assert report["base"] == str(Path("base").absolute()) and report["adapter"] == "adapter"
+assert report["adapter_metadata"]["lora_parameters"]["rank"] == 4
+Path("base-tasks.jsonl").write_text(json.dumps({"prompt": "alpha", "expected": control}) + "\n")
+result = runner.invoke(app, ["eval", "custom", "--backend", "mlx", "--model", "base",
+                            "--tasks", "base-tasks.jsonl", "--output", "base-eval.json",
+                            "--temperature", "0", "--max-tokens", "4"])
+assert result.exit_code == 0, (result.output, repr(result.exception))
+base_report = json.loads(Path("base-eval.json").read_text())
+assert base_report["adapter"] is None and base_report["base"] == "base"
+assert base_report["total"] == base_report["correct"] == 1
+assert base_report["results"][0]["output"] == control
+assert base_report["results"][0]["tokens_generated"] == control_count
 Path("consumer-evidence.json").write_text(json.dumps({"response": expected, "base": control,
                                                     "tokens_generated": count}))
 '''
@@ -404,6 +431,12 @@ Path("consumer-evidence.json").write_text(json.dumps({"response": expected, "bas
         assert failed.exit_code == 1, failed.output
         assert "Model loaded" not in failed.output
         assert not (tmp_path / "corrupt-results.jsonl").exists()
+        failed = CliRunner().invoke(app, [
+            "eval", "custom", "--backend", "mlx", "--model", str(adapter),
+            "--tasks", "tasks.jsonl", "--output", "corrupt-eval.json",
+        ])
+        assert failed.exit_code == 1 and "incomplete" in failed.output.lower()
+        assert not (tmp_path / "corrupt-eval.json").exists()
     mx.save_safetensors(str(adapter / "adapters.safetensors"), saved)
 
 
