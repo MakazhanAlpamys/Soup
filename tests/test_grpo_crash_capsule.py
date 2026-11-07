@@ -236,6 +236,240 @@ def test_a_finite_step_leaves_no_training_rows_on_disk(tmp_path):
     assert trainer.callback_handler.callbacks == []
 
 
+def test_evaluation_forward_does_not_open_a_training_capture_window(tmp_path):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+
+    class Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.tensor([1.0]))
+
+    class Trainer:
+        def __init__(self):
+            self.model = Model()
+            self.state = SimpleNamespace(global_step=0)
+            self.callback_handler = SimpleNamespace(callbacks=[])
+
+        def add_callback(self, callback):
+            self.callback_handler.callbacks.append(callback)
+
+        def _compute_loss(self, model, inputs):
+            return (model.weight * inputs["input_ids"]).sum()
+
+    trainer = Trainer()
+    capsule = harness.Issue342CrashCapsule(
+        trainer,
+        output_dir=tmp_path / "evaluation",
+        max_total_bytes=1 << 20,
+        acknowledge_training_rows=True,
+        instrument_lora_operands=False,
+    ).install()
+    trainer.model.eval()
+    with torch.no_grad():
+        trainer._compute_loss(trainer.model, {"input_ids": torch.ones(1)})
+
+    assert capsule._current is None
+    assert sorted(path.name for path in capsule.writer.directory.iterdir()) == [
+        "capture_policy.json",
+        "manifest.json",
+    ]
+
+
+def test_capsule_distinguishes_pre_clip_attribution_from_post_clip_gradient_stats(tmp_path):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+
+    class Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.lora_A = torch.nn.Linear(1, 1, bias=False)
+            self.lora_B = torch.nn.Linear(1, 1, bias=False)
+
+    class Trainer:
+        def __init__(self):
+            self.model = Model()
+            self.state = SimpleNamespace(global_step=0)
+            self.callback_handler = SimpleNamespace(callbacks=[])
+
+        def add_callback(self, callback):
+            self.callback_handler.callbacks.append(callback)
+
+        def _compute_loss(self, model, inputs):
+            poisoned = model.lora_A(inputs["input_ids"]) * inputs["poison"]
+            finite = model.lora_B(inputs["input_ids"])
+            return poisoned.sum() + finite.sum()
+
+    trainer = Trainer()
+    harness.Issue342CrashCapsule(
+        trainer,
+        output_dir=tmp_path / "post-clip",
+        max_total_bytes=1 << 20,
+        acknowledge_training_rows=True,
+        instrument_lora_operands=False,
+    ).install()
+    inputs = {
+        "input_ids": torch.ones((1, 1)),
+        "poison": torch.tensor([[float("nan")]]),
+    }
+    trainer._compute_loss(trainer.model, inputs).backward()
+    torch.nn.utils.clip_grad_norm_(trainer.model.parameters(), 1.0)
+    trainer.callback_handler.callbacks[0].on_pre_optimizer_step(None, trainer.state, None)
+
+    payload = torch.load(
+        tmp_path / "post-clip" / "rank000" / "capsule_000001.pt", weights_only=True
+    )
+    assert payload["first_nonfinite_parameter"]["name"] == "lora_A.weight"
+    assert payload["nonfinite_parameter_names_before_clip"] == ["lora_A.weight"]
+    assert sorted(payload["nonfinite_gradient_names"]) == ["lora_A.weight", "lora_B.weight"]
+    assert payload["post_clip_pre_watchdog_gradient_stats"]["lora_B.weight"]["finite"] is False
+
+
+def test_install_refuses_liger_loss_path_that_bypasses_the_wrapped_loss(tmp_path):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+
+    class Trainer:
+        def __init__(self):
+            self.model = torch.nn.Linear(1, 1)
+            self.args = SimpleNamespace(use_liger_kernel=True)
+            self.state = SimpleNamespace(global_step=0)
+            self.callback_handler = SimpleNamespace(callbacks=[])
+
+        def add_callback(self, callback):
+            self.callback_handler.callbacks.append(callback)
+
+        def _compute_loss(self, model, inputs):
+            return model(inputs["input_ids"]).sum()
+
+    capsule = harness.Issue342CrashCapsule(
+        Trainer(),
+        output_dir=tmp_path / "liger",
+        max_total_bytes=1 << 20,
+        acknowledge_training_rows=True,
+        instrument_lora_operands=False,
+    )
+
+    with pytest.raises(harness.CapsuleError, match="Liger"):
+        capsule.install()
+
+
+def test_install_refuses_a_rank_cap_smaller_than_the_pre_step_trainable_state(tmp_path):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+
+    class Trainer:
+        def __init__(self):
+            self.model = torch.nn.Linear(64, 64, bias=False)
+            self.state = SimpleNamespace(global_step=0)
+            self.callback_handler = SimpleNamespace(callbacks=[])
+
+        def add_callback(self, callback):
+            self.callback_handler.callbacks.append(callback)
+
+        def _compute_loss(self, model, inputs):
+            return model(inputs["input_ids"]).sum()
+
+    capsule = harness.Issue342CrashCapsule(
+        Trainer(),
+        output_dir=tmp_path / "too-small",
+        max_total_bytes=1024,
+        acknowledge_training_rows=True,
+        instrument_lora_operands=False,
+    )
+
+    with pytest.raises(harness.CapsuleSizeLimitError, match="trainable snapshot"):
+        capsule.install()
+
+
+def test_size_limited_payload_writes_a_summary_with_the_cap_error(tmp_path):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+
+    class Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.lora_A = torch.nn.Linear(1, 1, bias=False)
+
+    class Trainer:
+        def __init__(self):
+            self.model = Model()
+            self.state = SimpleNamespace(global_step=0)
+            self.callback_handler = SimpleNamespace(callbacks=[])
+
+        def add_callback(self, callback):
+            self.callback_handler.callbacks.append(callback)
+
+        def _compute_loss(self, model, inputs):
+            return (model.lora_A(inputs["input_ids"]) * inputs["poison"]).sum()
+
+    trainer = Trainer()
+    capsule = harness.Issue342CrashCapsule(
+        trainer,
+        output_dir=tmp_path / "size-limited",
+        max_total_bytes=8192,
+        acknowledge_training_rows=True,
+        instrument_lora_operands=False,
+    ).install()
+    # The tiny configured rank cap admits the compact JSON summary but not the
+    # RNG/row/state Torch payload, exercising the recovery branch directly.
+    inputs = {
+        "input_ids": torch.ones((1, 1)),
+        "poison": torch.tensor([[float("nan")]]),
+    }
+    trainer._compute_loss(trainer.model, inputs).backward()
+    trainer.callback_handler.callbacks[0].on_pre_optimizer_step(None, trainer.state, None)
+
+    rank_dir = capsule.writer.directory
+    assert not (rank_dir / "capsule_000001.pt").exists()
+    summary = json.loads((rank_dir / "capsule_000001.json").read_text(encoding="utf-8"))
+    assert "rank cap" in summary["error"]
+
+
+def test_size_limited_payload_warns_when_its_summary_cannot_fit(tmp_path):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+
+    class Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.lora_A = torch.nn.Linear(1, 1, bias=False)
+
+    class Trainer:
+        def __init__(self):
+            self.model = Model()
+            self.state = SimpleNamespace(global_step=0)
+            self.callback_handler = SimpleNamespace(callbacks=[])
+
+        def add_callback(self, callback):
+            self.callback_handler.callbacks.append(callback)
+
+        def _compute_loss(self, model, inputs):
+            return (model.lora_A(inputs["input_ids"]) * inputs["poison"]).sum()
+
+    trainer = Trainer()
+    capsule = harness.Issue342CrashCapsule(
+        trainer,
+        output_dir=tmp_path / "summary-too-large",
+        max_total_bytes=1 << 20,
+        acknowledge_training_rows=True,
+        instrument_lora_operands=False,
+    ).install()
+    capsule.writer.max_bytes = capsule.writer.bytes_written
+    inputs = {
+        "input_ids": torch.ones((1, 1)),
+        "poison": torch.tensor([[float("nan")]]),
+    }
+    trainer._compute_loss(trainer.model, inputs).backward()
+
+    with pytest.warns(RuntimeWarning, match="summary could not be written"):
+        trainer.callback_handler.callbacks[0].on_pre_optimizer_step(None, trainer.state, None)
+
+    rank_dir = capsule.writer.directory
+    assert not (rank_dir / "capsule_000001.pt").exists()
+    assert not (rank_dir / "capsule_000001.json").exists()
+
+
 def test_install_fails_closed_when_callback_order_cannot_be_verified(tmp_path):
     torch = pytest.importorskip("torch")
     harness = _module()
@@ -352,7 +586,7 @@ def test_sdpa_current_api_refuses_an_unavailable_requested_backend(monkeypatch):
             pass
 
 
-def test_sdpa_uses_the_legacy_torch_213_context_manager_when_needed(monkeypatch):
+def test_sdpa_falls_back_to_the_legacy_context_manager_when_needed(monkeypatch):
     harness = _module()
     calls = []
 

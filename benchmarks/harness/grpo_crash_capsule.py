@@ -34,6 +34,7 @@ import platform
 import random
 import threading
 import time
+import warnings
 from collections.abc import Callable, Iterator, Mapping
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -495,6 +496,14 @@ class Issue342CrashCapsule:
                 state[name] = parameter.detach().to(device="cpu", copy=True)
         return state
 
+    def _trainable_state_nbytes(self) -> int:
+        """Return the raw byte count of the pre-step trainable-state snapshot."""
+        return sum(
+            int(parameter.numel()) * int(parameter.element_size())
+            for parameter in self.model.parameters()
+            if parameter.requires_grad
+        )
+
     def _start_forward(self, args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> None:
         if self._current is None:
             self._synchronize("before_loss")
@@ -508,6 +517,7 @@ class Issue342CrashCapsule:
                 "pre_step_trainable": self._trainable_state(),
                 "microbatches": [],
                 "first_nonfinite_parameter": None,
+                "nonfinite_parameter_names_before_clip": [],
                 "first_nonfinite_scalar_grad": None,
                 "first_nonfinite_activation": None,
                 "lora_observations": {},
@@ -550,6 +560,11 @@ class Issue342CrashCapsule:
                             "name": name,
                             "stats": _tensor_stats(gradient, self.torch),
                         }
+                    if (
+                        self._current is not None
+                        and name not in self._current["nonfinite_parameter_names_before_clip"]
+                    ):
+                        self._current["nonfinite_parameter_names_before_clip"].append(name)
                     self._bad_seen = True
             return gradient
 
@@ -617,6 +632,8 @@ class Issue342CrashCapsule:
         self._loss_method_name = method_name
 
         def wrapped(*args: Any, **kwargs: Any) -> Any:
+            if not (getattr(self.model, "training", False) and self.torch.is_grad_enabled()):
+                return original(*args, **kwargs)
             self._start_forward(args, kwargs)
             result = original(*args, **kwargs)
             self._finish_forward(result)
@@ -675,6 +692,9 @@ class Issue342CrashCapsule:
             "global_step": self._current["global_step"],
             "nonfinite_gradient_names": bad,
             "first_nonfinite_parameter": self._current["first_nonfinite_parameter"],
+            "nonfinite_parameter_names_before_clip": self._current[
+                "nonfinite_parameter_names_before_clip"
+            ],
             "first_nonfinite_scalar_grad": self._current["first_nonfinite_scalar_grad"],
             "first_nonfinite_activation": self._current["first_nonfinite_activation"],
             "loss": self._current.get("loss"),
@@ -691,7 +711,7 @@ class Issue342CrashCapsule:
         payload["schema_version"] = _SCHEMA_VERSION
         payload["reason"] = reason
         gradient_stats, nonfinite_names = self._gradient_stats()
-        payload["pre_watchdog_gradient_stats"] = gradient_stats
+        payload["post_clip_pre_watchdog_gradient_stats"] = gradient_stats
         payload["nonfinite_gradient_names"] = nonfinite_names
         name = f"capsule_{self._current['serial']:06d}.pt"
         summary_name = f"capsule_{self._current['serial']:06d}.json"
@@ -703,12 +723,17 @@ class Issue342CrashCapsule:
         except CapsuleSizeLimitError as exc:
             try:
                 self.writer.write_json(summary_name, self._summary(reason, bad, error=str(exc)))
-            except CapsuleSizeLimitError:
-                pass
+            except CapsuleSizeLimitError as summary_exc:
+                warnings.warn(
+                    "capsule payload and size-limit summary could not be written: "
+                    f"payload={exc}; summary={summary_exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
         self._flushed = True
 
     def capture_pre_optimizer(self, state: Any) -> None:
-        """Run before Soup's watchdog to preserve raw accumulated gradients."""
+        """Run after Trainer clipping and before Soup's watchdog clears gradients."""
         del state
         if self._current is None:
             return
@@ -732,6 +757,16 @@ class Issue342CrashCapsule:
         if self._installed:
             return self
         try:
+            if bool(getattr(getattr(self.trainer, "args", None), "use_liger_kernel", False)):
+                raise CapsuleError(
+                    "Liger loss bypasses the wrapped GRPO loss path; crash capture is unsupported"
+                )
+            trainable_bytes = self._trainable_state_nbytes()
+            if trainable_bytes > self.writer.max_bytes:
+                raise CapsuleSizeLimitError(
+                    "capsule rank cap cannot fit the pre-step trainable snapshot: "
+                    f"{trainable_bytes} bytes required, {self.writer.max_bytes} bytes available"
+                )
             # Check before adding hooks or registering any callback.  A custom
             # trainer that cannot expose ordering is unsupported rather than a
             # source of partially attached instrumentation.
@@ -743,12 +778,15 @@ class Issue342CrashCapsule:
                     "captures_only_on_anomaly": True,
                     "contains_training_rows": True,
                     "load_only_your_own_capsule": True,
+                    "serialization": "Torch pickle (.pt)",
                     "torch_load": "weights_only=True where supported",
                 },
             )
             for name, parameter in self.model.named_parameters():
                 if parameter.requires_grad:
-                    self._parameter_handles.append(parameter.register_hook(self._parameter_hook(name)))
+                    self._parameter_handles.append(
+                        parameter.register_hook(self._parameter_hook(name))
+                    )
             if self.instrument_lora_operands:
                 for name, module in self.model.named_modules():
                     if isinstance(module, self.torch.nn.Linear) and (

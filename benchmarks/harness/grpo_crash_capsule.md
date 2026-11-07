@@ -18,15 +18,18 @@ incident on CPU, assign an SDPA backend, or identify a root cause.
 - The harness retains the current optimizer step in memory and writes it only
   when it observes a non-finite gradient before Soup's watchdog. A finite step
   writes only the small manifest/policy files.
-- Payloads contain tensors and basic containers so a payload created by you can
-  be inspected with `torch.load(path, weights_only=True)`. Never load a capsule
-  supplied by somebody else.
+- A payload is a Torch pickle (`.pt`) containing tensors and basic containers.
+  A payload created by you can be inspected with `torch.load(path,
+  weights_only=True)`. Never load a capsule supplied by somebody else.
 - Installation fails rather than capturing after Soup's watchdog if the
   installed Trainer does not expose the mutable callback ordering required to
   put the forensic callback first.
 
 The default cap is 2 GiB. Choose a fresh path and a larger explicit cap only
-when the trainable LoRA state and one accumulated step require it.
+when the trainable LoRA state and one accumulated step require it. Before it
+installs hooks, the harness refuses a rank whose raw pre-step trainable-state
+snapshot alone cannot fit within that rank's share; the serialized payload,
+token rows, RNG state, and summary need additional space.
 
 ## Capture run
 
@@ -65,9 +68,11 @@ config, model checkpoint, data snapshot, and output-cap policy:
 - `flash`
 
 An unavailable or failing backend is a result to record, not a reason to
-silently fall back to another backend. PyTorch 2.13 uses the legacy
-`torch.backends.cuda.sdp_kernel` context manager; newer Torch builds use
-`torch.nn.attention.sdpa_kernel` when it is available.
+silently fall back to another backend. PyTorch 2.13 documents both
+`torch.nn.attention.sdpa_kernel` and the legacy
+`torch.backends.cuda.sdp_kernel` context manager. The harness prefers the
+former whenever it exists and falls back to the latter only when the current
+API is unavailable.
 
 ## Evidence written on an anomaly
 
@@ -81,8 +86,9 @@ The capsule records, per rank:
 - CPU copies of the token tensors passed to the loss for every accumulated
   microbatch in that step;
 - pre-step trainable state, first non-finite LoRA input/output or
-  parameter-gradient name, and gradient statistics before the watchdog can
-  clear them;
+  parameter-gradient name, every parameter name observed non-finite by the
+  backward hooks before clipping, and gradient statistics sampled after
+  `max_grad_norm` clipping but before the watchdog can clear them;
 - input/gradient-output bounds for LoRA-named modules and the resulting
   conditional FP32 contraction bound.
 
@@ -102,7 +108,7 @@ python -m ruff check benchmarks/harness/grpo_crash_capsule.py tests/test_grpo_cr
 
 The tests cover: lazy Torch import, explicit sensitive-data acknowledgement,
 new-directory/no-overwrite containment, the per-rank cap, a weights-only
-loadable pre-watchdog anomaly capsule, no rows persisted by a finite step, and
-both current and legacy SDPA context-manager API surfaces, plus a simulated
-CUDA-sync failure record. They do not exercise CUDA, distributed ranks, TRL, or
-a real LoRA model.
+loadable post-clipping/pre-watchdog anomaly capsule with pre-clipping
+attribution, no rows persisted by a finite or evaluation step, and both current
+and legacy SDPA context-manager API surfaces, plus a simulated CUDA-sync failure
+record. They do not exercise CUDA, distributed ranks, TRL, or a real LoRA model.
