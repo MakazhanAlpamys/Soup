@@ -1647,75 +1647,75 @@ def _split_windows_command(command: str) -> list[str]:
     in_squote = False
     has_token = False
 
-    i = 0
-    n = len(command)
-    while i < n:
-        c = command[i]
+    index = 0
+    length = len(command)
+    while index < length:
+        char = command[index]
 
-        if not in_dquote and not in_squote and c in (" ", "\t"):
+        if not in_dquote and not in_squote and char in (" ", "\t"):
             if has_token:
                 args.append("".join(current))
                 current = []
                 has_token = False
-            i += 1
+            index += 1
             continue
 
         if not in_dquote:
             if in_squote:
-                if c == "'":
+                if char == "'":
                     in_squote = False
-                    i += 1
+                    index += 1
                     continue
-                current.append(c)
-                i += 1
+                current.append(char)
+                index += 1
                 continue
-            elif c == "'" and not has_token:
+            elif char == "'" and not has_token:
                 in_squote = True
                 has_token = True
-                i += 1
+                index += 1
                 continue
 
         has_token = True
 
-        if c == "\\":
+        if char == "\\":
             num_bs = 0
-            while i < n and command[i] == "\\":
+            while index < length and command[index] == "\\":
                 num_bs += 1
-                i += 1
+                index += 1
 
-            if i < n and command[i] == '"':
+            if index < length and command[index] == '"':
                 current.append("\\" * (num_bs // 2))
                 if num_bs % 2 != 0:
                     current.append('"')
-                    i += 1
+                    index += 1
                 else:
-                    if in_dquote and i + 1 < n and command[i + 1] == '"':
+                    if in_dquote and index + 1 < length and command[index + 1] == '"':
                         current.append('"')
-                        i += 2
+                        index += 2
                     else:
                         in_dquote = not in_dquote
-                        i += 1
+                        index += 1
             else:
                 current.append("\\" * num_bs)
             continue
 
-        if c == '"':
-            if in_dquote and i + 1 < n and command[i + 1] == '"':
+        if char == '"':
+            if in_dquote and index + 1 < length and command[index + 1] == '"':
                 current.append('"')
-                i += 2
+                index += 2
             else:
                 in_dquote = not in_dquote
-                i += 1
+                index += 1
             continue
 
-        current.append(c)
-        i += 1
+        current.append(char)
+        index += 1
 
     if has_token:
         args.append("".join(current))
 
     if in_dquote or in_squote:
-        raise ValueError("No closing quotation in --eval-command")
+        raise ValueError("No closing quotation")
 
     return args
 
