@@ -1476,11 +1476,14 @@ class TrainingConfig(BaseModel):
     preference_loss_weights: Optional[dict[str, float]] = Field(
         default=None,
         description=(
-            "Weighted blend of preference losses, e.g. {'dpo': 0.7, 'bco': 0.3}. "
+            "Weighted blend of preference losses, e.g. {'dpo': 0.7, 'simpo': 0.3}. "
             "Each weight ∈ (0, 1]; weights must sum to 1.0 (±1e-6). All keys "
             "must be members of {dpo, simpo, orpo, ipo, bco}. Requires "
             "task='preference'; mutually exclusive with preference_loss (the "
-            "scalar form). Capped at 5 components (the supported set)."
+            "scalar form). Capped at 5 components (the supported set). "
+            "A blend that contains bco is refused when the trainer is set up, "
+            "because the bco trainer splits each row into unpaired completion "
+            "and label rows."
         ),
     )
     # GRPO-specific
@@ -8510,7 +8513,7 @@ class SoupConfig(BaseModel):
         if not isinstance(weights, dict):
             raise ValueError(
                 "preference_loss_weights must be a dict, e.g. "
-                "{'dpo': 0.7, 'bco': 0.3}."
+                "{'dpo': 0.7, 'simpo': 0.3}."
             )
         if self.task != "preference":
             raise ValueError(
