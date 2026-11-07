@@ -91,15 +91,60 @@ def test_receipt_names_the_actual_written_file(value):
     assert len(payload["results"]) == 8
 
 
-def test_receipt_and_failure_keep_their_styles(monkeypatch):
+@pytest.mark.parametrize("value", VALUES)
+def test_an_unknown_candidate_is_named_as_typed(value):
+    result = runner.invoke(app, ["tunability", "--dataset", "input.jsonl", "--candidates", value])
+
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    assert f"unknown candidate {value!r}; known:" in plain(result)
+
+
+def _coloured(monkeypatch):
     monkeypatch.setattr(
         "soup_cli.commands.tunability.console",
         Console(
             width=500, height=100, force_terminal=True, no_color=False, color_system="standard"
         ),
     )
+
+
+def test_receipt_and_failure_keep_their_styles(monkeypatch):
+    _coloured(monkeypatch)
     good = runner.invoke(app, ["tunability", "--dataset", "input.jsonl", "-o", "report.json"])
     bad = runner.invoke(app, ["tunability", "--dataset", "../missing.jsonl"])
     assert good.exit_code == 0 and bad.exit_code == 2
     assert "\x1b[32mReport written to report.json\x1b[0m" in good.output
     assert "\x1b[31mdataset '../missing.jsonl' is outside cwd\x1b[0m" in bad.output
+
+
+@pytest.mark.parametrize("stage", ["candidates", "probe", "write"])
+def test_every_error_line_is_red(monkeypatch, stage):
+    import typer
+
+    _coloured(monkeypatch)
+    functions = {
+        "candidates": "_resolve_candidates",
+        "probe": "run_tunability",
+        "write": "write_report",
+    }
+
+    def fail(*_args, **_kwargs):
+        if stage == "candidates":
+            raise typer.BadParameter("boom")
+        raise ValueError("boom")
+
+    monkeypatch.setattr(f"soup_cli.commands.tunability.{functions[stage]}", fail)
+
+    result = runner.invoke(app, ["tunability", "--dataset", "input.jsonl", "-o", "report.json"])
+
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    assert "\x1b[31mboom\x1b[0m" in result.output
+
+
+def test_the_output_refusal_is_red(monkeypatch):
+    _coloured(monkeypatch)
+
+    result = runner.invoke(app, ["tunability", "--dataset", "input.jsonl", "-o", "../report.json"])
+
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    assert "\x1b[31moutput '../report.json' is outside cwd\x1b[0m" in result.output
