@@ -682,7 +682,8 @@ def test_a_refused_judge_url_names_the_field_once():
         _config(grpo_judge="http://judge.example.com/m")
     assert str(caught.value) == (
         "training -> grpo_judge: Value error, judge_model 'http://judge.example.com/m' "
-        "uses unsupported scheme"
+        "uses http to a host that is not loopback; http is accepted for a loopback host only "
+        "(127.0.0.1, ::1, localhost). Use https://, ollama:// or a loopback http:// URL instead"
     )
 
 

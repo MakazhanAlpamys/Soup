@@ -489,9 +489,17 @@ def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
         and parsed.hostname in LOOPBACK_HOSTS
     ):
         default_provider = "server"
+    elif parsed.scheme == "http":
+        # #2190 — http itself is accepted; what is refused is cleartext to a remote host.
+        raise ValueError(
+            f"judge_model '{judge_model}' uses http to a host that is not loopback; "
+            f"http is accepted for a loopback host only ({', '.join(sorted(LOOPBACK_HOSTS))}). "
+            "Use https://, ollama:// or a loopback http:// URL instead"
+        )
     else:
         raise ValueError(
-            f"judge_model '{judge_model}' uses unsupported scheme"
+            f"judge_model '{judge_model}' uses unsupported scheme '{parsed.scheme}'; "
+            "accepted: https://, ollama:// or http:// to a loopback host"
         )
 
     try:

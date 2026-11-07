@@ -511,6 +511,45 @@ class TestJudgeModelValidation:
                 judge_model="http://localhost.attacker.com/model",
             )
 
+    @pytest.mark.parametrize(
+        ("url", "message"),
+        [
+            (
+                "http://judge.example.com/m",
+                "judge_model 'http://judge.example.com/m' uses http to a host that is not "
+                "loopback; http is accepted for a loopback host only (127.0.0.1, ::1, "
+                "localhost). Use https://, ollama:// or a loopback http:// URL instead",
+            ),
+            (
+                "ftp://judge.example.com/m",
+                "judge_model 'ftp://judge.example.com/m' uses unsupported scheme 'ftp'; "
+                "accepted: https://, ollama:// or http:// to a loopback host",
+            ),
+        ],
+    )
+    def test_refusal_says_why_and_what_to_use(self, url, message):
+        """#2190 — a remote http URL is told http is loopback-only; another scheme
+        is told which ones are accepted."""
+        from soup_cli.eval.gate import _parse_judge_url
+        from tests.conftest import strip_ansi
+
+        with pytest.raises(ValueError) as caught:
+            _parse_judge_url(url)
+        assert strip_ansi(str(caught.value)) == message
+
+    @pytest.mark.parametrize(
+        ("url", "parsed"),
+        [
+            ("http://localhost:8000/m", ("server", "m", "http://localhost:8000")),
+            ("https://judge.example.com/m", ("server", "m", "https://judge.example.com")),
+            ("ollama://llama3.1", ("ollama", "llama3.1", None)),
+        ],
+    )
+    def test_accepted_urls_parse_as_before(self, url, parsed):
+        from soup_cli.eval.gate import _parse_judge_url
+
+        assert _parse_judge_url(url) == parsed
+
 
 # ---------------------------------------------------------------------------
 # Judge task score normalization

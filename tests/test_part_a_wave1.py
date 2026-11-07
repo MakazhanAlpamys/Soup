@@ -75,10 +75,10 @@ class TestParseJudgeURL:
     def test_rejects_localhost_prefix_bypass(self):
         from soup_cli.eval.gate import _parse_judge_url
 
-        with pytest.raises(ValueError, match="unsupported scheme"):
+        with pytest.raises(ValueError, match="host that is not loopback"):
             _parse_judge_url("http://localhost.attacker.com/model")
 
-        with pytest.raises(ValueError, match="unsupported scheme"):
+        with pytest.raises(ValueError, match="host that is not loopback"):
             _parse_judge_url("http://127.0.0.1.evil/model")
     def test_rejects_unsupported_scheme(self):
         from soup_cli.eval.gate import _parse_judge_url
