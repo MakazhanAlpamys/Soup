@@ -49,6 +49,20 @@ from soup_cli.utils.loop_feedback import (
     unique_sft,
     without_edited,
 )
+from soup_cli.utils.loop_gate import (
+    GATE,
+    NO_CORRECTIONS_NOTE,
+    build_gate_files,
+    read_gate_result,
+)
+from soup_cli.utils.loop_holdout import (
+    MIN_TRAINABLE_EDITS,
+    HoldoutPlan,
+    later,
+    plan_holdout,
+    read_ledger,
+    waiting_note,
+)
 from soup_cli.utils.loop_quantization import resolve_sft_quantization
 from soup_cli.utils.loop_state import VERIFY_METHODS, LoopState
 from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
@@ -262,11 +276,11 @@ def _newer(left: Optional[float], right: Optional[float]) -> Optional[float]:
 
 
 def _thumbs_pairs(
-    state: LoopState,
+    state: LoopState, cursor: Optional[float]
 ) -> "Tuple[list[PreferencePair], set[Tuple[str, str, str]], Optional[float]]":
     """``(pairs, keys of the new ones, newest ts)`` from the ``--record-thumbs`` database (#1440).
 
-    New means newer than ``state.harvest_cursor_ts`` (``harvest_dpo_pairs_since``).
+    New means newer than ``cursor`` (``harvest_dpo_pairs_since``).
     """
     path = checked_thumbs_db(state)
     if path is None:
@@ -275,7 +289,7 @@ def _thumbs_pairs(
     from soup_cli.utils.local_rl import harvest_dpo_pairs_since
 
     try:
-        found, new, newest = harvest_dpo_pairs_since(path, state.harvest_cursor_ts)
+        found, new, newest = harvest_dpo_pairs_since(path, cursor)
     except sqlite3.Error as exc:
         # Passed the check, then failed while reading (lock, corruption).
         raise ValueError(
@@ -391,7 +405,7 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
     (cwd-contained) and returns ``{pairs_harvested, new_pairs, cursor_ts, pairs_path,
     traces_collected, thumbs_pairs, train_method, dpo_pairs, kto_rows, sft_rows, new_edits,
     new_rated, new_data_rule, feedback_unknown_response, feedback_lines_skipped,
-    edited_answers}``.
+    edited_answers, holdout, waiting, training_blocked}``.
     ``thumbs_pairs`` counts the pairs READ from the database, before the union drops any that
     a trace already supplied; ``dpo_pairs`` / ``kto_rows`` / ``sft_rows`` are the sizes of the
     three datasets; ``feedback_unknown_response`` counts feedback lines about an answer no
@@ -403,15 +417,26 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
     selected dataset is empty; a configured
     database that is refused or missing raises (see ``checked_thumbs_db``).
 
-    The data cursor (``state.harvest_cursor_ts``) decides what is NEW, not what is
-    trained on: ``pairs_harvested`` and the dataset file hold ALL rows of the method, since
-    every iteration trains a fresh LoRA from the base model. ``new_pairs`` counts the rows
-    that arrived after the cursor. A database pair is new when the newer of its up and down
-    rows is later than the cursor; a trace pair, when a trace it is built from is (a trace
-    without a ts counts as new only while there is no cursor, see ``_trace_pairs``); a
-    feedback row, when the newest feedback line it came from is. ``cursor_ts`` is the
-    newest ts among the rows of the dataset, which ``run_once`` stores once a training run
-    used them, or ``None``.
+    The data cursors decide what is NEW, not what is trained on: ``pairs_harvested`` and the
+    dataset file hold ALL rows of the method, since every iteration trains a fresh LoRA from the
+    base model. ``new_pairs`` counts the rows that arrived after the later of the lineage cursor
+    (``state.harvest_cursor_ts``, the data the version in production was trained on) and the
+    newest feedback a training run already read (``state.attempt_cursor_ts``). A database pair is
+    new when the newer of its up and down rows is later than that; a trace pair, when a trace it
+    is built from is (a trace without a ts counts as new only while there is no cursor, see
+    ``_trace_pairs``); a feedback row, when the newest feedback line it came from is.
+    ``cursor_ts`` is the newest ts among the rows of the dataset, which ``run_once`` stores once
+    a training run used them (as the attempt cursor at once, as the data cursor when the
+    candidate is promoted), or ``None``.
+
+    When the check is ``soup ship`` (``verify_method``) the loop's verdict is ``--gate loop-v2``
+    and the corrected answers are split (``loop_holdout``): the ones whose prompt hashes into the
+    held-out 30% and were not checked yet are kept out of the datasets in this iteration
+    (``holdout.kept_aside``), and ``edited_answers`` is what trains and is checked (the new ones
+    and the ones graduating, ``holdout.trainable``). New is judged against the lineage cursor
+    for them. With one to four trainable corrections and the trigger fired, the cycle does not
+    write the dataset: ``waiting`` says why and ``training_blocked`` is the note the train stage
+    returns.
 
     Whether enough is new depends on the loop. For ``dpo`` and ``kto``, and for ``sft``
     without a feedback log, it is ``new_pairs >= state.min_new_pairs``
@@ -427,11 +452,17 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
     """
     from soup_cli.data.traces.parsers import parse_soup_serve
 
-    cursor = state.harvest_cursor_ts
+    # Two cursors. The lineage cursor (``harvest_cursor_ts``) follows the version in production:
+    # what is new to it is what that version was NOT trained on, rows of a rejected candidate
+    # included. The trigger counts what arrived since the later of it and the newest feedback a
+    # training run already read (``attempt_cursor_ts``), so a rejected run is not retrained on
+    # its own rows every poll.
+    lineage = state.harvest_cursor_ts
+    cursor = later(lineage, state.attempt_cursor_ts)
     trace_dir = _resolve_trace_dir(state)
     traces = list(parse_soup_serve(trace_dir)) if trace_dir else []
     pairs, new_keys, newest = _trace_pairs(traces, cursor)
-    thumbs, thumbs_new_keys, thumbs_newest = _thumbs_pairs(state)
+    thumbs, thumbs_new_keys, thumbs_newest = _thumbs_pairs(state, cursor)
     new_keys |= thumbs_new_keys
     newest = _newer(newest, thumbs_newest)
     seen = {_pair_key(p) for p in pairs}
@@ -446,7 +477,22 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
     feedback_path = _resolve_feedback_log(state)
     feedback = harvest_feedback(trace_dir, feedback_path)
     found = feedback.datasets
-    for item in found.dpo:
+    # The corrected answers that are rows of the selected dataset. A dpo pair needs an original
+    # answer to reject.
+    edited_answers = [
+        edit for edit in found.edits if state.train_method != "dpo" or edit.original.strip()
+    ]
+    # With `soup ship` as the check (the loop-v2 gate) the corrected answers whose prompt hashes
+    # into the held-out 30% and were not checked yet are kept out of this iteration's training:
+    # they are its held-out check (``loop_holdout``). Thumbs and ratings are never kept aside.
+    plan = None
+    if verify_method(state) == "ship":
+        plan = plan_holdout(edited_answers, lineage, read_ledger())
+    kept_ids = {edit.id for edit in plan.kept_aside} if plan is not None else set()
+    dpo_found = [item for item in found.dpo if item.edit_id not in kept_ids]
+    kto_found = [item for item in found.kto if item.edit_id not in kept_ids]
+    sft_found = [item for item in found.sft if item.edit_id not in kept_ids]
+    for item in dpo_found:
         key = (prompt_key(item.row["prompt"]), item.row["chosen"], item.row["rejected"])
         if key in taken:  # the same pair, already supplied by a trace or the database
             continue
@@ -460,20 +506,19 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
         *(good_answer_row(prompt, answer, ts, _THUMBS_SOURCE)
           for prompt, answer, ts in _thumbs_good_answers(state)),
     ]
-    sft_items = unique_sft([*without_edited(rated_good, found.edited_originals), *found.sft])
+    sft_items = unique_sft([*without_edited(rated_good, found.edited_originals), *sft_found])
     new_edits, new_rated = count_new(found.rated, cursor)
-    # The corrected answers that are rows of the selected dataset: the train stage writes
-    # paraphrases of their prompts. A dpo pair needs an original answer to reject.
-    edited_answers = [
-        edit for edit in found.edits if state.train_method != "dpo" or edit.original.strip()
-    ]
+    if plan is not None:
+        # The train stage writes paraphrases of the prompts of the corrections it trains on, and
+        # the gate checks them: the new ones and the ones graduating, not the ones kept aside.
+        edited_answers = list(plan.trainable)
     feedback_rule = state.train_method == "sft" and feedback_path is not None
     sft_newest = newest_ts(sft_items)
     if feedback_rule:
         sft_newest = _newer(sft_newest, newest_rated_ts(found.rated))
     by_method = {
         "dpo": (dpo_rows, dpo_newest),
-        "kto": ([(r.row, is_new(r.ts, cursor)) for r in found.kto], newest_ts(found.kto)),
+        "kto": ([(r.row, is_new(r.ts, cursor)) for r in kto_found], newest_ts(kto_found)),
         "sft": ([(r.row, is_new(r.ts, cursor)) for r in sft_items], sft_newest),
     }
     rows, selected_newest = by_method[state.train_method]
@@ -484,7 +529,7 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
         "thumbs_pairs": len(thumbs),
         "train_method": state.train_method,
         "dpo_pairs": len(dpo_rows),
-        "kto_rows": len(found.kto),
+        "kto_rows": len(kto_found),
         "sft_rows": len(sft_items),
         "new_edits": new_edits,
         "new_rated": new_rated,
@@ -492,6 +537,11 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
         "feedback_unknown_response": found.unknown_response,
         "feedback_lines_skipped": feedback.skipped_lines,
         "edited_answers": edited_answers,
+        # The holdout plan (None unless soup ship is the check), why the cycle waits for more
+        # corrections (None when it does not) and what the train stage says about it.
+        "holdout": plan,
+        "waiting": None,
+        "training_blocked": None,
     }
     if not rows:
         return {
@@ -506,6 +556,19 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
         enough = new_edits >= state.min_new_edits or new_rated >= state.min_new_rated
     else:
         enough = new_rows >= state.min_new_pairs
+    # The plan-time gate: fewer than five trainable corrections cannot give the verdict's
+    # corrections check an answer, so the cycle spends no GPU and says what is missing. With no
+    # trainable correction at all there is nothing to check and the trigger decides, as before.
+    note = waiting_note(len(plan.trainable), len(plan.kept_aside), new_rated) if (
+        enough and plan is not None
+    ) else None
+    if note is not None:
+        enough = False
+        common["training_blocked"] = note
+        common["waiting"] = {
+            "note": note, "trainable": len(plan.trainable), "needed": MIN_TRAINABLE_EDITS,
+            "kept_aside": len(plan.kept_aside), "new_rated": new_rated,
+        }
     pairs_path = None
     if enough:
         pairs_dir = Path(_PAIRS_DIR)
@@ -743,12 +806,20 @@ def train_dpo_from_pairs(
     new_n = int(ctx.get("new_pairs", pairs_n) or 0)
     method = state.train_method
     skip = {"run_id": None, "skipped": True, "adapter_path": None}
+    plan = ctx.get("holdout") if isinstance(ctx.get("holdout"), HoldoutPlan) else None
     if pairs_n <= 0:
         if method == "dpo":
             note = "no_preference_pairs: 0 valid pairs harvested, training skipped"
         else:
             note = f"no_{method}_rows: 0 valid {method} rows harvested, training skipped"
+        if plan is not None and plan.kept_aside:
+            kept = len(plan.kept_aside)
+            note += f" ({kept} corrected answer{'' if kept == 1 else 's'} kept aside for checking)"
         return {**skip, "notes": note}
+    blocked = ctx.get("training_blocked")
+    if isinstance(blocked, str) and blocked:
+        # The harvest decided not to train yet (too few trainable corrections): its words.
+        return {**skip, "notes": blocked}
     if method == "sft" and ctx.get("new_data_rule") == _RULE_EDITS_OR_RATED:
         # An sft loop with a feedback log: new edits OR new rated answers, not new rows.
         new_edits = int(ctx.get("new_edits", 0) or 0)
@@ -812,7 +883,12 @@ def train_dpo_from_pairs(
     if rc != 0:
         _LOG.warning("soup train exited rc=%s", rc)
         return {"run_id": None, "skipped": True, "adapter_path": None, "failed": True, **decided}
-    return {"run_id": run_id, "skipped": False, "adapter_path": output_dir, **decided}
+    trained = {"run_id": run_id, "skipped": False, "adapter_path": output_dir, **decided}
+    if plan is not None:
+        # What the verdict checks: the corrections this run trained on, and the ones it kept out.
+        trained["trained_edits"] = list(plan.trainable)
+        trained["kept_aside_edits"] = list(plan.kept_aside)
+    return trained
 
 
 # ---------------------------------------------------------------------------
@@ -956,8 +1032,8 @@ def check_verify_eval(method: str, path: str) -> None:
         ) from exc
 
 
-def _read_ship_decision(path: str) -> Optional[str]:
-    """The ``decision`` of a ``soup ship --output`` file, or ``None``."""
+def _read_ship_output(path: str) -> Optional[dict]:
+    """The object of a ``soup ship --output`` file that holds a decision, or ``None``."""
     try:
         if os.path.getsize(path) > _MAX_VERDICT_BYTES:
             return None
@@ -965,8 +1041,51 @@ def _read_ship_decision(path: str) -> Optional[str]:
             data = json.load(fh)
     except (OSError, UnicodeDecodeError, ValueError):
         return None
-    decision = data.get("decision") if isinstance(data, dict) else None
-    return decision if decision in _SHIP_DECISIONS else None
+    if isinstance(data, dict) and data.get("decision") in _SHIP_DECISIONS:
+        return data
+    return None
+
+
+def _read_ship_decision(path: str) -> Optional[str]:
+    """The ``decision`` of a ``soup ship --output`` file, or ``None``."""
+    data = _read_ship_output(path)
+    return data["decision"] if data is not None else None
+
+
+def _write_gate_files(
+    ctx: Mapping[str, object], run_id: str
+) -> "Tuple[str, str, list]":
+    """Write the ``--corrections`` and ``--held-out`` files of ``soup ship --gate loop-v2``.
+
+    The corrections are the edits this run trained on (``ctx["trained_edits"]``: the new ones and
+    the ones that graduated) that have a current paraphrase record; the held-out edits are the
+    ones kept out of this run (``ctx["kept_aside_edits"]``). Both files are always written, empty
+    when there is nothing for them, atomically and under cwd. Returns the two paths and the notes
+    for what was left out.
+    """
+    trained = [edit for edit in ctx.get("trained_edits") or () if isinstance(edit, EditedAnswer)]
+    kept = [edit for edit in ctx.get("kept_aside_edits") or () if isinstance(edit, EditedAnswer)]
+    paraphrases: dict = {}
+    if trained:
+        from soup_cli.utils.loop_paraphrase import current_paraphrases, read_paraphrases
+
+        paraphrases = current_paraphrases(read_paraphrases(), trained)
+    files = build_gate_files(trained, kept, paraphrases)
+    corrections_path = os.path.join(_VERDICTS_DIR, f"{run_id}.corrections.jsonl")
+    held_out_path = os.path.join(_VERDICTS_DIR, f"{run_id}.held-out.jsonl")
+    atomic_write_text(files.corrections, corrections_path, field="corrections file")
+    atomic_write_text(files.held_out, held_out_path, field="held-out file")
+    notes = []
+    if files.without_paraphrases:
+        notes.append(
+            f"{files.without_paraphrases} of {len(trained)} trained edits have no paraphrases "
+            "and were left out of the corrections check"
+        )
+    if files.over_limit:
+        notes.append(
+            f"{files.over_limit} rows over soup ship's limits were left out of the gate files"
+        )
+    return corrections_path, held_out_path, notes
 
 
 def verify_with_ship(
@@ -980,6 +1099,16 @@ def verify_with_ship(
     written the result is ``SKIPPED`` with the reason, and nothing rolls out.
     The decision is read from ``--output``, never from the exit code: a
     usage error exits 2 like DON'T SHIP does.
+
+    The call is the loop's verdict, ``--gate loop-v2``: ``--corrections`` lists the edits the
+    run trained on (``ctx["trained_edits"]``) with their paraphrases and ``--held-out`` the
+    edits kept out of it (``ctx["kept_aside_edits"]``), both files always passed
+    (``_write_gate_files``). What ``soup ship`` measured comes back as ``verdict_gate``,
+    ``verdict_corrections`` and ``verdict_held_out`` (the iteration format's objects, the ones
+    that follow it), a DON'T SHIP adds ``verdict_reason`` and ``notes``, and one with
+    ``canary_decides`` (nothing to check, the suites held) adds ``canary_decides``:
+    ``deploy_to_canary`` then still starts a canary. A verdict without the gate (an output that
+    does not say ``loop-v2``) keeps the plain meaning, without evidence.
     """
     adapter_path = ctx.get("adapter_path")
     if ctx.get("skipped") or not adapter_path:
@@ -993,6 +1122,19 @@ def verify_with_ship(
     run_id = str(ctx.get("run_id") or f"verify-{uuid.uuid4().hex[:8]}")
     Path(_VERDICTS_DIR).mkdir(parents=True, exist_ok=True)
     out_path = os.path.join(_VERDICTS_DIR, f"{run_id}.json")
+    baseline = (
+        {"kind": "version", "ref": state.production_adapter}
+        if state.production_adapter
+        else {"kind": "base", "ref": base}
+    )
+    common = {"verdict_method": "ship", "verdict_path": out_path, "verdict_baseline": baseline}
+    try:
+        corrections_path, held_out_path, file_notes = _write_gate_files(ctx, run_id)
+    except (OSError, ValueError, TypeError) as exc:
+        return {
+            **common,
+            **_verdict_skipped(f"the gate files could not be written ({_short(exc)})"),
+        }
     argv = [
         sys.executable, "-m", "soup_cli.cli", "ship",
         "--base", base,
@@ -1002,24 +1144,22 @@ def verify_with_ship(
     ]
     if state.production_adapter:
         argv.extend(["--base-adapter", state.production_adapter])
-    baseline = (
-        {"kind": "version", "ref": state.production_adapter}
-        if state.production_adapter
-        else {"kind": "base", "ref": base}
-    )
+    # The loop's verdict: did the candidate learn the corrections, and keep the edits held out?
+    # Both files go, even when empty.
+    argv.extend(["--gate", GATE, "--corrections", corrections_path, "--held-out", held_out_path])
     runner = _SHIP_RUNNER
     if runner is None:
         import subprocess  # noqa: S404 — argv list mode, no shell
 
         runner = subprocess.run
-    common = {"verdict_method": "ship", "verdict_path": out_path, "verdict_baseline": baseline}
     try:
         result = runner(  # noqa: S603 — internal argv, no shell
             argv, capture_output=True, timeout=_SHIP_TIMEOUT_SEC, check=False
         )
     except Exception as exc:  # noqa: BLE001 — a verdict failure must not crash the loop
         return {**common, **_verdict_skipped(f"soup ship could not run ({_short(exc)})")}
-    decision = _read_ship_decision(out_path)
+    shipped = _read_ship_output(out_path)
+    decision = shipped["decision"] if shipped is not None else None
     if decision is None:
         rc = getattr(result, "returncode", None)
         stderr = getattr(result, "stderr", b"") or b""
@@ -1029,7 +1169,28 @@ def verify_with_ship(
         tail = f": {_printable(lines[-1])}" if lines else ""
         reason = f"soup ship wrote no verdict (exit {rc}){tail}"
         return {**common, **_verdict_skipped(reason)}
-    return {**common, "gate_verdict": _SHIP_DECISIONS[decision], "verdict_decision": decision}
+    verdict = {**common, "gate_verdict": _SHIP_DECISIONS[decision], "verdict_decision": decision}
+    notes = list(file_notes)
+    gate = read_gate_result(shipped, decision)
+    if gate is not None:
+        verdict["verdict_gate"] = GATE
+        if gate.corrections is not None:
+            verdict["verdict_corrections"] = gate.corrections
+        if gate.held_out is not None:
+            verdict["verdict_held_out"] = gate.held_out
+        if decision == "DON'T SHIP":
+            # Nothing to check and the suites held: the canary's ratings decide, so the loop
+            # still deploys the candidate. Otherwise the gate's own words say why it stopped.
+            words = gate.reason[:1].upper() + gate.reason[1:] if gate.reason else None
+            if gate.canary_decides:
+                verdict["canary_decides"] = True
+                words = NO_CORRECTIONS_NOTE
+            if words:
+                verdict["verdict_reason"] = words
+                notes.append(words)
+    if notes:
+        verdict["notes"] = "; ".join(notes)
+    return verdict
 
 
 def verify_candidate(
@@ -1232,7 +1393,10 @@ def deploy_to_canary(
     ``canary_started_ts`` (epoch seconds) on success. The endpoint is SSRF-validated
     (loopback/LAN only) before any POST.
     """
-    if ctx.get("gate_verdict") != "OK":
+    # A DON'T SHIP of the loop-v2 gate that found nothing to check (canary_decides) goes on to a
+    # canary too: the ratings of its answers decide, not the verdict.
+    canary_decides = ctx.get("gate_verdict") == "MAJOR" and ctx.get("canary_decides") is True
+    if ctx.get("gate_verdict") != "OK" and not canary_decides:
         return {"deployed": False, "canary_verdict": None}
     adapter_path = ctx.get("adapter_path")
     if not adapter_path:

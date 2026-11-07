@@ -915,8 +915,8 @@ class TestIterationRecord:
     def test_the_evidence_field_is_last_and_defaults_to_none(self):
         names = list(IterationRecord.__dataclass_fields__)
 
-        assert names[-1] == "canary_quality"
-        assert names[-2] == "notes"
+        # (the verdict evidence, tests/test_loop_verdict_v2.py, comes after it)
+        assert names[names.index("notes") + 1] == "canary_quality"
         assert _iteration().canary_quality is None
 
     def test_it_carries_the_evidence_dict(self):

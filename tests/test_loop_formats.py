@@ -896,6 +896,35 @@ def test_verdict_evidence_stays_optional_next_to_a_no_verdict_decision():
     assert _errors("iteration", record) == []
 
 
+def test_verdict_gate_accepts_loop_v2():
+    record = _example("iteration", 2)
+    record["verdict"]["gate"] = "loop-v2"
+    assert _errors("iteration", record) == []
+
+
+@pytest.mark.parametrize("gate", ["loop-v3", "Loop-V2", "loop_v2", "", None, 2, True, ["loop-v2"]])
+def test_verdict_gate_refuses_any_other_value(gate):
+    record = _example("iteration", 2)
+    record["verdict"]["gate"] = gate
+    assert _errors("iteration", record), f"gate {gate!r} accepted"
+
+
+def test_verdict_gate_stays_optional():
+    record = _example("iteration", 2)
+    assert "gate" not in record["verdict"]
+    assert _errors("iteration", record) == []
+    record["verdict"] = {
+        "decision": "DON'T SHIP", "method": "ship", "gate": "loop-v2",
+        "reason": "Not enough corrections yet (3/5)",
+    }
+    assert _errors("iteration", record) == []
+
+
+def test_the_docs_describe_the_gate_and_the_ledger():
+    text = (Path(__file__).resolve().parents[1] / "docs" / "loop-formats.md").read_text("utf-8")
+    assert "`gate`" in text and "loop-v2" in text and "holdout.jsonl" in text
+
+
 # ---------------------------------------------------------------------------
 # paraphrase
 # ---------------------------------------------------------------------------

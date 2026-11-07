@@ -111,6 +111,10 @@
               "description": "SHIP and DON'T SHIP are soup ship's decisions; SKIPPED and ERROR mean no verdict was reached, and the iteration does not roll out."
             },
             "method": {"enum": ["ship", "eval_gate"]},
+            "gate": {
+              "enum": ["loop-v2"],
+              "description": "Optional. The gate that made the decision: loop-v2 is soup ship --gate loop-v2, where the corrections and held-out checks below decide. Absent = the plain verdict."
+            },
             "baseline": {
               "description": "What the candidate was compared against.",
               "oneOf": [

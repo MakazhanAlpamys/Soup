@@ -34,7 +34,7 @@ from typing import Any, Mapping, Optional
 
 from soup_cli.utils.loop_formats import DEFAULT_LAYOUT, SCHEMA_VERSION
 from soup_cli.utils.loop_iteration import IterationRecord, new_iteration_id
-from soup_cli.utils.loop_state import LoopState
+from soup_cli.utils.loop_state import MAX_CURSOR_TS, LoopState
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, open_no_follow
 
 _LOG = logging.getLogger(__name__)
@@ -289,19 +289,39 @@ def _epoch_iso(epoch: object) -> Optional[str]:
         return None
 
 
-def _data(harvest: Mapping[str, Any], new_state: LoopState) -> Optional[dict]:
-    """What the harvest read, or None for a stage that does not count conversations."""
+def _data(
+    harvest: Mapping[str, Any], new_state: LoopState, *, trained: bool = False
+) -> Optional[dict]:
+    """What the harvest read, or None for a stage that does not count conversations.
+
+    ``until`` is the cursor the iteration read up to. A training run reports its own (the data
+    cursor follows the version in production and moves only on promotion, so the state's can be
+    behind it); an iteration that trained nothing reports the state's.
+    """
     if "traces_collected" not in harvest:
         return None
-    data: dict[str, Any] = {"until": _epoch_iso(new_state.harvest_cursor_ts)}
+    until = new_state.harvest_cursor_ts
+    if trained:
+        read = harvest.get("cursor_ts")
+        if (
+            not isinstance(read, bool)
+            and isinstance(read, (int, float))
+            and 0 <= read <= MAX_CURSOR_TS  # False for NaN too
+        ):
+            until = float(read)
+    data: dict[str, Any] = {"until": _epoch_iso(until)}
     conversations = _count(harvest.get("traces_collected"))
     if conversations is not None:
         data["conversations"] = conversations
     return data
 
 
-def _dataset(harvest: Mapping[str, Any]) -> Optional[dict]:
-    """The training data built from the harvest (None when none was written)."""
+def _dataset(harvest: Mapping[str, Any], graduated: Optional[int] = None) -> Optional[dict]:
+    """The training data built from the harvest (None when none was written).
+
+    ``graduated`` is the number of edits that moved from the held-out set into training in this
+    iteration (the record's ``graduated``); left out when the iteration did not count them.
+    """
     path = harvest.get("pairs_path")
     if not isinstance(path, str) or not path:
         return None
@@ -310,6 +330,8 @@ def _dataset(harvest: Mapping[str, Any]) -> Optional[dict]:
         number = _count(harvest.get(key))
         if number is not None:  # the schema has no null here: leave out what was not counted
             dataset[key] = number
+    if graduated is not None:
+        dataset["graduated"] = graduated
     return dataset
 
 
@@ -343,13 +365,24 @@ def _verdict(
         # Not a verdict: "ERROR" when the check could not run, "SKIPPED" when it was not asked.
         failed = isinstance(notes, str) and notes.startswith("verdict_skipped:")
         decision = "ERROR" if failed else "SKIPPED"
-    return {
+    reason = _cap(str(notes), 4096) if notes and decision in ("ERROR", "SKIPPED") else None
+    if reason is None and decision == "DON'T SHIP":
+        reason = record.verdict_reason  # the gate's words for not shipping
+    verdict: dict[str, Any] = {
         "decision": decision,
         "method": method,
         "baseline": _baseline(gate, state),
         "path": portable_path(gate.get("verdict_path")),
-        "reason": _cap(str(notes), 4096) if notes and decision in ("ERROR", "SKIPPED") else None,
+        "reason": reason,
     }
+    # The evidence of ``soup ship --gate loop-v2``, only when the check ran: absent = not measured.
+    if record.verdict_gate is not None:
+        verdict["gate"] = record.verdict_gate
+    if record.verdict_corrections is not None:
+        verdict["corrections"] = json.loads(json.dumps(record.verdict_corrections))
+    if record.verdict_held_out is not None:
+        verdict["held_out"] = json.loads(json.dumps(record.verdict_held_out))
+    return verdict
 
 
 def _reason(outcome: str, trained: bool, decision: Optional[str], notes: list[str], pct: object):
@@ -408,8 +441,8 @@ def iteration_from_record(
         "to_version": state.latest_version + 1 if outcome == "canary" else None,
         "started_at": record.started_at,
         "finished_at": None if outcome == "canary" else record.finished_at,
-        "data": _data(harvest, new_state),
-        "dataset": _dataset(harvest),
+        "data": _data(harvest, new_state, trained=trained),
+        "dataset": _dataset(harvest, record.graduated),
         "train": (
             {"method": state.train_method, "run_id": record.run_id, "base": base,
              "root_base": base}
