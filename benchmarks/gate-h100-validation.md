@@ -73,6 +73,14 @@ appear in the order they were run, not in the order they would read best.
    > corrected text is §5.3a of the preprint, version 3.
 3. **Against DeepSpeed ZeRO-3 CPU offload, same box, same data, same model:
    2.93x the throughput in 9.7x less peak VRAM** at matched numerics.
+   > **Re-measured 2026-11-07 ([`gate-h100-deepspeed-compare.md`](gate-h100-deepspeed-compare.md)):
+   > the 2.93x does not hold against a DeepSpeed set up from its own documentation.** In a plain
+   > Hugging Face Trainer + PEFT script, with `cpu_adam` built, ZeRO-3 with CPU parameter offload
+   > runs at 39.79 tok/s and 5.0 GB peak on one H100 SXM, so layer streaming is 1.56x (S1) to
+   > 1.69x (best streaming config) of it, not 2.93x; the 21.65 tok/s / 38 GB row below came from
+   > DeepSpeed reached through Soup's own `--deepspeed` flag. DeepSpeed arms that keep the weights
+   > on the GPU (ZeRO-2, plain resident) are 2.4x to 7x faster than streaming whenever the model
+   > fits on the card. The numbers below are kept as measured.
 4. **A silent correctness defect, found and its cause named in the library that
    creates it.** `bitsandbytes.MatMul4Bit` stashes the packed weight and
    `quant_state` on `ctx` as plain attributes rather than through
@@ -1053,6 +1061,10 @@ reports. Same card class, SM clock 1980 MHz median-while-busy in every row.
 | layer streaming | NF4 | **121.46** | **3,399 MiB** | 67.44 s | 54.1% | 0 |
 | layer streaming | bf16 | 63.52 | 3,935 MiB | 128.97 s | 72.4% | 0 |
 | DeepSpeed ZeRO-3, param offload | bf16 | 21.65 | 38,135 MiB | 378.41 s | 45.5% | 0 |
+
+> **Superseded as a comparison by [`gate-h100-deepspeed-compare.md`](gate-h100-deepspeed-compare.md)
+> (2026-11-07):** with DeepSpeed configured from its documentation and run without Soup in the
+> path, the same ratio is 1.56x, not 2.93x. This section is kept as the record of what was run.
 
 At **matched numerics** (bf16 vs bf16), layer streaming is **2.93x** the
 throughput (63.52 / 21.65) in **9.7x** less peak VRAM (38,135 / 3,935). Both
