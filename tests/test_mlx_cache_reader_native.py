@@ -145,4 +145,3 @@ def test_native_real_preprocess_cache_loss_training_and_reload(
     assert all(all(value == expected_count for value in record["row_tokens"]) for record in steps)
     metadata = json.loads((tmp_path / "out" / "adapter_config.json").read_text())
     assert metadata["pre_tokenized"] is True
-
