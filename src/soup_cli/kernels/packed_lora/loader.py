@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
+#
+# Written for Soup.
 """The one door to the GPU half of ``training.packed_lora``.
 
 The CLI, the config and the CPU test suite import only the pure modules (``policy``, ``budget``,

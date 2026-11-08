@@ -1,3 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Origin: Soup Kernel Challenge (Decentrathon 6.0), the submission of team Luck
+# (BAITC-Hacks/hack-e79529fc-luck@b3f1225f); the int8 gate/up packs follow ideas seen in the
+# solutions of teams Null Pointers, 21, DarkDaur and OrbiTeam. Modified for Soup: the tests are
+# adapted to the ported modules and to a sm_120 card.
 """Correctness of the Triton kernels of ``training.packed_lora`` against plain PyTorch (and
 bitsandbytes), forward and backward. GPU tests: ``pytest -m gpu --no-cov`` on a Linux CUDA machine
 (WSL2 included); skipped everywhere else. The kernels were written for the Soup Kernel Challenge

@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
+#
+# Written for Soup.
 """The settings of the packed-LoRA kernels, and which runs they cannot take.
 
 Internal to the package: nothing in ``config/schema.py`` refers to this module yet, so a

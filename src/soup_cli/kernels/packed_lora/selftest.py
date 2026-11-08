@@ -1,4 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
+#
+# Written for Soup. It follows the kernel checks of the challenge team's own test suite on tiny
+# inputs, as capability probes that run once per process before the first step.
 """Start-up checks of the kernels themselves, run once per process on the first use.
 
 Support is decided by capability, not by version tables: instead of reading the versions of
