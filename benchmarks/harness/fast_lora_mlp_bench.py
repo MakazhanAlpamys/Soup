@@ -15,6 +15,8 @@ import pathlib
 import platform
 import statistics
 import subprocess
+import sys
+import tempfile
 import threading
 import types
 from typing import Any
@@ -442,6 +444,11 @@ def main() -> int:
     parser.add_argument(
         "--output", type=pathlib.Path, default=pathlib.Path("issue837_results.json")
     )
+    parser.add_argument(
+        "--_worker",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
 
@@ -470,13 +477,53 @@ def main() -> int:
     if args.tokens <= 0 or args.rank <= 0 or args.iters < 5 or args.warmup < 1:
         parser.error("tokens/rank/warmup must be positive and iters must be at least 5")
 
-    record = _metadata()
-    record["protocol"]["forward_backward_repeats_per_arm"] = args.iters
-    record["protocol"]["warmup_per_arm"] = args.warmup
-    record["settings"] = vars(args) | {"output": str(args.output)}
-    record["results"] = []
-    for dtype in args.dtypes:
-        record["results"].append(_measure_dtype(dtype, args))
+    if args._worker:
+        if len(args.dtypes) != 1:
+            parser.error("a worker process must measure exactly one dtype")
+        record = _metadata()
+        record["protocol"]["forward_backward_repeats_per_arm"] = args.iters
+        record["protocol"]["warmup_per_arm"] = args.warmup
+        record["protocol"]["dtype_process_isolation"] = "one fresh process per dtype cell"
+        record["settings"] = vars(args) | {"output": str(args.output)}
+        record["results"] = [_measure_dtype(args.dtypes[0], args)]
+    else:
+        # Each dtype is a separate cell. A fresh interpreter prevents allocator state,
+        # cached kernels, and the preceding dtype's measurements from carrying over.
+        # All three comparison arms remain paired and interleaved within that cell.
+        with tempfile.TemporaryDirectory(prefix="soup-837-") as temp_dir:
+            cell_records = []
+            for dtype in args.dtypes:
+                cell_output = pathlib.Path(temp_dir) / f"{dtype}.json"
+                command = [
+                    sys.executable,
+                    str(pathlib.Path(__file__).resolve()),
+                    "--dtypes",
+                    dtype,
+                    "--tokens",
+                    str(args.tokens),
+                    "--rank",
+                    str(args.rank),
+                    "--warmup",
+                    str(args.warmup),
+                    "--iters",
+                    str(args.iters),
+                    "--seed",
+                    str(args.seed),
+                    "--output",
+                    str(cell_output),
+                    "--_worker",
+                ]
+                completed = subprocess.run(command, capture_output=True, text=True)
+                if completed.returncode:
+                    console.print(completed.stdout)
+                    console.print(completed.stderr, style="red")
+                    return completed.returncode
+                cell_records.append(json.loads(cell_output.read_text(encoding="utf-8")))
+
+        record = cell_records[0]
+        record["protocol"]["dtype_process_isolation"] = "one fresh process per dtype cell"
+        record["settings"] = vars(args) | {"output": str(args.output), "_worker": False}
+        record["results"] = [cell["results"][0] for cell in cell_records]
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
