@@ -32,7 +32,7 @@ shape (`bitsandbytes/backends/cuda/ops.py`, `gemm_4bit`):
 `bnb.matmul_4bit` calls the same `gemm_4bit` op whether or not a gradient is needed
 (`MatMul4Bit.apply` in the autograd case), so "the `MatMul4Bit` path" and "the fused kernel"
 are the same numbers in every row measured below (`autograd vs fused` was exactly 0 in all
-72 rows of the 0.50.2 run).
+144 rows of the two 0.50.2 runs: 72 records per weight scale).
 
 The two ways accumulate in a different order, so they are not bit-identical. The size of
 the difference is the interesting part: it is at most one ulp of the output dtype, and each
@@ -72,7 +72,8 @@ of magnitude 4.7 to 13.8; absolute differences 1.5e-05 to 0.06)
 
 **bitsandbytes 0.50.3.dev0 (current `main`, pre-release wheel built 2026-10-27 from commit
 `a616886`, loaded from a separate directory; the recorded module path is the `--target` copy):**
-all 72 records of both runs are identical, field by field, to the 0.50.2 records above. `main`
+all 144 records of the two runs (72 per weight scale) are identical, field by field, to the
+0.50.2 records above. `main`
 is three commits past 0.50.2 (a version bump, a documentation URL, a ROCm-only cache), so this
 is what the commit list predicts.
 
