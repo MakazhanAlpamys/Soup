@@ -1,0 +1,60 @@
+{
+  "command": [
+    "<HOME>\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+    "-B",
+    "<EXP>\\dense123_train34\\stage34_train.py",
+    "train",
+    "--source",
+    "<ASSETS>\\mistral123-nf4-a76e109f",
+    "--store",
+    "<ASSETS>\\mistral123-soup-full-a76e109f",
+    "--output",
+    "<EXP>\\dense123_train34\\results\\train-01",
+    "--device",
+    "cuda:0",
+    "--data",
+    "<EXP>\\dense123_train34\\data_v1\\fixed_data.json"
+  ],
+  "outcome": "guard_stopped",
+  "failure": "system_commit_floor",
+  "started_utc": "2026-11-03T11:58:29Z",
+  "sampler_sha256": "939daed44a78f892195d2533f024a1938816d61055a3ffc3a05b5c5b908d3beb",
+  "working_set_cap": null,
+  "worker_scope": "standalone Python worker; subprocess workers are forbidden",
+  "supervisor_sha256": "db5e30df1683f0e6916c648f16b48cd2ef3359ba6a5a1ee7cb9730f8d5b9ece4",
+  "limits": {
+    "device_mib": 7600,
+    "host_emergency_mib": 256,
+    "host_sustained_mib": 768,
+    "host_sustained_seconds": 5,
+    "commit_floor_mib": 512,
+    "timeout_seconds": 1800.0,
+    "preflight_host_mib": 8192
+  },
+  "pid": 30488,
+  "pid_created": 1793707241.677023,
+  "worker_returncode_before_cleanup": null,
+  "cleanup": {
+    "tracked_children": {
+      "38536": 1793707241.6884024
+    },
+    "remaining_children": [],
+    "root_stopped": true,
+    "errors": []
+  },
+  "monitor_stopped": true,
+  "allowed_system_children": [
+    {
+      "pid": 38536,
+      "created": 1793707241.6884024,
+      "exe": "C:\\Windows\\System32\\conhost.exe",
+      "command": [
+        "\\??\\C:\\Windows\\system32\\conhost.exe",
+        "0x4"
+      ],
+      "reason": "direct Windows conhost"
+    }
+  ],
+  "elapsed_s": 386.8440000000119,
+  "worker_returncode": 1
+}
