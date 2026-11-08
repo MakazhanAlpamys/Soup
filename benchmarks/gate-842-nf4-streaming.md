@@ -58,3 +58,18 @@ and scale gradients. All four projections took the fused backend in every
 forward. The repair recomputed four fused forwards in backward. Each synthetic
 layer had 171.125 MiB of packed weight before quantisation metadata.
 [Aliasing results and executed paths](evidence/issue842/t4-aliasing.json).
+
+## ZeroGPU correctness check
+
+The same four-layer fixture ran on an NVIDIA RTX PRO 6000 Blackwell Server Edition,
+MIG 2g.48gb, sm_120, driver 580.178.04, CUDA 13.0, PyTorch 2.11.0 and
+bitsandbytes 0.50.2. All forward outputs matched. With the unsafe arm, the first
+two scale gradients differed by up to 0.16992 and 0.15448, and the input gradient
+by 0.07291. The bypass and repaired arms matched the private reference bit for bit
+in all five gradients. Each forward used four fused kernels. The repaired backward
+used four fused recomputations and four dense dequantisations. This pass used native
+fp16 and no timing loop. PEFT and transformers were absent from this worker.
+The first two requests failed to serialise integer slot IDs for Gradio. The
+successful request returned JSON text from the same computation.
+[Blackwell result](evidence/issue842/blackwell-aliasing.json) ·
+[Space revision](https://huggingface.co/spaces/none02007/stored1/tree/27a5ec647b23d2a78d22ded053d5bdb1169794f5).
