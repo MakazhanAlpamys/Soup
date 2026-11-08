@@ -755,8 +755,28 @@ training:
 
 **Row shapes by task:**
 - `task: classifier`: Single-input sequences via `{"text": "sample", "label": 1}` or `{"text": "sample", "label": "spam"}` (also accepts ChatML rows carrying `label`). Multi-label datasets pass lists of active label indices or names: `{"text": "sample", "label": [0, 2]}` or `{"text": "sample", "label": ["ham", "promo"]}`.
-- `task: reranker`: Query and document text via `{"text": "query doc", "label": "relevant"}` (or an integer class index).
-- `task: cross_encoder`: Paired inputs via `{"text_a": "query", "text_b": "doc", "label": 1}` or `{"question": "query", "answer": "doc", "label": 1}`.
+- `task: reranker`: Query and document text via `{"text": "query doc", "label": "relevant"}` (or an integer class index). Add an optional `"query_id"` (a non-empty string or an integer) to group the candidates of one query for ranking metrics: `{"query_id": "q17", "text": "query doc", "label": 1}`.
+- `task: cross_encoder`: Paired inputs via `{"text_a": "query", "text_b": "doc", "label": 1}` or `{"question": "query", "answer": "doc", "label": 1}`, with the same optional `"query_id"`.
+
+**Ranking metrics (`reranker`, `cross_encoder`, #2618).** When the validation rows carry
+`query_id`, each evaluation also reports `eval_mrr@10`, `eval_recall@1`, `eval_recall@5`,
+`eval_recall@10` and `eval_ndcg@10`, averaged over queries. They reach the Hugging Face log and
+`trainer_state.json`; the run's recorded validation number stays `val_loss`.
+
+- **Score.** With `num_labels: 2` (single-label), candidates are ranked by
+  `logit[1] - logit[0]`, so label index 1 (`label_names[1]` when names are set) is the relevant
+  class. With `num_labels: 1`, ranking needs `classifier_kind: multi_label` and uses the single
+  logit; a relevant row has label `[1]`. Any other head prints one line saying why ranking metrics
+  are skipped.
+- **Ranking.** Candidates are ordered by descending score, ties by row order. `recall@k` is the
+  share of a query's relevant candidates in its top `k`; nDCG uses binary gains.
+- **Skipped queries.** A query with no relevant candidate is skipped and counted in
+  `eval_ranking_queries_no_positive`. A query whose `query_id` also appears in the training rows
+  has an incomplete candidate list in validation (`data.val_split` cuts the file at a row index,
+  and a dataset's own validation split can do the same), so it is left out, counted in
+  `eval_ranking_queries_split` and reported in one line at setup. Keep all rows of a query on one side
+  of the split. Validation rows without `query_id` are left out; with none at all, ranking
+  metrics are skipped with one line. `eval_ranking_queries` counts the queries that were scored.
 
 Routes `classifier` / `reranker` / `cross_encoder` through
 `AutoModelForSequenceClassification`. Multi-label heads cap at 1024 entries per
