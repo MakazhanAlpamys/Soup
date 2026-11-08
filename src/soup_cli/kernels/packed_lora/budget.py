@@ -208,7 +208,8 @@ class Plan:
                 f"training.packed_lora.activations: resident keeps all {layers} layers' saved "
                 f"tensors on the GPU, which needs about {int(self.est_peak) // MIB} MiB at "
                 f"{t} tokens per step; the budget is {budget // MIB} MiB. Use activations: auto "
-                f"or raise the budget.", int(math.ceil(self.est_peak / (1 - SAFETY_FRAC) / MIB)))
+                f"or raise the budget.",
+                int(math.ceil((self.est_peak + SAFETY_BYTES) / (1 - SAFETY_FRAC) / MIB)))
 
     def set_int8(self, int8: bool) -> None:
         """The int8 gate/up stash turned out on / off (the start-up check): the layers' size

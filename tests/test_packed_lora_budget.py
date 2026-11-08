@@ -9,6 +9,7 @@ the planner here must make the same plan to the byte.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -113,6 +114,20 @@ def test_activations_resident_keeps_all_layers_or_refuses():
     with pytest.raises(BudgetTooSmallError) as excinfo:
         plan_at("7B", 7000, acts="resident")
     assert "activations: resident" in str(excinfo.value)
+
+
+def test_the_minimum_quoted_for_resident_activations_is_one_the_planner_accepts():
+    with pytest.raises(BudgetTooSmallError) as excinfo:
+        plan_at("7B", 7000, acts="resident")
+    minimum = excinfo.value.minimum_mib
+    # the number, not only the text: every layer's saved tensors plus the margin the limit keeps
+    # (the 64 MiB and the 2 % of the budget, as minimum_budget_mib counts them)
+    peak = shape_of("7B").peak(False, False, 28, 4096)
+    assert minimum == math.ceil((peak + budget.SAFETY_BYTES) / (1 - budget.SAFETY_FRAC) / MIB)
+    assert "the budget is 7000 MiB" in str(excinfo.value)
+    assert plan_at("7B", minimum, acts="resident").k == 28  # the quoted minimum works ...
+    with pytest.raises(BudgetTooSmallError):
+        plan_at("7B", minimum - 1, acts="resident")  # ... and one MiB less does not
 
 
 def test_acts_resident_scales_with_tokens_and_the_cap_lowers_it():
