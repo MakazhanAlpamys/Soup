@@ -5899,6 +5899,15 @@ class SoupConfig(BaseModel):
         if (self.backend == "mlx"
                 and resolve_mlx_task(self.task, self.training.preference_loss) not in MLX_TASKS):
             return self  # _validate_mlx_task_support refuses the task itself
+        if self.backend == "mlx" and self.task == "sft" and self.modality == "text":
+            if self.training.quantization != "none":
+                raise ValueError(
+                    f"{field} is not applied on backend='mlx' with "
+                    f"training.quantization={self.training.quantization!r}: native MLX "
+                    "vocabulary expansion requires unquantized embeddings (quantization='none'). "
+                    "Use quantization: none, or remove it."
+                )
+            return self
         why = {
             "unsloth": "its setup loads the model and attaches LoRA in one call, with "
             "no step that adds tokens",

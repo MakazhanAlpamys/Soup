@@ -514,6 +514,67 @@ class MLXSFTTrainerWrapper:
             f"[green]MLX model loaded:[/] {cfg.base} "
             f"(task={cfg.task}, lora_r={cfg.training.lora.r})"
         )
+        self._added_tokens = []
+        self._base_vocab_size = None
+        self._vocab_ext = None
+
+        has_new_tokens = bool(
+            getattr(cfg.data, "add_new_tokens", None)
+            or getattr(cfg.data, "new_special_tokens", None)
+        )
+        if has_new_tokens:
+            if cfg.training.quantization != "none":
+                raise ValueError(
+                    f"Vocabulary expansion is not supported with quantization="
+                    f"{cfg.training.quantization!r} on MLX: new tokens require unquantized "
+                    "embeddings (quantization='none')."
+                )
+            try:
+                import mlx.nn as nn
+
+                for mod in self.model.modules():
+                    if isinstance(
+                        mod,
+                        (
+                            getattr(nn, "QuantizedLinear", ()),
+                            getattr(nn, "QuantizedEmbedding", ()),
+                        ),
+                    ):
+                        raise ValueError(
+                            "Vocabulary expansion is not supported on a quantized MLX model: "
+                            "model contains quantized layers. Use an unquantized base model."
+                        )
+            except ImportError:
+                pass
+
+            inner = getattr(self.model, "model", self.model)
+            base_embed = getattr(inner, "embed_tokens", None)
+            hf_tok = getattr(self.tokenizer, "_tokenizer", self.tokenizer)
+            base_vocab_len = (
+                len(hf_tok)
+                if hasattr(hf_tok, "__len__")
+                else getattr(self.tokenizer, "vocab_size", 0)
+            )
+            if base_embed is not None and hasattr(base_embed, "weight"):
+                base_embed_rows = base_embed.weight.shape[0]
+                if base_vocab_len != base_embed_rows:
+                    raise ValueError(
+                        f"Tokenizer vocabulary size ({base_vocab_len}) does not match "
+                        f"base embedding table rows ({base_embed_rows}). MLX native vocabulary "
+                        "expansion requires unpadded embedding tables to maintain 1:1 token ID "
+                        "alignment."
+                    )
+            from soup_cli.utils.mlx_vocab import register_mlx_tokens
+
+            delta_v, added_list = register_mlx_tokens(self.tokenizer, cfg.data)
+            if delta_v > 0:
+                self._added_tokens = added_list
+                self._base_vocab_size = base_vocab_len
+                console.print(
+                    f"[green]MLX vocabulary expansion:[/] registered {delta_v} new token(s) "
+                    f"(base vocab: {base_vocab_len} -> {base_vocab_len + delta_v})"
+                )
+
         self._dataset = dataset
 
     def _apply_lora(self, model) -> None:
@@ -578,6 +639,13 @@ class MLXSFTTrainerWrapper:
             },
             **({"use_dora": True} if use_dora else {}),
         )
+        if getattr(self, "_added_tokens", None):
+            from soup_cli.utils.mlx_vocab import attach_mlx_vocab_extension
+
+            is_tied, ext_embed, ext_head = attach_mlx_vocab_extension(
+                model, delta_v=len(self._added_tokens)
+            )
+            self._vocab_ext = (is_tied, ext_embed, ext_head)
 
     def _load_checkpoint_weights(self, checkpoint_path: str) -> None:
         """Warm-start LoRA weights from a saved MLX checkpoint (#634).
@@ -1270,6 +1338,21 @@ class MLXSFTTrainerWrapper:
                 indent=2,
             )
         )
+
+        if getattr(self, "_vocab_ext", None):
+            from soup_cli.utils.mlx_vocab import save_expanded_vocab_artifact
+
+            is_tied, ext_embed, ext_head = self._vocab_ext
+            save_expanded_vocab_artifact(
+                output_dir=output_dir,
+                model=self.model,
+                tokenizer=self.tokenizer,
+                base_vocab_size=self._base_vocab_size,
+                is_tied=is_tied,
+                added_tokens=self._added_tokens,
+                extended_embed=ext_embed,
+                extended_head=ext_head,
+            )
 
         loss_summary = summarize_training_loss(
             [{"loss": loss} for loss in captured.get("losses", [])]
