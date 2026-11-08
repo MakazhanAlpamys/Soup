@@ -30,7 +30,8 @@ def _problem(*, packed=None, task="sft", backend="transformers", modality="text"
     config = SimpleNamespace(
         backend=backend, modality=modality, task=task,
         data=SimpleNamespace(format=(data or {}).get("format", "alpaca")),
-        training=TrainingConfig(**{"quantization": "4bit", "lora": lora, **training}))
+        training=TrainingConfig(
+            **{"quantization": "4bit", "batch_size": 2, "lora": lora, **training}))
     block = PackedLoraConfig(**({"enabled": True} if packed is None else packed))
     return packed_lora_problem(config, block)
 
@@ -200,9 +201,24 @@ class TestWhatItRefuses:
     def test_the_default_lora_block_is_refused_for_its_dropout(self):
         config = SimpleNamespace(
             backend="transformers", modality="text", task="sft",
-            data=SimpleNamespace(format="alpaca"), training=TrainingConfig(quantization="4bit"))
+            data=SimpleNamespace(format="alpaca"),
+            training=TrainingConfig(quantization="4bit", batch_size=2))
         problem = packed_lora_problem(config, PackedLoraConfig(enabled=True))
         assert "needs lora.dropout: 0" in problem
+
+    def test_an_auto_batch_size_is_refused_with_the_reason(self):
+        message = _problem(batch_size="auto")
+        assert message.startswith(
+            "training.packed_lora needs an explicit training.batch_size; got 'auto'")
+        assert "memory plan is made for the batch size" in message
+
+    def test_the_default_batch_size_is_auto_and_is_refused(self):
+        config = SimpleNamespace(
+            backend="transformers", modality="text", task="sft",
+            data=SimpleNamespace(format="alpaca"),
+            training=TrainingConfig(quantization="4bit", lora={"dropout": 0.0}))
+        assert "explicit training.batch_size" in packed_lora_problem(
+            config, PackedLoraConfig(enabled=True))
 
     @pytest.mark.parametrize("lora,name", [
         ({"use_dora": True}, "lora.use_dora"),

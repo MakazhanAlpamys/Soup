@@ -183,6 +183,11 @@ def packed_lora_problem(config, block):
             f"peft gives every projection its own dropout, so q/k/v and gate/up "
             f"would no longer share the one input the kernels read."
         )
+    elif tcfg.batch_size == "auto":
+        reason = (
+            "needs an explicit training.batch_size; got 'auto'. The memory plan is made for "
+            "the batch size, which 'auto' only finds out while the run trains."
+        )
     else:
         for label, clash, why in (
             ("lora.use_dora", lora.use_dora, "the kernels compute plain LoRA"),
