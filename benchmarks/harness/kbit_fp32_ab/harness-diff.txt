@@ -1,0 +1,26 @@
+# diff of the p6 payload against soup-archive/2026-11-07/case1-profile/payload (the soup-8a-prof harness); sha256 of the sources are in harness-source.sha256
+=== tco_common.py
+(identical)
+=== tco_meter.py
+(identical)
+=== tco_profile.py
+(identical)
+=== run_tco.sh
+(identical)
+=== tco_run.py
+223a224,225
+>     if os.environ.get("TCO_ARM") == "D":   # P6-2609: arm D = arm A + training.use_liger (the only yaml difference)
+>         lines.insert(lines.index("  quantization: 4bit") + 1, "  use_liger: true")
+389a392,393
+>         import p6_arms   # P6-2609: scratch arms B/C patch peft.prepare_model_for_kbit_training; A and D change nothing there
+>         p6_arms.apply(os.environ.get("TCO_ARM", "A"), out_dir)
+544c548
+<                       "amendment1_env": {k: os.environ.get(k) for k in ("TCO_GC", "TCO_STREAM_RECOMPUTE", "TCO_UNSLOTH_EXACT")},
+---
+>                       "amendment1_env": {k: os.environ.get(k) for k in ("TCO_GC", "TCO_STREAM_RECOMPUTE", "TCO_UNSLOTH_EXACT", "TCO_ARM", "TCO_PROFILE")},
+624a629,632
+>         # P6-2609: keep the raw samples (unix time, mem MiB, SM clock MHz, power W, temp C, util %) so the SM clock
+>         # can be taken over the measured window only; the summary below spans the whole run, idle model load included.
+>         atomic_write(os.path.join(base, "gpu_samples.json"),
+>                      {"cols": ["unix", "mem_mib", "sm_mhz", "power_w", "temp_c", "util_pct"], "rows": poller.samples})
+=== new files: payload/p6_arms.py payload/job_p6.sh payload/requirements-tco.txt (replaces the soup-41 pin list: no unsloth/unsloth_zoo/xformers/triton/torchao)

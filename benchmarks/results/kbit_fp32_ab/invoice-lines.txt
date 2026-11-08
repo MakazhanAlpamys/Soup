@@ -1,0 +1,2 @@
+  charge instance-59706768 2026-11-08: $0.479  [gpu: 1.097 hours at $0.373/hour = $0.409, disk: 1.139 hours at $0.019/hour = $0.022, bwd: 17.7 GB Downloaded at $0.003/GB = $0.046, bwu: 0.5 GB Uploaded at $0.004/GB = $0.002]
+  charge instance-59706558 2026-11-08: $0.036  [gpu: 0.086 hours at $0.399/hour = $0.034, disk: 0.092 hours at $0.019/hour = $0.002, bwd: Bandwidth (download) = $0.0, bwu: Bandwidth (upload) = $0.0]
