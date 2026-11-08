@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import struct
 import types
 
 import pytest
@@ -505,12 +506,28 @@ def test_the_estimate_is_the_payload_the_importer_writes(tmp_path, model_type, t
     assert sum(estimate.layer_bytes) + estimate.other_bytes == result.payload_bytes
     assert len(estimate.layer_bytes) == result.layer_count
     assert estimate.code_table_bytes == (16 + 256) * 4
-    on_disk = sum(
-        os.path.getsize(os.path.join(tmp_path / "out", name))
-        for name in os.listdir(tmp_path / "out")
-    )
+    out = tmp_path / "out"
+    on_disk = sum(os.path.getsize(out / name) for name in os.listdir(out))
     # headers and the index are bounded from above, never under-counted
     assert estimate.total_bytes >= on_disk
+    headers = 0
+    for name in os.listdir(out):
+        if name.endswith(".safetensors"):
+            with open(out / name, "rb") as handle:
+                headers += 8 + struct.unpack("<Q", handle.read(8))[0]
+    assert estimate.header_bytes >= headers
+    assert estimate.index_bytes >= os.path.getsize(out / "index.json")
+
+
+@pytest.mark.parametrize(
+    ("overrides", "needle"),
+    [({"dtype": "float32"}, "bfloat16"), ({"double_quant": False}, "double")],
+    ids=["float32", "no-double-quant"],
+)
+def test_the_estimate_refuses_a_request_the_store_cannot_serve(tmp_path, overrides, needle):
+    source = _build(tmp_path)
+    with pytest.raises(ValueError, match=needle):
+        _estimate(source, **overrides)
 
 
 def test_the_estimate_without_a_4bit_run_is_the_old_refusal(tmp_path):

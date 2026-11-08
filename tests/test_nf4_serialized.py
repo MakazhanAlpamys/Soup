@@ -270,11 +270,15 @@ def test_cache_inspection_accepts_the_store(work):
     )
     assert cached is not None, reason
     assert cached == result.index
-    # a native (cpu/cuda) quantisation request must NOT silently reuse serialised bytes
-    missed, why = inspect_shard_cache(
-        out, "bfloat16", fingerprint_source_files(components), components, "nf4", True, "cuda"
-    )
-    assert missed is None and "device" in why.lower(), why
+    # the importer's index depends on no device (nothing was quantised on one), so a run on
+    # any device reuses it; the trainer passes its own ('cuda', 'cpu'). A cache Soup quantised
+    # on a device still depends on it: tests/test_stream_nf4_serialized_source.py.
+    for device in ("cuda", "cpu"):
+        reused, why = inspect_shard_cache(
+            out, "bfloat16", fingerprint_source_files(components), components, "nf4", True,
+            device,
+        )
+        assert reused == result.index, why
 
 
 def test_verify_import_rereads_store_and_source(work):
