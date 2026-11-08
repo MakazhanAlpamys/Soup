@@ -88,6 +88,12 @@ would be a new record with a rule of its own.
 every seed. Run once, on source `75eda51e` (the commit that added this rule,
 with a clean `src/`), from the command under *Reproducing*. Every value is in
 [`evidence/run-2005-mlx-simnpo-m6.json`](evidence/run-2005-mlx-simnpo-m6.json).
+The branch was then rebased onto `main` `dcb37d9d`, which made that commit
+`a7929b24`. Of the `soup_cli` modules a SimNPO run loads, the rebase changed
+three: `trainer/unlearn.py`, in the transformers wrapper's `setup()` (#2577);
+`trainer/mlx_orpo.py`, in `build_orpo_example` (#2555); and
+`trainer/_trl_compat.py`, in a docstring. None of these is on the MLX SimNPO
+path, so the run was not repeated.
 LoRA went on `self_attn.q_proj` and `self_attn.v_proj`, the modules MLX resolves
 `target_modules: auto` to here.
 
