@@ -434,6 +434,74 @@ def _preflight_sharding(
     return mode, processes
 
 
+def _packed_lora_preflight(
+    cfg,
+    *,
+    allow_oom_attempt: bool,
+    trust_remote_code: bool = False,
+    sharding: str | None = None,
+) -> bool:
+    """``training.packed_lora``: refuse, before anything is loaded, a run the kernels cannot take.
+
+    Checks the machine, the model's config and the settings (``kernels/packed_lora/preflight.py``)
+    and prints the plan. A run the kernels cannot take stops here with the reasons, or, under
+    ``on_unsupported: stock``, says so and trains with the stock step. Memory that is not free
+    right now (pinned host RAM, GPU memory) is refused unless ``--allow-oom-attempt``.
+
+    Returns whether the kernels will run the step. The generic hardware-fit estimate prices a run
+    that checkpoints its activations and builds its logits, which the kernels do neither of, so
+    for a run they take the planner's estimate is the one checked against the card and the caller
+    skips the generic one.
+    """
+    block = cfg.training.packed_lora
+    if block is None or not block.enabled:
+        return False
+    from soup_cli.kernels.packed_lora import preflight as checks
+    from soup_cli.utils.terminal import for_terminal
+
+    result = checks.preflight(
+        cfg,
+        checks.read_model_config(cfg.base, trust_remote_code),
+        checks.read_machine(),
+        sharding=sharding,
+    )
+    if result.problems:
+        if block.on_unsupported == "stock":
+            for problem in result.problems:
+                console.print(f"[yellow]Packed LoRA kernels not used:[/] {for_terminal(problem)}")
+            console.print(
+                "[yellow]training.packed_lora.on_unsupported is stock: training with the "
+                "stock step.[/]"
+            )
+            return False
+        for problem in result.problems:
+            console.print(f"[red]Packed LoRA error:[/] {for_terminal(problem)}")
+        console.print(
+            "[dim]Set training.packed_lora.on_unsupported: stock to train with the stock step "
+            "instead, or remove training.packed_lora.[/]"
+        )
+        raise typer.Exit(1)
+    for problem in result.fit_problems:
+        colour = "yellow" if allow_oom_attempt else "red"
+        console.print(f"[{colour}]Packed LoRA error:[/] {for_terminal(problem)}")
+    if result.fit_problems:
+        if not allow_oom_attempt:
+            console.print(
+                "[dim]Free the memory, lower training.packed_lora.gpu_budget_mib or the batch "
+                "size, or pass --allow-oom-attempt to try anyway.[/]"
+            )
+            raise typer.Exit(1)
+        console.print("[yellow]--allow-oom-attempt set: launching anyway.[/]")
+    if result.plan is not None:
+        console.print(f"[green]Packed LoRA kernels:[/] {for_terminal(result.plan.describe())}")
+    elif result.estimate_bytes:
+        console.print(
+            "[green]Packed LoRA kernels:[/] no GPU budget, so what fits stays resident; the "
+            f"floor is about {result.estimate_bytes >> 20} MiB at {result.tokens} tokens per step"
+        )
+    return True
+
+
 def _hardware_fit_preflight(
     cfg,
     gpu_info,
@@ -1633,13 +1701,21 @@ def train(
     # or when the config isn't statically predictable (e.g. batch_size='auto');
     # says so when the quantization has no memory model (hqq:*).
     sharding, sharded_processes = _preflight_sharding(fsdp, ds_config_path, num_gpus, nodes)
-    _hardware_fit_preflight(
+    # training.packed_lora prices its own run (the planner's estimate against the card).
+    packed_lora_runs = _packed_lora_preflight(
         cfg,
-        gpu_info,
         allow_oom_attempt=allow_oom_attempt,
-        sharding=sharding,
-        num_processes=sharded_processes,
+        trust_remote_code=trust_remote_code,
+        sharding=f"--fsdp {fsdp}" if fsdp else ("--deepspeed" if ds_config_path else None),
     )
+    if not packed_lora_runs:
+        _hardware_fit_preflight(
+            cfg,
+            gpu_info,
+            allow_oom_attempt=allow_oom_attempt,
+            sharding=sharding,
+            num_processes=sharded_processes,
+        )
 
     backend_label = cfg.backend
     if cfg.backend == "unsloth":
