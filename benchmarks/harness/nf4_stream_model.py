@@ -2,8 +2,51 @@
 
 from __future__ import annotations
 
+import contextlib
 import pathlib
 import tempfile
+from collections import Counter
+from unittest.mock import patch
+
+
+@contextlib.contextmanager
+def slot_reads(pool):
+    """Observe native ctx reads using only pointers and the scheduler's ownership metadata."""
+    from bitsandbytes.autograd._functions import MatMul4Bit
+
+    by_pointer = {
+        tensor.data_ptr(): slot
+        for slot, buffers in enumerate(pool.buffers)
+        for tensor in buffers.values()
+    }
+    forward, backward = MatMul4Bit.forward, MatMul4Bit.backward
+    reads = Counter()
+
+    def capture(ctx, value, packed, *args):
+        slot = by_pointer.get(packed.data_ptr())
+        if slot is not None:
+            ctx._bench_owner = (slot, pool.owner[slot], pool.generation[slot])
+        return forward(ctx, value, packed, *args)
+
+    def inspect_read(ctx, grad):
+        if ctx.needs_input_grad[0]:
+            slot = by_pointer.get(ctx.tensors[1].data_ptr())
+            saved = getattr(ctx, "_bench_owner", None)
+            if slot is None or saved is None or slot != saved[0]:
+                reads["unmapped"] += 1
+            elif pool.owner[slot] != saved[1]:
+                reads["other_layer"] += 1
+            elif pool.generation[slot] != saved[2]:
+                reads["refilled_same_layer"] += 1
+            else:
+                reads["same_generation"] += 1
+        return backward(ctx, grad)
+
+    with (
+        patch.object(MatMul4Bit, "forward", staticmethod(capture)),
+        patch.object(MatMul4Bit, "backward", staticmethod(inspect_read)),
+    ):
+        yield reads
 
 
 def model_check(count_paths, difference, hardware) -> dict:
@@ -41,6 +84,7 @@ def model_check(count_paths, difference, hardware) -> dict:
 
     def run(model, ids, counts):
         model.train()
+        model.zero_grad(set_to_none=True)
         counts.clear()
         logits = model(input_ids=ids, use_cache=False).logits
         forward = dict(counts)
@@ -113,24 +157,35 @@ def model_check(count_paths, difference, hardware) -> dict:
                 )
                 try:
                     copied = bitexact.copy_lora(resident, model)
-                    logits, grads, paths = run(model, ids, counts)
-                    if copied != len(ref_grads) or grads.keys() != ref_grads.keys():
-                        raise ValueError("resident and streamed adapter sets differ")
-                    forward = difference(logits, ref)
-                    backward = {
-                        name: difference(grad, ref_grads[name]) for name, grad in grads.items()
-                    }
-                    all_exact = all(g["exact"] for g in backward.values())
+                    repeats = []
+                    with slot_reads(state.pool) as reads:
+                        for _ in range(5):
+                            reads.clear()
+                            logits, grads, paths = run(model, ids, counts)
+                            if copied != len(ref_grads) or grads.keys() != ref_grads.keys():
+                                raise ValueError("resident and streamed adapter sets differ")
+                            repeats.append(
+                                {
+                                    "forward": difference(logits, ref),
+                                    "backward": {
+                                        name: difference(grad, ref_grads[name])
+                                        for name, grad in grads.items()
+                                    },
+                                    "paths": paths,
+                                    "native_ctx_reads": dict(reads),
+                                }
+                            )
+                    valid = all(
+                        r["forward"]["exact"]
+                        and all(g["finite"] for g in r["backward"].values())
+                        and r["paths"]["forward"].get("kernel") == layers * len(suffixes)
+                        for r in repeats
+                    )
+                    all_exact = all(g["exact"] for r in repeats for g in r["backward"].values())
                     report["arms"][arm] = {
-                        "forward": forward,
-                        "backward": backward,
-                        "paths": paths,
+                        "repeats": repeats,
                         "pinned": state.pinned,
-                        "pass": state.pinned
-                        and forward["exact"]
-                        and all(g["finite"] for g in backward.values())
-                        and all_exact == (arm == "repair")
-                        and paths["forward"].get("kernel") == layers * len(suffixes),
+                        "pass": valid and state.pinned and all_exact == (arm == "repair"),
                     }
                 finally:
                     state.close()
