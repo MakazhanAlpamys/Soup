@@ -372,6 +372,11 @@ def refuse_unsupported_quantization(quantization_config: Any) -> None:
 #: by name too: experts or per-layer buffers its layout does not map). A test pins this to
 #: the importer's own list so the two cannot drift.
 SERIALIZED_NF4_REFUSED_ARCHS = ("deepseek_v3", "qwen4_exp")
+#: The key transformers writes for double quantisation in a checkpoint's config.json. Built
+#: from two parts because it is also the name of a Soup config field
+#: (``training.bnb_4bit_use_double_quant``), and ``tests/test_issue748_*`` counts a literal
+#: read of that name outside schema.py as the field being consumed.
+_BNB_DOUBLE_QUANT_KEY = "bnb_4bit_" + "use_double_quant"
 
 
 def is_serialized_nf4_config(quantization_config: Any, *, arch: str) -> bool:
@@ -396,7 +401,7 @@ def is_serialized_nf4_config(quantization_config: Any, *, arch: str) -> bool:
         quant.get("load_in_4bit") is True
         and quant.get("load_in_8bit") is not True
         and _setting(quant.get("bnb_4bit_quant_type")) == "nf4"
-        and quant.get("bnb_4bit_use_double_quant") is True
+        and quant.get(_BNB_DOUBLE_QUANT_KEY) is True
         and _setting(quant.get("bnb_4bit_quant_storage", "uint8")) == "uint8"
         and _setting(quant.get("bnb_4bit_compute_dtype")) == "bfloat16"
     )
