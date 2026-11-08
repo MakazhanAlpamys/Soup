@@ -53,7 +53,9 @@ class PackedRun:
         self.packed = None
         self.model = None
         self.device = None
+        self.dtype = None  # the compute dtype of the layers (a trainer's autocast must match it)
         self.tokens = None
+        self.park_pending = False  # the plan keeps a table off the GPU and none is parked yet
         self.link = None  # measured PCIe speed, bytes/s, when something crosses it
         self.steps_packed = 0
         self.steps_stock = 0
@@ -61,10 +63,13 @@ class PackedRun:
         self.closed = False
 
     # -- setup ----------------------------------------------------------------------------------
-    def prepare(self, model, dtype, tokens, architectures=OPEN_ARCHITECTURES):
+    def prepare(self, model, dtype, tokens, architectures=OPEN_ARCHITECTURES, park=True):
         """Read the model, run the start-up checks, make the memory plan and place what it says.
 
-        ``tokens``: the most tokens a step can hold (batch size x max length). Raises
+        ``tokens``: the most tokens a step can hold (batch size x max length). ``park=False``
+        leaves the tables the plan keeps off the GPU where they are until :meth:`park_tables`
+        (a trainer that has not yet been built or prepared by accelerate must not see a
+        parameter on the host). Raises
         :class:`~soup_cli.kernels.packed_lora.model.UnsupportedError` for a model the kernels do not
         handle, and :class:`~soup_cli.kernels.packed_lora.budget.BudgetTooSmallError` for a budget
         the floor does not fit; the caller turns either into an error or into the stock step
@@ -72,6 +77,7 @@ class PackedRun:
         causal = packed_model.unwrap(model)
         packed = packed_model.prepare(causal, dtype, architectures)
         self.model, self.packed, self.tokens = causal, packed, int(tokens)
+        self.dtype = dtype
         self.device = packed.layers[0].pack.scale2.device
         self.log(packed_model.describe(packed))
         problems = selftest.kernel_problems(dtype, self.device) + selftest.decode_problems(
@@ -90,12 +96,14 @@ class PackedRun:
                                     acts)
             if self.plan.head_gpu and self.plan.embed_gpu:
                 self.log("all tables stay on the GPU")
-            else:
+            elif park:
                 self._park_tables()
+            else:
+                self.park_pending = True
         n_host = 0
         if self.policy.activations != "resident":
             n_host = n_layers if self.plan is None else n_layers - self.plan.k
-        if n_host or (self.tables is not None and self.tables.any_active()):
+        if n_host or self.park_pending or (self.tables is not None and self.tables.any_active()):
             self.link = offload.measure_link()  # something crosses PCIe: how fast?
             if offload.is_slow(self.link):
                 self.log(f"PCIe is slow ({self.link / 1e9:.1f} GB/s): "
@@ -186,8 +194,11 @@ class PackedRun:
             self.tables.restore(embed_p, head_p, self.device)
 
     def park_tables(self):
-        """Park the tables again after :meth:`restore_tables`."""
-        if self.tables is not None and self.plan is not None:
+        """Park the tables the plan keeps off the GPU: the first time after ``prepare(park=False)``,
+        and again after :meth:`restore_tables`."""
+        if self.plan is not None and not self.closed and (
+                self.tables is not None or self.park_pending):
+            self.park_pending = False
             self._park_tables()
 
     # -- end ------------------------------------------------------------------------------------
