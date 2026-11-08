@@ -274,21 +274,28 @@ def embed_for_stock_forward(model, input_ids):
     return model.get_input_embeddings()(input_ids).float()
 
 
-def keep_tables_in_compute_dtype(model):
+def keep_tables_in_compute_dtype(model, *, stock_compute_dtype=None):
     """Context manager for ``prepare_model_for_kbit_training``: it upcasts every fp16 / bf16
     parameter that is not 4-bit to fp32, the embedding and the lm_head included: a 0.9 GB fp32
     copy of values that are all fp16 for a 1.5B model, 2 x 2.2 GB for 7B, made while the original
     is still alive. The packed forward reads the tables in the compute dtype anyway, so inside this
     context they are left in their loaded storage (same values, half the memory, no transient).
-    Norms and biases are upcast as before. Afterwards the stock forward needs
-    :func:`embed_for_stock_forward` (``model._packed_lora_fp32_embeds`` says so)."""
+    Norms and biases follow the k-bit preparation normally. The stock forward needs
+    :func:`embed_for_stock_forward` when its k-bit preparation would have kept the fp32
+    embedding (``model._packed_lora_fp32_embeds`` says so)."""
     import contextlib
 
     @contextlib.contextmanager
     def context():
         tables = []
+        stock_keeps_embedding_dtype = False
         if getattr(model, "is_loaded_in_4bit", False):
-            for module in (model.get_input_embeddings(), model.get_output_embeddings()):
+            embedding = model.get_input_embeddings()
+            stock_keeps_embedding_dtype = (
+                stock_compute_dtype is torch.bfloat16
+                and getattr(getattr(embedding, "weight", None), "dtype", None) is torch.bfloat16
+            )
+            for module in (embedding, model.get_output_embeddings()):
                 weight = getattr(module, "weight", None)
                 if (weight is not None and weight.dtype in FP_DTYPES and weight.is_cuda
                         and not any(weight is t for t in tables)):
@@ -301,7 +308,7 @@ def keep_tables_in_compute_dtype(model):
         finally:
             for w, data in stored:
                 w.data = data
-            if stored:
+            if stored and not stock_keeps_embedding_dtype:
                 model._packed_lora_fp32_embeds = True
 
     return context()

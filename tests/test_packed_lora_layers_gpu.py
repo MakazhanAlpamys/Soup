@@ -335,11 +335,12 @@ def test_the_stock_forward_after_prepare_equals_the_stock_forward_before():
         run.close()
 
 
-def test_keep_tables_in_compute_dtype_leaves_the_tables_unconverted():
-    from peft import prepare_model_for_kbit_training
+@pytest.mark.parametrize("stock_bf16", [False, True], ids=["stock-fp32", "stock-bf16"])
+def test_keep_tables_in_compute_dtype_leaves_the_tables_unconverted(stock_bf16):
     from transformers import AutoModelForCausalLM, BitsAndBytesConfig, Qwen2Config, Qwen2ForCausalLM
 
     from soup_cli.kernels.packed_lora import model as packed_model
+    from soup_cli.utils.kbit_prepare import prepare_kbit_model
 
     dt = torch.bfloat16
     config = Qwen2Config(vocab_size=1024, hidden_size=256, intermediate_size=512,
@@ -350,13 +351,15 @@ def test_keep_tables_in_compute_dtype_leaves_the_tables_unconverted():
         Qwen2ForCausalLM(config).to(dt).save_pretrained(tmp)
         model = AutoModelForCausalLM.from_pretrained(tmp, quantization_config=quant,
                                                      device_map={"": 0}, dtype=dt)
-    with packed_model.keep_tables_in_compute_dtype(model):
-        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=False)
+    compute_dtype = dt if stock_bf16 else torch.float16
+    with packed_model.keep_tables_in_compute_dtype(model, stock_compute_dtype=compute_dtype):
+        model = prepare_kbit_model(
+            model, use_gradient_checkpointing=False, compute_dtype=compute_dtype,
+        )
     assert model.get_input_embeddings().weight.dtype == dt
     assert model.get_input_embeddings().weight.is_cuda
-    assert model._packed_lora_fp32_embeds is True
-    # the norms are upcast as before
-    assert model.model.norm.weight.dtype == torch.float32
+    assert getattr(model, "_packed_lora_fp32_embeds", False) is not stock_bf16
+    assert model.model.norm.weight.dtype == (dt if stock_bf16 else torch.float32)
 
 
 # --- the run object -----------------------------------------------------------------------
