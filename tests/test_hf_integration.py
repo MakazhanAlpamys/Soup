@@ -9,6 +9,7 @@ import types
 from unittest.mock import MagicMock
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
@@ -740,6 +741,17 @@ class TestDeployHfSpace:
         assert "sdk: gradio" in gradio["README.md"]
         streamlit = render_space_template("streamlit-chat", model_repo="user/my-model")
         assert "sdk: streamlit" in streamlit["README.md"]
+
+    @pytest.mark.parametrize("template", ["gradio-chat", "streamlit-chat"])
+    def test_readme_colors_are_accepted_by_hf_spaces(self, template):
+        from soup_cli.commands.deploy import render_space_template
+
+        rendered = render_space_template(template, model_repo="user/my-model")
+        _, front_matter, _ = rendered["README.md"].split("---", 2)
+        metadata = yaml.safe_load(front_matter)
+        # https://huggingface.co/docs/hub/spaces-config-reference
+        allowed_colors = {"red", "yellow", "green", "blue", "indigo", "purple", "pink", "gray"}
+        assert {metadata["colorFrom"], metadata["colorTo"]} <= allowed_colors
 
     def test_template_escapes_model_repo_id(self):
         from soup_cli.commands.deploy import render_space_template

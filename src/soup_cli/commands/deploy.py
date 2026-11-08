@@ -72,7 +72,7 @@ _GRADIO_README = """---
 title: Soup Chat
 emoji: 🍲
 colorFrom: purple
-colorTo: cyan
+colorTo: blue
 sdk: gradio
 sdk_version: 4.0.0
 app_file: app.py
@@ -149,7 +149,7 @@ _STREAMLIT_README = """---
 title: Soup Chat
 emoji: 🍲
 colorFrom: purple
-colorTo: cyan
+colorTo: blue
 sdk: streamlit
 sdk_version: 1.30.0
 app_file: app.py
