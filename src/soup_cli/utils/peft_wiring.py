@@ -558,6 +558,11 @@ def restrict_target_modules_to_layers(
     for name in candidates:
         match = _LAYER_INDEX_NUM.search(name)
         if match is None:
+            # Outside the decoder stack (lm_head, the embeddings). A freeze plan
+            # only governs numbered layers, so it cannot scope these; peft keeps
+            # an exact name for a list target too, and after resolution every
+            # name is exact (#2201 review, item 3).
+            kept.append(name)
             continue
         if cutoff <= int(match.group(1)) < total_layers:
             kept.append(name)

@@ -132,3 +132,41 @@ class TestTheRefusalsThatRemain:
             _wrapper(tmp_path, monkeypatch, targets=["q_proj"], freeze=1,
                      extra_lora={"use_vera": True})
         assert "use_vera" in str(err.value)
+
+    def test_target_parameters_is_still_refused_for_a_string_target(self, tmp_path, monkeypatch):
+        """A resolved string must not slip past the refusals that key off the
+        freeze plan (#2201 review, item 2)."""
+        with pytest.raises(ValueError) as err:
+            _wrapper(tmp_path, monkeypatch, targets="all-linear", freeze=1,
+                     extra_lora={"target_parameters": ["model.layers.1.mlp.down_proj"]})
+        assert "target_parameters" in str(err.value)
+
+    def test_vera_is_still_refused_for_a_string_target(self, tmp_path, monkeypatch):
+        with pytest.raises(ValueError) as err:
+            _wrapper(tmp_path, monkeypatch, targets="all-linear", freeze=1,
+                     extra_lora={"use_vera": True})
+        assert "use_vera" in str(err.value)
+
+
+class TestNamesOutsideTheDecoderStack:
+    def test_a_name_outside_the_stack_is_kept(self):
+        """A freeze plan only governs numbered layers, so an exact name outside
+        them is kept, as peft keeps it for a list target (#2201, item 3)."""
+        from soup_cli.utils.peft_wiring import restrict_target_modules_to_layers
+
+        class _Model:
+            def named_modules(self):
+                return [
+                    ("", None),
+                    ("model.embed_tokens", None),
+                    ("model.layers.0.self_attn.q_proj", None),
+                    ("model.layers.1.self_attn.q_proj", None),
+                    ("lm_head", None),
+                ]
+
+        kept = restrict_target_modules_to_layers(
+            _Model(), ".*(q_proj|lm_head)", cutoff=1, total_layers=2
+        )
+        assert "model.layers.1.self_attn.q_proj" in kept
+        assert "lm_head" in kept
+        assert "model.layers.0.self_attn.q_proj" not in kept

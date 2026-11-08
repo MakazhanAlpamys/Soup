@@ -1922,6 +1922,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # Rather than refuse the combination, resolve the string to the
             # explicit module names it reaches and keep the ones the freeze
             # plan leaves trainable, so the adapter still respects the plan.
+            scoped_by_names = False
             if lora_layers_to_transform is not None and isinstance(target_modules, str):
                 from soup_cli.utils.peft_wiring import (
                     expand_string_target_modules,
@@ -1946,11 +1947,14 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 console.print(
                     f"[green]Freeze-scoped targets:[/] "
                     f"{len(resolved_targets)} module(s) resolved from "
-                    f"target_modules={target_modules!r} inside layers "
+                    f"target_modules={for_terminal(repr(target_modules))} inside layers "
                     f"{cutoff}..{total_layers - 1}"
                 )
                 target_modules = resolved_targets
-                lora_layers_to_transform = None
+                # Keep lora_layers_to_transform set: the target_parameters and
+                # VeRA refusals below key off it, and a string target with a
+                # freeze plan must not slip past them (#2201 review, item 2).
+                scoped_by_names = True
 
             # #1432: peft only applies layers_to_transform to a list target
             # that lives inside a numbered decoder layer, or to an exact
@@ -2003,7 +2007,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 target_modules=target_modules,
                 target_parameters=target_parameters,
                 task_type=TaskType.CAUSAL_LM,
-                layers_to_transform=lora_layers_to_transform,
+                layers_to_transform=(
+                    None if scoped_by_names else lora_layers_to_transform
+                ),
             )
             # v0.39.0 Part D / v0.40.6 #67 — surgical PEFT patches via shared helpers.
             from soup_cli.utils.peft_wiring import (
