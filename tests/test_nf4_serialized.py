@@ -965,6 +965,8 @@ EXTRA_MALFORMED_HEADERS = [
     ('"a":{"dtype":"U8","shape":[1],"data_offsets":[0,1],"x":1}', "invalid header entry"),
     ('"a":5', "invalid header entry"),
     ('"a":{"dtype":"U8","shape":[1],"data_offsets":[0]}', "invalid data_offsets"),
+    ('"a":{"dtype":"U8","shape":[1],"data_offsets":5}', "invalid data_offsets"),
+    ('"a":{"dtype":"U8","shape":[1],"data_offsets":null}', "invalid data_offsets"),
     ('"a":{"dtype":"U8","shape":[1],"data_offsets":[0,"1"]}', "invalid data_offsets"),
     ('"a":{"dtype":"U8","shape":[1],"data_offsets":[true,1]}', "invalid data_offsets"),
     ('"a":{"dtype":"U8","shape":[1],"data_offsets":[-1,0]}', "does not hold 1 bytes"),
