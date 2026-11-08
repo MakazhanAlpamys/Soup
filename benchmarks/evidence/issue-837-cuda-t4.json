@@ -1,0 +1,94 @@
+{
+  "timestamp_utc": "2026-11-08T11:44:30.650163+00:00",
+  "git_sha": "8a7692febac3250d2109dabbcb1582989c24786e",
+  "runtime": {
+    "python": "3.13.16",
+    "torch": "2.14.1+cu130",
+    "torch_cuda": "13.0",
+    "gpu": "Tesla T4",
+    "compute_capability": "7.5",
+    "gpu_memory_bytes": 15637086208,
+    "driver": "580.82.07",
+    "packages": {
+      "transformers": "5.22.1",
+      "peft": "0.21.2",
+      "bitsandbytes": "0.50.2",
+      "liger-kernel": "0.8.5"
+    }
+  },
+  "protocol": {
+    "shape": {
+      "tokens": 2048,
+      "hidden": 4096,
+      "intermediate": 14336,
+      "rank": 64
+    },
+    "warmup_per_arm": 5,
+    "measured_repeats_per_arm": 30,
+    "timer": "CUDA events, forward plus backward",
+    "arms_interleaved": ["fast", "plain", "liger"],
+    "saved_tensor_bytes": "unique saved tensor views, deduplicated by storage and view metadata",
+    "peak_memory": "torch.cuda.max_memory_allocated",
+    "scope": "single synthetic SwiGLU MLP block; no model download; not end-to-end training"
+  },
+  "results": {
+    "bf16": {
+      "saved_tensor_bytes": {
+        "fast": 494141440,
+        "plain": 611844096,
+        "liger": 553123840
+      },
+      "median_forward_backward_ms": {
+        "fast": 811.2027893066406,
+        "plain": 793.0513916015625,
+        "liger": 791.439453125
+      },
+      "p25_p75_ms": {
+        "fast": [796.3214721679688, 824.0235900878906],
+        "plain": [777.3809356689453, 808.5034027099609],
+        "liger": [780.4402160644531, 806.7873077392578]
+      },
+      "peak_memory_allocated_bytes": {
+        "fast": 1369702400,
+        "plain": 781975552,
+        "liger": 723255296
+      },
+      "max_gradient_relative_l2_vs_plain": {
+        "fast": 0.004315595181889909,
+        "liger": 0.004676141711634789
+      },
+      "output_equal_to_plain": true,
+      "path_proof": {"fast": "30/30", "plain": "30/30", "liger": "30/30"},
+      "sm_clock_mhz": {"min": 585, "median": 675, "max": 1080}
+    },
+    "nf4": {
+      "saved_tensor_bytes": {
+        "fast": 232699084,
+        "plain": 259522560,
+        "liger": 200802304
+      },
+      "median_forward_backward_ms": {
+        "fast": 820.0820617675781,
+        "plain": 802.6191101074219,
+        "liger": 804.5968017578125
+      },
+      "p25_p75_ms": {
+        "fast": [812.8780975341797, 845.2569885253906],
+        "plain": [789.2662200927734, 824.4217834472656],
+        "liger": [789.5962829589844, 824.8128204345703]
+      },
+      "peak_memory_allocated_bytes": {
+        "fast": 1550238720,
+        "plain": 1121895424,
+        "liger": 1063175168
+      },
+      "max_gradient_relative_l2_vs_plain": {
+        "fast": 0.0043144884988880056,
+        "liger": 0.004670710817751713
+      },
+      "output_equal_to_plain": true,
+      "path_proof": {"fast": "30/30", "plain": "30/30", "liger": "30/30"},
+      "sm_clock_mhz": {"min": 570, "median": 705, "max": 1320}
+    }
+  }
+}
