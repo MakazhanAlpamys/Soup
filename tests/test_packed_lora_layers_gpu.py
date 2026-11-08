@@ -436,7 +436,7 @@ def test_a_budget_run_makes_a_plan_that_covers_the_measured_peak():
         packed(model, run, ids, mask, labels)
         peak = torch.cuda.max_memory_allocated()
         print(f"plan estimate {run.plan.est_peak / 2**20:.0f} MiB, measured {peak / 2**20:.0f} MiB")
-        assert peak <= BUDGET_MIB << 20, (peak / 2**20, BUDGET_MIB)  # the promise
+        assert peak <= BUDGET_MIB << 20, (peak / 2**20, BUDGET_MIB)  # the target, within the margin
         assert abs(run.plan.est_peak - peak) <= 0.1 * peak, (peak / 2**20,
                                                              run.plan.est_peak / 2**20)
     finally:

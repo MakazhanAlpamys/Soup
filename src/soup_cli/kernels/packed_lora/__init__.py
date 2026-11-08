@@ -30,6 +30,15 @@ The GPU half (torch, bitsandbytes and Triton, imported on first use)::
 
 A step takes the stock batch (right-padded rows), drops the padding inside it, and runs every
 layer on the remaining tokens; the loss and its gradient come out of a head kernel that never
-builds the logits. Numbers: the loss matches the stock forward to 8e-5 relative, the LoRA
-gradients to 1.5 % (exact mode) or 3.5 % (int8 backward) on the layer checks.
+builds the logits.
+
+Numbers (RTX 5070 Laptop; ``benchmarks/packed-lora-gpu-tests-2026-11-08.md`` has the rows).
+Against the stock forward and backward on tiny random models the loss agrees to 8e-5 relative
+(the bar; 6e-5 measured), and the worst LoRA-gradient error over every parameter is 1.0 to 2.4 %
+in bf16 and 0.3 to 1.5 % in fp16. Those rows round the int8 gradients to nearest, which is not the
+default; their bars are 3 % (exact mode) and 4 % (int8 backward) in bf16 and 0.6 % / 2.5 % in
+fp16. The default numerics (``int8_backward: auto``, ``int8_rounding: grad``, stochastic rounding
+of the gradients) have one tiny-model row, 2.32 % against a bar of 5 %: unbiased but noisier per
+step. On Qwen2.5-1.5B the gradient cosine to the stock step is 0.9990 to 0.9994 (exact mode) and
+0.9941 to 0.9955 (default).
 """

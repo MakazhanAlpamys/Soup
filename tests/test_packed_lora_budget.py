@@ -149,7 +149,7 @@ def test_the_int8_stash_changes_the_layer_size_and_the_count():
 
 
 def test_layer_bytes_match_the_stash_formula():
-    # 78 KB per token for Qwen2.5-7B with the int8 gate/up stash (PORT.md) + the x of the LoRA
+    # 78 KB per token for Qwen2.5-7B with the int8 gate/up stash + the x of the LoRA
     assert abs(shape_of("7B").layer(4096) / 4096 - 78_144) < 64
     assert layer_bytes(8, 64, 256, 64, 32) < layer_bytes(8, 64, 256, 64, 32, int8=False) + 1
     # 16 tokens or fewer never take the int8 path (torch._int_mm wants more rows)

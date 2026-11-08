@@ -64,5 +64,10 @@ test whose model pytest kept alive; run alone it reads 2837 MiB.)
   shape). The bar here is half an fp16 ulp of the logits (rtol 1e-3, atol 3e-3 on the
   per-token loss and entropy, 1e-4 on the loss).
 - The gradient bars of the layer tests are the measured values with margin (3 % bf16 exact, 4 %
-  bf16 int8, 0.6 % fp16 exact), not the 1.5 % / 3.5 % of the challenge notes, which were measured
-  on other seeds and shapes.
+  bf16 int8, 0.6 % fp16 exact, 2.5 % fp16 int8), not the 1.5 % / 3.5 % of the challenge notes,
+  which were measured on other seeds and shapes.
+- The parity rows above round the int8 gradients to nearest, which is not the default. The
+  default numerics (stochastic rounding of the gradients) have one tiny-model row, 2.32 %
+  (bf16), checked against a bar of 5 %
+  (`test_stochastic_rounding_keeps_the_gradients_close`): unbiased, noisier per step. On Qwen2.5-1.5B the gradient cosine is 0.9990 to 0.9994 in the
+  exact mode and 0.9941 to 0.9955 in the default.

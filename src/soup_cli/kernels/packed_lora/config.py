@@ -8,17 +8,21 @@ only): no torch, no Triton.
 
 Defaults when enabled: ``int8_backward: auto`` (the int8 MLP input gradient, kept on when a
 start-up gradient check passes) with ``int8_rounding: grad`` (stochastic rounding of the gradient
-quantisers). That is what the RTX 4090 record (AMENDMENT-5) and the Kaggle T4 rerun measured.
-Making the exact mode the default is the one ``int8_backward`` default line below.
+quantisers). Round-to-nearest zeroes every gradient entry below half a step of its row's largest
+value, a bias that showed as a training loss drifting above plain Soup's in the challenge runs the
+kernels come from; stochastic rounding is unbiased, at the price of noisier steps. Making the exact
+mode the default is the one ``int8_backward`` default line below.
 """
 
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-#: ``gpu_budget_mib`` is a promise about torch's peak allocated memory. The planner refuses a
-#: budget under the floor of the model and batch it is given (and says what the minimum is); these
-#: bounds only reject numbers that cannot be a budget for any supported model.
+#: ``gpu_budget_mib`` is a target for torch's peak allocated memory, planned from a fit to
+#: measurements: an estimate with a margin (2 % of the budget plus 64 MiB) and a per-step guard,
+#: not a guarantee (``budget.py``: a fit, not a proof). The planner refuses a budget under the
+#: floor of the model and batch it is given (and says what the minimum is); these bounds only
+#: reject numbers that cannot be a budget for any supported model.
 MIN_BUDGET_MIB = 512
 MAX_BUDGET_MIB = 1_048_576
 
@@ -41,7 +45,8 @@ class PackedLoraConfig(BaseModel):
         ge=MIN_BUDGET_MIB,
         le=MAX_BUDGET_MIB,
         description=(
-            "Budget for torch's peak allocated GPU memory in MiB; the planner decides "
+            "Target for torch's peak allocated GPU memory in MiB, planned from a fit to "
+            "measurements (an estimate with a margin, not a guarantee): the planner decides "
             "how many layers keep their saved activations on the GPU and which tables "
             "live in pinned host memory. Unset keeps whatever fits resident. A budget "
             "under what the model needs is refused with the minimum."

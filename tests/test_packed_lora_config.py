@@ -52,7 +52,7 @@ class TestTheBlock:
         assert block.gpu_budget_mib is None
         assert block.activations == "auto"
         assert block.int8_backward == "auto"
-        # stochastic rounding of the gradient quantisers (PORT2 section 2b, PILOT_RESULTS 7)
+        # stochastic rounding of the gradient quantisers: round-to-nearest is biased (see config.py)
         assert block.int8_rounding == "grad"
         assert block.on_unsupported == "error"
 
