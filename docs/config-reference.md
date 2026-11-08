@@ -36,6 +36,7 @@ Sections:
 - [`data`](#data)
 - [`training`](#training)
 - [`training.lora`](#traininglora)
+- [`training.packed_lora`](#trainingpacked_lora)
 - [`training.eval_gate`](#trainingeval_gate)
 - [`eval`](#eval)
 - [`eval.ship`](#evalship)
@@ -264,6 +265,7 @@ Sections:
 | `training.moe_aux_loss_coeff` | `float` | `0.01` | `>= 0` | Auxiliary load-balancing loss coefficient for MoE models |
 | `training.use_liger` | `bool` | `false` |  | Enable Liger Kernel fused operations (20-60% memory savings, 20-40% speedup) |
 | `training.fast_lora` | `bool` | `false` |  | Run LoRA's q/k/v, MLP and other projections through Soup's hand-written Fast-LoRA autograd functions instead of peft's modules. Same math; no speedup is claimed. task='sft' on the transformers backend with text, quantization none or 4bit, and lora.dropout 0; refused beside use_liger, DoRA, VeRA, target_parameters, Spectrum, LISA and FP8 training. |
+| `training.packed_lora` | `section \| null` | `null` |  | Triton kernels for the Qwen2 QLoRA SFT step (NF4 decode, RMSNorm, RoPE, SwiGLU, a logit-free head and loss, an int8 MLP input gradient with a start-up check, saved activations in GPU or pinned host memory instead of gradient checkpointing). Off by default; yaml only. task='sft' on the transformers backend with text, quantization 4bit and lora.dropout 0; refused with the reason beside the other kernel switches. See [`training.packed_lora`](#trainingpacked_lora). |
 | `training.use_flash_attn` | `bool` | `false` |  | Enable FlashAttention (auto-detects v2/v3/v4 for faster attention) |
 | `training.use_ring_attention` | `bool` | `false` |  | Enable Ring FlashAttention for sequence parallelism across GPUs |
 | `training.rope_scaling_type` | `str \| null` | `null` | one of `"linear"`, `"dynamic"`, `"yarn"`, `"llama3"` | RoPE scaling method for long-context: linear, dynamic, yarn or llama3 (v0.49.0). 'longrope' is refused at config load (#1239). Applied by task sft, tts and pretrain on backend: transformers (sft: the text path without layer streaming); refused at config load anywhere else (#1697). |
@@ -375,6 +377,17 @@ Sections:
 | `training.lora.init_strategy` | `str` | `"random"` | one of `"random"`, `"pissa"`, `"olora"`, `"loftq"` | LoRA init strategy. 'random' (default) is standard Kaiming init. 'pissa' (PiSSA) initializes A/B from the SVD of the base weight — faster early convergence but adds an SVD pass on the first epoch. 'olora' is equivalent to use_olora=True (orthogonal QR init). 'loftq' (v0.41.0) initialises A/B + a low-bit base together, useful with QLoRA. Cannot be combined with use_dora or use_vera. |
 | `training.lora.loftq_iter` | `int` | `1` | `>= 1`, `<= 10` | LoftQ iteration count (1-10). Higher = better quant-aware init at the cost of one-time setup latency. Used only when init_strategy='loftq'. |
 | `training.lora.loftq_bits` | `int` | `4` | one of `2`, `4`, `8` | LoftQ target bitwidth — must be one of {2, 4, 8}. Used only when init_strategy='loftq'. |
+
+## `training.packed_lora`
+
+| Key | Type | Default | Constraints | Description |
+|---|---|---|---|---|
+| `training.packed_lora.enabled` | `bool` | `false` |  | Turn the packed-LoRA kernels on for this run |
+| `training.packed_lora.gpu_budget_mib` | `int \| null` | `null` | `>= 512`, `<= 1048576` | Target for torch's peak allocated GPU memory in MiB, planned from a fit to measurements (an estimate with a margin, not a guarantee): the planner decides how many layers keep their saved activations on the GPU and which tables live in pinned host memory. Unset keeps whatever fits resident. A budget under what the model needs is refused with the minimum. |
+| `training.packed_lora.activations` | `str` | `"auto"` | one of `"auto"`, `"resident"`, `"offload"` | Where each layer's saved activations live between its forward and backward: 'resident' (GPU), 'offload' (pinned host memory) or 'auto' (the last layers that fit stay on the GPU). |
+| `training.packed_lora.int8_backward` | `str` | `"auto"` | one of `"auto"`, `"on"`, `"stash"`, `"off"` | The MLP input-gradient GEMMs of the backward in int8. 'auto' keeps them on when a start-up gradient check passes, 'on' always, 'stash' only stores the gate/up activations as int8, 'off' is the exact mode (no int8 anywhere, about 21-24% slower). |
+| `training.packed_lora.int8_rounding` | `str` | `"grad"` | one of `"nearest"`, `"grad"`, `"stochastic"` | Rounding of the int8 gradient quantisers: 'grad' rounds the gradients stochastically (unbiased in expectation, the default), 'stochastic' also dithers the int8 weights, 'nearest' rounds to nearest (biased: the training loss drifts above plain Soup's). |
+| `training.packed_lora.on_unsupported` | `str` | `"error"` | one of `"error"`, `"stock"` | What to do when a run turns out not to be supported at setup ('error' stops with the reason, 'stock' prints it and trains with the stock step). |
 
 ## `training.eval_gate`
 

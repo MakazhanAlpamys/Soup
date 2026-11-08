@@ -1857,3 +1857,28 @@ Autopilot also detects pre-quantized bases automatically - `TheBloke/Llama-2-7B-
 The advanced GGUF pipeline uses POSIX `O_NOFOLLOW` to defeat the TOCTOU race between the dispatch-time symlink check and the actual open of the calibration data — a crafted environment cannot race-swap the calibration file between validate and read.
 
 `soup deploy autopilot --measure` caches results at `~/.soup/deploy_autopilot_cache.json` keyed on `(base, profile, eval-tasks)`. Repeat invocations short-circuit; pass `SOUP_DEPLOY_AUTOPILOT_CACHE=<path>` to redirect (constrained to home / cwd / tempdir). The recommended candidate uses soft-fallback: first `OK` by insertion order, else the candidate with the smallest delta (least drop relative to its own baseline).
+
+## Packed-LoRA kernels (`training.packed_lora`)
+
+Triton kernels for the Qwen2 QLoRA SFT step: NF4 decode (bit-identical to bitsandbytes), RMSNorm, RoPE with the q/k/v LoRA epilogue, SwiGLU, an int8 MLP input gradient with a start-up check, and a head and loss that never build the logits. A step drops the padding inside the batch and runs every layer on the remaining tokens. Each layer's saved activations stay on the GPU or go to pinned host memory instead of being recomputed, so `gradient_checkpointing` is not needed (it is accepted and replaced). The code is `soup_cli.kernels.packed_lora`; it is built on the Soup Kernel Challenge submission of team Luck, with ideas from teams 21, Null Pointers, DarkDaur and OrbiTeam.
+
+> Status: the config block, the planner, the checks and the kernels are in; `soup train` does not read the setting yet. A config that enables it validates and then trains the stock step until the trainer wiring lands.
+
+```yaml
+task: sft
+training:
+  quantization: 4bit
+  lora: {r: 16, alpha: 32, dropout: 0}   # dropout must be 0 (Soup's default is 0.05)
+  packed_lora:
+    enabled: true
+    gpu_budget_mib: 7000     # torch's peak allocated memory; unset = whatever fits stays resident
+    activations: auto        # auto | resident | offload
+    int8_backward: auto      # auto | on | stash | off (off = exact mode, about 21-24% slower)
+    int8_rounding: grad      # grad = stochastic rounding of the gradients (default) | stochastic | nearest
+    on_unsupported: error    # error | stock
+```
+
+- **Numerics.** `int8_backward: auto` runs the three MLP input-gradient GEMMs in int8 when a start-up check on the first layer passes (cosine of `d_x` against the compute-dtype path of at least 0.998 with stochastic rounding, 0.999 with round-to-nearest). `int8_rounding: grad` rounds the two gradient quantisers stochastically, which is unbiased; round-to-nearest zeroes every entry below half a step of its row's largest value, a bias that showed as a training loss drifting above plain Soup's (+0.68 % held-out eval loss after 500 steps on a T4). With stochastic rounding the same run ended at -0.005 % held-out eval loss and +0.040 % training loss against plain Soup. `int8_backward: off` is the exact mode.
+- **Budget.** `gpu_budget_mib` is a promise about torch's peak allocated memory. The planner keeps every 4-bit weight on the GPU and spends the rest on the saved activations of the last layers, then on the lm_head and the embedding; the others go to pinned host memory (about 9 GB at 7B, 8 x 512, 7000 MiB). A budget below the floor of the model and batch is refused with the smallest budget that works. The estimate is a fit: it read 0.4-4 % high on the 7B and 1.5B shapes it was fitted on; a guard lowers the number of resident layers after a step that went over.
+- **Scope.** `task: sft`, `backend: transformers`, text, `quantization: 4bit` with double quantisation, `lora.dropout: 0`, one GPU, Linux (WSL2 included), compute capability 8.0 or newer. Qwen2 only (Qwen3 is ported and tested at layer level; its gate stays closed until a training run on a real Qwen3 matches plain Soup). Refused with the reason beside the other kernel switches: other architectures and tasks, DoRA, VeRA, `use_liger`, `use_cut_ce`, `fast_lora`, `use_flash_attn`, `packing`, `multipack`, `neftune_alpha`, `stream_layers`, `activation_offloading`, GaLore, LoRA-FA, LISA, Spectrum, `quantization_aware: fp8`, RAFT rows. fp16 on a T4 is not validated with the current kernels.
+- **Support is probed, not tabulated.** At start-up the kernels run on tiny inputs against PyTorch, the NF4 decoder is compared with bitsandbytes on the first weight, and the signature of torch's private memory-efficient attention ops is read from the installed torch.

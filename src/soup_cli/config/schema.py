@@ -6,6 +6,10 @@ from typing import Any, Callable, Dict, List, Literal, NamedTuple, Optional, Uni
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+# The packed-LoRA kernels' settings and the reasons they refuse a run live with the kernels
+# (pure Python: no torch, no Triton).
+from soup_cli.kernels.packed_lora.config import PackedLoraConfig, packed_lora_problem
+
 # Stream-buffer, read-ahead and noise-floor bounds come from a dependency-free
 # leaf that layer_stream, async_disk_source and ship_verdict re-export, so the
 # schema bound and the runtime validator's message are the same object, and the
@@ -3199,6 +3203,17 @@ class TrainingConfig(BaseModel):
             "transformers backend with text, quantization none or 4bit, and "
             "lora.dropout 0; refused beside use_liger, DoRA, VeRA, "
             "target_parameters, Spectrum, LISA and FP8 training."
+        ),
+    )
+    packed_lora: Optional[PackedLoraConfig] = Field(
+        default=None,
+        description=(
+            "Triton kernels for the Qwen2 QLoRA SFT step (NF4 decode, RMSNorm, RoPE, "
+            "SwiGLU, a logit-free head and loss, an int8 MLP input gradient with a "
+            "start-up check, saved activations in GPU or pinned host memory instead of "
+            "gradient checkpointing). Off by default; yaml only. task='sft' on the "
+            "transformers backend with text, quantization 4bit and lora.dropout 0; "
+            "refused with the reason beside the other kernel switches."
         ),
     )
     # Performance — FlashAttention
@@ -6801,6 +6816,16 @@ class SoupConfig(BaseModel):
             )
         if reason is not None:
             raise ValueError(f"training.fast_lora {reason}")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_packed_lora_supported(self) -> "SoupConfig":
+        """``training.packed_lora``: the kernels run one Qwen2 QLoRA SFT step; every other
+        setting is refused with its reason (``kernels/packed_lora/config.py``) rather than
+        left unpatched."""
+        problem = packed_lora_problem(self, self.training.packed_lora)
+        if problem is not None:
+            raise ValueError(problem)
         return self
 
     @model_validator(mode="after")

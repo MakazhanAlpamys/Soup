@@ -3,10 +3,9 @@
 # Written for Soup.
 """The settings of the packed-LoRA kernels, and which runs they cannot take.
 
-Internal to the package: nothing in ``config/schema.py`` refers to this module yet, so a
-``soup.yaml`` has no ``training.packed_lora`` key. The trainer wiring adds the key, with this
-model as its type and :func:`packed_lora_problem` as its cross-validator. Pure Python (pydantic
-only): no torch, no Triton.
+``PackedLoraConfig`` is the type of ``training.packed_lora`` in ``config/schema.py``, and
+:func:`packed_lora_problem` is the sentence of its cross-validator (``SoupConfig``). Pure Python
+(pydantic only): no torch, no Triton.
 
 Defaults when enabled: ``int8_backward: auto`` (the int8 MLP input gradient, kept on when a
 start-up gradient check passes) with ``int8_rounding: grad`` (stochastic rounding of the gradient
