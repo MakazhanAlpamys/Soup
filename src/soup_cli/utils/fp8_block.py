@@ -30,6 +30,14 @@ The exceptions are the integer buffers a supported model really has
 (:data:`INTEGER_BUFFER_SUFFIXES`) and qwen4_exp's oMLX/oQ affine bundles, which the
 sharder dequantises itself.
 
+One quantised source is not sharded but imported: a pre-quantised bitsandbytes NF4
+checkpoint (``unsloth/*-bnb-4bit``: double-quantised, bfloat16 compute) when the run is
+``training.quantization: 4bit`` (:func:`is_serialized_nf4_config`, the
+``allow_serialized_nf4`` flag of :func:`check_source_quantization`). ``nf4_serialized``
+copies its payloads into the shard layout unchanged. The same source under any other
+quantization, and every other bitsandbytes spelling (8-bit, FP4, not double-quantised),
+is refused as above.
+
 No top-level torch: ``layer_shard`` imports this module on the light CLI path.
 """
 
@@ -360,8 +368,42 @@ def refuse_unsupported_quantization(quantization_config: Any) -> None:
     raise _refuse(problem) if is_fp8 else _refuse_source(problem)
 
 
+#: Architectures a serialised NF4 source is NOT imported for (``nf4_serialized`` refuses them
+#: by name too: experts or per-layer buffers its layout does not map). A test pins this to
+#: the importer's own list so the two cannot drift.
+SERIALIZED_NF4_REFUSED_ARCHS = ("deepseek_v3", "qwen4_exp")
+
+
+def is_serialized_nf4_config(quantization_config: Any, *, arch: str) -> bool:
+    """Whether a ``quantization_config`` is the one pre-quantised source layer streaming imports.
+
+    ``unsloth/*-bnb-4bit`` and its siblings: bitsandbytes, 4-bit, ``nf4``, double
+    (nested) quantisation, ``uint8`` storage and bfloat16 compute, on a dense decoder
+    architecture (:data:`SERIALIZED_NF4_REFUSED_ARCHS` are not). Read from the config
+    alone, so a caller decides before any weight is read. Strict on purpose: each flag
+    must be exactly ``True`` (an int or a string is not), and a field transformers would
+    default differently (compute dtype, nested flag) must be written out. Everything
+    else, 8-bit and FP4 included, stays refused by :func:`refuse_unsupported_quantization`.
+
+    ``nf4_serialized.plan_nf4_import`` repeats the format checks against the tensors.
+    """
+    if arch in SERIALIZED_NF4_REFUSED_ARCHS:
+        return False
+    quant = as_quantization_mapping(quantization_config)
+    if quant is None or _setting(quant.get("quant_method")) != "bitsandbytes":
+        return False
+    return (
+        quant.get("load_in_4bit") is True
+        and quant.get("load_in_8bit") is not True
+        and _setting(quant.get("bnb_4bit_quant_type")) == "nf4"
+        and quant.get("bnb_4bit_use_double_quant") is True
+        and _setting(quant.get("bnb_4bit_quant_storage", "uint8")) == "uint8"
+        and _setting(quant.get("bnb_4bit_compute_dtype")) == "bfloat16"
+    )
+
+
 def check_source_quantization(
-    quantization_config: Any, *, arch: str
+    quantization_config: Any, *, arch: str, allow_serialized_nf4: bool = False
 ) -> Optional[Tuple[int, int]]:
     """The config-alone gate of a layer-streamed source, run before any header is read.
 
@@ -369,7 +411,15 @@ def check_source_quantization(
     a config that declares no quantiser; any other declared quantisation is refused by
     name (:func:`refuse_unsupported_quantization`). The sharder, the disk pre-flight and
     the trainer setup all call this, and :func:`plan_fp8_block` repeats it.
+
+    ``allow_serialized_nf4`` is the one exception, passed by a caller whose run is
+    ``training.quantization: 4bit``: a pre-quantised double-quantised NF4 source
+    (:func:`is_serialized_nf4_config`) passes and returns ``None``; the caller then
+    imports it instead of sharding it (:func:`is_serialized_nf4_config` is the dispatch
+    predicate). Without the flag, or for any other config, nothing changes.
     """
+    if allow_serialized_nf4 and is_serialized_nf4_config(quantization_config, arch=arch):
+        return None
     block = fp8_block_size(quantization_config, arch=arch)
     refuse_unsupported_quantization(quantization_config)
     return block

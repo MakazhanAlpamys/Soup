@@ -58,6 +58,7 @@ from soup_cli.utils.fp8_block import (
     UnsupportedFP8Error,
     check_source_quantization,
     dequantize_fp8_block,
+    is_serialized_nf4_config,
     plan_fp8_block,
     read_checkpoint_quantization_config,
     refuse_unsupported_tensor,
@@ -77,6 +78,11 @@ QUANT_NONE = "none"
 QUANT_NF4 = "nf4"
 #: int8 rowwise is deliberately out of scope — NF4 only (plan 7.1).
 SUPPORTED_STREAM_QUANTS = (QUANT_NONE, QUANT_NF4)
+
+#: ``ShardIndex.quant_device`` of a cache the NF4 importer wrote
+#: (``utils/nf4_serialized.py``): nothing was quantised on a device, the bytes are the
+#: source's own, so the cache is the same on every run device.
+SERIALIZED_QUANT_DEVICE = "serialized"
 
 #: Sidecar keys for one quantised weight. ``::`` cannot collide with a real
 #: parameter path, which uses ``.`` exclusively.
@@ -1150,8 +1156,11 @@ def estimate_shard_cache_bytes(
     if arch == "qwen4_exp":
         return None
     # The config alone decides an unsupported FP8 spelling, or another declared
-    # quantiser: refused before any header, as the sharder refuses it.
-    check_source_quantization(quantization_config, arch=arch)
+    # quantiser: refused before any header, as the sharder refuses it. A pre-quantised
+    # NF4 source passes only for a 4bit run (it is imported, not sharded).
+    check_source_quantization(
+        quantization_config, arch=arch, allow_serialized_nf4=quant == QUANT_NF4
+    )
     if dtype not in _SUPPORTED_DTYPES:
         raise ValueError(
             f"unsupported dtype {dtype!r} for layer streaming; "
@@ -1164,11 +1173,17 @@ def estimate_shard_cache_bytes(
         )
     suffixes = _validate_quant_request(quant, quant_suffixes)
     quantise = quant == QUANT_NF4
+    # The gate above let a pre-quantised NF4 config through only for quant='nf4'.
+    serialized = is_serialized_nf4_config(quantization_config, arch=arch)
+    if serialized:
+        check_serialized_nf4_request(dtype=dtype, double_quant=double_quant)
 
     from soup_cli.utils.expert_stream import DOWN, GATE_UP, expert_key
     from soup_cli.utils.safetensors_reader import _ITEMSIZE
 
     tensors = _read_source_tensors(shard_paths)
+    if serialized:
+        return _estimate_serialized_nf4(tensors, source_files=len(shard_paths))
     fp8_plan = plan_fp8_block(quantization_config, tensors, arch=arch)
     consumed = _fp8_consumed_keys(fp8_plan)
 
@@ -1293,6 +1308,96 @@ def estimate_shard_cache_bytes(
         header_bytes=header_bytes,
         index_bytes=_INDEX_BYTES_FIXED + _INDEX_BYTES_PER_ENTRY * index_entries,
         expert_file_bytes=expert_file_bytes,
+        code_table_bytes=code_table_bytes,
+    )
+
+
+#: Companions of one serialised bitsandbytes NF4 weight ``W`` (``nf4_serialized`` module doc).
+_SERIALIZED_NF4_STATE = ".quant_state.bitsandbytes__nf4"
+_SERIALIZED_NF4_TABLES = (".quant_map", ".nested_quant_map")
+_SERIALIZED_NF4_SIDECARS = (".absmax", ".nested_absmax", *_SERIALIZED_NF4_TABLES) + (
+    _SERIALIZED_NF4_STATE,
+)
+#: Bytes of the shared code tables the importer writes once into extras: 16 + 256 float32.
+_SERIALIZED_NF4_TABLE_BYTES = (16 + 256) * 4
+
+
+def _estimate_serialized_nf4(
+    tensors: Mapping[str, Tuple[str, Tuple[int, ...]]], *, source_files: int
+) -> ShardCacheEstimate:
+    """Size the cache :mod:`~soup_cli.utils.nf4_serialized` writes for a serialised source.
+
+    The importer copies the payloads as they are, so the size is the sum of the source
+    tensors' own bytes, from the headers: a quantised weight, its ``absmax`` and
+    ``nested_absmax`` verbatim; the JSON ``quant_state`` blob replaced by one float32
+    ``nested_offset``; the two code tables stored once in extras instead of once per
+    weight; everything else as it is. Sizing it as a float source (a rate per element)
+    would charge for a quantisation that does not happen.
+
+    A tensor that is neither an NF4 weight, one of its companions nor a plain float one is
+    refused in the shared words (:func:`refuse_unsupported_tensor`): an 8-bit ``SCB``, an
+    FP4 state, an integer tensor.
+    """
+    from soup_cli.utils.safetensors_reader import _DTYPES, _ITEMSIZE
+
+    layer_bytes: Dict[int, int] = {}
+    other_bytes = 0
+    header_bytes = 0
+    stored_names: set = set()
+    quantised: set = set()
+    for key, (dtype, shape) in sorted(tensors.items()):
+        companion = key.endswith(_SERIALIZED_NF4_SIDECARS)
+        packed = not companion and key + _SERIALIZED_NF4_STATE in tensors
+        if not companion and not packed:
+            refuse_unsupported_tensor(key, dtype)
+        if dtype not in _DTYPES:
+            raise ValueError(f"checkpoint tensor {key!r} has the stored type {dtype!r}")
+        nbytes = math.prod(shape) * _ITEMSIZE[_DTYPES[dtype]]
+        name = key
+        if packed:
+            match = _LAYER_RE.match(key)
+            quantised.add(match.group(2) if match else key)
+        elif key.endswith(_SERIALIZED_NF4_TABLES):
+            continue
+        elif key.endswith(_SERIALIZED_NF4_STATE):
+            # becomes one float32 'W::nested_offset'
+            name = key[: -len(_SERIALIZED_NF4_STATE)] + NESTED_OFFSET_SUFFIX
+            nbytes = 4
+        elif key.endswith(".nested_absmax"):
+            name = key[: -len(".nested_absmax")] + NESTED_ABSMAX_SUFFIX
+        elif key.endswith(".absmax"):
+            name = key[: -len(".absmax")] + ABSMAX_SUFFIX
+        match = _LAYER_RE.match(name)
+        header_bytes += len(name) + _HEADER_BYTES_PER_TENSOR
+        if match is None:
+            other_bytes += nbytes
+            continue
+        stored_names.add(match.group(2))
+        layer_bytes[int(match.group(1))] = layer_bytes.get(int(match.group(1)), 0) + nbytes
+    if not layer_bytes:
+        raise ValueError(
+            "no decoder layer weights (model.layers.N.*) found; layer streaming has "
+            "nothing to stream"
+        )
+    n_layers = max(layer_bytes) + 1
+    if n_layers > _MAX_LAYERS:
+        raise ValueError(f"too many decoder layers ({n_layers} > {_MAX_LAYERS})")
+    if len(layer_bytes) != n_layers:
+        missing = sorted(set(range(n_layers)) - set(layer_bytes))
+        raise ValueError(f"decoder layer indices are not contiguous; missing {missing[:8]}")
+    code_table_bytes = 0
+    if quantised:
+        code_table_bytes = _SERIALIZED_NF4_TABLE_BYTES
+        other_bytes += code_table_bytes
+        header_bytes += sum(
+            len(name) + _HEADER_BYTES_PER_TENSOR for name in (NF4_CODE_KEY, NF4_NESTED_CODE_KEY)
+        )
+    index_entries = source_files + len(stored_names) + len(quantised) + n_layers
+    return ShardCacheEstimate(
+        layer_bytes=tuple(layer_bytes[idx] for idx in range(n_layers)),
+        other_bytes=other_bytes,
+        header_bytes=header_bytes,
+        index_bytes=_INDEX_BYTES_FIXED + _INDEX_BYTES_PER_ENTRY * index_entries,
         code_table_bytes=code_table_bytes,
     )
 
@@ -1485,6 +1590,18 @@ def _describe_source_change(
     return "source_fingerprint changed although its recorded components match"
 
 
+def _quant_device_changed(index: ShardIndex, quant_device: str) -> bool:
+    """Whether a cache quantised on one device is being asked for on another.
+
+    A cache Soup quantised itself depends on the device (CPU and CUDA agree on the packed
+    nibbles but not on every float32 nested statistic). A cache the importer wrote
+    (:data:`SERIALIZED_QUANT_DEVICE`) holds the source's bytes unchanged and depends on none.
+    """
+    return (
+        index.quant_device != SERIALIZED_QUANT_DEVICE and index.quant_device != quant_device
+    )
+
+
 def inspect_shard_cache(
     out_dir: str,
     dtype: str,
@@ -1520,7 +1637,7 @@ def inspect_shard_cache(
         return None, (
             f"double_quant changed ({index.double_quant!r} -> {double_quant!r})"
         )
-    if index.quant != QUANT_NONE and index.quant_device != quant_device:
+    if index.quant != QUANT_NONE and _quant_device_changed(index, quant_device):
         return None, (
             f"quantization device changed "
             f"({index.quant_device!r} -> {quant_device!r})"
@@ -1602,7 +1719,7 @@ def _content_change_requires_index_quarantine(
             index.dtype != dtype,
             index.quant != quant,
             index.quant != QUANT_NONE and index.double_quant != double_quant,
-            index.quant != QUANT_NONE and index.quant_device != quant_device,
+            index.quant != QUANT_NONE and _quant_device_changed(index, quant_device),
             index.source_fingerprint != fingerprint,
             index.external_mode != external_mode,
             index.expert_layout != expert_layout,
@@ -1718,6 +1835,143 @@ def _validate_quant_request(quant: str, quant_suffixes: Iterable[str]) -> Tuple[
     return suffixes
 
 
+def check_serialized_nf4_request(
+    *, dtype: str, double_quant: bool, stripe_roots: Sequence[str] = ()
+) -> None:
+    """Refuse a run the store of a pre-quantised NF4 source cannot serve, by name.
+
+    The importer keeps the source's bytes: bfloat16 for everything outside the quantised
+    projections, double-quantised statistics, one cache folder. A run that streams
+    another dtype (a float16 card, the CPU), turns double quantisation off or stripes the
+    cache over more drives would be handed a store that is not what it asked for, and
+    ``inspect_shard_cache`` would call it stale on every start. The trainer calls this
+    before the weights are resolved; the sharder and the size estimate call it again.
+    """
+    if dtype != "bfloat16":
+        raise ValueError(
+            f"a pre-quantised bitsandbytes NF4 source is stored in bfloat16 and imported "
+            f"byte for byte, so the run must stream in bfloat16; this one streams in "
+            f"{dtype!r} (float16 and float32 are what a pre-Ampere GPU and the CPU "
+            f"stream). Use a GPU with bfloat16 support, or point training.base at a bf16 "
+            f"copy of this model."
+        )
+    if not double_quant:
+        raise ValueError(
+            "a pre-quantised bitsandbytes NF4 source is double-quantised and imported byte "
+            "for byte, but this run turns double quantisation off "
+            "(training.bnb_4bit_use_double_quant: false). Unset it, or point training.base "
+            "at a bf16 copy of this model."
+        )
+    if stripe_roots:
+        raise ValueError(
+            "a pre-quantised bitsandbytes NF4 source is imported into one cache folder; "
+            "the layer cache is striped over several drives here (SOUP_STRIPE_DIRS). "
+            "Unset it for this model, or point training.base at a bf16 copy of it."
+        )
+
+
+def _remove_staging(staging: str) -> None:
+    """Delete the importer's staging folder (flat files only), best effort."""
+    try:
+        names = os.listdir(staging)
+    except OSError:
+        return
+    for name in names:
+        try:
+            os.unlink(os.path.join(staging, name))
+        except OSError:
+            pass
+    try:
+        os.rmdir(staging)
+    except OSError:
+        pass
+
+
+def _shard_serialized_nf4(
+    weights_dir: str,
+    out_dir: str,
+    *,
+    dtype: str,
+    arch: str,
+    force: bool,
+    double_quant: bool,
+    suffixes: Tuple[str, ...],
+    stripe_roots: Sequence[str],
+    shards: List[str],
+    notify: Optional[Callable[[str], None]],
+) -> ShardIndex:
+    """:func:`shard_checkpoint` for a pre-quantised bitsandbytes NF4 source.
+
+    The same cache contract as the float path (a reusable cache is returned, anything else
+    is replaced, the index is the last file written), with the bytes coming from
+    :func:`~soup_cli.utils.nf4_serialized.import_nf4_checkpoint` instead of from a read,
+    a cast and a quantisation. The importer wants an empty folder, so it writes into a
+    staging folder inside the cache folder; its files replace the cache's one by one and
+    the index, last, is the commit. A failed import changes nothing.
+    """
+    from soup_cli.utils import nf4_serialized
+    from soup_cli.utils.terminal import for_terminal
+
+    check_serialized_nf4_request(
+        dtype=dtype, double_quant=double_quant, stripe_roots=stripe_roots
+    )
+    resolved_out = _validate_out_dir(out_dir)
+    source_files = checkpoint_source_components(
+        weights_dir,
+        _source_file_components(shards),
+        include_config=source_identity_includes_config(arch),
+    )
+    fingerprint = _fingerprint_components(source_files)
+    if not force:
+        cached, miss_reason = inspect_shard_cache(
+            resolved_out,
+            dtype,
+            fingerprint,
+            source_files,
+            QUANT_NF4,
+            True,
+            SERIALIZED_QUANT_DEVICE,
+        )
+        if cached is not None:
+            if notify is not None:
+                _notify_unindexed_cache_files(resolved_out, cached, notify)
+            return cached
+        if notify is not None:
+            notify(f"[yellow]Re-sharding layer cache:[/] {for_terminal(miss_reason)}.")
+    staging = tempfile.mkdtemp(prefix=".soup-nf4-import.", dir=resolved_out)
+    try:
+        index = nf4_serialized.import_nf4_checkpoint(weights_dir, staging, notify=notify).index
+        if set(index.quant_specs) != set(suffixes):
+            raise ValueError(
+                f"quant_suffixes {sorted(suffixes)} are not the decoder projections this "
+                f"checkpoint stores quantised ({sorted(index.quant_specs)}); the streamed "
+                f"model and the store would disagree about which weights are packed"
+            )
+        # From here the old cache is being replaced: its index stops describing it first.
+        _quarantine_shard_index(resolved_out)
+        names = sorted(name for name in os.listdir(staging) if name != _INDEX_NAME)
+        for name in names:
+            os.replace(os.path.join(staging, name), os.path.join(resolved_out, name))
+        os.replace(
+            os.path.join(staging, _INDEX_NAME), os.path.join(resolved_out, _INDEX_NAME)
+        )
+    finally:
+        _remove_staging(staging)
+    try:
+        os.remove(os.path.join(resolved_out, _RESHARDING_INDEX_NAME))
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        if notify is not None:
+            notify(
+                f"[yellow]Could not delete the completed re-shard marker "
+                f"({for_terminal(exc)}); the new cache index is committed.[/]"
+            )
+    if notify is not None:
+        _notify_unindexed_cache_files(resolved_out, index, notify)
+    return index
+
+
 def shard_checkpoint(
     weights_dir: str,
     out_dir: str,
@@ -1770,6 +2024,13 @@ def shard_checkpoint(
     are stacked or written to their experts file, cast to the stream dtype and then
     stored by the rules above. The scales are consumed and never stored. Any other
     FP8 spelling is refused before anything is written.
+
+    A pre-quantised double-quantised bitsandbytes NF4 source with bfloat16 compute
+    (``unsloth/*-bnb-4bit``; ``fp8_block.is_serialized_nf4_config``) is, under
+    ``quant='nf4'`` only, not sharded at all: ``nf4_serialized`` copies its payloads into
+    the shard layout unchanged (``quant_device`` ``'serialized'``), and a ``dtype`` other
+    than bfloat16, ``double_quant=False`` or ``stripe_roots`` is refused for it by name
+    (:func:`check_serialized_nf4_request`).
 
     Every other quantised source is refused too (``fp8_block.check_source_quantization``
     and the header plan, :func:`~soup_cli.utils.fp8_block.plan_fp8_block`). The source
@@ -1826,7 +2087,22 @@ def shard_checkpoint(
     # An FP8 spelling, or another quantiser, that the config alone rules out is refused
     # before any header is read.
     source_quantization = read_checkpoint_quantization_config(weights_dir)
-    check_source_quantization(source_quantization, arch=arch)
+    check_source_quantization(source_quantization, arch=arch, allow_serialized_nf4=quantise)
+    if is_serialized_nf4_config(source_quantization, arch=arch):
+        # Pre-quantised bitsandbytes NF4 (``unsloth/*-bnb-4bit``), which the gate above let
+        # through for quant='nf4' only: imported byte for byte.
+        return _shard_serialized_nf4(
+            weights_dir,
+            out_dir,
+            dtype=dtype,
+            arch=arch,
+            force=force,
+            double_quant=double_quant,
+            suffixes=suffixes,
+            stripe_roots=stripe_roots,
+            shards=shards,
+            notify=notify,
+        )
 
     # pass 1 — build key -> shard without materialising a single tensor
     where: Dict[str, Tuple[str, str]] = {}
