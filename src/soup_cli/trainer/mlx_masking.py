@@ -206,7 +206,7 @@ def build_response_mask(
                 "than for the turns before it"
             )
 
-        if is_response and (not mask_history or k == last_response):
+        if is_response:
             for i in range(len(prefix), len(upto)):
                 mask[i] = 1
             saw_response = len(upto) > len(prefix) or saw_response

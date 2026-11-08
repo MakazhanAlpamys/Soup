@@ -810,11 +810,18 @@ class MLXSFTTrainerWrapper:
                 try:
                     masked_train.process(train_rows[0])
                 except ResponseMaskError as exc:
-                    raise ResponseMaskError(
-                        f"{exc}. Use a prefix-stable native chat template and keep selected "
-                        "targets within data.max_length, or disable selective masking "
-                        "and set data.train_on_responses_only: false for full-sequence loss."
-                    ) from exc
+                    if train_field or mask_history:
+                        hint = (
+                            "Use a prefix-stable native chat template and keep selected "
+                            "targets within data.max_length, or disable selective masking "
+                            "and set data.train_on_responses_only: false for full-sequence loss."
+                        )
+                    else:
+                        hint = (
+                            "Set `data.train_on_responses_only: false` to train on the full "
+                            "sequence on this model, or run the recipe on the transformers backend."
+                        )
+                    raise ResponseMaskError(f"{exc}. {hint}") from exc
 
             train_dataset = CacheDataset(masked_train)
             val_dataset = (

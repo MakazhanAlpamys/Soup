@@ -96,8 +96,25 @@ def test_history_checks_selected_boundaries_when_template_rewrites_ignored_reaso
 
 @pytest.mark.parametrize("flag", [0, 1, "false", [], {}])
 def test_malformed_flags_refused_before_any_template_call(flag):
+    calls = []
+
+    class RecordingTokenizer(IntegerTokenizer):
+        def apply_chat_template(self, messages, **kwargs):
+            calls.append(messages)
+            return super().apply_chat_template(messages, **kwargs)
+
+    tokenizer = RecordingTokenizer()
     with pytest.raises(ResponseMaskError, match="train.*bool"):
-        selected([{"role": "user", "content": "question", "train": flag}], train_field=True)
+        MaskedChatDataset([], tokenizer, train_field=True).process({"messages": [
+            {"role": "user", "content": "question", "train": flag},
+            {"role": "assistant", "content": "answer"},
+        ]})
+    assert calls == []
+    tokens, mask = MaskedChatDataset([], tokenizer, train_field=True).process({"messages": [
+        {"role": "user", "content": "question", "train": False},
+        {"role": "assistant", "content": "answer"},
+    ]})
+    assert calls and supervised(tokens, mask)
 
 
 @pytest.mark.parametrize("mode", [{"train_field": True}, {"mask_history": True}])
@@ -191,6 +208,10 @@ def test_public_wrapper_trains_the_selected_tokens(tmp_path, monkeypatch, mode):
         assert isinstance(dataset, MaskedChatDataset)
         tokens, mask = dataset.process(dataset[0])
         captured["selected"] = supervised(tokens, mask)
+        validation = kwargs["val_dataset"]
+        assert isinstance(validation, MaskedChatDataset)
+        tokens, mask = validation.process(validation[0])
+        captured["validation"] = supervised(tokens, mask)
         kwargs["training_callback"].on_train_loss_report({"train_loss": 0.5})
 
     monkeypatch.setattr(sys.modules["mlx_lm.tuner.trainer"], "train", train)
@@ -205,13 +226,92 @@ def test_public_wrapper_trains_the_selected_tokens(tmp_path, monkeypatch, mode):
     ))
     wrapper.model = _FakeMlxModel()
     wrapper.tokenizer = IntegerTokenizer()
-    wrapper._dataset = {"train": [{"messages": conversation()}] * 4, "val": []}
+    wrapper._dataset = {
+        "train": [{"messages": conversation()}] * 4,
+        "val": [{"messages": conversation()}] * 4,
+    }
     wrapper.train()
     words = [wrapper.tokenizer.words[token] for token in captured["selected"]]
     assert words == selected(conversation(), **{mode: True})
+    assert captured["validation"] == captured["selected"]
     metadata = json.loads((tmp_path / "adapter_config.json").read_text())
     assert metadata["mask_history"] is (mode == "mask_history")
     assert metadata["train_on_messages_with_train_field"] is (mode == "train_field")
+
+
+@pytest.mark.parametrize("mode", ["train_field", "mask_history"])
+@pytest.mark.parametrize("split", ["train", "val"])
+def test_public_wrapper_refuses_a_selected_turn_cut_by_max_length(
+    tmp_path, monkeypatch, mode, split,
+):
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
+
+    _install_fake_mlx(monkeypatch)
+    reached = []
+
+    def train(**kwargs):
+        for key in ("train_dataset", "val_dataset"):
+            dataset = kwargs[key]
+            tokens, mask = dataset.process(dataset[0])
+            assert supervised(tokens[:64], mask[:64])
+        reached.append(True)
+        kwargs["training_callback"].on_train_loss_report({"train_loss": 0.5})
+
+    monkeypatch.setattr(sys.modules["mlx_lm.tuner.trainer"], "train", train)
+    data = {"train": "unused.jsonl", "format": "chatml", "max_length": 64}
+    if mode == "train_field":
+        data.update(train_on_responses_only=False, train_on_messages_with_train_field=True)
+    else:
+        data.update(train_on_responses_only=True, mask_history=True)
+    wrapper = MLXSFTTrainerWrapper(SoupConfig(
+        base="local-base", backend="mlx", data=data, output=str(tmp_path),
+        training={"quantization": "none", "epochs": 1, "batch_size": 1},
+    ))
+    wrapper.model = _FakeMlxModel()
+    wrapper.tokenizer = IntegerTokenizer()
+    short = {"messages": [{"role": "user", "content": "question"},
+                          {"role": "assistant", "content": "answer"}]}
+    long = {"messages": [{"role": "user", "content": " ".join(["word"] * 80)},
+                         {"role": "assistant", "content": "answer"}]}
+    wrapper._dataset = {"train": [short] * 4, "val": [short] * 4}
+    wrapper._dataset[split] = [long] * 4
+    with pytest.raises(ResponseMaskError, match="no causal-loss target.*truncation"):
+        wrapper.train()
+    assert reached == []
+    wrapper._dataset[split] = [short] * 4
+    wrapper.train()
+    assert reached == [True]
+
+
+@pytest.mark.parametrize("mode", ["responses_only", "train_field", "mask_history"])
+def test_public_wrapper_template_refusal_hint_matches_the_masking_mode(
+    tmp_path, monkeypatch, mode,
+):
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
+
+    _install_fake_mlx(monkeypatch)
+    data = {"train": "unused.jsonl", "format": "chatml"}
+    if mode == "train_field":
+        data.update(train_on_responses_only=False, train_on_messages_with_train_field=True)
+    elif mode == "mask_history":
+        data.update(mask_history=True)
+    wrapper = MLXSFTTrainerWrapper(SoupConfig(
+        base="local-base", backend="mlx", data=data, output=str(tmp_path),
+        training={"quantization": "none", "epochs": 1, "batch_size": 1},
+    ))
+    wrapper.model = _FakeMlxModel()
+    wrapper.tokenizer = IntegerTokenizer(prefix_stable=False)
+    wrapper._dataset = {"train": [{"messages": conversation()}] * 4, "val": []}
+    with pytest.raises(ResponseMaskError, match="prefix-stable") as exc:
+        wrapper.train()
+    message = str(exc.value)
+    if mode == "responses_only":
+        assert "transformers backend" in message
+        assert "data.max_length" not in message
+    else:
+        assert "data.max_length" in message and "disable selective masking" in message
 
 
 @pytest.mark.parametrize('responses,train_field,history,valid,token_mask', [
