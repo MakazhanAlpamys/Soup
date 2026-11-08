@@ -493,11 +493,16 @@ def main() -> int:
     modes.add_argument("--ablation", action="store_true")
     modes.add_argument("--grid", action="store_true")
     modes.add_argument("--aliasing", action="store_true")
+    modes.add_argument("--model", action="store_true")
     parser.add_argument("--json", type=pathlib.Path)
     parser.add_argument("--child", nargs=3, type=int, metavar=("N", "K", "M"))
     args = parser.parse_args()
     if args.self_test:
         payload = self_test()
+    elif args.model:
+        from nf4_stream_model import model_check
+
+        payload = model_check(count_paths, difference, hardware)
     elif args.aliasing:
         payload = aliasing()
     elif args.child:
