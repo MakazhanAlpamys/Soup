@@ -1349,8 +1349,12 @@ macOS. A value already set is kept, and Windows leaves the current directory out
 non-empty value, `0` included, so no setting brings the old search back: to run a program from
 the current directory, give its path (`./tool.exe`, or an absolute path in quotes) or put the
 directory on `PATH` as an absolute path. `soup adapters bisect --eval-command` uses native command-line splitting:
-POSIX quoting on Linux/macOS and Windows quoting on Windows, preserving backslashes in
-`.\tool.bat` and `C:\tools\tool.bat`. Quote a program path containing spaces.
+POSIX quoting on Linux/macOS and Microsoft C runtime quoting rules on Windows (where
+double quotes group arguments anywhere within an option like `--opt="a b"`, a single quote
+opens a group only at the start of a word like `'{ckpt}'` whereas inside a word it is an ordinary
+character, and backslashes are literal unless preceding a double quote; use double quotes for
+`--opt="a b"`), preserving backslashes in `.\tool.bat` and `C:\tools\tool.bat`.
+Quote a program path containing spaces.
 The template is split once before checkpoint substitution; checkpoint text remains one
 argument even when it contains spaces or quotes. No shell interprets that text. A missing
 or unstartable program is an invocation error (exit 2), with no bisect verdict or result
