@@ -128,7 +128,7 @@ def run_ship(tmp_path: Path, monkeypatch, *args: str, tasks=TASKS):
 PAIRWISE = ["--task-mode", "pairwise", "--judge-model", "ollama://judge"]
 
 
-def plain(text: str) -> str:
+def _plain(text: str) -> str:
     return " ".join(strip_ansi(text).split())
 
 
@@ -550,7 +550,7 @@ def test_a_scope_names_its_rows_by_position_and_a_sink_records_into_its_recorder
 def test_the_sidecar_has_each_rows_id_both_orders_and_the_combined_result(judged):
     result, root = judged
     assert read_rows(root / "out.judge-rows.jsonl") == EXPECTED_TASK_ROWS
-    text = plain(result.output)
+    text = _plain(result.output)
     assert "Wrote judge rows" in text
     assert "(5 rows)" in text
 
@@ -698,14 +698,14 @@ def test_no_file_is_written_when_no_output_is_requested(tmp_path, monkeypatch):
     result = run_ship(tmp_path, monkeypatch, *PAIRWISE)
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert sorted(os.listdir(tmp_path)) == ["held.jsonl", "tasks.jsonl"]
-    assert "judge rows" not in plain(result.output)
+    assert "judge rows" not in _plain(result.output)
 
 
 def test_a_mode_without_a_pairwise_judge_writes_no_rows(tmp_path, monkeypatch):
     result = run_ship(tmp_path, monkeypatch, "--task-mode", "metric", "--output", "out.json")
     assert result.exit_code in (0, EXIT_GATE_FAILED), (result.output, repr(result.exception))
     assert sorted(os.listdir(tmp_path)) == ["held.jsonl", "out.json", "tasks.jsonl"]
-    assert "judge rows" not in plain(result.output)
+    assert "judge rows" not in _plain(result.output)
 
 
 def test_noise_floor_repeats_judge_the_base_against_itself_and_are_not_rows(tmp_path, monkeypatch):
@@ -750,7 +750,7 @@ def test_an_output_outside_the_working_directory_is_refused_and_no_rows_are_writ
     work.mkdir()
     result = run_ship(work, monkeypatch, *PAIRWISE, "--output", "../escape.json")
     assert result.exit_code == EXIT_RUNTIME_ERROR, (result.output, repr(result.exception))
-    assert "cannot write --output" in plain(result.output)
+    assert "cannot write --output" in _plain(result.output)
     assert not list(tmp_path.glob("escape*"))
     assert not list(work.glob("*.judge-rows.jsonl"))
 
@@ -764,8 +764,8 @@ def test_a_symlink_where_the_sidecar_goes_fails_the_run_and_leaves_its_target_al
     os.symlink(target, tmp_path / "out.judge-rows.jsonl")
     result = run_ship(tmp_path, monkeypatch, *PAIRWISE, "--output", "out.json")
     assert result.exit_code == EXIT_RUNTIME_ERROR, (result.output, repr(result.exception))
-    assert "cannot write the judge rows next to --output" in plain(result.output)
-    assert "must not be a symlink" in plain(result.output)
+    assert "cannot write the judge rows next to --output" in _plain(result.output)
+    assert "must not be a symlink" in _plain(result.output)
     assert target.read_text(encoding="utf-8") == "keep me"
 
 
