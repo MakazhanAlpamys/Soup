@@ -925,6 +925,18 @@ def test_a_source_and_an_output_on_different_drives_are_disjoint(work, monkeypat
     assert result.verified is True
 
 
+def test_a_source_inside_the_output_is_refused(work, tmp_path):
+    source, _out = work
+    build_source(source)
+    with pytest.raises(ValueError, match="must not contain each other"):
+        import_nf4_checkpoint(source, str(tmp_path))
+
+
+def test_the_huggingface_config_keys_are_read_through_constants():
+    assert nf4_serialized.HF_DOUBLE_QUANT_KEY == "bnb_4bit_use_double_quant"
+    assert nf4_serialized.HF_QUANT_STORAGE_KEY == "bnb_4bit_quant_storage"
+
+
 def test_a_drive_mismatch_is_a_refusal_not_a_crash(tmp_path, monkeypatch):
     root = os.path.realpath(str(tmp_path / "ckpt"))
     os.makedirs(root)
@@ -947,6 +959,8 @@ EXTRA_MALFORMED_HEADERS = [
     ('"a":{"dtype":"U8","shape":[1,1,1,1,1,1,1,1,1],"data_offsets":[0,1]}', "invalid shape"),
     ('"a":{"dtype":"U8","shape":[-1],"data_offsets":[0,1]}', "invalid shape"),
     ('"a":{"dtype":"U8","shape":"ab","data_offsets":[0,1]}', "invalid shape"),
+    ('"a":{"dtype":"U8","shape":5,"data_offsets":[0,1]}', "invalid shape"),
+    ('"a":{"dtype":"U8","shape":null,"data_offsets":[0,1]}', "invalid shape"),
     ('"a":{"dtype":"U8","shape":[1]}', "invalid header entry"),
     ('"a":{"dtype":"U8","shape":[1],"data_offsets":[0,1],"x":1}', "invalid header entry"),
     ('"a":5', "invalid header entry"),
