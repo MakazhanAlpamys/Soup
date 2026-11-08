@@ -399,7 +399,10 @@ def _metadata() -> dict[str, Any]:
     props = torch.cuda.get_device_properties(0)
     try:
         sha = subprocess.run(
-            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+            ["git", "-C", str(pathlib.Path(__file__).resolve().parents[2]), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         sha = "unknown"
@@ -458,6 +461,9 @@ def main() -> int:
         return 0
 
     import torch
+    from rich.console import Console
+
+    console = Console()
 
     if not torch.cuda.is_available():
         parser.error("a CUDA GPU is required; no benchmark result was produced")
@@ -475,18 +481,18 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     for row in record["results"]:
-        print(f"\n{row['dtype']} — {row['shape']}")
+        console.print(f"\n{row['dtype']} — {row['shape']}")
         for arm in ARMS:
             timing = row["timing_ms"][arm]
             memory = row["peak_memory_bytes"][arm]
-            print(
+            console.print(
                 f"{arm:>5}: median {timing['median']:.3f} ms "
                 f"(IQR {timing['p25']:.3f}–{timing['p75']:.3f}); "
                 f"peak {memory['absolute'] / 2**20:.1f} MiB; "
                 f"saved {row['saved_tensor_bytes'][arm] / 2**20:.1f} MiB; "
                 f"path {row['path_proof'][arm]}"
             )
-    print(f"\nFull record: {args.output.resolve()}")
+    console.print(f"\nFull record: {args.output.resolve()}")
     return 0
 
 
