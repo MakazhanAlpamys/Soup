@@ -331,10 +331,10 @@ class TestPreflightSharding:
 # --- the floor per card ----------------------------------------------------------------
 
 
-def _parts(shape_of, model, params, **training):
+def _parts(shape_of, model, params, *, kbit_fp32=False, **training):
     shape_of(model, params)
     cfg = load_config_from_string(_yaml(**training))
-    inp = train_mod._build_hardware_fit_input(cfg)
+    inp = train_mod._build_hardware_fit_input(cfg, kbit_fp32=kbit_fp32)
     return cfg, inp, hardware_fit.estimate_peak_vram_gb(inp)
 
 
@@ -374,14 +374,28 @@ class TestFloorPerCard:
         ) == hardware_fit.unextrapolated_floor(cfg, inp, b)
 
     def test_the_seventy_b_case_fits_24_gb_only_with_every_term_divided(self, shape_of):
-        # Each divided term matters on its own: undividing any one is more than 24 GB.
-        cfg, inp, b = _parts(shape_of, _LLAMA_70B, _LLAMA_70B_PARAMS)
+        # On a card without bf16 hardware peft's fp32 embeddings and head are priced
+        # (#2609): 23.89 GB a card, each divided term matters on its own, and undividing
+        # any one is more than 24 GB.
+        cfg, inp, b = _parts(shape_of, _LLAMA_70B, _LLAMA_70B_PARAMS, kbit_fp32=True)
         floor, _ = hardware_fit.unextrapolated_floor(
             cfg, inp, b, sharding="full_shard", num_processes=2
         )
         assert floor < 24
         for term in (b.weights_gb, b.adapters_gb, b.gradients_gb, b.optimizer_gb):
             assert floor + term / 2 > 24
+
+    def test_the_seventy_b_case_in_bf16_has_room_and_only_the_weights_decide(self, shape_of):
+        # The bf16 default (#2609) prices the two [128256, 8192] matrices at 2 bytes: 21.79
+        # GB a card, so undividing the small terms still fits and the weights do not.
+        cfg, inp, b = _parts(shape_of, _LLAMA_70B, _LLAMA_70B_PARAMS)
+        floor, _ = hardware_fit.unextrapolated_floor(
+            cfg, inp, b, sharding="full_shard", num_processes=2
+        )
+        assert floor == pytest.approx(21.789797755)
+        assert floor + b.weights_gb / 2 > 24
+        for term in (b.adapters_gb, b.gradients_gb, b.optimizer_gb):
+            assert floor + term / 2 < 24
 
 
 class TestFullFineTuneThroughTheGate:

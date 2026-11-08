@@ -118,8 +118,13 @@ class HardwareFitInput:
     activation_offloading: Optional[str] = None
     #: The loader whose default LoRA targets and weight dtypes are being estimated.
     backend: str = "transformers"
+    #: A 4-bit or 8-bit run that keeps its embeddings, norms and untied head in fp32: a card
+    #: without bf16 hardware, or ``grpo_fp16`` (``RunSpec.kbit_fp32``, #2609).
+    kbit_fp32: bool = False
 
     def __post_init__(self) -> None:
+        if not isinstance(self.kbit_fp32, bool):
+            raise TypeError(f"kbit_fp32 must be bool, got {type(self.kbit_fp32).__name__}")
         if isinstance(self.params_b, bool):
             raise TypeError("params_b must be a number, not bool")
         if not isinstance(self.params_b, (int, float)):
@@ -494,6 +499,7 @@ def hardware_fit_input_from_config(
     profile_defaults: bool = False,
     gpu_memory_gb: Optional[float] = None,
     on_hub_request: Optional[Callable[[], None]] = None,
+    kbit_fp32: bool = False,
 ) -> Optional[HardwareFitInput]:
     """The estimate's input for a ``SoupConfig``: the train pre-flight, ``soup profile``
     and the MCP ``profile`` tool all build it here, so they price the same run (#2049).
@@ -505,6 +511,9 @@ def hardware_fit_input_from_config(
     with no memory model at bf16, as ``soup profile`` always did. ``gpu_memory_gb``
     is the card's memory in GiB, which ``gradient_checkpointing: auto`` resolves on.
     ``on_hub_request`` is called just before the first request to the Hub, if one is made.
+    ``kbit_fp32`` is True for a card without bf16 hardware, where a 4-bit or 8-bit run keeps
+    peft's fp32 embeddings, norms and head (#2609); ``grpo_fp16`` implies it. Every other
+    caller, which knows no card, prices the bf16 default.
     """
     from soup_cli.utils.model_shape import read_model_shape
 
@@ -565,6 +574,7 @@ def hardware_fit_input_from_config(
             fused_loss=fused_loss,
             backend=getattr(cfg, "backend", "transformers"),
             activation_offloading=getattr(tcfg, "activation_offloading", None),
+            kbit_fp32=bool(kbit_fp32 or (task == "grpo" and getattr(tcfg, "grpo_fp16", False))),
         )
     except (ValueError, TypeError, ArithmeticError):
         return None  # dims out of the predictor's supported range
@@ -595,6 +605,7 @@ def estimate_peak_vram_gb(inp: HardwareFitInput) -> VRAMBreakdown:
             fused_loss=inp.fused_loss,
             backend=inp.backend,
             activation_offloading=inp.activation_offloading,
+            kbit_fp32=inp.kbit_fp32,
         ),
     )
     return breakdown_from_estimate(est)

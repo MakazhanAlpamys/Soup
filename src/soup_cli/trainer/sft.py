@@ -1555,6 +1555,20 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         )
         return (mode == "bf16", mode == "fp16")
 
+    def _kbit_compute_dtype(self, tcfg, base_model: str):
+        """The dtype a 4-bit/8-bit run computes in, for ``prepare_kbit_model`` (#2609).
+
+        What ``TrainingArguments`` gets: an ``auto_mixed_precision`` pick of fp16 on a bf16
+        card keeps PEFT's fp32 non-quantised weights, instead of putting bf16 weights under
+        an fp16 run.
+        """
+        from soup_cli.utils.kbit_prepare import kbit_compute_dtype
+
+        if not getattr(tcfg, "auto_mixed_precision", False):
+            return kbit_compute_dtype(self.device)
+        bf16, _fp16 = self._resolve_mixed_precision(tcfg, base_model)
+        return kbit_compute_dtype(self.device, prefer_fp16=not bf16)
+
     def _resolve_load_dtype(self, tcfg):
         """Decide the ``dtype`` kwarg for ``from_pretrained`` (#339, #471, #492).
 
@@ -1624,7 +1638,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def _setup_transformers(self, cfg, tcfg):
         """Load model via standard transformers + peft pipeline."""
-        from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
+        from peft import TaskType, get_peft_model
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         from soup_cli.utils.moe import detect_moe_model
@@ -1759,13 +1773,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
 
         if tcfg.quantization in ("4bit", "8bit"):
+            from soup_cli.utils.kbit_prepare import prepare_kbit_model
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-            self.model = prepare_model_for_kbit_training(
+            self.model = prepare_kbit_model(
                 self.model,
                 use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
                     tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
                 ),
+                compute_dtype=self._kbit_compute_dtype(tcfg, cfg.base),
             )
 
         # Freeze training — freeze bottom layers before LoRA
@@ -2074,7 +2090,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def _setup_vision_transformers(self, cfg, tcfg):
         """Load vision-language model via transformers (LLaMA-Vision, Qwen2-VL, etc.)."""
-        from peft import get_peft_model, prepare_model_for_kbit_training
+        from peft import get_peft_model
         from transformers import AutoModelForImageTextToText, AutoProcessor
 
         console.print(f"[dim]Loading vision processor: {cfg.base}[/]")
@@ -2131,13 +2147,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             cfg.data,
         )
         if tcfg.quantization in ("4bit", "8bit"):
+            from soup_cli.utils.kbit_prepare import prepare_kbit_model
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-            self.model = prepare_model_for_kbit_training(
+            self.model = prepare_kbit_model(
                 self.model,
                 use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
                     tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
                 ),
+                compute_dtype=self._kbit_compute_dtype(tcfg, cfg.base),
             )
 
         # LoRA — target language model layers only
@@ -2237,7 +2255,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def _setup_audio_transformers(self, cfg, tcfg):
         """Load audio-language model via transformers (Qwen2-Audio, Whisper, etc.)."""
-        from peft import get_peft_model, prepare_model_for_kbit_training
+        from peft import get_peft_model
         from rich.panel import Panel as RichPanel
         from transformers import AutoModel, AutoProcessor
 
@@ -2299,13 +2317,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             cfg.data,
         )
         if tcfg.quantization in ("4bit", "8bit"):
+            from soup_cli.utils.kbit_prepare import prepare_kbit_model
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-            self.model = prepare_model_for_kbit_training(
+            self.model = prepare_kbit_model(
                 self.model,
                 use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
                     tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
                 ),
+                compute_dtype=self._kbit_compute_dtype(tcfg, cfg.base),
             )
 
         # LoRA — target language model layers only
