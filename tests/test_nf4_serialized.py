@@ -508,11 +508,30 @@ def _mixed_blocksize(tensors):
         tensors[f"{key}.{part}"] = tensor.detach().clone().contiguous()
 
 
+def _nested_absmax_long(tensors):
+    tensors[_Q + ".nested_absmax"] = tensors[_Q + ".nested_absmax"].repeat(2)
+
+
+def _two_spellings(tensors):
+    tensors["language_model.model.norm.weight"] = tensors["model.norm.weight"].clone()
+
+
 REJECTIONS = [
     ("fp4", {"tweak": _rename_to_fp4}, "FP4"),
     ("blob-not-u8", {"tweak": _blob_float}, f"{_Q}{_STATE}: the quant_state blob must be a 1-D U8"),
     ("blob-extra-field", {"tweak": lambda t: edit_state(t, _Q, extra=1)}, "unexpected fields"),
     ("absmax-float", {"tweak": _absmax_float}, f"{_Q}.absmax: stored as F32"),
+    (
+        "nested-absmax-long",
+        {"tweak": _nested_absmax_long},
+        f"{_Q}.nested_absmax: stored as F32 [2]",
+    ),
+    (
+        "blob-too-large",
+        {"tweak": lambda t: edit_state(t, _Q, pad="x" * 70000)},
+        "quant_state blob is",
+    ),
+    ("two-spellings", {"tweak": _two_spellings}, "spelled two ways"),
     (
         "nested-map-short",
         {"tweak": _nested_map_short},
@@ -594,6 +613,7 @@ def test_unsupported_sources_are_refused_before_anything_is_written(work, case, 
     [
         ({"bnb_4bit_use_double_quant": False}, "bnb_4bit_use_double_quant is False"),
         ({"bnb_4bit_quant_type": "fp4"}, "bnb_4bit_quant_type is 'fp4'"),
+        ({"load_in_4bit": False}, "load_in_4bit is False"),
         ({"quant_method": "gptq"}, "quant_method is 'gptq'"),
         ({"load_in_8bit": True, "load_in_4bit": False}, "8-bit"),
         ({"bnb_4bit_quant_storage": "bfloat16"}, "bnb_4bit_quant_storage is 'bfloat16'"),
@@ -832,3 +852,39 @@ def test_the_weight_map_must_name_the_file_that_holds_the_tensor(work):
     _edit_weight_map(source, swap)
     with pytest.raises(ValueError, match="whose header does not hold it"):
         import_nf4_checkpoint(source, out)
+
+
+def test_a_header_that_claims_more_than_the_file_holds_is_refused(work):
+    source, out = work
+    build_source(source)
+    with open(os.path.join(source, "model.safetensors"), "wb") as handle:
+        handle.write(struct.pack("<Q", 2**24 + 1) + b"{}")
+    with pytest.raises(ValueError, match="truncated or corrupt safetensors header"):
+        import_nf4_checkpoint(source, out)
+
+
+def test_a_file_that_resolves_outside_the_checkpoint_is_refused(tmp_path, monkeypatch):
+    root = os.path.realpath(str(tmp_path / "ckpt"))
+    os.makedirs(root)
+    with open(os.path.join(root, "config.json"), "w") as handle:
+        handle.write("{}")
+    elsewhere = str(tmp_path / "elsewhere.json")
+    with open(elsewhere, "w") as handle:
+        handle.write("{}")
+    real = os.path.realpath
+
+    def fake(path, *args, **kwargs):
+        return elsewhere if str(path).endswith("config.json") else real(path, *args, **kwargs)
+
+    monkeypatch.setattr(os.path, "realpath", fake)
+    with pytest.raises(ValueError, match="resolves outside the checkpoint directory"):
+        nf4_serialized._contained_file(root, "config.json", "checkpoint")
+
+
+def test_an_architecture_with_experts_or_layer_buffers_is_refused(work, monkeypatch):
+    source, out = work
+    build_source(source)
+    monkeypatch.setattr("soup_cli.utils.layer_stream.stream_arch_of", lambda config: "deepseek_v3")
+    with pytest.raises(ValueError, match="dense decoder architectures only"):
+        import_nf4_checkpoint(source, out)
+    assert not os.path.exists(out)

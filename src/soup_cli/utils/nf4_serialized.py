@@ -810,7 +810,7 @@ def _compare(stored: BinaryIO, start: int, span: _Span, chunk_bytes: int, file_n
                 if span.inline is not None
                 else source.read(amount)
             )
-            if got != want or len(got) != amount:
+            if got != want:
                 raise ValueError(
                     f"{file_name}: {_label(span.key)} differs from the source at payload byte "
                     f"{position}"
