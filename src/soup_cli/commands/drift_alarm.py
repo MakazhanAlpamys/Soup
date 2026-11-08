@@ -8,6 +8,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
 from soup_cli.utils.drift_alarm import (
     post_webhook,
@@ -15,6 +16,7 @@ from soup_cli.utils.drift_alarm import (
     validate_threshold,
     validate_webhook_url,
 )
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -50,13 +52,13 @@ def drift_alarm(
         try:
             slack_url = validate_webhook_url(slack_url)
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]--slack-url: {escape(str(exc))}[/]")
+            console.print(f"[red]--slack-url: {for_terminal(exc)}[/]", emoji=False)
             raise typer.Exit(2) from exc
     if discord_url is not None:
         try:
             discord_url = validate_webhook_url(discord_url)
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]--discord-url: {escape(str(exc))}[/]")
+            console.print(f"[red]--discord-url: {for_terminal(exc)}[/]", emoji=False)
             raise typer.Exit(2) from exc
 
     try:
@@ -66,10 +68,11 @@ def drift_alarm(
             threshold=threshold,
         )
     except FileNotFoundError as exc:
-        console.print(f"[red]File not found: {escape(str(exc))}[/]")
+        console.print(f"[red]File not found: {for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(1) from None
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        # Data/path errors quote outside text with repr(), which escapes controls.
+        console.print(f"[red]{escape(str(exc))}[/]", emoji=False)
         raise typer.Exit(1) from exc
 
     border = "red" if report.drift_detected else "green"
@@ -81,10 +84,12 @@ def drift_alarm(
     )
     if report.top_drift_tokens:
         top_str = ", ".join(
-            f"{escape(t)}={d:.3f}" for t, d in report.top_drift_tokens[:3]
+            f"{for_terminal(t)}={d:.3f}" for t, d in report.top_drift_tokens[:3]
         )
         panel_body += f"\nTop drift tokens: {top_str}"
-    console.print(Panel(panel_body, title="drift-alarm", border_style=border))
+    console.print(
+        Panel(Text.from_markup(panel_body, emoji=False), title="drift-alarm", border_style=border)
+    )
 
     if report.drift_detected:
         payload = {

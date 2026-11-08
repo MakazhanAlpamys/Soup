@@ -60,6 +60,22 @@ def _stdin_isatty() -> bool:
     return sys.stdin.isatty()
 
 
+def _confirm_start_training() -> None:
+    """Refuse on a non-TTY stdin (#1913) or ask for interactive confirmation."""
+    from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR
+
+    if not _stdin_isatty():
+        console.print(
+            "[red]stdin is not a TTY, so the start-training confirmation "
+            "cannot be answered.[/] Pass --yes to start without the "
+            "confirmation."
+        )
+        raise typer.Exit(EXIT_USAGE_ERROR)
+    if not typer.confirm("Start training?", default=True):
+        console.print("[yellow]Cancelled.[/]")
+        raise typer.Exit()
+
+
 def _nondefault_unwired_training_settings(training_config) -> list[str]:
     """Return staged training settings whose value differs from the schema default."""
     fields = type(training_config).model_fields
@@ -1172,19 +1188,8 @@ def train(
         )
 
     # --- MiniLLM on-policy rollout shortcut (v0.71.18 #257) ---
-    # Applied before SoupConfig validation via load_config(training_overrides=),
-    # so --minillm-on-policy can still select student-only sampling when the
-    # YAML leaves mix at 0 (#692 / #977). The assignment below is therefore a
-    # no-op when the flag was set; it stays so a later reader sees the flag
-    # take effect on cfg.training.
+    # Applied at config load time via load_config(training_overrides=).
     if minillm_on_policy:
-        if not cfg.training.minillm_enabled:
-            console.print(
-                "[red]--minillm-on-policy requires "
-                "training.minillm_enabled=true (task='distill')[/]"
-            )
-            raise typer.Exit(1)
-        cfg.training.minillm_on_policy = True
         console.print("[green]MiniLLM on-policy rollout enabled[/]")
 
     # --- Cloud GPU training (v0.71.18 #16, v0.71.22 #264) ---
@@ -1467,6 +1472,14 @@ def train(
 
             num_processes = num_gpus * nodes
             if not is_in_distributed():
+                # #2239: ask the start-training confirmation once in the
+                # launching process before spawning N ranks that would all read
+                # from the same terminal, and pass --yes to the launched ranks
+                # so they skip asking again.
+                will_reexec = not dry_run and not no_reexec
+                if will_reexec and not yes:
+                    _confirm_start_training()
+
                 # v0.33.0 #37 — auto-reexec under accelerate launch unless
                 # --no-reexec was passed. On POSIX the accelerate process
                 # replaces this one (os.execvp): no leftover PID tree, stdio
@@ -1501,7 +1514,7 @@ def train(
                         track_energy=track_energy,
                         energy_country=energy_country,
                         energy_out=energy_out,
-                        yes=yes,
+                        yes=yes or will_reexec,
                         minillm_on_policy=minillm_on_policy,
                         capture_activations=capture_activations,
                         capture_prompts=capture_prompts,
@@ -1863,21 +1876,7 @@ def train(
             raise typer.Exit(1) from exc
 
     if not dry_run and not yes:
-        # #1913: on a non-TTY stdin the confirm can never be answered — a pipe
-        # hangs until its writer closes (EOF aborts via typer) and an
-        # unattended service waits forever. Fail with the escape hatch named.
-        from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR
-
-        if not _stdin_isatty():
-            console.print(
-                "[red]stdin is not a TTY, so the start-training confirmation "
-                "cannot be answered.[/] Pass --yes to start without the "
-                "confirmation."
-            )
-            raise typer.Exit(EXIT_USAGE_ERROR)
-        if not typer.confirm("Start training?", default=True):
-            console.print("[yellow]Cancelled.[/]")
-            raise typer.Exit()
+        _confirm_start_training()
 
     # #1223: a split nothing evaluates is not withheld -- generation tasks train
     # on every row unless training.eval_steps asks for evaluation.
@@ -2779,6 +2778,59 @@ def _resolve_checkpoint(
     return None
 
 
+def _resume_failure_reason(
+    resume: str,
+    output_dir: str,
+    experiment_name: str | None = None,
+    *,
+    backend: str = "transformers",
+) -> str:
+    """Say which path ``_resolve_checkpoint`` searched and why it found nothing.
+
+    The resolvers return a bare ``None`` for several different situations: a
+    missing path, a path that is not a directory (or an adapter file on MLX), an
+    output directory that does not exist, and one that holds no checkpoint
+    entry. This re-walks the same checks, only after resolution failed, so the
+    message names the path the user can fix (#2296).
+    """
+    from soup_cli.utils.terminal import for_terminal
+
+    if backend == "mlx":
+        if resume.lower() == "auto":
+            base = Path(output_dir)
+            base_text = for_terminal(output_dir)
+            if not base.exists():
+                return f"'{base_text}' does not exist"
+            if not base.is_dir():
+                return f"'{base_text}' is not a directory"
+            return f"no adapter file in '{base_text}'"
+        checkpoint_path = Path(resume)
+        path_text = for_terminal(resume)
+        if not checkpoint_path.exists():
+            return f"'{path_text}' does not exist"
+        return (
+            "--resume on MLX takes an adapter file, "
+            f"but '{path_text}' is not a file"
+        )
+
+    if resume.lower() == "auto":
+        base = Path(output_dir)
+        if experiment_name:
+            base = base / experiment_name
+        base_text = for_terminal(str(base))
+        if not base.exists():
+            return f"'{base_text}' does not exist"
+        if not base.is_dir():
+            return f"'{base_text}' is not a directory"
+        return f"no checkpoint-N directory in '{base_text}'"
+
+    checkpoint_path = Path(resume)
+    path_text = for_terminal(resume)
+    if not checkpoint_path.exists():
+        return f"'{path_text}' does not exist"
+    return f"'{path_text}' is not a directory"
+
+
 def _resolve_resume_or_exit(resume: str, cfg: "SoupConfig") -> str | None:
     """Resolve ``--resume`` against ``cfg``, printing status and exiting on
     failure. Extracted out of ``train()`` (#634 review) so the
@@ -2798,7 +2850,10 @@ def _resolve_resume_or_exit(resume: str, cfg: "SoupConfig") -> str | None:
     if resume_from:
         console.print(f"[green]Resuming from:[/] {resume_from}")
     else:
-        console.print("[red]No checkpoint found to resume from.[/]")
+        reason = _resume_failure_reason(
+            resume, cfg.output, cfg.experiment_name, backend=cfg.backend
+        )
+        console.print(f"[red]No checkpoint found to resume from: {reason}[/]")
         raise typer.Exit(1)
     return resume_from
 

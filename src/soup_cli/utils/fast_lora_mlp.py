@@ -29,6 +29,25 @@ _HAD_INSTANCE_FORWARD_MARKER = "_soup_fast_lora_mlp_had_instance_forward"
 _OWNER = "mlp"
 _FUNCTION: Any = None
 
+
+def _lora_dx_add(grad_base: Any, grad_h: Any, lora_a: Any) -> Any:
+    """Add base dX and the LoRA dX term, rounding once after a wide add.
+
+    For bf16 activations the LoRA operands are fp32, so this adds in fp32
+    and rounds once.  That is wider than PEFT's backward, which casts the
+    branch gradient to the input dtype before autograd adds it.  The LoRA
+    product must not be rounded to ``grad_base.dtype`` before the addition:
+    that loses a bf16 ulp and doubles it in the SwiGLU backward (#2187).
+    """
+    import torch
+
+    wide = torch.promote_types(
+        grad_base.dtype, torch.promote_types(grad_h.dtype, lora_a.dtype)
+    )
+    summed = grad_base.to(wide) + torch.matmul(grad_h.to(wide), lora_a.to(wide))
+    return summed.to(grad_base.dtype)
+
+
 __all__ = ["patch_fast_lora_mlp", "unpatch_fast_lora_mlp"]
 
 
@@ -178,10 +197,8 @@ def _mlp_function() -> Any:
                 grad_bdl = _flatten(_as_dtype(grad_y, hd.dtype)).t() @ _flatten(hd) * sd
                 grad_hd = torch.matmul(_as_dtype(grad_y, bdl.dtype), bdl) * sd
                 grad_ad = _flatten(grad_hd).t() @ _as_dtype(_flatten(m), grad_hd.dtype)
-                grad_m = torch.add(
-                    grad_m,
-                    torch.matmul(_as_dtype(grad_hd, grad_m.dtype), _as_dtype(ad, grad_m.dtype)),
-                )
+                # Round once after a wide add; see _lora_dx_add and #2187.
+                grad_m = _lora_dx_add(grad_m, grad_hd, ad)
 
             grad_u = grad_m * silu_g
             # Match autograd's opmath rule for SiLU backward: bf16/fp16

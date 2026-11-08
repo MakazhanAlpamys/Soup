@@ -143,7 +143,16 @@ training:
     alpha: 32
 ```
 
-MLX backend supports SFT, DPO, ORPO, SimPO, KTO and GRPO. Any other task with `backend: mlx` (`ipo`, `preference`, ...) is refused when the config is loaded, with an error naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for ready-made Apple Silicon configs.
+MLX backend supports SFT, DPO, ORPO, SimPO, KTO and GRPO. `task: preference`
+with `training.preference_loss: dpo`, `orpo` or `simpo` selects the corresponding
+native MLX trainer, with the same load-time restrictions and doctor support
+report as the explicit native task. The configured task remains `preference`;
+the saved `adapter_config.json` records `dpo`, `orpo` or `simpo`, so the adapter
+can also be resumed with that explicit native task. IPO, BCO and
+`training.preference_loss_weights` blends remain refused on MLX. Other tasks
+without a native trainer are refused when the config is loaded, with an error
+naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for
+ready-made Apple Silicon configs.
 
 `training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO, SimPO, KTO and GRPO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
 
@@ -173,8 +182,8 @@ training:
     alpha: 32
 ```
 
-- **No second model in memory.** LoRA `B` starts at zero, so before the first update the policy *is* the base model. Reference log-probs are computed once from it before training, which is what TRL's `precompute_ref_log_probs` does. `--resume` computes them before the checkpoint loads, so the reference is always the base model.
-- **The rows `load_dataset` gives every backend.** Each row is read by the loader's own `format: dpo` converter, so MLX accepts exactly the layouts the transformers backend does: text (three strings) or conversational (a message-list prompt, or full `chosen` / `rejected` conversations that repeat the user turn, as the bundled examples do). Text rows get EOS appended; conversational rows go through the model's chat template; the prompt is capped at `max_length // 2` and completions at what remains, as on TRL 0.29. Where this differs from TRL, it does on purpose: a pair whose `chosen` equals its `rejected` is skipped with a count (TRL trains it at a constant loss and zero gradient), and a row the chat template is not prefix-stable for is skipped with a count and the first row's index (TRL warns and slices anyway). Fewer pairs than `training.batch_size` after skipping is refused, naming both.
+- **No second model in memory.** LoRA `B` starts at zero, so before the first update the policy *is* the base model. Reference log-probs are computed once from it before training, which is what TRL's `precompute_ref_log_probs` does. `--resume` computes them before the checkpoint loads, so the reference is always the base model. `--resume` refuses a checkpoint without `adapter_config.json`, from another task (an MLX SFT adapter included), or from another base, before any tensor loads.
+- **The rows `load_dataset` gives every backend.** Each row is read by the loader's own `format: dpo` converter, so MLX accepts exactly the layouts the transformers backend does: text (three strings) or conversational (a message-list prompt, or full `chosen` / `rejected` conversations that repeat the user turn, as the bundled examples do). Text rows get EOS appended; conversational rows go through the model's chat template; the prompt is capped at `max_length // 2` and completions at what remains, even when the row would fit; the transformers backend makes that cut only on a row that does not fit `data.max_length` (#1209). Where this differs from TRL, it does on purpose: a pair whose `chosen` equals its `rejected` is skipped with a count (TRL trains it at a constant loss and zero gradient), and a row the chat template is not prefix-stable for is skipped with a count and the first row's index (TRL warns and slices anyway). Fewer pairs than `training.batch_size` after skipping is refused, naming both.
 - **Seeded.** `training.seed` seeds `mx.random` (LoRA init, dropout) and the batch order; `training.data_seed`, when set, owns the batch order instead. Two runs with the same seed reproduce each other's losses.
 - **LoRA dropout applies.** `lora.dropout` (default 0.05) is active during training, as in MLX SFT; TRL's `disable_dropout` (on by default in 0.29.1) turns it off on the transformers backend. Set `lora.dropout: 0` to match it.
 - **Memory.** Log-probs are computed from the first completion position on, with the vocabulary head run in checkpointed chunks, so the full-vocabulary logits of a batch are never held at once. The chunked path is checked against the full model on the first batch and dropped, with a warning, for an architecture that changes logits after the head. Set `training.gradient_checkpointing: true` for long sequences: measured once on an M4 Pro, Qwen2.5-0.5B-4bit with 792-token pairs, it took a training step from 10.05 GB to 3.63 GB.
@@ -220,9 +229,11 @@ training:
   TRL's ORPO trainer does: rendered to text with the chat template (keeping
   only the prefix the prompt and `prompt + answer` renderings share), the
   answer located even when the tokenizer merges the last prompt token into it,
-  BOS prepended and EOS appended when missing. Over-long rows are cut as on the
-  transformers backend (prompt to `max_length // 2`, keeping its end, answers to
-  the remaining room); TRL's own earlier answer cut, which can leave the shorter
+  BOS prepended and EOS appended when missing. A prompt longer than
+  `max_length // 2` tokens is cut to that many, keeping its end, with the BOS
+  in front, and the answers to the remaining room, even when the row would fit;
+  the transformers backend makes that cut only on a row that does not fit
+  `data.max_length` (#1209). TRL's own earlier answer cut, which can leave the shorter
   answer empty, is not reproduced. A pair the template cannot split is skipped
   with a count; a row with no room for an answer is refused.
 - **Ties train.** A pair whose `chosen` equals its `rejected` is kept, as in
@@ -244,8 +255,9 @@ training:
   metadata, from another task, or from another base, before any tensor loads.
 - **Refused at load:** `quantization: 8bit` (use `none`, or a pre-quantized
   4-bit base with `quantization: 4bit`), `training.lora.r: 0`, non-text
-  `modality`, LoRA+, and `task: preference` with `preference_loss: orpo` on
-  `backend: mlx` (use `task: orpo`). The other settings MLX DPO does not apply
+  `modality`, LoRA+ and `data.chat_template`. `task: preference` with
+  `training.preference_loss: orpo` uses this same native trainer and these
+  same restrictions. The other settings MLX DPO does not apply
   are not applied here either.
 
 #### SimPO on MLX
@@ -277,11 +289,15 @@ That shows the objective moving, not alignment quality.
   micro-batch and the micro-batches are averaged with equal weight, as the
   transformers Trainer does for TRL's CPO.
 - **Tokens** are ORPO's above: TRL's CPO and ORPO trainers tokenize rows with
-  the same code, so rows that fit in `data.max_length` train on the same tokens
-  on either backend. Over-long rows are cut with Soup's cap (prompt to
-  `max_length // 2`, keeping its end, answers to the remaining room). The
-  transformers SimPO path applies no prompt cap: TRL 0.29.1 cuts only the
-  answers there, and Soup refuses a row whose shorter answer that cut empties.
+  the same code. MLX SimPO, like MLX DPO and ORPO, cuts by the prompt alone: a
+  prompt longer than `max_length // 2` tokens is cut to that many, keeping its
+  end, and the answers to the remaining room, even when the row would fit. The
+  transformers SimPO path applies the same cap only when a row does not fit
+  `data.max_length` (TRL 0.29.1 cuts only the answers, so a long prompt reached
+  the model whole); Soup refuses a row whose shorter answer that cut empties.
+  Rows that fit with a prompt of at most `max_length // 2` tokens train on the
+  same tokens on either backend; a row that fits with a longer prompt keeps its
+  whole prompt on transformers and loses its start on MLX.
 - **Ties train**, as in TRL: the preference term is the constant
   `softplus(simpo_gamma)` and the NLL still learns.
 - **Stops on a nonfinite loss** instead of training on NaN.
@@ -302,9 +318,9 @@ That shows the objective moving, not alignment quality.
   another task (ORPO and DPO included), or from another base, before any tensor
   loads.
 - **Refused at load:** `quantization: 8bit`, `training.lora.r: 0`, non-text
-  `modality`, LoRA+, `data.chat_template` (as for MLX DPO and ORPO), and
-  `task: preference` with `preference_loss: simpo` on
-  `backend: mlx` (use `task: simpo`). The other settings MLX DPO does not apply
+  `modality`, LoRA+ and `data.chat_template` (as for MLX DPO and ORPO).
+  `task: preference` with `training.preference_loss: simpo` uses this same
+  native trainer and these same restrictions. The other settings MLX DPO does not apply
   are not applied here either.
 
 #### KTO on MLX
@@ -375,8 +391,9 @@ training:
   completion located even when the tokenizer merges the last prompt token
   into it, BOS prepended to the prompt and EOS appended to the completion when
   missing. A row longer than `data.max_length` loses the end of its completion;
-  the prompt is never cut (TRL 0.29.1 has no prompt cap, and the transformers
-  path adds none). A KL row is re-cut to its own prompt's room.
+  the prompt is never cut (TRL 0.29.1 has no prompt cap; the transformers path
+  now caps the prompt only when a row does not fit `data.max_length`). A KL row
+  is re-cut to its own prompt's room.
 - **Labels** are read by the loader's `format: kto` converter, exactly as on the
   transformers backend (`true` / `false`, and the strings and numbers that
   converter accepts); MLX adds no reading of its own. Only a row handed to the
@@ -429,6 +446,39 @@ went from 0.04 to 0.99 as the model learned to work the product out before
 answering. That task is easy and fully verifiable; it shows the loop training,
 not reasoning quality in general.
 
+**Bases.** A dense base, or one pre-quantized by mlx-lm at 4 bits in `affine`
+mode, as `mlx_lm.convert -q` and the `mlx-community/...-4bit` repos write it:
+every quantized layer a `QuantizedLinear` or a `QuantizedEmbedding`, so a tied
+output head runs through the quantized embedding. Layers mlx-lm left dense stay
+dense. The quantized weights, scales and biases stay frozen and only the LoRA
+adapter trains. The run checks that no quantized tensor is trainable once the
+adapter is attached, and refuses before the first update if one is. The same
+loop and objective train both kinds of base. Any other quantized base is refused
+right after the load, with the first layer outside the rule and its kind, bits
+and mode:
+- an 8-bit base, or a mixed-bit recipe with any layer that is not 4-bit;
+- `mxfp4`, `mxfp8` and `nvfp4`;
+- quantized MoE expert layers (`QuantizedSwitchLinear`);
+- BitNet `BitLinear` layers (a `quantization_config.quant_method: bitnet`
+  checkpoint), whose scale mlx-lm keeps as `weight_scale`.
+
+The rule reads the layers mlx-lm loads, not the checkpoint's format. A 4-bit
+GPTQ or AWQ checkpoint, and a `compressed-tensors` one that mlx-lm loads as 4-bit
+`affine` (every one at mlx-lm 0.31.3, only the `pack-quantized` format at
+0.32.2), therefore passes it as well; a `compressed-tensors` checkpoint in an
+`nvfp4` or `mxfp4` format loads in that mode and is refused. The native tests
+cover only bases quantized by mlx-lm's own `quantize_model`.
+
+On MLX, `training.quantization` only names the base, since nothing is quantized
+at load, so the base's own layers decide; `quantization: 8bit` stays refused at
+load. The 4-bit path is covered by native tests on tiny random Llamas that
+mlx-lm's own `quantize_model` quantizes, saved and loaded through `mlx_lm.load`
+(Apple M6, `mlx-lm` 0.31.3 and 0.32.2). They check updates, accumulation,
+gradient checkpointing, checkpoints and a fresh-process reload, quantized tensors
+bit-identical after training, and the loss and gradients against an independent
+reference on the same quantized base. They show behaviour, not quality or speed
+on a real 4-bit model.
+
 | setting | value |
 |---|---|
 | `loss_type` | `dapo`: per-token clipped surrogate, summed over every completion token of the update and divided by that token count (EOS included) |
@@ -462,7 +512,7 @@ training:
   gradient_accumulation_steps: 2
   grpo_beta: 0.1
   lr: 1e-5
-  quantization: none
+  quantization: none         # 4bit with a 4-bit MLX base, e.g. mlx-community/...-4bit
   lora:
     r: 16
     alpha: 32
@@ -503,7 +553,8 @@ The loader does not auto-detect bare `{"prompt", "answer"}` rows; use `messages`
   completion stops the run.
 - **Reference.** With `grpo_beta > 0` the reference is the base model, as TRL
   uses for a PEFT model. It is the policy with every LoRA scale set to 0, run
-  on the generated tokens before each update. No second copy is loaded.
+  on the generated tokens before each update. No second copy is loaded; on a
+  4-bit base the reference is that same frozen quantized base.
 - **Watchdog.** A nonfinite loss or gradient skips the update, as Soup's GRPO
   watchdog does on transformers. The weights and optimizer moments do not
   change. The skip is printed and counted in the result and in
@@ -535,7 +586,10 @@ The loader does not auto-detect bare `{"prompt", "answer"}` rows; use `messages`
   `mlx_lm.load(base, adapter_path=output)`. Both are written atomically, and the
   metadata before the first update. The metadata records every setting in the
   table above, the reward, the advantage epsilon and std, the reference and
-  generation mode, and the skipped-update count. `save_steps` counts updates.
+  generation mode, and the skipped-update count. It also records the base's
+  quantization as `base_quantization`: `bits`, `group_size`, `mode`, and the
+  number of quantized linear and embedding layers, or `null` for a dense base.
+  `save_steps` counts updates.
 - **Cost.** Rollouts dominate: each update samples up to `data.max_length`
   tokens for `num_generations` completions of every prompt. Keep
   `data.max_length` small. With `grpo_beta > 0` each micro-step adds one
@@ -549,9 +603,11 @@ The loader does not auto-detect bare `{"prompt", "answer"}` rows; use `messages`
   streaming.
 - **Refused at launch or after the load:** `--deepspeed` / `--fsdp`, and
   `--resume` / `--hf-resume`: only the adapter is saved, and resume is not
-  implemented for MLX GRPO. A base that loads quantized is refused right after
-  the load. 4-bit bases come in a follow-up. `quantization: 4bit` is Soup's default and, on MLX, only names a
-  pre-quantized base, so a dense base trains with it.
+  implemented for MLX GRPO. A quantized base in any format but 4-bit `affine` is
+  refused right after the load (see **Bases** above), and a quantized tensor left
+  trainable once the adapter is attached is refused before the first update.
+  `quantization: 4bit` is Soup's default and, on MLX, only names a pre-quantized
+  base, so a dense base trains with it too.
 
 #### DoRA on MLX
 
@@ -602,6 +658,10 @@ now **refused when the optimizer is built**, rather than silently substituted:
 Soup's optimizer allowlist (`utils.optimizer_zoo`) is far wider than anything
 MLX ships, so most valid values have no MLX equivalent. Run those recipes on
 the transformers backend.
+
+Adafactor uses `relative_step=False` and `scale_parameter=False`, so the
+configured learning rate, warmup and schedule control its updates instead of
+MLX's default relative step size and parameter-RMS scaling.
 
 The schedule counts **optimizer updates**, not iterations: mlx-lm calls
 `optimizer.update()` once every `gradient_accumulation_steps`, so a warmup of
@@ -672,6 +732,14 @@ Works with the tasks that have an unsloth setup: SFT (text; SFT vision and audio
 
 > **Tip:** Soup auto-detects unsloth. When it is installed, `soup train` prints a hint if you haven't enabled it yet and your config would load with it.
 
+With `training.lora.target_modules: auto`, the Unsloth loader and VRAM estimate
+both use `q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj` and
+`down_proj`; explicit targets are preserved. Under 4-bit loading the estimate
+prices the embedding and output head at 2 bytes per parameter, from a real load
+and LoRA injection ([dtype record](../benchmarks/unsloth-4bit-weight-dtypes.md)).
+The Transformers backend keeps its architecture-specific automatic targets and
+fp32 k-bit embedding/head figure.
+
 ### Gradient checkpointing on Unsloth
 
 On `backend: unsloth`, `training.gradient_checkpointing` is honoured instead of silently ignored ([#797](https://github.com/MakazhanAlpamys/Soup/issues/797)):
@@ -726,8 +794,14 @@ Only ed25519 and RSA public keys are accepted:
 soup train --config soup.yaml --cloud runpod --gpu rtx4090 --cloud-submit
 ```
 
-The local controller creates one Secure Cloud GPU Pod with TCP SSH access, installs
-the running Soup version, runs training over SSH and copies the configured relative
+The local controller creates one Secure Cloud GPU Pod with TCP SSH access, creates
+`/workspace/venv` with `python3 -m venv --system-site-packages`, and installs the
+running Soup version with `/workspace/venv/bin/python -m pip`. This keeps the
+image's preinstalled torch visible and avoids installing Soup into its system
+Python. Training uses `/workspace/venv/bin/soup` by absolute path, so it does not
+depend on the non-login SSH command's script search path. Environment creation
+and installation diagnostics go to stderr; either failure stops before training.
+The controller runs training over SSH and copies the configured relative
 output directory back before deleting the Pod. Choose a fresh local output path;
 existing outputs, symlink/junction paths and path components starting with `-` are
 refused before allocation and rechecked before copying. SCP separates options from
@@ -794,6 +868,9 @@ or claim successful artifact retrieval.
 **Not yet live-validated.** Tests use local mocked API/SSH transports. The code
 PR does not include a paid run; provider execution, GPU behavior, retrieval and
 billing termination remain a separate live-validation task, per #264's ruling.
+That first live run (#2098) should also record the image's externally-managed
+Python marker and SSH `PATH`, to establish whether the image needed the venv
+workaround tracked in #2192.
 API contract: [RunPod REST v1 OpenAPI](https://rest.runpod.io/v1/openapi.json),
 [SSH setup](https://docs.runpod.io/pods/configuration/use-ssh).
 
@@ -1044,6 +1121,10 @@ soup recipes verify
 soup recipes verify --config soup.yaml
 soup recipes verify --json    # one row per config on stdout, for CI
 ```
+
+`recipes use --output` keeps the requested filename and writes the recipe's YAML unchanged.
+Receipts and errors display brackets literally and strip terminal control characters only from
+the display.
 
 **What's covered:**
 
@@ -1874,11 +1955,11 @@ The estimate is per term, in bytes (GB in the output is 1e9 bytes):
 
 | term | what it prices |
 |---|---|
-| `weights` | the base at its loaded precision: 2 bytes a parameter in bf16, 4 under full fine-tuning (fp32 master weights, #339). Under `4bit` and `8bit` loading only the decoder's linear layers are quantized (0.53 and 1.02 bytes a parameter); the embeddings, output head and norms are cast to fp32 for training |
-| `adapters` | LoRA's A and B, `r * (in + out)` per adapted module per layer, from the model's own dims and `lora.target_modules` (`auto` is peft's default for the architecture), in fp32 |
+| `weights` | the base at its loaded precision: 2 bytes a parameter in bf16, 4 under full fine-tuning (fp32 master weights, #339). Under `4bit` and `8bit` loading only the decoder's linear layers are quantized (0.53 and 1.02 bytes a parameter); Transformers casts the embeddings and output head to fp32 for training. Unsloth `4bit` prices those two weights at the observed 2 bytes per parameter ([dtype record](../benchmarks/unsloth-4bit-weight-dtypes.md)) |
+| `adapters` | LoRA's A and B, `r * (in + out)` per adapted module per layer, from the model's own dims and `lora.target_modules`, in fp32. `auto` uses peft's default for the architecture on Transformers, and the loader's seven projections on Unsloth |
 | `gradients`, `optimizer` | per trainable parameter: 4 bytes of gradient, and 8 for AdamW, 2 for the 8-bit optimizers, 4 for Adafactor |
-| `activations` | what the backward pass keeps per layer; with `gradient_checkpointing`, one hidden-sized tensor per layer plus one layer recomputed. `medium` keeps every other layer; `selective` is priced as no checkpointing, an upper bound. `auto` is resolved on the card as the `sft` trainer resolves it (`full` below 24 GB, `medium` to 80 GB, `selective` above), and only `sft` and `tts` apply the tiers: every other task checkpoints fully. With `activation_offloading: cpu` or `disk` it is still charged as resident, since what offloading moves off the card is not measured, and the output says so (#2327) |
-| `logits` | the output head's logits and the loss over them, 12 bytes an element (14 under `4bit` / `8bit`, whose output head is fp32). Checkpointing does not reduce it, and on a 150k vocabulary it is often the largest term. Not charged for the tasks without an LM head (`classifier`, `reranker`, `cross_encoder`, `embedding`, `reward_model`). On `prm`, whose step runs the causal-LM forward without labels and takes its loss from the reward head, only the logits are charged, 6 bytes an element: the half-precision output and the fp32 copy Accelerate makes of it, both live at the end of the forward. With `use_liger` or `use_cut_ce` on `sft` or `tts` it is still charged, since the fused loss may not apply, and the output says it may overstate the peak |
+| `activations` | what the backward pass keeps per layer; the estimate charges saved inputs for the backend's resolved LoRA targets, including all seven projections for Unsloth `auto`, unless checkpointing is full. With `gradient_checkpointing`, one hidden-sized tensor per layer plus one layer recomputed. `medium` keeps every other layer; `selective` is priced as no checkpointing, an upper bound. `auto` is resolved on the card as the `sft` trainer resolves it (`full` below 24 GB, `medium` to 80 GB, `selective` above), and only `sft` and `tts` apply the tiers: every other task checkpoints fully. With `activation_offloading: cpu` or `disk` it is still charged as resident, since what offloading moves off the card is not measured, and the output says so (#2327) |
+| `logits` | the output head's logits and the loss over them, 12 bytes an element (14 under `4bit` / `8bit` for the Transformers fp32 head). The 14-byte charge is also retained for Unsloth `4bit`, whose head was observed in 16-bit; its logits and loss allocations have not been measured. Checkpointing does not reduce it, and on a 150k vocabulary it is often the largest term. Not charged for the tasks without an LM head (`classifier`, `reranker`, `cross_encoder`, `embedding`, `reward_model`). On `prm`, whose step runs the causal-LM forward without labels and takes its loss from the reward head, only the logits are charged, 6 bytes an element: the half-precision output and the fp32 copy Accelerate makes of it, both live at the end of the forward. That forward passes `logits_to_keep=1` where the model takes it, so the logits cover one position, `vocab * batch * 6` bytes; the model types whose forward has no such argument (`gemma4_assistant`, `gemma4_unified_assistant`, `musicgen`, `musicgen_melody`, `prophetnet`, `trocr`, `whisper`, `xlstm`) and a base whose `config.json` has an `auto_map` (remote code) are charged every position. With `use_liger` or `use_cut_ce` on `sft` or `tts` it is still charged, since the fused loss may not apply, and the output says it may overstate the peak |
 | `dequant` | under `4bit`, the bf16 copy of the largest weight a matmul dequantizes |
 | `optimizer_step` | how far the optimizer step's peak exceeds the forward and backward pass, or 0. The step holds the weights, adapters, gradients and optimizer state plus, for `adamw_torch`, 4 bytes a trained parameter of foreach scratch, after the activations and logits are freed. It sets the peak on a short full fine-tune (#2277) and stays out of the floor below |
 | `overhead` | the CUDA context and allocator slack, which `max_memory_allocated()` does not see |

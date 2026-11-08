@@ -17,6 +17,7 @@ from soup_cli.utils.profiler import (
     estimate_speed,
     estimate_training_time,
 )
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 err_console = Console(stderr=True)
@@ -109,7 +110,9 @@ def cost(
     diagnostic_console = err_console if json_output else console
     config_path = Path(config)
     if not config_path.exists():
-        diagnostic_console.print(f"[red]Config file not found:[/] {config}")
+        diagnostic_console.print(
+            f"[red]Config file not found:[/] {for_terminal(config)}", emoji=False
+        )
         raise typer.Exit(1)
 
     # The loader reports refusals and advisories on stdout. Keep those out of
@@ -165,7 +168,9 @@ def cost(
         })
 
     if not results:
-        diagnostic_console.print(f"[red]No matching GPUs found for:[/] {gpu}")
+        diagnostic_console.print(
+            f"[red]No matching GPUs found for:[/] {for_terminal(gpu)}", emoji=False
+        )
         raise typer.Exit(1)
 
     if json_output:

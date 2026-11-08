@@ -601,7 +601,7 @@ soup train --config unlearn.yaml --yes
 soup eval unlearning <run-id> --benchmark tofu --evidence evidence.json --output report.json
 ```
 
-`task: unlearn` is live (v0.71.9): it loads a LoRA-wrapped policy, a frozen reference copy (NPO / RMU), and the forget / retain JSONL sets, then optimises the per-method loss — NPO's `(2/β)·mean(-logσ(-β·(π_logp − ref_logp)))` drives the policy's forget-set log-prob below the reference (= forgetting), while the retain set anchors capability. Run NPO/SimNPO **with** a `retain_set` — without one the policy has no utility anchor and Soup warns loudly.
+`task: unlearn` is live (v0.71.9): it loads a LoRA-wrapped policy, a frozen reference copy (NPO / RMU), and the forget / retain JSONL sets, then optimises the per-method loss — NPO's `(2/β)·mean(-logσ(-β·(π_logp − ref_logp)))` drives the policy's forget-set log-prob below the reference (= forgetting), while the retain set anchors capability. Run NPO/SimNPO **with** a `retain_set` — without one the policy has no utility anchor and Soup warns loudly. A `forget_set` or a `retain_set` that is set but yields no usable row is refused, naming the file, before any model loads.
 
 Unlearning honors `training.optimizer`, `scheduler`, `warmup_ratio`, `weight_decay`,
 `max_grad_norm`, `batch_size`, `gradient_accumulation_steps` and
@@ -1374,6 +1374,36 @@ frozen reference.
 Same input format as DPO; rows are split internally to TRL's BCO
 unpaired schema (`{prompt, completion, label}`).
 
+**When the prompt is cut, for all six preference tasks (transformers
+backend).** TRL 0.29 no longer exposes `max_prompt_length`, so `soup train`
+enforces `data.max_length` itself
+on TRL's tokenized rows, for the train and validation splits. A row whose
+prompt plus longest answer fits in `data.max_length` reaches the trainer
+unchanged, however long its prompt. A row that overflows has a prompt longer than
+`data.max_length // 2` tokens cut to that many, and its answers cut to the room
+left, so every sequence is at most `data.max_length`. Which end of the prompt survives the
+cut is each TRL trainer's own `truncation_mode`:
+
+| Task (transformers backend) | Prompt cut | End kept |
+|---|---|---|
+| `dpo` | only when the row does not fit `data.max_length` (#1209) | start (`keep_start`) |
+| `ipo` | only when the row does not fit `data.max_length` | start (`keep_start`, as DPO) |
+| `orpo` | only when the row does not fit `data.max_length` (#1209) | end (`keep_end`), BOS kept in front |
+| `simpo` | only when the row does not fit `data.max_length` | end (`keep_end`), BOS kept in front |
+| `kto` | only when the row does not fit `data.max_length` | end (`keep_end`), BOS kept in front |
+| `bco` | only when the row does not fit `data.max_length` | end (`keep_end`), BOS kept in front |
+
+When BCO, KTO, ORPO or SimPO keeps the end of a prompt that starts with the
+tokenizer's BOS token, the BOS stays in front, followed by the last
+`data.max_length // 2 - 1` prompt tokens.
+
+Keeping the end preserves a chat template's assistant header, which sits at
+the end of the prompt; DPO and IPO keep the start because that is TRL's
+default for `DPOConfig`, and Soup does not change it. Before #1209, DPO and
+ORPO cut every prompt longer than `data.max_length // 2`, including rows that
+fit; `backend: mlx` native DPO, ORPO and SimPO still do (see
+[SimPO on MLX](backends-and-ops.md#simpo-on-mlx)).
+
 ```yaml
 task: bco
 data:
@@ -1483,7 +1513,8 @@ when the fraction exceeds 5%) and persisted in `trainer_state.json` so
 `soup adapters audit` can see it.
 
 On Apple Silicon, `backend: mlx` trains GRPO natively with the same objective
-(TRL's `loss_type="dapo"` defaults) and the built-in rewards; see
+(TRL's `loss_type="dapo"` defaults) and the built-in rewards, on a dense or a
+pre-quantized 4-bit (`affine`) MLX base; see
 [GRPO on MLX](backends-and-ops.md#grpo-on-mlx) for the units, the rollout
 mode and what it refuses.
 
@@ -1948,14 +1979,13 @@ training:
   quantization: 4bit
 ```
 
-**Long prompts are capped as in DPO and ORPO.** trl's CPO trainer cuts only the
-answers, so after it tokenizes, `soup train` cuts the prompt to
-`data.max_length // 2` tokens, keeping its end, and the answers to the room
-left, for the train and validation splits. Every sequence is then at most
-`data.max_length`. The cut goes by the prompt alone: a prompt longer than
-`data.max_length // 2` tokens loses its start even when prompt and answers
-would fit in `data.max_length`. A row whose prompt is at most
-`data.max_length // 2` tokens and which fits is unchanged.
+**Long prompts are capped only when a row overflows.** trl's CPO trainer cuts
+only the answers, so a long prompt reached the model whole. A SimPO prompt is
+now cut only when the row does not fit in `data.max_length`: it is then cut to
+`data.max_length // 2` tokens, keeping its end, and the answers get the room
+left, for the train and validation splits, so every sequence is at most
+`data.max_length`. A row that fits is unchanged, whatever its prompt length
+(see the table under [Preference Variety](#preference-variety--bco--unified-dispatcher--kl-variants)).
 
 **Rows whose completion trl truncates away are refused.** trl's CPO trainer
 truncates each answer to `data.max_length` minus the **longer** answer's length,

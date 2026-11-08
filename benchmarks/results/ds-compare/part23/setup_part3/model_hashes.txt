@@ -1,0 +1,18 @@
+# NousResearch/Meta-Llama-3.1-8B-Instruct  revision d10aef7999a2b5ba950ab3974312feeedbfe0b77
+# sha256  bytes  file   (every file under the model directory; written 2026-11-07T13:37:05Z)
+29e4c210b0d6ac178b16b2a255a568bdb23b581e50ca1ef6a6d071dd85704e6e  855  config.json
+189fb0c0d7fd8a527db217c0a60a0e013f0394cd8800f9697a666a9e75e5f7fd  184  generation_config.json
+2b1879f356aed350030bb40eb45ad362c89d9891096f79a3ab323d3ba5607668  4976698672  model-00001-of-00004.safetensors
+09d433f650646834a83c580877bd60c6d1f88f7755305c12576b5c7058f9af15  4999802720  model-00002-of-00004.safetensors
+fc1cdddd6bfa91128d6e94ee73d0ce62bfcdb7af29e978ddcab30c66ae9ea7fa  4915916176  model-00003-of-00004.safetensors
+92ecfe1a2414458b4821ac8c13cf8cb70aed66b5eea8dc5ad9eeb4ff309d6d7b  1168138808  model-00004-of-00004.safetensors
+146776fce3f6db1103aa6f249e65ee5544c5923ce6f971b092eee79aa6e5d37b  23950  model.safetensors.index.json
+6f38c73729248f6c127296386e3cdde96e254636cc58b4169d3fd32328d9a8ec  296  special_tokens_map.json
+79e3e522635f3171300913bb421464a87de6222182a0570b9b2ccba2a964b2b4  9085657  tokenizer.json
+24e8a6dc2547164b7002e3125f10b415105644fcf02bf9ad8b674c87b1eaaed6  50870  tokenizer_config.json
+
+# files compared by hand against the published revision:
+29e4c210b0d6ac178b16b2a255a568bdb23b581e50ca1ef6a6d071dd85704e6e  855  config.json
+79e3e522635f3171300913bb421464a87de6222182a0570b9b2ccba2a964b2b4  9085657  tokenizer.json
+24e8a6dc2547164b7002e3125f10b415105644fcf02bf9ad8b674c87b1eaaed6  50870  tokenizer_config.json
+189fb0c0d7fd8a527db217c0a60a0e013f0394cd8800f9697a666a9e75e5f7fd  184  generation_config.json

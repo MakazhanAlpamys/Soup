@@ -520,6 +520,13 @@ def ensure_judge_calibrated(
             f"agreement={report.agreement_rate:.2f}, "
             f"bias={report.position_bias:+.2f}"
         )
+    for name, value in (("min_agreement", min_agreement), ("max_bias", max_bias)):
+        try:
+            finite = math.isfinite(value)
+        except OverflowError:
+            finite = False
+        if not finite:
+            raise ValueError(f"{name} must be finite")
     if report.agreement_rate < min_agreement:
         raise RuntimeError(
             f"Judge agreement {report.agreement_rate:.2f} below floor "

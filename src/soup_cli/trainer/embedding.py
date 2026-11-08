@@ -7,6 +7,7 @@ from typing import Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig, TrainingConfig
+from soup_cli.data.formats import split_embedding_negatives
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
@@ -79,6 +80,11 @@ class EmbeddingTrainerWrapper:
         cfg = self.config
         tcfg = cfg.training
 
+        # #2556: one objective per split, decided before any model loads.
+        has_negatives = split_embedding_negatives(dataset["train"], "train")
+        if dataset.get("val"):
+            split_embedding_negatives(dataset["val"], "validation")
+
         # #353: seed before the model and any adapter are built.
         apply_training_seed(tcfg)
 
@@ -116,7 +122,6 @@ class EmbeddingTrainerWrapper:
         # --- Determine loss function ---
         loss_type = tcfg.embedding_loss
         margin = tcfg.embedding_margin
-        has_negatives = "negative" in train_ds.column_names
 
         if loss_type == "triplet" and not has_negatives:
             console.print(

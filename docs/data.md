@@ -287,6 +287,15 @@ soup data evolve --input seeds.jsonl --provider ollama --model llama3.1 \
 
 Every command applies the project-wide TOCTOU policy (`os.lstat + S_ISLNK` symlink rejection before any open) and cwd containment via the shared `paths.enforce_under_cwd_and_no_symlink` helper. All five are LIVE: `soup build` materialises with five built-in transforms (`identity` / `drop_empty` / `lowercase` / `strip` / `dedup_exact`) and SQLite-tracked incremental re-transform (v0.71.6); `soup data gen-magpie` and provider-backed `best-of-n` harvest via raw completion against `--provider ollama|vllm` (SSRF-validated; `anthropic` rejected because the Messages API has no raw-completion endpoint). Provider-backed `best-of-n` records the sampler provider and model in each row's `_best_of_n` provenance; omit `--provider` to retain the local Transformers `--base` path.
 
+`soup data evolve` and `soup data gen-magpie` report failed Ollama/vLLM calls,
+including transport errors, non-200 replies, malformed or empty completions and
+responses over the byte limit. If no rows survive and any provider call failed,
+they exit 1, name the provider, endpoint and first error, and leave an existing
+output untouched (or create no file). If usable rows survive, they write those
+rows, exit 0 and warn with the failed/total call counts. A reachable provider
+whose successful replies are all filtered out still writes an empty file,
+exits 0 and prints the existing zero-row warning. `--plan-only` makes no requests.
+
 `best-of-n` fsyncs each completed prompt group to a private recovery journal
 (`<output>.checkpoint.jsonl` by default). `--resume` reuses only a sequential
 prefix whose prompt and run-configuration digest matches exactly, so completed
@@ -585,6 +594,11 @@ soup data review prefs.jsonl --sample 10
 **Supported log formats:** `langchain`, `openai`, `soup-serve`
 **Supported signals:** `thumbs_up` (rating-based), `regenerations` (latest wins), `user_edit` (edited wins)
 
+For `thumbs_up`, each prompt yields at most one pair. Soup selects the first
+upvoted response with a different downvoted response, then the first such
+downvoted response. Prompts without two distinct responses across the ratings
+yield no pair.
+
 **The `soup-serve` record shape.** The parser reads a top-level `signal` in the
 canonical vocabulary, falling back to a nested `feedback.rating` (`up` / `down`)
 for older logs:
@@ -864,6 +878,8 @@ Or use `.txt` files directly (one document per line).
 {"anchor": "What is Python?", "positive": "A programming language.", "negative": "A type of snake."}
 ```
 
+The two lines show the two shapes, and a file uses one of them: a non-blank `negative` on every row, or on none. A mix is refused before the model loads, naming how many rows have a `negative` and how many do not; the validation set is checked on its own.
+
 With `embedding_loss: contrastive` (the default), each row's negatives are the other rows' positives in the same batch, so a batch needs at least two rows: `batch_size: 1` is refused at config load, `batch_size: auto` resolves to at least 2, and the last partial batch of each epoch is dropped. This also applies when `triplet` falls back to contrastive because the rows have no `negative`. Use `triplet` with a `negative` on every row, or `cosine`, to train at batch size 1.
 
 **Cross-Encoder (paired sequence classification - `data.format: cross_encoder`):**
@@ -1142,6 +1158,11 @@ soup data ingest README.md
 soup data ingest notes.docx
 ```
 
+`data ingest` refuses an `--output` that names the source document, including
+alternate path spellings and hard links, before detecting or reading its format.
+It exits 1, names both paths and leaves the source bytes unchanged; choose a
+different output file.
+
 **Custom prompt strategies (schema only — runtime invocation in v0.42.1):**
 
 ```yaml
@@ -1152,16 +1173,20 @@ data:
 
 ## Data Tools
 
-File outputs must be distinct from their inputs. `persona-mix` protects
+Data commands refuse a file output that aliases an input before reading or
+writing the data, including alternate spellings (`./x`, `sub/../x`, absolute
+paths and Windows case variants), hard links and symlinks to the same file.
+The same terminal-safe message names both paths and says which output to change.
+`augment`, `evolve` and `best-of-n` exit 2, `lint` exits 3, and every other command exits 1.
+Optional report outputs are checked only when provided. `persona-mix` protects
 `--prompts`, `--personas` and `--styles`; `generate` protects `--seed`,
 `--dedup-with` and `--context`; and `canary check` protects `--manifest`.
 `mix --optimize` also protects every `--datasets` entry and the live
 `--base-yaml`, even with `--overwrite`. Forge's dataset and provenance outputs
 must not replace a source document or each other. Recipe execution protects
 the recipe and seed files from sampler, checkpoint and node-sidecar writes.
-These collisions exit 1 and name the paths; choose a separate output. A recipe
-can still read inputs inside its output directory when no written file aliases
-them. `mix --apply` only prints a recipe and does not write `--output`.
+A recipe can still read inputs inside its output directory when no written file
+aliases them. `mix --apply` only prints a recipe and does not write `--output`.
 
 ```bash
 # Inspect a dataset
@@ -1195,6 +1220,13 @@ soup data filter ./data/train.jsonl --score-only  # add scores without filtering
 soup data clean ./data/train.jsonl
 soup data clean ./data/train.jsonl -o ./data/clean.jsonl --dry-run
 ```
+
+`soup data filter --perplexity` and `--score-only` require torch and transformers
+(install with `pip install "soup-cli[train]"`). If either package cannot be
+imported, the command exits 1 with installation instructions before writing an
+output: an existing file stays unchanged, and no new file is created.
+`--score-only` requests both perplexity and coherence scores; it does not fall
+back to coherence-only output. `--coherence` alone works without these packages.
 
 `soup data validate` exits with code `0` when at least one row is usable and the
 optional minimum valid fraction is met. It exits with code `3` for input errors,
@@ -1553,10 +1585,11 @@ needs |d| >= 0.8 and mean lengths at least 10% apart, MINOR |d| >= 0.3 and 5%, s
 consistent one-word gap between near-constant lengths is not flagged —
 `label_imbalance` (KTO desirable:undesirable ratio), `near_duplicates`
 (MinHash/LSH, reuses the `soup data dedup` kernel; requires
-`pip install "soup-cli[data]"`, degrades to an advisory skip otherwise),
+`pip install "soup-cli[data]"`; without it the check is reported as `SKIPPED`
+and the summary line counts it),
 `identical_pairs` (`chosen == rejected` — zero preference signal), and
 `prompt_leak` (the prompt echoed verbatim inside the completion, a common
 synthetic-data pipeline bug). For conversational `chosen` / `rejected` (message
 lists), `length_bias` and `prompt_leak` read only the assistant turns, since the
 leading user turn is the prompt itself. Same OK/MINOR/MAJOR taxonomy and exit codes as
-`soup data doctor`.
+`soup data doctor`; a `SKIPPED` check never raises the overall verdict or the exit code.

@@ -192,6 +192,10 @@ class TestBuildUnlearnTrainer:
             raise RuntimeError("LOAD_CALLED")
 
         monkeypatch.setattr(live_eval, "load_model_and_tokenizer", _boom)
+        # #2574: setup() reads the rows before any model loads.
+        monkeypatch.setattr(
+            "soup_cli.trainer.unlearn._load_unlearn_rows", lambda _path: [("p", "t")]
+        )
         with pytest.raises(RuntimeError, match="LOAD_CALLED"):
             wrapper.setup()
 
@@ -516,6 +520,10 @@ class TestUnlearnTrainerWrapper:
             raise RuntimeError("LOAD_CALLED")
 
         monkeypatch.setattr(live_eval, "load_model_and_tokenizer", _boom)
+        # #2574: setup() reads the rows before any model loads.
+        monkeypatch.setattr(
+            "soup_cli.trainer.unlearn._load_unlearn_rows", lambda _path: [("p", "t")]
+        )
         with pytest.raises(RuntimeError, match="LOAD_CALLED"):
             wrapper.setup()
 

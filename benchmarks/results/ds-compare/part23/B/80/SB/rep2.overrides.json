@@ -1,0 +1,7 @@
+{
+  "env": {},
+  "training": {
+    "stream_buffers": 3,
+    "stream_recompute": "auto"
+  }
+}
