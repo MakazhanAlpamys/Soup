@@ -16,7 +16,7 @@ from typing import Callable, Literal, Mapping, Optional
 from urllib.parse import urlparse
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from soup_cli import __version__
 from soup_cli.eval.results import newest_eval_rows
@@ -142,6 +142,46 @@ def _require_gate_tasks(suite: EvalSuite) -> None:
         names.add(task.name)
 
 
+# Pydantic prefixes a validator's ``ValueError`` with this before ``errors()``.
+_PYDANTIC_VALUE_ERROR_PREFIX = "Value error, "
+
+
+def _suite_error_location(loc: tuple[object, ...]) -> str:
+    """Render a pydantic error location as ``tasks[0].name``."""
+    rendered: list[str] = []
+    for part in loc:
+        if isinstance(part, int) and rendered:
+            rendered[-1] = f"{rendered[-1]}[{part}]"
+        elif isinstance(part, int):
+            rendered.append(f"[{part}]")
+        else:
+            rendered.append(str(part))
+    return ".".join(rendered)
+
+
+def _suite_validation_message(path: str, exc: ValidationError, *, empty: bool) -> str:
+    """Name the suite file and each field a pydantic refusal is about.
+
+    An empty document only fails ``suite`` (``tasks`` has a default), so say
+    what to write instead of repeating that one missing field.
+    """
+    if empty:
+        return (
+            f"eval-gate suite '{path}' is empty: it needs 'suite' (a name) "
+            "and 'tasks' (a list of tasks)"
+        )
+    pieces: list[str] = []
+    for err in exc.errors():
+        loc = _suite_error_location(tuple(err["loc"]))
+        if err["type"] == "missing":
+            pieces.append(f"{(loc or 'value')!r} is required")
+            continue
+        msg = str(err["msg"]).removeprefix(_PYDANTIC_VALUE_ERROR_PREFIX)
+        pieces.append(f"{loc}: {msg}" if loc else msg)
+    detail = "; ".join(pieces) if pieces else "invalid suite"
+    return f"eval-gate suite '{path}': {detail}"
+
+
 def load_suite(path: str) -> EvalSuite:
     """Load and validate an eval suite from disk."""
     suite_path = Path(path)
@@ -159,6 +199,7 @@ def load_suite(path: str) -> EvalSuite:
         raise MalformedSuiteError(
             f"eval-gate suite '{path}' is not valid YAML: {exc}"
         ) from exc
+    empty = raw is None
     if raw is None:
         data: dict[str, object] = {}
     elif not isinstance(raw, Mapping):
@@ -169,7 +210,13 @@ def load_suite(path: str) -> EvalSuite:
         )
     else:
         data = dict(raw)
-    suite = EvalSuite(**data)
+    # #2295: keep a plain ValueError (not MalformedSuiteError) so the training
+    # hook still warns and leaves the gate inert. The text names the file and
+    # each failing field, without pydantic's own report.
+    try:
+        suite = EvalSuite(**data)
+    except ValidationError as exc:
+        raise ValueError(_suite_validation_message(path, exc, empty=empty)) from exc
     _require_gate_tasks(suite)
     return suite
 
