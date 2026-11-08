@@ -57,6 +57,13 @@ class TestEnvironment:
         (problem,) = _env(world_size=2)
         assert "supports one GPU only; WORLD_SIZE is 2" in problem
 
+    def test_a_sharding_setting_is_named(self):
+        (problem,) = _env(sharding="--fsdp full_shard")
+        assert "supports one GPU only; --fsdp full_shard is set" in problem
+
+    def test_no_sharding_setting_is_no_problem(self):
+        assert _env(sharding=None) == [] and _env(sharding="") == []
+
     def test_all_problems_are_listed(self):
         problems = _env(system="Windows", has_triton=False, compute_capability=None,
                         world_size=4)
