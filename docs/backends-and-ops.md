@@ -767,8 +767,8 @@ local HF repo, so a cloud run would silently ignore them.
 A local `data.train` is refused at plan time too, naming the field and pointing at a Hub dataset
 id (every built-in template sets one, so users hit this first). The same applies to local model
 paths (`base`, `teacher_model`, `reward_model`, `mole_task_adapters`): they are refused at plan
-time rather than silently shipped. Uploading local input files is the remaining half of #1430 and
-is not done yet.
+time rather than silently shipped. Uploading local input files is tracked in
+[#1704](https://github.com/MakazhanAlpamys/Soup/issues/1704) and is not done yet.
 
 ```bash
 pip install "soup-cli[modal]"   # only needed for live submit

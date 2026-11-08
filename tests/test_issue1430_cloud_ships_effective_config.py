@@ -27,7 +27,7 @@ from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
-CLOUDS = ("lambda", "modal")
+CLOUDS = ("lambda", "modal", "runpod")
 
 
 def _shipped_configs(stub: Path) -> list:
@@ -199,6 +199,35 @@ def test_flags_handled_after_the_cloud_branch_are_refused(chat_config, argv, tmp
     assert not Path("soup_lambda_app.py").exists(), "a stub was rendered anyway"
 
 
+@pytest.mark.parametrize(
+    "argv, phrase, runs",
+    [
+        (["--push-as", "me/soup"], "--push-as is not supported with --cloud", "it runs locally"),
+        (["--gate", "suite.yaml"], "--gate is not supported with --cloud", "it runs locally"),
+        (
+            ["--push-as", "me/soup", "--gate", "suite.yaml"],
+            "--push-as, --gate are not supported with --cloud",
+            "they run locally",
+        ),
+    ],
+    ids=["push-as", "gate", "both"],
+)
+def test_the_flag_refusal_names_every_flag_with_the_right_verb(
+    chat_config, argv, phrase, runs, tmp_path
+):
+    """One flag reads `is` and `it runs`, two read `are` and `they run`."""
+    _rewrite(load_config(chat_config), chat_config, train="teknium/OpenHermes-2.5")
+    (tmp_path / "suite.yaml").write_text("tasks: []\n", encoding="utf-8")
+
+    result = _plan("lambda", *argv)
+
+    output = " ".join(strip_ansi(result.output).split())
+    assert result.exit_code == 2, output
+    assert phrase in output, output
+    assert runs in output, output
+    assert "both run locally" not in output, output
+
+
 class TestUnshippedInputs:
     """The classifier behind the refusal."""
 
@@ -334,3 +363,147 @@ class TestUnshippedInputs:
 
         with pytest.raises(ValueError, match="Hub dataset id"):
             refuse_unshipped_inputs(self._cfg("./data/train.jsonl"))
+
+
+class TestDataTrainDirectory:
+    """A data.train with no data suffix is a Hub id OR a local dataset directory."""
+
+    def _cfg(self, train):
+        from soup_cli.config.loader import load_config_from_string
+
+        return load_config_from_string(
+            "base: HuggingFaceTB/SmolLM2-135M\ntask: sft\n"
+            f"data:\n  train: {train}\noutput: ./out\n"
+        )
+
+    @pytest.mark.parametrize(
+        "value", ["./hfdir", "../hfdir", "/nowhere/hfdir", "C:\\x\\hfdir"]
+    )
+    def test_a_directory_spelled_as_a_path_is_unshipped(self, value):
+        from soup_cli.cloud._shipped import unshipped_inputs
+
+        assert unshipped_inputs(self._cfg(value)) == ["data.train"]
+
+    def test_a_bare_existing_directory_is_unshipped(self, tmp_path, monkeypatch):
+        from soup_cli.cloud._shipped import unshipped_inputs
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "hfdir").mkdir()
+        assert unshipped_inputs(self._cfg("hfdir")) == ["data.train"]
+        assert unshipped_inputs(self._cfg("teknium/OpenHermes-2.5")) == []
+
+    @pytest.mark.parametrize("cloud", CLOUDS)
+    def test_a_local_dataset_directory_stops_the_plan(self, chat_config, cloud):
+        """The CLI path: `train: ./hfdir` exited 0 and rendered a stub before."""
+        (chat_config.parent / "hfdir").mkdir()
+        _rewrite(load_config(chat_config), chat_config, train="./hfdir")
+
+        result = _plan(cloud)
+
+        output = " ".join(strip_ansi(result.output).split())
+        assert result.exit_code == 2, output
+        assert "data.train" in output, output
+        assert not Path(f"soup_{cloud}_app.py").exists(), "a stub was rendered anyway"
+
+
+class TestRefusalHint:
+    """The refusal names the Hub id that fits the refused field (#1584 review)."""
+
+    def _cfg(self, train="teknium/OpenHermes-2.5"):
+        from soup_cli.config.loader import load_config_from_string
+
+        return load_config_from_string(
+            "base: HuggingFaceTB/SmolLM2-135M\ntask: grpo\n"
+            f"data:\n  train: {train}\noutput: ./out\n"
+        )
+
+    def _message(self, cfg):
+        from soup_cli.cloud._shipped import refuse_unshipped_inputs
+
+        with pytest.raises(ValueError) as excinfo:
+            refuse_unshipped_inputs(cfg)
+        return str(excinfo.value)
+
+    def test_a_local_model_path_points_at_a_model_id(self):
+        cfg = self._cfg()
+        cfg.base = "./models/merged"
+
+        message = self._message(cfg)
+
+        assert "base" in message
+        assert "Hub model id" in message, message
+        assert "dataset id" not in message, message
+
+    def test_a_local_dataset_points_at_a_dataset_id(self):
+        message = self._message(self._cfg("./data/train.jsonl"))
+
+        assert "Hub dataset id" in message, message
+        assert "model id" not in message, message
+
+    def test_a_dataset_and_a_model_path_name_both(self):
+        cfg = self._cfg("./data/train.jsonl")
+        cfg.base = "./models/merged"
+
+        message = self._message(cfg)
+
+        assert "Hub dataset id or model id" in message, message
+
+    def test_a_field_with_no_hub_form_says_to_run_locally(self):
+        """A reward file has no Hub id, so neither hint fits."""
+        cfg = self._cfg()
+        cfg.training.reward_fn = "./rewards.py"
+
+        message = self._message(cfg)
+
+        assert "training.reward_fn" in message
+        assert "Hub" not in message, message
+        assert "Run locally." in message, message
+
+
+@pytest.mark.parametrize(
+    "module, function",
+    [
+        ("lambda_labs", "plan_lambda_run"),
+        ("modal", "plan_modal_run"),
+        ("runpod", "plan_runpod_run"),
+    ],
+)
+def test_a_plan_embeds_the_config_text_it_is_given_not_the_file(
+    tmp_path, monkeypatch, module, function
+):
+    """`soup train` passes the effective config; every backend has to take it."""
+    import importlib
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "soup.yaml").write_text(
+        "base: from-the-file\ndata: {train: public/dataset}\noutput: out\n",
+        encoding="utf-8",
+    )
+    effective = "base: public/model\ndata: {train: public/dataset}\noutput: out\n"
+    backend = importlib.import_module(f"soup_cli.cloud.{module}")
+
+    plan = getattr(backend, function)(
+        "soup.yaml",
+        gpu="a100",
+        output_dir="out",
+        soup_version="0.77.2",
+        config_yaml=effective,
+    )
+    stub = Path(backend.write_stub(plan))
+
+    assert _shipped_configs(stub) == [effective]
+
+
+def test_runpod_still_reads_the_file_when_no_config_text_is_given(tmp_path, monkeypatch):
+    """The fallback for a direct caller, as for the Lambda and Modal plans."""
+    from soup_cli.cloud import runpod
+
+    monkeypatch.chdir(tmp_path)
+    on_disk = "base: public/model\ndata: {train: public/dataset}\noutput: out\n"
+    (tmp_path / "soup.yaml").write_text(on_disk, encoding="utf-8")
+
+    plan = runpod.plan_runpod_run(
+        "soup.yaml", gpu="a100", output_dir="out", soup_version="0.77.2"
+    )
+
+    assert _shipped_configs(Path(runpod.write_stub(plan))) == [on_disk]

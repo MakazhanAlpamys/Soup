@@ -36,13 +36,26 @@ if TYPE_CHECKING:  # pragma: no cover — typing only
 
 #: Dotted paths the remote run reads. Sourced from
 #: ``mcp_server.registry.PLAN_INPUT_FIELDS`` so the two lists cannot drift, with
-#: ``data.train`` (handled entry by entry through the schema's own classifier)
-#: and ``training.checkpoint_eval_tasks``, which ``soup train`` never reads,
-#: removed.
+#: ``training.checkpoint_eval_tasks``, which ``soup train`` never reads, removed.
+#: ``data.train`` stays in the walk: ``unshipped_inputs`` also runs each entry
+#: through the schema's own suffix rule, but a local dataset *directory* has no
+#: data suffix, so only the existence / escape-hatch rule below catches it.
 _PATH_FIELDS: Tuple[str, ...] = tuple(
-    field
-    for field in PLAN_INPUT_FIELDS
-    if field not in {"data.train", "training.checkpoint_eval_tasks"}
+    field for field in PLAN_INPUT_FIELDS if field != "training.checkpoint_eval_tasks"
+)
+
+#: Fields whose remote form is a Hugging Face Hub *model* id. The refusal names
+#: the escape hatch that fits the field: a dataset id for ``data.train``, a model
+#: id for these, neither for a reward file or an image directory.
+_HUB_MODEL_FIELDS: frozenset[str] = frozenset(
+    {
+        "base",
+        "training.prm_reward",
+        "training.reward_model",
+        "training.teacher_model",
+        "training.ra_dit_retriever_model",
+        "training.mole_task_adapters",
+    }
 )
 
 
@@ -140,7 +153,9 @@ def unshipped_inputs(cfg: "SoupConfig") -> List[str]:
 
     data.train may be a single entry or a list, and each is classified
     separately: a Hub id in the list is fine and a ./data file beside it is
-    not, so the whole field cannot be judged by its first entry. Every other
+    not, so the whole field cannot be judged by its first entry. It is judged
+    twice: by the schema's suffix rule (a data file that does not exist yet) and
+    by the walk below (a local dataset directory, which has no suffix). Every
     field is walked as a dotted schema path so a list or a comma-separated
     value is judged entry by entry.
     """
@@ -161,12 +176,30 @@ def unshipped_inputs(cfg: "SoupConfig") -> List[str]:
     return sorted(set(found))
 
 
+def _escape_hatch(fields: List[str]) -> str:
+    """The sentence naming what the remote run can resolve in place of a local path.
+
+    A Hub dataset id exists for ``data.train`` and a Hub model id for the model
+    fields; a reward file or an image directory has no Hub form, so for those
+    the only way out is to run locally.
+    """
+    kinds: List[str] = []
+    if "data.train" in fields:
+        kinds.append("dataset id")
+    if any(field in _HUB_MODEL_FIELDS for field in fields):
+        kinds.append("model id")
+    if not kinds:
+        return "Run locally."
+    return f"Use a Hugging Face Hub {' or '.join(kinds)} instead, or run locally."
+
+
 def refuse_unshipped_inputs(cfg: "SoupConfig") -> None:
     """Raise ``ValueError`` naming every input the remote machine would lack.
 
     Called at plan time, before any paid call, so the failure costs nothing to
-    surface. The message names the Hub-dataset escape hatch because that is the
-    one form of each field the remote run can actually resolve.
+    surface. The message names the Hub escape hatch that fits the refused
+    fields (dataset id, model id, or none), because that is the one form of
+    each field the remote run can actually resolve.
     """
     fields = unshipped_inputs(cfg)
     if not fields:
@@ -174,6 +207,6 @@ def refuse_unshipped_inputs(cfg: "SoupConfig") -> None:
     listed = ", ".join(fields)
     raise ValueError(
         f"--cloud ships only the config: {listed} would leave local files behind, "
-        "so the remote run would fail after the instance boots. Use a Hugging Face "
-        "Hub dataset id instead, or run locally. See issue #1430."
+        f"so the remote run would fail after the instance boots. {_escape_hatch(fields)} "
+        "See issue #1430."
     )

@@ -1222,12 +1222,13 @@ def train(
         # would be dropped with no message. Refuse rather than run without them.
         dropped = [name for name, on in (("--push-as", push_as), ("--gate", gate)) if on]
         if dropped:
-            verb = "is" if len(dropped) == 1 else "are"
+            one = len(dropped) == 1
             console.print(
-                f"[red]{markup_escape(', '.join(dropped))} {verb} not supported with "
-                f"--cloud:[/] both run locally, against local files and a local "
-                "HF repo, and a cloud run would silently ignore them. Run "
-                "without --cloud, or drop the flag."
+                f"[red]{markup_escape(', '.join(dropped))} {'is' if one else 'are'} "
+                f"not supported with --cloud:[/] {'it runs' if one else 'they run'} "
+                "locally, against local files and a local HF repo, and a cloud run "
+                f"would silently ignore {'it' if one else 'them'}. Run without "
+                f"--cloud, or drop {'the flag' if one else 'the flags'}."
             )
             raise typer.Exit(2)
         try:
