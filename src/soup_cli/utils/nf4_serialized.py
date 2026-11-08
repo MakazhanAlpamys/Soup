@@ -458,6 +458,23 @@ def _parse_state(span: _Span, key: str, shape: Tuple[int, ...]) -> Tuple[Any, by
     return spec, offset
 
 
+def _check_native_nf4_table(span: _Span, stored: bytes) -> None:
+    """The stored ``quant_map`` must be bitsandbytes' own NF4 table, bit for bit.
+
+    The CUDA dequantise kernel ignores the stored map and uses its built-in NF4 table, so a
+    different (even self-consistent) table would decode differently on CPU and on GPU.
+    """
+    from bitsandbytes.functional import get_4bit_type
+
+    native = get_4bit_type("nf4", device="cpu").to("cpu").float().tolist()
+    if stored != struct.pack("<%df" % len(native), *native):
+        raise ValueError(
+            f"{_label(span.key)}: the stored NF4 code table is not bitsandbytes' own NF4 "
+            f"table (bit for bit); the CUDA kernels ignore the stored map, so it would "
+            f"decode differently on CPU and on GPU"
+        )
+
+
 def _shard_name(path: str) -> str:
     return os.path.basename(path)
 
@@ -632,6 +649,7 @@ def plan_nf4_import(source_dir: str) -> Nf4ImportPlan:
             f"checkpoint is missing {len(missing)} expected tensor(s): "
             f"{', '.join(_label(key) for key in missing[:5])}"
         )
+    _check_native_nf4_table(tables[NF4_CODE_KEY], table_bytes[NF4_CODE_KEY])
     extras.update(tables)
 
     shards: Dict[str, Dict[str, _Span]] = {

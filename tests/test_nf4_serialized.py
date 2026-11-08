@@ -383,6 +383,33 @@ def _int8(tensors):
     tensors[key + ".SCB"] = torch.zeros(128, dtype=torch.float32)
 
 
+def _real_int8(tensors):
+    """A projection serialised by a real ``Linear8bitLt`` (int8 weight, SCB, weight_format)."""
+    import bitsandbytes as bnb
+
+    key = "model.layers.0.mlp.up_proj.weight"
+    layer = bnb.nn.Linear8bitLt(64, 128, bias=False, has_fp16_weights=False)
+    layer.weight = bnb.nn.Int8Params(
+        torch.randn(128, 64, dtype=torch.float16), requires_grad=False, has_fp16_weights=False
+    )
+    layer.weight = layer.weight._quantize("cpu")
+    state = layer.state_dict()
+    assert set(state) == {"weight", "SCB", "weight_format"}, set(state)
+    for suffix in (".absmax", ".nested_absmax", ".quant_map", ".nested_quant_map", _STATE):
+        del tensors[key + suffix]
+    tensors[key] = state["weight"].clone()
+    tensors[key + ".SCB"] = state["SCB"].clone()
+    tensors[key + ".weight_format"] = state["weight_format"].clone()
+
+
+def _tampered_table_everywhere(tensors):
+    """A different but self-consistent NF4 table: every projection carries the same one."""
+    for key in [name for name in tensors if name.endswith(".quant_map")]:
+        table = tensors[key].clone()
+        table[3] += 0.25
+        tensors[key] = table
+
+
 def _drop(suffix):
     def tweak(tensors):
         del tensors[_Q + suffix]
@@ -429,9 +456,83 @@ def _extra_projection(tensors):
     tensors["model.layers.0.mlp.extra_proj.weight.absmax"] = tensors[_Q].clone()
 
 
+def _blob_float(tensors):
+    tensors[_Q + _STATE] = tensors[_Q + _STATE].to(torch.float32)
+
+
+def _absmax_float(tensors):
+    tensors[_Q + ".absmax"] = tensors[_Q + ".absmax"].to(torch.float32)
+
+
+def _nested_map_short(tensors):
+    tensors[_Q + ".nested_quant_map"] = tensors[_Q + ".nested_quant_map"][:255].clone()
+
+
+def _nan_nested_table(tensors):
+    for key in [name for name in tensors if name.endswith(".nested_quant_map")]:
+        table = tensors[key].clone()
+        table[0] = float("nan")
+        tensors[key] = table
+
+
+def _huge_offset_literal(tensors):
+    text = tensors[_Q + _STATE].numpy().tobytes().decode()
+    head = text[: text.index('"nested_offset"')]
+    text = head + '"nested_offset": 1e999}'
+    tensors[_Q + _STATE] = torch.frombuffer(bytearray(text.encode()), dtype=torch.uint8).clone()
+
+
+def _mixed_blocksize(tensors):
+    """Layer 1's q_proj re-quantised at blocksize 128: valid tensors, a different spec."""
+    from bitsandbytes.functional import QuantState, dequantize_4bit, quantize_4bit
+
+    key = "model.layers.1.self_attn.q_proj.weight"
+    state = QuantState.from_dict(
+        {
+            "absmax": tensors[key + ".absmax"],
+            "quant_map": tensors[key + ".quant_map"],
+            "nested_absmax": tensors[key + ".nested_absmax"],
+            "nested_quant_map": tensors[key + ".nested_quant_map"],
+            "quant_state.bitsandbytes__nf4": tensors[key + _STATE],
+        },
+        device=torch.device("cpu"),
+    )
+    packed, fresh = quantize_4bit(
+        dequantize_4bit(tensors[key], state),
+        blocksize=128,
+        compress_statistics=True,
+        quant_type="nf4",
+    )
+    tensors[key] = packed.contiguous()
+    for part, tensor in fresh.as_dict(packed=True).items():
+        tensors[f"{key}.{part}"] = tensor.detach().clone().contiguous()
+
+
 REJECTIONS = [
     ("fp4", {"tweak": _rename_to_fp4}, "FP4"),
+    ("blob-not-u8", {"tweak": _blob_float}, f"{_Q}{_STATE}: the quant_state blob must be a 1-D U8"),
+    ("blob-extra-field", {"tweak": lambda t: edit_state(t, _Q, extra=1)}, "unexpected fields"),
+    ("absmax-float", {"tweak": _absmax_float}, f"{_Q}.absmax: stored as F32"),
+    (
+        "nested-map-short",
+        {"tweak": _nested_map_short},
+        f"{_Q}.nested_quant_map: stored as F32 [255]",
+    ),
+    ("nested-map-nan", {"tweak": _nan_nested_table}, "code table holds a non-finite value"),
+    ("offset-huge-literal", {"tweak": _huge_offset_literal}, "is not a finite number"),
+    ("spec-differs", {"tweak": _mixed_blocksize}, "quantisation spec differs from other layers"),
     ("int8-key", {"tweak": _int8}, "8-bit"),
+    (
+        "int8-real",
+        {"tweak": _real_int8},
+        "model.layers.0.mlp.up_proj.weight.SCB: bitsandbytes 8-bit",
+    ),
+    (
+        "table-not-nf4",
+        {"tweak": _tampered_table_everywhere},
+        "model.layers.0.mlp.down_proj.weight.quant_map: the stored NF4 code table is not "
+        "bitsandbytes' own NF4 table",
+    ),
     ("not-nested", {"nested": False}, "not double-quantised"),
     ("blocksize-32", {"blocksize": 32}, "blocksize is 32"),
     (
@@ -613,3 +714,121 @@ def test_symlinked_output_and_config_are_refused(work, tmp_path):
     os.symlink(str(tmp_path / "config.real"), config)
     with pytest.raises(ValueError, match="symlink"):
         plan_nf4_import(source)
+
+
+# ----------------------------------------------------------------------
+# guards that need their own scenario
+# ----------------------------------------------------------------------
+def test_a_shared_weight_must_keep_its_shape_across_layers(work, monkeypatch):
+    source, out = work
+    key = "model.layers.1.input_layernorm.weight"
+    build_source(source, tweak=lambda t: t.__setitem__(key, torch.zeros(65, dtype=torch.bfloat16)))
+    real = nf4_serialized._build_expectations
+
+    def widened(root):
+        arch, layers, expectations = real(root)
+        expectations[key] = (False, (65,))
+        return arch, layers, expectations
+
+    monkeypatch.setattr(nf4_serialized, "_build_expectations", widened)
+    with pytest.raises(ValueError, match="shape differs from the same weight in other layers"):
+        import_nf4_checkpoint(source, out)
+
+
+def test_a_source_that_changes_during_the_import_is_refused(work, monkeypatch):
+    source, out = work
+    build_source(source)
+    real = nf4_serialized._write_shard
+
+    def write_then_touch(path, spans, chunk_bytes):
+        real(path, spans, chunk_bytes)
+        with open(os.path.join(source, "model.safetensors"), "ab") as handle:
+            handle.write(bytes(1))
+
+    monkeypatch.setattr(nf4_serialized, "_write_shard", write_then_touch)
+    with pytest.raises(ValueError, match="changed during the import"):
+        import_nf4_checkpoint(source, out)
+    assert os.listdir(out) == []
+
+
+def test_verify_catches_a_missing_tensor_and_a_changed_layout(work):
+    source, out = work
+    build_source(source)
+    import_nf4_checkpoint(source, out)
+    path = os.path.join(out, "extras.safetensors")
+    shard = safetensors_torch.load_file(path)
+    original = dict(shard)
+    del shard["model.norm.weight"]
+    safetensors_torch.save_file(shard, path)
+    with pytest.raises(ValueError, match="tensors in the shard differ from the plan"):
+        verify_nf4_import(source, out)
+    original["model.norm.weight"] = original["model.norm.weight"].view(torch.float16)
+    safetensors_torch.save_file(original, path)
+    with pytest.raises(ValueError, match="was written with a different layout"):
+        verify_nf4_import(source, out)
+
+
+def test_verify_catches_an_index_that_does_not_match(work):
+    source, out = work
+    build_source(source)
+    import_nf4_checkpoint(source, out)
+    path = os.path.join(out, "index.json")
+    with open(path, encoding="utf-8") as handle:
+        payload = json.load(handle)
+    payload["total_params"] += 1
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+    with pytest.raises(ValueError, match="does not describe this source"):
+        verify_nf4_import(source, out)
+
+
+_ENTRY = '"a":{"dtype":"U8","shape":[1],"data_offsets":[0,1]}'
+MALFORMED_HEADERS = [
+    (_ENTRY + ',"b":{"dtype":"U8","shape":[1],"data_offsets":[2,3]}', "leave a gap"),
+    (_ENTRY + ',"b":{"dtype":"U8","shape":[1],"data_offsets":[0,1]}', "overlap"),
+    ('"a":{"dtype":"Q4","shape":[1],"data_offsets":[0,1]}', "unsupported stored dtype"),
+    ('"a":{"dtype":"U8","shape":[1.5],"data_offsets":[0,1]}', "invalid shape"),
+    ('"a":{"dtype":"U8","shape":[2],"data_offsets":[0,1]}', "does not hold 2 bytes"),
+]
+
+
+@pytest.mark.parametrize(("entries", "message"), MALFORMED_HEADERS)
+def test_malformed_safetensors_headers_are_refused(work, entries, message):
+    source, out = work
+    build_source(source)
+    header = ("{" + entries + "}").encode()
+    header += b" " * (-len(header) % 8)
+    with open(os.path.join(source, "model.safetensors"), "wb") as handle:
+        handle.write(struct.pack("<Q", len(header)) + header + bytes(3))
+    with pytest.raises(ValueError, match=message):
+        import_nf4_checkpoint(source, out)
+
+
+def _edit_weight_map(source, edit):
+    path = os.path.join(source, "model.safetensors.index.json")
+    with open(path) as handle:
+        weight_map = json.load(handle)["weight_map"]
+    edit(weight_map)
+    with open(path, "w") as handle:
+        json.dump({"weight_map": weight_map}, handle)
+
+
+def test_the_weight_map_must_list_every_tensor(work):
+    source, out = work
+    build_source(source, files=2)
+    _edit_weight_map(source, lambda weight_map: weight_map.pop(sorted(weight_map)[0]))
+    with pytest.raises(ValueError, match="does not list 1 tensor"):
+        import_nf4_checkpoint(source, out)
+
+
+def test_the_weight_map_must_name_the_file_that_holds_the_tensor(work):
+    source, out = work
+
+    def swap(weight_map):
+        first = sorted(weight_map)[0]
+        weight_map[first] = next(n for n in set(weight_map.values()) if n != weight_map[first])
+
+    build_source(source, files=2)
+    _edit_weight_map(source, swap)
+    with pytest.raises(ValueError, match="whose header does not hold it"):
+        import_nf4_checkpoint(source, out)
