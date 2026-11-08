@@ -1337,6 +1337,14 @@ Leaving the `with` block (or calling `close()`) releases the runtime the way a t
 `build_streamed_model(lora_config=None)` is the underlying call; with a `lora_config` it builds
 the training model exactly as before.
 
+To reload a LoRA adapter trained on a streamed base (the directory `soup train` saves), pass
+`adapter="path/to/adapter"` (under the current directory, no links). The adapter goes onto the
+streamed base the way the trainer placed it, every parameter stays frozen, and the logits are the
+trained model's logits (bit for bit on CPU); `stream.model` is then the `PeftModel`. A missing or
+partial adapter, one that is not LoRA, one that uses `modules_to_save` or DoRA, a different base
+(`allow_adapter_base_mismatch=True` waives only the name check) or tensors of the wrong shape are
+refused by name.
+
 What this is for and what it is not:
 
 - **Prefill, scoring and batch forward only.** A forward reads every decoder layer once, so the
