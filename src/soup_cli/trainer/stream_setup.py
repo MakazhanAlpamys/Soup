@@ -20,6 +20,7 @@ NO top-level torch: this module is imported by five trainer modules.
 """
 
 import contextlib
+import functools
 import math
 import os
 import shutil
@@ -984,6 +985,27 @@ def refuse_if_data_parallel(device) -> None:
     )
 
 
+def _closes_dp_group_on_failure(method):
+    """Close the B1 group's sockets when the decorated setup raises.
+
+    The group opens early in ``_setup_streaming_transformers`` and the streamed runtime that
+    would close it (``_close_stream_runtime``) does not exist yet; a peer then fails at once
+    on the closed connection instead of waiting out the group timeout. A decorator and not a
+    ``try`` in ``SFTTrainerWrapper.setup``: the dispatch there stays one plain call per branch
+    (#1697 / #1581 read it), and the refusal stays the first statement of the method.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return method(self, *args, **kwargs)
+        except BaseException:
+            self._close_dp_group()
+            raise
+
+    return wrapper
+
+
 class StreamingSetupMixin:
     """Builds a layer-streamed model in place of the resident load.
 
@@ -1098,6 +1120,7 @@ class StreamingSetupMixin:
                 stack.enter_context(context)
             yield stack
 
+    @_closes_dp_group_on_failure
     def _setup_streaming_transformers(self, cfg, tcfg):
         """v0.72.0 BETA — layer streaming. The resident base load NEVER happens.
 
@@ -1111,7 +1134,7 @@ class StreamingSetupMixin:
         # a tokenizer load, a weight resolve or a shard write.
         distributed = refuse_if_distributed_launch(
             cfg,
-            deepspeed=getattr(self, "deepspeed_config", None),
+            deepspeed=self._launch_deepspeed(),
             fsdp=getattr(self, "fsdp_config", None),
         )
         self._distributed_stream = distributed
@@ -2082,6 +2105,16 @@ class StreamingSetupMixin:
         # A B1 run's sockets close with it: a peer then fails at once on the closed
         # connection instead of waiting for this rank until the group timeout.
         self._close_dp_group()
+
+    def _launch_deepspeed(self) -> Any:
+        """The ``--deepspeed`` setting the launch refusal must name; ``None`` here.
+
+        Only ``task='sft'`` can run across processes (BETA), so only ``SFTTrainerWrapper``
+        reports its DeepSpeed config. This module builds no trainer and carries no DeepSpeed
+        guard of its own (#359): it asks the wrapper that does, instead of reading the config
+        itself. Every other task is refused as a distributed launch on its task alone.
+        """
+        return None
 
     def _close_dp_group(self) -> None:
         """Close the B1 group's sockets, if this run has one (idempotent)."""

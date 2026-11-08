@@ -757,11 +757,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         elif use_audio:
             self._setup_audio_transformers(cfg, tcfg)
         elif use_streaming:
-            try:
-                self._setup_streaming_transformers(cfg, tcfg)
-            except BaseException:
-                self._close_dp_group()  # a B1 peer then fails at once, not at its timeout
-                raise
+            self._setup_streaming_transformers(cfg, tcfg)
         elif use_unsloth:
             self._setup_unsloth(cfg, tcfg)
         else:
@@ -2431,6 +2427,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 ],
             )
         return train_ds, eval_ds
+
+    def _launch_deepspeed(self) -> Any:
+        """``--deepspeed`` for the distributed-launch refusal in the streamed setup."""
+        return self.deepspeed_config
 
     def _shard_for_data_parallel(self, rows: Any) -> Any:
         """B1: this rank's share of the training rows, equal in length on every rank."""
