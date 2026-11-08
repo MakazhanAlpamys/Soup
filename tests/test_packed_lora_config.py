@@ -1,7 +1,7 @@
 """``soup_cli.kernels.packed_lora.config``: the settings of the packed-LoRA kernels (CPU).
 
-The model is internal to the package: no field of ``SoupConfig`` refers to it, so a ``soup.yaml``
-has no ``training.packed_lora`` key. What is checked here: the block's defaults and bounds, and
+The model is the type of ``training.packed_lora`` (tested through ``SoupConfig`` in
+``test_packed_lora_schema.py``). What is checked here: the block's defaults and bounds, and
 :func:`packed_lora_problem`, the sentence for each setting of a run that the kernels cannot honour.
 Every refusal is asserted on the words a user would grep for, and each one is reached with exactly
 one offending setting, so that removing its branch fails exactly one test.
@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from soup_cli.config.schema import SoupConfig, TrainingConfig
+from soup_cli.config.schema import TrainingConfig
 from soup_cli.kernels.packed_lora.config import (
     MAX_BUDGET_MIB,
     MIN_BUDGET_MIB,
@@ -41,11 +41,6 @@ def _problem(*, packed=None, task="sft", backend="transformers", modality="text"
 class TestTheBlock:
     def test_it_is_off_unless_asked_for(self):
         assert PackedLoraConfig().enabled is False
-
-    def test_no_field_of_the_config_refers_to_it(self):
-        # zero user-visible surface until the trainer is wired
-        assert "packed_lora" not in TrainingConfig.model_fields
-        assert "packed_lora" not in SoupConfig.model_fields
 
     def test_the_defaults(self):
         block = PackedLoraConfig()
