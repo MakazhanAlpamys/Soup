@@ -5,9 +5,11 @@ the real ``JudgeEvaluator`` with only its HTTP call scripted (so the real prompt
 parser and the real two-order combination all run). Four layers:
 
 * ``pairwise_compare_detailed`` / ``pairwise_winrate(on_row=...)`` on a fake ``compare_pair``;
-* the row ids, the JSONL text, the sidecar path and the write guards, as pure functions;
-* the CLI: the sidecar's rows, both orders, the combined result, a tie and an unreadable reply,
-  the held-out rows under ``--gate loop-v2``, no file without ``--output``, no noise-floor rows;
+* the row ids, the prompt hash, the JSONL text, the sidecar path and the write guards, as pure
+  functions;
+* the CLI: the sidecar's rows (schema 2: the prompt and both answers, with the hash of the prompt),
+  both orders, the combined result, a tie and an unreadable reply, the held-out rows under
+  ``--gate loop-v2``, no file without ``--output``, no noise-floor rows;
 * the verdict JSON, byte for byte against what the command wrote before the rows existed.
 
 The new names are imported inside the tests that use them, so the scenario helpers at the top can
@@ -140,33 +142,45 @@ def digest(text: str) -> str:
 
 EXPECTED_TASK_ROWS = [
     {
-        "schema_version": 1,
+        "schema_version": 2,
         "leg": "task_eval",
         "index": 0,
         "id": "q-fr",
         "id_source": "id",
+        "prompt_hash": "7b9322536ee4",
+        "prompt": "capital of France?",
+        "base_answer": "base: capital of France?",
+        "tuned_answer": "tuned: capital of France?",
         "base_first": "tuned",
         "tuned_first": "tuned",
         "result": "tuned",
         "score": 1.0,
     },
     {
-        "schema_version": 1,
+        "schema_version": 2,
         "leg": "task_eval",
         "index": 1,
         "id": "e-two",
         "id_source": "edit_id",
+        "prompt_hash": "30ad205245cd",
+        "prompt": "2+2?",
+        "base_answer": "base: 2+2?",
+        "tuned_answer": "tuned: 2+2?",
         "base_first": "base",
         "tuned_first": "base",
         "result": "base",
         "score": 0.0,
     },
     {
-        "schema_version": 1,
+        "schema_version": 2,
         "leg": "task_eval",
         "index": 2,
         "id": digest("unlabelled question"),
         "id_source": "prompt_sha256",
+        "prompt_hash": "6f6c187f40b6",
+        "prompt": "unlabelled question",
+        "base_answer": "base: unlabelled question",
+        "tuned_answer": "tuned: unlabelled question",
         "base_first": "tuned",
         "tuned_first": "tuned",
         "result": "tuned",
@@ -174,11 +188,15 @@ EXPECTED_TASK_ROWS = [
     },
     # A judge that always says "the first one": the two orders disagree, so a tie.
     {
-        "schema_version": 1,
+        "schema_version": 2,
         "leg": "task_eval",
         "index": 3,
         "id": "q-order",
         "id_source": "id",
+        "prompt_hash": "c34a5ace8ac9",
+        "prompt": "order sensitive",
+        "base_answer": "base: order sensitive",
+        "tuned_answer": "tuned: order sensitive",
         "base_first": "base",
         "tuned_first": "tuned",
         "result": "tie",
@@ -186,11 +204,15 @@ EXPECTED_TASK_ROWS = [
     },
     # A reply that is not an answer in one order: no pick there, so a tie.
     {
-        "schema_version": 1,
+        "schema_version": 2,
         "leg": "task_eval",
         "index": 4,
         "id": "q-garbled",
         "id_source": "id",
+        "prompt_hash": "86d45f7aa214",
+        "prompt": "garbled judge",
+        "base_answer": "base: garbled judge",
+        "tuned_answer": "tuned: garbled judge",
         "base_first": "tuned",
         "tuned_first": "none",
         "result": "tie",
@@ -199,33 +221,45 @@ EXPECTED_TASK_ROWS = [
 ]
 EXPECTED_HELD_OUT_ROWS = [
     {
-        "schema_version": 1,
+        "schema_version": 2,
         "leg": "held_out",
         "index": 0,
         "id": "h-1",
         "id_source": "edit_id",
+        "prompt_hash": "be9c01a32835",
+        "prompt": "held one",
+        "base_answer": "base: held one",
+        "tuned_answer": "tuned: held one",
         "base_first": "tuned",
         "tuned_first": "tuned",
         "result": "tuned",
         "score": 1.0,
     },
     {
-        "schema_version": 1,
+        "schema_version": 2,
         "leg": "held_out",
         "index": 1,
         "id": "h-2",
         "id_source": "edit_id",
+        "prompt_hash": "149371b6e6fd",
+        "prompt": "held two",
+        "base_answer": "base: held two",
+        "tuned_answer": "tuned: held two",
         "base_first": "base",
         "tuned_first": "base",
         "result": "base",
         "score": 0.0,
     },
     {
-        "schema_version": 1,
+        "schema_version": 2,
         "leg": "held_out",
         "index": 2,
         "id": "h-3",
         "id_source": "edit_id",
+        "prompt_hash": "8eb462209977",
+        "prompt": "held three",
+        "base_answer": "base: held three",
+        "tuned_answer": "tuned: held three",
         "base_first": "none",
         "tuned_first": "tuned",
         "result": "tie",
@@ -384,7 +418,7 @@ def test_the_hash_of_a_prompt_with_a_lone_surrogate_does_not_stop_the_run():
     assert re.fullmatch(r"[0-9a-f]{64}", found.value)
 
 
-def test_every_row_is_one_json_line_whatever_the_id_holds():
+def test_every_row_is_one_json_line_whatever_the_id_and_the_texts_hold():
     from soup_cli.eval.judge import PairwiseOutcome
     from soup_cli.utils.ship_judge_rows import JudgeRowRecorder, RowId
 
@@ -392,11 +426,16 @@ def test_every_row_is_one_json_line_whatever_the_id_holds():
     outcome = PairwiseOutcome(first=1, swapped=0, second=1, combined=1)
     nasty = ["line\nbreak", "tab\there", "naïve ✓", "lone \ud800 surrogate", '"quoted"']
     for index, name in enumerate(nasty):
-        recorder.add("task_eval", index, RowId(name, "id"), outcome)
+        # the same nasty text as the id, the prompt and both answers
+        recorder.add("task_eval", index, RowId(name, "id"), outcome, (name, name + "<", name + ">"))
     text = recorder.to_jsonl()
     lines = text.split("\n")
     assert lines[-1] == "" and len(lines) == len(nasty) + 1
-    assert [json.loads(line)["id"] for line in lines[:-1]] == nasty
+    parsed = [json.loads(line) for line in lines[:-1]]
+    assert [row["id"] for row in parsed] == nasty
+    assert [row["prompt"] for row in parsed] == nasty
+    assert [row["base_answer"] for row in parsed] == [name + "<" for name in nasty]
+    assert [row["tuned_answer"] for row in parsed] == [name + ">" for name in nasty]
     assert text.isascii()
 
 
@@ -411,6 +450,7 @@ def test_a_tuned_win_scores_one_a_tie_a_half_and_a_base_win_zero():
             index,
             RowId("r", "id"),
             PairwiseOutcome(first=combined, swapped=None, second=None, combined=combined),
+            ("p", "b", "t"),
         )
     assert [(row["result"], row["score"]) for row in recorder.rows] == [
         ("tuned", 1.0),
@@ -490,7 +530,7 @@ def test_a_scope_names_its_rows_by_position_and_a_sink_records_into_its_recorder
 
     recorder = JudgeRowRecorder()
     ids = [RowId("first", "edit_id"), RowId("second", "edit_id")]
-    pairs = [("p0", "a", "b"), ("p1", "a", "b"), ("p2", "a", "b")]
+    pairs = [("p0", "a0", "b0"), ("p1", "a1", "b1"), ("p2", "a2", "b2")]
     with recording(recorder, "held_out", ids):
         sink = row_sink(pairs)
         for index in range(3):
@@ -523,13 +563,116 @@ def test_the_scores_of_the_rows_are_the_win_rate_in_the_verdict(judged):
     assert sum(row["score"] for row in rows) / len(rows) == verdict["task_win"]["tuned"]
 
 
-def test_the_sidecar_carries_no_prompt_or_answer_text(judged):
+def test_the_sidecar_carries_the_prompt_and_both_answers_the_judge_saw(judged):
     _result, root = judged
+    rows = read_rows(root / "out.judge-rows.jsonl")
+    # the generator answers "<model>: <prompt>", so a swapped pair would read the other way round
+    for row, task in zip(rows, TASKS):
+        assert row["prompt"] == task["prompt"]
+        assert row["base_answer"] == f"base: {task['prompt']}"
+        assert row["tuned_answer"] == f"tuned: {task['prompt']}"
+        assert row["base_answer"] != row["tuned_answer"]
     text = (root / "out.judge-rows.jsonl").read_text(encoding="utf-8")
-    for row in TASKS:
-        assert row["prompt"] not in text
-    assert "Paris" not in text  # an expected answer
-    assert "base: " not in text and "tuned: " not in text
+    assert "Paris" not in text  # an expected answer is not what the judge saw: it stays out
+
+
+def test_the_texts_are_the_base_answer_and_the_tuned_answer_whatever_order_the_judge_picked(
+    judged,
+):
+    _result, root = judged
+    rows = {row["id"]: row for row in read_rows(root / "out.judge-rows.jsonl")}
+    # the judge picks the FIRST answer shown in both orders: base_first=base, tuned_first=tuned.
+    # The two orders differ in who was shown first; the texts do not move.
+    order_sensitive = rows["q-order"]
+    assert (order_sensitive["base_first"], order_sensitive["tuned_first"]) == ("base", "tuned")
+    assert order_sensitive["base_answer"] == "base: order sensitive"
+    assert order_sensitive["tuned_answer"] == "tuned: order sensitive"
+    # and where both orders pick the same side, the texts are still not swapped with it
+    assert rows["e-two"]["result"] == "base"
+    assert rows["e-two"]["base_answer"] == "base: 2+2?"
+    assert rows["e-two"]["tuned_answer"] == "tuned: 2+2?"
+
+
+@pytest.mark.parametrize("first,swapped,second,combined", ORDER_CASES)
+def test_a_sink_records_the_pair_as_base_then_tuned_for_every_outcome(
+    first, swapped, second, combined
+):
+    from soup_cli.eval.judge import PairwiseOutcome
+    from soup_cli.utils.ship_judge_rows import JudgeRowRecorder, recording, row_sink
+
+    recorder = JudgeRowRecorder()
+    pairs = [("the prompt", "BASE TEXT", "TUNED TEXT")]
+    with recording(recorder, "task_eval"):
+        row_sink(pairs)(
+            0, PairwiseOutcome(first=first, swapped=swapped, second=second, combined=combined)
+        )
+    (row,) = recorder.rows
+    assert (row["prompt"], row["base_answer"], row["tuned_answer"]) == (
+        "the prompt",
+        "BASE TEXT",
+        "TUNED TEXT",
+    )
+
+
+def test_the_rows_are_schema_two(judged):
+    from soup_cli.utils import ship_judge_rows
+
+    _result, root = judged
+    assert ship_judge_rows.SCHEMA_VERSION == 2
+    rows = read_rows(root / "out.judge-rows.jsonl")
+    assert len(rows) == 5
+    assert {row["schema_version"] for row in rows} == {2}
+
+
+def test_the_prompt_hash_is_the_first_twelve_hex_of_sha256_of_the_stripped_casefolded_prompt():
+    from soup_cli.utils.ship_judge_rows import prompt_hash
+
+    prompt = "  What is 2+2?  "
+    # the literal Soup Zero's held_out_audit joins on: a change of the rule must show up here
+    assert prompt_hash(prompt) == "61a3385003d9"
+    # and the same rule written out independently of the implementation
+    expected = hashlib.sha256(prompt.strip().casefold().encode("utf-8", "surrogatepass"))
+    assert prompt_hash(prompt) == expected.hexdigest()[:12]
+    assert re.fullmatch(r"[0-9a-f]{12}", prompt_hash(prompt))
+
+
+@pytest.mark.parametrize(
+    "prompt,same_as",
+    [
+        ("WHAT IS 2+2?", "What is 2+2?"),  # case
+        ("\t What is 2+2?\n\n", "What is 2+2?"),  # outer whitespace only
+        ("STRASSE", "Straße"),  # casefold, which lower() is not: ß folds to ss
+    ],
+)
+def test_the_prompt_hash_ignores_case_and_outer_whitespace(prompt, same_as):
+    from soup_cli.utils.ship_judge_rows import prompt_hash
+
+    assert prompt_hash(prompt) == prompt_hash(same_as)
+
+
+def test_the_prompt_hash_keeps_inner_whitespace_and_tells_prompts_apart():
+    from soup_cli.utils.ship_judge_rows import prompt_hash
+
+    assert prompt_hash("What is  2+2?") != prompt_hash("What is 2+2?")
+    assert prompt_hash("What is 2+3?") != prompt_hash("What is 2+2?")
+    assert prompt_hash("Straße") == "16d969520877"  # the casefolded key is 'strasse'
+
+
+def test_the_prompt_hash_of_a_prompt_with_a_lone_surrogate_does_not_stop_the_run():
+    from soup_cli.utils.ship_judge_rows import prompt_hash
+
+    expected = hashlib.sha256("bad \ud800 prompt".encode("utf-8", "surrogatepass"))
+    assert prompt_hash("bad \ud800 prompt") == expected.hexdigest()[:12]
+
+
+def test_every_row_carries_the_hash_of_the_prompt_the_judge_saw(judged):
+    _result, root = judged
+    rows = read_rows(root / "out.judge-rows.jsonl")
+    for row in rows:
+        expected = hashlib.sha256(row["prompt"].strip().casefold().encode("utf-8"))
+        assert row["prompt_hash"] == expected.hexdigest()[:12]
+    # not the id: a row with its own id is still joined by the prompt
+    assert rows[0]["id"] == "q-fr" and rows[0]["prompt_hash"] == "7b9322536ee4"
 
 
 def test_the_sidecar_is_written_atomically_and_replaces_a_stale_one(tmp_path, monkeypatch):

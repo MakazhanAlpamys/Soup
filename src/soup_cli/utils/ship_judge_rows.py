@@ -5,14 +5,23 @@ it: one JSON object per line in ``<--output stem>.judge-rows.jsonl``, for the ta
 (``leg: task_eval``) and, under ``--gate loop-v2``, the held-out style note (``leg: held_out``).
 The verdict JSON itself is not touched, so every report that reads it still reads the same bytes.
 
-A row::
+A row (schema 2)::
 
-    {"schema_version":1,"leg":"task_eval","index":2,"id":"q-17","id_source":"id",
+    {"schema_version":2,"leg":"task_eval","index":2,"id":"q-17","id_source":"id",
+     "prompt_hash":"61a3385003d9","prompt":"What is 2+2?","base_answer":"3","tuned_answer":"4",
      "base_first":"base","tuned_first":"tuned","result":"tie","score":0.5}
 
 * ``index``: the row's 0-based position in that leg's input.
 * ``id`` / ``id_source``: the row's ``edit_id`` or ``id`` when the input has one, else the SHA-256
-  of its prompt (``prompt_sha256``). No prompt or answer text is written, as in the other reports.
+  of its prompt (``prompt_sha256``).
+* ``prompt`` / ``base_answer`` / ``tuned_answer``: the exact texts the judge saw (schema 1 kept no
+  text). The two answers are always base then tuned, whichever one the judge was shown first.
+  They are not shortened here: an answer is already bounded by the generation limit. This file
+  therefore holds your prompts and both models' answers; treat it like the inputs it came from.
+* ``prompt_hash``: the first 12 hex digits of ``sha256(prompt.strip().casefold())``, the same key
+  the loop's holdout split hashes (``loop_holdout``) and Soup Zero's ``held_out_audit`` joins on.
+  It differs from the ``prompt_sha256`` fallback id above, which is the full digest of the prompt
+  as it is written.
 * ``base_first``: whom the judge picked when the base answer was shown first (as A);
   ``tuned_first``: the same when the tuned answer was shown first. Each is ``base``, ``tuned`` or
   ``none`` (a tie, or a reply that could not be read: the judge reports both as one "no pick").
@@ -45,7 +54,8 @@ from soup_cli.utils.paths import atomic_write_text
 if TYPE_CHECKING:  # typing only: the judge module stays out of this module's import cost
     from soup_cli.eval.judge import PairwiseOutcome
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+PROMPT_HASH_CHARS = 12
 JUDGE_ROWS_SUFFIX = ".judge-rows.jsonl"
 LEG_TASK_EVAL = "task_eval"
 LEG_HELD_OUT = "held_out"
@@ -67,6 +77,17 @@ class RowId:
 def prompt_digest(prompt: str) -> str:
     """SHA-256 hex of a prompt (``surrogatepass``: a lone surrogate must not stop a verdict)."""
     return hashlib.sha256(prompt.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def prompt_hash(prompt: str) -> str:
+    """The first 12 hex digits of ``sha256(prompt.strip().casefold())``: the loop's prompt key.
+
+    One implementation of the rule, ``loop_holdout``'s (imported when first used, so the
+    ``soup ship`` import path does not pull in the loop's modules).
+    """
+    from soup_cli.utils.loop_holdout import key_digest, normalize
+
+    return key_digest(normalize(prompt))[:PROMPT_HASH_CHARS]
 
 
 def _usable_id(value: object) -> Optional[str]:
@@ -110,7 +131,16 @@ class JudgeRowRecorder:
     def rows(self) -> List[Dict[str, object]]:
         return [dict(row) for row in self._rows]
 
-    def add(self, leg: str, index: int, row_id: RowId, outcome: "PairwiseOutcome") -> None:
+    def add(
+        self,
+        leg: str,
+        index: int,
+        row_id: RowId,
+        outcome: "PairwiseOutcome",
+        pair: Tuple[str, str, str],
+    ) -> None:
+        """Record one judged row; ``pair`` is the ``(prompt, base answer, tuned answer)`` judged."""
+        prompt, base_answer, tuned_answer = pair
         combined = outcome.combined
         result = {0: "base", 1: "tuned"}.get(combined, "tie")
         self._rows.append(
@@ -120,6 +150,10 @@ class JudgeRowRecorder:
                 "index": index,
                 "id": row_id.value,
                 "id_source": row_id.source,
+                "prompt_hash": prompt_hash(prompt),
+                "prompt": prompt,
+                "base_answer": base_answer,
+                "tuned_answer": tuned_answer,
                 "base_first": _picked(outcome.first),
                 "tuned_first": _picked(outcome.second),
                 "result": result,
@@ -128,7 +162,7 @@ class JudgeRowRecorder:
         )
 
     def to_jsonl(self) -> str:
-        # ensure_ascii: an id with a lone surrogate or a control byte stays one safe line.
+        # ensure_ascii: an id or a text with a lone surrogate or a control byte stays one safe line.
         return "".join(
             json.dumps(row, ensure_ascii=True, separators=(",", ":")) + "\n" for row in self._rows
         )
@@ -185,7 +219,7 @@ def row_sink(
         else:
             row = rows[index] if rows is not None and index < len(rows) else None
             row_id = row_id_of(pairs[index][0], getattr(row, "metadata", None))
-        scope.recorder.add(scope.leg, index, row_id, outcome)
+        scope.recorder.add(scope.leg, index, row_id, outcome, pairs[index])
 
     return sink
 
