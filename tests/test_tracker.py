@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from soup_cli.experiment.tracker import ExperimentTracker, generate_run_id
+from soup_cli.experiment.tracker import (
+    ExperimentTracker,
+    generate_run_id,
+    run_lookup_failure,
+)
 
 
 @pytest.fixture
@@ -130,6 +134,70 @@ def test_get_run_prefix_match(tracker):
     run = tracker.get_run(prefix)
     assert run is not None
     assert run["run_id"] == run_id
+
+
+def _start(tracker, run_id: str) -> str:
+    return tracker.start_run(
+        config_dict={}, device="cpu", device_name="CPU", gpu_info={}, run_id=run_id
+    )
+
+
+def test_count_run_id_matches(tracker):
+    """count_run_id_matches uses the same exact-then-prefix lookup as get_run."""
+    _start(tracker, "run_dup_1")
+    _start(tracker, "run_dup_2")
+    _start(tracker, "run_dup")
+    _start(tracker, "run_solo_1")
+
+    # An exact id is one match even when it is also a prefix of other ids.
+    assert tracker.count_run_id_matches("run_dup") == 1
+    assert tracker.count_run_id_matches("run_dup_1") == 1
+    assert tracker.count_run_id_matches("run_solo") == 1
+    assert tracker.count_run_id_matches("run_dup_") == 2
+    assert tracker.count_run_id_matches("run_") == 4
+    assert tracker.count_run_id_matches("gone") == 0
+    # LIKE wildcards are matched literally, as in get_run.
+    assert tracker.count_run_id_matches("run%") == 0
+    assert tracker.count_run_id_matches("run_dup__") == 0
+
+
+def test_get_run_still_returns_none_for_an_ambiguous_prefix(tracker):
+    _start(tracker, "run_dup_1")
+    _start(tracker, "run_dup_2")
+
+    assert tracker.get_run("run_dup_") is None
+    assert tracker.get_run("run_dup_2")["run_id"] == "run_dup_2"
+
+
+def test_run_lookup_failure_names_an_ambiguous_prefix(tracker):
+    _start(tracker, "run_dup_1")
+    _start(tracker, "run_dup_2")
+
+    assert run_lookup_failure(tracker, "run_dup_") == (
+        "Run id prefix 'run_dup_' matches 2 runs; give more characters"
+    )
+
+
+def test_run_lookup_failure_keeps_run_not_found_for_no_match(tracker):
+    _start(tracker, "run_dup_1")
+
+    assert run_lookup_failure(tracker, "gone") == "Run not found: gone"
+
+
+@pytest.mark.parametrize(
+    ("markup", "shown"),
+    [(True, "x\\[red]a"), (False, "x[red]a")],
+)
+def test_run_lookup_failure_escapes_the_id_only_for_markup(tracker, markup, shown):
+    _start(tracker, "x[red]a1")
+    _start(tracker, "x[red]a2")
+
+    assert run_lookup_failure(tracker, "x[red]a", markup=markup) == (
+        f"Run id prefix '{shown}' matches 2 runs; give more characters"
+    )
+    assert run_lookup_failure(tracker, "x[red]b\x9b‮", markup=markup) == (
+        f"Run not found: {shown[:-1]}b"
+    )
 
 
 def test_list_runs_ordering(tracker):

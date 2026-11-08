@@ -729,26 +729,32 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
     @app.get("/api/runs/{run_id}", dependencies=[Depends(_verify_token)])
     def get_run(run_id: str):
-        from soup_cli.experiment.tracker import ExperimentTracker
+        from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
         tracker = ExperimentTracker()
         try:
             run = tracker.get_run(run_id)
             if not run:
-                raise HTTPException(status_code=404, detail="Run not found")
+                raise HTTPException(
+                    status_code=404,
+                    detail=run_lookup_failure(tracker, run_id, markup=False),
+                )
             return run
         finally:
             tracker.close()
 
     @app.get("/api/runs/{run_id}/metrics", dependencies=[Depends(_verify_token)])
     def get_run_metrics(run_id: str):
-        from soup_cli.experiment.tracker import ExperimentTracker
+        from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
         tracker = ExperimentTracker()
         try:
             run = tracker.get_run(run_id)
             if not run:
-                raise HTTPException(status_code=404, detail="Run not found")
+                raise HTTPException(
+                    status_code=404,
+                    detail=run_lookup_failure(tracker, run_id, markup=False),
+                )
             metrics = tracker.get_metrics(run_id)
             return {"run_id": run_id, "metrics": metrics}
         finally:
