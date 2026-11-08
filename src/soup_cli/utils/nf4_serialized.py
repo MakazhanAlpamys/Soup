@@ -42,6 +42,7 @@ from dataclasses import dataclass
 from typing import Any, BinaryIO, Callable, Dict, List, Mapping, Optional, Tuple
 
 from soup_cli import __version__
+from soup_cli.utils.paths import is_under
 from soup_cli.utils.terminal import for_terminal
 
 #: Bytes per ``read()`` when payloads are copied or compared.
@@ -57,6 +58,14 @@ _MAX_STATE_BYTES = 64 * 1024
 _MAX_TENSORS = 200_000
 _MAX_ELEMENTS = 2**40
 _SCAN_BYTES = 64 * 1024
+_MAX_SKIP_MODULES = 4096
+#: What to do about a checkpoint this importer refuses for its quantisation.
+_NF4_HINT = (
+    "use a double-quantised bitsandbytes NF4 upload (nf4, bfloat16), or point training.base "
+    "at the bf16 original and set training.quantization: 4bit"
+)
+#: What to do about a file whose layout is broken.
+_REDOWNLOAD = "re-download the checkpoint, the file looks truncated or corrupt"
 
 _STATE_SUFFIX = ".quant_state.bitsandbytes__nf4"
 _FP4_STATE_SUFFIX = ".quant_state.bitsandbytes__fp4"
@@ -93,6 +102,8 @@ class _Span:
     offset: int
     nbytes: int
     inline: Optional[bytes] = None
+    #: the file's name inside the checkpoint (a snapshot link's name, not its blob's)
+    file: str = ""
 
 
 @dataclass(frozen=True)
@@ -133,7 +144,7 @@ def _object_pairs(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
     result: Dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
-            raise ValueError(f"duplicate JSON key {key!r}")
+            raise ValueError(f"duplicate JSON key {_label(key)}")
         result[key] = value
     return result
 
@@ -165,8 +176,53 @@ def _read_json_file(path: str, what: str) -> Dict[str, Any]:
         raise ValueError(f"{what} is not usable: {exc}") from exc
 
 
+def _blob_roots(root: str) -> List[str]:
+    """Where a link inside ``root`` may point: the cache repo's blob stores.
+
+    The policy the sharder's snapshot copy applies (``spectrum_scan``): a canonical
+    ``<cache>/models--org--name/snapshots/<commit>`` directory holds links into its
+    repo's own ``blobs`` directory, which in turn may link into the cache-wide shared
+    store. Both stores have to be real directories (a linked one is refused by name).
+    Any other directory has no store, so none of its links is followed.
+    """
+    from soup_cli.utils.spectrum_scan import (
+        _hf_repo_blob_root,
+        _hf_shared_blob_root,
+        _hf_snapshot_revision,
+    )
+
+    if _hf_snapshot_revision(root) is None:
+        return []
+    repo_root = os.path.dirname(os.path.dirname(root))
+    roots = [_hf_repo_blob_root(repo_root)]
+    shared = _hf_shared_blob_root(repo_root)
+    if shared is not None:
+        roots.append(shared)
+    return roots
+
+
+def _followed_link(root: str, path: str, name: str, what: str) -> str:
+    """The real file a snapshot link points at, or a refusal. Read THIS path, not the link."""
+    stores = _blob_roots(root)
+    if not stores:
+        raise ValueError(
+            f"{what}: {_label(name)} is a symlink and {_label(root)} is not a Hugging Face "
+            f"cache snapshot (.../snapshots/<commit>), so it is not followed; point at the "
+            f"snapshot directory or at a directory of regular files"
+        )
+    real = os.path.realpath(path)
+    if not any(is_under(real, store) for store in stores):
+        raise ValueError(
+            f"{what}: {_label(name)} points outside the Hugging Face blob store of its "
+            f"cache repo (path escape refused); re-download the model into the cache"
+        )
+    if not os.path.isfile(real):
+        raise FileNotFoundError(f"{what}: {_label(name)} is missing its blob; re-download it")
+    return real
+
+
 def _contained_file(root: str, name: object, what: str) -> str:
-    """The real path of ``name`` inside ``root``; a path escape or a link is refused."""
+    """The real path of ``name`` inside ``root``; a path escape or a stray link is refused."""
     plain = (
         isinstance(name, str)
         and name not in ("", ".", "..")
@@ -181,28 +237,31 @@ def _contained_file(root: str, name: object, what: str) -> str:
         )
     path = os.path.join(root, name)
     if os.path.islink(path):
-        raise ValueError(f"{what}: {_label(name)} is a symlink; refusing to follow it")
+        return _followed_link(root, path, name, what)
     real = os.path.realpath(path)
-    if os.path.commonpath((root, real)) != root:
+    if not is_under(real, root):
         raise ValueError(f"{what}: {_label(name)} resolves outside the checkpoint directory")
     if not os.path.isfile(real):
         raise FileNotFoundError(f"{what}: {_label(name)} not found in the checkpoint directory")
     return real
 
 
-def _read_header(path: str) -> Dict[str, _Span]:
+def _read_header(path: str, file_name: Optional[str] = None) -> Dict[str, _Span]:
     """Validate a safetensors layout completely, without mapping or loading it."""
-    name = _label(os.path.basename(path))
+    shown = file_name or os.path.basename(path)
+    name = _label(shown)
     size = os.path.getsize(path)
     with open(path, "rb") as handle:
         prefix = handle.read(8)
         if len(prefix) != 8:
-            raise ValueError(f"{name}: truncated safetensors file (no header length)")
+            raise ValueError(
+                f"{name}: truncated safetensors file (no header length); {_REDOWNLOAD}"
+            )
         (length,) = struct.unpack("<Q", prefix)
         if not 2 <= length <= _MAX_HEADER_BYTES or 8 + length > size:
             raise ValueError(
                 f"{name}: truncated or corrupt safetensors header (declares {length} header "
-                f"bytes in a {size}-byte file)"
+                f"bytes in a {size}-byte file); {_REDOWNLOAD}"
             )
         try:
             header = _json(handle.read(length))
@@ -244,17 +303,17 @@ def _read_header(path: str) -> Dict[str, _Span]:
         if end > body:
             raise ValueError(
                 f"{where}: file is truncated (tensor ends at byte {end}, the data region "
-                f"holds {body})"
+                f"holds {body}); {_REDOWNLOAD}"
             )
         ranges.append((start, end))
-        spans[key] = _Span(path, key, dtype, tuple(shape), 8 + length + start, nbytes)
+        spans[key] = _Span(path, key, dtype, tuple(shape), 8 + length + start, nbytes, file=shown)
     cursor = 0
     for start, end in sorted(ranges):
         if start != cursor:
-            raise ValueError(f"{name}: tensor byte ranges overlap or leave a gap")
+            raise ValueError(f"{name}: tensor byte ranges overlap or leave a gap; {_REDOWNLOAD}")
         cursor = end
     if cursor != body:
-        raise ValueError(f"{name}: {body - cursor} bytes of unindexed trailing data")
+        raise ValueError(f"{name}: {body - cursor} bytes of unindexed trailing data; {_REDOWNLOAD}")
     return spans
 
 
@@ -299,39 +358,87 @@ def _scan_scales(span: _Span, key: str) -> None:
 # ==========================================================================
 # plan
 # ==========================================================================
-def _check_config_quantization(config: Mapping[str, Any]) -> None:
+def _check_config_quantization(config: Mapping[str, Any]) -> Tuple[str, ...]:
+    """Refuse a config that is not a double-quantised bf16 NF4 export.
+
+    Returns ``llm_int8_skip_modules``: the modules the exporter left unquantised.
+    """
     quant = config.get("quantization_config")
     if not isinstance(quant, dict):
         raise ValueError(
-            "config.json has no quantization_config: this is not a bitsandbytes checkpoint"
+            f"config.json has no quantization_config: this is not a bitsandbytes checkpoint; "
+            f"{_NF4_HINT}"
         )
     method = quant.get("quant_method")
     if method != "bitsandbytes":
         raise ValueError(
             f"config.json quantization_config.quant_method is {_label(repr(method))}; only "
-            f"'bitsandbytes' NF4 checkpoints are imported"
+            f"'bitsandbytes' NF4 checkpoints are imported; {_NF4_HINT}"
         )
     if quant.get("load_in_8bit") is True:
         raise ValueError(
-            "config.json quantization_config.load_in_8bit is true: bitsandbytes 8-bit "
-            "(LLM.int8) checkpoints are not imported, only double-quantised NF4"
+            f"config.json quantization_config.load_in_8bit is true: bitsandbytes 8-bit "
+            f"(LLM.int8) checkpoints are not imported, only double-quantised NF4; {_NF4_HINT}"
         )
     if quant.get("load_in_4bit") is not True:
         raise ValueError(
             f"config.json quantization_config.load_in_4bit is "
-            f"{_label(repr(quant.get('load_in_4bit')))}; a 4-bit checkpoint is required"
+            f"{_label(repr(quant.get('load_in_4bit')))}; a 4-bit checkpoint is required; "
+            f"{_NF4_HINT}"
         )
     expected = (
         ("bnb_4bit_quant_type", "nf4", quant.get("bnb_4bit_quant_type")),
         ("bnb_4bit_use_double_quant", True, quant.get("bnb_4bit_use_double_quant")),
         ("bnb_4bit_quant_storage", "uint8", quant.get("bnb_4bit_quant_storage", "uint8")),
+        ("bnb_4bit_compute_dtype", "bfloat16", quant.get("bnb_4bit_compute_dtype")),
     )
     for field, wanted, got in expected:
         if got != wanted:
             raise ValueError(
                 f"config.json quantization_config.{field} is {_label(repr(got))}; "
-                f"{wanted!r} is required"
+                f"{wanted!r} is required (the import stores bf16 statistics and Soup streams "
+                f"in bf16); {_NF4_HINT}"
             )
+    skip = quant.get("llm_int8_skip_modules")
+    if skip is None:
+        return ()
+    if (
+        not isinstance(skip, list)
+        or len(skip) > _MAX_SKIP_MODULES
+        or not all(isinstance(entry, str) and entry for entry in skip)
+    ):
+        raise ValueError(
+            f"config.json quantization_config.llm_int8_skip_modules must be a list of module "
+            f"names (at most {_MAX_SKIP_MODULES}); got {_label(repr(skip))[:80]}"
+        )
+    return tuple(skip)
+
+
+def _check_skip_modules(
+    skip: Tuple[str, ...], expectations: Mapping[str, Tuple[bool, Tuple[int, ...]]]
+) -> None:
+    """Refuse a checkpoint that keeps some quantised projection in 16 bit.
+
+    ``llm_int8_skip_modules`` names modules the exporter did not quantise (the dynamic
+    "unsloth-bnb-4bit" uploads skip sensitive projections). Importing them as plain
+    float tensors is not possible: the shard store holds ONE layout per weight in every
+    layer (the sharder refuses a shared key whose layout varies) and the streamed
+    skeleton turns every decoder projection into a 4-bit linear. So a skip entry that
+    covers a quantised projection is refused, by name. Entries that cover nothing the
+    importer quantises (``lm_head``, a vision tower, norms) are harmless and ignored.
+    The match is by substring of the dotted module path, the widest reading of what
+    transformers versions skip, so it can only over-refuse.
+    """
+    for entry in skip:
+        for name in sorted(expectations):
+            if expectations[name][0] and entry in name.removesuffix(".weight"):
+                raise ValueError(
+                    f"config.json quantization_config.llm_int8_skip_modules lists "
+                    f"{_label(repr(entry))}, which covers the quantised projection "
+                    f"{_label(name)}: a checkpoint that keeps decoder projections in 16 bit "
+                    f"cannot be imported (the shard store uses one layout per weight in "
+                    f"every layer); {_NF4_HINT}"
+                )
 
 
 def _build_expectations(root: str) -> Tuple[str, int, Dict[str, Tuple[bool, Tuple[int, ...]]]]:
@@ -403,33 +510,36 @@ def _parse_state(span: _Span, key: str, shape: Tuple[int, ...]) -> Tuple[Any, by
     if absent_nested:
         raise ValueError(
             f"{name}: not double-quantised (quant_state lacks {', '.join(sorted(absent_nested))}); "
-            f"bnb_4bit_use_double_quant=True is required"
+            f"bnb_4bit_use_double_quant=True is required; {_NF4_HINT}"
         )
     if fields != _BASE_FIELDS | _NESTED_FIELDS:
+        extra = sorted(fields - _BASE_FIELDS - _NESTED_FIELDS)
+        unknown = ", ".join(_label(field) for field in extra)
         raise ValueError(
-            f"{name}: quant_state has unexpected fields "
-            f"{sorted(fields - _BASE_FIELDS - _NESTED_FIELDS)} or lacks "
-            f"{sorted((_BASE_FIELDS | _NESTED_FIELDS) - fields)}"
+            f"{name}: quant_state has unexpected fields [{unknown}] or lacks "
+            f"{sorted((_BASE_FIELDS | _NESTED_FIELDS) - fields)}; {_NF4_HINT}"
         )
     if payload["quant_type"] != "nf4":
         raise ValueError(
-            f"{name}: quant_type is {_label(repr(payload['quant_type']))}; only 'nf4' is imported"
+            f"{name}: quant_type is {_label(repr(payload['quant_type']))}; only 'nf4' is "
+            f"imported; {_NF4_HINT}"
         )
     if payload["dtype"] != "bfloat16":
         raise ValueError(
-            f"{name}: dtype is {_label(repr(payload['dtype']))}; only 'bfloat16' is imported"
+            f"{name}: dtype is {_label(repr(payload['dtype']))}; only 'bfloat16' is "
+            f"imported; {_NF4_HINT}"
         )
     if payload["nested_dtype"] != "float32":
         raise ValueError(
             f"{name}: nested_dtype is {_label(repr(payload['nested_dtype']))}; "
-            f"only 'float32' is imported"
+            f"only 'float32' is imported; {_NF4_HINT}"
         )
     for field in ("blocksize", "nested_blocksize"):
         value = payload[field]
         if type(value) is not int or value not in ALLOWED_BLOCKSIZES:
             raise ValueError(
                 f"{name}: {field} is {_label(repr(value))}; allowed: "
-                f"{', '.join(str(size) for size in ALLOWED_BLOCKSIZES)}"
+                f"{', '.join(str(size) for size in ALLOWED_BLOCKSIZES)}; {_NF4_HINT}"
             )
     if payload["shape"] != list(shape) or any(type(dim) is not int for dim in payload["shape"]):
         raise ValueError(
@@ -490,7 +600,6 @@ def plan_nf4_import(source_dir: str) -> Nf4ImportPlan:
         NF4_NESTED_CODE_KEY,
         ShardIndex,
         _canonical_stream_key,
-        _discover_safetensors,
         _source_file_components,
         checkpoint_source_components,
         extras_shard_path,
@@ -505,22 +614,34 @@ def plan_nf4_import(source_dir: str) -> Nf4ImportPlan:
     if not os.path.isdir(root):
         raise FileNotFoundError(f"checkpoint directory not found: {_label(source_dir)}")
     config = _read_json_file(_contained_file(root, "config.json", "checkpoint"), "config.json")
-    _check_config_quantization(config)
+    skip_modules = _check_config_quantization(config)
 
-    shard_paths = _discover_safetensors(root)
-    components = _source_file_components(shard_paths)
+    from soup_cli.utils.checkpoint_files import checkpoint_files
+
+    selected = checkpoint_files(root)
+    names = sorted(selected.weights)
+    if not names:
+        raise FileNotFoundError(
+            f"{selected.why_empty(source_dir)}: importing needs a safetensors checkpoint"
+        )
+    if len(names) > 4096:
+        raise ValueError(f"too many weight files ({len(names)} > 4096)")
+    # Read the REAL file a link points at, so a link swapped after this check is not followed.
+    real_paths = {name: _contained_file(root, name, "checkpoint") for name in names}
+    components = _source_file_components([os.path.join(root, name) for name in names])
     identity = {
-        path: (size, mtime)
-        for path, (_name, size, mtime) in zip(sorted(shard_paths), components)
+        real_paths[name]: (size, mtime)
+        for name, (_base, size, mtime) in zip(names, components)
     }
     raw_tensors: Dict[str, _Span] = {}
-    for path in shard_paths:
-        for key, span in _read_header(path).items():
+    for name in names:
+        for key, span in _read_header(real_paths[name], name).items():
             prior = raw_tensors.get(key)
             if prior is not None:
                 raise ValueError(
-                    f"tensor {_label(key)} appears in both {_label(_shard_name(prior.path))} "
-                    f"and {_label(_shard_name(path))}; every tensor must appear exactly once"
+                    f"tensor {_label(key)} appears in both {_label(prior.file)} "
+                    f"and {_label(name)}; every tensor must appear exactly once; "
+                    f"{_REDOWNLOAD}"
                 )
             raw_tensors[key] = span
     _check_weight_map(root, raw_tensors)
@@ -535,15 +656,16 @@ def plan_nf4_import(source_dir: str) -> Nf4ImportPlan:
         if key.endswith(_INT8_SUFFIXES):
             raise ValueError(
                 f"{_label(key)}: bitsandbytes 8-bit (LLM.int8) tensor; only double-quantised "
-                f"NF4 is imported"
+                f"NF4 is imported; {_NF4_HINT}"
             )
         if key.endswith(_FP4_STATE_SUFFIX):
             raise ValueError(
                 f"{_label(key)}: FP4 quantisation (bitsandbytes__fp4) is not imported; "
-                f"only NF4 is"
+                f"only NF4 is; {_NF4_HINT}"
             )
 
     arch, n_layers, expectations = _build_expectations(root)
+    _check_skip_modules(skip_modules, expectations)
     wanted = set()
     for name, (is_nf4, _shape) in expectations.items():
         wanted.add(name)
@@ -698,7 +820,7 @@ def _check_weight_map(root: str, tensors: Mapping[str, _Span]) -> None:
     for key, file_name in weight_map.items():
         _contained_file(root, file_name, f"{name} weight_map")
         span = tensors.get(key)
-        if span is None or _shard_name(span.path) != file_name:
+        if span is None or span.file != file_name:
             raise ValueError(
                 f"{name} maps {_label(key)} to {_label(file_name)}, whose header does not hold it"
             )
@@ -772,9 +894,7 @@ def _assert_sources_unchanged(plan: Nf4ImportPlan) -> None:
             raise ValueError(f"source file {_label(path)} changed during the import")
 
 
-def _verify_plan(
-    plan: Nf4ImportPlan, out_dir: str, chunk_bytes: int, notify: Optional[Callable[[str], None]]
-) -> None:
+def _verify_plan(plan: Nf4ImportPlan, out_dir: str, chunk_bytes: int) -> None:
     """Re-read every written shard and compare each payload with the source, byte for byte."""
     for file_name, spans in plan.shards.items():
         path = os.path.join(out_dir, file_name)
@@ -790,8 +910,6 @@ def _verify_plan(
                         f"{file_name}: {_label(key)} was written with a different layout"
                     )
                 _compare(stored, entry.offset, span, chunk_bytes, file_name)
-        if notify:
-            notify(f"Verified {file_name}")
 
 
 def _compare(stored: BinaryIO, start: int, span: _Span, chunk_bytes: int, file_name: str) -> None:
@@ -845,8 +963,11 @@ def import_nf4_checkpoint(
     plan = plan_nf4_import(source_dir)
     source_root = os.path.realpath(os.path.expanduser(str(source_dir)))
     target = os.path.realpath(os.path.expanduser(str(output_dir)))
-    if os.path.commonpath((source_root, target)) in (source_root, target):
-        raise ValueError("source and output directories must not contain each other")
+    if is_under(target, source_root) or is_under(source_root, target):
+        raise ValueError(
+            "source and output directories must not contain each other; give the shard "
+            "cache a directory of its own"
+        )
     out = _validate_out_dir(output_dir)
     if os.listdir(out):
         raise FileExistsError(
@@ -861,7 +982,7 @@ def import_nf4_checkpoint(
                 notify(f"Imported {file_name}")
         _assert_sources_unchanged(plan)
         if verify:
-            _verify_plan(plan, out, chunk_bytes, None)
+            _verify_plan(plan, out, chunk_bytes)
         _atomic_write_index(plan.index, out)
     except BaseException:
         for file_name in written:
@@ -894,7 +1015,7 @@ def verify_nf4_import(
     out = os.path.realpath(os.path.expanduser(str(output_dir)))
     if not os.path.isdir(out):
         raise FileNotFoundError(f"shard directory not found: {_label(output_dir)}")
-    _verify_plan(plan, out, chunk_bytes, None)
+    _verify_plan(plan, out, chunk_bytes)
     stored = read_shard_index(out)
     if stored != plan.index:
         raise ValueError("index.json does not describe this source checkpoint")

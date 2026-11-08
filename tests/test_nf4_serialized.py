@@ -142,10 +142,19 @@ def work(tmp_path):
 # happy path
 # ----------------------------------------------------------------------
 @pytest.mark.parametrize(
-    ("model_type", "tie", "files"),
-    [("llama", False, 1), ("qwen3", False, 2), ("mistral", False, 1), ("llama", True, 1)],
+    ("model_type", "tie", "files", "blocksize"),
+    [
+        ("llama", False, 1, 64),
+        ("qwen3", False, 2, 64),
+        ("mistral", False, 1, 64),
+        ("llama", True, 1, 64),
+        ("llama", False, 1, 4096),
+        ("qwen3", False, 2, 4096),
+    ],
 )
-def test_import_is_byte_for_byte_and_decodes_like_bitsandbytes(work, model_type, tie, files):
+def test_import_is_byte_for_byte_and_decodes_like_bitsandbytes(
+    work, model_type, tie, files, blocksize
+):
     from bitsandbytes.functional import QuantState, dequantize_4bit
 
     from soup_cli.utils.layer_shard import (
@@ -160,7 +169,7 @@ def test_import_is_byte_for_byte_and_decodes_like_bitsandbytes(work, model_type,
     from soup_cli.utils.layer_stream_runtime import rebuild_quant_state
 
     source, out = work
-    build_source(source, model_type, tie=tie, files=files)
+    build_source(source, model_type, tie=tie, files=files, blocksize=blocksize)
     result = import_nf4_checkpoint(source, out, chunk_bytes=1024)
 
     src = load_dir(source)
@@ -173,6 +182,7 @@ def test_import_is_byte_for_byte_and_decodes_like_bitsandbytes(work, model_type,
         f"self_attn.{n}_proj.weight" for n in "qkvo"
     } | {f"mlp.{n}_proj.weight" for n in ("gate", "up", "down")}
     assert result.verified is True and result.layer_count == 2
+    assert {spec.blocksize for spec in index.quant_specs.values()} == {blocksize}
     large = () if tie else ("lm_head.weight", "model.embed_tokens.weight")
     assert index.large_keys == large
 
@@ -614,6 +624,8 @@ def test_unsupported_sources_are_refused_before_anything_is_written(work, case, 
         ({"bnb_4bit_use_double_quant": False}, "bnb_4bit_use_double_quant is False"),
         ({"bnb_4bit_quant_type": "fp4"}, "bnb_4bit_quant_type is 'fp4'"),
         ({"load_in_4bit": False}, "load_in_4bit is False"),
+        ({"bnb_4bit_compute_dtype": "float16"}, "bnb_4bit_compute_dtype is 'float16'"),
+        ({"bnb_4bit_compute_dtype": "float32"}, "bnb_4bit_compute_dtype is 'float32'"),
         ({"quant_method": "gptq"}, "quant_method is 'gptq'"),
         ({"load_in_8bit": True, "load_in_4bit": False}, "8-bit"),
         ({"bnb_4bit_quant_storage": "bfloat16"}, "bnb_4bit_quant_storage is 'bfloat16'"),
@@ -886,3 +898,339 @@ def test_an_architecture_with_experts_or_layer_buffers_is_refused(work, monkeypa
     with pytest.raises(ValueError, match="dense decoder architectures only"):
         import_nf4_checkpoint(source, out)
     assert not os.path.exists(out)
+
+
+# ----------------------------------------------------------------------
+# review round: different drives, size guards, read bounds, labels, links, skip modules
+# ----------------------------------------------------------------------
+def _drives_differ(monkeypatch, *paths):
+    """Make ``os.path.commonpath`` fail the way Windows does for two drives, for this pair only."""
+    real = os.path.commonpath
+    pair = {os.path.normcase(os.path.realpath(path)) for path in paths}
+
+    def commonpath(items):
+        items = list(items)
+        if len(items) == 2 and {os.path.normcase(item) for item in items} == pair:
+            raise ValueError("Paths don't have the same drive")
+        return real(items)
+
+    monkeypatch.setattr(os.path, "commonpath", commonpath)
+
+
+def test_a_source_and_an_output_on_different_drives_are_disjoint(work, monkeypatch):
+    source, out = work
+    build_source(source)
+    _drives_differ(monkeypatch, source, out)
+    result = import_nf4_checkpoint(source, out)
+    assert result.verified is True
+
+
+def test_a_drive_mismatch_is_a_refusal_not_a_crash(tmp_path, monkeypatch):
+    root = os.path.realpath(str(tmp_path / "ckpt"))
+    os.makedirs(root)
+    with open(os.path.join(root, "config.json"), "w") as handle:
+        handle.write("{}")
+    _drives_differ(monkeypatch, root, os.path.join(root, "config.json"))
+    with pytest.raises(ValueError, match="resolves outside the checkpoint directory"):
+        nf4_serialized._contained_file(root, "config.json", "checkpoint")
+
+
+def _write_header_file(source, header_text, body=bytes(3)):
+    header = header_text.encode()
+    header += b" " * (-len(header) % 8)
+    with open(os.path.join(source, "model.safetensors"), "wb") as handle:
+        handle.write(struct.pack("<Q", len(header)) + header + body)
+
+
+EXTRA_MALFORMED_HEADERS = [
+    ('"a":{"dtype":"U8","shape":[2097152,2097152],"data_offsets":[0,1]}', "above the bound"),
+    ('"a":{"dtype":"U8","shape":[1,1,1,1,1,1,1,1,1],"data_offsets":[0,1]}', "invalid shape"),
+    ('"a":{"dtype":"U8","shape":[-1],"data_offsets":[0,1]}', "invalid shape"),
+    ('"a":{"dtype":"U8","shape":"ab","data_offsets":[0,1]}', "invalid shape"),
+    ('"a":{"dtype":"U8","shape":[1]}', "invalid header entry"),
+    ('"a":{"dtype":"U8","shape":[1],"data_offsets":[0,1],"x":1}', "invalid header entry"),
+    ('"a":5', "invalid header entry"),
+    ('"a":{"dtype":"U8","shape":[1],"data_offsets":[0]}', "invalid data_offsets"),
+    ('"a":{"dtype":"U8","shape":[1],"data_offsets":[0,"1"]}', "invalid data_offsets"),
+    ('"a":{"dtype":"U8","shape":[1],"data_offsets":[true,1]}', "invalid data_offsets"),
+    ('"a":{"dtype":"U8","shape":[1],"data_offsets":[-1,0]}', "does not hold 1 bytes"),
+    ('"a":{"dtype":5,"shape":[1],"data_offsets":[0,1]}', "unsupported stored dtype"),
+]
+
+
+@pytest.mark.parametrize(("entries", "message"), EXTRA_MALFORMED_HEADERS)
+def test_more_malformed_safetensors_headers_are_refused(work, entries, message):
+    source, out = work
+    build_source(source)
+    _write_header_file(source, "{" + entries + "}")
+    with pytest.raises(ValueError, match=message):
+        import_nf4_checkpoint(source, out)
+    assert not os.path.exists(out)
+
+
+def test_a_header_that_is_not_an_object_is_refused(work):
+    source, out = work
+    build_source(source)
+    _write_header_file(source, "[1]")
+    with pytest.raises(ValueError, match="expected a JSON object"):
+        import_nf4_checkpoint(source, out)
+
+
+def test_a_file_shorter_than_eight_bytes_is_refused(work):
+    source, out = work
+    build_source(source)
+    with open(os.path.join(source, "model.safetensors"), "wb") as handle:
+        handle.write(b"abc")
+    with pytest.raises(ValueError, match=r"no header length\); re-download"):
+        import_nf4_checkpoint(source, out)
+
+
+def test_a_header_with_too_many_tensors_is_refused(work):
+    source, out = work
+    build_source(source)
+    entry = '"t%d":{"dtype":"U8","shape":[0],"data_offsets":[0,0]}'
+    entries = ",".join(entry % number for number in range(nf4_serialized._MAX_TENSORS + 1))
+    _write_header_file(source, "{" + entries + "}", body=b"")
+    with pytest.raises(ValueError, match="more than 200000 tensors"):
+        import_nf4_checkpoint(source, out)
+
+
+def test_a_deeply_nested_header_is_refused(work):
+    source, out = work
+    build_source(source)
+    _write_header_file(source, '{"a":' + "[" * 100000 + "]" * 100000 + "}")
+    with pytest.raises(ValueError, match="JSON is nested too deeply"):
+        import_nf4_checkpoint(source, out)
+
+
+def test_an_oversized_config_is_refused_unread(work):
+    source, out = work
+    build_source(source)
+    with open(os.path.join(source, "config.json"), "wb") as handle:
+        handle.seek(nf4_serialized._MAX_HEADER_BYTES)
+        handle.write(b" ")
+    with pytest.raises(ValueError, match=r"config\.json is larger than 16777216 bytes"):
+        import_nf4_checkpoint(source, out)
+
+
+def test_an_oversized_index_file_is_refused_unread(tmp_path):
+    path = tmp_path / "big.json"
+    with open(path, "wb") as handle:
+        handle.seek(nf4_serialized._MAX_HEADER_BYTES)
+        handle.write(b" ")
+    with pytest.raises(ValueError, match="index is larger than 16777216 bytes"):
+        nf4_serialized._read_json_file(str(path), "index")
+
+
+class _ReadSpy:
+    """A file handle that records the size of every ``read()`` made through it."""
+
+    def __init__(self, handle, sizes):
+        self._handle = handle
+        self._sizes = sizes
+
+    def read(self, size=-1):
+        self._sizes.append(size)
+        return self._handle.read(size)
+
+    def __getattr__(self, name):
+        return getattr(self._handle, name)
+
+
+def test_every_stage_of_the_import_uses_the_callers_chunk_size(work, monkeypatch):
+    source, out = work
+    build_source(source)
+    seen = {"write": [], "copy": [], "compare": []}
+    reads = {"copy": [], "compare": []}
+    real_write = nf4_serialized._write_shard
+    real_copy = nf4_serialized._copy_range
+    real_compare = nf4_serialized._compare
+
+    def write(path, spans, chunk_bytes):
+        seen["write"].append(chunk_bytes)
+        return real_write(path, spans, chunk_bytes)
+
+    def copy(source_handle, target, span, chunk_bytes):
+        seen["copy"].append(chunk_bytes)
+        return real_copy(_ReadSpy(source_handle, reads["copy"]), target, span, chunk_bytes)
+
+    def compare(stored, start, span, chunk_bytes, file_name):
+        seen["compare"].append(chunk_bytes)
+        spy = _ReadSpy(stored, reads["compare"])
+        return real_compare(spy, start, span, chunk_bytes, file_name)
+
+    monkeypatch.setattr(nf4_serialized, "_write_shard", write)
+    monkeypatch.setattr(nf4_serialized, "_copy_range", copy)
+    monkeypatch.setattr(nf4_serialized, "_compare", compare)
+    import_nf4_checkpoint(source, out, chunk_bytes=512)
+    for stage, chunks in seen.items():
+        assert chunks and set(chunks) == {512}, (stage, set(chunks))
+    for stage, sizes in reads.items():
+        assert sizes and max(sizes) <= 512, (stage, max(sizes))
+
+
+def test_untrusted_names_in_messages_are_made_safe_for_the_terminal(work):
+    source, out = work
+    build_source(source)
+    entry = '"a\\u001b[bold]x":{"dtype":"U8","shape":[1],"data_offsets":[0,1]}'
+    _write_header_file(source, "{" + entry + "," + entry + "}")
+    with pytest.raises(ValueError, match="duplicate JSON key") as excinfo:
+        import_nf4_checkpoint(source, out)
+    message = str(excinfo.value)
+    assert "\x1b" not in message and "a\\[bold]x" in message, message
+
+
+def test_unexpected_quant_state_fields_are_made_safe_for_the_terminal(work):
+    source, out = work
+    build_source(source, tweak=lambda t: edit_state(t, _Q, **{"[bold]x": 1}))
+    with pytest.raises(ValueError, match="unexpected fields") as excinfo:
+        import_nf4_checkpoint(source, out)
+    assert "\\[bold]x" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("case", "kwargs"),
+    [
+        ("fp4", {"tweak": _rename_to_fp4}),
+        ("int8", {"tweak": _real_int8}),
+        ("not-nested", {"nested": False}),
+    ],
+)
+def test_quantisation_refusals_say_what_to_use_instead(work, case, kwargs):
+    source, out = work
+    build_source(source, **kwargs)
+    with pytest.raises(ValueError, match="training.quantization: 4bit"):
+        import_nf4_checkpoint(source, out)
+
+
+# ---- Hugging Face cache snapshots: links into the repo's blob store ------------------------
+def make_hf_cache(tmp_path, source, *, shared_store=False):
+    """Lay ``source`` out the way huggingface_hub does: blobs/<etag> and snapshots/<sha>/<name>."""
+    import shutil
+
+    hub = tmp_path / "hub"
+    repo = hub / "models--org--tiny"
+    blobs = repo / "blobs"
+    snapshot = repo / "snapshots" / ("a" * 40)
+    blobs.mkdir(parents=True)
+    snapshot.mkdir(parents=True)
+    for index, name in enumerate(sorted(os.listdir(source))):
+        blob = blobs / f"{index:040x}"
+        shutil.copy2(os.path.join(source, name), blob)
+        if shared_store and name.endswith(".safetensors"):
+            store = hub / "blobs"
+            store.mkdir(exist_ok=True)
+            (store / ".huggingface-shared-blobs").write_text("")
+            os.replace(blob, store / f"xet{index}")
+            os.symlink(os.path.join("..", "..", "blobs", f"xet{index}"), blob)
+        os.symlink(os.path.join("..", "..", "blobs", blob.name), snapshot / name)
+    return repo, snapshot
+
+
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize(("shared_store", "files"), [(False, 1), (True, 2)])
+def test_a_hugging_face_snapshot_of_links_is_imported(tmp_path, shared_store, files):
+    source = str(tmp_path / "src")
+    out = str(tmp_path / "out")
+    build_source(source, files=files)
+    _repo, snapshot = make_hf_cache(tmp_path, source, shared_store=shared_store)
+    result = import_nf4_checkpoint(str(snapshot), out)
+    assert result.verified is True and result.layer_count == 2
+    assert result.tensor_count == 2 * (28 + 2) + 3 + 2
+    # the cache identity names the file as the snapshot does, not by its blob's etag
+    weights = sorted(name for name in os.listdir(source) if name.endswith(".safetensors"))
+    assert [name for name, _size, _mtime in result.index.source_files] == weights
+    assert verify_nf4_import(str(snapshot), out).verified is True
+
+
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize("victim", ["config.json", "model.safetensors"])
+def test_a_snapshot_link_that_escapes_the_cache_is_refused(tmp_path, victim):
+    source = str(tmp_path / "src")
+    build_source(source)
+    _repo, snapshot = make_hf_cache(tmp_path, source)
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"{}")
+    link = snapshot / victim
+    link.unlink()
+    os.symlink(str(outside), link)
+    with pytest.raises(ValueError, match="points outside the Hugging Face blob store"):
+        import_nf4_checkpoint(str(snapshot), str(tmp_path / "out"))
+    assert not os.path.exists(tmp_path / "out")
+
+
+@pytest.mark.requires_symlink
+def test_a_blob_entry_that_links_outside_the_cache_is_refused(tmp_path):
+    source = str(tmp_path / "src")
+    build_source(source)
+    repo, snapshot = make_hf_cache(tmp_path, source)
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"{}")
+    blob = os.path.realpath(snapshot / "config.json")
+    os.unlink(blob)
+    os.symlink(str(outside), blob)
+    with pytest.raises(ValueError, match="points outside the Hugging Face blob store"):
+        import_nf4_checkpoint(str(snapshot), str(tmp_path / "out"))
+
+
+@pytest.mark.requires_symlink
+def test_a_linked_blob_store_is_refused_by_name(tmp_path):
+    import shutil
+
+    source = str(tmp_path / "src")
+    build_source(source)
+    repo, snapshot = make_hf_cache(tmp_path, source)
+    moved = tmp_path / "elsewhere"
+    shutil.move(str(repo / "blobs"), str(moved))
+    os.symlink(str(moved), str(repo / "blobs"), target_is_directory=True)
+    with pytest.raises(ValueError, match="is a link and is not followed"):
+        import_nf4_checkpoint(str(snapshot), str(tmp_path / "out"))
+
+
+@pytest.mark.requires_symlink
+def test_a_link_outside_a_snapshot_directory_is_still_refused(tmp_path):
+    source = str(tmp_path / "src")
+    build_source(source)
+    real = tmp_path / "config.real"
+    os.replace(os.path.join(source, "config.json"), real)
+    os.symlink(str(real), os.path.join(source, "config.json"))
+    with pytest.raises(ValueError, match="is not a Hugging Face cache snapshot"):
+        plan_nf4_import(source)
+
+
+# ---- quantization_config.llm_int8_skip_modules --------------------------------------------
+@pytest.mark.parametrize("skipped", [["lm_head"], ["vision_tower", "model.embed_tokens"], []])
+def test_skip_modules_that_cover_no_quantised_projection_are_harmless(work, skipped):
+    source, _out = work
+    build_source(source, quant_config={**_QUANT, "llm_int8_skip_modules": skipped})
+    assert plan_nf4_import(source).tensor_count == 2 * (28 + 2) + 3 + 2
+
+
+@pytest.mark.parametrize(
+    "skipped",
+    [["model.layers.0.mlp.gate_proj"], ["lm_head", "gate_proj"], ["layers.1.self_attn.q_proj"]],
+)
+def test_skip_modules_that_cover_a_quantised_projection_are_refused(work, skipped):
+    source, out = work
+    build_source(source, quant_config={**_QUANT, "llm_int8_skip_modules": skipped})
+    with pytest.raises(ValueError, match="llm_int8_skip_modules lists") as excinfo:
+        import_nf4_checkpoint(source, out)
+    message = str(excinfo.value)
+    assert skipped[-1] in message and "covers the quantised projection model.layers." in message
+    assert not os.path.exists(out)
+
+
+@pytest.mark.parametrize("skipped", ["lm_head", [5], [""], {"a": 1}, ["x"] * 4097])
+def test_skip_modules_must_be_a_list_of_names(work, skipped):
+    source, out = work
+    build_source(source, quant_config={**_QUANT, "llm_int8_skip_modules": skipped})
+    with pytest.raises(ValueError, match="llm_int8_skip_modules must be a list of module names"):
+        import_nf4_checkpoint(source, out)
+
+
+def test_a_missing_compute_dtype_is_refused(work):
+    source, out = work
+    config = {key: value for key, value in _QUANT.items() if key != "bnb_4bit_compute_dtype"}
+    build_source(source, quant_config=config)
+    with pytest.raises(ValueError, match="bnb_4bit_compute_dtype is None"):
+        import_nf4_checkpoint(source, out)
