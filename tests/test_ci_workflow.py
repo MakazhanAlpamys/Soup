@@ -112,6 +112,17 @@ def test_ci_init_rejects_unsupported_python_versions(tmp_path, monkeypatch, vers
     assert expected in plain
 
 
+@pytest.mark.parametrize("version", ["03.11", "3.011", "3.00", "00.11"])
+def test_ci_init_rejects_noncanonical_python_versions(tmp_path, monkeypatch, version):
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(app, ["ci", "init", "--python", version])
+
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "python_version must look like '3.11'" in strip_ansi(result.output)
+    assert not (tmp_path / ".github/workflows/soup-gate.yml").exists()
+
+
 @pytest.mark.parametrize("version", ["3.11", "3.12", "3.13"])
 def test_ci_init_accepts_supported_python_versions(tmp_path, monkeypatch, version):
     monkeypatch.chdir(tmp_path)
@@ -122,3 +133,13 @@ def test_ci_init_accepts_supported_python_versions(tmp_path, monkeypatch, versio
     assert workflow.is_file()
     content = workflow.read_text(encoding="utf-8")
     assert f'python-version: "{version}"' in content
+
+
+def test_ci_help_and_docs_name_supported_python_range():
+    from pathlib import Path
+
+    result = CliRunner().invoke(app, ["ci", "init", "--help"])
+    assert result.exit_code == 0
+    assert "3.11 to 3.13" in strip_ansi(result.output)
+    docs = Path(__file__).resolve().parents[1] / "docs" / "commands.md"
+    assert "--python accepts 3.11 to 3.13" in docs.read_text(encoding="utf-8")

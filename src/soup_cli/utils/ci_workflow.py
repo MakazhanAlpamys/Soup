@@ -27,7 +27,7 @@ from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, is_under_cwd
 # GitHub allows quite permissive ref names; we constrain to a safe subset that
 # also cannot break the YAML scalar or a shell step.
 _BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$")
-_PY_RE = re.compile(r"^\d+\.\d+$")
+_PY_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 _MIN_SUPPORTED_PYTHON = (3, 11)
 _MAX_SUPPORTED_PYTHON = (3, 13)
 _MAX_PATH_LEN = 4096

@@ -32,7 +32,7 @@ def init(
         "ship_evidence.json", "--evidence", help="Ship evidence JSON (repo-relative)"
     ),
     python_version: str = typer.Option(
-        "3.11", "--python", help="Python version for the CI runner (e.g. 3.11)"
+        "3.11", "--python", help="Python version for the CI runner (3.11 to 3.13)"
     ),
     branch: str = typer.Option("main", "--branch", help="Branch the workflow triggers on"),
     config: Optional[str] = typer.Option(
