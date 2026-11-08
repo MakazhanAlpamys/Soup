@@ -94,11 +94,22 @@ def normalize(raw: dict[str, Any]) -> dict[str, Any]:
             "arms_interleaved": protocol["interleaved_arms"],
             "dtype_order": [row["dtype"] for row in rows],
             "dtype_process_isolation": protocol["dtype_process_isolation"],
-            "saved_tensor_bytes": "unique saved tensor views, deduplicated by storage and view metadata",
-            "activation_only_saved_tensor_bytes": "derived arithmetic; excludes common BF16 base weights or Fast-LoRA NF4 packed weights and quant state",
+            "saved_tensor_bytes": (
+                "unique saved tensor views, deduplicated by storage and view metadata"
+            ),
+            "activation_only_saved_tensor_bytes": (
+                "derived arithmetic; excludes common BF16 base weights or Fast-LoRA NF4 "
+                "packed weights and quant state"
+            ),
             "peak_memory": "torch.cuda.max_memory_allocated absolute peak",
-            "noise_rule": "No threshold was specified before the timed run; medians and within-process IQRs are descriptive only, with no significance claim.",
-            "scope": "single synthetic SwiGLU MLP block; no model download; not end-to-end training",
+            "noise_rule": (
+                "No threshold was specified before the timed run; medians and "
+                "within-process IQRs are descriptive only, with no significance claim."
+            ),
+            "scope": (
+                "single synthetic SwiGLU MLP block; no model download; "
+                "not end-to-end training"
+            ),
             "settings": settings,
         },
         "results": results,

@@ -53,40 +53,43 @@ def test_schedule_covers_all_six_orders_equally():
     assert all(groups.count(order) == 5 for order in expected)
 
 
-class PlainBackward:
-    next_functions = ()
-
-
-class FastLoraSwiGLUBackward:
-    next_functions = ()
-
-
-class LigerSiLUMulBackward:
-    next_functions = ()
-
-
 class Output:
     def __init__(self, node):
         self.grad_fn = node
 
 
+_FAST = "FastLoraSwiGLUBackward"
+_LIGER = "LigerSiLUMulBackward"
+
+
+def _node(name, *children):
+    node = type(name, (), {})()
+    node.next_functions = tuple((child, 0) for child in children)
+    return node
+
+
+def _graph(*markers):
+    return _node("AddBackward0", _node("MulBackward0", *[_node(name) for name in markers]))
+
+
 @pytest.mark.parametrize(
-    ("arm", "node", "expected"),
+    ("arm", "markers", "expected"),
     [
-        ("fast", FastLoraSwiGLUBackward(), True),
-        ("plain", PlainBackward(), True),
-        ("liger", LigerSiLUMulBackward(), True),
-        ("plain", FastLoraSwiGLUBackward(), False),
-        ("fast", LigerSiLUMulBackward(), False),
-        ("liger", PlainBackward(), False),
+        ("fast", (_FAST,), True),
+        ("liger", (_LIGER,), True),
+        ("plain", (), True),
+        ("plain", (_FAST,), False),
+        ("plain", (_LIGER,), False),
+        ("fast", (_FAST, _LIGER), False),
+        ("liger", (_FAST, _LIGER), False),
     ],
 )
-def test_path_proof_accepts_only_the_requested_arm(arm, node, expected):
-    assert harness._path_ok(arm, Output(node)) is expected
+def test_path_proof_walks_the_whole_graph(arm, markers, expected):
+    assert harness._path_ok(arm, Output(_graph(*markers))) is expected
 
 
 @pytest.mark.parametrize("args", [["--iters", "4"], ["--tokens", "0"]])
-def test_invalid_measurement_arguments_exit_two(args, monkeypatch):
+def test_invalid_measurement_arguments_exit_two(args, monkeypatch, capsys):
     import torch
 
     monkeypatch.setattr(sys, "argv", [str(_HARNESS), *args])
@@ -96,9 +99,10 @@ def test_invalid_measurement_arguments_exit_two(args, monkeypatch):
         harness.main()
 
     assert error.value.code == 2
+    assert "iters must be at least 5" in capsys.readouterr().err
 
 
-def test_missing_cuda_exits_two_without_producing_a_result(monkeypatch):
+def test_missing_cuda_exits_two_without_producing_a_result(monkeypatch, capsys):
     import torch
 
     monkeypatch.setattr(sys, "argv", [str(_HARNESS)])
@@ -108,3 +112,4 @@ def test_missing_cuda_exits_two_without_producing_a_result(monkeypatch):
         harness.main()
 
     assert error.value.code == 2
+    assert "a CUDA GPU is required" in capsys.readouterr().err
