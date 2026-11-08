@@ -28,7 +28,8 @@ def _cfg(*, packed=None, task="sft", backend="transformers", modality="text", da
         backend=backend,
         modality=modality,
         data={"train": "tests/fixtures/sample_train.jsonl", **(data or {})},
-        training={"quantization": "4bit", "lora": lora, "packed_lora": block, **training},
+        training={"quantization": "4bit", "batch_size": 2, "lora": lora, "packed_lora": block,
+                  **training},
     )
 
 
@@ -123,7 +124,7 @@ class TestTheFields:
         text = yaml.safe_dump({
             "base": "test/model", "task": "sft",
             "data": {"train": "tests/fixtures/sample_train.jsonl"},
-            "training": {"quantization": "4bit", "lora": {"dropout": 0},
+            "training": {"quantization": "4bit", "batch_size": 2, "lora": {"dropout": 0},
                          "packed_lora": {"enabled": True, "gpu_budget": 7000}},
         })
         from soup_cli.config.unknown_keys import find_unknown_config_keys
@@ -135,7 +136,7 @@ class TestTheFields:
         text = (
             "base: test/model\ntask: sft\n"
             "data:\n  train: tests/fixtures/sample_train.jsonl\n"
-            "training:\n  quantization: 4bit\n  lora:\n    dropout: 0\n"
+            "training:\n  quantization: 4bit\n  batch_size: 2\n  lora:\n    dropout: 0\n"
             "  packed_lora:\n    enabled: true\n    gpu_budget: 7000\n"
         )
         with pytest.raises(Exception) as excinfo:
@@ -148,7 +149,7 @@ class TestTheFields:
         text = (
             "base: test/model\ntask: sft\n"
             "data:\n  train: tests/fixtures/sample_train.jsonl\n"
-            "training:\n  quantization: 4bit\n  lora:\n    dropout: 0\n"
+            "training:\n  quantization: 4bit\n  batch_size: 2\n  lora:\n    dropout: 0\n"
             f"  packed_lora:\n    enabled: true\n    int8_backward: {yaml_value}\n"
         )
         cfg = load_config_from_string(text)
@@ -230,9 +231,25 @@ class TestWhatItRefuses:
             SoupConfig(
                 base="test/model", task="sft",
                 data={"train": "tests/fixtures/sample_train.jsonl"},
-                training={"quantization": "4bit", "packed_lora": {"enabled": True}},
+                training={"quantization": "4bit", "batch_size": 2,
+                          "packed_lora": {"enabled": True}},
             )
         assert "needs lora.dropout: 0" in str(excinfo.value)
+
+    def test_an_auto_batch_size_is_refused_with_the_reason(self):
+        message = _refusal(batch_size="auto")
+        assert "training.packed_lora needs an explicit training.batch_size; got 'auto'" in message
+
+    def test_the_default_batch_size_is_refused_and_a_number_loads(self):
+        with pytest.raises(ValidationError) as excinfo:
+            SoupConfig(
+                base="test/model", task="sft",
+                data={"train": "tests/fixtures/sample_train.jsonl"},
+                training={"quantization": "4bit", "lora": {"dropout": 0.0},
+                          "packed_lora": {"enabled": True}},
+            )
+        assert "explicit training.batch_size" in str(excinfo.value)
+        assert _cfg(batch_size=1).training.batch_size == 1
 
     @pytest.mark.parametrize("lora,name", [
         ({"use_dora": True}, "lora.use_dora"),
