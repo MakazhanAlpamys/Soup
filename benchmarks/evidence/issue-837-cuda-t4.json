@@ -32,12 +32,41 @@
       "plain",
       "liger"
     ],
+    "balanced_arm_order_permutations": [
+      ["fast", "plain", "liger"],
+      ["fast", "liger", "plain"],
+      ["liger", "fast", "plain"],
+      ["liger", "plain", "fast"],
+      ["plain", "liger", "fast"],
+      ["plain", "fast", "liger"]
+    ],
     "dtype_order": [
       "bf16",
       "nf4"
     ],
     "dtype_process_isolation": "one fresh process per dtype cell; arms paired and interleaved inside each process",
-    "saved_tensor_bytes": "unique saved tensor views, deduplicated by storage and view metadata",
+    "fixture_settings": {
+      "target_projections": ["gate_proj", "up_proj", "down_proj"],
+      "lora_alpha": "2 * rank",
+      "lora_dropout": 0.0,
+      "seed": 837,
+      "nf4_double_quantization": true,
+      "nf4_compute_dtype": "bfloat16"
+    },
+    "saved_tensor_bytes": "unique saved tensor views, deduplicated by storage and view metadata; raw counts are not like-for-like for NF4 because Fast-LoRA saves packed weights and quant state through save_for_backward while bitsandbytes MatMul4Bit stores these on ctx",
+    "activation_only_saved_tensor_bytes_derived": {
+      "bf16_emulated_sm75": {
+        "fast": 141819904,
+        "plain": 259522560,
+        "liger": 200802304
+      },
+      "nf4": {
+        "fast": 141819904,
+        "plain": 259522560,
+        "liger": 200802304
+      },
+      "method": "derived arithmetic, not separately measured; subtract 352321536 common BF16 base-weight bytes from each arm and subtract 90879180 packed-weight plus quant-state bytes from Fast-LoRA NF4"
+    },
     "peak_memory": "torch.cuda.max_memory_allocated",
     "noise_rule": "No threshold was specified before the timed run; medians and within-process IQRs are descriptive only, with no significance claim.",
     "scope": "single synthetic SwiGLU MLP block; no model download; not end-to-end training"
@@ -77,7 +106,10 @@
         "fast": 0.004315595181889909,
         "liger": 0.004676141711634789
       },
-      "output_equal_to_plain": true,
+      "output_equal_to_plain": {
+        "fast": true,
+        "liger": true
+      },
       "path_proof": {
         "fast": "30/30",
         "plain": "30/30",
@@ -123,7 +155,10 @@
         "fast": 0.0043144884988880056,
         "liger": 0.004670710817751713
       },
-      "output_equal_to_plain": true,
+      "output_equal_to_plain": {
+        "fast": true,
+        "liger": true
+      },
       "path_proof": {
         "fast": "30/30",
         "plain": "30/30",

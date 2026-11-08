@@ -453,18 +453,19 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.self_test:
-        assert _schedule(3) == [
-            "fast",
-            "plain",
-            "liger",
-            "fast",
-            "liger",
-            "plain",
-            "liger",
-            "fast",
-            "plain",
-        ]
-        print("self-test passed: each arm is balanced and interleaved")
+        schedule = _schedule(30)
+        groups = [tuple(schedule[index : index + 3]) for index in range(0, len(schedule), 3)]
+        expected = {
+            ("fast", "plain", "liger"),
+            ("fast", "liger", "plain"),
+            ("liger", "fast", "plain"),
+            ("liger", "plain", "fast"),
+            ("plain", "liger", "fast"),
+            ("plain", "fast", "liger"),
+        }
+        if set(groups) != expected or any(groups.count(order) != 5 for order in expected):
+            raise RuntimeError("arm schedule self-test failed")
+        print("self-test passed: all six arm orders occur five times")
         return 0
 
     import torch
