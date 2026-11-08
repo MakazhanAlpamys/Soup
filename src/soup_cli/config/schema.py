@@ -1108,12 +1108,24 @@ class EvalGateConfig(BaseModel):
     )
     baseline: Optional[str] = Field(
         default=None,
-        description="registry://<id> | 'previous' | file path - scores to compare against",
+        description="registry://<id> | file path - scores to compare against",
     )
     on_regression: Literal["stop", "warn", "continue"] = Field(
         default="stop",
         description="Action on regression: stop training | warn only | continue",
     )
+
+    @field_validator("baseline")
+    @classmethod
+    def _refuse_previous_baseline(cls, value: Optional[str]) -> Optional[str]:
+        # 'previous' was documented but never implemented: resolve_baseline read
+        # it as a file named 'previous' and the gate ran with no baseline (#2523).
+        if isinstance(value, str) and value.strip().lower() == "previous":
+            raise ValueError(
+                "training.eval_gate.baseline: 'previous' is not implemented; "
+                "use a path to a baseline results file"
+            )
+        return value
 
     @model_validator(mode="after")
     def _require_suite_when_enabled(self) -> "EvalGateConfig":
