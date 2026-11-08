@@ -355,10 +355,10 @@ class TestWiring:
 class TestRealEvaluation:
     """One real ``Trainer.evaluate()`` on the tiny local Llama.
 
-    Batch size 1: the tiny Llama config has no ``pad_token_id``, and a
-    sequence-classification head refuses batches larger than 1 without one.
-    That is the same on ``main`` for every classifier-family task and is not
-    part of #2618.
+    Batch size 1: these tests call ``evaluate()`` before any training step,
+    and the tiny Llama config has no ``pad_token_id``; a sequence-classification
+    head refuses batches larger than 1 without one. ``Trainer.train()`` sets it
+    from the tokenizer, and every Soup path trains before it evaluates.
     """
     def test_reranker_evaluation_logs_ranking_metrics_beside_eval_loss(
         self, captured_console: io.StringIO
