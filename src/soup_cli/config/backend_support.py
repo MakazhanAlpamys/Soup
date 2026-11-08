@@ -36,14 +36,10 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 #: A setting the backend reads and refuses, versus one it never reads at all.
 #:
-#: #755's AC3 named three statuses. Only ``ignored`` has live instances; the
-#: other two are **deliberately deferred**, not forgotten:
-#:
-#: * ``honoured`` would mean enumerating 275 declared fields against every
-#:   reviewed pair -- a table nobody can review honestly, and the opposite of
-#:   this module's premise that a gap list is short enough to be checked;
-#: * ``rejected`` is retained for compatibility, but has no registry rows:
-#:   settings refused at config load cannot reach the doctor (#1330).
+#: ``honoured`` is intentionally not enumerated: the table records gaps only.
+#: ``rejected`` describes runtime refusals visible to the doctor; config-load
+#: refusals cannot reach it (#1330). Native selective non-text masks are refused
+#: before model loading rather than claimed as qualified multimodal support.
 IGNORED = "ignored"
 REJECTED = "rejected"
 STATUSES = frozenset({IGNORED, REJECTED})
@@ -100,19 +96,6 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
         "training.use_flash_attn",
         IGNORED,
         "MLX has its own attention kernels",
-        trainer_reads=True,
-    ),
-    SupportEntry(
-        "data.train_on_messages_with_train_field",
-        IGNORED,
-        "MLX supervises every assistant turn; the per-message flag is not read",
-        trainer_reads=True,
-    ),
-    SupportEntry(
-        "data.mask_history",
-        IGNORED,
-        "MLX supervises every assistant turn, not only the last; mask_history is "
-        "applied by the transformers label builder, which MLX SFT does not use",
         trainer_reads=True,
     ),
     SupportEntry(
@@ -227,9 +210,28 @@ _MLX_GRPO: tuple[SupportEntry, ...] = tuple(
     entry for entry in _MLX_DPO if entry.field in _MLX_GRPO_FIELDS
 )
 
+_MLX_SELECTIVE_NON_TEXT = tuple(
+    SupportEntry(
+        name, REJECTED, "native selective message masks support text SFT only", trainer_reads=True,
+    )
+    for name in ("data.mask_history", "data.train_on_messages_with_train_field")
+)
+
+
+# Multimodal schema guards already refuse these settings before doctor can run.
+_MLX_NON_TEXT_SFT = tuple(
+    entry for entry in _MLX_SFT
+    if entry.field not in {
+        "training.use_flash_attn", "training.use_liger", "training.moe_lora",
+    }
+) + _MLX_SELECTIVE_NON_TEXT
+
+
 #: ``(task, backend, modality)`` -> the settings that combination does not honour.
 REGISTRY: dict[tuple[str, str, str], tuple[SupportEntry, ...]] = {
     ("sft", "mlx", "text"): _MLX_SFT,
+    ("sft", "mlx", "vision"): _MLX_NON_TEXT_SFT,
+    ("sft", "mlx", "audio"): _MLX_NON_TEXT_SFT,
     ("dpo", "mlx", "text"): _MLX_DPO,
     ("orpo", "mlx", "text"): _MLX_ORPO,
     ("simpo", "mlx", "text"): _MLX_SIMPO,
@@ -314,6 +316,8 @@ TRAINER_MODULES: dict[tuple[str, str, str], tuple[str, ...]] = {
     ("sft", "transformers", "vision"): _TRANSFORMERS_SFT_MODULES,
     ("sft", "transformers", "audio"): _TRANSFORMERS_SFT_MODULES,
 }
+for _modality in ("vision", "audio"):
+    TRAINER_MODULES[("sft", "mlx", _modality)] = TRAINER_MODULES[("sft", "mlx", "text")]
 
 
 def unsupported_for(
