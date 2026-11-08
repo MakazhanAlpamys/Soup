@@ -717,15 +717,13 @@ def test_a_nonempty_output_directory_is_refused(work):
     assert os.listdir(out) == ["keep.txt"]
 
 
+@pytest.mark.requires_symlink
 def test_symlinked_output_and_config_are_refused(work, tmp_path):
     source, out = work
     build_source(source)
     real_out = tmp_path / "real_out"
     real_out.mkdir()
-    try:
-        os.symlink(real_out, out, target_is_directory=True)
-    except (OSError, NotImplementedError):
-        pytest.skip("symlinks need privileges on this host")
+    os.symlink(real_out, out, target_is_directory=True)
     with pytest.raises(ValueError, match="symlink"):
         import_nf4_checkpoint(source, out)
     assert os.listdir(real_out) == []
