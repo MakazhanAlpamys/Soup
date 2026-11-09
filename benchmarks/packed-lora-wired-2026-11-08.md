@@ -20,10 +20,10 @@ apart from the run (nvidia-smi read 0 MiB before each). The recipe is the harnes
 512, LoRA r 16 / alpha 32 / dropout 0 on all seven projections, lr 2e-4 constant, `adamw_torch`,
 clipping 1.0, 4-bit NF4, `gradient_checkpointing: true`, seed 3407. `--batch B --accum A` reads the
 same B x A rows per optimizer step in the same order. Code: `soup_cli` of branch
-`feat/packed-lora-wiring` (local hashes, before the pull request): the runs of the tables below were
-made with `src/` as it is at `4142669bf`, except that the checks of `soup train` did not yet refuse
+#2650 on top of `3af840ce4` (main with #2623): the runs of the tables below were
+made with `src/` as it is in #2650, except that the checks of `soup train` did not yet refuse
 `--fsdp` / `--deepspeed` (they run before anything is loaded and touch no training code); the GPU
-tests in `gpu-test-runs.md` ran on `src/` as it is at that commit.
+tests in `gpu-test-runs.md` ran on `src/` as it is in #2650.
 
 ```
 python benchmarks/harness/packed_lora_compare.py --out plain  --model Qwen/Qwen2.5-1.5B-Instruct --data rows.jsonl --batch 2 --accum 4 --steps 105
