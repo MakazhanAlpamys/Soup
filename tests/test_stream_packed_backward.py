@@ -850,10 +850,16 @@ class TestTheSlotOwnerCheckStillFires:
 # --------------------------------------------------------------------------
 # the setup applies the decision, from YAML to the runtime (spied), on CPU
 # --------------------------------------------------------------------------
+_PROBE_YAML = "  stream_vram_probe: true\n"
+
+
 def _drive_with_decision(tmp_path, monkeypatch, *, packed, mode=None, extra_yaml=""):
     """The real ``_setup_streaming_transformers`` with the pre-flight's decision forced.
 
-    ``order`` records, in call order, the packed switch and the VRAM probe.
+    ``order`` is ONE list, in call order, of the packed switch, the recompute
+    switch or planner (``"switch"`` / ``"plan"``) and the VRAM probe (``"probe"``).
+    ``_drive`` keeps its own spies' calls in ``events``; the wrappers below add the
+    same calls to ``order`` too, so that the relative order is observable.
     """
     pytest.importorskip("torch")
     import soup_cli.utils.layer_stream_runtime as rt
@@ -868,9 +874,23 @@ def _drive_with_decision(tmp_path, monkeypatch, *, packed, mode=None, extra_yaml
         def probe(wrapper, model, plan):
             order.append("probe")
 
-        # `_drive` installs its own probe spy before the setup runs; this replaces
-        # it at the one moment that is still before the probe is called.
+        # `_drive` installs its own probe, switch and planner spies before the setup
+        # runs; these replace them at the one moment that is still before any of them
+        # is called, and delegate to them so that `events` is kept as well.
         monkeypatch.setattr(SFTTrainerWrapper, "_run_stream_vram_probe", probe)
+        drive_switch = rt.set_stream_recompute
+        drive_plan = rt.plan_stream_recompute_auto
+
+        def switch(*args, **kwargs):
+            order.append("switch")
+            return drive_switch(*args, **kwargs)
+
+        def plan_auto(*args, **kwargs):
+            order.append("plan")
+            return drive_plan(*args, **kwargs)
+
+        monkeypatch.setattr(rt, "set_stream_recompute", switch)
+        monkeypatch.setattr(rt, "plan_stream_recompute_auto", plan_auto)
         plan = (
             SimpleNamespace(rows=1, seq_len=_MAX_LENGTH)
             if "stream_vram_probe" in extra_yaml
@@ -904,21 +924,41 @@ class TestSetupWiring:
         assert "Packed-state NF4 backward: 3 streamed layers" in said
         assert "one matrix at a time" in said
 
-    def test_the_routing_is_done_before_the_probe_runs(self, tmp_path, monkeypatch):
-        """Defensive ordering: the real pre-flight never routes under the probe, but
-        whatever routes the model must do it before anything is measured."""
-        order, model, _events, _said = _drive_with_decision(
-            tmp_path, monkeypatch, packed=True, extra_yaml="  stream_vram_probe: true\n"
-        )
-        assert order == [("packed", model, True), "probe"]
-
-    @pytest.mark.parametrize("mode", ["off", "auto"])
-    def test_it_composes_with_the_recompute_modes(self, tmp_path, monkeypatch, mode):
+    @pytest.mark.parametrize("probe", [False, True])
+    @pytest.mark.parametrize("mode", [None, "off", "auto"])
+    def test_the_routing_comes_before_every_recompute_and_probe_call(
+        self, tmp_path, monkeypatch, mode, probe
+    ):
+        """``stream_recompute: auto`` runs a synthetic step and the probe measures a
+        real one: both have to see the arm that will train, so the routing is the
+        FIRST of the calls. (The real pre-flight never routes under the probe; the
+        order is pinned for whatever does.)"""
         order, model, events, _said = _drive_with_decision(
-            tmp_path, monkeypatch, packed=True, mode=mode
+            tmp_path,
+            monkeypatch,
+            packed=True,
+            mode=mode,
+            extra_yaml=_PROBE_YAML if probe else "",
         )
-        assert order == [("packed", model, True)]
-        assert [event[0] for event in events] == ["switch" if mode == "off" else "plan"]
+        expected = [("packed", model, True)]
+        if mode is not None:
+            expected.append("switch" if mode == "off" else "plan")
+        if probe:
+            expected.append("probe")
+        assert order == expected
+        # the spies of `_drive` were still reached through the wrappers
+        assert [event[0] for event in events] == (
+            [] if mode is None else ["switch" if mode == "off" else "plan"]
+        )
+
+    @pytest.mark.parametrize("mode", [None, "off", "auto"])
+    def test_a_dense_decision_leaves_the_recompute_modes_alone(
+        self, tmp_path, monkeypatch, mode
+    ):
+        order, _model, _events, _said = _drive_with_decision(
+            tmp_path, monkeypatch, packed=False, mode=mode
+        )
+        assert order == ([] if mode is None else ["switch" if mode == "off" else "plan"])
 
     def test_a_failing_switch_closes_the_runtime_and_refuses(self, tmp_path, monkeypatch):
         pytest.importorskip("torch")
@@ -967,3 +1007,202 @@ class TestDefaultsAreUntouched:
 
         Console(file=buffer, width=200).print("\n".join(lines))
         assert "packed" not in buffer.getvalue()
+
+
+# --------------------------------------------------------------------------
+# the scale cache, the trainers with a second forward, and who shares the setup
+# --------------------------------------------------------------------------
+class TestWithTheNF4ScaleCache:
+    """``training.stream_nf4_scale_cache`` hands the packed Function the cache's own
+    expanded, non-nested state: its absmax is a long-lived tensor, not a pool alias."""
+
+    @pytest.mark.parametrize("packed_first", [False, True])
+    def test_both_arms_agree_to_the_bit_with_the_cache_filled_by_either(
+        self, tmp_path, monkeypatch, packed_first
+    ):
+        import torch
+
+        import soup_cli.utils.layer_stream_runtime as rt
+        from soup_cli.utils.layer_stream_runtime import set_stream_packed_backward
+        from tests.test_stream_nf4_scale_cache import _nf4_stream as cache_stream
+        from tests.test_v07202 import _randomise_lora_b
+
+        model, runtime, _index = cache_stream(tmp_path, cache=True, n_layers=_N_LAYERS)
+        _randomise_lora_b(model)
+        nested = []
+        real = rt.packed_dequant_nf4_linear
+
+        def recording(x, packed, quant_state, bias=None):
+            nested.append(bool(quant_state.nested))
+            return real(x, packed, quant_state, bias)
+
+        monkeypatch.setattr(rt, "packed_dequant_nf4_linear", recording)
+        ids = _ids()
+
+        def run(packed):
+            set_stream_packed_backward(model, packed)
+            return _step(model, ids)
+
+        first = run(packed_first)
+        assert len(runtime.scale_cache) > 0, "vacuous: the scale cache was never filled"
+        second = run(not packed_first)
+        assert nested, "vacuous: the packed Function never ran"
+        assert set(nested) == {False}, "the cache must hand it the expanded, non-nested state"
+        dense, packed = (second, first) if packed_first else (first, second)
+        assert torch.equal(dense[0], packed[0])
+        for name in dense[1]:
+            assert torch.equal(dense[1][name], packed[1][name]), name
+
+
+class TestTrainersWithASecondForward:
+    """DPO-style trainers run another forward between the policy forward and its
+    backward (``_STREAM_REFILL_BEFORE_BACKWARD``); the checkpoint recompute has to
+    pin the slot again for the packed arm exactly as it does for the dense one."""
+
+    def test_a_no_grad_reference_forward_between_forward_and_backward(self, tmp_path):
+        import torch
+
+        from soup_cli.utils.layer_stream_runtime import set_stream_packed_backward
+
+        model, runtime = _stream(tmp_path)
+        ids = _ids()
+        _loss, single = _step(model, ids)  # the dense arm, one forward
+        set_stream_packed_backward(model, True)
+        model.zero_grad(set_to_none=True)
+        policy = model(input_ids=ids, labels=ids).loss
+        loads = runtime.pool.loads
+        with torch.no_grad():
+            model(input_ids=ids, labels=ids)  # refills every slot
+        assert runtime.pool.loads - loads >= _N_LAYERS, "the second forward recycled nothing"
+        policy.backward()
+        checked = 0
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                assert torch.equal(param.grad, single[name]), name
+                checked += 1
+        assert checked > 0, "vacuous: nothing is trainable"
+
+    @pytest.mark.parametrize("packed", [False, True])
+    def test_two_grad_enabled_forwards_before_a_backward_are_refused_on_either_arm(
+        self, tmp_path, packed
+    ):
+        """Not a flow any streamed trainer has (``stream_recompute`` off/auto are
+        SFT-only for the same reason): the scheduler walks the layers forward and
+        then back, so a second grad-enabled forward before the backward is refused
+        outright. The packed arm neither adds nor removes that limit."""
+        from soup_cli.utils.layer_stream_runtime import set_stream_packed_backward
+
+        model, _runtime = _stream(tmp_path)
+        ids = _ids()
+        set_stream_packed_backward(model, packed)
+        model.zero_grad(set_to_none=True)
+        with pytest.raises(RuntimeError, match="layer-stream scheduler bug"):
+            first = model(input_ids=ids, labels=ids).loss
+            second = model(input_ids=ids, labels=ids).loss
+            (first + second).backward()
+
+    @pytest.mark.parametrize(
+        "module,name",
+        [
+            ("soup_cli.trainer.sft", "SFTTrainerWrapper"),
+            ("soup_cli.trainer.dpo", "DPOTrainerWrapper"),
+            ("soup_cli.trainer.kto", "KTOTrainerWrapper"),
+            ("soup_cli.trainer.orpo", "ORPOTrainerWrapper"),
+            ("soup_cli.trainer.simpo", "SimPOTrainerWrapper"),
+        ],
+    )
+    def test_every_streamed_trainer_shares_the_preflight_and_the_routing(self, module, name):
+        """The packed arm is not SFT-only: it lives in the mixin all five streamed
+        trainers inherit unchanged (only ``stream_vram_probe`` is SFT-only)."""
+        import importlib
+
+        from soup_cli.trainer.stream_setup import StreamingSetupMixin
+
+        cls = getattr(importlib.import_module(module), name)
+        for attribute in (
+            "_stream_budget_lines",
+            "_setup_streaming_transformers",
+            "_configure_stream_recompute",
+        ):
+            assert getattr(cls, attribute) is getattr(StreamingSetupMixin, attribute), (
+                name,
+                attribute,
+            )
+
+
+def _probe_wrapper(monkeypatch, peak):
+    from soup_cli.trainer import stream_setup
+
+    monkeypatch.setattr(
+        "soup_cli.utils.layer_stream_runtime.measure_step_peak_bytes", lambda *a, **k: peak
+    )
+
+    class _Wrapper(stream_setup.StreamingSetupMixin):
+        device = "cuda"
+
+        def __init__(self):
+            self.closed = 0
+            self._stream_runtime = None
+
+        def _close_stream_runtime(self):
+            self.closed += 1
+
+    return _Wrapper()
+
+
+class TestTheProbeRefusalsPointAtThePackedArm:
+    """With the probe on the dense arm is what gets measured; a refusal there says
+    what the formula path (probe off) would have tried."""
+
+    _HINT = "without training.stream_vram_probe the pre-flight prices the packed-state one"
+
+    def _refusal(self, monkeypatch, case, possible):
+        from soup_cli.trainer.stream_setup import _ProbePlan
+        from soup_cli.utils.layer_stream_runtime import StepPeak
+
+        def peak(alloc, oom=False):
+            return StepPeak(
+                peak_bytes=alloc, reserved_bytes=alloc, seconds=1.0, rows=1, seq_len=4096, oom=oom
+            )
+
+        gb = 10**9
+        predicted, peak_value = {
+            "oom": (3 * gb, peak(0, oom=True)),
+            "miss": (int(3.844 * gb), peak(int(4.633 * gb))),
+            "fallback": (5 * gb, None),
+        }[case]
+        wrapper = _probe_wrapper(monkeypatch, peak_value)
+        plan = _ProbePlan(
+            rows=1,
+            seq_len=4096,
+            vocab_size=32,
+            predicted_bytes=predicted,
+            available_bytes=4 * gb,
+            packed_backward_possible=possible,
+        )
+        with pytest.raises(ValueError) as caught:
+            wrapper._run_stream_vram_probe(object(), plan)
+        assert wrapper.closed == 1
+        return _plain(str(caught.value))
+
+    @pytest.mark.parametrize("case", ["oom", "miss", "fallback"])
+    def test_a_base_with_something_to_save_gets_the_pointer(self, monkeypatch, case):
+        message = self._refusal(monkeypatch, case, possible=True)
+        assert self._HINT in message
+        assert "The probe measured the dense-retaining NF4 backward" in message
+
+    @pytest.mark.parametrize("case", ["oom", "miss", "fallback"])
+    def test_a_base_without_gets_the_message_it_always_got(self, monkeypatch, case):
+        message = self._refusal(monkeypatch, case, possible=False)
+        assert "packed" not in message
+        assert "probe measured" not in message
+
+    def test_the_plan_knows_whether_there_is_anything_to_save(self, monkeypatch):
+        _mixin, _lines, plan, _seen = _ml_budget(
+            monkeypatch, seq=512, free=_HARNESS_CAP, probe=True
+        )
+        assert plan.packed_backward_possible is True
+        _mixin, _lines, plan, _seen = _ml_budget(
+            monkeypatch, seq=512, free=10**12, probe=True, nf4=False
+        )
+        assert plan.packed_backward_possible is False

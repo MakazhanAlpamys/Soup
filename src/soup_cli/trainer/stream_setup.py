@@ -353,6 +353,21 @@ class _ProbePlan:
     vocab_size: int
     predicted_bytes: int
     available_bytes: int
+    #: The base has NF4 weight a packed-state backward could save (two or more
+    #: matrices per layer). The probe measures the dense-retaining arm either way;
+    #: this only lets a refusal point at the arm the formula path would try.
+    packed_backward_possible: bool = False
+
+    @property
+    def packed_arm_hint(self) -> str:
+        if not self.packed_backward_possible:
+            return ""
+        return (
+            " The probe measured the dense-retaining NF4 backward (each layer's dense "
+            "weights held through its backward); without training.stream_vram_probe the "
+            "pre-flight prices the packed-state one, one dense matrix at a time, before "
+            "it refuses."
+        )
 
 
 def _existing_disk_anchor(path: str) -> str:
@@ -1571,8 +1586,8 @@ class StreamingSetupMixin:
             console.print(
                 f"[cyan]Packed-state NF4 backward:[/] {routed} streamed layers dequantise "
                 "one matrix at a time in the backward instead of holding the layer's dense "
-                "weights (the pre-flight above predicted the dense-retaining arm over the "
-                "free VRAM); one more dequantisation per matrix per step, same results."
+                "weights (the pre-flight above predicted holding them over the "
+                "free VRAM); one more dequantisation per matrix per micro-step, same results."
             )
         # training.stream_recompute -- before the probe, so that the probe
         # measures the mode that will train. The default ('on') adds nothing to
@@ -2052,13 +2067,14 @@ class StreamingSetupMixin:
                 dense_gb = decision.dense_predicted_bytes / 1e9
                 lines.insert(
                     1,
-                    "  backward     packed NF4 state, one matrix dequantised at a time: the "
-                    f"dense-retaining arm is predicted at ~{dense_gb:.2f} GB against "
-                    f"{available / 1e9:.2f} GB free",
+                    "  backward     packed NF4 state, one matrix dequantised at a time: "
+                    "holding each layer's dense weights through its backward is predicted at "
+                    f"~{dense_gb:.2f} GB against {available / 1e9:.2f} GB free",
                 )
                 packed_note = (
-                    " This already assumes the packed-state NF4 backward (the "
-                    f"dense-retaining arm was predicted at {dense_gb:.2f} GB)."
+                    " This already assumes the packed-state NF4 backward (holding each "
+                    f"layer's dense weights through its backward was predicted at "
+                    f"{dense_gb:.2f} GB)."
                 )
         if not fit.fits:
             reason = fit.reason + packed_note
@@ -2131,6 +2147,7 @@ class StreamingSetupMixin:
                 vocab_size=vocab,
                 predicted_bytes=predicted,
                 available_bytes=available,
+                packed_backward_possible=max(matrix_elements, default=0) < sum(matrix_elements),
             )
         return tuple(lines), plan
 
@@ -2178,7 +2195,7 @@ class StreamingSetupMixin:
                     f"{plan.available_bytes / 1e9:.2f} GB is free, and the "
                     f"measured probe that could have overruled that prediction "
                     f"failed to run. Lower training.batch_size or "
-                    f"data.max_length."
+                    f"data.max_length.{plan.packed_arm_hint}"
                 )
             return
         if peak.failed:
@@ -2202,7 +2219,7 @@ class StreamingSetupMixin:
                 f"out of VRAM while being measured (predicted "
                 f"{plan.predicted_bytes / 1e9:.2f} GB, "
                 f"{plan.available_bytes / 1e9:.2f} GB free). Lower "
-                f"training.batch_size or data.max_length."
+                f"training.batch_size or data.max_length.{plan.packed_arm_hint}"
             )
         fit = decide_measured_fit(
             measured_bytes=peak.peak_bytes,
@@ -2217,4 +2234,4 @@ class StreamingSetupMixin:
         )
         if not fit.fits:
             self._close_stream_runtime()
-            raise ValueError(fit.reason)
+            raise ValueError(fit.reason + plan.packed_arm_hint)

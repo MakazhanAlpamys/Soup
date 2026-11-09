@@ -924,11 +924,14 @@ When that prediction does not fit the free VRAM, the pre-flight tries the packed
 before it refuses (no config key): the layer's NF4 linears then save only their packed bytes and
 quantisation tensors and dequantise one matrix at a time in the backward, so the recompute phase
 charges the layer's largest matrix instead of all of it (Mistral Large 123B: 704,643,072 bytes
-instead of 2.77 GB per layer, 4.92 GB instead of 6.98 GB predicted at 512 tokens). It costs one
-more dequantisation per matrix per step and runs the same arithmetic (losses, gradients and an
+instead of 2.77 GB per layer, 4.92 GB instead of 6.98 GB predicted at 512 tokens; formula
+figures, not yet measured on a card). It costs one more dequantisation per matrix per micro-step
+and runs the same arithmetic (losses, gradients and an
 AdamW update are bit-equal to the dense arm in the CPU tests); the panel says when it was chosen.
 A run whose dense-retaining arm fits keeps it, unchanged, and so does one with `stream_vram_probe`
-on: the measurement stays the authority there and the dense arm is left to it.
+on: the measurement stays the authority there and the dense arm is left to it (a probe refusal
+then points at this arm). The choice is made by the pre-flight every streamed trainer shares (SFT,
+DPO, KTO, ORPO and SimPO), not by SFT alone; only `stream_vram_probe` is SFT-only.
 
 **Refused.** At config load, as listed under "Rejected at config load" below: without
 `stream_layers`, for a task other than `sft`, with `data.format: raft`, and beside

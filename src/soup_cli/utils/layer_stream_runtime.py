@@ -455,8 +455,9 @@ def _packed_dequant_nf4_function():
 
 
 def packed_dequant_nf4_linear(x: Any, packed: Any, quant_state: Any, bias: Any = None) -> Any:
-    """Dense-dequant NF4 linear that saves only packed state for its backward
-    (training.stream_recompute 'off' / 'auto')."""
+    """Dense-dequant NF4 linear that saves only packed state for its backward: a layer
+    without checkpoint recompute (training.stream_recompute 'off' / 'auto'), or a
+    checkpointed one the VRAM pre-flight routed here (set_stream_packed_backward)."""
     empty = packed.new_empty((0,))
     state2_absmax = empty
     state2_code = empty
