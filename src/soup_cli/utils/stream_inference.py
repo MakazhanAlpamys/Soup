@@ -350,7 +350,11 @@ def _read_adapter_config(directory: str) -> Dict[str, Any]:
         with open(path, encoding="utf-8") as handle:
             payload = json.load(handle)
     except (OSError, UnicodeDecodeError, ValueError, RecursionError) as exc:
-        raise ValueError(f"{_ADAPTER_CONFIG} is not valid JSON: {exc}") from exc
+        from soup_cli.utils.terminal import for_terminal
+
+        raise ValueError(
+            f"{_ADAPTER_CONFIG} is not valid JSON: {for_terminal(str(exc))}"
+        ) from exc
     if not isinstance(payload, dict):
         raise ValueError(f"{_ADAPTER_CONFIG} must hold a JSON object")
     return payload
@@ -375,6 +379,134 @@ def _check_adapter_kind(config: Dict[str, Any]) -> None:
             )
 
 
+#: ``LoraConfig``'s own defaults for the two numbers a config may leave out.
+_PEFT_DEFAULT_RANK = 8
+_PEFT_DEFAULT_ALPHA = 8
+
+
+def _shown(value: Any) -> str:
+    """A value from the file, quoted, cut short and made safe for a terminal."""
+    from soup_cli.utils.terminal import for_terminal
+
+    return for_terminal(repr(value)[:80])
+
+
+def _check_module_names(field: str, value: Any, *, required: bool) -> None:
+    """``target_modules`` / ``exclude_modules``: peft reads a string as a regex, a list as names."""
+    from soup_cli.config import schema
+    from soup_cli.utils.safe_regex import check_config_regex
+    from soup_cli.utils.terminal import for_terminal
+
+    max_chars = schema._MAX_LORA_PATTERN_KEY_LEN
+    max_names = schema._MAX_LORA_RANK_PATTERN_KEYS
+    if value is None or value == "" or value == []:
+        if required:
+            raise ValueError(f"{_ADAPTER_CONFIG} {field} names no module to adapt")
+        return
+    if isinstance(value, str):
+        if len(value) > max_chars:
+            raise ValueError(
+                f"{_ADAPTER_CONFIG} {field} is {len(value)} characters, over the "
+                f"{max_chars}-character cap"
+            )
+        try:
+            re.compile(value)
+            check_config_regex(value, field)
+        except (re.error, ValueError) as exc:
+            raise ValueError(
+                f"{_ADAPTER_CONFIG} {field} is not a usable pattern: {for_terminal(str(exc))}"
+            ) from None
+        return
+    if not isinstance(value, list) or not all(isinstance(name, str) and name for name in value):
+        raise ValueError(
+            f"{_ADAPTER_CONFIG} {field} must be a string or a list of non-empty strings, "
+            f"got {_shown(value)}"
+        )
+    if len(value) > max_names:
+        raise ValueError(
+            f"{_ADAPTER_CONFIG} {field} lists {len(value)} names, over the {max_names} cap"
+        )
+    if any(len(name) > max_chars for name in value):
+        raise ValueError(
+            f"{_ADAPTER_CONFIG} {field} has a name over the {max_chars}-character cap"
+        )
+
+
+def _check_adapter_limits(config: Dict[str, Any]) -> None:
+    """Bound every config value peft acts on, before anything is built or allocated.
+
+    peft allocates an adapter from ``r`` / ``rank_pattern`` the moment the model is wrapped, and
+    matches ``rank_pattern`` keys and a string ``target_modules`` as regular expressions, so
+    these come from a file nobody vouches for and get the training schema's own caps
+    (``config/schema.py``: ranks to 1024, 256 keys of up to 512 characters, and the same
+    ``check_config_regex`` complexity test).
+    """
+    import math
+
+    from pydantic import ValidationError
+
+    from soup_cli.config import schema
+    from soup_cli.utils.terminal import for_terminal
+
+    max_rank = schema._MAX_LORA_RANK_PATTERN_VALUE
+    rank = config.get("r", _PEFT_DEFAULT_RANK)
+    if isinstance(rank, bool) or not isinstance(rank, int) or not 1 <= rank <= max_rank:
+        raise ValueError(
+            f"{_ADAPTER_CONFIG} r must be an integer from 1 to {max_rank}, got {_shown(rank)}"
+        )
+    alpha = config.get("lora_alpha", _PEFT_DEFAULT_ALPHA)
+    if (
+        isinstance(alpha, bool)
+        or not isinstance(alpha, (int, float))
+        or not math.isfinite(alpha)
+        or alpha <= 0
+    ):
+        raise ValueError(
+            f"{_ADAPTER_CONFIG} lora_alpha must be a positive finite number, got {_shown(alpha)}"
+        )
+    try:
+        schema.LoraConfig(
+            rank_pattern=config.get("rank_pattern"), alpha_pattern=config.get("alpha_pattern")
+        )
+    except ValidationError as exc:
+        detail = "; ".join(str(error["msg"]) for error in exc.errors())
+        raise ValueError(
+            f"{_ADAPTER_CONFIG} has an unusable rank_pattern or alpha_pattern: "
+            f"{for_terminal(detail[:300])}"
+        ) from None
+    _check_module_names("target_modules", config.get("target_modules"), required=True)
+    _check_module_names("exclude_modules", config.get("exclude_modules"), required=False)
+
+
+def _check_adapter_ranks(
+    config: Dict[str, Any], header: Dict[str, Tuple[Tuple[int, ...], str]]
+) -> None:
+    """Every LoRA A tensor in the file must have a rank the config can have produced.
+
+    A module's rank is ``r`` or, when a ``rank_pattern`` key matches it, that key's value. The
+    file's header holds the real ranks, so a config and a weights file that are not from the
+    same adapter are refused here, with nothing built (``r`` itself may go unused when the
+    patterns cover every module, so it is not required to appear in the file).
+    """
+    from soup_cli.utils.terminal import for_terminal
+
+    ranks = {
+        key: shape[0]
+        for key, (shape, _dtype) in header.items()
+        if (".lora_A." in key or ".lora_embedding_A" in key) and shape
+    }
+    if not ranks:
+        raise ValueError(f"{_ADAPTER_WEIGHTS} holds no LoRA A tensor, so it is not a LoRA adapter")
+    allowed = {config.get("r", _PEFT_DEFAULT_RANK), *(config.get("rank_pattern") or {}).values()}
+    for key in sorted(ranks):
+        if ranks[key] not in allowed:
+            raise ValueError(
+                f"adapter tensor {for_terminal(key)} has rank {ranks[key]}, but "
+                f"{_ADAPTER_CONFIG} allows only rank {sorted(allowed)}: the weights and the "
+                "config are not from the same adapter"
+            )
+
+
 def _same_base(recorded: str, model_id: str) -> bool:
     """Whether the adapter's recorded base is the base being streamed.
 
@@ -382,8 +514,19 @@ def _same_base(recorded: str, model_id: str) -> bool:
     the final path segments are compared, so a Hub id and a local copy of that model
     (``org/Model`` and ``D:/models/Model``) match. The weights themselves are checked later,
     by shape, so this is the cheap early check and not the safety net.
+
+    ``recorded`` comes out of ``adapter_config.json``, so it is never handed to the filesystem
+    when it names a network share or a device (a UNC path, a device-namespace prefix, ``NUL``):
+    on Windows a stat of such a path opens a connection to the host. It is then compared as
+    text only, like a Hub id.
     """
-    if os.path.isdir(recorded) and os.path.isdir(model_id):
+    from soup_cli.utils.paths import is_network_or_device_path
+
+    if (
+        os.path.isdir(model_id)
+        and not is_network_or_device_path(recorded)
+        and os.path.isdir(recorded)
+    ):
         return os.path.samefile(recorded, model_id)
 
     def last_segment(text: str) -> str:
@@ -415,10 +558,14 @@ def _check_adapter_base(config: Dict[str, Any], model_id: str, allow_mismatch: b
 def _lora_config_of(directory: str) -> Any:
     from peft import LoraConfig
 
+    from soup_cli.utils.terminal import for_terminal
+
     try:
         return LoraConfig.from_pretrained(directory)
     except Exception as exc:  # peft raises TypeError / ValueError / OSError for a bad config
-        raise ValueError(f"{_ADAPTER_CONFIG} cannot be read as a LoRA config: {exc}") from exc
+        raise ValueError(
+            f"{_ADAPTER_CONFIG} cannot be read as a LoRA config: {for_terminal(str(exc))}"
+        ) from exc
 
 
 def _read_adapter_header(path: str) -> Dict[str, Tuple[Tuple[int, ...], str]]:
@@ -434,7 +581,9 @@ def _read_adapter_header(path: str) -> Dict[str, Tuple[Tuple[int, ...], str]]:
                 piece = handle.get_slice(key)
                 header[key] = (tuple(piece.get_shape()), str(piece.get_dtype()))
     except Exception as exc:  # safetensors raises its own SafetensorError for a bad file
-        raise ValueError(f"{_ADAPTER_WEIGHTS} cannot be read as safetensors: {exc}") from exc
+        raise ValueError(
+            f"{_ADAPTER_WEIGHTS} cannot be read as safetensors: {for_terminal(str(exc))}"
+        ) from exc
     for key, (_shape, dtype) in header.items():
         if not dtype.startswith(("F", "BF")):
             raise ValueError(
@@ -449,6 +598,7 @@ def _prepare_adapter(adapter: Any, model_id: str, allow_base_mismatch: bool) -> 
     directory = _resolve_adapter_dir(adapter)
     config = _read_adapter_config(directory)
     _check_adapter_kind(config)
+    _check_adapter_limits(config)
     _check_adapter_base(config, model_id, allow_base_mismatch)
     weights_path = os.path.join(directory, _ADAPTER_WEIGHTS)
     try:
@@ -461,6 +611,7 @@ def _prepare_adapter(adapter: Any, model_id: str, allow_base_mismatch: bool) -> 
             ) from None
         raise
     header = _read_adapter_header(weights_path)
+    _check_adapter_ranks(config, header)
     lora_config = _lora_config_of(directory)
     # The recorded name was checked above. Left in place, PEFT would warn that it renames it to
     # the streamed base's name; cleared, PEFT records the streamed base there, as in training.

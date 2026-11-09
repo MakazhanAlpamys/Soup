@@ -38,12 +38,25 @@ pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 VOCAB = 64
 TARGETS = ("q_proj", "v_proj")
 
-#: name -> (arch, tied embeddings, LoRA targets)
+#: Rank-stabilised scaling with per-module ranks and alphas, as soup.yaml's lora.use_rslora,
+#: lora.rank_pattern and lora.alpha_pattern write them into adapter_config.json.
+_RSLORA_ALL = dict(
+    use_rslora=True,
+    rank_pattern={"q_proj": 8, "v_proj": 2},
+    alpha_pattern={"q_proj": 16, "v_proj": 4},
+)
+_RSLORA_PART = dict(use_rslora=True, rank_pattern={"q_proj": 8}, alpha_pattern={"q_proj": 16})
+
+#: name -> (arch, tied embeddings, LoRA targets, extra LoraConfig arguments). r=4, alpha=8 are
+#: the base; "rslora-patterns" matches every module by a pattern, so its r goes unused (the
+#: file holds ranks 8 and 2 only), and "rslora-partial" mixes a pattern rank with r (8 and 4).
 VARIANTS = {
-    "llama-tied": ("llama", True, TARGETS),
-    "llama-untied": ("llama", False, TARGETS),
-    "llama-head": ("llama", False, TARGETS + ("lm_head",)),
-    "mistral-tied": ("mistral", True, TARGETS),
+    "llama-tied": ("llama", True, TARGETS, {}),
+    "llama-untied": ("llama", False, TARGETS, {}),
+    "llama-head": ("llama", False, TARGETS + ("lm_head",), {}),
+    "mistral-tied": ("mistral", True, TARGETS, {}),
+    "llama-rslora-patterns": ("llama", True, TARGETS, _RSLORA_ALL),
+    "llama-rslora-partial": ("llama", False, TARGETS, _RSLORA_PART),
 }
 
 Run = namedtuple("Run", "root weights shards index adapter ids mask trained_logits trained_masked")
@@ -90,7 +103,7 @@ def _ids(batch=2, seq=10, seed=5):
     return torch.randint(0, VOCAB, (batch, seq), generator=generator)
 
 
-def _train_and_save(root, *, arch, tie, targets, steps=2):
+def _train_and_save(root, *, arch, tie, targets, extra=None, steps=2):
     """Two real optimizer steps on a streamed LoRA model, then save_pretrained + eval logits."""
     from peft import LoraConfig, TaskType
 
@@ -102,7 +115,7 @@ def _train_and_save(root, *, arch, tie, targets, steps=2):
     weights, shards, index = _make_checkpoint(root, arch=arch, tie=tie)
     lora = LoraConfig(
         r=4, lora_alpha=8, lora_dropout=0.0, bias="none", target_modules=list(targets),
-        task_type=TaskType.CAUSAL_LM,
+        task_type=TaskType.CAUSAL_LM, **(extra or {}),
     )
     model, runtime = build_streamed_model(
         model_id=weights, shard_dir=shards, index=index, lora_config=lora, device="cpu",
@@ -135,9 +148,9 @@ def _train_and_save(root, *, arch, tie, targets, steps=2):
 def runs(tmp_path_factory):
     def get(name):
         if name not in _RUNS:
-            arch, tie, targets = VARIANTS[name]
+            arch, tie, targets, extra = VARIANTS[name]
             root = tmp_path_factory.mktemp(name)
-            _RUNS[name] = _train_and_save(root, arch=arch, tie=tie, targets=targets)
+            _RUNS[name] = _train_and_save(root, arch=arch, tie=tie, targets=targets, extra=extra)
         return _RUNS[name]
 
     return get
@@ -267,6 +280,39 @@ class TestRoundTrip:
             )
             for key, value in stored.items():
                 assert torch.equal(live[key].detach().cpu(), value), key
+
+    @pytest.mark.parametrize(
+        "variant,ranks",
+        [("llama-rslora-patterns", {8, 2}), ("llama-rslora-partial", {8, 4})],
+    )
+    def test_the_rslora_variants_carry_what_they_claim(self, runs, variant, ranks):
+        from safetensors import safe_open
+
+        trained = runs(variant)
+        text = (trained.adapter / "adapter_config.json").read_text(encoding="utf-8")
+        config = json.loads(text)
+        assert config["use_rslora"] is True
+        assert config["rank_pattern"] and config["alpha_pattern"]
+        with safe_open(
+            str(trained.adapter / "adapter_model.safetensors"), framework="pt"
+        ) as handle:
+            found = {
+                handle.get_slice(key).get_shape()[0] for key in handle.keys() if ".lora_A." in key
+            }
+        assert found == ranks
+
+    @pytest.mark.parametrize("field,value", [("use_rslora", False), ("alpha_pattern", {})])
+    def test_the_scaling_comes_from_the_config_so_the_equality_is_sensitive_to_it(
+        self, runs, tmp_path, monkeypatch, field, value
+    ):
+        """If the loader ignored rslora or the alpha pattern, the bit-for-bit tests above would
+        fail; this shows they can: change either in the file and the logits move."""
+        trained = runs("llama-rslora-patterns")
+        shutil.copytree(trained.adapter, tmp_path / "adapter")
+        monkeypatch.chdir(tmp_path)
+        _edit_config(tmp_path / "adapter", **{field: value})
+        with _open(trained) as handle:
+            assert not torch.equal(handle.logits(trained.ids), trained.trained_logits)
 
 
 # ==========================================================================
@@ -482,12 +528,119 @@ class TestAdapterConfig:
             ("bias", "none"),
             ("init_lora_weights", True),
             ("init_lora_weights", "gaussian"),
+            ("exclude_modules", None),
+            ("exclude_modules", []),
         ],
     )
     def test_the_same_fields_switched_off_are_accepted(self, run, work, field, value):
         _edit_config(work / "adapter", **{field: value})
         with _open(run) as handle:
             assert torch.equal(handle.logits(run.ids), run.trained_logits)
+
+    def test_a_target_modules_regex_is_accepted(self, run, work):
+        _edit_config(work / "adapter", target_modules=r".*\.(q_proj|v_proj)")
+        with _open(run) as handle:
+            assert torch.equal(handle.logits(run.ids), run.trained_logits)
+
+
+class TestConfigValuesAreBoundedBeforeTheBuild:
+    """``r`` and the patterns reach peft, which allocates an adapter from them the moment the
+    model is wrapped, and matches the pattern keys as regular expressions. They come from a file
+    nobody vouches for, so every refusal here happens with ``no_build``: nothing is allocated."""
+
+    @pytest.mark.parametrize("value", [10**9, 1025, 0, -1, "8", True, 2.5, None])
+    def test_the_rank_must_be_a_small_positive_integer(self, run, work, no_build, value):
+        _edit_config(work / "adapter", r=value)
+        with pytest.raises(ValueError, match="adapter_config.json r must be an integer from 1 to"):
+            _open(run)
+
+    def test_a_rank_at_the_cap_is_not_refused_by_the_cap(self, run, work, no_build):
+        """1024 passes the bound; the file's rank-4 tensors then refuse it as not its config."""
+        _edit_config(work / "adapter", r=1024)
+        with pytest.raises(ValueError, match=r"has rank 4, but adapter_config.json allows only"):
+            _open(run)
+
+    @pytest.mark.parametrize("value", ["x", True, 0, -3, float("nan"), float("inf"), None])
+    def test_alpha_must_be_a_positive_finite_number(self, run, work, no_build, value):
+        _edit_config(work / "adapter", lora_alpha=value)
+        with pytest.raises(ValueError, match="lora_alpha must be a positive finite number"):
+            _open(run)
+
+    @pytest.mark.parametrize(
+        "field,value,words",
+        [
+            ("rank_pattern", {"x" * 600: 4}, "512-character cap"),
+            ("rank_pattern", {"(": 4}, "invalid regex"),
+            ("rank_pattern", {"(x+)+y": 4}, "too complex"),
+            ("rank_pattern", {f"m{i}": 4 for i in range(300)}, "caps at 256 keys"),
+            ("rank_pattern", {"q_proj": 10**9}, r"must be in \(0, 1024\]"),
+            ("rank_pattern", {"q_proj": True}, "must be int"),
+            ("alpha_pattern", {"q_proj": "8"}, "must be int"),
+            ("alpha_pattern", {"(x+)+y": 8}, "too complex"),
+            ("alpha_pattern", ["q_proj"], "must be a dict"),
+        ],
+    )
+    def test_the_patterns_get_the_training_schemas_caps(
+        self, run, work, no_build, field, value, words
+    ):
+        _edit_config(work / "adapter", **{field: value})
+        with pytest.raises(
+            ValueError, match=f"unusable rank_pattern or alpha_pattern: .*{words}"
+        ):
+            _open(run)
+
+    @pytest.mark.parametrize(
+        "field,value,words",
+        [
+            ("target_modules", None, "target_modules names no module"),
+            ("target_modules", [], "target_modules names no module"),
+            ("target_modules", "", "target_modules names no module"),
+            ("target_modules", "x" * 600, "is 600 characters"),
+            ("target_modules", "(x+)+y", "target_modules is not a usable pattern"),
+            ("target_modules", "(", "target_modules is not a usable pattern"),
+            ("target_modules", ["q_proj"] * 300, "lists 300 names"),
+            ("target_modules", [1, 2], "must be a string or a list of non-empty strings"),
+            ("target_modules", {"a": 1}, "must be a string or a list of non-empty strings"),
+            ("target_modules", ["x" * 600], "name over the 512-character cap"),
+            ("exclude_modules", "(x+)+y", "exclude_modules is not a usable pattern"),
+            ("exclude_modules", ["a"] * 300, "exclude_modules lists 300 names"),
+        ],
+    )
+    def test_the_module_names_are_bounded(self, run, work, no_build, field, value, words):
+        _edit_config(work / "adapter", **{field: value})
+        with pytest.raises(ValueError, match=words):
+            _open(run)
+
+    def test_a_config_rank_the_weights_do_not_hold_is_refused(self, run, work, no_build):
+        _edit_config(work / "adapter", r=16)
+        with pytest.raises(ValueError) as caught:
+            _open(run)
+        message = str(caught.value)
+        assert "has rank 4, but adapter_config.json allows only rank [16]" in message
+        assert "not from the same adapter" in message
+
+    def test_a_rank_pattern_does_not_excuse_a_rank_the_file_lacks(self, run, work, no_build):
+        _edit_config(work / "adapter", r=8, rank_pattern={"q_proj": 16})
+        with pytest.raises(ValueError, match=r"has rank 4, .*allows only rank \[8, 16\]"):
+            _open(run)
+
+    def test_a_file_with_no_lora_a_tensor_is_not_an_adapter(self, run, work, no_build):
+        def drop_a(state):
+            for key in [k for k in state if "lora_A" in k]:
+                del state[key]
+
+        _edit_weights(work / "adapter", drop_a)
+        with pytest.raises(ValueError, match="holds no LoRA A tensor"):
+            _open(run)
+
+    def test_an_embedding_a_tensor_counts_as_a_lora_a_tensor(self):
+        from soup_cli.utils.stream_inference import _check_adapter_ranks
+
+        header = {"base_model.model.model.embed_tokens.lora_embedding_A": ((16, 64), "F32")}
+        with pytest.raises(ValueError, match="has rank 16"):
+            _check_adapter_ranks({"r": 4}, header)
+        _check_adapter_ranks({"r": 16}, header)
+        _check_adapter_ranks({"r": 4, "rank_pattern": {"embed_tokens": 16}}, header)
 
 
 class TestAdapterBase:
@@ -537,6 +690,75 @@ class TestAdapterBase:
         _edit_config(work / "adapter", base_model_name_or_path=["a", "b"])
         with pytest.raises(ValueError, match="base_model_name_or_path must be text"):
             _open(run)
+
+    @staticmethod
+    def _fail_if_stat(monkeypatch, forbidden):
+        """``os.path.isdir`` / ``samefile`` fail the test if ever handed ``forbidden``."""
+        real_isdir, real_samefile = os.path.isdir, os.path.samefile
+
+        def isdir(path):
+            assert os.fspath(path) != forbidden, f"isdir({forbidden!r}) reached the filesystem"
+            return real_isdir(path)
+
+        def samefile(first, second):
+            assert forbidden not in (os.fspath(first), os.fspath(second)), (
+                f"samefile({forbidden!r}) reached the filesystem"
+            )
+            return real_samefile(first, second)
+
+        monkeypatch.setattr(os.path, "isdir", isdir)
+        monkeypatch.setattr(os.path, "samefile", samefile)
+
+    @pytest.mark.parametrize(
+        "recorded",
+        [
+            r"\\host\share\other",
+            "//host/share/other",
+            r"\\?\C:\other",
+            r"\\.\pipe\other",
+            pytest.param(
+                "NUL",
+                marks=pytest.mark.skipif(
+                    os.name != "nt", reason="DOS device names are a Windows notion"
+                ),
+            ),
+        ],
+    )
+    def test_a_network_or_device_base_is_refused_without_touching_the_filesystem(
+        self, run, work, no_build, monkeypatch, recorded
+    ):
+        """On Windows a stat of a UNC path opens a connection to the host, and the path comes
+        out of the adapter file."""
+        _edit_config(work / "adapter", base_model_name_or_path=recorded)
+        self._fail_if_stat(monkeypatch, recorded)
+        with pytest.raises(ValueError, match="was trained on base"):
+            _open(run)
+
+    def test_a_network_named_base_is_compared_as_text_and_never_stat_ed(
+        self, run, work, monkeypatch
+    ):
+        recorded = "\\\\host\\share\\" + Path(run.weights).name
+        _edit_config(work / "adapter", base_model_name_or_path=recorded)
+        self._fail_if_stat(monkeypatch, recorded)
+        with _open(run) as handle:
+            assert torch.equal(handle.logits(run.ids), run.trained_logits)
+
+    def test_the_streamed_base_is_looked_at_before_the_recorded_path(self, tmp_path, monkeypatch):
+        """A Hub id as ``model_id`` is not a directory, so the recorded path is never stat-ed."""
+        from soup_cli.utils.stream_inference import _same_base
+
+        local = tmp_path / "local"
+        local.mkdir()
+        seen = []
+        real_isdir = os.path.isdir
+
+        def isdir(path):
+            seen.append(os.fspath(path))
+            return real_isdir(path)
+
+        monkeypatch.setattr(os.path, "isdir", isdir)
+        assert _same_base(str(local), "org/not-a-directory") is False
+        assert seen == ["org/not-a-directory"]
 
 
 class TestAdapterWeightsFile:
@@ -669,6 +891,47 @@ class TestAdapterAgainstTheBase:
             assert not any(
                 p.dtype != torch.float32 for n, p in handle.model.named_parameters() if "lora_" in n
             )
+
+
+class TestRefusalTextIsTerminalSafe:
+    """peft, json and safetensors quote the file in their messages: no control byte and no live
+    Rich tag may reach the terminal through a refusal (``utils/terminal.for_terminal``)."""
+
+    BAD = "boom \x1b[31m [red]tag[/red]"
+
+    def _assert_safe(self, message):
+        assert "boom" in message
+        assert "\x1b" not in message
+        assert "\\[red]" in message, message
+
+    @staticmethod
+    def _raise(exc_type):
+        def boom(*_args, **_kwargs):
+            raise exc_type(TestRefusalTextIsTerminalSafe.BAD)
+
+        return boom
+
+    def test_a_json_error_is_cleaned(self, run, work, no_build, monkeypatch):
+        monkeypatch.setattr(json, "load", self._raise(ValueError))
+        with pytest.raises(ValueError, match="adapter_config.json is not valid JSON") as caught:
+            _open(run)
+        self._assert_safe(str(caught.value))
+
+    def test_a_peft_config_error_is_cleaned(self, run, work, no_build, monkeypatch):
+        import peft
+
+        monkeypatch.setattr(peft.LoraConfig, "from_pretrained", self._raise(TypeError))
+        with pytest.raises(ValueError, match="cannot be read as a LoRA config") as caught:
+            _open(run)
+        self._assert_safe(str(caught.value))
+
+    def test_a_safetensors_error_is_cleaned(self, run, work, no_build, monkeypatch):
+        import safetensors
+
+        monkeypatch.setattr(safetensors, "safe_open", self._raise(OSError))
+        with pytest.raises(ValueError, match="cannot be read as safetensors") as caught:
+            _open(run)
+        self._assert_safe(str(caught.value))
 
 
 class TestAdaptedBoundary:
