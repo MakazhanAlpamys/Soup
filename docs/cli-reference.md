@@ -59,6 +59,7 @@ Usage: `soup [OPTIONS] <command> [ARGS]...`
 | [`soup bench`](#soup-bench) | Benchmark a model: inference speed (infer, the default) or training (train). |
 | [`soup bom`](#soup-bom) | CycloneDX ML-BOM + SPDX AI bill-of-materials emitter (v0.59.0). |
 | [`soup build`](#soup-build) | dbt-for-SFT DAG: validate, plan, and materialise dataset transforms. |
+| [`soup cache`](#soup-cache) | Layer-stream cache: list and prune stale slots. |
 | [`soup can`](#soup-can) | Soup Cans: pack/inspect/verify/fork shareable .can artifacts. |
 | [`soup card`](#soup-card) | Generate a HuggingFace model card from a registry entry. |
 | [`soup chat`](#soup-chat) | Chat with a fine-tuned model in the terminal. |
@@ -726,6 +727,40 @@ Usage: `soup build [OPTIONS] CONFIG`
 | `CONFIG` | text |  | yes | Path to build manifest (YAML) |
 | `--output-dir`, `-o` | text | `build_out` |  | Directory (under cwd) for materialised model JSONL + state store. |
 | `--dry-run` | flag | off |  | Validate the manifest + print the topological plan; do not execute. |
+
+## `soup cache`
+
+Layer-stream cache: list and prune stale slots.
+
+Usage: `soup cache <command> [ARGS]...`
+
+Subcommands:
+
+- [`list`](#soup-cache-list)
+- [`prune`](#soup-cache-prune)
+
+### `soup cache list`
+
+List every cache slot of a base, with sizes and paths.
+
+Usage: `soup cache list [OPTIONS]`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `--model` | text |  | yes | Base model id whose cache slots to inspect. |
+| `--cache-dir` | text |  |  | Cache root (default: the layer-stream root). |
+
+### `soup cache prune`
+
+Remove unreferenced slots of a base. Dry run unless --yes.
+
+Usage: `soup cache prune [OPTIONS]`
+
+| Name | Type | Default | Required | Help |
+|---|---|---|---|---|
+| `--model` | text |  | yes | Base model id whose cache slots to inspect. |
+| `--cache-dir` | text |  |  | Cache root (default: the layer-stream root). |
+| `--yes` | flag | off |  | Actually remove. Without it: dry run. |
 
 ## `soup can`
 

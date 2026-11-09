@@ -805,13 +805,8 @@ def resolve_cache_root(cache_dir: Optional[str] = None) -> str:
     return _resolve_cache_root(cache_dir, is_under)
 
 
-def resolve_shard_dir(model: str, cache_dir: Optional[str] = None) -> str:
-    """Per-model shard dir (explicit arg > env override > default).
-
-    ``SOUP_LAYER_STREAM_CACHE_DIR`` is rejected when it holds C0 control
-    characters or escapes ``$HOME`` / ``$CWD`` / ``$TMPDIR`` — silently, because
-    an env var is operator config, not API input (mirrors spectrum_scan).
-    """
+def shard_dir_path(model: str, cache_dir: Optional[str] = None) -> str:
+    """The slot :func:`resolve_shard_dir` returns, without creating it."""
     from soup_cli.utils.paths import is_under
     from soup_cli.utils.run_provenance import base_revision_kwargs
 
@@ -821,7 +816,17 @@ def resolve_shard_dir(model: str, cache_dir: Optional[str] = None) -> str:
         # '@' cannot occur in model_slug, so no model id aliases this slot.
         slug += "@" + revision
     root: str = _resolve_cache_root(cache_dir, is_under)
-    chosen = os.path.join(root, slug)
+    return os.path.join(root, slug)
+
+
+def resolve_shard_dir(model: str, cache_dir: Optional[str] = None) -> str:
+    """Per-model shard dir (explicit arg > env override > default).
+
+    ``SOUP_LAYER_STREAM_CACHE_DIR`` is rejected when it holds C0 control
+    characters or escapes ``$HOME`` / ``$CWD`` / ``$TMPDIR`` — silently, because
+    an env var is operator config, not API input (mirrors spectrum_scan).
+    """
+    chosen = shard_dir_path(model, cache_dir)
     os.makedirs(chosen, exist_ok=True)
     return chosen
 

@@ -652,11 +652,14 @@ def _render_stream_disk_preflight(
     shard_path: str,
     stripe_writes: Sequence[tuple[str, int]] = (),
     approximate: bool = False,
+    other_slots: Sequence = (),
+    base: str = "",
 ) -> None:
     """Print and enforce the complete on-disk cost before either cache writes.
 
     ``stripe_writes`` are the (folder, bytes) writes bound for each extra stripe drive (R4);
     each is charged to its own volume and refused by name when that drive cannot hold it.
+    ``other_slots`` are the base's other ``CacheSlot``s (#2196): listed, never counted.
     """
     writes = (
         ("materialized weight copy", materialized_path, materialize_bytes),
@@ -694,6 +697,30 @@ def _render_stream_disk_preflight(
         f"Projected total on disk: {projected_total / 1e9:.2f} GB",
         f"Additional writes before training: {additional / 1e9:.2f} GB",
     ]
+    stale_hint = ""
+    if other_slots:
+        from soup_cli.utils.terminal import for_terminal
+
+        total = sum(slot.bytes for slot in other_slots)
+        reclaim = sum(slot.bytes for slot in other_slots if not slot.referenced)
+        lines.append(f"Other cache slots of this base: {len(other_slots)} ({total / 1e9:.2f} GB)")
+        for slot in other_slots[:20]:
+            note = f" (kept: {slot.reason})" if slot.referenced else ""
+            lines.append(
+                f"  {for_terminal(slot.name)}: {slot.bytes / 1e9:.2f} GB, "
+                f"{for_terminal(slot.path)}{note}"
+            )
+            for stripe in slot.stripes:
+                lines.append(
+                    f"    stripe folder (manual): {for_terminal(stripe.path)}, "
+                    f"{stripe.bytes / 1e9:.2f} GB"
+                )
+        if len(other_slots) > 20:
+            lines.append(f"  +{len(other_slots) - 20} more")
+        lines.append(f"Reclaimable by pruning: {reclaim / 1e9:.2f} GB")
+        cmd = f"soup cache prune --model {for_terminal(base)} --yes"
+        lines.append(f"Remove unreferenced slots (opt-in): {cmd}")
+        stale_hint = " Stale cache slots can be removed with `soup cache prune`."
     for device in sorted(required_by_device):
         required = required_by_device[device]
         free = free_by_device[device]
@@ -715,7 +742,7 @@ def _render_stream_disk_preflight(
                 f"layer streaming needs {required / 1e9:.2f} GB of additional "
                 f"disk space for {labels}, but only {free / 1e9:.2f} GB is free. "
                 f"Refusing before copying or sharding. Free disk space, point "
-                f"{remedy} volume, or choose a smaller base."
+                f"{remedy} volume, or choose a smaller base.{stale_hint}"
             )
     console.print(Panel("\n".join(lines), title="Layer streaming disk pre-flight"))
 
@@ -1176,7 +1203,20 @@ class StreamingSetupMixin:
             effective_shard_bytes = max(shard_estimate, sum(shares))
             # The flat-rate fallback is a guess and says so; a measured cache is exact.
             coarse = cache_estimate is None and oq_shard_estimate is None
+            try:
+                from soup_cli.utils.layer_cache_slots import list_base_slots
+
+                other_slots = [
+                    s for s in list_base_slots(
+                        cfg.base, os.path.dirname(shard_dir), shard_dir
+                    )
+                    if s.reason != "current slot"
+                ]
+            except Exception:  # noqa: BLE001 - a listing failure must never abort training
+                other_slots = []
             _render_stream_disk_preflight(
+                other_slots=other_slots,
+                base=cfg.base,
                 source_bytes=weights_plan.source_bytes,
                 materialized_copy_bytes=weights_plan.materialized_copy_bytes,
                 materialize_bytes=weights_plan.materialize_bytes,
