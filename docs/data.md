@@ -795,6 +795,12 @@ to `prompt`).
   and a file with `{"messages": ..., "chosen": ..., "rejected": ...}` detects as `chatml`
   (losing the answers). Standalone validation of these layouts needs `--format dpo`.
   Tasks outside those seven get no automatic `dpo` resolution.
+- **KTO row validation:** For `task: kto`, training checks after loading that every row
+  in both the train and val splits contains `prompt`, `completion` **and** `label`.
+  If `data.format: auto` detects the file as a different format (e.g. `chatml`, `alpaca`,
+  `dpo`), this check catches the mismatch before any model is loaded and names the
+  detected format, the three required fields, and the fix (`data.format: kto`).
+  This applies to both live training and `soup train --dry-run` (#2423).
 - **Ignored keys:** A top-level `system` key, `scores`, and `ids` are ignored (system instructions
   belong in the conversation message list).
 - **Refusals:** A refused row is dropped with `Warning: N of M rows dropped: they do not convert as 'dpo'. First: row I: <reason>.`

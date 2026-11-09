@@ -209,6 +209,8 @@ adapter listing leaves scoring bundles out of its LM adapter results.
 
 Standalone `soup diff`, the local provider of `soup data generate`, and
 `soup deploy autopilot --measure` also refuse scoring bundles before work.
+Both merge backends refuse scoring bundles before backend handling; direct
+`merge_native_adapter` calls refuse them before validation or loading as well.
 Remote generation providers and HF Spaces interpret their model argument as
 a remote model ID. Ollama deployment accepts a GGUF file, not a reward bundle
 or its safetensors payload. Pure recipe planning and file-only signing/report

@@ -106,12 +106,15 @@ def test_merge_help():
 
 
 # #2003: scoring bundles must stop before the first LM-consumer operation.
+@pytest.mark.parametrize("backend", ["transformers", "mlx"])
 @pytest.mark.parametrize("artifact_kind", ["root", "payload", "recorded-base"])
 @pytest.mark.parametrize(
     "function_name, argument, first_work_line, list_input",
     [
-        ("merge", "adapter", 'if hub and hub != "hf":', False),
-        ("merge", "base", 'if hub and hub != "hf":', False),
+        ("merge", "adapter", "from soup_cli.utils.mlx_generation import reject_native_adapter",
+         False),
+        ("merge", "base", "from soup_cli.utils.mlx_generation import reject_native_adapter",
+         False),
     ],
 )
 def test_reward_bundle_refused_before_work(
@@ -121,6 +124,7 @@ def test_reward_bundle_refused_before_work(
     first_work_line,
     list_input,
     artifact_kind,
+    backend,
 ):
     from importlib import import_module
 
@@ -143,9 +147,20 @@ def test_reward_bundle_refused_before_work(
         root = adapter
     function = getattr(import_module("soup_cli.commands.merge"), function_name)
     value = [str(root)] if list_input else str(root)
-    kwargs = {}
+    kwargs = {"backend": backend}
     kwargs[argument] = value
     assert_reward_guard(function, kwargs, first_work_line)
+
+
+@pytest.mark.parametrize("backend", ["transformers", "mlx"])
+def test_ordinary_merge_reaches_first_work(tmp_path, backend):
+    from soup_cli.commands.merge import merge
+    from tests.reward_guard_helpers import assert_reward_guard
+
+    assert_reward_guard(
+        merge, {"adapter": str(tmp_path), "base": "ordinary/base", "backend": backend},
+        "from soup_cli.utils.mlx_generation import reject_native_adapter", refused=False,
+    )
 
 
 def test_reward_recorded_base_refused_at_resolution(tmp_path):

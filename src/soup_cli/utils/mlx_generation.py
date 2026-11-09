@@ -132,7 +132,8 @@ def reject_native_adapter(model: str) -> None:
 
 def load_native_model(
     model_path: str, base_model: str | None = None, *, trust_remote_code: bool = False,
-) -> tuple[Any, Any]:
+    return_config: bool = False,
+) -> tuple[Any, Any] | tuple[Any, Any, dict]:
     """Load a base and strictly apply every saved ordinary linear LoRA tensor."""
     from soup_cli.utils.mlx_reward import refuse_reward_artifact
 
@@ -222,7 +223,7 @@ def load_native_model(
         model.load_weights(list(weights.items()), strict=False)
         mx.eval(model.parameters())
     model.eval()
-    return model, tokenizer
+    return (model, tokenizer, base_config) if return_config else (model, tokenizer)
 
 
 def generate_native(

@@ -283,13 +283,33 @@ def _validate_csm_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
 
 def _validate_preference_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
     """Reject a lossy format choice before constructing any preference trainer."""
-    if cfg.task not in PREFERENCE_PAIR_TASKS:
+    if cfg.task != "kto" and cfg.task not in PREFERENCE_PAIR_TASKS:
         return
+
     from soup_cli.data.loader import last_load_outcome
 
-    required = {"prompt", "chosen", "rejected"}
     outcome = last_load_outcome()
     fmt = outcome.fmt or cfg.data.format
+
+    # kto rows must be {prompt, completion, label}; auto-detection may pick a
+    # different format (llava, chatml, …) which will cause KeyError: 'prompt'
+    # once the trainer starts.  Catch this before any model is loaded (#2423).
+    if cfg.task == "kto":
+        kto_required = {"prompt", "completion", "label"}
+        for split in ("train", "val"):
+            rows = dataset.get(split, [])
+            for index, row in enumerate(rows, 1):
+                if isinstance(row, dict) and kto_required.issubset(row):
+                    continue
+                console.print(
+                    f"[red]Invalid kto dataset:[/] {split} row {index} loaded as "
+                    f"format {markup_escape(repr(fmt))} lacks prompt, completion or label. "
+                    "Use data.format: kto with kto rows."
+                )
+                raise typer.Exit(1)
+        return
+
+    required = {"prompt", "chosen", "rejected"}
     for split in ("train", "val"):
         rows = dataset.get(split, [])
         for index, row in enumerate(rows, 1):
@@ -373,11 +393,18 @@ def _build_hardware_fit_input(cfg, gpu_memory_gb=None):
     ``"auto"``, unsupported quant, out-of-range dims), in which case the caller
     skips the gate rather than guess. Built by the shared
     ``hardware_fit_input_from_config``, as ``soup profile``'s input is (#2049).
-    ``gpu_memory_gb`` (GiB) resolves ``gradient_checkpointing: auto``.
+    ``gpu_memory_gb`` (GiB) resolves ``gradient_checkpointing: auto``. A line is
+    printed before the model's details are read from the Hub, without the offline
+    hint used by ``soup plan`` and ``soup profile``: the download comes next (#2306).
     """
     from soup_cli.utils.hardware_fit import hardware_fit_input_from_config
+    from soup_cli.utils.model_shape import HUB_REQUEST_LINE_BEFORE_DOWNLOAD
 
-    return hardware_fit_input_from_config(cfg, gpu_memory_gb=gpu_memory_gb)
+    return hardware_fit_input_from_config(
+        cfg,
+        gpu_memory_gb=gpu_memory_gb,
+        on_hub_request=lambda: console.print(f"[dim]{HUB_REQUEST_LINE_BEFORE_DOWNLOAD}[/]"),
+    )
 
 
 #: How the pre-flight panel names each sharding mode it prices per card (#2300).
