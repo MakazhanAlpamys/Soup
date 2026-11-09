@@ -788,6 +788,16 @@ training:
   of the split. Validation rows without `query_id` are left out; with none at all, ranking
   metrics are skipped with one line. `eval_ranking_queries` counts the queries that were scored.
 
+**Classification metrics (`classifier`, #2638).** When there are validation rows, each evaluation
+also reports `eval_accuracy` and `eval_f1_macro` for a single-label head, or
+`eval_subset_accuracy` (every label of a row correct), `eval_f1_micro` and `eval_f1_macro` for a
+multi-label head. They reach the Hugging Face log and `trainer_state.json`; the run's recorded
+validation number stays `val_loss`. A single-label prediction is the argmax of the logits (the
+first index on a tie). A multi-label label is predicted when its logit is above 0, a sigmoid
+probability above 0.5; a logit of exactly 0 is not predicted. A class with no true and no predicted
+row is left out of the macro average instead of counting as 0. `num_labels: 1` with the default
+single-label kind accepts only label 0, so the metrics are skipped with one line saying why.
+
 Routes `classifier` / `reranker` / `cross_encoder` through
 `AutoModelForSequenceClassification`. Multi-label heads cap at 1024 entries per
 row, dedup via set conversion, and reject null bytes in label strings.
