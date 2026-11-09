@@ -14,7 +14,7 @@ console = Console()
 
 
 def merge(
-    ctx: typer.Context = None,
+    ctx: typer.Context,
     adapter: str = typer.Option(
         ...,
         "--adapter",

@@ -116,29 +116,34 @@ class TestTokenRegistration:
         hf_tok = getattr(tok, "_tokenizer", tok)
         # Tokenizer already has a pre-existing additional special token
         hf_tok.add_special_tokens({"additional_special_tokens": ["<preexisting_spec>"]})
+        base_vocab_size = len(hf_tok)
 
         cfg = SimpleNamespace(
             add_new_tokens=["<regular_tok>"],
-            new_special_tokens=["<new_spec>"],
+            new_special_tokens=["<new_spec1>", "<new_spec2>"],
         )
         res = register_mlx_tokens(tok, cfg)
-        assert res.delta_v == 2
-        assert res.added_tokens == ["<new_spec>", "<regular_tok>"]
-        assert res.special_tokens == ["<new_spec>"]
+        assert res.delta_v == 3
+        assert res.added_tokens == ["<new_spec1>", "<new_spec2>", "<regular_tok>"]
+        assert res.special_tokens == ["<new_spec1>", "<new_spec2>"]
         assert res.regular_tokens == ["<regular_tok>"]
 
-        # All special tokens are present in tokenizer
+        # All 3 special tokens are present in tokenizer
         assert "<preexisting_spec>" in hf_tok.all_special_tokens
-        assert "<new_spec>" in hf_tok.all_special_tokens
+        assert "<new_spec1>" in hf_tok.all_special_tokens
+        assert "<new_spec2>" in hf_tok.all_special_tokens
         assert "<regular_tok>" not in hf_tok.all_special_tokens
 
-        # Check special IDs
-        spec_id_pre = hf_tok.convert_tokens_to_ids("<preexisting_spec>")
-        spec_id_new = hf_tok.convert_tokens_to_ids("<new_spec>")
-        reg_id = hf_tok.convert_tokens_to_ids("<regular_tok>")
-        assert spec_id_pre in hf_tok.all_special_ids
-        assert spec_id_new in hf_tok.all_special_ids
-        assert reg_id not in hf_tok.all_special_ids
+        # Check special IDs are in all_special_ids
+        for spec in ["<preexisting_spec>", "<new_spec1>", "<new_spec2>"]:
+            assert hf_tok.convert_tokens_to_ids(spec) in hf_tok.all_special_ids
+        assert hf_tok.convert_tokens_to_ids("<regular_tok>") not in hf_tok.all_special_ids
+
+        # Check token IDs equal base_vocab_size + position in the returned list
+        for pos, token_str in enumerate(res.added_tokens):
+            expected_id = base_vocab_size + pos
+            actual_id = hf_tok.convert_tokens_to_ids(token_str)
+            assert actual_id == expected_id
 
         # Repeat registration is an exact no-op
         res_repeat = register_mlx_tokens(tok, cfg)
@@ -426,7 +431,11 @@ class TestEndToEndMLXSFTVocabExpansion:
         )
         assert is_tied is True
         assert ext_head is None
+        # Reloaded rows and token IDs equal the trained ones
+        assert mx.array_equal(ext_embed.new_weights, new_embed_after).item()
         assert mx.array_equal(ext_embed.new_weights, added_weights["new_embed_tokens"]).item()
+        assert fresh_tok.convert_tokens_to_ids("<special_new>") == 16
+        assert fresh_tok.convert_tokens_to_ids("<custom_new>") == 17
 
         # Model forward pass generates expanded vocabulary dimension logits
         trained_logits = fresh_model(sample_input)
@@ -521,6 +530,20 @@ class TestEndToEndMLXSFTVocabExpansion:
 
         info = json.loads((out_path / "added_tokens_info.json").read_text(encoding="utf-8"))
         assert info["is_tied"] is False
+
+        # Verify reload on untied model restores both embedding and lm_head rows
+        from soup_cli.utils.mlx import load_mlx_model
+
+        fresh_model, fresh_tok = load_mlx_model(base_path, quantization="none")
+        is_tied, ext_embed, ext_head = load_expanded_vocab_artifact(
+            out_path, fresh_model, fresh_tok
+        )
+        assert is_tied is False
+        assert ext_head is not None
+        assert mx.array_equal(ext_embed.new_weights, new_embed_after).item()
+        assert mx.array_equal(ext_head.new_weights, new_head_after).item()
+        assert fresh_tok.convert_tokens_to_ids("<tok_alpha>") == 16
+        assert fresh_tok.convert_tokens_to_ids("<tok_beta>") == 17
 
     def test_negative_control_frozen_slice_fails_update(self, tmp_path):
         """Negative control: if new slice is intentionally frozen, it does NOT update."""
@@ -676,6 +699,44 @@ class TestConsumerRefusals:
         )
         assert res.exit_code != 0
         assert refusal_msg in res.output
+
+        (adapter_dir / "adapter_config.json").unlink()
+
+        # Case C: --backend mlx with added_tokens.safetensors (#1988, #2124)
+        (adapter_dir / "added_tokens.safetensors").write_text("stub", encoding="utf-8")
+        (adapter_dir / "adapter_config.json").write_text(
+            json.dumps({
+                "model": "org/base",
+                "fine_tune_type": "lora",
+                "lora_parameters": {"rank": 4, "scale": 1.0, "keys": ["q_proj"]},
+            }),
+            encoding="utf-8",
+        )
+        res = runner.invoke(
+            app,
+            ["merge", "--backend", "mlx", "--adapter", str(adapter_dir), "--output", str(out_dir)],
+        )
+        assert res.exit_code != 0
+        assert "MLX merge failed: Native MLX generation does not currently support" in res.output
+
+        (adapter_dir / "added_tokens.safetensors").unlink()
+
+        # Case D: --backend mlx with vocab_expansion: true in adapter_config.json (#1988, #2124)
+        (adapter_dir / "adapter_config.json").write_text(
+            json.dumps({
+                "model": "org/base",
+                "fine_tune_type": "lora",
+                "lora_parameters": {"rank": 4, "scale": 1.0, "keys": ["q_proj"]},
+                "vocab_expansion": True,
+            }),
+            encoding="utf-8",
+        )
+        res = runner.invoke(
+            app,
+            ["merge", "--backend", "mlx", "--adapter", str(adapter_dir), "--output", str(out_dir)],
+        )
+        assert res.exit_code != 0
+        assert "MLX merge failed: Native MLX generation does not currently support" in res.output
 
     def test_padded_embeddings_unaligned_with_tokenizer_refused(self, tmp_path, monkeypatch):
         base_path = tmp_path / "base_padded"
@@ -885,4 +946,68 @@ class TestArtifactLoaderValidation:
             encoding="utf-8",
         )
         with pytest.raises(ValueError, match="Malformed or invalid metadata"):
+            load_expanded_vocab_artifact(art_dir, model, tok)
+
+    def test_untied_missing_or_mismatched_head_shape_raises(self, tmp_path):
+        base_path = tmp_path / "base_untied"
+        _make_tiny_llama(base_path, tied=False, vocab_size=16)
+        from soup_cli.utils.mlx import load_mlx_model
+
+        model, tok = load_mlx_model(base_path, quantization="none")
+        art_dir = tmp_path / "art"
+        art_dir.mkdir()
+
+        # Case 1: missing new_lm_head entirely in untied artifact
+        mx.save_safetensors(
+            str(art_dir / "added_tokens.safetensors"),
+            {"new_embed_tokens": mx.random.normal((2, 32))},
+        )
+        (art_dir / "added_tokens_info.json").write_text(
+            json.dumps({
+                "base_vocab_size": 16,
+                "added_vocab_size": 2,
+                "is_tied": False,
+                "added_tokens": ["<t1>", "<t2>"],
+            }),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="missing 'new_lm_head'"):
+            load_expanded_vocab_artifact(art_dir, model, tok)
+
+        # Case 2: mismatched new_lm_head shape
+        mx.save_safetensors(
+            str(art_dir / "added_tokens.safetensors"),
+            {
+                "new_embed_tokens": mx.random.normal((2, 32)),
+                "new_lm_head": mx.random.normal((2, 64)),
+            },
+        )
+        with pytest.raises(ValueError, match=r"new_lm_head shape .* does not match expected"):
+            load_expanded_vocab_artifact(art_dir, model, tok)
+
+    def test_added_vocab_size_mismatch_with_token_count_raises(self, tmp_path):
+        base_path = tmp_path / "base"
+        _make_tiny_llama(base_path, tied=True, vocab_size=16)
+        from soup_cli.utils.mlx import load_mlx_model
+
+        model, tok = load_mlx_model(base_path, quantization="none")
+        art_dir = tmp_path / "art"
+        art_dir.mkdir()
+        mx.save_safetensors(
+            str(art_dir / "added_tokens.safetensors"),
+            {"new_embed_tokens": mx.random.normal((2, 32))},
+        )
+        (art_dir / "added_tokens_info.json").write_text(
+            json.dumps({
+                "base_vocab_size": 16,
+                "added_vocab_size": 3,
+                "is_tied": True,
+                "added_tokens": ["<t1>", "<t2>"],
+            }),
+            encoding="utf-8",
+        )
+        with pytest.raises(
+            ValueError,
+            match=r"added_vocab_size \(3\) does not match length of added_tokens \(2\)",
+        ):
             load_expanded_vocab_artifact(art_dir, model, tok)

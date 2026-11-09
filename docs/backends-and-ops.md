@@ -165,9 +165,13 @@ architecture (`model.model.embed_tokens` and `model.lm_head`) matching tokenizer
 The mechanism uses zero-allocation additive parameter slices rather than resizing the base
 embedding matrix in-place:
 - **Base weights frozen:** The base embedding table and LM head remain untouched and frozen.
+- **Registration order:** Special tokens are registered first to ensure semantic precedence,
+  whereas `backend: transformers` (`apply_vocab_expansion`) registers ordinary tokens first.
 - **Additive slice:** Only a new weight matrix $\Delta V \times D$ is allocated and registered
   as trainable parameters with the optimizer, initialized with a normal distribution
-  matching the base embedding's standard deviation and dtype (optionally seeded by `training.seed`).
+  matching the base embedding's standard deviation and dtype. The draw is always seeded via
+  `resolve_training_seed` (defaulting to 42 when unset), which reseeds `mx.random.seed`
+  before initialization.
 - **Zero-allocation gather:** The forward pass computes base and extended embeddings separately
   and merges them via `mx.where(is_new, new_out, base_out)`, avoiding concatenation of large
   weight tensors.

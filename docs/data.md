@@ -1094,7 +1094,9 @@ resized, on `backend: transformers` for `sft` (text, vision and audio), `dpo`, `
 vision and audio paths whatever the backend (they run their transformers setup before the
 backend is read). On `backend: mlx`, text SFT supports native vocabulary expansion
 when `training.quantization: none` on dense causal models (`mlx_lm.models.llama` layout)
-whose base embedding row count matches the tokenizer vocabulary length (#1994). New rows are
+whose base embedding row count matches the tokenizer vocabulary length (#1994). Special tokens
+are registered first to ensure semantic precedence, whereas `backend: transformers`
+(`apply_vocab_expansion`) registers ordinary tokens first. New rows are
 initialized with a normal distribution matching the base embedding's std and dtype.
 Saved adapters include separate `added_tokens.safetensors` and `added_tokens_info.json`
 sidecar artifacts, while downstream consumers (`soup infer`, `soup chat`, `soup merge`)
