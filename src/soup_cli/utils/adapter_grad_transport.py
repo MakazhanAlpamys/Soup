@@ -45,6 +45,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import math
 import os
 import re
@@ -100,6 +101,10 @@ SOCKET_BUFFER_BYTES = 8 * 1024 * 1024
 
 PROTOCOL_VERSION = 1
 _MAGIC = b"SOUPB1DP"
+
+_LOG = logging.getLogger(__name__)
+_buffer_grant_lock = threading.Lock()
+_buffer_grant_logged = False
 
 _GREETING = struct.Struct("!8sHB16s")  # magic, version, token required, nonce
 _HELLO_PREFIX = struct.Struct("!8sHIIQ")  # magic, version, rank, world size, max payload
@@ -454,6 +459,38 @@ def b1_rank_or_none(environ: Optional[Mapping[str, str]] = None) -> Optional[int
 # ---------------------------------------------------------------------------
 
 
+def _log_buffer_grant_once(sock: socket.socket) -> None:
+    """Debug-log, once per process, what the kernel granted for the socket buffer request.
+
+    Linux clamps ``SO_RCVBUF`` / ``SO_SNDBUF`` to ``net.core.rmem_max`` / ``wmem_max`` without an
+    error, and a socket whose buffer was set explicitly is no longer autotuned, so a large request
+    can leave a SMALLER window than the default would reach (measured 2026-11-09 on two rented
+    nodes: 8 MiB asked, 425,984 bytes granted). Linux reports twice what it keeps, so a grant
+    below the request is a real clamp. This reads and logs; it changes no setting.
+    """
+    global _buffer_grant_logged
+    with _buffer_grant_lock:
+        if _buffer_grant_logged:
+            return
+        _buffer_grant_logged = True
+    try:
+        received = int(sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF))
+        sent = int(sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF))
+    except (OSError, TypeError, ValueError):
+        return
+    clamped = min(received, sent) < SOCKET_BUFFER_BYTES
+    _LOG.debug(
+        "B1 socket buffers: requested %d bytes each, the kernel granted receive=%d send=%d%s",
+        SOCKET_BUFFER_BYTES,
+        received,
+        sent,
+        " (below the request: the kernel clamped it, see net.core.rmem_max and wmem_max, "
+        "and no longer autotunes the TCP window of this socket)"
+        if clamped
+        else "",
+    )
+
+
 def _tune_socket(sock: socket.socket) -> None:
     """Large buffers, no Nagle, keepalive. Every option is best effort."""
     for level, option, value in (
@@ -466,6 +503,7 @@ def _tune_socket(sock: socket.socket) -> None:
             sock.setsockopt(level, option, value)
         except OSError:
             pass
+    _log_buffer_grant_once(sock)
     # A rank may sit idle for minutes while the other downloads and shards: keep a NAT's
     # mapping alive. Names differ per platform.
     for name, value in (("TCP_KEEPIDLE", 60), ("TCP_KEEPINTVL", 15), ("TCP_KEEPCNT", 6)):
