@@ -530,10 +530,16 @@ def _wrapper(tmp_path, monkeypatch, *, packed, right_padded=True, finish_fails=F
              **training):
     """A real ``SFTTrainerWrapper`` on a tiny Qwen2 + LoRA on CPU. Its ``_setup_transformers`` is
     replaced by a stand-in that installs the hook the way ``_install_packed_lora`` does (a 4-bit
-    model cannot be built on CPU); everything after it is the real ``setup`` and ``train``."""
+    model cannot be built on CPU); everything after it is the real ``setup`` and ``train``.
+
+    The run is pinned to the CPU: the wrapper is built with ``device="cpu"``, but the SFT
+    arguments do not set ``use_cpu``, so on a machine with a card the Trainer moves the model and
+    every batch to ``cuda:0``. The stand-in engine is a CPU one and the hook, rightly, will not
+    hand it a batch on another device (``a batch on cuda:0, not on cpu``), so all of its steps
+    would run stock and the tests would depend on there being no GPU."""
     import yaml
     from peft import LoraConfig, TaskType, get_peft_model
-    from transformers import AutoTokenizer
+    from transformers import AutoTokenizer, TrainingArguments
 
     from soup_cli.config.loader import load_config_from_string
     from soup_cli.trainer.sft import SFTTrainerWrapper
@@ -552,6 +558,13 @@ def _wrapper(tmp_path, monkeypatch, *, packed, right_padded=True, finish_fails=F
         "modality": "text",
         "data": {"train": "train.jsonl", "max_length": 64, "chat_template": "chatml"},
         "training": tcfg, "output": str(tmp_path / "out")}))
+    real_post_init = TrainingArguments.__post_init__
+
+    def cpu_post_init(args):
+        args.use_cpu = True
+        real_post_init(args)
+
+    monkeypatch.setattr(TrainingArguments, "__post_init__", cpu_post_init)
     wrapper = SFTTrainerWrapper(cfg, device="cpu")
     engine = {}
 
@@ -581,6 +594,8 @@ def _wrapper(tmp_path, monkeypatch, *, packed, right_padded=True, finish_fails=F
             wrapper.setup({"train": _sft_rows(8)})
         return wrapper, engine
     wrapper.setup({"train": _sft_rows(8)})
+    # a patch that did not take must not pass silently: the engine above is a CPU one
+    assert wrapper.trainer.args.use_cpu and wrapper.trainer.args.device.type == "cpu"
     wrapper.trainer.args.max_steps = 2
     return wrapper, engine
 
