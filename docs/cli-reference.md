@@ -836,6 +836,7 @@ Usage: `soup chat [OPTIONS]`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `--model`, `-m` | text |  | yes | Path to LoRA adapter directory or full model |
+| `--backend` | text | `transformers` |  | Text backend: transformers or mlx |
 | `--base`, `-b` | text |  |  | Base model ID. Auto-detected from adapter_config.json if not set. |
 | `--device` | text |  |  | Device: cuda, mps, cpu. Auto-detected if not set. |
 | `--max-tokens` | integer | `512` |  | Maximum number of tokens to generate |
@@ -2826,6 +2827,8 @@ Usage: `soup merge [OPTIONS]`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `--adapter`, `-a` | text |  | yes | Path to the LoRA adapter directory |
+| `--backend` | text | `transformers` |  | Merge backend: transformers or mlx |
+| `--dequantize` | flag | off |  | Explicitly dequantize an MLX base for dense fused output |
 | `--base`, `-b` | text |  |  | Base model ID. Auto-detected from adapter_config.json if not set. |
 | `--output`, `-o` | text | `./merged` |  | Output directory for the merged model |
 | `--dtype` | text | `float16` |  | Data type for the merged model: float16, bfloat16, float32 |

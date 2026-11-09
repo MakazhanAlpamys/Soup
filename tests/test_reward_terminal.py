@@ -239,7 +239,13 @@ def test_the_stress_title_names_the_target_as_typed(name):
 def test_the_stress_title_keeps_its_bold_style(monkeypatch):
     monkeypatch.setattr(
         "soup_cli.commands.reward.console",
-        Console(width=500, force_terminal=True, color_system="standard", legacy_windows=False),
+        Console(
+            width=500,
+            force_terminal=True,
+            color_system="standard",
+            legacy_windows=False,
+            no_color=False,
+        ),
     )
 
     result = _stress(_verifier("plain.py"))

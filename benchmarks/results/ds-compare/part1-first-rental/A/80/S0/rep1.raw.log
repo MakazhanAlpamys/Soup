@@ -1,0 +1,31 @@
+Loading config from soup.yaml...
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────── Training Setup ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Device:  NVIDIA H100 80GB HBM3                                                                                                                                                                                                                         │
+│ Memory:  79.4 GB                                                                                                                                                                                                                                       │
+│ Model:   /workspace/payload/benchmarks/harness/ds_compare/model                                                                                                                                                                                        │
+│ Task:    sft                                                                                                                                                                                                                                           │
+│ Backend: transformers                                                                                                                                                                                                                                  │
+│ LoRA:    r=8, alpha=16                                                                                                                                                                                                                                 │
+│ Quant:   none                                                                                                                                                                                                                                          │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+Loading dataset...
+Loaded: 64 train samples
+Run ID: run_20261107_081312_5b8ab088
+Setting up model + trainer...
+Loading tokenizer: /workspace/payload/benchmarks/harness/ds_compare/model
+Preparing layer shards -> /root/.soup/layer-stream/workspace__payload__benchmarks__harness__ds_compare__model
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────── training.stream_layers ────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Layer streaming BETA — arch llama, tier ram                                                                                                                                                                                                            │
+│   base store   13.96 GB across 32 layers (pinned)                                                                                                                                                                                                      │
+│   VRAM buffers 2 x 436 MB = 872 MB                                                                                                                                                                                                                     │
+│   resident     0 MB embeddings + adapters                                                                                                                                                                                                              │
+│   peak VRAM    ~1.57 GB at batch 1 x seq 256 (logits 0.46 GB)                                                                                                                                                                                          │
+│   free VRAM    84.74 GB                                                                                                                                                                                                                                │
+│   forecast     11124-16359 tok/s — a compute-bound bound, not a promise                                                                                                                                                                                │
+│                (from 788.21 TFLOPS measured on this card now @ 1980 MHz)                                                                                                                                                                               │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+Layer streaming is BETA: slower than resident training, but this model may not run resident on this card at all.
+expandable_segments allocator hint is unavailable on this platform (silently ignored on Windows) — not enabled
+
+Error: RuntimeError: non-layer weights left unmaterialised after tying: ['model.embed_tokens.weight', 'lm_head.weight']
+Run with --verbose for the full traceback.

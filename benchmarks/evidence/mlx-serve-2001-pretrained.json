@@ -1,11 +1,11 @@
 {
-  "soup_base_sha": "06ed11453b723e26192c99b77ff2c097588ad56a",
+  "soup_base_sha": "485d62b79c2f98734934a91de2445cba58960ef6",
   "source_files_sha256": {
-    "src/soup_cli/commands/serve.py": "b66a80bcec00efd138aa56bf1d2533aa955e8ba2a135684cbe573aca4a9af8bf",
-    "src/soup_cli/utils/mlx_generation.py": "ea926e1b6682cec2217b551c2ba7d00f6f640e1825fd9365a86bbdcfa465b0cc",
+    "src/soup_cli/commands/serve.py": "91575c9fc9af913dfec6152c3834cb68d469e7f92ac55a8f87d230e8473b681b",
+    "src/soup_cli/utils/mlx_generation.py": "084a61f6c4596118c634d6c9df89b494abcb417f38d9484a4b4cdfe90a341cef",
     "src/soup_cli/utils/mlx_serve.py": "51910de633f1e50a1c7ae6a656ef81ee9bd4079ad866688d7d849301406a1363"
   },
-  "working_source_tree_sha256": "8d27c508697b4af95a350795d6be7086a65bf041a5dc602339b38db034ef1611",
+  "working_source_tree_sha256": "c428269f3bc9b4cc53db85ef5cf5cd9087fb5a7f6a2473a2dc28e81ef5226496",
   "benchmark_sha256": "5a8a926c1dfa89fe603cece25e1f9846e6e563828982e87054d4a0e45a28d9aa",
   "fixture_generator_sha256": "e9026dcee42aca161cc98f124f3eaff108f2f15805e41ced6ac0e84a0d04fa0b",
   "python": "3.12.7",
@@ -70,9 +70,9 @@
     "--model",
     "/Users/ryan/Project/workbench/Github-PR/Soup-contributions/test-results/2001/pretrained/SmolLM2-135M-Instruct",
     "--port",
-    "61338"
+    "57364"
   ],
-  "readiness_seconds": 1.2776470420067199,
+  "readiness_seconds": 1.0692183329956606,
   "child_returncode": 0,
   "results": [
     {
@@ -87,8 +87,8 @@
         }
       },
       "http": {
-        "id": "chatcmpl-695d926bb9d443b092418ecb1440c3cb",
-        "created": 1793708448,
+        "id": "chatcmpl-6609ffdb76724a56a50b3cd1e5c60e6c",
+        "created": 1794239992,
         "model": "SmolLM2-135M-Instruct",
         "object": "chat.completion",
         "choices": [
@@ -113,8 +113,8 @@
         "completion_tokens": 8,
         "total_tokens": 46
       },
-      "first_content_seconds": 0.024032458022702485,
-      "stream_seconds": 0.046035957988351583
+      "first_content_seconds": 0.023907291935756803,
+      "stream_seconds": 0.046033832943066955
     },
     {
       "case": 1,
@@ -128,8 +128,8 @@
         }
       },
       "http": {
-        "id": "chatcmpl-3a95da5d5eb44df0a442fbfe03b1a28a",
-        "created": 1793708448,
+        "id": "chatcmpl-4702828c9f0d4ae3977f12a49b403e11",
+        "created": 1794239993,
         "model": "SmolLM2-135M-Instruct",
         "object": "chat.completion",
         "choices": [
@@ -154,8 +154,8 @@
         "completion_tokens": 8,
         "total_tokens": 43
       },
-      "first_content_seconds": 0.0238573340466246,
-      "stream_seconds": 0.04644783399999142
+      "first_content_seconds": 0.02439074998255819,
+      "stream_seconds": 0.05698179197497666
     },
     {
       "case": 0,
@@ -169,8 +169,8 @@
         }
       },
       "http": {
-        "id": "chatcmpl-04f7cfe3401a4218aa79c6d01d4c8f3a",
-        "created": 1793708448,
+        "id": "chatcmpl-bccc861c811649468dae1f9d647757e0",
+        "created": 1794239993,
         "model": "SmolLM2-135M-Instruct",
         "object": "chat.completion",
         "choices": [
@@ -195,8 +195,8 @@
         "completion_tokens": 8,
         "total_tokens": 46
       },
-      "first_content_seconds": 0.02491266600554809,
-      "stream_seconds": 0.0573560000048019
+      "first_content_seconds": 0.023158750031143427,
+      "stream_seconds": 0.05511058296542615
     }
   ],
   "base_only_controls": null,

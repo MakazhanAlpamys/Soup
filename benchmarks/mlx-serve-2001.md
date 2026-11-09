@@ -89,10 +89,11 @@ the sorted whole-source manifest digest, fixture/benchmark hashes, model files,
 dependency versions, commands and exact content/count comparisons. The source
 digest identifies the qualified implementation even before its publishing commit.
 
-The `serve.py` digest in the three records is the file as it was in `efab186c`.
-The merge of `main` into the branch changed other parts of that file, not the
-lines this pull request adds to it, so a checkout of the merged head does not
-match the digest.
+The three linked records were rerun after integrating #2124 on 2026-11-10.
+Their source-file and whole-source digests identify that merged working tree;
+`soup_base_sha` names its pre-merge HEAD because qualification preceded the
+integration commit. Earlier records retained in Git history used the `serve.py`
+file from `efab186c`, as documented in the preceding revision.
 
 Default tests remain offline and deterministic; real-native tests are explicitly
 selected in the existing `mlx-smoke` job, installing the serving extras and HTTP
@@ -166,9 +167,29 @@ fail and restored controls pass.
 
 Current and minimum real-native stacks each pass **184 tests**. Independent
 Pydantic 2.1.1 and 2.3.0 core/serve stacks each pass **181 portable tests**, as does
-the forced-color portable run. All three public CLI records were refreshed and
-match the final source apart from the `serve.py` digest described above, and the
-qualification scripts. The final serial suite passed
+the forced-color portable run. At that revision, all three public CLI records
+were refreshed; their `serve.py` digest still described `efab186c`. The current
+records are the later integration reruns described above. The final serial suite passed
 on 2026-11-03: **49,004 passed, 590 skipped, 10 deselected**, **88.00% coverage**
 (77% required), 1591.77 seconds, exit 0; the functional source digest was unchanged.
 Ruff, dependency checks and generated-reference structure pass.
+
+## Native merge integration (2026-11-10)
+
+The shared native loader retains both `require_dense` and `return_config` after
+integrating #2124. Ten portable cases combine the flags, check the actual returned
+configuration and pin dense-only refusal for quantization metadata and quantized
+modules. The upstream-only resolution fails those cases; removing the dense guard
+or losing the configuration return also fails the relevant cases, and restored
+controls pass. The existing 22 serving review mutations remain detected.
+
+The portable integration selection passes **1,142 tests**, with two native-only
+skips. Current and resolved-floor native selections each pass **949 tests**, with
+34 skips, including native merge and chat coverage. Ruff and both generated-reference
+checks pass. All three linked CLI records were measured again with the unchanged
+protocol and cached models. Each completes six HTTP calls with direct-generation
+equality and clean SIGINT shutdown; both tiny runs retain 16 optimizer updates,
+11 unchanged frozen tensors and output distinct from their base controls. Every
+recorded source-file, whole-source and qualification-script digest matches this
+integration tree. These remain lifecycle/equality checks, with no new model-quality
+or throughput claim.
