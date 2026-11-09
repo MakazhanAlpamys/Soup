@@ -1,1 +1,0 @@
-- Layer streaming now switches a checkpointed NF4 layer to a packed-state backward on its own when the VRAM pre-flight predicts the dense-retaining backward would not fit, charging the largest matrix instead of the whole layer (about 0.7 GB instead of 2.77 GB per Mistral Large layer) with the same arithmetic and no new config key. (#PRNUM4)
