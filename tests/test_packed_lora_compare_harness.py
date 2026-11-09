@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import strip_ansi
+
 pytest.importorskip("torch")
 
 _HARNESS = Path(__file__).resolve().parents[1] / "benchmarks" / "harness" / "packed_lora_compare.py"
@@ -113,7 +115,7 @@ class TestWithoutCuda:
         assert code == 0 and len(calls) == 1
         assert calls[0][:2] == ["soup", "train"] and "--yes" in calls[0]
         assert ("--allow-oom-attempt" in calls[0]) is expected
-        assert '"batch": 1' in capsys.readouterr().out
+        assert '"batch": 1' in strip_ansi(capsys.readouterr().out)
 
     @pytest.mark.parametrize("flag,expected", [([], False),
                                                (["--packed", "{enabled: true}"], True)])
@@ -144,4 +146,4 @@ class TestWithoutCuda:
         code = harness.main(["--out", str(tmp_path / "out"), "--model", "m", "--data", str(rows),
                              "--batch", "2", "--accum", "1", "--steps", "10"])
         assert code == 2
-        assert "has 5 rows, 20 needed" in capsys.readouterr().err
+        assert "has 5 rows, 20 needed" in strip_ansi(capsys.readouterr().err)
