@@ -1,18 +1,18 @@
-"""v0.53.0 Part C — KV cache types schema helpers + v0.71.14 #140 live wiring.
+"""KV-cache type schema helpers and live serve wiring for issue #140.
 
 Closed allowlist of ``kv_cache_type`` strings exposed to
 ``soup serve --kv-cache-type <type>`` and YAML ``training.kv_cache_type``.
-Mirrors the unsloth serve recipe.
 
-* ``q8_0`` — 8-bit quantized KV cache (transformers: HQQ quantized cache)
-* ``bf16`` — bfloat16 KV cache (transformers: model + cache dtype)
-* ``f16``  — float16 KV cache (transformers: model + cache dtype)
-* ``fp8``  — FP8 on Hopper+ (vLLM-backend only; transformers has no fp8 path)
+* ``q8_0`` — 8-bit HQQ quantized cache (Transformers only).
+* ``bf16`` — bfloat16 cache (Transformers and vLLM).
+* ``f16`` — float16 cache (Transformers and vLLM).
+* ``fp8`` — FP8 cache (vLLM only, Hopper+).
 
-v0.71.14 (#140) lifts the v0.53.0 ``apply_kv_cache_type`` stub: it returns a
-:class:`KvCacheRuntime` plan for the **transformers** backend (model dtype +
-``generate`` kwargs) + a Hopper SM gate for ``fp8``. vLLM / SGLang stay in the
-infra-blocked tail (need a Hopper / Linux box to validate honestly).
+vLLM cache dtype support is checked against its installed ``CacheDType``
+alias at runtime. ``q8_0`` is explicitly refused by vLLM because its
+``int8_per_token_head`` format is not equivalent.
+
+SGLang wiring remains deferred.
 """
 
 from __future__ import annotations
@@ -24,9 +24,8 @@ from typing import Mapping, Optional, Tuple
 
 KV_CACHE_TYPES: frozenset[str] = frozenset({"q8_0", "bf16", "f16", "fp8"})
 
-# Live serve wiring exists for the transformers backend only. vLLM / SGLang
-# KV-cache-dtype routing needs a Hopper / Linux box to validate honestly →
-# blocked tail (v0.71.14 #140).
+# Backends handled by the Transformers-specific implementation below.
+# vLLM has a separate implementation branch in apply_kv_cache_type().
 _LIVE_BACKENDS: frozenset[str] = frozenset({"transformers"})
 
 _MAX_KV_CACHE_LEN: int = 16
@@ -46,28 +45,38 @@ class KVCacheSpec:
     live_wired: bool
 
 
-_KV_CACHE_METADATA: Mapping[str, KVCacheSpec] = MappingProxyType({
-    "q8_0": KVCacheSpec(
-        name="q8_0", bits=8, requires_hopper=False,
-        description="8-bit KV cache (default for unsloth runtime)",
-        live_wired=False,
-    ),
-    "bf16": KVCacheSpec(
-        name="bf16", bits=16, requires_hopper=False,
-        description="bfloat16 KV cache",
-        live_wired=False,
-    ),
-    "f16": KVCacheSpec(
-        name="f16", bits=16, requires_hopper=False,
-        description="float16 KV cache",
-        live_wired=False,
-    ),
-    "fp8": KVCacheSpec(
-        name="fp8", bits=8, requires_hopper=True,
-        description="FP8 KV cache (Hopper+ only)",
-        live_wired=False,
-    ),
-})
+_KV_CACHE_METADATA: Mapping[str, KVCacheSpec] = MappingProxyType(
+    {
+        "q8_0": KVCacheSpec(
+            name="q8_0",
+            bits=8,
+            requires_hopper=False,
+            description="8-bit KV cache (default for unsloth runtime)",
+            live_wired=True,
+        ),
+        "bf16": KVCacheSpec(
+            name="bf16",
+            bits=16,
+            requires_hopper=False,
+            description="bfloat16 KV cache",
+            live_wired=True,
+        ),
+        "f16": KVCacheSpec(
+            name="f16",
+            bits=16,
+            requires_hopper=False,
+            description="float16 KV cache",
+            live_wired=True,
+        ),
+        "fp8": KVCacheSpec(
+            name="fp8",
+            bits=8,
+            requires_hopper=True,
+            description="FP8 KV cache (Hopper+ only)",
+            live_wired=True,
+        ),
+    }
+)
 
 
 def validate_kv_cache_type(value: object) -> str:
@@ -79,23 +88,17 @@ def validate_kv_cache_type(value: object) -> str:
     if isinstance(value, bool):
         raise TypeError(f"kv_cache_type must not be bool, got {value!r}")
     if not isinstance(value, str):
-        raise TypeError(
-            f"kv_cache_type must be str, got {type(value).__name__}"
-        )
+        raise TypeError(f"kv_cache_type must be str, got {type(value).__name__}")
     if not value:
         raise ValueError("kv_cache_type must be non-empty")
     if "\x00" in value:
         raise ValueError("kv_cache_type must not contain null bytes")
     if len(value) > _MAX_KV_CACHE_LEN:
-        raise ValueError(
-            f"kv_cache_type too long (max {_MAX_KV_CACHE_LEN} chars)"
-        )
+        raise ValueError(f"kv_cache_type too long (max {_MAX_KV_CACHE_LEN} chars)")
     canonical = value.lower()
     if canonical not in KV_CACHE_TYPES:
         supported = ", ".join(sorted(KV_CACHE_TYPES))
-        raise ValueError(
-            f"kv_cache_type {value!r} not supported. Supported: {supported}"
-        )
+        raise ValueError(f"kv_cache_type {value!r} not supported. Supported: {supported}")
     return canonical
 
 
@@ -136,9 +139,8 @@ class KvCacheRuntime:
     kv_cache_type: str
     backend: str
     model_dtype: Optional[str]
-    generate_kwargs: Mapping[str, object] = field(
-        default_factory=lambda: MappingProxyType({})
-    )
+    vllm_cache_dtype: Optional[str] = None
+    generate_kwargs: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
     requires_quant_backend: bool = False
     note: str = ""
 
@@ -182,15 +184,52 @@ def _validate_compute_capability(
     if cc is None:
         return None
     if isinstance(cc, bool) or not isinstance(cc, tuple) or len(cc) != 2:
-        raise TypeError(
-            "compute_capability must be a (major, minor) int 2-tuple or None"
-        )
+        raise TypeError("compute_capability must be a (major, minor) int 2-tuple or None")
     major, minor = cc
     if isinstance(major, bool) or isinstance(minor, bool):
         raise TypeError("compute_capability entries must be int, not bool")
     if not isinstance(major, int) or not isinstance(minor, int):
         raise TypeError("compute_capability entries must be int")
     return (major, minor)
+
+
+def _resolve_vllm_cache_dtype(canonical: str) -> str:
+    if canonical == "q8_0":
+        raise NotImplementedError(
+            "kv_cache_type 'q8_0' is not supported by vLLM. "
+            "vLLM's int8_per_token_head is a different quantization scheme."
+        )
+
+    requested = {
+        "bf16": "bfloat16",
+        "f16": "float16",
+        "fp8": "fp8",
+    }[canonical]
+
+    from soup_cli.utils.vllm import get_vllm_version
+
+    version = get_vllm_version()
+
+    try:
+        from importlib import import_module
+        from typing import get_args
+
+        cache_module = import_module("vllm.config.cache")
+        accepted = get_args(cache_module.CacheDType)
+
+    except (ImportError, AttributeError, TypeError) as exc:
+        raise RuntimeError(
+            f"Cannot verify vLLM {version}'s accepted KV-cache dtypes; "
+            f"cannot safely use {requested!r}."
+        ) from exc
+
+    if requested not in accepted:
+        raise RuntimeError(
+            f"Installed vLLM {version} does not support KV-cache dtype "
+            f"{requested!r}. Accepted values: {', '.join(map(str, accepted))}."
+        )
+
+    return requested
 
 
 def apply_kv_cache_type(
@@ -203,29 +242,46 @@ def apply_kv_cache_type(
 
     Args:
         kv_cache_type: one of ``q8_0`` / ``bf16`` / ``f16`` / ``fp8``.
-        backend: serve backend. Only ``transformers`` is live; ``vllm`` /
-            ``sglang`` raise :class:`NotImplementedError` (blocked tail).
+        backend: serve backend. Transformers and vLLM are supported;
+            SGLang remains deferred. vLLM ``q8_0`` is explicitly unsupported.
         compute_capability: optional ``(major, minor)`` CUDA compute
             capability, used to gate ``fp8`` (Hopper SM >= 9.0).
 
     Raises:
         TypeError / ValueError: invalid ``kv_cache_type`` / ``backend`` /
             ``compute_capability``.
-        NotImplementedError: ``backend`` is vLLM / SGLang (deferred).
+        NotImplementedError: ``backend`` is a deferred backend such as SGLang.
         RuntimeError: ``fp8`` (transformers has no fp8 KV-cache path; it is a
             vLLM + Hopper feature — friendly error names the requirement).
     """
     canonical = validate_kv_cache_type(kv_cache_type)
     if isinstance(backend, bool) or not isinstance(backend, str):
-        raise TypeError(
-            f"backend must be str, got {type(backend).__name__}"
-        )
+        raise TypeError(f"backend must be str, got {type(backend).__name__}")
     backend_l = backend.lower()
+    if backend_l == "vllm":
+        cc = _validate_compute_capability(compute_capability)
+
+        if canonical == "fp8" and (cc is None or cc[0] < _HOPPER_MAJOR):
+            detected = "unknown" if cc is None else f"{cc[0]}.{cc[1]}"
+            raise RuntimeError(
+                f"KV-cache type 'fp8' requires Hopper (compute capability "
+                f"{_HOPPER_MAJOR}.0+); detected {detected}."
+            )
+
+        vllm_dtype = _resolve_vllm_cache_dtype(canonical)
+
+        return KvCacheRuntime(
+            kv_cache_type=canonical,
+            backend=backend_l,
+            model_dtype=None,
+            vllm_cache_dtype=vllm_dtype,
+            note=f"vLLM KV-cache dtype: {vllm_dtype}",
+        )
+
     if backend_l not in _LIVE_BACKENDS:
         raise NotImplementedError(
             f"kv_cache_type live wiring for backend {backend!r} is deferred "
-            "(vLLM / SGLang KV-cache-dtype routing needs a Hopper / Linux box "
-            "to validate — tracked in the infra-blocked tail). "
+            "(SGLang KV-cache-dtype routing is deferred). "
             "Use --backend transformers."
         )
     cc = _validate_compute_capability(compute_capability)
@@ -270,18 +326,19 @@ def apply_kv_cache_type(
         kv_cache_type=canonical,
         backend=backend_l,
         model_dtype=None,
-        generate_kwargs=MappingProxyType({
-            "cache_implementation": "quantized",
-            "cache_config": MappingProxyType({
-                "backend": "hqq",
-                "nbits": 8,
-                "axis_key": 0,
-                "axis_value": 0,
-            }),
-        }),
-        requires_quant_backend=True,
-        note=(
-            "8-bit quantized KV cache via the HQQ backend "
-            "(install with `pip install hqq`)."
+        generate_kwargs=MappingProxyType(
+            {
+                "cache_implementation": "quantized",
+                "cache_config": MappingProxyType(
+                    {
+                        "backend": "hqq",
+                        "nbits": 8,
+                        "axis_key": 0,
+                        "axis_value": 0,
+                    }
+                ),
+            }
         ),
+        requires_quant_backend=True,
+        note=("8-bit quantized KV cache via the HQQ backend (install with `pip install hqq`)."),
     )

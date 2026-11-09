@@ -26,12 +26,11 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 
-
 def _validate_adapter_name(name: str) -> bool:
     """Validate adapter name: alphanumeric + hyphens only."""
     if not name:
         return False
-    return bool(re.match(r'^[a-zA-Z0-9][a-zA-Z0-9\-]*$', name))
+    return bool(re.match(r"^[a-zA-Z0-9][a-zA-Z0-9\-]*$", name))
 
 
 def _validate_adapter_path(path: str, cwd: Optional[str] = None) -> bool:
@@ -61,9 +60,7 @@ def _parse_adapters(adapters: Optional[List[str]]) -> Dict[str, str]:
     result = {}
     for item in adapters:
         if "=" not in item:
-            raise ValueError(
-                f"Invalid adapter format: '{item}'. Expected key=path format."
-            )
+            raise ValueError(f"Invalid adapter format: '{item}'. Expected key=path format.")
         name, path = item.split("=", 1)
         result[name.strip()] = path.strip()
     return result
@@ -257,10 +254,7 @@ def serve(
     steer_strength: float = typer.Option(
         1.0,
         "--steer-strength",
-        help=(
-            "Steering strength multiplier (|s| <= 10.0). Ignored when "
-            "--steer is unset."
-        ),
+        help=("Steering strength multiplier (|s| <= 10.0). Ignored when --steer is unset."),
     ),
     hub: str = typer.Option(
         "hf",
@@ -300,10 +294,11 @@ def serve(
         None,
         "--kv-cache-type",
         help=(
-            "KV-cache type for decoding: q8_0 (8-bit quantized, needs hqq) / "
-            "bf16 / f16 (cache dtype) / fp8 (vLLM+Hopper only). Transformers "
-            "backend only — vLLM / SGLang routing is in the blocked tail. "
-            "v0.71.14 (#140)."
+            "KV-cache type: q8_0 (8-bit HQQ, Transformers only), "
+            "bf16 / f16 (Transformers and vLLM), "
+            "fp8 (vLLM + Hopper only). vLLM checks installed dtype support; "
+            "bf16/f16 must match the model dtype. "
+            "q8_0 is unsupported on vLLM; SGLang wiring is deferred."
         ),
     ),
     tool_auth_token: Optional[str] = typer.Option(
@@ -409,9 +404,7 @@ def serve(
             # Escape the exception message — it embeds the operator-
             # supplied --steer value via {value!r}, which would otherwise
             # let a crafted name inject Rich markup (security review M1).
-            console.print(
-                f"[red]Invalid --steer:[/] {_rich_escape(str(exc))}"
-            )
+            console.print(f"[red]Invalid --steer:[/] {_rich_escape(str(exc))}")
             raise typer.Exit(code=2) from exc
         if backend.lower() != "transformers":
             console.print(
@@ -450,9 +443,7 @@ def serve(
                 kv_cache_type, backend=backend.lower(), compute_capability=cc
             )
         except (TypeError, ValueError, NotImplementedError, RuntimeError) as exc:
-            console.print(
-                f"[red]--kv-cache-type:[/] {_rich_escape(str(exc))}"
-            )
+            console.print(f"[red]--kv-cache-type:[/] {_rich_escape(str(exc))}")
             raise typer.Exit(code=2) from exc
         if (
             resolved_kv_runtime.requires_quant_backend
@@ -482,9 +473,7 @@ def serve(
         from soup_cli.utils.hubs import apply_hub_to_cli_model
 
         try:
-            model, base_model = apply_hub_to_cli_model(
-                model, base_model, hub, console=console
-            )
+            model, base_model = apply_hub_to_cli_model(model, base_model, hub, console=console)
         except (TypeError, ValueError) as exc:
             console.print(f"[red]{exc}[/]")
             raise typer.Exit(code=2) from exc
@@ -500,7 +489,7 @@ def serve(
     except ImportError:
         console.print(
             "[red]FastAPI/uvicorn not installed.[/]\n"
-            "Install with: [bold]pip install \"soup-cli\\[serve]\"[/]"
+            'Install with: [bold]pip install "soup-cli\\[serve]"[/]'
         )
         raise typer.Exit(1)
 
@@ -584,7 +573,9 @@ def serve(
         # v0.33.0 #38 — live MII pipeline + OpenAI-compatible HTTP.
         try:
             mii_pipeline = create_mii_pipeline(
-                model_path=model, tensor_parallel=1, max_length=4096,
+                model_path=model,
+                tensor_parallel=1,
+                max_length=4096,
                 tokenizer=mii_tokenizer,
             )
         except (ImportError, RuntimeError, OSError) as exc:
@@ -606,13 +597,15 @@ def serve(
             console.print("[green]Chat template:[/] applying the model's own template.")
 
         mii_app = build_mii_app(
-            mii_pipeline, model_name=mii_model_name, tokenizer=mii_tokenizer,
+            mii_pipeline,
+            model_name=mii_model_name,
+            tokenizer=mii_tokenizer,
         )
 
         import uvicorn
+
         console.print(
-            f"[green]Starting DeepSpeed-MII server[/] "
-            f"({mii_model_name}) on http://{host}:{port}"
+            f"[green]Starting DeepSpeed-MII server[/] ({mii_model_name}) on http://{host}:{port}"
         )
         uvicorn.run(mii_app, host=host, port=port, log_level="info")
         return
@@ -642,7 +635,7 @@ def serve(
         if not is_vllm_available():
             console.print(
                 "[red]vLLM not installed.[/]\n"
-                "Install with: [bold]pip install \"soup-cli\\[serve-fast]\"[/]"
+                'Install with: [bold]pip install "soup-cli\\[serve-fast]"[/]'
             )
             raise typer.Exit(1)
 
@@ -653,7 +646,7 @@ def serve(
         if not check_sglang_available():
             console.print(
                 "[red]SGLang not installed.[/]\n"
-                "Install with: [bold]pip install \"soup-cli\\[sglang]\"[/]"
+                'Install with: [bold]pip install "soup-cli\\[sglang]"[/]'
             )
             raise typer.Exit(1)
 
@@ -763,9 +756,7 @@ def serve(
         console.print("[red]--structured-output regex requires --regex-pattern.[/]")
         raise typer.Exit(1)
     if structured_mode == "json" and not json_schema:
-        console.print(
-            "[red]--structured-output json requires --json-schema <path>.[/]"
-        )
+        console.print("[red]--structured-output json requires --json-schema <path>.[/]")
         raise typer.Exit(1)
 
     # Validate trace endpoint early
@@ -819,6 +810,9 @@ def serve(
             trust_remote_code=resolved_trust,
             max_model_len=max_model_len,
             enable_dashboard=dashboard,
+            vllm_cache_dtype=(
+                resolved_kv_runtime.vllm_cache_dtype if resolved_kv_runtime is not None else None
+            ),
         )
     elif backend == "sglang":
         app = _serve_sglang(
@@ -870,9 +864,7 @@ def serve(
                 is_adapter=is_adapter,
                 device=device,
                 trust_remote_code=resolved_trust,
-                kv_cache_dtype=(
-                    resolved_kv_runtime.model_dtype if resolved_kv_runtime else None
-                ),
+                kv_cache_dtype=(resolved_kv_runtime.model_dtype if resolved_kv_runtime else None),
             )
         console.print("[bold green]Model loaded![/]")
         if resolved_kv_runtime is not None:
@@ -889,18 +881,11 @@ def serve(
             from rich.markup import escape as _esc
 
             try:
-                model_obj, peft_adapter_names = _load_named_adapters(
-                    model_obj, adapter_map
-                )
+                model_obj, peft_adapter_names = _load_named_adapters(model_obj, adapter_map)
             except Exception as exc:  # noqa: BLE001 — surface any PEFT error
-                console.print(
-                    f"[red]Failed to load --adapters:[/] {_esc(str(exc))}"
-                )
+                console.print(f"[red]Failed to load --adapters:[/] {_esc(str(exc))}")
                 raise typer.Exit(1) from exc
-            console.print(
-                "[green]Adapters ready:[/] "
-                + ", ".join(sorted(peft_adapter_names))
-            )
+            console.print("[green]Adapters ready:[/] " + ", ".join(sorted(peft_adapter_names)))
 
         # v0.71.10 #201 — install the activation-steering decode hook. The
         # handle persists for the server's lifetime (process-global model).
@@ -916,9 +901,7 @@ def serve(
             try:
                 steer_dir = resolve_steering_dir(steer)
                 loaded_steer = load_steering_artifact(steer_dir)
-                install_steering_hook(
-                    model_obj, loaded_steer, strength=steer_strength
-                )
+                install_steering_hook(model_obj, loaded_steer, strength=steer_strength)
             except (TypeError, ValueError, OSError) as exc:
                 console.print(f"[red]--steer:[/] {_esc(str(exc))}")
                 raise typer.Exit(2) from exc
@@ -942,9 +925,7 @@ def serve(
             try:
                 bank_obj = load_bank(bank)
                 loaded_bank = apply_bank_to_serve(bank_obj)
-                loaded_bank.install_serve_hook(
-                    model_obj, strength=bank_strength
-                )
+                loaded_bank.install_serve_hook(model_obj, strength=bank_strength)
             except (TypeError, ValueError, OSError) as exc:
                 console.print(f"[red]--bank:[/] {_esc(str(exc))}")
                 raise typer.Exit(2) from exc
@@ -1017,6 +998,7 @@ def serve(
         schema_obj = None
         if json_schema:
             import json as _json
+
             schema_path = Path(json_schema)
             if not is_under_cwd(schema_path):
                 console.print(
@@ -1034,9 +1016,7 @@ def serve(
                 raise typer.Exit(1)
 
         try:
-            constraint = build_constraint(
-                structured_mode, schema_obj, regex_pattern
-            )
+            constraint = build_constraint(structured_mode, schema_obj, regex_pattern)
         except ValueError as exc:
             console.print(f"[red]{exc}[/]")
             raise typer.Exit(1)
@@ -1053,7 +1033,8 @@ def serve(
 
             try:
                 trace_log_writer = TraceLogWriter(
-                    trace_log, cap_mb=trace_log_cap_mb,
+                    trace_log,
+                    cap_mb=trace_log_cap_mb,
                 )
             except (TypeError, ValueError) as exc:
                 from rich.markup import escape as _escape
@@ -1061,8 +1042,7 @@ def serve(
                 console.print(f"[red]--trace-log:[/] {_escape(str(exc))}")
                 raise typer.Exit(1) from exc
             console.print(
-                f"[green]Request trace log:[/] {trace_log_writer.path} "
-                f"(cap {trace_log_cap_mb} MB)"
+                f"[green]Request trace log:[/] {trace_log_writer.path} (cap {trace_log_cap_mb} MB)"
             )
 
         # v0.53.9 #98 — validate reasoning parser name once at startup.
@@ -1156,11 +1136,37 @@ def _serve_vllm(
     trust_remote_code: bool = False,
     max_model_len: Optional[int] = None,
     enable_dashboard: bool = False,
+    vllm_cache_dtype: Optional[str] = None,
 ):
     """Set up vLLM engine and create FastAPI app."""
     from soup_cli.utils.vllm import create_vllm_app, create_vllm_engine
 
     console.print("[dim]Initializing vLLM engine...[/]")
+
+    if vllm_cache_dtype in {"bfloat16", "float16"}:
+        from transformers import AutoConfig
+
+        config_model = base_model if is_adapter and base_model else str(model_path)
+        model_config = AutoConfig.from_pretrained(
+            config_model,
+            trust_remote_code=trust_remote_code,
+        )
+
+        raw_model_dtype = getattr(model_config, "torch_dtype", None)
+
+        if raw_model_dtype is None:
+            raise RuntimeError(
+                "Cannot determine model dtype; "
+                f"cannot safely use vLLM KV-cache dtype {vllm_cache_dtype!r}."
+            )
+
+        model_dtype = str(raw_model_dtype).replace("torch.", "")
+
+        if model_dtype != vllm_cache_dtype:
+            raise RuntimeError(
+                f"vLLM KV-cache dtype {vllm_cache_dtype!r} must match model dtype {model_dtype!r}."
+            )
+
     engine, engine_model_name = create_vllm_engine(
         model_path=str(model_path),
         base_model=base_model,
@@ -1173,6 +1179,7 @@ def _serve_vllm(
         quantization=quantization,
         trust_remote_code=trust_remote_code,
         max_model_len=max_model_len,
+        vllm_cache_dtype=vllm_cache_dtype,
     )
     console.print("[bold green]vLLM engine ready![/]")
 
@@ -1232,9 +1239,7 @@ def _load_serve_tokenizer(
 
     for candidate in candidates:
         try:
-            return AutoTokenizer.from_pretrained(
-                candidate, trust_remote_code=trust_remote_code
-            )
+            return AutoTokenizer.from_pretrained(candidate, trust_remote_code=trust_remote_code)
         except Exception as exc:  # noqa: BLE001 — any load failure is a fallback
             logger.debug("tokenizer load failed for %s: %s", candidate, exc)
     return None
@@ -1443,9 +1448,7 @@ def _load_model(
         load_dtype = default_dtype
 
     console.print("[dim]Loading tokenizer...[/]")
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_path, trust_remote_code=trust_remote_code
-    )
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=trust_remote_code)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -1493,9 +1496,7 @@ def _load_named_adapters(model_obj, adapter_map: Dict[str, str]):
         path = adapter_map[name]
         if idx == 0 and not already_peft:
             # Wrap the plain base model into a multi-adapter PeftModel.
-            model_obj = PeftModel.from_pretrained(
-                model_obj, path, adapter_name=name
-            )
+            model_obj = PeftModel.from_pretrained(model_obj, path, adapter_name=name)
         else:
             model_obj.load_adapter(path, adapter_name=name)
         console.print(f"[dim]Loaded adapter '{name}' from {path}[/]")
@@ -1548,10 +1549,9 @@ def _load_draft_model(speculative_model: str, device: str):
     from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
 
     # SSRF protection: block URL-based model paths
-    if re.match(r'^https?://', speculative_model):
+    if re.match(r"^https?://", speculative_model):
         console.print(
-            "[red]Speculative model must be a local path or HuggingFace model ID, "
-            "not a URL.[/]"
+            "[red]Speculative model must be a local path or HuggingFace model ID, not a URL.[/]"
         )
         raise typer.Exit(1)
 
@@ -1581,7 +1581,7 @@ def _load_draft_tokenizer(speculative_model: str, trust_remote_code: bool = Fals
 
     from transformers import AutoTokenizer
 
-    if re.match(r'^https?://', speculative_model):
+    if re.match(r"^https?://", speculative_model):
         return None
     try:
         return AutoTokenizer.from_pretrained(
@@ -1632,9 +1632,7 @@ def _generate_response(
     # Apply chat template. #332 — THE shared builder; the vLLM backend calls
     # the same function so the two backends cannot drift apart again. #781 —
     # encoded without re-adding the special tokens the template rendered.
-    inputs = encode_chat_prompt(
-        messages, tokenizer, fallback_on_error=True, return_tensors="pt"
-    )
+    inputs = encode_chat_prompt(messages, tokenizer, fallback_on_error=True, return_tensors="pt")
     input_ids = inputs["input_ids"].to(model.device)
     attention_mask = inputs["attention_mask"].to(model.device)
 
@@ -1677,9 +1675,7 @@ def _generate_response(
             # the user-facing knob; n-gram size + prompt_lookup_max are
             # validated upstream by `validate_ngram_config`.
             try:
-                gen_kwargs["prompt_lookup_num_tokens"] = int(
-                    ngram_config.num_draft_tokens
-                )
+                gen_kwargs["prompt_lookup_num_tokens"] = int(ngram_config.num_draft_tokens)
             except (TypeError, AttributeError):
                 # Schema gate at construction time enforces shape; this
                 # is defence-in-depth.
@@ -1693,7 +1689,7 @@ def _generate_response(
 
         outputs = model.generate(**gen_kwargs)
 
-    new_tokens = outputs[0][input_ids.shape[1]:]
+    new_tokens = outputs[0][input_ids.shape[1] :]
     response = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
 
     prompt_tokens = input_ids.shape[1]
@@ -1794,9 +1790,7 @@ def _create_app(
         if not authorization or not _secrets.compare_digest(
             authorization.encode("utf-8"), expected.encode("utf-8")
         ):
-            raise HTTPException(
-                status_code=401, detail="Invalid or missing bearer token"
-            )
+            raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
 
     def _check_code_tool_auth(authorization: Optional[str]) -> None:
         """The python and bash tool routes take a token on every bind, loopback included."""
@@ -1978,10 +1972,7 @@ def _create_app(
         _check_tool_auth(authorization)
         current = _active_snapshot()
         return {
-            "adapters": [
-                {"name": name, "active": name == current}
-                for name in _adapter_map
-            ],
+            "adapters": [{"name": name, "active": name == current} for name in _adapter_map],
             "active": current,
         }
 
@@ -1995,9 +1986,7 @@ def _create_app(
         # adapter names are loaded by reading "unknown adapter" off a probe.
         _check_tool_auth(authorization)
         if not _adapter_map:
-            raise HTTPException(
-                status_code=404, detail="No adapters loaded."
-            )
+            raise HTTPException(status_code=404, detail="No adapters loaded.")
         if name not in _adapter_map:
             raise HTTPException(
                 status_code=404,
@@ -2032,9 +2021,7 @@ def _create_app(
     def chat_completions(
         request: ChatCompletionRequest,
         x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
-        x_conversation_id: Optional[str] = Header(
-            default=None, alias="X-Conversation-Id"
-        ),
+        x_conversation_id: Optional[str] = Header(default=None, alias="X-Conversation-Id"),
     ):
         # Check adapter selection (from request body)
         # Treat an empty public request value like an omitted adapter. The
@@ -2075,12 +2062,16 @@ def _create_app(
             from soup_cli.utils.structured_output import (
                 build_logits_processors,
             )
+
             processors = build_logits_processors(
-                output_constraint, tokenizer,
+                output_constraint,
+                tokenizer,
             )
             return StreamingResponse(
                 _stream_response(
-                    model_obj, tokenizer, messages,
+                    model_obj,
+                    tokenizer,
+                    messages,
                     max_tokens=max_tokens,
                     temperature=request.temperature,
                     top_p=request.top_p,
@@ -2098,9 +2089,7 @@ def _create_app(
                     adapter_names=_peft_adapter_names,
                     requested_adapter=requested_adapter,
                     active_adapter=_active_snapshot(),
-                    canary_outcome=(
-                        lambda ok: _record_canary_outcome(canary_tracking, ok)
-                    ),
+                    canary_outcome=(lambda ok: _record_canary_outcome(canary_tracking, ok)),
                     logits_processor=processors or None,
                     ngram_config=ngram_config,
                     reasoning_parser=reasoning_parser,
@@ -2126,8 +2115,10 @@ def _create_app(
                     from soup_cli.utils.structured_output import (
                         build_logits_processors,
                     )
+
                     processors = build_logits_processors(
-                        output_constraint, tokenizer,
+                        output_constraint,
+                        tokenizer,
                     )
                     if _mole_runtime is not None:
                         # v0.71.17 #259 — per-token MoLE gate-blend decode.
@@ -2146,15 +2137,20 @@ def _create_app(
                         # disabled) under the generation lock for the duration
                         # of generate().
                         with _adapter_scope(
-                            model_obj, _generation_lock, _peft_adapter_names,
-                            requested_adapter, _active_snapshot(),
+                            model_obj,
+                            _generation_lock,
+                            _peft_adapter_names,
+                            requested_adapter,
+                            _active_snapshot(),
                         ):
                             (
                                 response_text,
                                 prompt_tokens,
                                 completion_tokens,
                             ) = _generate_response(
-                                model_obj, tokenizer, messages,
+                                model_obj,
+                                tokenizer,
+                                messages,
                                 max_tokens=max_tokens,
                                 temperature=request.temperature,
                                 top_p=request.top_p,
@@ -2177,7 +2173,8 @@ def _create_app(
                     from soup_cli.utils.reasoning_parser import strip_reasoning
 
                     response_text = strip_reasoning(
-                        response_text, reasoning_parser,
+                        response_text,
+                        reasoning_parser,
                     )
 
                 # output_constraint is validated upstream; v0.33.0 #53 wires
@@ -2190,8 +2187,7 @@ def _create_app(
                 # the request handler on disk / serialisation issues.
                 if trace_log_writer is not None:
                     last_user = next(
-                        (m["content"] for m in reversed(messages)
-                         if m.get("role") == "user"),
+                        (m["content"] for m in reversed(messages) if m.get("role") == "user"),
                         "",
                     )
                     trace_log_writer.record(
@@ -2268,15 +2264,9 @@ def _create_app(
                 text = chat_response["choices"][0]["message"]["content"]
             except (KeyError, IndexError, TypeError):
                 text = ""
-        usage = (
-            chat_response.get("usage", {}) if isinstance(chat_response, dict) else {}
-        )
+        usage = chat_response.get("usage", {}) if isinstance(chat_response, dict) else {}
 
-        msg_id = (
-            chat_response.get("id", "")
-            if isinstance(chat_response, dict)
-            else ""
-        )
+        msg_id = chat_response.get("id", "") if isinstance(chat_response, dict) else ""
         out_model = openai_payload.get("model", model_name)
         in_tokens = int(usage.get("prompt_tokens", 0) or 0)
         out_tokens = int(usage.get("completion_tokens", 0) or 0)
@@ -2450,9 +2440,7 @@ def _create_app(
                 raw_results = backend(query, max_results, allowlist)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("/v1/tools/web_search backend error: %s", exc)
-                raise HTTPException(
-                    status_code=500, detail="Internal server error"
-                )
+                raise HTTPException(status_code=500, detail="Internal server error")
             for r in (raw_results or [])[:max_results]:
                 if isinstance(r, dict) and "url" in r:
                     # Re-check domain allowlist for backend results.
@@ -2498,9 +2486,7 @@ def _create_app(
         _check_tool_auth(authorization)
         db = getattr(app.state, "record_thumbs_db", None)
         if not db:
-            raise HTTPException(
-                status_code=404, detail="thumbs recording not enabled"
-            )
+            raise HTTPException(status_code=404, detail="thumbs recording not enabled")
         if not isinstance(payload, dict):
             raise HTTPException(status_code=400, detail="Invalid request")
         prompt = payload.get("prompt")
@@ -2613,15 +2599,26 @@ def _stream_anthropic_messages(
 
 
 def _stream_response(
-    model, tokenizer, messages,
-    max_tokens, temperature, top_p, model_name,
-    assistant_model=None, assistant_tokenizer=None, num_assistant_tokens=5,
-    trace_log_writer=None, started=None,
+    model,
+    tokenizer,
+    messages,
+    max_tokens,
+    temperature,
+    top_p,
+    model_name,
+    assistant_model=None,
+    assistant_tokenizer=None,
+    num_assistant_tokens=5,
+    trace_log_writer=None,
+    started=None,
     kv_cache_generate_kwargs=None,
     mole_runtime=None,
-    loaded_bank=None, x_user_id=None,
-    adapter_lock=None, adapter_names=None,
-    requested_adapter=None, active_adapter=None,
+    loaded_bank=None,
+    x_user_id=None,
+    adapter_lock=None,
+    adapter_names=None,
+    requested_adapter=None,
+    active_adapter=None,
     canary_outcome=None,
     logits_processor=None,
     ngram_config=None,
@@ -2656,11 +2653,16 @@ def _stream_response(
             # v0.71.33 — select the request's LoRA adapter under the generation
             # lock (resolved in the endpoint, applied here where generate runs).
             with _adapter_scope(
-                model, adapter_lock, adapter_names,
-                requested_adapter, active_adapter,
+                model,
+                adapter_lock,
+                adapter_names,
+                requested_adapter,
+                active_adapter,
             ):
                 response_text, _, completion_tokens_for_log = _generate_response(
-                    model, tokenizer, messages,
+                    model,
+                    tokenizer,
+                    messages,
                     max_tokens=max_tokens,
                     temperature=temperature,
                     top_p=top_p,
@@ -2686,7 +2688,8 @@ def _stream_response(
         from soup_cli.utils.reasoning_parser import strip_reasoning
 
         response_text = strip_reasoning(
-            response_text, reasoning_parser,
+            response_text,
+            reasoning_parser,
         )
 
     # Simulate streaming by sending word-by-word
@@ -2732,8 +2735,7 @@ def _stream_response(
     if trace_log_writer is not None and started is not None:
         try:
             last_user = next(
-                (m["content"] for m in reversed(messages)
-                 if m.get("role") == "user"),
+                (m["content"] for m in reversed(messages) if m.get("role") == "user"),
                 "",
             )
             trace_log_writer.record(
