@@ -97,13 +97,11 @@ def test_prune_failure_does_not_stop_others(root, monkeypatch):
     assert a.exists() and not b.exists()
 
 
+@pytest.mark.requires_symlink
 def test_symlinked_slot_ignored(root, tmp_path_factory):
     target = tmp_path_factory.mktemp("elsewhere")
     (target / "f").write_text("x")
-    try:
-        os.symlink(target, root / "org__m@link", target_is_directory=True)
-    except (OSError, NotImplementedError):
-        pytest.skip("no symlink support")
+    os.symlink(target, root / "org__m@link", target_is_directory=True)
     assert _by_name(root) == {}
     prune_slots("org/m", str(root), None, confirm=True)
     assert (target / "f").exists()
