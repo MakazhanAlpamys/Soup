@@ -790,6 +790,17 @@ page-locked, and on the disk tier whether the async reader's host *staging* is.
   target** if the box cannot provide it, instead of degrading to pageable and spending the
   whole margin pinning exists to provide. The refusal names the store size on the RAM tier,
   and `stream_read_ahead` on the disk tier.
+- **Windows, disk tier: commit headroom.** Windows charges page-locked memory against the
+  system *commit* limit (RAM + pagefile), which free RAM does not show; a 123B run on a 32 GB
+  laptop was stopped twice that way with pinned staging while pageable staging passed. On a
+  CUDA target the disk tier's pre-flight therefore also reads the commit counters
+  (`GetPerformanceInfo`) and charges the reader's pinned staging plus the resident extras
+  against what is still free. With `stream_pin` **unset** and less than 8 GiB left afterwards,
+  Soup stages in pageable memory and says so in the panel. `stream_pin: true` is honoured with
+  one warning when it is merely tight, and **refused before any weight is staged** when it
+  cannot fit at all, naming the numbers; the fixes are `stream_pin: false`, closing programs,
+  or a larger pagefile. `stream_pin: false` and every other OS are unchanged, and a failure to
+  read the counters skips the check. The 8 GiB margin is a chosen figure, not a measured bound.
 
 **Where `true` announces instead of refusing.** Page-locking needs a CUDA device to copy to.
 On a non-CUDA target there is nothing to force, so the request is **inapplicable rather than
