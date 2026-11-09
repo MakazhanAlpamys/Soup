@@ -566,9 +566,12 @@ class MLXSFTTrainerWrapper:
                     )
             from soup_cli.utils.mlx_vocab import register_mlx_tokens
 
-            delta_v, added_list = register_mlx_tokens(self.tokenizer, cfg.data)
+            reg_result = register_mlx_tokens(self.tokenizer, cfg.data)
+            delta_v, added_list = reg_result
             if delta_v > 0:
                 self._added_tokens = added_list
+                self._added_special_tokens = getattr(reg_result, "special_tokens", [])
+                self._added_regular_tokens = getattr(reg_result, "regular_tokens", [])
                 self._base_vocab_size = base_vocab_len
                 console.print(
                     f"[green]MLX vocabulary expansion:[/] registered {delta_v} new token(s) "
@@ -584,6 +587,10 @@ class MLXSFTTrainerWrapper:
         without it every parameter is trainable and the saved "adapter" is
         actually a full fine-tune (172 tensors instead of ~64 LoRA weights).
         """
+        if getattr(self, "_applied_lora", False):
+            return
+        self._applied_lora = True
+
         from mlx_lm.tuner.utils import linear_to_lora_layers
 
         cfg = self.config
@@ -640,12 +647,25 @@ class MLXSFTTrainerWrapper:
             **({"use_dora": True} if use_dora else {}),
         )
         if getattr(self, "_added_tokens", None):
-            from soup_cli.utils.mlx_vocab import attach_mlx_vocab_extension
+            import mlx.core as mx
+            from mlx.utils import tree_flatten
 
+            from soup_cli.utils.mlx_vocab import attach_mlx_vocab_extension
+            from soup_cli.utils.seeding import resolve_training_seed
+
+            seed = resolve_training_seed(cfg.training)
             is_tied, ext_embed, ext_head = attach_mlx_vocab_extension(
-                model, delta_v=len(self._added_tokens)
+                model, delta_v=len(self._added_tokens), seed=seed
             )
             self._vocab_ext = (is_tied, ext_embed, ext_head)
+            self._initial_new_weights = mx.array(ext_embed.new_weights)
+            if ext_head is not None:
+                self._initial_new_head_weights = mx.array(ext_head.new_weights)
+            self._initial_lora_weights = {
+                k: mx.array(v)
+                for k, v in tree_flatten(model.trainable_parameters())
+                if "lora" in k
+            }
 
     def _load_checkpoint_weights(self, checkpoint_path: str) -> None:
         """Warm-start LoRA weights from a saved MLX checkpoint (#634).
@@ -1352,6 +1372,8 @@ class MLXSFTTrainerWrapper:
                 added_tokens=self._added_tokens,
                 extended_embed=ext_embed,
                 extended_head=ext_head,
+                added_special_tokens=getattr(self, "_added_special_tokens", None),
+                added_regular_tokens=getattr(self, "_added_regular_tokens", None),
             )
 
         loss_summary = summarize_training_loss(
