@@ -26,11 +26,11 @@ from soup_cli.data.loader import (
 from soup_cli.monitoring.display import TrainingDisplay
 from soup_cli.trainer.classifier import CLASSIFICATION_TASKS
 from soup_cli.utils.gpu import (
+    apply_quantization_guard,
     configure_cuda_alloc_hint,
     configure_mps_async_load,
     detect_device,
     get_gpu_info,
-    resolve_quantization,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type hints only, no runtime import
@@ -1643,17 +1643,11 @@ def train(
 
     configure_mps_async_load(device)
 
-    # Quantization guard: explicit decision per #423.  See resolve_quantization()
-    # docstring for the full rationale — MLX 4-bit uses pre-quantized mlx-community
-    # weights (not bitsandbytes NF4), CPU cannot run bitsandbytes at all.
-    resolved_quant, quant_warning = resolve_quantization(
-        device=device,
-        backend=cfg.backend,
-        quantization=cfg.training.quantization,
-    )
-    if quant_warning:
-        console.print(f"[yellow]{quant_warning}[/]")
-    cfg.training.quantization = resolved_quant
+    # Quantization guard: explicit decision per #423, shared with `soup sweep`.  See the
+    # docstring of `resolve_quantization` (utils/gpu.py) for the full rationale — MLX 4-bit
+    # uses pre-quantized mlx-community weights (not bitsandbytes NF4), CPU cannot run
+    # bitsandbytes at all.
+    apply_quantization_guard(cfg, device, console)
 
     # Hardware-fit preflight: refuse (unless --allow-oom-attempt) when the
     # analytical VRAM predictor says the run won't fit. Skips silently on CPU
