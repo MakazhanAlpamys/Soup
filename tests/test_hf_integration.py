@@ -724,6 +724,51 @@ class TestDeployHfSpace:
         fake_api.upload_file.assert_not_called()
 
 
+    @pytest.mark.parametrize("with_requirements", [False, True])
+    def test_hf_space_custom_template_commits_exact_files(
+        self, tmp_path, monkeypatch, with_requirements
+    ):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("HF_TOKEN", "t1")
+        template = tmp_path / "custom"
+        template.mkdir()
+        contents = {
+            "app.py": "# café\nMODEL = '{MODEL_REPO}'\n",
+            "README.md": "---\nsdk: gradio\n---\n# {MODEL_REPO}\n",
+        }
+        if with_requirements:
+            contents["requirements.txt"] = "gradio>=4\n"
+        for name, content in contents.items():
+            (template / name).write_text(content, encoding="utf-8")
+        (template / "ignored.txt").write_text("local only", encoding="utf-8")
+
+        fake_api = MagicMock()
+        monkeypatch.setattr("soup_cli.utils.hf.get_hf_api", lambda **_: fake_api)
+        result = runner.invoke(
+            app,
+            [
+                "deploy", "hf-space", "--model", "user/my-model",
+                "--space", "user/my-space", "--template-dir", "custom", "--yes",
+            ],
+        )
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        fake_api.create_repo.assert_called_once_with(
+            repo_id="user/my-space", repo_type="space", space_sdk="gradio",
+            private=False, exist_ok=True,
+        )
+        fake_api.create_commit.assert_called_once()
+        args = fake_api.create_commit.call_args.kwargs
+        assert args["repo_id"] == "user/my-space"
+        assert args["repo_type"] == "space"
+        operations = args["operations"]
+        assert len(operations) == len(contents)
+        assert {op.path_in_repo: op.path_or_fileobj for op in operations} == {
+            name: content.replace("{MODEL_REPO}", "user/my-model").encode("utf-8")
+            for name, content in contents.items()
+        }
+        fake_api.upload_file.assert_not_called()
+
     @pytest.mark.parametrize("rejected_path", ["README.md", "app.py"])
     def test_hf_space_rejected_commit_preserves_existing_files(self, monkeypatch, rejected_path):
         monkeypatch.setenv("HF_TOKEN", "t1")
