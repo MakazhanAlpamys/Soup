@@ -44,7 +44,7 @@ def test_documents_extra_declares_both_reader_floors() -> None:
     assert match, "no installable documents extra"
     requirements = [Requirement(value) for value in ast.literal_eval(match.group(1))]
     assert {str(requirement) for requirement in requirements} == {
-        "pypdf>=6.19.0", "python-docx>=1.2.0",
+        "pypdf>=6.21.2", "python-docx>=1.2.0",
     }
 
 

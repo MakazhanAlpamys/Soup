@@ -13,18 +13,20 @@ from urllib.parse import urlparse
 
 from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
 
-# Token regex — 16-128 chars of urlsafe base64.
-_TOKEN_RE = re.compile(r"^[A-Za-z0-9_\-]{16,128}$")
+# Token regex — 16-128 chars of urlsafe base64, matched against the whole value.
+_TOKEN_RE = re.compile(r"[A-Za-z0-9_\-]{16,128}")
 
 
 def validate_token(token: str) -> str:
     """Reject a token that isn't urlsafe-base64-shaped.
 
     Mirrors `secrets.token_urlsafe(N)` output: 16..128 chars of `A-Za-z0-9_-`.
+    The whole value must match: a trailing newline is not part of a token.
+    The one rule for `soup ui`, `soup mcp serve` and `soup serve`.
     """
     if not isinstance(token, str):
         raise TypeError("token must be str")
-    if not _TOKEN_RE.match(token):
+    if _TOKEN_RE.fullmatch(token) is None:
         raise ValueError(
             "token must be 16-128 urlsafe-base64 chars (A-Z, a-z, 0-9, '_', '-')"
         )

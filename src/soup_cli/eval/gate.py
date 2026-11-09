@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Callable, Literal, Mapping, Optional
 from urllib.parse import urlparse
 
+import yaml
 from pydantic import BaseModel, Field, field_validator
 
 from soup_cli import __version__
@@ -123,6 +124,10 @@ class EvalSuite(BaseModel):
     tasks: list[GateTask] = Field(default_factory=list)
 
 
+class MalformedSuiteError(ValueError):
+    """Invalid YAML syntax or root shape that must still abort training setup."""
+
+
 def _require_gate_tasks(suite: EvalSuite) -> None:
     if not suite.tasks:
         raise ValueError(
@@ -146,9 +151,24 @@ def load_suite(path: str) -> EvalSuite:
         )
     if not suite_path.exists():
         raise FileNotFoundError(f"eval-gate suite not found: {path}")
-    data = load_yaml_file_limited(
-        suite_path, f"eval-gate suite '{path}'", max_bytes=MAX_CONFIG_BYTES
-    ) or {}
+    try:
+        raw = load_yaml_file_limited(
+            suite_path, f"eval-gate suite '{path}'", max_bytes=MAX_CONFIG_BYTES
+        )
+    except yaml.YAMLError as exc:
+        raise MalformedSuiteError(
+            f"eval-gate suite '{path}' is not valid YAML: {exc}"
+        ) from exc
+    if raw is None:
+        data: dict[str, object] = {}
+    elif not isinstance(raw, Mapping):
+        actual = type(raw).__name__
+        raise MalformedSuiteError(
+            f"eval-gate suite '{path}' must be a mapping with 'suite' and 'tasks', "
+            f"got a {actual}"
+        )
+    else:
+        data = dict(raw)
     suite = EvalSuite(**data)
     _require_gate_tasks(suite)
     return suite
@@ -515,7 +535,7 @@ def _run_judge_task(
 
     items: list[dict] = []
     with prompts_path.open("r", encoding="utf-8") as fh:
-        for line in fh:
+        for line_number, line in enumerate(fh, start=1):
             line = line.strip()
             if not line:
                 continue
@@ -525,7 +545,17 @@ def _run_judge_task(
                 raise ValueError(
                     f"invalid JSONL in {task.prompts}: {exc}"
                 ) from exc
+            if not isinstance(row, dict):
+                raise ValueError(
+                    f"judge task {task.name!r} file {task.prompts!r} line {line_number}: "
+                    f"row must be an object, got {type(row).__name__}"
+                )
             prompt = row.get("prompt", "")
+            if not isinstance(prompt, str):
+                raise ValueError(
+                    f"judge task {task.name!r} file {task.prompts!r} line {line_number}: "
+                    f"field 'prompt' must be a string, got {type(prompt).__name__}"
+                )
             response = generate_fn(prompt)
             items.append({
                 "prompt": prompt,
@@ -632,6 +662,12 @@ def run_gate(
             context="baseline score",
         )
     _require_gate_tasks(suite)
+    try:
+        finite_threshold = math.isfinite(regression_threshold)
+    except OverflowError:
+        finite_threshold = False
+    if not finite_threshold:
+        raise ValueError("regression_threshold must be finite")
     task_results: list[GateTaskResult] = []
     any_regressed = False
     any_failed_threshold = False

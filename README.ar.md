@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
+<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <strong>العربية</strong> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -92,52 +92,38 @@ soup train
 
 ## ما الجديد
 
-**v0.76.0 — الإعدادات التي كان Soup يقبلها ولا يطبّقها أبدًا باتت توقف التحميل.** الخيارات التي كان يُتحقَّق
-من صحتها وتُوثَّق ولا يقرؤها شيء في المسار الذي تزعم أنها تضبطه، صارت تُرفَض عند التحميل، مع تسمية
-الإعداد وما ينبغي تغييره؛ أما البقية فتُصدر تحذيرًا وتسمّي الإصدار الذي سيرفضها. وقد يتوقف تحميل إعداد
-كان يُحمَّل من قبل: شغّل `soup doctor --config soup.yaml` أولًا.
+**v0.77.2 — قطع من `main` بعد v0.77.1: 159 طلب سحب (pull request)، منها 153 من 30 شخصًا من خارج
+المشرف.** معظمه إصلاحات. ويضيف أيضًا ميزات وقاعدتين قد ترفضان ما كان v0.77.1 يقبله، لذا اقرأ
+[ملاحظات إصدار v0.77.2](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.2) قبل ترقية خادم أو إعداد `task: sft`. إن كنت قادمًا من 0.76.x
+فشغّل `soup doctor --config soup.yaml` أولًا واقرأ [ملاحظات إصدار v0.77.0](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0).
 
-- **تغيير غير متوافق مع الإصدارات السابقة: يُرفَض عند التحميل أي إعداد لم يكن له أي أثر.** ومن ذلك
-  `training.quantization_aware: true` (فلم يكن يشغّل تدريبًا واعيًا بالتكميم قط)، و`training.use_longlora`،
-  و`training.ebft_variant`، و`training.gdpo_variant`، و`training.rope_scaling_type` حيث لا تقرؤه أي خطوة
-  تهيئة، و`freeze_layers` / `freeze_ratio` خارج مسار `sft` / `tts` النصي على الواجهة الخلفية transformers،
-  و`auto_mixed_precision` خارج `sft` / `tts`، و`backend: unsloth` في سبع مهام أخرى ليست لها خطوة تهيئة
-  لـ unsloth. وتسمّي كل رسالة الحقل وما ينبغي تغييره. أما `lr_groups` و`early_stop_patience`
-  و`forgetting_eval_steps` وغيرها من الإعدادات التي لا يقرؤها شيء فتُصدر تحذيرًا عند التحميل الآن، وستُرفَض
-  بدءًا من v0.77.
-- **صارت خسارة التحقق تُقيَّم الآن.** كان `data.val_split` يستبعد صفوفًا من التدريب في كل تشغيل، ولم يكن
-  أي مدرّب على الواجهة الخلفية transformers يقيّمها. أما الآن فكل مهمة تحصل على قسم للتحقق تقيّمه في نهاية
-  كل حقبة (epoch)، أو كل N خطوة عبر `training.eval_steps`، وتسجّل خسارة التحقق؛ وتستغرق التشغيلات
-  أطول ببضعة في المئة. **تغيير غير متوافق مع الإصدارات السابقة بالنسبة إلى `grpo` و`ppo` و`online_dpo`:**
-  فهي افتراضيًا لم تعد تستبعد صفوفًا (يُتجاهَل `data.val_split` مع ملاحظة)، ولذلك يُدرَّب النموذج على كل صف.
-- **تغيير غير متوافق مع الإصدارات السابقة: كل `grpo_variant` غير قياسي يطبّق عقوبة KL الخاصة بـ `grpo_beta`.**
-  كانت `gspo` و`dapo` و`dr_grpo` و`bnpo` و`two_sided` و`rft` تتحقق من `grpo_beta` ثم تُسقطه، ولذلك لن تعيد
-  إعدادات المتغيّرات الموجودة إنتاج التشغيلات السابقة. وصار `grpo_beta: 0` يعمل بلا KL ويتخطى التمريرة
-  الأمامية للنموذج المرجعي.
-- **يقرأ بثّ الطبقات طبقته القرصية على خيط في الخلفية، عبر الإدخال/الإخراج المباشر (direct I/O)، ويمكنه توزيعها
-  على عدة أقراص NVMe.** على مخزن NF4 بحجم 36 GB وبهيئة نموذج 70B أكبر من ذاكرة RAM (جهاز واحد بوحدة
-  RTX 5070 Laptop سعة 8 GB)، انخفضت الخطوة الباردة من 110.5 s مع القراءة المتزامنة إلى 16.2-17.3 s، ومن
-  17.4 s إلى 9.97 s عبر قرصين باستخدام `SOUP_LAYER_STREAM_STRIPE_DIRS` (مسبار تحت حمل متواصل: جولتان،
-  1.28x و1.41x، بلا حكم رسمي؛ [السجل](benchmarks/probe-rtx5070-two-drive-sustained.md)). أما المخزن الذي
-  يتسع في ذاكرة RAM فيظل أسرع على طبقة RAM، وهي ما يختاره `stream_source: auto`. وهو لا يُفعَّل إلا بطلب
-  صريح (`stream_layers: true`) ولا يزال BETA؛ والسجلات:
-  [الإدخال/الإخراج المباشر](benchmarks/gate-974-disk-tier-direct-io.md)،
-  [التوزيع على الأقراص](benchmarks/gate-two-drive-striping.md).
-- **أوامر وخيارات جديدة.** يفحص `soup adapters check` مهايئ LoRA بحثًا عن الإخفاق الصامت؛ ويدرّب
-  `soup bench train` عددًا ثابتًا من الخطوات ويخرج برمز 1 إذا لم يكن النموذج يتدرّب (ويغطي `task: sft`
-  على الواجهة الخلفية transformers؛ وصار `soup bench` مجموعة أوامر، و`soup bench infer` هو معيار
-  الاستدلال القديم)؛ ويطهّر `soup data clean` مجموعة بيانات ويصلحها دون المساس بملف الإدخال؛
-  ويتحقق `soup recipes verify` على جهاز meta، ودون تنزيل أي أوزان، من أن كل وصفة مشحونة تستطيع إرفاق
-  مهايئ LoRA؛ ويسمّي `soup rewind` صفوف مجموعة البيانات التي تقف وراء قفزة الخسارة. ويكتسب `soup infer`
-  الخيار الاختياري <span dir="ltr">`--batch-size`</span> والخيار التجريبي <span dir="ltr">`--cuda-graphs`</span>
-  (يتطلب PyTorch 2.14 أو أحدث؛ على جهاز RTX 5070 Laptop واحد، دون تثبيت، مع Qwen2.5-1.5B بدقة FP16،
-  كان أبطأ تشغيل مع هذا الخيار أسرع بمقدار 2.9x في فك الترميز من أسرع تشغيل بدونه). ويُجري `soup ab` اختبارًا
-  ثنائي الجانب متينًا إزاء التباين، ويوقّع `soup adapters sign --backend sigstore`
-  و`soup attest emit --sign sigstore` باستخدام Sigstore OIDC بلا مفاتيح
-  (<span dir="ltr">`pip install "soup-cli[sigstore]"`</span>).
+- **`soup profile --model <id>` يجيب عن سؤال «هل يتّسع؟» دون ملف `soup.yaml`.** يسعّر التشغيل
+  انطلاقًا من `config.json` الخاص بالنموذج، ويحدّده `--seq` و`--batch` و`--method` و`--lora-r`
+  و`--optimizer` و`--gradient-checkpointing`؛ وعلى Apple Silicon يقارنه بمجموعة العمل في Metal.
+  ويقبل `soup plan` و`soup apply` الخيار `--minillm-on-policy`.
+- **مزيد من التدريب على Apple Silicon.** يشغّل `task: preference` مع `preference_loss: dpo` أو `orpo`
+  أو `simpo` مدرّب MLX الأصلي، ويتدرّب GRPO على MLX على قواعد `mlx-community` بدقة 4 بت، ويتبع
+  Adafactor على MLX معدّل التعلّم والجدول المضبوطين.
+- **وصفتان جديدتان لـ DPO:** `qwen3.5-0.8b-dpo` و`qwen3.5-27b-dpo`.
+- **تقديرات VRAM أقرب.** خطوة المُحسِّن مرحلة قائمة بذاتها، وتُحمَّل خطوة PRM لوغاريتمات موضع واحد،
+  ويُسعَّر تشغيل FSDP أو ZeRO المجزَّأ لكل بطاقة، وتُحمَّل خطوة `stream_loss_chunk` إعادة حساب
+  طبقتها الأخيرة، وتُحتسب أهداف LoRA في Unsloth كما يختارها محمِّله.
+- **كتابة فوق الملفات بصمت ونتائج فارغة أقل.** ترفض أوامر أكثر قيمةَ `--output` تسمّي أحد المدخلات
+  (`soup data ingest` و`persona-mix` و`generate` وغيرها)؛ ويرفض `soup ship --adapter` محوّلًا لا
+  يغيّر شيئًا؛ وتفشل `soup distill-prompt` و`soup data evolve` و`gen-magpie` و`filter --perplexity`
+  بدل أن تكتب ملفًا فارغًا أو غير مُصفّى.
+- **إصلاحات التفضيل والتعلّم المعزَّز.** عاد `data.max_length` يُطبَّق على SimPO وKTO، ويطبّق PPO الـ
+  gradient checkpointing على سياسته عند طلبه (ولم ينهَر بعد الآن مع 4 بت و8 بت)، ويحمّل `soup merge`
+  الإيداع الأساسي الذي دُرِّب عليه المحوّل.
+- **النص يُعرض كما كُتب.** عشرات الأوامر تطبع المسارات والأسماء والرسائل مع الإبقاء على الأقواس
+  ونص `:name:` وإزالة محارف التحكم في الطرفية.
 
-> Python **3.11–3.13** فقط. وعلى الإصدار 3.14 وما بعده كان pip يختار حزم PyTorch (wheels) غير مختبرة تنهار في
-> الامتداد الأصلي قبل أن يعمل Soup أصلًا.
+**تغييرات في السلوك يجب أن تعرفها.** يجب أن يكون `soup serve --tool-auth-token` من 16 إلى 128
+محرفًا من `A-Z` و`a-z` و`0-9` و`_` و`-` (وإلا يكون رمز الخروج 2). ويرفض `task: sft` الإعدادات
+`reasoning_effort` و`train_on_eot` و`use_flash_attn` و`use_liger` على مسارات الرؤية والصوت وMLX وUnsloth
+وRAFT والبيانات المرمَّزة مسبقًا التي لم تكن تطبّقها. ويلزم إعادة توليد نصوص `soup completions`.
+وقد يعطي `soup data from-traces --signal thumbs_up` وAdafactor على MLX و`soup merge` والفحص المسبق
+لـ VRAM نتيجة مختلفة عن v0.77.1.
 
 تجد أبرز ما في الإصدارات الأقدم في صفحة [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
 
@@ -342,7 +328,7 @@ soup doctor                           # افحص GPU / الاعتماديات / 
 
 ```bash
 docker pull ghcr.io/makazhanalpamys/soup:latest
-docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml
+docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml --yes
 docker compose up   # أو ابنِ الصورة محليًا
 ```
 

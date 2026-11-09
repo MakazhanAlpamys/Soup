@@ -122,12 +122,19 @@ def render_runpod_stub(
         raise ValueError("soup_version must be a safe package version")
     _validate_config(config_yaml)
     encoded = base64.b64encode(config_yaml.encode("utf-8")).decode("ascii")
+    from soup_cli.utils.terminal import _CONTROL_STRIP_TABLE
+
     constants = (
         f"_GPU_ID = {_GPU_IDS[gpu]!r}\n_CONFIG_B64 = {encoded!r}\n"
         f"_OUTPUT = {str(output)!r}\n_SOUP_VERSION = {soup_version!r}\n"
+        # The standalone script carries data from the one canonical sanitizer.
+        f"_TERMINAL_STRIP_TABLE = {_CONTROL_STRIP_TABLE!r}\n"
     )
+    from soup_cli.utils.tool_paths import controller_source
+
     controller = Path(__file__).with_name("_runpod_controller.py").read_text(encoding="utf-8")
-    return constants + controller
+    # The PATH search and child environment the controller uses come first.
+    return constants + controller_source() + "\n\n" + controller
 
 
 def plan_runpod_run(
@@ -172,6 +179,9 @@ _CONTROLLER_ENV_NAMES: frozenset[str] = frozenset({
     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
     "http_proxy", "https_proxy", "all_proxy", "no_proxy",
     "TEMP", "TMP", "TMPDIR", "SYSTEMDRIVE", "WINDIR", "SSH_AUTH_SOCK",
+    # Windows program search: the extensions tried, and the setting that keeps
+    # the current directory out of it.
+    "PATHEXT", "NoDefaultCurrentDirectoryInExePath",
 })
 
 

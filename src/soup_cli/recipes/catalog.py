@@ -51,7 +51,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (170 recipes)
+# Recipe catalog (175 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -3655,6 +3655,36 @@ training:
 output: ./output
 """,
     ),
+    "qwen3.5-0.8b-dpo": RecipeMeta(
+        model="Qwen/Qwen3.5-0.8B",
+        task="dpo",
+        size="0.8B",
+        tags=("qwen", "qwen3.5", "dpo", "alignment", "preference", "tiny", "edge", "mobile"),
+        description="Qwen 3.5 0.8B text DPO alignment (Apache-2.0, tiny / mobile)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-0.8B
+task: dpo
+modality: text
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 5e-6
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
+
+output: ./output
+""",
+    ),
     "qwen3.5-0.8b-grpo": RecipeMeta(
         model="Qwen/Qwen3.5-0.8B",
         task="grpo",
@@ -3714,6 +3744,36 @@ training:
     alpha: 16
     target_modules: auto
   quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "qwen3.5-2b-dpo": RecipeMeta(
+        model="Qwen/Qwen3.5-2B",
+        task="dpo",
+        size="2B",
+        tags=("qwen", "qwen3.5", "dpo", "alignment", "preference", "small", "edge"),
+        description="Qwen 3.5 2B text DPO alignment (Apache-2.0, small / edge)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-2B
+task: dpo
+modality: text
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 5e-6
+  batch_size: auto
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
 
 output: ./output
 """,
@@ -3807,6 +3867,40 @@ training:
     target_modules: auto
   quantization: 4bit
   dpo_beta: 0.1
+
+output: ./output
+""",
+    ),
+    "qwen3.5-4b-grpo": RecipeMeta(
+        model="Qwen/Qwen3.5-4B",
+        task="grpo",
+        size="4B",
+        tags=("qwen", "qwen3.5", "grpo", "reasoning", "thinking", "small"),
+        description="Qwen 3.5 4B text GRPO reasoning training (Apache-2.0)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-4B
+task: grpo
+modality: text
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  gradient_checkpointing: true
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
 
 output: ./output
 """,
@@ -3960,6 +4054,71 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "qwen3.5-27b-dpo": RecipeMeta(
+        model="Qwen/Qwen3.5-27B",
+        task="dpo",
+        size="27B",
+        tags=("qwen", "qwen3.5", "dpo", "alignment", "preference", "large"),
+        description="Qwen 3.5 27B text DPO alignment (Apache-2.0)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-27B
+task: dpo
+modality: text
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 5e-6
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
+
+output: ./output
+""",
+    ),
+    "qwen3.5-27b-grpo": RecipeMeta(
+        model="Qwen/Qwen3.5-27B",
+        task="grpo",
+        size="27B",
+        tags=("qwen", "qwen3.5", "grpo", "reasoning", "thinking", "large"),
+        description="Qwen 3.5 27B text GRPO reasoning training (Apache-2.0)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-27B
+task: grpo
+modality: text
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  gradient_checkpointing: true
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
 
 output: ./output
 """,

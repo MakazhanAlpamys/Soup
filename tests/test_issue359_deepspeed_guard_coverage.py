@@ -33,7 +33,11 @@ _GUARD_CALL = re.compile(r"attach_empty_param_group_guard\s*\(")
 #: DeepSpeed reachability: the wrapper takes a config it can be launched with.
 _DEEPSPEED_CAPABLE = re.compile(r"\bdeepspeed_config\b")
 # Unlike forwarding exemptions, these trainers reject DeepSpeed before setup.
-_DEEPSPEED_REFUSING = {"csm.py"}
+_DEEPSPEED_REFUSING = {
+    "csm.py",
+    # #1976: names deepspeed_config only to refuse it in __init__ (one MLX process).
+    "mlx_grpo.py",
+}
 
 
 def _code_without_comments(text: str) -> str:
@@ -450,7 +454,7 @@ def test_deepspeed_refusing_exemption_is_earned():
     from soup_cli.config.schema import SoupConfig
     from soup_cli.trainer.csm import CSMTrainerWrapper
 
-    assert _DEEPSPEED_REFUSING == {"csm.py"}
+    assert _DEEPSPEED_REFUSING == {"csm.py", "mlx_grpo.py"}
     config = SoupConfig(
         base="sesame/csm-1b", task="tts", modality="audio_out",
         data={"train": "speech.jsonl", "format": "audio"},
@@ -460,3 +464,16 @@ def test_deepspeed_refusing_exemption_is_earned():
     with pytest.raises(ValueError, match="single-device"):
         wrapper.setup({})
     assert wrapper.model is None and wrapper.trainer is None
+
+
+def test_mlx_grpo_deepspeed_refusal_is_earned():
+    """#1976: the MLX GRPO wrapper refuses DeepSpeed when it is built, before setup."""
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.trainer.mlx_grpo import MLXGRPOTrainerWrapper
+
+    config = load_config_from_string(
+        "base: tiny\ntask: grpo\nbackend: mlx\ndata: {train: d.jsonl}\n"
+        "training: {quantization: none}\noutput: ./out\n"
+    )
+    with pytest.raises(ValueError, match="--deepspeed is not supported"):
+        MLXGRPOTrainerWrapper(config, device="mps", deepspeed_config="ds.json")

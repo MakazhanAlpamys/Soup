@@ -11,6 +11,7 @@ from typing import Any, Optional, Tuple
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.trainer.stream_setup import StreamingSetupMixin
 from soup_cli.utils.eval_schedule import training_eval_kwargs
@@ -730,9 +731,6 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def setup(self, dataset: dict):
         """Load model, tokenizer, apply LoRA, create trainer."""
-        from transformers import TrainingArguments
-        from trl import SFTTrainer
-
         # Enable Rich progress bar for HuggingFace downloads
         _enable_hf_transfer_progress()
 
@@ -765,6 +763,26 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             self._setup_unsloth(cfg, tcfg)
         else:
             self._setup_transformers(cfg, tcfg)
+
+        # #1464: a streamed run holds its runtime from here on, and training's
+        # cleanup context does not exist until train(). The streamed load above
+        # releases the runtime on its own failures; this covers everything after it.
+        try:
+            self._finish_setup(dataset, cfg, tcfg, use_vision=use_vision, use_audio=use_audio)
+        except BaseException:
+            try:
+                self._close_stream_runtime()
+            except Exception as close_error:
+                console.print(
+                    "[yellow]Could not release the layer-streaming runtime: "
+                    f"{for_terminal(str(close_error))}[/]"
+                )
+            raise
+
+    def _finish_setup(self, dataset: dict, cfg, tcfg, *, use_vision: bool, use_audio: bool):
+        """The rest of setup(), once the model is loaded (#1464)."""
+        from transformers import TrainingArguments
+        from trl import SFTTrainer
 
         # v0.71.23 #266 — the Spectrum full-FT branch leaves a raw (non-PEFT)
         # model, which has no get_nb_trainable_parameters(); fall back to a
@@ -1539,7 +1557,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         return (mode == "bf16", mode == "fp16")
 
     def _resolve_load_dtype(self, tcfg):
-        """Decide the ``torch_dtype`` kwarg for ``from_pretrained`` (#339, #471, #492).
+        """Decide the ``dtype`` kwarg for ``from_pretrained`` (#339, #471, #492).
 
         Two cases, told apart by the module-level ``is_full_finetune`` (also
         used by ``commands/train.py``'s VRAM pre-flight, so the two cannot
@@ -1569,12 +1587,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
           implementations (#492 review) — this was itself the finding that
           produced #492's helper.
 
-        #492 review — the kwarg name is ``torch_dtype``, not ``dtype``: the
-        latter only exists in transformers>=4.56, and this project's declared
-        floor is >=4.36.0, so ``dtype=`` was a hard ``TypeError`` at model
-        load on every version from the floor to 4.55 (measured live on
-        4.46.1) — not a silent no-op, since transformers only forwards a
-        kwarg into the config if the config already ``hasattr`` it.
+        The loader uses ``dtype`` consistently with the declared Transformers
+        5.16.1 floor (#2200); the former ``torch_dtype`` spelling is deprecated.
+        This changes the argument name, not the precision decision above.
         """
         return resolve_base_load_dtype(
             self.device, full_finetune=is_full_finetune(tcfg)
@@ -1679,7 +1694,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code,
             "device_map": dev_map,
-            "torch_dtype": self._resolve_load_dtype(tcfg),
+            "dtype": self._resolve_load_dtype(tcfg),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -2100,7 +2115,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # mismatch risk as the text path). Routed through the shared
             # method anyway rather than hardcoding a string, so this stays
             # correct by construction if a vision full-FT branch is ever added.
-            "torch_dtype": self._resolve_load_dtype(tcfg),
+            "dtype": self._resolve_load_dtype(tcfg),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -2266,7 +2281,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # schema gates unfrozen_parameters / lisa_enabled / lora.r==0 to
             # modality='text'); still routed through the shared method since
             # #471's pre-Ampere torch.float16 override can still apply here.
-            "torch_dtype": self._resolve_load_dtype(tcfg),
+            "dtype": self._resolve_load_dtype(tcfg),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -2525,7 +2540,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
             if resume_from_checkpoint is not None:
                 keep_trainable_dtype_on_resume(self.trainer)
-            self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+            with manual_save_context(self.trainer):
+                self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
         self._report_rewind()
 

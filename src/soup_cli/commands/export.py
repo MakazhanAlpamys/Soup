@@ -13,8 +13,9 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
-from soup_cli.config.deprecation import DEPRECATED_VALUE_REJECTION_VERSION
+from soup_cli.config.deprecation import EXPORT_FORMATS_REMOVED_IN
 from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
@@ -163,16 +164,19 @@ def export(
         removed_notice = ""
         if fmt in ("awq", "gptq"):
             removed_notice = (
-                f"\n[yellow]--format {fmt} was removed in v{DEPRECATED_VALUE_REJECTION_VERSION}.[/]"
+                f"\n[yellow]--format {fmt} was removed in v{EXPORT_FORMATS_REMOVED_IN}.[/]"
             )
         console.print(
-            f"[red]Unsupported format: {fmt}[/]{removed_notice}\n"
-            f"Supported: {', '.join(SUPPORTED_FORMATS)}"
+            Text.assemble(
+                (f"Unsupported format: {strip_control(fmt)}", "red"),
+                Text.from_markup(removed_notice),
+                f"\nSupported: {', '.join(SUPPORTED_FORMATS)}",
+            )
         )
         raise typer.Exit(1)
 
     if not model_path.exists():
-        console.print(f"[red]Model path not found: {model_path}[/]")
+        console.print(Text(f"Model path not found: {strip_control(model_path)}", style="red"))
         raise typer.Exit(1)
 
     if (verbose or no_install_deps) and fmt != "gguf":
@@ -194,8 +198,10 @@ def export(
             raise typer.Exit(1)
         if deploy != "ollama":
             console.print(
-                f"[red]Unsupported deploy target: {deploy}[/]\n"
-                "Supported: ollama"
+                Text.assemble(
+                    (f"Unsupported deploy target: {strip_control(deploy)}", "red"),
+                    "\nSupported: ollama",
+                )
             )
             raise typer.Exit(1)
 
@@ -306,6 +312,7 @@ def export(
     adapter_config_path = model_path / "adapter_config.json"
     is_adapter = adapter_config_path.exists()
     merge_dir = None
+    merge_dir_created = False
 
     if is_adapter:
         console.print("[dim]GGUF: merge adapter...[/]")
@@ -318,43 +325,41 @@ def export(
             )
             raise typer.Exit(1)
 
-        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
-        _merge_adapter(
-            str(model_path), base_model, str(merge_dir), trust_remote_code,
-        )
-        model_path = merge_dir
+        merge_dir, merge_dir_created = _merge_dir_for(model_path)
 
-        try:
-            _check_gguf_capabilities(model_path, llama_cpp_path)
-        except typer.Exit:
-            shutil.rmtree(merge_dir, ignore_errors=True)
-            raise
-
-    # --- Find llama.cpp ---
-    console.print("[dim]GGUF: toolchain lookup...[/]")
-    llama_dir = _find_llama_cpp(llama_cpp_path)
-    # #144 G2 — this used to run only after an auto-clone, so `--llama-cpp` and an
-    # already-present ~/.soup/llama.cpp died on `ModuleNotFoundError:
-    # sentencepiece`. Here it covers every branch, and returns immediately when
-    # the packages are already importable.
-    if not no_install_deps:
-        console.print("[dim]GGUF: conversion dependencies...[/]")
-        _install_convert_deps()
-    tool_options = {"verbose": True} if verbose else {}
-    convert_options = dict(tool_options)
-
-    # --- Convert to GGUF ---
-    console.print(
-        Panel(
-            f"Model:  [bold]{model_path}[/]\n"
-            f"Format: [bold]{fmt}[/]\n"
-            f"Quant:  [bold]{quant}[/]\n"
-            f"Output: [bold]{output_path}[/]",
-            title="Export Plan",
-        )
-    )
-
+    # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
+        if is_adapter:
+            _merge_adapter(
+                str(model_path), base_model, str(merge_dir), trust_remote_code,
+            )
+            model_path = merge_dir
+            _check_gguf_capabilities(model_path, llama_cpp_path)
+
+        # --- Find llama.cpp ---
+        console.print("[dim]GGUF: toolchain lookup...[/]")
+        llama_dir = _find_llama_cpp(llama_cpp_path)
+        # #144 G2 — this used to run only after an auto-clone, so `--llama-cpp` and an
+        # already-present ~/.soup/llama.cpp died on `ModuleNotFoundError:
+        # sentencepiece`. Here it covers every branch, and returns immediately when
+        # the packages are already importable.
+        if not no_install_deps:
+            console.print("[dim]GGUF: conversion dependencies...[/]")
+            _install_convert_deps()
+        tool_options = {"verbose": True} if verbose else {}
+        convert_options = dict(tool_options)
+
+        # --- Convert to GGUF ---
+        console.print(
+            Panel(
+                f"Model:  [bold]{model_path}[/]\n"
+                f"Format: [bold]{fmt}[/]\n"
+                f"Quant:  [bold]{quant}[/]\n"
+                f"Output: [bold]{output_path}[/]",
+                title="Export Plan",
+            )
+        )
+
         # Step 1: Convert HF model to GGUF (f16)
         convert_script = llama_dir / "convert_hf_to_gguf.py"
         if not convert_script.exists():
@@ -406,9 +411,7 @@ def export(
 
     finally:
         # Clean up temporary merge directory
-        if merge_dir and merge_dir.exists():
-            console.print("[dim]Cleaning up temporary merge files...[/]")
-            shutil.rmtree(merge_dir, ignore_errors=True)
+        _remove_merge_dir(merge_dir, merge_dir_created)
 
     if not output_path.exists():
         console.print("[red]Export failed - output file not created.[/]")
@@ -454,6 +457,29 @@ def _detect_base_model(adapter_config_path: Path) -> Optional[str]:
         return None
 
 
+def _merge_dir_for(model_path: Path) -> tuple[Path, bool]:
+    """The scratch directory next to an adapter, and whether this export will create it.
+
+    A directory (or link) already there is not this export's: the cleanup leaves it alone.
+    """
+    path = model_path.parent / f".soup_merge_tmp_{model_path.name}"
+    return path, not (path.exists() or path.is_symlink())
+
+
+def _remove_merge_dir(merge_dir: Optional[Path], created: bool, *, announce: bool = True) -> None:
+    """Remove the scratch merge directory if this export created it; never one that was there."""
+    if merge_dir is None or not merge_dir.exists():
+        return
+    if not created:
+        console.print(
+            f"[dim]Leaving {for_terminal(str(merge_dir))}: it existed before this export.[/]"
+        )
+        return
+    if announce:
+        console.print("[dim]Cleaning up temporary merge files...[/]")
+    shutil.rmtree(merge_dir, ignore_errors=True)
+
+
 def _merge_adapter(
     adapter_path: str,
     base_model: str,
@@ -488,7 +514,7 @@ def _merge_adapter(
         console.print("[dim]Base revision: unknown (legacy, local source or base override)[/]")
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
-        torch_dtype=torch.float16,
+        dtype=torch.float16,
         trust_remote_code=trc,
         device_map="cpu",
         **revision_kwargs,
@@ -501,11 +527,17 @@ def _merge_adapter(
     model = model.merge_and_unload()
 
     out = Path(output_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    model.save_pretrained(str(out))
+    created = not out.exists()
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+        model.save_pretrained(str(out))
 
-    tokenizer = AutoTokenizer.from_pretrained(adapter_path, trust_remote_code=trc)
-    tokenizer.save_pretrained(str(out))
+        tokenizer = AutoTokenizer.from_pretrained(adapter_path, trust_remote_code=trc)
+        tokenizer.save_pretrained(str(out))
+    except BaseException:
+        if created and out.exists():
+            shutil.rmtree(out, ignore_errors=True)
+        raise
     console.print("[green]Adapter merged successfully.[/]")
 
 
@@ -587,7 +619,7 @@ def _existing_llama_cpp(user_path: Optional[str] = None) -> Optional[Path]:
         path = Path(user_path)
         if path.exists():
             return path
-        console.print(f"[red]llama.cpp not found at: {path}[/]")
+        console.print(Text(f"llama.cpp not found at: {strip_control(path)}", style="red"))
         raise typer.Exit(1)
 
     # 2. LLAMA_CPP_PATH env var
@@ -660,9 +692,13 @@ def _find_llama_cpp(user_path: Optional[str] = None) -> Path:
     console.print("[yellow]llama.cpp not found. Cloning to ~/.soup/llama.cpp...[/]")
     console.print("[dim]This is a one-time setup for GGUF export.[/]")
 
+    from soup_cli.utils.tool_paths import require_tool
+
     try:
+        # A missing git raises FileNotFoundError, handled below.
+        git = require_tool("git", "Install git, or clone llama.cpp manually.")
         subprocess.run(
-            ["git", "clone", "--depth", "1", "--branch", LLAMA_CPP_TAG,
+            [git, "clone", "--depth", "1", "--branch", LLAMA_CPP_TAG,
              "https://github.com/ggerganov/llama.cpp.git", str(soup_llama)],
             check=True,
             capture_output=True,
@@ -789,12 +825,17 @@ def _find_quantize_binary(llama_dir: Path) -> Optional[Path]:
         candidates.append(llama_dir / "build" / config / "llama-quantize.exe")
     for candidate in candidates:
         if candidate.exists():
-            return candidate
+            import os
+
+            # Absolute, so the binary runs from llama_dir even when it is ".".
+            return Path(os.path.abspath(candidate))
 
     # Check if it's in PATH
-    which_result = shutil.which("llama-quantize")
-    if which_result:
-        return Path(which_result)
+    from soup_cli.utils.tool_paths import find_tool
+
+    on_path = find_tool("llama-quantize")
+    if on_path:
+        return Path(on_path)
 
     return None
 
@@ -819,6 +860,7 @@ def _export_onnx(
     adapter_config_path = model_path / "adapter_config.json"
     is_adapter = adapter_config_path.exists()
     merge_dir = None
+    merge_dir_created = False
     source_path = model_path
 
     if is_adapter:
@@ -830,39 +872,41 @@ def _export_onnx(
                 "Please specify with [bold]--base[/] flag."
             )
             raise typer.Exit(1)
-        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
-        _merge_adapter(str(model_path), base_model, str(merge_dir), trust_remote_code)
-        source_path = merge_dir
+        merge_dir, merge_dir_created = _merge_dir_for(model_path)
 
     output_path = Path(output) if output else model_path.parent / f"{model_path.name}_onnx"
 
-    console.print(
-        Panel(
-            f"Model:  [bold]{source_path}[/]\n"
-            f"Format: [bold]ONNX[/]\n"
-            f"Output: [bold]{output_path}[/]",
-            title="Export Plan",
-        )
-    )
-
+    # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
+        if is_adapter:
+            _merge_adapter(str(model_path), base_model, str(merge_dir), trust_remote_code)
+            source_path = merge_dir
+
         console.print(
-            "[yellow]Warning: ONNX export may execute custom model code "
-            "if the model uses trust_remote_code.[/]"
+            Panel(
+                f"Model:  [bold]{source_path}[/]\n"
+                f"Format: [bold]ONNX[/]\n"
+                f"Output: [bold]{output_path}[/]",
+                title="Export Plan",
+            )
         )
-        console.print("[dim]Exporting to ONNX...[/]")
-        main_export(
-            model_name_or_path=str(source_path),
-            output=str(output_path),
-            task=task,
-        )
-    except Exception as exc:
-        console.print(f"[red]ONNX export failed:[/] {exc}")
-        raise typer.Exit(1)
+
+        try:
+            console.print(
+                "[yellow]Warning: ONNX export may execute custom model code "
+                "if the model uses trust_remote_code.[/]"
+            )
+            console.print("[dim]Exporting to ONNX...[/]")
+            main_export(
+                model_name_or_path=str(source_path),
+                output=str(output_path),
+                task=task,
+            )
+        except Exception as exc:
+            console.print(f"[red]ONNX export failed:[/] {exc}")
+            raise typer.Exit(1)
     finally:
-        if merge_dir and merge_dir.exists():
-            console.print("[dim]Cleaning up temporary merge files...[/]")
-            shutil.rmtree(merge_dir, ignore_errors=True)
+        _remove_merge_dir(merge_dir, merge_dir_created)
 
     console.print(
         Panel(
@@ -919,6 +963,7 @@ def _export_tensorrt(
     adapter_config_path = model_path / "adapter_config.json"
     is_adapter = adapter_config_path.exists()
     merge_dir = None
+    merge_dir_created = False
     source_path = model_path
 
     if is_adapter:
@@ -930,22 +975,24 @@ def _export_tensorrt(
                 "Please specify with [bold]--base[/] flag."
             )
             raise typer.Exit(1)
-        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
-        _merge_adapter(str(model_path), base_model, str(merge_dir), trust_remote_code)
-        source_path = merge_dir
+        merge_dir, merge_dir_created = _merge_dir_for(model_path)
 
     output_path = Path(output) if output else model_path.parent / f"{model_path.name}_trt"
 
-    console.print(
-        Panel(
-            f"Model:  [bold]{source_path}[/]\n"
-            f"Format: [bold]TensorRT-LLM[/]\n"
-            f"Output: [bold]{output_path}[/]",
-            title="Export Plan",
-        )
-    )
-
+    # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
+        if is_adapter:
+            _merge_adapter(str(model_path), base_model, str(merge_dir), trust_remote_code)
+            source_path = merge_dir
+
+        console.print(
+            Panel(
+                f"Model:  [bold]{source_path}[/]\n"
+                f"Format: [bold]TensorRT-LLM[/]\n"
+                f"Output: [bold]{output_path}[/]",
+                title="Export Plan",
+            )
+        )
         # Step 1: Convert HF model to TensorRT-LLM checkpoint
         console.print("[dim]Converting to TensorRT-LLM checkpoint...[/]")
         ckpt_dir = output_path / "checkpoint"
@@ -977,10 +1024,14 @@ def _export_tensorrt(
         engine_dir = output_path / "engine"
         engine_dir.mkdir(parents=True, exist_ok=True)
 
+        from soup_cli.utils.tool_paths import require_tool
+
         try:
+            # A missing trtllm-build raises FileNotFoundError, handled below.
+            trtllm_build = require_tool("trtllm-build", "Install tensorrt_llm.")
             result = subprocess.run(
                 [
-                    "trtllm-build",
+                    trtllm_build,
                     "--checkpoint_dir", str(ckpt_dir),
                     "--output_dir", str(engine_dir),
                     "--gemm_plugin", "float16",
@@ -1002,9 +1053,7 @@ def _export_tensorrt(
             raise typer.Exit(1)
 
     finally:
-        if merge_dir and merge_dir.exists():
-            console.print("[dim]Cleaning up temporary merge files...[/]")
-            shutil.rmtree(merge_dir, ignore_errors=True)
+        _remove_merge_dir(merge_dir, merge_dir_created)
 
     console.print(
         Panel(
@@ -1261,42 +1310,46 @@ def _export_bitnet_gguf(
 
     adapter_config_path = model_path / "adapter_config.json"
     merge_dir = None
+    merge_dir_created = False
     if adapter_config_path.exists():
         console.print("[yellow]LoRA adapter detected — merging first...[/]")
         base_model = base or _detect_base_model(adapter_config_path)
         if not base_model:
             console.print("[red]Cannot detect base model. Pass --base.[/]")
             raise typer.Exit(2)
-        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
-        _merge_adapter(
-            str(model_path), base_model, str(merge_dir), trust_remote_code,
-        )
-        source_model_dir = merge_dir
-    else:
-        source_model_dir = model_path
+        merge_dir, merge_dir_created = _merge_dir_for(model_path)
 
-    llama_dir = _find_llama_cpp(llama_cpp_path)
-
-    console.print(Panel(
-        f"Model:   [bold]{source_model_dir}[/]\n"
-        f"Format:  [bold]{canonical}[/] (TQ1_0 ternary)\n"
-        f"Output:  [bold]{output_path}[/]",
-        title="BitNet GGUF Export",
-    ))
-
+    # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
-        export_bitnet_gguf(
-            model_dir=str(source_model_dir),
-            output_path=str(output_path),
-            export_format=canonical,
-            llama_cpp_dir=str(llama_dir),
-        )
-    except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        console.print(f"[red]BitNet GGUF export failed: {exc}[/]")
-        raise typer.Exit(1)
+        if merge_dir is not None:
+            _merge_adapter(
+                str(model_path), base_model, str(merge_dir), trust_remote_code,
+            )
+            source_model_dir = merge_dir
+        else:
+            source_model_dir = model_path
+
+        llama_dir = _find_llama_cpp(llama_cpp_path)
+
+        console.print(Panel(
+            f"Model:   [bold]{source_model_dir}[/]\n"
+            f"Format:  [bold]{canonical}[/] (TQ1_0 ternary)\n"
+            f"Output:  [bold]{output_path}[/]",
+            title="BitNet GGUF Export",
+        ))
+
+        try:
+            export_bitnet_gguf(
+                model_dir=str(source_model_dir),
+                output_path=str(output_path),
+                export_format=canonical,
+                llama_cpp_dir=str(llama_dir),
+            )
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            console.print(f"[red]BitNet GGUF export failed: {exc}[/]")
+            raise typer.Exit(1)
     finally:
-        if merge_dir and merge_dir.exists():
-            shutil.rmtree(merge_dir, ignore_errors=True)
+        _remove_merge_dir(merge_dir, merge_dir_created, announce=False)
 
     console.print(Panel(
         f"Output: [bold]{output_path}[/]\n"
@@ -1366,6 +1419,7 @@ def _export_gguf_advanced(
     # Pre-merge LoRA adapter if needed
     adapter_config_path = model_path / "adapter_config.json"
     merge_dir = None
+    merge_dir_created = False
     if adapter_config_path.exists():
         console.print("[yellow]LoRA adapter detected — merging first...[/]")
         base_model = base or _detect_base_model(adapter_config_path)
@@ -1374,38 +1428,41 @@ def _export_gguf_advanced(
                 "[red]Cannot detect base model. Pass --base.[/]"
             )
             raise typer.Exit(2)
-        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
-        _merge_adapter(
-            str(model_path), base_model, str(merge_dir), trust_remote_code,
-        )
-        source_model_dir = merge_dir
-    else:
-        source_model_dir = model_path
+        merge_dir, merge_dir_created = _merge_dir_for(model_path)
 
-    llama_dir = _find_llama_cpp(llama_cpp_path)
-
-    console.print(Panel(
-        f"Model:    [bold]{source_model_dir}[/]\n"
-        f"Flavour:  [bold]{gguf_flavour}[/]\n"
-        f"Calib:    [bold]{calibration_data or '(none — Apple/ARM)'}[/]\n"
-        f"Output:   [bold]{output_path}[/]",
-        title="Advanced GGUF Export",
-    ))
-
+    # #1464: this try must begin before _merge_adapter so later failures clean the merge dir.
     try:
-        export_advanced_gguf(
-            model_dir=str(source_model_dir),
-            output_path=str(output_path),
-            flavour=gguf_flavour,
-            calibration_data=calibration_data,
-            llama_cpp_dir=str(llama_dir),
-        )
-    except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        console.print(f"[red]Advanced GGUF export failed: {exc}[/]")
-        raise typer.Exit(1)
+        if merge_dir is not None:
+            _merge_adapter(
+                str(model_path), base_model, str(merge_dir), trust_remote_code,
+            )
+            source_model_dir = merge_dir
+        else:
+            source_model_dir = model_path
+
+        llama_dir = _find_llama_cpp(llama_cpp_path)
+
+        console.print(Panel(
+            f"Model:    [bold]{source_model_dir}[/]\n"
+            f"Flavour:  [bold]{gguf_flavour}[/]\n"
+            f"Calib:    [bold]{calibration_data or '(none — Apple/ARM)'}[/]\n"
+            f"Output:   [bold]{output_path}[/]",
+            title="Advanced GGUF Export",
+        ))
+
+        try:
+            export_advanced_gguf(
+                model_dir=str(source_model_dir),
+                output_path=str(output_path),
+                flavour=gguf_flavour,
+                calibration_data=calibration_data,
+                llama_cpp_dir=str(llama_dir),
+            )
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            console.print(f"[red]Advanced GGUF export failed: {exc}[/]")
+            raise typer.Exit(1)
     finally:
-        if merge_dir and merge_dir.exists():
-            shutil.rmtree(merge_dir, ignore_errors=True)
+        _remove_merge_dir(merge_dir, merge_dir_created, announce=False)
 
     console.print(Panel(
         f"Output: [bold]{output_path}[/]\n"

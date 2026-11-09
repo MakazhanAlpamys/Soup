@@ -11,7 +11,6 @@ import json
 import os
 import pathlib
 import re
-import shutil
 import signal
 import stat
 import subprocess
@@ -32,10 +31,27 @@ _GPU_ID = globals().get("_GPU_ID", "")
 _CONFIG_B64 = globals().get("_CONFIG_B64", "")
 _OUTPUT = globals().get("_OUTPUT", "")
 _SOUP_VERSION = globals().get("_SOUP_VERSION", "")
+# ssh and scp are found and given their environment the way soup runs every
+# external program: render_runpod_stub puts the source of find_tool and
+# tool_environment (soup_cli/utils/tool_paths.py) ahead of this text.
+_find_tool = globals().get("find_tool")
+_environment_for_tools = globals().get("tool_environment")
+_MISSING_TOOLS = "OpenSSH ssh and scp must be installed and on PATH before RunPod submission."
 
 _API_BASE = "https://rest.runpod.io/v1"
 _POD_ID = re.compile(r"[a-zA-Z0-9_-]{1,64}")
 _MAX_RESPONSE = 1024 * 1024
+_LOG_TAIL_LINES = 50
+_LOG_TAIL_BYTES = 50_000
+# Bound scheme matching so long non-URL log lines do not cause quadratic work.
+_URL_CREDENTIALS = re.compile(r"(\b[a-z][a-z0-9+.-]{0,31}://)[^/\s?#]*@", re.IGNORECASE)
+# The same token shapes as utils/crash.py, without importing the installed CLI.
+_SECRET_PATTERNS = (
+    re.compile(r"hf_[A-Za-z0-9]{20,}"),
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),
+    re.compile(r"api[_-]?key[\"' :=]+[A-Za-z0-9_\-]{16,}", re.IGNORECASE),
+    re.compile(r"Bearer\s+[A-Za-z0-9_\-\.]{20,}"),
+)
 _IMAGE = "runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404"
 _BOOT = (
     "set -eu; if [ ! -x /usr/sbin/sshd ]; then apt-get update; "
@@ -133,6 +149,37 @@ def _wait_for_ssh(api_key, pod_id):
     raise _ControllerError("RunPod did not expose SSH within 15 minutes")
 
 
+def _tool(name):
+    path = _find_tool(name)
+    if path is None:
+        raise _ControllerError(_MISSING_TOOLS)
+    return path
+
+
+def _tool_environment():
+    """The environment for ssh and scp: the controller's, without the RunPod API key,
+    which they do not use; on Windows the program search skips the current directory."""
+    return _environment_for_tools(drop=("RUNPOD_API_KEY",))
+
+
+def _print_remote_stderr_tail(output: str | None) -> None:
+    """Print a sanitized, redacted failure tail as literal stderr."""
+    if not output:
+        return
+    # Strip controls before matching credentials, then redact before truncation:
+    # slicing a password first can remove the URL prefix that identifies it.
+    # render_runpod_stub serializes the canonical utils/terminal.py table.
+    safe = output.translate(globals()["_TERMINAL_STRIP_TABLE"])
+    safe = _URL_CREDENTIALS.sub(r"\1<redacted>@", safe)
+    for pattern in _SECRET_PATTERNS:
+        safe = pattern.sub("<redacted>", safe)
+    encoded = safe.encode("utf-8", errors="replace")[-_LOG_TAIL_BYTES:]
+    lines = encoded.decode("utf-8", errors="ignore").splitlines()[-_LOG_TAIL_LINES:]
+    tail = "\n".join(lines)
+    if tail:
+        _notice(f"RunPod remote stderr tail (last {_LOG_TAIL_LINES} lines):\n{tail}")
+
+
 def _train_and_copy(ip, port, private_key):
     with tempfile.TemporaryDirectory(prefix="soup-runpod-ssh-") as directory:
         known_hosts = pathlib.Path(directory) / "known_hosts"
@@ -163,57 +210,133 @@ def _run_ssh_session(ip: str, port: int, private_key: str, known_hosts: pathlib.
         "root = pathlib.Path('/workspace/soup'); root.mkdir(parents=True, exist_ok=True)\n"
         "import os; os.chdir(root)\n"
         f"pathlib.Path('soup.yaml').write_bytes(base64.b64decode({_CONFIG_B64!r}))\n"
-        "subprocess.run([sys.executable, '-m', 'pip', 'install', "
+        "subprocess.run([sys.executable, '-m', 'venv', '--system-site-packages', "
+        "'/workspace/venv'], check=True, stdout=sys.stderr)\n"
+        "subprocess.run(['/workspace/venv/bin/python', '-m', 'pip', 'install', "
         f"'soup-cli[train]=={_SOUP_VERSION}'], "
         "check=True, stdout=sys.stderr)\n"
         "with open('train.log', 'w') as log:\n"
-        "    result = subprocess.run(['soup', 'train', '--config', 'soup.yaml', '--yes'], "
+        "    result = subprocess.run(['/workspace/venv/bin/soup', 'train', "
+        "'--config', 'soup.yaml', '--yes'], "
         "stdout=log, stderr=subprocess.STDOUT)\n"
+        "if result.returncode:\n"
+        "    with open('train.log', 'rb') as log:\n"
+        "        log.seek(0, os.SEEK_END)\n"
+        f"        log.seek(max(0, log.tell() - {_LOG_TAIL_BYTES + 1}))\n"
+        f"        tail = log.read({_LOG_TAIL_BYTES + 1})\n"
+        # Do not forward a partial first line with its credential prefix missing.
+        f"        if len(tail) > {_LOG_TAIL_BYTES}:\n"
+        "            tail = tail.partition(b'\\n')[2]\n"
+        f"        tail = b'\\n'.join(tail.splitlines()[-{_LOG_TAIL_LINES}:])\n"
+        "    sys.stderr.buffer.write(tail)\n"
         "sys.exit(result.returncode)\n"
     )
+    ssh, scp = _tool("ssh"), _tool("scp")
+    env = _tool_environment()
     # A readiness mapping can precede sshd. Retry a harmless readiness command,
     # never the training command: reconnecting must not start training twice.
     deadline = time.monotonic() + 300
     while True:
-        ready = subprocess.run(
-            ["ssh", *common, "-p", str(port), f"root@{ip}", "true"], capture_output=True, timeout=30
-        )
+        try:
+            ready = subprocess.run(
+                [ssh, *common, "-p", str(port), f"root@{ip}", "true"],
+                capture_output=True,
+                timeout=30,
+                env=env,
+            )
+        except subprocess.TimeoutExpired:
+            raise _ControllerError(
+                "RunPod SSH readiness probe timed out after 30 seconds"
+            ) from None
         if ready.returncode == 0:
             break
         if time.monotonic() >= deadline:
             raise _ControllerError("RunPod SSH did not become ready within five minutes")
         time.sleep(5)
-    result = subprocess.run(
-        ["ssh", *common, "-p", str(port), f"root@{ip}", "python3 -"],
-        input=script,
-        text=True,
-        capture_output=True,
-        timeout=25 * 3600,
-    )
+    try:
+        result = subprocess.run(
+            [ssh, *common, "-p", str(port), f"root@{ip}", "python3 -"],
+            input=script,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=25 * 3600,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        raise _ControllerError("RunPod remote training command timed out after 25 hours") from None
     if result.returncode != 0:
+        _print_remote_stderr_tail(result.stderr)
         raise _ControllerError("RunPod remote training failed; no successful artifact copy claimed")
-    destination = _local_destination()
-    destination.mkdir(parents=True, exist_ok=True)
-    copied = subprocess.run(
-        [
-            "scp",
-            *common,
-            "-P",
-            str(port),
-            "-r",
-            "--",
-            f"root@{ip}:/workspace/soup/{_OUTPUT}",
-            str(destination),
-        ],
-        capture_output=True,
-        timeout=900,
-    )
+    target = _local_destination()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # The copy goes into a directory created for it, and only the one expected
+    # entry is then moved to the output path.
+    staging = pathlib.Path(tempfile.mkdtemp(prefix=".soup-runpod-copy-", dir=str(target.parent)))
+    try:
+        copied = subprocess.run(
+            [
+                scp,
+                *common,
+                "-P",
+                str(port),
+                "-r",
+                "--",
+                f"root@{ip}:/workspace/soup/{_OUTPUT}",
+                str(staging),
+            ],
+            capture_output=True,
+            timeout=900,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        raise _ControllerError(_failed_copy("RunPod artifact copy timed out", staging)) from None
     if copied.returncode != 0:
-        raise _ControllerError("RunPod artifact copy failed")
+        raise _ControllerError(_failed_copy("RunPod artifact copy failed", staging))
+    _move_copied_output(staging, target)
+
+
+def _failed_copy(reason, staging):
+    """``reason`` for a copy that did not finish. The copy directory ``staging``
+    (and nothing else) is removed when the copy left it empty; otherwise it is kept
+    and the returned text names it."""
+    try:
+        os.rmdir(staging)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return f"{reason}; the copy directory is left in place: {staging}"
+    return reason
+
+
+def _move_copied_output(staging, target):
+    """Move the output directory the copy wrote into ``staging`` to ``target``.
+
+    ``staging`` must hold exactly that one entry, made of directories and regular
+    files only; otherwise nothing is moved and ``staging`` is left for inspection.
+    """
+    if sorted(os.listdir(staging)) != [target.name]:
+        raise _ControllerError(
+            "RunPod artifact copy held unexpected entries; nothing was moved to the output path"
+        )
+    for directory, dirnames, filenames in os.walk(staging):
+        for name in dirnames + filenames:
+            info = os.lstat(os.path.join(directory, name))
+            regular = stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)
+            if not regular or getattr(info, "st_file_attributes", 0) & 0x400:
+                raise _ControllerError(
+                    "RunPod artifact copy held a link or special file; nothing was moved "
+                    "to the output path"
+                )
+    _local_destination()
+    os.replace(staging / target.name, target)
+    os.rmdir(staging)
 
 
 def _local_destination():
-    """Recheck the download path before allocation and immediately before SCP."""
+    """Recheck the download path before allocation and immediately before SCP;
+    return it."""
     root = os.path.realpath(os.getcwd())
     target = pathlib.Path(_OUTPUT)
     if (target.is_absolute() or ".." in target.parts or str(target) == "."
@@ -230,7 +353,7 @@ def _local_destination():
         raise _ControllerError("RunPod output must stay under cwd")
     if os.path.lexists(target):
         raise _ControllerError("RunPod output already exists; choose a fresh output directory")
-    return target.parent
+    return target
 
 
 def _terminate(api_key, pod_id):
@@ -268,8 +391,8 @@ def main():
     if not all((_GPU_ID, _CONFIG_B64, _OUTPUT, _SOUP_VERSION)):
         _notice("Generate a RunPod plan with soup train --cloud runpod first.")
         return 2
-    if not all(shutil.which(command) for command in ("ssh", "scp")):
-        _notice("OpenSSH ssh and scp must be installed before RunPod submission.")
+    if not all(_find_tool(command) for command in ("ssh", "scp")):
+        _notice(_MISSING_TOOLS)
         return 2
     try:
         _local_destination()

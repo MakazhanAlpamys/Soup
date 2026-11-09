@@ -103,8 +103,31 @@ def test_render_recipe_includes_base_and_quant():
     yaml_text = render_recipe_yaml(profile, base="meta-llama/Llama-3.2-1B",
                                    output_dir="./out")
     assert "base: meta-llama/Llama-3.2-1B" in yaml_text
-    assert "quantization: awq" in yaml_text
+    assert "quantization: 4bit" in yaml_text
     assert "output: ./out" in yaml_text
+
+
+def test_the_24gb_profile_no_longer_names_awq():
+    """Soup no longer produces AWQ (export removed in v0.77.0), so the profile that
+    wrote ``quantization: awq`` for an ordinary base trains 4bit QLoRA instead."""
+    profile = get_profile("rtx-4090-24gb")
+    assert (profile.quant, profile.peft) == ("4bit", "qlora")
+    assert profile.description == "Consumer NVIDIA 24GB — 4bit QLoRA + vLLM"
+    assert profile.notes == (
+        "Soup does not produce AWQ; to serve a pre-quantized AWQ checkpoint, "
+        "point vLLM at it directly"
+    )
+
+
+def test_no_profile_writes_a_format_soup_cannot_produce():
+    from soup_cli.config.loader import load_config_from_string
+
+    for name, profile in list_profiles().items():
+        assert profile.quant not in {"awq", "gptq"}, name
+        yaml_text = render_recipe_yaml(profile, base="meta-llama/Llama-3.2-1B",
+                                       output_dir="./out")
+        assert "awq" not in yaml_text.lower(), name
+        load_config_from_string(yaml_text)
 
 
 def test_render_recipe_mlx_backend_for_mlx_runtime():

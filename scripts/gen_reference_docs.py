@@ -548,11 +548,40 @@ def _yaml_key(name: str, info: FieldInfo) -> str:
     return name
 
 
+def staged_notes() -> dict[str, str]:
+    """The sentence the row of each key in ``STAGED_FIELDS`` ends with, by YAML path.
+
+    A staged field passes the schema and is refused by the loader
+    (``config/staged_fields.py``, #808), so its description does not say so by
+    itself. This page says it for every key that list names, read from the list,
+    so a field staged later gets the sentence without an edit here."""
+    from soup_cli.config.staged_fields import STAGED_FIELD_REJECTION_VERSION, STAGED_FIELDS
+
+    note = (
+        "Refused at load when set away from its default "
+        f"(v{STAGED_FIELD_REJECTION_VERSION}, #808)."
+    )
+    return {f"{section}.{name}": note for section, name in STAGED_FIELDS}
+
+
+def _with_sentence(description: str, sentence: str) -> str:
+    """``sentence`` after ``description``, which is first closed with a full stop."""
+    if description and not description.endswith((".", "!", "?", ":")):
+        description += "."
+    return f"{description} {sentence}".strip()
+
+
 def config_sections(
-    model: type[BaseModel], prefix: str = "", _stack: tuple[type[BaseModel], ...] = ()
+    model: type[BaseModel],
+    prefix: str = "",
+    _stack: tuple[type[BaseModel], ...] = (),
+    *,
+    notes: collections.abc.Mapping[str, str] | None = None,
 ) -> list[tuple[str, list[ConfigRow]]]:
     """``(YAML path, rows)`` per section: the model's own keys, then every nested model
-    depth-first in field order. A model already being rendered is not entered again."""
+    depth-first in field order. A model already being rendered is not entered again.
+    ``notes`` maps a YAML path to a sentence its row's description ends with."""
+    notes = notes or {}
     stack = (*_stack, model)
     rows: list[ConfigRow] = []
     nested: list[tuple[str, type[BaseModel]]] = []
@@ -568,9 +597,9 @@ def config_sections(
         description = escape_cell(strip_internal_phase(info.description or ""))
         links = ", ".join(f"[{_code(child)}](#{github_slug(child)})" for child, _ in children)
         if links:
-            if description and not description.endswith((".", "!", "?", ":")):
-                description += "."
-            description = f"{description} See {links}.".strip()
+            description = _with_sentence(description, f"See {links}.")
+        if path in notes:
+            description = _with_sentence(description, escape_cell(notes[path]))
         rows.append(
             ConfigRow(
                 key=path,
@@ -582,7 +611,7 @@ def config_sections(
         )
     sections = [(prefix, rows)]
     for child_path, sub in nested:
-        sections.extend(config_sections(sub, child_path, stack))
+        sections.extend(config_sections(sub, child_path, stack, notes=notes))
     return sections
 
 
@@ -594,7 +623,9 @@ def _load_config_model() -> type[BaseModel]:
 
 def render_config_reference(model: type[BaseModel] | None = None) -> str:
     """The text of ``docs/config-reference.md``."""
-    sections = config_sections(model if model is not None else _load_config_model())
+    sections = config_sections(
+        model if model is not None else _load_config_model(), notes=staged_notes()
+    )
     lines = [
         "# Config reference",
         "",
@@ -609,8 +640,10 @@ def render_config_reference(model: type[BaseModel] | None = None) -> str:
         "",
         "Every key `soup.yaml` accepts. A key that is not on this page **refuses the load** — see",
         "[Unknown config keys](backends-and-ops.md#unknown-config-keys) for the error and the",
-        "nearest-name hint. The guides linked from the [docs index](README.md) explain what the",
-        "settings do together; this page is the lookup table.",
+        "nearest-name hint. A key whose description ends \"Refused at load when set away from",
+        "its default\" is declared but read by nothing: leave it out, or at its default.",
+        "The guides linked from the [docs index](README.md) explain what the settings do",
+        "together; this page is the lookup table.",
         "",
         "How to read a table:",
         "",

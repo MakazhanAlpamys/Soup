@@ -92,7 +92,10 @@ def guards():
 
 def run_arm(args, pair, arm, extra):
     out, common = Path(args.out), args.common
-    harness = os.path.join(args.tree, "benchmarks", "harness", "issue361_nf4_throughput.py")
+    harness = os.path.realpath(os.path.join(args.tree, "benchmarks", "harness", args.harness))
+    harness_root = os.path.realpath(os.path.join(args.tree, "benchmarks", "harness"))
+    if os.path.commonpath([harness_root, harness]) != harness_root:
+        raise ValueError("harness must stay inside benchmarks/harness")
     path = out / f"p{pair}-{arm}.json"
     cmd = [
         sys.executable,
@@ -250,6 +253,11 @@ def main():
     parser.add_argument("--shards", help="NF4 shard directory")
     parser.add_argument("--pairs", type=int, default=5)
     parser.add_argument("--label", default="")
+    parser.add_argument(
+        "--harness",
+        default="issue361_nf4_throughput.py",
+        help="benchmark script under benchmarks/harness (default unchanged)",
+    )
     parser.add_argument("--a-args", default="")
     parser.add_argument("--b-args", default="")
     parser.add_argument("--common", default="--warmup 10 --steps 50 --no-ceiling")

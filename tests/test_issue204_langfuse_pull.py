@@ -890,7 +890,7 @@ _GOLDEN_OUTPUT = (
     '{"trace_id": "t2", "prompt": "Привет", "output": "Здравствуйте", "source": "langfuse", '
     '"signal": "thumbs_down", "metadata": {}}\n'
     '{"trace_id": "t4", "prompt": "list shape", "output": "ok", "source": "langfuse", '
-    '"signal": "none", "metadata": {}}\n'
+    '"signal": "thumbs_down", "metadata": {}}\n'
 ).encode("utf-8")
 
 
@@ -1170,6 +1170,10 @@ def test_planted_credentials_never_reach_any_artefact(name, pull_env, monkeypatc
     _use_transport(monkeypatch, transport)
     monkeypatch.setenv("SOUP_AUDIT_LOG_PATH", str(pull_env / "audit.jsonl"))
     monkeypatch.delenv("SOUP_NO_AUDIT_LOG", raising=False)
+    # run() sets NoDefaultCurrentDirectoryInExePath on Windows. Setting it here
+    # first makes teardown restore the value from before the test, or remove it.
+    monkeypatch.setenv("NoDefaultCurrentDirectoryInExePath", "placeholder")
+    monkeypatch.delenv("NoDefaultCurrentDirectoryInExePath")
     payloads = []
     monkeypatch.setattr(
         webhooks, "send_webhooks", lambda payload, **kwargs: payloads.append(dict(payload)) or []

@@ -1,10 +1,7 @@
-"""#1048 item 2: a LoRA target on the streamed embedding or head is refused at
-build time, where the model says whether the checkpoint streams them.
+"""Boundary target qualification from #2082 by @ybai08 (#1048 item 2).
 
-The parse-time refusal matched the literal names ``lm_head`` and
-``embed_tokens`` only. A regex or dotted spelling of the same target loaded and
-then crashed at the first save, and a tied checkpoint, which streams neither
-weight and round-trips cleanly, was refused.
+Saving and resuming now supports the formerly refused untied targets. Keep the
+same literal, regex, dotted, preference and tied controls when lifting that guard.
 """
 
 from __future__ import annotations
@@ -83,7 +80,7 @@ def _counted_installs(monkeypatch):
     return installs
 
 
-class TestAnUntiedBoundaryTargetIsRefusedAtBuild:
+class TestAnUntiedBoundaryTargetBuildsAndSaves:
     @pytest.mark.parametrize(
         ("target_modules", "named"),
         [
@@ -96,39 +93,42 @@ class TestAnUntiedBoundaryTargetIsRefusedAtBuild:
     def test_every_spelling(self, tmp_path, monkeypatch, target_modules, named):
         installs = _counted_installs(monkeypatch)
 
-        with pytest.raises(ValueError) as excinfo:
-            _setup(tmp_path, monkeypatch, tie=False, target_modules=target_modules)
-
-        message = str(excinfo.value)
-        assert f"LoRA target on the streamed {named} of an untied checkpoint" in message
-        assert "training.lora.target_modules" in message
-        assert installs == []  # refused before any buffer is allocated
+        wrapper = _setup(tmp_path, monkeypatch, tie=False, target_modules=target_modules)
+        try:
+            wrapper.model.save_pretrained(tmp_path / "adapter")
+            for target in named.split(", "):
+                assert any(target in key and "lora_" in key for key in wrapper.model.state_dict())
+        finally:
+            wrapper._close_stream_runtime()
+        assert installs == [True]
 
     def test_the_dotted_embedding_path_on_purpose(self, tmp_path, monkeypatch):
-        # Per the maintainer's answer on #1048: refused like every other adapted
-        # boundary module until saving and resuming it (item 1) lands.
+        # The original guard's deliberately named dotted-path regression.
         installs = _counted_installs(monkeypatch)
-
-        with pytest.raises(ValueError) as excinfo:
-            _setup(
-                tmp_path, monkeypatch, tie=False, target_modules=["q_proj", "model.embed_tokens"]
+        wrapper = _setup(
+            tmp_path, monkeypatch, tie=False, target_modules=["q_proj", "model.embed_tokens"]
+        )
+        try:
+            wrapper.model.save_pretrained(tmp_path / "adapter")
+            assert any(
+                "model.embed_tokens.lora_embedding_A" in key for key in wrapper.model.state_dict()
             )
-
-        message = str(excinfo.value)
-        assert "LoRA target on the streamed embed_tokens of an untied checkpoint" in message
-        assert "'model.embed_tokens'" in message  # the spelling it was given
-        assert "lm_head" not in message
-        assert installs == []  # refused before any buffer is allocated
+        finally:
+            wrapper._close_stream_runtime()
+        assert installs == [True]
 
     def test_a_preference_task_too(self, tmp_path, monkeypatch):
         installs = _counted_installs(monkeypatch)
 
-        with pytest.raises(ValueError, match="streamed lm_head of an untied checkpoint"):
-            _setup(
-                tmp_path, monkeypatch, tie=False, target_modules=".*(q_proj|lm_head)", task="dpo"
-            )
-
-        assert installs == []  # refused before any buffer is allocated
+        wrapper = _setup(
+            tmp_path, monkeypatch, tie=False, target_modules=".*(q_proj|lm_head)", task="dpo"
+        )
+        try:
+            wrapper.model.save_pretrained(tmp_path / "adapter")
+            assert wrapper.trainer.ref_model is None
+        finally:
+            wrapper._close_stream_runtime()
+        assert installs == [True]
 
     def test_without_a_boundary_target_it_builds(self, tmp_path, monkeypatch):
         installs = _counted_installs(monkeypatch)

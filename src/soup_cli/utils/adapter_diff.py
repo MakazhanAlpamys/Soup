@@ -177,6 +177,37 @@ def _validate_top_k(top_k: object) -> int:
     return top_k
 
 
+READ_ADAPTER_DEPS: Tuple[str, ...] = ("numpy",)
+WRITE_ADAPTER_DEPS: Tuple[str, ...] = ("numpy", "safetensors")
+
+READ_ADAPTER_DEPS_MSG = (
+    "numpy package required; "
+    'pip install "soup-cli[train]" (or pip install numpy)'
+)
+WRITE_ADAPTER_DEPS_MSG = (
+    "numpy and safetensors packages required; "
+    'pip install "soup-cli[train]" (or pip install safetensors numpy)'
+)
+
+
+def require_adapter_dependencies(
+    deps: Tuple[str, ...] = WRITE_ADAPTER_DEPS,
+) -> None:
+    """Validate that dependencies needed for adapter operations can be imported."""
+    import importlib
+
+    msg = (
+        READ_ADAPTER_DEPS_MSG
+        if deps == READ_ADAPTER_DEPS
+        else WRITE_ADAPTER_DEPS_MSG
+    )
+    for dep in deps:
+        try:
+            importlib.import_module(dep)
+        except ImportError as exc:
+            raise RuntimeError(msg) from exc
+
+
 #: Safetensors dtype tag -> little-endian numpy dtype, for everything except BF16.
 _NUMPY_DTYPES = {
     "float16": "<f2",
@@ -208,6 +239,7 @@ def _read_safetensors_numpy(path: Path) -> dict[str, Any]:
     read), for a header ``read_header`` refuses, and for a dtype numpy cannot hold (the
     FP8 spellings ``read_header`` accepts), each naming the file once.
     """
+    require_adapter_dependencies(READ_ADAPTER_DEPS)
     import numpy as np
 
     from soup_cli.utils.safetensors_reader import read_header
@@ -318,6 +350,7 @@ def compute_adapter_diff(
     top_k: int = 10,
 ) -> AdapterDiffReport:
     """End-to-end: load both adapters, compute layer diffs, rank top-K."""
+    require_adapter_dependencies(READ_ADAPTER_DEPS)
     _require_str(adapter_a, "adapter_a")
     _require_str(adapter_b, "adapter_b")
     _validate_top_k(top_k)

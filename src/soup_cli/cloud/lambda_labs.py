@@ -49,7 +49,9 @@ _LAMBDA_SUBMIT_OVERRIDE: Optional[Callable[["CloudPlan"], int]] = None
 # environment it needs, listed here by name:
 #   * the Lambda variables the rendered controller reads in ``main()``;
 #   * the OS variables ``ssh`` / ``scp`` and ``os.path.expanduser`` use to find
-#     the executables, the home directory (keys, known_hosts) and temp files;
+#     the executables, the home directory (keys, known_hosts) and temp files,
+#     with the Windows executable extensions and the setting that keeps the
+#     current directory out of the Windows program search;
 #   * ``SSH_AUTH_SOCK``, so a passphrase-protected key still works under
 #     ``BatchMode=yes``;
 #   * the proxy and certificate variables ``urllib`` / ``ssl`` read for the
@@ -64,6 +66,8 @@ _CONTROLLER_ENV_NAMES: frozenset[str] = frozenset({
     "LAMBDA_SSH_PRIVATE_KEY",
     "LAMBDA_REGION",
     "PATH",
+    "PATHEXT",
+    "NoDefaultCurrentDirectoryInExePath",
     "HOME",
     "USERPROFILE",
     "HOMEDRIVE",
@@ -112,6 +116,8 @@ def _validate_remote_output(value: object) -> str:
     path = PurePosixPath(output)
     if path.is_absolute() or ".." in path.parts:
         raise ValueError("Lambda output_dir must be a relative path without '..'")
+    if any(part.startswith("-") for part in path.parts):
+        raise ValueError("Lambda output_dir parts must not start with '-'")
     if not _REMOTE_OUTPUT_RE.fullmatch(output):
         raise ValueError(
             "Lambda output_dir may contain only letters, digits, '.', '_', '-', and '/'"
@@ -146,12 +152,17 @@ def render_lambda_stub(
             f"and be <= {_MAX_VERSION_LEN} chars"
         )
 
+    from soup_cli.utils.tool_paths import controller_source
+
     cfg_b64 = base64.b64encode(encoded).decode("ascii")
     pip_spec = f"soup-cli[train]=={soup_version}"
     user_data = (
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         "mkdir -p /home/ubuntu/soup\n"
+        # #2234 - the log exists before the first step that can fail, so a failed
+        # install is visible in the tail the controller fetches on a non-zero exit.
+        ": > /home/ubuntu/soup/train.log\n"
         "finish() {\n"
         "  rc=$?\n"
         "  printf '%s\\n' \"$rc\" > /home/ubuntu/soup.exit\n"
@@ -160,12 +171,12 @@ def render_lambda_stub(
         "  exit \"$rc\"\n"
         "}\n"
         "trap finish EXIT\n"
-        "apt-get update\n"
-        "apt-get install -y python3-pip\n"
-        f"python3 -m pip install {pip_spec!r}\n"
+        "apt-get update 2>&1 | tee -a /home/ubuntu/soup/train.log\n"
+        "apt-get install -y python3-pip 2>&1 | tee -a /home/ubuntu/soup/train.log\n"
+        f"python3 -m pip install {pip_spec!r} 2>&1 | tee -a /home/ubuntu/soup/train.log\n"
         "cd /home/ubuntu/soup\n"
         f"printf '%s' {cfg_b64!r} | base64 -d > soup.yaml\n"
-        "soup train --config soup.yaml --yes 2>&1 | tee /home/ubuntu/soup/train.log\n"
+        "soup train --config soup.yaml --yes 2>&1 | tee -a /home/ubuntu/soup/train.log\n"
     )
 
     lines = [
@@ -180,6 +191,26 @@ def render_lambda_stub(
         "import time",
         "import urllib.error",
         "import urllib.request",
+        "",
+        # ssh and scp are found and given their environment the way soup runs every
+        # external program (soup_cli/utils/tool_paths.py); this script runs without
+        # soup_cli, so it carries their source.
+        *controller_source().splitlines(),
+        "",
+        "_find_tool = find_tool",
+        "_MISSING_TOOLS = 'OpenSSH ssh and scp must be installed and on PATH before Lambda "
+        "submission.'",
+        "",
+        "def _tool(name):",
+        "    path = _find_tool(name)",
+        "    if path is None:",
+        "        raise RuntimeError(_MISSING_TOOLS)",
+        "    return path",
+        "",
+        "def _tool_environment():",
+        "    # ssh and scp get the controller's environment without the Lambda API key,",
+        "    # which they do not use.",
+        "    return tool_environment(drop=('LAMBDA_API_KEY',))",
         "",
         "# Started with -I, which ignores PYTHONIOENCODING and PYTHONUTF8: replace what the",
         "# output encoding cannot show, so a log line is printed rather than raising.",
@@ -271,9 +302,9 @@ def render_lambda_stub(
         "    cmd = f'tail -n {_LOG_TAIL_LINES} /home/ubuntu/soup/train.log'",
         "    try:",
         "        res = subprocess.run(",
-        "            ['ssh', *common, f'ubuntu@{ip}', cmd],",
+        "            [_tool('ssh'), *common, f'ubuntu@{ip}', cmd],",
         "            check=False, capture_output=True, encoding='utf-8', errors='replace',",
-        "            timeout=_LOG_FETCH_TIMEOUT,",
+        "            timeout=_LOG_FETCH_TIMEOUT, env=_tool_environment(),",
         "        )",
         "        if res.returncode != 0:",
         "            err_lines = res.stderr.strip().splitlines()",
@@ -310,14 +341,16 @@ def render_lambda_stub(
         '        \'else echo MISSING; fi ;; \'',
         '        \'esac\'',
         "    )",
+        "    ssh, scp = _tool('ssh'), _tool('scp')",
+        "    env = _tool_environment()",
         "    overall_deadline = time.monotonic() + 90000",
         "    outage_start = None",
         "    backoff = 1",
         "    while True:",
         "        try:",
         "            wait = subprocess.run(",
-        "                ['ssh', *common, f'ubuntu@{ip}', poll_cmd],",
-        "                check=False, capture_output=True, text=True, timeout=30,",
+        "                [ssh, *common, f'ubuntu@{ip}', poll_cmd],",
+        "                check=False, capture_output=True, text=True, timeout=30, env=env,",
         "            )",
         "        except subprocess.TimeoutExpired:",
         "            now = time.monotonic()",
@@ -371,7 +404,8 @@ def render_lambda_stub(
         "    scp_backoff = 1",
         "    while True:",
         "        copied = subprocess.run(",
-        "            ['scp', *common, '-r', source, str(destination)], check=False,",
+        "            [scp, *common, '-r', '--', source, str(destination)], check=False,",
+        "            env=env,",
         "        )",
         "        if copied.returncode == 0:",
         "            break",
@@ -398,6 +432,9 @@ def render_lambda_stub(
         "        return 2",
         "    if not pathlib.Path(private_key).is_file():",
         "        print('LAMBDA_SSH_PRIVATE_KEY does not name a readable file.')",
+        "        return 2",
+        "    if not all(_find_tool(command) for command in ('ssh', 'scp')):",
+        "        print(_MISSING_TOOLS)",
         "        return 2",
         "    instance_id = None",
         "    rc = 1",

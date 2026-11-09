@@ -8,7 +8,6 @@ import re
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.utils.data_clean import (
@@ -21,8 +20,9 @@ from soup_cli.utils.data_clean import (
     sanitize_text,
     strip_boilerplate,
 )
+from tests.conftest import make_cli_runner
 
-runner = CliRunner()
+runner = make_cli_runner()
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
@@ -626,10 +626,60 @@ def test_cli_clean_command_json_output(tmp_path: Path, monkeypatch: pytest.Monke
         ["data", "clean", str(dirty_file), "--dry-run", "--json"],
     )
     assert result.exit_code == 0
-    payload = json.loads(_strip_ansi(result.output))
+    payload = json.loads(_strip_ansi(result.stdout))
     assert payload["total_scanned"] == 3
     assert payload["output_rows"] == 2
     assert payload["total_dropped"] == 1
     assert payload["total_clean"] == 1
     assert payload["total_modified"] == 1
     assert payload["dry_run"] is True
+
+
+def test_cli_clean_says_when_rows_are_not_a_recognised_format(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """#1818: an unreadable shape is reported, not silently cleaned as plaintext."""
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "unknown.jsonl"
+    source.write_text(
+        json.dumps({"alpha": "one\u200b"}) + "\n" + json.dumps({"beta": "two"}) + "\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "cleaned.jsonl"
+
+    result = runner.invoke(app, ["data", "clean", str(source), "-o", str(out)])
+
+    assert result.exit_code == 0, result.output
+    printed = _strip_ansi(result.output)
+    assert (
+        "rows are not in a recognised format; nothing was cleaned beyond character "
+        "sanitising"
+    ) in printed
+    # The first offending key set comes from the detection error, not a bare warning.
+    assert "Keys found:" in printed
+    assert "alpha" in printed
+    # The fallback still does the one thing it does: strip invisible characters.
+    assert "\u200b" not in out.read_text(encoding="utf-8")
+
+
+def test_cli_clean_json_keeps_the_unknown_format_warning_on_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """#1818: with ``--json`` stdout stays a clean document, the warning goes to stderr."""
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "unknown.jsonl"
+    source.write_text(
+        json.dumps({"alpha": "one\u200b"}) + "\n" + json.dumps({"beta": "two"}) + "\n",
+        encoding="utf-8",
+    )
+
+    separate_runner = make_cli_runner()
+    result = separate_runner.invoke(
+        app, ["data", "clean", str(source), "--dry-run", "--json"]
+    )
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    payload = json.loads(result.stdout)
+    assert payload["total_scanned"] == 2
+    assert "not in a recognised format" in _strip_ansi(result.stderr)
+    assert "not in a recognised format" not in result.stdout

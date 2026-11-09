@@ -966,7 +966,7 @@ class TestGgufWindowsFixes:
     def test_missing_binary_returns_none(self, tmp_path, monkeypatch):
         from soup_cli.commands import export as export_mod
 
-        monkeypatch.setattr(export_mod.shutil, "which", lambda _: None)
+        monkeypatch.setattr("soup_cli.utils.tool_paths.find_tool", lambda _, path=None: None)
         llama = tmp_path / "llama.cpp"
         (llama / "build").mkdir(parents=True)
         assert export_mod._find_quantize_binary(llama) is None

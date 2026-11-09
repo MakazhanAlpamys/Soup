@@ -546,7 +546,7 @@ class TestPeakVramIsNotDoubled:
             from transformers import AutoModelForCausalLM
 
             forced = AutoModelForCausalLM.from_pretrained(
-                weights, torch_dtype=next(wrapper.model.parameters()).dtype
+                weights, dtype=next(wrapper.model.parameters()).dtype
             ).to("cuda")
             wrapper.trainer.ref_model = forced
         # Reset AFTER setup: the pre-flight's own GEMM ceiling probe allocates
@@ -1197,7 +1197,7 @@ class TestKtoBatchIsRefusedEarly:
         from datasets import Dataset
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        model = AutoModelForCausalLM.from_pretrained(weights, torch_dtype=torch.float32)
+        model = AutoModelForCausalLM.from_pretrained(weights, dtype=torch.float32)
         tokenizer = AutoTokenizer.from_pretrained(weights)
         dataset = Dataset.from_list(_kto_rows(4))
         from soup_cli.trainer._trl_compat import prompt_length_kwargs

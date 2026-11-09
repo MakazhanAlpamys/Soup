@@ -93,7 +93,7 @@ class TestTrlFacts:
 
     def test_the_transformers_kto_path_passes_beta_and_max_length_only(self):
         """Soup builds KTOConfig with kto_beta and max_length; the prompt-length
-        helper forwards nothing on 0.29.1, and no Soup cap touches the rows."""
+        helper forwards nothing on 0.29.1."""
         pytest.importorskip("trl")
         from trl.experimental.kto import KTOConfig
 
@@ -111,7 +111,6 @@ class TestTrlFacts:
         assert not names & {"loss_type", "desirable_weight", "undesirable_weight",
                             "precompute_ref_log_probs", "disable_dropout"}
         assert prompt_length_kwargs(KTOConfig, 64) == {}
-        assert "enforce_preference_sequence_limit" not in source
 
     def test_the_training_sampler_is_sequential(self):
         """``_get_train_sampler`` (kto_trainer.py:1315-1320): TRL's KTO never
@@ -1226,7 +1225,7 @@ class TestConfig:
     def test_other_tasks_name_kto_among_the_mlx_ones(self):
         from soup_cli.config.loader import load_config_from_string
 
-        with pytest.raises(Exception, match="only ships SFT, DPO, ORPO, SimPO and KTO"):
+        with pytest.raises(Exception, match="only ships SFT, DPO, ORPO, SimPO, KTO and GRPO"):
             load_config_from_string(_KTO_YAML.replace("task: kto", "task: ipo"))
 
     def test_the_transformers_route_is_unchanged(self):

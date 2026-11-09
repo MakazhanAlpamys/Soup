@@ -349,15 +349,16 @@ from soup_cli.commands import active_sample as _active_sample_cmd  # noqa: E402
 
 data.app.command(name="active-sample")(_active_sample_cmd.active_sample)
 
-# v0.63.0 Part D — mSPRT A/B harness.
+# v0.63.0 Part D — Bayes-factor A/B harness.
 from soup_cli.commands import ab as _ab_cmd  # noqa: E402
 
 app.command(
     name="ab",
     help=(
-        "Two-sided mSPRT sequential A/B harness on latency / judge_score / retry_rate: "
-        "reports whether the treatment is better or worse, valid under re-running after "
-        "every new row (v0.63.0)."
+        "Two-sided sequential A/B harness on latency / judge_score / retry_rate "
+        "(Bayes factor with a confidence-sequence accept rule): reports whether "
+        "the treatment is better or worse, valid under re-running after every "
+        "new row (v0.63.0)."
     ),
 )(_ab_cmd.ab)
 
@@ -1024,7 +1025,14 @@ def run():
     """Entry point with friendly error handling."""
     import time  # noqa: PLC0415
 
+    from soup_cli.utils.tool_paths import (  # noqa: PLC0415
+        exclude_current_directory_from_program_search,
+    )
+
     start_time = time.monotonic()
+    # On Windows a program started by bare name, by Soup or by a program it
+    # starts, is not looked for in the current directory (as elsewhere).
+    exclude_current_directory_from_program_search()
 
     # v0.54.0 — rewrite `soup advise <data>` → `soup advise run <data>`.
     sys.argv = _rewrite_advise_argv(sys.argv)

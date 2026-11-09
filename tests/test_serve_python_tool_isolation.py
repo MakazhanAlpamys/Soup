@@ -58,13 +58,17 @@ def _client(**kwargs) -> TestClient:
 @pytest.fixture
 def sandbox_calls(monkeypatch) -> list[str]:
     """Replace the code sandbox with a recorder that returns fixed stdout."""
+    from soup_cli.trainer.rewards import SandboxProcessResult
+
     calls: list[str] = []
 
-    def _fake_sandbox(code: str, strict_namespaces: bool = False) -> str:
+    def _fake_sandbox(code: str, strict_namespaces: bool = False) -> SandboxProcessResult:
+        assert strict_namespaces is True
         calls.append(code)
-        return "ran"
+        return SandboxProcessResult(returncode=0, stdout="ran", stderr="")
 
-    monkeypatch.setattr("soup_cli.trainer.rewards._run_code_sandbox", _fake_sandbox)
+    monkeypatch.setattr("soup_cli.trainer.rewards._run_code_sandbox_process", _fake_sandbox)
+    monkeypatch.setattr("soup_cli.trainer.rewards._run_code_sandbox", lambda *a, **k: "ran")
     return calls
 
 
@@ -262,8 +266,9 @@ def test_python_tool_runs_when_the_namespaces_are_created(child):
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"stdout": "ran", "stderr": "", "exit_code": 0, "timed_out": False}
     assert child.unshare_flags == [_namespace_flags()]
-    assert len(child.started) == 1
-    assert child.started[0].endswith("\nprint(1)")
+    # The caller's code is the child's last argument, compiled there under "<code>"
+    # (tests/test_serve_code_tool_replies.py).
+    assert child.started == ["print(1)"]
     assert child.rlimits, "the resource limits are still set before the code starts"
 
 

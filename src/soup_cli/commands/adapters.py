@@ -424,7 +424,19 @@ def merge(
         console.print("[red]Need at least 2 adapter paths to merge[/]")
         raise typer.Exit(2)
 
-    # cmaes argument validation runs FIRST (before any file I/O / scanning):
+    from soup_cli.utils.adapter_diff import (
+        WRITE_ADAPTER_DEPS,
+        require_adapter_dependencies,
+    )
+
+    try:
+        require_adapter_dependencies(WRITE_ADAPTER_DEPS)
+    except RuntimeError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
+    # Dependency pre-flight runs before heavy operations.
+    # cmaes argument validation runs next (before any file I/O / scanning):
     # a user who forgot --eval should get that error immediately, not a scan
     # error on their inputs. The cmaes *search* itself still runs after the
     # security gates below (v0.71.4 review — preserves the "reject missing
@@ -442,6 +454,14 @@ def merge(
                 "--strategy cmaes; the --eval suite already drives the search.[/]"
             )
             raise typer.Exit(2)
+
+    from soup_cli.utils.paths import ensure_distinct_paths
+
+    try:
+        ensure_distinct_paths([("adapter", path) for path in adapters], [("--output", output)])
+    except ValueError as exc:
+        console.print(f"[red]Output path refused: {escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
 
     # v0.71.2 #192 — backdoor-scan gate. Refuse to merge any input whose
     # spectral scan returns FAIL (or that cannot be scanned at all) unless the
@@ -638,6 +658,12 @@ def merge(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
 
+    except RuntimeError as exc:
+        # The root package pre-flight cannot establish that the writer's
+        # submodule will import successfully when the output is saved.
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
     # v0.71.4 #172 — live canary verdict. With --canary, score the merged
     # adapter vs the first input and classify OK/MINOR/MAJOR; without it the
     # verdict stays UNKNOWN (advisory).
@@ -748,7 +774,7 @@ def arithmetic(
     )
     from soup_cli.utils.adapter_diff import load_adapter_weights
     from soup_cli.utils.adapter_merge import write_merged_adapter
-    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, ensure_distinct_paths
 
     # 1. Parse the --adapter name=path map.
     name_re = re.compile(r"^[A-Za-z0-9_.\-]+$")
@@ -792,6 +818,27 @@ def arithmetic(
 
     referenced = [t.name for t in terms]
     ref_paths = [mapping[n] for n in referenced]
+
+    # Refuse writing over a referenced adapter before any adapter is read (#2358).
+    try:
+        ensure_distinct_paths(
+            [(f"adapter {n}", path) for n, path in zip(referenced, ref_paths)],
+            [("--output", output)],
+        )
+    except ValueError as exc:
+        console.print(f"[red]Output path refused: {escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
+    from soup_cli.utils.adapter_diff import (
+        WRITE_ADAPTER_DEPS,
+        require_adapter_dependencies,
+    )
+
+    try:
+        require_adapter_dependencies(WRITE_ADAPTER_DEPS)
+    except RuntimeError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
 
     # 3. Backdoor-scan gate (mirrors `adapters merge`, #192). Refuse FAIL /
     #    un-scannable inputs unless --allow-unscanned; WARN is advisory.
@@ -1590,6 +1637,104 @@ def adapter_pr(
     )
 
 
+def _split_windows_command(command: str) -> list[str]:
+    """Split a command line according to Microsoft C runtime rules,
+    with single-quote grouping support for cross-platform compatibility.
+    """
+    args: list[str] = []
+    current: list[str] = []
+    in_dquote = False
+    in_squote = False
+    has_token = False
+
+    index = 0
+    length = len(command)
+    while index < length:
+        char = command[index]
+
+        if not in_dquote and not in_squote and char in (" ", "\t"):
+            if has_token:
+                args.append("".join(current))
+                current = []
+                has_token = False
+            index += 1
+            continue
+
+        if not in_dquote:
+            if in_squote:
+                if char == "'":
+                    in_squote = False
+                    index += 1
+                    continue
+                current.append(char)
+                index += 1
+                continue
+            elif char == "'" and not has_token:
+                in_squote = True
+                has_token = True
+                index += 1
+                continue
+
+        has_token = True
+
+        if char == "\\":
+            num_bs = 0
+            while index < length and command[index] == "\\":
+                num_bs += 1
+                index += 1
+
+            if index < length and command[index] == '"':
+                current.append("\\" * (num_bs // 2))
+                if num_bs % 2 != 0:
+                    current.append('"')
+                    index += 1
+                else:
+                    if in_dquote and index + 1 < length and command[index + 1] == '"':
+                        current.append('"')
+                        index += 2
+                    else:
+                        in_dquote = not in_dquote
+                        index += 1
+            else:
+                current.append("\\" * num_bs)
+            continue
+
+        if char == '"':
+            if in_dquote and index + 1 < length and command[index + 1] == '"':
+                current.append('"')
+                index += 2
+            else:
+                in_dquote = not in_dquote
+                index += 1
+            continue
+
+        current.append(char)
+        index += 1
+
+    if has_token:
+        args.append("".join(current))
+
+    if in_dquote or in_squote:
+        raise ValueError("No closing quotation")
+
+    return args
+
+
+def _split_bisect_eval_command(command: str, *, windows: Optional[bool] = None) -> list[str]:
+    """Split the template before substitution, preserving native path spelling."""
+    import shlex
+
+    if windows is None:
+        windows = os.name == "nt"
+    if windows:
+        argv = _split_windows_command(command)
+    else:
+        argv = shlex.split(command, posix=True)
+    if not argv or not argv[0]:
+        raise ValueError("--eval-command must name a program")
+    return argv
+
+
 @app.command(name="bisect")
 def adapter_bisect(
     history: list[str] = typer.Argument(
@@ -1603,7 +1748,7 @@ def adapter_bisect(
         ...,
         "--eval-command",
         help=(
-            "Shell command template; '{ckpt}' is replaced with each "
+            "Command template (no shell); '{ckpt}' is replaced with each "
             "checkpoint id. Exit code 0 means PASS, non-zero means FAIL. "
             "Example: 'soup eval custom --model {ckpt} --tasks tasks.jsonl'"
         ),
@@ -1652,23 +1797,78 @@ def adapter_bisect(
         return
 
     # Execute via subprocess; exit 0 means OK.
-    import shlex
+    import errno
     import subprocess  # noqa: S404 — argv list mode, no shell
 
-    def _eval_fn(ckpt: str) -> bool:
-        cmd_str = eval_command.replace("{ckpt}", shlex.quote(ckpt))
-        # Safer: split via shlex and use argv mode (no shell interpolation).
-        argv = shlex.split(cmd_str)
+    from soup_cli.utils.tool_paths import find_tool
+
+    try:
+        template = _split_bisect_eval_command(eval_command)
+    except ValueError as exc:
+        console.print(f"[red]Invalid --eval-command: {for_terminal(exc)}[/]")
+        raise typer.Exit(2) from exc
+    program = template[0]
+    # Resolve fixed programs up front; only a program containing the checkpoint
+    # placeholder needs resolving for each probe.
+    def _program_path(name: str) -> Optional[str]:
+        if os.path.dirname(name):
+            if not os.path.isfile(name):
+                if (os.name == "nt" and not os.path.splitext(name)[1]
+                        and os.path.isfile(name + ".exe")):
+                    name += ".exe"
+                else:
+                    raise FileNotFoundError(errno.ENOENT, "not a regular file", name)
+            if not os.access(name, os.X_OK):
+                raise PermissionError(errno.EACCES, "not executable", name)
+            return name
         try:
+            return find_tool(name)
+        except ValueError:
+            return None
+
+    def _not_on_path(name: str) -> str:
+        return (
+            f"--eval-command program {for_terminal(repr(name))} was not found on PATH; "
+            "install it, put it on PATH, or give its path"
+        )
+
+    def _refuse_launch(name: str, exc: OSError) -> None:
+        console.print(
+            f"[red]--eval-command program {for_terminal(repr(name))} could not start: "
+            f"{for_terminal(exc)}[/]"
+        )
+        raise typer.Exit(2) from exc
+
+    fixed_program = None
+    if "{ckpt}" not in program:
+        try:
+            fixed_program = _program_path(program)
+        except OSError as exc:
+            _refuse_launch(program, exc)
+        if fixed_program is None:
+            console.print(f"[red]{_not_on_path(program)}[/]")
+            raise typer.Exit(2)
+
+    def _eval_fn(ckpt: str) -> bool:
+        # Each checkpoint stays in its existing argument, including spaces and quotes.
+        argv = [argument.replace("{ckpt}", ckpt) for argument in template]
+        try:
+            resolved = fixed_program or _program_path(argv[0])
+            if resolved is None:
+                console.print(f"[red]{_not_on_path(argv[0])}[/]")
+                raise typer.Exit(2)
+            argv[0] = resolved
             result = subprocess.run(  # noqa: S603
                 argv, capture_output=True, timeout=3600, check=False
             )
-        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        except subprocess.TimeoutExpired as exc:
             console.print(
-                f"[yellow]Eval failed for {escape(ckpt)}: "
-                f"{escape(str(exc))}[/]"
+                f"[yellow]Eval failed for {for_terminal(ckpt)}: "
+                f"{for_terminal(exc)}[/]"
             )
             return False
+        except OSError as exc:
+            _refuse_launch(argv[0], exc)
         return result.returncode == 0
 
     try:
@@ -1689,7 +1889,7 @@ def adapter_bisect(
         console.print(
             Panel(
                 f"Verdict:      [red]BROKEN_AT[/]\n"
-                f"First broken: [bold]{escape(result.first_broken or '?')}[/]\n"
+                f"First broken: [bold]{for_terminal(result.first_broken or '?')}[/]\n"
                 f"Probes:       {result.probes}",
                 title="Adapter bisect",
             )

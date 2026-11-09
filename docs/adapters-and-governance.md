@@ -33,6 +33,8 @@
 
 v0.57 shipped `adapters diff / merge / blame / branch`. v0.67 finishes the lifecycle: evolutionary merge driven by your eval, GitHub-shaped PRs for adapter review, a shared `soup.lock` for team reproducibility, and binary-search bisect over training history.
 
+`adapters merge` and `adapters arithmetic` refuse an `--output` that names one of their input adapters (including `./A`, an absolute path, a case alias on Windows or a hard link) and exit before touching it; write to a new directory instead.
+
 ```bash
 # 1. Evolutionary merge: search the simplex of merge weights via CMA-ES.
 #    v0.71.4 makes this a LIVE loop — each candidate is merged, scored against
@@ -85,10 +87,15 @@ soup adapters bisect \
   ckpt-step-100 ckpt-step-200 ckpt-step-400 ckpt-step-800 \
   --eval-command "soup eval custom --model {ckpt} --tasks eval.jsonl" \
   -o bisect.json
-# Exits 3 on BROKEN_AT — pipe into `soup adapters blame` for attribution.
+# Exits 2 on BROKEN_AT — pipe into `soup adapters blame` for attribution.
 ```
 
-CMA-ES is pure-Python (no `cma` dependency); the eval is operator-supplied via a closure so any scoring code works. PR rendering escapes Markdown table cells, so crafted metric names cannot inject table rows or links. The lockfile composes with v0.64 `soup env lock` — drift in any of `{base_model, base_model_sha, dataset_sha, env_hash, closure_sha}` exits 3 (`soup_version` and `created_at` are advisory-only). Bisect uses `shlex.split` + `shlex.quote(ckpt)` in argv-list mode (no `shell=True`), so checkpoint ids cannot inject shell metacharacters.
+CMA-ES is pure-Python (no `cma` dependency); the eval is operator-supplied via a closure so any scoring code works. PR rendering escapes Markdown table cells, so crafted metric names cannot inject table rows or links. The lockfile composes with v0.64 `soup env lock` — drift in any of `{base_model, base_model_sha, dataset_sha, env_hash, closure_sha}` exits 3 (`soup_version` and `created_at` are advisory-only). Bisect splits its command template with native platform quoting before replacing
+`{ckpt}` inside each argument, and runs an argv list without a shell. A fixed program is
+checked before the first probe, including a program given with its path; bare names use
+only absolute `PATH` directories. An unstartable program exits 2 without a verdict or
+output file, including one named by the checkpoint. An actual nonzero exit or a timeout
+still counts as a failed probe.
 
 VeRA / VB-LoRA bank storage (`soup_cli.utils.vector_bank`) supports live multi-tenant serving,
 and `task='moe_lora_routing'` trains the live sparse per-token MoLE gating kernel.
@@ -118,7 +125,8 @@ soup loop watch --pre-wired --pack-cans --poll-interval 300
 
 # Learn from Soup's own serving (#1440): the pre-wired harvest also reads the
 # thumbs `soup serve --record-thumbs` captures through POST /v1/thumbs, pairing
-# the latest thumbs-up and thumbs-down answer per prompt. The database must
+# the latest thumbs-up and thumbs-down answer per prompt. Matching answer
+# texts yield no pair, even when older distinct answers exist. The database must
 # stay under cwd and exist as a thumbs database: start the serve first, or
 # `soup loop watch` refuses, naming the field.
 soup serve --model ./base --record-thumbs ./rl.db
@@ -316,7 +324,7 @@ soup registry promote llama31-chat-v1 --tag prod
 soup registry delete llama31-chat-v1 --yes
 ```
 
-**Training data:** `push --data <file>` stores the file's SHA-256 as the entry's `data_hash`, shown by `soup registry show`. It records the file registered as the training input, not proof of what the run trained on. The file must be under the current directory. Without `--data`, `register_from_run` copies a stored historical `training_data_sha256` without reopening today's path; legacy runs remain unknown. When both are present, the explicit file takes precedence for `data_hash`, while the separate historical `training_data_sha256` is retained. `entry_hash` binds the chosen data digest and any recorded base revision/source. Training-time hash capture itself remains #1764 part 2; reserving nullable storage does not claim the transformed examples consumed by training.
+**Training data:** `push --data <file>` stores the file's SHA-256 as the entry's `data_hash`, shown by `soup registry show`. It records the file registered as the training input, not proof of what the run trained on. The file must be under the current directory. Without `--data`, `register_from_run` copies a stored historical `training_data_sha256` without reopening today's path; legacy runs remain unknown. When both are present, the explicit file takes precedence for `data_hash`, while the separate historical `training_data_sha256` is retained. `entry_hash` binds the chosen data digest and any recorded base revision/source. `soup train` captures that digest at startup for a bounded, complete local text-training source (#2024); it identifies the source file's bytes, not the transformed examples consumed by training.
 
 **Base identity:** Registration copies the run's nullable base revision and its source;
 `soup registry show` exposes both. `hub_commit` identifies the commit passed to supported
@@ -773,12 +781,18 @@ recipe. Exit code 3 under `--strict` for CI gating.
 
 ## Pre-Flight Adapter Health Audit (`soup adapters check`)
 
-Pre-flight scan auditing single LoRA adapters for silent training failures (#1721):
+Pre-flight scan auditing single LoRA adapters for silent training failures (#1721).
+Inspection runs without a PyTorch dependency, but requires `numpy`
+(`pip install "soup-cli[train]"` or `pip install numpy`):
 - **Total and per-layer ||dW||_F**: Frobenius norm of LoRA parameter updates (dW = scaling * (B @ A), with alpha / r for standard LoRA and alpha / sqrt(r) for rsLoRA) with float64 accumulation via matrix trace contraction.
 - **Live fraction**: Proportion of adapter layers with active, non-zero updates.
 - **All-zero lora_B layers**: Flags un-trained or zero-initialized layers that failed to move during training.
 - **Incomplete LoRA pairs**: Flags orphaned or partially-saved projections missing either A or B.
 - **Leaked .inner. keys**: Flags legacy wrapper namespaces for adapters saved prior to the #1011 save-time guard.
+
+`soup adapters diff` and `soup adapters scan` also need only `numpy` to read weights.
+Writing with `soup adapters merge` or `soup adapters arithmetic` requires both `numpy`
+and `safetensors` (`pip install "soup-cli[train]"` or `pip install safetensors numpy`).
 
 ```bash
 soup adapters check path/to/adapter/

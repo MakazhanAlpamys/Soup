@@ -71,12 +71,47 @@ whose `scatter` operator still requires `int64` indices, Soup widens only the
 QSA indexer's local index tensors before LoRA injection; Torch and the upstream
 Transformers class remain unchanged.
 
-`soup recipes use qwen3.5-4b-dpo` selects the 4B language decoder for text
-preference pairs (`prompt`, `chosen`, `rejected`). It inherits the shipped
+`soup recipes use qwen3.5-0.8b-dpo`, `qwen3.5-2b-dpo` and `qwen3.5-4b-dpo` select
+the 0.8B, 2B and 4B language decoders for text preference pairs (`prompt`, `chosen`,
+`rejected`). All three inherit the shipped
 Qwen3.5-9B DPO settings: `lr: 5e-6`, three epochs, LoRA rank 16 / alpha 32,
 4-bit quantization and a 4096-token limit. These are inherited starting values,
-not a measured 4B tuning recommendation. The model's visual tower is excluded;
-image preference data is not supported by this recipe.
+not measured 0.8B, 2B or 4B tuning recommendations. The model's visual tower is excluded;
+image preference data is not supported by these recipes. The 2B config's native
+text architecture and LoRA attachment have been checked on the meta device, with
+a tiny random decoder's forward/backward pass checked on CPU. This does not
+establish full-checkpoint 2B training quality, NF4 execution, or GPU memory use.
+
+`soup recipes use qwen3.5-4b-grpo` selects the 4B language decoder for text
+reasoning data in `./data/reasoning_train.jsonl`. It inherits the 0.8B, 2B and
+9B GRPO starting settings, including four generations, the `accuracy` reward,
+eight accumulation steps and gradient checkpointing. Supply a reference answer
+for each prompt, either as an `answer` column or as the final assistant message.
+The native decoder and LoRA path are checked with the public configuration on
+meta and a tiny random model on CPU. Full 4B GRPO training, NF4 execution,
+GPU memory use and reward quality need separate validation.
+
+`soup recipes use qwen3.5-27b-dpo` selects `Qwen/Qwen3.5-27B`'s language
+decoder for the same text preference layout. It inherits the 9B DPO recipe's
+4096-token limit, learning rate, epochs, LoRA and quantization settings. It uses
+eight accumulation steps, matching the Qwen3.5 27B SFT, Qwen3.6 27B DPO and
+Gemma 3 27B DPO recipes. These settings are starting values. Full-size tuning
+and memory fit have not been measured.
+The pinned public configuration builds on the meta device, and a tiny random
+decoder with both attention block kinds passes a CPU LoRA forward/backward check.
+Full 27B weights, NF4 execution, GPU memory use and training quality are unverified.
+
+`soup recipes use qwen3.5-27b-grpo` selects the same 27B language decoder for
+`./data/reasoning_train.jsonl`, with a reference answer in an `answer` column or
+the final assistant message. It inherits the 4B/9B GRPO starting values:
+`lr: 1e-5`, three epochs, four generations, `grpo_beta: 0.1` and the `accuracy`
+reward. The 4096-token limit, auto batch size, eight accumulation steps, LoRA
+rank 16 / alpha 32 and 4-bit quantization also match the shipped 27B SFT/DPO
+recipes; gradient checkpointing is explicit. These are inherited starting values.
+The pinned public configuration's full text architecture and LoRA attachment
+have been checked on meta, and a tiny random hybrid decoder passes a CPU LoRA
+forward/backward check. This does not validate full 27B weights, GRPO rollouts,
+NF4 execution, GPU memory fit or training quality.
 
 With `training.stream_layers: true`, the Qwen4-Exp text decoder is admitted by
 its own parity-tested path. Its very large frozen PLE N-gram table is excluded
@@ -175,7 +210,7 @@ spelling is unchanged. See [the README's install section](../README.md#1-install
 | `fast` | `pip install "soup-cli[fast]"` | Unsloth backend (2-5x faster, lower VRAM) |
 | `vision` | `pip install "soup-cli[vision]"` | Vision / multimodal fine-tuning (Pillow) |
 | `audio` | `pip install "soup-cli[audio]"` | Audio / speech fine-tuning (librosa, soundfile) |
-| `mlx` | `pip install "soup-cli[mlx]"` | Standalone Apple Silicon SFT, DPO, ORPO, SimPO and KTO backend for local data; `[train]` is not required |
+| `mlx` | `pip install "soup-cli[mlx]"` | Standalone Apple Silicon SFT, DPO, ORPO, SimPO, KTO and GRPO backend for local data; `[train]` is not required |
 | `qat` | `pip install "soup-cli[qat]"` | torchao: FP8 training (`quantization_aware: fp8`), FP8 attention, NVFP4, the `ao_adamw_*` optimizers and `soup export --format torchao` |
 | `serve` | `pip install "soup-cli[serve]"` | Inference server (FastAPI + uvicorn) |
 | `serve-fast` | `pip install "soup-cli[serve-fast]"` | vLLM inference backend (2-4x throughput) |

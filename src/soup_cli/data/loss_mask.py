@@ -616,19 +616,50 @@ def build_per_message_train_labels(
     messages: Sequence[dict],
     tokenizer: Any,
     max_length: int = 2048,
+    *,
+    verified_prefix: bool = False,
+    tools: Any = None,
 ) -> dict[str, list[int]]:
     """Build labels using per-message ``train: bool`` field.
 
     For each message, the ``train`` flag (defaulting to ``role == "assistant"``
     when missing) decides whether its tokens contribute to loss.
 
-    Mirrors Axolotl ``message_field_training`` behaviour.
+    Mirrors Axolotl ``message_field_training`` behaviour. ``verified_prefix``
+    requires actual token-prefix boundaries for each message (native MLX),
+    including its header/end marker. Unsupported templates are refused rather
+    than using the legacy alignment fallback. ``tools`` is forwarded in that mode.
     """
     _check_messages(messages)
     _validate_max_length(max_length)
 
     if not getattr(tokenizer, "chat_template", None):
         raise ValueError("tokenizer has no chat_template — cannot mask labels")
+
+    if verified_prefix:
+        # Native training cannot safely approximate a mask through a template
+        # that rewrites earlier turns. Keep the same per-message policy while
+        # requiring each complete message boundary to be a verified token prefix.
+        full_ids = coerce_token_ids(tokenizer.apply_chat_template(
+            messages, tools=tools, add_generation_prompt=False, return_dict=False,
+        ))
+        labels = [IGNORE_INDEX] * len(full_ids)
+        previous = []
+        for position, message in enumerate(messages):
+            flag = message.get("train")
+            if flag is not None and type(flag) is not bool:
+                raise ValueError(f"message {position} train must be bool or None")
+            current = coerce_token_ids(tokenizer.apply_chat_template(
+                messages[:position + 1], tools=tools,
+                add_generation_prompt=False, return_dict=False,
+            ))
+            if len(current) < len(previous) or full_ids[:len(current)] != current:
+                raise ValueError(f"chat template is not prefix-stable at message {position}")
+            should_train = flag if flag is not None else message.get("role") == "assistant"
+            if should_train:
+                labels[len(previous):len(current)] = full_ids[len(previous):len(current)]
+            previous = current
+        return _truncate(full_ids, labels, max_length)
 
     full_ids = _tokenize_only(tokenizer, messages)
     labels: list[int] = [IGNORE_INDEX] * len(full_ids)

@@ -150,7 +150,9 @@ class TestTensorrtExportFunction:
             "tensorrt_llm": MagicMock(),
             "tensorrt_llm.commands": MagicMock(),
             "tensorrt_llm.commands.convert_checkpoint": MagicMock(),
-        }), mock_patch("subprocess.run", return_value=mock_result) as mock_run:
+        }), mock_patch("subprocess.run", return_value=mock_result) as mock_run, mock_patch(
+            "soup_cli.utils.tool_paths.find_tool", return_value="/fake/bin/trtllm-build"
+        ):
             import soup_cli.commands.export as export_mod
 
             export_mod._export_tensorrt(

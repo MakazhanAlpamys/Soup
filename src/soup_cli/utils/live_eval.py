@@ -91,14 +91,17 @@ def _check_positive_int(value: object, name: str) -> int:
 
 
 def resolve_device(device: Optional[str] = None) -> str:
-    """Return ``device`` if given, else ``"cuda"`` when available, else ``"cpu"``.
+    """Return concrete device (``"cuda"`` if available, else ``"cpu"``) for ``None``/``"auto"``.
 
-    Never raises — falls back to ``"cpu"`` if torch is unavailable.
+    Explicit device strings (e.g. ``"cpu"``, ``"cuda:0"``) are returned verbatim.
+    Raises ``ValueError`` if ``device`` is not a non-empty string or None.
+    Falls back to ``"cpu"`` if torch is unavailable.
     """
     if device is not None:
         if not isinstance(device, str) or not device.strip():
             raise ValueError("device must be a non-empty string or None")
-        return device
+        if device.strip().lower() != "auto":
+            return device
     try:
         import torch
 
@@ -227,7 +230,7 @@ def load_model_and_tokenizer(
 
     Returns ``(model, tokenizer, device)``. ``model`` is ``.eval()``-ed and
     moved to the resolved device. Heavy imports are local. ``dtype`` (e.g.
-    ``"auto"``) is forwarded as ``torch_dtype`` so a caller can preserve the
+    ``"auto"``) is forwarded as ``dtype`` so a caller can preserve the
     checkpoint's native precision instead of upcasting to fp32 (``soup shrink``
     needs this so the shipped smaller model is not silently re-widened).
     ``quantization`` (``"4bit"`` / ``"8bit"`` / ``None``) judges the base the
@@ -260,7 +263,7 @@ def load_model_and_tokenizer(
         tokenizer.pad_token = tokenizer.eos_token
     model_kwargs = {"trust_remote_code": trust_remote_code, **revision_kwargs}
     if dtype is not None:
-        model_kwargs["torch_dtype"] = dtype
+        model_kwargs["dtype"] = dtype
     quant_config = _build_quantization_config(quantization)
     if quant_config is not None:
         # A quantized load is pinned to a device at from_pretrained time
@@ -377,6 +380,7 @@ def make_generator(
         return outputs
 
     _gen.batch = _batch
+    _gen.batch_size = batch_size
     return _gen
 
 

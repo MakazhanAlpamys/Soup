@@ -443,7 +443,9 @@ class JudgeEvaluator:
             JudgeResults with aggregated scores.
         """
         judge_scores: list[JudgeScore] = []
-        for item in items:
+        from soup_cli.utils.ship_progress import track
+
+        for item in track(items, len(items)):
             score = self.evaluate(
                 prompt=item["prompt"],
                 response=item["response"],
@@ -680,7 +682,9 @@ def pairwise_winrate(
     if not pairs:
         return 0.5
     total = 0.0
-    for index, (prompt, base_resp, tuned_resp) in enumerate(pairs):
+    from soup_cli.utils.ship_progress import track
+
+    for index, (prompt, base_resp, tuned_resp) in enumerate(track(pairs, len(pairs))):
         try:
             verdict = pairwise_compare(prompt, base_resp, tuned_resp, evaluator, swap=True)
         except JudgeUnavailableError as exc:

@@ -1,0 +1,25 @@
+{
+  "name": "a1",
+  "config": "soup-a.yaml",
+  "command": [
+    "soup",
+    "bench",
+    "train",
+    "--config",
+    "/content/issue999/soup-a.yaml",
+    "--steps",
+    "28",
+    "--warmup",
+    "8",
+    "-o",
+    "/content/issue999/a1.json"
+  ],
+  "fixes_applied": [
+    "fingerprint",
+    "fp16-adapter-alignment"
+  ],
+  "exit_code": 0,
+  "wall_seconds": 146.6,
+  "peak_rss_bytes": 8687157248,
+  "min_available_bytes": 4240896000
+}

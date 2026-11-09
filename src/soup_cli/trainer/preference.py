@@ -232,7 +232,8 @@ class PreferenceTrainerWrapper:
                         # over them. CPO / ORPO hand over policy log-probs;
                         # a dpo / ipo primary (trl's DPOTrainer) also gives
                         # the reference ones. A dpo / ipo term under a
-                        # simpo / orpo primary has no reference and refuses.
+                        # simpo / orpo primary reads an adapter-off
+                        # reference; without an adapter it refuses.
                         from soup_cli.utils.preference_combine import (
                             attach_policy_logp_capture,
                             attach_reference_logp_capture,

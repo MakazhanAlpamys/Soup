@@ -54,7 +54,8 @@ from pathlib import Path
 from typing import Callable, Tuple
 
 from soup_cli.eval.forgetting import MINI_BENCHMARKS, ForgettingDetector
-from soup_cli.eval.generation import generate_outputs
+from soup_cli.eval.generation import iter_outputs
+from soup_cli.utils.ship_progress import track
 
 GeneratorFn = Callable[[str], str]
 
@@ -212,8 +213,8 @@ def _fraction_passing(
     if not items:
         return 0.0
     passed = 0
-    outputs = generate_outputs(gen, [item.get("prompt", "") for item in items])
-    for item, output in zip(items, outputs):
+    outputs = iter_outputs(gen, [item.get("prompt", "") for item in items])
+    for item, output in track(zip(items, outputs), len(items)):
         if output is None:
             continue
         output = output[:_MAX_OUTPUT_LEN]

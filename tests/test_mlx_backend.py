@@ -307,7 +307,8 @@ output: ./output
         cfg = load_config_from_string(yaml_str)
         assert (cfg.task, cfg.backend) == ("dpo", "mlx")
 
-    def test_mlx_grpo_config_rejected_at_load(self):
+    def test_mlx_grpo_config_loads(self):
+        """#1976: GRPO has a native MLX trainer (tests/test_mlx_grpo.py)."""
         from soup_cli.config.loader import load_config_from_string
 
         yaml_str = """
@@ -322,8 +323,8 @@ training:
   lr: 1e-6
 output: ./output
 """
-        with pytest.raises(ValueError, match="MLX backend only ships SFT"):
-            load_config_from_string(yaml_str)
+        cfg = load_config_from_string(yaml_str)
+        assert (cfg.task, cfg.backend) == ("grpo", "mlx")
 
 
 class TestMlxRecipeRepoIds:

@@ -103,9 +103,9 @@ def _runner():
 
     Not sufficient on its own here; see :func:`_pin_console`.
     """
-    from typer.testing import CliRunner
+    from tests.conftest import make_cli_runner
 
-    return CliRunner(env={"COLUMNS": "200"})
+    return make_cli_runner(env={"COLUMNS": "200"})
 
 
 def _pin_console(monkeypatch):
@@ -339,7 +339,7 @@ class TestTheCommand:
 
         cfg = self._write(tmp_path, _mlx_record(optimizer="SGD"), _config())
         res = _runner().invoke(app, ["audit", ".", "--config", cfg.name, "--json"])
-        payload = json.loads(res.output)
+        payload = json.loads(res.stdout)
         assert payload["diverged_count"] == 1
         assert any(r["setting"] == "optimizer" for r in payload["rows"])
 
@@ -642,6 +642,26 @@ class TestMaskingIsAuditedByEffectNotByRequest:
             if r.setting == "data.train_on_responses_only"
         )
         assert row.status == "ok"
+
+    def test_per_message_training_counts_as_a_requested_mask(self):
+        """Per-message selection requests a mask independently of response-only mode."""
+        from soup_cli.trainer.mlx_masking import plan_response_masking
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        plan = plan_response_masking(
+            False, {"messages": [{"role": "user", "content": "q"},
+                                 {"role": "assistant", "content": "a"}]}, train_field=True,
+        )
+        record = _mlx_record(
+            mask_prompt=plan.mask_prompt, response_token_mask=plan.token_mask,
+            train_on_responses_only=False, train_on_messages_with_train_field=True,
+        )
+        result = audit_adapter(_config(data={
+            "train_on_responses_only": False, "train_on_messages_with_train_field": True,
+        }), record)
+        row = next(r for r in result.rows if r.setting == "data.train_on_responses_only")
+        assert row.status == "ok", (row.status, row.detail)
+        assert result.exit_code == 0
 
     def test_masking_switched_off_but_performed_anyway_diverges(self):
         """The other direction: a mask the config did not ask for."""

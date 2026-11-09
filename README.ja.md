@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
+<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -92,52 +92,40 @@ LLM の学習は、今でも骨の折れる作業です。経験豊富なチー�
 
 ## 新着情報
 
-**v0.76.0 — Soup が受け入れながら一度も適用していなかった設定は、読み込みを止めるようになりました。**
-検証され、文書化されていながら、設定対象と称する経路のどこからも読み取られていなかったオプションは、
-読み込み時に拒否され、設定名と変更すべき内容が示されます。それ以外は警告を出し、拒否することになる
-リリースを明示します。以前は読み込めた設定が読み込めなくなることがあります。まず
-`soup doctor --config soup.yaml` を実行してください。
+**v0.77.2 — v0.77.1 以降の `main` をそのまま切り出したリリース：プルリクエスト 159 件、うち 153 件は
+メンテナー以外の 30 人によるものです。** 大半は修正ですが、新機能と、v0.77.1 が受け入れていたものを
+拒否することがある 2 つの規則も含みます。サーバーや `task: sft` の設定をアップグレードする前に
+[v0.77.2 のリリースノート](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.2)を読んでください。0.76.x から移行する場合は、まず
+`soup doctor --config soup.yaml` を実行し、[v0.77.0 のリリースノート](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0)を読んでください。
 
-- **破壊的変更: 一度も効果のなかった設定は、読み込み時に拒否されます。** 対象には、
-  `training.quantization_aware: true`（量子化対応学習は実際には一度も実行されていませんでした）、
-  `training.use_longlora`、`training.ebft_variant`、`training.gdpo_variant`、どのセットアップも読み取らない
-  場合の `training.rope_scaling_type`、`freeze_layers` / `freeze_ratio`（transformers バックエンドの
-  テキスト `sft` / `tts` 経路以外）、`auto_mixed_precision`（`sft` / `tts` 以外）、そして unsloth の
-  セットアップを持たないさらに七つのタスクでの `backend: unsloth` が含まれます。各メッセージは、該当する
-  フィールドと変更すべき内容を示します。`lr_groups`、`early_stop_patience`、`forgetting_eval_steps` など、
-  読み取られない他のつまみは、今は読み込み時に警告を出し、v0.77 から拒否されます。
-- **検証損失が評価されるようになりました。** `data.val_split` はすべての実行で行を学習から除外していましたが、
-  transformers バックエンドのどのトレーナーもそれらを評価していませんでした。今は、分割を受け取るすべての
-  タスクが、各エポックの終わりに、または `training.eval_steps` を指定した場合は N ステップごとにそれを評価し、
-  検証損失を記録します。実行時間は数パーセント長くなります。**`grpo`、`ppo`、`online_dpo` では破壊的変更です。**
-  既定では行を取り分けなくなり（`data.val_split` は注記付きで無視されます）、すべての行が学習に使われます。
-- **破壊的変更: 標準でないすべての `grpo_variant` が `grpo_beta` の KL ペナルティを適用します。**
-  `gspo`、`dapo`、`dr_grpo`、`bnpo`、`two_sided`、`rft` は `grpo_beta` を検証しながら捨てていたため、
-  既存のバリアント設定は以前の実行を再現できません。`grpo_beta: 0` は KL なしで動作し、参照モデルの
-  フォワードパスを省略するようになりました。
-- **レイヤーストリーミングは、ディスク階層をバックグラウンドスレッドでダイレクト I/O により読み込み、
-  NVMe ドライブにまたがってストライプ化できます。** RAM より大きい 36 GB の 70B 相当の NF4 ストア
-  （RTX 5070 Laptop 8 GB 搭載の一台）で、コールドステップは同期読み込みの 110.5 s から 16.2-17.3 s に短縮され、
-  `SOUP_LAYER_STREAM_STRIPE_DIRS` による 二台のドライブへの分散では 17.4 s から 9.97 s になりました
-  （持続負荷プローブ: 二ラウンド、1.28x と 1.41x、正式な判定なし。
-  [記録](benchmarks/probe-rtx5070-two-drive-sustained.md)）。RAM に収まるストアは、引き続き RAM 階層のほうが
-  高速で、`stream_source: auto` はそちらを選びます。オプトイン方式（`stream_layers: true`）で、まだ BETA です。
-  記録: [ダイレクト I/O](benchmarks/gate-974-disk-tier-direct-io.md)、
-  [ストライピング](benchmarks/gate-two-drive-striping.md)。
-- **新しいコマンドとオプション。** `soup adapters check` は LoRA アダプターをスキャンして、サイレントな失敗を検出します。
-  `soup bench train` は決まったステップ数だけ学習し、モデルが学習していなかった場合は終了コード 1 で終了します
-  （transformers バックエンドの `task: sft` が対象です。`soup bench` はグループになり、`soup bench infer` が
-  従来の推論ベンチマークです）。`soup data clean` は、入力ファイルに触れずにデータセットをサニタイズして
-  修復します。`soup recipes verify` は、重みをダウンロードせずに meta デバイス上で、同梱のすべてのレシピが
-  LoRA アダプターを取り付けられることを確認します。`soup rewind` は、損失スパイクの原因となったデータセットの
-  行を特定します。`soup infer` には、オプトインの `--batch-size` と実験的な `--cuda-graphs` が加わりました
-  （PyTorch 2.14 以降が必要。RTX 5070 Laptop 一台、ピン留めなし、FP16 の Qwen2.5-1.5B で、これを使った最も遅い実行でも、
-  使わなかった最も速い実行より 2.9x 速くデコードできました）。`soup ab` は、分散に頑健な両側検定を実行します。
-  `soup adapters sign --backend sigstore` と `soup attest emit --sign sigstore` は、Sigstore のキーレス OIDC で
-  署名します（`pip install "soup-cli[sigstore]"`）。
+- **`soup profile --model <id>` は `soup.yaml` なしで「収まるか」に答えます。** モデルの
+  `config.json` から実行の見積もりを出し、`--seq`、`--batch`、`--method`、`--lora-r`、`--optimizer`、
+  `--gradient-checkpointing` で形が決まります。Apple Silicon では Metal のワーキングセットと比較します。
+  `soup plan` と `soup apply` は `--minillm-on-policy` を受け付けます。
+- **Apple Silicon での学習が増えました。** `preference_loss: dpo`、`orpo`、`simpo` を指定した
+  `task: preference` はネイティブ MLX トレーナーで動き、MLX GRPO は 4 ビットの `mlx-community`
+  ベースで学習でき、MLX Adafactor は設定された学習率とスケジュールに従います。
+- **新しい DPO レシピが 2 つ：** `qwen3.5-0.8b-dpo` と `qwen3.5-27b-dpo`。
+- **VRAM の見積もりが実測に近づきました。** optimizer ステップを独立したフェーズとして扱い、
+  PRM ステップには 1 位置分の logits を計上し、分割された FSDP / ZeRO の実行はカードごとに見積もり、
+  `stream_loss_chunk` のステップには最終層の再計算を計上し、Unsloth の LoRA ターゲットはそのローダーが
+  選ぶとおりに扱います。
+- **黙った上書きと空の結果が減りました。** より多くのコマンドが、入力を指す `--output` を拒否します
+  （`soup data ingest`、`persona-mix`、`generate` など）。`soup ship --adapter` は何も変えないアダプターを
+  拒否し、`soup distill-prompt`、`soup data evolve`、`gen-magpie`、`filter --perplexity` は空または
+  未フィルターのファイルを書く代わりに失敗します。
+- **選好学習と RL の修正。** `data.max_length` が SimPO と KTO で再び効くようになり、PPO は要求されると方策に
+  gradient checkpointing を適用し（4 ビット・8 ビットでもクラッシュしなくなり）、`soup merge` は
+  アダプターを学習したときのベースのコミットを読み込みます。
+- **テキストを入力どおりに表示。** 数十のコマンドが、パス・名前・メッセージを、角括弧と `:name:` の
+  テキストを保ったまま、端末制御文字を取り除いて表示します。
 
-> Python は **3.11–3.13** のみ対応です。3.14 以降では、pip がテストされていない PyTorch の wheel を解決し、
-> Soup が動き出す前にネイティブ拡張の中でクラッシュしていました。
+**知っておくべき挙動の変更。** `soup serve --tool-auth-token` は `A-Z`、`a-z`、`0-9`、`_`、`-` からなる
+16〜128 文字でなければなりません（そうでなければ終了コード 2）。`task: sft` は、`reasoning_effort`、
+`train_on_eot`、`use_flash_attn`、`use_liger` を、それらを一度も適用していなかった画像・音声・MLX・
+Unsloth・RAFT・事前トークナイズ済みの経路で拒否します。`soup completions` のスクリプトは再生成が必要です。
+`soup data from-traces --signal thumbs_up`、MLX Adafactor、`soup merge`、VRAM の事前チェックは、
+v0.77.1 と異なる結果になることがあります。
 
 過去のハイライトは [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) ページにあります。
 
@@ -337,7 +325,7 @@ CUDA や PyTorch をローカルにインストールせずに Soup を実行で
 
 ```bash
 docker pull ghcr.io/makazhanalpamys/soup:latest
-docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml
+docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml --yes
 docker compose up   # またはローカルでビルド
 ```
 

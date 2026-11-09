@@ -26,8 +26,6 @@ entry and both modules stay resident (untouched by this fix; pinned below).
 
 from __future__ import annotations
 
-from unittest import mock
-
 import pytest
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
@@ -81,28 +79,23 @@ def _lora(target_modules):
 
 
 def _build_streamed(tmp_path, *, tie, target_modules, seed=3):
-    from soup_cli.utils import layer_stream_runtime
     from soup_cli.utils.layer_shard import shard_checkpoint
     from soup_cli.utils.layer_stream_runtime import build_streamed_model
 
     weights = _tiny_llama_dir(tmp_path, tie=tie)
     shards = str(tmp_path / "shards")
     index = shard_checkpoint(weights, shards, dtype="float32", arch="llama")
-    # #1048: build_streamed_model refuses these targets until saving and
-    # resuming them works. This file pins the part that already does, so it
-    # builds past that refusal.
-    with mock.patch.object(layer_stream_runtime, "_refuse_lora_on_streamed_boundary"):
-        model, runtime = build_streamed_model(
-            model_id=weights,
-            shard_dir=shards,
-            index=index,
-            lora_config=_lora(target_modules),
-            device="cpu",
-            dtype="float32",
-            buffers=2,
-            pin=False,
-            seed=seed,
-        )
+    model, runtime = build_streamed_model(
+        model_id=weights,
+        shard_dir=shards,
+        index=index,
+        lora_config=_lora(target_modules),
+        device="cpu",
+        dtype="float32",
+        buffers=2,
+        pin=False,
+        seed=seed,
+    )
     return model, runtime, weights
 
 

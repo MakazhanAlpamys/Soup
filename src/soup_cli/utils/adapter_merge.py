@@ -23,7 +23,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, FrozenSet, Literal, Mapping, Optional, Sequence, Tuple
 
-from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+from soup_cli.utils.adapter_diff import (
+    WRITE_ADAPTER_DEPS,
+    WRITE_ADAPTER_DEPS_MSG,
+    require_adapter_dependencies,
+)
+from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, ensure_distinct_paths
 
 MergeStrategy = Literal["linear", "ties", "dare", "svd", "cmaes"]
 # A canary scorer: ``scorer(role, tasks) -> per-prompt scores`` where ``role``
@@ -294,7 +299,11 @@ def merge_adapters(
     if len(adapter_paths) > _MAX_ADAPTERS:
         raise ValueError(f"at most {_MAX_ADAPTERS} adapters")
 
+    require_adapter_dependencies(WRITE_ADAPTER_DEPS)
     enforce_under_cwd_and_no_symlink(output_dir, "output_dir")
+    ensure_distinct_paths(
+        [("adapter", path) for path in adapter_paths], [("output_dir", output_dir)]
+    )
 
     weights_list = [load_adapter_weights(p) for p in adapter_paths]
 
@@ -371,12 +380,11 @@ def write_merged_adapter(
     (#305) so the emitted ``adapter_config.json``'s ``r`` matches the
     concatenated tensors and the adapter stays loadable.
     """
+    require_adapter_dependencies(WRITE_ADAPTER_DEPS)
     try:
         from safetensors.numpy import save_file
     except ImportError as exc:
-        raise RuntimeError(
-            "safetensors package required; pip install safetensors"
-        ) from exc
+        raise RuntimeError(WRITE_ADAPTER_DEPS_MSG) from exc
 
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)

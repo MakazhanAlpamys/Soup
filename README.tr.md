@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
+<!-- synced-from: README.md sha256:aa2170df59636760e0235b87cddf967a14e932605ed3abb16480115d99db6e40 -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -93,56 +93,42 @@ yerine altyapıyla boğuşarak geçiriyor. Soup bunu çözer.
 
 ## Yenilikler
 
-**v0.76.0 — Soup'un kabul edip hiç uygulamadığı ayarlar artık yüklemeyi durduruyor.** Doğrulanan ve
-belgelenen, ancak yapılandırdığını iddia ettikleri yolda hiçbir şey tarafından okunmayan seçenekler artık
-yükleme sırasında reddediliyor; ayarın adını ve neyin değiştirileceğini belirtiyor. Geri kalanlar uyarı
-veriyor ve onları reddedecek sürümü belirtiyor. Daha önce yüklenen bir yapılandırma artık yüklenmeyebilir:
-önce `soup doctor --config soup.yaml` komutunu çalıştırın.
+**v0.77.2 — v0.77.1'den sonra `main`'in bir kesiti: 159 pull request, bunların 153'ü bakımcı
+dışındaki 30 kişiden.** Büyük kısmı düzeltme. Ayrıca yeni özellikler ve v0.77.1'in kabul ettiğini
+reddedebilen iki kural getiriyor; bu yüzden bir sunucuyu ya da bir `task: sft` yapılandırmasını
+yükseltmeden önce [v0.77.2 sürüm notlarını](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.2) okuyun. 0.76.x'ten geliyorsanız önce
+`soup doctor --config soup.yaml` komutunu çalıştırın ve [v0.77.0 sürüm notlarını](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0) okuyun.
 
-- **Geriye dönük uyumsuz değişiklik: hiç etkili olmayan bir ayar yüklemede reddediliyor.** Bunların
-  arasında `training.quantization_aware: true` (nicelemeye duyarlı eğitimi hiç çalıştırmıyordu),
-  `training.use_longlora`, `training.ebft_variant`, `training.gdpo_variant`, hiçbir hazırlık adımının
-  okumadığı yerlerdeki `training.rope_scaling_type`, `freeze_layers` / `freeze_ratio` (transformers
-  arka ucunda metin `sft` / `tts` yolunun dışında), `auto_mixed_precision` (`sft` / `tts` dışında)
-  ve unsloth hazırlık adımı bulunmayan yedi görevde daha `backend: unsloth` var. Her mesaj alanın adını
-  ve neyin değiştirileceğini belirtiyor. `lr_groups`, `early_stop_patience`, `forgetting_eval_steps` ve
-  okunmayan diğer ayarlar artık yüklemede uyarı veriyor ve v0.77'den itibaren reddedilecek.
-- **Doğrulama kaybı artık değerlendiriliyor.** `data.val_split`, her çalıştırmada satırları eğitimin
-  dışında tutuyordu ve transformers arka ucundaki hiçbir trainer bunları değerlendirmiyordu. Artık bir
-  bölme alan her görev, onu her epoch sonunda ya da `training.eval_steps` ile her N adımda değerlendiriyor
-  ve doğrulama kaybını kaydediyor; çalıştırmalar yüzde birkaç daha uzun sürüyor.
-  **`grpo`, `ppo` ve `online_dpo` için geriye dönük uyumsuz:** varsayılan olarak artık satır ayırmıyorlar
-  (`data.val_split` bir notla yok sayılıyor), dolayısıyla her satır eğitime giriyor.
-- **Geriye dönük uyumsuz değişiklik: standart olmayan her `grpo_variant`, `grpo_beta` KL cezasını
-  uyguluyor.** `gspo`, `dapo`, `dr_grpo`, `bnpo`, `two_sided` ve `rft`, `grpo_beta` değerini doğrulayıp
-  atıyordu; bu yüzden mevcut varyant yapılandırmaları önceki çalıştırmaları yeniden üretmeyecek.
-  `grpo_beta: 0` artık KL'siz çalışıyor ve referans modelin ileri geçişini atlıyor.
-- **Katman akışı disk katmanını bir arka plan iş parçacığında, doğrudan G/Ç (direct I/O) ile okuyor ve
-  onu NVMe sürücülere şeritleyebiliyor.** RAM'den büyük, 36 GB'lık, 70B biçimli bir NF4 deposunda (tek
-  bir RTX 5070 Laptop 8 GB makinesi), soğuk bir adım eşzamanlı okumada 110.5 s iken 16.2-17.3 s'ye düştü;
-  `SOUP_LAYER_STREAM_STRIPE_DIRS` ile iki sürücüye yayıldığında ise 17.4 s'den 9.97 s'ye indi (sürekli yük
-  altında bir sonda ölçümü: iki tur, 1.28x ve 1.41x, resmî bir hüküm yok;
-  [kayıt](benchmarks/probe-rtx5070-two-drive-sustained.md)). RAM'e sığan bir depo RAM katmanında hâlâ daha
-  hızlı ve `stream_source: auto` onu seçiyor. İsteğe bağlıdır (`stream_layers: true`) ve hâlâ BETA;
-  kayıtlar: [doğrudan G/Ç](benchmarks/gate-974-disk-tier-direct-io.md),
-  [şeritleme](benchmarks/gate-two-drive-striping.md).
-- **Yeni komutlar ve seçenekler.** `soup adapters check`, bir LoRA adaptörünü sessiz arızalara karşı
-  tarar; `soup bench train`, sabit sayıda adım eğitir ve model eğitilmiyorsa çıkış kodu 1 ile biter
-  (transformers arka ucunda `task: sft` için geçerlidir; `soup bench` artık bir gruptur ve
-  `soup bench infer` eski çıkarım kıyaslamasıdır); `soup data clean`, girdi dosyasına dokunmadan bir veri
-  kümesini temizler ve onarır; `soup recipes verify`, meta aygıtında, hiçbir ağırlık indirmeden, gönderilen
-  her tarifin bir LoRA adaptörü bağlayabildiğini denetler; `soup rewind`, bir kayıp sıçramasının
-  arkasındaki veri kümesi satırlarını adlandırır. `soup infer`, isteğe bağlı `--batch-size` ve deneysel bir
-  `--cuda-graphs` kazandı (PyTorch 2.14 veya daha yeni; tek bir RTX 5070 Laptop'ta, sabitlenmemiş,
-  FP16'da Qwen2.5-1.5B ile, onunla yapılan en yavaş çalıştırma, onsuz yapılan en hızlı çalıştırmadan
-  kod çözmede 2.9x daha hızlıydı). `soup ab`, iki yönlü, varyansa karşı dayanıklı bir test çalıştırır;
-  `soup adapters sign --backend sigstore` ve `soup attest emit --sign sigstore` ise Sigstore anahtarsız
-  OIDC ile imzalar (`pip install "soup-cli[sigstore]"`).
+- **`soup profile --model <id>`, `soup.yaml` olmadan "sığar mı?" sorusunu yanıtlıyor.** Çalıştırmayı
+  modelin `config.json` dosyasından fiyatlıyor; sonucu `--seq`, `--batch`, `--method`, `--lora-r`,
+  `--optimizer` ve `--gradient-checkpointing` belirliyor; Apple Silicon'da Metal'in çalışma kümesiyle
+  karşılaştırıyor. `soup plan` ve `soup apply` artık `--minillm-on-policy` alıyor.
+- **Apple Silicon'da daha fazla eğitim.** `preference_loss: dpo`, `orpo` ya da `simpo` ile
+  `task: preference` yerel MLX eğiticisini çalıştırıyor, MLX GRPO 4-bit `mlx-community` tabanlarında
+  eğitiliyor ve MLX Adafactor yapılandırılmış öğrenme oranını ve çizelgesini izliyor.
+- **İki yeni DPO tarifi:** `qwen3.5-0.8b-dpo` ve `qwen3.5-27b-dpo`.
+- **Daha yakın VRAM tahminleri.** Optimizer adımı kendi başına bir aşama; bir PRM adımına tek konumun
+  logit'leri yazılıyor; parçalanmış bir FSDP ya da ZeRO çalıştırması kart başına fiyatlanıyor;
+  `stream_loss_chunk` adımına son katmanının yeniden hesaplaması yazılıyor; Unsloth'un LoRA hedefleri
+  yükleyicisinin seçtiği gibi hesaplanıyor.
+- **Sessiz üzerine yazmalar ve boş sonuçlar azaldı.** Daha fazla komut, bir girdiyi adlandıran
+  `--output` değerini reddediyor (`soup data ingest`, `persona-mix`, `generate` ve diğerleri);
+  `soup ship --adapter` hiçbir şeyi değiştirmeyen bir adaptörü reddediyor; `soup distill-prompt`,
+  `soup data evolve`, `gen-magpie` ve `filter --perplexity` boş ya da filtrelenmemiş bir dosya yazmak
+  yerine hata veriyor.
+- **Tercih ve RL düzeltmeleri.** `data.max_length` SimPO ve KTO için yeniden geçerli, PPO istenince
+  politikasını checkpoint'liyor (4-bit ve 8-bit altında artık çökmüyor) ve `soup merge` adaptörün
+  eğitildiği taban commit'ini yüklüyor.
+- **Metin yazıldığı gibi gösteriliyor.** Onlarca komut yolları, adları ve iletileri köşeli
+  parantezler ve `:name:` metni korunarak, terminal denetim karakterleri kaldırılarak yazdırıyor.
 
-> v0.77'den itibaren yalnızca Python **3.11–3.13**. Python 3.10, 2026-10-01'de kullanım ömrünün
-> sonuna (end of life) ulaştı; 3.10 üzerinde pip v0.76'yı kurmaya devam eder. 3.14+ sürümlerinde
-> pip, üst sınırı olmayan son sürüm olan v0.72.4'e geri döner ve orada test edilmemiş PyTorch
-> wheel paketlerini seçer.
+**Bilmeniz gereken davranış değişiklikleri.** `soup serve --tool-auth-token`, `A-Z`, `a-z`, `0-9`,
+`_` ve `-` karakterlerinden oluşan 16 ila 128 karakter olmalı (aksi halde çıkış kodu 2).
+`task: sft`, `reasoning_effort`, `train_on_eot`, `use_flash_attn` ve `use_liger` ayarlarını,
+bunları hiç uygulamayan görü, ses, MLX, Unsloth, RAFT ve önceden belirteçlenmiş yollarda reddediyor.
+`soup completions` betiklerinin yeniden üretilmesi gerekiyor.
+`soup data from-traces --signal thumbs_up`, MLX Adafactor, `soup merge` ve VRAM ön kontrolü
+v0.77.1'den farklı bir sonuç verebilir.
 
 Eski sürümlerin öne çıkanları [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) sayfasında.
 
@@ -344,7 +330,7 @@ CUDA ya da PyTorch'u yerel olarak kurmadan Soup'u çalıştırın (imaj her sür
 
 ```bash
 docker pull ghcr.io/makazhanalpamys/soup:latest
-docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml
+docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml --yes
 docker compose up   # ya da yerel olarak derleyin
 ```
 

@@ -35,16 +35,25 @@ def export_flow(tmp_path, monkeypatch):
     home.mkdir()
     monkeypatch.setattr(Path, "home", lambda: home)
     calls = []
+    unexpected = []
     original_run = subprocess.run
+    # Every program lookup answers with a stand-in path, so the only commands
+    # that reach ``run`` are the ones this fixture knows.
+    monkeypatch.setattr("soup_cli.utils.tool_paths.find_tool",
+                        lambda name, path=None: "/fake/" + name)
 
     def run(command, **kwargs):
-        if command[:2] == ["git", "clone"]:
+        if list(command[:2]) == ["/fake/git", "clone"]:
             calls.append("clone")
             _converter(Path(command[-1]), ("LlamaForCausalLM",))
             return subprocess.CompletedProcess(command, 0, "", "")
-        if "--print-supported-models" in command:
+        if (len(command) == 3 and command[0] == sys.executable
+                and command[2] == "--print-supported-models"):
+            # The synthetic converter this fixture wrote: a local script.
             calls.append("probe")
-        return original_run(command, **kwargs)
+            return original_run(command, **kwargs)
+        unexpected.append(command)
+        raise AssertionError(f"export_flow: unexpected command {command!r}")
 
     def convert(script, model, output, outtype, **kwargs):
         calls.append("convert")
@@ -95,7 +104,9 @@ def export_flow(tmp_path, monkeypatch):
         return SimpleNamespace(exit_code=result.exit_code, output=strip_ansi(result.output),
                                exception=result.exception), calls
 
-    return invoke
+    yield invoke
+    # A test that expects a refusal must not pass because a command was refused here.
+    assert unexpected == [], unexpected
 
 
 @pytest.mark.parametrize("managed", [False, True])

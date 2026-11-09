@@ -20,13 +20,20 @@ def _backend():
     return runpod
 
 
-def _controller():
+#: Where the controllers built by ``_controller()`` find ssh and scp. A test of the
+#: real PATH search uses ``_controller(real_tools=True)``.
+FAKE_TOOL_DIR = "/fake-bin/"
+
+
+def _controller(*, real_tools: bool = False):
     text = _backend().render_runpod_stub(
         CONFIG, gpu="a100", output_dir="out", soup_version="0.76.0"
     )
     namespace = {"__name__": "test_controller"}
     exec(compile(text, "soup_runpod_app.py", "exec"), namespace)
     namespace["shutil"] = types.SimpleNamespace(which=lambda command: command)
+    if not real_tools:
+        namespace["_find_tool"] = lambda name: FAKE_TOOL_DIR + name
     return namespace
 
 
@@ -255,12 +262,14 @@ def test_training_failure_or_copy_failure_is_not_success(credentials, monkeypatc
 
     def run(argv, **kwargs):
         calls.append((argv, kwargs))
-        return subprocess.CompletedProcess(argv, 0 if argv[0] == "ssh" else 1)
+        return subprocess.CompletedProcess(argv, 0 if argv[0] == FAKE_TOOL_DIR + "ssh" else 1)
 
     monkeypatch.setattr(ns["subprocess"], "run", run)
     with pytest.raises(RuntimeError, match="copy"):
         ns["_train_and_copy"]("192.0.2.1", 2222, str(credentials))
-    assert [item[0][0] for item in calls] == ["ssh", "ssh", "scp"]
+    assert [item[0][0] for item in calls] == [
+        FAKE_TOOL_DIR + "ssh", FAKE_TOOL_DIR + "ssh", FAKE_TOOL_DIR + "scp"
+    ]
     assert "-P" in calls[2][0] and "2222" in calls[2][0]
     script = calls[1][1]["input"]
     assert "test-provider-secret" not in script

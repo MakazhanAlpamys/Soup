@@ -136,20 +136,15 @@ class TestComputeDtype:
 class TestDiffModelLoading:
     """Test diff command uses Transformers kwargs compatible with the floor."""
 
-    def test_load_model_uses_torch_dtype(self):
-        """_load_model keeps the guarded Transformers load-kwarg policy (#478)."""
+    def test_load_model_uses_dtype(self):
+        """Both branches follow the Transformers 5.x model-load keyword policy."""
         import inspect
 
         from soup_cli.commands.diff import _load_model
 
         source = inspect.getsource(_load_model)
-        # #1443 resolves the value per --device instead of hard-coding
-        # float16, but both from_pretrained calls must still use the
-        # `torch_dtype=` spelling the floor Transformers version requires.
-        assert source.count("torch_dtype=torch_dtype") == 2
-        # Substring-safe: torch_dtype=... contains the letters dtype=
-        bare = source.replace("torch_dtype=", "")
-        assert "dtype=" not in bare
+        assert source.count("dtype=torch_dtype") == 2
+        assert "torch_dtype=" not in source
 
 
 # --- BUG-006: wandb version pin ---

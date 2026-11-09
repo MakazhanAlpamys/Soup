@@ -12,8 +12,10 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.constants import GITHUB_URL
+from soup_cli.utils.terminal import strip_control
 from soup_cli.utils.torchao_compat import TORCHAO_MIN_VERSION
 
 console = Console()
@@ -330,7 +332,8 @@ def doctor(
 
     loaded_cfg = None
     if config:
-        # Load and validate the config before the environment summary (#2100).
+        # Load and validate the config before the "All checks passed!" line (#2100);
+        # the environment tables above have already printed.
         # If the config is refused or cannot be loaded, doctor terminates with exit 2
         # before asserting that "All checks passed!".
         loaded_cfg = _load_doctor_config(config)
@@ -375,7 +378,9 @@ def _load_doctor_config(config_path: str):
 
         return load_config(config_path)
     except FileNotFoundError as exc:
-        console.print(f"\n[red]Config not found:[/] {config_path}")
+        console.print(
+            Text.assemble(("\nConfig not found:", "red"), " ", strip_control(config_path))
+        )
         # Non-zero deliberately: this leg is meant to be gate-able in CI, and a
         # config that cannot be read is not a clean bill of health. `doctor`
         # without --config keeps its old exit status.
@@ -410,6 +415,11 @@ def _report_config_support(cfg) -> None:
 
     backend = getattr(cfg, "backend", DEFAULT_BACKEND)
     modality = getattr(cfg, "modality", DEFAULT_MODALITY)
+    task = cfg.task
+    if backend == "mlx":
+        from soup_cli.config.schema import resolve_mlx_task
+
+        task = resolve_mlx_task(task, cfg.training.preference_loss)
     gaps = check_config(cfg)
 
     modality_str = f" modality=[bold]{modality}[/]" if modality != DEFAULT_MODALITY else ""
@@ -418,7 +428,7 @@ def _report_config_support(cfg) -> None:
         f"backend=[bold]{backend}[/]{modality_str}"
     )
     if not gaps:
-        known = unsupported_for(cfg.task, backend, modality)
+        known = unsupported_for(task, backend, modality)
         modality_msg = f" modality={modality}" if modality != DEFAULT_MODALITY else ""
         console.print(
             f"  [green]None of the {len(known)} setting(s) known to be unread "
@@ -719,14 +729,14 @@ def _torch_cuda_wheel_tag(driver: tuple[int, int] | None) -> str | None:
 
 
 def _nvidia_smi_executable() -> str | None:
-    """Absolute path to nvidia-smi, or None.
+    """Absolute path of nvidia-smi in an absolute PATH directory, or None.
 
-    Bare ``nvidia-smi`` is never handed to ``subprocess`` (CWE-427):
-    Windows ``CreateProcess`` searches the current directory before PATH.
+    nvidia-smi is run by this path, never by its bare name, so the current
+    directory is never searched for it.
     """
-    import shutil
+    from soup_cli.utils.tool_paths import find_tool
 
-    return shutil.which("nvidia-smi")
+    return find_tool("nvidia-smi")
 
 
 def _nvidia_smi_cuda_version() -> tuple[int, int] | None:
@@ -774,6 +784,21 @@ def _detect_gpu_arch_mismatch_advisory() -> str:
     )
 
 
+def _cuda_visibility_hides_every_gpu(value: str | None, gpu_count: int) -> bool:
+    """CUDA exposes only the devices listed before the first invalid entry."""
+    if value is None:
+        return False
+    first = value.split(",", 1)[0].strip()
+    if first.startswith(("GPU-", "MIG-")):
+        return False  # UUID validation would require a separate nvidia-smi -L query.
+    if not (first.isascii() and first.isdigit()):
+        return True
+    try:
+        return int(first) >= gpu_count
+    except ValueError:
+        return True  # An oversized integer must not crash the diagnostic.
+
+
 def _detect_gpu_hw_without_torch_cuda() -> str:
     """v0.40.1 Part C / N3 — return advisory string if nvidia-smi succeeds
     but torch lacks CUDA (i.e. user installed the CPU-only wheel).
@@ -794,14 +819,22 @@ def _detect_gpu_hw_without_torch_cuda() -> str:
         return ""
     if completed.returncode != 0:
         return ""
-    gpu_name = (completed.stdout or "").strip().splitlines()[:1]
-    raw_label = gpu_name[0] if gpu_name else "GPU"
+    gpu_names = (completed.stdout or "").strip().splitlines()
+    raw_label = gpu_names[0] if gpu_names else "GPU"
     # v0.40.1 review fix — security: nvidia-smi output is embedded in a
-    # Rich-markup string at the call site; escape `[`/`]` so a GPU name like
-    # "NVIDIA Quadro [T4]" cannot break or inject markup.
-    from rich.markup import escape as _markup_escape
+    # Rich-markup string at the call site; strip controls and escape markup
+    # in both the card name and the visibility setting.
+    from soup_cli.utils.terminal import for_terminal
 
-    gpu_label = _markup_escape(raw_label)
+    gpu_label = for_terminal(raw_label)
+    visibility = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if _cuda_visibility_hides_every_gpu(visibility, len(gpu_names)):
+        return (
+            f"GPU hardware present ({gpu_label}) but "
+            f"CUDA_VISIBLE_DEVICES={for_terminal(visibility)} "
+            "hides it from torch. Unset CUDA_VISIBLE_DEVICES to use the GPU."
+        )
+
     try:
         from importlib.metadata import version as _pkgver
 
@@ -874,6 +907,8 @@ def _detect_dual_python_interpreters() -> str:
 
 
 _GB = 1024**3
+#: macOS ships sysctl at this fixed location.
+_MACOS_SYSCTL = "/usr/sbin/sysctl"
 
 
 def _get_ram_gb() -> str:
@@ -901,7 +936,7 @@ def _get_ram_gb() -> str:
             import subprocess
 
             res = subprocess.run(
-                ["sysctl", "-n", "hw.memsize"],
+                [_MACOS_SYSCTL, "-n", "hw.memsize"],
                 capture_output=True,
                 text=True,
                 timeout=5,

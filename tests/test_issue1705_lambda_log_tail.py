@@ -51,6 +51,9 @@ def _exec(
 ) -> tuple[int, list]:
     namespace: dict[str, object] = {"__name__": "controller"}
     exec(stub, namespace)
+    # ssh and scp are taken as found under their own names, so the fake replies can
+    # be keyed on argv[0]; tests/test_external_tool_paths.py covers the PATH search.
+    namespace["_find_tool"] = lambda name: name
 
     terminations: list[tuple] = []
     clock = {"now": 0.0}
@@ -95,11 +98,38 @@ class TestLambdaLogTailOnFailure:
         user_data = str(namespace["_USER_DATA"])
 
         pipefail_stmt = "set -euo pipefail"
-        tee_stmt = "soup train --config soup.yaml --yes 2>&1 | tee /home/ubuntu/soup/train.log"
+        tee_stmt = "soup train --config soup.yaml --yes 2>&1 | tee -a /home/ubuntu/soup/train.log"
 
         assert pipefail_stmt in user_data
         assert tee_stmt in user_data
         assert user_data.index(pipefail_stmt) < user_data.index(tee_stmt)
+
+    def test_user_data_appends_every_step_to_the_log_before_it_can_fail(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        stub = _setup_env(tmp_path, monkeypatch)
+        namespace: dict[str, object] = {}
+        exec(stub, namespace)
+        user_data = str(namespace["_USER_DATA"])
+
+        log = "/home/ubuntu/soup/train.log"
+        lines = user_data.splitlines()
+        create = f": > {log}"
+        assert create in lines
+        assert lines.index("mkdir -p /home/ubuntu/soup") < lines.index(create)
+        assert lines.index(create) < next(
+            i for i, line in enumerate(lines) if line.startswith("apt-get update")
+        )
+        for step in (
+            "apt-get update",
+            "apt-get install -y python3-pip",
+            "python3 -m pip install ",
+            "soup train --config soup.yaml --yes",
+        ):
+            assert any(
+                line.startswith(step) and line.endswith(f"2>&1 | tee -a {log}")
+                for line in lines
+            ), step
 
     def test_remote_exit_1_prints_log_tail_before_instance_termination(
         self, tmp_path: Path, monkeypatch
@@ -142,7 +172,7 @@ class TestLambdaLogTailOnFailure:
         namespace: dict[str, object] = {}
         exec(stub, namespace)
         user_data = str(namespace["_USER_DATA"])
-        match = re.search(r"\|\s*tee\s+(\S+)", user_data)
+        match = re.search(r"\|\s*tee\s+(?:-a\s+)?(\S+)", user_data)
         assert match is not None
         tee_path = match.group(1)
 
@@ -398,6 +428,36 @@ class TestLambdaLogTailOnFailure:
         tail_block = next(p for p in prints if "Remote log tail" in p)
         assert "UniqueFatalError: out of bounds" in tail_block
         assert not any("Could not fetch remote log tail" in p for p in prints)
+
+    def test_pip_failure_in_the_tail_is_printed_before_the_exit_line(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """#2234: a failure before `soup train` starts still reaches the fetched tail."""
+        stub = _setup_env(tmp_path, monkeypatch)
+        prints: list[str] = []
+        pip_log = (
+            "ERROR: Could not find a version that satisfies the requirement "
+            "soup-cli[train]==0.75.1 (from versions: none)\n"
+            "ERROR: No matching distribution found for soup-cli[train]==0.75.1\n"
+        )
+
+        def fake_run(argv, **kw):
+            if argv[0] == "ssh":
+                if "tail" in argv[-1]:
+                    return subprocess.CompletedProcess(argv, 0, pip_log, "")
+                return subprocess.CompletedProcess(argv, 0, "status: error\n1\n", "")
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        rc, _ = _exec(stub, fake_run, captured_prints=prints)
+
+        assert rc == 1
+        tail_idx = next(
+            i for i, p in enumerate(prints) if "No matching distribution found" in p
+        )
+        failure_idx = next(
+            i for i, p in enumerate(prints) if "remote soup train exited 1" in p
+        )
+        assert tail_idx < failure_idx
 
     def test_successful_run_prints_no_log_tail(
         self, tmp_path: Path, monkeypatch

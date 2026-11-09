@@ -409,29 +409,29 @@ def resolve_disk_kind(
     return DiskClassification(override)
 
 
-def _resolve_tool(name: str, *fallbacks: str) -> Optional[str]:
-    """Absolute path to a system tool, or None.
+def _resolve_tool(name: str, *fixed_paths: str) -> Optional[str]:
+    """Absolute path of a system tool, or None.
 
-    Bare names are deliberately never handed to ``subprocess``: on Windows
-    ``CreateProcess`` searches the CURRENT DIRECTORY before ``PATH``, so
-    ``["powershell", ...]`` run from a freshly-cloned project would execute an
-    attacker-planted ``powershell.exe`` sitting in that checkout (CWE-427). No
-    shell metacharacters required. POSIX ``execvp`` searches ``$PATH`` only, so
-    this matters most on Windows — but resolving everywhere costs nothing.
+    The first of ``fixed_paths`` (where the OS ships the tool) that exists wins;
+    otherwise the absolute PATH directories are searched
+    (:func:`soup_cli.utils.tool_paths.find_tool`), never the current directory.
+    The tool is then run by this path, never by its bare name.
     """
     import os
-    import shutil
 
-    found = shutil.which(name)
-    if found:
-        return found
-    for candidate in fallbacks:
-        if os.path.isfile(candidate):
+    from soup_cli.utils.tool_paths import find_tool
+
+    for candidate in fixed_paths:
+        if os.path.isabs(candidate) and os.path.isfile(candidate):
             return candidate
-    return None
+    return find_tool(name)
 
 
-_POWERSHELL_FALLBACK = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+# Where Windows and macOS ship the tools the disk probe runs.
+_WINDOWS_POWERSHELL = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+_MACOS_DISKUTIL = "/usr/sbin/diskutil"
+_MACOS_DF = "/bin/df"
+_MACOS_SYSTEM_PROFILER = "/usr/sbin/system_profiler"
 
 
 def _darwin_bsd_whole_disk(identifier: Any) -> Optional[str]:
@@ -500,7 +500,7 @@ def _darwin_disk_kind(path: str, diskutil: str) -> DiskClassification:
         # ``diskutil info`` accepts a device or an exact mount point, not an
         # arbitrary directory within that volume. Resolve the latter with the
         # POSIX ``df -P`` format, validate its device token, then retry.
-        df_tool = _resolve_tool("df", "/bin/df")
+        df_tool = _resolve_tool("df", _MACOS_DF)
         if df_tool is None:
             return DiskClassification("unknown")
         df_result = subprocess.run(
@@ -533,7 +533,7 @@ def _darwin_disk_kind(path: str, diskutil: str) -> DiskClassification:
 
     physical_stores = _darwin_apfs_physical_stores(disk_info)
     if physical_stores:
-        profiler = _resolve_tool("system_profiler", "/usr/sbin/system_profiler")
+        profiler = _resolve_tool("system_profiler", _MACOS_SYSTEM_PROFILER)
         if profiler is not None:
             profile_result = subprocess.run(
                 [
@@ -723,7 +723,7 @@ def _probe_disk_kind(path: str) -> DiskClassification:
             measured = _measure_seq_read_bytes_per_s(path)
             return DiskClassification(_classify_measured_read(measured), measured)
         if system == "Windows":
-            shell = _resolve_tool("powershell", _POWERSHELL_FALLBACK)
+            shell = _resolve_tool("powershell", _WINDOWS_POWERSHELL)
             if shell is None:
                 return DiskClassification("unknown")
             out = subprocess.run(
@@ -749,7 +749,7 @@ def _probe_disk_kind(path: str) -> DiskClassification:
                     return DiskClassification(candidate)
             return DiskClassification("unknown")
         if system == "Darwin":
-            tool = _resolve_tool("diskutil", "/usr/sbin/diskutil")
+            tool = _resolve_tool("diskutil", _MACOS_DISKUTIL)
             if tool is None:
                 return DiskClassification("unknown")
             return _darwin_disk_kind(path, tool)
@@ -1322,6 +1322,53 @@ def estimate_loss_chunk_bytes(
     return 2 * hidden_size * seq_len * batch_size * dtype_bytes(dtype)
 
 
+def estimate_recompute_bytes(
+    *,
+    hidden_size: int,
+    intermediate_size: int,
+    kv_size: int,
+    n_heads: int,
+    seq_len: int,
+    batch_size: int = 1,
+    dtype: str = "bfloat16",
+    lora_targets: int = 0,
+    lora_dropout: float = 0.0,
+    dense_layer_elements: int = 0,
+) -> int:
+    """What the backward of the last decoder layer holds besides the checkpoint boundaries (#1693).
+
+    Measured on a card, a chunked step peaks there and not in the loss: at the
+    end of that layer's checkpoint recompute, when the chunked loss buffers are
+    already freed. ``dense_layer_elements`` is one layer's NF4 weights, which
+    the dequantise + linear path rebuilds in the stream dtype and ``F.linear``
+    keeps until the layer's backward; 0 for a bf16 base. The per-token terms are
+    those of the MLP backward, the larger of the layer's two peaks per token, so
+    the sum bounds both at any length. They assume separate q/k/v/o and
+    gate/up/down projections and LoRA on hidden-sized inputs (``lora_targets``
+    of them); a ``lora_dropout`` of 0 saves no mask.
+    """
+    for name, value in (
+        ("hidden_size", hidden_size),
+        ("intermediate_size", intermediate_size),
+        ("kv_size", kv_size),
+        ("n_heads", n_heads),
+        ("seq_len", seq_len),
+        ("batch_size", batch_size),
+    ):
+        if value <= 0:
+            raise ValueError(f"{name} must be positive; got {value}")
+    element = dtype_bytes(dtype)
+    mask = 1 if lora_dropout > 0 else 0
+    per_token = (
+        8 * hidden_size  # the two RMSNorm inputs, upcast to fp32
+        + element * (3 * hidden_size + 2 * kv_size)  # q, k, v, attention and layer outputs
+        + 4 * n_heads  # attention's fp32 log-sum-exp
+        + lora_targets * (mask + element) * hidden_size  # dropout mask, autocast input copy
+        + 6 * element * intermediate_size  # gate, up and silu outputs, three gradients
+    )
+    return element * dense_layer_elements + seq_len * batch_size * per_token
+
+
 def estimate_stream_peak_vram(
     *,
     layer_bytes: int,
@@ -1339,6 +1386,7 @@ def estimate_stream_peak_vram(
     large_layer_bytes: int = 0,
     persistent_bytes: int = 0,
     loss_chunk: Optional[int] = None,
+    recompute_bytes: int = 0,
 ) -> int:
     """Predicted ``torch.cuda.max_memory_allocated()`` for a streaming step.
 
@@ -1372,6 +1420,11 @@ def estimate_stream_peak_vram(
     charged on ``min(seq_len, loss_chunk)`` tokens, at the same bytes per
     element, and :func:`estimate_loss_chunk_bytes` is added. None of the runs
     this formula was fitted to used it.
+
+    ``recompute_bytes`` is :func:`estimate_recompute_bytes`. The step peaks
+    either in the loss (the transient, logits and chunk terms) or in the last
+    layer's backward, with the checkpoint boundaries live in both, so the larger
+    of the two is charged. 0 leaves the loss phase alone.
     """
     logits_tokens = seq_len
     chunk_bytes = 0
@@ -1382,21 +1435,18 @@ def estimate_stream_peak_vram(
         chunk_bytes = estimate_loss_chunk_bytes(
             hidden_size=hidden_size, seq_len=seq_len, batch_size=batch_size, dtype=dtype
         )
-    return (
-        layer_bytes * buffers
-        + large_layer_bytes
-        + persistent_bytes
-        + extras_bytes
-        + estimate_optimizer_bytes(adapter_params)
-        + STREAM_FIXED_SLACK_BYTES
-        + estimate_activation_bytes(
-            hidden_size=hidden_size,
-            intermediate_size=intermediate_size,
-            n_layers=n_layers,
-            seq_len=seq_len,
-            batch_size=batch_size,
-            dtype=dtype,
-        )
+    activations = estimate_activation_bytes(
+        hidden_size=hidden_size,
+        intermediate_size=intermediate_size,
+        n_layers=n_layers,
+        seq_len=seq_len,
+        batch_size=batch_size,
+        dtype=dtype,
+    )
+    boundaries = dtype_bytes(dtype) * n_layers * hidden_size * seq_len * batch_size
+    loss_phase = (
+        activations
+        - boundaries
         + estimate_logits_bytes(
             vocab_size=vocab_size,
             seq_len=logits_tokens,
@@ -1404,6 +1454,16 @@ def estimate_stream_peak_vram(
             bytes_per_element=logits_bytes_per_element,
         )
         + chunk_bytes
+    )
+    return (
+        layer_bytes * buffers
+        + large_layer_bytes
+        + persistent_bytes
+        + extras_bytes
+        + estimate_optimizer_bytes(adapter_params)
+        + STREAM_FIXED_SLACK_BYTES
+        + boundaries
+        + max(loss_phase, recompute_bytes)
     )
 
 

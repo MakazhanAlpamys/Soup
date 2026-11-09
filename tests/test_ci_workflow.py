@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.utils.ci_workflow import render_soup_gate_workflow
+from tests.conftest import strip_ansi
 
 
 def _validation_args(body):
@@ -41,15 +42,26 @@ def test_rendered_gate_refuses_any_partial_drop(
     assert standalone.exit_code == 0, (standalone.output, repr(standalone.exception))
 
 
-@pytest.mark.parametrize("content", ["", "\n", '{"instruction":"hi","output":"ok"}\n42\n'])
-def test_rendered_gate_refuses_empty_or_skipped_rows(tmp_path, monkeypatch, content):
+@pytest.mark.parametrize(("content", "code", "message"), [
+    ("", 3, "Empty dataset - cannot detect format"),
+    ("\n", 3, "Empty dataset - cannot detect format"),
+    (
+        '{"instruction":"hi","output":"ok"}\n42\n',
+        2,
+        "Validation failed: valid fraction 0.500 is below --min-valid-fraction 1.000.",
+    ),
+], ids=["empty", "blank-line", "skipped-row"])
+def test_rendered_gate_refuses_empty_or_skipped_rows(
+    tmp_path, monkeypatch, content, code, message,
+):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "train.jsonl").write_text(content, encoding="utf-8")
     body = render_soup_gate_workflow(
         data_path="train.jsonl", suite_path="expectations.yaml", evidence_path="evidence.json",
     )
     result = CliRunner().invoke(app, _validation_args(body))
-    assert result.exit_code in (2, 3), (result.output, repr(result.exception))
+    assert result.exit_code == code, (result.output, repr(result.exception))
+    assert message in " ".join(strip_ansi(result.output).split()), result.output
 
 
 def test_ci_init_writes_strict_command_and_preserves_existing_workflow(tmp_path, monkeypatch):
@@ -64,3 +76,49 @@ def test_ci_init_writes_strict_command_and_preserves_existing_workflow(tmp_path,
     result = runner.invoke(app, ["ci", "init"])
     assert result.exit_code == 1, result.output
     assert workflow.read_text(encoding="utf-8") == "operator-owned workflow\n"
+
+
+def test_supported_python_constants_match_pyproject():
+    import re
+    from pathlib import Path
+
+    from soup_cli.utils.ci_workflow import _MAX_SUPPORTED_PYTHON, _MIN_SUPPORTED_PYTHON
+
+    root = Path(__file__).resolve().parents[1]
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'requires-python\s*=\s*">=(\d+)\.(\d+),\s*<(\d+)\.(\d+)"', pyproject)
+    assert match, "requires-python not found in pyproject.toml"
+    floor = (int(match.group(1)), int(match.group(2)))
+    ceil = (int(match.group(3)), int(match.group(4)))
+    assert _MIN_SUPPORTED_PYTHON == floor
+    assert _MAX_SUPPORTED_PYTHON == (ceil[0], ceil[1] - 1)
+
+
+@pytest.mark.parametrize("version", ["3.10", "3.9", "3.14", "2.7", "4.12", "3.111"])
+def test_ci_init_rejects_unsupported_python_versions(tmp_path, monkeypatch, version):
+    from soup_cli import __version__
+
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(app, ["ci", "init", "--python", version])
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    workflow = tmp_path / ".github/workflows/soup-gate.yml"
+    assert not workflow.exists()
+    plain = " ".join(strip_ansi(result.output).split())
+    expected = (
+        f"python_version {version} is not supported by soup-cli {__version__} "
+        "(needs Python 3.11 to 3.13)"
+    )
+    assert expected in plain
+
+
+@pytest.mark.parametrize("version", ["3.11", "3.12", "3.13"])
+def test_ci_init_accepts_supported_python_versions(tmp_path, monkeypatch, version):
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(app, ["ci", "init", "--python", version])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    workflow = tmp_path / ".github/workflows/soup-gate.yml"
+    assert workflow.is_file()
+    content = workflow.read_text(encoding="utf-8")
+    assert f'python-version: "{version}"' in content

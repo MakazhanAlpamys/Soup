@@ -50,6 +50,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
+from soup_cli import __version__
 from soup_cli.utils.exit_codes import (
     EXIT_GATE_FAILED as _EXIT_DONT_SHIP,
 )
@@ -63,12 +64,15 @@ from soup_cli.utils.exit_codes import (
     GateGroup,
 )
 from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
+from soup_cli.utils.ship_progress import group, jsonl_command
 
 if TYPE_CHECKING:  # pydantic models — import for typing only (no eager cost)
     from soup_cli.config.schema import ShipConfig, SoupConfig
 from soup_cli.utils.ship_verdict import (
+    DECISION_DONT_SHIP,
     DECISION_SHIP,
     DEFAULT_FORGETTING_THRESHOLD,
+    FAILED_ADAPTER_NOOP,
     MAX_NOISE_FLOOR_RUNS,
     MIN_NOISE_FLOOR_RUNS,
     NUMERICS_FAMILY_FULL,
@@ -607,24 +611,27 @@ def _resolve_generators(
     template_options = (
         {"chat_template_kwargs": chat_template_kwargs} if chat_template_kwargs is not None else {}
     )
-    base_gen = live_eval.make_generator(
-        base, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
-        dtype=dtype, quantization=quantization,
-        **template_options,
-    )
+    with group("load", side="base"):
+        base_gen = live_eval.make_generator(
+            base, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
+            dtype=dtype, quantization=quantization,
+            **template_options,
+        )
     if adapter:
-        tuned_gen = live_eval.make_generator(
-            base, adapter=adapter, device=device,
-            max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
-            dtype=dtype, quantization=quantization,
-            **template_options,
-        )
+        with group("load", side="tuned"):
+            tuned_gen = live_eval.make_generator(
+                base, adapter=adapter, device=device,
+                max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
+                dtype=dtype, quantization=quantization,
+                **template_options,
+            )
     elif tuned:
-        tuned_gen = live_eval.make_generator(
-            tuned, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
-            dtype=dtype, quantization=quantization,
-            **template_options,
-        )
+        with group("load", side="tuned"):
+            tuned_gen = live_eval.make_generator(
+                tuned, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
+                dtype=dtype, quantization=quantization,
+                **template_options,
+            )
     else:  # pragma: no cover — _verdict_live guarantees one of tuned/adapter
         raise ValueError("need --tuned or --adapter")
     return base_gen, tuned_gen
@@ -642,8 +649,10 @@ def _leg1_metric(
     tasks = load_eval_tasks(task_eval)
     if not tasks:
         raise ValueError(f"task-eval file {task_eval!r} has no tasks")
-    base_acc = run_eval(base_id, tasks, generate_fn=base_gen).accuracy
-    tuned_acc = run_eval(tuned_id, tasks, generate_fn=tuned_gen).accuracy
+    with group("task_eval", side="base", countable=True):
+        base_acc = run_eval(base_id, tasks, generate_fn=base_gen).accuracy
+    with group("task_eval", side="tuned", countable=True):
+        tuned_acc = run_eval(tuned_id, tasks, generate_fn=tuned_gen).accuracy
     return build_task_win("metric", base_acc, tuned_acc)
 
 
@@ -703,7 +712,11 @@ def _leg1_judge(
     judge_model: str,
 ) -> TaskWin:
     score = _build_judge_scorer(task_eval, judge_model)
-    return build_task_win("judge_score", score(base_gen), score(tuned_gen))
+    with group("task_eval", side="base", countable=True):
+        base_score = score(base_gen)
+    with group("task_eval", side="tuned", countable=True):
+        tuned_score = score(tuned_gen)
+    return build_task_win("judge_score", base_score, tuned_score)
 
 
 def _build_pairwise_scorer(
@@ -749,7 +762,8 @@ def _leg1_pairwise(
     ``TaskWin(base=0.5 coin-flip, tuned=win-rate)`` so ``won <=> win-rate > 0.5``.
     """
     winrate = _build_pairwise_scorer(task_eval, judge_model)
-    return build_task_win("pairwise", 0.5, winrate(base_gen, tuned_gen))
+    with group("task_eval", side="tuned", countable=True):
+        return build_task_win("pairwise", 0.5, winrate(base_gen, tuned_gen))
 
 
 def _extract_lm_score(bench_data: Mapping[str, object]) -> Optional[float]:
@@ -792,9 +806,10 @@ def _lm_eval_leg2(
     base_map: Dict[str, object] = {}
     tuned_map: Dict[str, object] = {}
 
-    tuned_results = eval_cmd._run_lm_eval(
-        tuned_arg, names, None, _LM_EVAL_BATCH_SIZE, dev
-    )
+    with group("suite_eval", side="tuned", suite=",".join(names)):
+        tuned_results = eval_cmd._run_lm_eval(
+            tuned_arg, names, None, _LM_EVAL_BATCH_SIZE, dev
+        )
     tuned_blocks = tuned_results.get("results", {})
     for name in names:
         score = _extract_lm_score(tuned_blocks.get(name, {}))
@@ -808,9 +823,10 @@ def _lm_eval_leg2(
         else:
             base_to_run.append(name)
     if base_to_run:
-        base_results = eval_cmd._run_lm_eval(
-            base_arg, base_to_run, None, _LM_EVAL_BATCH_SIZE, dev
-        )
+        with group("suite_eval", side="base", suite=",".join(base_to_run)):
+            base_results = eval_cmd._run_lm_eval(
+                base_arg, base_to_run, None, _LM_EVAL_BATCH_SIZE, dev
+            )
         base_blocks = base_results.get("results", {})
         for name in base_to_run:
             score = _extract_lm_score(base_blocks.get(name, {}))
@@ -851,11 +867,13 @@ def _leg2_scores(
     tuned_map: Dict[str, object] = {}
 
     for name in bundled_names:
-        tuned_map[name] = score_bundled_suite(name, tuned_gen)
+        with group("suite_eval", side="tuned", suite=name, countable=True):
+            tuned_map[name] = score_bundled_suite(name, tuned_gen)
         if name in baseline_scores:
             base_map[name] = float(baseline_scores[name])
         else:
-            base_map[name] = score_bundled_suite(name, base_gen)
+            with group("suite_eval", side="base", suite=name, countable=True):
+                base_map[name] = score_bundled_suite(name, base_gen)
 
     if other_names:
         lm_base, lm_tuned = _lm_eval_leg2(
@@ -989,8 +1007,11 @@ def _measure_noise_floor(
         console.print(f"[dim]noise floor: base repeat {index + 1}/{runs}[/]")
         run: Dict[str, float] = {}
         for name in bundled:
-            run[name] = score_bundled_suite(name, base_gen)
-        run[TASK_AXIS] = task_score()
+            with group("suite_eval", side="base", suite=name,
+                       repeat=index + 1, countable=True):
+                run[name] = score_bundled_suite(name, base_gen)
+        with group("task_eval", side="base", repeat=index + 1, countable=True):
+            run[TASK_AXIS] = task_score()
         samples.append(run)
 
     floor = compute_noise_floor(samples, judge_inclusive=judge_inclusive)
@@ -1032,6 +1053,36 @@ def _parse_suite(general_suite: Optional[str]) -> List[str]:
         return list(DEFAULT_GENERAL_SUITE)
     names = [chunk.strip() for chunk in general_suite.split(",")]
     return [name for name in names if name]
+
+
+def _adapter_is_noop(adapter: str) -> bool:
+    """True when every ``lora_B`` in a local adapter is zero, so tuned == base.
+
+    Reuses ``soup adapters check``'s reader but not its verdict, which refuses
+    more than this (partly-zero layers, orphans, ...). An adapter with no LoRA
+    pairs (VeRA etc.) or a non-zero standalone tensor (saved head, bias) can
+    still change the model and is left to the live eval. Hub ids are skipped.
+    """
+    if not os.path.isdir(adapter):
+        return False
+    from soup_cli.utils.adapter_check import check_adapter
+
+    try:
+        report = check_adapter(adapter)
+    except (ValueError, TypeError, OSError, RuntimeError, ImportError) as exc:
+        console.print(
+            "[yellow]Warning:[/] could not read the adapter weights to check for an "
+            f"all-zero lora_B: {escape(for_terminal(str(exc)))}"
+        )
+        return False
+    return (
+        report.total_layers > 0
+        and len(report.all_zero_lora_b_layers) == report.total_layers
+        and all(
+            item.frobenius == 0.0 and not item.has_non_finite
+            for item in report.standalone_tensors
+        )
+    )
 
 
 def _verdict_live(
@@ -1113,6 +1164,18 @@ def _verdict_live(
         if not judge_model:
             _fail("--task-mode pairwise needs --judge-model <url>", _EXIT_USAGE)
         _validate_judge_model_url(judge_model)
+
+    # Read the adapter before either model loads: an all-zero lora_B adds
+    # nothing, and the live eval would only reach "task did not improve" (#2410).
+    if adapter and _adapter_is_noop(adapter):
+        return ShipVerdict(
+            decision=DECISION_DONT_SHIP,
+            task_win=TaskWin(mode=task_mode, base=0.0, tuned=0.0, won=False),
+            benchmark_deltas=(),
+            failed_rule=FAILED_ADAPTER_NOOP,
+            forgetting_threshold=forgetting_threshold,
+            soup_version=__version__,
+        )
 
     tuned_id = tuned if tuned else base
     try:
@@ -1223,7 +1286,10 @@ def _emit_and_exit(
             console.print(f"[green]Wrote[/] {escape(output)}")
         except (OSError, ValueError, TypeError) as exc:
             _fail(f"cannot write --output: {type(exc).__name__}: {exc}", _EXIT_RUNTIME)
-    if emit_evidence:
+    if emit_evidence and verdict.failed_rule == FAILED_ADAPTER_NOOP:
+        # Nothing was measured; 0.0 placeholder scores must not replay as evidence.
+        console.print("[yellow]Warning:[/] no scores were measured; evidence not written")
+    elif emit_evidence:
         try:
             payload = verdict_to_evidence(verdict, provenance=provenance)
             atomic_write_text(
@@ -1248,8 +1314,12 @@ def _emit_and_exit(
 # ---------------------------------------------------------------------------
 
 @app.callback(invoke_without_command=True)
+@jsonl_command
 def ship(
     ctx: typer.Context,
+    progress: Optional[str] = typer.Option(
+        None, "--progress", help="Opt-in JSONL progress on stderr (jsonl).",
+    ),
     base: Optional[str] = typer.Option(
         None, "--base", help="Base model id/path (the 'before')."
     ),
@@ -1350,6 +1420,8 @@ def ship(
     ),
 ) -> None:
     """Decide SHIP / DON'T SHIP for a fine-tune (exit 0 = SHIP, 2 = DON'T)."""
+    if progress is not None and progress != "jsonl":
+        _fail("--progress must be jsonl", _EXIT_USAGE)
     soup_config = None
     from soup_cli.utils.ship_provenance import check_binding, validate_data_identity
 
