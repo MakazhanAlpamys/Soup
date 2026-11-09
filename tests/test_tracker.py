@@ -195,8 +195,18 @@ def test_run_lookup_failure_escapes_the_id_only_for_markup(tracker, markup, show
     assert run_lookup_failure(tracker, "x[red]a", markup=markup) == (
         f"Run id prefix '{shown}' matches 2 runs; give more characters"
     )
-    assert run_lookup_failure(tracker, "x[red]b\x9b‮", markup=markup) == (
+    assert run_lookup_failure(tracker, "x[red]b\x9b\u202e", markup=markup) == (
         f"Run not found: {shown[:-1]}b"
+    )
+
+
+def test_run_lookup_failure_can_leave_the_id_out_of_the_no_match_text(tracker):
+    _start(tracker, "run_dup_1")
+    _start(tracker, "run_dup_2")
+
+    assert run_lookup_failure(tracker, "run_gone", name_missing_id=False) == "Run not found"
+    assert run_lookup_failure(tracker, "run_dup", name_missing_id=False) == (
+        "Run id prefix 'run_dup' matches 2 runs; give more characters"
     )
 
 

@@ -737,7 +737,9 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             if not run:
                 raise HTTPException(
                     status_code=404,
-                    detail=run_lookup_failure(tracker, run_id, markup=False),
+                    detail=run_lookup_failure(
+                        tracker, run_id, markup=False, name_missing_id=False
+                    ),
                 )
             return run
         finally:
@@ -753,7 +755,9 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             if not run:
                 raise HTTPException(
                     status_code=404,
-                    detail=run_lookup_failure(tracker, run_id, markup=False),
+                    detail=run_lookup_failure(
+                        tracker, run_id, markup=False, name_missing_id=False
+                    ),
                 )
             metrics = tracker.get_metrics(run_id)
             return {"run_id": run_id, "metrics": metrics}

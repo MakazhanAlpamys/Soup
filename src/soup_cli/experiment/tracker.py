@@ -159,7 +159,11 @@ def _run_id_prefix_pattern(run_id: str) -> str:
 
 
 def run_lookup_failure(
-    tracker: ExperimentTracker, run_id: str, *, markup: bool = True
+    tracker: ExperimentTracker,
+    run_id: str,
+    *,
+    markup: bool = True,
+    name_missing_id: bool = True,
 ) -> str:
     """Say why ``tracker.get_run(run_id)`` returned ``None``.
 
@@ -168,13 +172,14 @@ def run_lookup_failure(
     says so instead of claiming the run doesn't exist (#2470). With ``markup``
     the id goes through :func:`for_terminal`, ready for a Rich console; without
     it only control characters are removed, for callers that escape the whole
-    line themselves or don't print to a terminal.
+    line themselves or don't print to a terminal. ``name_missing_id=False``
+    gives the bare ``Run not found`` for no match, which the web endpoints return.
     """
     shown = for_terminal(run_id) if markup else strip_control(run_id)
     count = tracker.count_run_id_matches(run_id)
     if count > 1:
         return f"Run id prefix '{shown}' matches {count} runs; give more characters"
-    return f"Run not found: {shown}"
+    return f"Run not found: {shown}" if name_missing_id else "Run not found"
 
 
 def generate_run_id() -> str:

@@ -36,7 +36,7 @@ def db(tmp_path, monkeypatch) -> Path:
     monkeypatch.chdir(workdir)
     tracker = ExperimentTracker(db_path=path)
     try:
-        for run_id in ("run_dup_1", "run_dup_2", EXISTING):
+        for run_id in ("run_dup_1", "run_dup_2", "run_[x]\x9b1", "run_[x]\x9b2", EXISTING):
             tracker.start_run(
                 config_dict={}, device="cpu", device_name="CPU", gpu_info={}, run_id=run_id
             )
@@ -106,8 +106,8 @@ def test_runs_show_keeps_its_hint_line(run_id):
     ("run_id", "detail"),
     [
         (AMBIGUOUS, AMBIGUOUS_LINE),
-        (MISSING, MISSING_LINE),
-        ("run_[x]\x9b", "Run not found: run_[x]"),
+        (MISSING, "Run not found"),
+        ("run_[x]\x9b", "Run id prefix 'run_[x]' matches 2 runs; give more characters"),
     ],
 )
 def test_ui_run_lookup_404_detail(path, run_id, detail):
