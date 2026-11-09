@@ -208,6 +208,10 @@ def validate_classification_dataset(cfg: SoupConfig, dataset: dict) -> None:
     label_names = (
         list(tcfg.label_names) if tcfg.label_names is not None else None
     )
+    # #2618: query_id must use one type across both splits. A column holding
+    # both an int and a str cannot be built by datasets (ArrowInvalid, naming
+    # no row), and an int id in train never matches a str id in val.
+    first_query_id: tuple[type, str, int] | None = None
 
     for split in ("train", "val"):
         if split not in dataset or not dataset[split]:
@@ -240,11 +244,21 @@ def validate_classification_dataset(cfg: SoupConfig, dataset: dict) -> None:
             # #2618: the optional query_id groups ranking candidates.
             if cfg.task in RANKING_TASKS and row.get(QUERY_ID_KEY) is not None:
                 try:
-                    validate_query_id(row[QUERY_ID_KEY])
+                    query_id = validate_query_id(row[QUERY_ID_KEY])
                 except TypeError as exc:
                     raise TypeError(f"{split} row {idx}: {exc}") from exc
                 except ValueError as exc:
                     raise ValueError(f"{split} row {idx}: {exc}") from exc
+                if first_query_id is None:
+                    first_query_id = (type(query_id), split, idx)
+                elif type(query_id) is not first_query_id[0]:
+                    kind, first_split, first_idx = first_query_id
+                    raise TypeError(
+                        f"{split} row {idx}: query_id type {type(query_id).__name__} "
+                        f"differs from type {kind.__name__} used at {first_split} row "
+                        f"{first_idx}; use one type (all str or all int) for query_id "
+                        "in the training and validation rows"
+                    )
 
 
 def build_ranking_compute_metrics(

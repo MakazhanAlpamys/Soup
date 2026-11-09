@@ -200,7 +200,9 @@ class TestQueryGroups:
         assert groups == [None, 7]
         assert counts["rows_without_query_id"] == 1
 
-    def test_int_and_str_ids_are_different_queries(self) -> None:
+    def test_helper_compares_ids_as_given(self) -> None:
+        # The helper compares ids as given; the trainer refuses a dataset that
+        # mixes int and str ids at load (TestMixedQueryIdTypes).
         groups, counts = ranking_query_groups([{"query_id": 1}], [{"query_id": "1"}])
         assert groups == ["1"]
         assert counts["queries_split"] == 0
@@ -241,6 +243,72 @@ class TestQueryIdValidationAtLoad:
         validate_classification_dataset(
             cfg, {"train": [{"query_id": True, "text": "a", "label": 1}]}
         )
+
+
+class TestMixedQueryIdTypes:
+    """One query_id type per dataset, refused at load with the row that differs.
+
+    Without the check, ``setup()`` fails inside ``datasets`` (``ArrowInvalid``,
+    naming no row) when one split mixes int and str ids, and an int id in train
+    silently never matches a str id in val.
+    """
+
+    @staticmethod
+    def _setup(dataset: dict) -> None:
+        from soup_cli.trainer.classifier import ClassifierTrainerWrapper
+
+        # Validation runs before the tokenizer or model is loaded, so a dummy base works.
+        ClassifierTrainerWrapper(_config("reranker", 2), device="cpu").setup(dataset)
+
+    def test_mixed_types_in_one_split_are_refused_with_the_row(self) -> None:
+        dataset = {
+            "train": [{"query_id": "q1", "text": "a", "label": 1}],
+            "val": [
+                {"query_id": "q2", "text": "b", "label": 1},
+                {"query_id": 2, "text": "c", "label": 0},
+            ],
+        }
+        with pytest.raises(TypeError, match=r"val row 1: query_id type int differs from type "
+                                            r"str used at train row 0"):
+            self._setup(dataset)
+
+    def test_int_in_train_and_str_in_val_are_refused(self) -> None:
+        dataset = {
+            "train": [{"query_id": 1, "text": "a", "label": 1}],
+            "val": [{"query_id": "1", "text": "b", "label": 0}],
+        }
+        with pytest.raises(TypeError, match=r"val row 0: query_id type str .* train row 0"):
+            self._setup(dataset)
+
+    def test_rows_without_query_id_do_not_count_as_another_type(self) -> None:
+        from soup_cli.trainer.classifier import validate_classification_dataset
+
+        validate_classification_dataset(
+            _config("reranker", 2),
+            {
+                "train": [{"text": "a", "label": 1}, {"query_id": 3, "text": "b", "label": 0}],
+                "val": [{"query_id": None, "text": "c", "label": 1},
+                        {"query_id": 4, "text": "d", "label": 0}],
+            },
+        )
+
+    def test_int_ids_go_through_setup_and_evaluation(
+        self, captured_console: io.StringIO
+    ) -> None:
+        from soup_cli.trainer.classifier import ClassifierTrainerWrapper
+
+        dataset = {
+            "train": [{"query_id": 1, "text": "q a", "label": 1},
+                      {"query_id": 1, "text": "q b", "label": 0}],
+            "val": [{"query_id": 2, "text": "q c", "label": 1},
+                    {"query_id": 2, "text": "q d", "label": 0}],
+        }
+        cfg = _config("reranker", 2, base=_tiny_base(), batch_size=1)
+        wrapper = ClassifierTrainerWrapper(cfg, device="cpu")
+        wrapper.setup(dataset)
+        metrics = wrapper.trainer.evaluate()
+        assert metrics["eval_ranking_queries"] == 1
+        assert "eval_mrr@10" in metrics
 
 
 # --------------------------------------------------------------------------- wiring

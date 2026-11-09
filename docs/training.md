@@ -755,7 +755,7 @@ training:
 
 **Row shapes by task:**
 - `task: classifier`: Single-input sequences via `{"text": "sample", "label": 1}` or `{"text": "sample", "label": "spam"}` (also accepts ChatML rows carrying `label`). Multi-label datasets pass lists of active label indices or names: `{"text": "sample", "label": [0, 2]}` or `{"text": "sample", "label": ["ham", "promo"]}`.
-- `task: reranker`: Query and document text via `{"text": "query doc", "label": "relevant"}` (or an integer class index). Add an optional `"query_id"` (a non-empty string or an integer) to group the candidates of one query for ranking metrics: `{"query_id": "q17", "text": "query doc", "label": 1}`.
+- `task: reranker`: Query and document text via `{"text": "query doc", "label": "relevant"}` (or an integer class index). Add an optional `"query_id"` (a non-empty string or an integer) to group the candidates of one query for ranking metrics: `{"query_id": "q17", "text": "query doc", "label": 1}`. Use one type for every `query_id` in the training and validation rows, all strings or all integers; a dataset that mixes them is refused at load with the row that differs.
 - `task: cross_encoder`: Paired inputs via `{"text_a": "query", "text_b": "doc", "label": 1}` or `{"question": "query", "answer": "doc", "label": 1}`, with the same optional `"query_id"`.
 
 **Ranking metrics (`reranker`, `cross_encoder`, #2618).** When the validation rows carry
