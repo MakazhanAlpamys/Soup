@@ -94,6 +94,11 @@ three: `trainer/unlearn.py`, in the transformers wrapper's `setup()` (#2577);
 `trainer/mlx_orpo.py`, in `build_orpo_example` (#2555); and
 `trainer/_trl_compat.py`, in a docstring. None of these is on the MLX SimNPO
 path, so the run was not repeated.
+`main` `5743c0e3` was then merged into the branch, which left `a7929b24` as it
+is. Of the same modules, the merge changed two: `config/backend_support.py`, in
+the rows for SFT (#2128), and `trainer/mlx_sft.py`, in `_check_unsupported()`
+and `train()` (#2128), both of which the MLX DPO wrapper, and so the SimNPO
+one, overrides. The run was not repeated then either.
 LoRA went on `self_attn.q_proj` and `self_attn.v_proj`, the modules MLX resolves
 `target_modules: auto` to here.
 
