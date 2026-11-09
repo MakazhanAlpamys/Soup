@@ -1870,6 +1870,38 @@ def check_serialized_nf4_request(
         )
 
 
+#: Name prefix of the importer's staging folder inside the cache folder (``tempfile.mkdtemp``).
+_NF4_STAGING_PREFIX = ".soup-nf4-import."
+
+
+def _remove_stale_nf4_staging(cache_dir: str) -> None:
+    """Delete the staging folders a killed import left in ``cache_dir``, best effort.
+
+    A run killed between ``mkdtemp`` and its ``finally`` (a power cut, the OOM killer, a
+    closed terminal) leaves a folder holding a partial copy of the model, and nothing else
+    would ever remove it. Only directories directly inside ``cache_dir`` whose name starts
+    with the importer's own prefix go, and only if they really live there: a link or a
+    junction (whose real path is elsewhere) is left alone and never followed, and a plain file
+    of that name is not a folder to empty. The cache folder has one writer at a time, as on
+    the float path.
+    """
+    real_dir = os.path.realpath(cache_dir)
+    try:
+        entries = list(os.scandir(real_dir))
+    except OSError:
+        return
+    for entry in entries:
+        if not entry.name.startswith(_NF4_STAGING_PREFIX):
+            continue
+        here = os.path.normcase(os.path.join(real_dir, entry.name))
+        try:
+            if os.path.normcase(os.path.realpath(entry.path)) != here:
+                continue
+        except OSError:
+            continue
+        _remove_staging(entry.path)
+
+
 def _remove_staging(staging: str) -> None:
     """Delete the importer's staging folder (flat files only), best effort."""
     try:
@@ -1938,7 +1970,8 @@ def _shard_serialized_nf4(
             return cached
         if notify is not None:
             notify(f"[yellow]Re-sharding layer cache:[/] {for_terminal(miss_reason)}.")
-    staging = tempfile.mkdtemp(prefix=".soup-nf4-import.", dir=resolved_out)
+    _remove_stale_nf4_staging(resolved_out)
+    staging = tempfile.mkdtemp(prefix=_NF4_STAGING_PREFIX, dir=resolved_out)
     try:
         index = nf4_serialized.import_nf4_checkpoint(weights_dir, staging, notify=notify).index
         if set(index.quant_specs) != set(suffixes):

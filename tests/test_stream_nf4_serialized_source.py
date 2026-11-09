@@ -29,6 +29,8 @@ import types
 
 import pytest
 
+from soup_cli.utils.nf4_serialized import HF_REQUIRED_QUANTIZATION
+
 _TAIL = "Layer streaming cannot dequantise it"
 _POINTER = "Point training.base at a bf16 or FP8-block copy of this model"
 
@@ -135,6 +137,39 @@ def test_every_other_quantised_config_is_refused_in_its_old_words_even_for_a_4bi
     old = _refusal(config, allow=False)
     assert _refusal(config, allow=True) == old
     assert _TAIL in old and _POINTER in old
+
+
+def _importer_accepts(quant):
+    from soup_cli.utils.nf4_serialized import _check_config_quantization
+
+    try:
+        _check_config_quantization({"quantization_config": quant})
+    except ValueError:
+        return False
+    return True
+
+
+@pytest.mark.parametrize(
+    ("field", "wanted", "default"),
+    HF_REQUIRED_QUANTIZATION,
+    ids=lambda value: str(value),
+)
+def test_the_gate_and_the_importer_read_one_requirement_table(field, wanted, default):
+    """The trainer decides from the config alone and the importer decides again from the same
+    file: a requirement one of them forgot would send a run into a refusal after the download
+    (or let a bad checkpoint through the gate). Each row must flip BOTH, or neither."""
+    from soup_cli.utils.fp8_block import is_serialized_nf4_config
+
+    absent = _without(NESTED_NF4, field)
+    cases = [
+        (NESTED_NF4, True),
+        (dict(NESTED_NF4, **{field: "not-the-required-value"}), False),
+        (dict(NESTED_NF4, **{field: 1 if wanted is True else 0}), False),
+        (absent, default == wanted),
+    ]
+    for quant, expected in cases:
+        assert is_serialized_nf4_config(quant, arch="llama") is expected, (field, quant)
+        assert _importer_accepts(quant) is expected, (field, quant)
 
 
 @pytest.mark.parametrize("arch", ["deepseek_v3", "qwen4_exp"])
@@ -454,6 +489,91 @@ def test_an_interrupted_install_leaves_a_cache_nothing_will_reuse(tmp_path, monk
     direct = tmp_path / "direct"
     assert repaired == import_nf4_checkpoint(source, str(direct)).index
     assert _bytes(cache) == _bytes(direct)
+
+
+def _stale_staging(cache, name=".soup-nf4-import.dead0001", files=("layer_000.safetensors",)):
+    folder = cache / name
+    folder.mkdir(parents=True)
+    for file_name in files:
+        (folder / file_name).write_bytes(b"partial copy of a model" * 100)
+    return folder
+
+
+def test_staging_folders_a_killed_import_left_are_removed_by_the_next_import(tmp_path):
+    from soup_cli.utils.nf4_serialized import import_nf4_checkpoint
+
+    source = _build(tmp_path)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    dead = [
+        _stale_staging(cache, ".soup-nf4-import.dead0001"),
+        _stale_staging(cache, ".soup-nf4-import.dead0002", ("a.tmp", "index.json", ".soup.x.tmp")),
+    ]
+    index = _shard(source, cache)
+    assert all(not folder.exists() for folder in dead), _files(cache)
+    # and the import itself is the same one a clean folder gets
+    direct = tmp_path / "direct"
+    assert index == import_nf4_checkpoint(source, str(direct)).index
+    assert _bytes(cache) == _bytes(direct)
+
+
+def test_only_the_importers_own_staging_prefix_inside_the_cache_folder_is_removed(tmp_path):
+    source = _build(tmp_path)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    keep_dirs = [
+        _stale_staging(cache, ".soup-nf4-importer.not-ours"),
+        _stale_staging(cache, "soup-nf4-import.no-dot-prefix"),
+        _stale_staging(cache, ".soup-nf4-import"),
+        _stale_staging(cache, "notes"),
+    ]
+    (cache / ".soup-nf4-import.a-file").write_bytes(b"not a folder")
+    # a staging-looking folder anywhere else (a sibling of the cache folder, or inside the
+    # source checkout) is none of this function's business
+    elsewhere = _stale_staging(tmp_path, ".soup-nf4-import.sibling")
+    inside_source = _stale_staging(tmp_path / "src", ".soup-nf4-import.in-source")
+    _shard(source, cache)
+    assert all(folder.exists() for folder in keep_dirs), _files(cache)
+    assert (cache / ".soup-nf4-import.a-file").read_bytes() == b"not a folder"
+    assert elsewhere.exists() and inside_source.exists()
+    assert all((folder / "layer_000.safetensors").exists() for folder in keep_dirs)
+
+
+@pytest.mark.requires_symlink
+def test_a_staging_named_link_is_not_followed_and_not_deleted(tmp_path):
+    source = _build(tmp_path)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    precious = tmp_path / "precious"
+    precious.mkdir()
+    (precious / "keep.bin").write_bytes(b"do not delete")
+    link = cache / ".soup-nf4-import.link"
+    os.symlink(str(precious), str(link), target_is_directory=True)
+    _shard(source, cache)
+    assert (precious / "keep.bin").read_bytes() == b"do not delete"
+    assert os.path.islink(link)
+
+
+def test_an_unreadable_cache_folder_listing_is_not_fatal_to_the_import(tmp_path, monkeypatch):
+    """Cleaning is best effort: a listing that fails must not stop an import that would work."""
+    from soup_cli.utils import layer_shard
+
+    source = _build(tmp_path)
+    cache = tmp_path / "cache"
+    real_scandir = os.scandir
+    calls = []
+
+    def _failing_scandir(path="."):
+        if os.path.realpath(path) == os.path.realpath(cache):
+            calls.append(path)
+            raise PermissionError("denied")
+        return real_scandir(path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(layer_shard.os, "scandir", _failing_scandir)
+        index = _shard(source, cache)
+    assert calls, "the stale-folder sweep never listed the cache folder"
+    assert index.quant_device == "serialized"
 
 
 def test_a_source_the_importer_refuses_is_refused_with_its_words_and_writes_nothing(tmp_path):

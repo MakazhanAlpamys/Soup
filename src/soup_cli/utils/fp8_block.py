@@ -372,11 +372,6 @@ def refuse_unsupported_quantization(quantization_config: Any) -> None:
 #: by name too: experts or per-layer buffers its layout does not map). A test pins this to
 #: the importer's own list so the two cannot drift.
 SERIALIZED_NF4_REFUSED_ARCHS = ("deepseek_v3", "qwen4_exp")
-#: The key transformers writes for double quantisation in a checkpoint's config.json. Built
-#: from two parts because it is also the name of a Soup config field
-#: (``training.bnb_4bit_use_double_quant``), and ``tests/test_issue748_*`` counts a literal
-#: read of that name outside schema.py as the field being consumed.
-_BNB_DOUBLE_QUANT_KEY = "bnb_4bit_" + "use_double_quant"
 
 
 def is_serialized_nf4_config(quantization_config: Any, *, arch: str) -> bool:
@@ -390,8 +385,14 @@ def is_serialized_nf4_config(quantization_config: Any, *, arch: str) -> bool:
     default differently (compute dtype, nested flag) must be written out. Everything
     else, 8-bit and FP4 included, stays refused by :func:`refuse_unsupported_quantization`.
 
-    ``nf4_serialized.plan_nf4_import`` repeats the format checks against the tensors.
+    The nested, storage and compute-dtype requirements are the importer's own table
+    (``nf4_serialized.HF_REQUIRED_QUANTIZATION``, whose ``HF_*_KEY`` names keep the Soup
+    field of the same name from counting as "consumed" here), and
+    ``nf4_serialized.plan_nf4_import`` repeats the format checks against the tensors. The
+    import is inside the function: this module is on the light CLI path.
     """
+    from soup_cli.utils.nf4_serialized import HF_REQUIRED_QUANTIZATION, hf_setting_matches
+
     if arch in SERIALIZED_NF4_REFUSED_ARCHS:
         return False
     quant = as_quantization_mapping(quantization_config)
@@ -400,10 +401,10 @@ def is_serialized_nf4_config(quantization_config: Any, *, arch: str) -> bool:
     return (
         quant.get("load_in_4bit") is True
         and quant.get("load_in_8bit") is not True
-        and _setting(quant.get("bnb_4bit_quant_type")) == "nf4"
-        and quant.get(_BNB_DOUBLE_QUANT_KEY) is True
-        and _setting(quant.get("bnb_4bit_quant_storage", "uint8")) == "uint8"
-        and _setting(quant.get("bnb_4bit_compute_dtype")) == "bfloat16"
+        and all(
+            hf_setting_matches(_setting(quant.get(field, default)), wanted)
+            for field, wanted, default in HF_REQUIRED_QUANTIZATION
+        )
     )
 
 

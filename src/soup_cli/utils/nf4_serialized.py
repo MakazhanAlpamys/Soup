@@ -73,6 +73,17 @@ HF_QUANT_TYPE_KEY = "bnb_4bit_quant_type"
 HF_DOUBLE_QUANT_KEY = "bnb_4bit_use_double_quant"
 HF_QUANT_STORAGE_KEY = "bnb_4bit_quant_storage"
 HF_COMPUTE_DTYPE_KEY = "bnb_4bit_compute_dtype"
+#: What an importable ``quantization_config`` must say: ``(key, required value, value when the
+#: key is absent)``. The absent-key value is what transformers reads; none of its defaults
+#: for the type (fp4), double quantisation (off) or compute dtype (float32) is importable,
+#: so those three must be written out. ``fp8_block.is_serialized_nf4_config`` (the config-alone
+#: gate of the trainer and the sharder) reads this same table, so the two cannot disagree.
+HF_REQUIRED_QUANTIZATION = (
+    (HF_QUANT_TYPE_KEY, "nf4", None),
+    (HF_DOUBLE_QUANT_KEY, True, None),
+    (HF_QUANT_STORAGE_KEY, "uint8", "uint8"),
+    (HF_COMPUTE_DTYPE_KEY, "bfloat16", None),
+)
 #: What to do about a checkpoint this importer refuses for its quantisation.
 _NF4_HINT = (
     "use a double-quantised bitsandbytes NF4 upload (nf4, bfloat16), or point training.base "
@@ -377,6 +388,15 @@ def _scan_scales(span: _Span, key: str) -> None:
             remaining -= len(raw)
 
 
+def hf_setting_matches(got: Any, wanted: Any) -> bool:
+    """Whether one ``quantization_config`` value is the required one.
+
+    The type must match too: ``1`` and ``"true"`` are not ``True`` (``1 == True`` in Python),
+    and a list is not a name.
+    """
+    return type(got) is type(wanted) and got == wanted
+
+
 # ==========================================================================
 # plan
 # ==========================================================================
@@ -408,15 +428,9 @@ def _check_config_quantization(config: Mapping[str, Any]) -> Tuple[str, ...]:
             f"{_label(repr(quant.get('load_in_4bit')))}; a 4-bit checkpoint is required; "
             f"{_NF4_HINT}"
         )
-    expected = (
-        (HF_QUANT_TYPE_KEY, "nf4", None),
-        (HF_DOUBLE_QUANT_KEY, True, None),
-        (HF_QUANT_STORAGE_KEY, "uint8", "uint8"),
-        (HF_COMPUTE_DTYPE_KEY, "bfloat16", None),
-    )
-    for field, wanted, default in expected:
+    for field, wanted, default in HF_REQUIRED_QUANTIZATION:
         got = quant.get(field, default)
-        if got != wanted:
+        if not hf_setting_matches(got, wanted):
             raise ValueError(
                 f"config.json quantization_config.{field} is {_label(repr(got))}; "
                 f"{wanted!r} is required (the import stores bf16 statistics and Soup streams "

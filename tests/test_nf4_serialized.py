@@ -628,6 +628,8 @@ def test_unsupported_sources_are_refused_before_anything_is_written(work, case, 
     ("change", "message"),
     [
         ({"bnb_4bit_use_double_quant": False}, "bnb_4bit_use_double_quant is False"),
+        ({"bnb_4bit_use_double_quant": 1}, "bnb_4bit_use_double_quant is 1"),
+        ({"bnb_4bit_use_double_quant": "true"}, "bnb_4bit_use_double_quant is 'true'"),
         ({"bnb_4bit_quant_type": "fp4"}, "bnb_4bit_quant_type is 'fp4'"),
         ({"load_in_4bit": False}, "load_in_4bit is False"),
         ({"bnb_4bit_compute_dtype": "float16"}, "bnb_4bit_compute_dtype is 'float16'"),
