@@ -504,7 +504,7 @@ def _build_expectations(root: str) -> Tuple[str, int, Dict[str, Tuple[bool, Tupl
     except ImportError as exc:
         raise ImportError(
             f"importing a pre-quantised checkpoint needs bitsandbytes, transformers and "
-            f"accelerate (pip install 'soup-cli[train]'): {exc}"
+            f"accelerate (pip install \"soup-cli[train]\"): {exc}"
         ) from exc
     arch = stream_arch_of(model.config)
     if arch in _UNSUPPORTED_ARCHS or layer_buffer_keys(arch):
