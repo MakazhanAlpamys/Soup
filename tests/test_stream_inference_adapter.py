@@ -589,6 +589,13 @@ class TestConfigValuesAreBoundedBeforeTheBuild:
         ):
             _open(run)
 
+    def test_a_pattern_refusal_leaves_no_live_markup(self, run, work, no_build):
+        """The refusal quotes the start of the key; a Rich tag in it must come out escaped."""
+        _edit_config(work / "adapter", rank_pattern={"[red]" + "x" * 600: 4})
+        with pytest.raises(ValueError, match="512-character cap") as caught:
+            _open(run)
+        assert "\\[red]" in str(caught.value)
+
     @pytest.mark.parametrize(
         "field,value,words",
         [

@@ -410,8 +410,7 @@ def _check_module_names(field: str, value: Any, *, required: bool) -> None:
                 f"{max_chars}-character cap"
             )
         try:
-            re.compile(value)
-            check_config_regex(value, field)
+            check_config_regex(value, field)  # raises re.error for a pattern that does not parse
         except (re.error, ValueError) as exc:
             raise ValueError(
                 f"{_ADAPTER_CONFIG} {field} is not a usable pattern: {for_terminal(str(exc))}"
