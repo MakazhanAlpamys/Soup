@@ -35,6 +35,20 @@ invisible: reseeding at ``setup()`` already puts every stream where the checkpoi
 
 Float32 on the CPU: on an accelerator the streamed dtype is bf16 and the bit-exact
 claim is a different one (the GPU tier measures it).
+
+Apple Silicon is kept off MPS on purpose (``_hide_mps``). ``Trainer`` checkpoints the
+python, numpy and CPU generators and the CUDA / XLA / NPU / HPU / MLU / MUSA ones, and no
+MPS generator (``_save_rng_state`` / ``_load_rng_state``, read in transformers 5.17).
+On an MPS host the LoRA dropout masks are drawn from the MPS generator, so a resumed run
+restarts them from the seed and trains steps 3 and 4 on other masks. Measured on the
+``macos-latest`` CI cell (macos-26-arm64, torch 2.14.1, transformers 5.19.0): all 21
+trainer runs of this file sit in the DataLoader's "pin_memory ... not supported on MPS"
+warning group, ``resident-dropout`` and ``streamed-untied-dropout`` diverged from step 3
+(adapter deltas of about one learning-rate step, 5e-3), the resident control exactly as
+much as the streamed variant, while every dropout-free variant stayed bit-identical and
+the RNG stream tests passed (MPS dropout never touches the CPU generator). That is a
+``Trainer`` property of the platform, not a streaming defect: a ``--resume`` with LoRA
+dropout on Apple Silicon is not bit-exact. This file measures the CPU, as promised above.
 """
 
 from __future__ import annotations
@@ -228,6 +242,7 @@ class Leg:
     batches: list[Any] = field(default_factory=list)
     log: list[dict[str, Any]] = field(default_factory=list)
     global_step: int = -1
+    trainer_device: str = ""
     optimizer_class: str = ""
     scheduler_class: str = ""
     at_train_begin: dict[str, Any] = field(default_factory=dict)
@@ -245,6 +260,29 @@ class Scenario:
     stream: bool
 
 
+def _hide_mps(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the real wrapper off MPS, where a checkpoint does not carry the dropout RNG.
+
+    Soup does not wire ``use_cpu`` into ``TrainingArguments``, so the Trainer would pick
+    MPS by itself on Apple Silicon; the same three lookups other tests patch
+    (``test_issue805_optimizer_settings.py``) make it pick the CPU. Patched after the lazy
+    transformers import, and ``transformers.training_args`` caches its own copy of the
+    probe, so that one is overridden too.
+    """
+    import torch
+
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+    monkeypatch.setattr(torch.mps, "is_available", lambda: False)
+    monkeypatch.setattr("transformers.training_args.is_torch_mps_available", lambda: False)
+
+
+def _expected_device() -> str:
+    """The device the legs run on: CUDA when present (its generator is checkpointed), else CPU."""
+    from tests.conftest import cuda_available
+
+    return "cuda" if cuda_available() else "cpu"
+
+
 def _build(
     root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -254,7 +292,6 @@ def _build(
     accumulate: int,
     dropout: float,
 ) -> Any:
-    from tests.conftest import accelerator_device
     from tests.test_v07204 import (
         _stream_cfg,
         _tiny_llama_dir,
@@ -277,7 +314,8 @@ def _build(
         save_steps=CUT_AT,
         lora={"r": 4, "alpha": 8, "dropout": dropout, "target_modules": ["q_proj", "v_proj"]},
     )
-    wrapper = _wrapper_for("sft")(cfg, device=accelerator_device())
+    _hide_mps(monkeypatch)
+    wrapper = _wrapper_for("sft")(cfg, device=_expected_device())
     wrapper.setup({"train": _rows()})
     wrapper.trainer.args.max_steps = TOTAL_STEPS
     return wrapper
@@ -298,6 +336,7 @@ def _run(
     trainer = wrapper.trainer
     leg = Leg(checkpoints=root / "out", start_adapters=_adapters(wrapper.model))
     leg.streamed = getattr(wrapper, "_stream_runtime", None) is not None
+    leg.trainer_device = trainer.args.device.type
 
     real_training_step = trainer.training_step
 
@@ -407,6 +446,17 @@ class TestTheRunsAreComparable:
         # test streaming if the setup path really built a streamed model.
         for leg in (scenario.continuous, scenario.first, scenario.resumed):
             assert leg.streamed is scenario.stream
+
+    def test_the_trainer_runs_where_its_checkpoint_carries_the_dropout_rng(
+        self, scenario: Scenario
+    ) -> None:
+        # On MPS a resumed run cannot continue a dropout run exactly (see the module
+        # docstring), and nothing else in this file says why: twelve tests would just fail.
+        for leg in (scenario.continuous, scenario.first, scenario.resumed):
+            assert leg.trainer_device == _expected_device(), (
+                f"the Trainer picked {leg.trainer_device!r}; Trainer checkpoints no MPS RNG, "
+                "so the dropout variants cannot resume exactly there"
+            )
 
     def test_all_three_runs_start_from_the_same_adapter(self, scenario: Scenario) -> None:
         start = scenario.continuous.start_adapters
