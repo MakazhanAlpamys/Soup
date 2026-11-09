@@ -69,7 +69,7 @@ def _colon_skip_builders(source: str) -> list[int]:
         lower = text.casefold()
         colon = "colon" in lower or re.search(r"(['\"]):\1", text)
         filename = any(word in lower for word in ("filename", "file name", "windows name"))
-        if colon and filename and "windows" in lower:
+        if colon and filename:
             builders.append(node.lineno)
     return builders
 
@@ -141,6 +141,7 @@ def test_marker_keeps_the_original_condition_and_reason(filenames):
         "from pytest import skip as skip_case\n"
         "if sys.platform == 'win32':\n"
         "    skip_case('colon is not a valid Windows filename character')",
+        "import pytest\npytest.mark.skipif(sys.platform == 'win32', reason='colon in filename')",
         "import pytest\nWHY = 'colon filename on Windows'\n"
         "pytest.mark.skipif(is_windows, reason=WHY)",
     ],
