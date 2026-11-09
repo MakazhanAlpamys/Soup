@@ -101,6 +101,18 @@ The pinned public configuration builds on the meta device, and a tiny random
 decoder with both attention block kinds passes a CPU LoRA forward/backward check.
 Full 27B weights, NF4 execution, GPU memory use and training quality are unverified.
 
+`soup recipes use qwen3.5-27b-grpo` selects the same 27B language decoder for
+`./data/reasoning_train.jsonl`, with a reference answer in an `answer` column or
+the final assistant message. It inherits the 4B/9B GRPO starting values:
+`lr: 1e-5`, three epochs, four generations, `grpo_beta: 0.1` and the `accuracy`
+reward. The 4096-token limit, auto batch size, eight accumulation steps, LoRA
+rank 16 / alpha 32 and 4-bit quantization also match the shipped 27B SFT/DPO
+recipes; gradient checkpointing is explicit. These are inherited starting values.
+The pinned public configuration's full text architecture and LoRA attachment
+have been checked on meta, and a tiny random hybrid decoder passes a CPU LoRA
+forward/backward check. This does not validate full 27B weights, GRPO rollouts,
+NF4 execution, GPU memory fit or training quality.
+
 `soup recipes use qwen3.5-122b-a10b-dpo` selects the 122B-A10B language decoder
 for `prompt`, `chosen` and `rejected` text preferences in
 `./data/preference_train.jsonl`. It inherits the 122B SFT recipe's one epoch,

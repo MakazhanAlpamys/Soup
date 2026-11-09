@@ -24,6 +24,7 @@ EXPECTED_QWEN35_TEXT_RECIPES = {
     "qwen3.5-9b-dpo",
     "qwen3.5-27b-sft",
     "qwen3.5-27b-dpo",
+    "qwen3.5-27b-grpo",
     "qwen3.5-35b-a3b-sft",
     "qwen3.5-35b-a3b-dpo",
     "qwen3.5-35b-a3b-grpo",

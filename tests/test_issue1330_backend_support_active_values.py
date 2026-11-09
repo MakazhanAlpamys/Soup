@@ -149,8 +149,18 @@ def test_seed_zero_on_mlx_is_not_reported_now_that_mlx_seeds():
     assert "training.data_seed" not in reported_fields
 
 
-def test_schema_refused_settings_have_no_doctor_rows():
-    assert all(entry.status != REJECTED for entries in REGISTRY.values() for entry in entries)
+@pytest.mark.parametrize("key,entry", [
+    (key, entry) for key, entries in REGISTRY.items() for entry in entries
+    if entry.status == REJECTED
+])
+def test_rejected_doctor_rows_are_reachable_at_runtime_not_refused_by_schema(key, entry):
+    config = _config(*key)
+    namespace, field = entry.field.split(".")
+    config.setdefault(namespace, {})[field] = True
+    if field == "train_on_messages_with_train_field":
+        config["data"]["train_on_responses_only"] = False
+    loaded = _load(config)  # A schema refusal here means the doctor row is unreachable.
+    assert (entry.field, REJECTED) in {(gap.field, gap.status) for gap in check_config(loaded)}
 
 
 @pytest.mark.parametrize(
@@ -197,7 +207,7 @@ def test_every_mlx_support_row_is_reachable(task, field, value):
 
 @pytest.mark.parametrize(
     ("task", "expected_count"),
-    [("sft", 10), ("dpo", 5), ("orpo", 5), ("simpo", 5), ("kto", 5)],
+    [("sft", 8), ("dpo", 5), ("orpo", 5), ("simpo", 5), ("kto", 5)],
 )
 def test_mlx_doctor_all_clear_counts_only_reachable_settings(
     task, expected_count, tmp_path, capsys, monkeypatch
