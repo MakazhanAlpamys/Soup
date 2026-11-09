@@ -42,8 +42,9 @@ Kaggle ran commit `714cb9f7` on device 0, sm_75, driver 580.178.04, CUDA 13.0,
 PyTorch 2.11.0+cu130, bitsandbytes 0.50.2, peft 0.21.2, transformers 5.20.2.
 The input was synthetic. Scales were double-quantised with 64-element weight blocks.
 Commit `714cb9f7` produced `t4-ablation.json.gz` and `t4-aliasing.json`. Because later
-commits added `--model` and tracing to `nf4_stream_bench.py`, running `--ablation` from
-the branch head produces a different script SHA-256 hash than the record.
+commits added `--model` to `nf4_stream_bench.py` (with slot-read tracing in
+`nf4_stream_model.py`), running `--ablation` from the branch head produces a different
+script SHA-256 hash than the record.
 
 | Fresh process | Shipped / cached ms | Reduction | Projection tokens/s, shipped / cached | Peak MiB, shipped / cached | Timed SM clock min/median/max MHz (5 samples) | Median memory-controller use (5 samples) | Same-shape dense GEMM TFLOP/s |
 |---|---:|---:|---:|---:|---:|---:|---:|
