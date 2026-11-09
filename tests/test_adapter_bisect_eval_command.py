@@ -43,10 +43,87 @@ def workdir(tmp_path, monkeypatch):
         (r"C:\dir\tool.bat {ckpt}", [r"C:\dir\tool.bat", "{ckpt}"]),
         (r'"C:\dir with space\tool.bat" {ckpt}', [r"C:\dir with space\tool.bat", "{ckpt}"]),
         (r'".\tool.bat" "" "prefix {ckpt}"', [r".\tool.bat", "", "prefix {ckpt}"]),
+        (r"tool.bat --ckpt '{ckpt}'", ["tool.bat", "--ckpt", "{ckpt}"]),
+        (r'tool.bat --x="a b"', ["tool.bat", "--x=a b"]),
+        (r'tool.bat "--ckpt={ckpt}"', ["tool.bat", "--ckpt={ckpt}"]),
+        (r'"C:\Program Files\py\python.exe" {ckpt}', [r"C:\Program Files\py\python.exe", "{ckpt}"]),
+        (r"C:\tools\eval.bat {ckpt}", [r"C:\tools\eval.bat", "{ckpt}"]),
+        (r'tool.bat a\"b', ["tool.bat", 'a"b']),
+        (r'tool.bat ""', ["tool.bat", ""]),
+        (r"C:\Users\O'Brien\tool.bat {ckpt}", [r"C:\Users\O'Brien\tool.bat", "{ckpt}"]),
+        (r"tool.bat --ckpt='{ckpt}'", ["tool.bat", "--ckpt='{ckpt}'"]),
     ],
 )
 def test_windows_split_preserves_paths_and_argument_boundaries(command, expected):
     assert adapters._split_bisect_eval_command(command, windows=True) == expected
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        (r"python eval.py --ckpt '{ckpt}'", ["python", "eval.py", "--ckpt", "{ckpt}"]),
+        (r'python eval.py --x="a b" {ckpt}', ["python", "eval.py", "--x=a b", "{ckpt}"]),
+        (r'python eval.py "--ckpt={ckpt}"', ["python", "eval.py", "--ckpt={ckpt}"]),
+    ],
+)
+def test_posix_control_split_matches_existing_behavior(command, expected):
+    assert adapters._split_bisect_eval_command(command, windows=False) == expected
+
+
+@pytest.mark.parametrize("command", ["", "   ", '""'])
+def test_windows_split_refuses_a_command_that_names_no_program(command):
+    with pytest.raises(ValueError, match="must name a program"):
+        adapters._split_bisect_eval_command(command, windows=True)
+
+
+@pytest.mark.parametrize("command", ['tool.bat "abc', "tool.bat 'abc"])
+def test_windows_split_refuses_an_unterminated_quote(command):
+    with pytest.raises(ValueError, match="No closing quotation"):
+        adapters._split_bisect_eval_command(command, windows=True)
+
+
+def test_windows_cli_single_quoted_template_ends_all_ok(workdir, monkeypatch):
+    program = r"C:\tools\eval.bat"
+    simulated = SimpleNamespace(**vars(os))
+    simulated.name = "nt"
+    simulated.path = SimpleNamespace(**vars(ntpath))
+    simulated.path.isfile = lambda path: path == program
+    simulated.access = lambda path, mode: True
+    monkeypatch.setattr(adapters, "os", simulated)
+
+    calls = []
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda argv, **kwargs: calls.append(argv) or SimpleNamespace(returncode=0),
+    )
+    result = _invoke(rf"{program} eval.py --ckpt '{{ckpt}}'")
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert len(calls) == 2
+    assert calls[0] == [program, "eval.py", "--ckpt", "ckpt-1"]
+    assert calls[1] == [program, "eval.py", "--ckpt", "ckpt-2"]
+    assert json.loads(Path("bisect.json").read_text())["verdict"] == "ALL_OK"
+
+
+def test_windows_cli_embedded_double_quoted_option_ends_all_ok(workdir, monkeypatch):
+    program = r"C:\tools\eval.bat"
+    simulated = SimpleNamespace(**vars(os))
+    simulated.name = "nt"
+    simulated.path = SimpleNamespace(**vars(ntpath))
+    simulated.path.isfile = lambda path: path == program
+    simulated.access = lambda path, mode: True
+    monkeypatch.setattr(adapters, "os", simulated)
+
+    calls = []
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda argv, **kwargs: calls.append(argv) or SimpleNamespace(returncode=0),
+    )
+    result = _invoke(rf'{program} eval.py --x="a b" "{{ckpt}}"')
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert len(calls) == 2
+    assert calls[0] == [program, "eval.py", "--x=a b", "ckpt-1"]
+    assert calls[1] == [program, "eval.py", "--x=a b", "ckpt-2"]
+    assert json.loads(Path("bisect.json").read_text())["verdict"] == "ALL_OK"
 
 
 @pytest.mark.parametrize(

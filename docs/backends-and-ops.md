@@ -1349,8 +1349,12 @@ macOS. A value already set is kept, and Windows leaves the current directory out
 non-empty value, `0` included, so no setting brings the old search back: to run a program from
 the current directory, give its path (`./tool.exe`, or an absolute path in quotes) or put the
 directory on `PATH` as an absolute path. `soup adapters bisect --eval-command` uses native command-line splitting:
-POSIX quoting on Linux/macOS and Windows quoting on Windows, preserving backslashes in
-`.\tool.bat` and `C:\tools\tool.bat`. Quote a program path containing spaces.
+POSIX quoting on Linux/macOS and Microsoft C runtime quoting rules on Windows (where
+double quotes group arguments anywhere within an option like `--opt="a b"`, a single quote
+opens a group only at the start of a word like `'{ckpt}'` whereas inside a word it is an ordinary
+character, and backslashes are literal unless preceding a double quote; use double quotes for
+`--opt="a b"`), preserving backslashes in `.\tool.bat` and `C:\tools\tool.bat`.
+Quote a program path containing spaces.
 The template is split once before checkpoint substitution; checkpoint text remains one
 argument even when it contains spaces or quotes. No shell interprets that text. A missing
 or unstartable program is an invocation error (exit 2), with no bisect verdict or result
@@ -1640,16 +1644,31 @@ LIVE (v0.71.21): reshapes fused Llama-4 expert weights `[E*din, dout]` → `[E, 
 
 ## Ctrl+C Graceful Save
 
-First SIGINT → trainer writes a checkpoint and continues. Second SIGINT → trainer stops cleanly after the next save. No-state fallback raises `KeyboardInterrupt` so the user never gets stuck. `GracefulSaveHandler.install()` is idempotent and swallows `signal.signal` failures on non-main threads.
+For HF Trainer-backed runs, the first SIGINT requests a checkpoint after the
+next completed optimizer step and training continues. The second requests a
+checkpoint and stops after that save. A third SIGINT restores the prior signal
+handler and raises `KeyboardInterrupt` immediately, without waiting for a safe
+step or a checkpoint to finish. Requests survive gradient accumulation
+and TrainerControl resets. Initialized distributed ranks share the save/stop
+decision at the safe step. The prior signal handler is restored on normal
+completion and on startup, training or checkpoint errors. The controls work
+without a live display. Signal installation is unavailable on non-main threads;
+the file trigger still works there.
+
+Native MLX training and custom loops that do not use HF Trainer (including
+`task: unlearn`) do not implement these manual-save controls.
 
 
 ## Checkpoint-Now Trigger File
 
 ```bash
-touch ./out/.checkpoint_now    # trainer saves on the next step, then deletes the trigger
+touch ./out/.checkpoint_now    # save after the next optimizer step; remove after success
 ```
 
-Path containment via `is_under_cwd`; `os.lstat + S_ISLNK` rejection at the trigger target so a pre-placed symlink can't redirect the write.
+The HF Trainer lifecycle polls this file at optimizer-step boundaries. A failed
+save leaves the trigger in place for a retry. The saving rank consumes it only
+after the checkpoint succeeds. Path containment uses `is_under_cwd`; trigger
+symlinks and non-regular files are neither followed nor consumed.
 
 
 ## Onboarding Wizard Helper

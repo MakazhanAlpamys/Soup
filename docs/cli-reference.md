@@ -836,6 +836,7 @@ Usage: `soup chat [OPTIONS]`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `--model`, `-m` | text |  | yes | Path to LoRA adapter directory or full model |
+| `--backend` | text | `transformers` |  | Text backend: transformers or mlx |
 | `--base`, `-b` | text |  |  | Base model ID. Auto-detected from adapter_config.json if not set. |
 | `--device` | text |  |  | Device: cuda, mps, cpu. Auto-detected if not set. |
 | `--max-tokens` | integer | `512` |  | Maximum number of tokens to generate |
