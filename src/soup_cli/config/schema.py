@@ -8970,6 +8970,22 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_mlx_lora_pattern_scope(self) -> "SoupConfig":
+        """Per-module reconstruction is qualified for text SFT, not native preference/RL."""
+        if self.backend == "mlx" and self.task != "sft":
+            fields = [
+                f"training.lora.{name}"
+                for name in ("rank_pattern", "alpha_pattern")
+                if getattr(self.training.lora, name)
+            ]
+            if fields:
+                raise ValueError(
+                    f"{' and '.join(fields)}: MLX patterns support ordinary LoRA/rsLoRA "
+                    f"text SFT only; task={self.task!r} does not apply per-module patterns."
+                )
+        return self
+
+    @model_validator(mode="after")
     def _validate_unsloth_lora_patterns(self) -> "SoupConfig":
         """#2153 - ``lora.rank_pattern`` / ``alpha_pattern`` are not applied on
         ``backend: unsloth``. Stop-gap: delete this validator (and
@@ -9003,7 +9019,6 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-
     def _validate_uld_compat(self) -> "SoupConfig":
         """v0.70.0 Part B — Universal Logit Distillation gate.
 

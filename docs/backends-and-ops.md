@@ -154,8 +154,6 @@ without a native trainer are refused when the config is loaded, with an error
 naming the task. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for
 ready-made Apple Silicon configs.
 
-
-
 #### DPO on MLX
 
 `task: dpo` with `backend: mlx` runs Soup's own training loop (`mlx-lm` ships no DPO helper), with the sigmoid loss TRL uses by default and `training.dpo_beta`.
@@ -317,7 +315,6 @@ That shows the objective moving, not alignment quality.
   `task: preference` with `training.preference_loss: simpo` uses this same
   native trainer and these same restrictions. The other settings MLX DPO does not apply
   are not applied here either.
-
 
 #### KTO on MLX
 
@@ -622,7 +619,6 @@ Resume restores adapter weights only and requires the same resolved recipe.
 DoRA, LoRA-FA, LoRA+, packing and non-SFT tasks are outside this pattern path;
 they are refused rather than silently converted to uniform LoRA. Empty or null
 patterns retain the existing scalar adapter behavior.
-
 
 #### DoRA on MLX
 

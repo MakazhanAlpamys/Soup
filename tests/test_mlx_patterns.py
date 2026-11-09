@@ -29,7 +29,8 @@ def _manifest():
 def _config(*, backend="mlx", task="sft", **lora):
     return SoupConfig(
         base="test/model", backend=backend, task=task, data={"train": "train.jsonl"},
-        training={"quantization": "none", "lora": lora},
+        training={"quantization": "none", "lora": lora,
+                  **({"preference_loss": "dpo"} if task == "preference" else {})},
     )
 
 
@@ -91,7 +92,7 @@ def test_public_pattern_config_passes_train_dry_run(tmp_path, monkeypatch):
     assert not (tmp_path / "output" / "adapters.safetensors").exists()
 
 
-@pytest.mark.parametrize("task", ["sft", "dpo", "orpo", "simpo"])
+@pytest.mark.parametrize("task", ["sft", "dpo", "orpo", "simpo", "kto", "grpo"])
 @pytest.mark.parametrize("empty", [None, {}])
 def test_uniform_mlx_recipes_remain_valid(task, empty):
     cfg = _config(task=task, r=8, alpha=16, use_rslora=True,
@@ -116,11 +117,20 @@ def test_mlx_dora_still_refuses_patterns_with_its_own_diagnostic(field):
         _config(use_dora=True, **{field: {"q_proj": 2}})
 
 
-@pytest.mark.parametrize("task", ["grpo", "kto", "ipo", "pretrain"])
+@pytest.mark.parametrize("task", ["ipo", "pretrain"])
 def test_patterns_do_not_enable_unsupported_mlx_tasks(task):
     assert _config(backend="transformers", task=task).task == task
     with pytest.raises(ValueError, match="MLX backend only ships SFT"):
         _config(task=task, rank_pattern={"q_proj": 2})
+
+
+@pytest.mark.parametrize("task", ["dpo", "orpo", "simpo", "kto", "grpo", "preference"])
+@pytest.mark.parametrize("field", ["rank_pattern", "alpha_pattern"])
+def test_non_sft_patterns_refused_at_load_with_uniform_controls(task, field):
+    assert _config(task=task).task == task
+    assert getattr(_config(task=task, **{field: {}}).training.lora, field) == {}
+    with pytest.raises(ValueError, match=rf"training.lora.{field}.*text SFT only"):
+        _config(task=task, **{field: {"q_proj": 2}})
 
 
 def test_patterns_do_not_enable_mlx_full_fine_tuning():

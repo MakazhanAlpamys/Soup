@@ -306,7 +306,8 @@ def test_strict_artifact_and_warm_start_contracts(tmp_path, monkeypatch, quantiz
 
 
 @pytest.mark.parametrize("variant", [
-    "packing", "lorafa", "loraplus", "pretrain", "dpo", "orpo", "simpo",
+    "packing", "lorafa", "loraplus", "pretrain", "dpo", "orpo", "simpo", "kto", "grpo",
+    "preference",
 ])
 def test_pattern_combinations_refused_with_ordinary_valid_control(tmp_path, variant):
     from mlx_lm import load
@@ -326,10 +327,19 @@ def test_pattern_combinations_refused_with_ordinary_valid_control(tmp_path, vari
         cfg.training.loraplus_lr_ratio = 2
     else:
         cfg.task = variant
+        if variant == "kto":
+            cfg.training.batch_size = 2
+        elif variant == "preference":
+            cfg.training.preference_loss = "dpo"
         if variant != "pretrain":
-            # These tasks are valid MLX configs, but their shared adapter path
-            # must refuse patterns before it can silently train uniform LoRA.
-            cfg = cfg.model_validate(cfg.model_dump())
+            # Uniform configs remain valid. Independently exercise the runtime
+            # guard for callers that mutate a config after load-time validation.
+            uniform_cfg = cfg.model_copy(deep=True)
+            uniform_cfg.training.lora.rank_pattern = None
+            uniform_cfg = cfg.model_validate(uniform_cfg.model_dump())
+            uniform, _ = load(str(base))
+            MLXSFTTrainerWrapper(uniform_cfg)._apply_lora(uniform)
+            assert isinstance(uniform.layers[0].self_attn.q_proj, LoRALinear)
     model, _ = load(str(base))
     before = dict(tree_flatten(model.trainable_parameters()))
     with pytest.raises(ValueError, match="ordinary LoRA/rsLoRA text SFT only"):
