@@ -10,7 +10,7 @@ The order inside ``SFTTrainerWrapper._setup_transformers``:
 1. ``_begin_packed_lora`` (before the tokenizer and the model are downloaded): the machine and the
    model's config are checked, and a run the kernels cannot take stops here with the reasons, or
    trains with the stock step under ``on_unsupported: stock``.
-2. ``_packed_lora_kbit_context`` around ``prepare_model_for_kbit_training``: the embedding and the
+2. ``_packed_lora_kbit_context`` around peft's k-bit preparation call: the embedding and the
    lm_head are left in the compute dtype instead of being copied to fp32 (a 4.4 GiB transient for
    a 7B model, which does not fit an 8 GB card next to the 4-bit layers).
 3. ``_install_packed_lora`` (after the LoRA exists): the model is read, the start-up checks run, the
@@ -112,9 +112,9 @@ class PackedLoraSetupMixin:
             )
         self._packed_lora_wanted = True
 
-    # -- 2. around prepare_model_for_kbit_training ------------------------------------------------
+    # -- 2. around peft's k-bit preparation -------------------------------------------------------
     def _packed_lora_kbit_context(self) -> Any:
-        """A context for ``prepare_model_for_kbit_training``: the tables stay in the compute
+        """A context for peft's k-bit preparation call: the tables stay in the compute
         dtype. A no-op for a run that does not use the kernels."""
         if not self._packed_lora_wanted:
             return contextlib.nullcontext()
