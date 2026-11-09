@@ -89,6 +89,11 @@ the sorted whole-source manifest digest, fixture/benchmark hashes, model files,
 dependency versions, commands and exact content/count comparisons. The source
 digest identifies the qualified implementation even before its publishing commit.
 
+The `serve.py` digest in the three records is the file as it was in `efab186c`.
+The merge of `main` into the branch changed other parts of that file, not the
+lines this pull request adds to it, so a checkout of the merged head does not
+match the digest.
+
 Default tests remain offline and deterministic; real-native tests are explicitly
 selected in the existing `mlx-smoke` job, installing the serving extras and HTTP
 test client there. Portable streaming/cancellation/queue tests use real ASGI handlers
@@ -162,7 +167,8 @@ fail and restored controls pass.
 Current and minimum real-native stacks each pass **184 tests**. Independent
 Pydantic 2.1.1 and 2.3.0 core/serve stacks each pass **181 portable tests**, as does
 the forced-color portable run. All three public CLI records were refreshed and
-match the final source and qualification scripts. The final serial suite passed
+match the final source apart from the `serve.py` digest described above, and the
+qualification scripts. The final serial suite passed
 on 2026-11-03: **49,004 passed, 590 skipped, 10 deselected**, **88.00% coverage**
 (77% required), 1591.77 seconds, exit 0; the functional source digest was unchanged.
 Ruff, dependency checks and generated-reference structure pass.
