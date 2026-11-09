@@ -1923,10 +1923,14 @@ def render_stream_panel(plan: StreamPlan, extra_lines: Sequence[str] = ()) -> Pa
         # The number the disk tier used to predict as zero. It is host memory,
         # so it does not belong in the VRAM line below, and it is held for the
         # whole run — an operator choosing a depth is choosing this.
+        # A plan that is not pinned (stream_pin: false, or the Windows commit
+        # pre-flight's fallback) stages pageable memory: "page-locked when the
+        # box allows" would contradict the note printed beneath it.
+        staged = "page-locked when the box allows" if plan.pinned else "pageable"
         lines.append(
             f"  host staging read_ahead {plan.read_ahead} -> "
             f"{plan.staging_bytes / 1e6:.0f} MB "
-            f"(page-locked when the box allows)"
+            f"({staged})"
         )
     lines += [
         f"  VRAM buffers {plan.buffers} x {plan.layer_bytes / 1e6:.0f} MB "

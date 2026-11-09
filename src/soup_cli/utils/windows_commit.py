@@ -1,28 +1,28 @@
-"""Windows commit headroom for layer streaming's page-locked host staging.
+"""Windows commit headroom for layer streaming's host staging.
 
-On Windows, page-locked (pinned) host memory and private mappings are charged
-against the system COMMIT limit (RAM + pagefile), not only against free RAM. The
-disk tier's async reader page-locks its staging for the whole run, and the staging
-pre-flight (``trainer/stream_setup.py::_validate_stream_staging_ram_fit``) reads
-free RAM alone, so a box with RAM to spare and no commit left passed it and was
-stopped later, mid-run. An experimental Mistral Large 123B run on a 32 GB laptop
-was stopped twice that way with pinned staging; the same run with pageable staging
-passed. (That evidence is one box and one pair of sessions, and the reports say
-other memory use differed between them. This module acts on the mechanism, which
-is documented, and not on that pair alone.)
+On Windows every private host allocation is charged against the system COMMIT limit
+(RAM + pagefile), pageable or page-locked, and free RAM does not show it. The disk
+tier's async reader holds its staging for the whole run, and the staging pre-flight
+(``trainer/stream_setup.py::_validate_stream_staging_ram_fit``) reads free RAM alone,
+so a box with RAM to spare and no commit left passed it and was stopped later,
+mid-run. Page-locked staging is the larger charge: it is packed into power-of-two
+arenas (``plan_pinned_arenas``, #901), so the 123B plan below asks for 3 GiB where its
+slots add up to 2.17 GiB.
 
 What this module adds, all of it Windows-only and none of it a config key:
 
-* :func:`assess_commit_fit` - a pure function: commit total / limit, the planned
-  pinned staging and the resident extras in, ``fits`` / ``tight`` / ``does not fit``
-  out. It is the one place the margin is applied.
-* :func:`read_commit_info` - the numbers, read lazily through ``ctypes``. Any
-  failure to read them is ``None``, with a debug-level note: the check is skipped,
-  training is not.
-* :func:`apply_commit_preflight` - what the staging pre-flight does with the
-  verdict. ``stream_pin`` unset and not ``fits``: stage pageable instead and say so
-  in the panel. ``stream_pin: true`` and ``does not fit``: refuse, before the
-  runtime stages anything. ``stream_pin: false``: not read, not touched.
+* :func:`assess_commit_fit` - a pure function: commit total / limit, a staging charge
+  and the resident extras in, ``fits`` / ``tight`` / ``does not fit`` out. It is the
+  one place the margin is applied.
+* :func:`pinned_staging_bytes` - what pinning really commits: the arena-rounded size,
+  by the same packer the reader uses.
+* :func:`read_commit_info` - the numbers, read lazily through ``ctypes``. Any failure
+  to read them is ``None``, logged at info: the check is skipped, training is not.
+* :func:`apply_commit_preflight` - what the staging pre-flight does with the verdicts.
+  ``stream_pin`` unset: pinned (arena-rounded) fits -> pin; else pageable (the plain
+  slot sum) fits -> stage pageable and say so in the panel; else refuse. ``stream_pin:
+  true``: refuse when the arenas cannot fit at all, warn when it is tight.
+  ``stream_pin: false``: not read, not touched.
 
 Which Windows API: ``GetPerformanceInfo`` (psapi), not ``GlobalMemoryStatusEx``.
 Both report commit, but ``GlobalMemoryStatusEx`` documents ``ullTotalPageFile`` as
@@ -42,31 +42,59 @@ import dataclasses
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Callable, List, Optional
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; this module stays import-light
     from soup_cli.utils.layer_stream import StreamPlan
 
 logger = logging.getLogger(__name__)
 
-#: Commit that must still be free AFTER the pinned staging and the resident extras
-#: are charged, for the staging to count as ``fits``. **A chosen safety margin, not
-#: a measured bound.** The pre-flight can only see the staging; the rest of a run
-#: (CUDA context, dense-layer work buffers, activations spilled to host, the
-#: interpreter) commits on top of it and is not predictable from the plan. The one
-#: measurement there is: a pageable 512-token Mistral Large run that passed took the
-#: system's commit headroom from 12.7-17.9 GB at its start down to 2.47 GB at its
-#: lowest point, 10.2-15.4 GB of growth of which about 2.3 GB was its own staging.
-#: 8 GiB is the low end of the other ~8 GB, rounded up, and it sorts the two recorded
-#: starts the way the runs went: 12.7 GB less a 4 GiB pinned arena and one 0.8 GB
-#: vocabulary slot leaves 7.6 GB (``tight``); 17.9 GB leaves 12.8 GB (``fits``).
-#: Being wrong costs throughput (pageable staging loses the copy overlap), not
-#: correctness, which is why a larger figure is cheaper than a smaller one.
-COMMIT_HEADROOM_MARGIN_BYTES = 8 * 2**30
+#: Commit that must still be free AFTER the pinned staging (arena-rounded) and the
+#: resident extras are charged, for pinning to count as ``fits``. **A chosen safety
+#: margin, not a measured bound.** The pre-flight sees only the staging; the rest of a
+#: run (CUDA context, dense-layer work buffers, activations spilled to host, the
+#: interpreter, and whatever else the box is doing) commits on top of it.
+#:
+#: Derivation, from the two sessions of the experimental Mistral Large 123B run on a
+#: 32 GB laptop (commit limit 54,471,286,784 B; plan: 88 layers of 714,074,140 B, two
+#: 805,306,368 B vocabulary matrices, ``stream_read_ahead`` 1; its regions were
+#: [714,080,256, 805,310,464, 805,310,464] and pinned they pack into 3,221,225,472 B of
+#: arenas, 4,294,967,296 B at depth 2):
+#:
+#: * pageable, completed three updates: free commit 14,439,596,032 B at the start,
+#:   4,078,985,216 B at its lowest, 2,324,713,472 B of it staging. Growth beyond the
+#:   staging: 8,035,897,344 B (7.5 GiB).
+#: * pinned, stopped by the harness's own 512 MiB commit floor in the first iteration:
+#:   15,669,370,880 B at the start, 484,179,968 B at the stop, 3,221,225,472 B of it
+#:   arenas. Growth beyond the staging, a LOWER bound because it was cut short:
+#:   11,963,965,440 B (11.1 GiB).
+#:
+#: The margin has to cover the growth beyond the staging plus the 536,870,912 B floor
+#: in the worse session: 12,500,836,352 B, rounded up to 12 GiB. With 12 GiB and the
+#: real plan sizes the two starts the brief gives (12.7 GB and 17.9 GB free) come out
+#: as the runs would want: at ``stream_read_ahead`` 1 (3 GiB of arenas) 12.7 GB leaves
+#: 9.48 GB (``tight``, falls back to pageable) and 17.9 GB leaves 14.68 GB (``fits``);
+#: at depth 2 (4 GiB) they leave 8.41 GB and 13.61 GB, the same two verdicts. The
+#: recorded pinned start, 15.67 GB, leaves 12.45 GB at depth 1: ``tight`` too, so it
+#: would have been told to stage pageable (charging the plain slot sum instead, 2.32
+#: GB, leaves 13.34 GB and keeps it pinned: that is why the arena size is charged).
+#:
+#: Two caveats the records themselves make. The sessions differ in more than staging:
+#: the pinned one began with 3.1 GB less free commit and commit outside the worker grew
+#: by a further 4.7 GB, so the staging explains about 0.9 GB of a 3.9 GB difference in
+#: growth, and the margin is sized on the worse session rather than on a controlled
+#: pinned-versus-pageable pair. And it is one laptop. Being wrong costs throughput
+#: (pageable staging gives up the copy overlap), not correctness, which is why a larger
+#: figure is the cheaper error.
+COMMIT_HEADROOM_MARGIN_BYTES = 12 * 2**30
+
+#: ``AsyncDiskSource`` widens every staging region to sector boundaries; this is that
+#: sector (``async_disk_source.SECTOR_BYTES``), repeated so the module stays import-light.
+_SECTOR_BYTES = 4096
 
 
 class CommitFit(str, Enum):
-    """How a pinned staging sits against the commit still free."""
+    """How a staging charge sits against the commit still free."""
 
     FITS = "fits"
     TIGHT = "tight"
@@ -93,7 +121,7 @@ class CommitVerdict:
     fit: CommitFit
     available_bytes: int
     required_bytes: int
-    #: ``available - required``; NEGATIVE when the staging does not fit at all.
+    #: ``available - required``; NEGATIVE when the charge does not fit at all.
     headroom_after_bytes: int
     margin_bytes: int
 
@@ -114,13 +142,14 @@ def assess_commit_fit(
     resident_extras_bytes: int = 0,
     margin_bytes: int = COMMIT_HEADROOM_MARGIN_BYTES,
 ) -> CommitVerdict:
-    """Decide whether pinned staging leaves enough system commit.
+    """Decide whether a staging charge leaves enough system commit.
 
+    ``pinned_staging_bytes`` is the staging figure being judged: the arena-rounded
+    size when judging pinning, the plain slot sum when judging pageable staging.
     ``available`` is ``limit - total`` (0 when the total is over the limit, which
     happens transiently while the pagefile grows). The staging and the resident
-    extras are charged against it, the same two figures the free-RAM check is
-    given, so the two checks cannot disagree about what is being held. What is left
-    decides the verdict:
+    extras are charged against it, the same two figures the free-RAM check is given.
+    What is left decides the verdict:
 
     * ``fits`` - at least ``margin_bytes`` left;
     * ``tight`` - between 0 and ``margin_bytes`` left: it fits, with less room for
@@ -148,6 +177,58 @@ def assess_commit_fit(
         headroom_after_bytes=left,
         margin_bytes=margin,
     )
+
+
+# ---------------------------------------------------------------------------
+# what pinning really commits
+# ---------------------------------------------------------------------------
+def _region_bytes(size: int) -> int:
+    """A staging region as the reader allocates it: sector-aligned, plus one sector.
+
+    ``AsyncDiskSource`` widens a layer's data section to sector boundaries on both
+    ends. For the recorded 123B regions this reproduces them exactly: 714,074,140 ->
+    714,080,256 and 805,306,368 -> 805,310,464. It is the worst case for a start that
+    is not sector-aligned and at most one sector over for one that is.
+    """
+    return -(-int(size) // _SECTOR_BYTES) * _SECTOR_BYTES + _SECTOR_BYTES
+
+
+def staging_regions(plan: "StreamPlan") -> List[int]:
+    """The regions the async reader allocates for ``plan``, in allocation order.
+
+    The decoder layers first (``min(read_ahead, n_layers)`` slots of ``layer_bytes``),
+    then one region per vocabulary matrix. The plan carries the vocabulary matrices as
+    their sum (``large_store_bytes``) and the largest (``large_buffer_bytes``); a
+    matrix pair of equal size (embedding and untied head) splits back exactly, a tied
+    model has one. This is the plan's own approximation, the one
+    ``layer_stream.staging_bytes_for`` makes.
+    """
+    depth = max(0, min(int(plan.read_ahead), int(plan.n_layers)))
+    regions = [_region_bytes(plan.layer_bytes)] * depth
+    large_total = int(plan.large_store_bytes)
+    if large_total > 0:
+        biggest = int(plan.large_buffer_bytes)
+        biggest = large_total if biggest <= 0 else min(biggest, large_total)
+        regions.append(_region_bytes(biggest))
+        if large_total > biggest:
+            regions.append(_region_bytes(large_total - biggest))
+    return regions
+
+
+def pinned_staging_bytes(plan: "StreamPlan") -> int:
+    """Bytes pinning commits for ``plan``: the staging packed into power-of-two arenas.
+
+    The reader page-locks ``plan_pinned_arenas(regions).pinned_bytes`` (#901), not the
+    slot sum: torch's caching host allocator rounds a pinned block up to a power of
+    two, so the regions share arenas that are themselves powers of two. Pure
+    arithmetic from the packer the reader calls, no torch.
+    """
+    from soup_cli.utils.layer_stream_runtime import plan_pinned_arenas
+
+    regions = staging_regions(plan)
+    if not regions:
+        return 0
+    return plan_pinned_arenas(regions, align=_SECTOR_BYTES).pinned_bytes
 
 
 # ---------------------------------------------------------------------------
@@ -209,18 +290,19 @@ def read_commit_info() -> Optional[CommitInfo]:
     """System commit now, or ``None`` when it is not Windows or could not be read.
 
     Never raises: this guards a pre-flight, and a pre-flight that cannot take its
-    reading is skipped (with a debug-level note), not allowed to stop the training
-    it was written to protect.
+    reading is skipped, not allowed to stop the training it was written to protect.
+    The skip is logged at info, so a Windows user whose counters fail can see why the
+    old behaviour came back.
     """
     if not _on_windows():
         return None
     try:
         info = _query_commit_windows()
     except Exception as exc:  # noqa: BLE001 - any failure here skips the check
-        logger.debug("Windows commit headroom could not be read (%r); skipping the check", exc)
+        logger.info("Windows commit headroom could not be read (%r); skipping the check", exc)
         return None
     if info.limit_bytes <= 0:
-        logger.debug(
+        logger.info(
             "Windows commit limit read as %d bytes; treating it as unreadable and skipping "
             "the check",
             info.limit_bytes,
@@ -232,8 +314,14 @@ def read_commit_info() -> Optional[CommitInfo]:
 # ---------------------------------------------------------------------------
 # the decision
 # ---------------------------------------------------------------------------
-def _gb(value: int) -> str:
-    return f"{value / 1e9:.2f} GB"
+def _gib(value: int) -> str:
+    return f"{value / 2**30:.2f} GiB"
+
+
+def _left(verdict: CommitVerdict) -> str:
+    if verdict.headroom_after_bytes >= 0:
+        return _gib(verdict.headroom_after_bytes)
+    return f"none (over by {_gib(-verdict.headroom_after_bytes)})"
 
 
 def apply_commit_preflight(
@@ -244,19 +332,25 @@ def apply_commit_preflight(
     resident_bytes: int,
     notify: Callable[[str], object],
 ) -> "StreamPlan":
-    """Charge the disk tier's pinned staging against Windows commit.
+    """Charge the disk tier's host staging against Windows commit.
 
-    Returns ``plan`` itself when nothing changes, and a copy with ``pinned=False``
-    and one added note (which the panel prints) when an unset ``stream_pin`` falls
-    back to pageable staging. Raises ``ValueError`` when ``stream_pin: true`` asks
-    for a staging that does not fit the commit limit at all; a merely ``tight`` one
-    is honoured with one warning, because the user asked for it and the margin is a
-    judgement. ``notify`` is ``console.print``.
+    Pinning is judged on the arena-rounded size (:func:`pinned_staging_bytes`), pageable
+    staging on the plain slot sum (``plan.staging_bytes``). ``stream_pin`` unset:
+
+    * pinned fits: ``plan`` itself, silently;
+    * else pageable does not run out of commit: a copy with ``pinned=False`` and one
+      added note, which the panel prints;
+    * else ``ValueError`` - pageable memory is committed too, so staging in it does not
+      rescue a box with no commit left.
+
+    ``stream_pin: true`` is refused (``ValueError``) when the arenas cannot fit at all,
+    and honoured with one warning through ``notify`` (``console.print``) when merely
+    tight, because the user asked for it and the margin is a judgement.
 
     Nothing happens, and the commit counters are not read, when ``stream_pin`` is
-    ``false`` (pageable already), the target is not CUDA (nothing is page-locked),
-    the plan is already pageable, there is no staging to charge (the RAM tier), or
-    the OS is not Windows.
+    ``false`` (pageable already), the target is not CUDA (nothing is page-locked), the
+    plan is already pageable, there is no staging to charge (the RAM tier), or the OS is
+    not Windows.
     """
     if stream_pin is False or not on_cuda or not plan.pinned or plan.staging_bytes <= 0:
         return plan
@@ -264,51 +358,76 @@ def apply_commit_preflight(
         return plan
     info = read_commit_info()
     if info is None:
-        logger.debug("Windows commit pre-flight skipped: the commit counters were unavailable")
-        return plan
-    verdict = assess_commit_fit(
-        commit_total_bytes=info.total_bytes,
-        commit_limit_bytes=info.limit_bytes,
-        pinned_staging_bytes=plan.staging_bytes,
-        resident_extras_bytes=resident_bytes,
-    )
-    if verdict.fit is CommitFit.FITS:
         return plan
 
-    staging = _gb(plan.staging_bytes)
-    extras = _gb(int(resident_bytes))
-    free = _gb(verdict.available_bytes)
-    margin = _gb(verdict.margin_bytes)
-    committed = f"{_gb(info.total_bytes)} of {_gb(info.limit_bytes)} committed"
-    if verdict.headroom_after_bytes >= 0:
-        left, over = _gb(verdict.headroom_after_bytes), ""
+    def judge(staging_bytes: int) -> CommitVerdict:
+        return assess_commit_fit(
+            commit_total_bytes=info.total_bytes,
+            commit_limit_bytes=info.limit_bytes,
+            pinned_staging_bytes=staging_bytes,
+            resident_extras_bytes=resident_bytes,
+        )
+
+    pinned_bytes = pinned_staging_bytes(plan)
+    pinned = judge(pinned_bytes)
+    if pinned.fit is CommitFit.FITS:
+        return plan
+    pageable = judge(plan.staging_bytes)
+
+    slots = _gib(plan.staging_bytes)
+    extras = _gib(int(resident_bytes))
+    free = _gib(pinned.available_bytes)
+    margin = _gib(pinned.margin_bytes)
+    committed = f"{_gib(info.total_bytes)} of {_gib(info.limit_bytes)} committed"
+    what = (
+        f"{_gib(pinned_bytes)} of page-locked staging (power-of-two arenas for {slots} of "
+        f"slots) plus {extras} of resident extras"
+    )
+    pageable_fits = pageable.fit is not CommitFit.DOES_NOT_FIT
+    fixes = "close programs to free commit, enlarge the Windows pagefile"
+    if plan.read_ahead > 1:
+        fixes += f", or lower training.stream_read_ahead (now {plan.read_ahead})"
     else:
-        left, over = "none", f" (the charge is {_gb(-verdict.headroom_after_bytes)} over)"
+        fixes += ", or use a smaller base"
 
     if stream_pin is True:
-        if verdict.fit is CommitFit.DOES_NOT_FIT:
+        if pinned.fit is CommitFit.DOES_NOT_FIT:
+            if pageable_fits:
+                way_out = (
+                    f"Set training.stream_pin: false to stage {slots} in pageable memory, which "
+                    f"fits, or {fixes}."
+                )
+            else:
+                way_out = (
+                    f"Pageable memory is committed too, so training.stream_pin: false would "
+                    f"not fit either ({slots} against {free} free); {fixes}."
+                )
             raise ValueError(
                 f"training.stream_pin=true but pinned host staging does not fit the Windows "
-                f"commit limit: {staging} of staging + {extras} of resident extras = "
-                f"{_gb(verdict.required_bytes)}, and only {free} of system commit is free "
-                f"({committed}). Page-locked memory is charged against commit, not just free "
-                f"RAM. Refusing before any weight is staged. Set training.stream_pin: false to "
-                f"stage in pageable memory, close programs to free commit, or enlarge the "
-                f"Windows pagefile."
+                f"commit limit: {what} = {_gib(pinned.required_bytes)}, and only {free} of "
+                f"system commit is free ({committed}). Refusing before any weight is staged. "
+                f"{way_out}"
             )
         notify(
-            f"[yellow]training.stream_pin=true: pinned staging ({staging} + {extras} of "
-            f"resident extras) leaves {_gb(verdict.headroom_after_bytes)} of the {free} of "
-            f"Windows commit still free, under the {margin} margin. Proceeding as asked; if the "
-            f"run is stopped for lack of commit, set training.stream_pin: false.[/]"
+            f"[yellow]training.stream_pin=true: {what} would leave {_left(pinned)} of Windows "
+            f"commit free ({free} free now), under the {margin} margin. Proceeding as asked; if "
+            f"the run is stopped for lack of commit, set training.stream_pin: false.[/]"
         )
         return plan
 
+    if not pageable_fits:
+        raise ValueError(
+            f"Windows commit is too low for layer streaming's host staging: {what} = "
+            f"{_gib(pinned.required_bytes)}, or {slots} + {extras} = "
+            f"{_gib(pageable.required_bytes)} even in pageable memory, and only {free} of "
+            f"system commit is free ({committed}). Pageable memory is committed too, so "
+            f"training.stream_pin: false does not help. Refusing before any weight is staged. "
+            f"To continue, {fixes}."
+        )
     line = (
-        f"Windows commit headroom: pinned staging ({staging} + {extras} of resident extras) "
-        f"would leave {left} of the {free} of system commit still free{over} ({committed}), "
-        f"under the {margin} margin; staging in pageable host memory instead (copies no longer "
-        f"overlap compute). training.stream_pin: true forces page-locking (it is refused only "
-        f"when the staging cannot fit the commit limit at all)."
+        f"Windows commit headroom: {what} would leave {_left(pinned)} ({free} free now), "
+        f"under the {margin} margin. Staging {slots} in pageable host memory instead, which "
+        f"gives up the host-to-device copy overlap. training.stream_pin: true forces "
+        f"page-locking; it is refused only when the arenas cannot fit the commit limit at all."
     )
     return dataclasses.replace(plan, pinned=False, notes=plan.notes + (line,))

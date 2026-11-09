@@ -790,17 +790,24 @@ page-locked, and on the disk tier whether the async reader's host *staging* is.
   target** if the box cannot provide it, instead of degrading to pageable and spending the
   whole margin pinning exists to provide. The refusal names the store size on the RAM tier,
   and `stream_read_ahead` on the disk tier.
-- **Windows, disk tier: commit headroom.** Windows charges page-locked memory against the
-  system *commit* limit (RAM + pagefile), which free RAM does not show; a 123B run on a 32 GB
-  laptop was stopped twice that way with pinned staging while pageable staging passed. On a
-  CUDA target the disk tier's pre-flight therefore also reads the commit counters
-  (`GetPerformanceInfo`) and charges the reader's pinned staging plus the resident extras
-  against what is still free. With `stream_pin` **unset** and less than 8 GiB left afterwards,
-  Soup stages in pageable memory and says so in the panel. `stream_pin: true` is honoured with
-  one warning when it is merely tight, and **refused before any weight is staged** when it
-  cannot fit at all, naming the numbers; the fixes are `stream_pin: false`, closing programs,
-  or a larger pagefile. `stream_pin: false` and every other OS are unchanged, and a failure to
-  read the counters skips the check. The 8 GiB margin is a chosen figure, not a measured bound.
+- **Windows, disk tier: commit headroom.** Windows charges every private host allocation,
+  pageable or page-locked, against the system *commit* limit (RAM + pagefile), and free RAM
+  does not show it. Page-locked staging is the larger charge, because it is packed into
+  power-of-two arenas: the 123B plan at `stream_read_ahead: 1` stages 2.17 GiB of slots and
+  page-locks 3 GiB. An experimental 123B run on a 32 GB laptop was stopped twice by the
+  harness's own commit floor with pinned staging, and completed with pageable staging in a
+  session that also differed in other ways. On a CUDA target the disk tier's pre-flight
+  therefore also reads the commit counters (`GetPerformanceInfo`). With `stream_pin`
+  **unset** it keeps pinning when the arenas leave at least 12 GiB of commit free; below
+  that it stages in pageable memory and says so in the panel; and when even the pageable
+  staging does not fit (pageable memory is committed too) it **refuses before any weight is
+  staged**, naming the numbers. `stream_pin: true` is honoured with one warning when it is
+  merely tight and refused, with the same numbers, when the arenas cannot fit at all; the
+  fixes are `stream_pin: false` (when the pageable staging fits), closing programs, a larger
+  pagefile, or a lower `stream_read_ahead`. `stream_pin: false` and every other OS are
+  unchanged, and a failure to read the counters skips the check (logged at info). The 12 GiB
+  margin is a chosen figure, not a measured bound. Only the disk tier's staging is checked;
+  the RAM tier's page-locked store is not.
 
 **Where `true` announces instead of refusing.** Page-locking needs a CUDA device to copy to.
 On a non-CUDA target there is nothing to force, so the request is **inapplicable rather than
