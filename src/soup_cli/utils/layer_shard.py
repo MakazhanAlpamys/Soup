@@ -1852,21 +1852,21 @@ def check_serialized_nf4_request(
             f"a pre-quantised bitsandbytes NF4 source is stored in bfloat16 and imported "
             f"byte for byte, so the run must stream in bfloat16; this one streams in "
             f"{dtype!r} (float16 and float32 are what a pre-Ampere GPU and the CPU "
-            f"stream). Use a GPU with bfloat16 support, or point training.base at a bf16 "
+            f"stream). Use a GPU with bfloat16 support, or point base at a bf16 "
             f"copy of this model."
         )
     if not double_quant:
         raise ValueError(
             "a pre-quantised bitsandbytes NF4 source is double-quantised and imported byte "
             "for byte, but this run turns double quantisation off "
-            "(training.bnb_4bit_use_double_quant: false). Unset it, or point training.base "
+            "(training.bnb_4bit_use_double_quant: false). Unset it, or point base "
             "at a bf16 copy of this model."
         )
     if stripe_roots:
         raise ValueError(
             "a pre-quantised bitsandbytes NF4 source is imported into one cache folder; "
             "the layer cache is striped over several drives here (SOUP_STRIPE_DIRS). "
-            "Unset it for this model, or point training.base at a bf16 copy of it."
+            "Unset it for this model, or point base at a bf16 copy of it."
         )
 
 

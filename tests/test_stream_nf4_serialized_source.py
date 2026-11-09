@@ -321,6 +321,29 @@ def test_a_request_the_store_cannot_serve_is_refused_by_name_before_a_byte_is_wr
     assert not cache.exists() or _files(cache) == []
 
 
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"dtype": "float16", "double_quant": True},
+        {"dtype": "bfloat16", "double_quant": False},
+        {"dtype": "bfloat16", "double_quant": True, "stripe_roots": ("stripe-a",)},
+    ],
+    ids=["dtype", "no-double-quant", "stripe-roots"],
+)
+def test_a_request_refusal_names_config_keys_that_exist(arguments):
+    """The model is the top-level ``base``; ``training.base`` is not a key, and an unknown key
+    refuses the load."""
+    from soup_cli.config.schema import SoupConfig, TrainingConfig
+    from soup_cli.utils.layer_shard import check_serialized_nf4_request
+
+    assert "base" in SoupConfig.model_fields
+    assert "bnb_4bit_use_double_quant" in TrainingConfig.model_fields
+    with pytest.raises(ValueError) as caught:
+        check_serialized_nf4_request(**arguments)
+    message = str(caught.value)
+    assert "training.base" not in message and "point base at" in message, message
+
+
 def test_quant_suffixes_that_disagree_with_the_import_commit_nothing(tmp_path):
     source = _build(tmp_path)
     cache = tmp_path / "cache"
