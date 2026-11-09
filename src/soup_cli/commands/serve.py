@@ -608,7 +608,7 @@ def serve(
             mii_pipeline,
             model_name=mii_model_name,
             tokenizer=mii_tokenizer,
-            mii_pipeline, model_name=mii_model_name, tokenizer=mii_tokenizer, host=host,
+            host=host,
         )
 
         import uvicorn
@@ -2753,7 +2753,7 @@ def _reply_streamer_class():
                 # written may change with the next token, so it is held back.
                 end = max(text.rfind(" "), text.rfind("\n")) + 1
             if end > self.print_len:
-                self.on_finalized_text(text[self.print_len:end])
+                self.on_finalized_text(text[self.print_len : end])
                 self.print_len = end
 
     return _ReplyStreamer
@@ -2795,7 +2795,7 @@ class _StripEmitter:
             self._started = True
         text = self._held + piece
         body = text.rstrip()
-        self._held = text[len(body):]
+        self._held = text[len(body) :]
         return body
 
 
@@ -2943,7 +2943,10 @@ def _stream_response(
             # v0.71.17 #259 — MoLE blends per-token via a custom decode loop;
             # generate the full text then simulate streaming.
             (
-                response_text, _, completion_tokens_for_log, finish_reason,
+                response_text,
+                _,
+                completion_tokens_for_log,
+                finish_reason,
             ) = mole_runtime.generate_text(
                 messages,
                 max_tokens=max_tokens,
@@ -2951,17 +2954,23 @@ def _stream_response(
                 top_p=top_p,
             )
         else:
+
             def generate(**streaming):
                 # v0.71.33 — select the request's LoRA adapter under the generation
                 # lock (resolved in the endpoint, applied here where generate runs).
                 # Entered on whichever thread calls generate, so the lock is taken
                 # and released by the same thread.
                 with _adapter_scope(
-                    model, adapter_lock, adapter_names,
-                    requested_adapter, active_adapter,
+                    model,
+                    adapter_lock,
+                    adapter_names,
+                    requested_adapter,
+                    active_adapter,
                 ):
                     return _generate_response(
-                        model, tokenizer, messages,
+                        model,
+                        tokenizer,
+                        messages,
                         max_tokens=max_tokens,
                         temperature=temperature,
                         top_p=top_p,
@@ -2994,11 +3003,17 @@ def _stream_response(
                     # sets the stop event for generate(). It does not wait for the worker.
                     pieces.close()
                 (
-                    response_text, _, completion_tokens_for_log, finish_reason,
+                    response_text,
+                    _,
+                    completion_tokens_for_log,
+                    finish_reason,
                 ) = outcome["result"]
             else:
                 (
-                    response_text, _, completion_tokens_for_log, finish_reason,
+                    response_text,
+                    _,
+                    completion_tokens_for_log,
+                    finish_reason,
                 ) = generate()
     except Exception:
         if canary_outcome is not None:
@@ -3029,7 +3044,7 @@ def _stream_response(
     elif response_text.startswith(sent):
         # Whatever the streamer did not release; the stripped reply is what counts.
         if len(response_text) > len(sent):
-            yield content_chunk(response_text[len(sent):])
+            yield content_chunk(response_text[len(sent) :])
     else:
         # The incremental decode and the final decode disagree (a tokenizer that
         # decodes a suffix differently from the same text in context): what was
