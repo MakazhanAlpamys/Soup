@@ -1423,7 +1423,7 @@ def decide_packed_backward(
     prediction fits the free VRAM (:func:`decide_stream_fit` accepts equality).
     When it does not fit, the packed-state arm is taken if it is the smaller
     prediction: it is the only arm that could fit, and when it does not either it
-    is the best case the refusal (or the VRAM probe) should be judged on. Equal
+    is the best case the refusal should be judged on. Equal
     predictions mean there is nothing to save (no NF4 weight, or one matrix per
     layer), and the shipped arm stays.
     """

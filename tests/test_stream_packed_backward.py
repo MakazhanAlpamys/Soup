@@ -135,6 +135,7 @@ def _ml_budget(monkeypatch, *, seq, free, nf4=True, on_cuda=True, probe=False, m
 
     def recompute(**kwargs):
         seen["recompute"] = kwargs
+        seen.setdefault("recompute_calls", []).append(kwargs)
         return real_recompute(**kwargs)
 
     monkeypatch.setattr(layer_stream, "estimate_recompute_bytes", recompute)
@@ -356,23 +357,48 @@ class TestThePreflightDecides:
         assert seen["recompute"]["dense_layer_elements"] == _ML_DENSE
         assert "~6.98 GB" in lines[0]
 
-    def test_the_vram_probe_measures_the_arm_that_will_train(self, monkeypatch):
-        """With ``stream_vram_probe`` the formula is advisory, but the arm it
-        picked is still the one the probe has to measure."""
-        mixin, _lines, plan, _seen = _ml_budget(
+    def test_the_probe_stays_authoritative_and_keeps_the_dense_arm(self, monkeypatch, capsys):
+        """Over budget on the formula but with ``stream_vram_probe`` on: today's path.
+        The packed arm is not even priced, the prediction, the plan and the notice
+        are the dense arm's, and the probe is left to measure the arm that runs today."""
+        mixin, lines, plan, seen = _ml_budget(
             monkeypatch, seq=512, free=_HARNESS_CAP, probe=True
         )
-        assert mixin._stream_packed_backward is True
-        assert plan.predicted_bytes == _ml_peak(512, _ML_LARGEST)
+        assert mixin._stream_packed_backward is False
+        assert [call["dense_layer_elements"] for call in seen["recompute_calls"]] == [_ML_DENSE]
+        assert lines[0] == "  peak VRAM    ~6.98 GB at batch 1 x seq 512 (logits 0.23 GB)"
+        assert not any("packed" in line for line in lines)
+        assert plan.predicted_bytes == _ml_peak(512, _ML_DENSE)
+        assert plan.available_bytes == _HARNESS_CAP
+        said = _plain(capsys.readouterr().out)
+        assert "Predicted over budget (6.98 GB vs 6.71 GB free)" in said
+        assert "packed" not in said
 
-    def test_a_probe_deferral_with_nothing_to_save_keeps_the_dense_arm(self, monkeypatch):
-        """Over budget but left to the probe: a base without NF4 weight has no packed
-        arm to route to, so the pre-flight must not record one."""
-        free = _ml_peak(512, 0) - 1
+    def test_the_same_config_without_the_probe_goes_packed(self, monkeypatch):
+        """The contrast that makes the test above mean something."""
         mixin, _lines, plan, _seen = _ml_budget(
-            monkeypatch, seq=512, free=free, nf4=False, probe=True
+            monkeypatch, seq=512, free=_HARNESS_CAP, probe=False
         )
-        assert plan is not None  # the probe was left to speak
+        assert mixin._stream_packed_backward is True
+        assert plan is None
+
+    def test_a_far_over_budget_probe_config_is_refused_as_it_always_was(self, monkeypatch):
+        with pytest.raises(ValueError) as caught:
+            _ml_budget(monkeypatch, seq=512, free=1_000_000_000, probe=True)
+        message = _plain(str(caught.value))
+        assert "cannot overrule a prediction this far over budget (7.0x)" in message
+        assert "packed" not in message
+
+    def test_nothing_to_save_records_no_packed_arm_when_it_refuses(self, monkeypatch):
+        """Over budget with no NF4 weight: refused, and no packed arm recorded on the
+        way (the setup never runs, but the flag is the pre-flight's own answer)."""
+        from soup_cli.trainer.stream_setup import StreamingSetupMixin
+
+        mixin = StreamingSetupMixin()
+        with pytest.raises(ValueError, match="predicted to need"):
+            _ml_budget(
+                monkeypatch, seq=512, free=_ml_peak(512, 0) - 1, nf4=False, mixin=mixin
+            )
         assert mixin._stream_packed_backward is False
 
     def test_the_decision_is_made_afresh_on_every_call(self, monkeypatch):
@@ -878,7 +904,9 @@ class TestSetupWiring:
         assert "Packed-state NF4 backward: 3 streamed layers" in said
         assert "one matrix at a time" in said
 
-    def test_the_probe_measures_the_routed_model(self, tmp_path, monkeypatch):
+    def test_the_routing_is_done_before_the_probe_runs(self, tmp_path, monkeypatch):
+        """Defensive ordering: the real pre-flight never routes under the probe, but
+        whatever routes the model must do it before anything is measured."""
         order, model, _events, _said = _drive_with_decision(
             tmp_path, monkeypatch, packed=True, extra_yaml="  stream_vram_probe: true\n"
         )

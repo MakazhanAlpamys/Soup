@@ -926,7 +926,9 @@ quantisation tensors and dequantise one matrix at a time in the backward, so the
 charges the layer's largest matrix instead of all of it (Mistral Large 123B: 704,643,072 bytes
 instead of 2.77 GB per layer, 4.92 GB instead of 6.98 GB predicted at 512 tokens). It costs one
 more dequantisation per matrix per step and runs the same arithmetic (losses, gradients and an
-AdamW update are bit-equal to the dense arm in the CPU tests); the panel says when it was chosen. A run whose dense-retaining arm fits keeps it, unchanged.
+AdamW update are bit-equal to the dense arm in the CPU tests); the panel says when it was chosen.
+A run whose dense-retaining arm fits keeps it, unchanged, and so does one with `stream_vram_probe`
+on: the measurement stays the authority there and the dense arm is left to it.
 
 **Refused.** At config load, as listed under "Rejected at config load" below: without
 `stream_layers`, for a task other than `sft`, with `data.format: raft`, and beside

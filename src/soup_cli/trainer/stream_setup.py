@@ -2030,12 +2030,15 @@ class StreamingSetupMixin:
         )
         fit = decide_stream_fit(predicted_bytes=predicted, available_bytes=available)
         packed_note = ""
-        if not fit.fits:
+        if not fit.fits and not tcfg.stream_vram_probe:
             # The dense-retaining arm does not fit. A checkpointed layer's NF4 linears
             # can instead save packed state and dequantise one matrix at a time, which
             # charges the largest matrix and not the whole layer (a base with nothing
             # to save predicts the same number and stays as it is). Automatic and
             # derived from the numbers above: a run whose dense arm fits never gets here.
+            # Not with training.stream_vram_probe: the measurement is the authority
+            # there, and a config the probe lets through today keeps the arm it
+            # measures today.
             decision = decide_packed_backward(
                 dense_predicted_bytes=int(predicted),
                 packed_predicted_bytes=int(predict(packed_backward=True)),
