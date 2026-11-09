@@ -291,7 +291,7 @@ def _read_header(path: str, file_name: Optional[str] = None) -> Dict[str, _Span]
             continue
         where = f"{name}: tensor {_label(key)}"
         if not isinstance(item, dict) or set(item) != {"dtype", "shape", "data_offsets"}:
-            raise ValueError(f"{where} has an invalid header entry")
+            raise ValueError(f"{where} has an invalid header entry; {_REDOWNLOAD}")
         dtype, shape, offsets = item["dtype"], item["shape"], item["data_offsets"]
         if not isinstance(dtype, str) or dtype not in _ITEMSIZE:
             raise ValueError(f"{where} has unsupported stored dtype {_label(repr(dtype))}")
@@ -300,20 +300,24 @@ def _read_header(path: str, file_name: Optional[str] = None) -> Dict[str, _Span]
             or len(shape) > 8
             or any(type(dim) is not int or dim < 0 for dim in shape)
         ):
-            raise ValueError(f"{where} has an invalid shape {_label(repr(shape))}")
+            raise ValueError(f"{where} has an invalid shape {_label(repr(shape))}; {_REDOWNLOAD}")
         elements = math.prod(shape)
         if elements > _MAX_ELEMENTS:
-            raise ValueError(f"{where} declares {elements} elements, above the bound")
+            raise ValueError(
+                f"{where} declares {elements} elements, above the bound; {_REDOWNLOAD}"
+            )
         if (
             not isinstance(offsets, list)
             or len(offsets) != 2
             or any(type(value) is not int for value in offsets)
         ):
-            raise ValueError(f"{where} has invalid data_offsets")
+            raise ValueError(f"{where} has invalid data_offsets; {_REDOWNLOAD}")
         start, end = offsets
         nbytes = elements * _ITEMSIZE[dtype]
         if start < 0 or end - start != nbytes:
-            raise ValueError(f"{where}: byte range {offsets} does not hold {nbytes} bytes")
+            raise ValueError(
+                f"{where}: byte range {offsets} does not hold {nbytes} bytes; {_REDOWNLOAD}"
+            )
         if end > body:
             raise ValueError(
                 f"{where}: file is truncated (tensor ends at byte {end}, the data region "
@@ -339,7 +343,9 @@ def _read_span(span: _Span) -> bytes:
         handle.seek(span.offset)
         raw = handle.read(span.nbytes)
     if len(raw) != span.nbytes:
-        raise ValueError(f"{_label(span.key)}: source truncated while reading it")
+        raise ValueError(
+            f"{_label(span.key)}: source truncated while reading it; {_REDOWNLOAD}"
+        )
     return raw
 
 
@@ -347,7 +353,7 @@ def _need(span: _Span, dtype: str, shape: Tuple[int, ...], key: str, why: str = 
     if span.dtype != dtype or span.shape != tuple(shape):
         raise ValueError(
             f"{_label(key)}: stored as {span.dtype} {list(span.shape)}, but a byte-for-byte "
-            f"import needs {dtype} {list(shape)}{why}"
+            f"import needs {dtype} {list(shape)}{why}; {_REDOWNLOAD}; or {_NF4_HINT}"
         )
 
 
@@ -359,7 +365,9 @@ def _scan_scales(span: _Span, key: str) -> None:
         while remaining:
             raw = handle.read(min(remaining, _SCAN_BYTES))
             if not raw:
-                raise ValueError(f"{_label(key)}: source truncated while reading it")
+                raise ValueError(
+                    f"{_label(key)}: source truncated while reading it; {_REDOWNLOAD}"
+                )
             for (value,) in struct.iter_unpack("<f", raw):
                 if not math.isfinite(value) or value < 0:
                     raise ValueError(
@@ -559,7 +567,7 @@ def _parse_state(span: _Span, key: str, shape: Tuple[int, ...]) -> Tuple[Any, by
     if payload["shape"] != list(shape) or any(type(dim) is not int for dim in payload["shape"]):
         raise ValueError(
             f"{name}: quant_state shape is {_label(repr(payload['shape']))}, but the model "
-            f"declares {list(shape)}"
+            f"declares {list(shape)}; {_REDOWNLOAD}"
         )
     value = payload["nested_offset"]
     if type(value) not in (int, float) or not math.isfinite(value):
@@ -862,7 +870,9 @@ def _copy_range(source: BinaryIO, target: BinaryIO, span: _Span, chunk_bytes: in
     while remaining:
         raw = source.read(min(chunk_bytes, remaining))
         if not raw:
-            raise ValueError(f"{_label(span.key)}: source truncated while copying it")
+            raise ValueError(
+                f"{_label(span.key)}: source truncated while copying it; {_REDOWNLOAD}"
+            )
         target.write(raw)
         remaining -= len(raw)
 

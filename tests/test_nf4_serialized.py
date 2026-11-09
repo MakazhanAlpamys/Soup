@@ -25,6 +25,8 @@ from soup_cli.utils.nf4_serialized import (  # noqa: E402
 )
 
 _STATE = ".quant_state.bitsandbytes__nf4"
+#: the fix hint a file-layout refusal carries (nf4_serialized._REDOWNLOAD, spelled out here)
+REDOWNLOAD = "re-download the checkpoint, the file looks truncated or corrupt"
 _Q = "model.layers.0.self_attn.q_proj.weight"
 _PROJ = r"\.layers\.\d+\.(self_attn|mlp)\.\w+_proj\.weight$"
 _QUANT = {
@@ -671,8 +673,9 @@ def test_a_truncated_file_is_refused(work):
     build_source(source)
     path = os.path.join(source, "model.safetensors")
     os.truncate(path, os.path.getsize(path) - 10)
-    with pytest.raises(ValueError, match="truncated"):
+    with pytest.raises(ValueError, match="truncated") as excinfo:
         import_nf4_checkpoint(source, out)
+    assert REDOWNLOAD in str(excinfo.value)
     assert not os.path.exists(out)
 
 
@@ -681,8 +684,9 @@ def test_trailing_bytes_are_refused(work):
     build_source(source)
     with open(os.path.join(source, "model.safetensors"), "ab") as handle:
         handle.write(b"\0" * 16)
-    with pytest.raises(ValueError, match="unindexed trailing data"):
+    with pytest.raises(ValueError, match="unindexed trailing data") as excinfo:
         import_nf4_checkpoint(source, out)
+    assert REDOWNLOAD in str(excinfo.value)
 
 
 def test_a_header_with_a_duplicate_key_is_refused(work):
@@ -1119,6 +1123,80 @@ def test_quantisation_refusals_say_what_to_use_instead(work, case, kwargs):
         import_nf4_checkpoint(source, out)
 
 
+_HINTED_HEADER_MESSAGES = (
+    "invalid shape",
+    "above the bound",
+    "invalid data_offsets",
+    "invalid header entry",
+    "does not hold",
+)
+_HINTED_HEADERS = [
+    row
+    for row in (*MALFORMED_HEADERS, *EXTRA_MALFORMED_HEADERS)
+    if row[1] in _HINTED_HEADER_MESSAGES or row[1].startswith("does not hold")
+]
+
+
+@pytest.mark.parametrize(("entries", "message"), _HINTED_HEADERS)
+def test_a_malformed_tensor_entry_says_how_to_fix_it(work, entries, message):
+    source, out = work
+    build_source(source)
+    _write_header_file(source, "{" + entries + "}")
+    with pytest.raises(ValueError, match=message) as excinfo:
+        import_nf4_checkpoint(source, out)
+    assert str(excinfo.value).endswith(REDOWNLOAD), str(excinfo.value)
+
+
+def test_every_malformed_tensor_entry_kind_is_covered_by_the_hint_test():
+    assert {row[1] for row in _HINTED_HEADERS} >= set(_HINTED_HEADER_MESSAGES) - {"does not hold"}
+    assert any(row[1].startswith("does not hold") for row in _HINTED_HEADERS)
+
+
+_WRONG_LAYOUT = [
+    ("norm-fp16", {"tweak": _norm_fp16}, REDOWNLOAD, "training.quantization: 4bit"),
+    ("packed-not-u8", {"tweak": _packed_float}, REDOWNLOAD, "training.quantization: 4bit"),
+    (
+        "quant-state-shape",
+        {"tweak": lambda tensors: edit_state(tensors, _Q, shape=[64, 65])},
+        REDOWNLOAD,
+        "but the model declares",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("case", "kwargs", "first", "second"), _WRONG_LAYOUT, ids=[c[0] for c in _WRONG_LAYOUT]
+)
+def test_a_tensor_in_the_wrong_layout_says_how_to_fix_it(work, case, kwargs, first, second):
+    source, out = work
+    build_source(source, **kwargs)
+    with pytest.raises(ValueError) as excinfo:
+        import_nf4_checkpoint(source, out)
+    message = str(excinfo.value)
+    assert first in message and second in message, (case, message)
+    assert not os.path.exists(out)
+
+
+def _span(path, nbytes, key="model.x.weight"):
+    return nf4_serialized._Span(path, key, "U8", (nbytes,), 0, nbytes)
+
+
+@pytest.mark.parametrize("site", ["read-whole", "scan-scales", "copy"])
+def test_a_file_that_shrank_after_the_headers_were_read_says_how_to_fix_it(tmp_path, site):
+    path = tmp_path / "short.bin"
+    path.write_bytes(b"\0" * 8)
+    span = _span(str(path), 64)
+    with pytest.raises(ValueError, match="source truncated while") as excinfo:
+        if site == "read-whole":
+            nf4_serialized._read_span(span)
+        elif site == "scan-scales":
+            nf4_serialized._scan_scales(span, span.key)
+        else:
+            with open(path, "rb") as source, open(tmp_path / "copy.bin", "wb") as target:
+                nf4_serialized._copy_range(source, target, span, 16)
+    assert str(excinfo.value).endswith(REDOWNLOAD), str(excinfo.value)
+
+
 # ---- Hugging Face cache snapshots: links into the repo's blob store ------------------------
 def make_hf_cache(tmp_path, source, *, shared_store=False):
     """Lay ``source`` out the way huggingface_hub does: blobs/<etag> and snapshots/<sha>/<name>."""
@@ -1244,9 +1322,23 @@ def test_skip_modules_must_be_a_list_of_names(work, skipped):
         import_nf4_checkpoint(source, out)
 
 
-def test_a_missing_compute_dtype_is_refused(work):
+@pytest.mark.parametrize(
+    "key", ["bnb_4bit_quant_type", "bnb_4bit_use_double_quant", "bnb_4bit_compute_dtype"]
+)
+def test_a_missing_quantization_key_is_refused_as_transformers_would_default_it(work, key):
+    """An absent key is read as transformers' default (fp4, no double quantisation, float32
+    compute), none of which this import takes: it is refused, never assumed."""
     source, out = work
-    config = {key: value for key, value in _QUANT.items() if key != "bnb_4bit_compute_dtype"}
+    config = {name: value for name, value in _QUANT.items() if name != key}
     build_source(source, quant_config=config)
-    with pytest.raises(ValueError, match="bnb_4bit_compute_dtype is None"):
+    with pytest.raises(ValueError, match=f"{key} is None"):
         import_nf4_checkpoint(source, out)
+    assert not os.path.exists(out)
+
+
+def test_a_missing_storage_key_is_read_as_uint8(work):
+    source, out = work
+    config = {name: value for name, value in _QUANT.items() if name != "bnb_4bit_quant_storage"}
+    build_source(source, quant_config=config)
+    import_nf4_checkpoint(source, out)
+    assert os.path.exists(os.path.join(out, "index.json"))
