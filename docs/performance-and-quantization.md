@@ -920,6 +920,14 @@ fused 4-bit GEMM per card and per matmul shape at run time, and on the fused pat
 live. At the lengths below the loss phase stays the larger on an unchunked step, so those
 predictions do not move; a short NF4 run can rise.
 
+When that prediction does not fit the free VRAM, the pre-flight tries the packed-state backward
+before it refuses (no config key): the layer's NF4 linears then save only their packed bytes and
+quantisation tensors and dequantise one matrix at a time in the backward, so the recompute phase
+charges the layer's largest matrix instead of all of it (Mistral Large 123B: 704,643,072 bytes
+instead of 2.77 GB per layer, 4.92 GB instead of 6.98 GB predicted at 512 tokens). It costs one
+more dequantisation per matrix per step and runs the same arithmetic (losses, gradients and an
+AdamW update are bit-equal to the dense arm in the CPU tests); the panel says when it was chosen. A run whose dense-retaining arm fits keeps it, unchanged.
+
 **Refused.** At config load, as listed under "Rejected at config load" below: without
 `stream_layers`, for a task other than `sft`, with `data.format: raft`, and beside
 `use_cut_ce`. When the model is built, with the reason: a trainable output head, a model

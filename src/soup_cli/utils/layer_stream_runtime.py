@@ -371,10 +371,14 @@ _PACKED_DEQUANT_NF4_FUNCTION = None
 def _packed_dequant_nf4_function():
     """Lazy autograd Function: dense-dequant forward, PACKED-only saved state.
 
-    For a streamed layer that runs WITHOUT checkpoint recompute. ``F.linear`` on
-    a dequantised weight would save the dense bf16 weight for the backward (437 MB
-    per Mistral-7B layer); this saves only the packed bytes and the quantisation
-    tensors through ``save_for_backward`` and dequantises again for ``grad_x``.
+    For a streamed layer that runs WITHOUT checkpoint recompute, or whose
+    checkpoint recompute would hold too many dense weights at once (see
+    :func:`set_stream_packed_backward`). ``F.linear`` on a dequantised weight
+    would save the dense bf16 weight for the backward (437 MB per Mistral-7B
+    layer); this saves only the packed bytes and the quantisation tensors through
+    ``save_for_backward`` and dequantises again for ``grad_x``. Under a
+    checkpoint the saved tensors are the pool-slot aliases the recompute
+    restores, and the slot-owner check runs before ``grad_x``.
     The forward arithmetic is the compatibility path's (dequantise + ``F.linear``)
     and the backward's ``grad_y @ W`` is the same GEMM ``F.linear``'s backward
     issues, so outputs and gradients stay bit-identical to the recompute path.
@@ -571,7 +575,13 @@ def install_dequant_forward(module: Any) -> int:
     quantisation tensor go through ``save_for_backward``, so non-reentrant
     checkpointing can discard and recompute them after the pool refills the correct
     layer. Whenever bitsandbytes selects its dequantise + linear fallback, Soup
-    keeps the v0.73.0 path rather than paying a third dequantisation in backward.
+    keeps the v0.73.0 path rather than paying a third dequantisation in backward,
+    with one exception: when the VRAM pre-flight predicts that this arm's
+    dense weights (a checkpointed layer's recompute holds all of the layer's at
+    once, 2.77 GB per Mistral Large layer) would not fit, it routes the layer's
+    linears to the packed-state Function instead
+    (:func:`set_stream_packed_backward`), paying the extra dequantisation for a
+    backward that holds one dense matrix at a time. Same arithmetic, same bits.
     Missing private dispatch symbols fail toward the Function: exact but possibly
     slower, never toward an alias-unsafe ``MatMul4Bit``.
 
@@ -623,9 +633,11 @@ def install_dequant_forward(module: Any) -> int:
         if scale_cache is not None:
             quant_state = scale_cache.dense_state(self.weight._soup_scale_cache_key, quant_state)
         if getattr(self, "_soup_packed_backward", False) and torch.is_grad_enabled():
-            # training.stream_recompute — no checkpoint recompute around this
-            # layer: never let F.linear save the dense weight; save the packed
-            # bytes instead.
+            # Never let F.linear save the dense weight; save the packed bytes
+            # instead. Set for a layer with no checkpoint recompute
+            # (training.stream_recompute), and for a checkpointed layer whose dense
+            # weights the VRAM pre-flight predicted would not fit
+            # (set_stream_packed_backward).
             return packed_dequant_nf4_linear(x, self.weight, quant_state, bias).to(inp_dtype)
         weight = dequantize_4bit(self.weight, quant_state).to(x.dtype)
         return functional.linear(x, weight, bias).to(inp_dtype)
@@ -1621,6 +1633,13 @@ def _build_streamed_layer_class():
             # unpack instead of at the recompute. See _body_retained /
             # set_stream_recompute.
             self.recompute = True
+            # Set by the VRAM pre-flight (set_stream_packed_backward) when the
+            # dense-retaining NF4 arm would not fit: this layer's NF4 linears then
+            # save packed state and dequantise per matrix even while the layer is
+            # checkpointed. Kept apart from ``recompute`` so that the 'auto' probe
+            # and set_stream_recompute, which flip a layer's recompute, do not
+            # undo it.
+            self.packed_checkpoint_backward = False
             self._bwd_visited = True
             # The pool slot's load generation at the first backward visit; a
             # later unpack refuses a slot that was reloaded since, even with the
@@ -2054,16 +2073,48 @@ def _linear4bit_class() -> Any:
 
 def _set_layer_recompute(module: Any, *, skip: bool) -> None:
     """One streamed layer: ``skip`` = no checkpoint recompute. Its NF4 linears
-    then save the packed bytes, not the dense weight, for the backward. A layer
-    with no patched NF4 linear (``n_dequant_forward == 0``) has none to flag, and
-    bitsandbytes is not imported for it."""
+    then save the packed bytes, not the dense weight, for the backward; so do they
+    on a checkpointed layer the pre-flight routed there
+    (``packed_checkpoint_backward``). A layer with no patched NF4 linear
+    (``n_dequant_forward == 0``) has none to flag, and bitsandbytes is not
+    imported for it."""
     module.recompute = not skip
     if not getattr(module, "n_dequant_forward", 0):
         return
+    packed = skip or bool(getattr(module, "packed_checkpoint_backward", False))
     linear4bit = _linear4bit_class()
     for child in module.inner.modules():
         if isinstance(child, linear4bit):
-            child._soup_packed_backward = skip
+            child._soup_packed_backward = packed
+
+
+def set_stream_packed_backward(model: Any, enabled: bool) -> int:
+    """Route every streamed layer's NF4 linears to the packed-state backward, or back.
+
+    On bitsandbytes' dequantise + ``F.linear`` arm a checkpointed layer's recompute
+    rebuilds the layer's dense weights together and holds them until its backward
+    has used each one (2.77 GB per Mistral Large layer). Enabled, the layer's NF4
+    linears save only the packed bytes and quantisation tensors
+    (``packed_dequant_nf4_linear``) and dequantise one matrix at a time in the
+    backward, for one more dequantisation per matrix. Both arms dequantise with the
+    same call and issue the same GEMMs; ``tests/test_stream_packed_backward.py``
+    checks loss, every LoRA gradient and an AdamW update bit-for-bit on CPU. The
+    streamed-slot owner check still runs before every backward.
+
+    Decided by the VRAM pre-flight (``decide_packed_backward``), never by a config
+    key. A layer that skips the recompute is packed for its own reason and stays so
+    when this is turned off. Returns the number of streamed layers that carry NF4
+    linears, i.e. the ones whose arm this can change.
+    """
+    if not isinstance(enabled, bool):
+        raise TypeError(f"enabled must be a bool; got {enabled!r}")
+    routed = 0
+    for module in streamed_decoder_layers(model):
+        module.packed_checkpoint_backward = enabled
+        _set_layer_recompute(module, skip=not module.recompute)
+        if getattr(module, "n_dequant_forward", 0):
+            routed += 1
+    return routed
 
 
 def _output_nbytes(output: Any) -> int:
