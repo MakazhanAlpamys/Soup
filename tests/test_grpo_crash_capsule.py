@@ -236,6 +236,391 @@ def test_a_finite_step_leaves_no_training_rows_on_disk(tmp_path):
     assert trainer.callback_handler.callbacks == []
 
 
+def _diagnostic_trainer(torch):
+    class Trainer:
+        def __init__(self):
+            self.model = torch.nn.Linear(16, 1, bias=False)
+            with torch.no_grad():
+                self.model.weight.zero_()
+            self.state = SimpleNamespace(global_step=0)
+            self.callback_handler = SimpleNamespace(callbacks=[])
+            self.accelerator = SimpleNamespace(clip_grad_norm_=torch.nn.utils.clip_grad_norm_)
+
+        def add_callback(self, callback):
+            self.callback_handler.callbacks.append(callback)
+
+        def _compute_loss(self, model, inputs):
+            return model(inputs["input_ids"]).sum() + inputs["constant"]
+
+    return Trainer()
+
+
+@pytest.mark.parametrize("bad_index", [0, 1])
+def test_capsule_preserves_each_microbatch_loss_and_first_bad_loss(tmp_path, bad_index):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+    trainer = _diagnostic_trainer(torch)
+    capsule = harness.Issue342CrashCapsule(
+        trainer, output_dir=tmp_path / "losses",
+        max_total_bytes=1 << 20, acknowledge_training_rows=True,
+    ).install()
+    for index in range(2):
+        trainer._compute_loss(trainer.model, {
+            "input_ids": torch.ones(1, 16),
+            "constant": torch.tensor(float("nan") if index == bad_index else 0.0),
+        }).backward()
+    capsule.capture_pre_optimizer(trainer.state)
+    payload = torch.load(tmp_path / "losses/rank000/capsule_000001.pt", weights_only=True)
+    assert payload["loss"]["finite"] is (bad_index == 0)
+    assert [row["microbatch_index"] for row in payload["microbatch_loss_stats"]] == [0, 1]
+    assert [row["stats"]["finite"] for row in payload["microbatch_loss_stats"]] == [
+        bad_index != 0, bad_index != 1,
+    ]
+    summary = json.loads(
+        (tmp_path / "losses/rank000/capsule_000001.json").read_text(encoding="utf-8")
+    )
+    assert summary["first_nonfinite_loss"]["microbatch_index"] == bad_index
+    capsule.close()
+
+
+def test_capsule_observes_accumulation_overflow_from_finite_contributions(tmp_path):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+    trainer = _diagnostic_trainer(torch)
+    contributions = []
+    trainer.model.weight.register_hook(
+        lambda grad: contributions.append(bool(grad.isfinite().all()))
+    )
+    capsule = harness.Issue342CrashCapsule(
+        trainer, output_dir=tmp_path / "accumulation",
+        max_total_bytes=1 << 20, acknowledge_training_rows=True,
+    ).install()
+    for _ in range(2):
+        trainer._compute_loss(trainer.model, {
+            "input_ids": torch.full((1, 16), 2e38), "constant": torch.tensor(0.0),
+        }).backward()
+    assert contributions == [True, True]
+    assert trainer.model.weight.grad.isinf().all()
+    capsule.capture_pre_optimizer(trainer.state)
+    summary = json.loads(
+        (tmp_path / "accumulation/rank000/capsule_000001.json").read_text(encoding="utf-8")
+    )
+    assert summary["first_nonfinite_parameter"] is None
+    assert summary["nonfinite_parameter_names_before_clip"] == []
+    assert summary["first_nonfinite_accumulated_parameter"]["name"] == "weight"
+    assert summary["first_nonfinite_accumulated_parameter"]["microbatch_index"] == 1
+    assert summary["nonfinite_accumulated_parameter_names_before_clip"] == ["weight"]
+    capsule.close()
+    assert not trainer.model.weight._post_accumulate_grad_hooks
+
+
+@pytest.mark.parametrize("max_norm", [1.0, float("inf")])
+def test_capsule_triggers_on_the_actual_nonfinite_norm_and_restores_the_method(tmp_path, max_norm):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+    trainer = _diagnostic_trainer(torch)
+    original = trainer.accelerator.clip_grad_norm_
+    capsule = harness.Issue342CrashCapsule(
+        trainer, output_dir=tmp_path / "norm",
+        max_total_bytes=1 << 20, acknowledge_training_rows=True,
+    ).install()
+    trainer._compute_loss(trainer.model, {
+        "input_ids": torch.full((1, 16), 1e20), "constant": torch.tensor(0.0),
+    }).backward()
+    assert trainer.model.weight.grad.isfinite().all()
+    norm = trainer.accelerator.clip_grad_norm_(trainer.model.parameters(), max_norm)
+    assert norm.isinf()
+    capsule.capture_pre_optimizer(trainer.state)
+    summary_path = tmp_path / "norm/rank000/capsule_000001.json"
+    assert summary_path.is_file()
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["gradient_norm_observation"]["finite"] is False
+    assert summary["gradient_norm_observation"]["value"] == "inf"
+    assert summary["gradient_norm_source"] == "accelerator.clip_grad_norm_"
+    assert summary["first_nonfinite_parameter"] is None
+    assert summary["first_nonfinite_accumulated_parameter"] is None
+    if max_norm == 1.0:
+        assert trainer.model.weight.grad.isfinite().all()
+        assert summary["post_clip_nonfinite_gradient_names"] == []
+    capsule.close()
+    assert trainer.accelerator.clip_grad_norm_ is original
+
+
+@pytest.mark.parametrize("hook_kind", ["missing", "none", "zero", "empty"])
+def test_missing_accumulation_hook_is_explicitly_unavailable(tmp_path, monkeypatch, hook_kind):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+    trainer = _diagnostic_trainer(torch)
+    method = "register_post_accumulate_grad_hook"
+    if hook_kind == "missing":
+        monkeypatch.delattr(torch.Tensor, method)
+    else:
+        monkeypatch.setattr(torch.Tensor, method, {"none": None, "zero": 0, "empty": ""}[hook_kind])
+    capsule = harness.Issue342CrashCapsule(
+        trainer, output_dir=tmp_path / "unsupported-hook",
+        max_total_bytes=1 << 20, acknowledge_training_rows=True,
+    ).install()
+    trainer._compute_loss(trainer.model, {
+        "input_ids": torch.ones(1, 16), "constant": torch.tensor(float("nan")),
+    }).backward()
+    assert trainer.model.weight.grad.isfinite().all()
+    capsule.capture_pre_optimizer(trainer.state)
+    payload = torch.load(
+        tmp_path / "unsupported-hook/rank000/capsule_000001.pt", weights_only=True
+    )
+    manifest = json.loads(
+        (tmp_path / "unsupported-hook/rank000/manifest.json").read_text(encoding="utf-8")
+    )
+    summary = json.loads(
+        (tmp_path / "unsupported-hook/rank000/capsule_000001.json").read_text(encoding="utf-8")
+    )
+    for record in (manifest, payload["environment"], summary):
+        assert record["accumulated_gradient_source"] == "unavailable"
+        assert record["accumulated_gradient_unavailable_parameter_names"] == ["weight"]
+    assert manifest["accumulated_gradient_hook_count"] == 0
+    assert manifest["accumulated_gradient_phase"] == "unavailable"
+    assert payload["first_nonfinite_accumulated_parameter"] is None
+    capsule.close()
+
+
+def test_partial_accumulation_hook_support_lists_unobserved_parameters(tmp_path, monkeypatch):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+    trainer = _diagnostic_trainer(torch)
+    trainer.model.extra = torch.nn.Parameter(torch.zeros(1))
+    monkeypatch.setattr(trainer.model.extra, "register_post_accumulate_grad_hook", None)
+    capsule = harness.Issue342CrashCapsule(
+        trainer, output_dir=tmp_path / "partial-hooks",
+        max_total_bytes=1 << 20, acknowledge_training_rows=True,
+    ).install()
+    for _ in range(2):
+        trainer._compute_loss(trainer.model, {
+            "input_ids": torch.full((1, 16), 2e38), "constant": torch.tensor(0.0),
+        }).backward()
+    capsule.capture_pre_optimizer(trainer.state)
+    summary = json.loads(
+        (tmp_path / "partial-hooks/rank000/capsule_000001.json").read_text(encoding="utf-8")
+    )
+    assert summary["accumulated_gradient_source"] == (
+        "torch.Tensor.register_post_accumulate_grad_hook"
+    )
+    assert summary["accumulated_gradient_unavailable_parameter_names"] == ["extra"]
+    assert summary["first_nonfinite_accumulated_parameter"]["name"] == "weight"
+    assert summary["first_nonfinite_accumulated_parameter"]["microbatch_index"] == 1
+    capsule.close()
+    assert not trainer.model.weight._post_accumulate_grad_hooks
+
+
+@pytest.mark.parametrize("path", ["no_accelerator", "no_method", "none_method"])
+def test_missing_norm_method_leaves_its_source_unavailable(tmp_path, path):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+    trainer = _diagnostic_trainer(torch)
+    if path == "no_accelerator":
+        del trainer.accelerator
+    elif path == "no_method":
+        trainer.accelerator = SimpleNamespace()
+    else:
+        trainer.accelerator.clip_grad_norm_ = None
+    capsule = harness.Issue342CrashCapsule(
+        trainer, output_dir=tmp_path / "unsupported-norm",
+        max_total_bytes=1 << 20, acknowledge_training_rows=True,
+    ).install()
+    trainer._compute_loss(trainer.model, {
+        "input_ids": torch.ones(1, 16), "constant": torch.tensor(float("nan")),
+    }).backward()
+    capsule.capture_pre_optimizer(trainer.state)
+    summary = json.loads(
+        (tmp_path / "unsupported-norm/rank000/capsule_000001.json").read_text(encoding="utf-8")
+    )
+    assert summary["gradient_norm_source"] == "unavailable"
+    assert summary["gradient_norm_observation"] is None
+    capsule.close()
+    if path == "no_accelerator":
+        assert not hasattr(trainer, "accelerator")
+    elif path == "no_method":
+        assert not hasattr(trainer.accelerator, "clip_grad_norm_")
+    else:
+        assert trainer.accelerator.clip_grad_norm_ is None
+
+
+@pytest.mark.parametrize("result_kind", ["none", "empty", "non_scalar", "complex", "huge_integer"])
+def test_unsupported_norm_result_passes_through_without_a_false_observation(tmp_path, result_kind):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+    trainer = _diagnostic_trainer(torch)
+    result = {
+        "none": None, "empty": "", "non_scalar": torch.ones(2),
+        "complex": torch.tensor(1 + 2j), "huge_integer": 10**400,
+    }[result_kind]
+    calls = []
+
+    def norm(*args, **kwargs):
+        calls.append((args, kwargs))
+        return result
+
+    trainer.accelerator.clip_grad_norm_ = norm
+    capsule = harness.Issue342CrashCapsule(
+        trainer, output_dir=tmp_path / "unsupported-result",
+        max_total_bytes=1 << 20, acknowledge_training_rows=True,
+    ).install()
+    trainer._compute_loss(trainer.model, {
+        "input_ids": torch.ones(1, 16), "constant": torch.tensor(0.0),
+    }).backward()
+    parameters = list(trainer.model.parameters())
+    assert trainer.accelerator.clip_grad_norm_(parameters, 1.0) is result
+    assert calls == [((parameters, 1.0), {})]
+    assert capsule._current["gradient_norm_source"] == "unavailable"
+    assert capsule._current["gradient_norm_observation"] is None
+    capsule.capture_pre_optimizer(trainer.state)
+    assert not list((tmp_path / "unsupported-result/rank000").glob("capsule_*"))
+    capsule.close()
+    assert trainer.accelerator.clip_grad_norm_ is norm
+
+
+def test_late_install_failure_removes_live_hooks_and_restores_methods(tmp_path, monkeypatch):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+    trainer = _diagnostic_trainer(torch)
+    original_norm = trainer.accelerator.clip_grad_norm_
+    original_loss = trainer._compute_loss
+    capsule = harness.Issue342CrashCapsule(
+        trainer, output_dir=tmp_path / "late-failure",
+        max_total_bytes=1 << 20, acknowledge_training_rows=True,
+    )
+    sentinel = RuntimeError("callback ordering refused")
+
+    def fail(*args):
+        assert trainer.model.weight._post_accumulate_grad_hooks
+        assert trainer.accelerator.clip_grad_norm_ is not original_norm
+        assert trainer._compute_loss != original_loss
+        raise sentinel
+
+    monkeypatch.setattr(capsule, "_place_before_watchdog", fail)
+    with pytest.raises(RuntimeError) as error:
+        capsule.install()
+    assert error.value is sentinel
+    assert trainer.accelerator.clip_grad_norm_ is original_norm
+    assert trainer._compute_loss == original_loss
+    assert not trainer.model.weight._post_accumulate_grad_hooks
+    assert not trainer.model.weight._backward_hooks
+    assert trainer.callback_handler.callbacks == []
+
+
+def test_norm_observer_preserves_arguments_return_value_errors_and_step_reset(tmp_path):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+    trainer = _diagnostic_trainer(torch)
+    calls = []
+    sentinel = RuntimeError("the norm implementation failed")
+    result = torch.tensor(2.0)
+
+    def norm(parameters, max_norm, *, norm_type=2.0):
+        calls.append((parameters, max_norm, norm_type))
+        if max_norm < 0:
+            raise sentinel
+        return result
+
+    trainer.accelerator.clip_grad_norm_ = norm
+    capsule = harness.Issue342CrashCapsule(
+        trainer, output_dir=tmp_path / "observer",
+        max_total_bytes=1 << 20, acknowledge_training_rows=True,
+    ).install()
+    inputs = {"input_ids": torch.ones(1, 16), "constant": torch.tensor(0.0)}
+    trainer._compute_loss(trainer.model, inputs).backward()
+    parameters = trainer.model.parameters()
+    assert trainer.accelerator.clip_grad_norm_(parameters, 1.0, norm_type=1.0) is result
+    assert calls == [(parameters, 1.0, 1.0)]
+    with pytest.raises(RuntimeError) as error:
+        trainer.accelerator.clip_grad_norm_(parameters, -1.0)
+    assert error.value is sentinel
+    assert len(calls) == 2
+    assert capsule._current["gradient_norm_observation"]["finite"]
+    assert capsule._current["gradient_norm_observation"]["value"] == 2.0
+    capsule.finish_step()
+    trainer.model.zero_grad(set_to_none=True)
+    trainer._compute_loss(trainer.model, inputs).backward()
+    assert capsule._current["gradient_norm_source"] == "unavailable"
+    assert capsule._current["gradient_norm_observation"] is None
+    assert capsule._current["first_nonfinite_accumulated_parameter"] is None
+    assert len(capsule._current["microbatch_loss_stats"]) == 1
+    capsule.capture_pre_optimizer(trainer.state)
+    assert not list((tmp_path / "observer/rank000").glob("capsule_*"))
+    capsule.close()
+    assert trainer.accelerator.clip_grad_norm_ is norm
+
+
+def test_failed_install_restores_the_instance_norm_observer(tmp_path, monkeypatch):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+    trainer = _diagnostic_trainer(torch)
+    original = trainer.accelerator.clip_grad_norm_
+    capsule = harness.Issue342CrashCapsule(
+        trainer, output_dir=tmp_path / "failed",
+        max_total_bytes=1 << 20, acknowledge_training_rows=True,
+    )
+
+    def fail(*args, **kwargs):
+        raise OSError("writer refused the manifest")
+
+    monkeypatch.setattr(capsule.writer, "write_json", fail)
+    with pytest.raises(OSError, match="writer refused"):
+        capsule.install()
+    assert trainer.accelerator.clip_grad_norm_ is original
+    assert not trainer.model.weight._post_accumulate_grad_hooks
+    assert trainer.callback_handler.callbacks == []
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(float("nan"), "nan"), (float("inf"), "inf"), (float("-inf"), "-inf")],
+)
+def test_norm_observer_classifies_python_nonfinite_scalars(tmp_path, value, expected):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+    trainer = _diagnostic_trainer(torch)
+    trainer.accelerator.clip_grad_norm_ = lambda *args, **kwargs: value
+    capsule = harness.Issue342CrashCapsule(
+        trainer, output_dir=tmp_path / "scalar",
+        max_total_bytes=1 << 20, acknowledge_training_rows=True,
+    ).install()
+    trainer._compute_loss(trainer.model, {
+        "input_ids": torch.ones(1, 16), "constant": torch.tensor(0.0),
+    }).backward()
+    result = trainer.accelerator.clip_grad_norm_(trainer.model.parameters(), 1.0)
+    assert result is value
+    capsule.capture_pre_optimizer(trainer.state)
+    summary = json.loads(
+        (tmp_path / "scalar/rank000/capsule_000001.json").read_text(encoding="utf-8")
+    )
+    assert summary["gradient_norm_observation"]["value"] == expected
+    capsule.close()
+
+
+@pytest.mark.parametrize("value", [0.0, 1e200])
+def test_finite_python_norm_preserves_zero_and_float64_range(tmp_path, value):
+    torch = pytest.importorskip("torch")
+    harness = _module()
+    trainer = _diagnostic_trainer(torch)
+    trainer.accelerator.clip_grad_norm_ = lambda *args, **kwargs: value
+    capsule = harness.Issue342CrashCapsule(
+        trainer, output_dir=tmp_path / "finite-norm",
+        max_total_bytes=1 << 20, acknowledge_training_rows=True,
+    ).install()
+    trainer._compute_loss(trainer.model, {
+        "input_ids": torch.ones(1, 16), "constant": torch.tensor(0.0),
+    }).backward()
+    assert trainer.accelerator.clip_grad_norm_(trainer.model.parameters(), 1.0) is value
+    stats = capsule._current["gradient_norm_observation"]
+    assert stats["finite"] is True
+    assert stats["dtype"] == "torch.float64"
+    assert stats["value"] == value
+    assert stats["abs_max"] == value
+    capsule.capture_pre_optimizer(trainer.state)
+    assert not list((tmp_path / "finite-norm/rank000").glob("capsule_*"))
+    capsule.close()
+
+
 @pytest.mark.parametrize(
     ("evaluation", "without_grad"),
     [(True, False), (False, True)],
